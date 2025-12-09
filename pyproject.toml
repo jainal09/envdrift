@@ -1,0 +1,124 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "envdrift"
+version = "0.0.1"
+description = "Prevent environment variable drift with Pydantic schema validation, pre-commit hooks, and dotenvx encryption"
+readme = "README.md"
+license = "MIT"
+requires-python = ">=3.11"
+authors = [
+    { name = "Jainal Gosaliya", email = "gosaliya.jainal@gmail.com" }
+]
+keywords = [
+    "environment",
+    "variables",
+    "pydantic",
+    "validation",
+    "dotenv",
+    "config",
+    "drift",
+    "schema",
+    "secrets",
+    "pre-commit",
+]
+classifiers = [
+    "Development Status :: 1 - Planning",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+    "Topic :: Software Development :: Quality Assurance",
+    "Topic :: Security",
+    "Typing :: Typed",
+]
+dependencies = [
+    "pydantic>=2.0",
+    "pydantic-settings>=2.0",
+    "rich>=13.0",
+    "typer>=0.9",
+    "python-dotenv>=1.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "ruff>=0.8.0",
+    "pyrefly>=0.2.0",
+    "bandit>=1.7.0",
+    "pytest>=8.0",
+    "pytest-cov>=4.0",
+    "pre-commit>=3.0",
+]
+
+[project.scripts]
+envdrift = "envdrift.cli:app"
+
+[project.urls]
+Homepage = "https://github.com/jainal09/envdrift"
+Documentation = "https://github.com/jainal09/envdrift#readme"
+Repository = "https://github.com/jainal09/envdrift"
+Issues = "https://github.com/jainal09/envdrift/issues"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/envdrift"]
+
+[tool.ruff]
+target-version = "py311"
+line-length = 100
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = [
+    "E",      # pycodestyle errors
+    "W",      # pycodestyle warnings
+    "F",      # Pyflakes
+    "I",      # isort
+    "N",      # pep8-naming
+    "UP",     # pyupgrade
+    "B",      # flake8-bugbear
+    "C4",     # flake8-comprehensions
+    "SIM",    # flake8-simplify
+    "PTH",    # flake8-use-pathlib
+    "RUF",    # Ruff-specific rules
+    "S",      # flake8-bandit (security)
+]
+ignore = [
+    "S101",   # assert allowed in tests
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["S101"]
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+addopts = [
+    "--strict-markers",
+    "--cov=envdrift",
+    "--cov-report=term-missing",
+]
+
+[tool.coverage.run]
+source = ["src/envdrift"]
+branch = true
+
+[tool.coverage.report]
+exclude_lines = [
+    "pragma: no cover",
+    "if TYPE_CHECKING:",
+    "raise NotImplementedError",
+]
+
+[tool.bandit]
+exclude_dirs = ["tests", ".venv"]
+skips = ["B101"]
