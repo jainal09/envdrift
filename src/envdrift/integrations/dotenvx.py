@@ -15,7 +15,7 @@ import os
 import platform
 import shutil
 import stat
-import subprocess
+import subprocess  # nosec B404
 import sys
 import tempfile
 import urllib.request
@@ -234,7 +234,7 @@ class DotenvxInstaller:
 
             # Download
             try:
-                urllib.request.urlretrieve(url, archive_path)
+                urllib.request.urlretrieve(url, archive_path)  # nosec B310
             except Exception as e:
                 raise DotenvxInstallError(f"Download failed: {e}") from e
 
@@ -291,7 +291,7 @@ class DotenvxInstaller:
                 # Resolve to absolute and ensure it's within target_dir
                 if not member_path.resolve().is_relative_to(target_dir.resolve()):
                     raise DotenvxInstallError(f"Unsafe path in archive: {member.name}")
-            tar.extractall(target_dir)
+            tar.extractall(target_dir)  # nosec B202
 
     def _extract_zip(self, archive_path: Path, target_dir: Path) -> None:
         """
@@ -310,7 +310,7 @@ class DotenvxInstaller:
                 # Resolve to absolute and ensure it's within target_dir
                 if not member_path.resolve().is_relative_to(target_dir.resolve()):
                     raise DotenvxInstallError(f"Unsafe path in archive: {name}")
-            zip_ref.extractall(target_dir)
+            zip_ref.extractall(target_dir)  # nosec B202
 
     def install(self, force: bool = False) -> Path:
         """
@@ -332,7 +332,7 @@ class DotenvxInstaller:
         if target_path.exists() and not force:
             # Verify version
             try:
-                result = subprocess.run(
+                result = subprocess.run(  # nosec B603
                     [str(target_path), "--version"],
                     capture_output=True,
                     text=True,
@@ -341,7 +341,7 @@ class DotenvxInstaller:
                 if self.version in result.stdout:
                     self.progress(f"dotenvx v{self.version} already installed")
                     return target_path
-            except Exception:
+            except Exception:  # nosec B110
                 pass  # Will reinstall
 
         self.download_and_extract(target_path)
@@ -482,7 +482,7 @@ class DotenvxWrapper:
         cmd = [str(binary)] + args
 
         try:
-            result = subprocess.run(
+            result = subprocess.run(  # nosec B603
                 cmd,
                 capture_output=capture_output,
                 text=True,

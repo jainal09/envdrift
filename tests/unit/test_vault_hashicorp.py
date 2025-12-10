@@ -23,11 +23,13 @@ class TestHashiCorpVaultImport:
     def test_hvac_available_flag_exists(self):
         """Test HVAC_AVAILABLE flag exists in module."""
         from envdrift.vault import hashicorp
+
         assert hasattr(hashicorp, "HVAC_AVAILABLE")
 
     def test_hashicorp_vault_client_exists(self):
         """Test HashiCorpVaultClient class exists."""
         from envdrift.vault import hashicorp
+
         assert hasattr(hashicorp, "HashiCorpVaultClient")
 
 
@@ -38,10 +40,7 @@ class TestHashiCorpVaultClientWithMock:
         """Test client stores url and token."""
         from envdrift.vault.hashicorp import HashiCorpVaultClient
 
-        client = HashiCorpVaultClient(
-            url="http://localhost:8200",
-            token="my-token"
-        )
+        client = HashiCorpVaultClient(url="http://localhost:8200", token="my-token")
 
         assert client.url == "http://localhost:8200"
         assert client.token == "my-token"
@@ -50,10 +49,7 @@ class TestHashiCorpVaultClientWithMock:
         """Test default mount point is 'secret'."""
         from envdrift.vault.hashicorp import HashiCorpVaultClient
 
-        client = HashiCorpVaultClient(
-            url="http://localhost:8200",
-            token="my-token"
-        )
+        client = HashiCorpVaultClient(url="http://localhost:8200", token="my-token")
 
         assert client.mount_point == "secret"
 
@@ -62,9 +58,7 @@ class TestHashiCorpVaultClientWithMock:
         from envdrift.vault.hashicorp import HashiCorpVaultClient
 
         client = HashiCorpVaultClient(
-            url="http://localhost:8200",
-            token="my-token",
-            mount_point="kv"
+            url="http://localhost:8200", token="my-token", mount_point="kv"
         )
 
         assert client.mount_point == "kv"
@@ -82,10 +76,7 @@ class TestHashiCorpVaultClientWithMock:
         """Test is_authenticated returns False before authenticate."""
         from envdrift.vault.hashicorp import HashiCorpVaultClient
 
-        client = HashiCorpVaultClient(
-            url="http://localhost:8200",
-            token="my-token"
-        )
+        client = HashiCorpVaultClient(url="http://localhost:8200", token="my-token")
 
         assert client.is_authenticated() is False
         assert client._client is None
@@ -112,10 +103,7 @@ class TestHashiCorpVaultClientWithMock:
 
         from envdrift.vault.hashicorp import HashiCorpVaultClient
 
-        client = HashiCorpVaultClient(
-            url="http://localhost:8200",
-            token="valid-token"
-        )
+        client = HashiCorpVaultClient(url="http://localhost:8200", token="valid-token")
         client.authenticate()
 
         assert client._client is mock_client
@@ -130,10 +118,7 @@ class TestHashiCorpVaultClientWithMock:
 
         from envdrift.vault.hashicorp import HashiCorpVaultClient
 
-        client = HashiCorpVaultClient(
-            url="http://localhost:8200",
-            token="invalid-token"
-        )
+        client = HashiCorpVaultClient(url="http://localhost:8200", token="invalid-token")
 
         with pytest.raises((AuthenticationError, VaultError)):
             client.authenticate()
@@ -144,19 +129,13 @@ class TestHashiCorpVaultClientWithMock:
         mock_client = MagicMock()
         mock_client.is_authenticated.return_value = True
         mock_client.secrets.kv.v2.read_secret_version.return_value = {
-            "data": {
-                "data": {"value": "my-secret-value"},
-                "metadata": {"version": 1}
-            }
+            "data": {"data": {"value": "my-secret-value"}, "metadata": {"version": 1}}
         }
         mock_hvac_module.Client.return_value = mock_client
 
         from envdrift.vault.hashicorp import HashiCorpVaultClient
 
-        client = HashiCorpVaultClient(
-            url="http://localhost:8200",
-            token="valid-token"
-        )
+        client = HashiCorpVaultClient(url="http://localhost:8200", token="valid-token")
         client.authenticate()
 
         secret = client.get_secret("my-secret")
@@ -170,19 +149,13 @@ class TestHashiCorpVaultClientWithMock:
         mock_client = MagicMock()
         mock_client.is_authenticated.return_value = True
         mock_client.secrets.kv.v2.read_secret_version.return_value = {
-            "data": {
-                "data": {"key1": "value1", "key2": "value2"},
-                "metadata": {"version": 2}
-            }
+            "data": {"data": {"key1": "value1", "key2": "value2"}, "metadata": {"version": 2}}
         }
         mock_hvac_module.Client.return_value = mock_client
 
         from envdrift.vault.hashicorp import HashiCorpVaultClient
 
-        client = HashiCorpVaultClient(
-            url="http://localhost:8200",
-            token="valid-token"
-        )
+        client = HashiCorpVaultClient(url="http://localhost:8200", token="valid-token")
         client.authenticate()
 
         secret = client.get_secret("json-secret")
@@ -209,10 +182,7 @@ class TestHashiCorpVaultClientWithMock:
 
         from envdrift.vault.hashicorp import HashiCorpVaultClient
 
-        client = HashiCorpVaultClient(
-            url="http://localhost:8200",
-            token="valid-token"
-        )
+        client = HashiCorpVaultClient(url="http://localhost:8200", token="valid-token")
         client.authenticate()
 
         with pytest.raises(SecretNotFoundError):
@@ -224,18 +194,13 @@ class TestHashiCorpVaultClientWithMock:
         mock_client = MagicMock()
         mock_client.is_authenticated.return_value = True
         mock_client.secrets.kv.v2.list_secrets.return_value = {
-            "data": {
-                "keys": ["secret1", "secret2", "folder/"]
-            }
+            "data": {"keys": ["secret1", "secret2", "folder/"]}
         }
         mock_hvac_module.Client.return_value = mock_client
 
         from envdrift.vault.hashicorp import HashiCorpVaultClient
 
-        client = HashiCorpVaultClient(
-            url="http://localhost:8200",
-            token="valid-token"
-        )
+        client = HashiCorpVaultClient(url="http://localhost:8200", token="valid-token")
         client.authenticate()
 
         secrets = client.list_secrets()
@@ -256,10 +221,7 @@ class TestHashiCorpVaultClientWithMock:
 
         from envdrift.vault.hashicorp import HashiCorpVaultClient
 
-        client = HashiCorpVaultClient(
-            url="http://localhost:8200",
-            token="valid-token"
-        )
+        client = HashiCorpVaultClient(url="http://localhost:8200", token="valid-token")
         client.authenticate()
 
         secrets = client.list_secrets(prefix="myapp/")
@@ -276,10 +238,7 @@ class TestHashiCorpVaultClientWithMock:
 
         from envdrift.vault.hashicorp import HashiCorpVaultClient
 
-        client = HashiCorpVaultClient(
-            url="http://localhost:8200",
-            token="valid-token"
-        )
+        client = HashiCorpVaultClient(url="http://localhost:8200", token="valid-token")
         client.authenticate()
 
         client.create_or_update_secret("new-secret", "new-value")
@@ -295,10 +254,7 @@ class TestHashiCorpVaultClientWithMock:
 
         from envdrift.vault.hashicorp import HashiCorpVaultClient
 
-        client = HashiCorpVaultClient(
-            url="http://localhost:8200",
-            token="valid-token"
-        )
+        client = HashiCorpVaultClient(url="http://localhost:8200", token="valid-token")
         client.authenticate()
 
         client.create_or_update_secret("json-secret", {"key": "value"})
@@ -315,10 +271,7 @@ class TestHashiCorpVaultClientWithMock:
 
         from envdrift.vault.hashicorp import HashiCorpVaultClient
 
-        client = HashiCorpVaultClient(
-            url="http://localhost:8200",
-            token="valid-token"
-        )
+        client = HashiCorpVaultClient(url="http://localhost:8200", token="valid-token")
         client.authenticate()
 
         client.set_secret("test-secret", "test-value")
@@ -338,10 +291,7 @@ class TestEnsureAuthenticated:
 
         from envdrift.vault.hashicorp import HashiCorpVaultClient
 
-        client = HashiCorpVaultClient(
-            url="http://localhost:8200",
-            token="my-token"
-        )
+        client = HashiCorpVaultClient(url="http://localhost:8200", token="my-token")
         # Don't set _client - it should try to authenticate and fail
 
         with pytest.raises((AuthenticationError, VaultError)):
