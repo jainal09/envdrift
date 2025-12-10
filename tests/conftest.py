@@ -1,6 +1,5 @@
 """Pytest configuration and shared fixtures."""
 
-
 import pytest
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -10,9 +9,9 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 def valid_env_content():
     """
     Provide a sample `.env` file content for tests.
-    
+
     Returns:
-    	env_content (str): Multi-line string containing sample environment variables for database and cache URLs, API keys and secrets, server host/port/debug settings, and a feature flag.
+        env_content (str): Multi-line string containing sample environment variables for database and cache URLs, API keys and secrets, server host/port/debug settings, and a feature flag.
     """
     return """# Database configuration
 DATABASE_URL=postgres://localhost/db
@@ -36,9 +35,9 @@ NEW_FEATURE_FLAG=enabled
 def encrypted_env_content():
     """
     Sample dotenvx-format .env content where most values are encrypted.
-    
+
     Includes a public key line, several encrypted variable values, and a few plaintext entries (host, port, debug, feature flag).
-    
+
     Returns:
         str: The contents of an encrypted .env file suitable for use in tests.
     """
@@ -60,7 +59,7 @@ NEW_FEATURE_FLAG=enabled
 def partial_encrypted_content():
     """
     Provide sample .env content that contains both encrypted and plaintext values.
-    
+
     Returns:
         env_content (str): Multiline string representing a .env file where some values are encrypted (prefixed with `encrypted:...`) and others are plaintext.
     """
@@ -75,7 +74,7 @@ DEBUG=true
 def env_with_secrets():
     """
     Sample .env content containing several plaintext secret-looking variables and one non-secret variable.
-    
+
     Returns:
         env_content (str): Multi-line string representing environment file entries including DATABASE_URL, API_KEY, GITHUB_TOKEN, AWS_ACCESS_KEY_ID, STRIPE_SECRET, and NORMAL_VAR.
     """
@@ -92,11 +91,11 @@ NORMAL_VAR=just_a_value
 def tmp_env_file(tmp_path, valid_env_content):
     """
     Create a temporary `.env` file containing the provided environment content.
-    
+
     Parameters:
         tmp_path (Path): Temporary directory fixture provided by pytest.
         valid_env_content (str): Text to write into the `.env` file.
-    
+
     Returns:
         Path: Path to the created `.env` file.
     """
@@ -109,11 +108,11 @@ def tmp_env_file(tmp_path, valid_env_content):
 def tmp_encrypted_env_file(tmp_path, encrypted_env_content):
     """
     Create a temporary .env.production file containing encrypted environment content.
-    
+
     Parameters:
         tmp_path (pathlib.Path): Temporary directory provided by pytest where the file will be created.
         encrypted_env_content (str): Encrypted dotenv-formatted content to write into the file.
-    
+
     Returns:
         pathlib.Path: Path to the created .env.production file.
     """
@@ -126,12 +125,13 @@ def tmp_encrypted_env_file(tmp_path, encrypted_env_content):
 def test_settings_class():
     """
     Provide a Pydantic BaseSettings subclass configured for tests.
-    
+
     Returns:
         TestSettings (type): A BaseSettings subclass with extra="forbid". Includes sensitive string fields
         `DATABASE_URL`, `REDIS_URL`, `API_KEY`, and `JWT_SECRET`; defaults `HOST="0.0.0.0"`, `PORT=8000`,
         `DEBUG=False`; and a required `NEW_FEATURE_FLAG` string.
     """
+
     class TestSettings(BaseSettings):
         model_config = SettingsConfigDict(extra="forbid")
 
@@ -150,6 +150,7 @@ def test_settings_class():
 @pytest.fixture
 def permissive_settings_class():
     """Test Pydantic Settings class with extra="ignore"."""
+
     class PermissiveSettings(BaseSettings):
         model_config = SettingsConfigDict(extra="ignore")
 
@@ -163,10 +164,10 @@ def permissive_settings_class():
 def env_file_dev(tmp_path):
     """
     Create a temporary development `.env.development` file populated with typical development environment variables.
-    
+
     Parameters:
         tmp_path (Path): Base temporary directory in which the `.env.development` file will be created.
-    
+
     Returns:
         Path: Path to the created `.env.development` file.
     """
@@ -186,9 +187,9 @@ DEV_ONLY_VAR=dev_value
 def env_file_prod(tmp_path):
     """
     Create a production .env file under the provided temporary path.
-    
+
     Writes a file named ".env.production" containing typical production environment variables (DATABASE_URL, API_KEY, DEBUG, LOG_LEVEL, APP_NAME, SENTRY_DSN) and returns the Path to the created file.
-    
+
     Returns:
         Path: Path to the created ".env.production" file.
     """

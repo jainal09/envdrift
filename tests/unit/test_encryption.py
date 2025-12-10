@@ -1,6 +1,5 @@
 """Tests for EncryptionDetector."""
 
-
 from envdrift.core.encryption import EncryptionDetector
 from envdrift.core.parser import EnvParser
 
@@ -67,11 +66,11 @@ class TestEncryptionDetector:
 
     def test_should_not_block_encrypted(self, tmp_path):
         """Don't block commit when all secrets encrypted."""
-        content = '''
+        content = """
 API_KEY="encrypted:BDQE123..."
 JWT_SECRET="encrypted:BDQE456..."
 DEBUG=true
-'''
+"""
         env_file = tmp_path / ".env"
         env_file.write_text(content)
 
@@ -117,12 +116,12 @@ BAZ=qux
     def test_encryption_ratio(self, tmp_path):
         """Test encryption ratio calculation."""
         # 2 encrypted, 2 plaintext = 50%
-        content = '''
+        content = """
 ENC1="encrypted:abc"
 ENC2="encrypted:def"
 PLAIN1=value1
 PLAIN2=value2
-'''
+"""
         env_file = tmp_path / ".env"
         env_file.write_text(content)
 

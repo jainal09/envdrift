@@ -1,6 +1,5 @@
 """Tests for EnvParser."""
 
-
 import pytest
 
 from envdrift.core.parser import EncryptionStatus, EnvParser, EnvVar
@@ -25,11 +24,11 @@ class TestEnvParser:
 
     def test_parse_quoted_values(self, tmp_path):
         """Parse KEY="value" and KEY='value'."""
-        content = '''
+        content = """
 DOUBLE_QUOTED="hello world"
 SINGLE_QUOTED='hello world'
 UNQUOTED=hello
-'''
+"""
         env_file = tmp_path / ".env"
         env_file.write_text(content)
 
@@ -42,10 +41,10 @@ UNQUOTED=hello
 
     def test_parse_encrypted_values(self, tmp_path):
         """Detect encrypted: prefix."""
-        content = '''
+        content = """
 ENCRYPTED_VAR="encrypted:BDQE1234567890..."
 PLAINTEXT_VAR=just_plain_text
-'''
+"""
         env_file = tmp_path / ".env"
         env_file.write_text(content)
 
@@ -57,11 +56,11 @@ PLAINTEXT_VAR=just_plain_text
 
     def test_parse_empty_values(self, tmp_path):
         """Handle KEY= (empty value)."""
-        content = '''
+        content = """
 EMPTY_VAR=
 EMPTY_QUOTED=""
 HAS_VALUE=something
-'''
+"""
         env_file = tmp_path / ".env"
         env_file.write_text(content)
 
@@ -75,16 +74,16 @@ HAS_VALUE=something
     def test_parse_comments(self, tmp_path):
         """
         Verifies that the parser ignores comment lines and still records them.
-        
+
         Asserts that only non-comment environment variables are returned in `variables`
         and that comment lines are collected in `comments`.
         """
-        content = '''
+        content = """
 # This is a comment
 FOO=bar
 # Another comment
 BAZ=qux
-'''
+"""
         env_file = tmp_path / ".env"
         env_file.write_text(content)
 
@@ -96,10 +95,10 @@ BAZ=qux
 
     def test_parse_line_numbers(self, tmp_path):
         """Track line numbers for error reporting."""
-        content = '''FOO=bar
+        content = """FOO=bar
 
 BAZ=qux
-'''
+"""
         env_file = tmp_path / ".env"
         env_file.write_text(content)
 
@@ -146,15 +145,15 @@ BAZ=qux
     def test_env_file_is_fully_encrypted_property(self, tmp_path):
         """Test EnvFile.is_fully_encrypted property."""
         # Fully encrypted
-        full_enc = '''
+        full_enc = """
 FOO="encrypted:abc123"
 BAR="encrypted:def456"
-'''
+"""
         # Partially encrypted
-        partial = '''
+        partial = """
 FOO="encrypted:abc123"
 BAR=plaintext
-'''
+"""
         parser = EnvParser()
 
         full_file = tmp_path / ".env.full"

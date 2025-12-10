@@ -20,7 +20,7 @@ Environment variable drift is a silent killer of deployments:
 - Staging has `NEW_FEATURE_FLAG=true` but production doesn't
 - Someone copies the wrong `.env` file and chaos ensues
 
-**In 2024 alone, 24 million secrets were leaked on GitHub.** Knight Capital lost **$460 million in 45 minutes** due to a configuration deployment error.
+**In 2024 alone, [24 million secrets were leaked on GitHub](https://www.gitguardian.com/state-of-secrets-sprawl-report-2025).** Knight Capital lost **[$460 million in 45 minutes](https://www.sec.gov/litigation/admin/2013/34-70694.pdf)** due to a configuration deployment error.
 
 ## Quick Example
 

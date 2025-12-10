@@ -30,7 +30,7 @@ class EnvVar:
     def is_encrypted(self) -> bool:
         """
         Determine whether this environment variable's value is encrypted.
-        
+
         Returns:
             True if the variable is encrypted, False otherwise.
         """
@@ -40,7 +40,7 @@ class EnvVar:
     def is_empty(self) -> bool:
         """
         Indicates whether the variable's value is empty.
-        
+
         Returns:
             True if the variable's value is empty, False otherwise.
         """
@@ -59,7 +59,7 @@ class EnvFile:
     def is_encrypted(self) -> bool:
         """
         Determine whether the file contains at least one encrypted environment variable.
-        
+
         Returns:
             `true` if at least one variable in the file is encrypted, `false` otherwise.
         """
@@ -69,7 +69,7 @@ class EnvFile:
     def is_fully_encrypted(self) -> bool:
         """
         Determine whether every non-empty environment variable in the file is encrypted.
-        
+
         Returns:
             `true` if all non-empty variables have encryption status `ENCRYPTED`, `false` otherwise (also `false` when there are no non-empty variables).
         """
@@ -81,10 +81,10 @@ class EnvFile:
     def get(self, name: str) -> EnvVar | None:
         """
         Retrieve the environment variable with the specified name from this EnvFile.
-        
+
         Parameters:
             name (str): The variable name to look up.
-        
+
         Returns:
             EnvVar | None: The matching EnvVar if found, `None` otherwise.
         """
@@ -93,7 +93,7 @@ class EnvFile:
     def __contains__(self, name: str) -> bool:
         """
         Determine whether the EnvFile contains a variable with the given name.
-        
+
         Returns:
             True if a variable with the given name exists in the file, False otherwise.
         """
@@ -102,7 +102,7 @@ class EnvFile:
     def __len__(self) -> int:
         """
         Number of environment variables contained in the EnvFile.
-        
+
         Returns:
             int: The count of parsed variables.
         """
@@ -129,13 +129,13 @@ class EnvParser:
     def parse(self, path: Path | str) -> EnvFile:
         """
         Parse a .env file and produce an EnvFile representing its parsed contents.
-        
+
         Parameters:
             path (Path | str): Filesystem path to the .env file.
-        
+
         Returns:
             EnvFile: Parsed file containing variables and comments.
-        
+
         Raises:
             FileNotFoundError: If the file does not exist.
         """
@@ -153,10 +153,10 @@ class EnvParser:
     def parse_string(self, content: str) -> EnvFile:
         """
         Parse .env formatted text, extracting variables (with detected encryption status) and comments.
-        
+
         Parameters:
             content (str): The complete text content of a .env file to parse.
-        
+
         Returns:
             EnvFile: An EnvFile populated with parsed EnvVar entries keyed by variable name and a list of comment lines.
         """
@@ -205,9 +205,9 @@ class EnvParser:
     def _unquote(self, value: str) -> str:
         """
         Remove a single matching pair of surrounding single or double quotes from the value.
-        
+
         Returns:
-        	the unquoted string if the value is enclosed in matching single quotes ('...') or double quotes ("..."); otherwise the original value
+                the unquoted string if the value is enclosed in matching single quotes ('...') or double quotes ("..."); otherwise the original value
         """
         if len(value) >= 2:
             if (value.startswith('"') and value.endswith('"')) or (
@@ -219,10 +219,10 @@ class EnvParser:
     def _detect_encryption_status(self, value: str) -> EncryptionStatus:
         """
         Detects the encryption status of an environment variable value.
-        
+
         Parameters:
             value (str): The unquoted value string to classify.
-        
+
         Returns:
             EncryptionStatus: `EncryptionStatus.EMPTY` if the value is empty, `EncryptionStatus.ENCRYPTED` if it starts with "encrypted:", otherwise `EncryptionStatus.PLAINTEXT`.
         """

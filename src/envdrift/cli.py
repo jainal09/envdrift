@@ -33,9 +33,7 @@ app = typer.Typer(
 
 @app.command()
 def validate(
-    env_file: Annotated[
-        Path, typer.Argument(help="Path to .env file to validate")
-    ] = Path(".env"),
+    env_file: Annotated[Path, typer.Argument(help="Path to .env file to validate")] = Path(".env"),
     schema: Annotated[
         str | None,
         typer.Option("--schema", "-s", help="Dotted path to Settings class"),
@@ -44,9 +42,7 @@ def validate(
         Path | None,
         typer.Option("--service-dir", "-d", help="Service directory for imports"),
     ] = None,
-    ci: Annotated[
-        bool, typer.Option("--ci", help="CI mode: exit with code 1 on failure")
-    ] = False,
+    ci: Annotated[bool, typer.Option("--ci", help="CI mode: exit with code 1 on failure")] = False,
     check_encryption: Annotated[
         bool,
         typer.Option("--check-encryption/--no-check-encryption", help="Check encryption"),
@@ -60,14 +56,14 @@ def validate(
 ) -> None:
     """
     Validate an .env file against a Pydantic Settings schema and display results.
-    
+
     Loads the specified Settings class, parses the given .env file, runs validation
     (including optional encryption checks and extra-key checks), and prints a
     human-readable validation report. If --fix is provided and validation fails,
     prints a generated template for missing values. Exits with code 1 on invalid
     schema or missing env file; when --ci is set, also exits with code 1 if the
     validation result is invalid.
-    
+
     Parameters:
         schema (str | None): Dotted import path to the Pydantic Settings class
             (for example: "app.config:Settings"). Required; the command exits with
@@ -156,7 +152,7 @@ def diff(
 ) -> None:
     """
     Compare two .env files and display their differences.
-    
+
     Parameters:
         env1 (Path): Path to the first .env file (e.g., .env.dev).
         env2 (Path): Path to the second .env file (e.g., .env.prod).
@@ -212,9 +208,7 @@ def diff(
 
 @app.command("encrypt")
 def encrypt_cmd(
-    env_file: Annotated[
-        Path, typer.Argument(help="Path to .env file")
-    ] = Path(".env"),
+    env_file: Annotated[Path, typer.Argument(help="Path to .env file")] = Path(".env"),
     check: Annotated[
         bool, typer.Option("--check", help="Only check encryption status, don't encrypt")
     ] = False,
@@ -229,10 +223,10 @@ def encrypt_cmd(
 ) -> None:
     """
     Check encryption status of an .env file or encrypt it using dotenvx.
-    
+
     When run with --check, prints an encryption report and exits with code 1 if the detector recommends blocking a commit.
     When run without --check, attempts to perform encryption via the dotenvx integration; if dotenvx is not available, prints installation instructions and exits.
-    
+
     Parameters:
         env_file (Path): Path to the .env file to inspect or encrypt.
         check (bool): If True, only analyze and report encryption status; do not modify the file.
@@ -289,9 +283,7 @@ def encrypt_cmd(
 
 @app.command("decrypt")
 def decrypt_cmd(
-    env_file: Annotated[
-        Path, typer.Argument(help="Path to encrypted .env file")
-    ] = Path(".env"),
+    env_file: Annotated[Path, typer.Argument(help="Path to encrypted .env file")] = Path(".env"),
 ) -> None:
     """Decrypt an encrypted .env file using dotenvx."""
     if not env_file.exists():
@@ -332,12 +324,12 @@ def init(
 ) -> None:
     """
     Generate a Pydantic BaseSettings subclass from variables in an .env file.
-    
+
     Writes a Python module containing a Pydantic `BaseSettings` subclass with fields
     inferred from the .env variables. Detected sensitive variables are annotated
     with `json_schema_extra={"sensitive": True}` and fields without a sensible
     default are left required.
-    
+
     Parameters:
         env_file (Path): Path to the source .env file.
         output (Path): Path to write the generated Python module (e.g., settings.py).
@@ -432,14 +424,14 @@ def hook(
 ) -> None:
     """
     Manage the pre-commit hook integration by showing a sample config or installing hooks.
-    
+
     When invoked with --config or without --install, prints a pre-commit configuration snippet for envdrift hooks.
     When invoked with --install, attempts to install the hooks using the pre-commit integration and prints success on completion.
-    
+
     Parameters:
         install (bool): If True, install the pre-commit hooks into the project (--install / -i).
         show_config (bool): If True, print the sample pre-commit configuration snippet (--config).
-    
+
     Raises:
         typer.Exit: If installation is requested but the pre-commit integration is unavailable.
     """
@@ -471,6 +463,7 @@ repos:
     if install:
         try:
             from envdrift.integrations.precommit import install_hooks
+
             install_hooks()
             print_success("Pre-commit hooks installed")
         except ImportError:
@@ -483,7 +476,7 @@ repos:
 def version() -> None:
     """
     Display the installed envdrift version in the console.
-    
+
     Prints the current package version using the application's styled console output.
     """
     console.print(f"envdrift [bold green]{__version__}[/bold green]")

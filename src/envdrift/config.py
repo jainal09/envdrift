@@ -42,7 +42,9 @@ class EnvdriftConfig:
 
     # Core settings
     schema: str | None = None
-    environments: list[str] = field(default_factory=lambda: ["development", "staging", "production"])
+    environments: list[str] = field(
+        default_factory=lambda: ["development", "staging", "production"]
+    )
     env_file_pattern: str = ".env.{environment}"
 
     # Sub-configs
@@ -57,12 +59,12 @@ class EnvdriftConfig:
     def from_dict(cls, data: dict[str, Any]) -> EnvdriftConfig:
         """
         Builds an EnvdriftConfig from a configuration dictionary.
-        
+
         Parses top-level sections (expected keys: "envdrift", "validation", "vault", "precommit"), applies sensible defaults for missing fields, and returns a populated EnvdriftConfig with the original dictionary stored in `raw`.
-        
+
         Parameters:
             data (dict[str, Any]): Parsed TOML/pyproject data containing configuration sections.
-        
+
         Returns:
             EnvdriftConfig: Configuration object populated from `data`.
         """
@@ -95,7 +97,9 @@ class EnvdriftConfig:
 
         return cls(
             schema=envdrift_section.get("schema"),
-            environments=envdrift_section.get("environments", ["development", "staging", "production"]),
+            environments=envdrift_section.get(
+                "environments", ["development", "staging", "production"]
+            ),
             env_file_pattern=envdrift_section.get("env_file_pattern", ".env.{environment}"),
             validation=validation,
             vault=vault,
@@ -113,13 +117,13 @@ class ConfigNotFoundError(Exception):
 def find_config(start_dir: Path | None = None, filename: str = "envdrift.toml") -> Path | None:
     """
     Locate an envdrift configuration file by searching the given directory and its parents.
-    
+
     Searches each directory from start_dir (defaults to the current working directory) up to the filesystem root for a file named by `filename`. If no such file is found, also checks each directory's pyproject.toml for a top-level [tool.envdrift] section and returns that pyproject path when present.
-    
+
     Parameters:
         start_dir (Path | None): Directory to start searching from; defaults to the current working directory.
         filename (str): Configuration filename to look for (default "envdrift.toml").
-    
+
     Returns:
         Path | None: Path to the first matching configuration file or pyproject.toml containing [tool.envdrift], or `None` if none is found.
     """
@@ -141,7 +145,8 @@ def find_config(start_dir: Path | None = None, filename: str = "envdrift.toml") 
                     data = tomllib.load(f)
                 if "tool" in data and "envdrift" in data["tool"]:
                     return pyproject
-            except Exception:
+            except (OSError, tomllib.TOMLDecodeError):
+                # Skip malformed or unreadable pyproject.toml files
                 pass
 
         current = current.parent
@@ -178,14 +183,18 @@ def load_config(path: Path | str | None = None) -> EnvdriftConfig:
     if path.name == "pyproject.toml":
         tool_config = data.get("tool", {}).get("envdrift", {})
         if tool_config:
-            # Restructure to expected format
-            data = {"envdrift": tool_config}
-            if "validation" in tool_config:
-                data["validation"] = tool_config.pop("validation")
-            if "vault" in tool_config:
-                data["vault"] = tool_config.pop("vault")
-            if "precommit" in tool_config:
-                data["precommit"] = tool_config.pop("precommit")
+            # Restructure to expected format (copy to avoid mutating original)
+            envdrift_section = dict(tool_config)
+            data = {"envdrift": envdrift_section}
+            if "validation" in envdrift_section:
+                data["validation"] = envdrift_section.get("validation")
+                del envdrift_section["validation"]
+            if "vault" in envdrift_section:
+                data["vault"] = envdrift_section.get("vault")
+                del envdrift_section["vault"]
+            if "precommit" in envdrift_section:
+                data["precommit"] = envdrift_section.get("precommit")
+                del envdrift_section["precommit"]
 
     return EnvdriftConfig.from_dict(data)
 
@@ -193,11 +202,11 @@ def load_config(path: Path | str | None = None) -> EnvdriftConfig:
 def get_env_file_path(config: EnvdriftConfig, environment: str) -> Path:
     """
     Build the Path to the .env file for the given environment using the configuration's env_file_pattern.
-    
+
     Parameters:
         config (EnvdriftConfig): Configuration whose env_file_pattern will be formatted.
         environment (str): Environment name inserted into the pattern (replaces `{environment}`).
-    
+
     Returns:
         Path: Path to the computed .env file.
     """
@@ -208,9 +217,9 @@ def get_env_file_path(config: EnvdriftConfig, environment: str) -> Path:
 def get_schema_for_environment(config: EnvdriftConfig, environment: str) -> str | None:
     """
     Resolve the schema path to use for a given environment.
-    
+
     Prefers an environment-specific precommit schema when configured; otherwise returns the default schema from the config.
-    
+
     Returns:
         The schema path for `environment`, or `None` if no schema is configured.
     """
@@ -224,7 +233,7 @@ def get_schema_for_environment(config: EnvdriftConfig, environment: str) -> str 
 
 
 # Example config file content
-EXAMPLE_CONFIG = '''# envdrift.toml - Project configuration
+EXAMPLE_CONFIG = """# envdrift.toml - Project configuration
 
 [envdrift]
 # Default schema for validation
@@ -279,19 +288,19 @@ files = [
 [precommit.schemas]
 production = "config.settings:ProductionSettings"
 staging = "config.settings:StagingSettings"
-'''
+"""
 
 
 def create_example_config(path: Path | None = None) -> Path:
     """
     Create an example envdrift.toml configuration file at the given path.
-    
+
     Parameters:
         path (Path | None): Destination path for the example config. If None, defaults to "./envdrift.toml".
-    
+
     Returns:
         Path: The path to the created configuration file.
-    
+
     Raises:
         FileExistsError: If a file already exists at the target path.
     """

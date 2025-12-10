@@ -44,9 +44,9 @@ def print_validation_result(
 ) -> None:
     """
     Render a formatted validation report for an environment file against a schema using Rich console output.
-    
+
     Prints a header with the environment path and schema, then a PASS or FAIL status. When validation fails, prints any of the following sections as applicable: missing required variables (with schema descriptions when available), extra variables, unencrypted secrets, type errors, warnings, and — when `verbose` is true — missing optional variables (with defaults when available). Finally prints a summary of error and warning counts and a short hint to run with --fix.
-    
+
     Parameters:
         result (ValidationResult): Validation outcome containing flags and lists of issues.
         env_path (Path): Filesystem path to the validated environment file.
@@ -55,9 +55,13 @@ def print_validation_result(
     """
     # Header
     console.print()
-    console.print(Panel(f"[bold]Validating:[/bold] {env_path}\n"
-                       f"[bold]Schema:[/bold] {schema.module_path}:{schema.class_name}",
-                       title="envdrift validate"))
+    console.print(
+        Panel(
+            f"[bold]Validating:[/bold] {env_path}\n"
+            f"[bold]Schema:[/bold] {schema.module_path}:{schema.class_name}",
+            title="envdrift validate",
+        )
+    )
 
     if result.valid:
         console.print()
@@ -127,16 +131,20 @@ def print_validation_result(
 def print_diff_result(result: DiffResult, show_unchanged: bool = False) -> None:
     """
     Render a human-readable comparison of two environments to the shared console.
-    
+
     Prints a header showing the two environment paths, a table of variable differences (optionally including unchanged entries), and a concise summary of added/removed/changed counts with a drift notice when differences exist.
-    
+
     Parameters:
         result (DiffResult): The computed diff between two environments, including paths, per-variable differences, and aggregate counts.
         show_unchanged (bool): If True, include variables that are identical in both environments in the output; otherwise omit them.
     """
     console.print()
-    console.print(Panel(f"[bold]Comparing:[/bold] {result.env1_path} vs {result.env2_path}",
-                       title="envdrift diff"))
+    console.print(
+        Panel(
+            f"[bold]Comparing:[/bold] {result.env1_path} vs {result.env2_path}",
+            title="envdrift diff",
+        )
+    )
 
     if not result.has_drift:
         console.print()
@@ -174,11 +182,14 @@ def print_diff_result(result: DiffResult, show_unchanged: bool = False) -> None:
             value2 = Text(str(diff.value2) if diff.value2 else "", style="dim")
 
         # Mark sensitive values
-        name = diff.name
         if diff.is_sensitive:
-            name = f"{name} [dim](sensitive)[/dim]"
+            name_text = Text()
+            name_text.append(diff.name)
+            name_text.append(" (sensitive)", style="dim")
+        else:
+            name_text = Text(diff.name)
 
-        table.add_row(name, value1, value2, status)
+        table.add_row(name_text, value1, value2, status)
 
     console.print()
     console.print(table)
@@ -203,13 +214,14 @@ def print_diff_result(result: DiffResult, show_unchanged: bool = False) -> None:
 def print_encryption_report(report: EncryptionReport) -> None:
     """
     Render a human-readable encryption summary for a file, including overall status, variable counts, detected plaintext secrets, warnings, and a remediation suggestion.
-    
+
     Parameters:
         report (EncryptionReport): EncryptionReport for the inspected file (provides path, encryption ratios, lists of encrypted/plaintext/empty variables, plaintext secrets, and warnings).
     """
     console.print()
-    console.print(Panel(f"[bold]Encryption Status:[/bold] {report.path}",
-                       title="envdrift encrypt --check"))
+    console.print(
+        Panel(f"[bold]Encryption Status:[/bold] {report.path}", title="envdrift encrypt --check")
+    )
 
     # Overall status
     if report.is_fully_encrypted:
@@ -262,7 +274,7 @@ def print_sync_summary(
 ) -> None:
     """
     Prints a summary of vault synchronization results.
-    
+
     Parameters:
         services_processed (int): Total number of services that were processed.
         created (int): Number of new keys created.
@@ -271,14 +283,16 @@ def print_sync_summary(
         errors (int): Number of services that failed during syncing.
     """
     console.print()
-    console.print(Panel(
-        f"[bold]Services processed:[/bold] {services_processed}\n"
-        f"[green]Created:[/green] {created}\n"
-        f"[yellow]Updated:[/yellow] {updated}\n"
-        f"[dim]Skipped:[/dim] {skipped}\n"
-        f"[red]Errors:[/red] {errors}",
-        title="Sync Summary"
-    ))
+    console.print(
+        Panel(
+            f"[bold]Services processed:[/bold] {services_processed}\n"
+            f"[green]Created:[/green] {created}\n"
+            f"[yellow]Updated:[/yellow] {updated}\n"
+            f"[dim]Skipped:[/dim] {skipped}\n"
+            f"[red]Errors:[/red] {errors}",
+            title="Sync Summary",
+        )
+    )
 
     if errors == 0:
         console.print("[bold green]All services synced successfully[/bold green]")

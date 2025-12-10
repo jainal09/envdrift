@@ -27,7 +27,7 @@ class FieldMetadata:
     def is_optional(self) -> bool:
         """
         Indicates that the field can be omitted because it has a default value.
-        
+
         Returns:
             `true` if the field can be omitted because it has a default value, `false` otherwise.
         """
@@ -47,7 +47,7 @@ class SchemaMetadata:
     def required_fields(self) -> list[str]:
         """
         List the names of fields marked as required in the schema.
-        
+
         Returns:
             list[str]: Field names for which FieldMetadata.required is True.
         """
@@ -57,7 +57,7 @@ class SchemaMetadata:
     def optional_fields(self) -> list[str]:
         """
         List optional field names from the schema.
-        
+
         Returns:
             list[str]: Field names whose corresponding FieldMetadata.required is False.
         """
@@ -67,7 +67,7 @@ class SchemaMetadata:
     def sensitive_fields(self) -> list[str]:
         """
         List names of fields that are marked as sensitive.
-        
+
         Returns:
             list[str]: Field names for which the corresponding FieldMetadata.sensitive is True.
         """
@@ -83,19 +83,17 @@ class SchemaLoadError(Exception):
 class SchemaLoader:
     """Load and introspect Pydantic Settings classes."""
 
-    def load(
-        self, dotted_path: str, service_dir: Path | str | None = None
-    ) -> type[BaseSettings]:
+    def load(self, dotted_path: str, service_dir: Path | str | None = None) -> type[BaseSettings]:
         """
         Load a Pydantic BaseSettings subclass specified by a dotted path.
-        
+
         Parameters:
             dotted_path (str): Dotted import path with class name separated by `:`, e.g. "module.path:SettingsClass".
             service_dir (Path | str | None): Optional directory to temporarily add to sys.path to assist imports.
-        
+
         Returns:
             type[BaseSettings]: The resolved Pydantic Settings class.
-        
+
         Raises:
             SchemaLoadError: If the path format is invalid, the module cannot be imported, the class is missing,
                              or the resolved object is not a subclass of `BaseSettings`.
@@ -109,8 +107,7 @@ class SchemaLoader:
         # Parse the dotted path
         if ":" not in dotted_path:
             raise SchemaLoadError(
-                f"Invalid schema path '{dotted_path}'. "
-                "Expected format: 'module.path:ClassName'"
+                f"Invalid schema path '{dotted_path}'. Expected format: 'module.path:ClassName'"
             )
 
         module_path, class_name = dotted_path.rsplit(":", 1)
@@ -118,9 +115,7 @@ class SchemaLoader:
         try:
             module = importlib.import_module(module_path)
         except ImportError as e:
-            raise SchemaLoadError(
-                f"Cannot import module '{module_path}': {e}"
-            ) from e
+            raise SchemaLoadError(f"Cannot import module '{module_path}': {e}") from e
 
         try:
             settings_cls = getattr(module, class_name)
@@ -131,21 +126,19 @@ class SchemaLoader:
 
         # Verify it's a BaseSettings subclass
         if not isinstance(settings_cls, type) or not issubclass(settings_cls, BaseSettings):
-            raise SchemaLoadError(
-                f"'{class_name}' is not a Pydantic BaseSettings subclass"
-            )
+            raise SchemaLoadError(f"'{class_name}' is not a Pydantic BaseSettings subclass")
 
         return settings_cls
 
     def extract_metadata(self, settings_cls: type[BaseSettings]) -> SchemaMetadata:
         """
         Builds a SchemaMetadata instance describing the given Pydantic BaseSettings class, including each field's metadata and the model's extra policy.
-        
+
         Inspects the class's model_config.extra (defaulting to "ignore") and model_fields to populate FieldMetadata entries; for required fields the stored default is None, sensitivity is read from a field's json_schema_extra["sensitive"] if present, and type annotations fall back to "Any" when not available.
-        
+
         Parameters:
             settings_cls (type[BaseSettings]): The Pydantic BaseSettings subclass to inspect.
-        
+
         Returns:
             SchemaMetadata: Metadata for the settings class, including field map and extra policy.
         """
@@ -208,11 +201,11 @@ class SchemaLoader:
     ) -> dict[str, Any] | None:
         """
         Invoke a module-level get_schema_metadata() function if present and return its result.
-        
+
         Parameters:
             module_path (str): Dotted module path to import (e.g., "config.settings").
             service_dir (Path | str | None): Optional directory to add to sys.path to aid importing the module.
-        
+
         Returns:
             dict[str, Any] | None: The dictionary returned by get_schema_metadata() if callable and executed successfully,
             or `None` if the module cannot be imported or the function is absent.
@@ -238,11 +231,11 @@ class SchemaLoader:
     ) -> SchemaMetadata:
         """
         Convenience method that loads a Pydantic BaseSettings class from a dotted path and returns its SchemaMetadata.
-        
+
         Parameters:
             dotted_path (str): Dotted import path with class name, e.g. "config.settings:ProductionSettings".
             service_dir (Path | str | None): Optional directory to add to sys.path to assist imports.
-        
+
         Returns:
             SchemaMetadata: Metadata describing the loaded settings class and its fields.
         """

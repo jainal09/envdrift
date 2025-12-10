@@ -23,11 +23,9 @@ def test_validate_requires_schema() -> None:
 
 def test_validate_file_not_found(tmp_path) -> None:
     """Test validate with missing env file."""
-    result = runner.invoke(app, [
-        "validate",
-        str(tmp_path / "nonexistent.env"),
-        "--schema", "app:Settings"
-    ])
+    result = runner.invoke(
+        app, ["validate", str(tmp_path / "nonexistent.env"), "--schema", "app:Settings"]
+    )
     assert result.exit_code == 1
     assert "not found" in result.stdout.lower()
 
@@ -43,11 +41,7 @@ def test_diff_file_not_found(tmp_path) -> None:
     env1 = tmp_path / ".env1"
     env1.write_text("FOO=bar")
 
-    result = runner.invoke(app, [
-        "diff",
-        str(env1),
-        str(tmp_path / "nonexistent.env")
-    ])
+    result = runner.invoke(app, ["diff", str(env1), str(tmp_path / "nonexistent.env")])
     assert result.exit_code == 1
     assert "not found" in result.stdout.lower()
 
@@ -95,11 +89,7 @@ def test_diff_json_format(tmp_path) -> None:
 
 def test_encrypt_check_file_not_found(tmp_path) -> None:
     """Test encrypt --check with missing file."""
-    result = runner.invoke(app, [
-        "encrypt",
-        str(tmp_path / "nonexistent.env"),
-        "--check"
-    ])
+    result = runner.invoke(app, ["encrypt", str(tmp_path / "nonexistent.env"), "--check"])
     assert result.exit_code == 1
 
 
@@ -128,11 +118,7 @@ def test_init_creates_settings(tmp_path) -> None:
     env_file.write_text("FOO=bar\nPORT=8000\nDEBUG=true")
     output_file = tmp_path / "settings.py"
 
-    result = runner.invoke(app, [
-        "init",
-        str(env_file),
-        "--output", str(output_file)
-    ])
+    result = runner.invoke(app, ["init", str(env_file), "--output", str(output_file)])
     assert result.exit_code == 0
     assert output_file.exists()
 
@@ -149,12 +135,9 @@ def test_init_detects_sensitive(tmp_path) -> None:
     env_file.write_text("API_KEY=secret\nDEBUG=true")
     output_file = tmp_path / "settings.py"
 
-    result = runner.invoke(app, [
-        "init",
-        str(env_file),
-        "--output", str(output_file),
-        "--detect-sensitive"
-    ])
+    result = runner.invoke(
+        app, ["init", str(env_file), "--output", str(output_file), "--detect-sensitive"]
+    )
     assert result.exit_code == 0
 
     content = output_file.read_text()
@@ -167,12 +150,9 @@ def test_init_custom_class_name(tmp_path) -> None:
     env_file.write_text("FOO=bar")
     output_file = tmp_path / "settings.py"
 
-    result = runner.invoke(app, [
-        "init",
-        str(env_file),
-        "--output", str(output_file),
-        "--class-name", "CustomSettings"
-    ])
+    result = runner.invoke(
+        app, ["init", str(env_file), "--output", str(output_file), "--class-name", "CustomSettings"]
+    )
     assert result.exit_code == 0
 
     content = output_file.read_text()

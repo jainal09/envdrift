@@ -55,7 +55,7 @@ HOOK_ENTRY = {
 def get_hook_config() -> str:
     """
     Provide the default pre-commit hook configuration template for envdrift.
-    
+
     Returns:
         The YAML string containing the pre-commit configuration for envdrift hooks.
     """
@@ -65,10 +65,10 @@ def get_hook_config() -> str:
 def find_precommit_config(start_dir: Path | None = None) -> Path | None:
     """
     Locate a .pre-commit-config.yaml file by searching the given directory and its parents.
-    
+
     Parameters:
         start_dir (Path | None): Directory to start the search from. If None, the current working directory is used.
-    
+
     Returns:
         Path | None: Path to the first .pre-commit-config.yaml found while walking upward, or `None` if no file is found.
     """
@@ -77,10 +77,13 @@ def find_precommit_config(start_dir: Path | None = None) -> Path | None:
 
     current = start_dir.resolve()
 
-    while current != current.parent:
+    while True:
         config_path = current / ".pre-commit-config.yaml"
         if config_path.exists():
             return config_path
+        if current == current.parent:
+            # Reached filesystem root
+            break
         current = current.parent
 
     return None
@@ -106,8 +109,7 @@ def install_hooks(
         import yaml
     except ImportError:
         raise ImportError(
-            "PyYAML is required for pre-commit integration. "
-            "Install with: pip install pyyaml"
+            "PyYAML is required for pre-commit integration. Install with: pip install pyyaml"
         )
 
     # Find or create config
@@ -172,13 +174,13 @@ def install_hooks(
 def uninstall_hooks(config_path: Path | None = None) -> bool:
     """
     Remove any envdrift hooks from a .pre-commit-config.yaml file.
-    
+
     Parameters:
         config_path (Path | None): Path to the pre-commit config file. If None, the repository tree is searched upward to locate .pre-commit-config.yaml.
-    
+
     Returns:
         bool: `True` if one or more envdrift hooks were removed and the file was updated, `False` otherwise.
-    
+
     Raises:
         ImportError: If PyYAML is not available.
     """
@@ -208,8 +210,7 @@ def uninstall_hooks(config_path: Path | None = None) -> bool:
 
             # Remove envdrift hooks
             repo["hooks"] = [
-                hook for hook in hooks
-                if not hook.get("id", "").startswith("envdrift-")
+                hook for hook in hooks if not hook.get("id", "").startswith("envdrift-")
             ]
 
             if len(repo["hooks"]) != original_count:
@@ -218,7 +219,8 @@ def uninstall_hooks(config_path: Path | None = None) -> bool:
     if modified:
         # Remove empty local repos
         config["repos"] = [
-            repo for repo in config["repos"]
+            repo
+            for repo in config["repos"]
             if not (repo.get("repo") == "local" and not repo.get("hooks"))
         ]
 
@@ -231,10 +233,10 @@ def uninstall_hooks(config_path: Path | None = None) -> bool:
 def verify_hooks_installed(config_path: Path | None = None) -> dict[str, bool]:
     """
     Check which envdrift pre-commit hooks are present in a given pre-commit configuration.
-    
+
     Parameters:
         config_path (Path | None): Path to a .pre-commit-config.yaml file. If None, the file is searched for by walking up from the current working directory.
-    
+
     Returns:
         dict[str, bool]: Mapping of hook id to installation status: `{"envdrift-validate": bool, "envdrift-encryption": bool}`. Returns both `False` if the config file is missing or unreadable, or if the PyYAML package is not available.
     """

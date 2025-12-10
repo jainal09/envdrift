@@ -1,6 +1,5 @@
 """Tests for DiffEngine."""
 
-
 from envdrift.core.diff import DiffEngine, DiffType
 from envdrift.core.parser import EnvParser
 

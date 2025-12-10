@@ -43,16 +43,14 @@ class HashiCorpVaultClient(VaultClient):
     ):
         """
         Create a HashiCorp Vault client configured to use the KV v2 secrets engine.
-        
+
         Parameters:
             url (str): Vault server URL (e.g., "https://vault.example.com:8200").
             token (str | None): Authentication token; if omitted, the VAULT_TOKEN environment variable is used.
             mount_point (str): KV secrets engine mount point (default "secret").
         """
         if not HVAC_AVAILABLE:
-            raise ImportError(
-                "hvac not installed. Install with: pip install envdrift[hashicorp]"
-            )
+            raise ImportError("hvac not installed. Install with: pip install envdrift[hashicorp]")
 
         self.url = url
         self.token = token or os.environ.get("VAULT_TOKEN")
@@ -62,14 +60,14 @@ class HashiCorpVaultClient(VaultClient):
     def authenticate(self) -> None:
         """
         Authenticate the client against HashiCorp Vault using the configured token.
-        
+
         This initializes and verifies the underlying hvac client and stores it on the instance
         when authentication succeeds.
-        
+
         Raises:
-        	AuthenticationError: If no token was provided, the token is invalid, expired, or Vault
-        		rejects authentication (including Unauthorized or Forbidden responses).
-        	VaultError: For other connection or unexpected errors communicating with Vault.
+                AuthenticationError: If no token was provided, the token is invalid, expired, or Vault
+                        rejects authentication (including Unauthorized or Forbidden responses).
+                VaultError: For other connection or unexpected errors communicating with Vault.
         """
         if not self.token:
             raise AuthenticationError(
@@ -89,7 +87,7 @@ class HashiCorpVaultClient(VaultClient):
     def is_authenticated(self) -> bool:
         """
         Return whether the stored hvac client is currently authenticated.
-        
+
         Returns:
             bool: `True` if an internal hvac client exists and reports it is authenticated, `False` otherwise.
         """
@@ -103,15 +101,15 @@ class HashiCorpVaultClient(VaultClient):
     def get_secret(self, name: str) -> SecretValue:
         """
         Retrieve a secret from Vault at the given path relative to the client's mount point.
-        
+
         If the stored secret data contains only a single key named "value", that value is returned; otherwise the entire secret data dict is JSON-encoded and returned as the value. The returned SecretValue includes the secret's version and metadata (created_time, deletion_time, destroyed, custom_metadata).
-        
+
         Parameters:
             name: Secret path relative to the configured mount point.
-        
+
         Returns:
             A SecretValue containing the secret's value, version, and metadata.
-        
+
         Raises:
             SecretNotFoundError: If the secret path does not exist.
             AuthenticationError: If access to the secret is denied or the client is unauthenticated.
@@ -135,6 +133,7 @@ class HashiCorpVaultClient(VaultClient):
                 value = secret_data["value"]
             else:
                 import json
+
                 value = json.dumps(secret_data)
 
             return SecretValue(
@@ -185,14 +184,14 @@ class HashiCorpVaultClient(VaultClient):
     def create_or_update_secret(self, name: str, data: dict) -> SecretValue:
         """
         Create or update a secret at the given Vault path.
-        
+
         Parameters:
             name (str): Secret path in the KV v2 engine.
             data (dict): Dictionary of key-value pairs to store for the secret.
-        
+
         Returns:
             SecretValue: The stored secret representation containing the secret `name`, a string `value` (JSON-encoded when multiple keys), the secret `version`, and metadata including `created_time`.
-        
+
         Raises:
             AuthenticationError: If the client is not authorized to write the secret.
             VaultError: For other Vault-related errors.
@@ -208,8 +207,10 @@ class HashiCorpVaultClient(VaultClient):
 
             metadata = response.get("data", {})
 
+            # Use same value extraction logic as get_secret for consistency
             import json
-            value = json.dumps(data) if len(data) > 1 else data.get("value", "")
+
+            value = data["value"] if ("value" in data and len(data) == 1) else json.dumps(data)
 
             return SecretValue(
                 name=name,
@@ -227,11 +228,11 @@ class HashiCorpVaultClient(VaultClient):
     def set_secret(self, name: str, value: str) -> SecretValue:
         """
         Set a string secret at the given path.
-        
+
         Parameters:
             name (str): Secret path in Vault.
             value (str): Secret string to store.
-        
+
         Returns:
             SecretValue: The created or updated secret, including its stored value and metadata.
         """

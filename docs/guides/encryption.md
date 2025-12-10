@@ -18,7 +18,7 @@ envdrift encrypt .env.production --check
 
 Output:
 
-```
+```text
 Encryption Report for .env.production
 
 ENCRYPTED VARIABLES:
@@ -61,7 +61,7 @@ envdrift decrypt .env.production
 
 After encryption:
 
-```
+```text
 .env.production          # Encrypted (safe to commit)
 .env.keys                 # Private keys (NEVER commit!)
 ```

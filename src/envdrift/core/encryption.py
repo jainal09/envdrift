@@ -19,14 +19,16 @@ class EncryptionReport:
     encrypted_vars: set[str] = field(default_factory=set)
     plaintext_vars: set[str] = field(default_factory=set)
     empty_vars: set[str] = field(default_factory=set)
-    plaintext_secrets: set[str] = field(default_factory=set)  # Plaintext vars that look like secrets
+    plaintext_secrets: set[str] = field(
+        default_factory=set
+    )  # Plaintext vars that look like secrets
     warnings: list[str] = field(default_factory=list)
 
     @property
     def encryption_ratio(self) -> float:
         """
         Compute the fraction of non-empty variables that are encrypted.
-        
+
         Returns:
             encryption_ratio (float): Fraction between 0.0 and 1.0 equal to encrypted_vars / (encrypted_vars + plaintext_vars). Returns 0.0 when there are no non-empty variables.
         """
@@ -39,7 +41,7 @@ class EncryptionReport:
     def total_vars(self) -> int:
         """
         Total number of variables considered by the report.
-        
+
         Returns:
             int: Count of encrypted, plaintext, and empty variables.
         """
@@ -97,11 +99,11 @@ class EncryptionDetector:
     ) -> EncryptionReport:
         """
         Analyze an EnvFile to determine which variables are encrypted, plaintext, empty, and which plaintext values appear to be secrets.
-        
+
         Parameters:
             env_file (EnvFile): Parsed env file to analyze.
             schema (SchemaMetadata | None): Optional schema whose sensitive_fields will be treated as sensitive names.
-        
+
         Returns:
             EncryptionReport: Report containing the file path, sets of encrypted/plaintext/empty variables, detected plaintext secrets, collected warnings, and the is_fully_encrypted flag.
         """
@@ -131,13 +133,9 @@ class EncryptionDetector:
                             f"'{var_name}' is marked sensitive in schema but has plaintext value"
                         )
                     elif is_suspicious:
-                        report.warnings.append(
-                            f"'{var_name}' has a value that looks like a secret"
-                        )
+                        report.warnings.append(f"'{var_name}' has a value that looks like a secret")
                     elif is_name_sensitive:
-                        report.warnings.append(
-                            f"'{var_name}' has a name suggesting sensitive data"
-                        )
+                        report.warnings.append(f"'{var_name}' has a name suggesting sensitive data")
 
         # Determine if fully encrypted
         non_empty_vars = report.encrypted_vars | report.plaintext_vars
@@ -149,10 +147,10 @@ class EncryptionDetector:
     def should_block_commit(self, report: EncryptionReport) -> bool:
         """
         Decides whether a commit should be blocked due to plaintext secrets found in the report.
-        
+
         Parameters:
             report (EncryptionReport): Analysis report to evaluate.
-        
+
         Returns:
             `true` if the report contains any plaintext secrets, `false` otherwise.
         """
@@ -161,10 +159,10 @@ class EncryptionDetector:
     def has_encrypted_header(self, content: str) -> bool:
         """
         Determine whether the given file content contains a dotenvx encryption header.
-        
+
         Parameters:
             content (str): Raw file content to inspect for encryption markers.
-        
+
         Returns:
             `true` if any encrypted-file marker from ENCRYPTED_FILE_MARKERS is present in content, `false` otherwise.
         """
@@ -176,10 +174,10 @@ class EncryptionDetector:
     def is_file_encrypted(self, path: Path) -> bool:
         """
         Determine whether a file contains a dotenvx encrypted header.
-        
+
         Parameters:
             path (Path): Filesystem path to the file to inspect.
-        
+
         Returns:
             `true` if the file contains a dotenvx encrypted header, `false` otherwise.
         """
@@ -192,7 +190,7 @@ class EncryptionDetector:
     def _is_value_suspicious(self, value: str) -> bool:
         """
         Determine whether a plaintext value matches any configured secret patterns.
-        
+
         Returns:
             `true` if the value appears to be a secret, `false` otherwise.
         """
@@ -204,10 +202,10 @@ class EncryptionDetector:
     def _is_name_sensitive(self, name: str) -> bool:
         """
         Determine whether an environment variable name indicates sensitive data.
-        
+
         Parameters:
             name (str): The environment variable name to test.
-        
+
         Returns:
             True if the name matches any configured sensitive-name pattern, False otherwise.
         """
@@ -219,10 +217,10 @@ class EncryptionDetector:
     def get_recommendations(self, report: EncryptionReport) -> list[str]:
         """
         Builds human-readable remediation recommendations derived from an EncryptionReport.
-        
+
         Parameters:
             report (EncryptionReport): Analysis result for a single .env file used to derive recommendations.
-        
+
         Returns:
             list[str]: Ordered list of recommendation strings; empty if no actions are suggested.
         """
@@ -233,9 +231,7 @@ class EncryptionDetector:
                 f"Encrypt the following variables before committing: "
                 f"{', '.join(sorted(report.plaintext_secrets))}"
             )
-            recommendations.append(
-                "Run: dotenvx encrypt -f <env_file>"
-            )
+            recommendations.append("Run: dotenvx encrypt -f <env_file>")
 
         if not report.is_fully_encrypted and report.encrypted_vars:
             recommendations.append(

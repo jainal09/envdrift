@@ -81,6 +81,7 @@ envdrift diff ENV1 ENV2 [OPTIONS]
 | Option | Short | Description | Default |
 |--------|-------|-------------|---------|
 | `--schema` | `-s` | Schema for sensitive field detection | - |
+| `--service-dir` | `-d` | Directory to add to sys.path for imports | - |
 | `--format` | - | Output format: `table` or `json` | `table` |
 | `--show-values` | - | Show actual values (careful with secrets!) | `false` |
 | `--include-unchanged` | - | Include unchanged variables in output | `false` |

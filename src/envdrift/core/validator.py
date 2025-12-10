@@ -25,9 +25,9 @@ class ValidationResult:
     def has_errors(self) -> bool:
         """
         Return whether the validation contains any errors (exclude warnings).
-        
+
         Checks for missing required variables, unencrypted sensitive values, type errors, or extra variables present when the schema forbids extras.
-        
+
         Returns:
             True if any errors are present, False otherwise.
         """
@@ -42,7 +42,7 @@ class ValidationResult:
     def error_count(self) -> int:
         """
         Compute the total number of validation error entries.
-        
+
         Returns:
             int: Sum of missing required variables, unencrypted secrets, type errors, and extra variables.
         """
@@ -57,7 +57,7 @@ class ValidationResult:
     def warning_count(self) -> int:
         """
         Compute the total number of warning entries, combining explicit warnings with missing optional variables.
-        
+
         Returns:
             The total count of warnings and missing optional variables as an integer.
         """
@@ -149,9 +149,7 @@ class Validator:
                 else:
                     # Just a warning when extra is "ignore" or "allow"
                     for var_name in extra:
-                        result.warnings.append(
-                            f"Extra variable '{var_name}' not in schema"
-                        )
+                        result.warnings.append(f"Extra variable '{var_name}' not in schema")
 
         # Check encryption status for sensitive variables
         if check_encryption:
@@ -205,7 +203,7 @@ class Validator:
     def is_value_suspicious(self, value: str) -> bool:
         """
         Determine whether a plaintext value matches any known secret-like pattern.
-        
+
         Returns:
             `true` if the value matches any secret-like pattern, `false` otherwise.
         """
@@ -217,10 +215,10 @@ class Validator:
     def is_name_suspicious(self, name: str) -> bool:
         """
         Determine whether an environment variable name indicates it contains sensitive data.
-        
+
         Parameters:
             name (str): Environment variable name to evaluate.
-        
+
         Returns:
             bool: `True` if the variable name matches a sensitive pattern, `False` otherwise.
         """
@@ -232,14 +230,14 @@ class Validator:
     def _check_type(self, value: str, expected_type: type) -> str | None:
         """
         Validate a plaintext .env value against an expected Python type.
-        
+
         Parameters:
             value (str): The raw value read from a .env file.
             expected_type (type): The Python type expected for the value (e.g., int, float, bool, list).
-        
+
         Notes:
             If `expected_type` is None or `value` is an empty string, no type check is performed and the function returns None.
-        
+
         Returns:
             str | None: An error message describing the type mismatch, or `None` if the value is acceptable or no check was performed.
         """
@@ -275,16 +273,14 @@ class Validator:
 
         return None
 
-    def generate_fix_template(
-        self, result: ValidationResult, schema: SchemaMetadata
-    ) -> str:
+    def generate_fix_template(self, result: ValidationResult, schema: SchemaMetadata) -> str:
         """
         Generate a .env snippet that provides assignments for any missing schema variables.
-        
+
         Parameters:
             result (ValidationResult): Validation outcome containing `missing_required` and `missing_optional` sets.
             schema (SchemaMetadata): Schema metadata used to include field descriptions, defaults, and sensitivity flags.
-        
+
         Returns:
             template (str): A newline-separated .env template. Required sensitive fields use the placeholder
             `encrypted:YOUR_VALUE_HERE`; optional fields include commented defaults when available.
@@ -298,7 +294,7 @@ class Validator:
                 if field_meta and field_meta.description:
                     lines.append(f"# {field_meta.description}")
                 if field_meta and field_meta.sensitive:
-                    lines.append(f"{var_name}=\"encrypted:YOUR_VALUE_HERE\"")
+                    lines.append(f'{var_name}="encrypted:YOUR_VALUE_HERE"')
                 else:
                     lines.append(f"{var_name}=")
                 lines.append("")

@@ -1,6 +1,5 @@
 """Tests for Validator."""
 
-
 from envdrift.core.parser import EnvParser
 from envdrift.core.schema import SchemaLoader
 from envdrift.core.validator import Validator

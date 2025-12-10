@@ -115,7 +115,13 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        env: [development, staging, production]
+        include:
+          - env: development
+            settings_class: DevelopmentSettings
+          - env: staging
+            settings_class: StagingSettings
+          - env: production
+            settings_class: ProductionSettings
     steps:
       - uses: actions/checkout@v4
 
@@ -125,7 +131,7 @@ jobs:
       - name: Validate ${{ matrix.env }}
         run: |
           envdrift validate .env.${{ matrix.env }} \
-            --schema config.settings:${{ matrix.env | title }}Settings \
+            --schema config.settings:${{ matrix.settings_class }} \
             --ci
 ```
 

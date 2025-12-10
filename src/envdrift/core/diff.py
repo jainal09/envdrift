@@ -44,7 +44,7 @@ class DiffResult:
     def added_count(self) -> int:
         """
         Number of variables that are present in env2 but not in env1.
-        
+
         Returns:
             int: Count of variables classified as `ADDED`.
         """
@@ -54,7 +54,7 @@ class DiffResult:
     def removed_count(self) -> int:
         """
         Number of variables that are present in the first environment but missing in the second.
-        
+
         Returns:
             int: Count of diffs with type `DiffType.REMOVED`.
         """
@@ -64,7 +64,7 @@ class DiffResult:
     def changed_count(self) -> int:
         """
         Number of variables whose values differ between the two environments.
-        
+
         Returns:
             int: Count of VarDiff entries whose `diff_type` is `DiffType.CHANGED`.
         """
@@ -74,7 +74,7 @@ class DiffResult:
     def unchanged_count(self) -> int:
         """
         Return the number of variables that are unchanged between the two environments.
-        
+
         Returns:
             int: Count of VarDiff entries whose `diff_type` is `DiffType.UNCHANGED`.
         """
@@ -84,7 +84,7 @@ class DiffResult:
     def has_drift(self) -> bool:
         """
         Determine whether there is any drift between the two environments.
-        
+
         Returns:
             True if at least one variable was added, removed, or changed, False otherwise.
         """
@@ -93,7 +93,7 @@ class DiffResult:
     def get_added(self) -> list[VarDiff]:
         """
         List VarDiff entries that are present only in the second environment.
-        
+
         Returns:
             list[VarDiff]: VarDiff objects whose `diff_type` is `DiffType.ADDED`.
         """
@@ -102,7 +102,7 @@ class DiffResult:
     def get_removed(self) -> list[VarDiff]:
         """
         Retrieve variables present in the first environment but absent in the second.
-        
+
         Returns:
             list[VarDiff]: VarDiff objects whose `diff_type` is `DiffType.REMOVED`.
         """
@@ -111,7 +111,7 @@ class DiffResult:
     def get_changed(self) -> list[VarDiff]:
         """
         Return all variables whose values differ between the two environments.
-        
+
         Returns:
             list[VarDiff]: List of VarDiff entries whose `diff_type` is `DiffType.CHANGED`.
         """
@@ -133,14 +133,14 @@ class DiffEngine:
     ) -> DiffResult:
         """
         Compute differences between two environment files and return a structured DiffResult.
-        
+
         Parameters:
             env1 (EnvFile): First environment file (left-hand side of comparison).
             env2 (EnvFile): Second environment file (right-hand side of comparison).
             schema (SchemaMetadata | None): Optional schema used to identify sensitive fields.
             mask_values (bool): If True, sensitive variable values are replaced with a mask in the result.
             include_unchanged (bool): If True, variables with identical values in both files are included.
-        
+
         Returns:
             DiffResult: Aggregated comparison result containing a list of VarDiff entries and summary counts.
         """
@@ -200,10 +200,10 @@ class DiffEngine:
     def to_dict(self, result: DiffResult) -> dict:
         """
         Convert a DiffResult into a JSON-serializable dictionary.
-        
+
         Args:
             result: DiffResult instance to convert.
-        
+
         Returns:
             dict: Mapping with keys:
                 - "env1": string path of the first env file

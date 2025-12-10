@@ -18,16 +18,16 @@ def validate(
 ) -> ValidationResult:
     """
     Validate an .env file against a Pydantic Settings class schema.
-    
+
     Parameters:
         env_file: Path or string to the .env file to validate.
         schema: Dotted path to the Pydantic Settings class (e.g., "app.config:Settings"); required.
         service_dir: Optional directory to add to sys.path to assist importing the schema.
         check_encryption: If true, perform additional checks for encrypted or sensitive values.
-    
+
     Returns:
         ValidationResult: Result containing validation status and any issues found.
-    
+
     Raises:
         ValueError: If `schema` is not provided.
         FileNotFoundError: If the env file does not exist or cannot be read.
@@ -61,17 +61,17 @@ def diff(
 ) -> DiffResult:
     """
     Compute differences between two .env files.
-    
+
     Parameters:
         env1 (Path | str): Path to the first .env file.
         env2 (Path | str): Path to the second .env file.
         schema (str | None): Optional dotted path to a Pydantic Settings class used to identify sensitive fields.
         service_dir (Path | str | None): Optional directory to add to imports when loading the schema.
         mask_values (bool): If true, mask sensitive values in the resulting diff.
-    
+
     Returns:
         DiffResult: Differences between the files, including added, removed, and changed variables. Sensitive values are masked when requested.
-    
+
     Raises:
         FileNotFoundError: If either env1 or env2 does not exist.
     """
@@ -103,18 +103,18 @@ def init(
 ) -> Path:
     """
     Generate a Pydantic BaseSettings subclass file from an existing .env file.
-    
+
     Parses the provided env file, optionally detects variables that appear sensitive, and writes a Python module defining a Pydantic Settings class with inferred type hints and defaults. Sensitive fields are marked with `json_schema_extra={"sensitive": True}`.
-    
+
     Parameters:
         env_file (Path | str): Path to the source .env file.
         output (Path | str): Path where the generated Python module will be written.
         class_name (str): Name to use for the generated Settings class.
         detect_sensitive (bool): If True, attempt to detect sensitive variables and mark them in the generated fields.
-    
+
     Returns:
         Path: The path to the written settings file.
-    
+
     Raises:
         FileNotFoundError: If the specified env_file does not exist or cannot be read.
     """
