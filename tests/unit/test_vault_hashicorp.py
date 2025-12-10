@@ -192,12 +192,19 @@ class TestHashiCorpVaultClientWithMock:
         assert "value1" in secret.value
 
     @patch("envdrift.vault.hashicorp.hvac")
-    @patch("envdrift.vault.hashicorp.InvalidPath", Exception)
     def test_get_secret_not_found_raises(self, mock_hvac_module):
-        """Test get_secret raises for missing secret."""
+        """Test get_secret raises SecretNotFoundError for missing secret.
+
+        This test verifies that when hvac raises InvalidPath (secret doesn't exist),
+        the client properly converts it to SecretNotFoundError.
+        """
+        # Import the actual InvalidPath from the module (which may be Exception if hvac not installed)
+        from envdrift.vault.hashicorp import InvalidPath
+
         mock_client = MagicMock()
         mock_client.is_authenticated.return_value = True
-        mock_client.secrets.kv.v2.read_secret_version.side_effect = Exception("not found")
+        # Raise InvalidPath which is what hvac raises when secret doesn't exist
+        mock_client.secrets.kv.v2.read_secret_version.side_effect = InvalidPath("not found")
         mock_hvac_module.Client.return_value = mock_client
 
         from envdrift.vault.hashicorp import HashiCorpVaultClient
@@ -208,7 +215,7 @@ class TestHashiCorpVaultClientWithMock:
         )
         client.authenticate()
 
-        with pytest.raises((SecretNotFoundError, VaultError)):
+        with pytest.raises(SecretNotFoundError):
             client.get_secret("nonexistent")
 
     @patch("envdrift.vault.hashicorp.hvac")
