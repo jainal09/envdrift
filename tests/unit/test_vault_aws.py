@@ -2,13 +2,12 @@
 
 from __future__ import annotations
 
+from unittest.mock import MagicMock, patch
+
 import pytest
-from unittest.mock import MagicMock, patch, PropertyMock
 
 from envdrift.vault.base import (
     AuthenticationError,
-    SecretNotFoundError,
-    SecretValue,
     VaultError,
 )
 
@@ -26,6 +25,7 @@ class TestAWSSecretsManagerClient:
         }):
             # Need to import after patching
             import importlib
+
             import envdrift.vault.aws as aws_module
             importlib.reload(aws_module)
             yield aws_module
@@ -44,7 +44,7 @@ class TestAWSSecretsManagerClient:
         """Test successful authentication."""
         mock_sm_client = MagicMock()
         mock_sts_client = MagicMock()
-        
+
         with patch("boto3.client") as mock_client:
             def client_factory(service, **kwargs):
                 if service == "secretsmanager":
@@ -52,12 +52,12 @@ class TestAWSSecretsManagerClient:
                 elif service == "sts":
                     return mock_sts_client
                 return MagicMock()
-            
+
             mock_client.side_effect = client_factory
-            
+
             client = mock_boto3.AWSSecretsManagerClient()
             client.authenticate()
-            
+
             assert client._client is not None
 
     def test_authenticate_no_credentials(self, mock_boto3):
@@ -65,7 +65,7 @@ class TestAWSSecretsManagerClient:
         with patch("boto3.client") as mock_client:
             # Simulate NoCredentialsError
             mock_client.side_effect = Exception("No credentials")
-            
+
             client = mock_boto3.AWSSecretsManagerClient()
             # The actual exception type depends on mocking setup
             with pytest.raises((AuthenticationError, VaultError, Exception)):
@@ -80,7 +80,7 @@ class TestAWSSecretsManagerClient:
         """Test is_authenticated returns True after authentication."""
         mock_sm_client = MagicMock()
         mock_sts_client = MagicMock()
-        
+
         with patch("boto3.client") as mock_client:
             def client_factory(service, **kwargs):
                 if service == "secretsmanager":
@@ -88,12 +88,12 @@ class TestAWSSecretsManagerClient:
                 elif service == "sts":
                     return mock_sts_client
                 return MagicMock()
-            
+
             mock_client.side_effect = client_factory
-            
+
             client = mock_boto3.AWSSecretsManagerClient()
             client.authenticate()
-            
+
             # After auth, is_authenticated should check STS again
             assert client.is_authenticated() is True
 
@@ -108,9 +108,9 @@ class TestAWSSecretsManagerClient:
             "CreatedDate": "2024-01-01",
             "VersionStages": ["AWSCURRENT"],
         }
-        
+
         mock_sts_client = MagicMock()
-        
+
         with patch("boto3.client") as mock_client:
             def client_factory(service, **kwargs):
                 if service == "secretsmanager":
@@ -118,14 +118,14 @@ class TestAWSSecretsManagerClient:
                 elif service == "sts":
                     return mock_sts_client
                 return MagicMock()
-            
+
             mock_client.side_effect = client_factory
-            
+
             client = mock_boto3.AWSSecretsManagerClient()
             client.authenticate()
-            
+
             secret = client.get_secret("my-secret")
-            
+
             assert secret.name == "my-secret"
             assert secret.value == "secret-value"
             assert secret.version == "v1"
@@ -138,9 +138,9 @@ class TestAWSSecretsManagerClient:
             "SecretBinary": b"binary-data",
             "VersionId": "v1",
         }
-        
+
         mock_sts_client = MagicMock()
-        
+
         with patch("boto3.client") as mock_client:
             def client_factory(service, **kwargs):
                 if service == "secretsmanager":
@@ -148,12 +148,12 @@ class TestAWSSecretsManagerClient:
                 elif service == "sts":
                     return mock_sts_client
                 return MagicMock()
-            
+
             mock_client.side_effect = client_factory
-            
+
             client = mock_boto3.AWSSecretsManagerClient()
             client.authenticate()
-            
+
             secret = client.get_secret("binary-secret")
             assert secret.value == "binary-data"
 
@@ -166,9 +166,9 @@ class TestAWSSecretsManagerClient:
             {"SecretList": [{"Name": "secret3"}]},
         ]
         mock_sm_client.get_paginator.return_value = mock_paginator
-        
+
         mock_sts_client = MagicMock()
-        
+
         with patch("boto3.client") as mock_client:
             def client_factory(service, **kwargs):
                 if service == "secretsmanager":
@@ -176,12 +176,12 @@ class TestAWSSecretsManagerClient:
                 elif service == "sts":
                     return mock_sts_client
                 return MagicMock()
-            
+
             mock_client.side_effect = client_factory
-            
+
             client = mock_boto3.AWSSecretsManagerClient()
             client.authenticate()
-            
+
             secrets = client.list_secrets()
             assert secrets == ["secret1", "secret2", "secret3"]
 
@@ -193,9 +193,9 @@ class TestAWSSecretsManagerClient:
             {"SecretList": [{"Name": "app/secret1"}, {"Name": "app/secret2"}, {"Name": "other/secret"}]},
         ]
         mock_sm_client.get_paginator.return_value = mock_paginator
-        
+
         mock_sts_client = MagicMock()
-        
+
         with patch("boto3.client") as mock_client:
             def client_factory(service, **kwargs):
                 if service == "secretsmanager":
@@ -203,12 +203,12 @@ class TestAWSSecretsManagerClient:
                 elif service == "sts":
                     return mock_sts_client
                 return MagicMock()
-            
+
             mock_client.side_effect = client_factory
-            
+
             client = mock_boto3.AWSSecretsManagerClient()
             client.authenticate()
-            
+
             secrets = client.list_secrets(prefix="app/")
             assert secrets == ["app/secret1", "app/secret2"]
 
@@ -220,9 +220,9 @@ class TestAWSSecretsManagerClient:
             "VersionId": "v1",
             "ARN": "arn:aws:...",
         }
-        
+
         mock_sts_client = MagicMock()
-        
+
         with patch("boto3.client") as mock_client:
             def client_factory(service, **kwargs):
                 if service == "secretsmanager":
@@ -230,12 +230,12 @@ class TestAWSSecretsManagerClient:
                 elif service == "sts":
                     return mock_sts_client
                 return MagicMock()
-            
+
             mock_client.side_effect = client_factory
-            
+
             client = mock_boto3.AWSSecretsManagerClient()
             client.authenticate()
-            
+
             secret = client.create_secret("new-secret", "value", "description")
             assert secret.name == "new-secret"
             assert secret.value == "value"
@@ -248,9 +248,9 @@ class TestAWSSecretsManagerClient:
             "VersionId": "v2",
             "ARN": "arn:aws:...",
         }
-        
+
         mock_sts_client = MagicMock()
-        
+
         with patch("boto3.client") as mock_client:
             def client_factory(service, **kwargs):
                 if service == "secretsmanager":
@@ -258,12 +258,12 @@ class TestAWSSecretsManagerClient:
                 elif service == "sts":
                     return mock_sts_client
                 return MagicMock()
-            
+
             mock_client.side_effect = client_factory
-            
+
             client = mock_boto3.AWSSecretsManagerClient()
             client.authenticate()
-            
+
             secret = client.update_secret("existing-secret", "new-value")
             assert secret.name == "existing-secret"
             assert secret.value == "new-value"
@@ -277,9 +277,9 @@ class TestAWSSecretsManagerClient:
             "SecretString": '{"key": "value", "number": 42}',
             "VersionId": "v1",
         }
-        
+
         mock_sts_client = MagicMock()
-        
+
         with patch("boto3.client") as mock_client:
             def client_factory(service, **kwargs):
                 if service == "secretsmanager":
@@ -287,11 +287,11 @@ class TestAWSSecretsManagerClient:
                 elif service == "sts":
                     return mock_sts_client
                 return MagicMock()
-            
+
             mock_client.side_effect = client_factory
-            
+
             client = mock_boto3.AWSSecretsManagerClient()
             client.authenticate()
-            
+
             data = client.get_secret_json("json-secret")
             assert data == {"key": "value", "number": 42}

@@ -2,14 +2,12 @@
 
 from __future__ import annotations
 
-import pytest
-from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 from envdrift.output.rich import (
     console,
-    print_success,
     print_error,
+    print_success,
     print_warning,
 )
 
@@ -17,7 +15,7 @@ from envdrift.output.rich import (
 class TestPrintFunctions:
     """Tests for print utility functions."""
 
-    def test_print_success(self, capsys):
+    def test_print_success(self):
         """Test print_success outputs green OK."""
         with patch.object(console, "print") as mock_print:
             print_success("Operation completed")
@@ -25,7 +23,7 @@ class TestPrintFunctions:
             call_args = str(mock_print.call_args)
             assert "OK" in call_args or "Operation completed" in call_args
 
-    def test_print_error(self, capsys):
+    def test_print_error(self):
         """Test print_error outputs red ERROR."""
         with patch.object(console, "print") as mock_print:
             print_error("Something failed")
@@ -33,7 +31,7 @@ class TestPrintFunctions:
             call_args = str(mock_print.call_args)
             assert "ERROR" in call_args or "Something failed" in call_args
 
-    def test_print_warning(self, capsys):
+    def test_print_warning(self):
         """Test print_warning outputs yellow WARN."""
         with patch.object(console, "print") as mock_print:
             print_warning("Something suspicious")

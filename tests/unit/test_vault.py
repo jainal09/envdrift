@@ -2,17 +2,18 @@
 
 from __future__ import annotations
 
-import pytest
 from unittest.mock import MagicMock, patch
 
+import pytest
+
+from envdrift.vault import VaultProvider, get_vault_client
 from envdrift.vault.base import (
-    VaultError,
     AuthenticationError,
     SecretNotFoundError,
     SecretValue,
     VaultClient,
+    VaultError,
 )
-from envdrift.vault import VaultProvider, get_vault_client
 
 
 class TestVaultExceptions:
@@ -102,7 +103,7 @@ class TestGetVaultClient:
         # The azure module isn't imported until get_vault_client is called
         # so we need to mock the import
         mock_azure_module = MagicMock()
-        
+
         with patch.dict("sys.modules", {"envdrift.vault.azure": mock_azure_module}):
             with pytest.raises(ValueError) as exc_info:
                 get_vault_client("azure")
@@ -113,25 +114,23 @@ class TestGetVaultClient:
         mock_client = MagicMock()
         mock_azure_module = MagicMock()
         mock_azure_module.AzureKeyVaultClient.return_value = mock_client
-        
+
         with patch.dict("sys.modules", {"envdrift.vault.azure": mock_azure_module}):
             client = get_vault_client(VaultProvider.AZURE, vault_url="https://myvault.vault.azure.net")
             assert client is not None
 
     def test_aws_default_region(self):
         """Test AWS client uses default region."""
-        mock_client = MagicMock()
         mock_aws_module = MagicMock()
-        mock_aws_module.AWSSecretsManagerClient.return_value = mock_client
-        
+
         with patch.dict("sys.modules", {"envdrift.vault.aws": mock_aws_module}):
-            client = get_vault_client("aws")
-            # Should not raise - uses default region
+            get_vault_client("aws")
+            mock_aws_module.AWSSecretsManagerClient.assert_called_once()
 
     def test_hashicorp_requires_url(self):
         """Test HashiCorp provider requires url config."""
         mock_hashi_module = MagicMock()
-        
+
         with patch.dict("sys.modules", {"envdrift.vault.hashicorp": mock_hashi_module}):
             with pytest.raises(ValueError) as exc_info:
                 get_vault_client("hashicorp")
@@ -142,10 +141,10 @@ class TestGetVaultClient:
         mock_client = MagicMock()
         mock_hashi_module = MagicMock()
         mock_hashi_module.HashiCorpVaultClient.return_value = mock_client
-        
+
         with patch.dict("sys.modules", {"envdrift.vault.hashicorp": mock_hashi_module}):
             client = get_vault_client(
-                "hashicorp", 
+                "hashicorp",
                 url="http://localhost:8200",
                 token="mytoken"
             )
@@ -159,7 +158,7 @@ class TestGetVaultClient:
     def test_provider_as_string(self):
         """Test provider can be passed as string."""
         mock_aws_module = MagicMock()
-        
+
         with patch.dict("sys.modules", {"envdrift.vault.aws": mock_aws_module}):
             # Should convert "aws" string to VaultProvider.AWS
             client = get_vault_client("aws", region="us-west-2")
@@ -200,7 +199,7 @@ class TestVaultClientBase:
         client = ConcreteVaultClient()
         client._authenticated = True
         client._secrets["MY_SECRET"] = "my-value"
-        
+
         value = client.get_secret_value("MY_SECRET")
         assert value == "my-value"
 
@@ -208,7 +207,7 @@ class TestVaultClientBase:
         """Test ensure_authenticated calls authenticate when needed."""
         client = ConcreteVaultClient()
         assert not client.is_authenticated()
-        
+
         client.ensure_authenticated()
         assert client.is_authenticated()
 
@@ -216,7 +215,7 @@ class TestVaultClientBase:
         """Test ensure_authenticated does nothing when already authenticated."""
         client = ConcreteVaultClient()
         client._authenticated = True
-        
+
         # Should not raise or change state
         client.ensure_authenticated()
         assert client.is_authenticated()
@@ -224,14 +223,14 @@ class TestVaultClientBase:
     def test_get_secret_when_not_authenticated(self):
         """Test get_secret raises when not authenticated."""
         client = ConcreteVaultClient()
-        
+
         with pytest.raises(AuthenticationError):
             client.get_secret("SOME_SECRET")
 
     def test_list_secrets_when_not_authenticated(self):
         """Test list_secrets raises when not authenticated."""
         client = ConcreteVaultClient()
-        
+
         with pytest.raises(AuthenticationError):
             client.list_secrets()
 
@@ -244,7 +243,7 @@ class TestVaultClientBase:
             "APP_SECRET": "val2",
             "DB_PASSWORD": "val3",
         }
-        
+
         result = client.list_secrets(prefix="APP_")
         assert "APP_KEY" in result
         assert "APP_SECRET" in result

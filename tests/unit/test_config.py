@@ -2,15 +2,16 @@
 
 from __future__ import annotations
 
-import pytest
 from pathlib import Path
 
+import pytest
+
 from envdrift.config import (
-    EnvdriftConfig,
-    VaultConfig,
-    ValidationConfig,
-    PrecommitConfig,
     ConfigNotFoundError,
+    EnvdriftConfig,
+    PrecommitConfig,
+    ValidationConfig,
+    VaultConfig,
     find_config,
     load_config,
 )
@@ -131,24 +132,24 @@ class TestEnvdriftConfig:
             },
         }
         config = EnvdriftConfig.from_dict(data)
-        
+
         assert config.schema == "app.config:Settings"
         assert config.environments == ["dev", "prod"]
         assert config.env_file_pattern == ".env.{env}"
-        
+
         assert config.validation.check_encryption is False
         assert config.validation.strict_extra is False
         assert config.validation.secret_patterns == ["*_TOKEN"]
-        
+
         assert config.vault.provider == "aws"
         assert config.vault.aws_region == "eu-west-1"
         assert config.vault.azure_vault_url == "https://test.vault.azure.net"
         assert config.vault.hashicorp_url == "https://vault.test.com"
         assert config.vault.mappings == {"SECRET": "path/to/secret"}
-        
+
         assert config.precommit.files == [".env.dev"]
         assert config.precommit.schemas == {".env.dev": "config:DevSettings"}
-        
+
         assert config.raw == data
 
 
@@ -164,7 +165,7 @@ class TestFindConfig:
         """Test find_config finds envdrift.toml."""
         config_file = tmp_path / "envdrift.toml"
         config_file.write_text('[envdrift]\nschema = "test"')
-        
+
         result = find_config(tmp_path)
         assert result == config_file
 
@@ -172,7 +173,7 @@ class TestFindConfig:
         """Test find_config finds pyproject.toml with [tool.envdrift]."""
         pyproject = tmp_path / "pyproject.toml"
         pyproject.write_text('[tool.envdrift]\nschema = "test"')
-        
+
         result = find_config(tmp_path)
         assert result == pyproject
 
@@ -180,7 +181,7 @@ class TestFindConfig:
         """Test find_config ignores pyproject.toml without [tool.envdrift]."""
         pyproject = tmp_path / "pyproject.toml"
         pyproject.write_text('[tool.poetry]\nname = "test"')
-        
+
         result = find_config(tmp_path)
         assert result is None
 
@@ -188,10 +189,10 @@ class TestFindConfig:
         """Test find_config searches parent directories."""
         config_file = tmp_path / "envdrift.toml"
         config_file.write_text('[envdrift]\nschema = "test"')
-        
+
         subdir = tmp_path / "src" / "app"
         subdir.mkdir(parents=True)
-        
+
         result = find_config(subdir)
         assert result == config_file
 
@@ -199,10 +200,10 @@ class TestFindConfig:
         """Test find_config prefers envdrift.toml over pyproject.toml."""
         config_file = tmp_path / "envdrift.toml"
         config_file.write_text('[envdrift]\nschema = "from_envdrift"')
-        
+
         pyproject = tmp_path / "pyproject.toml"
         pyproject.write_text('[tool.envdrift]\nschema = "from_pyproject"')
-        
+
         result = find_config(tmp_path)
         assert result == config_file
 
@@ -234,7 +235,7 @@ environments = ["dev", "staging", "prod"]
 [validation]
 check_encryption = false
 """)
-        
+
         config = load_config(config_file)
         assert config.schema == "app.config:Settings"
         assert config.environments == ["dev", "staging", "prod"]
@@ -251,7 +252,7 @@ schema = "myapp.settings:Config"
 check_encryption = true
 strict_extra = false
 """)
-        
+
         config = load_config(pyproject)
         assert config.schema == "myapp.settings:Config"
         assert config.validation.check_encryption is True

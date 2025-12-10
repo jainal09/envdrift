@@ -3,23 +3,25 @@
 from __future__ import annotations
 
 import subprocess
-import pytest
 from pathlib import Path
-from unittest.mock import MagicMock, patch, mock_open
+from unittest.mock import MagicMock, patch
+
+import pytest
 
 from envdrift.integrations.dotenvx import (
-    DotenvxNotFoundError,
-    DotenvxError,
-    DotenvxInstallError,
-    get_platform_info,
-    get_venv_bin_dir,
-    get_dotenvx_path,
-    DotenvxInstaller,
     DOTENVX_VERSION,
     DOWNLOAD_URLS,
-    _load_constants,
+    DotenvxError,
+    DotenvxInstaller,
+    DotenvxInstallError,
+    DotenvxNotFoundError,
+    DotenvxWrapper,
     _get_dotenvx_version,
     _get_download_url_templates,
+    _load_constants,
+    get_dotenvx_path,
+    get_platform_info,
+    get_venv_bin_dir,
 )
 
 
@@ -81,7 +83,7 @@ class TestGetPlatformInfo:
         """Test Darwin arm64 normalization."""
         mock_system.return_value = "Darwin"
         mock_machine.return_value = "arm64"
-        
+
         system, machine = get_platform_info()
         assert system == "Darwin"
         assert machine == "arm64"
@@ -92,7 +94,7 @@ class TestGetPlatformInfo:
         """Test Linux aarch64 normalization."""
         mock_system.return_value = "Linux"
         mock_machine.return_value = "aarch64"
-        
+
         system, machine = get_platform_info()
         assert system == "Linux"
         assert machine == "aarch64"
@@ -103,7 +105,7 @@ class TestGetPlatformInfo:
         """Test Windows AMD64 normalization."""
         mock_system.return_value = "Windows"
         mock_machine.return_value = "AMD64"
-        
+
         system, machine = get_platform_info()
         assert system == "Windows"
         assert machine == "AMD64"
@@ -114,7 +116,7 @@ class TestGetPlatformInfo:
         """Test x86_64 is unchanged on Linux."""
         mock_system.return_value = "Linux"
         mock_machine.return_value = "x86_64"
-        
+
         system, machine = get_platform_info()
         assert system == "Linux"
         assert machine == "x86_64"
@@ -128,7 +130,7 @@ class TestGetVenvBinDir:
         venv_path = tmp_path / ".venv"
         venv_path.mkdir()
         monkeypatch.setenv("VIRTUAL_ENV", str(venv_path))
-        
+
         with patch("platform.system", return_value="Linux"):
             result = get_venv_bin_dir()
             assert result == venv_path / "bin"
@@ -138,7 +140,7 @@ class TestGetVenvBinDir:
         venv_path = tmp_path / ".venv"
         venv_path.mkdir()
         monkeypatch.setenv("VIRTUAL_ENV", str(venv_path))
-        
+
         with patch("platform.system", return_value="Windows"):
             result = get_venv_bin_dir()
             assert result == venv_path / "Scripts"
@@ -147,21 +149,20 @@ class TestGetVenvBinDir:
         """Test finds .venv in current working directory."""
         monkeypatch.delenv("VIRTUAL_ENV", raising=False)
         monkeypatch.chdir(tmp_path)
-        
+
         venv_path = tmp_path / ".venv"
         venv_path.mkdir()
-        
+
         # Clear sys.path venv entries
-        with patch("sys.path", []):
-            with patch("platform.system", return_value="Linux"):
-                result = get_venv_bin_dir()
-                assert result == venv_path / "bin"
+        with patch("sys.path", []), patch("platform.system", return_value="Linux"):
+            result = get_venv_bin_dir()
+            assert result == venv_path / "bin"
 
     def test_raises_when_no_venv(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         """Test raises RuntimeError when no venv found."""
         monkeypatch.delenv("VIRTUAL_ENV", raising=False)
         monkeypatch.chdir(tmp_path)
-        
+
         with patch("sys.path", []):
             with pytest.raises(RuntimeError) as exc_info:
                 get_venv_bin_dir()
@@ -176,7 +177,7 @@ class TestGetDotenvxPath:
         venv_path = tmp_path / ".venv"
         venv_path.mkdir()
         monkeypatch.setenv("VIRTUAL_ENV", str(venv_path))
-        
+
         with patch("platform.system", return_value="Linux"):
             result = get_dotenvx_path()
             assert result.name == "dotenvx"
@@ -187,7 +188,7 @@ class TestGetDotenvxPath:
         venv_path = tmp_path / ".venv"
         venv_path.mkdir()
         monkeypatch.setenv("VIRTUAL_ENV", str(venv_path))
-        
+
         with patch("platform.system", return_value="Windows"):
             result = get_dotenvx_path()
             assert result.name == "dotenvx.exe"
@@ -266,10 +267,6 @@ class TestDownloadUrls:
         assert ("Windows", "AMD64") in DOWNLOAD_URLS
 
 
-# Import DotenvxWrapper for additional tests
-from envdrift.integrations.dotenvx import DotenvxWrapper
-
-
 class TestDotenvxInstallerExtended:
     """Extended tests for DotenvxInstaller class."""
 
@@ -277,17 +274,19 @@ class TestDotenvxInstallerExtended:
     @patch("envdrift.integrations.dotenvx.get_dotenvx_path")
     @patch("platform.system", return_value="Linux")
     @patch("platform.machine", return_value="x86_64")
-    def test_download_and_extract_tar_gz(self, mock_machine, mock_system, mock_path, mock_urlretrieve, tmp_path):
+    def test_download_and_extract_tar_gz(
+        self, mock_machine, mock_system, mock_path, mock_urlretrieve, tmp_path
+    ):
         """Test download_and_extract with tar.gz archive."""
         target = tmp_path / "dotenvx"
         mock_path.return_value = target
-        
+
         # Create a mock tarfile
-        import tarfile
         import io
-        
+        import tarfile
+
         tar_path = tmp_path / "dotenvx.tar.gz"
-        
+
         # Create tar.gz with dotenvx binary
         with tarfile.open(tar_path, "w:gz") as tar:
             # Add a fake dotenvx binary
@@ -295,46 +294,50 @@ class TestDotenvxInstallerExtended:
             tarinfo = tarfile.TarInfo(name="dotenvx")
             tarinfo.size = len(data)
             tar.addfile(tarinfo, io.BytesIO(data))
-        
+
         # Mock urlretrieve to copy our test tar
-        def mock_download(url, path):
+        def mock_download(_url, path):
             import shutil
+
             shutil.copy(tar_path, path)
-        
+
         mock_urlretrieve.side_effect = mock_download
-        
+
         installer = DotenvxInstaller()
         installer.download_and_extract(target)
-        
+
         assert target.exists()
 
     @patch("envdrift.integrations.dotenvx.urllib.request.urlretrieve")
     @patch("envdrift.integrations.dotenvx.get_dotenvx_path")
     @patch("platform.system", return_value="Windows")
     @patch("platform.machine", return_value="AMD64")
-    def test_download_and_extract_zip(self, mock_machine, mock_system, mock_path, mock_urlretrieve, tmp_path):
+    def test_download_and_extract_zip(
+        self, mock_machine, mock_system, mock_path, mock_urlretrieve, tmp_path
+    ):
         """Test download_and_extract with zip archive."""
         target = tmp_path / "dotenvx.exe"
         mock_path.return_value = target
-        
+
         # Create a mock zip file
         import zipfile
-        
+
         zip_path = tmp_path / "dotenvx.zip"
-        
+
         with zipfile.ZipFile(zip_path, "w") as zf:
             zf.writestr("dotenvx.exe", b"mock dotenvx binary")
-        
+
         # Mock urlretrieve to copy our test zip
-        def mock_download(url, path):
+        def mock_download(_url, path):
             import shutil
+
             shutil.copy(zip_path, path)
-        
+
         mock_urlretrieve.side_effect = mock_download
-        
+
         installer = DotenvxInstaller()
         installer.download_and_extract(target)
-        
+
         assert target.exists()
 
     @patch("envdrift.integrations.dotenvx.urllib.request.urlretrieve")
@@ -343,12 +346,12 @@ class TestDotenvxInstallerExtended:
     def test_download_failed(self, mock_machine, mock_system, mock_urlretrieve, tmp_path):
         """Test download_and_extract handles download failure."""
         mock_urlretrieve.side_effect = Exception("Network error")
-        
+
         installer = DotenvxInstaller()
-        
+
         with pytest.raises(DotenvxInstallError) as exc_info:
             installer.download_and_extract(tmp_path / "dotenvx")
-        
+
         assert "Download failed" in str(exc_info.value)
 
     @patch("envdrift.integrations.dotenvx.urllib.request.urlretrieve")
@@ -357,14 +360,16 @@ class TestDotenvxInstallerExtended:
     def test_unknown_archive_format(self, mock_machine, mock_system, mock_urlretrieve, tmp_path):
         """Test download_and_extract raises for unknown archive format."""
         # Mock URL to return unknown format
-        with patch.object(DotenvxInstaller, "get_download_url", return_value="https://example.com/dotenvx.unknown"):
+        with patch.object(
+            DotenvxInstaller, "get_download_url", return_value="https://example.com/dotenvx.unknown"
+        ):
             mock_urlretrieve.return_value = None  # Success
-            
+
             installer = DotenvxInstaller()
-            
+
             with pytest.raises(DotenvxInstallError) as exc_info:
                 installer.download_and_extract(tmp_path / "dotenvx")
-            
+
             assert "Unknown archive format" in str(exc_info.value)
 
     @patch("envdrift.integrations.dotenvx.get_dotenvx_path")
@@ -374,13 +379,13 @@ class TestDotenvxInstallerExtended:
         target = tmp_path / "dotenvx"
         target.touch()
         mock_path.return_value = target
-        
+
         mock_run.return_value = MagicMock(stdout=f"dotenvx v{DOTENVX_VERSION}")
-        
+
         messages = []
         installer = DotenvxInstaller(progress_callback=messages.append)
         result = installer.install()
-        
+
         assert result == target
         assert any("already installed" in msg for msg in messages)
 
@@ -391,11 +396,11 @@ class TestDotenvxInstallerExtended:
         target = tmp_path / "dotenvx"
         target.touch()
         mock_path.return_value = target
-        
+
         mock_run.return_value = MagicMock(stdout=f"dotenvx v{DOTENVX_VERSION}")
-        
+
         installer = DotenvxInstaller()
-        
+
         with patch.object(installer, "download_and_extract") as mock_download:
             installer.install(force=True)
             mock_download.assert_called_once_with(target)
@@ -423,10 +428,10 @@ class TestDotenvxWrapper:
         binary_path = tmp_path / "dotenvx"
         binary_path.touch()
         mock_path.return_value = binary_path
-        
+
         wrapper = DotenvxWrapper()
         result = wrapper._find_binary()
-        
+
         assert result == binary_path
         assert wrapper._binary_path == binary_path
 
@@ -435,12 +440,12 @@ class TestDotenvxWrapper:
         """Test _find_binary uses cached path."""
         binary_path = tmp_path / "dotenvx"
         binary_path.touch()
-        
+
         wrapper = DotenvxWrapper()
         wrapper._binary_path = binary_path
-        
+
         result = wrapper._find_binary()
-        
+
         assert result == binary_path
         mock_path.assert_not_called()
 
@@ -449,62 +454,68 @@ class TestDotenvxWrapper:
     def test_find_binary_from_system_path(self, mock_venv_path, mock_which, tmp_path):
         """Test _find_binary finds binary in system PATH."""
         mock_venv_path.side_effect = RuntimeError("No venv")
-        
+
         system_path = tmp_path / "dotenvx"
         mock_which.return_value = str(system_path)
-        
+
         wrapper = DotenvxWrapper()
         result = wrapper._find_binary()
-        
+
         assert result == system_path
 
     @patch("shutil.which", return_value=None)
     @patch("envdrift.integrations.dotenvx.get_dotenvx_path")
     @patch("envdrift.integrations.dotenvx.DotenvxInstaller")
-    def test_find_binary_auto_installs(self, mock_installer_class, mock_venv_path, mock_which, tmp_path):
+    def test_find_binary_auto_installs(
+        self, mock_installer_class, mock_venv_path, mock_which, tmp_path
+    ):
         """Test _find_binary auto-installs when enabled."""
         mock_venv_path.return_value = tmp_path / "not_exists"
-        
+
         installed_path = tmp_path / "installed_dotenvx"
         mock_installer = MagicMock()
         mock_installer.install.return_value = installed_path
         mock_installer_class.return_value = mock_installer
-        
+
         wrapper = DotenvxWrapper(auto_install=True)
         result = wrapper._find_binary()
-        
+
         assert result == installed_path
         mock_installer_class.assert_called_once_with(version=DOTENVX_VERSION)
 
     @patch("shutil.which", return_value=None)
     @patch("envdrift.integrations.dotenvx.get_dotenvx_path")
-    def test_find_binary_raises_when_not_found_and_no_auto_install(self, mock_venv_path, mock_which, tmp_path):
+    def test_find_binary_raises_when_not_found_and_no_auto_install(
+        self, mock_venv_path, mock_which, tmp_path
+    ):
         """Test _find_binary raises when binary not found and auto_install=False."""
         mock_venv_path.return_value = tmp_path / "not_exists"
-        
+
         wrapper = DotenvxWrapper(auto_install=False)
-        
+
         with pytest.raises(DotenvxNotFoundError) as exc_info:
             wrapper._find_binary()
-        
+
         assert "dotenvx not found" in str(exc_info.value)
 
     @patch("shutil.which", return_value=None)
     @patch("envdrift.integrations.dotenvx.get_dotenvx_path")
     @patch("envdrift.integrations.dotenvx.DotenvxInstaller")
-    def test_find_binary_raises_when_auto_install_fails(self, mock_installer_class, mock_venv_path, mock_which, tmp_path):
+    def test_find_binary_raises_when_auto_install_fails(
+        self, mock_installer_class, mock_venv_path, mock_which, tmp_path
+    ):
         """Test _find_binary raises when auto-install fails."""
         mock_venv_path.return_value = tmp_path / "not_exists"
-        
+
         mock_installer = MagicMock()
         mock_installer.install.side_effect = DotenvxInstallError("Install failed")
         mock_installer_class.return_value = mock_installer
-        
+
         wrapper = DotenvxWrapper(auto_install=True)
-        
+
         with pytest.raises(DotenvxNotFoundError) as exc_info:
             wrapper._find_binary()
-        
+
         assert "auto-install failed" in str(exc_info.value)
 
     @patch("envdrift.integrations.dotenvx.get_dotenvx_path")
@@ -513,10 +524,10 @@ class TestDotenvxWrapper:
         binary_path = tmp_path / "dotenvx"
         binary_path.touch()
         mock_path.return_value = binary_path
-        
+
         wrapper = DotenvxWrapper()
         result = wrapper.binary_path
-        
+
         assert result == binary_path
 
     @patch("envdrift.integrations.dotenvx.get_dotenvx_path")
@@ -525,7 +536,7 @@ class TestDotenvxWrapper:
         binary_path = tmp_path / "dotenvx"
         binary_path.touch()
         mock_path.return_value = binary_path
-        
+
         wrapper = DotenvxWrapper()
         assert wrapper.is_installed() is True
 
@@ -534,7 +545,7 @@ class TestDotenvxWrapper:
     def test_is_installed_false(self, mock_venv_path, mock_which, tmp_path):
         """Test is_installed returns False when binary not found."""
         mock_venv_path.return_value = tmp_path / "not_exists"
-        
+
         wrapper = DotenvxWrapper(auto_install=False)
         assert wrapper.is_installed() is False
 
@@ -545,16 +556,12 @@ class TestDotenvxWrapper:
         binary_path = tmp_path / "dotenvx"
         binary_path.touch()
         mock_path.return_value = binary_path
-        
-        mock_run.return_value = MagicMock(
-            returncode=0,
-            stdout="1.2.3\n",
-            stderr=""
-        )
-        
+
+        mock_run.return_value = MagicMock(returncode=0, stdout="1.2.3\n", stderr="")
+
         wrapper = DotenvxWrapper()
         result = wrapper.get_version()
-        
+
         assert result == "1.2.3"
 
     @patch("subprocess.run")
@@ -564,15 +571,15 @@ class TestDotenvxWrapper:
         binary_path = tmp_path / "dotenvx"
         binary_path.touch()
         mock_path.return_value = binary_path
-        
+
         env_file = tmp_path / ".env"
         env_file.write_text("KEY=value")
-        
+
         mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
-        
+
         wrapper = DotenvxWrapper()
         wrapper.encrypt(env_file)
-        
+
         mock_run.assert_called()
         call_args = mock_run.call_args[0][0]
         assert "encrypt" in call_args
@@ -584,12 +591,12 @@ class TestDotenvxWrapper:
         binary_path = tmp_path / "dotenvx"
         binary_path.touch()
         mock_path.return_value = binary_path
-        
+
         wrapper = DotenvxWrapper()
-        
+
         with pytest.raises(DotenvxError) as exc_info:
             wrapper.encrypt(tmp_path / "nonexistent.env")
-        
+
         assert "File not found" in str(exc_info.value)
 
     @patch("subprocess.run")
@@ -599,15 +606,15 @@ class TestDotenvxWrapper:
         binary_path = tmp_path / "dotenvx"
         binary_path.touch()
         mock_path.return_value = binary_path
-        
+
         env_file = tmp_path / ".env"
         env_file.write_text("ENCRYPTED_KEY=xyz")
-        
+
         mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
-        
+
         wrapper = DotenvxWrapper()
         wrapper.decrypt(env_file)
-        
+
         mock_run.assert_called()
         call_args = mock_run.call_args[0][0]
         assert "decrypt" in call_args
@@ -618,12 +625,12 @@ class TestDotenvxWrapper:
         binary_path = tmp_path / "dotenvx"
         binary_path.touch()
         mock_path.return_value = binary_path
-        
+
         wrapper = DotenvxWrapper()
-        
+
         with pytest.raises(DotenvxError) as exc_info:
             wrapper.decrypt(tmp_path / "nonexistent.env")
-        
+
         assert "File not found" in str(exc_info.value)
 
     @patch("subprocess.run")
@@ -633,14 +640,14 @@ class TestDotenvxWrapper:
         binary_path = tmp_path / "dotenvx"
         binary_path.touch()
         mock_path.return_value = binary_path
-        
+
         env_file = tmp_path / ".env"
-        
+
         mock_run.return_value = MagicMock(returncode=0, stdout="output", stderr="")
-        
+
         wrapper = DotenvxWrapper()
         result = wrapper.run(env_file, ["python", "script.py"])
-        
+
         assert result.returncode == 0
         call_args = mock_run.call_args[0][0]
         assert "run" in call_args
@@ -653,14 +660,14 @@ class TestDotenvxWrapper:
         binary_path = tmp_path / "dotenvx"
         binary_path.touch()
         mock_path.return_value = binary_path
-        
+
         env_file = tmp_path / ".env"
-        
+
         mock_run.return_value = MagicMock(returncode=0, stdout="myvalue\n", stderr="")
-        
+
         wrapper = DotenvxWrapper()
         result = wrapper.get(env_file, "MY_KEY")
-        
+
         assert result == "myvalue"
         call_args = mock_run.call_args[0][0]
         assert "get" in call_args
@@ -673,14 +680,14 @@ class TestDotenvxWrapper:
         binary_path = tmp_path / "dotenvx"
         binary_path.touch()
         mock_path.return_value = binary_path
-        
+
         env_file = tmp_path / ".env"
-        
+
         mock_run.return_value = MagicMock(returncode=1, stdout="", stderr="not found")
-        
+
         wrapper = DotenvxWrapper()
         result = wrapper.get(env_file, "NONEXISTENT_KEY")
-        
+
         assert result is None
 
     @patch("subprocess.run")
@@ -690,14 +697,14 @@ class TestDotenvxWrapper:
         binary_path = tmp_path / "dotenvx"
         binary_path.touch()
         mock_path.return_value = binary_path
-        
+
         env_file = tmp_path / ".env"
-        
+
         mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
-        
+
         wrapper = DotenvxWrapper()
         wrapper.set(env_file, "NEW_KEY", "new_value")
-        
+
         call_args = mock_run.call_args[0][0]
         assert "set" in call_args
         assert "NEW_KEY" in call_args
@@ -710,14 +717,14 @@ class TestDotenvxWrapper:
         binary_path = tmp_path / "dotenvx"
         binary_path.touch()
         mock_path.return_value = binary_path
-        
+
         mock_run.return_value = MagicMock(returncode=1, stdout="", stderr="error message")
-        
+
         wrapper = DotenvxWrapper()
-        
+
         with pytest.raises(DotenvxError) as exc_info:
             wrapper._run(["invalid"], check=True)
-        
+
         assert "dotenvx command failed" in str(exc_info.value)
 
     @patch("subprocess.run")
@@ -727,14 +734,14 @@ class TestDotenvxWrapper:
         binary_path = tmp_path / "dotenvx"
         binary_path.touch()
         mock_path.return_value = binary_path
-        
+
         mock_run.side_effect = subprocess.TimeoutExpired(cmd="dotenvx", timeout=120)
-        
+
         wrapper = DotenvxWrapper()
-        
+
         with pytest.raises(DotenvxError) as exc_info:
             wrapper._run(["slow-command"])
-        
+
         assert "timed out" in str(exc_info.value)
 
     @patch("subprocess.run")
@@ -744,18 +751,18 @@ class TestDotenvxWrapper:
         binary_path = tmp_path / "dotenvx"
         binary_path.touch()
         mock_path.return_value = binary_path
-        
+
         mock_run.side_effect = FileNotFoundError("binary not found")
-        
+
         wrapper = DotenvxWrapper()
-        
+
         with pytest.raises(DotenvxNotFoundError):
             wrapper._run(["command"])
 
     def test_install_instructions(self):
         """Test install_instructions returns formatted string."""
         instructions = DotenvxWrapper.install_instructions()
-        
+
         assert "dotenvx is not installed" in instructions
         assert "Option 1" in instructions
         assert "Option 2" in instructions
@@ -768,26 +775,26 @@ class TestTarGzExtraction:
 
     def test_extract_tar_gz_path_traversal_attack(self, tmp_path):
         """Test _extract_tar_gz prevents path traversal attacks."""
-        import tarfile
         import io
-        
+        import tarfile
+
         # Create a malicious tar with path traversal
         tar_path = tmp_path / "malicious.tar.gz"
-        
+
         with tarfile.open(tar_path, "w:gz") as tar:
             # Add a file with path traversal
             data = b"malicious content"
             tarinfo = tarfile.TarInfo(name="../../../etc/passwd")
             tarinfo.size = len(data)
             tar.addfile(tarinfo, io.BytesIO(data))
-        
+
         installer = DotenvxInstaller()
         target_dir = tmp_path / "extract"
         target_dir.mkdir()
-        
+
         with pytest.raises(DotenvxInstallError) as exc_info:
             installer._extract_tar_gz(tar_path, target_dir)
-        
+
         assert "Unsafe path" in str(exc_info.value)
 
 
@@ -797,19 +804,19 @@ class TestZipExtraction:
     def test_extract_zip_path_traversal_attack(self, tmp_path):
         """Test _extract_zip prevents path traversal attacks."""
         import zipfile
-        
+
         # Create a malicious zip with path traversal
         zip_path = tmp_path / "malicious.zip"
-        
+
         with zipfile.ZipFile(zip_path, "w") as zf:
             # Add a file with path traversal
             zf.writestr("../../../etc/passwd", "malicious content")
-        
+
         installer = DotenvxInstaller()
         target_dir = tmp_path / "extract"
         target_dir.mkdir()
-        
+
         with pytest.raises(DotenvxInstallError) as exc_info:
             installer._extract_zip(zip_path, target_dir)
-        
+
         assert "Unsafe path" in str(exc_info.value)

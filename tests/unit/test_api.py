@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
-import pytest
 from pathlib import Path
 
-from envdrift.api import validate, diff, init
+import pytest
+
+from envdrift.api import diff, init, validate
 
 
 class TestValidateAPI:
@@ -15,7 +16,7 @@ class TestValidateAPI:
         """Test that validate raises ValueError when schema is None."""
         env_file = tmp_path / ".env"
         env_file.write_text("FOO=bar")
-        
+
         with pytest.raises(ValueError) as exc_info:
             validate(env_file, schema=None)
         assert "schema is required" in str(exc_info.value)
@@ -30,7 +31,7 @@ class TestValidateAPI:
         # Create env file
         env_file = tmp_path / ".env"
         env_file.write_text("APP_NAME=test\nDEBUG=false")
-        
+
         # Create schema
         schema_file = tmp_path / "config.py"
         schema_file.write_text("""
@@ -40,7 +41,7 @@ class Settings(BaseSettings):
     APP_NAME: str
     DEBUG: bool = True
 """)
-        
+
         result = validate(env_file, schema="config:Settings", service_dir=tmp_path)
         assert result.valid
 
@@ -48,7 +49,7 @@ class Settings(BaseSettings):
         """Test validation fails for missing required variable."""
         env_file = tmp_path / ".env"
         env_file.write_text("DEBUG=true")
-        
+
         schema_file = tmp_path / "settings_req.py"
         schema_file.write_text("""
 from pydantic_settings import BaseSettings
@@ -57,7 +58,7 @@ class SettingsReq(BaseSettings):
     REQUIRED_VAR: str
     DEBUG: bool = True
 """)
-        
+
         result = validate(env_file, schema="settings_req:SettingsReq", service_dir=tmp_path)
         assert not result.valid
         assert "REQUIRED_VAR" in result.missing_required
@@ -72,7 +73,7 @@ class TestDiffAPI:
         env2 = tmp_path / "env2"
         env1.write_text("VAR1=value1\nVAR2=value2")
         env2.write_text("VAR1=value1\nVAR2=value2")
-        
+
         result = diff(env1, env2)
         assert result.added_count == 0
         assert result.removed_count == 0
@@ -84,12 +85,12 @@ class TestDiffAPI:
         env2 = tmp_path / "env2"
         env1.write_text("KEEP=same\nREMOVED=old\nCHANGED=before")
         env2.write_text("KEEP=same\nADDED=new\nCHANGED=after")
-        
+
         result = diff(env1, env2)
         added_names = [d.name for d in result.get_added()]
         removed_names = [d.name for d in result.get_removed()]
         changed_names = [d.name for d in result.get_changed()]
-        
+
         assert "ADDED" in added_names
         assert "REMOVED" in removed_names
         assert "CHANGED" in changed_names
@@ -100,7 +101,7 @@ class TestDiffAPI:
         env2 = tmp_path / "env2"
         env1.write_text("API_KEY=secret1")
         env2.write_text("API_KEY=secret2")
-        
+
         # Create schema marking API_KEY as sensitive
         schema_file = tmp_path / "sensitive_config.py"
         schema_file.write_text("""
@@ -110,7 +111,7 @@ from pydantic_settings import BaseSettings
 class SensitiveSettings(BaseSettings):
     API_KEY: str = Field(json_schema_extra={"sensitive": True})
 """)
-        
+
         result = diff(env1, env2, schema="sensitive_config:SensitiveSettings", service_dir=tmp_path, mask_values=True)
         changed = result.get_changed()
         assert len(changed) == 1
@@ -122,7 +123,7 @@ class SensitiveSettings(BaseSettings):
         """Test diff raises error for missing file."""
         env1 = tmp_path / "env1"
         env1.write_text("FOO=bar")
-        
+
         with pytest.raises(FileNotFoundError):
             diff(env1, tmp_path / "missing.env")
 
@@ -134,10 +135,10 @@ class TestInitAPI:
         """Test basic init functionality."""
         env_file = tmp_path / ".env"
         env_file.write_text("NAME=test\nVALUE=123")
-        
+
         output = tmp_path / "generated.py"
         result = init(env_file, output)
-        
+
         assert result == output
         assert output.exists()
         content = output.read_text()
@@ -149,10 +150,10 @@ class TestInitAPI:
         """Test init with custom class name."""
         env_file = tmp_path / ".env"
         env_file.write_text("FOO=bar")
-        
+
         output = tmp_path / "settings.py"
         init(env_file, output, class_name="MyConfig")
-        
+
         content = output.read_text()
         assert "class MyConfig(BaseSettings):" in content
 
@@ -160,10 +161,10 @@ class TestInitAPI:
         """Test init detects sensitive variables."""
         env_file = tmp_path / ".env"
         env_file.write_text("SECRET_KEY=abc123\nPASSWORD=hunter2\nAPP_NAME=myapp")
-        
+
         output = tmp_path / "settings.py"
         init(env_file, output, detect_sensitive=True)
-        
+
         content = output.read_text()
         # SECRET_KEY and PASSWORD should be marked sensitive
         assert 'json_schema_extra={"sensitive": True}' in content
@@ -177,10 +178,10 @@ INT_VAR=42
 BOOL_TRUE=true
 BOOL_FALSE=false
 """)
-        
+
         output = tmp_path / "settings.py"
         init(env_file, output, detect_sensitive=False)
-        
+
         content = output.read_text()
         assert "STRING_VAR: str" in content
         assert "INT_VAR: int = 42" in content

@@ -2,15 +2,16 @@
 
 from __future__ import annotations
 
-import pytest
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+
+import pytest
+import yaml
 
 from envdrift.integrations.precommit import (
     HOOK_CONFIG,
     HOOK_ENTRY,
-    get_hook_config,
     find_precommit_config,
+    get_hook_config,
     install_hooks,
     uninstall_hooks,
     verify_hooks_installed,
@@ -68,7 +69,7 @@ class TestFindPrecommitConfig:
         """Test finding config in start directory."""
         config_file = tmp_path / ".pre-commit-config.yaml"
         config_file.write_text("repos: []")
-        
+
         result = find_precommit_config(tmp_path)
         assert result == config_file
 
@@ -77,11 +78,11 @@ class TestFindPrecommitConfig:
         # Create config in parent
         config_file = tmp_path / ".pre-commit-config.yaml"
         config_file.write_text("repos: []")
-        
+
         # Start from child directory
         child_dir = tmp_path / "src" / "subdir"
         child_dir.mkdir(parents=True)
-        
+
         result = find_precommit_config(child_dir)
         assert result == config_file
 
@@ -98,9 +99,9 @@ class TestInstallHooks:
     def test_creates_new_config(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         """Test creates new config file if missing."""
         monkeypatch.chdir(tmp_path)
-        
+
         result = install_hooks(config_path=tmp_path / ".pre-commit-config.yaml")
-        
+
         assert result is True
         config_file = tmp_path / ".pre-commit-config.yaml"
         assert config_file.exists()
@@ -109,8 +110,7 @@ class TestInstallHooks:
 
     def test_adds_to_existing_config(self, tmp_path: Path):
         """Test adds hooks to existing config."""
-        import yaml
-        
+
         config_file = tmp_path / ".pre-commit-config.yaml"
         existing_config = {
             "repos": [
@@ -119,21 +119,20 @@ class TestInstallHooks:
         }
         with open(config_file, "w") as f:
             yaml.dump(existing_config, f)
-        
+
         result = install_hooks(config_path=config_file)
-        
+
         assert result is True
         with open(config_file) as f:
             updated_config = yaml.safe_load(f)
-        
+
         # Should have original repo plus local repo with envdrift hooks
         repo_ids = [r.get("repo") for r in updated_config["repos"]]
         assert "local" in repo_ids
 
     def test_adds_to_existing_local_repo(self, tmp_path: Path):
         """Test adds hooks to existing local repo."""
-        import yaml
-        
+
         config_file = tmp_path / ".pre-commit-config.yaml"
         existing_config = {
             "repos": [
@@ -142,13 +141,13 @@ class TestInstallHooks:
         }
         with open(config_file, "w") as f:
             yaml.dump(existing_config, f)
-        
+
         result = install_hooks(config_path=config_file)
-        
+
         assert result is True
         with open(config_file) as f:
             updated_config = yaml.safe_load(f)
-        
+
         local_repo = next(r for r in updated_config["repos"] if r["repo"] == "local")
         hook_ids = [h["id"] for h in local_repo["hooks"]]
         assert "custom-hook" in hook_ids
@@ -157,30 +156,29 @@ class TestInstallHooks:
     def test_raises_when_config_not_found_and_no_create(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         """Test raises FileNotFoundError when config not found and create_if_missing=False."""
         monkeypatch.chdir(tmp_path)
-        
+
         with pytest.raises(FileNotFoundError):
             install_hooks(create_if_missing=False)
 
     def test_idempotent_install(self, tmp_path: Path):
         """Test installing hooks twice doesn't duplicate them."""
-        import yaml
-        
+
         config_file = tmp_path / ".pre-commit-config.yaml"
-        
+
         # Install twice
         install_hooks(config_path=config_file)
         install_hooks(config_path=config_file)
-        
+
         with open(config_file) as f:
             config = yaml.safe_load(f)
-        
+
         # Count envdrift hooks
         envdrift_hooks = []
         for repo in config["repos"]:
             for hook in repo.get("hooks", []):
                 if hook.get("id", "").startswith("envdrift-"):
                     envdrift_hooks.append(hook)
-        
+
         # Should only have 2 hooks (validate and encryption), not 4
         assert len(envdrift_hooks) == 2
 
@@ -190,19 +188,18 @@ class TestUninstallHooks:
 
     def test_removes_envdrift_hooks(self, tmp_path: Path):
         """Test removes envdrift hooks from config."""
-        import yaml
-        
+
         config_file = tmp_path / ".pre-commit-config.yaml"
         # First install hooks
         install_hooks(config_path=config_file)
-        
+
         # Then uninstall
         result = uninstall_hooks(config_path=config_file)
-        
+
         assert result is True
         with open(config_file) as f:
             config = yaml.safe_load(f)
-        
+
         # Check no envdrift hooks remain
         for repo in config.get("repos", []):
             for hook in repo.get("hooks", []):
@@ -211,14 +208,13 @@ class TestUninstallHooks:
     def test_returns_false_when_no_config(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         """Test returns False when config not found."""
         monkeypatch.chdir(tmp_path)
-        
+
         result = uninstall_hooks()
         assert result is False
 
     def test_returns_false_when_no_envdrift_hooks(self, tmp_path: Path):
         """Test returns False when no envdrift hooks to remove."""
-        import yaml
-        
+
         config_file = tmp_path / ".pre-commit-config.yaml"
         existing_config = {
             "repos": [
@@ -227,7 +223,7 @@ class TestUninstallHooks:
         }
         with open(config_file, "w") as f:
             yaml.dump(existing_config, f)
-        
+
         result = uninstall_hooks(config_path=config_file)
         assert result is False
 
@@ -239,25 +235,24 @@ class TestVerifyHooksInstalled:
         """Test detects both hooks when installed."""
         config_file = tmp_path / ".pre-commit-config.yaml"
         install_hooks(config_path=config_file)
-        
+
         result = verify_hooks_installed(config_path=config_file)
-        
+
         assert result["envdrift-validate"] is True
         assert result["envdrift-encryption"] is True
 
     def test_no_hooks_installed(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         """Test returns False for both when no config."""
         monkeypatch.chdir(tmp_path)
-        
+
         result = verify_hooks_installed()
-        
+
         assert result["envdrift-validate"] is False
         assert result["envdrift-encryption"] is False
 
     def test_partial_hooks_installed(self, tmp_path: Path):
         """Test detects partial installation."""
-        import yaml
-        
+
         config_file = tmp_path / ".pre-commit-config.yaml"
         config = {
             "repos": [
@@ -269,8 +264,8 @@ class TestVerifyHooksInstalled:
         }
         with open(config_file, "w") as f:
             yaml.dump(config, f)
-        
+
         result = verify_hooks_installed(config_path=config_file)
-        
+
         assert result["envdrift-validate"] is True
         assert result["envdrift-encryption"] is False

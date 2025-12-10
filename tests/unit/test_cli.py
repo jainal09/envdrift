@@ -2,14 +2,11 @@
 
 from __future__ import annotations
 
-import pytest
 from pathlib import Path
-from unittest.mock import MagicMock, patch
 
 from typer.testing import CliRunner
 
 from envdrift.cli import app
-
 
 runner = CliRunner()
 
@@ -21,7 +18,7 @@ class TestValidateCommand:
         """Test validate command requires --schema option."""
         env_file = tmp_path / ".env"
         env_file.write_text("FOO=bar")
-        
+
         result = runner.invoke(app, ["validate", str(env_file)])
         assert result.exit_code == 1
         assert "schema" in result.output.lower()
@@ -36,7 +33,7 @@ class TestValidateCommand:
         """Test validate command with invalid schema path."""
         env_file = tmp_path / ".env"
         env_file.write_text("FOO=bar")
-        
+
         result = runner.invoke(app, ["validate", str(env_file), "--schema", "nonexistent:Settings"])
         assert result.exit_code == 1
 
@@ -44,7 +41,7 @@ class TestValidateCommand:
         """Test validate command succeeds with valid schema."""
         env_file = tmp_path / ".env"
         env_file.write_text("APP_NAME=test\nDEBUG=true")
-        
+
         schema_file = tmp_path / "myconfig.py"
         schema_file.write_text("""
 from pydantic_settings import BaseSettings
@@ -53,9 +50,9 @@ class MySettings(BaseSettings):
     APP_NAME: str
     DEBUG: bool = True
 """)
-        
+
         result = runner.invoke(app, [
-            "validate", str(env_file), 
+            "validate", str(env_file),
             "--schema", "myconfig:MySettings",
             "--service-dir", str(tmp_path)
         ])
@@ -66,7 +63,7 @@ class MySettings(BaseSettings):
         """Test validate --ci exits with code 1 on validation failure."""
         env_file = tmp_path / ".env"
         env_file.write_text("DEBUG=true")
-        
+
         schema_file = tmp_path / "ci_config.py"
         schema_file.write_text("""
 from pydantic_settings import BaseSettings
@@ -75,7 +72,7 @@ class CiSettings(BaseSettings):
     REQUIRED_VAR: str
     DEBUG: bool = True
 """)
-        
+
         result = runner.invoke(app, [
             "validate", str(env_file),
             "--schema", "ci_config:CiSettings",
@@ -88,7 +85,7 @@ class CiSettings(BaseSettings):
         """Test validate --fix outputs fix template."""
         env_file = tmp_path / ".env"
         env_file.write_text("DEBUG=true")
-        
+
         schema_file = tmp_path / "fix_config.py"
         schema_file.write_text("""
 from pydantic_settings import BaseSettings
@@ -97,7 +94,7 @@ class FixSettings(BaseSettings):
     MISSING_VAR: str
     DEBUG: bool = True
 """)
-        
+
         result = runner.invoke(app, [
             "validate", str(env_file),
             "--schema", "fix_config:FixSettings",
@@ -115,7 +112,7 @@ class TestDiffCommand:
         """Test diff command with missing first file."""
         env2 = tmp_path / "env2"
         env2.write_text("FOO=bar")
-        
+
         result = runner.invoke(app, ["diff", str(tmp_path / "missing.env"), str(env2)])
         assert result.exit_code == 1
         assert "not found" in result.output.lower()
@@ -124,7 +121,7 @@ class TestDiffCommand:
         """Test diff command with missing second file."""
         env1 = tmp_path / "env1"
         env1.write_text("FOO=bar")
-        
+
         result = runner.invoke(app, ["diff", str(env1), str(tmp_path / "missing.env")])
         assert result.exit_code == 1
         assert "not found" in result.output.lower()
@@ -135,7 +132,7 @@ class TestDiffCommand:
         env2 = tmp_path / "env2"
         env1.write_text("FOO=bar\nBAZ=qux")
         env2.write_text("FOO=bar\nBAZ=qux")
-        
+
         result = runner.invoke(app, ["diff", str(env1), str(env2)])
         assert result.exit_code == 0
         assert "no drift" in result.output.lower() or "match" in result.output.lower()
@@ -146,7 +143,7 @@ class TestDiffCommand:
         env2 = tmp_path / "env2"
         env1.write_text("FOO=old\nREMOVED=val")
         env2.write_text("FOO=new\nADDED=val")
-        
+
         result = runner.invoke(app, ["diff", str(env1), str(env2)])
         assert result.exit_code == 0
         # Should show the changes
@@ -158,7 +155,7 @@ class TestDiffCommand:
         env2 = tmp_path / "env2"
         env1.write_text("FOO=bar")
         env2.write_text("FOO=baz")
-        
+
         result = runner.invoke(app, ["diff", str(env1), str(env2), "--format", "json"])
         assert result.exit_code == 0
         # JSON output should be parseable
@@ -170,7 +167,7 @@ class TestDiffCommand:
         env2 = tmp_path / "env2"
         env1.write_text("SAME=value\nDIFF=old")
         env2.write_text("SAME=value\nDIFF=new")
-        
+
         result = runner.invoke(app, ["diff", str(env1), str(env2), "--include-unchanged"])
         assert result.exit_code == 0
         assert "SAME" in result.output
@@ -189,7 +186,7 @@ class TestEncryptCommand:
         """Test encrypt --check on plaintext file with secrets."""
         env_file = tmp_path / ".env"
         env_file.write_text("SECRET_KEY=mysupersecretkey123\nAPI_TOKEN=abc123")
-        
+
         result = runner.invoke(app, ["encrypt", str(env_file), "--check"])
         # Should report encryption status
         assert "encrypt" in result.output.lower() or "secret" in result.output.lower() or result.exit_code == 1
@@ -198,7 +195,7 @@ class TestEncryptCommand:
         """Test encrypt --check on encrypted file."""
         env_file = tmp_path / ".env"
         env_file.write_text('#DOTENV_PUBLIC_KEY="abc123"\nSECRET="encrypted:abcdef1234567890"')
-        
+
         result = runner.invoke(app, ["encrypt", str(env_file), "--check"])
         # Should pass for encrypted file
         assert result.exit_code == 0 or "encrypt" in result.output.lower()
@@ -227,14 +224,14 @@ class TestInitCommand:
         """Test init generates a settings file."""
         env_file = tmp_path / ".env"
         env_file.write_text("APP_NAME=myapp\nDEBUG=true\nPORT=8080")
-        
+
         output_file = tmp_path / "generated_settings.py"
         result = runner.invoke(app, [
             "init", str(env_file),
             "--output", str(output_file),
             "--class-name", "AppSettings"
         ])
-        
+
         assert result.exit_code == 0
         assert output_file.exists()
         content = output_file.read_text()
@@ -247,14 +244,14 @@ class TestInitCommand:
         """Test init --detect-sensitive marks sensitive vars."""
         env_file = tmp_path / ".env"
         env_file.write_text("SECRET_KEY=abc123\nPASSWORD=hunter2\nAPP_NAME=myapp")
-        
+
         output_file = tmp_path / "settings_sens.py"
         result = runner.invoke(app, [
             "init", str(env_file),
             "--output", str(output_file),
             "--detect-sensitive"
         ])
-        
+
         assert result.exit_code == 0
         content = output_file.read_text()
         assert "sensitive" in content.lower()
@@ -263,14 +260,14 @@ class TestInitCommand:
         """Test init without --detect-sensitive flag."""
         env_file = tmp_path / ".env"
         env_file.write_text("SECRET_KEY=abc123")
-        
+
         output_file = tmp_path / "settings_no_sens.py"
         # Default is --detect-sensitive, so just run without the flag
         result = runner.invoke(app, [
             "init", str(env_file),
             "--output", str(output_file),
         ])
-        
+
         assert result.exit_code == 0
         content = output_file.read_text()
         assert "SECRET_KEY" in content
