@@ -80,10 +80,24 @@ class AWSSecretsManagerClient(VaultClient):
         """
         Return whether the AWS Secrets Manager client has been authenticated.
 
+        This method validates credentials by calling STS get_caller_identity(),
+        which ensures that expired or revoked credentials are detected.
+
         Returns:
-            `true` if the client is authenticated, `false` otherwise.
+            `true` if the client is authenticated and credentials are valid, `false` otherwise.
         """
-        return self._client is not None
+        if self._client is None:
+            return False
+
+        # Validate credentials are still valid by calling STS
+        try:
+            sts = boto3.client("sts", region_name=self.region)
+            sts.get_caller_identity()
+            return True
+        except (NoCredentialsError, PartialCredentialsError, ClientError):
+            # Credentials are invalid/expired, reset client state
+            self._client = None
+            return False
 
     def get_secret(self, name: str) -> SecretValue:
         """
