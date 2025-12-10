@@ -20,18 +20,22 @@ class VaultProvider(Enum):
 
 
 def get_vault_client(provider: VaultProvider | str, **config) -> VaultClient:
-    """Factory to create vault client.
-
-    Args:
-        provider: The vault provider to use
-        **config: Provider-specific configuration
-
+    """
+    Create and return a provider-specific VaultClient configured from the provided keyword arguments.
+    
+    Parameters:
+        provider (VaultProvider | str): Vault provider enum or provider name ("azure", "aws", "hashicorp").
+        **config: Provider-specific configuration:
+            - For "azure": `vault_url` (str) — required.
+            - For "aws": `region` (str) — optional, defaults to "us-east-1".
+            - For "hashicorp": `url` (str) — required; `token` (str) — optional.
+    
     Returns:
-        Configured VaultClient instance
-
+        VaultClient: A configured client instance for the requested provider.
+    
     Raises:
-        ImportError: If the required optional dependencies are not installed
-        ValueError: If provider is not supported
+        ImportError: If the provider's optional dependencies are not installed.
+        ValueError: If the provider is unsupported or cannot be converted to a VaultProvider.
     """
     if isinstance(provider, str):
         provider = VaultProvider(provider)

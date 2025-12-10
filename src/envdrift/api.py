@@ -16,20 +16,22 @@ def validate(
     service_dir: Path | str | None = None,
     check_encryption: bool = True,
 ) -> ValidationResult:
-    """Validate an .env file against a Pydantic schema.
-
-    Args:
-        env_file: Path to the .env file to validate
-        schema: Dotted path to the Pydantic Settings class (e.g., 'app.config:Settings')
-        service_dir: Optional directory to add to sys.path for imports
-        check_encryption: Whether to check if sensitive vars are encrypted
-
+    """
+    Validate an .env file against a Pydantic Settings class schema.
+    
+    Parameters:
+        env_file: Path or string to the .env file to validate.
+        schema: Dotted path to the Pydantic Settings class (e.g., "app.config:Settings"); required.
+        service_dir: Optional directory to add to sys.path to assist importing the schema.
+        check_encryption: If true, perform additional checks for encrypted or sensitive values.
+    
     Returns:
-        ValidationResult with validation status and any issues found
-
+        ValidationResult: Result containing validation status and any issues found.
+    
     Raises:
-        FileNotFoundError: If env file doesn't exist
-        SchemaLoadError: If schema cannot be loaded
+        ValueError: If `schema` is not provided.
+        FileNotFoundError: If the env file does not exist or cannot be read.
+        SchemaLoadError: If the specified schema cannot be imported or loaded.
     """
     if schema is None:
         raise ValueError("schema is required. Example: 'app.config:Settings'")
@@ -57,20 +59,21 @@ def diff(
     service_dir: Path | str | None = None,
     mask_values: bool = True,
 ) -> DiffResult:
-    """Compare two .env files and return differences.
-
-    Args:
-        env1: Path to first .env file
-        env2: Path to second .env file
-        schema: Optional schema for sensitive field detection
-        service_dir: Optional directory to add to sys.path for imports
-        mask_values: Whether to mask sensitive values in output
-
+    """
+    Compute differences between two .env files.
+    
+    Parameters:
+        env1 (Path | str): Path to the first .env file.
+        env2 (Path | str): Path to the second .env file.
+        schema (str | None): Optional dotted path to a Pydantic Settings class used to identify sensitive fields.
+        service_dir (Path | str | None): Optional directory to add to imports when loading the schema.
+        mask_values (bool): If true, mask sensitive values in the resulting diff.
+    
     Returns:
-        DiffResult with all differences between the files
-
+        DiffResult: Differences between the files, including added, removed, and changed variables. Sensitive values are masked when requested.
+    
     Raises:
-        FileNotFoundError: If either env file doesn't exist
+        FileNotFoundError: If either env1 or env2 does not exist.
     """
     env1 = Path(env1)
     env2 = Path(env2)
@@ -98,19 +101,22 @@ def init(
     class_name: str = "Settings",
     detect_sensitive: bool = True,
 ) -> Path:
-    """Generate a Pydantic Settings class from an existing .env file.
-
-    Args:
-        env_file: Path to the .env file to read
-        output: Path where to write the generated Settings class
-        class_name: Name for the Settings class
-        detect_sensitive: Auto-detect sensitive variables
-
+    """
+    Generate a Pydantic BaseSettings subclass file from an existing .env file.
+    
+    Parses the provided env file, optionally detects variables that appear sensitive, and writes a Python module defining a Pydantic Settings class with inferred type hints and defaults. Sensitive fields are marked with `json_schema_extra={"sensitive": True}`.
+    
+    Parameters:
+        env_file (Path | str): Path to the source .env file.
+        output (Path | str): Path where the generated Python module will be written.
+        class_name (str): Name to use for the generated Settings class.
+        detect_sensitive (bool): If True, attempt to detect sensitive variables and mark them in the generated fields.
+    
     Returns:
-        Path to the generated file
-
+        Path: The path to the written settings file.
+    
     Raises:
-        FileNotFoundError: If env file doesn't exist
+        FileNotFoundError: If the specified env_file does not exist or cannot be read.
     """
     from envdrift.core.encryption import EncryptionDetector
 

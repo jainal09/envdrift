@@ -28,12 +28,22 @@ class EnvVar:
 
     @property
     def is_encrypted(self) -> bool:
-        """Check if this variable is encrypted."""
+        """
+        Determine whether this environment variable's value is encrypted.
+        
+        Returns:
+            True if the variable is encrypted, False otherwise.
+        """
         return self.encryption_status == EncryptionStatus.ENCRYPTED
 
     @property
     def is_empty(self) -> bool:
-        """Check if this variable has an empty value."""
+        """
+        Indicates whether the variable's value is empty.
+        
+        Returns:
+            True if the variable's value is empty, False otherwise.
+        """
         return self.encryption_status == EncryptionStatus.EMPTY
 
 
@@ -47,27 +57,55 @@ class EnvFile:
 
     @property
     def is_encrypted(self) -> bool:
-        """Check if ANY variable in this file is encrypted."""
+        """
+        Determine whether the file contains at least one encrypted environment variable.
+        
+        Returns:
+            `true` if at least one variable in the file is encrypted, `false` otherwise.
+        """
         return any(var.is_encrypted for var in self.variables.values())
 
     @property
     def is_fully_encrypted(self) -> bool:
-        """Check if ALL non-empty variables are encrypted."""
+        """
+        Determine whether every non-empty environment variable in the file is encrypted.
+        
+        Returns:
+            `true` if all non-empty variables have encryption status `ENCRYPTED`, `false` otherwise (also `false` when there are no non-empty variables).
+        """
         non_empty_vars = [v for v in self.variables.values() if not v.is_empty]
         if not non_empty_vars:
             return False
         return all(var.is_encrypted for var in non_empty_vars)
 
     def get(self, name: str) -> EnvVar | None:
-        """Get a variable by name."""
+        """
+        Retrieve the environment variable with the specified name from this EnvFile.
+        
+        Parameters:
+            name (str): The variable name to look up.
+        
+        Returns:
+            EnvVar | None: The matching EnvVar if found, `None` otherwise.
+        """
         return self.variables.get(name)
 
     def __contains__(self, name: str) -> bool:
-        """Check if a variable exists."""
+        """
+        Determine whether the EnvFile contains a variable with the given name.
+        
+        Returns:
+            True if a variable with the given name exists in the file, False otherwise.
+        """
         return name in self.variables
 
     def __len__(self) -> int:
-        """Return number of variables."""
+        """
+        Number of environment variables contained in the EnvFile.
+        
+        Returns:
+            int: The count of parsed variables.
+        """
         return len(self.variables)
 
 
@@ -89,16 +127,17 @@ class EnvParser:
     LINE_PATTERN = re.compile(r"^([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)$")
 
     def parse(self, path: Path | str) -> EnvFile:
-        """Parse .env file and return structured data.
-
-        Args:
-            path: Path to the .env file
-
+        """
+        Parse a .env file and produce an EnvFile representing its parsed contents.
+        
+        Parameters:
+            path (Path | str): Filesystem path to the .env file.
+        
         Returns:
-            EnvFile with parsed variables
-
+            EnvFile: Parsed file containing variables and comments.
+        
         Raises:
-            FileNotFoundError: If the file doesn't exist
+            FileNotFoundError: If the file does not exist.
         """
         path = Path(path)
 
@@ -112,13 +151,14 @@ class EnvParser:
         return env_file
 
     def parse_string(self, content: str) -> EnvFile:
-        """Parse .env content from string.
-
-        Args:
-            content: String content of .env file
-
+        """
+        Parse .env formatted text, extracting variables (with detected encryption status) and comments.
+        
+        Parameters:
+            content (str): The complete text content of a .env file to parse.
+        
         Returns:
-            EnvFile with parsed variables
+            EnvFile: An EnvFile populated with parsed EnvVar entries keyed by variable name and a list of comment lines.
         """
         env_file = EnvFile(path=Path())
         lines = content.splitlines()
@@ -163,11 +203,11 @@ class EnvParser:
         return env_file
 
     def _unquote(self, value: str) -> str:
-        """Remove surrounding quotes from a value.
-
-        Handles:
-        - Double quotes: "value"
-        - Single quotes: 'value'
+        """
+        Remove a single matching pair of surrounding single or double quotes from the value.
+        
+        Returns:
+        	the unquoted string if the value is enclosed in matching single quotes ('...') or double quotes ("..."); otherwise the original value
         """
         if len(value) >= 2:
             if (value.startswith('"') and value.endswith('"')) or (
@@ -177,13 +217,14 @@ class EnvParser:
         return value
 
     def _detect_encryption_status(self, value: str) -> EncryptionStatus:
-        """Detect the encryption status of a value.
-
-        Args:
-            value: The unquoted value string
-
+        """
+        Detects the encryption status of an environment variable value.
+        
+        Parameters:
+            value (str): The unquoted value string to classify.
+        
         Returns:
-            EncryptionStatus enum value
+            EncryptionStatus: `EncryptionStatus.EMPTY` if the value is empty, `EncryptionStatus.ENCRYPTED` if it starts with "encrypted:", otherwise `EncryptionStatus.PLAINTEXT`.
         """
         if not value:
             return EncryptionStatus.EMPTY

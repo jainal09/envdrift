@@ -42,39 +42,79 @@ class DiffResult:
 
     @property
     def added_count(self) -> int:
-        """Count of variables added in env2."""
+        """
+        Number of variables that are present in env2 but not in env1.
+        
+        Returns:
+            int: Count of variables classified as `ADDED`.
+        """
         return sum(1 for d in self.differences if d.diff_type == DiffType.ADDED)
 
     @property
     def removed_count(self) -> int:
-        """Count of variables removed from env1."""
+        """
+        Number of variables that are present in the first environment but missing in the second.
+        
+        Returns:
+            int: Count of diffs with type `DiffType.REMOVED`.
+        """
         return sum(1 for d in self.differences if d.diff_type == DiffType.REMOVED)
 
     @property
     def changed_count(self) -> int:
-        """Count of variables with different values."""
+        """
+        Number of variables whose values differ between the two environments.
+        
+        Returns:
+            int: Count of VarDiff entries whose `diff_type` is `DiffType.CHANGED`.
+        """
         return sum(1 for d in self.differences if d.diff_type == DiffType.CHANGED)
 
     @property
     def unchanged_count(self) -> int:
-        """Count of variables that are the same."""
+        """
+        Return the number of variables that are unchanged between the two environments.
+        
+        Returns:
+            int: Count of VarDiff entries whose `diff_type` is `DiffType.UNCHANGED`.
+        """
         return sum(1 for d in self.differences if d.diff_type == DiffType.UNCHANGED)
 
     @property
     def has_drift(self) -> bool:
-        """Check if there are any differences."""
+        """
+        Determine whether there is any drift between the two environments.
+        
+        Returns:
+            True if at least one variable was added, removed, or changed, False otherwise.
+        """
         return self.added_count + self.removed_count + self.changed_count > 0
 
     def get_added(self) -> list[VarDiff]:
-        """Get all added variables."""
+        """
+        List VarDiff entries that are present only in the second environment.
+        
+        Returns:
+            list[VarDiff]: VarDiff objects whose `diff_type` is `DiffType.ADDED`.
+        """
         return [d for d in self.differences if d.diff_type == DiffType.ADDED]
 
     def get_removed(self) -> list[VarDiff]:
-        """Get all removed variables."""
+        """
+        Retrieve variables present in the first environment but absent in the second.
+        
+        Returns:
+            list[VarDiff]: VarDiff objects whose `diff_type` is `DiffType.REMOVED`.
+        """
         return [d for d in self.differences if d.diff_type == DiffType.REMOVED]
 
     def get_changed(self) -> list[VarDiff]:
-        """Get all changed variables."""
+        """
+        Return all variables whose values differ between the two environments.
+        
+        Returns:
+            list[VarDiff]: List of VarDiff entries whose `diff_type` is `DiffType.CHANGED`.
+        """
         return [d for d in self.differences if d.diff_type == DiffType.CHANGED]
 
 
@@ -91,17 +131,18 @@ class DiffEngine:
         mask_values: bool = True,
         include_unchanged: bool = False,
     ) -> DiffResult:
-        """Compare two env files.
-
-        Args:
-            env1: First env file (typically dev/staging)
-            env2: Second env file (typically prod)
-            schema: Optional schema for sensitive field detection
-            mask_values: Whether to mask sensitive values in output
-            include_unchanged: Whether to include unchanged vars in result
-
+        """
+        Compute differences between two environment files and return a structured DiffResult.
+        
+        Parameters:
+            env1 (EnvFile): First environment file (left-hand side of comparison).
+            env2 (EnvFile): Second environment file (right-hand side of comparison).
+            schema (SchemaMetadata | None): Optional schema used to identify sensitive fields.
+            mask_values (bool): If True, sensitive variable values are replaced with a mask in the result.
+            include_unchanged (bool): If True, variables with identical values in both files are included.
+        
         Returns:
-            DiffResult with all differences
+            DiffResult: Aggregated comparison result containing a list of VarDiff entries and summary counts.
         """
         result = DiffResult(env1_path=env1.path, env2_path=env2.path)
 
@@ -157,13 +198,18 @@ class DiffEngine:
         return result
 
     def to_dict(self, result: DiffResult) -> dict:
-        """Convert DiffResult to dictionary for JSON output.
-
+        """
+        Convert a DiffResult into a JSON-serializable dictionary.
+        
         Args:
-            result: The diff result
-
+            result: DiffResult instance to convert.
+        
         Returns:
-            Dictionary representation
+            dict: Mapping with keys:
+                - "env1": string path of the first env file
+                - "env2": string path of the second env file
+                - "summary": dict with counts ("added", "removed", "changed") and "has_drift" flag
+                - "differences": list of dicts for each variable containing "name", "type", "value_env1", "value_env2", and "sensitive"
         """
         return {
             "env1": str(result.env1_path),

@@ -23,12 +23,16 @@ def print_success(message: str) -> None:
 
 
 def print_error(message: str) -> None:
-    """Print an error message."""
+    """
+    Print a message prefixed with a red "ERROR" badge to the module console.
+    """
     console.print(f"[red][ERROR][/red] {message}")
 
 
 def print_warning(message: str) -> None:
-    """Print a warning message."""
+    """
+    Display a yellow "WARN" badge followed by the provided message to the shared console.
+    """
     console.print(f"[yellow][WARN][/yellow] {message}")
 
 
@@ -38,13 +42,16 @@ def print_validation_result(
     schema: SchemaMetadata,
     verbose: bool = False,
 ) -> None:
-    """Print validation result with Rich formatting.
-
-    Args:
-        result: The validation result
-        env_path: Path to the validated env file
-        schema: Schema metadata
-        verbose: Whether to show additional details
+    """
+    Render a formatted validation report for an environment file against a schema using Rich console output.
+    
+    Prints a header with the environment path and schema, then a PASS or FAIL status. When validation fails, prints any of the following sections as applicable: missing required variables (with schema descriptions when available), extra variables, unencrypted secrets, type errors, warnings, and — when `verbose` is true — missing optional variables (with defaults when available). Finally prints a summary of error and warning counts and a short hint to run with --fix.
+    
+    Parameters:
+        result (ValidationResult): Validation outcome containing flags and lists of issues.
+        env_path (Path): Filesystem path to the validated environment file.
+        schema (SchemaMetadata): Schema metadata used for validation (fields, descriptions, defaults).
+        verbose (bool): If true, include missing optional variables and their default information.
     """
     # Header
     console.print()
@@ -118,11 +125,14 @@ def print_validation_result(
 
 
 def print_diff_result(result: DiffResult, show_unchanged: bool = False) -> None:
-    """Print diff result with Rich formatting.
-
-    Args:
-        result: The diff result
-        show_unchanged: Whether to show unchanged variables
+    """
+    Render a human-readable comparison of two environments to the shared console.
+    
+    Prints a header showing the two environment paths, a table of variable differences (optionally including unchanged entries), and a concise summary of added/removed/changed counts with a drift notice when differences exist.
+    
+    Parameters:
+        result (DiffResult): The computed diff between two environments, including paths, per-variable differences, and aggregate counts.
+        show_unchanged (bool): If True, include variables that are identical in both environments in the output; otherwise omit them.
     """
     console.print()
     console.print(Panel(f"[bold]Comparing:[/bold] {result.env1_path} vs {result.env2_path}",
@@ -191,10 +201,11 @@ def print_diff_result(result: DiffResult, show_unchanged: bool = False) -> None:
 
 
 def print_encryption_report(report: EncryptionReport) -> None:
-    """Print encryption report with Rich formatting.
-
-    Args:
-        report: The encryption report
+    """
+    Render a human-readable encryption summary for a file, including overall status, variable counts, detected plaintext secrets, warnings, and a remediation suggestion.
+    
+    Parameters:
+        report (EncryptionReport): EncryptionReport for the inspected file (provides path, encryption ratios, lists of encrypted/plaintext/empty variables, plaintext secrets, and warnings).
     """
     console.print()
     console.print(Panel(f"[bold]Encryption Status:[/bold] {report.path}",
@@ -249,14 +260,15 @@ def print_sync_summary(
     skipped: int,
     errors: int,
 ) -> None:
-    """Print vault sync summary.
-
-    Args:
-        services_processed: Number of services processed
-        created: Number of new keys created
-        updated: Number of keys updated
-        skipped: Number of keys skipped (no change)
-        errors: Number of errors
+    """
+    Prints a summary of vault synchronization results.
+    
+    Parameters:
+        services_processed (int): Total number of services that were processed.
+        created (int): Number of new keys created.
+        updated (int): Number of keys updated.
+        skipped (int): Number of keys skipped because no change was needed.
+        errors (int): Number of services that failed during syncing.
     """
     console.print()
     console.print(Panel(
