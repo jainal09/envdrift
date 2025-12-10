@@ -24,6 +24,9 @@ wheels/
 .installed.cfg
 *.egg
 
+# hatch-vcs generated version file
+src/envdrift/_version.py
+
 # PyInstaller
 *.manifest
 *.spec

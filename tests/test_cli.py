@@ -11,7 +11,10 @@ def test_version() -> None:
     """Test version command."""
     result = runner.invoke(app, ["version"])
     assert result.exit_code == 0
-    assert "0.1.0" in result.stdout
+    # Check for version output (works with both tagged and dev versions)
+    assert "envdrift" in result.stdout
+    # Version should contain numbers (e.g., "0.1.0" or "0.1.dev1+g123456")
+    assert any(char.isdigit() for char in result.stdout)
 
 
 def test_validate_requires_schema() -> None:

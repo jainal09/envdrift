@@ -7,7 +7,21 @@ envdrift helps you:
 - Support dotenvx encryption for secure .env files
 """
 
-__version__ = "0.1.0"
+try:
+    from envdrift._version import __version__
+except ImportError:
+    # Fallback for editable installs before build
+    try:
+        from importlib.metadata import PackageNotFoundError, version
+    except ImportError:
+        # Very old Python without importlib.metadata
+        __version__ = "0.0.0+unknown"
+    else:
+        try:
+            __version__ = version("envdrift")
+        except PackageNotFoundError:
+            __version__ = "0.0.0+unknown"
+
 __author__ = "Jainal Gosaliya"
 __email__ = "gosaliya.jainal@gmail.com"
 
