@@ -121,8 +121,8 @@ class EncryptionDetector:
                 report.plaintext_vars.add(var_name)
 
                 # Check if this plaintext value looks like a secret
-                is_suspicious = self._is_value_suspicious(env_var.value)
-                is_name_sensitive = self._is_name_sensitive(var_name)
+                is_suspicious = self.is_value_suspicious(env_var.value)
+                is_name_sensitive = self.is_name_sensitive(var_name)
                 is_schema_sensitive = var_name in schema_sensitive
 
                 if is_suspicious or is_name_sensitive or is_schema_sensitive:
@@ -187,7 +187,7 @@ class EncryptionDetector:
         content = path.read_text(encoding="utf-8")
         return self.has_encrypted_header(content)
 
-    def _is_value_suspicious(self, value: str) -> bool:
+    def is_value_suspicious(self, value: str) -> bool:
         """
         Determine whether a plaintext value matches any configured secret patterns.
 
@@ -199,7 +199,7 @@ class EncryptionDetector:
                 return True
         return False
 
-    def _is_name_sensitive(self, name: str) -> bool:
+    def is_name_sensitive(self, name: str) -> bool:
         """
         Determine whether an environment variable name indicates sensitive data.
 

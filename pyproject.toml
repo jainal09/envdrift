@@ -161,6 +161,8 @@ addopts = [
     "--strict-markers",
     "--cov=envdrift",
     "--cov-report=term-missing",
+    "--cov-branch",
+    "--cov-report=xml",
 ]
 
 [tool.coverage.run]

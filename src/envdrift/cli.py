@@ -350,8 +350,8 @@ def init(
     sensitive_vars = set()
     if detect_sensitive:
         for var_name, env_var in env.variables.items():
-            is_name_sens = detector._is_name_sensitive(var_name)
-            is_val_susp = detector._is_value_suspicious(env_var.value)
+            is_name_sens = detector.is_name_sensitive(var_name)
+            is_val_susp = detector.is_value_suspicious(env_var.value)
             if is_name_sens or is_val_susp:
                 sensitive_vars.add(var_name)
 
