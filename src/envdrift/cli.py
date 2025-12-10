@@ -58,7 +58,30 @@ def validate(
         bool, typer.Option("--verbose", "-v", help="Show additional details")
     ] = False,
 ) -> None:
-    """Validate an .env file against a Pydantic schema."""
+    """
+    Validate an .env file against a Pydantic Settings schema and display results.
+    
+    Loads the specified Settings class, parses the given .env file, runs validation
+    (including optional encryption checks and extra-key checks), and prints a
+    human-readable validation report. If --fix is provided and validation fails,
+    prints a generated template for missing values. Exits with code 1 on invalid
+    schema or missing env file; when --ci is set, also exits with code 1 if the
+    validation result is invalid.
+    
+    Parameters:
+        schema (str | None): Dotted import path to the Pydantic Settings class
+            (for example: "app.config:Settings"). Required; the command exits with
+            code 1 if not provided or if loading fails.
+        service_dir (Path | None): Optional directory to add to imports when
+            resolving the schema.
+        ci (bool): When true, exit with code 1 if validation fails.
+        check_encryption (bool): When true, validate encryption-related metadata
+            on sensitive fields.
+        fix (bool): When true and validation fails, print a fix template with
+            missing variables and defaults when available.
+        verbose (bool): When true, include additional details in the validation
+            output.
+    """
     if schema is None:
         print_error("--schema is required. Example: --schema 'app.config:Settings'")
         raise typer.Exit(code=1)
@@ -131,7 +154,18 @@ def diff(
         bool, typer.Option("--include-unchanged", help="Include unchanged variables")
     ] = False,
 ) -> None:
-    """Compare two .env files and show differences."""
+    """
+    Compare two .env files and display their differences.
+    
+    Parameters:
+        env1 (Path): Path to the first .env file (e.g., .env.dev).
+        env2 (Path): Path to the second .env file (e.g., .env.prod).
+        schema (str | None): Optional dotted path to a Pydantic Settings class used to detect sensitive fields; if provided, the schema will be loaded for masking decisions.
+        service_dir (Path | None): Optional directory to add to import resolution when loading the schema.
+        show_values (bool): If True, do not mask sensitive values in the output.
+        format_ (str): Output format, either "table" (default) for human-readable output or "json" for machine-readable output.
+        include_unchanged (bool): If True, include variables that are unchanged between the two files in the output.
+    """
     # Check files exist
     if not env1.exists():
         print_error(f"ENV file not found: {env1}")
@@ -193,7 +227,18 @@ def encrypt_cmd(
         typer.Option("--service-dir", "-d", help="Service directory for imports"),
     ] = None,
 ) -> None:
-    """Check or perform encryption on .env file using dotenvx."""
+    """
+    Check encryption status of an .env file or encrypt it using dotenvx.
+    
+    When run with --check, prints an encryption report and exits with code 1 if the detector recommends blocking a commit.
+    When run without --check, attempts to perform encryption via the dotenvx integration; if dotenvx is not available, prints installation instructions and exits.
+    
+    Parameters:
+        env_file (Path): Path to the .env file to inspect or encrypt.
+        check (bool): If True, only analyze and report encryption status; do not modify the file.
+        schema (str | None): Optional dotted path to a Settings schema used to detect sensitive fields.
+        service_dir (Path | None): Optional directory to add to import resolution when loading the schema.
+    """
     if not env_file.exists():
         print_error(f"ENV file not found: {env_file}")
         raise typer.Exit(code=1)
@@ -285,7 +330,21 @@ def init(
         bool, typer.Option("--detect-sensitive", help="Auto-detect sensitive variables")
     ] = True,
 ) -> None:
-    """Generate a Pydantic Settings class from an existing .env file."""
+    """
+    Generate a Pydantic BaseSettings subclass from variables in an .env file.
+    
+    Writes a Python module containing a Pydantic `BaseSettings` subclass with fields
+    inferred from the .env variables. Detected sensitive variables are annotated
+    with `json_schema_extra={"sensitive": True}` and fields without a sensible
+    default are left required.
+    
+    Parameters:
+        env_file (Path): Path to the source .env file.
+        output (Path): Path to write the generated Python module (e.g., settings.py).
+        class_name (str): Name to use for the generated `BaseSettings` subclass.
+        detect_sensitive (bool): If true, attempt to auto-detect sensitive variables
+            (by name and value) and mark them in the generated fields.
+    """
     if not env_file.exists():
         print_error(f"ENV file not found: {env_file}")
         raise typer.Exit(code=1)
@@ -371,7 +430,19 @@ def hook(
         bool, typer.Option("--config", help="Show pre-commit config snippet")
     ] = False,
 ) -> None:
-    """Manage pre-commit hook integration."""
+    """
+    Manage the pre-commit hook integration by showing a sample config or installing hooks.
+    
+    When invoked with --config or without --install, prints a pre-commit configuration snippet for envdrift hooks.
+    When invoked with --install, attempts to install the hooks using the pre-commit integration and prints success on completion.
+    
+    Parameters:
+        install (bool): If True, install the pre-commit hooks into the project (--install / -i).
+        show_config (bool): If True, print the sample pre-commit configuration snippet (--config).
+    
+    Raises:
+        typer.Exit: If installation is requested but the pre-commit integration is unavailable.
+    """
     if show_config or (not install):
         hook_config = """# Add to .pre-commit-config.yaml
 repos:
@@ -410,7 +481,11 @@ repos:
 
 @app.command()
 def version() -> None:
-    """Show envdrift version."""
+    """
+    Display the installed envdrift version in the console.
+    
+    Prints the current package version using the application's styled console output.
+    """
     console.print(f"envdrift [bold green]{__version__}[/bold green]")
 
 

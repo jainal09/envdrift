@@ -54,7 +54,13 @@ class AWSSecretsManagerClient(VaultClient):
         self._client = None
 
     def authenticate(self) -> None:
-        """Authenticate using boto3 credential chain."""
+        """
+        Initialize the AWS Secrets Manager client for the configured region and verify access.
+        
+        Raises:
+            AuthenticationError: if AWS credentials are missing or incomplete.
+            VaultError: if the Secrets Manager service returns an error.
+        """
         try:
             self._client = boto3.client(
                 "secretsmanager",
@@ -68,17 +74,27 @@ class AWSSecretsManagerClient(VaultClient):
             raise VaultError(f"AWS Secrets Manager error: {e}") from e
 
     def is_authenticated(self) -> bool:
-        """Check if client is authenticated."""
+        """
+        Return whether the AWS Secrets Manager client has been authenticated.
+        
+        Returns:
+            `true` if the client is authenticated, `false` otherwise.
+        """
         return self._client is not None
 
     def get_secret(self, name: str) -> SecretValue:
-        """Retrieve a secret from AWS Secrets Manager.
-
-        Args:
-            name: The secret name or ARN
-
+        """
+        Retrieve a secret from AWS Secrets Manager.
+        
+        Parameters:
+            name (str): Secret name or ARN.
+        
         Returns:
-            SecretValue with the secret data
+            SecretValue: Contains the secret's name, value, version, and metadata (`arn`, `created_date`, `version_stages`).
+        
+        Raises:
+            SecretNotFoundError: If the secret does not exist.
+            VaultError: For other AWS Secrets Manager errors.
         """
         self.ensure_authenticated()
 
@@ -110,13 +126,14 @@ class AWSSecretsManagerClient(VaultClient):
             raise VaultError(f"AWS Secrets Manager error: {e}") from e
 
     def list_secrets(self, prefix: str = "") -> list[str]:
-        """List secret names in AWS Secrets Manager.
-
-        Args:
-            prefix: Optional prefix to filter secrets
-
+        """
+        List secret names stored in AWS Secrets Manager.
+        
+        Parameters:
+            prefix (str): Optional name prefix to filter results; only secrets whose names start with this prefix are returned.
+        
         Returns:
-            List of secret names
+            List of secret names.
         """
         self.ensure_authenticated()
 
@@ -139,15 +156,14 @@ class AWSSecretsManagerClient(VaultClient):
             raise VaultError(f"AWS Secrets Manager error: {e}") from e
 
     def get_secret_json(self, name: str) -> dict:
-        """Get secret as JSON dictionary.
-
-        Many AWS secrets store JSON objects.
-
-        Args:
-            name: The secret name or ARN
-
+        """
+        Retrieve the secret identified by `name` and parse its value as a JSON object.
+        
         Returns:
-            Parsed JSON as dictionary
+            dict: Parsed JSON from the secret value.
+        
+        Raises:
+            VaultError: If the secret value is not valid JSON.
         """
         secret = self.get_secret(name)
         try:
@@ -156,15 +172,19 @@ class AWSSecretsManagerClient(VaultClient):
             raise VaultError(f"Secret '{name}' is not valid JSON: {e}") from e
 
     def create_secret(self, name: str, value: str, description: str = "") -> SecretValue:
-        """Create a new secret in AWS Secrets Manager.
-
-        Args:
-            name: The secret name
-            value: The secret value
-            description: Optional description
-
+        """
+        Create a new secret in AWS Secrets Manager.
+        
+        Parameters:
+            name (str): The name to assign to the secret.
+            value (str): The secret value to store.
+            description (str): Optional human-readable description for the secret.
+        
         Returns:
-            SecretValue with the created secret
+            SecretValue: The created secret's representation, including the stored value, version identifier, and metadata (ARN).
+        
+        Raises:
+            VaultError: If AWS Secrets Manager returns an error while creating the secret.
         """
         self.ensure_authenticated()
 
@@ -184,14 +204,14 @@ class AWSSecretsManagerClient(VaultClient):
             raise VaultError(f"AWS Secrets Manager error: {e}") from e
 
     def update_secret(self, name: str, value: str) -> SecretValue:
-        """Update an existing secret in AWS Secrets Manager.
-
-        Args:
-            name: The secret name
-            value: The new secret value
-
+        """
+        Update an existing secret in AWS Secrets Manager.
+        
         Returns:
-            SecretValue with the updated secret
+            SecretValue: Contains the updated secret's name, value, version, and ARN metadata.
+        
+        Raises:
+            VaultError: If AWS Secrets Manager returns an error.
         """
         self.ensure_authenticated()
 

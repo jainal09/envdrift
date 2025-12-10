@@ -24,7 +24,12 @@ class EncryptionReport:
 
     @property
     def encryption_ratio(self) -> float:
-        """Calculate encryption ratio (encrypted / total non-empty)."""
+        """
+        Compute the fraction of non-empty variables that are encrypted.
+        
+        Returns:
+            encryption_ratio (float): Fraction between 0.0 and 1.0 equal to encrypted_vars / (encrypted_vars + plaintext_vars). Returns 0.0 when there are no non-empty variables.
+        """
         total = len(self.encrypted_vars) + len(self.plaintext_vars)
         if total == 0:
             return 0.0
@@ -32,7 +37,12 @@ class EncryptionReport:
 
     @property
     def total_vars(self) -> int:
-        """Total number of variables."""
+        """
+        Total number of variables considered by the report.
+        
+        Returns:
+            int: Count of encrypted, plaintext, and empty variables.
+        """
         return len(self.encrypted_vars) + len(self.plaintext_vars) + len(self.empty_vars)
 
 
@@ -85,14 +95,15 @@ class EncryptionDetector:
         env_file: EnvFile,
         schema: SchemaMetadata | None = None,
     ) -> EncryptionReport:
-        """Analyze encryption status of env file.
-
-        Args:
-            env_file: Parsed env file
-            schema: Optional schema for sensitive field detection
-
+        """
+        Analyze an EnvFile to determine which variables are encrypted, plaintext, empty, and which plaintext values appear to be secrets.
+        
+        Parameters:
+            env_file (EnvFile): Parsed env file to analyze.
+            schema (SchemaMetadata | None): Optional schema whose sensitive_fields will be treated as sensitive names.
+        
         Returns:
-            EncryptionReport with analysis results
+            EncryptionReport: Report containing the file path, sets of encrypted/plaintext/empty variables, detected plaintext secrets, collected warnings, and the is_fully_encrypted flag.
         """
         report = EncryptionReport(path=env_file.path)
 
@@ -136,24 +147,26 @@ class EncryptionDetector:
         return report
 
     def should_block_commit(self, report: EncryptionReport) -> bool:
-        """Determine if this file should block a commit.
-
-        Args:
-            report: Encryption report
-
+        """
+        Decides whether a commit should be blocked due to plaintext secrets found in the report.
+        
+        Parameters:
+            report (EncryptionReport): Analysis report to evaluate.
+        
         Returns:
-            True if commit should be blocked
+            `true` if the report contains any plaintext secrets, `false` otherwise.
         """
         return len(report.plaintext_secrets) > 0
 
     def has_encrypted_header(self, content: str) -> bool:
-        """Check if file content has dotenvx encryption header.
-
-        Args:
-            content: Raw file content
-
+        """
+        Determine whether the given file content contains a dotenvx encryption header.
+        
+        Parameters:
+            content (str): Raw file content to inspect for encryption markers.
+        
         Returns:
-            True if encrypted header is present
+            `true` if any encrypted-file marker from ENCRYPTED_FILE_MARKERS is present in content, `false` otherwise.
         """
         for marker in self.ENCRYPTED_FILE_MARKERS:
             if marker in content:
@@ -161,13 +174,14 @@ class EncryptionDetector:
         return False
 
     def is_file_encrypted(self, path: Path) -> bool:
-        """Quick check if a file appears to be encrypted.
-
-        Args:
-            path: Path to the .env file
-
+        """
+        Determine whether a file contains a dotenvx encrypted header.
+        
+        Parameters:
+            path (Path): Filesystem path to the file to inspect.
+        
         Returns:
-            True if file appears to be encrypted
+            `true` if the file contains a dotenvx encrypted header, `false` otherwise.
         """
         if not path.exists():
             return False
@@ -176,13 +190,11 @@ class EncryptionDetector:
         return self.has_encrypted_header(content)
 
     def _is_value_suspicious(self, value: str) -> bool:
-        """Check if a plaintext value looks like a secret.
-
-        Args:
-            value: The value to check
-
+        """
+        Determine whether a plaintext value matches any configured secret patterns.
+        
         Returns:
-            True if value appears to be a secret
+            `true` if the value appears to be a secret, `false` otherwise.
         """
         for pattern in self.SECRET_VALUE_PATTERNS:
             if pattern.search(value):
@@ -190,13 +202,14 @@ class EncryptionDetector:
         return False
 
     def _is_name_sensitive(self, name: str) -> bool:
-        """Check if variable name suggests sensitive content.
-
-        Args:
-            name: Variable name to check
-
+        """
+        Determine whether an environment variable name indicates sensitive data.
+        
+        Parameters:
+            name (str): The environment variable name to test.
+        
         Returns:
-            True if name suggests sensitive data
+            True if the name matches any configured sensitive-name pattern, False otherwise.
         """
         for pattern in self.SENSITIVE_NAME_PATTERNS:
             if pattern.match(name):
@@ -204,13 +217,14 @@ class EncryptionDetector:
         return False
 
     def get_recommendations(self, report: EncryptionReport) -> list[str]:
-        """Get recommendations based on encryption report.
-
-        Args:
-            report: The encryption report
-
+        """
+        Builds human-readable remediation recommendations derived from an EncryptionReport.
+        
+        Parameters:
+            report (EncryptionReport): Analysis result for a single .env file used to derive recommendations.
+        
         Returns:
-            List of recommendation strings
+            list[str]: Ordered list of recommendation strings; empty if no actions are suggested.
         """
         recommendations = []
 

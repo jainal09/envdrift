@@ -73,7 +73,12 @@ HAS_VALUE=something
         assert result.variables["HAS_VALUE"].encryption_status == EncryptionStatus.PLAINTEXT
 
     def test_parse_comments(self, tmp_path):
-        """Skip comment lines."""
+        """
+        Verifies that the parser ignores comment lines and still records them.
+        
+        Asserts that only non-comment environment variables are returned in `variables`
+        and that comment lines are collected in `comments`.
+        """
         content = '''
 # This is a comment
 FOO=bar

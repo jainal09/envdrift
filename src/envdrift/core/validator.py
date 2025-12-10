@@ -23,7 +23,14 @@ class ValidationResult:
 
     @property
     def has_errors(self) -> bool:
-        """Check if validation has any errors (not warnings)."""
+        """
+        Return whether the validation contains any errors (exclude warnings).
+        
+        Checks for missing required variables, unencrypted sensitive values, type errors, or extra variables present when the schema forbids extras.
+        
+        Returns:
+            True if any errors are present, False otherwise.
+        """
         return (
             bool(self.missing_required)
             or bool(self.unencrypted_secrets)
@@ -33,7 +40,12 @@ class ValidationResult:
 
     @property
     def error_count(self) -> int:
-        """Return total number of errors."""
+        """
+        Compute the total number of validation error entries.
+        
+        Returns:
+            int: Sum of missing required variables, unencrypted secrets, type errors, and extra variables.
+        """
         return (
             len(self.missing_required)
             + len(self.unencrypted_secrets)
@@ -43,7 +55,12 @@ class ValidationResult:
 
     @property
     def warning_count(self) -> int:
-        """Return total number of warnings."""
+        """
+        Compute the total number of warning entries, combining explicit warnings with missing optional variables.
+        
+        Returns:
+            The total count of warnings and missing optional variables as an integer.
+        """
         return len(self.warnings) + len(self.missing_optional)
 
 
@@ -186,13 +203,11 @@ class Validator:
         return result
 
     def is_value_suspicious(self, value: str) -> bool:
-        """Check if plaintext value looks like a secret.
-
-        Args:
-            value: The plaintext value to check
-
+        """
+        Determine whether a plaintext value matches any known secret-like pattern.
+        
         Returns:
-            True if value matches secret patterns
+            `true` if the value matches any secret-like pattern, `false` otherwise.
         """
         for pattern in self.SECRET_PATTERNS:
             if pattern.search(value):
@@ -200,13 +215,14 @@ class Validator:
         return False
 
     def is_name_suspicious(self, name: str) -> bool:
-        """Check if variable name suggests sensitive content.
-
-        Args:
-            name: The variable name to check
-
+        """
+        Determine whether an environment variable name indicates it contains sensitive data.
+        
+        Parameters:
+            name (str): Environment variable name to evaluate.
+        
         Returns:
-            True if name suggests sensitive content
+            bool: `True` if the variable name matches a sensitive pattern, `False` otherwise.
         """
         for pattern in self.SENSITIVE_VAR_PATTERNS:
             if pattern.match(name):
@@ -214,14 +230,18 @@ class Validator:
         return False
 
     def _check_type(self, value: str, expected_type: type) -> str | None:
-        """Basic type checking for common types.
-
-        Args:
-            value: The string value from .env
-            expected_type: The expected Python type
-
+        """
+        Validate a plaintext .env value against an expected Python type.
+        
+        Parameters:
+            value (str): The raw value read from a .env file.
+            expected_type (type): The Python type expected for the value (e.g., int, float, bool, list).
+        
+        Notes:
+            If `expected_type` is None or `value` is an empty string, no type check is performed and the function returns None.
+        
         Returns:
-            Error message if type doesn't match, None otherwise
+            str | None: An error message describing the type mismatch, or `None` if the value is acceptable or no check was performed.
         """
         if expected_type is None or value == "":
             return None
@@ -258,14 +278,16 @@ class Validator:
     def generate_fix_template(
         self, result: ValidationResult, schema: SchemaMetadata
     ) -> str:
-        """Generate a template to add missing variables.
-
-        Args:
-            result: Validation result with missing vars
-            schema: Schema metadata for descriptions
-
+        """
+        Generate a .env snippet that provides assignments for any missing schema variables.
+        
+        Parameters:
+            result (ValidationResult): Validation outcome containing `missing_required` and `missing_optional` sets.
+            schema (SchemaMetadata): Schema metadata used to include field descriptions, defaults, and sensitivity flags.
+        
         Returns:
-            String template that can be appended to .env file
+            template (str): A newline-separated .env template. Required sensitive fields use the placeholder
+            `encrypted:YOUR_VALUE_HERE`; optional fields include commented defaults when available.
         """
         lines = []
 

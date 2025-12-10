@@ -24,19 +24,36 @@ from pathlib import Path
 
 
 def _load_constants() -> dict:
-    """Load constants from constants.json file."""
+    """
+    Load and return the parsed contents of the package's constants.json.
+    
+    The file is resolved relative to this module (../constants.json).
+    
+    Returns:
+        dict: Parsed JSON object from constants.json.
+    """
     constants_path = Path(__file__).parent.parent / "constants.json"
     with open(constants_path) as f:
         return json.load(f)
 
 
 def _get_dotenvx_version() -> str:
-    """Get the pinned dotenvx version from constants."""
+    """
+    Return the pinned dotenvx version from the package constants.
+    
+    Returns:
+        version (str): The pinned dotenvx version string (for example, "1.2.3").
+    """
     return _load_constants()["dotenvx_version"]
 
 
 def _get_download_url_templates() -> dict[str, str]:
-    """Get download URL templates from constants."""
+    """
+    Return the download URL templates loaded from constants.json.
+    
+    Returns:
+        download_urls (dict[str, str]): Mapping from platform/architecture identifiers to URL templates that include a version placeholder.
+    """
     return _load_constants()["download_urls"]
 
 
@@ -74,10 +91,13 @@ class DotenvxInstallError(Exception):
 
 
 def get_platform_info() -> tuple[str, str]:
-    """Get current platform and architecture.
-
+    """
+    Return the current platform name and a normalized architecture identifier.
+    
+    The returned architecture value normalizes common variants (for example, AMD64 -> `x86_64` on non-Windows systems; `arm64` vs `aarch64` differs between Darwin and other OSes).
+    
     Returns:
-        Tuple of (system, machine) e.g., ("Darwin", "arm64")
+        tuple: `(system, machine)` where `system` is the platform name (e.g., "Darwin", "Linux", "Windows") and `machine` is the normalized architecture (e.g., "x86_64", "arm64", "aarch64", "AMD64").
     """
     system = platform.system()
     machine = platform.machine()
@@ -94,13 +114,16 @@ def get_platform_info() -> tuple[str, str]:
 
 
 def get_venv_bin_dir() -> Path:
-    """Get the bin directory of the current virtual environment.
-
+    """
+    Determine the filesystem path to the current virtual environment's executable directory.
+    
+    Searches these locations in order: the VIRTUAL_ENV environment variable, candidate venv directories found on sys.path, and a .venv directory in the current working directory. Returns the venv's "bin" subdirectory on POSIX systems or "Scripts" on Windows.
+    
     Returns:
-        Path to .venv/bin/ (or .venv/Scripts/ on Windows)
-
+        Path: Path to the virtual environment's bin directory (or Scripts on Windows).
+    
     Raises:
-        RuntimeError: If not running in a virtual environment
+        RuntimeError: If no virtual environment directory can be located.
     """
     # Check for virtual environment
     venv_path = os.environ.get("VIRTUAL_ENV")
@@ -137,10 +160,11 @@ def get_venv_bin_dir() -> Path:
 
 
 def get_dotenvx_path() -> Path:
-    """Get the path where dotenvx binary should be installed.
-
+    """
+    Return the expected filesystem path of the dotenvx executable within the project's virtual environment.
+    
     Returns:
-        Path to the dotenvx binary
+        Path to the dotenvx binary inside the virtual environment's bin (or Scripts on Windows).
     """
     bin_dir = get_venv_bin_dir()
     binary_name = "dotenvx.exe" if platform.system() == "Windows" else "dotenvx"
@@ -165,13 +189,14 @@ class DotenvxInstaller:
         self.progress = progress_callback or (lambda x: None)
 
     def get_download_url(self) -> str:
-        """Get the download URL for the current platform.
-
+        """
+        Determine the platform-specific download URL for the configured dotenvx version.
+        
         Returns:
-            URL to download dotenvx binary
-
+            download_url (str): The concrete URL for the current system and architecture with the target version substituted.
+        
         Raises:
-            DotenvxInstallError: If platform is not supported
+            DotenvxInstallError: If the current platform/architecture is not supported.
         """
         system, machine = get_platform_info()
         key = (system, machine)
@@ -187,13 +212,16 @@ class DotenvxInstaller:
         return url.replace(DOTENVX_VERSION, self.version)
 
     def download_and_extract(self, target_path: Path) -> None:
-        """Download and extract dotenvx binary.
-
-        Args:
-            target_path: Where to place the binary
-
+        """
+        Download the packaged dotenvx release for the current platform and place the extracted binary at the given target path.
+        
+        The function creates the target directory if necessary, extracts the platform-specific archive, copies the included dotenvx binary to target_path (overwriting if present), and sets executable permissions on non-Windows systems.
+        
+        Parameters:
+            target_path (Path): Destination path for the dotenvx executable.
+        
         Raises:
-            DotenvxInstallError: If download or extraction fails
+            DotenvxInstallError: If the download, extraction, or locating/copying of the binary fails.
         """
         url = self.get_download_url()
         self.progress(f"Downloading dotenvx v{self.version}...")
@@ -247,30 +275,45 @@ class DotenvxInstaller:
             self.progress(f"Installed to {target_path}")
 
     def _extract_tar_gz(self, archive_path: Path, target_dir: Path) -> None:
-        """Extract a tar.gz archive."""
+        """
+        Extracts all files from a gzip-compressed tar archive into the given target directory.
+        
+        Parameters:
+            archive_path (Path): Path to the .tar.gz archive to extract.
+            target_dir (Path): Destination directory where the archive contents will be extracted.
+        """
         import tarfile
 
         with tarfile.open(archive_path, "r:gz") as tar:
             tar.extractall(target_dir)
 
     def _extract_zip(self, archive_path: Path, target_dir: Path) -> None:
-        """Extract a zip archive."""
+        """
+        Extract the contents of a ZIP archive into the given target directory.
+        
+        Parameters:
+            archive_path (Path): Path to the ZIP archive to extract.
+            target_dir (Path): Directory where archive contents will be extracted.
+        """
         import zipfile
 
         with zipfile.ZipFile(archive_path, "r") as zip_ref:
             zip_ref.extractall(target_dir)
 
     def install(self, force: bool = False) -> Path:
-        """Install dotenvx binary to virtual environment.
-
-        Args:
-            force: Force reinstall even if already installed
-
+        """
+        Install the pinned dotenvx binary into the virtual environment.
+        
+        If the target binary already exists and `force` is False, verifies the installed version and skips reinstallation when it matches the requested version; otherwise downloads and installs the requested version.
+        
+        Parameters:
+            force (bool): Reinstall even if a binary already exists.
+        
         Returns:
-            Path to the installed binary
-
+            Path: Path to the installed dotenvx binary.
+        
         Raises:
-            DotenvxInstallError: If installation fails
+            DotenvxInstallError: If installation fails.
         """
         target_path = get_dotenvx_path()
 
@@ -294,13 +337,14 @@ class DotenvxInstaller:
 
     @staticmethod
     def ensure_installed(version: str = DOTENVX_VERSION) -> Path:
-        """Static method to ensure dotenvx is installed.
-
-        Args:
-            version: Version to install
-
+        """
+        Ensure the dotenvx binary of the given version is installed into the virtual environment.
+        
+        Parameters:
+            version (str): Target dotenvx version to install.
+        
         Returns:
-            Path to dotenvx binary
+            Path: Path to the installed dotenvx binary
         """
         installer = DotenvxInstaller(version=version)
         return installer.install()
@@ -316,24 +360,28 @@ class DotenvxWrapper:
     """
 
     def __init__(self, auto_install: bool = True, version: str = DOTENVX_VERSION):
-        """Initialize dotenvx wrapper.
-
-        Args:
-            auto_install: Automatically install dotenvx if not found
-            version: Version to use/install
+        """
+        Create a DotenvxWrapper that provides methods to run and manage the dotenvx CLI within a virtual environment.
+        
+        Parameters:
+            auto_install (bool): If True, attempt to install dotenvx into the project's virtual environment when it cannot be found.
+            version (str): Pinned dotenvx version to use for lookups and installations.
         """
         self.auto_install = auto_install
         self.version = version
         self._binary_path: Path | None = None
 
     def _find_binary(self) -> Path:
-        """Find dotenvx binary.
-
+        """
+        Locate and return the filesystem path to the dotenvx executable, caching the result.
+        
+        Searches the virtual environment, then the system PATH, and attempts to auto-install the binary when configured to do so.
+        
         Returns:
-            Path to dotenvx binary
-
+            Path: Filesystem path to the found dotenvx executable.
+        
         Raises:
-            DotenvxNotFoundError: If not found and auto_install is False
+            DotenvxNotFoundError: If the executable cannot be found and auto-installation is not enabled or fails.
         """
         if self._binary_path and self._binary_path.exists():
             return self._binary_path
@@ -370,11 +418,21 @@ class DotenvxWrapper:
 
     @property
     def binary_path(self) -> Path:
-        """Get path to dotenvx binary."""
+        """
+        Resolve and return the path to the dotenvx executable.
+        
+        Returns:
+            path (Path): The resolved filesystem path to the dotenvx binary.
+        """
         return self._find_binary()
 
     def is_installed(self) -> bool:
-        """Check if dotenvx is installed."""
+        """
+        Determine whether the dotenvx binary is available (will attempt installation when auto_install is enabled).
+        
+        Returns:
+            `true` if the dotenvx binary was found or successfully installed, `false` otherwise.
+        """
         try:
             self._find_binary()
             return True
@@ -382,10 +440,11 @@ class DotenvxWrapper:
             return False
 
     def get_version(self) -> str:
-        """Get installed dotenvx version.
-
+        """
+        Get the installed dotenvx CLI version.
+        
         Returns:
-            Version string
+            str: The version string reported by the dotenvx binary (trimmed).
         """
         result = self._run(["--version"])
         return result.stdout.strip()
@@ -396,18 +455,20 @@ class DotenvxWrapper:
         check: bool = True,
         capture_output: bool = True,
     ) -> subprocess.CompletedProcess:
-        """Run dotenvx command.
-
-        Args:
-            args: Command arguments
-            check: Raise on non-zero exit
-            capture_output: Capture stdout/stderr
-
+        """
+        Execute the dotenvx CLI with the provided arguments and return the completed process.
+        
+        Parameters:
+            args (list[str]): Arguments to pass to the dotenvx executable (excluding the binary path).
+            check (bool): If True, raise DotenvxError when the process exits with a non-zero status.
+            capture_output (bool): If True, capture and return stdout and stderr on the CompletedProcess.
+        
         Returns:
-            CompletedProcess result
-
+            subprocess.CompletedProcess: The result of the executed command, including return code, stdout, and stderr.
+        
         Raises:
-            DotenvxError: If command fails and check=True
+            DotenvxError: If the command times out or (when `check` is True) exits with a non-zero status.
+            DotenvxNotFoundError: If the dotenvx executable cannot be found.
         """
         binary = self._find_binary()
         cmd = [str(binary)] + args
@@ -432,13 +493,14 @@ class DotenvxWrapper:
             raise DotenvxNotFoundError(f"dotenvx binary not found: {e}") from e
 
     def encrypt(self, env_file: Path | str) -> None:
-        """Encrypt an env file in place.
-
-        Args:
-            env_file: Path to .env file
-
+        """
+        Encrypt the specified .env file in place.
+        
+        Parameters:
+            env_file (Path | str): Path to the .env file to encrypt.
+        
         Raises:
-            DotenvxError: If encryption fails
+            DotenvxError: If the file does not exist or the encryption command fails.
         """
         env_file = Path(env_file)
         if not env_file.exists():
@@ -447,13 +509,14 @@ class DotenvxWrapper:
         self._run(["encrypt", "-f", str(env_file)])
 
     def decrypt(self, env_file: Path | str) -> None:
-        """Decrypt an env file in place.
-
-        Args:
-            env_file: Path to .env file
-
+        """
+        Decrypt the specified dotenv file in place.
+        
+        Parameters:
+            env_file (Path | str): Path to the .env file to decrypt.
+        
         Raises:
-            DotenvxError: If decryption fails
+            DotenvxError: If the file does not exist or the decryption command fails.
         """
         env_file = Path(env_file)
         if not env_file.exists():
@@ -462,27 +525,31 @@ class DotenvxWrapper:
         self._run(["decrypt", "-f", str(env_file)])
 
     def run(self, env_file: Path | str, command: list[str]) -> subprocess.CompletedProcess:
-        """Run a command with env file loaded.
-
-        Args:
-            env_file: Path to .env file
-            command: Command to run
-
+        """
+        Run the given command with environment variables loaded from the specified env file.
+        
+        The command is executed via the installed dotenvx CLI and will not raise on non-zero exit; inspect the returned CompletedProcess to determine success.
+        
+        Parameters:
+            env_file (Path | str): Path to the dotenv file whose variables should be loaded.
+            command (list[str]): The command and its arguments to execute (e.g. ["python", "script.py"]).
+        
         Returns:
-            CompletedProcess result
+            subprocess.CompletedProcess: The completed process result containing return code, stdout, and stderr.
         """
         env_file = Path(env_file)
         return self._run(["run", "-f", str(env_file), "--"] + command, check=False)
 
     def get(self, env_file: Path | str, key: str) -> str | None:
-        """Get a single value from env file.
-
-        Args:
-            env_file: Path to .env file
-            key: Variable name
-
+        """
+        Retrieve the value for `key` from the given env file.
+        
+        Parameters:
+            env_file (Path | str): Path to the env file to read.
+            key (str): Name of the variable to retrieve.
+        
         Returns:
-            Value or None if not found
+            str | None: Trimmed value of the variable if present, `None` if the key is not present or the command fails.
         """
         env_file = Path(env_file)
         result = self._run(["get", "-f", str(env_file), key], check=False)
@@ -493,19 +560,29 @@ class DotenvxWrapper:
         return result.stdout.strip()
 
     def set(self, env_file: Path | str, key: str, value: str) -> None:
-        """Set a value in env file.
-
-        Args:
-            env_file: Path to .env file
-            key: Variable name
-            value: Value to set
+        """
+        Set a key to the given value in the specified dotenv file.
+        
+        Parameters:
+            env_file (Path | str): Path to the .env file to modify.
+            key (str): The environment variable name to set.
+            value (str): The value to assign to `key`.
         """
         env_file = Path(env_file)
         self._run(["set", "-f", str(env_file), key, value])
 
     @staticmethod
     def install_instructions() -> str:
-        """Return installation instructions."""
+        """
+        Provide multi-option installation instructions for obtaining the dotenvx CLI.
+        
+        Returns:
+            str: Multi-line installation instructions containing three options:
+                 1) Auto-install into the project's virtual environment (recommended),
+                 2) Manual install via DotenvxInstaller.ensure_installed(),
+                 3) System install via the official install script. The pinned version
+                 is interpolated into the instructions.
+        """
         return f"""
 dotenvx is not installed.
 

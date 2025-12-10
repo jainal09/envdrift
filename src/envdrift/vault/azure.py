@@ -41,10 +41,14 @@ class AzureKeyVaultClient(VaultClient):
     """
 
     def __init__(self, vault_url: str):
-        """Initialize Azure Key Vault client.
-
-        Args:
-            vault_url: The vault URL (e.g., "https://my-vault.vault.azure.net/")
+        """
+        Create an Azure Key Vault client bound to the provided vault URL.
+        
+        Parameters:
+            vault_url (str): Vault URL (e.g., "https://my-vault.vault.azure.net/").
+        
+        Raises:
+            ImportError: If the Azure SDK is not installed (install with `pip install envdrift[azure]`).
         """
         if not AZURE_AVAILABLE:
             raise ImportError(
@@ -56,7 +60,12 @@ class AzureKeyVaultClient(VaultClient):
         self._credential = None
 
     def authenticate(self) -> None:
-        """Authenticate using DefaultAzureCredential."""
+        """
+        Authenticate to Azure Key Vault using DefaultAzureCredential and initialize the SecretClient.
+        
+        On success sets self._credential to the created credential and self._client to a ready SecretClient.
+        Raises AuthenticationError if credential acquisition fails and VaultError for HTTP-related Key Vault errors.
+        """
         try:
             self._credential = DefaultAzureCredential()
             self._client = SecretClient(
@@ -72,17 +81,27 @@ class AzureKeyVaultClient(VaultClient):
             raise VaultError(f"Azure Key Vault error: {e}") from e
 
     def is_authenticated(self) -> bool:
-        """Check if client is authenticated."""
+        """
+        Return whether the client has an initialized SecretClient and is ready for operations.
+        
+        Returns:
+            `true` if the internal client is initialized, `false` otherwise.
+        """
         return self._client is not None
 
     def get_secret(self, name: str) -> SecretValue:
-        """Retrieve a secret from Azure Key Vault.
-
-        Args:
-            name: The secret name
-
+        """
+        Retrieve a secret from the configured Azure Key Vault.
+        
+        Parameters:
+            name (str): The name of the secret to retrieve.
+        
         Returns:
-            SecretValue with the secret data
+            SecretValue: Contains the secret's name, value, version, and metadata (keys: "enabled", "created_on", "updated_on", "content_type").
+        
+        Raises:
+            SecretNotFoundError: If no secret with the given name exists in the vault.
+            VaultError: For other Azure Key Vault HTTP errors.
         """
         self.ensure_authenticated()
 
@@ -108,13 +127,14 @@ class AzureKeyVaultClient(VaultClient):
             raise VaultError(f"Azure Key Vault error: {e}") from e
 
     def list_secrets(self, prefix: str = "") -> list[str]:
-        """List secret names in the vault.
-
-        Args:
-            prefix: Optional prefix to filter secrets
-
+        """
+        List secret names in the vault, optionally filtered by a prefix.
+        
+        Parameters:
+            prefix (str): Optional string; include only secret names that start with this prefix.
+        
         Returns:
-            List of secret names
+            list[str]: Sorted list of secret names that match the prefix.
         """
         self.ensure_authenticated()
 
@@ -129,14 +149,11 @@ class AzureKeyVaultClient(VaultClient):
             raise VaultError(f"Azure Key Vault error: {e}") from e
 
     def set_secret(self, name: str, value: str) -> SecretValue:
-        """Set a secret in Azure Key Vault.
-
-        Args:
-            name: The secret name
-            value: The secret value
-
+        """
+        Store or update a secret in Azure Key Vault.
+        
         Returns:
-            SecretValue with the created/updated secret
+            SecretValue containing the stored secret's name, value, version, and metadata (includes `enabled`).
         """
         self.ensure_authenticated()
 

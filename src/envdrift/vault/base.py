@@ -35,7 +35,12 @@ class SecretValue:
     metadata: dict[str, Any] = field(default_factory=dict)
 
     def __str__(self) -> str:
-        """Return masked representation."""
+        """
+        Produce a string representation of the SecretValue with the secret value masked.
+        
+        Returns:
+            str: A string in the form "SecretValue(name=<name>, value=****)" where the actual secret value is redacted.
+        """
         return f"SecretValue(name={self.name}, value=****)"
 
 
@@ -51,71 +56,77 @@ class VaultClient(ABC):
 
     @abstractmethod
     def get_secret(self, name: str) -> SecretValue:
-        """Retrieve a secret by name.
-
-        Args:
-            name: The name/path of the secret
-
+        """
+        Retrieve the secret identified by `name` from the vault.
+        
+        Parameters:
+            name (str): Secret name or path within the vault.
+        
         Returns:
-            SecretValue with the secret data
-
+            SecretValue: The secret object containing the secret's value and metadata.
+        
         Raises:
-            SecretNotFoundError: If the secret doesn't exist
-            AuthenticationError: If not authenticated
-            VaultError: For other vault errors
+            SecretNotFoundError: If the secret does not exist.
+            AuthenticationError: If the client is not authenticated.
+            VaultError: For other vault-related errors.
         """
         ...
 
     @abstractmethod
     def list_secrets(self, prefix: str = "") -> list[str]:
-        """List available secret names.
-
-        Args:
-            prefix: Optional prefix to filter secrets
-
+        """
+        List secret names available in the vault, optionally filtered by a prefix.
+        
+        Parameters:
+            prefix (str): Optional prefix to filter returned secret names.
+        
         Returns:
-            List of secret names
-
+            list[str]: Secret names that match the prefix (or all secret names if prefix is empty).
+        
         Raises:
-            AuthenticationError: If not authenticated
-            VaultError: For other vault errors
+            AuthenticationError: If the client is not authenticated.
+            VaultError: For other vault-related errors.
         """
         ...
 
     @abstractmethod
     def is_authenticated(self) -> bool:
-        """Check if client is authenticated.
-
+        """
+        Determine whether the client is currently authenticated.
+        
         Returns:
-            True if authenticated, False otherwise
+            True if the client is authenticated, False otherwise.
         """
         ...
 
     @abstractmethod
     def authenticate(self) -> None:
-        """Authenticate to the vault.
-
+        """
+        Authenticate the client with the vault.
+        
         Raises:
-            AuthenticationError: If authentication fails
+            AuthenticationError: If authentication fails.
         """
         ...
 
     def get_secret_value(self, name: str) -> str:
-        """Convenience method to get just the secret value.
-
-        Args:
-            name: The name/path of the secret
-
+        """
+        Retrieve the value string of a secret identified by name.
+        
+        Parameters:
+        	name (str): The secret's name or path.
+        
         Returns:
-            The secret value as a string
+        	The secret's value string.
         """
         return self.get_secret(name).value
 
     def ensure_authenticated(self) -> None:
-        """Ensure client is authenticated, authenticating if needed.
-
+        """
+        Authenticate the client if it is not already authenticated.
+        
         Raises:
-            AuthenticationError: If authentication fails
+            AuthenticationError: If authentication fails.
         """
         if not self.is_authenticated():
             self.authenticate()

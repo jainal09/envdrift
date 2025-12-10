@@ -25,7 +25,12 @@ class FieldMetadata:
 
     @property
     def is_optional(self) -> bool:
-        """Check if field has a default value."""
+        """
+        Indicates that the field can be omitted because it has a default value.
+        
+        Returns:
+            `true` if the field can be omitted because it has a default value, `false` otherwise.
+        """
         return not self.required
 
 
@@ -40,17 +45,32 @@ class SchemaMetadata:
 
     @property
     def required_fields(self) -> list[str]:
-        """Return list of required field names."""
+        """
+        List the names of fields marked as required in the schema.
+        
+        Returns:
+            list[str]: Field names for which FieldMetadata.required is True.
+        """
         return [name for name, f in self.fields.items() if f.required]
 
     @property
     def optional_fields(self) -> list[str]:
-        """Return list of optional field names."""
+        """
+        List optional field names from the schema.
+        
+        Returns:
+            list[str]: Field names whose corresponding FieldMetadata.required is False.
+        """
         return [name for name, f in self.fields.items() if not f.required]
 
     @property
     def sensitive_fields(self) -> list[str]:
-        """Return list of sensitive field names."""
+        """
+        List names of fields that are marked as sensitive.
+        
+        Returns:
+            list[str]: Field names for which the corresponding FieldMetadata.sensitive is True.
+        """
         return [name for name, f in self.fields.items() if f.sensitive]
 
 
@@ -66,18 +86,19 @@ class SchemaLoader:
     def load(
         self, dotted_path: str, service_dir: Path | str | None = None
     ) -> type[BaseSettings]:
-        """Load settings class from dotted path.
-
-        Args:
-            dotted_path: e.g., "config.settings:ProductionSettings"
-                         or "app.config:Settings"
-            service_dir: Optional directory to add to sys.path for imports
-
+        """
+        Load a Pydantic BaseSettings subclass specified by a dotted path.
+        
+        Parameters:
+            dotted_path (str): Dotted import path with class name separated by `:`, e.g. "module.path:SettingsClass".
+            service_dir (Path | str | None): Optional directory to temporarily add to sys.path to assist imports.
+        
         Returns:
-            The Pydantic Settings class
-
+            type[BaseSettings]: The resolved Pydantic Settings class.
+        
         Raises:
-            SchemaLoadError: If the class cannot be loaded
+            SchemaLoadError: If the path format is invalid, the module cannot be imported, the class is missing,
+                             or the resolved object is not a subclass of `BaseSettings`.
         """
         # Add service directory to path if provided
         if service_dir:
@@ -117,13 +138,16 @@ class SchemaLoader:
         return settings_cls
 
     def extract_metadata(self, settings_cls: type[BaseSettings]) -> SchemaMetadata:
-        """Extract field metadata from Settings class.
-
-        Args:
-            settings_cls: A Pydantic BaseSettings class
-
+        """
+        Builds a SchemaMetadata instance describing the given Pydantic BaseSettings class, including each field's metadata and the model's extra policy.
+        
+        Inspects the class's model_config.extra (defaulting to "ignore") and model_fields to populate FieldMetadata entries; for required fields the stored default is None, sensitivity is read from a field's json_schema_extra["sensitive"] if present, and type annotations fall back to "Any" when not available.
+        
+        Parameters:
+            settings_cls (type[BaseSettings]): The Pydantic BaseSettings subclass to inspect.
+        
         Returns:
-            SchemaMetadata with all field information
+            SchemaMetadata: Metadata for the settings class, including field map and extra policy.
         """
         schema = SchemaMetadata(
             class_name=settings_cls.__name__,
@@ -182,16 +206,16 @@ class SchemaLoader:
     def get_schema_metadata_func(
         self, module_path: str, service_dir: Path | str | None = None
     ) -> dict[str, Any] | None:
-        """Check if module has get_schema_metadata() function.
-
-        This allows projects to customize schema export.
-
-        Args:
-            module_path: Module path (e.g., "config.settings")
-            service_dir: Optional directory to add to sys.path
-
+        """
+        Invoke a module-level get_schema_metadata() function if present and return its result.
+        
+        Parameters:
+            module_path (str): Dotted module path to import (e.g., "config.settings").
+            service_dir (Path | str | None): Optional directory to add to sys.path to aid importing the module.
+        
         Returns:
-            Result of get_schema_metadata() if it exists, None otherwise
+            dict[str, Any] | None: The dictionary returned by get_schema_metadata() if callable and executed successfully,
+            or `None` if the module cannot be imported or the function is absent.
         """
         if service_dir:
             service_dir = Path(service_dir).resolve()
@@ -212,14 +236,15 @@ class SchemaLoader:
     def load_and_extract(
         self, dotted_path: str, service_dir: Path | str | None = None
     ) -> SchemaMetadata:
-        """Convenience method to load and extract metadata in one call.
-
-        Args:
-            dotted_path: e.g., "config.settings:ProductionSettings"
-            service_dir: Optional directory to add to sys.path
-
+        """
+        Convenience method that loads a Pydantic BaseSettings class from a dotted path and returns its SchemaMetadata.
+        
+        Parameters:
+            dotted_path (str): Dotted import path with class name, e.g. "config.settings:ProductionSettings".
+            service_dir (Path | str | None): Optional directory to add to sys.path to assist imports.
+        
         Returns:
-            SchemaMetadata with all field information
+            SchemaMetadata: Metadata describing the loaded settings class and its fields.
         """
         settings_cls = self.load(dotted_path, service_dir)
         return self.extract_metadata(settings_cls)
