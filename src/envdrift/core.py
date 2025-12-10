@@ -10,6 +10,15 @@ from envdrift.core.schema import SchemaLoader
 from envdrift.core.validator import ValidationResult, Validator
 
 
+def _is_float(value: str) -> bool:
+    """Check if a string represents a float value."""
+    try:
+        float(value)
+        return "." in value  # Distinguish from int
+    except ValueError:
+        return False
+
+
 def validate(
     env_file: Path | str = ".env",
     schema: str | None = None,
@@ -122,9 +131,9 @@ def init(
     env = parser.parse(env_file)
 
     # Detect sensitive variables if requested
-    detector = EncryptionDetector()
     sensitive_vars = set()
     if detect_sensitive:
+        detector = EncryptionDetector()
         for var_name, env_var in env.variables.items():
             if detector.is_name_sensitive(var_name) or detector.is_value_suspicious(env_var.value):
                 sensitive_vars.add(var_name)
@@ -155,9 +164,12 @@ def init(
         if value.lower() in ("true", "false"):
             type_hint = "bool"
             default_val = value.lower() == "true"
-        elif value.isdigit():
+        elif value.lstrip("-").isdigit() and value.count("-") <= 1:
             type_hint = "int"
             default_val = int(value)
+        elif _is_float(value):
+            type_hint = "float"
+            default_val = float(value)
         else:
             type_hint = "str"
             default_val = None
@@ -177,5 +189,5 @@ def init(
     lines.append("")
 
     # Write output
-    output.write_text("\n".join(lines))
+    output.write_text("\n".join(lines), encoding="utf-8")
     return output
