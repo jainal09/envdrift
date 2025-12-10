@@ -4,10 +4,10 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from envdrift.core.diff import DiffEngine, DiffResult
 from envdrift.core.parser import EnvParser
 from envdrift.core.schema import SchemaLoader
-from envdrift.core.validator import Validator, ValidationResult
-from envdrift.core.diff import DiffEngine, DiffResult
+from envdrift.core.validator import ValidationResult, Validator
 
 
 def validate(
@@ -165,12 +165,12 @@ def init(
         # Build field
         if is_sensitive:
             if default_val is not None:
-                lines.append(f'    {var_name}: {type_hint} = Field(default={repr(default_val)}, json_schema_extra={{"sensitive": True}})')
+                lines.append(f'    {var_name}: {type_hint} = Field(default={default_val!r}, json_schema_extra={{"sensitive": True}})')
             else:
                 lines.append(f'    {var_name}: {type_hint} = Field(json_schema_extra={{"sensitive": True}})')
         else:
             if default_val is not None:
-                lines.append(f"    {var_name}: {type_hint} = {repr(default_val)}")
+                lines.append(f"    {var_name}: {type_hint} = {default_val!r}")
             else:
                 lines.append(f"    {var_name}: {type_hint}")
 
