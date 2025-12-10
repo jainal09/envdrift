@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="docs/assets/images/env-drift-logo.png" alt="envdrift logo" width="300">
+</p>
+
 # envdrift
 
 [![PyPI version](https://badge.fury.io/py/envdrift.svg)](https://badge.fury.io/py/envdrift)

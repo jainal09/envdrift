@@ -6,6 +6,8 @@ repo_name: jainal09/envdrift
 
 theme:
   name: material
+  logo: assets/images/env-drift-logo.png
+  favicon: assets/images/env-drift-logo.png
   palette:
     - scheme: default
       primary: indigo
