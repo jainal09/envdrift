@@ -164,15 +164,15 @@ class AWSSecretsManagerClient(VaultClient):
             secrets = []
             paginator = self._client.get_paginator("list_secrets")
 
-            filters = []
-            if prefix:
-                filters.append({"Key": "name", "Values": [prefix]})
-
-            for page in paginator.paginate(Filters=filters if filters else []):
+            # Note: AWS ListSecrets filter with Key="name" performs exact match,
+            # so we fetch all secrets and filter client-side for prefix matching
+            for page in paginator.paginate():
                 for secret in page.get("SecretList", []):
                     name = secret.get("Name")
                     if name:
-                        secrets.append(name)
+                        # Apply client-side prefix filtering
+                        if not prefix or name.startswith(prefix):
+                            secrets.append(name)
 
             return sorted(secrets)
         except ClientError as e:

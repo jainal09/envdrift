@@ -117,7 +117,11 @@ class EnvParser:
     - Quoted values: KEY="value" or KEY='value'
     - dotenvx encrypted: KEY="encrypted:xxxx"
     - Comments and blank lines (skipped)
-    - Multiline values (basic support)
+
+    Note:
+        Multiline values are not currently supported. Each line is parsed
+        independently. For multiline secrets (e.g., PEM keys), consider
+        base64 encoding or using a single-line escaped format.
     """
 
     # dotenvx encrypted value pattern

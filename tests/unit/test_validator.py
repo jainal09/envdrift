@@ -116,6 +116,7 @@ NEW_FEATURE_FLAG=enabled
 
         assert result.valid is False
         assert "DATABASE_URL" in result.unencrypted_secrets
+        assert "REDIS_URL" in result.unencrypted_secrets
         assert "API_KEY" in result.unencrypted_secrets
         assert "JWT_SECRET" in result.unencrypted_secrets
 

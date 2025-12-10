@@ -32,7 +32,6 @@ class HashiCorpVaultClient(VaultClient):
 
     Authentication methods supported:
     - Token (via token parameter or VAULT_TOKEN env var)
-    - AppRole (if configured)
     """
 
     def __init__(
