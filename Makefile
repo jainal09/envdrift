@@ -1,4 +1,4 @@
-.PHONY: install dev lint format typecheck security test build clean publish help
+.PHONY: install dev lint format typecheck security test build clean publish docs docs-serve help
 
 # Default target
 help:
@@ -15,6 +15,8 @@ help:
 	@echo "  security    Run security checks with bandit"
 	@echo "  test        Run tests with pytest"
 	@echo "  check       Run all checks (lint, typecheck, security, test)"
+	@echo "  docs        Build documentation"
+	@echo "  docs-serve  Serve documentation locally"
 	@echo "  build       Build package for distribution"
 	@echo "  publish     Publish to PyPI"
 	@echo "  clean       Remove build artifacts"
@@ -63,10 +65,19 @@ publish: build
 publish-test: build
 	uv publish --index-url https://test.pypi.org/simple/
 
+# Build documentation
+docs:
+	uv run mkdocs build --strict
+
+# Serve documentation locally
+docs-serve:
+	uv run mkdocs serve
+
 # Clean build artifacts
 clean:
 	rm -rf dist/
 	rm -rf build/
+	rm -rf site/
 	rm -rf *.egg-info/
 	rm -rf src/*.egg-info/
 	rm -rf .pytest_cache/

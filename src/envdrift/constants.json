@@ -1,0 +1,10 @@
+{
+    "dotenvx_version": "1.51.1",
+    "download_urls": {
+        "darwin_amd64": "https://github.com/jainal09/envdrift/releases/download/dotenvx-v{version}/dotenvx-{version}-darwin-amd64.tar.gz",
+        "darwin_arm64": "https://github.com/jainal09/envdrift/releases/download/dotenvx-v{version}/dotenvx-{version}-darwin-arm64.tar.gz",
+        "linux_amd64": "https://github.com/jainal09/envdrift/releases/download/dotenvx-v{version}/dotenvx-{version}-linux-amd64.tar.gz",
+        "linux_arm64": "https://github.com/jainal09/envdrift/releases/download/dotenvx-v{version}/dotenvx-{version}-linux-arm64.tar.gz",
+        "windows_amd64": "https://github.com/jainal09/envdrift/releases/download/dotenvx-v{version}/dotenvx-{version}-windows-amd64.zip"
+    }
+}

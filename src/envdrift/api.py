@@ -10,35 +10,28 @@ from envdrift.core.schema import SchemaLoader
 from envdrift.core.validator import ValidationResult, Validator
 
 
-def _is_float(value: str) -> bool:
-    """Check if a string represents a float value."""
-    try:
-        float(value)
-        return "." in value  # Distinguish from int
-    except ValueError:
-        return False
-
-
 def validate(
     env_file: Path | str = ".env",
     schema: str | None = None,
     service_dir: Path | str | None = None,
     check_encryption: bool = True,
 ) -> ValidationResult:
-    """Validate an .env file against a Pydantic schema.
+    """
+    Validate an .env file against a Pydantic Settings class schema.
 
-    Args:
-        env_file: Path to the .env file to validate
-        schema: Dotted path to the Pydantic Settings class (e.g., 'app.config:Settings')
-        service_dir: Optional directory to add to sys.path for imports
-        check_encryption: Whether to check if sensitive vars are encrypted
+    Parameters:
+        env_file: Path or string to the .env file to validate.
+        schema: Dotted path to the Pydantic Settings class (e.g., "app.config:Settings"); required.
+        service_dir: Optional directory to add to sys.path to assist importing the schema.
+        check_encryption: If true, perform additional checks for encrypted or sensitive values.
 
     Returns:
-        ValidationResult with validation status and any issues found
+        ValidationResult: Result containing validation status and any issues found.
 
     Raises:
-        FileNotFoundError: If env file doesn't exist
-        SchemaLoadError: If schema cannot be loaded
+        ValueError: If `schema` is not provided.
+        FileNotFoundError: If the env file does not exist or cannot be read.
+        SchemaLoadError: If the specified schema cannot be imported or loaded.
     """
     if schema is None:
         raise ValueError("schema is required. Example: 'app.config:Settings'")
@@ -66,20 +59,21 @@ def diff(
     service_dir: Path | str | None = None,
     mask_values: bool = True,
 ) -> DiffResult:
-    """Compare two .env files and return differences.
+    """
+    Compute differences between two .env files.
 
-    Args:
-        env1: Path to first .env file
-        env2: Path to second .env file
-        schema: Optional schema for sensitive field detection
-        service_dir: Optional directory to add to sys.path for imports
-        mask_values: Whether to mask sensitive values in output
+    Parameters:
+        env1 (Path | str): Path to the first .env file.
+        env2 (Path | str): Path to the second .env file.
+        schema (str | None): Optional dotted path to a Pydantic Settings class used to identify sensitive fields.
+        service_dir (Path | str | None): Optional directory to add to imports when loading the schema.
+        mask_values (bool): If true, mask sensitive values in the resulting diff.
 
     Returns:
-        DiffResult with all differences between the files
+        DiffResult: Differences between the files, including added, removed, and changed variables. Sensitive values are masked when requested.
 
     Raises:
-        FileNotFoundError: If either env file doesn't exist
+        FileNotFoundError: If either env1 or env2 does not exist.
     """
     env1 = Path(env1)
     env2 = Path(env2)
@@ -107,19 +101,22 @@ def init(
     class_name: str = "Settings",
     detect_sensitive: bool = True,
 ) -> Path:
-    """Generate a Pydantic Settings class from an existing .env file.
+    """
+    Generate a Pydantic BaseSettings subclass file from an existing .env file.
 
-    Args:
-        env_file: Path to the .env file to read
-        output: Path where to write the generated Settings class
-        class_name: Name for the Settings class
-        detect_sensitive: Auto-detect sensitive variables
+    Parses the provided env file, optionally detects variables that appear sensitive, and writes a Python module defining a Pydantic Settings class with inferred type hints and defaults. Sensitive fields are marked with `json_schema_extra={"sensitive": True}`.
+
+    Parameters:
+        env_file (Path | str): Path to the source .env file.
+        output (Path | str): Path where the generated Python module will be written.
+        class_name (str): Name to use for the generated Settings class.
+        detect_sensitive (bool): If True, attempt to detect sensitive variables and mark them in the generated fields.
 
     Returns:
-        Path to the generated file
+        Path: The path to the written settings file.
 
     Raises:
-        FileNotFoundError: If env file doesn't exist
+        FileNotFoundError: If the specified env_file does not exist or cannot be read.
     """
     from envdrift.core.encryption import EncryptionDetector
 
@@ -131,11 +128,13 @@ def init(
     env = parser.parse(env_file)
 
     # Detect sensitive variables if requested
+    detector = EncryptionDetector()
     sensitive_vars = set()
     if detect_sensitive:
-        detector = EncryptionDetector()
         for var_name, env_var in env.variables.items():
-            if detector.is_name_sensitive(var_name) or detector.is_value_suspicious(env_var.value):
+            is_name_sens = detector.is_name_sensitive(var_name)
+            is_val_susp = detector.is_value_suspicious(env_var.value)
+            if is_name_sens or is_val_susp:
                 sensitive_vars.add(var_name)
 
     # Generate settings class
@@ -164,22 +163,22 @@ def init(
         if value.lower() in ("true", "false"):
             type_hint = "bool"
             default_val = value.lower() == "true"
-        elif value.lstrip("-").isdigit() and value.count("-") <= 1:
+        elif value.isdigit():
             type_hint = "int"
             default_val = int(value)
-        elif _is_float(value):
-            type_hint = "float"
-            default_val = float(value)
         else:
             type_hint = "str"
             default_val = None
 
         # Build field
         if is_sensitive:
+            extra = 'json_schema_extra={"sensitive": True}'
             if default_val is not None:
-                lines.append(f'    {var_name}: {type_hint} = Field(default={default_val!r}, json_schema_extra={{"sensitive": True}})')
+                lines.append(
+                    f"    {var_name}: {type_hint} = Field(default={default_val!r}, {extra})"
+                )
             else:
-                lines.append(f'    {var_name}: {type_hint} = Field(json_schema_extra={{"sensitive": True}})')
+                lines.append(f"    {var_name}: {type_hint} = Field({extra})")
         else:
             if default_val is not None:
                 lines.append(f"    {var_name}: {type_hint} = {default_val!r}")
@@ -189,5 +188,5 @@ def init(
     lines.append("")
 
     # Write output
-    output.write_text("\n".join(lines), encoding="utf-8")
+    output.write_text("\n".join(lines))
     return output
