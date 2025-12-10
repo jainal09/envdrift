@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="docs/assets/images/env-drift-logo.png" alt="envdrift logo" width="200">
+  <img src="docs/assets/images/env-drift-logo.png" alt="envdrift logo" width="300">
 </p>
 
 # envdrift
