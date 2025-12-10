@@ -96,3 +96,44 @@ Ensure:
 1. You have git history: `git fetch --tags --unshallow` (if needed)
 2. You're on or after a tagged commit
 3. Tags follow the `v*` pattern (e.g., `v0.1.0`, not `0.1.0`)
+
+### Pre-release validation
+
+Before creating and pushing a tag, verify the version doesn't already exist on PyPI:
+
+```bash
+# Check if version exists on PyPI
+pip index versions envdrift
+
+# Or check directly on PyPI
+curl -s https://pypi.org/pypi/envdrift/json | grep -o '"version":"[^"]*"'
+```
+
+This prevents "Version already exists" errors and helps avoid creating tags that will fail to publish.
+
+### Cleaning up orphaned tags
+
+If you accidentally created a tag that failed to publish, clean it up:
+
+```bash
+# Delete local tag
+git tag -d v0.1.X
+
+# Delete remote tag (only if it failed to publish)
+git push origin :refs/tags/v0.1.X
+```
+
+**Warning**: Only delete tags that have NOT been successfully published to PyPI. Once a version is on PyPI, the tag should remain in git for version traceability.
+
+### Tag hygiene and force-pushing
+
+**Never force-push tags** - This can cause serious issues:
+
+- Force-pushing a tag to a different commit can trigger republishing attempts
+- PyPI will reject the duplicate version, causing workflow failures
+- It breaks version traceability and can confuse users
+
+If you need to fix a release:
+1. Don't modify existing tags
+2. Create a new patch version (e.g., if `v0.1.1` has issues, create `v0.1.2`)
+3. Keep the git history clean and traceable
