@@ -27,7 +27,7 @@ Use semantic versioning for tags (e.g., `v0.1.1`, `v0.2.0`, `v1.0.0`):
 git tag v0.1.1
 git push origin v0.1.1
 
-# For a minor release (new features, backwards compatible)
+# For a minor release (new features, backward-compatible)
 git tag v0.2.0
 git push origin v0.2.0
 
@@ -53,7 +53,7 @@ Check the [Actions tab](https://github.com/jainal09/envdrift/actions) to ensure 
 Follow [Semantic Versioning](https://semver.org/):
 
 - **Patch** (0.1.X): Bug fixes, no API changes
-- **Minor** (0.X.0): New features, backwards compatible
+- **Minor** (0.X.0): New features, backward-compatible
 - **Major** (X.0.0): Breaking changes
 
 ## Versioning Between Releases

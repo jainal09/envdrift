@@ -12,10 +12,15 @@ try:
 except ImportError:
     # Fallback for editable installs before build
     try:
-        from importlib.metadata import version
-        __version__ = version("envdrift")
-    except Exception:
+        from importlib.metadata import PackageNotFoundError, version
+    except ImportError:
+        # Very old Python without importlib.metadata
         __version__ = "0.0.0+unknown"
+    else:
+        try:
+            __version__ = version("envdrift")
+        except PackageNotFoundError:
+            __version__ = "0.0.0+unknown"
 
 __author__ = "Jainal Gosaliya"
 __email__ = "gosaliya.jainal@gmail.com"
