@@ -1,18 +1,34 @@
 """Command-line interface for envdrift."""
 
+from __future__ import annotations
+
+import json
 from pathlib import Path
-from typing import Annotated, Optional
+from typing import Annotated
 
 import typer
-from rich.console import Console
-from rich.panel import Panel
+
+from envdrift import __version__
+from envdrift.core.diff import DiffEngine
+from envdrift.core.encryption import EncryptionDetector
+from envdrift.core.parser import EnvParser
+from envdrift.core.schema import SchemaLoader, SchemaLoadError
+from envdrift.core.validator import Validator
+from envdrift.output.rich import (
+    console,
+    print_diff_result,
+    print_encryption_report,
+    print_error,
+    print_success,
+    print_validation_result,
+    print_warning,
+)
 
 app = typer.Typer(
     name="envdrift",
     help="Prevent environment variable drift with Pydantic schema validation.",
     no_args_is_help=True,
 )
-console = Console()
 
 
 @app.command()
@@ -21,22 +37,75 @@ def validate(
         Path, typer.Argument(help="Path to .env file to validate")
     ] = Path(".env"),
     schema: Annotated[
-        Optional[str],
+        str | None,
         typer.Option("--schema", "-s", help="Dotted path to Settings class"),
+    ] = None,
+    service_dir: Annotated[
+        Path | None,
+        typer.Option("--service-dir", "-d", help="Service directory for imports"),
     ] = None,
     ci: Annotated[
         bool, typer.Option("--ci", help="CI mode: exit with code 1 on failure")
     ] = False,
+    check_encryption: Annotated[
+        bool,
+        typer.Option("--check-encryption/--no-check-encryption", help="Check encryption"),
+    ] = True,
+    fix: Annotated[
+        bool, typer.Option("--fix", help="Output template for missing variables")
+    ] = False,
+    verbose: Annotated[
+        bool, typer.Option("--verbose", "-v", help="Show additional details")
+    ] = False,
 ) -> None:
     """Validate an .env file against a Pydantic schema."""
-    console.print(
-        Panel(
-            "[yellow]Coming soon in v0.1.0[/yellow]\n\n"
-            "This command will validate your .env file against a Pydantic Settings schema.",
-            title="envdrift validate",
-        )
+    if schema is None:
+        print_error("--schema is required. Example: --schema 'app.config:Settings'")
+        raise typer.Exit(code=1)
+
+    # Check env file exists
+    if not env_file.exists():
+        print_error(f"ENV file not found: {env_file}")
+        raise typer.Exit(code=1)
+
+    # Load schema
+    loader = SchemaLoader()
+    try:
+        settings_cls = loader.load(schema, service_dir)
+        schema_meta = loader.extract_metadata(settings_cls)
+    except SchemaLoadError as e:
+        print_error(str(e))
+        raise typer.Exit(code=1) from None
+
+    # Parse env file
+    parser = EnvParser()
+    try:
+        env = parser.parse(env_file)
+    except FileNotFoundError as e:
+        print_error(str(e))
+        raise typer.Exit(code=1) from None
+
+    # Validate
+    validator = Validator()
+    result = validator.validate(
+        env,
+        schema_meta,
+        check_encryption=check_encryption,
+        check_extra=True,
     )
-    if ci:
+
+    # Print result
+    print_validation_result(result, env_file, schema_meta, verbose=verbose)
+
+    # Generate fix template if requested
+    if fix and not result.valid:
+        template = validator.generate_fix_template(result, schema_meta)
+        if template:
+            console.print("[bold]Fix template:[/bold]")
+            console.print(template)
+
+    # Exit with appropriate code
+    if ci and not result.valid:
         raise typer.Exit(code=1)
 
 
@@ -44,16 +113,161 @@ def validate(
 def diff(
     env1: Annotated[Path, typer.Argument(help="First .env file (e.g., .env.dev)")],
     env2: Annotated[Path, typer.Argument(help="Second .env file (e.g., .env.prod)")],
+    schema: Annotated[
+        str | None,
+        typer.Option("--schema", "-s", help="Schema for sensitive field detection"),
+    ] = None,
+    service_dir: Annotated[
+        Path | None,
+        typer.Option("--service-dir", "-d", help="Service directory for imports"),
+    ] = None,
+    show_values: Annotated[
+        bool, typer.Option("--show-values", help="Don't mask sensitive values")
+    ] = False,
+    format_: Annotated[
+        str, typer.Option("--format", "-f", help="Output format: table (default), json")
+    ] = "table",
+    include_unchanged: Annotated[
+        bool, typer.Option("--include-unchanged", help="Include unchanged variables")
+    ] = False,
 ) -> None:
     """Compare two .env files and show differences."""
-    console.print(
-        Panel(
-            "[yellow]Coming soon in v0.1.0[/yellow]\n\n"
-            f"This command will compare [bold]{env1}[/bold] and [bold]{env2}[/bold]\n"
-            "and show missing, extra, and differing variables.",
-            title="envdrift diff",
-        )
+    # Check files exist
+    if not env1.exists():
+        print_error(f"ENV file not found: {env1}")
+        raise typer.Exit(code=1)
+    if not env2.exists():
+        print_error(f"ENV file not found: {env2}")
+        raise typer.Exit(code=1)
+
+    # Load schema if provided
+    schema_meta = None
+    if schema:
+        loader = SchemaLoader()
+        try:
+            settings_cls = loader.load(schema, service_dir)
+            schema_meta = loader.extract_metadata(settings_cls)
+        except SchemaLoadError as e:
+            print_warning(f"Could not load schema: {e}")
+
+    # Parse env files
+    parser = EnvParser()
+    try:
+        env_file1 = parser.parse(env1)
+        env_file2 = parser.parse(env2)
+    except FileNotFoundError as e:
+        print_error(str(e))
+        raise typer.Exit(code=1) from None
+
+    # Diff
+    engine = DiffEngine()
+    result = engine.diff(
+        env_file1,
+        env_file2,
+        schema=schema_meta,
+        mask_values=not show_values,
+        include_unchanged=include_unchanged,
     )
+
+    # Output
+    if format_ == "json":
+        console.print_json(json.dumps(engine.to_dict(result), indent=2))
+    else:
+        print_diff_result(result, show_unchanged=include_unchanged)
+
+
+@app.command("encrypt")
+def encrypt_cmd(
+    env_file: Annotated[
+        Path, typer.Argument(help="Path to .env file")
+    ] = Path(".env"),
+    check: Annotated[
+        bool, typer.Option("--check", help="Only check encryption status, don't encrypt")
+    ] = False,
+    schema: Annotated[
+        str | None,
+        typer.Option("--schema", "-s", help="Schema for sensitive field detection"),
+    ] = None,
+    service_dir: Annotated[
+        Path | None,
+        typer.Option("--service-dir", "-d", help="Service directory for imports"),
+    ] = None,
+) -> None:
+    """Check or perform encryption on .env file using dotenvx."""
+    if not env_file.exists():
+        print_error(f"ENV file not found: {env_file}")
+        raise typer.Exit(code=1)
+
+    # Load schema if provided
+    schema_meta = None
+    if schema:
+        loader = SchemaLoader()
+        try:
+            settings_cls = loader.load(schema, service_dir)
+            schema_meta = loader.extract_metadata(settings_cls)
+        except SchemaLoadError as e:
+            print_warning(f"Could not load schema: {e}")
+
+    # Parse env file
+    parser = EnvParser()
+    env = parser.parse(env_file)
+
+    # Analyze encryption
+    detector = EncryptionDetector()
+    report = detector.analyze(env, schema_meta)
+
+    if check:
+        # Just report status
+        print_encryption_report(report)
+
+        if detector.should_block_commit(report):
+            raise typer.Exit(code=1)
+    else:
+        # Attempt encryption using dotenvx
+        try:
+            from envdrift.integrations.dotenvx import DotenvxWrapper
+
+            dotenvx = DotenvxWrapper()
+
+            if not dotenvx.is_installed():
+                print_error("dotenvx is not installed")
+                console.print(dotenvx.install_instructions())
+                raise typer.Exit(code=1)
+
+            dotenvx.encrypt(env_file)
+            print_success(f"Encrypted {env_file}")
+        except ImportError:
+            print_error("dotenvx integration not available")
+            console.print("Run: envdrift encrypt --check to check encryption status")
+            raise typer.Exit(code=1) from None
+
+
+@app.command("decrypt")
+def decrypt_cmd(
+    env_file: Annotated[
+        Path, typer.Argument(help="Path to encrypted .env file")
+    ] = Path(".env"),
+) -> None:
+    """Decrypt an encrypted .env file using dotenvx."""
+    if not env_file.exists():
+        print_error(f"ENV file not found: {env_file}")
+        raise typer.Exit(code=1)
+
+    try:
+        from envdrift.integrations.dotenvx import DotenvxWrapper
+
+        dotenvx = DotenvxWrapper()
+
+        if not dotenvx.is_installed():
+            print_error("dotenvx is not installed")
+            console.print(dotenvx.install_instructions())
+            raise typer.Exit(code=1)
+
+        dotenvx.decrypt(env_file)
+        print_success(f"Decrypted {env_file}")
+    except ImportError:
+        print_error("dotenvx integration not available")
+        raise typer.Exit(code=1) from None
 
 
 @app.command()
@@ -64,16 +278,88 @@ def init(
     output: Annotated[
         Path, typer.Option("--output", "-o", help="Output file for Settings class")
     ] = Path("settings.py"),
+    class_name: Annotated[
+        str, typer.Option("--class-name", "-c", help="Name for the Settings class")
+    ] = "Settings",
+    detect_sensitive: Annotated[
+        bool, typer.Option("--detect-sensitive", help="Auto-detect sensitive variables")
+    ] = True,
 ) -> None:
     """Generate a Pydantic Settings class from an existing .env file."""
-    console.print(
-        Panel(
-            "[yellow]Coming soon in v0.1.0[/yellow]\n\n"
-            f"This command will generate a Pydantic Settings class\n"
-            f"from [bold]{env_file}[/bold] and write it to [bold]{output}[/bold].",
-            title="envdrift init",
-        )
-    )
+    if not env_file.exists():
+        print_error(f"ENV file not found: {env_file}")
+        raise typer.Exit(code=1)
+
+    # Parse env file
+    parser = EnvParser()
+    env = parser.parse(env_file)
+
+    # Detect sensitive variables if requested
+    detector = EncryptionDetector()
+    sensitive_vars = set()
+    if detect_sensitive:
+        for var_name, env_var in env.variables.items():
+            is_name_sens = detector._is_name_sensitive(var_name)
+            is_val_susp = detector._is_value_suspicious(env_var.value)
+            if is_name_sens or is_val_susp:
+                sensitive_vars.add(var_name)
+
+    # Generate settings class
+    lines = [
+        '"""Auto-generated Pydantic Settings class."""',
+        "",
+        "from pydantic import Field",
+        "from pydantic_settings import BaseSettings, SettingsConfigDict",
+        "",
+        "",
+        f"class {class_name}(BaseSettings):",
+        f'    """Settings generated from {env_file}."""',
+        "",
+        "    model_config = SettingsConfigDict(",
+        f'        env_file="{env_file}",',
+        '        extra="forbid",',
+        "    )",
+        "",
+    ]
+
+    for var_name, env_var in sorted(env.variables.items()):
+        is_sensitive = var_name in sensitive_vars
+
+        # Try to infer type from value
+        value = env_var.value
+        if value.lower() in ("true", "false"):
+            type_hint = "bool"
+            default_val = value.lower() == "true"
+        elif value.isdigit():
+            type_hint = "int"
+            default_val = int(value)
+        else:
+            type_hint = "str"
+            default_val = None  # Will be required
+
+        # Build field
+        if is_sensitive:
+            extra = 'json_schema_extra={"sensitive": True}'
+            if default_val is not None:
+                lines.append(
+                    f"    {var_name}: {type_hint} = Field(default={default_val!r}, {extra})"
+                )
+            else:
+                lines.append(f"    {var_name}: {type_hint} = Field({extra})")
+        else:
+            if default_val is not None:
+                lines.append(f"    {var_name}: {type_hint} = {default_val!r}")
+            else:
+                lines.append(f"    {var_name}: {type_hint}")
+
+    lines.append("")
+
+    # Write output
+    output.write_text("\n".join(lines))
+    print_success(f"Generated {output}")
+
+    if sensitive_vars:
+        console.print(f"[dim]Detected {len(sensitive_vars)} sensitive variable(s)[/dim]")
 
 
 @app.command()
@@ -81,25 +367,50 @@ def hook(
     install: Annotated[
         bool, typer.Option("--install", "-i", help="Install pre-commit hook")
     ] = False,
+    show_config: Annotated[
+        bool, typer.Option("--config", help="Show pre-commit config snippet")
+    ] = False,
 ) -> None:
     """Manage pre-commit hook integration."""
+    if show_config or (not install):
+        hook_config = """# Add to .pre-commit-config.yaml
+repos:
+  - repo: local
+    hooks:
+      - id: envdrift-validate
+        name: Validate env files
+        entry: envdrift validate --ci
+        language: system
+        files: ^\\.env\\.(production|staging|development)$
+        pass_filenames: true
+
+      - id: envdrift-encryption
+        name: Check env encryption
+        entry: envdrift encrypt --check
+        language: system
+        files: ^\\.env\\.(production|staging)$
+        pass_filenames: true
+"""
+        console.print(hook_config)
+
+        if not install:
+            console.print("[dim]Use --install to add hooks to .pre-commit-config.yaml[/dim]")
+            return
+
     if install:
-        console.print(
-            Panel(
-                "[yellow]Coming soon in v0.1.0[/yellow]\n\n"
-                "This command will add envdrift to your .pre-commit-config.yaml",
-                title="envdrift hook",
-            )
-        )
-    else:
-        console.print("Use --install to add envdrift pre-commit hook")
+        try:
+            from envdrift.integrations.precommit import install_hooks
+            install_hooks()
+            print_success("Pre-commit hooks installed")
+        except ImportError:
+            print_error("Pre-commit integration not available")
+            console.print("Copy the config above to .pre-commit-config.yaml manually")
+            raise typer.Exit(code=1) from None
 
 
 @app.command()
 def version() -> None:
     """Show envdrift version."""
-    from envdrift import __version__
-
     console.print(f"envdrift [bold green]{__version__}[/bold green]")
 
 

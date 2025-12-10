@@ -1,0 +1,210 @@
+"""AWS Secrets Manager client implementation."""
+
+from __future__ import annotations
+
+import json
+
+from envdrift.vault.base import (
+    AuthenticationError,
+    SecretNotFoundError,
+    SecretValue,
+    VaultClient,
+    VaultError,
+)
+
+try:
+    import boto3
+    from botocore.exceptions import (
+        ClientError,
+        NoCredentialsError,
+        PartialCredentialsError,
+    )
+
+    AWS_AVAILABLE = True
+except ImportError:
+    AWS_AVAILABLE = False
+    boto3 = None
+    ClientError = Exception
+    NoCredentialsError = Exception
+    PartialCredentialsError = Exception
+
+
+class AWSSecretsManagerClient(VaultClient):
+    """AWS Secrets Manager implementation.
+
+    Uses boto3's default credential chain which supports:
+    - Environment variables (AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY)
+    - Shared credential file (~/.aws/credentials)
+    - AWS config file (~/.aws/config)
+    - IAM role credentials (EC2, ECS, Lambda)
+    """
+
+    def __init__(self, region: str = "us-east-1"):
+        """Initialize AWS Secrets Manager client.
+
+        Args:
+            region: AWS region name
+        """
+        if not AWS_AVAILABLE:
+            raise ImportError(
+                "boto3 not installed. Install with: pip install envdrift[aws]"
+            )
+
+        self.region = region
+        self._client = None
+
+    def authenticate(self) -> None:
+        """Authenticate using boto3 credential chain."""
+        try:
+            self._client = boto3.client(
+                "secretsmanager",
+                region_name=self.region,
+            )
+            # Test authentication by listing secrets
+            self._client.list_secrets(MaxResults=1)
+        except (NoCredentialsError, PartialCredentialsError) as e:
+            raise AuthenticationError(f"AWS authentication failed: {e}") from e
+        except ClientError as e:
+            raise VaultError(f"AWS Secrets Manager error: {e}") from e
+
+    def is_authenticated(self) -> bool:
+        """Check if client is authenticated."""
+        return self._client is not None
+
+    def get_secret(self, name: str) -> SecretValue:
+        """Retrieve a secret from AWS Secrets Manager.
+
+        Args:
+            name: The secret name or ARN
+
+        Returns:
+            SecretValue with the secret data
+        """
+        self.ensure_authenticated()
+
+        try:
+            response = self._client.get_secret_value(SecretId=name)
+
+            # Secret can be string or binary
+            if "SecretString" in response:
+                value = response["SecretString"]
+            else:
+                value = response["SecretBinary"].decode("utf-8")
+
+            created = response.get("CreatedDate")
+            created_str = str(created) if created else None
+            return SecretValue(
+                name=response.get("Name", name),
+                value=value,
+                version=response.get("VersionId"),
+                metadata={
+                    "arn": response.get("ARN"),
+                    "created_date": created_str,
+                    "version_stages": response.get("VersionStages", []),
+                },
+            )
+        except ClientError as e:
+            error_code = e.response.get("Error", {}).get("Code", "")
+            if error_code == "ResourceNotFoundException":
+                raise SecretNotFoundError(f"Secret '{name}' not found") from e
+            raise VaultError(f"AWS Secrets Manager error: {e}") from e
+
+    def list_secrets(self, prefix: str = "") -> list[str]:
+        """List secret names in AWS Secrets Manager.
+
+        Args:
+            prefix: Optional prefix to filter secrets
+
+        Returns:
+            List of secret names
+        """
+        self.ensure_authenticated()
+
+        try:
+            secrets = []
+            paginator = self._client.get_paginator("list_secrets")
+
+            filters = []
+            if prefix:
+                filters.append({"Key": "name", "Values": [prefix]})
+
+            for page in paginator.paginate(Filters=filters if filters else []):
+                for secret in page.get("SecretList", []):
+                    name = secret.get("Name")
+                    if name:
+                        secrets.append(name)
+
+            return sorted(secrets)
+        except ClientError as e:
+            raise VaultError(f"AWS Secrets Manager error: {e}") from e
+
+    def get_secret_json(self, name: str) -> dict:
+        """Get secret as JSON dictionary.
+
+        Many AWS secrets store JSON objects.
+
+        Args:
+            name: The secret name or ARN
+
+        Returns:
+            Parsed JSON as dictionary
+        """
+        secret = self.get_secret(name)
+        try:
+            return json.loads(secret.value)
+        except json.JSONDecodeError as e:
+            raise VaultError(f"Secret '{name}' is not valid JSON: {e}") from e
+
+    def create_secret(self, name: str, value: str, description: str = "") -> SecretValue:
+        """Create a new secret in AWS Secrets Manager.
+
+        Args:
+            name: The secret name
+            value: The secret value
+            description: Optional description
+
+        Returns:
+            SecretValue with the created secret
+        """
+        self.ensure_authenticated()
+
+        try:
+            response = self._client.create_secret(
+                Name=name,
+                SecretString=value,
+                Description=description,
+            )
+            return SecretValue(
+                name=response.get("Name", name),
+                value=value,
+                version=response.get("VersionId"),
+                metadata={"arn": response.get("ARN")},
+            )
+        except ClientError as e:
+            raise VaultError(f"AWS Secrets Manager error: {e}") from e
+
+    def update_secret(self, name: str, value: str) -> SecretValue:
+        """Update an existing secret in AWS Secrets Manager.
+
+        Args:
+            name: The secret name
+            value: The new secret value
+
+        Returns:
+            SecretValue with the updated secret
+        """
+        self.ensure_authenticated()
+
+        try:
+            response = self._client.put_secret_value(
+                SecretId=name,
+                SecretString=value,
+            )
+            return SecretValue(
+                name=response.get("Name", name),
+                value=value,
+                version=response.get("VersionId"),
+                metadata={"arn": response.get("ARN")},
+            )
+        except ClientError as e:
+            raise VaultError(f"AWS Secrets Manager error: {e}") from e

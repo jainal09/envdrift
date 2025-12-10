@@ -7,10 +7,10 @@ envdrift helps you:
 - Support dotenvx encryption for secure .env files
 """
 
-__version__ = "0.0.1"
+__version__ = "0.1.0"
 __author__ = "Jainal Gosaliya"
 __email__ = "gosaliya.jainal@gmail.com"
 
-from envdrift.core import validate, diff, init
+from envdrift.api import diff, init, validate
 
-__all__ = ["validate", "diff", "init", "__version__"]
+__all__ = ["__version__", "diff", "init", "validate"]

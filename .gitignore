@@ -77,3 +77,4 @@ venv.bak/
 # UV
 .uv/
 uv.lock
+site/
