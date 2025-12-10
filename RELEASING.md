@@ -63,6 +63,25 @@ When not on an exact tag, `hatch-vcs` will generate a version like:
 
 This ensures every commit has a unique, ordered version number.
 
+## Manual Publishing (Emergency)
+
+If you need to publish manually:
+
+```bash
+# Ensure you're on the tagged commit
+git checkout v0.1.1
+
+# Install dependencies
+uv sync --all-extras
+
+# Run tests
+uv run pytest
+
+# Build and publish
+uv build
+uv publish --token $PYPI_TOKEN
+```
+
 ## Troubleshooting
 
 ### "Version already exists" error
