@@ -341,8 +341,11 @@ class DotenvxInstaller:
                 if self.version in result.stdout:
                     self.progress(f"dotenvx v{self.version} already installed")
                     return target_path
-            except Exception:  # nosec B110
-                pass  # Will reinstall
+            except Exception as e:  # nosec B110
+                # Version check failed, will reinstall
+                import logging
+
+                logging.debug(f"Version check failed: {e}")
 
         self.download_and_extract(target_path)
         return target_path

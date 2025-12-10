@@ -208,6 +208,7 @@ class TestHashiCorpVaultClientWithMock:
         assert len(secrets) == 3
         assert "secret1" in secrets
         assert "secret2" in secrets
+        assert "folder/" in secrets
 
     @patch("envdrift.vault.hashicorp.hvac")
     def test_list_secrets_with_prefix(self, mock_hvac_module):
