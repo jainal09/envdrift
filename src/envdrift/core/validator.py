@@ -235,6 +235,10 @@ class Validator:
         if expected_type is None or value == "":
             return None
 
+        # Skip type check for encrypted values
+        if value.startswith("encrypted:"):
+            return None
+
         type_name = getattr(expected_type, "__name__", str(expected_type))
 
         # Handle int
