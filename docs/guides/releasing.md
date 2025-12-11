@@ -39,6 +39,7 @@ git push origin v1.0.0
 ### 3. Automated publishing
 
 Once the tag is pushed:
+
 1. GitHub Actions automatically triggers the publish workflow
 2. Tests are run to ensure quality
 3. Package is built with the version from the git tag
@@ -59,6 +60,7 @@ Follow [Semantic Versioning](https://semver.org/):
 ## Versioning Between Releases
 
 When not on an exact tag, `hatch-vcs` will generate a version like:
+
 - `0.1.1.dev5+g1234567` - 5 commits after tag v0.1.0, commit hash 1234567
 
 This ensures every commit has a unique, ordered version number.
@@ -68,8 +70,8 @@ This ensures every commit has a unique, ordered version number.
 If you need to publish manually:
 
 ```bash
-# Ensure you're on the tagged commit
-git checkout v0.1.1
+# Ensure you're on the tagged commit (use tags/ prefix to avoid branch/tag ambiguity)
+git checkout tags/v0.1.1
 
 # Install dependencies
 uv sync --all-extras
@@ -82,17 +84,22 @@ uv build
 uv publish --token $PYPI_TOKEN
 ```
 
+> **Note**: Always use `git checkout tags/<version>` instead of `git checkout <version>` to avoid
+> accidentally creating a branch with the same name as the tag.
+
 ## Troubleshooting
 
 ### "Version already exists" error
 
 If PyPI rejects the version, check:
+
 1. Has this tag been published before?
 2. Is there a tag on a commit that's already been published?
 
 ### Version not detected correctly
 
 Ensure:
+
 1. You have git history: `git fetch --tags --unshallow` (if needed)
 2. You're on or after a tagged commit
 3. Tags follow the `v*` pattern (e.g., `v0.1.0`, not `0.1.0`)
@@ -123,7 +130,8 @@ git tag -d v0.1.X
 git push origin :refs/tags/v0.1.X
 ```
 
-**Warning**: Only delete tags that have NOT been successfully published to PyPI. Once a version is on PyPI, the tag should remain in git for version traceability.
+**Warning**: Only delete tags that have NOT been successfully published to PyPI.
+Once a version is on PyPI, the tag should remain in git for version traceability.
 
 ### Tag hygiene and force-pushing
 
@@ -134,6 +142,7 @@ git push origin :refs/tags/v0.1.X
 - It breaks version traceability and can confuse users
 
 If you need to fix a release:
+
 1. Don't modify existing tags
 2. Create a new patch version (e.g., if `v0.1.1` has issues, create `v0.1.2`)
 3. Keep the git history clean and traceable

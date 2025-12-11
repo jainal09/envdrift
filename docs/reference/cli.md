@@ -27,21 +27,21 @@ envdrift validate [ENV_FILE] --schema SCHEMA [OPTIONS]
 
 ### Arguments
 
-| Argument | Description | Default |
-|----------|-------------|---------|
-| `ENV_FILE` | Path to .env file to validate | `.env` |
+| Argument   | Description                   | Default |
+|------------|-------------------------------|---------|
+| `ENV_FILE` | Path to .env file to validate | `.env`  |
 
 ### Options
 
-| Option | Short | Description | Default |
-|--------|-------|-------------|---------|
-| `--schema` | `-s` | Dotted path to Settings class (required) | - |
-| `--service-dir` | `-d` | Directory to add to sys.path for imports | - |
-| `--ci` | - | CI mode: exit with code 1 on failure | `false` |
-| `--check-encryption` | - | Check if sensitive vars are encrypted | `true` |
-| `--no-check-encryption` | - | Skip encryption check | - |
-| `--fix` | - | Output template for missing variables | `false` |
-| `--verbose` | `-v` | Show additional details | `false` |
+| Option                  | Short | Description                              | Default |
+|-------------------------|-------|------------------------------------------|---------|
+| `--schema`              | `-s`  | Dotted path to Settings class (required) | -       |
+| `--service-dir`         | `-d`  | Directory to add to sys.path for imports | -       |
+| `--ci`                  | -     | CI mode: exit with code 1 on failure     | `false` |
+| `--check-encryption`    | -     | Check if sensitive vars are encrypted    | `true`  |
+| `--no-check-encryption` | -     | Skip encryption check                    | -       |
+| `--fix`                 | -     | Output template for missing variables    | `false` |
+| `--verbose`             | `-v`  | Show additional details                  | `false` |
 
 ### Examples
 
@@ -71,20 +71,20 @@ envdrift diff ENV1 ENV2 [OPTIONS]
 
 ### Arguments
 
-| Argument | Description |
-|----------|-------------|
-| `ENV1` | Path to first .env file |
-| `ENV2` | Path to second .env file |
+| Argument | Description              |
+|----------|--------------------------|
+| `ENV1`   | Path to first .env file  |
+| `ENV2`   | Path to second .env file |
 
 ### Options
 
-| Option | Short | Description | Default |
-|--------|-------|-------------|---------|
-| `--schema` | `-s` | Schema for sensitive field detection | - |
-| `--service-dir` | `-d` | Directory to add to sys.path for imports | - |
-| `--format` | - | Output format: `table` or `json` | `table` |
-| `--show-values` | - | Show actual values (careful with secrets!) | `false` |
-| `--include-unchanged` | - | Include unchanged variables in output | `false` |
+| Option                | Short | Description                                | Default |
+|-----------------------|-------|--------------------------------------------|---------|
+| `--schema`            | `-s`  | Schema for sensitive field detection       | -       |
+| `--service-dir`       | `-d`  | Directory to add to sys.path for imports   | -       |
+| `--format`            | -     | Output format: `table` or `json`           | `table` |
+| `--show-values`       | -     | Show actual values (careful with secrets!) | `false` |
+| `--include-unchanged` | -     | Include unchanged variables in output      | `false` |
 
 ### Examples
 
@@ -114,16 +114,16 @@ envdrift encrypt [ENV_FILE] [OPTIONS]
 
 ### Arguments
 
-| Argument | Description | Default |
-|----------|-------------|---------|
-| `ENV_FILE` | Path to .env file | `.env` |
+| Argument   | Description        | Default |
+|------------|--------------------|---------|
+| `ENV_FILE` | Path to .env file  | `.env`  |
 
 ### Options
 
-| Option | Short | Description | Default |
-|--------|-------|-------------|---------|
-| `--check` | - | Only check encryption status, don't encrypt | `false` |
-| `--schema` | `-s` | Schema for sensitive field detection | - |
+| Option     | Short | Description                                 | Default |
+|------------|-------|---------------------------------------------|---------|
+| `--check`  | -     | Only check encryption status, don't encrypt | `false` |
+| `--schema` | `-s`  | Schema for sensitive field detection        | -       |
 
 ### Examples
 
@@ -150,9 +150,9 @@ envdrift decrypt [ENV_FILE]
 
 ### Arguments
 
-| Argument | Description | Default |
-|----------|-------------|---------|
-| `ENV_FILE` | Path to encrypted .env file | `.env` |
+| Argument   | Description                  | Default |
+|------------|------------------------------|---------|
+| `ENV_FILE` | Path to encrypted .env file  | `.env`  |
 
 ### Examples
 
@@ -172,17 +172,17 @@ envdrift init [ENV_FILE] [OPTIONS]
 
 ### Arguments
 
-| Argument | Description | Default |
-|----------|-------------|---------|
-| `ENV_FILE` | Path to .env file to read | `.env` |
+| Argument   | Description               | Default |
+|------------|---------------------------|---------|
+| `ENV_FILE` | Path to .env file to read | `.env`  |
 
 ### Options
 
-| Option | Short | Description | Default |
-|--------|-------|-------------|---------|
-| `--output` | `-o` | Output file for Settings class | `settings.py` |
-| `--class-name` | `-c` | Name for the Settings class | `Settings` |
-| `--detect-sensitive` | - | Auto-detect sensitive variables | `true` |
+| Option               | Short | Description                     | Default       |
+|----------------------|-------|---------------------------------|---------------|
+| `--output`           | `-o`  | Output file for Settings class  | `settings.py` |
+| `--class-name`       | `-c`  | Name for the Settings class     | `Settings`    |
+| `--detect-sensitive` | -     | Auto-detect sensitive variables | `true`        |
 
 ### Examples
 
@@ -209,10 +209,10 @@ envdrift hook [OPTIONS]
 
 ### Options
 
-| Option | Short | Description | Default |
-|--------|-------|-------------|---------|
-| `--install` | `-i` | Install pre-commit hooks | `false` |
-| `--config` | - | Show pre-commit config snippet | `false` |
+| Option      | Short | Description                    | Default |
+|-------------|-------|--------------------------------|---------|
+| `--install` | `-i`  | Install pre-commit hooks       | `false` |
+| `--config`  | -     | Show pre-commit config snippet | `false` |
 
 ### Examples
 

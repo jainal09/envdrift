@@ -46,14 +46,14 @@ envdrift validate .env --schema config.settings:Settings
 
 If everything matches, you'll see:
 
-```
+```text
 Validation PASSED for .env
 Summary: 0 error(s), 0 warning(s)
 ```
 
 If there's a mismatch:
 
-```
+```text
 Validation FAILED for .env
 
 MISSING REQUIRED VARIABLES:
@@ -70,7 +70,7 @@ envdrift diff .env.development .env.production
 
 Output:
 
-```
+```text
 Comparing: .env.development vs .env.production
 
 ADDED (in .env.production only):

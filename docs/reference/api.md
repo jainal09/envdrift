@@ -29,12 +29,12 @@ else:
 
 **Parameters:**
 
-| Parameter | Type | Description | Default |
-|-----------|------|-------------|---------|
-| `env_file` | `Path \| str` | Path to .env file | `".env"` |
-| `schema` | `str` | Dotted path to Settings class | Required |
-| `service_dir` | `Path \| str \| None` | Directory to add to sys.path | `None` |
-| `check_encryption` | `bool` | Check if sensitive vars are encrypted | `True` |
+| Parameter          | Type                  | Description                           | Default  |
+|--------------------|-----------------------|---------------------------------------|----------|
+| `env_file`         | `Path \| str`         | Path to .env file                     | `".env"` |
+| `schema`           | `str`                 | Dotted path to Settings class         | Required |
+| `service_dir`      | `Path \| str \| None` | Directory to add to sys.path          | `None`   |
+| `check_encryption` | `bool`                | Check if sensitive vars are encrypted | `True`   |
 
 **Returns:** `ValidationResult`
 
@@ -67,12 +67,12 @@ if result.has_drift:
 
 **Parameters:**
 
-| Parameter | Type | Description | Default |
-|-----------|------|-------------|---------|
-| `env1` | `Path \| str` | Path to first .env file | Required |
-| `env2` | `Path \| str` | Path to second .env file | Required |
-| `schema` | `str \| None` | Schema for sensitive field masking | `None` |
-| `mask_values` | `bool` | Mask sensitive values | `True` |
+| Parameter     | Type          | Description                        | Default  |
+|---------------|---------------|------------------------------------|----------|
+| `env1`        | `Path \| str` | Path to first .env file            | Required |
+| `env2`        | `Path \| str` | Path to second .env file           | Required |
+| `schema`      | `str \| None` | Schema for sensitive field masking | `None`   |
+| `mask_values` | `bool`        | Mask sensitive values              | `True`   |
 
 **Returns:** `DiffResult`
 
@@ -95,12 +95,12 @@ print(f"Generated: {output_path}")
 
 **Parameters:**
 
-| Parameter | Type | Description | Default |
-|-----------|------|-------------|---------|
-| `env_file` | `Path \| str` | Path to .env file | `".env"` |
-| `output` | `Path \| str` | Output file path | `"settings.py"` |
-| `class_name` | `str` | Name for Settings class | `"Settings"` |
-| `detect_sensitive` | `bool` | Auto-detect sensitive vars | `True` |
+| Parameter          | Type          | Description                | Default         |
+|--------------------|---------------|----------------------------|-----------------|
+| `env_file`         | `Path \| str` | Path to .env file          | `".env"`        |
+| `output`           | `Path \| str` | Output file path           | `"settings.py"` |
+| `class_name`       | `str`         | Name for Settings class    | `"Settings"`    |
+| `detect_sensitive` | `bool`        | Auto-detect sensitive vars | `True`          |
 
 **Returns:** `Path` to generated file
 
