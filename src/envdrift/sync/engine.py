@@ -238,10 +238,14 @@ class SyncEngine:
         backup_path = target_file.with_suffix(".backup_decryption_test")
         shutil.copy2(target_file, backup_path)
 
+        dotenvx_path = shutil.which("dotenvx")
+        if not dotenvx_path:
+            return DecryptionTestResult.SKIPPED
+
         try:
             # Try to decrypt using dotenvx
             result = subprocess.run(
-                ["dotenvx", "decrypt", "-f", str(target_file)],
+                [dotenvx_path, "decrypt", "-f", str(target_file)],
                 cwd=str(mapping.folder_path),
                 capture_output=True,
                 text=True,
@@ -255,7 +259,7 @@ class SyncEngine:
 
             # Re-encrypt to not leave file decrypted
             subprocess.run(
-                ["dotenvx", "encrypt", "-f", str(target_file)],
+                [dotenvx_path, "encrypt", "-f", str(target_file)],
                 cwd=str(mapping.folder_path),
                 capture_output=True,
                 text=True,

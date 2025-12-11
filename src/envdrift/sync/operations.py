@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import os
 import re
 import shutil
 from datetime import datetime
@@ -120,7 +119,7 @@ def atomic_write(path: Path, content: str, permissions: int = 0o600) -> None:
     tmp_path = path.with_suffix(".tmp")
     try:
         tmp_path.write_text(content)
-        os.chmod(tmp_path, permissions)
+        tmp_path.chmod(permissions)
         tmp_path.replace(path)
     except Exception:
         tmp_path.unlink(missing_ok=True)

@@ -360,7 +360,7 @@ class TestSyncEngineFetchVaultSecret:
         )
 
         engine = SyncEngine(config=config, vault_client=mock_vault_client)
-        result = engine.sync_all()
+        engine.sync_all()
 
         content = (tmp_path / "service1" / ".env.keys").read_text()
         # Should not have double KEY= prefix
