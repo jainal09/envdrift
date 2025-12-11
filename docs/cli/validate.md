@@ -222,13 +222,13 @@ else:
 
 ## What Gets Validated
 
-| Check                              | Error/Warning | Description                            |
-| :--------------------------------- | :------------ | :------------------------------------- |
-| Missing required vars              | Error         | Fields without defaults must exist     |
-| Type mismatches                    | Error         | Values must parse as the expected type |
-| Extra vars (with `extra="forbid"`) | Error         | Unknown variables not allowed          |
-| Extra vars (with `extra="ignore"`) | Warning       | Unknown variables allowed but noted    |
-| Unencrypted sensitive vars | Warning | Fields marked `sensitive=True` should be encrypted |
+| Check                              | Error/Warning | Description                                          |
+| :--------------------------------- | :------------ | :--------------------------------------------------- |
+| Missing required vars              | Error         | Fields without defaults must exist                   |
+| Type mismatches                    | Error         | Values must parse as the expected type               |
+| Extra vars (with `extra="forbid"`) | Error         | Unknown variables not allowed                        |
+| Extra vars (with `extra="ignore"`) | Warning       | Unknown variables allowed but noted                  |
+| Unencrypted sensitive vars         | Warning       | Fields marked `sensitive=True` should be encrypted   |
 
 ## See Also
 

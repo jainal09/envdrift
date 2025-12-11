@@ -12,15 +12,15 @@ uv add envdrift
 
 ## Commands
 
-| Command | Description |
-|---------|-------------|
-| [validate](validate.md) | Validate .env files against Pydantic schemas |
-| [diff](diff.md) | Compare two .env files and show differences |
-| [encrypt](encrypt.md) | Check or perform encryption using dotenvx |
-| [decrypt](decrypt.md) | Decrypt encrypted .env files |
-| [init](init.md) | Generate Pydantic Settings from .env files |
-| [hook](hook.md) | Manage pre-commit hook integration |
-| [version](version.md) | Show envdrift version |
+| Command                  | Description                                            |
+| ------------------------ | ------------------------------------------------------ |
+| [validate](validate.md)  | Validate .env files against Pydantic schemas           |
+| [diff](diff.md)          | Compare two .env files and show differences            |
+| [encrypt](encrypt.md)    | Check or perform encryption using dotenvx              |
+| [decrypt](decrypt.md)    | Decrypt encrypted .env files                           |
+| [init](init.md)          | Generate Pydantic Settings from .env files             |
+| [hook](hook.md)          | Manage pre-commit hook integration                     |
+| [version](version.md)    | Show envdrift version                                  |
 
 ## Global Options
 
@@ -50,15 +50,15 @@ envdrift init .env --output settings.py
 
 ## Exit Codes
 
-| Code | Meaning |
-|------|---------|
-| 0 | Success |
-| 1 | Validation failed, file not found, or other error |
+| Code | Meaning                                                       |
+| ---- | ------------------------------------------------------------- |
+| 0    | Success                                                       |
+| 1    | Validation failed, file not found, or other error             |
 
 ## Environment Variables
 
-| Variable | Description |
-|----------|-------------|
+| Variable                     | Description                                                                                                        |
+| ---------------------------- | ------------------------------------------------------------------------------------------------------------------ |
 | `ENVDRIFT_SCHEMA_EXTRACTION` | Set by envdrift during schema loading. Check this in your settings module to skip instantiation during validation. |
 
 ## Schema Path Format
