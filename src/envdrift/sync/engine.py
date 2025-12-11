@@ -50,7 +50,7 @@ class SyncEngine:
         if self.prompt_callback is None:
             self.prompt_callback = self._default_prompt
         if self.progress_callback is None:
-            self.progress_callback = lambda x: None
+            self.progress_callback = lambda _: None
 
     def sync_all(self) -> SyncResult:
         """Sync all services defined in config."""
