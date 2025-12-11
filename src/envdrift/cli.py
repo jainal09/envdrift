@@ -473,6 +473,187 @@ repos:
 
 
 @app.command()
+def sync(
+    config_file: Annotated[
+        Path | None,
+        typer.Option("--config", "-c", help="Path to sync config file (pair.txt format)"),
+    ] = None,
+    provider: Annotated[
+        str | None,
+        typer.Option("--provider", "-p", help="Vault provider: azure, aws, hashicorp"),
+    ] = None,
+    vault_url: Annotated[
+        str | None,
+        typer.Option("--vault-url", help="Vault URL (Azure Key Vault or HashiCorp Vault)"),
+    ] = None,
+    region: Annotated[
+        str | None,
+        typer.Option("--region", help="AWS region (default: us-east-1)"),
+    ] = None,
+    verify: Annotated[
+        bool,
+        typer.Option("--verify", help="Check only, don't modify files"),
+    ] = False,
+    force: Annotated[
+        bool,
+        typer.Option("--force", "-f", help="Update all mismatches without prompting"),
+    ] = False,
+    check_decryption: Annotated[
+        bool,
+        typer.Option("--check-decryption", help="Verify keys can decrypt .env files"),
+    ] = False,
+    validate_schema: Annotated[
+        bool,
+        typer.Option("--validate-schema", help="Run schema validation after sync"),
+    ] = False,
+    schema: Annotated[
+        str | None,
+        typer.Option("--schema", "-s", help="Schema path for validation"),
+    ] = None,
+    service_dir: Annotated[
+        Path | None,
+        typer.Option("--service-dir", "-d", help="Service directory for schema imports"),
+    ] = None,
+    ci: Annotated[
+        bool,
+        typer.Option("--ci", help="CI mode: exit with code 1 on errors"),
+    ] = False,
+) -> None:
+    """
+    Sync encryption keys from vault to local .env.keys files.
+
+    Fetches DOTENV_PRIVATE_KEY_* secrets from cloud vaults (Azure Key Vault,
+    AWS Secrets Manager, HashiCorp Vault) and syncs them to local service
+    directories for dotenvx decryption.
+
+    Examples:
+        # Azure Key Vault
+        envdrift sync -c pair.txt -p azure --vault-url https://myvault.vault.azure.net/
+
+        # AWS Secrets Manager
+        envdrift sync -c pair.txt -p aws --region us-west-2
+
+        # HashiCorp Vault
+        envdrift sync -c pair.txt -p hashicorp --vault-url http://localhost:8200
+
+        # Verify mode (CI)
+        envdrift sync -c pair.txt -p azure --vault-url $URL --verify --ci
+    """
+    from envdrift.output.rich import print_service_sync_status, print_sync_result
+
+    # Validate required options
+    if config_file is None:
+        print_error("--config is required. Example: --config pair.txt")
+        raise typer.Exit(code=1)
+
+    if provider is None:
+        print_error("--provider is required. Options: azure, aws, hashicorp")
+        raise typer.Exit(code=1)
+
+    if not config_file.exists():
+        print_error(f"Config file not found: {config_file}")
+        raise typer.Exit(code=1)
+
+    # Validate provider-specific options
+    if provider == "azure" and not vault_url:
+        print_error("Azure provider requires --vault-url")
+        raise typer.Exit(code=1)
+
+    if provider == "hashicorp" and not vault_url:
+        print_error("HashiCorp provider requires --vault-url")
+        raise typer.Exit(code=1)
+
+    # Load sync config
+    try:
+        from envdrift.sync.config import SyncConfig, SyncConfigError
+
+        sync_config = SyncConfig.from_file(config_file)
+    except SyncConfigError as e:
+        print_error(f"Invalid config file: {e}")
+        raise typer.Exit(code=1) from None
+
+    if not sync_config.mappings:
+        print_warning("No service mappings found in config file")
+        return
+
+    # Create vault client
+    try:
+        from envdrift.vault import get_vault_client
+
+        vault_kwargs: dict = {}
+        if provider == "azure":
+            vault_kwargs["vault_url"] = vault_url
+        elif provider == "aws":
+            vault_kwargs["region"] = region or "us-east-1"
+        elif provider == "hashicorp":
+            vault_kwargs["url"] = vault_url
+
+        vault_client = get_vault_client(provider, **vault_kwargs)
+    except ImportError as e:
+        print_error(str(e))
+        raise typer.Exit(code=1) from None
+    except ValueError as e:
+        print_error(str(e))
+        raise typer.Exit(code=1) from None
+
+    # Create sync engine
+    from envdrift.sync.engine import SyncEngine, SyncMode
+
+    mode = SyncMode(
+        verify_only=verify,
+        force_update=force,
+        check_decryption=check_decryption,
+        validate_schema=validate_schema,
+        schema_path=schema,
+        service_dir=service_dir,
+    )
+
+    # Progress callback for non-CI mode
+    def progress_callback(msg: str) -> None:
+        if not ci:
+            console.print(f"[dim]{msg}[/dim]")
+
+    # Prompt callback (disabled in force/verify/ci modes)
+    def prompt_callback(msg: str) -> bool:
+        if force or verify or ci:
+            return force
+        response = console.input(f"{msg} (y/N): ").strip().lower()
+        return response in ("y", "yes")
+
+    engine = SyncEngine(
+        config=sync_config,
+        vault_client=vault_client,
+        mode=mode,
+        prompt_callback=prompt_callback,
+        progress_callback=progress_callback,
+    )
+
+    # Print header
+    console.print()
+    mode_str = "VERIFY" if verify else ("FORCE" if force else "Interactive")
+    console.print(f"[bold]Vault Sync[/bold] - Mode: {mode_str}")
+    console.print(f"[dim]Provider: {provider} | Services: {len(sync_config.mappings)}[/dim]")
+    console.print()
+
+    # Run sync
+    try:
+        result = engine.sync_all()
+    except Exception as e:
+        print_error(f"Sync failed: {e}")
+        raise typer.Exit(code=1) from None
+
+    # Print results
+    for service_result in result.services:
+        print_service_sync_status(service_result)
+
+    print_sync_result(result)
+
+    # Exit with appropriate code
+    if ci and result.has_errors:
+        raise typer.Exit(code=1)
+
+
+@app.command()
 def version() -> None:
     """
     Display the installed envdrift version in the console.
