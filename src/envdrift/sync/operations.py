@@ -102,7 +102,7 @@ class EnvKeysFile:
             raise FileNotFoundError(f"Cannot backup non-existent file: {self.path}")
 
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        backup_path = self.path.with_suffix(f".backup.{timestamp}")
+        backup_path = self.path.parent / f"{self.path.name}.backup.{timestamp}"
         shutil.copy2(self.path, backup_path)
         return backup_path
 

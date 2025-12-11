@@ -23,6 +23,7 @@ from envdrift.output.rich import (
     print_validation_result,
     print_warning,
 )
+from envdrift.vault.base import SecretNotFoundError, VaultError
 
 app = typer.Typer(
     name="envdrift",
@@ -638,7 +639,7 @@ def sync(
     # Run sync
     try:
         result = engine.sync_all()
-    except Exception as e:
+    except (VaultError, SyncConfigError, SecretNotFoundError) as e:
         print_error(f"Sync failed: {e}")
         raise typer.Exit(code=1) from None
 
