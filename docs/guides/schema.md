@@ -122,7 +122,7 @@ class Settings(BaseSettings):
 
 If `.env` contains `PORT=not_a_number`, validation fails:
 
-```
+```text
 TYPE ERRORS:
   - PORT: expected int, got 'not_a_number'
 ```

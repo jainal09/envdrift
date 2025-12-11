@@ -100,10 +100,10 @@ pre-commit install
 
 envdrift uses standard exit codes for CI:
 
-| Exit Code | Meaning |
-|-----------|---------|
-| 0 | Validation passed |
-| 1 | Validation failed (missing vars, type errors, etc.) |
+| Exit Code | Meaning                                             |
+|-----------|-----------------------------------------------------|
+| 0         | Validation passed                                   |
+| 1         | Validation failed (missing vars, type errors, etc.) |
 
 ## Multi-Environment Validation
 

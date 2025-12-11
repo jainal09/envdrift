@@ -22,6 +22,12 @@ repos:
       - id: check-added-large-files
       - id: check-toml
 
+  - repo: https://github.com/DavidAnson/markdownlint-cli2
+    rev: v0.17.2
+    hooks:
+      - id: markdownlint-cli2
+        args: ["**/*.md", "#node_modules", "#.venv", "#venv", "#.git", "#dist", "#build", "#site"]
+
   - repo: local
     hooks:
       - id: pytest
