@@ -26,17 +26,14 @@ class ValidationResult:
         """
         Return whether the validation contains any errors (exclude warnings).
 
-        Checks for missing required variables, unencrypted sensitive values, type errors, or extra variables present when the schema forbids extras.
+        Checks for missing required variables, type errors, or extra variables
+        present when the schema forbids extras. Unencrypted secrets are warnings,
+        not errors - use `envdrift encrypt --check` for strict enforcement.
 
         Returns:
             True if any errors are present, False otherwise.
         """
-        return (
-            bool(self.missing_required)
-            or bool(self.unencrypted_secrets)
-            or bool(self.type_errors)
-            or (bool(self.extra_vars))  # Only error if extra_policy is forbid
-        )
+        return bool(self.missing_required) or bool(self.type_errors) or bool(self.extra_vars)
 
     @property
     def error_count(self) -> int:
@@ -44,24 +41,21 @@ class ValidationResult:
         Compute the total number of validation error entries.
 
         Returns:
-            int: Sum of missing required variables, unencrypted secrets, type errors, and extra variables.
+            int: Sum of missing required variables, type errors, and extra variables.
         """
-        return (
-            len(self.missing_required)
-            + len(self.unencrypted_secrets)
-            + len(self.type_errors)
-            + len(self.extra_vars)
-        )
+        return len(self.missing_required) + len(self.type_errors) + len(self.extra_vars)
 
     @property
     def warning_count(self) -> int:
         """
-        Compute the total number of warning entries, combining explicit warnings with missing optional variables.
+        Compute the total number of warning entries.
+
+        Combines explicit warnings, missing optional variables, and unencrypted secrets.
 
         Returns:
-            The total count of warnings and missing optional variables as an integer.
+            The total count of warnings as an integer.
         """
-        return len(self.warnings) + len(self.missing_optional)
+        return len(self.warnings) + len(self.missing_optional) + len(self.unencrypted_secrets)
 
 
 class Validator:
@@ -191,12 +185,9 @@ class Validator:
                 result.type_errors[field_name] = type_error
 
         # Determine overall validity
-        result.valid = not (
-            result.missing_required
-            or result.unencrypted_secrets
-            or result.type_errors
-            or result.extra_vars
-        )
+        # Note: unencrypted_secrets are warnings, not errors
+        # Use `envdrift encrypt --check` for strict encryption enforcement
+        result.valid = not (result.missing_required or result.type_errors or result.extra_vars)
 
         return result
 
@@ -242,6 +233,10 @@ class Validator:
             str | None: An error message describing the type mismatch, or `None` if the value is acceptable or no check was performed.
         """
         if expected_type is None or value == "":
+            return None
+
+        # Skip type check for encrypted values
+        if value.startswith("encrypted:"):
             return None
 
         type_name = getattr(expected_type, "__name__", str(expected_type))

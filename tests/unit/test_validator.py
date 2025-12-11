@@ -114,7 +114,9 @@ NEW_FEATURE_FLAG=enabled
         validator = Validator()
         result = validator.validate(env, schema, check_encryption=True)
 
-        assert result.valid is False
+        # Unencrypted secrets are warnings, not errors (valid is still True)
+        assert result.valid is True
+        assert result.warning_count > 0  # Has warnings for unencrypted secrets
         assert "DATABASE_URL" in result.unencrypted_secrets
         assert "REDIS_URL" in result.unencrypted_secrets
         assert "API_KEY" in result.unencrypted_secrets

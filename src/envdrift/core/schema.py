@@ -3,12 +3,16 @@
 from __future__ import annotations
 
 import importlib
+import os
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
 from pydantic_settings import BaseSettings
+
+# Environment variable to signal schema extraction mode
+ENVDRIFT_SCHEMA_EXTRACTION = "ENVDRIFT_SCHEMA_EXTRACTION"
 
 
 @dataclass
@@ -112,10 +116,16 @@ class SchemaLoader:
 
         module_path, class_name = dotted_path.rsplit(":", 1)
 
+        # Set environment variable to signal schema extraction mode
+        # This allows user code to skip Settings instantiation during import
+        os.environ[ENVDRIFT_SCHEMA_EXTRACTION] = "1"
         try:
             module = importlib.import_module(module_path)
         except ImportError as e:
             raise SchemaLoadError(f"Cannot import module '{module_path}': {e}") from e
+        finally:
+            # Clean up the environment variable
+            os.environ.pop(ENVDRIFT_SCHEMA_EXTRACTION, None)
 
         try:
             settings_cls = getattr(module, class_name)

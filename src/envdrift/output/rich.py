@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from rich.console import Console
 from rich.panel import Panel
@@ -13,6 +14,9 @@ from envdrift.core.diff import DiffResult, DiffType
 from envdrift.core.encryption import EncryptionReport
 from envdrift.core.schema import SchemaMetadata
 from envdrift.core.validator import ValidationResult
+
+if TYPE_CHECKING:
+    from envdrift.sync.result import ServiceSyncResult, SyncResult
 
 console = Console()
 
@@ -66,11 +70,9 @@ def print_validation_result(
     if result.valid:
         console.print()
         console.print("[bold green]Validation PASSED[/bold green]")
+    else:
         console.print()
-        return
-
-    console.print()
-    console.print("[bold red]Validation FAILED[/bold red]")
+        console.print("[bold red]Validation FAILED[/bold red]")
     console.print()
 
     # Missing required variables
@@ -89,11 +91,12 @@ def print_validation_result(
             console.print(f"  [yellow]*[/yellow] {var}")
         console.print()
 
-    # Unencrypted secrets
+    # Unencrypted secrets (warning, not error)
     if result.unencrypted_secrets:
-        console.print("[bold red]UNENCRYPTED SECRETS:[/bold red]")
+        console.print("[bold yellow]UNENCRYPTED SECRETS (warning):[/bold yellow]")
         for var in sorted(result.unencrypted_secrets):
-            console.print(f"  [red]*[/red] {var} (marked sensitive but not encrypted)")
+            console.print(f"  [yellow]*[/yellow] {var} (marked sensitive but not encrypted)")
+        console.print("[dim]  Run 'envdrift encrypt --check' for strict enforcement[/dim]")
         console.print()
 
     # Type errors
@@ -120,12 +123,14 @@ def print_validation_result(
             console.print(f"  [dim]*[/dim] {var}{default}")
         console.print()
 
-    # Summary
+    # Summary (show if there are any issues)
     err_count = result.error_count
     warn_count = result.warning_count
-    console.print(f"[bold]Summary:[/bold] {err_count} error(s), {warn_count} warning(s)")
-    console.print()
-    console.print("[dim]Run with --fix to generate template for missing variables.[/dim]")
+    if err_count > 0 or warn_count > 0:
+        console.print(f"[bold]Summary:[/bold] {err_count} error(s), {warn_count} warning(s)")
+        console.print()
+    if err_count > 0:
+        console.print("[dim]Run with --fix to generate template for missing variables.[/dim]")
 
 
 def print_diff_result(result: DiffResult, show_unchanged: bool = False) -> None:
@@ -298,3 +303,117 @@ def print_sync_summary(
         console.print("[bold green]All services synced successfully[/bold green]")
     else:
         console.print(f"[bold red]{errors} service(s) failed[/bold red]")
+
+
+def print_service_sync_status(result: ServiceSyncResult) -> None:
+    """
+    Print status for a single service sync operation.
+
+    Parameters:
+        result (ServiceSyncResult): Result of syncing a single service.
+    """
+    from envdrift.sync.result import DecryptionTestResult, SyncAction
+
+    # Determine status icon and color
+    if result.action == SyncAction.CREATED:
+        icon = "[green]+[/green]"
+        status = "[green]created[/green]"
+    elif result.action == SyncAction.UPDATED:
+        icon = "[yellow]~[/yellow]"
+        status = "[yellow]updated[/yellow]"
+    elif result.action == SyncAction.SKIPPED:
+        icon = "[dim]=[/dim]"
+        status = "[dim]skipped[/dim]"
+    else:  # ERROR
+        icon = "[red]x[/red]"
+        status = "[red]error[/red]"
+
+    console.print(f"  {icon} {result.folder_path} - {status}")
+
+    # Show error details
+    if result.error:
+        console.print(f"    [red]Error: {result.error}[/red]")
+
+    # Show mismatch preview
+    if result.local_value_preview and result.vault_value_preview:
+        if result.local_value_preview != result.vault_value_preview:
+            console.print(f"    [dim]Local:  {result.local_value_preview}[/dim]")
+            console.print(f"    [dim]Vault:  {result.vault_value_preview}[/dim]")
+
+    # Show backup path
+    if result.backup_path:
+        console.print(f"    [dim]Backup: {result.backup_path}[/dim]")
+
+    # Show decryption test result
+    if result.decryption_result is not None:
+        if result.decryption_result == DecryptionTestResult.PASSED:
+            console.print("    [green]Decryption: PASSED[/green]")
+        elif result.decryption_result == DecryptionTestResult.FAILED:
+            console.print("    [red]Decryption: FAILED[/red]")
+        else:
+            console.print("    [dim]Decryption: skipped (no encrypted file)[/dim]")
+
+    # Show schema validation result
+    if result.schema_valid is not None:
+        if result.schema_valid:
+            console.print("    [green]Schema: valid[/green]")
+        else:
+            console.print("    [red]Schema: invalid[/red]")
+
+
+def print_sync_result(result: SyncResult) -> None:
+    """
+    Print complete sync results with summary.
+
+    Parameters:
+        result (SyncResult): Aggregate sync results.
+    """
+
+    console.print()
+
+    # Build summary panel content
+    lines = [
+        f"[bold]Services processed:[/bold] {result.total_processed}",
+        f"[green]Created:[/green] {result.created_count}",
+        f"[yellow]Updated:[/yellow] {result.updated_count}",
+        f"[dim]Skipped:[/dim] {result.skipped_count}",
+        f"[red]Errors:[/red] {result.error_count}",
+    ]
+
+    # Add decryption stats if any were tested
+    if result.decryption_tested > 0:
+        lines.append("")
+        lines.append("[bold]Decryption Tests:[/bold]")
+        lines.append(f"  [green]Passed:[/green] {result.decryption_passed}")
+        lines.append(f"  [red]Failed:[/red] {result.decryption_failed}")
+        skipped = result.decryption_tested - result.decryption_passed - result.decryption_failed
+        if skipped > 0:
+            lines.append(f"  [dim]Skipped:[/dim] {skipped}")
+
+    console.print(Panel("\n".join(lines), title="Sync Summary"))
+
+    # Final status message
+    if result.has_errors:
+        console.print("[bold red]Sync completed with errors[/bold red]")
+    else:
+        console.print("[bold green]All services synced successfully[/bold green]")
+
+
+def print_mismatch_warning(
+    service_name: str,
+    local_preview: str,
+    vault_preview: str,
+) -> None:
+    """
+    Print value mismatch warning.
+
+    Parameters:
+        service_name (str): Name of the service with mismatched values.
+        local_preview (str): Preview of local value (first N chars).
+        vault_preview (str): Preview of vault value (first N chars).
+    """
+    console.print()
+    console.print(f"[bold yellow]VALUE MISMATCH: {service_name}[/bold yellow]")
+    console.print(f"  Local:  {local_preview}")
+    console.print(f"  Vault:  {vault_preview}")
+    console.print()

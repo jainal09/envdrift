@@ -34,17 +34,29 @@ theme:
 
 nav:
   - Home: index.md
+  - Glossary: glossary.md
   - Getting Started:
     - Installation: getting-started/installation.md
     - Quick Start: getting-started/quickstart.md
+  - CLI Reference:
+    - Overview: cli/index.md
+    - validate: cli/validate.md
+    - diff: cli/diff.md
+    - encrypt: cli/encrypt.md
+    - decrypt: cli/decrypt.md
+    - init: cli/init.md
+    - hook: cli/hook.md
+    - sync: cli/sync.md
+    - version: cli/version.md
   - Guides:
     - Schema Best Practices: guides/schema.md
     - CI/CD Integration: guides/cicd.md
     - Encryption: guides/encryption.md
+    - Vault Sync: guides/vault-sync.md
     - Releasing: guides/releasing.md
   - Reference:
-    - CLI: reference/cli.md
     - Python API: reference/api.md
+    - CLI Reference: reference/cli.md
 
 markdown_extensions:
   - pymdownx.highlight:
