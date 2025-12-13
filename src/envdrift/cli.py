@@ -322,9 +322,19 @@ def _verify_decryption_with_vault(
     secret_name: str,
 ) -> bool:
     """
-    Verify that the env file can be decrypted with the key from vault.
-
-    Returns True if decryption succeeds, False if it fails.
+    Verify that a vault-stored private key can decrypt the given .env file.
+    
+    Performs a non-destructive check by fetching the secret named `secret_name` from the specified vault provider, injecting the retrieved key into an isolated environment, and attempting to decrypt a temporary copy of `env_file` using the dotenvx integration. Prints user-facing status and remediation guidance; does not modify the original file.
+    
+    Parameters:
+        env_file (Path): Path to the .env file to test decryption for.
+        provider (str): Vault provider identifier (e.g., "azure", "aws", "hashicorp").
+        vault_url (str | None): Vault endpoint URL when required by the provider (e.g., Azure or HashiCorp); may be None for providers that do not require it.
+        region (str | None): Region identifier for providers that require it (e.g., AWS); may be None.
+        secret_name (str): Name of the secret in the vault that contains the private key (or an environment-style value like "DOTENV_PRIVATE_KEY_ENV=key").
+    
+    Returns:
+        bool: `True` if the vault key successfully decrypts a temporary copy of `env_file`, `False` otherwise.
     """
     import os
     import tempfile
@@ -486,7 +496,20 @@ def decrypt_cmd(
         typer.Option("--secret", help="Vault secret name for the private key"),
     ] = None,
 ) -> None:
-    """Decrypt an encrypted .env file using dotenvx, or verify it with a vault key."""
+    """
+    Decrypt an encrypted .env file or verify that a vault-provided key can decrypt it without modifying the file.
+    
+    When run normally, decrypts the given env file using the dotenvx integration and reports success; if dotenvx is not available, prints installation instructions and exits. When run with --verify-vault, checks that the specified vault provider and secret contain a key capable of decrypting the file without changing the file on disk; on a successful check the function prints confirmation and does not decrypt the file.
+    
+    Parameters:
+        env_file (Path): Path to the encrypted .env file to operate on.
+        verify_vault (bool): If true, perform a vault-based verification instead of local decryption.
+        ci (bool): CI mode (non-interactive); affects exit behavior for errors.
+        vault_provider (str | None): Vault provider identifier; supported values include "azure", "aws", and "hashicorp". Required when --verify-vault is used.
+        vault_url (str | None): Vault URL required for providers that need it (Azure and HashiCorp) when verifying with a vault key.
+        vault_region (str | None): AWS region when using the AWS provider for vault verification.
+        vault_secret (str | None): Name of the vault secret that holds the private key; required when --verify-vault is used.
+    """
     if not env_file.exists():
         print_error(f"ENV file not found: {env_file}")
         raise typer.Exit(code=1)

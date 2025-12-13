@@ -216,7 +216,16 @@ class SyncEngine:
         return value
 
     def _test_decryption(self, mapping: ServiceMapping) -> DecryptionTestResult:
-        """Test that the synced key can decrypt .env files."""
+        """
+        Attempt to verify that the synchronized key can decrypt an environment file for the service.
+        
+        The method locates an environment file for the mapping (preferring .env.<environment>, then .env.production, .env.staging, .env.development), checks whether the file appears encrypted, and uses the `dotenvx` utility to decrypt and then re-encrypt the file to confirm the key works. If decryption or re-encryption fails the file is restored to its original state before returning.
+        
+        Returns:
+            DecryptionTestResult.PASSED if decryption and re-encryption both succeed.
+            DecryptionTestResult.FAILED if decryption or re-encryption fails (the original file is restored).
+            DecryptionTestResult.SKIPPED if no suitable env file exists, the file does not appear encrypted, or the `dotenvx` utility is not available.
+        """
         # Find .env file to test (prefer .env.production)
         env_files = [
             mapping.folder_path / f".env.{mapping.environment}",
