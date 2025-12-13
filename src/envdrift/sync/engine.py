@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import shutil
-import subprocess
+import subprocess  # nosec B404
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -244,7 +244,7 @@ class SyncEngine:
             shutil.copy2(target_file, backup_path)
 
             # Try to decrypt using dotenvx
-            result = subprocess.run(
+            result = subprocess.run(  # nosec B603
                 [dotenvx_path, "decrypt", "-f", str(target_file)],
                 cwd=str(mapping.folder_path),
                 capture_output=True,
@@ -258,7 +258,7 @@ class SyncEngine:
                 return DecryptionTestResult.FAILED
 
             # Re-encrypt to not leave file decrypted
-            encrypt_result = subprocess.run(
+            encrypt_result = subprocess.run(  # nosec B603
                 [dotenvx_path, "encrypt", "-f", str(target_file)],
                 cwd=str(mapping.folder_path),
                 capture_output=True,

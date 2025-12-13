@@ -112,7 +112,13 @@ class SensitiveSettings(BaseSettings):
     API_KEY: str = Field(json_schema_extra={"sensitive": True})
 """)
 
-        result = diff(env1, env2, schema="sensitive_config:SensitiveSettings", service_dir=tmp_path, mask_values=True)
+        result = diff(
+            env1,
+            env2,
+            schema="sensitive_config:SensitiveSettings",
+            service_dir=tmp_path,
+            mask_values=True,
+        )
         changed = result.get_changed()
         assert len(changed) == 1
         assert changed[0].name == "API_KEY"

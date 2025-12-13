@@ -221,6 +221,34 @@ def encrypt_cmd(
         Path | None,
         typer.Option("--service-dir", "-d", help="Service directory for imports"),
     ] = None,
+    verify_vault: Annotated[
+        bool,
+        typer.Option(
+            "--verify-vault",
+            help="(Deprecated) Use `envdrift decrypt --verify-vault` instead",
+            hidden=True,
+        ),
+    ] = False,
+    vault_provider: Annotated[
+        str | None,
+        typer.Option(
+            "--provider", "-p", help="(Deprecated) Use with decrypt --verify-vault", hidden=True
+        ),
+    ] = None,
+    vault_url: Annotated[
+        str | None,
+        typer.Option(
+            "--vault-url", help="(Deprecated) Use with decrypt --verify-vault", hidden=True
+        ),
+    ] = None,
+    vault_region: Annotated[
+        str | None,
+        typer.Option("--region", help="(Deprecated) Use with decrypt --verify-vault", hidden=True),
+    ] = None,
+    vault_secret: Annotated[
+        str | None,
+        typer.Option("--secret", help="(Deprecated) Use with decrypt --verify-vault", hidden=True),
+    ] = None,
 ) -> None:
     """
     Check encryption status of an .env file or encrypt it using dotenvx.
@@ -236,6 +264,10 @@ def encrypt_cmd(
     """
     if not env_file.exists():
         print_error(f"ENV file not found: {env_file}")
+        raise typer.Exit(code=1)
+
+    if verify_vault:
+        print_error("Vault verification moved to `envdrift decrypt --verify-vault ...`")
         raise typer.Exit(code=1)
 
     # Load schema if provided
@@ -282,14 +314,209 @@ def encrypt_cmd(
             raise typer.Exit(code=1) from None
 
 
+def _verify_decryption_with_vault(
+    env_file: Path,
+    provider: str,
+    vault_url: str | None,
+    region: str | None,
+    secret_name: str,
+) -> bool:
+    """
+    Verify that the env file can be decrypted with the key from vault.
+
+    Returns True if decryption succeeds, False if it fails.
+    """
+    import os
+    import tempfile
+
+    from envdrift.vault import get_vault_client
+    from envdrift.vault.base import SecretNotFoundError, VaultError
+
+    console.print()
+    console.print("[bold]Vault Key Verification[/bold]")
+    console.print(f"[dim]Provider: {provider} | Secret: {secret_name}[/dim]")
+
+    try:
+        # Create vault client
+        vault_kwargs: dict = {}
+        if provider == "azure":
+            vault_kwargs["vault_url"] = vault_url
+        elif provider == "aws":
+            vault_kwargs["region"] = region or "us-east-1"
+        elif provider == "hashicorp":
+            vault_kwargs["url"] = vault_url
+
+        vault_client = get_vault_client(provider, **vault_kwargs)
+        vault_client.ensure_authenticated()
+
+        # Fetch private key from vault
+        console.print("[dim]Fetching private key from vault...[/dim]")
+        private_key = vault_client.get_secret(secret_name)
+
+        if not private_key:
+            print_error(f"Secret '{secret_name}' is empty in vault")
+            return False
+
+        # Extract the actual value from SecretValue object
+        # The vault client returns a SecretValue with .value attribute
+        if hasattr(private_key, "value"):
+            private_key_str = private_key.value
+        elif isinstance(private_key, str):
+            private_key_str = private_key
+        else:
+            private_key_str = str(private_key)
+
+        console.print("[dim]Private key retrieved successfully[/dim]")
+
+        # Try to decrypt using the vault key
+        console.print("[dim]Testing decryption with vault key...[/dim]")
+
+        from envdrift.integrations.dotenvx import DotenvxWrapper
+
+        dotenvx = DotenvxWrapper()
+        if not dotenvx.is_installed():
+            print_error("dotenvx is not installed - cannot verify decryption")
+            return False
+
+        # The vault stores secrets in "DOTENV_PRIVATE_KEY_ENV=key" format
+        # Parse out the actual key value if it's in that format
+        actual_private_key = private_key_str
+        if "=" in private_key_str and private_key_str.startswith("DOTENV_PRIVATE_KEY"):
+            # Extract just the key value after the =
+            actual_private_key = private_key_str.split("=", 1)[1]
+            # Get the variable name from the vault value
+            key_var_name = private_key_str.split("=", 1)[0]
+        else:
+            # Key is just the raw value, construct variable name from env file
+            env_name = env_file.stem.replace(".env", "").replace(".", "_").upper()
+            if env_name.startswith("_"):
+                env_name = env_name[1:]
+            if not env_name:
+                env_name = "PRODUCTION"  # Default
+            key_var_name = f"DOTENV_PRIVATE_KEY_{env_name}"
+
+        # Build a clean environment so dotenvx cannot fall back to stray keys
+        dotenvx_env = {
+            k: v for k, v in os.environ.items() if not k.startswith("DOTENV_PRIVATE_KEY")
+        }
+        dotenvx_env.pop("DOTENV_KEY", None)
+        dotenvx_env[key_var_name] = actual_private_key
+
+        # Work inside an isolated temp directory with only the vault key
+        with tempfile.TemporaryDirectory(prefix=".envdrift-verify-") as temp_dir:
+            temp_dir_path = Path(temp_dir)
+            tmp_path = temp_dir_path / env_file.name  # Preserve filename for key naming
+            tmp_keys_path = temp_dir_path / ".env.keys"
+
+            # Copy env file and write a dedicated .env.keys containing only the vault key
+            tmp_path.write_text(env_file.read_text())
+            tmp_keys_path.write_text(f"{key_var_name}={actual_private_key}\n")
+
+            try:
+                dotenvx.decrypt(
+                    tmp_path,
+                    env_keys_file=tmp_keys_path,
+                    env=dotenvx_env,
+                    cwd=temp_dir_path,
+                )
+                print_success("✓ Vault key can decrypt this file - keys are in sync!")
+                return True
+            except Exception as e:
+                print_error("✗ Vault key CANNOT decrypt this file!")
+                console.print(f"[red]Error: {e}[/red]")
+                console.print()
+                console.print(
+                    "[yellow]This means the file was encrypted with a DIFFERENT key.[/yellow]"
+                )
+                console.print("[yellow]The team's shared vault key won't work![/yellow]")
+                console.print()
+                console.print("[bold]To fix:[/bold]")
+                console.print(f"  1. Restore the encrypted file: git restore {env_file}")
+
+                # Construct sync command with the same provider options
+                sync_cmd = f"envdrift sync --force -c pair.txt -p {provider}"
+                if vault_url:
+                    sync_cmd += f" --vault-url {vault_url}"
+                if region:
+                    sync_cmd += f" --region {region}"
+                console.print(f"  2. Restore vault key locally: {sync_cmd}")
+
+                console.print(f"  3. Re-encrypt with the vault key: envdrift encrypt {env_file}")
+                return False
+
+    except SecretNotFoundError:
+        print_error(f"Secret '{secret_name}' not found in vault")
+        return False
+    except VaultError as e:
+        print_error(f"Vault error: {e}")
+        return False
+    except ImportError as e:
+        print_error(f"Import error: {e}")
+        return False
+    except Exception as e:
+        print_error(f"Unexpected error during vault verification: {e}")
+        return False
+
+
 @app.command("decrypt")
 def decrypt_cmd(
     env_file: Annotated[Path, typer.Argument(help="Path to encrypted .env file")] = Path(".env"),
+    verify_vault: Annotated[
+        bool,
+        typer.Option(
+            "--verify-vault", help="Verify vault key can decrypt without modifying the file"
+        ),
+    ] = False,
+    ci: Annotated[
+        bool,
+        typer.Option("--ci", help="CI mode: non-interactive; exits non-zero on errors"),
+    ] = False,
+    vault_provider: Annotated[
+        str | None,
+        typer.Option("--provider", "-p", help="Vault provider: azure, aws, hashicorp"),
+    ] = None,
+    vault_url: Annotated[
+        str | None,
+        typer.Option("--vault-url", help="Vault URL (Azure/HashiCorp)"),
+    ] = None,
+    vault_region: Annotated[
+        str | None,
+        typer.Option("--region", help="AWS region"),
+    ] = None,
+    vault_secret: Annotated[
+        str | None,
+        typer.Option("--secret", help="Vault secret name for the private key"),
+    ] = None,
 ) -> None:
-    """Decrypt an encrypted .env file using dotenvx."""
+    """Decrypt an encrypted .env file using dotenvx, or verify it with a vault key."""
     if not env_file.exists():
         print_error(f"ENV file not found: {env_file}")
         raise typer.Exit(code=1)
+
+    if verify_vault:
+        if not vault_provider:
+            print_error("--verify-vault requires --provider")
+            raise typer.Exit(code=1)
+        if not vault_secret:
+            print_error("--verify-vault requires --secret (vault secret name)")
+            raise typer.Exit(code=1)
+        if vault_provider in ("azure", "hashicorp") and not vault_url:
+            print_error(f"--verify-vault with {vault_provider} requires --vault-url")
+            raise typer.Exit(code=1)
+
+        vault_check_passed = _verify_decryption_with_vault(
+            env_file=env_file,
+            provider=vault_provider,
+            vault_url=vault_url,
+            region=vault_region,
+            secret_name=vault_secret,
+        )
+        if not vault_check_passed:
+            raise typer.Exit(code=1)
+
+        console.print("[dim]Vault verification completed. Original file was not decrypted.[/dim]")
+        console.print("[dim]Run without --verify-vault to decrypt the file locally.[/dim]")
+        return
 
     try:
         from envdrift.integrations.dotenvx import DotenvxWrapper
@@ -454,6 +681,14 @@ repos:
         language: system
         files: ^\\.env\\.(production|staging)$
         pass_filenames: true
+
+      # Optional: Verify encryption keys match vault (prevents key drift)
+      # - id: envdrift-vault-verify
+      #   name: Verify vault key can decrypt
+      #   entry: envdrift decrypt --verify-vault -p azure --vault-url https://myvault.vault.azure.net --secret myapp-dotenvx-key --ci
+      #   language: system
+      #   files: ^\\.env\\.production$
+      #   pass_filenames: true
 """
         console.print(hook_config)
 

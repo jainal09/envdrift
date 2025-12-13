@@ -56,7 +56,7 @@ nav:
     - Releasing: guides/releasing.md
   - Reference:
     - Python API: reference/api.md
-    - CLI Reference: reference/cli.md
+    - Glossary: glossary.md
 
 markdown_extensions:
   - pymdownx.highlight:

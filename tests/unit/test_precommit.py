@@ -47,17 +47,13 @@ class TestHookEntry:
 
     def test_validate_hook_entry(self):
         """Test envdrift-validate hook entry."""
-        validate_hook = next(
-            h for h in HOOK_ENTRY["hooks"] if h["id"] == "envdrift-validate"
-        )
+        validate_hook = next(h for h in HOOK_ENTRY["hooks"] if h["id"] == "envdrift-validate")
         assert validate_hook["language"] == "system"
         assert "validate" in validate_hook["entry"]
 
     def test_encryption_hook_entry(self):
         """Test envdrift-encryption hook entry."""
-        encrypt_hook = next(
-            h for h in HOOK_ENTRY["hooks"] if h["id"] == "envdrift-encryption"
-        )
+        encrypt_hook = next(h for h in HOOK_ENTRY["hooks"] if h["id"] == "envdrift-encryption")
         assert encrypt_hook["language"] == "system"
         assert "encrypt" in encrypt_hook["entry"]
 
@@ -114,7 +110,11 @@ class TestInstallHooks:
         config_file = tmp_path / ".pre-commit-config.yaml"
         existing_config = {
             "repos": [
-                {"repo": "https://github.com/pre-commit/pre-commit-hooks", "rev": "v4.0.0", "hooks": [{"id": "trailing-whitespace"}]}
+                {
+                    "repo": "https://github.com/pre-commit/pre-commit-hooks",
+                    "rev": "v4.0.0",
+                    "hooks": [{"id": "trailing-whitespace"}],
+                }
             ]
         }
         with open(config_file, "w") as f:
@@ -135,9 +135,7 @@ class TestInstallHooks:
 
         config_file = tmp_path / ".pre-commit-config.yaml"
         existing_config = {
-            "repos": [
-                {"repo": "local", "hooks": [{"id": "custom-hook", "entry": "echo test"}]}
-            ]
+            "repos": [{"repo": "local", "hooks": [{"id": "custom-hook", "entry": "echo test"}]}]
         }
         with open(config_file, "w") as f:
             yaml.dump(existing_config, f)
@@ -153,7 +151,9 @@ class TestInstallHooks:
         assert "custom-hook" in hook_ids
         assert "envdrift-validate" in hook_ids
 
-    def test_raises_when_config_not_found_and_no_create(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    def test_raises_when_config_not_found_and_no_create(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ):
         """Test raises FileNotFoundError when config not found and create_if_missing=False."""
         monkeypatch.chdir(tmp_path)
 
@@ -217,9 +217,7 @@ class TestUninstallHooks:
 
         config_file = tmp_path / ".pre-commit-config.yaml"
         existing_config = {
-            "repos": [
-                {"repo": "local", "hooks": [{"id": "other-hook", "entry": "echo test"}]}
-            ]
+            "repos": [{"repo": "local", "hooks": [{"id": "other-hook", "entry": "echo test"}]}]
         }
         with open(config_file, "w") as f:
             yaml.dump(existing_config, f)
@@ -258,7 +256,7 @@ class TestVerifyHooksInstalled:
             "repos": [
                 {
                     "repo": "local",
-                    "hooks": [{"id": "envdrift-validate", "entry": "envdrift validate"}]
+                    "hooks": [{"id": "envdrift-validate", "entry": "envdrift validate"}],
                 }
             ]
         }

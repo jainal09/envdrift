@@ -12,6 +12,56 @@ When using dotenvx for encryption, each environment has a private key stored in 
 
 The `envdrift sync` command solves this by storing keys in cloud vaults and syncing them to local environments.
 
+## Verify vault key can decrypt (drift detection)
+
+To ensure the encrypted file matches the shared vault key (and to catch key drift), run:
+
+```bash
+envdrift decrypt .env.production --verify-vault --ci \
+  -p azure --vault-url https://myvault.vault.azure.net \
+  --secret myapp-dotenvx-key
+```
+
+If the vault key cannot decrypt the file, it exits 1 and prints repair steps:
+
+1. `git restore .env.production`
+2. `envdrift sync --force -c pair.txt -p azure --vault-url https://myvault.vault.azure.net`
+3. `envdrift encrypt .env.production`
+
+## Team workflow (day to day)
+
+1. **One-time setup**
+   - Store the private key in vault (Azure/AWS/HashiCorp).
+   - Add `envdrift sync` to onboarding docs so teammates can pull keys locally.
+   - Add a pre-commit or CI job that runs:
+
+     ```bash
+     envdrift decrypt .env.production --verify-vault --ci \
+       -p azure --vault-url https://myvault.vault.azure.net \
+       --secret myapp-dotenvx-key
+     ```
+
+     This fails fast on key drift.
+
+2. **Pull keys locally**
+
+   ```bash
+   envdrift sync --force -c pair.txt -p azure --vault-url https://myvault.vault.azure.net
+   ```
+
+   This writes `.env.keys` for dotenvx (never commit this file).
+
+3. **Encrypt changes**
+
+   ```bash
+   uv run envdrift encrypt .env.production
+   ```
+
+4. **If drift is detected**
+   - `git restore .env.production`
+   - `envdrift sync --force -c pair.txt -p azure --vault-url https://myvault.vault.azure.net`
+   - `uv run envdrift encrypt .env.production`
+
 ## Architecture
 
 ```text

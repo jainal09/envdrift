@@ -116,7 +116,9 @@ class TestGetVaultClient:
         mock_azure_module.AzureKeyVaultClient.return_value = mock_client
 
         with patch.dict("sys.modules", {"envdrift.vault.azure": mock_azure_module}):
-            client = get_vault_client(VaultProvider.AZURE, vault_url="https://myvault.vault.azure.net")
+            client = get_vault_client(
+                VaultProvider.AZURE, vault_url="https://myvault.vault.azure.net"
+            )
             assert client is not None
 
     def test_aws_default_region(self):
@@ -143,11 +145,7 @@ class TestGetVaultClient:
         mock_hashi_module.HashiCorpVaultClient.return_value = mock_client
 
         with patch.dict("sys.modules", {"envdrift.vault.hashicorp": mock_hashi_module}):
-            client = get_vault_client(
-                "hashicorp",
-                url="http://localhost:8200",
-                token="mytoken"
-            )
+            client = get_vault_client("hashicorp", url="http://localhost:8200", token="mytoken")
             assert client is not None
 
     def test_unsupported_provider_raises(self):

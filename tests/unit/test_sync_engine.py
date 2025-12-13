@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import subprocess
 from pathlib import Path
 from unittest.mock import MagicMock
 
@@ -335,6 +336,88 @@ class TestSyncEngineDecryptionTest:
         result = engine.sync_all()
 
         assert result.services[0].decryption_result == DecryptionTestResult.SKIPPED
+
+    def test_decryption_test_passes(
+        self, mock_vault_client: MagicMock, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Test decryption test passes and cleans up backup."""
+        mapping = ServiceMapping(
+            secret_name="test-key", folder_path=tmp_path, environment="production"
+        )
+        env_file = tmp_path / ".env.production"
+        env_file.write_text('DOTENV_PUBLIC_KEY="abc"\nSECRET="encrypted:xyz"\n')
+
+        monkeypatch.setattr("envdrift.sync.engine.shutil.which", lambda _: "/usr/bin/dotenvx")
+        monkeypatch.setattr("envdrift.sync.engine.shutil.copy2", lambda *a, **k: None)
+        monkeypatch.setattr("envdrift.sync.engine.Path.unlink", lambda *a, **k: None)
+        runner = MagicMock()
+        runner.side_effect = [
+            subprocess.CompletedProcess(["decrypt"], 0),
+            subprocess.CompletedProcess(["encrypt"], 0),
+        ]
+        monkeypatch.setattr("envdrift.sync.engine.subprocess.run", runner)
+        import envdrift.sync.engine as engine_mod
+
+        assert engine_mod.subprocess.run is runner
+
+        engine = SyncEngine(
+            config=SyncConfig(mappings=[mapping]), vault_client=mock_vault_client, mode=SyncMode()
+        )
+
+        result = engine._test_decryption(mapping)
+
+        assert runner.call_count == 2  # decrypt + encrypt
+        assert result == DecryptionTestResult.PASSED
+        assert not env_file.with_suffix(".backup_decryption_test").exists()
+
+    def test_decryption_test_fails_on_subprocess_error(
+        self, mock_vault_client: MagicMock, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Test decryption test returns FAILED when subprocess fails."""
+        mapping = ServiceMapping(
+            secret_name="test-key", folder_path=tmp_path, environment="production"
+        )
+        env_file = tmp_path / ".env.production"
+        env_file.write_text('DOTENV_PUBLIC_KEY="abc"\nSECRET="encrypted:xyz"\n')
+
+        def fake_run(cmd, **kwargs):
+            return subprocess.CompletedProcess(cmd, 1)
+
+        monkeypatch.setattr("envdrift.sync.engine.shutil.which", lambda _: "/usr/bin/dotenvx")
+        monkeypatch.setattr("envdrift.sync.engine.subprocess.run", fake_run)
+
+        engine = SyncEngine(
+            config=SyncConfig(mappings=[mapping]), vault_client=mock_vault_client, mode=SyncMode()
+        )
+        result = engine._test_decryption(mapping)
+
+        assert result == DecryptionTestResult.FAILED
+        assert not env_file.with_suffix(".backup_decryption_test").exists()
+
+    def test_decryption_test_timeout_restores_file(
+        self, mock_vault_client: MagicMock, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Timeouts should be treated as FAILED and restore the original file."""
+        mapping = ServiceMapping(
+            secret_name="test-key", folder_path=tmp_path, environment="production"
+        )
+        env_file = tmp_path / ".env.production"
+        original = 'DOTENV_PUBLIC_KEY="abc"\nSECRET="encrypted:xyz"\n'
+        env_file.write_text(original)
+
+        def fake_run(cmd, **kwargs):
+            raise subprocess.TimeoutExpired(cmd=cmd, timeout=30)
+
+        monkeypatch.setattr("envdrift.sync.engine.shutil.which", lambda _: "/usr/bin/dotenvx")
+        monkeypatch.setattr("envdrift.sync.engine.subprocess.run", fake_run)
+
+        engine = SyncEngine(
+            config=SyncConfig(mappings=[mapping]), vault_client=mock_vault_client, mode=SyncMode()
+        )
+        result = engine._test_decryption(mapping)
+
+        assert result == DecryptionTestResult.FAILED
+        assert env_file.read_text() == original
 
 
 class TestSyncEngineFetchVaultSecret:

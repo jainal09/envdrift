@@ -16,6 +16,8 @@ The `encrypt` command works with [dotenvx](https://dotenvx.com/) to manage encry
 - **Detect plaintext secrets** - Identify sensitive values that should be encrypted
 - **Perform encryption** - Encrypt the file using dotenvx (downloads automatically)
 
+> Vault verification has moved to `envdrift decrypt --verify-vault`. Use decrypt for drift checks; encrypt no longer supports `--verify-vault`.
+
 ## Arguments
 
 | Argument   | Description           | Default |
