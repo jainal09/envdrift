@@ -516,15 +516,11 @@ class TestVaultVerification:
 
         def fake_decrypt(self, env_path, env_keys_file=None, env=None, cwd=None):
             captured["env_path"] = env_path
-            captured["env_keys_file"] = env_keys_file
             captured["env"] = env
             captured["cwd"] = cwd
 
             assert env_path.exists()
-            assert env_keys_file is not None and env_keys_file.exists()
             assert env_path.parent == cwd
-            assert env_keys_file.parent == cwd
-            assert "vault-key" in env_keys_file.read_text()
 
         monkeypatch.setattr(
             "envdrift.integrations.dotenvx.DotenvxWrapper.decrypt",
@@ -543,6 +539,7 @@ class TestVaultVerification:
         subprocess_env = captured["env"]
         assert subprocess_env.get("DOTENV_PRIVATE_KEY_PRODUCTION") == "vault-key"
         assert "DOTENV_PRIVATE_KEY_STAGING" not in subprocess_env
+        assert captured["cwd"] is not None and captured["cwd"] != env_file.parent
 
     def test_verify_vault_failure_suggests_restore(self, monkeypatch, tmp_path: Path):
         """Vault verification failure should guide restoring encrypted file and keys."""
@@ -610,7 +607,6 @@ class TestVaultVerification:
 
             def decrypt(self, env_path, env_keys_file=None, env=None, cwd=None):
                 captured["env_var"] = env.get("DOTENV_PRIVATE_KEY_PRODUCTION")
-                captured["key_file"] = env_keys_file.read_text()
                 captured["cwd"] = cwd
                 assert env_path.exists()
 
@@ -627,7 +623,6 @@ class TestVaultVerification:
 
         assert result is True
         assert captured["env_var"] == "plainawskey"
-        assert "DOTENV_PRIVATE_KEY_PRODUCTION=plainawskey" in captured["key_file"]
 
 
 class TestAppHelp:

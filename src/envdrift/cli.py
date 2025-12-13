@@ -406,17 +406,14 @@ def _verify_decryption_with_vault(
         with tempfile.TemporaryDirectory(prefix=".envdrift-verify-") as temp_dir:
             temp_dir_path = Path(temp_dir)
             tmp_path = temp_dir_path / env_file.name  # Preserve filename for key naming
-            tmp_keys_path = temp_dir_path / ".env.keys"
 
-            # Copy env file and write a dedicated .env.keys containing only the vault key
+            # Copy env file into isolated directory; inject vault key via environment
             tmp_path.write_text(env_file.read_text())
-            tmp_keys_path.write_text(f"{key_var_name}={actual_private_key}\n")
-            tmp_keys_path.chmod(0o600)  # Restrict key file to the current user
 
             try:
                 dotenvx.decrypt(
                     tmp_path,
-                    env_keys_file=tmp_keys_path,
+                    env_keys_file=None,
                     env=dotenvx_env,
                     cwd=temp_dir_path,
                 )
