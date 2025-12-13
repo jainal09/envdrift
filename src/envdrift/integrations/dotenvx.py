@@ -470,17 +470,17 @@ class DotenvxWrapper:
     ) -> subprocess.CompletedProcess:
         """
         Execute the dotenvx CLI with the provided arguments.
-        
+
         Parameters:
             args (list[str]): Arguments to pass to the dotenvx executable (excluding the binary path).
             check (bool): If True, raise DotenvxError when the process exits with a non-zero status.
             capture_output (bool): If True, capture stdout and stderr and include them on the returned CompletedProcess.
             env (dict[str, str] | None): Optional environment mapping to use for the subprocess; defaults to the current environment.
             cwd (Path | str | None): Optional working directory for the subprocess.
-        
+
         Returns:
             subprocess.CompletedProcess: The finished process result, including returncode, stdout, and stderr.
-        
+
         Raises:
             DotenvxError: If the command times out or (when `check` is True) exits with a non-zero status.
             DotenvxNotFoundError: If the dotenvx executable cannot be found.
@@ -547,13 +547,13 @@ class DotenvxWrapper:
     ) -> None:
         """
         Decrypt the specified dotenv file in place.
-        
+
         Parameters:
             env_file (Path | str): Path to the .env file to decrypt.
             env_keys_file (Path | str | None): Optional path to a .env.keys file to use for decryption.
             env (dict[str, str] | None): Optional environment variables to supply to the subprocess.
             cwd (Path | str | None): Optional working directory for the subprocess.
-        
+
         Raises:
             DotenvxError: If env_file does not exist or the decryption command fails.
             DotenvxNotFoundError: If the dotenvx binary cannot be located when running the command.

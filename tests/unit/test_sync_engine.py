@@ -380,11 +380,11 @@ class TestSyncEngineDecryptionTest:
         def fake_run(cmd, **kwargs):
             """
             Simulate subprocess.run by returning a completed process that indicates failure.
-            
+
             Parameters:
                 cmd: The command that would have been executed; accepted for signature compatibility and included in the returned CompletedProcess.
                 **kwargs: Additional keyword arguments accepted for compatibility and ignored.
-            
+
             Returns:
                 subprocess.CompletedProcess: A CompletedProcess with the provided `cmd` and a `returncode` of 1.
             """
@@ -415,13 +415,13 @@ class TestSyncEngineDecryptionTest:
         def fake_run(cmd, **kwargs):
             """
             Simulate a subprocess.run invocation that always raises a timeout.
-            
+
             Parameters:
-            	cmd (Sequence[str] | str): The command that was attempted to run; included in the raised exception.
-            	**kwargs: Additional keyword arguments accepted by subprocess.run (ignored).
-            
+                cmd (Sequence[str] | str): The command that was attempted to run; included in the raised exception.
+                **kwargs: Additional keyword arguments accepted by subprocess.run (ignored).
+
             Raises:
-            	subprocess.TimeoutExpired: Always raised with the provided `cmd` and a timeout value of 30 seconds.
+                subprocess.TimeoutExpired: Always raised with the provided `cmd` and a timeout value of 30 seconds.
             """
             raise subprocess.TimeoutExpired(cmd=cmd, timeout=30)
 

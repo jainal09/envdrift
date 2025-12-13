@@ -324,16 +324,16 @@ def _verify_decryption_with_vault(
 ) -> bool:
     """
     Verify that a vault-stored private key can decrypt the given .env file.
-    
+
     Performs a non-destructive check by fetching the secret named `secret_name` from the specified vault provider, injecting the retrieved key into an isolated environment, and attempting to decrypt a temporary copy of `env_file` using the dotenvx integration. Prints user-facing status and remediation guidance; does not modify the original file.
-    
+
     Parameters:
         env_file (Path): Path to the .env file to test decryption for.
         provider (str): Vault provider identifier (e.g., "azure", "aws", "hashicorp").
         vault_url (str | None): Vault endpoint URL when required by the provider (e.g., Azure or HashiCorp); may be None for providers that do not require it.
         region (str | None): Region identifier for providers that require it (e.g., AWS); may be None.
         secret_name (str): Name of the secret in the vault that contains the private key (or an environment-style value like "DOTENV_PRIVATE_KEY_ENV=key").
-    
+
     Returns:
         bool: `True` if the vault key successfully decrypts a temporary copy of `env_file`, `False` otherwise.
     """
@@ -365,7 +365,8 @@ def _verify_decryption_with_vault(
             console.print("[dim]Fetching private key from vault...[/dim]")
         private_key = vault_client.get_secret(secret_name)
 
-        if not private_key:
+        # SecretValue can be truthy even if value is empty; check both
+        if not private_key or (hasattr(private_key, "value") and not private_key.value):
             print_error(f"Secret '{secret_name}' is empty in vault")
             return False
 
@@ -506,9 +507,9 @@ def decrypt_cmd(
 ) -> None:
     """
     Decrypt an encrypted .env file or verify that a vault-provided key can decrypt it without modifying the file.
-    
+
     When run normally, decrypts the given env file using the dotenvx integration and reports success; if dotenvx is not available, prints installation instructions and exits. When run with --verify-vault, checks that the specified vault provider and secret contain a key capable of decrypting the file without changing the file on disk; on a successful check the function prints confirmation and does not decrypt the file.
-    
+
     Parameters:
         env_file (Path): Path to the encrypted .env file to operate on.
         verify_vault (bool): If true, perform a vault-based verification instead of local decryption.

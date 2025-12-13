@@ -75,11 +75,11 @@ class TestAWSSecretsManagerClient:
             def client_factory(service, **kwargs):
                 """
                 Return a mocked AWS service client corresponding to the requested service name.
-                
+
                 Parameters:
                     service (str): The name of the AWS service to create a client for (e.g., "secretsmanager", "sts").
                     **kwargs: Ignored; accepted for compatibility with boto3.client signature.
-                
+
                 Returns:
                     object: A mock client instance — a predefined mock for "secretsmanager" or "sts", otherwise a generic MagicMock.
                 """
@@ -122,11 +122,11 @@ class TestAWSSecretsManagerClient:
             def client_factory(service, **kwargs):
                 """
                 Return a mocked AWS service client corresponding to the requested service name.
-                
+
                 Parameters:
                     service (str): The name of the AWS service to create a client for (e.g., "secretsmanager", "sts").
                     **kwargs: Ignored; accepted for compatibility with boto3.client signature.
-                
+
                 Returns:
                     object: A mock client instance — a predefined mock for "secretsmanager" or "sts", otherwise a generic MagicMock.
                 """
@@ -163,11 +163,11 @@ class TestAWSSecretsManagerClient:
             def client_factory(service, **kwargs):
                 """
                 Return a mocked AWS service client corresponding to the requested service name.
-                
+
                 Parameters:
                     service (str): The name of the AWS service to create a client for (e.g., "secretsmanager", "sts").
                     **kwargs: Ignored; accepted for compatibility with boto3.client signature.
-                
+
                 Returns:
                     object: A mock client instance — a predefined mock for "secretsmanager" or "sts", otherwise a generic MagicMock.
                 """
@@ -204,11 +204,11 @@ class TestAWSSecretsManagerClient:
             def client_factory(service, **kwargs):
                 """
                 Return a mocked AWS service client corresponding to the requested service name.
-                
+
                 Parameters:
                     service (str): The name of the AWS service to create a client for (e.g., "secretsmanager", "sts").
                     **kwargs: Ignored; accepted for compatibility with boto3.client signature.
-                
+
                 Returns:
                     object: A mock client instance — a predefined mock for "secretsmanager" or "sts", otherwise a generic MagicMock.
                 """
@@ -243,11 +243,11 @@ class TestAWSSecretsManagerClient:
             def client_factory(service, **kwargs):
                 """
                 Return a mocked AWS service client corresponding to the requested service name.
-                
+
                 Parameters:
                     service (str): The name of the AWS service to create a client for (e.g., "secretsmanager", "sts").
                     **kwargs: Ignored; accepted for compatibility with boto3.client signature.
-                
+
                 Returns:
                     object: A mock client instance — a predefined mock for "secretsmanager" or "sts", otherwise a generic MagicMock.
                 """
@@ -287,11 +287,11 @@ class TestAWSSecretsManagerClient:
             def client_factory(service, **kwargs):
                 """
                 Return a mocked AWS service client corresponding to the requested service name.
-                
+
                 Parameters:
                     service (str): The name of the AWS service to create a client for (e.g., "secretsmanager", "sts").
                     **kwargs: Ignored; accepted for compatibility with boto3.client signature.
-                
+
                 Returns:
                     object: A mock client instance — a predefined mock for "secretsmanager" or "sts", otherwise a generic MagicMock.
                 """
@@ -325,11 +325,11 @@ class TestAWSSecretsManagerClient:
             def client_factory(service, **kwargs):
                 """
                 Return a mocked AWS service client corresponding to the requested service name.
-                
+
                 Parameters:
                     service (str): The name of the AWS service to create a client for (e.g., "secretsmanager", "sts").
                     **kwargs: Ignored; accepted for compatibility with boto3.client signature.
-                
+
                 Returns:
                     object: A mock client instance — a predefined mock for "secretsmanager" or "sts", otherwise a generic MagicMock.
                 """
@@ -364,11 +364,11 @@ class TestAWSSecretsManagerClient:
             def client_factory(service, **kwargs):
                 """
                 Return a mocked AWS service client corresponding to the requested service name.
-                
+
                 Parameters:
                     service (str): The name of the AWS service to create a client for (e.g., "secretsmanager", "sts").
                     **kwargs: Ignored; accepted for compatibility with boto3.client signature.
-                
+
                 Returns:
                     object: A mock client instance — a predefined mock for "secretsmanager" or "sts", otherwise a generic MagicMock.
                 """
@@ -404,11 +404,11 @@ class TestAWSSecretsManagerClient:
             def client_factory(service, **kwargs):
                 """
                 Return a mocked AWS service client corresponding to the requested service name.
-                
+
                 Parameters:
                     service (str): The name of the AWS service to create a client for (e.g., "secretsmanager", "sts").
                     **kwargs: Ignored; accepted for compatibility with boto3.client signature.
-                
+
                 Returns:
                     object: A mock client instance — a predefined mock for "secretsmanager" or "sts", otherwise a generic MagicMock.
                 """
@@ -433,7 +433,7 @@ class TestAWSSecretsManagerClient:
             def __init__(self, code):
                 """
                 Initialize the object with a response dictionary containing an AWS-style error code.
-                
+
                 Parameters:
                     code (str | int): Error code to store under "Error" -> "Code" in the response.
                 """
@@ -468,11 +468,11 @@ class TestAWSSecretsManagerClient:
             def factory(service, **kwargs):
                 """
                 Selects a mocked AWS client implementation based on the requested service name.
-                
+
                 Parameters:
                     service (str): The AWS service name to select (e.g., "secretsmanager").
                     kwargs: Additional keyword arguments are accepted for compatibility and ignored.
-                
+
                 Returns:
                     The mocked Secrets Manager client when `service` is "secretsmanager", otherwise the mocked STS client.
                 """
@@ -489,16 +489,16 @@ class TestAWSSecretsManagerClient:
             def factory_fail(service, **kwargs):
                 """
                 Produce a mock AWS client for tests, simulating expired STS credentials when requested.
-                
+
                 Parameters:
-                	service (str): The AWS service name to create. If "sts", the factory simulates expired credentials.
-                	**kwargs: Ignored extra arguments accepted for compatibility with boto3.client signature.
-                
+                        service (str): The AWS service name to create. If "sts", the factory simulates expired credentials.
+                        **kwargs: Ignored extra arguments accepted for compatibility with boto3.client signature.
+
                 Returns:
-                	The mock Secrets Manager client when `service` is not "sts".
-                
+                        The mock Secrets Manager client when `service` is not "sts".
+
                 Raises:
-                	FakeCredentialsError: If `service` is "sts", raised to simulate expired/stale credentials.
+                        FakeCredentialsError: If `service` is "sts", raised to simulate expired/stale credentials.
                 """
                 if service == "sts":
                     raise FakeCredentialsError("expired")
@@ -518,7 +518,7 @@ class TestAWSSecretsManagerClient:
             def __init__(self, code):
                 """
                 Initialize the object with a response dictionary containing an AWS-style error code.
-                
+
                 Parameters:
                     code (str | int): Error code to store under "Error" -> "Code" in the response.
                 """
@@ -536,11 +536,11 @@ class TestAWSSecretsManagerClient:
             def client_factory(service, **kwargs):
                 """
                 Return a mocked AWS service client corresponding to the requested service name.
-                
+
                 Parameters:
                     service (str): The name of the AWS service to create a client for (e.g., "secretsmanager", "sts").
                     **kwargs: Ignored; accepted for compatibility with boto3.client signature.
-                
+
                 Returns:
                     object: A mock client instance — a predefined mock for "secretsmanager" or "sts", otherwise a generic MagicMock.
                 """
@@ -575,11 +575,11 @@ class TestAWSSecretsManagerClient:
             def client_factory(service, **kwargs):
                 """
                 Return a mocked AWS service client corresponding to the requested service name.
-                
+
                 Parameters:
                     service (str): The name of the AWS service to create a client for (e.g., "secretsmanager", "sts").
                     **kwargs: Ignored; accepted for compatibility with boto3.client signature.
-                
+
                 Returns:
                     object: A mock client instance — a predefined mock for "secretsmanager" or "sts", otherwise a generic MagicMock.
                 """
@@ -606,7 +606,7 @@ class TestAWSSecretsManagerClient:
             def __init__(self, code="Boom"):
                 """
                 Initialize the object with an error response dictionary containing an error code.
-                
+
                 Parameters:
                     code (str): Error code to set in self.response["Error"]["Code"]. Defaults to "Boom".
                 """
@@ -626,11 +626,11 @@ class TestAWSSecretsManagerClient:
             def client_factory(service, **kwargs):
                 """
                 Return a mocked AWS service client corresponding to the requested service name.
-                
+
                 Parameters:
                     service (str): The name of the AWS service to create a client for (e.g., "secretsmanager", "sts").
                     **kwargs: Ignored; accepted for compatibility with boto3.client signature.
-                
+
                 Returns:
                     object: A mock client instance — a predefined mock for "secretsmanager" or "sts", otherwise a generic MagicMock.
                 """
@@ -665,11 +665,11 @@ class TestAWSSecretsManagerClient:
             def client_factory(service, **kwargs):
                 """
                 Return a mocked AWS service client corresponding to the requested service name.
-                
+
                 Parameters:
                     service (str): The name of the AWS service to create a client for (e.g., "secretsmanager", "sts").
                     **kwargs: Ignored; accepted for compatibility with boto3.client signature.
-                
+
                 Returns:
                     object: A mock client instance — a predefined mock for "secretsmanager" or "sts", otherwise a generic MagicMock.
                 """
@@ -694,7 +694,7 @@ class TestAWSSecretsManagerClient:
             def __init__(self, code="Boom"):
                 """
                 Initialize the object with an error response dictionary containing an error code.
-                
+
                 Parameters:
                     code (str): Error code to set in self.response["Error"]["Code"]. Defaults to "Boom".
                 """
@@ -712,11 +712,11 @@ class TestAWSSecretsManagerClient:
             def client_factory(service, **kwargs):
                 """
                 Return a mocked AWS service client corresponding to the requested service name.
-                
+
                 Parameters:
                     service (str): The name of the AWS service to create a client for (e.g., "secretsmanager", "sts").
                     **kwargs: Ignored; accepted for compatibility with boto3.client signature.
-                
+
                 Returns:
                     object: A mock client instance — a predefined mock for "secretsmanager" or "sts", otherwise a generic MagicMock.
                 """
@@ -741,7 +741,7 @@ class TestAWSSecretsManagerClient:
             def __init__(self, code="Boom"):
                 """
                 Initialize the object with an error response dictionary containing an error code.
-                
+
                 Parameters:
                     code (str): Error code to set in self.response["Error"]["Code"]. Defaults to "Boom".
                 """
@@ -759,11 +759,11 @@ class TestAWSSecretsManagerClient:
             def client_factory(service, **kwargs):
                 """
                 Return a mocked AWS service client corresponding to the requested service name.
-                
+
                 Parameters:
                     service (str): The name of the AWS service to create a client for (e.g., "secretsmanager", "sts").
                     **kwargs: Ignored; accepted for compatibility with boto3.client signature.
-                
+
                 Returns:
                     object: A mock client instance — a predefined mock for "secretsmanager" or "sts", otherwise a generic MagicMock.
                 """

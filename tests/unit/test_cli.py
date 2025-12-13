@@ -249,7 +249,7 @@ class TestEncryptCommand:
             def __init__(self):
                 """
                 Initialize the instance and set the `called` flag to False.
-                
+
                 This prepares the object in an uninvoked state by creating a boolean attribute
                 `called` initialized to False.
                 """
@@ -258,9 +258,9 @@ class TestEncryptCommand:
             def is_installed(self):
                 """
                 Check whether the component is installed.
-                
+
                 This implementation always reports the component as installed.
-                
+
                 Returns:
                     `true` if the component is installed, `false` otherwise.
                 """
@@ -269,7 +269,7 @@ class TestEncryptCommand:
             def encrypt(self, file_path):
                 """
                 Record that the encrypt method was invoked and assert the provided path matches the expected env file.
-                
+
                 Parameters:
                     file_path (str | pathlib.Path): Path passed to the encrypt method; must equal the test's expected `env_file`.
                 """
@@ -294,7 +294,7 @@ class TestEncryptCommand:
             def is_installed(self):
                 """
                 Report whether the integration is installed and available for use.
-                
+
                 Returns:
                     `True` if the integration is installed and available, `False` otherwise.
                 """
@@ -303,7 +303,7 @@ class TestEncryptCommand:
             def install_instructions(self):
                 """
                 Provide the installation command for the `dotenvx` CLI.
-                
+
                 Returns:
                     installation_command (str): The exact shell command "npm install -g dotenvx" to install dotenvx globally.
                 """
@@ -338,10 +338,10 @@ class TestDecryptCommand:
         def fake_verify(**kwargs):
             """
             Test stub that simulates a successful verification and records that it was invoked.
-            
+
             Parameters:
                 **kwargs: Arbitrary keyword arguments accepted and ignored by the stub.
-            
+
             Returns:
                 True indicating the verification succeeded.
             """
@@ -405,7 +405,7 @@ class TestDecryptCommand:
             def __init__(self):
                 """
                 Create a new instance with its decrypted state initialized to False.
-                
+
                 Attributes:
                     decrypted: Indicates whether the instance's content has been decrypted; starts as False.
                 """
@@ -414,9 +414,9 @@ class TestDecryptCommand:
             def is_installed(self):
                 """
                 Check whether the component is installed.
-                
+
                 This implementation always reports the component as installed.
-                
+
                 Returns:
                     `true` if the component is installed, `false` otherwise.
                 """
@@ -425,10 +425,10 @@ class TestDecryptCommand:
             def decrypt(self, file_path):
                 """
                 Mark this object as having performed decryption and verify the target file path.
-                
+
                 Parameters:
                     file_path (str | Path): Path to the file intended for decryption; must match the module-level `env_file`.
-                
+
                 Raises:
                     AssertionError: If `file_path` does not equal the expected `env_file`.
                 """
@@ -565,7 +565,7 @@ class TestVaultVerification:
             def ensure_authenticated(self) -> None:
                 """
                 Ensure the command runner is authenticated before performing operations.
-                
+
                 Implementations should verify or establish the required authentication state for subsequent CLI actions.
                 """
                 return None
@@ -573,10 +573,10 @@ class TestVaultVerification:
             def get_secret(self, name: str):
                 """
                 Retrieve a secret value by its name.
-                
+
                 Parameters:
                     name (str): The key/name of the secret to retrieve.
-                
+
                 Returns:
                     secret_value: The secret associated with the provided name.
                 """
@@ -596,13 +596,13 @@ class TestVaultVerification:
         def fake_decrypt(self, env_path, env_keys_file=None, env=None, cwd=None):
             """
             Record the decrypt call arguments for tests and assert the supplied env_path exists and is located in the provided cwd.
-            
+
             Parameters:
                 env_path (Path): Path to the environment file passed to the fake decrypt.
                 env_keys_file (Path | None): Optional path to the keys file (captured but not validated).
                 env (dict | None): Optional environment mapping passed to the call (captured for inspection).
                 cwd (Path | None): Expected working directory; the function asserts env_path.parent == cwd.
-            
+
             Raises:
                 AssertionError: If `env_path` does not exist or if `env_path.parent` is not equal to `cwd`.
             """
@@ -644,7 +644,7 @@ class TestVaultVerification:
             def ensure_authenticated(self) -> None:
                 """
                 Ensure the command runner is authenticated before performing operations.
-                
+
                 Implementations should verify or establish the required authentication state for subsequent CLI actions.
                 """
                 return None
@@ -652,10 +652,10 @@ class TestVaultVerification:
             def get_secret(self, name: str):
                 """
                 Retrieve a secret value by its name.
-                
+
                 Parameters:
                     name (str): The key/name of the secret to retrieve.
-                
+
                 Returns:
                     secret_value: The secret associated with the provided name.
                 """
@@ -700,7 +700,7 @@ class TestVaultVerification:
             def ensure_authenticated(self) -> None:
                 """
                 Ensure the command runner is authenticated before performing operations.
-                
+
                 Implementations should verify or establish the required authentication state for subsequent CLI actions.
                 """
                 return None
@@ -708,13 +708,13 @@ class TestVaultVerification:
             def get_secret(self, name: str):
                 """
                 Return the fixed plaintext key for the "dotenv-key" secret.
-                
+
                 Parameters:
                     name (str): The secret name; must be "dotenv-key".
-                
+
                 Returns:
                     str: The plaintext secret "plainawskey".
-                
+
                 Raises:
                     AssertionError: If `name` is not "dotenv-key".
                 """
@@ -727,9 +727,9 @@ class TestVaultVerification:
             def is_installed(self):
                 """
                 Check whether the component is installed.
-                
+
                 This implementation always reports the component as installed.
-                
+
                 Returns:
                     `true` if the component is installed, `false` otherwise.
                 """
@@ -738,13 +738,13 @@ class TestVaultVerification:
             def decrypt(self, env_path, env_keys_file=None, env=None, cwd=None):
                 """
                 Test stub that simulates a decrypt call by recording the production private key and working directory and asserting the env file exists.
-                
+
                 Parameters:
                     env_path (Path): Path to the environment file to be decrypted; must exist.
                     env_keys_file (Path|None): Optional path to the keys file (not used by the stub).
                     env (Mapping|None): Environment mapping; the stub reads `DOTENV_PRIVATE_KEY_PRODUCTION` from this mapping.
                     cwd (str|Path|None): Working directory passed to the stub; recorded for inspection.
-                
+
                 Raises:
                     AssertionError: If `env_path` does not exist.
                 """
@@ -796,10 +796,10 @@ class TestHookInstall:
         def fake_install_hooks(config_path=None):
             """
             Mark that the hook installation path was invoked by setting called["installed"] to True.
-            
+
             Parameters:
                 config_path (str | None): Optional path to a hooks configuration file; this argument is accepted but ignored.
-            
+
             Returns:
                 bool: True to indicate the (fake) installation succeeded.
             """
@@ -862,7 +862,7 @@ class TestSyncCommand:
             def __init__(self, config, vault_client, mode, prompt_callback, progress_callback):
                 """
                 Initialize the instance with runtime dependencies and callbacks.
-                
+
                 Parameters:
                     config: Configuration object or mapping that controls the instance's behavior and settings.
                     vault_client: Vault client used to retrieve or verify secrets; expected to expose the methods the instance uses to interact with the vault.
@@ -879,7 +879,7 @@ class TestSyncCommand:
             def sync_all(self):
                 """
                 Return a stubbed synchronization result indicating no errors.
-                
+
                 Returns:
                     SimpleNamespace: An object with attributes:
                         - services: an empty list representing synchronized services.
@@ -928,7 +928,7 @@ class TestSyncCommand:
             def sync_all(self):
                 """
                 Return a namespace representing a sync result with no services and an error state.
-                
+
                 Returns:
                     result (types.SimpleNamespace): An object with attributes:
                         - services (list): An empty list of synchronized services.

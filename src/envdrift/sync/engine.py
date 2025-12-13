@@ -218,9 +218,9 @@ class SyncEngine:
     def _test_decryption(self, mapping: ServiceMapping) -> DecryptionTestResult:
         """
         Attempt to verify that the synchronized key can decrypt an environment file for the service.
-        
+
         The method locates an environment file for the mapping (preferring .env.<environment>, then .env.production, .env.staging, .env.development), checks whether the file appears encrypted, and uses the `dotenvx` utility to decrypt and then re-encrypt the file to confirm the key works. If decryption or re-encryption fails the file is restored to its original state before returning.
-        
+
         Returns:
             DecryptionTestResult.PASSED if decryption and re-encryption both succeed.
             DecryptionTestResult.FAILED if decryption or re-encryption fails (the original file is restored).
