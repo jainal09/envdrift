@@ -465,17 +465,21 @@ class DotenvxWrapper:
         args: list[str],
         check: bool = True,
         capture_output: bool = True,
+        env: dict[str, str] | None = None,
+        cwd: Path | str | None = None,
     ) -> subprocess.CompletedProcess:
         """
-        Execute the dotenvx CLI with the provided arguments and return the completed process.
+        Execute the dotenvx CLI with the provided arguments.
 
         Parameters:
             args (list[str]): Arguments to pass to the dotenvx executable (excluding the binary path).
             check (bool): If True, raise DotenvxError when the process exits with a non-zero status.
-            capture_output (bool): If True, capture and return stdout and stderr on the CompletedProcess.
+            capture_output (bool): If True, capture stdout and stderr and include them on the returned CompletedProcess.
+            env (dict[str, str] | None): Optional environment mapping to use for the subprocess; defaults to the current environment.
+            cwd (Path | str | None): Optional working directory for the subprocess.
 
         Returns:
-            subprocess.CompletedProcess: The result of the executed command, including return code, stdout, and stderr.
+            subprocess.CompletedProcess: The finished process result, including returncode, stdout, and stderr.
 
         Raises:
             DotenvxError: If the command times out or (when `check` is True) exits with a non-zero status.
@@ -490,6 +494,8 @@ class DotenvxWrapper:
                 capture_output=capture_output,
                 text=True,
                 timeout=120,
+                env=env,
+                cwd=str(cwd) if cwd else None,
             )
 
             if check and result.returncode != 0:
@@ -503,12 +509,21 @@ class DotenvxWrapper:
         except FileNotFoundError as e:
             raise DotenvxNotFoundError(f"dotenvx binary not found: {e}") from e
 
-    def encrypt(self, env_file: Path | str) -> None:
+    def encrypt(
+        self,
+        env_file: Path | str,
+        env_keys_file: Path | str | None = None,
+        env: dict[str, str] | None = None,
+        cwd: Path | str | None = None,
+    ) -> None:
         """
         Encrypt the specified .env file in place.
 
         Parameters:
             env_file (Path | str): Path to the .env file to encrypt.
+            env_keys_file (Path | str | None): Optional path to the .env.keys file to use.
+            env (dict[str, str] | None): Optional environment variables for the subprocess.
+            cwd (Path | str | None): Optional working directory for the subprocess.
 
         Raises:
             DotenvxError: If the file does not exist or the encryption command fails.
@@ -517,23 +532,41 @@ class DotenvxWrapper:
         if not env_file.exists():
             raise DotenvxError(f"File not found: {env_file}")
 
-        self._run(["encrypt", "-f", str(env_file)])
+        args = ["encrypt", "-f", str(env_file)]
+        if env_keys_file:
+            args.extend(["-fk", str(env_keys_file)])
 
-    def decrypt(self, env_file: Path | str) -> None:
+        self._run(args, env=env, cwd=cwd)
+
+    def decrypt(
+        self,
+        env_file: Path | str,
+        env_keys_file: Path | str | None = None,
+        env: dict[str, str] | None = None,
+        cwd: Path | str | None = None,
+    ) -> None:
         """
         Decrypt the specified dotenv file in place.
 
         Parameters:
             env_file (Path | str): Path to the .env file to decrypt.
+            env_keys_file (Path | str | None): Optional path to a .env.keys file to use for decryption.
+            env (dict[str, str] | None): Optional environment variables to supply to the subprocess.
+            cwd (Path | str | None): Optional working directory for the subprocess.
 
         Raises:
-            DotenvxError: If the file does not exist or the decryption command fails.
+            DotenvxError: If env_file does not exist or the decryption command fails.
+            DotenvxNotFoundError: If the dotenvx binary cannot be located when running the command.
         """
         env_file = Path(env_file)
         if not env_file.exists():
             raise DotenvxError(f"File not found: {env_file}")
 
-        self._run(["decrypt", "-f", str(env_file)])
+        args = ["decrypt", "-f", str(env_file)]
+        if env_keys_file:
+            args.extend(["-fk", str(env_keys_file)])
+
+        self._run(args, env=env, cwd=cwd)
 
     def run(self, env_file: Path | str, command: list[str]) -> subprocess.CompletedProcess:
         """

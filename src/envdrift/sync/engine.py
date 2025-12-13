@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import shutil
-import subprocess
+import subprocess  # nosec B404
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -216,7 +216,16 @@ class SyncEngine:
         return value
 
     def _test_decryption(self, mapping: ServiceMapping) -> DecryptionTestResult:
-        """Test that the synced key can decrypt .env files."""
+        """
+        Attempt to verify that the synchronized key can decrypt an environment file for the service.
+
+        The method locates an environment file for the mapping (preferring .env.<environment>, then .env.production, .env.staging, .env.development), checks whether the file appears encrypted, and uses the `dotenvx` utility to decrypt and then re-encrypt the file to confirm the key works. If decryption or re-encryption fails the file is restored to its original state before returning.
+
+        Returns:
+            DecryptionTestResult.PASSED if decryption and re-encryption both succeed.
+            DecryptionTestResult.FAILED if decryption or re-encryption fails (the original file is restored).
+            DecryptionTestResult.SKIPPED if no suitable env file exists, the file does not appear encrypted, or the `dotenvx` utility is not available.
+        """
         # Find .env file to test (prefer .env.production)
         env_files = [
             mapping.folder_path / f".env.{mapping.environment}",
@@ -244,7 +253,7 @@ class SyncEngine:
             shutil.copy2(target_file, backup_path)
 
             # Try to decrypt using dotenvx
-            result = subprocess.run(
+            result = subprocess.run(  # nosec B603
                 [dotenvx_path, "decrypt", "-f", str(target_file)],
                 cwd=str(mapping.folder_path),
                 capture_output=True,
@@ -258,7 +267,7 @@ class SyncEngine:
                 return DecryptionTestResult.FAILED
 
             # Re-encrypt to not leave file decrypted
-            encrypt_result = subprocess.run(
+            encrypt_result = subprocess.run(  # nosec B603
                 [dotenvx_path, "encrypt", "-f", str(target_file)],
                 cwd=str(mapping.folder_path),
                 capture_output=True,

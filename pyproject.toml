@@ -157,6 +157,9 @@ addopts = [
 [tool.coverage.run]
 source = ["src/envdrift"]
 branch = true
+omit = [
+    "src/envdrift/**/__init__.py",
+]
 
 [tool.coverage.report]
 exclude_lines = [

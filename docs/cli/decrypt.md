@@ -1,16 +1,18 @@
 # envdrift decrypt
 
-Decrypt an encrypted .env file using dotenvx.
+Decrypt an encrypted .env file using dotenvx, or verify that a vault key can decrypt a file (drift detection).
 
 ## Synopsis
 
 ```bash
 envdrift decrypt [ENV_FILE]
+envdrift decrypt [ENV_FILE] --verify-vault [--provider ...]
 ```
 
 ## Description
 
-The `decrypt` command decrypts .env files that were encrypted with dotenvx. This is useful for:
+The `decrypt` command decrypts .env files that were encrypted with dotenvx.
+It can also **verify** that a key stored in your vault can decrypt the file without actually decrypting it (useful for catching key drift in CI/pre-commit).
 
 - Local development after cloning a repo
 - Viewing encrypted values
@@ -30,11 +32,15 @@ The `decrypt` command decrypts .env files that were encrypted with dotenvx. This
 envdrift decrypt .env.production
 ```
 
-Output:
+### Verify vault key (drift detection, no decryption performed)
 
-```text
-[OK] Decrypted .env.production
+```bash
+envdrift decrypt .env.production --verify-vault --ci \
+  -p azure --vault-url https://myvault.vault.azure.net \
+  --secret myapp-dotenvx-key
 ```
+
+Exit code 0 if the vault key can decrypt the file, 1 if it cannot.
 
 ### Decrypt Specific Environment
 
@@ -84,7 +90,7 @@ echo 'DOTENV_PRIVATE_KEY_PRODUCTION="your-key-here"' > .env.keys
 envdrift decrypt .env.production
 ```
 
-### CI/CD Pipeline
+### CI/CD Pipeline (decrypt)
 
 ```yaml
 # GitHub Actions
@@ -95,6 +101,20 @@ steps:
   - name: Decrypt environment
     run: envdrift decrypt .env.production
 ```
+
+### CI/pre-commit drift check (verify-vault)
+
+```bash
+envdrift decrypt .env.production --verify-vault --ci \
+  -p azure --vault-url https://myvault.vault.azure.net \
+  --secret myapp-dotenvx-key
+```
+
+Failure shows WRONG_PRIVATE_KEY and prints repair steps:
+
+- `git restore <file>`
+- `envdrift sync --force ...` to restore .env.keys from vault
+- `envdrift encrypt <file>` to re-encrypt with the vault key
 
 ## Error Handling
 
@@ -112,6 +132,17 @@ Check that .env.keys exists or DOTENV_PRIVATE_KEY_* is set
 The private key does not match the encrypted file
 ```
 
+When using `--verify-vault`, a wrong key returns exit 1 with a message like:
+
+```text
+[ERROR] ✗ Vault key CANNOT decrypt this file!
+...
+To fix:
+  1. Restore the encrypted file: git restore .env.production
+  2. Restore vault key locally: envdrift sync --force -c pair.txt -p azure --vault-url https://...
+  3. Re-encrypt with the vault key: envdrift encrypt .env.production
+```
+
 ### dotenvx Not Installed
 
 ```text
@@ -125,6 +156,8 @@ Install: curl -sfS https://dotenvx.sh | sh
 - Add `.env.keys` to your `.gitignore`
 - Use secrets management (GitHub Secrets, Vault, etc.) for CI/CD
 - Rotate keys if they are ever exposed
+- For drift tests, clear cached keys (`.env.keys`, `DOTENV_PRIVATE_KEY_*` dirs, /tmp)
+  or run in a clean temp dir so dotenvx does not silently reuse an old key.
 
 ## See Also
 
