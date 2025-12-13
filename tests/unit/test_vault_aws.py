@@ -14,6 +14,24 @@ from envdrift.vault.base import (
 )
 
 
+@pytest.fixture
+def mock_client_factory():
+    """Create reusable mocked AWS clients for testing."""
+
+    mock_sm_client = MagicMock()
+    mock_sts_client = MagicMock()
+
+    def client_factory(service, **kwargs):
+        """Return a mock AWS service client for the given service."""
+        if service == "secretsmanager":
+            return mock_sm_client
+        if service == "sts":
+            return mock_sts_client
+        return MagicMock()
+
+    return client_factory, mock_sm_client, mock_sts_client
+
+
 class TestAWSSecretsManagerClient:
     """Tests for AWSSecretsManagerClient."""
 
@@ -65,30 +83,11 @@ class TestAWSSecretsManagerClient:
         client = mock_boto3.AWSSecretsManagerClient()
         assert client.region == "us-east-1"
 
-    def test_authenticate_success(self, mock_boto3):
+    def test_authenticate_success(self, mock_boto3, mock_client_factory):
         """Test successful authentication."""
-        mock_sm_client = MagicMock()
-        mock_sts_client = MagicMock()
+        client_factory, mock_sm_client, mock_sts_client = mock_client_factory
 
         with patch("boto3.client") as mock_client:
-
-            def client_factory(service, **kwargs):
-                """
-                Return a mocked AWS service client corresponding to the requested service name.
-
-                Parameters:
-                    service (str): The name of the AWS service to create a client for (e.g., "secretsmanager", "sts").
-                    **kwargs: Ignored; accepted for compatibility with boto3.client signature.
-
-                Returns:
-                    object: A mock client instance — a predefined mock for "secretsmanager" or "sts", otherwise a generic MagicMock.
-                """
-                if service == "secretsmanager":
-                    return mock_sm_client
-                elif service == "sts":
-                    return mock_sts_client
-                return MagicMock()
-
             mock_client.side_effect = client_factory
 
             client = mock_boto3.AWSSecretsManagerClient()
