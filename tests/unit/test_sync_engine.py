@@ -378,6 +378,16 @@ class TestSyncEngineDecryptionTest:
         env_file.write_text('DOTENV_PUBLIC_KEY="abc"\nSECRET="encrypted:xyz"\n')
 
         def fake_run(cmd, **kwargs):
+            """
+            Simulate subprocess.run by returning a completed process that indicates failure.
+            
+            Parameters:
+                cmd: The command that would have been executed; accepted for signature compatibility and included in the returned CompletedProcess.
+                **kwargs: Additional keyword arguments accepted for compatibility and ignored.
+            
+            Returns:
+                subprocess.CompletedProcess: A CompletedProcess with the provided `cmd` and a `returncode` of 1.
+            """
             return subprocess.CompletedProcess(cmd, 1)
 
         monkeypatch.setattr("envdrift.sync.engine.shutil.which", lambda _: "/usr/bin/dotenvx")
@@ -403,6 +413,16 @@ class TestSyncEngineDecryptionTest:
         env_file.write_text(original)
 
         def fake_run(cmd, **kwargs):
+            """
+            Simulate a subprocess.run invocation that always raises a timeout.
+            
+            Parameters:
+            	cmd (Sequence[str] | str): The command that was attempted to run; included in the raised exception.
+            	**kwargs: Additional keyword arguments accepted by subprocess.run (ignored).
+            
+            Raises:
+            	subprocess.TimeoutExpired: Always raised with the provided `cmd` and a timeout value of 30 seconds.
+            """
             raise subprocess.TimeoutExpired(cmd=cmd, timeout=30)
 
         monkeypatch.setattr("envdrift.sync.engine.shutil.which", lambda _: "/usr/bin/dotenvx")
