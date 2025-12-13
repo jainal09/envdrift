@@ -266,7 +266,7 @@ def encrypt_cmd(
         print_error(f"ENV file not found: {env_file}")
         raise typer.Exit(code=1)
 
-    if verify_vault:
+    if verify_vault or vault_provider or vault_url or vault_region or vault_secret:
         print_error("Vault verification moved to `envdrift decrypt --verify-vault ...`")
         raise typer.Exit(code=1)
 

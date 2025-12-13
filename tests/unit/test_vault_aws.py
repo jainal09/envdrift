@@ -32,6 +32,16 @@ def mock_client_factory():
     return client_factory, mock_sm_client, mock_sts_client
 
 
+@pytest.fixture
+def patched_boto_clients(mock_client_factory):
+    """Patch boto3.client to return shared mock clients."""
+
+    client_factory, mock_sm_client, mock_sts_client = mock_client_factory
+    with patch("boto3.client") as mock_client:
+        mock_client.side_effect = client_factory
+        yield mock_sm_client, mock_sts_client
+
+
 class TestAWSSecretsManagerClient:
     """Tests for AWSSecretsManagerClient."""
 
@@ -111,41 +121,19 @@ class TestAWSSecretsManagerClient:
         client = mock_boto3.AWSSecretsManagerClient()
         assert client.is_authenticated() is False
 
-    def test_is_authenticated_true_after_auth(self, mock_boto3):
+    def test_is_authenticated_true_after_auth(self, mock_boto3, patched_boto_clients):
         """Test is_authenticated returns True after authentication."""
-        mock_sm_client = MagicMock()
-        mock_sts_client = MagicMock()
+        _sm, _sts = patched_boto_clients
 
-        with patch("boto3.client") as mock_client:
+        client = mock_boto3.AWSSecretsManagerClient()
+        client.authenticate()
 
-            def client_factory(service, **kwargs):
-                """
-                Return a mocked AWS service client corresponding to the requested service name.
+        # After auth, is_authenticated should check STS again
+        assert client.is_authenticated() is True
 
-                Parameters:
-                    service (str): The name of the AWS service to create a client for (e.g., "secretsmanager", "sts").
-                    **kwargs: Ignored; accepted for compatibility with boto3.client signature.
-
-                Returns:
-                    object: A mock client instance — a predefined mock for "secretsmanager" or "sts", otherwise a generic MagicMock.
-                """
-                if service == "secretsmanager":
-                    return mock_sm_client
-                elif service == "sts":
-                    return mock_sts_client
-                return MagicMock()
-
-            mock_client.side_effect = client_factory
-
-            client = mock_boto3.AWSSecretsManagerClient()
-            client.authenticate()
-
-            # After auth, is_authenticated should check STS again
-            assert client.is_authenticated() is True
-
-    def test_get_secret_string(self, mock_boto3):
+    def test_get_secret_string(self, mock_boto3, patched_boto_clients):
         """Test retrieving a string secret."""
-        mock_sm_client = MagicMock()
+        mock_sm_client, _ = patched_boto_clients
         mock_sm_client.get_secret_value.return_value = {
             "Name": "my-secret",
             "SecretString": "secret-value",
@@ -155,79 +143,33 @@ class TestAWSSecretsManagerClient:
             "VersionStages": ["AWSCURRENT"],
         }
 
-        mock_sts_client = MagicMock()
+        client = mock_boto3.AWSSecretsManagerClient()
+        client.authenticate()
 
-        with patch("boto3.client") as mock_client:
+        secret = client.get_secret("my-secret")
 
-            def client_factory(service, **kwargs):
-                """
-                Return a mocked AWS service client corresponding to the requested service name.
+        assert secret.name == "my-secret"
+        assert secret.value == "secret-value"
+        assert secret.version == "v1"
 
-                Parameters:
-                    service (str): The name of the AWS service to create a client for (e.g., "secretsmanager", "sts").
-                    **kwargs: Ignored; accepted for compatibility with boto3.client signature.
-
-                Returns:
-                    object: A mock client instance — a predefined mock for "secretsmanager" or "sts", otherwise a generic MagicMock.
-                """
-                if service == "secretsmanager":
-                    return mock_sm_client
-                elif service == "sts":
-                    return mock_sts_client
-                return MagicMock()
-
-            mock_client.side_effect = client_factory
-
-            client = mock_boto3.AWSSecretsManagerClient()
-            client.authenticate()
-
-            secret = client.get_secret("my-secret")
-
-            assert secret.name == "my-secret"
-            assert secret.value == "secret-value"
-            assert secret.version == "v1"
-
-    def test_get_secret_binary(self, mock_boto3):
+    def test_get_secret_binary(self, mock_boto3, patched_boto_clients):
         """Test retrieving a binary secret."""
-        mock_sm_client = MagicMock()
+        mock_sm_client, _ = patched_boto_clients
         mock_sm_client.get_secret_value.return_value = {
             "Name": "binary-secret",
             "SecretBinary": b"binary-data",
             "VersionId": "v1",
         }
 
-        mock_sts_client = MagicMock()
+        client = mock_boto3.AWSSecretsManagerClient()
+        client.authenticate()
 
-        with patch("boto3.client") as mock_client:
+        secret = client.get_secret("binary-secret")
+        assert secret.value == "binary-data"
 
-            def client_factory(service, **kwargs):
-                """
-                Return a mocked AWS service client corresponding to the requested service name.
-
-                Parameters:
-                    service (str): The name of the AWS service to create a client for (e.g., "secretsmanager", "sts").
-                    **kwargs: Ignored; accepted for compatibility with boto3.client signature.
-
-                Returns:
-                    object: A mock client instance — a predefined mock for "secretsmanager" or "sts", otherwise a generic MagicMock.
-                """
-                if service == "secretsmanager":
-                    return mock_sm_client
-                elif service == "sts":
-                    return mock_sts_client
-                return MagicMock()
-
-            mock_client.side_effect = client_factory
-
-            client = mock_boto3.AWSSecretsManagerClient()
-            client.authenticate()
-
-            secret = client.get_secret("binary-secret")
-            assert secret.value == "binary-data"
-
-    def test_list_secrets(self, mock_boto3):
+    def test_list_secrets(self, mock_boto3, patched_boto_clients):
         """Test listing secrets."""
-        mock_sm_client = MagicMock()
+        mock_sm_client, _ = patched_boto_clients
         mock_paginator = MagicMock()
         mock_paginator.paginate.return_value = [
             {"SecretList": [{"Name": "secret1"}, {"Name": "secret2"}]},
@@ -235,38 +177,15 @@ class TestAWSSecretsManagerClient:
         ]
         mock_sm_client.get_paginator.return_value = mock_paginator
 
-        mock_sts_client = MagicMock()
+        client = mock_boto3.AWSSecretsManagerClient()
+        client.authenticate()
 
-        with patch("boto3.client") as mock_client:
+        secrets = client.list_secrets()
+        assert secrets == ["secret1", "secret2", "secret3"]
 
-            def client_factory(service, **kwargs):
-                """
-                Return a mocked AWS service client corresponding to the requested service name.
-
-                Parameters:
-                    service (str): The name of the AWS service to create a client for (e.g., "secretsmanager", "sts").
-                    **kwargs: Ignored; accepted for compatibility with boto3.client signature.
-
-                Returns:
-                    object: A mock client instance — a predefined mock for "secretsmanager" or "sts", otherwise a generic MagicMock.
-                """
-                if service == "secretsmanager":
-                    return mock_sm_client
-                elif service == "sts":
-                    return mock_sts_client
-                return MagicMock()
-
-            mock_client.side_effect = client_factory
-
-            client = mock_boto3.AWSSecretsManagerClient()
-            client.authenticate()
-
-            secrets = client.list_secrets()
-            assert secrets == ["secret1", "secret2", "secret3"]
-
-    def test_list_secrets_with_prefix(self, mock_boto3):
+    def test_list_secrets_with_prefix(self, mock_boto3, patched_boto_clients):
         """Test listing secrets with prefix filter."""
-        mock_sm_client = MagicMock()
+        mock_sm_client, _ = patched_boto_clients
         mock_paginator = MagicMock()
         mock_paginator.paginate.return_value = [
             {
@@ -279,151 +198,59 @@ class TestAWSSecretsManagerClient:
         ]
         mock_sm_client.get_paginator.return_value = mock_paginator
 
-        mock_sts_client = MagicMock()
+        client = mock_boto3.AWSSecretsManagerClient()
+        client.authenticate()
 
-        with patch("boto3.client") as mock_client:
+        secrets = client.list_secrets(prefix="app/")
+        assert secrets == ["app/secret1", "app/secret2"]
 
-            def client_factory(service, **kwargs):
-                """
-                Return a mocked AWS service client corresponding to the requested service name.
-
-                Parameters:
-                    service (str): The name of the AWS service to create a client for (e.g., "secretsmanager", "sts").
-                    **kwargs: Ignored; accepted for compatibility with boto3.client signature.
-
-                Returns:
-                    object: A mock client instance — a predefined mock for "secretsmanager" or "sts", otherwise a generic MagicMock.
-                """
-                if service == "secretsmanager":
-                    return mock_sm_client
-                elif service == "sts":
-                    return mock_sts_client
-                return MagicMock()
-
-            mock_client.side_effect = client_factory
-
-            client = mock_boto3.AWSSecretsManagerClient()
-            client.authenticate()
-
-            secrets = client.list_secrets(prefix="app/")
-            assert secrets == ["app/secret1", "app/secret2"]
-
-    def test_create_secret(self, mock_boto3):
+    def test_create_secret(self, mock_boto3, patched_boto_clients):
         """Test creating a secret."""
-        mock_sm_client = MagicMock()
+        mock_sm_client, _ = patched_boto_clients
         mock_sm_client.create_secret.return_value = {
             "Name": "new-secret",
             "VersionId": "v1",
             "ARN": "arn:aws:...",
         }
 
-        mock_sts_client = MagicMock()
+        client = mock_boto3.AWSSecretsManagerClient()
+        client.authenticate()
 
-        with patch("boto3.client") as mock_client:
+        secret = client.create_secret("new-secret", "value", "description")
+        assert secret.name == "new-secret"
+        assert secret.value == "value"
 
-            def client_factory(service, **kwargs):
-                """
-                Return a mocked AWS service client corresponding to the requested service name.
-
-                Parameters:
-                    service (str): The name of the AWS service to create a client for (e.g., "secretsmanager", "sts").
-                    **kwargs: Ignored; accepted for compatibility with boto3.client signature.
-
-                Returns:
-                    object: A mock client instance — a predefined mock for "secretsmanager" or "sts", otherwise a generic MagicMock.
-                """
-                if service == "secretsmanager":
-                    return mock_sm_client
-                elif service == "sts":
-                    return mock_sts_client
-                return MagicMock()
-
-            mock_client.side_effect = client_factory
-
-            client = mock_boto3.AWSSecretsManagerClient()
-            client.authenticate()
-
-            secret = client.create_secret("new-secret", "value", "description")
-            assert secret.name == "new-secret"
-            assert secret.value == "value"
-
-    def test_update_secret(self, mock_boto3):
+    def test_update_secret(self, mock_boto3, patched_boto_clients):
         """Test updating a secret."""
-        mock_sm_client = MagicMock()
+        mock_sm_client, _ = patched_boto_clients
         mock_sm_client.put_secret_value.return_value = {
             "Name": "existing-secret",
             "VersionId": "v2",
             "ARN": "arn:aws:...",
         }
 
-        mock_sts_client = MagicMock()
+        client = mock_boto3.AWSSecretsManagerClient()
+        client.authenticate()
 
-        with patch("boto3.client") as mock_client:
+        secret = client.update_secret("existing-secret", "new-value")
+        assert secret.name == "existing-secret"
+        assert secret.value == "new-value"
+        assert secret.version == "v2"
 
-            def client_factory(service, **kwargs):
-                """
-                Return a mocked AWS service client corresponding to the requested service name.
-
-                Parameters:
-                    service (str): The name of the AWS service to create a client for (e.g., "secretsmanager", "sts").
-                    **kwargs: Ignored; accepted for compatibility with boto3.client signature.
-
-                Returns:
-                    object: A mock client instance — a predefined mock for "secretsmanager" or "sts", otherwise a generic MagicMock.
-                """
-                if service == "secretsmanager":
-                    return mock_sm_client
-                elif service == "sts":
-                    return mock_sts_client
-                return MagicMock()
-
-            mock_client.side_effect = client_factory
-
-            client = mock_boto3.AWSSecretsManagerClient()
-            client.authenticate()
-
-            secret = client.update_secret("existing-secret", "new-value")
-            assert secret.name == "existing-secret"
-            assert secret.value == "new-value"
-            assert secret.version == "v2"
-
-    def test_get_secret_json(self, mock_boto3):
+    def test_get_secret_json(self, mock_boto3, patched_boto_clients):
         """Test getting secret as JSON."""
-        mock_sm_client = MagicMock()
+        mock_sm_client, _ = patched_boto_clients
         mock_sm_client.get_secret_value.return_value = {
             "Name": "json-secret",
             "SecretString": '{"key": "value", "number": 42}',
             "VersionId": "v1",
         }
 
-        mock_sts_client = MagicMock()
+        client = mock_boto3.AWSSecretsManagerClient()
+        client.authenticate()
 
-        with patch("boto3.client") as mock_client:
-
-            def client_factory(service, **kwargs):
-                """
-                Return a mocked AWS service client corresponding to the requested service name.
-
-                Parameters:
-                    service (str): The name of the AWS service to create a client for (e.g., "secretsmanager", "sts").
-                    **kwargs: Ignored; accepted for compatibility with boto3.client signature.
-
-                Returns:
-                    object: A mock client instance — a predefined mock for "secretsmanager" or "sts", otherwise a generic MagicMock.
-                """
-                if service == "secretsmanager":
-                    return mock_sm_client
-                elif service == "sts":
-                    return mock_sts_client
-                return MagicMock()
-
-            mock_client.side_effect = client_factory
-
-            client = mock_boto3.AWSSecretsManagerClient()
-            client.authenticate()
-
-            data = client.get_secret_json("json-secret")
-            assert data == {"key": "value", "number": 42}
+        data = client.get_secret_json("json-secret")
+        assert data == {"key": "value", "number": 42}
 
     def test_authenticate_access_denied(self, mock_boto3):
         """AccessDenied should raise AuthenticationError."""
@@ -508,7 +335,7 @@ class TestAWSSecretsManagerClient:
             assert client.is_authenticated() is False
             assert client._client is None
 
-    def test_get_secret_not_found_raises(self, mock_boto3):
+    def test_get_secret_not_found_raises(self, mock_boto3, patched_boto_clients):
         """ResourceNotFound should raise SecretNotFoundError."""
 
         from envdrift.vault.base import SecretNotFoundError
@@ -525,80 +352,34 @@ class TestAWSSecretsManagerClient:
 
         mock_boto3.ClientError = FakeClientError
 
-        mock_sm_client = MagicMock()
+        mock_sm_client, _ = patched_boto_clients
         mock_sm_client.get_secret_value.side_effect = FakeClientError("ResourceNotFoundException")
 
-        mock_sts_client = MagicMock()
+        client = mock_boto3.AWSSecretsManagerClient()
+        client.authenticate()
 
-        with patch("boto3.client") as mock_client:
+        with pytest.raises(SecretNotFoundError):
+            client.get_secret("missing-secret")
 
-            def client_factory(service, **kwargs):
-                """
-                Return a mocked AWS service client corresponding to the requested service name.
-
-                Parameters:
-                    service (str): The name of the AWS service to create a client for (e.g., "secretsmanager", "sts").
-                    **kwargs: Ignored; accepted for compatibility with boto3.client signature.
-
-                Returns:
-                    object: A mock client instance — a predefined mock for "secretsmanager" or "sts", otherwise a generic MagicMock.
-                """
-                if service == "secretsmanager":
-                    return mock_sm_client
-                elif service == "sts":
-                    return mock_sts_client
-                return MagicMock()
-
-            mock_client.side_effect = client_factory
-
-            client = mock_boto3.AWSSecretsManagerClient()
-            client.authenticate()
-
-            with pytest.raises(SecretNotFoundError):
-                client.get_secret("missing-secret")
-
-    def test_get_secret_binary_base64_fallback(self, mock_boto3):
+    def test_get_secret_binary_base64_fallback(self, mock_boto3, patched_boto_clients):
         """Binary secrets should be base64-encoded when utf-8 decode fails."""
 
-        mock_sm_client = MagicMock()
+        mock_sm_client, _ = patched_boto_clients
         mock_sm_client.get_secret_value.return_value = {
             "Name": "binary-secret",
             "SecretBinary": b"\xff\xfe",
             "VersionId": "v1",
         }
 
-        mock_sts_client = MagicMock()
+        client = mock_boto3.AWSSecretsManagerClient()
+        client.authenticate()
 
-        with patch("boto3.client") as mock_client:
+        secret = client.get_secret("binary-secret")
+        # Should be base64 encoded ascii string
+        assert isinstance(secret.value, str)
+        assert secret.value.strip() != ""
 
-            def client_factory(service, **kwargs):
-                """
-                Return a mocked AWS service client corresponding to the requested service name.
-
-                Parameters:
-                    service (str): The name of the AWS service to create a client for (e.g., "secretsmanager", "sts").
-                    **kwargs: Ignored; accepted for compatibility with boto3.client signature.
-
-                Returns:
-                    object: A mock client instance — a predefined mock for "secretsmanager" or "sts", otherwise a generic MagicMock.
-                """
-                if service == "secretsmanager":
-                    return mock_sm_client
-                elif service == "sts":
-                    return mock_sts_client
-                return MagicMock()
-
-            mock_client.side_effect = client_factory
-
-            client = mock_boto3.AWSSecretsManagerClient()
-            client.authenticate()
-
-            secret = client.get_secret("binary-secret")
-            # Should be base64 encoded ascii string
-            assert isinstance(secret.value, str)
-            assert secret.value.strip() != ""
-
-    def test_list_secrets_error_wraps(self, mock_boto3):
+    def test_list_secrets_error_wraps(self, mock_boto3, patched_boto_clients):
         """Paginator errors should raise VaultError."""
 
         class FakeClientError(Exception):
@@ -613,80 +394,34 @@ class TestAWSSecretsManagerClient:
 
         mock_boto3.ClientError = FakeClientError
 
-        mock_sm_client = MagicMock()
+        mock_sm_client, _ = patched_boto_clients
         mock_paginator = MagicMock()
         mock_paginator.paginate.side_effect = FakeClientError()
         mock_sm_client.get_paginator.return_value = mock_paginator
 
-        mock_sts_client = MagicMock()
+        client = mock_boto3.AWSSecretsManagerClient()
+        client.authenticate()
 
-        with patch("boto3.client") as mock_client:
+        with pytest.raises(VaultError):
+            client.list_secrets()
 
-            def client_factory(service, **kwargs):
-                """
-                Return a mocked AWS service client corresponding to the requested service name.
-
-                Parameters:
-                    service (str): The name of the AWS service to create a client for (e.g., "secretsmanager", "sts").
-                    **kwargs: Ignored; accepted for compatibility with boto3.client signature.
-
-                Returns:
-                    object: A mock client instance — a predefined mock for "secretsmanager" or "sts", otherwise a generic MagicMock.
-                """
-                if service == "secretsmanager":
-                    return mock_sm_client
-                elif service == "sts":
-                    return mock_sts_client
-                return MagicMock()
-
-            mock_client.side_effect = client_factory
-
-            client = mock_boto3.AWSSecretsManagerClient()
-            client.authenticate()
-
-            with pytest.raises(VaultError):
-                client.list_secrets()
-
-    def test_get_secret_json_invalid(self, mock_boto3):
+    def test_get_secret_json_invalid(self, mock_boto3, patched_boto_clients):
         """Invalid JSON should raise VaultError."""
 
-        mock_sm_client = MagicMock()
+        mock_sm_client, _ = patched_boto_clients
         mock_sm_client.get_secret_value.return_value = {
             "Name": "json-secret",
             "SecretString": "not-json",
             "VersionId": "v1",
         }
 
-        mock_sts_client = MagicMock()
+        client = mock_boto3.AWSSecretsManagerClient()
+        client.authenticate()
 
-        with patch("boto3.client") as mock_client:
+        with pytest.raises(VaultError):
+            client.get_secret_json("json-secret")
 
-            def client_factory(service, **kwargs):
-                """
-                Return a mocked AWS service client corresponding to the requested service name.
-
-                Parameters:
-                    service (str): The name of the AWS service to create a client for (e.g., "secretsmanager", "sts").
-                    **kwargs: Ignored; accepted for compatibility with boto3.client signature.
-
-                Returns:
-                    object: A mock client instance — a predefined mock for "secretsmanager" or "sts", otherwise a generic MagicMock.
-                """
-                if service == "secretsmanager":
-                    return mock_sm_client
-                elif service == "sts":
-                    return mock_sts_client
-                return MagicMock()
-
-            mock_client.side_effect = client_factory
-
-            client = mock_boto3.AWSSecretsManagerClient()
-            client.authenticate()
-
-            with pytest.raises(VaultError):
-                client.get_secret_json("json-secret")
-
-    def test_create_secret_error_wraps(self, mock_boto3):
+    def test_create_secret_error_wraps(self, mock_boto3, patched_boto_clients):
         """Create secret errors should raise VaultError."""
 
         class FakeClientError(Exception):
@@ -701,39 +436,16 @@ class TestAWSSecretsManagerClient:
 
         mock_boto3.ClientError = FakeClientError
 
-        mock_sm_client = MagicMock()
+        mock_sm_client, _ = patched_boto_clients
         mock_sm_client.create_secret.side_effect = FakeClientError()
 
-        mock_sts_client = MagicMock()
+        client = mock_boto3.AWSSecretsManagerClient()
+        client.authenticate()
 
-        with patch("boto3.client") as mock_client:
+        with pytest.raises(VaultError):
+            client.create_secret("name", "value")
 
-            def client_factory(service, **kwargs):
-                """
-                Return a mocked AWS service client corresponding to the requested service name.
-
-                Parameters:
-                    service (str): The name of the AWS service to create a client for (e.g., "secretsmanager", "sts").
-                    **kwargs: Ignored; accepted for compatibility with boto3.client signature.
-
-                Returns:
-                    object: A mock client instance — a predefined mock for "secretsmanager" or "sts", otherwise a generic MagicMock.
-                """
-                if service == "secretsmanager":
-                    return mock_sm_client
-                elif service == "sts":
-                    return mock_sts_client
-                return MagicMock()
-
-            mock_client.side_effect = client_factory
-
-            client = mock_boto3.AWSSecretsManagerClient()
-            client.authenticate()
-
-            with pytest.raises(VaultError):
-                client.create_secret("name", "value")
-
-    def test_update_secret_error_wraps(self, mock_boto3):
+    def test_update_secret_error_wraps(self, mock_boto3, patched_boto_clients):
         """Update secret errors should raise VaultError."""
 
         class FakeClientError(Exception):
@@ -748,34 +460,11 @@ class TestAWSSecretsManagerClient:
 
         mock_boto3.ClientError = FakeClientError
 
-        mock_sm_client = MagicMock()
+        mock_sm_client, _ = patched_boto_clients
         mock_sm_client.put_secret_value.side_effect = FakeClientError()
 
-        mock_sts_client = MagicMock()
+        client = mock_boto3.AWSSecretsManagerClient()
+        client.authenticate()
 
-        with patch("boto3.client") as mock_client:
-
-            def client_factory(service, **kwargs):
-                """
-                Return a mocked AWS service client corresponding to the requested service name.
-
-                Parameters:
-                    service (str): The name of the AWS service to create a client for (e.g., "secretsmanager", "sts").
-                    **kwargs: Ignored; accepted for compatibility with boto3.client signature.
-
-                Returns:
-                    object: A mock client instance — a predefined mock for "secretsmanager" or "sts", otherwise a generic MagicMock.
-                """
-                if service == "secretsmanager":
-                    return mock_sm_client
-                elif service == "sts":
-                    return mock_sts_client
-                return MagicMock()
-
-            mock_client.side_effect = client_factory
-
-            client = mock_boto3.AWSSecretsManagerClient()
-            client.authenticate()
-
-            with pytest.raises(VaultError):
-                client.update_secret("name", "value")
+        with pytest.raises(VaultError):
+            client.update_secret("name", "value")
