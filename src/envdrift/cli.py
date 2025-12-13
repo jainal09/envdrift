@@ -320,6 +320,7 @@ def _verify_decryption_with_vault(
     vault_url: str | None,
     region: str | None,
     secret_name: str,
+    ci: bool = False,
 ) -> bool:
     """
     Verify that the env file can be decrypted with the key from vault.
@@ -330,11 +331,11 @@ def _verify_decryption_with_vault(
     import tempfile
 
     from envdrift.vault import get_vault_client
-    from envdrift.vault.base import SecretNotFoundError, VaultError
 
-    console.print()
-    console.print("[bold]Vault Key Verification[/bold]")
-    console.print(f"[dim]Provider: {provider} | Secret: {secret_name}[/dim]")
+    if not ci:
+        console.print()
+        console.print("[bold]Vault Key Verification[/bold]")
+        console.print(f"[dim]Provider: {provider} | Secret: {secret_name}[/dim]")
 
     try:
         # Create vault client
@@ -350,7 +351,8 @@ def _verify_decryption_with_vault(
         vault_client.ensure_authenticated()
 
         # Fetch private key from vault
-        console.print("[dim]Fetching private key from vault...[/dim]")
+        if not ci:
+            console.print("[dim]Fetching private key from vault...[/dim]")
         private_key = vault_client.get_secret(secret_name)
 
         if not private_key:
@@ -366,12 +368,14 @@ def _verify_decryption_with_vault(
         else:
             private_key_str = str(private_key)
 
-        console.print("[dim]Private key retrieved successfully[/dim]")
+        if not ci:
+            console.print("[dim]Private key retrieved successfully[/dim]")
 
         # Try to decrypt using the vault key
-        console.print("[dim]Testing decryption with vault key...[/dim]")
+        if not ci:
+            console.print("[dim]Testing decryption with vault key...[/dim]")
 
-        from envdrift.integrations.dotenvx import DotenvxWrapper
+        from envdrift.integrations.dotenvx import DotenvxError, DotenvxWrapper
 
         dotenvx = DotenvxWrapper()
         if not dotenvx.is_installed():
@@ -419,7 +423,7 @@ def _verify_decryption_with_vault(
                 )
                 print_success("✓ Vault key can decrypt this file - keys are in sync!")
                 return True
-            except Exception as e:
+            except DotenvxError as e:
                 print_error("✗ Vault key CANNOT decrypt this file!")
                 console.print(f"[red]Error: {e}[/red]")
                 console.print()
@@ -452,6 +456,10 @@ def _verify_decryption_with_vault(
         print_error(f"Import error: {e}")
         return False
     except Exception as e:
+        import logging
+        import traceback
+
+        logging.debug("Unexpected vault verification error:\n%s", traceback.format_exc())
         print_error(f"Unexpected error during vault verification: {e}")
         return False
 
@@ -508,6 +516,7 @@ def decrypt_cmd(
             vault_url=vault_url,
             region=vault_region,
             secret_name=vault_secret,
+            ci=ci,
         )
         if not vault_check_passed:
             raise typer.Exit(code=1)

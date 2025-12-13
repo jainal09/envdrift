@@ -356,9 +356,6 @@ class TestSyncEngineDecryptionTest:
             subprocess.CompletedProcess(["encrypt"], 0),
         ]
         monkeypatch.setattr("envdrift.sync.engine.subprocess.run", runner)
-        import envdrift.sync.engine as engine_mod
-
-        assert engine_mod.subprocess.run is runner
 
         engine = SyncEngine(
             config=SyncConfig(mappings=[mapping]), vault_client=mock_vault_client, mode=SyncMode()

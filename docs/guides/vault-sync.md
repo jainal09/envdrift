@@ -54,13 +54,13 @@ If the vault key cannot decrypt the file, it exits 1 and prints repair steps:
 3. **Encrypt changes**
 
    ```bash
-   uv run envdrift encrypt .env.production
+   envdrift encrypt .env.production
    ```
 
 4. **If drift is detected**
    - `git restore .env.production`
    - `envdrift sync --force -c pair.txt -p azure --vault-url https://myvault.vault.azure.net`
-   - `uv run envdrift encrypt .env.production`
+   - `envdrift encrypt .env.production`
 
 ## Architecture
 

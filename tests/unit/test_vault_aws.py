@@ -36,7 +36,7 @@ class TestAWSSecretsManagerClient:
             importlib.reload(aws_module)
             yield aws_module
 
-    def test_init_without_boto3_raises(self, monkeypatch):
+    def test_init_without_boto3_raises(self):
         """Client init should raise when boto3 is unavailable."""
 
         with patch.dict(

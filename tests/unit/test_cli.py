@@ -8,6 +8,7 @@ from types import SimpleNamespace
 from typer.testing import CliRunner
 
 from envdrift.cli import _verify_decryption_with_vault, app
+from envdrift.integrations.dotenvx import DotenvxError
 
 runner = CliRunner()
 
@@ -563,7 +564,7 @@ class TestVaultVerification:
         )
         monkeypatch.setattr(
             "envdrift.integrations.dotenvx.DotenvxWrapper.decrypt",
-            lambda *_, **__: (_ for _ in ()).throw(RuntimeError("bad key")),
+            lambda *_, **__: (_ for _ in ()).throw(DotenvxError("bad key")),
         )
 
         printed: list[str] = []

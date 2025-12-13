@@ -11,6 +11,7 @@
 [![Ruff](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/ruff/main/assets/badge/v2.json)](https://github.com/astral-sh/ruff)
 [![Pyrefly](https://img.shields.io/badge/types-pyrefly-blue)](https://github.com/facebook/pyrefly)
 [![codecov](https://codecov.io/gh/jainal09/envdrift/graph/badge.svg)](https://codecov.io/gh/jainal09/envdrift)
+[![SLOC](https://sloc.xyz/github/jainal09/envdrift)](https://sloc.xyz/github/jainal09/envdrift)
 
 **Prevent environment variable drift between dev, staging, and production.**
 
