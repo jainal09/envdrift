@@ -411,6 +411,7 @@ def _verify_decryption_with_vault(
             # Copy env file and write a dedicated .env.keys containing only the vault key
             tmp_path.write_text(env_file.read_text())
             tmp_keys_path.write_text(f"{key_var_name}={actual_private_key}\n")
+            tmp_keys_path.chmod(0o600)  # Restrict key file to the current user
 
             try:
                 dotenvx.decrypt(
