@@ -25,7 +25,7 @@ envdrift decrypt .env.production --verify-vault --ci \
 If the vault key cannot decrypt the file, it exits 1 and prints repair steps:
 
 1. `git restore .env.production`
-2. `envdrift sync --force -c pair.txt -p azure --vault-url https://myvault.vault.azure.net`
+2. `envdrift sync --force` (auto-discovers envdrift.toml; add `-c envdrift.toml` or provider flags only if you need to override)
 3. `envdrift encrypt .env.production`
 
 ## Team workflow (day to day)
@@ -46,7 +46,9 @@ If the vault key cannot decrypt the file, it exits 1 and prints repair steps:
 2. **Pull keys locally**
 
    ```bash
-   envdrift sync --force -c pair.txt -p azure --vault-url https://myvault.vault.azure.net
+   envdrift sync --force          # auto-discovers envdrift.toml
+   # or pin the config explicitly:
+   envdrift sync --force -c envdrift.toml
    ```
 
    This writes `.env.keys` for dotenvx (never commit this file).
@@ -59,7 +61,7 @@ If the vault key cannot decrypt the file, it exits 1 and prints repair steps:
 
 4. **If drift is detected**
    - `git restore .env.production`
-   - `envdrift sync --force -c pair.txt -p azure --vault-url https://myvault.vault.azure.net`
+   - `envdrift sync --force` (-c envdrift.toml if auto-discovery doesn’t find the file)
    - `envdrift encrypt .env.production`
 
 ## Architecture
@@ -110,13 +112,29 @@ pip install envdrift[vault]
 
 ### 2. Create a configuration file
 
-Create `pair.txt` in your project root:
+Preferred: `envdrift.toml` in your project root:
 
-```text
-# Format: secret-name=folder-path
-myapp-dotenvx-key=services/myapp
-auth-service-dotenvx-key=services/auth
+```toml
+[vault]
+provider = "azure"  # or aws/hashicorp
+
+[vault.azure]
+vault_url = "https://my-keyvault.vault.azure.net/"
+
+[vault.sync]
+default_vault_name = "my-keyvault"
+
+[[vault.sync.mappings]]
+secret_name = "myapp-dotenvx-key"
+folder_path = "services/myapp"
+
+[[vault.sync.mappings]]
+secret_name = "auth-service-dotenvx-key"
+folder_path = "services/auth"
+environment = "staging"
 ```
+
+Legacy (still supported): `pair.txt` with `secret-name=folder-path` lines. Use only when you can’t add TOML.
 
 ### 3. Store your keys in the vault
 
@@ -146,15 +164,15 @@ vault kv put secret/myapp-dotenvx-key \
 
 ### 4. Sync keys locally
 
+Auto-discovery finds `envdrift.toml` (or `[tool.envdrift]` in `pyproject.toml`) in your project tree.
+Add `-c envdrift.toml` when running outside the repo root or if you want CI to pin the exact file.
+
 ```bash
-# Azure
-envdrift sync -c pair.txt -p azure --vault-url https://my-keyvault.vault.azure.net/
+# Auto-discovery (Azure/AWS/HashiCorp)
+envdrift sync
 
-# AWS
-envdrift sync -c pair.txt -p aws --region us-east-1
-
-# HashiCorp
-envdrift sync -c pair.txt -p hashicorp --vault-url http://localhost:8200
+# Explicit path when auto-discovery isn’t available
+envdrift sync -c envdrift.toml
 ```
 
 ## Provider Setup
@@ -203,11 +221,8 @@ az keyvault set-policy \
 #### Example
 
 ```bash
-# Login
 az login
-
-# Sync
-envdrift sync -c pair.txt -p azure --vault-url https://my-keyvault.vault.azure.net/
+envdrift sync
 ```
 
 ### AWS Secrets Manager
@@ -263,8 +278,8 @@ No configuration needed - automatically uses instance profile.
 # Configure credentials
 aws configure
 
-# Sync
-envdrift sync -c pair.txt -p aws --region us-east-1
+# Sync (region/provider can live in envdrift.toml; auto-discovered)
+envdrift sync
 ```
 
 ### HashiCorp Vault
@@ -305,29 +320,20 @@ path "secret/data/*" {
 vault login
 
 # Sync
-envdrift sync -c pair.txt -p hashicorp --vault-url http://localhost:8200
+envdrift sync
 ```
 
 ## Configuration
 
-### Simple Format (pair.txt)
-
-```text
-# Comments start with #
-secret-name=folder-path
-
-# Multiple services
-myapp-dotenvx-key=services/myapp
-auth-service-key=services/auth-service
-api-gateway-key=services/api
-
-# With explicit vault name (Azure)
-production-vault/prod-key=services/prod
-```
-
-### TOML Format (envdrift.toml)
+### TOML Format (envdrift.toml) — recommended
 
 ```toml
+[vault]
+provider = "azure"
+
+[vault.azure]
+vault_url = "https://my-keyvault.vault.azure.net/"
+
 [vault.sync]
 default_vault_name = "my-keyvault"
 env_keys_filename = ".env.keys"
@@ -346,6 +352,23 @@ secret_name = "prod-key"
 folder_path = "services/prod"
 vault_name = "production-vault"  # Override default
 ```
+
+### Legacy Format (pair.txt)
+
+```text
+# Comments start with #
+secret-name=folder-path
+
+# Multiple services
+myapp-dotenvx-key=services/myapp
+auth-service-key=services/auth-service
+api-gateway-key=services/api
+
+# With explicit vault name (Azure)
+production-vault/prod-key=services/prod
+```
+
+`pair.txt` remains supported for backwards compatibility, but TOML is preferred because it stores provider defaults and mappings together.
 
 ## CI/CD Integration
 
@@ -374,9 +397,7 @@ jobs:
 
       - name: Sync encryption keys
         run: |
-          envdrift sync -c pair.txt -p azure \
-            --vault-url ${{ secrets.VAULT_URL }} \
-            --force --ci
+          envdrift sync --force --ci
 
       - name: Decrypt environment files
         run: envdrift decrypt .env.production
@@ -415,8 +436,7 @@ jobs:
 
       - name: Sync and verify keys
         run: |
-          envdrift sync -c pair.txt -p aws \
-            --check-decryption --ci
+          envdrift sync --check-decryption --ci
 ```
 
 ### GitLab CI
@@ -426,7 +446,7 @@ deploy:
   image: python:3.11
   script:
     - pip install envdrift[azure]
-    - envdrift sync -c pair.txt -p azure --vault-url $VAULT_URL --force --ci
+    - envdrift sync --force --ci
     - envdrift decrypt .env.production
     - ./deploy.sh
   variables:
@@ -455,10 +475,21 @@ deploy:
      --value "$(grep DOTENV_PRIVATE_KEY_PRODUCTION .env.keys | cut -d'=' -f2)"
    ```
 
-3. **Create pair.txt:**
+3. **Create envdrift.toml:**
 
-   ```text
-   myapp-dotenvx-key=.
+   ```toml
+   [vault]
+   provider = "azure"
+
+   [vault.azure]
+   vault_url = "https://my-keyvault.vault.azure.net/"
+
+   [vault.sync]
+   default_vault_name = "my-keyvault"
+
+   [[vault.sync.mappings]]
+   secret_name = "myapp-dotenvx-key"
+   folder_path = "."
    ```
 
 4. **Add .env.keys to .gitignore:**
@@ -467,10 +498,10 @@ deploy:
    .env.keys
    ```
 
-5. **Commit encrypted .env files:**
+5. **Commit encrypted .env files and config:**
 
    ```bash
-   git add .env.production pair.txt
+   git add .env.production envdrift.toml
    git commit -m "Add encrypted environment"
    ```
 
@@ -481,7 +512,7 @@ deploy:
 3. Run sync:
 
    ```bash
-   envdrift sync -c pair.txt -p azure --vault-url https://my-keyvault.vault.azure.net/
+   envdrift sync
    ```
 
 4. Decrypt for local development:
@@ -510,7 +541,7 @@ deploy:
 3. Team syncs:
 
    ```bash
-   envdrift sync -c pair.txt -p azure --vault-url $URL --force
+   envdrift sync --force
    ```
 
 ## Troubleshooting
@@ -575,7 +606,7 @@ Verify your identity has required permissions:
 Use `--verify` to check without modifying:
 
 ```bash
-envdrift sync -c pair.txt -p azure --vault-url $URL --verify
+envdrift sync --verify
 ```
 
 This shows what would change without making modifications.

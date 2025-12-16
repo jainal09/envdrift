@@ -15,61 +15,58 @@ The `sync` command fetches `DOTENV_PRIVATE_KEY_*` secrets from cloud vaults and 
 This enables secure key distribution without committing keys to source control. Keys are stored in cloud vaults (Azure Key Vault, AWS Secrets Manager,
 or HashiCorp Vault) and synced to local development environments or CI/CD pipelines.
 
+If `--config` is omitted, envdrift auto-discovers `envdrift.toml` or a `pyproject.toml` with `[tool.envdrift]` in the current directory tree.
+
 Supported vault providers:
 
 - **Azure Key Vault** - Microsoft Azure's secret management service
 - **AWS Secrets Manager** - Amazon Web Services secret storage
 - **HashiCorp Vault** - Open-source secrets management
 
+Auto-discovery usually supplies provider, vault URL, and region from your config file.
+Pass CLI flags when you need to override those defaults or when using legacy `pair.txt`, and use `-c` to pin a specific config file (common in CI).
+
 ## Options
 
 ### `--config`, `-c`
 
-Path to sync configuration file (pair.txt format). **Required.**
+Path to sync configuration file (TOML preferred; legacy `pair.txt` still supported). Optional when auto-discovery finds `envdrift.toml` or `pyproject.toml`
+(with `[tool.envdrift]`).
 
 ```bash
+# Preferred: TOML with provider + mappings (auto-discovered, so -c is optional)
+envdrift sync
+
+# Explicit path if needed
+envdrift sync --config envdrift.toml
+
+# Legacy: pair.txt (requires provider flags)
 envdrift sync --config pair.txt -p azure --vault-url https://myvault.vault.azure.net/
 ```
 
 ### `--provider`, `-p`
 
-Vault provider to use. **Required.**
+Vault provider to use. Required when the config doesn’t include a provider (e.g., legacy `pair.txt`); optional otherwise. Use this to override TOML defaults.
 
 Options: `azure`, `aws`, `hashicorp`
 
-```bash
-envdrift sync -c pair.txt --provider azure --vault-url https://myvault.vault.azure.net/
-envdrift sync -c pair.txt --provider aws --region us-west-2
-envdrift sync -c pair.txt --provider hashicorp --vault-url http://localhost:8200
-```
+TOML configs usually include the provider; pass `--provider` to override.
 
 ### `--vault-url`
 
 Vault URL. **Required for Azure and HashiCorp.**
 
-```bash
-# Azure Key Vault
-envdrift sync -c pair.txt -p azure --vault-url https://myvault.vault.azure.net/
-
-# HashiCorp Vault
-envdrift sync -c pair.txt -p hashicorp --vault-url http://localhost:8200
-```
+Only required when using legacy configs or overriding the TOML defaults.
 
 ### `--region`
 
 AWS region for Secrets Manager. Default: `us-east-1`.
 
-```bash
-envdrift sync -c pair.txt -p aws --region us-west-2
-```
+Only required when using legacy configs or overriding the TOML defaults.
 
 ### `--verify`
 
 Check only mode. Reports differences without modifying files.
-
-```bash
-envdrift sync -c pair.txt -p azure --vault-url $URL --verify
-```
 
 Use this in CI/CD to verify keys are in sync without making changes.
 
@@ -77,17 +74,9 @@ Use this in CI/CD to verify keys are in sync without making changes.
 
 Force update all mismatches without prompting.
 
-```bash
-envdrift sync -c pair.txt -p azure --vault-url $URL --force
-```
-
 ### `--check-decryption`
 
 After syncing, verify that the keys can decrypt `.env` files.
-
-```bash
-envdrift sync -c pair.txt -p azure --vault-url $URL --check-decryption
-```
 
 This tests actual decryption using dotenvx to ensure keys are valid.
 
@@ -95,37 +84,49 @@ This tests actual decryption using dotenvx to ensure keys are valid.
 
 Run schema validation after sync.
 
-```bash
-envdrift sync -c pair.txt -p azure --vault-url $URL --validate-schema --schema config.settings:Settings
-```
-
 ### `--schema`, `-s`
 
 Schema path for validation (used with `--validate-schema`).
-
-```bash
-envdrift sync -c pair.txt -p azure --vault-url $URL --validate-schema -s config.settings:Settings
-```
 
 ### `--service-dir`, `-d`
 
 Service directory for schema imports.
 
-```bash
-envdrift sync -c pair.txt -p azure --vault-url $URL --validate-schema -s config.settings:Settings -d ./backend
-```
-
 ### `--ci`
 
 CI mode. Exit with code 1 on any errors.
 
-```bash
-envdrift sync -c pair.txt -p azure --vault-url $URL --verify --ci
-```
-
 ## Configuration File Format
 
-### Simple Format (pair.txt)
+### TOML Format (recommended)
+
+In `envdrift.toml`:
+
+```toml
+[vault]
+provider = "azure"  # azure | aws | hashicorp
+
+[vault.azure]
+vault_url = "https://my-keyvault.vault.azure.net/"
+
+[vault.sync]
+default_vault_name = "my-keyvault"
+env_keys_filename = ".env.keys"
+
+[[vault.sync.mappings]]
+secret_name = "myapp-key"
+folder_path = "services/myapp"
+
+[[vault.sync.mappings]]
+secret_name = "auth-service-key"
+folder_path = "services/auth"
+vault_name = "other-vault"  # Override default
+environment = "staging"     # Use DOTENV_PRIVATE_KEY_STAGING
+```
+
+Place the file in the project root so auto-discovery finds it; pass `-c envdrift.toml` in CI to pin the exact file.
+
+### Legacy Format (pair.txt)
 
 ```text
 # Secret name = folder path
@@ -142,65 +143,53 @@ myvault/api-service-key=services/api
 - Empty lines are ignored
 - Whitespace is trimmed
 
-### TOML Format
-
-In `envdrift.toml`:
-
-```toml
-[vault.sync]
-default_vault_name = "my-keyvault"
-env_keys_filename = ".env.keys"
-
-[[vault.sync.mappings]]
-secret_name = "myapp-key"
-folder_path = "services/myapp"
-
-[[vault.sync.mappings]]
-secret_name = "auth-service-key"
-folder_path = "services/auth"
-vault_name = "other-vault"  # Override default
-environment = "staging"     # Use DOTENV_PRIVATE_KEY_STAGING
-```
+`pair.txt` is still supported, but TOML is recommended for new setups because it captures provider defaults and mappings together.
 
 ## Examples
 
 ### Azure Key Vault
 
 ```bash
-# Basic sync
-envdrift sync -c pair.txt -p azure --vault-url https://myvault.vault.azure.net/
+# Basic sync (provider + url in envdrift.toml)
+envdrift sync -c envdrift.toml
+
+# Override provider/url on the CLI if needed
+envdrift sync -c envdrift.toml -p azure --vault-url https://myvault.vault.azure.net/
 
 # Force update
-envdrift sync -c pair.txt -p azure --vault-url https://myvault.vault.azure.net/ --force
+envdrift sync -c envdrift.toml --force
 
 # Verify mode (CI)
-envdrift sync -c pair.txt -p azure --vault-url $VAULT_URL --verify --ci
+envdrift sync -c envdrift.toml --verify --ci
 ```
 
 ### AWS Secrets Manager
 
 ```bash
-# Default region (us-east-1)
-envdrift sync -c pair.txt -p aws
+# Default region (from TOML)
+envdrift sync -c envdrift.toml
 
-# Specific region
-envdrift sync -c pair.txt -p aws --region us-west-2
+# Override region
+envdrift sync -c envdrift.toml --region us-west-2
 
 # CI mode with decryption check
-envdrift sync -c pair.txt -p aws --region us-west-2 --check-decryption --ci
+envdrift sync -c envdrift.toml --check-decryption --ci
 ```
 
 ### HashiCorp Vault
 
 ```bash
 # Basic sync
-envdrift sync -c pair.txt -p hashicorp --vault-url http://localhost:8200
+envdrift sync -c envdrift.toml
 
 # Production
-envdrift sync -c pair.txt -p hashicorp --vault-url https://vault.example.com --verify
+envdrift sync -c envdrift.toml --verify
 ```
 
 ### CI/CD Integration
+
+These snippets pin `-c envdrift.toml` so CI runs use the intended config even if the working directory differs.
+If your pipeline runs at the repo root and auto-discovery is reliable, you can omit `-c`.
 
 #### GitHub Actions
 
@@ -219,9 +208,7 @@ jobs:
       - name: Sync encryption keys
         run: |
           pip install envdrift[azure]
-          envdrift sync -c pair.txt -p azure \
-            --vault-url ${{ secrets.VAULT_URL }} \
-            --check-decryption --ci
+          envdrift sync -c envdrift.toml --check-decryption --ci
 ```
 
 #### AWS with OIDC
@@ -245,7 +232,7 @@ jobs:
       - name: Sync encryption keys
         run: |
           pip install envdrift[aws]
-          envdrift sync -c pair.txt -p aws --check-decryption --ci
+          envdrift sync -c envdrift.toml --check-decryption --ci
 ```
 
 ## Modes
