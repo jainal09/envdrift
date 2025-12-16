@@ -836,7 +836,7 @@ def sync(
             envdrift_config = load_config(config_path)
         except tomllib.TOMLDecodeError as e:
             print_error(f"TOML syntax error in {config_path}: {e}")
-            raise typer.Exit(code=1)
+            raise typer.Exit(code=1) from None
         except ConfigNotFoundError:
             pass
     elif config_file is None:
