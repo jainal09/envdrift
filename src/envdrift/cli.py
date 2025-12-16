@@ -821,30 +821,45 @@ def sync(
     from envdrift.output.rich import print_service_sync_status, print_sync_result
     from envdrift.sync.config import SyncConfig, SyncConfigError
 
-    # Try to load project config for defaults
+    # Determine config source for defaults:
+    # 1. If --config points to a TOML file, use it for defaults
+    # 2. Otherwise, use auto-discovery (find_config)
+    # Note: skip discovery when --config is provided (e.g., pair.txt) to avoid
+    # pulling defaults from unrelated projects.
     envdrift_config = None
-    config_path = find_config()
-    if config_path:
+    config_path = None
+
+    if config_file is not None and config_file.suffix.lower() == ".toml":
+        # Use the explicitly provided TOML file for defaults
+        config_path = config_file
         with contextlib.suppress(ConfigNotFoundError, tomllib.TOMLDecodeError):
             envdrift_config = load_config(config_path)
+    elif config_file is None:
+        # Auto-discover config from envdrift.toml or pyproject.toml
+        config_path = find_config()
+        if config_path:
+            with contextlib.suppress(ConfigNotFoundError, tomllib.TOMLDecodeError):
+                envdrift_config = load_config(config_path)
+
+    vault_config = getattr(envdrift_config, "vault", None)
 
     # Determine effective provider (CLI overrides config)
-    effective_provider = provider
-    if effective_provider is None and envdrift_config:
-        effective_provider = envdrift_config.vault.provider
+    effective_provider = provider or getattr(vault_config, "provider", None)
 
     # Determine effective vault URL (CLI overrides config)
     effective_vault_url = vault_url
-    if effective_vault_url is None and envdrift_config:
+    if effective_vault_url is None and vault_config:
         if effective_provider == "azure":
-            effective_vault_url = envdrift_config.vault.azure_vault_url
+            effective_vault_url = getattr(vault_config, "azure_vault_url", None)
         elif effective_provider == "hashicorp":
-            effective_vault_url = envdrift_config.vault.hashicorp_url
+            effective_vault_url = getattr(vault_config, "hashicorp_url", None)
 
     # Determine effective region (CLI overrides config)
     effective_region = region
-    if effective_region is None and envdrift_config:
-        effective_region = envdrift_config.vault.aws_region
+    if effective_region is None and vault_config:
+        effective_region = getattr(vault_config, "aws_region", None)
+
+    vault_sync = getattr(vault_config, "sync", None)
 
     # Load sync config from file or project config
     sync_config: SyncConfig | None = None
@@ -865,7 +880,7 @@ def sync(
         except SyncConfigError as e:
             print_error(f"Invalid config file: {e}")
             raise typer.Exit(code=1) from None
-    elif envdrift_config and envdrift_config.vault.sync.mappings:
+    elif vault_sync and vault_sync.mappings:
         # Use mappings from project config
         from envdrift.sync.config import ServiceMapping
 
@@ -877,10 +892,10 @@ def sync(
                     vault_name=m.vault_name,
                     environment=m.environment,
                 )
-                for m in envdrift_config.vault.sync.mappings
+                for m in vault_sync.mappings
             ],
-            default_vault_name=envdrift_config.vault.sync.default_vault_name,
-            env_keys_filename=envdrift_config.vault.sync.env_keys_filename,
+            default_vault_name=vault_sync.default_vault_name,
+            env_keys_filename=vault_sync.env_keys_filename,
         )
     elif config_path and config_path.suffix.lower() == ".toml":
         # Try to load sync config from discovered TOML
