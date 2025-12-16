@@ -25,7 +25,7 @@ envdrift decrypt .env.production --verify-vault --ci \
 If the vault key cannot decrypt the file, it exits 1 and prints repair steps:
 
 1. `git restore .env.production`
-2. `envdrift sync --force -c envdrift.toml` (or add `-p/--vault-url` to override)
+2. `envdrift sync --force` (auto-discovers envdrift.toml; add `-c envdrift.toml` or provider flags only if you need to override)
 3. `envdrift encrypt .env.production`
 
 ## Team workflow (day to day)
@@ -46,6 +46,8 @@ If the vault key cannot decrypt the file, it exits 1 and prints repair steps:
 2. **Pull keys locally**
 
    ```bash
+   envdrift sync --force          # auto-discovers envdrift.toml
+   # or pin the config explicitly:
    envdrift sync --force -c envdrift.toml
    ```
 
@@ -59,7 +61,7 @@ If the vault key cannot decrypt the file, it exits 1 and prints repair steps:
 
 4. **If drift is detected**
    - `git restore .env.production`
-   - `envdrift sync --force -c envdrift.toml`
+   - `envdrift sync --force` (-c envdrift.toml if auto-discovery doesn’t find the file)
    - `envdrift encrypt .env.production`
 
 ## Architecture
@@ -162,15 +164,15 @@ vault kv put secret/myapp-dotenvx-key \
 
 ### 4. Sync keys locally
 
+Auto-discovery finds `envdrift.toml` (or `[tool.envdrift]` in `pyproject.toml`) in your project tree.
+Add `-c envdrift.toml` when running outside the repo root or if you want CI to pin the exact file.
+
 ```bash
-# Azure (auto-discovers envdrift.toml; add -c if needed)
+# Auto-discovery (Azure/AWS/HashiCorp)
 envdrift sync
 
-# AWS
-envdrift sync
-
-# HashiCorp
-envdrift sync
+# Explicit path when auto-discovery isn’t available
+envdrift sync -c envdrift.toml
 ```
 
 ## Provider Setup

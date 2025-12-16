@@ -23,6 +23,9 @@ Supported vault providers:
 - **AWS Secrets Manager** - Amazon Web Services secret storage
 - **HashiCorp Vault** - Open-source secrets management
 
+Auto-discovery usually supplies provider, vault URL, and region from your config file.
+Pass CLI flags when you need to override those defaults or when using legacy `pair.txt`, and use `-c` to pin a specific config file (common in CI).
+
 ## Options
 
 ### `--config`, `-c`
@@ -65,21 +68,15 @@ Only required when using legacy configs or overriding the TOML defaults.
 
 Check only mode. Reports differences without modifying files.
 
-Combine with TOML configs to avoid repeating provider details.
-
 Use this in CI/CD to verify keys are in sync without making changes.
 
 ### `--force`, `-f`
 
 Force update all mismatches without prompting.
 
-Combine with TOML configs to avoid repeating provider details.
-
 ### `--check-decryption`
 
 After syncing, verify that the keys can decrypt `.env` files.
-
-Combine with TOML configs to avoid repeating provider details.
 
 This tests actual decryption using dotenvx to ensure keys are valid.
 
@@ -87,25 +84,17 @@ This tests actual decryption using dotenvx to ensure keys are valid.
 
 Run schema validation after sync.
 
-Combine with TOML configs to avoid repeating provider details.
-
 ### `--schema`, `-s`
 
 Schema path for validation (used with `--validate-schema`).
-
-Combine with TOML configs to avoid repeating provider details.
 
 ### `--service-dir`, `-d`
 
 Service directory for schema imports.
 
-Combine with TOML configs to avoid repeating provider details.
-
 ### `--ci`
 
 CI mode. Exit with code 1 on any errors.
-
-Combine with TOML configs to avoid repeating provider details.
 
 ## Configuration File Format
 
@@ -135,7 +124,7 @@ vault_name = "other-vault"  # Override default
 environment = "staging"     # Use DOTENV_PRIVATE_KEY_STAGING
 ```
 
-Place the file in the project root so `envdrift sync -c envdrift.toml` picks up provider defaults and mappings in one place.
+Place the file in the project root so auto-discovery finds it; pass `-c envdrift.toml` in CI to pin the exact file.
 
 ### Legacy Format (pair.txt)
 
@@ -198,6 +187,9 @@ envdrift sync -c envdrift.toml --verify
 ```
 
 ### CI/CD Integration
+
+These snippets pin `-c envdrift.toml` so CI runs use the intended config even if the working directory differs.
+If your pipeline runs at the repo root and auto-discovery is reliable, you can omit `-c`.
 
 #### GitHub Actions
 
