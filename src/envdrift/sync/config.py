@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import tomllib
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -134,3 +135,50 @@ class SyncConfig:
     def get_effective_vault_name(self, mapping: ServiceMapping) -> str | None:
         """Get the effective vault name for a mapping (mapping override or default)."""
         return mapping.vault_name or self.default_vault_name
+
+    @classmethod
+    def from_toml_file(cls, path: Path) -> SyncConfig:
+        """
+        Load sync config from a TOML file.
+
+        Supports both standalone TOML files with [vault.sync] section
+        and pyproject.toml with [tool.envdrift.vault.sync] section.
+
+        Format:
+            [vault.sync]
+            default_vault_name = "my-keyvault"
+            env_keys_filename = ".env.keys"
+
+            [[vault.sync.mappings]]
+            secret_name = "myapp-key"
+            folder_path = "services/myapp"
+            vault_name = "other-vault"  # Optional
+            environment = "staging"     # Optional
+        """
+        if not path.exists():
+            raise SyncConfigError(f"Config file not found: {path}")
+
+        try:
+            with path.open("rb") as f:
+                data = tomllib.load(f)
+        except tomllib.TOMLDecodeError as e:
+            raise SyncConfigError(f"Invalid TOML syntax: {e}") from e
+
+        # Handle pyproject.toml with [tool.envdrift] structure
+        if path.name == "pyproject.toml":
+            tool_config = data.get("tool", {}).get("envdrift", {})
+            sync_data = tool_config.get("vault", {}).get("sync", {})
+        else:
+            # Standalone envdrift.toml or sync.toml
+            sync_data = data.get("vault", {}).get("sync", {})
+            # Also support top-level sync section for dedicated sync config files
+            if not sync_data and "mappings" in data:
+                sync_data = data
+
+        if not sync_data:
+            raise SyncConfigError(
+                f"No sync configuration found in {path}. "
+                "Expected [vault.sync] section with [[vault.sync.mappings]]"
+            )
+
+        return cls.from_toml(sync_data)

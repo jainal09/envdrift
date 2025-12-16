@@ -9,6 +9,25 @@ from typing import Any
 
 
 @dataclass
+class SyncMappingConfig:
+    """Sync mapping configuration for vault key synchronization."""
+
+    secret_name: str
+    folder_path: str
+    vault_name: str | None = None
+    environment: str = "production"
+
+
+@dataclass
+class SyncConfig:
+    """Sync-specific configuration."""
+
+    mappings: list[SyncMappingConfig] = field(default_factory=list)
+    default_vault_name: str | None = None
+    env_keys_filename: str = ".env.keys"
+
+
+@dataclass
 class VaultConfig:
     """Vault-specific configuration."""
 
@@ -17,6 +36,7 @@ class VaultConfig:
     aws_region: str = "us-east-1"
     hashicorp_url: str | None = None
     mappings: dict[str, str] = field(default_factory=dict)
+    sync: SyncConfig = field(default_factory=SyncConfig)
 
 
 @dataclass
@@ -80,6 +100,23 @@ class EnvdriftConfig:
             secret_patterns=validation_section.get("secret_patterns", []),
         )
 
+        # Build sync config from vault.sync section
+        sync_section = vault_section.get("sync", {})
+        sync_mappings = [
+            SyncMappingConfig(
+                secret_name=m["secret_name"],
+                folder_path=m["folder_path"],
+                vault_name=m.get("vault_name"),
+                environment=m.get("environment", "production"),
+            )
+            for m in sync_section.get("mappings", [])
+        ]
+        sync_config = SyncConfig(
+            mappings=sync_mappings,
+            default_vault_name=sync_section.get("default_vault_name"),
+            env_keys_filename=sync_section.get("env_keys_filename", ".env.keys"),
+        )
+
         # Build vault config
         vault = VaultConfig(
             provider=vault_section.get("provider", "azure"),
@@ -87,6 +124,7 @@ class EnvdriftConfig:
             aws_region=vault_section.get("aws", {}).get("region", "us-east-1"),
             hashicorp_url=vault_section.get("hashicorp", {}).get("url"),
             mappings=vault_section.get("mappings", {}),
+            sync=sync_config,
         )
 
         # Build precommit config
@@ -272,10 +310,22 @@ region = "us-east-1"
 url = "https://vault.example.com:8200"
 # token from VAULT_TOKEN env var
 
-# Key mappings: vault_secret_name -> local_path
-[vault.mappings]
-"myapp-dotenvx-key" = "."
-"service2-dotenvx-key" = "services/service2"
+# Sync configuration for `envdrift sync` command
+[vault.sync]
+default_vault_name = "my-keyvault"
+env_keys_filename = ".env.keys"
+
+# Map vault secrets to local service directories
+[[vault.sync.mappings]]
+secret_name = "myapp-dotenvx-key"
+folder_path = "."
+environment = "production"
+
+[[vault.sync.mappings]]
+secret_name = "service2-dotenvx-key"
+folder_path = "services/service2"
+vault_name = "other-vault"  # Optional: override default vault
+environment = "staging"
 
 [precommit]
 # Files to validate on commit

@@ -743,7 +743,11 @@ repos:
 def sync(
     config_file: Annotated[
         Path | None,
-        typer.Option("--config", "-c", help="Path to sync config file (pair.txt format)"),
+        typer.Option(
+            "--config",
+            "-c",
+            help="Path to sync config file (TOML or legacy pair.txt format)",
+        ),
     ] = None,
     provider: Annotated[
         str | None,
@@ -793,69 +797,138 @@ def sync(
     AWS Secrets Manager, HashiCorp Vault) and syncs them to local service
     directories for dotenvx decryption.
 
+    Configuration can be provided via:
+    - TOML: pyproject.toml [tool.envdrift.vault.sync] or envdrift.toml [vault.sync]
+    - Legacy: pair.txt file with secret=folder format
+
     Examples:
-        # Azure Key Vault
+        # Auto-discover config from pyproject.toml or envdrift.toml
+        envdrift sync
+
+        # TOML config file
+        envdrift sync -c envdrift.toml
+
+        # Legacy pair.txt format
         envdrift sync -c pair.txt -p azure --vault-url https://myvault.vault.azure.net/
 
-        # AWS Secrets Manager
-        envdrift sync -c pair.txt -p aws --region us-west-2
-
-        # HashiCorp Vault
-        envdrift sync -c pair.txt -p hashicorp --vault-url http://localhost:8200
-
         # Verify mode (CI)
-        envdrift sync -c pair.txt -p azure --vault-url $URL --verify --ci
+        envdrift sync --verify --ci
     """
+    import contextlib
+
+    from envdrift.config import find_config, load_config
     from envdrift.output.rich import print_service_sync_status, print_sync_result
+    from envdrift.sync.config import SyncConfig, SyncConfigError
 
-    # Validate required options
-    if config_file is None:
-        print_error("--config is required. Example: --config pair.txt")
+    # Try to load project config for defaults
+    envdrift_config = None
+    config_path = find_config()
+    if config_path:
+        with contextlib.suppress(Exception):
+            envdrift_config = load_config(config_path)
+
+    # Determine effective provider (CLI overrides config)
+    effective_provider = provider
+    if effective_provider is None and envdrift_config:
+        effective_provider = envdrift_config.vault.provider
+
+    # Determine effective vault URL (CLI overrides config)
+    effective_vault_url = vault_url
+    if effective_vault_url is None and envdrift_config:
+        if effective_provider == "azure":
+            effective_vault_url = envdrift_config.vault.azure_vault_url
+        elif effective_provider == "hashicorp":
+            effective_vault_url = envdrift_config.vault.hashicorp_url
+
+    # Determine effective region (CLI overrides config)
+    effective_region = region
+    if effective_region is None and envdrift_config:
+        effective_region = envdrift_config.vault.aws_region
+
+    # Load sync config from file or project config
+    sync_config: SyncConfig | None = None
+
+    if config_file is not None:
+        # Explicit config file provided
+        if not config_file.exists():
+            print_error(f"Config file not found: {config_file}")
+            raise typer.Exit(code=1)
+
+        try:
+            # Detect format by extension
+            if config_file.suffix.lower() == ".toml":
+                sync_config = SyncConfig.from_toml_file(config_file)
+            else:
+                # Legacy pair.txt format
+                sync_config = SyncConfig.from_file(config_file)
+        except SyncConfigError as e:
+            print_error(f"Invalid config file: {e}")
+            raise typer.Exit(code=1) from None
+    elif envdrift_config and envdrift_config.vault.sync.mappings:
+        # Use mappings from project config
+        from pathlib import Path as PathLib
+
+        from envdrift.sync.config import ServiceMapping
+
+        sync_config = SyncConfig(
+            mappings=[
+                ServiceMapping(
+                    secret_name=m.secret_name,
+                    folder_path=PathLib(m.folder_path),
+                    vault_name=m.vault_name,
+                    environment=m.environment,
+                )
+                for m in envdrift_config.vault.sync.mappings
+            ],
+            default_vault_name=envdrift_config.vault.sync.default_vault_name,
+            env_keys_filename=envdrift_config.vault.sync.env_keys_filename,
+        )
+    elif config_path and config_path.suffix.lower() == ".toml":
+        # Try to load sync config from discovered TOML
+        with contextlib.suppress(SyncConfigError):
+            sync_config = SyncConfig.from_toml_file(config_path)
+
+    if sync_config is None or not sync_config.mappings:
+        print_error(
+            "No sync configuration found. Provide one of:\n"
+            "  --config <file.toml>  TOML config with [vault.sync] section\n"
+            "  --config <pair.txt>   Legacy format: secret=folder\n"
+            "  [tool.envdrift.vault.sync] section in pyproject.toml"
+        )
         raise typer.Exit(code=1)
 
-    if provider is None:
-        print_error("--provider is required. Options: azure, aws, hashicorp")
-        raise typer.Exit(code=1)
-
-    if not config_file.exists():
-        print_error(f"Config file not found: {config_file}")
+    # Validate provider is set
+    if effective_provider is None:
+        print_error(
+            "--provider is required (or set [vault] provider in config). "
+            "Options: azure, aws, hashicorp"
+        )
         raise typer.Exit(code=1)
 
     # Validate provider-specific options
-    if provider == "azure" and not vault_url:
-        print_error("Azure provider requires --vault-url")
+    if effective_provider == "azure" and not effective_vault_url:
+        print_error("Azure provider requires --vault-url " "(or [vault.azure] vault_url in config)")
         raise typer.Exit(code=1)
 
-    if provider == "hashicorp" and not vault_url:
-        print_error("HashiCorp provider requires --vault-url")
+    if effective_provider == "hashicorp" and not effective_vault_url:
+        print_error(
+            "HashiCorp provider requires --vault-url " "(or [vault.hashicorp] url in config)"
+        )
         raise typer.Exit(code=1)
-
-    # Load sync config
-    try:
-        from envdrift.sync.config import SyncConfig, SyncConfigError
-
-        sync_config = SyncConfig.from_file(config_file)
-    except SyncConfigError as e:
-        print_error(f"Invalid config file: {e}")
-        raise typer.Exit(code=1) from None
-
-    if not sync_config.mappings:
-        print_warning("No service mappings found in config file")
-        return
 
     # Create vault client
     try:
         from envdrift.vault import get_vault_client
 
         vault_kwargs: dict = {}
-        if provider == "azure":
-            vault_kwargs["vault_url"] = vault_url
-        elif provider == "aws":
-            vault_kwargs["region"] = region or "us-east-1"
-        elif provider == "hashicorp":
-            vault_kwargs["url"] = vault_url
+        if effective_provider == "azure":
+            vault_kwargs["vault_url"] = effective_vault_url
+        elif effective_provider == "aws":
+            vault_kwargs["region"] = effective_region or "us-east-1"
+        elif effective_provider == "hashicorp":
+            vault_kwargs["url"] = effective_vault_url
 
-        vault_client = get_vault_client(provider, **vault_kwargs)
+        vault_client = get_vault_client(effective_provider, **vault_kwargs)
     except ImportError as e:
         print_error(str(e))
         raise typer.Exit(code=1) from None
@@ -899,7 +972,9 @@ def sync(
     console.print()
     mode_str = "VERIFY" if verify else ("FORCE" if force else "Interactive")
     console.print(f"[bold]Vault Sync[/bold] - Mode: {mode_str}")
-    console.print(f"[dim]Provider: {provider} | Services: {len(sync_config.mappings)}[/dim]")
+    console.print(
+        f"[dim]Provider: {effective_provider} | Services: {len(sync_config.mappings)}[/dim]"
+    )
     console.print()
 
     # Run sync

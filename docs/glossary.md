@@ -93,13 +93,25 @@ Variables defined as required in the schema but not present in the `.env` file. 
 
 ## P
 
-### pair.txt
+### pair.txt (Legacy)
 
-A configuration file format for the `sync` command that maps vault secret names to local folder paths:
+A legacy configuration file format for the `sync` command. **Deprecated**: Use TOML configuration instead.
 
 ```text
 secret-name=folder-path
 vault-name/secret-name=folder-path
+```
+
+For modern projects, configure sync mappings in `pyproject.toml` or `envdrift.toml`:
+
+```toml
+[vault.sync]
+default_vault_name = "my-keyvault"
+
+[[vault.sync.mappings]]
+secret_name = "myapp-dotenvx-key"
+folder_path = "."
+environment = "production"
 ```
 
 ### Plaintext Secret
@@ -148,6 +160,33 @@ The directory added to Python's import path when loading a schema. Specified wit
 The process of fetching encryption keys from a cloud vault and updating local `.env.keys` files. See [sync command](cli/sync.md).
 
 ## T
+
+### TOML Configuration
+
+envdrift supports configuration via TOML files. Configuration is auto-discovered from:
+
+1. `envdrift.toml` in project root
+2. `pyproject.toml` with `[tool.envdrift]` section
+
+Example configuration:
+
+```toml
+[tool.envdrift]
+schema = "config.settings:ProductionSettings"
+
+[tool.envdrift.vault]
+provider = "azure"
+
+[tool.envdrift.vault.azure]
+vault_url = "https://my-vault.vault.azure.net/"
+
+[tool.envdrift.vault.sync]
+default_vault_name = "my-keyvault"
+
+[[tool.envdrift.vault.sync.mappings]]
+secret_name = "myapp-key"
+folder_path = "."
+```
 
 ### Type Error
 
