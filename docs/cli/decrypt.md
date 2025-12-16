@@ -35,8 +35,8 @@ envdrift decrypt .env.production
 ### Verify vault key (drift detection, no decryption performed)
 
 ```bash
+# Provider/vault can come from envdrift.toml (auto-discovered) or be overridden:
 envdrift decrypt .env.production --verify-vault --ci \
-  -p azure --vault-url https://myvault.vault.azure.net \
   --secret myapp-dotenvx-key
 ```
 
@@ -139,7 +139,7 @@ When using `--verify-vault`, a wrong key returns exit 1 with a message like:
 ...
 To fix:
   1. Restore the encrypted file: git restore .env.production
-  2. Restore vault key locally: envdrift sync --force -c pair.txt -p azure --vault-url https://...
+  2. Restore vault key locally: envdrift sync --force (-c envdrift.toml if not auto-discovered)
   3. Re-encrypt with the vault key: envdrift encrypt .env.production
 ```
 
