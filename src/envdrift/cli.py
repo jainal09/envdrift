@@ -815,8 +815,9 @@ def sync(
         envdrift sync --verify --ci
     """
     import contextlib
+    import tomllib
 
-    from envdrift.config import find_config, load_config
+    from envdrift.config import ConfigNotFoundError, find_config, load_config
     from envdrift.output.rich import print_service_sync_status, print_sync_result
     from envdrift.sync.config import SyncConfig, SyncConfigError
 
@@ -824,7 +825,7 @@ def sync(
     envdrift_config = None
     config_path = find_config()
     if config_path:
-        with contextlib.suppress(Exception):
+        with contextlib.suppress(ConfigNotFoundError, tomllib.TOMLDecodeError):
             envdrift_config = load_config(config_path)
 
     # Determine effective provider (CLI overrides config)
@@ -866,15 +867,13 @@ def sync(
             raise typer.Exit(code=1) from None
     elif envdrift_config and envdrift_config.vault.sync.mappings:
         # Use mappings from project config
-        from pathlib import Path as PathLib
-
         from envdrift.sync.config import ServiceMapping
 
         sync_config = SyncConfig(
             mappings=[
                 ServiceMapping(
                     secret_name=m.secret_name,
-                    folder_path=PathLib(m.folder_path),
+                    folder_path=Path(m.folder_path),
                     vault_name=m.vault_name,
                     environment=m.environment,
                 )
