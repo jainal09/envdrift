@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import tomllib
 from pathlib import Path
+from textwrap import dedent
 from types import SimpleNamespace
 
 from typer.testing import CliRunner
@@ -953,3 +955,267 @@ class TestSyncCommand:
         )
 
         assert result.exit_code == 1
+
+    def test_sync_autodiscovery_uses_config_defaults(self, monkeypatch, tmp_path: Path):
+        """Auto-discovered envdrift.toml should supply provider, vault URL, and mappings."""
+
+        config_file = tmp_path / "envdrift.toml"
+        config_file.write_text(
+            dedent(
+                """
+                [vault]
+                provider = "azure"
+
+                [vault.azure]
+                vault_url = "https://example.vault.azure.net/"
+
+                [vault.sync]
+                default_vault_name = "main"
+                env_keys_filename = ".env.keys"
+
+                [[vault.sync.mappings]]
+                secret_name = "dotenv-key"
+                folder_path = "services/api"
+                environment = "production"
+                """
+            )
+        )
+
+        monkeypatch.chdir(tmp_path)
+        captured: dict[str, object] = {}
+
+        monkeypatch.setattr(
+            "envdrift.vault.get_vault_client",
+            lambda *_args, **_kwargs: SimpleNamespace(ensure_authenticated=lambda: None),
+        )
+        monkeypatch.setattr("envdrift.output.rich.print_service_sync_status", lambda *_, **__: None)
+        monkeypatch.setattr("envdrift.output.rich.print_sync_result", lambda *_, **__: None)
+
+        class DummyEngine:
+            def __init__(self, config, vault_client, mode, prompt_callback, progress_callback):
+                captured["config"] = config
+
+            def sync_all(self):
+                return SimpleNamespace(services=[], has_errors=False)
+
+        monkeypatch.setattr("envdrift.sync.engine.SyncEngine", DummyEngine)
+
+        result = runner.invoke(app, ["sync"])
+
+        assert result.exit_code == 0
+        sync_config = captured["config"]
+        assert sync_config.default_vault_name == "main"
+        assert sync_config.env_keys_filename == ".env.keys"
+        assert sync_config.mappings[0].secret_name == "dotenv-key"
+        assert sync_config.mappings[0].folder_path == Path("services/api")
+
+    def test_sync_config_file_toml_supplies_defaults(self, monkeypatch, tmp_path: Path):
+        """Explicit TOML config should supply provider defaults when CLI flags are absent."""
+
+        config_file = tmp_path / "sync.toml"
+        config_file.write_text(
+            dedent(
+                """
+                [vault]
+                provider = "aws"
+
+                [vault.aws]
+                region = "eu-west-2"
+
+                [vault.sync]
+                default_vault_name = "aws-vault"
+                env_keys_filename = "keys.env"
+
+                [[vault.sync.mappings]]
+                secret_name = "dotenv-key"
+                folder_path = "services/api"
+                vault_name = "aws-vault"
+                """
+            )
+        )
+
+        captured: dict[str, object] = {}
+
+        def fake_get_vault_client(provider, **kwargs):
+            captured["provider"] = provider
+            captured["kwargs"] = kwargs
+            return SimpleNamespace(ensure_authenticated=lambda: None)
+
+        monkeypatch.setattr("envdrift.vault.get_vault_client", fake_get_vault_client)
+        monkeypatch.setattr("envdrift.output.rich.print_service_sync_status", lambda *_, **__: None)
+        monkeypatch.setattr("envdrift.output.rich.print_sync_result", lambda *_, **__: None)
+
+        class DummyEngine:
+            def __init__(self, config, vault_client, mode, prompt_callback, progress_callback):
+                captured["config"] = config
+
+            def sync_all(self):
+                return SimpleNamespace(services=[], has_errors=False)
+
+        monkeypatch.setattr("envdrift.sync.engine.SyncEngine", DummyEngine)
+
+        result = runner.invoke(app, ["sync", "-c", str(config_file)])
+
+        assert result.exit_code == 0
+        assert captured["provider"] == "aws"
+        assert captured["kwargs"]["region"] == "eu-west-2"
+        sync_config = captured["config"]
+        assert sync_config.env_keys_filename == "keys.env"
+        assert sync_config.default_vault_name == "aws-vault"
+        assert sync_config.mappings[0].vault_name == "aws-vault"
+
+    def test_sync_falls_back_to_sync_config_when_load_config_fails(
+        self, monkeypatch, tmp_path: Path
+    ):
+        """If config loading fails, still attempt to read sync config from the TOML path."""
+
+        config_file = tmp_path / "envdrift.toml"
+        config_file.write_text(
+            dedent(
+                """
+                [vault.sync]
+                default_vault_name = "fallback"
+
+                [[vault.sync.mappings]]
+                secret_name = "dotenv-key"
+                folder_path = "services/api"
+                """
+            )
+        )
+
+        def broken_load_config(*_args, **_kwargs):
+            raise tomllib.TOMLDecodeError("boom", "", 0)
+
+        monkeypatch.setattr("envdrift.config.find_config", lambda *_args, **_kwargs: config_file)
+        monkeypatch.setattr("envdrift.config.load_config", broken_load_config)
+        monkeypatch.setattr(
+            "envdrift.vault.get_vault_client",
+            lambda *_args, **_kwargs: SimpleNamespace(ensure_authenticated=lambda: None),
+        )
+        monkeypatch.setattr("envdrift.output.rich.print_service_sync_status", lambda *_, **__: None)
+        monkeypatch.setattr("envdrift.output.rich.print_sync_result", lambda *_, **__: None)
+
+        captured: dict[str, object] = {}
+
+        class DummyEngine:
+            def __init__(self, config, vault_client, mode, prompt_callback, progress_callback):
+                captured["config"] = config
+
+            def sync_all(self):
+                return SimpleNamespace(services=[], has_errors=False)
+
+        monkeypatch.setattr("envdrift.sync.engine.SyncEngine", DummyEngine)
+
+        result = runner.invoke(
+            app,
+            [
+                "sync",
+                "-p",
+                "azure",
+                "--vault-url",
+                "https://example.vault.azure.net/",
+            ],
+        )
+
+        assert result.exit_code == 0
+        assert captured["config"].default_vault_name == "fallback"
+
+    def test_sync_missing_config_file_errors(self, tmp_path: Path):
+        """Missing provided config file should exit with error."""
+
+        missing_file = tmp_path / "nope.toml"
+
+        result = runner.invoke(app, ["sync", "-c", str(missing_file), "-p", "aws"])
+
+        assert result.exit_code == 1
+        assert "not found" in result.output.lower()
+
+    def test_sync_requires_vault_url_for_hashicorp(self, tmp_path: Path):
+        """HashiCorp provider must supply --vault-url."""
+
+        config_file = tmp_path / "pair.txt"
+        config_file.write_text("secret=service")
+
+        result = runner.invoke(app, ["sync", "-c", str(config_file), "-p", "hashicorp"])
+
+        assert result.exit_code == 1
+        assert "vault-url" in result.output.lower()
+
+    def test_sync_autodiscovery_hashicorp_defaults(self, monkeypatch, tmp_path: Path):
+        """HashiCorp provider and URL should be read from discovered config."""
+
+        config_file = tmp_path / "envdrift.toml"
+        config_file.write_text(
+            dedent(
+                """
+                [vault]
+                provider = "hashicorp"
+
+                [vault.hashicorp]
+                url = "http://localhost:8200"
+
+                [vault.sync]
+                default_vault_name = "hc"
+
+                [[vault.sync.mappings]]
+                secret_name = "dotenv-key"
+                folder_path = "services/api"
+                """
+            )
+        )
+
+        monkeypatch.chdir(tmp_path)
+        captured: dict[str, object] = {}
+
+        def fake_get_vault_client(provider, **kwargs):
+            captured["provider"] = provider
+            captured["kwargs"] = kwargs
+            return SimpleNamespace(ensure_authenticated=lambda: None)
+
+        monkeypatch.setattr("envdrift.vault.get_vault_client", fake_get_vault_client)
+        monkeypatch.setattr("envdrift.output.rich.print_service_sync_status", lambda *_, **__: None)
+        monkeypatch.setattr("envdrift.output.rich.print_sync_result", lambda *_, **__: None)
+
+        class DummyEngine:
+            def __init__(self, config, vault_client, mode, prompt_callback, progress_callback):
+                captured["config"] = config
+
+            def sync_all(self):
+                return SimpleNamespace(services=[], has_errors=False)
+
+        monkeypatch.setattr("envdrift.sync.engine.SyncEngine", DummyEngine)
+
+        result = runner.invoke(app, ["sync"])
+
+        assert result.exit_code == 0
+        assert captured["provider"] == "hashicorp"
+        assert captured["kwargs"]["url"] == "http://localhost:8200"
+        assert captured["config"].default_vault_name == "hc"
+
+    def test_sync_invalid_toml_config_errors(self, monkeypatch, tmp_path: Path):
+        """Invalid TOML sync config should raise a SyncConfigError."""
+
+        bad_config = tmp_path / "bad.toml"
+        bad_config.write_text(
+            dedent(
+                """
+                [vault.sync]
+
+                [[vault.sync.mappings]]
+                # missing secret_name
+                folder_path = "services/api"
+                """
+            )
+        )
+
+        def skip_load_config(*_args, **_kwargs):
+            from envdrift.config import ConfigNotFoundError
+
+            raise ConfigNotFoundError("skip load for test")
+
+        monkeypatch.setattr("envdrift.config.load_config", skip_load_config)
+
+        result = runner.invoke(app, ["sync", "-c", str(bad_config), "-p", "aws"])
+
+        assert result.exit_code == 1
+        assert "invalid config file" in result.output.lower()

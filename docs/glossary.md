@@ -20,6 +20,14 @@ Amazon Web Services' secrets management service. envdrift supports syncing encry
 
 Pydantic's base class for settings management. envdrift validates `.env` files against classes that inherit from `pydantic_settings.BaseSettings`.
 
+## C
+
+### Contributing
+
+How to set up a dev environment and run required checks. Install deps with `make dev`, enable pre-commit hooks
+(`uv run pre-commit install` or `envdrift hook --install`), and run `make check` before opening a PR.
+See the full guide: [Guides ➜ Contributing](guides/contributing.md).
+
 ## D
 
 ### Dotenvx
