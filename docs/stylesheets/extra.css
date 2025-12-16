@@ -1,0 +1,72 @@
+/* Custom brand colors for Material theme */
+:root {
+  --md-primary-fg-color: #8a2345;
+  --md-primary-fg-color--light: #a83a5e;
+  --md-primary-fg-color--dark: #641a32;
+  --md-primary-bg-color: #ffffff;
+
+  --md-accent-fg-color: #e91e63; /* Material pink 500 */
+  --md-accent-fg-color--light: #f06292;
+  --md-accent-fg-color--dark: #ad1457;
+}
+
+[data-md-color-scheme="slate"] {
+  --md-primary-fg-color: #8a2345;
+  --md-primary-fg-color--light: #a83a5e;
+  --md-primary-fg-color--dark: #641a32;
+  --md-primary-bg-color: #0f1115;
+
+  --md-accent-fg-color: #e91e63;
+  --md-accent-fg-color--light: #f06292;
+  --md-accent-fg-color--dark: #ad1457;
+}
+
+/* Keep navbar text legible by using the primary color for highlights only */
+[data-md-color-scheme="default"] .md-header .md-nav__link,
+[data-md-color-scheme="default"] .md-header .md-nav__title,
+[data-md-color-scheme="default"] .md-header .md-tabs__link {
+  color: #ffffff;
+}
+
+[data-md-color-scheme="default"] .md-header .md-nav__link--active,
+[data-md-color-scheme="default"] .md-header .md-nav__item--active > .md-nav__link,
+[data-md-color-scheme="default"] .md-header .md-tabs__link--active {
+  color: #e91e63;
+}
+
+[data-md-color-scheme="default"] .md-nav--primary .md-nav__link,
+[data-md-color-scheme="default"] .md-nav--primary .md-nav__title {
+  color: inherit;
+}
+
+[data-md-color-scheme="default"] .md-nav--primary .md-nav__link--active,
+[data-md-color-scheme="default"] .md-nav--primary .md-nav__item--active > .md-nav__link {
+  color: var(--md-primary-fg-color);
+}
+
+[data-md-color-scheme="slate"] .md-header,
+[data-md-color-scheme="slate"] .md-tabs {
+  color: #e5e7eb; /* light gray for contrast on dark */
+}
+
+[data-md-color-scheme="slate"] .md-header .md-nav__link,
+[data-md-color-scheme="slate"] .md-header .md-nav__title,
+[data-md-color-scheme="slate"] .md-header .md-tabs__link {
+  color: #e5e7eb;
+}
+
+[data-md-color-scheme="slate"] .md-header .md-nav__link--active,
+[data-md-color-scheme="slate"] .md-header .md-nav__item--active > .md-nav__link,
+[data-md-color-scheme="slate"] .md-header .md-tabs__link--active {
+  color: #e91e63;
+}
+
+[data-md-color-scheme="slate"] .md-nav--primary .md-nav__link,
+[data-md-color-scheme="slate"] .md-nav--primary .md-nav__title {
+  color: inherit;
+}
+
+[data-md-color-scheme="slate"] .md-nav--primary .md-nav__link--active,
+[data-md-color-scheme="slate"] .md-nav--primary .md-nav__item--active > .md-nav__link {
+  color: var(--md-primary-fg-color);
+}

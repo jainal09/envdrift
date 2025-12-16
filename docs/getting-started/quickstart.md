@@ -94,6 +94,6 @@ Add the output to your `.pre-commit-config.yaml`.
 
 ## Next Steps
 
-- [CLI Reference](../reference/cli.md) - All available commands
+- [CLI Reference] (../cli/index.md) - All available commands
 - [Schema Best Practices](../guides/schema.md) - How to structure your settings
 - [CI/CD Integration](../guides/cicd.md) - Add to your pipeline
