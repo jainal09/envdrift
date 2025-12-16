@@ -54,6 +54,7 @@ nav:
     - Encryption: guides/encryption.md
     - Vault Sync: guides/vault-sync.md
     - Releasing: guides/releasing.md
+    - Contributing: guides/contributing.md
   - Reference:
     - Python API: reference/api.md
 

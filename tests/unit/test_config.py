@@ -257,3 +257,123 @@ strict_extra = false
         assert config.schema == "myapp.settings:Config"
         assert config.validation.check_encryption is True
         assert config.validation.strict_extra is False
+
+
+class TestSyncConfig:
+    """Tests for SyncConfig and SyncMappingConfig dataclasses."""
+
+    def test_sync_mapping_config_defaults(self):
+        """Test default SyncMappingConfig values."""
+        from envdrift.config import SyncMappingConfig
+
+        mapping = SyncMappingConfig(secret_name="test-key", folder_path=".")
+        assert mapping.secret_name == "test-key"
+        assert mapping.folder_path == "."
+        assert mapping.vault_name is None
+        assert mapping.environment == "production"
+
+    def test_sync_mapping_config_custom(self):
+        """Test SyncMappingConfig with custom values."""
+        from envdrift.config import SyncMappingConfig
+
+        mapping = SyncMappingConfig(
+            secret_name="api-key",
+            folder_path="services/api",
+            vault_name="other-vault",
+            environment="staging",
+        )
+        assert mapping.secret_name == "api-key"
+        assert mapping.folder_path == "services/api"
+        assert mapping.vault_name == "other-vault"
+        assert mapping.environment == "staging"
+
+    def test_sync_config_defaults(self):
+        """Test default SyncConfig values."""
+        from envdrift.config import SyncConfig
+
+        config = SyncConfig()
+        assert config.mappings == []
+        assert config.default_vault_name is None
+        assert config.env_keys_filename == ".env.keys"
+
+    def test_vault_config_with_sync(self):
+        """Test VaultConfig includes SyncConfig."""
+        config = VaultConfig()
+        assert hasattr(config, "sync")
+        assert config.sync.mappings == []
+        assert config.sync.default_vault_name is None
+
+    def test_from_dict_with_sync_mappings(self):
+        """Test from_dict parses vault.sync section."""
+        data = {
+            "vault": {
+                "provider": "azure",
+                "azure": {"vault_url": "https://test.vault.azure.net"},
+                "sync": {
+                    "default_vault_name": "my-vault",
+                    "env_keys_filename": ".env.keys.custom",
+                    "mappings": [
+                        {
+                            "secret_name": "app-key",
+                            "folder_path": "services/app",
+                            "environment": "production",
+                        },
+                        {
+                            "secret_name": "api-key",
+                            "folder_path": "services/api",
+                            "vault_name": "other-vault",
+                            "environment": "staging",
+                        },
+                    ],
+                },
+            },
+        }
+        config = EnvdriftConfig.from_dict(data)
+
+        assert config.vault.sync.default_vault_name == "my-vault"
+        assert config.vault.sync.env_keys_filename == ".env.keys.custom"
+        assert len(config.vault.sync.mappings) == 2
+
+        first_mapping = config.vault.sync.mappings[0]
+        assert first_mapping.secret_name == "app-key"
+        assert first_mapping.folder_path == "services/app"
+        assert first_mapping.vault_name is None
+        assert first_mapping.environment == "production"
+
+        second_mapping = config.vault.sync.mappings[1]
+        assert second_mapping.secret_name == "api-key"
+        assert second_mapping.vault_name == "other-vault"
+        assert second_mapping.environment == "staging"
+
+    def test_load_config_with_sync_from_toml(self, tmp_path: Path):
+        """Test load_config parses sync mappings from TOML file."""
+        config_file = tmp_path / "envdrift.toml"
+        config_file.write_text("""
+[vault]
+provider = "azure"
+
+[vault.azure]
+vault_url = "https://test.vault.azure.net"
+
+[vault.sync]
+default_vault_name = "test-vault"
+
+[[vault.sync.mappings]]
+secret_name = "myapp-key"
+folder_path = "."
+environment = "production"
+
+[[vault.sync.mappings]]
+secret_name = "service-key"
+folder_path = "services/backend"
+vault_name = "backend-vault"
+environment = "staging"
+""")
+
+        config = load_config(config_file)
+        assert config.vault.provider == "azure"
+        assert config.vault.azure_vault_url == "https://test.vault.azure.net"
+        assert config.vault.sync.default_vault_name == "test-vault"
+        assert len(config.vault.sync.mappings) == 2
+        assert config.vault.sync.mappings[0].secret_name == "myapp-key"
+        assert config.vault.sync.mappings[1].vault_name == "backend-vault"

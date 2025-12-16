@@ -257,3 +257,108 @@ class TestSyncConfigEffectiveVaultName:
         result = config.get_effective_vault_name(mapping)
 
         assert result is None
+
+
+class TestSyncConfigFromTomlFile:
+    """Tests for SyncConfig.from_toml_file()."""
+
+    def test_from_toml_file_envdrift_toml(self, tmp_path: Path) -> None:
+        """Test loading from envdrift.toml with [vault.sync] section."""
+        config_file = tmp_path / "envdrift.toml"
+        config_file.write_text("""
+[vault.sync]
+default_vault_name = "my-vault"
+env_keys_filename = ".env.keys"
+
+[[vault.sync.mappings]]
+secret_name = "app-key"
+folder_path = "services/app"
+environment = "production"
+
+[[vault.sync.mappings]]
+secret_name = "api-key"
+folder_path = "services/api"
+vault_name = "other-vault"
+environment = "staging"
+""")
+
+        config = SyncConfig.from_toml_file(config_file)
+
+        assert config.default_vault_name == "my-vault"
+        assert config.env_keys_filename == ".env.keys"
+        assert len(config.mappings) == 2
+        assert config.mappings[0].secret_name == "app-key"
+        assert config.mappings[1].vault_name == "other-vault"
+
+    def test_from_toml_file_pyproject_toml(self, tmp_path: Path) -> None:
+        """Test loading from pyproject.toml with [tool.envdrift.vault.sync] section."""
+        config_file = tmp_path / "pyproject.toml"
+        config_file.write_text("""
+[tool.envdrift.vault.sync]
+default_vault_name = "pyproject-vault"
+
+[[tool.envdrift.vault.sync.mappings]]
+secret_name = "test-key"
+folder_path = "."
+""")
+
+        config = SyncConfig.from_toml_file(config_file)
+
+        assert config.default_vault_name == "pyproject-vault"
+        assert len(config.mappings) == 1
+        assert config.mappings[0].secret_name == "test-key"
+
+    def test_from_toml_file_standalone_sync_toml(self, tmp_path: Path) -> None:
+        """Test loading from standalone sync.toml with top-level mappings."""
+        config_file = tmp_path / "sync.toml"
+        config_file.write_text("""
+default_vault_name = "standalone-vault"
+
+[[mappings]]
+secret_name = "standalone-key"
+folder_path = "."
+""")
+
+        config = SyncConfig.from_toml_file(config_file)
+
+        assert config.default_vault_name == "standalone-vault"
+        assert len(config.mappings) == 1
+        assert config.mappings[0].secret_name == "standalone-key"
+
+    def test_from_toml_file_not_found(self, tmp_path: Path) -> None:
+        """Test error when TOML file not found."""
+        config_file = tmp_path / "nonexistent.toml"
+
+        with pytest.raises(SyncConfigError, match="Config file not found"):
+            SyncConfig.from_toml_file(config_file)
+
+    def test_from_toml_file_invalid_syntax(self, tmp_path: Path) -> None:
+        """Test error on invalid TOML syntax."""
+        config_file = tmp_path / "invalid.toml"
+        config_file.write_text("this is not valid [ toml")
+
+        with pytest.raises(SyncConfigError, match="Invalid TOML syntax"):
+            SyncConfig.from_toml_file(config_file)
+
+    def test_from_toml_file_no_sync_section(self, tmp_path: Path) -> None:
+        """Test error when no sync section found."""
+        config_file = tmp_path / "empty.toml"
+        config_file.write_text("""
+[vault]
+provider = "azure"
+""")
+
+        with pytest.raises(SyncConfigError, match="No sync configuration found"):
+            SyncConfig.from_toml_file(config_file)
+
+    def test_from_toml_file_missing_required_field(self, tmp_path: Path) -> None:
+        """Test error when required field missing in mapping."""
+        config_file = tmp_path / "missing.toml"
+        config_file.write_text("""
+[vault.sync]
+[[vault.sync.mappings]]
+folder_path = "."
+""")
+
+        with pytest.raises(SyncConfigError, match="Missing 'secret_name'"):
+            SyncConfig.from_toml_file(config_file)
