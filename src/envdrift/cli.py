@@ -814,7 +814,6 @@ def sync(
         # Verify mode (CI)
         envdrift sync --verify --ci
     """
-    import contextlib
     import tomllib
 
     from envdrift.config import ConfigNotFoundError, find_config, load_config
@@ -908,8 +907,10 @@ def sync(
         )
     elif config_path and config_path.suffix.lower() == ".toml":
         # Try to load sync config from discovered TOML
-        with contextlib.suppress(SyncConfigError):
+        try:
             sync_config = SyncConfig.from_toml_file(config_path)
+        except SyncConfigError as e:
+            print_warning(f"Could not load sync config from {config_path}: {e}")
 
     if sync_config is None or not sync_config.mappings:
         print_error(
