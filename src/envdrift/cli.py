@@ -832,14 +832,23 @@ def sync(
     if config_file is not None and config_file.suffix.lower() == ".toml":
         # Use the explicitly provided TOML file for defaults
         config_path = config_file
-        with contextlib.suppress(ConfigNotFoundError, tomllib.TOMLDecodeError):
+        try:
             envdrift_config = load_config(config_path)
+        except tomllib.TOMLDecodeError as e:
+            print_error(f"TOML syntax error in {config_path}: {e}")
+            raise typer.Exit(code=1)
+        except ConfigNotFoundError:
+            pass
     elif config_file is None:
         # Auto-discover config from envdrift.toml or pyproject.toml
         config_path = find_config()
         if config_path:
-            with contextlib.suppress(ConfigNotFoundError, tomllib.TOMLDecodeError):
+            try:
                 envdrift_config = load_config(config_path)
+            except ConfigNotFoundError:
+                pass
+            except tomllib.TOMLDecodeError as e:
+                print_warning(f"TOML syntax error in {config_path}: {e}")
 
     vault_config = getattr(envdrift_config, "vault", None)
 

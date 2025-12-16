@@ -1219,3 +1219,45 @@ class TestSyncCommand:
 
         assert result.exit_code == 1
         assert "invalid config file" in result.output.lower()
+
+    def test_sync_reports_toml_syntax_error_for_explicit_config(self, tmp_path: Path):
+        """Explicit TOML config with syntax errors should surface a user-facing error."""
+
+        bad_config = tmp_path / "bad.toml"
+        bad_config.write_text("invalid = [")
+
+        result = runner.invoke(
+            app,
+            [
+                "sync",
+                "-c",
+                str(bad_config),
+                "-p",
+                "aws",
+            ],
+        )
+
+        assert result.exit_code == 1
+        assert "toml syntax error" in result.output.lower()
+
+    def test_sync_warns_on_autodiscovered_toml_syntax_error(self, monkeypatch, tmp_path: Path):
+        """Auto-discovery should warn about TOML syntax errors instead of silently skipping."""
+
+        bad_config = tmp_path / "envdrift.toml"
+        bad_config.write_text("bad = [")
+
+        monkeypatch.chdir(tmp_path)
+
+        result = runner.invoke(
+            app,
+            [
+                "sync",
+                "-p",
+                "azure",
+                "--vault-url",
+                "https://example.vault.azure.net/",
+            ],
+        )
+
+        assert result.exit_code == 1
+        assert "toml syntax error" in result.output.lower()
