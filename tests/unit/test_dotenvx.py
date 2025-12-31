@@ -267,6 +267,21 @@ class TestGetVenvBinDir:
             assert result == tmp_path / "AppData" / "Roaming" / "Python" / "Scripts"
             assert result.exists()  # Should be created
 
+    def test_raises_when_no_appdata_on_windows(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        """Test raises RuntimeError on Windows when APPDATA is not set."""
+        monkeypatch.delenv("VIRTUAL_ENV", raising=False)
+        monkeypatch.delenv("APPDATA", raising=False)
+        monkeypatch.chdir(tmp_path)
+
+        with (
+            patch("sys.path", ["C:\\Python313\\Lib\\site-packages"]),
+            patch("platform.system", return_value="Windows"),
+            pytest.raises(RuntimeError, match="APPDATA"),
+        ):
+            get_venv_bin_dir()
+
 
 class TestGetDotenvxPath:
     """Tests for get_dotenvx_path function."""

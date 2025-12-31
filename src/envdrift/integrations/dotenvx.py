@@ -161,11 +161,14 @@ def get_venv_bin_dir() -> Path:
                 if platform.system() == "Windows":
                     # Windows: site-packages -> Lib -> tool_venv
                     tool_venv = p.parent.parent
-                    return tool_venv / "Scripts"
+                    bin_dir = tool_venv / "Scripts"
                 else:
                     # Linux: site-packages -> pythonX.Y -> lib -> tool_venv
                     tool_venv = p.parent.parent.parent
-                    return tool_venv / "bin"
+                    bin_dir = tool_venv / "bin"
+                # Validate path exists before returning
+                if bin_dir.parent.exists():
+                    return bin_dir
 
     # Default to creating in current directory's .venv
     cwd_venv = Path.cwd() / ".venv"
@@ -189,9 +192,11 @@ def get_venv_bin_dir() -> Path:
         user_bin.mkdir(parents=True, exist_ok=True)
         return user_bin
 
+    # Only reachable on Windows when APPDATA is not set
     raise RuntimeError(
         "Cannot find virtual environment or user bin directory. "
-        "Please activate a virtual environment or create one with: python -m venv .venv"
+        "On Windows, ensure the APPDATA environment variable is set, "
+        "or activate a virtual environment with: python -m venv .venv"
     )
 
 
