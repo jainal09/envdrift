@@ -188,6 +188,12 @@ class ConcreteVaultClient(VaultClient):
     def authenticate(self) -> None:
         self._authenticated = True
 
+    def set_secret(self, name: str, value: str) -> SecretValue:
+        if not self._authenticated:
+            raise AuthenticationError("Not authenticated")
+        self._secrets[name] = value
+        return SecretValue(name=name, value=value)
+
 
 class TestVaultClientBase:
     """Tests for VaultClient base class methods."""

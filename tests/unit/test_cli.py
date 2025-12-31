@@ -1261,3 +1261,184 @@ class TestSyncCommand:
 
         assert result.exit_code == 1
         assert "toml syntax error" in result.output.lower()
+
+
+class TestVaultPushCommand:
+    """Tests for vault-push command."""
+
+    def test_vault_push_requires_provider(self, tmp_path: Path):
+        """vault-push should require a provider."""
+        result = runner.invoke(
+            app,
+            ["vault-push", str(tmp_path), "secret-name", "--env", "soak"],
+        )
+        assert result.exit_code == 1
+        assert "provider required" in result.output.lower()
+
+    def test_vault_push_requires_vault_url_for_azure(self, tmp_path: Path):
+        """vault-push should require vault URL for azure provider."""
+        result = runner.invoke(
+            app,
+            [
+                "vault-push",
+                str(tmp_path),
+                "secret-name",
+                "--env",
+                "soak",
+                "-p",
+                "azure",
+            ],
+        )
+        assert result.exit_code == 1
+        assert "vault-url required" in result.output.lower()
+
+    def test_vault_push_normal_mode_requires_all_args(self, tmp_path: Path):
+        """Normal mode requires folder, secret-name, and --env."""
+        result = runner.invoke(
+            app,
+            [
+                "vault-push",
+                str(tmp_path),
+                "-p",
+                "aws",
+            ],
+        )
+        assert result.exit_code == 1
+        assert "required" in result.output.lower()
+
+    def test_vault_push_file_not_found(self, tmp_path: Path):
+        """vault-push should error when .env.keys file doesn't exist."""
+        result = runner.invoke(
+            app,
+            [
+                "vault-push",
+                str(tmp_path / "nonexistent"),
+                "secret-name",
+                "--env",
+                "soak",
+                "-p",
+                "aws",
+            ],
+        )
+        assert result.exit_code == 1
+        assert "not found" in result.output.lower()
+
+    def test_vault_push_key_not_found(self, tmp_path: Path):
+        """vault-push should error when key is not in .env.keys."""
+        env_keys = tmp_path / ".env.keys"
+        env_keys.write_text("DOTENV_PRIVATE_KEY_PRODUCTION=abc123")
+
+        result = runner.invoke(
+            app,
+            [
+                "vault-push",
+                str(tmp_path),
+                "secret-name",
+                "--env",
+                "soak",  # Looking for SOAK but file has PRODUCTION
+                "-p",
+                "aws",
+            ],
+        )
+        assert result.exit_code == 1
+        assert "not found" in result.output.lower()
+
+    def test_vault_push_reads_key_from_env_keys(self, monkeypatch, tmp_path: Path):
+        """vault-push should read key from .env.keys and push to vault."""
+        env_keys = tmp_path / ".env.keys"
+        env_keys.write_text("DOTENV_PRIVATE_KEY_SOAK=my-secret-key-value")
+
+        pushed_secrets = {}
+
+        class MockVaultClient:
+            def authenticate(self):
+                pass
+
+            def set_secret(self, name, value):
+                pushed_secrets[name] = value
+                return SimpleNamespace(name=name, value=value, version="v1")
+
+        monkeypatch.setattr(
+            "envdrift.vault.get_vault_client",
+            lambda *_, **__: MockVaultClient(),
+        )
+
+        result = runner.invoke(
+            app,
+            [
+                "vault-push",
+                str(tmp_path),
+                "soak-machine",
+                "--env",
+                "soak",
+                "-p",
+                "aws",
+            ],
+        )
+
+        assert result.exit_code == 0
+        assert "soak-machine" in pushed_secrets
+        assert pushed_secrets["soak-machine"] == "DOTENV_PRIVATE_KEY_SOAK=my-secret-key-value"
+
+    def test_vault_push_direct_mode(self, monkeypatch):
+        """vault-push --direct should push the value directly."""
+        pushed_secrets = {}
+
+        class MockVaultClient:
+            def authenticate(self):
+                pass
+
+            def set_secret(self, name, value):
+                pushed_secrets[name] = value
+                return SimpleNamespace(name=name, value=value, version="v1")
+
+        monkeypatch.setattr(
+            "envdrift.vault.get_vault_client",
+            lambda *_, **__: MockVaultClient(),
+        )
+
+        result = runner.invoke(
+            app,
+            [
+                "vault-push",
+                "--direct",
+                "my-secret",
+                "DOTENV_PRIVATE_KEY_PROD=abc123",
+                "-p",
+                "aws",
+            ],
+        )
+
+        assert result.exit_code == 0
+        assert "my-secret" in pushed_secrets
+        assert pushed_secrets["my-secret"] == "DOTENV_PRIVATE_KEY_PROD=abc123"
+
+    def test_vault_push_auth_failure(self, monkeypatch, tmp_path: Path):
+        """vault-push should handle authentication errors gracefully."""
+        env_keys = tmp_path / ".env.keys"
+        env_keys.write_text("DOTENV_PRIVATE_KEY_SOAK=abc")
+
+        from envdrift.vault import VaultError
+
+        def failing_client(*_, **__):
+            client = SimpleNamespace()
+            client.authenticate = lambda: (_ for _ in ()).throw(VaultError("Auth failed"))
+            return client
+
+        monkeypatch.setattr("envdrift.vault.get_vault_client", failing_client)
+
+        result = runner.invoke(
+            app,
+            [
+                "vault-push",
+                str(tmp_path),
+                "secret",
+                "--env",
+                "soak",
+                "-p",
+                "aws",
+            ],
+        )
+
+        assert result.exit_code == 1
+        assert "auth" in result.output.lower() or "failed" in result.output.lower()

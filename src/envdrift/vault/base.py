@@ -109,6 +109,24 @@ class VaultClient(ABC):
         """
         ...
 
+    @abstractmethod
+    def set_secret(self, name: str, value: str) -> SecretValue:
+        """
+        Create or update a secret in the vault.
+
+        Parameters:
+            name (str): Secret name or path within the vault.
+            value (str): The secret value to store.
+
+        Returns:
+            SecretValue: The stored secret object containing name, value, version, and metadata.
+
+        Raises:
+            AuthenticationError: If the client is not authenticated or lacks write permissions.
+            VaultError: For other vault-related errors.
+        """
+        ...
+
     def get_secret_value(self, name: str) -> str:
         """
         Retrieve the value string of a secret identified by name.
