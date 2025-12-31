@@ -115,15 +115,15 @@ def get_platform_info() -> tuple[str, str]:
 
 def get_venv_bin_dir() -> Path:
     """
-    Determine the filesystem path to the current virtual environment's executable directory.
-
-    Searches these locations in order: the VIRTUAL_ENV environment variable, candidate venv directories found on sys.path (including uv tool and pipx installs), a .venv directory in the current working directory, and finally falls back to user bin directories (~/.local/bin on Linux/macOS or %APPDATA%\\Python\\Scripts on Windows). Returns the venv's "bin" subdirectory on POSIX systems or "Scripts" on Windows.
-
+    Locate the filesystem path to the active virtual environment's executable directory.
+    
+    Searches in this order: the VIRTUAL_ENV environment variable; candidate virtual environment directories discovered on sys.path (including uv tool and pipx venv layouts); a .venv directory in the current working directory; and finally a user-writable scripts directory (%APPDATA%\Python\Scripts on Windows or ~/.local/bin on POSIX). Returns the venv's "Scripts" directory on Windows or "bin" on POSIX. When falling back to the user scripts/bin location, the directory will be created if it does not exist.
+    
     Returns:
-        Path: Path to the virtual environment's bin directory (or Scripts on Windows).
-
+        Path: Path to the virtual environment's executable directory ("Scripts" on Windows, "bin" on POSIX).
+    
     Raises:
-        RuntimeError: If no virtual environment directory can be located.
+        RuntimeError: If no suitable virtual environment or user bin directory can be determined.
     """
     # Check for virtual environment
     venv_path = os.environ.get("VIRTUAL_ENV")
@@ -657,22 +657,24 @@ class DotenvxWrapper:
         Provide multi-option installation instructions for obtaining the dotenvx CLI.
 
         Returns:
-            str: Multi-line installation instructions containing installation options
-                 for different scenarios. The pinned version is interpolated into
-                 the instructions.
+            str: Multi-line installation instructions containing three options:
+                 1) Auto-install into the project's virtual environment (recommended),
+                 2) Manual install via DotenvxInstaller.ensure_installed(),
+                 3) System install via the official install script. The pinned version
+                 is interpolated into the instructions.
         """
         return f"""
 dotenvx is not installed.
 
-Option 1 - Install to ~/.local/bin (recommended):
-  curl -sfS "https://dotenvx.sh?directory=$HOME/.local/bin" | sh -s -- --version={DOTENVX_VERSION}
-  (Make sure ~/.local/bin is in your PATH)
+Option 1 - Auto-install (recommended):
+  The next envdrift command will automatically install dotenvx v{DOTENVX_VERSION}
+  to your virtual environment.
 
-Option 2 - Install to current directory:
-  curl -sfS "https://dotenvx.sh?directory=." | sh -s -- --version={DOTENVX_VERSION}
+Option 2 - Manual install:
+  python -c "from envdrift.integrations.dotenvx import DotenvxInstaller; DotenvxInstaller.ensure_installed()"
 
-Option 3 - System-wide install (requires sudo):
-  curl -sfS https://dotenvx.sh | sudo sh -s -- --version={DOTENVX_VERSION}
+Option 3 - System install:
+  curl -sfS https://dotenvx.sh | sh -s -- --version={DOTENVX_VERSION}
 
-After installing, run your envdrift command again.
+Note: envdrift prefers using a local binary in .venv/bin/ for reproducibility.
 """
