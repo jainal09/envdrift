@@ -251,3 +251,30 @@ class AWSSecretsManagerClient(VaultClient):
             )
         except ClientError as e:
             raise VaultError(f"AWS Secrets Manager error: {e}") from e
+
+    def set_secret(self, name: str, value: str) -> SecretValue:
+        """
+        Create or update a secret in AWS Secrets Manager.
+
+        Attempts to update the secret first; if it doesn't exist, creates it.
+
+        Parameters:
+            name (str): The name of the secret.
+            value (str): The secret value to store.
+
+        Returns:
+            SecretValue: The created or updated secret's representation.
+
+        Raises:
+            VaultError: If AWS Secrets Manager returns an error.
+        """
+        self.ensure_authenticated()
+
+        try:
+            # Try to update first (most common case)
+            return self.update_secret(name, value)
+        except VaultError as e:
+            # Check if it's a ResourceNotFoundException
+            if "ResourceNotFoundException" in str(e):
+                return self.create_secret(name, value)
+            raise
