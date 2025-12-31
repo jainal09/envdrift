@@ -1380,7 +1380,7 @@ class TestVaultPushCommand:
         assert "soak-machine" in pushed_secrets
         assert pushed_secrets["soak-machine"] == "DOTENV_PRIVATE_KEY_SOAK=my-secret-key-value"
 
-    def test_vault_push_direct_mode(self, monkeypatch, tmp_path: Path):
+    def test_vault_push_direct_mode(self, monkeypatch):
         """vault-push --direct should push the value directly."""
         pushed_secrets = {}
 

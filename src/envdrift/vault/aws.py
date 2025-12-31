@@ -274,7 +274,9 @@ class AWSSecretsManagerClient(VaultClient):
             # Try to update first (most common case)
             return self.update_secret(name, value)
         except VaultError as e:
-            # Check if it's a ResourceNotFoundException
-            if "ResourceNotFoundException" in str(e):
-                return self.create_secret(name, value)
+            # Extract original ClientError if available
+            if e.__cause__ and hasattr(e.__cause__, "response"):
+                error_code = e.__cause__.response.get("Error", {}).get("Code", "")
+                if error_code == "ResourceNotFoundException":
+                    return self.create_secret(name, value)
             raise
