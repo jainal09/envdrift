@@ -657,24 +657,22 @@ class DotenvxWrapper:
         Provide multi-option installation instructions for obtaining the dotenvx CLI.
 
         Returns:
-            str: Multi-line installation instructions containing three options:
-                 1) Auto-install into the project's virtual environment (recommended),
-                 2) Manual install via DotenvxInstaller.ensure_installed(),
-                 3) System install via the official install script. The pinned version
-                 is interpolated into the instructions.
+            str: Multi-line installation instructions containing installation options
+                 for different scenarios. The pinned version is interpolated into
+                 the instructions.
         """
         return f"""
 dotenvx is not installed.
 
-Option 1 - Auto-install (recommended):
-  The next envdrift command will automatically install dotenvx v{DOTENVX_VERSION}
-  to your virtual environment.
+Option 1 - Install to ~/.local/bin (recommended):
+  curl -sfS "https://dotenvx.sh?directory=$HOME/.local/bin" | sh -s -- --version={DOTENVX_VERSION}
+  (Make sure ~/.local/bin is in your PATH)
 
-Option 2 - Manual install:
-  python -c "from envdrift.integrations.dotenvx import DotenvxInstaller; DotenvxInstaller.ensure_installed()"
+Option 2 - Install to current directory:
+  curl -sfS "https://dotenvx.sh?directory=." | sh -s -- --version={DOTENVX_VERSION}
 
-Option 3 - System install:
-  curl -sfS https://dotenvx.sh | sh -s -- --version={DOTENVX_VERSION}
+Option 3 - System-wide install (requires sudo):
+  curl -sfS https://dotenvx.sh | sudo sh -s -- --version={DOTENVX_VERSION}
 
-Note: envdrift prefers using a local binary in .venv/bin/ for reproducibility.
+After installing, run your envdrift command again.
 """
