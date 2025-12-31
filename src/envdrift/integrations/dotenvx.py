@@ -117,7 +117,7 @@ def get_venv_bin_dir() -> Path:
     """
     Determine the filesystem path to the current virtual environment's executable directory.
 
-    Searches these locations in order: the VIRTUAL_ENV environment variable, candidate venv directories found on sys.path, and a .venv directory in the current working directory. Returns the venv's "bin" subdirectory on POSIX systems or "Scripts" on Windows.
+    Searches these locations in order: the VIRTUAL_ENV environment variable, candidate venv directories found on sys.path (including uv tool and pipx installs), a .venv directory in the current working directory, and finally falls back to user bin directories (~/.local/bin on Linux/macOS or %APPDATA%\\Python\\Scripts on Windows). Returns the venv's "bin" subdirectory on POSIX systems or "Scripts" on Windows.
 
     Returns:
         Path: Path to the virtual environment's bin directory (or Scripts on Windows).
@@ -137,6 +137,7 @@ def get_venv_bin_dir() -> Path:
     # This handles cases where VIRTUAL_ENV isn't set
     for path in sys.path:
         p = Path(path)
+        # Check for standard venv directories
         if ".venv" in p.parts or "venv" in p.parts:
             # Walk up to find the venv root
             while p.name not in (".venv", "venv") and p.parent != p:
@@ -145,6 +146,29 @@ def get_venv_bin_dir() -> Path:
                 if platform.system() == "Windows":
                     return p / "Scripts"
                 return p / "bin"
+        # Check for uv tool install (e.g., ~/.local/share/uv/tools/envdrift/)
+        # or pipx install (e.g., ~/.local/pipx/venvs/envdrift/)
+        is_uv_tool = "uv" in p.parts and "tools" in p.parts
+        is_pipx = "pipx" in p.parts and "venvs" in p.parts
+        if is_uv_tool or is_pipx:
+            # Walk up to find the tool's venv root
+            # Linux: lib/pythonX.Y/site-packages (3 levels up)
+            # Windows: Lib/site-packages (2 levels up)
+            while p.name != "site-packages" and p.parent != p:
+                p = p.parent
+            if p.name == "site-packages":
+                # Check parent structure to determine levels
+                if platform.system() == "Windows":
+                    # Windows: site-packages -> Lib -> tool_venv
+                    tool_venv = p.parent.parent
+                    bin_dir = tool_venv / "Scripts"
+                else:
+                    # Linux: site-packages -> pythonX.Y -> lib -> tool_venv
+                    tool_venv = p.parent.parent.parent
+                    bin_dir = tool_venv / "bin"
+                # Validate path exists before returning
+                if bin_dir.parent.exists():
+                    return bin_dir
 
     # Default to creating in current directory's .venv
     cwd_venv = Path.cwd() / ".venv"
@@ -153,9 +177,26 @@ def get_venv_bin_dir() -> Path:
             return cwd_venv / "Scripts"
         return cwd_venv / "bin"
 
+    # Fallback for plain pip install (system or --user)
+    # Use user-writable bin directory
+    if platform.system() == "Windows":
+        # Windows user scripts: %APPDATA%\Python\Scripts
+        appdata = os.environ.get("APPDATA")
+        if appdata:
+            user_scripts = Path(appdata) / "Python" / "Scripts"
+            user_scripts.mkdir(parents=True, exist_ok=True)
+            return user_scripts
+    else:
+        # Linux/macOS: ~/.local/bin (standard user bin directory)
+        user_bin = Path.home() / ".local" / "bin"
+        user_bin.mkdir(parents=True, exist_ok=True)
+        return user_bin
+
+    # Only reachable on Windows when APPDATA is not set
     raise RuntimeError(
-        "Cannot find virtual environment. "
-        "Please activate a virtual environment or create one with: python -m venv .venv"
+        "Cannot find virtual environment or user bin directory. "
+        "On Windows, ensure the APPDATA environment variable is set, "
+        "or activate a virtual environment with: python -m venv .venv"
     )
 
 
@@ -621,24 +662,22 @@ class DotenvxWrapper:
         Provide multi-option installation instructions for obtaining the dotenvx CLI.
 
         Returns:
-            str: Multi-line installation instructions containing three options:
-                 1) Auto-install into the project's virtual environment (recommended),
-                 2) Manual install via DotenvxInstaller.ensure_installed(),
-                 3) System install via the official install script. The pinned version
-                 is interpolated into the instructions.
+            str: Multi-line installation instructions containing installation options
+                 for different scenarios. The pinned version is interpolated into
+                 the instructions.
         """
         return f"""
 dotenvx is not installed.
 
-Option 1 - Auto-install (recommended):
-  The next envdrift command will automatically install dotenvx v{DOTENVX_VERSION}
-  to your virtual environment.
+Option 1 - Install to ~/.local/bin (recommended):
+  curl -sfS "https://dotenvx.sh?directory=$HOME/.local/bin" | sh -s -- --version={DOTENVX_VERSION}
+  (Make sure ~/.local/bin is in your PATH)
 
-Option 2 - Manual install:
-  python -c "from envdrift.integrations.dotenvx import DotenvxInstaller; DotenvxInstaller.ensure_installed()"
+Option 2 - Install to current directory:
+  curl -sfS "https://dotenvx.sh?directory=." | sh -s -- --version={DOTENVX_VERSION}
 
-Option 3 - System install:
-  curl -sfS https://dotenvx.sh | sh -s -- --version={DOTENVX_VERSION}
+Option 3 - System-wide install (requires sudo):
+  curl -sfS https://dotenvx.sh | sudo sh -s -- --version={DOTENVX_VERSION}
 
-Note: envdrift prefers using a local binary in .venv/bin/ for reproducibility.
+After installing, run your envdrift command again.
 """
