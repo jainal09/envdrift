@@ -12,15 +12,17 @@ uv add envdrift
 
 ## Commands
 
-| Command                  | Description                                            |
-| ------------------------ | ------------------------------------------------------ |
-| [validate](validate.md)  | Validate .env files against Pydantic schemas           |
-| [diff](diff.md)          | Compare two .env files and show differences            |
-| [encrypt](encrypt.md)    | Check or perform encryption using dotenvx              |
-| [decrypt](decrypt.md)    | Decrypt encrypted .env files                           |
-| [init](init.md)          | Generate Pydantic Settings from .env files             |
-| [hook](hook.md)          | Manage pre-commit hook integration                     |
-| [version](version.md)    | Show envdrift version                                  |
+| Command                      | Description                                            |
+| ---------------------------- | ------------------------------------------------------ |
+| [validate](validate.md)      | Validate .env files against Pydantic schemas           |
+| [diff](diff.md)              | Compare two .env files and show differences            |
+| [encrypt](encrypt.md)        | Check or perform encryption using dotenvx              |
+| [decrypt](decrypt.md)        | Decrypt encrypted .env files                           |
+| [sync](sync.md)              | Sync encryption keys from cloud vaults to local files  |
+| [vault-push](vault-push.md)  | Push encryption keys from local files to cloud vaults  |
+| [init](init.md)              | Generate Pydantic Settings from .env files             |
+| [hook](hook.md)              | Manage pre-commit hook integration                     |
+| [version](version.md)        | Show envdrift version                                  |
 
 ## Global Options
 

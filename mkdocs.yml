@@ -50,6 +50,7 @@ nav:
     - init: cli/init.md
     - hook: cli/hook.md
     - sync: cli/sync.md
+    - vault-push: cli/vault-push.md
     - version: cli/version.md
   - Guides:
     - Schema Best Practices: guides/schema.md
