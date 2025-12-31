@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Annotated
 
 import typer
+from rich.panel import Panel
 
 from envdrift import __version__
 from envdrift.core.diff import DiffEngine
@@ -1017,6 +1018,298 @@ def sync(
     # Exit with appropriate code
     if ci and result.has_errors:
         raise typer.Exit(code=1)
+
+
+@app.command()
+def pull(
+    config_file: Annotated[
+        Path | None,
+        typer.Option(
+            "--config",
+            "-c",
+            help="Path to sync config file (TOML or legacy pair.txt format)",
+        ),
+    ] = None,
+    provider: Annotated[
+        str | None,
+        typer.Option("--provider", "-p", help="Vault provider: azure, aws, hashicorp"),
+    ] = None,
+    vault_url: Annotated[
+        str | None,
+        typer.Option("--vault-url", help="Vault URL (Azure Key Vault or HashiCorp Vault)"),
+    ] = None,
+    region: Annotated[
+        str | None,
+        typer.Option("--region", help="AWS region (default: us-east-1)"),
+    ] = None,
+    force: Annotated[
+        bool,
+        typer.Option("--force", "-f", help="Update all mismatches without prompting"),
+    ] = False,
+) -> None:
+    """
+    Pull keys from vault and decrypt all env files (one-command developer setup).
+
+    Reads your TOML configuration, fetches encryption keys from your cloud vault,
+    writes them to local .env.keys files, and decrypts all corresponding .env files.
+
+    This is the recommended command for onboarding new developers - just run
+    `envdrift pull` and all encrypted environment files are ready to use.
+
+    Configuration is read from:
+    - pyproject.toml [tool.envdrift.vault.sync] section
+    - envdrift.toml [vault.sync] section
+    - Explicit --config file
+
+    Examples:
+        # Auto-discover config and pull everything
+        envdrift pull
+
+        # Use explicit config file
+        envdrift pull -c envdrift.toml
+
+        # Override provider settings
+        envdrift pull -p azure --vault-url https://myvault.vault.azure.net/
+
+        # Force update without prompts
+        envdrift pull --force
+    """
+    import tomllib
+
+    from envdrift.config import ConfigNotFoundError, find_config, load_config
+    from envdrift.output.rich import print_service_sync_status, print_sync_result
+    from envdrift.sync.config import SyncConfig, SyncConfigError
+
+    # === CONFIG LOADING (same as sync command) ===
+    envdrift_config = None
+    config_path = None
+
+    if config_file is not None and config_file.suffix.lower() == ".toml":
+        config_path = config_file
+        try:
+            envdrift_config = load_config(config_path)
+        except tomllib.TOMLDecodeError as e:
+            print_error(f"TOML syntax error in {config_path}: {e}")
+            raise typer.Exit(code=1) from None
+        except ConfigNotFoundError:
+            pass
+    elif config_file is None:
+        config_path = find_config()
+        if config_path:
+            try:
+                envdrift_config = load_config(config_path)
+            except ConfigNotFoundError:
+                pass
+            except tomllib.TOMLDecodeError as e:
+                print_warning(f"TOML syntax error in {config_path}: {e}")
+
+    vault_config = getattr(envdrift_config, "vault", None)
+
+    effective_provider = provider or getattr(vault_config, "provider", None)
+    effective_vault_url = vault_url
+    if effective_vault_url is None and vault_config:
+        if effective_provider == "azure":
+            effective_vault_url = getattr(vault_config, "azure_vault_url", None)
+        elif effective_provider == "hashicorp":
+            effective_vault_url = getattr(vault_config, "hashicorp_url", None)
+
+    effective_region = region
+    if effective_region is None and vault_config:
+        effective_region = getattr(vault_config, "aws_region", None)
+
+    vault_sync = getattr(vault_config, "sync", None)
+
+    sync_config: SyncConfig | None = None
+
+    if config_file is not None:
+        if not config_file.exists():
+            print_error(f"Config file not found: {config_file}")
+            raise typer.Exit(code=1)
+
+        try:
+            if config_file.suffix.lower() == ".toml":
+                sync_config = SyncConfig.from_toml_file(config_file)
+            else:
+                sync_config = SyncConfig.from_file(config_file)
+        except SyncConfigError as e:
+            print_error(f"Invalid config file: {e}")
+            raise typer.Exit(code=1) from None
+    elif vault_sync and vault_sync.mappings:
+        from envdrift.sync.config import ServiceMapping
+
+        sync_config = SyncConfig(
+            mappings=[
+                ServiceMapping(
+                    secret_name=m.secret_name,
+                    folder_path=Path(m.folder_path),
+                    vault_name=m.vault_name,
+                    environment=m.environment,
+                )
+                for m in vault_sync.mappings
+            ],
+            default_vault_name=vault_sync.default_vault_name,
+            env_keys_filename=vault_sync.env_keys_filename,
+        )
+    elif config_path and config_path.suffix.lower() == ".toml":
+        try:
+            sync_config = SyncConfig.from_toml_file(config_path)
+        except SyncConfigError as e:
+            print_warning(f"Could not load sync config from {config_path}: {e}")
+
+    if sync_config is None or not sync_config.mappings:
+        print_error(
+            "No sync configuration found. Provide one of:\n"
+            "  --config <file.toml>  TOML config with [vault.sync] section\n"
+            "  --config <pair.txt>   Legacy format: secret=folder\n"
+            "  [tool.envdrift.vault.sync] section in pyproject.toml"
+        )
+        raise typer.Exit(code=1)
+
+    if effective_provider is None:
+        print_error(
+            "--provider is required (or set [vault] provider in config). "
+            "Options: azure, aws, hashicorp"
+        )
+        raise typer.Exit(code=1)
+
+    if effective_provider == "azure" and not effective_vault_url:
+        print_error("Azure provider requires --vault-url (or [vault.azure] vault_url in config)")
+        raise typer.Exit(code=1)
+
+    if effective_provider == "hashicorp" and not effective_vault_url:
+        print_error("HashiCorp provider requires --vault-url (or [vault.hashicorp] url in config)")
+        raise typer.Exit(code=1)
+
+    # === CREATE VAULT CLIENT ===
+    try:
+        from envdrift.vault import get_vault_client
+
+        vault_kwargs: dict = {}
+        if effective_provider == "azure":
+            vault_kwargs["vault_url"] = effective_vault_url
+        elif effective_provider == "aws":
+            vault_kwargs["region"] = effective_region or "us-east-1"
+        elif effective_provider == "hashicorp":
+            vault_kwargs["url"] = effective_vault_url
+
+        vault_client = get_vault_client(effective_provider, **vault_kwargs)
+    except ImportError as e:
+        print_error(str(e))
+        raise typer.Exit(code=1) from None
+    except ValueError as e:
+        print_error(str(e))
+        raise typer.Exit(code=1) from None
+
+    # === STEP 1: SYNC KEYS FROM VAULT ===
+    from envdrift.sync.engine import SyncEngine, SyncMode
+
+    mode = SyncMode(force_update=force)
+
+    def progress_callback(msg: str) -> None:
+        console.print(f"[dim]{msg}[/dim]")
+
+    def prompt_callback(msg: str) -> bool:
+        if force:
+            return True
+        response = console.input(f"{msg} (y/N): ").strip().lower()
+        return response in ("y", "yes")
+
+    engine = SyncEngine(
+        config=sync_config,
+        vault_client=vault_client,
+        mode=mode,
+        prompt_callback=prompt_callback,
+        progress_callback=progress_callback,
+    )
+
+    console.print()
+    console.print("[bold]Pull[/bold] - Syncing keys and decrypting env files")
+    console.print(
+        f"[dim]Provider: {effective_provider} | Services: {len(sync_config.mappings)}[/dim]"
+    )
+    console.print()
+
+    console.print("[bold cyan]Step 1:[/bold cyan] Syncing keys from vault...")
+    console.print()
+
+    try:
+        sync_result = engine.sync_all()
+    except (VaultError, SyncConfigError, SecretNotFoundError) as e:
+        print_error(f"Sync failed: {e}")
+        raise typer.Exit(code=1) from None
+
+    for service_result in sync_result.services:
+        print_service_sync_status(service_result)
+
+    print_sync_result(sync_result)
+
+    if sync_result.has_errors:
+        print_error("Setup incomplete due to sync errors")
+        raise typer.Exit(code=1)
+
+    # === STEP 2: DECRYPT ENV FILES ===
+    console.print()
+    console.print("[bold cyan]Step 2:[/bold cyan] Decrypting environment files...")
+    console.print()
+
+    try:
+        from envdrift.integrations.dotenvx import DotenvxWrapper
+
+        dotenvx = DotenvxWrapper()
+
+        if not dotenvx.is_installed():
+            print_error("dotenvx is not installed")
+            console.print(dotenvx.install_instructions())
+            raise typer.Exit(code=1)
+    except ImportError:
+        print_error("dotenvx integration not available")
+        raise typer.Exit(code=1) from None
+
+    decrypted_count = 0
+    skipped_count = 0
+    error_count = 0
+
+    for mapping in sync_config.mappings:
+        env_file = mapping.folder_path / f".env.{mapping.environment}"
+
+        if not env_file.exists():
+            console.print(f"  [dim]=[/dim] {env_file} [dim]- skipped (not found)[/dim]")
+            skipped_count += 1
+            continue
+
+        # Check if file is encrypted
+        content = env_file.read_text()
+        if "encrypted:" not in content.lower():
+            console.print(f"  [dim]=[/dim] {env_file} [dim]- skipped (not encrypted)[/dim]")
+            skipped_count += 1
+            continue
+
+        try:
+            dotenvx.decrypt(env_file, cwd=mapping.folder_path)
+            console.print(f"  [green]+[/green] {env_file} [dim]- decrypted[/dim]")
+            decrypted_count += 1
+        except Exception as e:
+            console.print(f"  [red]![/red] {env_file} [red]- error: {e}[/red]")
+            error_count += 1
+
+    # === SUMMARY ===
+    console.print()
+    console.print(
+        Panel(
+            f"Decrypted: {decrypted_count}\n"
+            f"Skipped: {skipped_count}\n"
+            f"Errors: {error_count}",
+            title="Decrypt Summary",
+            expand=False,
+        )
+    )
+
+    if error_count > 0:
+        print_warning("Some files could not be decrypted")
+        raise typer.Exit(code=1)
+
+    console.print()
+    print_success("Setup complete! Your environment files are ready to use.")
 
 
 @app.command("vault-push")
