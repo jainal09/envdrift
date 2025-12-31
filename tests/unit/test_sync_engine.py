@@ -42,11 +42,15 @@ class TestSyncEngineBasic:
         """Test syncing creates new .env.keys file."""
         mock_vault_client.get_secret.return_value = SecretValue(name="test-key", value="secret123")
 
+        service_dir = tmp_path / "service1"
+        service_dir.mkdir()
+        (service_dir / ".env.production").write_text("DB_URL=encrypted:xyz\n")
+
         config = SyncConfig(
             mappings=[
                 ServiceMapping(
                     secret_name="test-key",
-                    folder_path=tmp_path / "service1",
+                    folder_path=service_dir,
                 ),
             ],
         )
@@ -56,7 +60,33 @@ class TestSyncEngineBasic:
 
         assert len(result.services) == 1
         assert result.services[0].action == SyncAction.CREATED
-        assert (tmp_path / "service1" / ".env.keys").exists()
+        assert (service_dir / ".env.keys").exists()
+
+    def test_sync_skips_when_env_file_does_not_exist(
+        self, mock_vault_client: MagicMock, tmp_path: Path
+    ) -> None:
+        """Test syncing skips when .env.<environment> file doesn't exist."""
+        mock_vault_client.get_secret.return_value = SecretValue(name="test-key", value="secret123")
+
+        service_dir = tmp_path / "service1"
+        service_dir.mkdir()
+        # No .env.production file created
+
+        config = SyncConfig(
+            mappings=[
+                ServiceMapping(
+                    secret_name="test-key",
+                    folder_path=service_dir,
+                ),
+            ],
+        )
+
+        engine = SyncEngine(config=config, vault_client=mock_vault_client)
+        result = engine.sync_all()
+
+        assert result.services[0].action == SyncAction.SKIPPED
+        assert ".env.production" in result.services[0].message
+        assert not (service_dir / ".env.keys").exists()
 
     def test_sync_updates_mismatched_file(
         self, mock_vault_client: MagicMock, tmp_path: Path
@@ -67,6 +97,7 @@ class TestSyncEngineBasic:
         # Create existing file with different value
         service_dir = tmp_path / "service1"
         service_dir.mkdir()
+        (service_dir / ".env.production").write_text("DB_URL=encrypted:xyz\n")
         (service_dir / ".env.keys").write_text("DOTENV_PRIVATE_KEY_PRODUCTION=old_secret\n")
 
         config = SyncConfig(
@@ -99,6 +130,7 @@ class TestSyncEngineBasic:
 
         service_dir = tmp_path / "service1"
         service_dir.mkdir()
+        (service_dir / ".env.production").write_text("DB_URL=encrypted:xyz\n")
         (service_dir / ".env.keys").write_text("DOTENV_PRIVATE_KEY_PRODUCTION=same_secret\n")
 
         config = SyncConfig(
@@ -125,11 +157,15 @@ class TestSyncEngineVerifyMode:
         """Test verify mode doesn't modify files."""
         mock_vault_client.get_secret.return_value = SecretValue(name="test-key", value="secret123")
 
+        service_dir = tmp_path / "service1"
+        service_dir.mkdir()
+        (service_dir / ".env.production").write_text("DB_URL=encrypted:xyz\n")
+
         config = SyncConfig(
             mappings=[
                 ServiceMapping(
                     secret_name="test-key",
-                    folder_path=tmp_path / "service1",
+                    folder_path=service_dir,
                 ),
             ],
         )
@@ -141,9 +177,9 @@ class TestSyncEngineVerifyMode:
         )
         result = engine.sync_all()
 
-        # Should report error (file doesn't exist) but not create it
+        # Should report error (key file doesn't exist) but not create it
         assert result.services[0].action == SyncAction.ERROR
-        assert not (tmp_path / "service1" / ".env.keys").exists()
+        assert not (service_dir / ".env.keys").exists()
 
     def test_verify_mode_reports_mismatch(
         self, mock_vault_client: MagicMock, tmp_path: Path
@@ -153,6 +189,7 @@ class TestSyncEngineVerifyMode:
 
         service_dir = tmp_path / "service1"
         service_dir.mkdir()
+        (service_dir / ".env.production").write_text("DB_URL=encrypted:xyz\n")
         (service_dir / ".env.keys").write_text("DOTENV_PRIVATE_KEY_PRODUCTION=old_secret\n")
 
         config = SyncConfig(
@@ -186,6 +223,7 @@ class TestSyncEngineForceMode:
 
         service_dir = tmp_path / "service1"
         service_dir.mkdir()
+        (service_dir / ".env.production").write_text("DB_URL=encrypted:xyz\n")
         (service_dir / ".env.keys").write_text("DOTENV_PRIVATE_KEY_PRODUCTION=old_secret\n")
 
         prompt_called = False
@@ -223,11 +261,15 @@ class TestSyncEngineErrorHandling:
         """Test handling when secret is not found in vault."""
         mock_vault_client.get_secret.side_effect = SecretNotFoundError("Secret not found")
 
+        service_dir = tmp_path / "service1"
+        service_dir.mkdir()
+        (service_dir / ".env.production").write_text("DB_URL=encrypted:xyz\n")
+
         config = SyncConfig(
             mappings=[
                 ServiceMapping(
                     secret_name="missing-key",
-                    folder_path=tmp_path / "service1",
+                    folder_path=service_dir,
                 ),
             ],
         )
@@ -242,11 +284,15 @@ class TestSyncEngineErrorHandling:
         """Test handling generic vault errors."""
         mock_vault_client.get_secret.side_effect = VaultError("Connection failed")
 
+        service_dir = tmp_path / "service1"
+        service_dir.mkdir()
+        (service_dir / ".env.production").write_text("DB_URL=encrypted:xyz\n")
+
         config = SyncConfig(
             mappings=[
                 ServiceMapping(
                     secret_name="test-key",
-                    folder_path=tmp_path / "service1",
+                    folder_path=service_dir,
                 ),
             ],
         )
@@ -265,6 +311,12 @@ class TestSyncEngineMultipleServices:
     ) -> None:
         """Test processing multiple services."""
         mock_vault_client.get_secret.return_value = SecretValue(name="key", value="secret")
+
+        # Create all service directories with .env.production files
+        for i in range(1, 4):
+            service_dir = tmp_path / f"service{i}"
+            service_dir.mkdir()
+            (service_dir / ".env.production").write_text("DB_URL=encrypted:xyz\n")
 
         config = SyncConfig(
             mappings=[
@@ -450,11 +502,15 @@ class TestSyncEngineFetchVaultSecret:
             value="DOTENV_PRIVATE_KEY_PRODUCTION=actual_secret",
         )
 
+        service_dir = tmp_path / "service1"
+        service_dir.mkdir()
+        (service_dir / ".env.production").write_text("DB_URL=encrypted:xyz\n")
+
         config = SyncConfig(
             mappings=[
                 ServiceMapping(
                     secret_name="test-key",
-                    folder_path=tmp_path / "service1",
+                    folder_path=service_dir,
                 ),
             ],
         )
@@ -462,10 +518,42 @@ class TestSyncEngineFetchVaultSecret:
         engine = SyncEngine(config=config, vault_client=mock_vault_client)
         engine.sync_all()
 
-        content = (tmp_path / "service1" / ".env.keys").read_text()
+        content = (service_dir / ".env.keys").read_text()
         # Should not have double KEY= prefix
         assert "DOTENV_PRIVATE_KEY_PRODUCTION=actual_secret" in content
         assert "DOTENV_PRIVATE_KEY_PRODUCTION=DOTENV_PRIVATE_KEY" not in content
+
+    def test_strips_any_key_prefix_from_value(
+        self, mock_vault_client: MagicMock, tmp_path: Path
+    ) -> None:
+        """Test that any DOTENV_PRIVATE_KEY_*= prefix is stripped from vault value."""
+        # Vault stores key with different environment than config
+        mock_vault_client.get_secret.return_value = SecretValue(
+            name="test-key",
+            value="DOTENV_PRIVATE_KEY_SOAK=actual_secret",
+        )
+
+        service_dir = tmp_path / "service1"
+        service_dir.mkdir()
+        (service_dir / ".env.production").write_text("DB_URL=encrypted:xyz\n")
+
+        config = SyncConfig(
+            mappings=[
+                ServiceMapping(
+                    secret_name="test-key",
+                    folder_path=service_dir,
+                    environment="production",
+                ),
+            ],
+        )
+
+        engine = SyncEngine(config=config, vault_client=mock_vault_client)
+        engine.sync_all()
+
+        content = (service_dir / ".env.keys").read_text()
+        # Should strip the SOAK prefix and write with PRODUCTION key
+        assert "DOTENV_PRIVATE_KEY_PRODUCTION=actual_secret" in content
+        assert "DOTENV_PRIVATE_KEY_SOAK" not in content
 
 
 class TestSyncResult:
@@ -475,9 +563,13 @@ class TestSyncResult:
         """Test exit code is 0 on success."""
         mock_vault_client.get_secret.return_value = SecretValue(name="key", value="secret")
 
+        service_dir = tmp_path / "service"
+        service_dir.mkdir()
+        (service_dir / ".env.production").write_text("DB_URL=encrypted:xyz\n")
+
         config = SyncConfig(
             mappings=[
-                ServiceMapping(secret_name="key", folder_path=tmp_path / "service"),
+                ServiceMapping(secret_name="key", folder_path=service_dir),
             ],
         )
 
@@ -491,9 +583,13 @@ class TestSyncResult:
         """Test exit code is 1 on error."""
         mock_vault_client.get_secret.side_effect = SecretNotFoundError("Not found")
 
+        service_dir = tmp_path / "service"
+        service_dir.mkdir()
+        (service_dir / ".env.production").write_text("DB_URL=encrypted:xyz\n")
+
         config = SyncConfig(
             mappings=[
-                ServiceMapping(secret_name="key", folder_path=tmp_path / "service"),
+                ServiceMapping(secret_name="key", folder_path=service_dir),
             ],
         )
 

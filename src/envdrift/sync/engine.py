@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 import shutil
 import subprocess  # nosec B404
 from collections.abc import Callable
@@ -78,6 +79,16 @@ class SyncEngine:
     def _sync_service(self, mapping: ServiceMapping) -> ServiceSyncResult:
         """Sync a single service."""
         try:
+            # Check if corresponding .env.<environment> file exists
+            env_file = mapping.folder_path / f".env.{mapping.environment}"
+            if not env_file.exists():
+                return ServiceSyncResult(
+                    secret_name=mapping.secret_name,
+                    folder_path=mapping.folder_path,
+                    action=SyncAction.SKIPPED,
+                    message=f"No .env.{mapping.environment} file found - skipping",
+                )
+
             # Fetch secret from vault
             vault_value = self._fetch_vault_secret(mapping)
             vault_preview = preview_value(vault_value)
@@ -210,8 +221,11 @@ class SyncEngine:
         value = secret.value
 
         # Handle case where vault stores full line (KEY=value)
-        if value.startswith(f"{mapping.env_key_name}="):
-            value = value[len(f"{mapping.env_key_name}=") :]
+        # Strip any DOTENV_PRIVATE_KEY_*= prefix, not just the current environment's
+        pattern = r"^DOTENV_PRIVATE_KEY_[A-Z_]+=(.+)$"
+        match = re.match(pattern, value)
+        if match:
+            value = match.group(1)
 
         return value
 
