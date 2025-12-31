@@ -158,15 +158,114 @@ class TestGetVenvBinDir:
             result = get_venv_bin_dir()
             assert result == venv_path / "bin"
 
-    def test_raises_when_no_venv(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-        """Test raises RuntimeError when no venv found."""
+    def test_fallback_when_no_venv(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+        """Test falls back to user bin when no venv found."""
+        monkeypatch.delenv("VIRTUAL_ENV", raising=False)
+        monkeypatch.chdir(tmp_path)
+        # Mock home to use tmp_path
+        monkeypatch.setattr(Path, "home", lambda: tmp_path)
+
+        with patch("sys.path", []), patch("platform.system", return_value="Linux"):
+            result = get_venv_bin_dir()
+            # Should fall back to ~/.local/bin
+            assert result == tmp_path / ".local" / "bin"
+
+    def test_finds_uv_tool_venv(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+        """Test finds venv when installed via uv tool install."""
         monkeypatch.delenv("VIRTUAL_ENV", raising=False)
         monkeypatch.chdir(tmp_path)
 
-        with patch("sys.path", []):
-            with pytest.raises(RuntimeError) as exc_info:
-                get_venv_bin_dir()
-            assert "virtual environment" in str(exc_info.value)
+        # Simulate uv tool install structure: ~/.local/share/uv/tools/envdrift/lib/python3.13/site-packages
+        uv_tool_path = tmp_path / ".local" / "share" / "uv" / "tools" / "envdrift"
+        site_packages = uv_tool_path / "lib" / "python3.13" / "site-packages"
+        site_packages.mkdir(parents=True)
+
+        with (
+            patch("sys.path", [str(site_packages)]),
+            patch("platform.system", return_value="Linux"),
+        ):
+            result = get_venv_bin_dir()
+            assert result == uv_tool_path / "bin"
+
+    def test_finds_uv_tool_venv_windows(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+        """Test finds venv when installed via uv tool install on Windows."""
+        monkeypatch.delenv("VIRTUAL_ENV", raising=False)
+        monkeypatch.chdir(tmp_path)
+
+        # Simulate uv tool install structure on Windows
+        uv_tool_path = tmp_path / "AppData" / "Local" / "uv" / "tools" / "envdrift"
+        site_packages = uv_tool_path / "Lib" / "site-packages"
+        site_packages.mkdir(parents=True)
+
+        with (
+            patch("sys.path", [str(site_packages)]),
+            patch("platform.system", return_value="Windows"),
+        ):
+            result = get_venv_bin_dir()
+            assert result == uv_tool_path / "Scripts"
+
+    def test_finds_pipx_venv(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+        """Test finds venv when installed via pipx."""
+        monkeypatch.delenv("VIRTUAL_ENV", raising=False)
+        monkeypatch.chdir(tmp_path)
+
+        # Simulate pipx install structure: ~/.local/pipx/venvs/envdrift/lib/python3.13/site-packages
+        pipx_venv_path = tmp_path / ".local" / "pipx" / "venvs" / "envdrift"
+        site_packages = pipx_venv_path / "lib" / "python3.13" / "site-packages"
+        site_packages.mkdir(parents=True)
+
+        with (
+            patch("sys.path", [str(site_packages)]),
+            patch("platform.system", return_value="Linux"),
+        ):
+            result = get_venv_bin_dir()
+            assert result == pipx_venv_path / "bin"
+
+    def test_finds_pipx_venv_windows(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+        """Test finds venv when installed via pipx on Windows."""
+        monkeypatch.delenv("VIRTUAL_ENV", raising=False)
+        monkeypatch.chdir(tmp_path)
+
+        # Simulate pipx install structure on Windows
+        pipx_venv_path = tmp_path / "AppData" / "Local" / "pipx" / "venvs" / "envdrift"
+        site_packages = pipx_venv_path / "Lib" / "site-packages"
+        site_packages.mkdir(parents=True)
+
+        with (
+            patch("sys.path", [str(site_packages)]),
+            patch("platform.system", return_value="Windows"),
+        ):
+            result = get_venv_bin_dir()
+            assert result == pipx_venv_path / "Scripts"
+
+    def test_fallback_to_user_bin_linux(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+        """Test falls back to ~/.local/bin for plain pip install on Linux."""
+        monkeypatch.delenv("VIRTUAL_ENV", raising=False)
+        monkeypatch.chdir(tmp_path)
+        # Mock home to use tmp_path
+        monkeypatch.setattr(Path, "home", lambda: tmp_path)
+
+        with (
+            patch("sys.path", ["/usr/lib/python3.13/site-packages"]),
+            patch("platform.system", return_value="Linux"),
+        ):
+            result = get_venv_bin_dir()
+            assert result == tmp_path / ".local" / "bin"
+            assert result.exists()  # Should be created
+
+    def test_fallback_to_user_bin_windows(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+        """Test falls back to %APPDATA%\\Python\\Scripts for plain pip install on Windows."""
+        monkeypatch.delenv("VIRTUAL_ENV", raising=False)
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.setenv("APPDATA", str(tmp_path / "AppData" / "Roaming"))
+
+        with (
+            patch("sys.path", ["C:\\Python313\\Lib\\site-packages"]),
+            patch("platform.system", return_value="Windows"),
+        ):
+            result = get_venv_bin_dir()
+            assert result == tmp_path / "AppData" / "Roaming" / "Python" / "Scripts"
+            assert result.exists()  # Should be created
 
 
 class TestGetDotenvxPath:

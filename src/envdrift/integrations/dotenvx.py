@@ -117,7 +117,7 @@ def get_venv_bin_dir() -> Path:
     """
     Determine the filesystem path to the current virtual environment's executable directory.
 
-    Searches these locations in order: the VIRTUAL_ENV environment variable, candidate venv directories found on sys.path, and a .venv directory in the current working directory. Returns the venv's "bin" subdirectory on POSIX systems or "Scripts" on Windows.
+    Searches these locations in order: the VIRTUAL_ENV environment variable, candidate venv directories found on sys.path (including uv tool and pipx installs), a .venv directory in the current working directory, and finally falls back to user bin directories (~/.local/bin on Linux/macOS or %APPDATA%\\Python\\Scripts on Windows). Returns the venv's "bin" subdirectory on POSIX systems or "Scripts" on Windows.
 
     Returns:
         Path: Path to the virtual environment's bin directory (or Scripts on Windows).
@@ -137,6 +137,7 @@ def get_venv_bin_dir() -> Path:
     # This handles cases where VIRTUAL_ENV isn't set
     for path in sys.path:
         p = Path(path)
+        # Check for standard venv directories
         if ".venv" in p.parts or "venv" in p.parts:
             # Walk up to find the venv root
             while p.name not in (".venv", "venv") and p.parent != p:
@@ -145,6 +146,26 @@ def get_venv_bin_dir() -> Path:
                 if platform.system() == "Windows":
                     return p / "Scripts"
                 return p / "bin"
+        # Check for uv tool install (e.g., ~/.local/share/uv/tools/envdrift/)
+        # or pipx install (e.g., ~/.local/pipx/venvs/envdrift/)
+        is_uv_tool = "uv" in p.parts and "tools" in p.parts
+        is_pipx = "pipx" in p.parts and "venvs" in p.parts
+        if is_uv_tool or is_pipx:
+            # Walk up to find the tool's venv root
+            # Linux: lib/pythonX.Y/site-packages (3 levels up)
+            # Windows: Lib/site-packages (2 levels up)
+            while p.name != "site-packages" and p.parent != p:
+                p = p.parent
+            if p.name == "site-packages":
+                # Check parent structure to determine levels
+                if platform.system() == "Windows":
+                    # Windows: site-packages -> Lib -> tool_venv
+                    tool_venv = p.parent.parent
+                    return tool_venv / "Scripts"
+                else:
+                    # Linux: site-packages -> pythonX.Y -> lib -> tool_venv
+                    tool_venv = p.parent.parent.parent
+                    return tool_venv / "bin"
 
     # Default to creating in current directory's .venv
     cwd_venv = Path.cwd() / ".venv"
@@ -153,8 +174,23 @@ def get_venv_bin_dir() -> Path:
             return cwd_venv / "Scripts"
         return cwd_venv / "bin"
 
+    # Fallback for plain pip install (system or --user)
+    # Use user-writable bin directory
+    if platform.system() == "Windows":
+        # Windows user scripts: %APPDATA%\Python\Scripts
+        appdata = os.environ.get("APPDATA")
+        if appdata:
+            user_scripts = Path(appdata) / "Python" / "Scripts"
+            user_scripts.mkdir(parents=True, exist_ok=True)
+            return user_scripts
+    else:
+        # Linux/macOS: ~/.local/bin (standard user bin directory)
+        user_bin = Path.home() / ".local" / "bin"
+        user_bin.mkdir(parents=True, exist_ok=True)
+        return user_bin
+
     raise RuntimeError(
-        "Cannot find virtual environment. "
+        "Cannot find virtual environment or user bin directory. "
         "Please activate a virtual environment or create one with: python -m venv .venv"
     )
 
