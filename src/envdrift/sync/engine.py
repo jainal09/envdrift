@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 import shutil
 import subprocess  # nosec B404
 from collections.abc import Callable
@@ -9,6 +10,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from envdrift.env_files import detect_env_file
 from envdrift.sync.config import ServiceMapping, SyncConfig
 from envdrift.sync.operations import EnvKeysFile, ensure_directory, preview_value
 from envdrift.sync.result import (
@@ -78,6 +80,26 @@ class SyncEngine:
     def _sync_service(self, mapping: ServiceMapping) -> ServiceSyncResult:
         """Sync a single service."""
         try:
+            # Check if corresponding .env.<environment> file exists
+            env_file = mapping.folder_path / f".env.{mapping.effective_environment}"
+            effective_environment = mapping.effective_environment
+
+            if not env_file.exists():
+                # Try to auto-detect: find any .env.* file or plain .env in the folder
+                detected = self._detect_env_file(mapping.folder_path)
+                if detected:
+                    env_file, effective_environment = detected
+                else:
+                    return ServiceSyncResult(
+                        secret_name=mapping.secret_name,
+                        folder_path=mapping.folder_path,
+                        action=SyncAction.SKIPPED,
+                        message=f"No .env.{mapping.effective_environment} file found - skipping",
+                    )
+
+            # Use effective environment for key name
+            effective_key_name = f"DOTENV_PRIVATE_KEY_{effective_environment.upper()}"
+
             # Fetch secret from vault
             vault_value = self._fetch_vault_secret(mapping)
             vault_preview = preview_value(vault_value)
@@ -97,7 +119,7 @@ class SyncEngine:
             # Read local file
             env_keys_path = mapping.folder_path / self.config.env_keys_filename
             env_keys_file = EnvKeysFile(env_keys_path)
-            local_value = env_keys_file.read_key(mapping.env_key_name)
+            local_value = env_keys_file.read_key(effective_key_name)
             local_preview = preview_value(local_value) if local_value else None
 
             # Compare values
@@ -112,7 +134,7 @@ class SyncEngine:
                         vault_value_preview=vault_preview,
                     )
 
-                env_keys_file.write_key(mapping.env_key_name, vault_value, mapping.environment)
+                env_keys_file.write_key(effective_key_name, vault_value, effective_environment)
                 return ServiceSyncResult(
                     secret_name=mapping.secret_name,
                     folder_path=mapping.folder_path,
@@ -159,7 +181,7 @@ class SyncEngine:
                 if should_update:
                     # Create backup before updating
                     backup_path = env_keys_file.create_backup()
-                    env_keys_file.write_key(mapping.env_key_name, vault_value, mapping.environment)
+                    env_keys_file.write_key(effective_key_name, vault_value, effective_environment)
                     return ServiceSyncResult(
                         secret_name=mapping.secret_name,
                         folder_path=mapping.folder_path,
@@ -210,10 +232,34 @@ class SyncEngine:
         value = secret.value
 
         # Handle case where vault stores full line (KEY=value)
-        if value.startswith(f"{mapping.env_key_name}="):
-            value = value[len(f"{mapping.env_key_name}=") :]
+        # Strip any DOTENV_PRIVATE_KEY_*= prefix, not just the current environment's
+        # Support uppercase, lowercase, digits in environment names (e.g., soak, local, prod)
+        pattern = r"^DOTENV_PRIVATE_KEY_[A-Za-z0-9_]+=(.+)$"
+        match = re.match(pattern, value)
+        if match:
+            value = match.group(1)
 
         return value
+
+    def _detect_env_file(self, folder_path: Path) -> tuple[Path, str] | None:
+        """
+        Auto-detect .env file in a folder.
+
+        Checks for:
+        1. Plain .env file (returns default environment)
+        2. Single .env.* file (returns environment from suffix)
+
+        Returns (env_file_path, environment_name) or None.
+        """
+        detection = detect_env_file(folder_path)
+        if (
+            detection.status == "found"
+            and detection.path is not None
+            and detection.environment is not None
+        ):
+            return (detection.path, detection.environment)
+
+        return None
 
     def _test_decryption(self, mapping: ServiceMapping) -> DecryptionTestResult:
         """
@@ -226,9 +272,9 @@ class SyncEngine:
             DecryptionTestResult.FAILED if decryption or re-encryption fails (the original file is restored).
             DecryptionTestResult.SKIPPED if no suitable env file exists, the file does not appear encrypted, or the `dotenvx` utility is not available.
         """
-        # Find .env file to test (prefer .env.production)
+        # Find .env file to test (prefer .env.<effective_environment>)
         env_files = [
-            mapping.folder_path / f".env.{mapping.environment}",
+            mapping.folder_path / f".env.{mapping.effective_environment}",
             mapping.folder_path / ".env.production",
             mapping.folder_path / ".env.staging",
             mapping.folder_path / ".env.development",
@@ -304,7 +350,7 @@ class SyncEngine:
             from envdrift.core.validator import EnvValidator
 
             # Find env file
-            env_file = mapping.folder_path / f".env.{mapping.environment}"
+            env_file = mapping.folder_path / f".env.{mapping.effective_environment}"
             if not env_file.exists():
                 env_file = mapping.folder_path / ".env"
             if not env_file.exists():

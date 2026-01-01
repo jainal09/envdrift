@@ -10,7 +10,10 @@ When using dotenvx for encryption, each environment has a private key stored in 
 - Need to be **shared securely** with team members
 - Must be **available in CI/CD** for decryption
 
-The `envdrift sync` command solves this by storing keys in cloud vaults and syncing them to local environments.
+envdrift provides two commands for vault synchronization:
+
+- **`envdrift pull`** - Pull keys from vault AND decrypt all env files (recommended for onboarding)
+- **`envdrift sync`** - Syncs keys only (useful when you need more control)
 
 ## Verify vault key can decrypt (drift detection)
 
@@ -32,7 +35,7 @@ If the vault key cannot decrypt the file, it exits 1 and prints repair steps:
 
 1. **One-time setup**
    - Store the private key in vault (Azure/AWS/HashiCorp).
-   - Add `envdrift sync` to onboarding docs so teammates can pull keys locally.
+   - Add `envdrift pull` to onboarding docs - one command gets developers ready.
    - Add a pre-commit or CI job that runs:
 
      ```bash
@@ -43,12 +46,16 @@ If the vault key cannot decrypt the file, it exits 1 and prints repair steps:
 
      This fails fast on key drift.
 
-2. **Pull keys locally**
+2. **Developer onboarding (one command)**
 
    ```bash
-   envdrift sync --force          # auto-discovers envdrift.toml
-   # or pin the config explicitly:
-   envdrift sync --force -c envdrift.toml
+   envdrift pull          # syncs keys AND decrypts all env files
+   ```
+
+   Or if you need more control:
+
+   ```bash
+   envdrift sync --force   # sync keys only
    ```
 
    This writes `.env.keys` for dotenvx (never commit this file).
@@ -61,7 +68,7 @@ If the vault key cannot decrypt the file, it exits 1 and prints repair steps:
 
 4. **If drift is detected**
    - `git restore .env.production`
-   - `envdrift sync --force` (-c envdrift.toml if auto-discovery doesn’t find the file)
+   - `envdrift sync --force` (-c envdrift.toml if auto-discovery doesn't find the file)
    - `envdrift encrypt .env.production`
 
 ## Architecture
@@ -353,6 +360,56 @@ folder_path = "services/prod"
 vault_name = "production-vault"  # Override default
 ```
 
+### Profile Configuration
+
+Profiles allow multiple environment configurations in a single project (e.g., local development, staging, production).
+
+```toml
+[vault]
+provider = "azure"
+
+[vault.azure]
+vault_url = "https://my-keyvault.vault.azure.net/"
+
+[vault.sync]
+default_vault_name = "my-keyvault"
+
+# Regular mapping (always processed by pull/sync)
+[[vault.sync.mappings]]
+secret_name = "shared-key"
+folder_path = "."
+
+# Profile: local development
+[[vault.sync.mappings]]
+secret_name = "local-key"
+folder_path = "."
+profile = "local"              # Only with --profile local
+activate_to = ".env"           # Copy decrypted .env.local to .env
+
+# Profile: production
+[[vault.sync.mappings]]
+secret_name = "prod-key"
+folder_path = "."
+profile = "prod"
+activate_to = ".env"
+```
+
+**Usage:**
+
+```bash
+# Pull local development environment
+envdrift pull --profile local
+
+# Pull production environment
+envdrift pull --profile prod
+```
+
+**Key concepts:**
+
+- **`profile`**: Tags a mapping for filtering. Without `--profile`, only non-profile mappings are processed.
+- **`activate_to`**: Path to copy the decrypted file to (e.g., `.env`). Useful for apps that expect a plain `.env` file.
+- **`environment`**: If omitted, defaults to the `profile` value (e.g., profile `local` → looks for `.env.local`).
+
 ### Legacy Format (pair.txt)
 
 ```text
@@ -509,17 +566,25 @@ deploy:
 
 1. Clone the repository
 2. Get vault access from team lead
-3. Run sync:
+3. Run pull (syncs keys AND decrypts all env files in one command):
 
    ```bash
-   envdrift sync
+   envdrift pull
    ```
 
-4. Decrypt for local development:
+That's it! The `pull` command handles everything automatically.
 
-   ```bash
-   envdrift decrypt .env.development
-   ```
+**Alternative (manual approach):**
+
+If you need more control, you can run the steps separately:
+
+```bash
+# Sync keys only
+envdrift sync
+
+# Then decrypt specific files
+envdrift decrypt .env.development
+```
 
 ### Key Rotation
 
@@ -622,6 +687,7 @@ This shows what would change without making modifications.
 
 ## See Also
 
-- [sync command](../cli/sync.md) - CLI reference
+- [pull command](../cli/pull.md) - One-command setup (recommended)
+- [sync command](../cli/sync.md) - Sync keys only
 - [encrypt](../cli/encrypt.md) - Encryption command
 - [decrypt](../cli/decrypt.md) - Decryption command

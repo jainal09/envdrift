@@ -21,12 +21,27 @@ class ServiceMapping:
     secret_name: str
     folder_path: Path
     vault_name: str | None = None
-    environment: str = "production"
+    environment: str | None = None  # Defaults to profile if set, else "production"
+    profile: str | None = None  # Profile name for filtering (e.g., "local", "prod")
+    activate_to: Path | None = None  # Path to copy decrypted file when profile is activated
+
+    @property
+    def effective_environment(self) -> str:
+        """
+        Return the effective environment.
+
+        Priority: explicit environment > profile > "production"
+        """
+        if self.environment is not None:
+            return self.environment
+        if self.profile is not None:
+            return self.profile
+        return "production"
 
     @property
     def env_key_name(self) -> str:
         """Return the environment key name (e.g., DOTENV_PRIVATE_KEY_PRODUCTION)."""
-        return f"DOTENV_PRIVATE_KEY_{self.environment.upper()}"
+        return f"DOTENV_PRIVATE_KEY_{self.effective_environment.upper()}"
 
 
 @dataclass
@@ -117,12 +132,15 @@ class SyncConfig:
             if "folder_path" not in mapping_data:
                 raise SyncConfigError("Missing 'folder_path' in mapping")
 
+            activate_to = mapping_data.get("activate_to")
             mappings.append(
                 ServiceMapping(
                     secret_name=mapping_data["secret_name"],
                     folder_path=Path(mapping_data["folder_path"]),
                     vault_name=mapping_data.get("vault_name"),
-                    environment=mapping_data.get("environment", "production"),
+                    environment=mapping_data.get("environment"),  # None = use effective_environment
+                    profile=mapping_data.get("profile"),
+                    activate_to=Path(activate_to) if activate_to else None,
                 )
             )
 
@@ -135,6 +153,22 @@ class SyncConfig:
     def get_effective_vault_name(self, mapping: ServiceMapping) -> str | None:
         """Get the effective vault name for a mapping (mapping override or default)."""
         return mapping.vault_name or self.default_vault_name
+
+    def filter_by_profile(self, profile: str | None) -> list[ServiceMapping]:
+        """
+        Filter mappings by profile.
+
+        If profile is None, returns only mappings without a profile (regular mappings).
+        If profile is specified, returns:
+          - All mappings without a profile (regular mappings)
+          - Plus the mapping that matches the specified profile
+        """
+        if profile is None:
+            # No profile specified: return only non-profile mappings
+            return [m for m in self.mappings if m.profile is None]
+
+        # Profile specified: return non-profile mappings + matching profile
+        return [m for m in self.mappings if m.profile is None or m.profile == profile]
 
     @classmethod
     def from_toml_file(cls, path: Path) -> SyncConfig:

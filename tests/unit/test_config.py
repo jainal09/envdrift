@@ -270,7 +270,9 @@ class TestSyncConfig:
         assert mapping.secret_name == "test-key"
         assert mapping.folder_path == "."
         assert mapping.vault_name is None
-        assert mapping.environment == "production"
+        assert mapping.environment is None  # None = use effective_environment
+        assert mapping.profile is None
+        assert mapping.activate_to is None
 
     def test_sync_mapping_config_custom(self):
         """Test SyncMappingConfig with custom values."""
@@ -286,6 +288,23 @@ class TestSyncConfig:
         assert mapping.folder_path == "services/api"
         assert mapping.vault_name == "other-vault"
         assert mapping.environment == "staging"
+
+    def test_sync_mapping_config_with_profile(self):
+        """Test SyncMappingConfig with profile and activate_to."""
+        from envdrift.config import SyncMappingConfig
+
+        mapping = SyncMappingConfig(
+            secret_name="local-key",
+            folder_path=".",
+            profile="local",
+            activate_to=".env",
+        )
+        assert mapping.secret_name == "local-key"
+        assert mapping.folder_path == "."
+        assert mapping.profile == "local"
+        assert mapping.activate_to == ".env"
+        # environment is None, so effective_environment should derive from profile
+        assert mapping.environment is None
 
     def test_sync_config_defaults(self):
         """Test default SyncConfig values."""
