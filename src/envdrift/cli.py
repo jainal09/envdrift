@@ -75,8 +75,9 @@ def _load_config_and_create_vault_client(
     # Determine config source for defaults:
     # 1. If --config points to a TOML file, use it for defaults
     # 2. Otherwise, use auto-discovery (find_config)
-    # Note: skip discovery when --config is provided (e.g., pair.txt) to avoid
-    # pulling defaults from unrelated projects.
+    # Note: discovery only runs when --config is not provided. If --config points
+    # to a non-TOML file (e.g., pair.txt), we skip discovery to avoid pulling
+    # defaults from unrelated projects.
     envdrift_config = None
     config_path = None
 
@@ -183,13 +184,11 @@ def _load_config_and_create_vault_client(
 
     # Validate provider-specific options
     if effective_provider == "azure" and not effective_vault_url:
-        print_error("Azure provider requires --vault-url " "(or [vault.azure] vault_url in config)")
+        print_error("Azure provider requires --vault-url (or [vault.azure] vault_url in config)")
         raise typer.Exit(code=1)
 
     if effective_provider == "hashicorp" and not effective_vault_url:
-        print_error(
-            "HashiCorp provider requires --vault-url " "(or [vault.hashicorp] url in config)"
-        )
+        print_error("HashiCorp provider requires --vault-url (or [vault.hashicorp] url in config)")
         raise typer.Exit(code=1)
 
     # Create vault client
