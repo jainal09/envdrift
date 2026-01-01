@@ -10,6 +10,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from envdrift.env_files import detect_env_file
 from envdrift.sync.config import ServiceMapping, SyncConfig
 from envdrift.sync.operations import EnvKeysFile, ensure_directory, preview_value
 from envdrift.sync.result import (
@@ -245,34 +246,18 @@ class SyncEngine:
         Auto-detect .env file in a folder.
 
         Checks for:
-        1. Plain .env file (returns environment as folder name)
+        1. Plain .env file (returns default environment)
         2. Single .env.* file (returns environment from suffix)
 
         Returns (env_file_path, environment_name) or None.
         """
-        if not folder_path.exists():
-            return None
-
-        # First, check for plain .env file
-        plain_env = folder_path / ".env"
-        if plain_env.exists() and plain_env.is_file():
-            # Use "production" as default environment for plain .env files
-            # This is consistent with effective_environment default
-            return (plain_env, "production")
-
-        # Find all .env.* files, excluding special files
-        exclude_patterns = {".env.keys", ".env.example", ".env.sample", ".env.template"}
-        env_files = []
-
-        for f in folder_path.iterdir():
-            if f.is_file() and f.name.startswith(".env.") and f.name not in exclude_patterns:
-                env_files.append(f)
-
-        if len(env_files) == 1:
-            env_file = env_files[0]
-            # Extract environment from filename: .env.soak -> soak
-            environment = env_file.name[5:]  # Remove ".env." prefix
-            return (env_file, environment)
+        detection = detect_env_file(folder_path)
+        if (
+            detection.status == "found"
+            and detection.path is not None
+            and detection.environment is not None
+        ):
+            return (detection.path, detection.environment)
 
         return None
 

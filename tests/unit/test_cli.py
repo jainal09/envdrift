@@ -1263,6 +1263,147 @@ class TestSyncCommand:
         assert "toml syntax error" in result.output.lower()
 
 
+class TestPullCommand:
+    """Tests for the pull CLI command."""
+
+    def test_pull_happy_path_decrypts_files(self, monkeypatch, tmp_path: Path):
+        """Pull should sync and decrypt encrypted env files successfully."""
+        service_dir = tmp_path / "service"
+        service_dir.mkdir()
+        env_file = service_dir / ".env.production"
+        env_file.write_text("SECRET=encrypted:abc123")
+
+        config_file = tmp_path / "envdrift.toml"
+        config_file.write_text(
+            dedent(
+                f"""
+                [vault]
+                provider = "aws"
+
+                [vault.aws]
+                region = "us-east-1"
+
+                [vault.sync]
+                default_vault_name = "main"
+                env_keys_filename = ".env.keys"
+
+                [[vault.sync.mappings]]
+                secret_name = "dotenv-key"
+                folder_path = "{service_dir.as_posix()}"
+                environment = "production"
+                """
+            ).lstrip()
+        )
+
+        monkeypatch.setattr("envdrift.vault.get_vault_client", lambda *_, **__: SimpleNamespace())
+        monkeypatch.setattr("envdrift.output.rich.print_service_sync_status", lambda *_, **__: None)
+        monkeypatch.setattr("envdrift.output.rich.print_sync_result", lambda *_, **__: None)
+
+        class DummyEngine:
+            def __init__(self, *_args, **_kwargs):
+                pass
+
+            def sync_all(self):
+                return SimpleNamespace(services=[], has_errors=False)
+
+        monkeypatch.setattr("envdrift.sync.engine.SyncEngine", DummyEngine)
+
+        class DummyDotenvx:
+            def __init__(self):
+                self.decrypted: list[Path] = []
+
+            def is_installed(self):
+                return True
+
+            def decrypt(self, env_path):
+                self.decrypted.append(Path(env_path))
+
+        dummy = DummyDotenvx()
+        monkeypatch.setattr("envdrift.integrations.dotenvx.DotenvxWrapper", lambda: dummy)
+
+        result = runner.invoke(app, ["pull", "-c", str(config_file)])
+
+        assert result.exit_code == 0
+        assert env_file in dummy.decrypted
+        assert "setup complete" in result.output.lower()
+
+    def test_pull_profile_activation_invalid_path_errors(self, monkeypatch, tmp_path: Path):
+        """Pull should report invalid activation paths and exit non-zero."""
+        service_a = tmp_path / "service-a"
+        service_a.mkdir()
+        env_a = service_a / ".env.production"
+        env_a.write_text("SECRET=encrypted:abc")
+
+        service_b = tmp_path / "service-b"
+        service_b.mkdir()
+        env_b = service_b / ".env.production"
+        env_b.write_text("SECRET=encrypted:def")
+
+        config_file = tmp_path / "envdrift.toml"
+        config_file.write_text(
+            dedent(
+                f"""
+                [vault]
+                provider = "aws"
+
+                [vault.aws]
+                region = "us-east-1"
+
+                [vault.sync]
+                default_vault_name = "main"
+                env_keys_filename = ".env.keys"
+
+                [[vault.sync.mappings]]
+                secret_name = "dotenv-key-a"
+                folder_path = "{service_a.as_posix()}"
+                environment = "production"
+                profile = "local"
+                activate_to = "active.env"
+
+                [[vault.sync.mappings]]
+                secret_name = "dotenv-key-b"
+                folder_path = "{service_b.as_posix()}"
+                environment = "production"
+                profile = "local"
+                activate_to = "../outside.env"
+                """
+            ).lstrip()
+        )
+
+        monkeypatch.setattr("envdrift.vault.get_vault_client", lambda *_, **__: SimpleNamespace())
+        monkeypatch.setattr("envdrift.output.rich.print_service_sync_status", lambda *_, **__: None)
+        monkeypatch.setattr("envdrift.output.rich.print_sync_result", lambda *_, **__: None)
+
+        class DummyEngine:
+            def __init__(self, *_args, **_kwargs):
+                pass
+
+            def sync_all(self):
+                return SimpleNamespace(services=[], has_errors=False)
+
+        monkeypatch.setattr("envdrift.sync.engine.SyncEngine", DummyEngine)
+
+        class DummyDotenvx:
+            def __init__(self):
+                self.decrypted: list[Path] = []
+
+            def is_installed(self):
+                return True
+
+            def decrypt(self, env_path):
+                self.decrypted.append(Path(env_path))
+
+        dummy = DummyDotenvx()
+        monkeypatch.setattr("envdrift.integrations.dotenvx.DotenvxWrapper", lambda: dummy)
+
+        result = runner.invoke(app, ["pull", "-c", str(config_file), "--profile", "local"])
+
+        assert result.exit_code == 1
+        assert env_a in dummy.decrypted
+        assert env_b in dummy.decrypted
+        assert (service_a / "active.env").exists()
+
+
 class TestVaultPushCommand:
     """Tests for vault-push command."""
 
@@ -1444,85 +1585,94 @@ class TestVaultPushCommand:
         assert "auth" in result.output.lower() or "failed" in result.output.lower()
 
 
-class TestDetectEnvFileForDecrypt:
-    """Tests for _detect_env_file_for_decrypt helper function."""
+class TestDetectEnvFile:
+    """Tests for detect_env_file helper function."""
 
     def test_returns_plain_env_file(self, tmp_path: Path):
         """Test that plain .env file is found."""
-        from envdrift.cli import _detect_env_file_for_decrypt
+        from envdrift.env_files import detect_env_file
 
         env_file = tmp_path / ".env"
         env_file.write_text("SECRET=value")
 
-        path, status = _detect_env_file_for_decrypt(tmp_path)
+        detection = detect_env_file(tmp_path)
 
-        assert status == "found"
-        assert path == env_file
+        assert detection.status == "found"
+        assert detection.path == env_file
+        assert detection.environment == "production"
 
     def test_returns_single_env_file(self, tmp_path: Path):
         """Test that single .env.* file is found."""
-        from envdrift.cli import _detect_env_file_for_decrypt
+        from envdrift.env_files import detect_env_file
 
         env_file = tmp_path / ".env.production"
         env_file.write_text("SECRET=value")
 
-        path, status = _detect_env_file_for_decrypt(tmp_path)
+        detection = detect_env_file(tmp_path)
 
-        assert status == "found"
-        assert path == env_file
+        assert detection.status == "found"
+        assert detection.path == env_file
+        assert detection.environment == "production"
 
     def test_returns_multiple_found_status(self, tmp_path: Path):
         """Test that multiple .env.* files return multiple_found status."""
-        from envdrift.cli import _detect_env_file_for_decrypt
+        from envdrift.env_files import detect_env_file
 
         (tmp_path / ".env.production").write_text("SECRET=value1")
         (tmp_path / ".env.staging").write_text("SECRET=value2")
 
-        path, status = _detect_env_file_for_decrypt(tmp_path)
+        detection = detect_env_file(tmp_path)
 
-        assert status == "multiple_found"
-        assert path is None
+        assert detection.status == "multiple_found"
+        assert detection.path is None
+        assert detection.environment is None
 
     def test_returns_not_found_status(self, tmp_path: Path):
         """Test that empty folder returns not_found status."""
-        from envdrift.cli import _detect_env_file_for_decrypt
+        from envdrift.env_files import detect_env_file
 
-        path, status = _detect_env_file_for_decrypt(tmp_path)
+        detection = detect_env_file(tmp_path)
 
-        assert status == "not_found"
-        assert path is None
+        assert detection.status == "not_found"
+        assert detection.path is None
+        assert detection.environment is None
 
     def test_returns_folder_not_found_status(self, tmp_path: Path):
         """Test that non-existent folder returns folder_not_found status."""
-        from envdrift.cli import _detect_env_file_for_decrypt
+        from envdrift.env_files import detect_env_file
 
-        path, status = _detect_env_file_for_decrypt(tmp_path / "nonexistent")
+        detection = detect_env_file(tmp_path / "nonexistent")
 
-        assert status == "folder_not_found"
-        assert path is None
+        assert detection.status == "folder_not_found"
+        assert detection.path is None
+        assert detection.environment is None
 
     def test_excludes_special_files(self, tmp_path: Path):
         """Test that .env.keys, .env.example etc are excluded."""
-        from envdrift.cli import _detect_env_file_for_decrypt
+        from envdrift.env_files import detect_env_file
 
         (tmp_path / ".env.keys").write_text("KEY=value")
         (tmp_path / ".env.example").write_text("EXAMPLE=value")
         (tmp_path / ".env.production").write_text("SECRET=value")
 
-        path, status = _detect_env_file_for_decrypt(tmp_path)
+        detection = detect_env_file(tmp_path)
 
-        assert status == "found"
-        assert path.name == ".env.production"
+        assert detection.status == "found"
+        assert detection.path is not None
+        assert detection.path.name == ".env.production"
+        assert detection.environment == "production"
 
     def test_plain_env_takes_precedence(self, tmp_path: Path):
         """Test that plain .env takes precedence over .env.* files."""
-        from envdrift.cli import _detect_env_file_for_decrypt
+        from envdrift.env_files import detect_env_file
 
         (tmp_path / ".env").write_text("PLAIN=value")
         (tmp_path / ".env.production").write_text("PROD=value")
         (tmp_path / ".env.staging").write_text("STAGING=value")
 
-        path, status = _detect_env_file_for_decrypt(tmp_path)
+        detection = detect_env_file(tmp_path)
 
-        assert status == "found"
-        assert path.name == ".env"
+        assert detection.status == "found"
+        assert detection.path is not None
+        assert detection.path.name == ".env"
+        assert detection.environment == "production"

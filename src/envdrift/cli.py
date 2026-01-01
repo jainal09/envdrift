@@ -16,6 +16,7 @@ from envdrift.core.encryption import EncryptionDetector
 from envdrift.core.parser import EnvParser
 from envdrift.core.schema import SchemaLoader, SchemaLoadError
 from envdrift.core.validator import Validator
+from envdrift.env_files import detect_env_file
 from envdrift.output.rich import (
     console,
     print_diff_result,
@@ -1023,40 +1024,6 @@ def sync(
         raise typer.Exit(code=1)
 
 
-def _detect_env_file_for_decrypt(folder_path: Path) -> tuple[Path | None, str]:
-    """Auto-detect .env file in a folder for decryption.
-
-    Returns:
-        tuple of (path, status) where status is one of:
-        - "found": env file found
-        - "folder_not_found": folder doesn't exist
-        - "multiple_found": multiple .env.* files exist (ambiguous)
-        - "not_found": no env files found
-    """
-    if not folder_path.exists():
-        return None, "folder_not_found"
-
-    # First, check for plain .env file
-    plain_env = folder_path / ".env"
-    if plain_env.exists() and plain_env.is_file():
-        return plain_env, "found"
-
-    # Find all .env.* files, excluding special files
-    exclude_patterns = {".env.keys", ".env.example", ".env.sample", ".env.template"}
-    env_files = []
-
-    for f in folder_path.iterdir():
-        if f.is_file() and f.name.startswith(".env.") and f.name not in exclude_patterns:
-            env_files.append(f)
-
-    if len(env_files) == 1:
-        return env_files[0], "found"
-    elif len(env_files) > 1:
-        return None, "multiple_found"
-
-    return None, "not_found"
-
-
 @app.command()
 def pull(
     config_file: Annotated[
@@ -1345,10 +1312,10 @@ def pull(
 
         if not env_file.exists():
             # Try to auto-detect .env.* file
-            detected, status = _detect_env_file_for_decrypt(mapping.folder_path)
-            if status == "found" and detected:
-                env_file = detected
-            elif status == "multiple_found":
+            detection = detect_env_file(mapping.folder_path)
+            if detection.status == "found" and detection.path is not None:
+                env_file = detection.path
+            elif detection.status == "multiple_found":
                 console.print(
                     f"  [yellow]?[/yellow] {mapping.folder_path} "
                     f"[yellow]- skipped (multiple .env.* files, specify environment)[/yellow]"
@@ -1368,7 +1335,7 @@ def pull(
             continue
 
         try:
-            dotenvx.decrypt(env_file)
+            dotenvx.decrypt(env_file.resolve())
             console.print(f"  [green]+[/green] {env_file} [dim]- decrypted[/dim]")
             decrypted_count += 1
 
