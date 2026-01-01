@@ -1442,3 +1442,87 @@ class TestVaultPushCommand:
 
         assert result.exit_code == 1
         assert "auth" in result.output.lower() or "failed" in result.output.lower()
+
+
+class TestDetectEnvFileForDecrypt:
+    """Tests for _detect_env_file_for_decrypt helper function."""
+
+    def test_returns_plain_env_file(self, tmp_path: Path):
+        """Test that plain .env file is found."""
+        from envdrift.cli import _detect_env_file_for_decrypt
+
+        env_file = tmp_path / ".env"
+        env_file.write_text("SECRET=value")
+
+        path, status = _detect_env_file_for_decrypt(tmp_path)
+
+        assert status == "found"
+        assert path == env_file
+
+    def test_returns_single_env_file(self, tmp_path: Path):
+        """Test that single .env.* file is found."""
+        from envdrift.cli import _detect_env_file_for_decrypt
+
+        env_file = tmp_path / ".env.production"
+        env_file.write_text("SECRET=value")
+
+        path, status = _detect_env_file_for_decrypt(tmp_path)
+
+        assert status == "found"
+        assert path == env_file
+
+    def test_returns_multiple_found_status(self, tmp_path: Path):
+        """Test that multiple .env.* files return multiple_found status."""
+        from envdrift.cli import _detect_env_file_for_decrypt
+
+        (tmp_path / ".env.production").write_text("SECRET=value1")
+        (tmp_path / ".env.staging").write_text("SECRET=value2")
+
+        path, status = _detect_env_file_for_decrypt(tmp_path)
+
+        assert status == "multiple_found"
+        assert path is None
+
+    def test_returns_not_found_status(self, tmp_path: Path):
+        """Test that empty folder returns not_found status."""
+        from envdrift.cli import _detect_env_file_for_decrypt
+
+        path, status = _detect_env_file_for_decrypt(tmp_path)
+
+        assert status == "not_found"
+        assert path is None
+
+    def test_returns_folder_not_found_status(self, tmp_path: Path):
+        """Test that non-existent folder returns folder_not_found status."""
+        from envdrift.cli import _detect_env_file_for_decrypt
+
+        path, status = _detect_env_file_for_decrypt(tmp_path / "nonexistent")
+
+        assert status == "folder_not_found"
+        assert path is None
+
+    def test_excludes_special_files(self, tmp_path: Path):
+        """Test that .env.keys, .env.example etc are excluded."""
+        from envdrift.cli import _detect_env_file_for_decrypt
+
+        (tmp_path / ".env.keys").write_text("KEY=value")
+        (tmp_path / ".env.example").write_text("EXAMPLE=value")
+        (tmp_path / ".env.production").write_text("SECRET=value")
+
+        path, status = _detect_env_file_for_decrypt(tmp_path)
+
+        assert status == "found"
+        assert path.name == ".env.production"
+
+    def test_plain_env_takes_precedence(self, tmp_path: Path):
+        """Test that plain .env takes precedence over .env.* files."""
+        from envdrift.cli import _detect_env_file_for_decrypt
+
+        (tmp_path / ".env").write_text("PLAIN=value")
+        (tmp_path / ".env.production").write_text("PROD=value")
+        (tmp_path / ".env.staging").write_text("STAGING=value")
+
+        path, status = _detect_env_file_for_decrypt(tmp_path)
+
+        assert status == "found"
+        assert path.name == ".env"

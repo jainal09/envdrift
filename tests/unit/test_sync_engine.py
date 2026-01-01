@@ -555,6 +555,70 @@ class TestSyncEngineFetchVaultSecret:
         assert "DOTENV_PRIVATE_KEY_PRODUCTION=actual_secret" in content
         assert "DOTENV_PRIVATE_KEY_SOAK" not in content
 
+    def test_strips_lowercase_key_prefix_from_value(
+        self, mock_vault_client: MagicMock, tmp_path: Path
+    ) -> None:
+        """Test that lowercase DOTENV_PRIVATE_KEY_*= prefix is stripped from vault value."""
+        # Vault stores key with lowercase environment name like "soak", "local", "prod"
+        mock_vault_client.get_secret.return_value = SecretValue(
+            name="test-key",
+            value="DOTENV_PRIVATE_KEY_soak=actual_secret",
+        )
+
+        service_dir = tmp_path / "service1"
+        service_dir.mkdir()
+        (service_dir / ".env.soak").write_text("DB_URL=encrypted:xyz\n")
+
+        config = SyncConfig(
+            mappings=[
+                ServiceMapping(
+                    secret_name="test-key",
+                    folder_path=service_dir,
+                    environment="soak",
+                ),
+            ],
+        )
+
+        engine = SyncEngine(config=config, vault_client=mock_vault_client)
+        engine.sync_all()
+
+        content = (service_dir / ".env.keys").read_text()
+        # Should strip the soak prefix and write with SOAK key (uppercase in .env.keys)
+        assert "DOTENV_PRIVATE_KEY_SOAK=actual_secret" in content
+        assert "DOTENV_PRIVATE_KEY_soak=" not in content
+
+    def test_strips_mixed_case_key_prefix_with_digits(
+        self, mock_vault_client: MagicMock, tmp_path: Path
+    ) -> None:
+        """Test that mixed case with digits DOTENV_PRIVATE_KEY_*= prefix is stripped."""
+        # Vault stores key with mixed case and digits
+        mock_vault_client.get_secret.return_value = SecretValue(
+            name="test-key",
+            value="DOTENV_PRIVATE_KEY_Prod2=actual_secret",
+        )
+
+        service_dir = tmp_path / "service1"
+        service_dir.mkdir()
+        (service_dir / ".env.prod2").write_text("DB_URL=encrypted:xyz\n")
+
+        config = SyncConfig(
+            mappings=[
+                ServiceMapping(
+                    secret_name="test-key",
+                    folder_path=service_dir,
+                    environment="prod2",
+                ),
+            ],
+        )
+
+        engine = SyncEngine(config=config, vault_client=mock_vault_client)
+        engine.sync_all()
+
+        content = (service_dir / ".env.keys").read_text()
+        # Should strip the Prod2 prefix and write with PROD2 key
+        assert "DOTENV_PRIVATE_KEY_PROD2=actual_secret" in content
+        assert "DOTENV_PRIVATE_KEY_Prod2=" not in content
+
 
 class TestSyncResult:
     """Tests for SyncResult aggregation."""
