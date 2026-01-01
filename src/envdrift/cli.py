@@ -1311,7 +1311,7 @@ def pull(
     console.print()
 
     try:
-        from envdrift.integrations.dotenvx import DotenvxWrapper
+        from envdrift.integrations.dotenvx import DotenvxError, DotenvxWrapper
 
         dotenvx = DotenvxWrapper()
 
@@ -1365,7 +1365,7 @@ def pull(
                 )
                 activated_count += 1
 
-        except Exception as e:
+        except DotenvxError as e:
             console.print(f"  [red]![/red] {env_file} [red]- error: {e}[/red]")
             error_count += 1
 
