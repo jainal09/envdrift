@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import shutil
 from pathlib import Path
 from typing import Annotated
 
@@ -1022,15 +1023,23 @@ def sync(
         raise typer.Exit(code=1)
 
 
-def _detect_env_file_for_decrypt(folder_path: Path) -> Path | None:
-    """Auto-detect .env file in a folder for decryption."""
+def _detect_env_file_for_decrypt(folder_path: Path) -> tuple[Path | None, str]:
+    """Auto-detect .env file in a folder for decryption.
+
+    Returns:
+        tuple of (path, status) where status is one of:
+        - "found": env file found
+        - "folder_not_found": folder doesn't exist
+        - "multiple_found": multiple .env.* files exist (ambiguous)
+        - "not_found": no env files found
+    """
     if not folder_path.exists():
-        return None
+        return None, "folder_not_found"
 
     # First, check for plain .env file
     plain_env = folder_path / ".env"
     if plain_env.exists() and plain_env.is_file():
-        return plain_env
+        return plain_env, "found"
 
     # Find all .env.* files, excluding special files
     exclude_patterns = {".env.keys", ".env.example", ".env.sample", ".env.template"}
@@ -1041,9 +1050,11 @@ def _detect_env_file_for_decrypt(folder_path: Path) -> Path | None:
             env_files.append(f)
 
     if len(env_files) == 1:
-        return env_files[0]
+        return env_files[0], "found"
+    elif len(env_files) > 1:
+        return None, "multiple_found"
 
-    return None
+    return None, "not_found"
 
 
 @app.command()
@@ -1334,9 +1345,16 @@ def pull(
 
         if not env_file.exists():
             # Try to auto-detect .env.* file
-            detected = _detect_env_file_for_decrypt(mapping.folder_path)
-            if detected:
+            detected, status = _detect_env_file_for_decrypt(mapping.folder_path)
+            if status == "found" and detected:
                 env_file = detected
+            elif status == "multiple_found":
+                console.print(
+                    f"  [yellow]?[/yellow] {mapping.folder_path} "
+                    f"[yellow]- skipped (multiple .env.* files, specify environment)[/yellow]"
+                )
+                skipped_count += 1
+                continue
             else:
                 console.print(f"  [dim]=[/dim] {env_file} [dim]- skipped (not found)[/dim]")
                 skipped_count += 1
@@ -1356,8 +1374,6 @@ def pull(
 
             # Activate profile: copy decrypted file to activate_to path if configured
             if profile and mapping.profile == profile and mapping.activate_to:
-                import shutil
-
                 activate_path = (mapping.folder_path / mapping.activate_to).resolve()
                 # Validate path is within folder_path to prevent directory traversal
                 try:

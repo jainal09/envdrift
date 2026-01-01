@@ -255,9 +255,9 @@ class SyncEngine:
         # First, check for plain .env file
         plain_env = folder_path / ".env"
         if plain_env.exists() and plain_env.is_file():
-            # Use folder name as environment for plain .env
-            environment = folder_path.name
-            return (plain_env, environment)
+            # Use "production" as default environment for plain .env files
+            # This is consistent with effective_environment default
+            return (plain_env, "production")
 
         # Find all .env.* files, excluding special files
         exclude_patterns = {".env.keys", ".env.example", ".env.sample", ".env.template"}
