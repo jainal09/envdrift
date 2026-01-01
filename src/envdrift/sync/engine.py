@@ -232,7 +232,8 @@ class SyncEngine:
 
         # Handle case where vault stores full line (KEY=value)
         # Strip any DOTENV_PRIVATE_KEY_*= prefix, not just the current environment's
-        pattern = r"^DOTENV_PRIVATE_KEY_[A-Z_]+=(.+)$"
+        # Support uppercase, lowercase, digits in environment names (e.g., soak, local, prod)
+        pattern = r"^DOTENV_PRIVATE_KEY_[A-Za-z0-9_]+=(.+)$"
         match = re.match(pattern, value)
         if match:
             value = match.group(1)
