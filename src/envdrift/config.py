@@ -15,7 +15,9 @@ class SyncMappingConfig:
     secret_name: str
     folder_path: str
     vault_name: str | None = None
-    environment: str = "production"
+    environment: str | None = None  # None = derive from profile or default to "production"
+    profile: str | None = None  # Profile name for filtering (e.g., "local", "prod")
+    activate_to: str | None = None  # Path to copy decrypted file when profile is activated
 
 
 @dataclass
@@ -107,7 +109,9 @@ class EnvdriftConfig:
                 secret_name=m["secret_name"],
                 folder_path=m["folder_path"],
                 vault_name=m.get("vault_name"),
-                environment=m.get("environment", "production"),
+                environment=m.get("environment"),  # None = derive from profile
+                profile=m.get("profile"),
+                activate_to=m.get("activate_to"),
             )
             for m in sync_section.get("mappings", [])
         ]
@@ -326,6 +330,13 @@ secret_name = "service2-dotenvx-key"
 folder_path = "services/service2"
 vault_name = "other-vault"  # Optional: override default vault
 environment = "staging"
+
+# Profile mappings - use with `envdrift pull --profile local`
+[[vault.sync.mappings]]
+secret_name = "local-key"
+folder_path = "."
+profile = "local"           # Tag for --profile filtering
+activate_to = ".env"        # Copy decrypted .env.local to .env
 
 [precommit]
 # Files to validate on commit

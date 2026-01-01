@@ -360,6 +360,56 @@ folder_path = "services/prod"
 vault_name = "production-vault"  # Override default
 ```
 
+### Profile Configuration
+
+Profiles allow multiple environment configurations in a single project (e.g., local development, staging, production).
+
+```toml
+[vault]
+provider = "azure"
+
+[vault.azure]
+vault_url = "https://my-keyvault.vault.azure.net/"
+
+[vault.sync]
+default_vault_name = "my-keyvault"
+
+# Regular mapping (always processed by pull/sync)
+[[vault.sync.mappings]]
+secret_name = "shared-key"
+folder_path = "."
+
+# Profile: local development
+[[vault.sync.mappings]]
+secret_name = "local-key"
+folder_path = "."
+profile = "local"              # Only with --profile local
+activate_to = ".env"           # Copy decrypted .env.local to .env
+
+# Profile: production
+[[vault.sync.mappings]]
+secret_name = "prod-key"
+folder_path = "."
+profile = "prod"
+activate_to = ".env"
+```
+
+**Usage:**
+
+```bash
+# Pull local development environment
+envdrift pull --profile local
+
+# Pull production environment
+envdrift pull --profile prod
+```
+
+**Key concepts:**
+
+- **`profile`**: Tags a mapping for filtering. Without `--profile`, only non-profile mappings are processed.
+- **`activate_to`**: Path to copy the decrypted file to (e.g., `.env`). Useful for apps that expect a plain `.env` file.
+- **`environment`**: If omitted, defaults to the `profile` value (e.g., profile `local` → looks for `.env.local`).
+
 ### Legacy Format (pair.txt)
 
 ```text

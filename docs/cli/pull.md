@@ -61,6 +61,23 @@ Force update all key mismatches without prompting.
 envdrift pull --force
 ```
 
+### `--profile`
+
+Filter mappings by profile and activate the specified environment.
+
+Use this when you have multiple environment configurations (e.g., `local`, `prod`, `soak`) and want to set up a specific one.
+
+```bash
+# Pull only the 'local' profile
+envdrift pull --profile local
+```
+
+When a profile is specified:
+
+- Regular mappings (without a profile) are always processed
+- Only the matching profile mapping is processed
+- If `activate_to` is configured, the decrypted file is copied to that path
+
 ## Examples
 
 ### Basic Pull
@@ -86,6 +103,13 @@ envdrift pull -p azure --vault-url https://myvault.vault.azure.net/
 
 ```bash
 envdrift pull --force
+```
+
+### Pull With Profile
+
+```bash
+# Set up local development environment
+envdrift pull --profile local
 ```
 
 ## Output
@@ -147,16 +171,36 @@ vault_url = "https://my-keyvault.vault.azure.net/"
 [vault.sync]
 default_vault_name = "my-keyvault"
 
+# Regular mapping (always processed)
 [[vault.sync.mappings]]
 secret_name = "myapp-key"
 folder_path = "services/myapp"
 environment = "production"
 
+# Profile mappings (processed only with --profile)
 [[vault.sync.mappings]]
-secret_name = "auth-key"
-folder_path = "services/auth"
-environment = "staging"
+secret_name = "local-key"
+folder_path = "."
+profile = "local"              # Only process with --profile local
+activate_to = ".env"           # Copy .env.local to .env after decryption
+
+[[vault.sync.mappings]]
+secret_name = "prod-key"
+folder_path = "."
+profile = "prod"
+activate_to = ".env"
 ```
+
+### Profile vs Environment
+
+- **`environment`**: Specifies which `.env.<environment>` file to look for (e.g., `production` → `.env.production`)
+- **`profile`**: Tags a mapping for filtering with `--profile`
+
+When `environment` is not set, it defaults from:
+
+1. The explicit `environment` field (if set)
+2. The `profile` field (if set)
+3. `"production"` (default)
 
 ## Exit Codes
 

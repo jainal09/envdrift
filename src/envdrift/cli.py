@@ -900,6 +900,8 @@ def sync(
                     folder_path=Path(m.folder_path),
                     vault_name=m.vault_name,
                     environment=m.environment,
+                    profile=m.profile,
+                    activate_to=Path(m.activate_to) if m.activate_to else None,
                 )
                 for m in vault_sync.mappings
             ],
@@ -1021,10 +1023,16 @@ def sync(
 
 
 def _detect_env_file_for_decrypt(folder_path: Path) -> Path | None:
-    """Auto-detect .env.<environment> file in a folder for decryption."""
+    """Auto-detect .env file in a folder for decryption."""
     if not folder_path.exists():
         return None
 
+    # First, check for plain .env file
+    plain_env = folder_path / ".env"
+    if plain_env.exists() and plain_env.is_file():
+        return plain_env
+
+    # Find all .env.* files, excluding special files
     exclude_patterns = {".env.keys", ".env.example", ".env.sample", ".env.template"}
     env_files = []
 
@@ -1064,6 +1072,10 @@ def pull(
         bool,
         typer.Option("--force", "-f", help="Update all mismatches without prompting"),
     ] = False,
+    profile: Annotated[
+        str | None,
+        typer.Option("--profile", help="Only process mappings for this profile"),
+    ] = None,
 ) -> None:
     """
     Pull keys from vault and decrypt all env files (one-command developer setup).
@@ -1074,14 +1086,22 @@ def pull(
     This is the recommended command for onboarding new developers - just run
     `envdrift pull` and all encrypted environment files are ready to use.
 
+    Use --profile to filter mappings and activate a specific environment:
+    - Without --profile: processes all mappings without a profile tag
+    - With --profile: processes regular mappings + the matching profile,
+      and copies the decrypted file to the activate_to path if configured
+
     Configuration is read from:
     - pyproject.toml [tool.envdrift.vault.sync] section
     - envdrift.toml [vault.sync] section
     - Explicit --config file
 
     Examples:
-        # Auto-discover config and pull everything
+        # Auto-discover config and pull everything (non-profile mappings only)
         envdrift pull
+
+        # Pull with a specific profile (regular mappings + profile, activates env)
+        envdrift pull --profile local
 
         # Use explicit config file
         envdrift pull -c envdrift.toml
@@ -1162,6 +1182,8 @@ def pull(
                     folder_path=Path(m.folder_path),
                     vault_name=m.vault_name,
                     environment=m.environment,
+                    profile=m.profile,
+                    activate_to=Path(m.activate_to) if m.activate_to else None,
                 )
                 for m in vault_sync.mappings
             ],
@@ -1218,9 +1240,28 @@ def pull(
         print_error(str(e))
         raise typer.Exit(code=1) from None
 
-    # === STEP 1: SYNC KEYS FROM VAULT ===
+    # === FILTER MAPPINGS BY PROFILE ===
     from envdrift.sync.engine import SyncEngine, SyncMode
 
+    filtered_mappings = sync_config.filter_by_profile(profile)
+
+    if not filtered_mappings:
+        if profile:
+            print_error(f"No mappings found for profile '{profile}'")
+        else:
+            print_warning("No non-profile mappings found. Use --profile to specify one.")
+        raise typer.Exit(code=1)
+
+    # Create a filtered config for the sync engine
+    from envdrift.sync.config import SyncConfig as SyncConfigClass
+
+    filtered_config = SyncConfigClass(
+        mappings=filtered_mappings,
+        default_vault_name=sync_config.default_vault_name,
+        env_keys_filename=sync_config.env_keys_filename,
+    )
+
+    # === STEP 1: SYNC KEYS FROM VAULT ===
     mode = SyncMode(force_update=force)
 
     def progress_callback(msg: str) -> None:
@@ -1233,7 +1274,7 @@ def pull(
         return response in ("y", "yes")
 
     engine = SyncEngine(
-        config=sync_config,
+        config=filtered_config,
         vault_client=vault_client,
         mode=mode,
         prompt_callback=prompt_callback,
@@ -1241,10 +1282,9 @@ def pull(
     )
 
     console.print()
-    console.print("[bold]Pull[/bold] - Syncing keys and decrypting env files")
-    console.print(
-        f"[dim]Provider: {effective_provider} | Services: {len(sync_config.mappings)}[/dim]"
-    )
+    profile_info = f" (profile: {profile})" if profile else ""
+    console.print(f"[bold]Pull[/bold] - Syncing keys and decrypting env files{profile_info}")
+    console.print(f"[dim]Provider: {effective_provider} | Services: {len(filtered_mappings)}[/dim]")
     console.print()
 
     console.print("[bold cyan]Step 1:[/bold cyan] Syncing keys from vault...")
@@ -1286,9 +1326,11 @@ def pull(
     decrypted_count = 0
     skipped_count = 0
     error_count = 0
+    activated_count = 0
 
-    for mapping in sync_config.mappings:
-        env_file = mapping.folder_path / f".env.{mapping.environment}"
+    for mapping in filtered_mappings:
+        effective_env = mapping.effective_environment
+        env_file = mapping.folder_path / f".env.{effective_env}"
 
         if not env_file.exists():
             # Try to auto-detect .env.* file
@@ -1311,17 +1353,34 @@ def pull(
             dotenvx.decrypt(env_file)
             console.print(f"  [green]+[/green] {env_file} [dim]- decrypted[/dim]")
             decrypted_count += 1
+
+            # Activate profile: copy decrypted file to activate_to path if configured
+            if profile and mapping.profile == profile and mapping.activate_to:
+                import shutil
+
+                activate_path = mapping.folder_path / mapping.activate_to
+                shutil.copy2(env_file, activate_path)
+                console.print(
+                    f"  [cyan]→[/cyan] {activate_path} [dim]- activated from {env_file.name}[/dim]"
+                )
+                activated_count += 1
+
         except Exception as e:
             console.print(f"  [red]![/red] {env_file} [red]- error: {e}[/red]")
             error_count += 1
 
     # === SUMMARY ===
     console.print()
+    summary_lines = [
+        f"Decrypted: {decrypted_count}",
+        f"Skipped: {skipped_count}",
+        f"Errors: {error_count}",
+    ]
+    if activated_count > 0:
+        summary_lines.append(f"Activated: {activated_count}")
     console.print(
         Panel(
-            f"Decrypted: {decrypted_count}\n"
-            f"Skipped: {skipped_count}\n"
-            f"Errors: {error_count}",
+            "\n".join(summary_lines),
             title="Decrypt Summary",
             expand=False,
         )

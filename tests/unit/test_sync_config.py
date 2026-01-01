@@ -39,13 +39,56 @@ class TestServiceMapping:
         )
         assert mapping.env_key_name == "DOTENV_PRIVATE_KEY_DEVELOPMENT"
 
-    def test_default_environment_is_production(self) -> None:
-        """Test default environment is production."""
+    def test_effective_environment_defaults_to_production(self) -> None:
+        """Test effective_environment defaults to production when no environment or profile."""
         mapping = ServiceMapping(
             secret_name="my-key",
             folder_path=Path("services/myapp"),
         )
-        assert mapping.environment == "production"
+        assert mapping.environment is None
+        assert mapping.effective_environment == "production"
+        assert mapping.env_key_name == "DOTENV_PRIVATE_KEY_PRODUCTION"
+
+    def test_effective_environment_from_explicit_environment(self) -> None:
+        """Test effective_environment uses explicit environment."""
+        mapping = ServiceMapping(
+            secret_name="my-key",
+            folder_path=Path("services/myapp"),
+            environment="staging",
+        )
+        assert mapping.effective_environment == "staging"
+
+    def test_effective_environment_from_profile(self) -> None:
+        """Test effective_environment derives from profile when environment is None."""
+        mapping = ServiceMapping(
+            secret_name="my-key",
+            folder_path=Path("services/myapp"),
+            profile="local",
+        )
+        assert mapping.environment is None
+        assert mapping.effective_environment == "local"
+        assert mapping.env_key_name == "DOTENV_PRIVATE_KEY_LOCAL"
+
+    def test_effective_environment_explicit_overrides_profile(self) -> None:
+        """Test explicit environment takes priority over profile."""
+        mapping = ServiceMapping(
+            secret_name="my-key",
+            folder_path=Path("services/myapp"),
+            environment="staging",
+            profile="local",
+        )
+        assert mapping.effective_environment == "staging"
+
+    def test_profile_and_activate_to(self) -> None:
+        """Test ServiceMapping with profile and activate_to fields."""
+        mapping = ServiceMapping(
+            secret_name="local-key",
+            folder_path=Path("services/myapp"),
+            profile="local",
+            activate_to=Path(".env"),
+        )
+        assert mapping.profile == "local"
+        assert mapping.activate_to == Path(".env")
 
 
 class TestSyncConfigFromFile:
@@ -157,7 +200,8 @@ class TestSyncConfigFromToml:
 
         assert len(config.mappings) == 2
         assert config.mappings[0].secret_name == "myapp-key"
-        assert config.mappings[0].environment == "production"
+        assert config.mappings[0].environment is None  # Derives from effective_environment
+        assert config.mappings[0].effective_environment == "production"
 
     def test_from_toml_with_environment(self) -> None:
         """Test TOML config with environment override."""
@@ -214,6 +258,105 @@ class TestSyncConfigFromToml:
         config = SyncConfig.from_toml(data)
 
         assert len(config.mappings) == 0
+
+    def test_from_toml_with_profile(self) -> None:
+        """Test TOML config with profile field."""
+        data = {
+            "mappings": [
+                {
+                    "secret_name": "local-key",
+                    "folder_path": ".",
+                    "profile": "local",
+                },
+            ]
+        }
+
+        config = SyncConfig.from_toml(data)
+
+        assert config.mappings[0].profile == "local"
+        assert config.mappings[0].environment is None
+        assert config.mappings[0].effective_environment == "local"
+
+    def test_from_toml_with_profile_and_activate_to(self) -> None:
+        """Test TOML config with profile and activate_to."""
+        data = {
+            "mappings": [
+                {
+                    "secret_name": "local-key",
+                    "folder_path": ".",
+                    "profile": "local",
+                    "activate_to": ".env",
+                },
+            ]
+        }
+
+        config = SyncConfig.from_toml(data)
+
+        assert config.mappings[0].profile == "local"
+        assert config.mappings[0].activate_to == Path(".env")
+
+
+class TestSyncConfigFilterByProfile:
+    """Tests for filter_by_profile()."""
+
+    def test_no_profile_returns_non_profile_mappings(self) -> None:
+        """Test filter_by_profile(None) returns only mappings without a profile."""
+        config = SyncConfig(
+            mappings=[
+                ServiceMapping(secret_name="regular", folder_path=Path()),
+                ServiceMapping(secret_name="local", folder_path=Path(), profile="local"),
+                ServiceMapping(secret_name="prod", folder_path=Path(), profile="prod"),
+            ]
+        )
+
+        result = config.filter_by_profile(None)
+
+        assert len(result) == 1
+        assert result[0].secret_name == "regular"
+
+    def test_profile_returns_non_profile_plus_matching(self) -> None:
+        """Test filter_by_profile('local') returns non-profile + matching profile."""
+        config = SyncConfig(
+            mappings=[
+                ServiceMapping(secret_name="regular", folder_path=Path()),
+                ServiceMapping(secret_name="local", folder_path=Path(), profile="local"),
+                ServiceMapping(secret_name="prod", folder_path=Path(), profile="prod"),
+            ]
+        )
+
+        result = config.filter_by_profile("local")
+
+        assert len(result) == 2
+        names = [m.secret_name for m in result]
+        assert "regular" in names
+        assert "local" in names
+        assert "prod" not in names
+
+    def test_profile_only_mappings(self) -> None:
+        """Test filter_by_profile when all mappings have profiles."""
+        config = SyncConfig(
+            mappings=[
+                ServiceMapping(secret_name="local", folder_path=Path(), profile="local"),
+                ServiceMapping(secret_name="prod", folder_path=Path(), profile="prod"),
+            ]
+        )
+
+        result = config.filter_by_profile("prod")
+
+        assert len(result) == 1
+        assert result[0].secret_name == "prod"
+
+    def test_no_matching_profile(self) -> None:
+        """Test filter_by_profile with non-matching profile."""
+        config = SyncConfig(
+            mappings=[
+                ServiceMapping(secret_name="local", folder_path=Path(), profile="local"),
+            ]
+        )
+
+        result = config.filter_by_profile("prod")
+
+        assert len(result) == 0
 
 
 class TestSyncConfigEffectiveVaultName:

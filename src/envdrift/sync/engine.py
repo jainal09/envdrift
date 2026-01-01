@@ -80,11 +80,11 @@ class SyncEngine:
         """Sync a single service."""
         try:
             # Check if corresponding .env.<environment> file exists
-            env_file = mapping.folder_path / f".env.{mapping.environment}"
-            effective_environment = mapping.environment
+            env_file = mapping.folder_path / f".env.{mapping.effective_environment}"
+            effective_environment = mapping.effective_environment
 
             if not env_file.exists():
-                # Try to auto-detect: find any .env.* file in the folder
+                # Try to auto-detect: find any .env.* file or plain .env in the folder
                 detected = self._detect_env_file(mapping.folder_path)
                 if detected:
                     env_file, effective_environment = detected
@@ -93,7 +93,7 @@ class SyncEngine:
                         secret_name=mapping.secret_name,
                         folder_path=mapping.folder_path,
                         action=SyncAction.SKIPPED,
-                        message=f"No .env.{mapping.environment} file found - skipping",
+                        message=f"No .env.{mapping.effective_environment} file found - skipping",
                     )
 
             # Use effective environment for key name
@@ -241,13 +241,23 @@ class SyncEngine:
 
     def _detect_env_file(self, folder_path: Path) -> tuple[Path, str] | None:
         """
-        Auto-detect .env.<environment> file in a folder.
+        Auto-detect .env file in a folder.
 
-        Returns (env_file_path, environment_name) if exactly one .env.* file
-        is found (excluding .env.keys, .env.example, etc.), otherwise None.
+        Checks for:
+        1. Plain .env file (returns environment as folder name)
+        2. Single .env.* file (returns environment from suffix)
+
+        Returns (env_file_path, environment_name) or None.
         """
         if not folder_path.exists():
             return None
+
+        # First, check for plain .env file
+        plain_env = folder_path / ".env"
+        if plain_env.exists() and plain_env.is_file():
+            # Use folder name as environment for plain .env
+            environment = folder_path.name
+            return (plain_env, environment)
 
         # Find all .env.* files, excluding special files
         exclude_patterns = {".env.keys", ".env.example", ".env.sample", ".env.template"}
