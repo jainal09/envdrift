@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import shutil
 from pathlib import Path
-from typing import Annotated
+from typing import TYPE_CHECKING, Annotated, Any
 
 import typer
 from rich.panel import Panel
@@ -28,11 +28,173 @@ from envdrift.output.rich import (
 )
 from envdrift.vault.base import SecretNotFoundError, VaultError
 
+if TYPE_CHECKING:
+    from envdrift.sync.config import SyncConfig
+
 app = typer.Typer(
     name="envdrift",
     help="Prevent environment variable drift with Pydantic schema validation.",
     no_args_is_help=True,
 )
+
+
+def _load_config_and_create_vault_client(
+    config_file: Path | None,
+    provider: str | None,
+    vault_url: str | None,
+    region: str | None,
+) -> tuple[SyncConfig, Any, str, str | None, str | None]:
+    import tomllib
+
+    from envdrift.config import ConfigNotFoundError, find_config, load_config
+    from envdrift.sync.config import ServiceMapping, SyncConfig, SyncConfigError
+    from envdrift.vault import get_vault_client
+
+    # Determine config source for defaults:
+    # 1. If --config points to a TOML file, use it for defaults
+    # 2. Otherwise, use auto-discovery (find_config)
+    # Note: skip discovery when --config is provided (e.g., pair.txt) to avoid
+    # pulling defaults from unrelated projects.
+    envdrift_config = None
+    config_path = None
+
+    if config_file is not None and config_file.suffix.lower() == ".toml":
+        # Use the explicitly provided TOML file for defaults
+        config_path = config_file
+        try:
+            envdrift_config = load_config(config_path)
+        except tomllib.TOMLDecodeError as e:
+            print_error(f"TOML syntax error in {config_path}: {e}")
+            raise typer.Exit(code=1) from None
+        except ConfigNotFoundError:
+            pass
+    elif config_file is None:
+        # Auto-discover config from envdrift.toml or pyproject.toml
+        config_path = find_config()
+        if config_path:
+            try:
+                envdrift_config = load_config(config_path)
+            except ConfigNotFoundError:
+                pass
+            except tomllib.TOMLDecodeError as e:
+                print_warning(f"TOML syntax error in {config_path}: {e}")
+
+    vault_config = getattr(envdrift_config, "vault", None)
+
+    # Determine effective provider (CLI overrides config)
+    effective_provider = provider or getattr(vault_config, "provider", None)
+
+    # Determine effective vault URL (CLI overrides config)
+    effective_vault_url = vault_url
+    if effective_vault_url is None and vault_config:
+        if effective_provider == "azure":
+            effective_vault_url = getattr(vault_config, "azure_vault_url", None)
+        elif effective_provider == "hashicorp":
+            effective_vault_url = getattr(vault_config, "hashicorp_url", None)
+
+    # Determine effective region (CLI overrides config)
+    effective_region = region
+    if effective_region is None and vault_config:
+        effective_region = getattr(vault_config, "aws_region", None)
+
+    vault_sync = getattr(vault_config, "sync", None)
+
+    # Load sync config from file or project config
+    sync_config: SyncConfig | None = None
+
+    if config_file is not None:
+        # Explicit config file provided
+        if not config_file.exists():
+            print_error(f"Config file not found: {config_file}")
+            raise typer.Exit(code=1)
+
+        try:
+            # Detect format by extension
+            if config_file.suffix.lower() == ".toml":
+                sync_config = SyncConfig.from_toml_file(config_file)
+            else:
+                # Legacy pair.txt format
+                sync_config = SyncConfig.from_file(config_file)
+        except SyncConfigError as e:
+            print_error(f"Invalid config file: {e}")
+            raise typer.Exit(code=1) from None
+    elif vault_sync and vault_sync.mappings:
+        # Use mappings from project config
+        sync_config = SyncConfig(
+            mappings=[
+                ServiceMapping(
+                    secret_name=m.secret_name,
+                    folder_path=Path(m.folder_path),
+                    vault_name=m.vault_name,
+                    environment=m.environment,
+                    profile=m.profile,
+                    activate_to=Path(m.activate_to) if m.activate_to else None,
+                )
+                for m in vault_sync.mappings
+            ],
+            default_vault_name=vault_sync.default_vault_name,
+            env_keys_filename=vault_sync.env_keys_filename,
+        )
+    elif config_path and config_path.suffix.lower() == ".toml":
+        # Try to load sync config from discovered TOML
+        try:
+            sync_config = SyncConfig.from_toml_file(config_path)
+        except SyncConfigError as e:
+            print_warning(f"Could not load sync config from {config_path}: {e}")
+
+    if sync_config is None or not sync_config.mappings:
+        print_error(
+            "No sync configuration found. Provide one of:\n"
+            "  --config <file.toml>  TOML config with [vault.sync] section\n"
+            "  --config <pair.txt>   Legacy format: secret=folder\n"
+            "  [tool.envdrift.vault.sync] section in pyproject.toml"
+        )
+        raise typer.Exit(code=1)
+
+    # Validate provider is set
+    if effective_provider is None:
+        print_error(
+            "--provider is required (or set [vault] provider in config). "
+            "Options: azure, aws, hashicorp"
+        )
+        raise typer.Exit(code=1)
+
+    # Validate provider-specific options
+    if effective_provider == "azure" and not effective_vault_url:
+        print_error("Azure provider requires --vault-url " "(or [vault.azure] vault_url in config)")
+        raise typer.Exit(code=1)
+
+    if effective_provider == "hashicorp" and not effective_vault_url:
+        print_error(
+            "HashiCorp provider requires --vault-url " "(or [vault.hashicorp] url in config)"
+        )
+        raise typer.Exit(code=1)
+
+    # Create vault client
+    try:
+        vault_kwargs: dict = {}
+        if effective_provider == "azure":
+            vault_kwargs["vault_url"] = effective_vault_url
+        elif effective_provider == "aws":
+            vault_kwargs["region"] = effective_region or "us-east-1"
+        elif effective_provider == "hashicorp":
+            vault_kwargs["url"] = effective_vault_url
+
+        vault_client = get_vault_client(effective_provider, **vault_kwargs)
+    except ImportError as e:
+        print_error(str(e))
+        raise typer.Exit(code=1) from None
+    except ValueError as e:
+        print_error(str(e))
+        raise typer.Exit(code=1) from None
+
+    return (
+        sync_config,
+        vault_client,
+        effective_provider,
+        effective_vault_url,
+        effective_region,
+    )
 
 
 @app.command()
@@ -817,153 +979,15 @@ def sync(
         # Verify mode (CI)
         envdrift sync --verify --ci
     """
-    import tomllib
-
-    from envdrift.config import ConfigNotFoundError, find_config, load_config
     from envdrift.output.rich import print_service_sync_status, print_sync_result
-    from envdrift.sync.config import SyncConfig, SyncConfigError
+    from envdrift.sync.config import SyncConfigError
 
-    # Determine config source for defaults:
-    # 1. If --config points to a TOML file, use it for defaults
-    # 2. Otherwise, use auto-discovery (find_config)
-    # Note: skip discovery when --config is provided (e.g., pair.txt) to avoid
-    # pulling defaults from unrelated projects.
-    envdrift_config = None
-    config_path = None
-
-    if config_file is not None and config_file.suffix.lower() == ".toml":
-        # Use the explicitly provided TOML file for defaults
-        config_path = config_file
-        try:
-            envdrift_config = load_config(config_path)
-        except tomllib.TOMLDecodeError as e:
-            print_error(f"TOML syntax error in {config_path}: {e}")
-            raise typer.Exit(code=1) from None
-        except ConfigNotFoundError:
-            pass
-    elif config_file is None:
-        # Auto-discover config from envdrift.toml or pyproject.toml
-        config_path = find_config()
-        if config_path:
-            try:
-                envdrift_config = load_config(config_path)
-            except ConfigNotFoundError:
-                pass
-            except tomllib.TOMLDecodeError as e:
-                print_warning(f"TOML syntax error in {config_path}: {e}")
-
-    vault_config = getattr(envdrift_config, "vault", None)
-
-    # Determine effective provider (CLI overrides config)
-    effective_provider = provider or getattr(vault_config, "provider", None)
-
-    # Determine effective vault URL (CLI overrides config)
-    effective_vault_url = vault_url
-    if effective_vault_url is None and vault_config:
-        if effective_provider == "azure":
-            effective_vault_url = getattr(vault_config, "azure_vault_url", None)
-        elif effective_provider == "hashicorp":
-            effective_vault_url = getattr(vault_config, "hashicorp_url", None)
-
-    # Determine effective region (CLI overrides config)
-    effective_region = region
-    if effective_region is None and vault_config:
-        effective_region = getattr(vault_config, "aws_region", None)
-
-    vault_sync = getattr(vault_config, "sync", None)
-
-    # Load sync config from file or project config
-    sync_config: SyncConfig | None = None
-
-    if config_file is not None:
-        # Explicit config file provided
-        if not config_file.exists():
-            print_error(f"Config file not found: {config_file}")
-            raise typer.Exit(code=1)
-
-        try:
-            # Detect format by extension
-            if config_file.suffix.lower() == ".toml":
-                sync_config = SyncConfig.from_toml_file(config_file)
-            else:
-                # Legacy pair.txt format
-                sync_config = SyncConfig.from_file(config_file)
-        except SyncConfigError as e:
-            print_error(f"Invalid config file: {e}")
-            raise typer.Exit(code=1) from None
-    elif vault_sync and vault_sync.mappings:
-        # Use mappings from project config
-        from envdrift.sync.config import ServiceMapping
-
-        sync_config = SyncConfig(
-            mappings=[
-                ServiceMapping(
-                    secret_name=m.secret_name,
-                    folder_path=Path(m.folder_path),
-                    vault_name=m.vault_name,
-                    environment=m.environment,
-                    profile=m.profile,
-                    activate_to=Path(m.activate_to) if m.activate_to else None,
-                )
-                for m in vault_sync.mappings
-            ],
-            default_vault_name=vault_sync.default_vault_name,
-            env_keys_filename=vault_sync.env_keys_filename,
-        )
-    elif config_path and config_path.suffix.lower() == ".toml":
-        # Try to load sync config from discovered TOML
-        try:
-            sync_config = SyncConfig.from_toml_file(config_path)
-        except SyncConfigError as e:
-            print_warning(f"Could not load sync config from {config_path}: {e}")
-
-    if sync_config is None or not sync_config.mappings:
-        print_error(
-            "No sync configuration found. Provide one of:\n"
-            "  --config <file.toml>  TOML config with [vault.sync] section\n"
-            "  --config <pair.txt>   Legacy format: secret=folder\n"
-            "  [tool.envdrift.vault.sync] section in pyproject.toml"
-        )
-        raise typer.Exit(code=1)
-
-    # Validate provider is set
-    if effective_provider is None:
-        print_error(
-            "--provider is required (or set [vault] provider in config). "
-            "Options: azure, aws, hashicorp"
-        )
-        raise typer.Exit(code=1)
-
-    # Validate provider-specific options
-    if effective_provider == "azure" and not effective_vault_url:
-        print_error("Azure provider requires --vault-url " "(or [vault.azure] vault_url in config)")
-        raise typer.Exit(code=1)
-
-    if effective_provider == "hashicorp" and not effective_vault_url:
-        print_error(
-            "HashiCorp provider requires --vault-url " "(or [vault.hashicorp] url in config)"
-        )
-        raise typer.Exit(code=1)
-
-    # Create vault client
-    try:
-        from envdrift.vault import get_vault_client
-
-        vault_kwargs: dict = {}
-        if effective_provider == "azure":
-            vault_kwargs["vault_url"] = effective_vault_url
-        elif effective_provider == "aws":
-            vault_kwargs["region"] = effective_region or "us-east-1"
-        elif effective_provider == "hashicorp":
-            vault_kwargs["url"] = effective_vault_url
-
-        vault_client = get_vault_client(effective_provider, **vault_kwargs)
-    except ImportError as e:
-        print_error(str(e))
-        raise typer.Exit(code=1) from None
-    except ValueError as e:
-        print_error(str(e))
-        raise typer.Exit(code=1) from None
+    sync_config, vault_client, effective_provider, _, _ = _load_config_and_create_vault_client(
+        config_file=config_file,
+        provider=provider,
+        vault_url=vault_url,
+        region=region,
+    )
 
     # Create sync engine
     from envdrift.sync.engine import SyncEngine, SyncMode
@@ -1090,133 +1114,15 @@ def pull(
         # Force update without prompts
         envdrift pull --force
     """
-    import tomllib
-
-    from envdrift.config import ConfigNotFoundError, find_config, load_config
     from envdrift.output.rich import print_service_sync_status, print_sync_result
-    from envdrift.sync.config import SyncConfig, SyncConfigError
+    from envdrift.sync.config import SyncConfigError
 
-    # === CONFIG LOADING (same as sync command) ===
-    envdrift_config = None
-    config_path = None
-
-    if config_file is not None and config_file.suffix.lower() == ".toml":
-        config_path = config_file
-        try:
-            envdrift_config = load_config(config_path)
-        except tomllib.TOMLDecodeError as e:
-            print_error(f"TOML syntax error in {config_path}: {e}")
-            raise typer.Exit(code=1) from None
-        except ConfigNotFoundError:
-            pass
-    elif config_file is None:
-        config_path = find_config()
-        if config_path:
-            try:
-                envdrift_config = load_config(config_path)
-            except ConfigNotFoundError:
-                pass
-            except tomllib.TOMLDecodeError as e:
-                print_warning(f"TOML syntax error in {config_path}: {e}")
-
-    vault_config = getattr(envdrift_config, "vault", None)
-
-    effective_provider = provider or getattr(vault_config, "provider", None)
-    effective_vault_url = vault_url
-    if effective_vault_url is None and vault_config:
-        if effective_provider == "azure":
-            effective_vault_url = getattr(vault_config, "azure_vault_url", None)
-        elif effective_provider == "hashicorp":
-            effective_vault_url = getattr(vault_config, "hashicorp_url", None)
-
-    effective_region = region
-    if effective_region is None and vault_config:
-        effective_region = getattr(vault_config, "aws_region", None)
-
-    vault_sync = getattr(vault_config, "sync", None)
-
-    sync_config: SyncConfig | None = None
-
-    if config_file is not None:
-        if not config_file.exists():
-            print_error(f"Config file not found: {config_file}")
-            raise typer.Exit(code=1)
-
-        try:
-            if config_file.suffix.lower() == ".toml":
-                sync_config = SyncConfig.from_toml_file(config_file)
-            else:
-                sync_config = SyncConfig.from_file(config_file)
-        except SyncConfigError as e:
-            print_error(f"Invalid config file: {e}")
-            raise typer.Exit(code=1) from None
-    elif vault_sync and vault_sync.mappings:
-        from envdrift.sync.config import ServiceMapping
-
-        sync_config = SyncConfig(
-            mappings=[
-                ServiceMapping(
-                    secret_name=m.secret_name,
-                    folder_path=Path(m.folder_path),
-                    vault_name=m.vault_name,
-                    environment=m.environment,
-                    profile=m.profile,
-                    activate_to=Path(m.activate_to) if m.activate_to else None,
-                )
-                for m in vault_sync.mappings
-            ],
-            default_vault_name=vault_sync.default_vault_name,
-            env_keys_filename=vault_sync.env_keys_filename,
-        )
-    elif config_path and config_path.suffix.lower() == ".toml":
-        try:
-            sync_config = SyncConfig.from_toml_file(config_path)
-        except SyncConfigError as e:
-            print_warning(f"Could not load sync config from {config_path}: {e}")
-
-    if sync_config is None or not sync_config.mappings:
-        print_error(
-            "No sync configuration found. Provide one of:\n"
-            "  --config <file.toml>  TOML config with [vault.sync] section\n"
-            "  --config <pair.txt>   Legacy format: secret=folder\n"
-            "  [tool.envdrift.vault.sync] section in pyproject.toml"
-        )
-        raise typer.Exit(code=1)
-
-    if effective_provider is None:
-        print_error(
-            "--provider is required (or set [vault] provider in config). "
-            "Options: azure, aws, hashicorp"
-        )
-        raise typer.Exit(code=1)
-
-    if effective_provider == "azure" and not effective_vault_url:
-        print_error("Azure provider requires --vault-url (or [vault.azure] vault_url in config)")
-        raise typer.Exit(code=1)
-
-    if effective_provider == "hashicorp" and not effective_vault_url:
-        print_error("HashiCorp provider requires --vault-url (or [vault.hashicorp] url in config)")
-        raise typer.Exit(code=1)
-
-    # === CREATE VAULT CLIENT ===
-    try:
-        from envdrift.vault import get_vault_client
-
-        vault_kwargs: dict = {}
-        if effective_provider == "azure":
-            vault_kwargs["vault_url"] = effective_vault_url
-        elif effective_provider == "aws":
-            vault_kwargs["region"] = effective_region or "us-east-1"
-        elif effective_provider == "hashicorp":
-            vault_kwargs["url"] = effective_vault_url
-
-        vault_client = get_vault_client(effective_provider, **vault_kwargs)
-    except ImportError as e:
-        print_error(str(e))
-        raise typer.Exit(code=1) from None
-    except ValueError as e:
-        print_error(str(e))
-        raise typer.Exit(code=1) from None
+    sync_config, vault_client, effective_provider, _, _ = _load_config_and_create_vault_client(
+        config_file=config_file,
+        provider=provider,
+        vault_url=vault_url,
+        region=region,
+    )
 
     # === FILTER MAPPINGS BY PROFILE ===
     from envdrift.sync.engine import SyncEngine, SyncMode
