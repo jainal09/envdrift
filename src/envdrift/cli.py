@@ -1358,12 +1358,28 @@ def pull(
             if profile and mapping.profile == profile and mapping.activate_to:
                 import shutil
 
-                activate_path = mapping.folder_path / mapping.activate_to
-                shutil.copy2(env_file, activate_path)
-                console.print(
-                    f"  [cyan]→[/cyan] {activate_path} [dim]- activated from {env_file.name}[/dim]"
-                )
-                activated_count += 1
+                activate_path = (mapping.folder_path / mapping.activate_to).resolve()
+                # Validate path is within folder_path to prevent directory traversal
+                try:
+                    activate_path.relative_to(mapping.folder_path.resolve())
+                except ValueError:
+                    console.print(
+                        f"  [red]![/red] {mapping.activate_to} [red]- invalid path (escapes folder)[/red]"
+                    )
+                    error_count += 1
+                    continue
+
+                try:
+                    shutil.copy2(env_file, activate_path)
+                    console.print(
+                        f"  [cyan]→[/cyan] {activate_path} [dim]- activated from {env_file.name}[/dim]"
+                    )
+                    activated_count += 1
+                except OSError as e:
+                    console.print(
+                        f"  [red]![/red] {activate_path} [red]- activation failed: {e}[/red]"
+                    )
+                    error_count += 1
 
         except DotenvxError as e:
             console.print(f"  [red]![/red] {env_file} [red]- error: {e}[/red]")
