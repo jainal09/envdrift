@@ -46,15 +46,15 @@ def _load_config_and_create_vault_client(
 ) -> tuple[SyncConfig, Any, str, str | None, str | None]:
     """
     Load sync configuration and instantiate a vault client using CLI arguments, discovered project config, or an explicit config file.
-    
+
     This resolves effective provider, vault URL, and region by preferring CLI arguments over project defaults (from a provided TOML file, discovered envdrift.toml/pyproject.toml, or an explicit legacy config), constructs a SyncConfig (from a TOML, legacy pair file, or project sync mappings), validates required provider-specific options, and returns the SyncConfig along with a ready-to-use vault client and the resolved provider/URL/region.
-    
+
     Parameters:
         config_file (Path | None): Path provided via --config. If a TOML file is given, it is used for defaults and/or as the sync config source; other extensions may be treated as legacy pair files.
         provider (str | None): CLI provider override (e.g., "azure", "aws", "hashicorp"). If omitted, the provider from project config is used when available.
         vault_url (str | None): CLI vault URL override for providers that require it (Azure, HashiCorp). If omitted, the value from project config is used when present.
         region (str | None): CLI region override for AWS. If omitted, the value from project config is used when present.
-    
+
     Returns:
         tuple[SyncConfig, Any, str, str | None, str | None]: A tuple containing:
             - SyncConfig: the resolved synchronization configuration with mappings.
@@ -62,7 +62,7 @@ def _load_config_and_create_vault_client(
             - effective_provider: the resolved provider string.
             - effective_vault_url: the resolved vault URL when applicable, otherwise None.
             - effective_region: the resolved region when applicable, otherwise None.
-    
+
     Raises:
         typer.Exit: Exits with a non-zero code if no valid sync configuration can be found, required provider options are missing, the config file is invalid or unreadable, or the vault client cannot be created.
     """
@@ -978,9 +978,9 @@ def sync(
 ) -> None:
     """
     Sync encryption keys from a configured vault to local .env.keys files for each service.
-    
+
     Loads sync configuration and a vault client, fetches DOTENV_PRIVATE_KEY_* secrets for configured mappings, and writes/updates local key files; optionally verifies keys, forces updates, checks decryption, and runs schema validation after sync. In interactive mode the command may prompt before updating individual services; --force, --verify, and --ci disable prompts.
-    
+
     Exits with code 1 on vault or sync configuration errors, and when run with --ci if any sync errors occurred.
     """
     from envdrift.output.rich import print_service_sync_status, print_sync_result
