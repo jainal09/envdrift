@@ -81,13 +81,23 @@ class SyncEngine:
         try:
             # Check if corresponding .env.<environment> file exists
             env_file = mapping.folder_path / f".env.{mapping.environment}"
+            effective_environment = mapping.environment
+
             if not env_file.exists():
-                return ServiceSyncResult(
-                    secret_name=mapping.secret_name,
-                    folder_path=mapping.folder_path,
-                    action=SyncAction.SKIPPED,
-                    message=f"No .env.{mapping.environment} file found - skipping",
-                )
+                # Try to auto-detect: find any .env.* file in the folder
+                detected = self._detect_env_file(mapping.folder_path)
+                if detected:
+                    env_file, effective_environment = detected
+                else:
+                    return ServiceSyncResult(
+                        secret_name=mapping.secret_name,
+                        folder_path=mapping.folder_path,
+                        action=SyncAction.SKIPPED,
+                        message=f"No .env.{mapping.environment} file found - skipping",
+                    )
+
+            # Use effective environment for key name
+            effective_key_name = f"DOTENV_PRIVATE_KEY_{effective_environment.upper()}"
 
             # Fetch secret from vault
             vault_value = self._fetch_vault_secret(mapping)
@@ -108,7 +118,7 @@ class SyncEngine:
             # Read local file
             env_keys_path = mapping.folder_path / self.config.env_keys_filename
             env_keys_file = EnvKeysFile(env_keys_path)
-            local_value = env_keys_file.read_key(mapping.env_key_name)
+            local_value = env_keys_file.read_key(effective_key_name)
             local_preview = preview_value(local_value) if local_value else None
 
             # Compare values
@@ -123,7 +133,7 @@ class SyncEngine:
                         vault_value_preview=vault_preview,
                     )
 
-                env_keys_file.write_key(mapping.env_key_name, vault_value, mapping.environment)
+                env_keys_file.write_key(effective_key_name, vault_value, effective_environment)
                 return ServiceSyncResult(
                     secret_name=mapping.secret_name,
                     folder_path=mapping.folder_path,
@@ -170,7 +180,7 @@ class SyncEngine:
                 if should_update:
                     # Create backup before updating
                     backup_path = env_keys_file.create_backup()
-                    env_keys_file.write_key(mapping.env_key_name, vault_value, mapping.environment)
+                    env_keys_file.write_key(effective_key_name, vault_value, effective_environment)
                     return ServiceSyncResult(
                         secret_name=mapping.secret_name,
                         folder_path=mapping.folder_path,
@@ -228,6 +238,32 @@ class SyncEngine:
             value = match.group(1)
 
         return value
+
+    def _detect_env_file(self, folder_path: Path) -> tuple[Path, str] | None:
+        """
+        Auto-detect .env.<environment> file in a folder.
+
+        Returns (env_file_path, environment_name) if exactly one .env.* file
+        is found (excluding .env.keys, .env.example, etc.), otherwise None.
+        """
+        if not folder_path.exists():
+            return None
+
+        # Find all .env.* files, excluding special files
+        exclude_patterns = {".env.keys", ".env.example", ".env.sample", ".env.template"}
+        env_files = []
+
+        for f in folder_path.iterdir():
+            if f.is_file() and f.name.startswith(".env.") and f.name not in exclude_patterns:
+                env_files.append(f)
+
+        if len(env_files) == 1:
+            env_file = env_files[0]
+            # Extract environment from filename: .env.soak -> soak
+            environment = env_file.name[5:]  # Remove ".env." prefix
+            return (env_file, environment)
+
+        return None
 
     def _test_decryption(self, mapping: ServiceMapping) -> DecryptionTestResult:
         """

@@ -1020,6 +1020,24 @@ def sync(
         raise typer.Exit(code=1)
 
 
+def _detect_env_file_for_decrypt(folder_path: Path) -> Path | None:
+    """Auto-detect .env.<environment> file in a folder for decryption."""
+    if not folder_path.exists():
+        return None
+
+    exclude_patterns = {".env.keys", ".env.example", ".env.sample", ".env.template"}
+    env_files = []
+
+    for f in folder_path.iterdir():
+        if f.is_file() and f.name.startswith(".env.") and f.name not in exclude_patterns:
+            env_files.append(f)
+
+    if len(env_files) == 1:
+        return env_files[0]
+
+    return None
+
+
 @app.command()
 def pull(
     config_file: Annotated[
@@ -1273,9 +1291,14 @@ def pull(
         env_file = mapping.folder_path / f".env.{mapping.environment}"
 
         if not env_file.exists():
-            console.print(f"  [dim]=[/dim] {env_file} [dim]- skipped (not found)[/dim]")
-            skipped_count += 1
-            continue
+            # Try to auto-detect .env.* file
+            detected = _detect_env_file_for_decrypt(mapping.folder_path)
+            if detected:
+                env_file = detected
+            else:
+                console.print(f"  [dim]=[/dim] {env_file} [dim]- skipped (not found)[/dim]")
+                skipped_count += 1
+                continue
 
         # Check if file is encrypted
         content = env_file.read_text()
