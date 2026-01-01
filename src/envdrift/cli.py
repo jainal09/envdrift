@@ -1285,7 +1285,7 @@ def pull(
             continue
 
         try:
-            dotenvx.decrypt(env_file, cwd=mapping.folder_path)
+            dotenvx.decrypt(env_file)
             console.print(f"  [green]+[/green] {env_file} [dim]- decrypted[/dim]")
             decrypted_count += 1
         except Exception as e:
