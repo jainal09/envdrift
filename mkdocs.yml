@@ -50,6 +50,8 @@ nav:
     - init: cli/init.md
     - hook: cli/hook.md
     - sync: cli/sync.md
+    - pull: cli/pull.md
+    - lock: cli/lock.md
     - vault-push: cli/vault-push.md
     - version: cli/version.md
   - Guides:

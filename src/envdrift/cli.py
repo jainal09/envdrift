@@ -1303,6 +1303,430 @@ def pull(
     print_success("Setup complete! Your environment files are ready to use.")
 
 
+@app.command()
+def lock(
+    config_file: Annotated[
+        Path | None,
+        typer.Option(
+            "--config",
+            "-c",
+            help="Path to sync config file (TOML or legacy pair.txt format)",
+        ),
+    ] = None,
+    provider: Annotated[
+        str | None,
+        typer.Option("--provider", "-p", help="Vault provider: azure, aws, hashicorp"),
+    ] = None,
+    vault_url: Annotated[
+        str | None,
+        typer.Option("--vault-url", help="Vault URL (Azure Key Vault or HashiCorp Vault)"),
+    ] = None,
+    region: Annotated[
+        str | None,
+        typer.Option("--region", help="AWS region (default: us-east-1)"),
+    ] = None,
+    force: Annotated[
+        bool,
+        typer.Option("--force", "-f", help="Force encryption without prompting"),
+    ] = False,
+    profile: Annotated[
+        str | None,
+        typer.Option("--profile", help="Only process mappings for this profile"),
+    ] = None,
+    verify_vault: Annotated[
+        bool,
+        typer.Option("--verify-vault", help="Verify local keys match vault before encrypting"),
+    ] = False,
+    sync_keys: Annotated[
+        bool,
+        typer.Option(
+            "--sync-keys", help="Sync keys from vault before encrypting (implies --verify-vault)"
+        ),
+    ] = False,
+    check_only: Annotated[
+        bool,
+        typer.Option("--check", help="Only check encryption status, don't encrypt"),
+    ] = False,
+) -> None:
+    """
+    Verify keys and encrypt all env files (opposite of pull - prepares for commit).
+
+    The lock command ensures your environment files are properly encrypted before
+    committing. It can optionally verify that local keys match vault keys to prevent
+    key drift, and then encrypts all decrypted .env files.
+
+    This is the recommended command before committing changes to ensure:
+    1. Local encryption keys are in sync with the team's vault keys
+    2. All .env files are properly encrypted
+    3. No plaintext secrets are accidentally committed
+
+    Workflow:
+    - With --verify-vault: Check if local .env.keys match vault secrets
+    - With --sync-keys: Fetch keys from vault to ensure consistency
+    - Then: Encrypt all .env files that are currently decrypted
+
+    Use --profile to filter mappings for a specific environment.
+
+    Configuration is read from:
+    - pyproject.toml [tool.envdrift.vault.sync] section
+    - envdrift.toml [vault.sync] section
+    - Explicit --config file
+
+    Examples:
+        # Encrypt all env files (basic usage)
+        envdrift lock
+
+        # Verify keys match vault, then encrypt
+        envdrift lock --verify-vault
+
+        # Sync keys from vault first, then encrypt
+        envdrift lock --sync-keys
+
+        # Check encryption status only (dry run)
+        envdrift lock --check
+
+        # Lock with a specific profile
+        envdrift lock --profile local
+
+        # Force encryption without prompts
+        envdrift lock --force
+    """
+    from envdrift.output.rich import print_service_sync_status, print_sync_result
+    from envdrift.sync.config import SyncConfigError
+
+    # If sync_keys is requested, it implies verify_vault
+    if sync_keys:
+        verify_vault = True
+
+    sync_config, vault_client, effective_provider, _, _ = _load_config_and_create_vault_client(
+        config_file=config_file,
+        provider=provider,
+        vault_url=vault_url,
+        region=region,
+    )
+
+    # === FILTER MAPPINGS BY PROFILE ===
+    from envdrift.sync.config import SyncConfig as SyncConfigClass
+    from envdrift.sync.engine import SyncEngine, SyncMode
+
+    filtered_mappings = sync_config.filter_by_profile(profile)
+
+    if not filtered_mappings:
+        if profile:
+            print_error(f"No mappings found for profile '{profile}'")
+        else:
+            print_warning("No non-profile mappings found. Use --profile to specify one.")
+        raise typer.Exit(code=1)
+
+    # Create a filtered config for the sync engine
+    filtered_config = SyncConfigClass(
+        mappings=filtered_mappings,
+        default_vault_name=sync_config.default_vault_name,
+        env_keys_filename=sync_config.env_keys_filename,
+    )
+
+    console.print()
+    profile_info = f" (profile: {profile})" if profile else ""
+    mode_str = "CHECK" if check_only else ("FORCE" if force else "Interactive")
+    console.print(f"[bold]Lock[/bold] - Verifying keys and encrypting env files{profile_info}")
+    console.print(
+        f"[dim]Provider: {effective_provider} | Mode: {mode_str} | Services: {len(filtered_mappings)}[/dim]"
+    )
+    console.print()
+
+    # Tracking for summary
+    warnings: list[str] = []
+    errors: list[str] = []
+
+    # === STEP 1: VERIFY/SYNC KEYS (OPTIONAL) ===
+    if verify_vault:
+        console.print("[bold cyan]Step 1:[/bold cyan] Verifying keys with vault...")
+        console.print()
+
+        if sync_keys:
+            # Actually sync keys from vault
+            mode = SyncMode(force_update=force)
+
+            def progress_callback(msg: str) -> None:
+                console.print(f"[dim]{msg}[/dim]")
+
+            def prompt_callback(msg: str) -> bool:
+                if force:
+                    return True
+                response = console.input(f"{msg} (y/N): ").strip().lower()
+                return response in ("y", "yes")
+
+            engine = SyncEngine(
+                config=filtered_config,
+                vault_client=vault_client,
+                mode=mode,
+                prompt_callback=prompt_callback,
+                progress_callback=progress_callback,
+            )
+
+            try:
+                sync_result = engine.sync_all()
+            except (VaultError, SyncConfigError, SecretNotFoundError) as e:
+                print_error(f"Key sync failed: {e}")
+                raise typer.Exit(code=1) from None
+
+            for service_result in sync_result.services:
+                print_service_sync_status(service_result)
+
+            print_sync_result(sync_result)
+
+            if sync_result.has_errors:
+                errors.append("Key synchronization had errors")
+                if not force:
+                    print_error("Cannot proceed with encryption due to key sync errors")
+                    raise typer.Exit(code=1)
+        else:
+            # Just verify (compare local keys with vault)
+            from envdrift.sync.operations import EnvKeysFile
+
+            verification_issues = 0
+
+            for mapping in filtered_mappings:
+                effective_env = mapping.effective_environment
+                env_keys_file = mapping.folder_path / (sync_config.env_keys_filename or ".env.keys")
+                key_name = f"DOTENV_PRIVATE_KEY_{effective_env.upper()}"
+
+                # Check if local key exists
+                if not env_keys_file.exists():
+                    console.print(
+                        f"  [yellow]![/yellow] {mapping.folder_path} "
+                        f"[yellow]- warning: .env.keys not found[/yellow]"
+                    )
+                    warnings.append(f"{mapping.folder_path}: .env.keys file missing")
+                    continue
+
+                local_keys = EnvKeysFile(env_keys_file)
+                local_key = local_keys.read_key(key_name)
+
+                if not local_key:
+                    console.print(
+                        f"  [yellow]![/yellow] {mapping.folder_path} "
+                        f"[yellow]- warning: {key_name} not found in .env.keys[/yellow]"
+                    )
+                    warnings.append(f"{mapping.folder_path}: {key_name} missing from .env.keys")
+                    continue
+
+                # Fetch key from vault for comparison
+                try:
+                    vault_client.ensure_authenticated()
+                    vault_secret = vault_client.get_secret(mapping.secret_name)
+
+                    if not vault_secret or not vault_secret.value:
+                        console.print(
+                            f"  [yellow]![/yellow] {mapping.folder_path} "
+                            f"[yellow]- warning: vault secret '{mapping.secret_name}' is empty[/yellow]"
+                        )
+                        warnings.append(f"{mapping.folder_path}: vault secret is empty")
+                        continue
+
+                    vault_value = vault_secret.value
+
+                    # Parse vault value (format: KEY_NAME=value)
+                    if "=" in vault_value and vault_value.startswith("DOTENV_PRIVATE_KEY"):
+                        vault_key = vault_value.split("=", 1)[1]
+                    else:
+                        vault_key = vault_value
+
+                    # Compare keys
+                    if local_key == vault_key:
+                        console.print(
+                            f"  [green]✓[/green] {mapping.folder_path} "
+                            f"[dim]- keys match vault[/dim]"
+                        )
+                    else:
+                        console.print(
+                            f"  [red]✗[/red] {mapping.folder_path} "
+                            f"[red]- KEY MISMATCH: local key differs from vault![/red]"
+                        )
+                        errors.append(
+                            f"{mapping.folder_path}: local key does not match vault "
+                            f"(run 'envdrift lock --sync-keys' to fix)"
+                        )
+                        verification_issues += 1
+
+                except SecretNotFoundError:
+                    console.print(
+                        f"  [yellow]![/yellow] {mapping.folder_path} "
+                        f"[yellow]- warning: vault secret '{mapping.secret_name}' not found[/yellow]"
+                    )
+                    warnings.append(f"{mapping.folder_path}: vault secret not found")
+                except VaultError as e:
+                    console.print(
+                        f"  [red]![/red] {mapping.folder_path} "
+                        f"[red]- error: vault access failed: {e}[/red]"
+                    )
+                    errors.append(f"{mapping.folder_path}: vault error - {e}")
+
+            console.print()
+
+            if verification_issues > 0 and not force:
+                print_error(
+                    f"Found {verification_issues} key mismatch(es). "
+                    "Run with --sync-keys to update local keys, or --force to encrypt anyway."
+                )
+                raise typer.Exit(code=1)
+
+    # === STEP 2: ENCRYPT ENV FILES ===
+    step_num = "Step 2" if verify_vault else "Step 1"
+    console.print(f"[bold cyan]{step_num}:[/bold cyan] Encrypting environment files...")
+    console.print()
+
+    try:
+        from envdrift.integrations.dotenvx import DotenvxError, DotenvxWrapper
+
+        dotenvx = DotenvxWrapper()
+
+        if not dotenvx.is_installed():
+            print_error("dotenvx is not installed")
+            console.print(dotenvx.install_instructions())
+            raise typer.Exit(code=1)
+    except ImportError:
+        print_error("dotenvx integration not available")
+        raise typer.Exit(code=1) from None
+
+    encrypted_count = 0
+    skipped_count = 0
+    error_count = 0
+    already_encrypted_count = 0
+
+    for mapping in filtered_mappings:
+        effective_env = mapping.effective_environment
+        env_file = mapping.folder_path / f".env.{effective_env}"
+
+        # Check if env file exists
+        if not env_file.exists():
+            # Try to auto-detect .env.* file
+            detection = detect_env_file(mapping.folder_path)
+            if detection.status == "found" and detection.path is not None:
+                env_file = detection.path
+            elif detection.status == "multiple_found":
+                console.print(
+                    f"  [yellow]?[/yellow] {mapping.folder_path} "
+                    f"[yellow]- skipped (multiple .env.* files, specify environment)[/yellow]"
+                )
+                warnings.append(f"{mapping.folder_path}: multiple .env files found")
+                skipped_count += 1
+                continue
+            else:
+                console.print(f"  [dim]=[/dim] {env_file} [dim]- skipped (not found)[/dim]")
+                warnings.append(f"{env_file}: file not found")
+                skipped_count += 1
+                continue
+
+        # Check if .env.keys file exists (needed for encryption)
+        env_keys_file = mapping.folder_path / (sync_config.env_keys_filename or ".env.keys")
+        if not env_keys_file.exists():
+            console.print(
+                f"  [yellow]![/yellow] {env_file} "
+                f"[yellow]- warning: no .env.keys file, will generate new key[/yellow]"
+            )
+            warnings.append(f"{env_file}: no .env.keys file found, new key will be generated")
+
+        # Check if file is already encrypted
+        content = env_file.read_text()
+        if "encrypted:" in content.lower():
+            # Check encryption ratio
+            encrypted_lines = sum(
+                1 for line in content.splitlines() if "encrypted:" in line.lower()
+            )
+            total_value_lines = sum(
+                1
+                for line in content.splitlines()
+                if line.strip() and not line.strip().startswith("#") and "=" in line
+            )
+
+            if total_value_lines > 0:
+                ratio = encrypted_lines / total_value_lines
+                if ratio >= 0.9:  # 90%+ encrypted = fully encrypted
+                    console.print(
+                        f"  [dim]=[/dim] {env_file} [dim]- skipped (already encrypted)[/dim]"
+                    )
+                    already_encrypted_count += 1
+                    continue
+                else:
+                    # Partially encrypted - re-encrypt to catch new values
+                    console.print(
+                        f"  [yellow]~[/yellow] {env_file} "
+                        f"[dim]- partially encrypted ({int(ratio*100)}%), re-encrypting...[/dim]"
+                    )
+                    warnings.append(f"{env_file}: was only {int(ratio*100)}% encrypted")
+
+        if check_only:
+            # Just report what would be encrypted
+            console.print(f"  [cyan]?[/cyan] {env_file} [dim]- would be encrypted[/dim]")
+            encrypted_count += 1
+            continue
+
+        # Prompt before encrypting (unless force mode)
+        if not force:
+            response = console.input(f"  Encrypt {env_file}? (y/N): ").strip().lower()
+            if response not in ("y", "yes"):
+                console.print(f"  [dim]=[/dim] {env_file} [dim]- skipped (user declined)[/dim]")
+                skipped_count += 1
+                continue
+
+        # Perform encryption
+        try:
+            dotenvx.encrypt(env_file.resolve())
+            console.print(f"  [green]+[/green] {env_file} [dim]- encrypted[/dim]")
+            encrypted_count += 1
+
+        except DotenvxError as e:
+            console.print(f"  [red]![/red] {env_file} [red]- error: {e}[/red]")
+            errors.append(f"{env_file}: encryption failed - {e}")
+            error_count += 1
+
+    # === SUMMARY ===
+    console.print()
+    summary_lines = []
+
+    if check_only:
+        summary_lines.append(f"Would encrypt: {encrypted_count}")
+    else:
+        summary_lines.append(f"Encrypted: {encrypted_count}")
+
+    summary_lines.append(f"Already encrypted: {already_encrypted_count}")
+    summary_lines.append(f"Skipped: {skipped_count}")
+    summary_lines.append(f"Errors: {error_count}")
+
+    console.print(
+        Panel(
+            "\n".join(summary_lines),
+            title="Lock Summary",
+            expand=False,
+        )
+    )
+
+    # Print warnings
+    if warnings:
+        console.print()
+        console.print("[bold yellow]Warnings:[/bold yellow]")
+        for warning in warnings:
+            console.print(f"  [yellow]•[/yellow] {warning}")
+
+    # Print errors
+    if errors:
+        console.print()
+        console.print("[bold red]Errors:[/bold red]")
+        for error in errors:
+            console.print(f"  [red]•[/red] {error}")
+
+    if error_count > 0 or errors:
+        print_warning("Some files could not be encrypted or had issues")
+        raise typer.Exit(code=1)
+
+    console.print()
+    if check_only:
+        print_success("Check complete! Run without --check to encrypt files.")
+    else:
+        print_success("Lock complete! Your environment files are encrypted and ready to commit.")
+
+
 @app.command("vault-push")
 def vault_push(
     folder: Annotated[
