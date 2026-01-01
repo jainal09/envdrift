@@ -286,9 +286,9 @@ class SyncEngine:
             DecryptionTestResult.FAILED if decryption or re-encryption fails (the original file is restored).
             DecryptionTestResult.SKIPPED if no suitable env file exists, the file does not appear encrypted, or the `dotenvx` utility is not available.
         """
-        # Find .env file to test (prefer .env.production)
+        # Find .env file to test (prefer .env.<effective_environment>)
         env_files = [
-            mapping.folder_path / f".env.{mapping.environment}",
+            mapping.folder_path / f".env.{mapping.effective_environment}",
             mapping.folder_path / ".env.production",
             mapping.folder_path / ".env.staging",
             mapping.folder_path / ".env.development",
@@ -364,7 +364,7 @@ class SyncEngine:
             from envdrift.core.validator import EnvValidator
 
             # Find env file
-            env_file = mapping.folder_path / f".env.{mapping.environment}"
+            env_file = mapping.folder_path / f".env.{mapping.effective_environment}"
             if not env_file.exists():
                 env_file = mapping.folder_path / ".env"
             if not env_file.exists():
