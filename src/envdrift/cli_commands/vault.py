@@ -94,8 +94,18 @@ def vault_push(
 
     # --all mode implementation
     if all_services:
+        from envdrift.cli_commands.encryption_helpers import (
+            build_sops_encrypt_kwargs,
+            is_encrypted_content,
+            resolve_encryption_backend,
+        )
         from envdrift.cli_commands.sync import load_sync_config_and_client
-        from envdrift.integrations.dotenvx import DotenvxError, DotenvxWrapper
+        from envdrift.encryption import (
+            EncryptionBackendError,
+            EncryptionNotFoundError,
+            EncryptionProvider,
+            detect_encryption_provider,
+        )
 
         # Load sync config and client
         sync_config, client, effective_provider, _, _, _ = load_sync_config_and_client(
@@ -106,19 +116,22 @@ def vault_push(
             project_id=project_id,
         )
 
-        dotenvx_auto_install = False
-        config_path = config
-        if config_path is None:
-            config_path = find_config()
-        if config_path:
-            with contextlib.suppress(ConfigNotFoundError, tomllib.TOMLDecodeError):
-                envdrift_config = load_config(config_path)
-                encryption_config = getattr(envdrift_config, "encryption", None)
-                if encryption_config:
-                    dotenvx_auto_install = encryption_config.dotenvx_auto_install
+        try:
+            encryption_backend, backend_provider, encryption_config = resolve_encryption_backend(
+                config
+            )
+        except ValueError as e:
+            print_error(f"Unsupported encryption backend: {e}")
+            raise typer.Exit(code=1) from None
 
-        # Initialize dotenvx for encryption checks
-        dotenvx = DotenvxWrapper(auto_install=dotenvx_auto_install)
+        if not encryption_backend.is_installed():
+            print_error(f"{encryption_backend.name} is not installed")
+            console.print(encryption_backend.install_instructions())
+            raise typer.Exit(code=1)
+
+        sops_encrypt_kwargs = {}
+        if backend_provider == EncryptionProvider.SOPS:
+            sops_encrypt_kwargs = build_sops_encrypt_kwargs(encryption_config)
 
         console.print("[bold]Vault Push All[/bold]")
         console.print(f"Provider: {effective_provider}")
@@ -128,6 +141,7 @@ def vault_push(
         pushed_count = 0
         skipped_count = 0
         error_count = 0
+        dotenvx_mismatch = False
 
         for mapping in sync_config.mappings:
             try:
@@ -150,11 +164,36 @@ def vault_push(
 
                 # Check encryption
                 content = env_file.read_text()
-                if "encrypted:" not in content.lower():
-                    console.print(f"Encrypting {env_file}...")
+                if not is_encrypted_content(backend_provider, encryption_backend, content):
+                    detected_provider = detect_encryption_provider(env_file)
+                    if detected_provider and detected_provider != backend_provider:
+                        if (
+                            detected_provider == EncryptionProvider.DOTENVX
+                            and backend_provider != EncryptionProvider.DOTENVX
+                        ):
+                            print_error(
+                                f"{env_file}: encrypted with dotenvx, "
+                                f"but config uses {backend_provider.value}"
+                            )
+                            error_count += 1
+                            dotenvx_mismatch = True
+                            continue
+                        console.print(
+                            f"[dim]Skipped[/dim] {mapping.folder_path}: "
+                            f"Encrypted with {detected_provider.value}, "
+                            f"config uses {backend_provider.value}"
+                        )
+                        skipped_count += 1
+                        continue
+
+                    console.print(f"Encrypting {env_file} with {encryption_backend.name}...")
                     try:
-                        dotenvx.encrypt(env_file)
-                    except DotenvxError as e:
+                        result = encryption_backend.encrypt(env_file, **sops_encrypt_kwargs)
+                        if not result.success:
+                            print_error(result.message)
+                            error_count += 1
+                            continue
+                    except (EncryptionNotFoundError, EncryptionBackendError) as e:
                         print_error(f"Failed to encrypt {env_file}: {e}")
                         error_count += 1
                         continue
@@ -199,7 +238,7 @@ def vault_push(
                 print_success(f"Pushed {mapping.secret_name}")
                 pushed_count += 1
 
-            except (VaultError, DotenvxError, OSError, ValueError) as e:
+            except (VaultError, OSError, ValueError) as e:
                 print_error(f"Error processing {mapping.folder_path}: {e}")
                 error_count += 1
 
@@ -207,6 +246,8 @@ def vault_push(
         console.print(
             f"Done. Pushed: {pushed_count}, Skipped: {skipped_count}, Errors: {error_count}"
         )
+        if dotenvx_mismatch:
+            raise typer.Exit(code=1)
         return
 
     # Normal/Direct mode preamble

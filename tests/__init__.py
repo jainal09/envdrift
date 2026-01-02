@@ -1,1 +1,1 @@
-"""Tests for envdrift."""
+"""Test package marker for shared helpers."""

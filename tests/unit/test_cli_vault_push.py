@@ -7,9 +7,11 @@ from unittest.mock import MagicMock, patch
 from typer.testing import CliRunner
 
 from envdrift.cli import app
-from envdrift.integrations.dotenvx import DotenvxError
+from envdrift.encryption import EncryptionProvider
+from envdrift.encryption.base import EncryptionBackendError
 from envdrift.sync.config import ServiceMapping, SyncConfig
 from envdrift.vault.base import SecretNotFoundError, SecretValue, VaultError
+from tests.helpers import DummyEncryptionBackend
 
 runner = CliRunner()
 
@@ -17,14 +19,14 @@ runner = CliRunner()
 class TestVaultPushAll:
     """Tests for vault-push --all."""
 
+    @patch("envdrift.cli_commands.encryption_helpers.resolve_encryption_backend")
     @patch("envdrift.cli_commands.sync.load_sync_config_and_client")
-    @patch("envdrift.integrations.dotenvx.DotenvxWrapper")
     @patch("envdrift.sync.operations.EnvKeysFile")
     def test_push_all_success(
         self,
         mock_keys_file,
-        mock_dotenvx_cls,
         mock_loader,
+        mock_resolve_backend,
         tmp_path,
     ):
         """Test happy path for --all."""
@@ -43,9 +45,12 @@ class TestVaultPushAll:
 
         mock_loader.return_value = (mock_sync_config, mock_client, "azure", None, None, None)
 
-        # Mock Dotenvx
-        mock_dotenvx = MagicMock()
-        mock_dotenvx_cls.return_value = mock_dotenvx
+        dummy_backend = DummyEncryptionBackend()
+        mock_resolve_backend.return_value = (
+            dummy_backend,
+            EncryptionProvider.DOTENVX,
+            None,
+        )
 
         # Create env file
         service_dir = tmp_path / "service1"
@@ -76,10 +81,12 @@ class TestVaultPushAll:
             "my-secret", "DOTENV_PRIVATE_KEY_PRODUCTION=secret123"
         )
 
+    @patch("envdrift.cli_commands.encryption_helpers.resolve_encryption_backend")
     @patch("envdrift.cli_commands.sync.load_sync_config_and_client")
     def test_push_all_skips_existing(
         self,
         mock_loader,
+        mock_resolve_backend,
         tmp_path,
     ):
         """Test skipping existing secrets."""
@@ -94,6 +101,11 @@ class TestVaultPushAll:
             ]
         )
         mock_loader.return_value = (mock_sync_config, mock_client, "azure", None, None, None)
+        mock_resolve_backend.return_value = (
+            DummyEncryptionBackend(),
+            EncryptionProvider.DOTENVX,
+            None,
+        )
 
         # Create env file
         service_dir = tmp_path / "service1"
@@ -111,14 +123,14 @@ class TestVaultPushAll:
         assert "already" in result.output and "exists" in result.output
         mock_client.set_secret.assert_not_called()
 
+    @patch("envdrift.cli_commands.encryption_helpers.resolve_encryption_backend")
     @patch("envdrift.cli_commands.sync.load_sync_config_and_client")
-    @patch("envdrift.integrations.dotenvx.DotenvxWrapper")
     @patch("envdrift.sync.operations.EnvKeysFile")
     def test_push_all_encrypts_unencrypted(
         self,
         mock_keys_file,
-        mock_dotenvx_cls,
         mock_loader,
+        mock_resolve_backend,
         tmp_path,
     ):
         """Test auto-encryption."""
@@ -134,8 +146,12 @@ class TestVaultPushAll:
         )
         mock_loader.return_value = (mock_sync_config, mock_client, "azure", None, None, None)
 
-        mock_dotenvx = MagicMock()
-        mock_dotenvx_cls.return_value = mock_dotenvx
+        dummy_backend = DummyEncryptionBackend()
+        mock_resolve_backend.return_value = (
+            dummy_backend,
+            EncryptionProvider.DOTENVX,
+            None,
+        )
 
         # Create unencrypted env file
         service_dir = tmp_path / "service1"
@@ -158,22 +174,26 @@ class TestVaultPushAll:
         assert result.exit_code == 0
 
         # Verify encryption called
-        mock_dotenvx.encrypt.assert_called_once()
-        args, _ = mock_dotenvx.encrypt.call_args
-        assert args[0] == env_file
+        assert dummy_backend.encrypt_calls == [env_file]
 
+    @patch("envdrift.cli_commands.encryption_helpers.resolve_encryption_backend")
     @patch("envdrift.cli_commands.sync.load_sync_config_and_client")
-    @patch("envdrift.integrations.dotenvx.DotenvxWrapper")
     def test_push_all_error_handling(
         self,
-        mock_dotenvx_cls,
         mock_loader,
+        mock_resolve_backend,
         tmp_path,
     ):
         """Test various error conditions in push loop to ensure coverage."""
         mock_client = MagicMock()
-        mock_dotenvx = MagicMock()
-        mock_dotenvx_cls.return_value = mock_dotenvx
+        dummy_backend = DummyEncryptionBackend(
+            encrypt_side_effect=EncryptionBackendError("encrypt failed")
+        )
+        mock_resolve_backend.return_value = (
+            dummy_backend,
+            EncryptionProvider.DOTENVX,
+            None,
+        )
 
         # Scenarios:
         # 1. Missing .env file (Skipped)
@@ -200,8 +220,6 @@ class TestVaultPushAll:
 
         # Setup s2: Unencrypted .env, encrypt raises error
         (tmp_path / "s2" / ".env.prod").write_text("plain=text")
-        mock_dotenvx.encrypt.side_effect = DotenvxError("encrypt failed")
-
         # Setup s3: Encrypted .env, Vault check raises VaultError
         (tmp_path / "s3" / ".env.prod").write_text("encrypted: yes")
 
@@ -240,3 +258,146 @@ class TestVaultPushAll:
         assert "Vault error checking" in output
         assert ".env.keys not found" in output
         assert "not found in keys file" in output
+
+    @patch("envdrift.cli_commands.encryption_helpers.resolve_encryption_backend")
+    @patch("envdrift.cli_commands.sync.load_sync_config_and_client")
+    def test_push_all_backend_not_installed(
+        self,
+        mock_loader,
+        mock_resolve_backend,
+        tmp_path,
+    ):
+        """vault-push --all should exit when backend is missing."""
+        mock_client = MagicMock()
+        mock_sync_config = SyncConfig(
+            mappings=[
+                ServiceMapping(
+                    secret_name="missing-backend",
+                    folder_path=tmp_path / "service1",
+                    environment="production",
+                )
+            ]
+        )
+        mock_loader.return_value = (mock_sync_config, mock_client, "azure", None, None, None)
+        mock_resolve_backend.return_value = (
+            DummyEncryptionBackend(installed=False),
+            EncryptionProvider.DOTENVX,
+            None,
+        )
+
+        result = runner.invoke(app, ["vault-push", "--all"])
+
+        assert result.exit_code == 1
+        assert "not installed" in result.output.lower()
+
+    @patch("envdrift.cli_commands.encryption_helpers.resolve_encryption_backend")
+    @patch("envdrift.cli_commands.sync.load_sync_config_and_client")
+    def test_push_all_dotenvx_mismatch_errors(
+        self,
+        mock_loader,
+        mock_resolve_backend,
+        tmp_path,
+    ):
+        """vault-push --all should error when dotenvx files exist under sops config."""
+        mock_client = MagicMock()
+        mock_sync_config = SyncConfig(
+            mappings=[
+                ServiceMapping(
+                    secret_name="mismatch-secret",
+                    folder_path=tmp_path / "service1",
+                    environment="production",
+                )
+            ]
+        )
+        mock_loader.return_value = (mock_sync_config, mock_client, "azure", None, None, None)
+
+        def sops_only_header(content: str) -> bool:
+            return "ENC[AES256_GCM," in content or "sops:" in content
+
+        mock_resolve_backend.return_value = (
+            DummyEncryptionBackend(name="sops", has_encrypted_header=sops_only_header),
+            EncryptionProvider.SOPS,
+            None,
+        )
+
+        service_dir = tmp_path / "service1"
+        service_dir.mkdir()
+        env_file = service_dir / ".env.production"
+        env_file.write_text(
+            "#/---BEGIN DOTENV ENCRYPTED---/\n"
+            "DOTENV_PUBLIC_KEY=abc\n"
+            "SECRET=encrypted:abc123\n"
+        )
+
+        result = runner.invoke(app, ["vault-push", "--all"])
+
+        assert result.exit_code == 1
+        output = " ".join(result.output.lower().split())
+        assert "encrypted with dotenvx" in output
+
+    @patch("envdrift.cli_commands.encryption_helpers.resolve_encryption_backend")
+    @patch("envdrift.cli_commands.sync.load_sync_config_and_client")
+    @patch("envdrift.sync.operations.EnvKeysFile")
+    def test_push_all_sops_encrypt_kwargs(
+        self,
+        mock_keys_file,
+        mock_loader,
+        mock_resolve_backend,
+        tmp_path,
+    ):
+        """vault-push --all should pass SOPS encryption kwargs."""
+        from envdrift.config import EncryptionConfig
+
+        mock_client = MagicMock()
+        mock_sync_config = SyncConfig(
+            mappings=[
+                ServiceMapping(
+                    secret_name="sops-secret",
+                    folder_path=tmp_path / "service1",
+                    environment="production",
+                )
+            ]
+        )
+        mock_loader.return_value = (mock_sync_config, mock_client, "azure", None, None, None)
+
+        encryption_config = EncryptionConfig(
+            backend="sops",
+            sops_age_recipients="age1abc",
+            sops_kms_arn="arn:aws:kms:us-east-1:123:key/abc",
+            sops_gcp_kms="projects/p/locations/l/keyRings/r/cryptoKeys/k",
+            sops_azure_kv="https://vault.vault.azure.net/keys/key/1",
+        )
+
+        def sops_only_header(content: str) -> bool:
+            return "ENC[AES256_GCM," in content or "sops:" in content
+
+        dummy_backend = DummyEncryptionBackend(name="sops", has_encrypted_header=sops_only_header)
+        mock_resolve_backend.return_value = (
+            dummy_backend,
+            EncryptionProvider.SOPS,
+            encryption_config,
+        )
+
+        service_dir = tmp_path / "service1"
+        service_dir.mkdir()
+        env_file = service_dir / ".env.production"
+        env_file.write_text("PLAIN=text")
+
+        (service_dir / ".env.keys").touch()
+        mock_keys_instance = MagicMock()
+        mock_keys_instance.read_key.return_value = "secret123"
+        mock_keys_file.return_value = mock_keys_instance
+        mock_client.get_secret.side_effect = SecretNotFoundError("missing")
+
+        result = runner.invoke(app, ["vault-push", "--all"])
+
+        assert result.exit_code == 0
+        assert dummy_backend.encrypt_calls == [env_file]
+        assert dummy_backend.encrypt_kwargs == [
+            {
+                "age_recipients": "age1abc",
+                "kms_arn": "arn:aws:kms:us-east-1:123:key/abc",
+                "gcp_kms": "projects/p/locations/l/keyRings/r/cryptoKeys/k",
+                "azure_kv": "https://vault.vault.azure.net/keys/key/1",
+            }
+        ]
