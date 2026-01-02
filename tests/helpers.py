@@ -50,7 +50,7 @@ class DummyEncryptionBackend:
             or "sops:" in content
         )
 
-    def encrypt(self, env_file: Path | str, **kwargs):
+    def encrypt(self, env_file: Path | str, **kwargs) -> EncryptionResult:
         if self._encrypt_side_effect is not None:
             raise self._encrypt_side_effect
         path = Path(env_file)
@@ -58,7 +58,7 @@ class DummyEncryptionBackend:
         self.encrypt_kwargs.append(kwargs)
         return EncryptionResult(success=True, message="ok", file_path=path)
 
-    def decrypt(self, env_file: Path | str, **kwargs):
+    def decrypt(self, env_file: Path | str, **kwargs) -> EncryptionResult:
         if self._decrypt_side_effect is not None:
             raise self._decrypt_side_effect
         path = Path(env_file)

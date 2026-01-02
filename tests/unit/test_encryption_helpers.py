@@ -96,6 +96,7 @@ def test_resolve_encryption_backend_warns_on_bad_config(tmp_path, caplog):
     resolve_encryption_backend(config_file)
 
     assert "Failed to load config" in caplog.text
+    assert any(record.levelno == logging.WARNING for record in caplog.records)
 
 
 def test_build_sops_encrypt_kwargs():
