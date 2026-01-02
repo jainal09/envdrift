@@ -1438,9 +1438,24 @@ class TestPullCommand:
 
         class DummyEngine:
             def __init__(self, *_args, **_kwargs):
+                """
+                Create an instance without performing any additional initialization.
+                
+                Parameters:
+                    *args: Positional arguments that are accepted but ignored.
+                    **kwargs: Keyword arguments that are accepted but ignored.
+                """
                 pass
 
             def sync_all(self):
+                """
+                Builds a sync result representing no discovered services and no errors.
+                
+                Returns:
+                    result (types.SimpleNamespace): An object with attributes:
+                        services (list): Empty list indicating no services to sync.
+                        has_errors (bool): False indicating the sync produced no errors.
+                """
                 return SimpleNamespace(services=[], has_errors=False)
 
         monkeypatch.setattr("envdrift.sync.engine.SyncEngine", DummyEngine)
@@ -1449,9 +1464,21 @@ class TestPullCommand:
 
         class DummyDotenvx:
             def is_installed(self):
+                """
+                Check whether the component represented by this instance is installed.
+                
+                Returns:
+                    True if the component is installed, False otherwise.
+                """
                 return False
 
             def install_instructions(self):
+                """
+                Provide a concise user-facing instruction to install the dotenvx dependency.
+                
+                Returns:
+                    str: A short install instruction string, e.g. "install dotenvx".
+                """
                 return "install dotenvx"
 
         monkeypatch.setattr("envdrift.integrations.dotenvx.DotenvxWrapper", lambda: DummyDotenvx())
@@ -1493,9 +1520,24 @@ class TestPullCommand:
 
         class DummyEngine:
             def __init__(self, *_args, **_kwargs):
+                """
+                Create an instance without performing any additional initialization.
+                
+                Parameters:
+                    *args: Positional arguments that are accepted but ignored.
+                    **kwargs: Keyword arguments that are accepted but ignored.
+                """
                 pass
 
             def sync_all(self):
+                """
+                Builds a sync result representing no discovered services and no errors.
+                
+                Returns:
+                    result (types.SimpleNamespace): An object with attributes:
+                        services (list): Empty list indicating no services to sync.
+                        has_errors (bool): False indicating the sync produced no errors.
+                """
                 return SimpleNamespace(services=[], has_errors=False)
 
         monkeypatch.setattr("envdrift.sync.engine.SyncEngine", DummyEngine)
@@ -1504,9 +1546,24 @@ class TestPullCommand:
 
         class DummyDotenvx:
             def is_installed(self):
+                """
+                Report whether the component is installed.
+                
+                Returns:
+                    True if the component is installed.
+                """
                 return True
 
             def decrypt(self, _path):
+                """
+                Simulate a failed decrypt operation by always raising a DotenvxError.
+                
+                Parameters:
+                    _path (str | pathlib.Path): Path to the file to decrypt (ignored).
+                
+                Raises:
+                    DotenvxError: Always raised to indicate decryption failure (message "boom").
+                """
                 raise DotenvxError("boom")
 
         monkeypatch.setattr("envdrift.integrations.dotenvx.DotenvxWrapper", lambda: DummyDotenvx())
@@ -1548,9 +1605,24 @@ class TestPullCommand:
 
         class DummyEngine:
             def __init__(self, *_args, **_kwargs):
+                """
+                Create an instance without performing any additional initialization.
+                
+                Parameters:
+                    *args: Positional arguments that are accepted but ignored.
+                    **kwargs: Keyword arguments that are accepted but ignored.
+                """
                 pass
 
             def sync_all(self):
+                """
+                Builds a sync result representing no discovered services and no errors.
+                
+                Returns:
+                    result (types.SimpleNamespace): An object with attributes:
+                        services (list): Empty list indicating no services to sync.
+                        has_errors (bool): False indicating the sync produced no errors.
+                """
                 return SimpleNamespace(services=[], has_errors=False)
 
         monkeypatch.setattr("envdrift.sync.engine.SyncEngine", DummyEngine)
@@ -1594,9 +1666,24 @@ class TestPullCommand:
 
         class DummyEngine:
             def __init__(self, *_args, **_kwargs):
+                """
+                Create an instance without performing any additional initialization.
+                
+                Parameters:
+                    *args: Positional arguments that are accepted but ignored.
+                    **kwargs: Keyword arguments that are accepted but ignored.
+                """
                 pass
 
             def sync_all(self):
+                """
+                Builds a sync result representing no discovered services and no errors.
+                
+                Returns:
+                    result (types.SimpleNamespace): An object with attributes:
+                        services (list): Empty list indicating no services to sync.
+                        has_errors (bool): False indicating the sync produced no errors.
+                """
                 return SimpleNamespace(services=[], has_errors=False)
 
         monkeypatch.setattr("envdrift.sync.engine.SyncEngine", DummyEngine)
@@ -1605,6 +1692,12 @@ class TestPullCommand:
 
         class DummyDotenvx:
             def is_installed(self):
+                """
+                Report whether the component is installed.
+                
+                Returns:
+                    True if the component is installed.
+                """
                 return True
 
         monkeypatch.setattr("envdrift.integrations.dotenvx.DotenvxWrapper", lambda: DummyDotenvx())
@@ -1650,6 +1743,12 @@ class TestLockCommand:
 
         class DummyDotenvx:
             def is_installed(self):
+                """
+                Report whether the component is installed.
+                
+                Returns:
+                    True if the component is installed.
+                """
                 return True
 
         monkeypatch.setattr("envdrift.integrations.dotenvx.DotenvxWrapper", lambda: DummyDotenvx())
@@ -1689,9 +1788,23 @@ class TestLockCommand:
 
         class DummyVault:
             def ensure_authenticated(self):
+                """
+                Ensure the current context is authenticated for subsequent operations.
+                
+                Verify or establish an authenticated session so callers can assume valid credentials afterwards.
+                """
                 return None
 
             def get_secret(self, _name):
+                """
+                Provide a mocked secret object containing a production DOTENV private key.
+                
+                Parameters:
+                    _name: Ignored; present to match the expected secret-retrieval signature.
+                
+                Returns:
+                    SimpleNamespace: An object with a `value` attribute set to "DOTENV_PRIVATE_KEY_PRODUCTION=remote".
+                """
                 return SimpleNamespace(value="DOTENV_PRIVATE_KEY_PRODUCTION=remote")
 
         monkeypatch.setattr("envdrift.vault.get_vault_client", lambda *_, **__: DummyVault())
@@ -1733,6 +1846,12 @@ class TestLockCommand:
 
         class DummyDotenvx:
             def is_installed(self):
+                """
+                Report whether the component is installed.
+                
+                Returns:
+                    True if the component is installed.
+                """
                 return True
 
         monkeypatch.setattr("envdrift.integrations.dotenvx.DotenvxWrapper", lambda: DummyDotenvx())

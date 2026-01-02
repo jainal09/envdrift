@@ -128,7 +128,11 @@ def test_get_schema_metadata_func_missing_module():
 
 
 def test_get_schema_metadata_func_non_callable(tmp_path, monkeypatch):
-    """get_schema_metadata_func should return None when attribute is not callable."""
+    """
+    Check that get_schema_metadata_func returns None when a module-level `get_schema_metadata` attribute is not callable.
+    
+    Creates a temporary module defining `get_schema_metadata` as a non-callable value, adds its directory to sys.path, and asserts the loader returns `None`.
+    """
     loader = SchemaLoader()
 
     module_path = tmp_path / "meta_module.py"
