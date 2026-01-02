@@ -1584,7 +1584,7 @@ class TestLockCommand:
             def is_installed(self):
                 """
                 Report whether the component is installed.
-                
+
                 Returns:
                     True if the component is installed.
                 """
@@ -1629,7 +1629,7 @@ class TestLockCommand:
             def ensure_authenticated(self):
                 """
                 Ensure the current context is authenticated for subsequent operations.
-                
+
                 Verify or establish an authenticated session so callers can assume valid credentials afterwards.
                 """
                 return None
@@ -1637,10 +1637,10 @@ class TestLockCommand:
             def get_secret(self, _name):
                 """
                 Provide a mocked secret object containing a production DOTENV private key.
-                
+
                 Parameters:
                     _name: Ignored; present to match the expected secret-retrieval signature.
-                
+
                 Returns:
                     SimpleNamespace: An object with a `value` attribute set to "DOTENV_PRIVATE_KEY_PRODUCTION=remote".
                 """
@@ -1687,7 +1687,7 @@ class TestLockCommand:
             def is_installed(self):
                 """
                 Report whether the component is installed.
-                
+
                 Returns:
                     True if the component is installed.
                 """
