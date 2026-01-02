@@ -10,7 +10,12 @@ from types import SimpleNamespace
 from typer.testing import CliRunner
 
 from envdrift.cli import app
-from envdrift.cli_commands.encryption import _verify_decryption_with_vault
+from envdrift.cli_commands.encryption import (
+    _load_encryption_config,
+    _resolve_config_path,
+    _verify_decryption_with_vault,
+)
+from envdrift.config import EnvdriftConfig
 from envdrift.integrations.dotenvx import DotenvxError
 
 runner = CliRunner()
@@ -59,7 +64,10 @@ def _mock_dotenvx(
                 decrypted_paths.append(Path(env_path))
 
     dummy = DummyDotenvx()
-    monkeypatch.setattr("envdrift.integrations.dotenvx.DotenvxWrapper", lambda: dummy)
+    monkeypatch.setattr(
+        "envdrift.integrations.dotenvx.DotenvxWrapper",
+        lambda *_, **__: dummy,
+    )
     return dummy
 
 
@@ -290,82 +298,195 @@ class TestEncryptCommand:
         assert result.exit_code == 0 or "encrypt" in result.output.lower()
 
     def test_encrypt_perform_encryption(self, monkeypatch, tmp_path: Path):
-        """Test encrypt without --check calls dotenvx.encrypt."""
+        """Test encrypt without --check calls encryption backend."""
+        from unittest.mock import MagicMock
+
+        from envdrift.encryption.base import EncryptionResult
 
         env_file = tmp_path / ".env"
         env_file.write_text("FOO=bar")
 
-        class DummyDotenvx:
-            def __init__(self):
-                """
-                Initialize the instance and set the `called` flag to False.
+        # Create a mock encryption backend
+        mock_backend = MagicMock()
+        mock_backend.name = "dotenvx"
+        mock_backend.is_installed.return_value = True
+        mock_backend.encrypt.return_value = EncryptionResult(
+            success=True,
+            message=f"Encrypted {env_file}",
+            file_path=env_file,
+        )
 
-                This prepares the object in an uninvoked state by creating a boolean attribute
-                `called` initialized to False.
-                """
-                self.called = False
-
-            def is_installed(self):
-                """
-                Check whether the component is installed.
-
-                This implementation always reports the component as installed.
-
-                Returns:
-                    `true` if the component is installed, `false` otherwise.
-                """
-                return True
-
-            def encrypt(self, file_path):
-                """
-                Record that the encrypt method was invoked and assert the provided path matches the expected env file.
-
-                Parameters:
-                    file_path (str | pathlib.Path): Path passed to the encrypt method; must equal the test's expected `env_file`.
-                """
-                self.called = True
-                assert Path(file_path) == env_file
-
-        dummy = DummyDotenvx()
-        monkeypatch.setattr("envdrift.integrations.dotenvx.DotenvxWrapper", lambda: dummy)
+        monkeypatch.setattr(
+            "envdrift.cli_commands.encryption.get_encryption_backend",
+            lambda *args, **kwargs: mock_backend,
+        )
 
         result = runner.invoke(app, ["encrypt", str(env_file)])
 
         assert result.exit_code == 0
-        assert dummy.called is True
+        mock_backend.encrypt.assert_called_once()
 
     def test_encrypt_prompts_install_when_missing_dotenvx(self, monkeypatch, tmp_path: Path):
-        """Encrypt should surface install instructions when dotenvx is absent."""
+        """Encrypt should surface install instructions when backend is absent."""
+        from unittest.mock import MagicMock
 
         env_file = tmp_path / ".env"
         env_file.write_text("FOO=bar")
 
-        class DummyDotenvx:
-            def is_installed(self):
-                """
-                Report whether the integration is installed and available for use.
+        # Create a mock encryption backend that is not installed
+        mock_backend = MagicMock()
+        mock_backend.name = "dotenvx"
+        mock_backend.is_installed.return_value = False
+        mock_backend.install_instructions.return_value = "npm install -g dotenvx"
 
-                Returns:
-                    `True` if the integration is installed and available, `False` otherwise.
-                """
-                return False
-
-            def install_instructions(self):
-                """
-                Provide the installation command for the `dotenvx` CLI.
-
-                Returns:
-                    installation_command (str): The exact shell command "npm install -g dotenvx" to install dotenvx globally.
-                """
-                return "npm install -g dotenvx"
-
-        monkeypatch.setattr("envdrift.integrations.dotenvx.DotenvxWrapper", lambda: DummyDotenvx())
+        monkeypatch.setattr(
+            "envdrift.cli_commands.encryption.get_encryption_backend",
+            lambda *args, **kwargs: mock_backend,
+        )
 
         result = runner.invoke(app, ["encrypt", str(env_file)])
 
         assert result.exit_code == 1
         assert "dotenvx is not installed" in result.output
         assert "npm install" in result.output
+
+    def test_encrypt_uses_sops_config_defaults(self, monkeypatch, tmp_path: Path):
+        """Encrypt should honor SOPS defaults from config when backend is omitted."""
+        from unittest.mock import MagicMock
+
+        from envdrift.encryption import EncryptionProvider
+        from envdrift.encryption.base import EncryptionResult
+
+        env_file = tmp_path / ".env"
+        env_file.write_text("FOO=bar")
+
+        config_file = tmp_path / "envdrift.toml"
+        config_file.write_text(
+            dedent(
+                """
+                [encryption]
+                backend = "sops"
+
+                [encryption.sops]
+                config_file = ".sops.yaml"
+                age_key_file = "keys.txt"
+                age_recipients = "age1example"
+                """
+            ).strip()
+            + "\n"
+        )
+        (tmp_path / ".sops.yaml").write_text("creation_rules:\n  - age: age1example\n")
+        (tmp_path / "keys.txt").write_text("AGE-SECRET-KEY-1EXAMPLE\n")
+
+        monkeypatch.chdir(tmp_path)
+
+        mock_backend = MagicMock()
+        mock_backend.name = "sops"
+        mock_backend.is_installed.return_value = True
+        mock_backend.encrypt.return_value = EncryptionResult(
+            success=True,
+            message="Encrypted",
+            file_path=env_file,
+        )
+
+        mock_get_backend = MagicMock(return_value=mock_backend)
+        monkeypatch.setattr(
+            "envdrift.cli_commands.encryption.get_encryption_backend",
+            mock_get_backend,
+        )
+
+        result = runner.invoke(app, ["encrypt", str(env_file)])
+
+        assert result.exit_code == 0
+        args, kwargs = mock_get_backend.call_args
+        assert args[0] == EncryptionProvider.SOPS
+        assert kwargs["config_file"] == (tmp_path / ".sops.yaml").resolve()
+        assert kwargs["age_key_file"] == (tmp_path / "keys.txt").resolve()
+        mock_backend.encrypt.assert_called_once()
+        _, encrypt_kwargs = mock_backend.encrypt.call_args
+        assert encrypt_kwargs["age_recipients"] == "age1example"
+
+    def test_encrypt_uses_sops_auto_install_from_config(self, monkeypatch, tmp_path: Path):
+        """Encrypt should pass SOPS auto_install from config."""
+        from unittest.mock import MagicMock
+
+        from envdrift.encryption import EncryptionProvider
+        from envdrift.encryption.base import EncryptionResult
+
+        env_file = tmp_path / ".env"
+        env_file.write_text("FOO=bar")
+
+        config_file = tmp_path / "envdrift.toml"
+        config_file.write_text(
+            dedent(
+                """
+                [encryption]
+                backend = "sops"
+
+                [encryption.sops]
+                auto_install = true
+                """
+            ).strip()
+            + "\n"
+        )
+
+        monkeypatch.chdir(tmp_path)
+
+        mock_backend = MagicMock()
+        mock_backend.name = "sops"
+        mock_backend.is_installed.return_value = True
+        mock_backend.encrypt.return_value = EncryptionResult(
+            success=True,
+            message="Encrypted",
+            file_path=env_file,
+        )
+
+        mock_get_backend = MagicMock(return_value=mock_backend)
+        monkeypatch.setattr(
+            "envdrift.cli_commands.encryption.get_encryption_backend",
+            mock_get_backend,
+        )
+
+        result = runner.invoke(app, ["encrypt", str(env_file)])
+
+        assert result.exit_code == 0
+        args, kwargs = mock_get_backend.call_args
+        assert args[0] == EncryptionProvider.SOPS
+        assert kwargs["auto_install"] is True
+
+    def test_encrypt_unknown_backend(self, tmp_path: Path):
+        """Encrypt should error on unknown backend."""
+        env_file = tmp_path / ".env"
+        env_file.write_text("FOO=bar")
+
+        result = runner.invoke(app, ["encrypt", str(env_file), "--backend", "unknown"])
+
+        assert result.exit_code == 1
+        assert "unknown encryption backend" in result.output.lower()
+
+    def test_encrypt_backend_error(self, monkeypatch, tmp_path: Path):
+        """Encrypt should surface backend errors."""
+        from unittest.mock import MagicMock
+
+        from envdrift.encryption.base import EncryptionBackendError
+
+        env_file = tmp_path / ".env"
+        env_file.write_text("FOO=bar")
+
+        mock_backend = MagicMock()
+        mock_backend.name = "dotenvx"
+        mock_backend.is_installed.return_value = True
+        mock_backend.encrypt.side_effect = EncryptionBackendError("boom")
+
+        monkeypatch.setattr(
+            "envdrift.cli_commands.encryption.get_encryption_backend",
+            lambda *args, **kwargs: mock_backend,
+        )
+
+        result = runner.invoke(app, ["encrypt", str(env_file)])
+
+        assert result.exit_code == 1
+        assert "encryption failed" in result.output.lower()
 
 
 class TestDecryptCommand:
@@ -447,53 +568,97 @@ class TestDecryptCommand:
         assert result.exit_code == 1
         assert "moved" in result.output.lower()
 
-    def test_decrypt_calls_dotenvx_when_installed(self, monkeypatch, tmp_path: Path):
-        """Decrypt should call dotenvx when available."""
+    def test_decrypt_calls_backend_when_installed(self, monkeypatch, tmp_path: Path):
+        """Decrypt should call encryption backend when available."""
+        from unittest.mock import MagicMock
+
+        from envdrift.encryption.base import EncryptionResult
 
         env_file = tmp_path / ".env"
         env_file.write_text("SECRET=encrypted")
 
-        class DummyDotenvx:
-            def __init__(self):
-                """
-                Create a new instance with its decrypted state initialized to False.
+        # Create a mock encryption backend
+        mock_backend = MagicMock()
+        mock_backend.name = "dotenvx"
+        mock_backend.is_installed.return_value = True
+        mock_backend.decrypt.return_value = EncryptionResult(
+            success=True,
+            message=f"Decrypted {env_file}",
+            file_path=env_file,
+        )
 
-                Attributes:
-                    decrypted: Indicates whether the instance's content has been decrypted; starts as False.
-                """
-                self.decrypted = False
-
-            def is_installed(self):
-                """
-                Check whether the component is installed.
-
-                This implementation always reports the component as installed.
-
-                Returns:
-                    `true` if the component is installed, `false` otherwise.
-                """
-                return True
-
-            def decrypt(self, file_path):
-                """
-                Mark this object as having performed decryption and verify the target file path.
-
-                Parameters:
-                    file_path (str | Path): Path to the file intended for decryption; must match the module-level `env_file`.
-
-                Raises:
-                    AssertionError: If `file_path` does not equal the expected `env_file`.
-                """
-                self.decrypted = True
-                assert Path(file_path) == env_file
-
-        dummy = DummyDotenvx()
-        monkeypatch.setattr("envdrift.integrations.dotenvx.DotenvxWrapper", lambda: dummy)
+        monkeypatch.setattr(
+            "envdrift.cli_commands.encryption.get_encryption_backend",
+            lambda *args, **kwargs: mock_backend,
+        )
+        # Also mock the detector to return a backend
+        monkeypatch.setattr(
+            "envdrift.cli_commands.encryption.EncryptionDetector.detect_backend_for_file",
+            lambda self, path: "dotenvx",
+        )
 
         result = runner.invoke(app, ["decrypt", str(env_file)])
 
         assert result.exit_code == 0
-        assert dummy.decrypted is True
+        mock_backend.decrypt.assert_called_once()
+
+    def test_decrypt_uses_sops_config_auto_install(self, monkeypatch, tmp_path: Path):
+        """Decrypt should honor SOPS config defaults when auto-detect fails."""
+        from unittest.mock import MagicMock
+
+        from envdrift.encryption import EncryptionProvider
+        from envdrift.encryption.base import EncryptionResult
+
+        env_file = tmp_path / ".env"
+        env_file.write_text('KEY="ENC[AES256_GCM,data:abc]"')
+
+        config_file = tmp_path / "envdrift.toml"
+        config_file.write_text(
+            dedent(
+                """
+                [encryption]
+                backend = "sops"
+
+                [encryption.sops]
+                auto_install = true
+                config_file = ".sops.yaml"
+                age_key_file = "age.key"
+                """
+            ).strip()
+            + "\n"
+        )
+        (tmp_path / ".sops.yaml").write_text("creation_rules:\n  - age: age1example\n")
+        (tmp_path / "age.key").write_text("AGE-SECRET-KEY-1EXAMPLE\n")
+
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.setattr(
+            "envdrift.cli_commands.encryption.EncryptionDetector.detect_backend_for_file",
+            lambda *_args, **_kwargs: None,
+        )
+
+        mock_backend = MagicMock()
+        mock_backend.name = "sops"
+        mock_backend.is_installed.return_value = True
+        mock_backend.decrypt.return_value = EncryptionResult(
+            success=True,
+            message="Decrypted",
+            file_path=env_file,
+        )
+
+        mock_get_backend = MagicMock(return_value=mock_backend)
+        monkeypatch.setattr(
+            "envdrift.cli_commands.encryption.get_encryption_backend",
+            mock_get_backend,
+        )
+
+        result = runner.invoke(app, ["decrypt", str(env_file)])
+
+        assert result.exit_code == 0
+        args, kwargs = mock_get_backend.call_args
+        assert args[0] == EncryptionProvider.SOPS
+        assert kwargs["auto_install"] is True
+        assert kwargs["config_file"] == (tmp_path / ".sops.yaml").resolve()
+        assert kwargs["age_key_file"] == (tmp_path / "age.key").resolve()
 
     def test_decrypt_verify_vault_requires_provider(self, tmp_path: Path):
         """Verify-vault should require provider and secret arguments."""
@@ -505,6 +670,135 @@ class TestDecryptCommand:
 
         assert result.exit_code == 1
         assert "provider" in result.output.lower()
+
+    def test_decrypt_verify_vault_requires_secret(self, tmp_path: Path):
+        """Verify-vault should require secret argument."""
+        env_file = tmp_path / ".env"
+        env_file.write_text("SECRET=encrypted")
+
+        result = runner.invoke(
+            app,
+            [
+                "decrypt",
+                str(env_file),
+                "--verify-vault",
+                "--provider",
+                "azure",
+                "--vault-url",
+                "https://example.vault.azure.net",
+            ],
+        )
+
+        assert result.exit_code == 1
+        assert "secret" in result.output.lower()
+
+    def test_decrypt_verify_vault_disallows_sops(self, tmp_path: Path):
+        """Verify-vault should be blocked for SOPS backend."""
+        env_file = tmp_path / ".env"
+        env_file.write_text('KEY="ENC[AES256_GCM,data:abc]"')
+
+        result = runner.invoke(
+            app,
+            ["decrypt", str(env_file), "--backend", "sops", "--verify-vault"],
+        )
+
+        assert result.exit_code == 1
+        assert "only supported" in result.output.lower()
+
+    def test_decrypt_unknown_backend(self, tmp_path: Path):
+        """Decrypt should error on unknown backend."""
+        env_file = tmp_path / ".env"
+        env_file.write_text("SECRET=encrypted")
+
+        result = runner.invoke(app, ["decrypt", str(env_file), "--backend", "unknown"])
+
+        assert result.exit_code == 1
+        assert "unknown encryption backend" in result.output.lower()
+
+    def test_decrypt_backend_not_installed(self, monkeypatch, tmp_path: Path):
+        """Decrypt should print install guidance when backend is missing."""
+        from unittest.mock import MagicMock
+
+        env_file = tmp_path / ".env"
+        env_file.write_text("SECRET=encrypted")
+
+        mock_backend = MagicMock()
+        mock_backend.name = "dotenvx"
+        mock_backend.is_installed.return_value = False
+        mock_backend.install_instructions.return_value = "install dotenvx"
+
+        monkeypatch.setattr(
+            "envdrift.cli_commands.encryption.get_encryption_backend",
+            lambda *args, **kwargs: mock_backend,
+        )
+        monkeypatch.setattr(
+            "envdrift.cli_commands.encryption.EncryptionDetector.detect_backend_for_file",
+            lambda *_args, **_kwargs: "dotenvx",
+        )
+
+        result = runner.invoke(app, ["decrypt", str(env_file)])
+
+        assert result.exit_code == 1
+        assert "not installed" in result.output.lower()
+        assert "install dotenvx" in result.output
+
+    def test_decrypt_backend_error(self, monkeypatch, tmp_path: Path):
+        """Decrypt should surface backend errors."""
+        from unittest.mock import MagicMock
+
+        from envdrift.encryption.base import EncryptionBackendError
+
+        env_file = tmp_path / ".env"
+        env_file.write_text("SECRET=encrypted")
+
+        mock_backend = MagicMock()
+        mock_backend.name = "dotenvx"
+        mock_backend.is_installed.return_value = True
+        mock_backend.decrypt.side_effect = EncryptionBackendError("boom")
+
+        monkeypatch.setattr(
+            "envdrift.cli_commands.encryption.get_encryption_backend",
+            lambda *args, **kwargs: mock_backend,
+        )
+        monkeypatch.setattr(
+            "envdrift.cli_commands.encryption.EncryptionDetector.detect_backend_for_file",
+            lambda *_args, **_kwargs: "dotenvx",
+        )
+
+        result = runner.invoke(app, ["decrypt", str(env_file)])
+
+        assert result.exit_code == 1
+        assert "decryption failed" in result.output.lower()
+
+
+class TestEncryptionHelpers:
+    """Tests for encryption helper functions."""
+
+    def test_load_encryption_config_handles_toml_error(self, monkeypatch, tmp_path: Path):
+        """Invalid TOML should return default config and no path."""
+        config_path = tmp_path / "envdrift.toml"
+        config_path.write_text("invalid = [")
+
+        def fake_load(_path):
+            raise tomllib.TOMLDecodeError("bad", "invalid = [", 10)
+
+        warnings = []
+
+        monkeypatch.setattr("envdrift.config.find_config", lambda: config_path)
+        monkeypatch.setattr("envdrift.config.load_config", fake_load)
+        monkeypatch.setattr("envdrift.cli_commands.encryption.print_warning", warnings.append)
+
+        config, resolved = _load_encryption_config()
+
+        assert isinstance(config, EnvdriftConfig)
+        assert resolved is None
+        assert warnings
+
+    def test_resolve_config_path_relative(self, tmp_path: Path):
+        """Relative paths should resolve relative to config file."""
+        config_path = tmp_path / "envdrift.toml"
+        resolved = _resolve_config_path(config_path, "configs/.sops.yaml")
+        assert resolved == (tmp_path / "configs" / ".sops.yaml").resolve()
 
 
 class TestInitCommand:
@@ -805,7 +1099,10 @@ class TestVaultVerification:
                 assert env_path.exists()
 
         monkeypatch.setattr("envdrift.vault.get_vault_client", lambda *_, **__: DummyVault())
-        monkeypatch.setattr("envdrift.integrations.dotenvx.DotenvxWrapper", lambda: DummyDotenvx())
+        monkeypatch.setattr(
+            "envdrift.integrations.dotenvx.DotenvxWrapper",
+            lambda *_, **__: DummyDotenvx(),
+        )
 
         result = _verify_decryption_with_vault(
             env_file=env_file,
@@ -884,6 +1181,40 @@ class TestSyncCommand:
         missing_provider = runner.invoke(app, ["sync", "-c", str(config_file)])
         assert missing_provider.exit_code == 1
         assert "--provider" in missing_provider.output
+
+    def test_get_dotenvx_auto_install_from_config(self, tmp_path: Path):
+        """Sync helper should read auto_install from envdrift.toml."""
+        from envdrift.cli_commands.sync import _get_dotenvx_auto_install
+
+        config_file = tmp_path / "envdrift.toml"
+        config_file.write_text(
+            dedent(
+                """
+                [encryption.dotenvx]
+                auto_install = true
+                """
+            ).strip()
+            + "\n"
+        )
+
+        assert _get_dotenvx_auto_install(config_file) is True
+
+    def test_get_dotenvx_auto_install_invalid_toml(self, tmp_path: Path):
+        """Sync helper should return False for invalid TOML."""
+        from envdrift.cli_commands.sync import _get_dotenvx_auto_install
+
+        config_file = tmp_path / "envdrift.toml"
+        config_file.write_text("invalid = [")
+
+        assert _get_dotenvx_auto_install(config_file) is False
+
+    def test_get_dotenvx_auto_install_no_config(self, monkeypatch):
+        """Sync helper should return False when config is missing."""
+        from envdrift.cli_commands.sync import _get_dotenvx_auto_install
+
+        monkeypatch.setattr("envdrift.config.find_config", lambda: None)
+
+        assert _get_dotenvx_auto_install(None) is False
 
     def test_sync_requires_vault_url_for_azure(self, tmp_path: Path):
         """Azure provider must supply --vault-url."""
@@ -1590,7 +1921,10 @@ class TestLockCommand:
                 """
                 return True
 
-        monkeypatch.setattr("envdrift.integrations.dotenvx.DotenvxWrapper", lambda: DummyDotenvx())
+        monkeypatch.setattr(
+            "envdrift.integrations.dotenvx.DotenvxWrapper",
+            lambda *_, **__: DummyDotenvx(),
+        )
 
         result = runner.invoke(app, ["lock", "-c", str(config_file), "--check"])
 
@@ -1693,7 +2027,10 @@ class TestLockCommand:
                 """
                 return True
 
-        monkeypatch.setattr("envdrift.integrations.dotenvx.DotenvxWrapper", lambda: DummyDotenvx())
+        monkeypatch.setattr(
+            "envdrift.integrations.dotenvx.DotenvxWrapper",
+            lambda *_, **__: DummyDotenvx(),
+        )
 
         result = runner.invoke(app, ["lock", "-c", str(config_file), "--force"])
 
@@ -1850,6 +2187,73 @@ class TestVaultPushCommand:
         assert result.exit_code == 0
         assert "my-secret" in pushed_secrets
         assert pushed_secrets["my-secret"] == "DOTENV_PRIVATE_KEY_PROD=abc123"
+
+    def test_vault_push_all_uses_auto_install(self, monkeypatch, tmp_path: Path):
+        """vault-push --all should honor dotenvx auto_install from config."""
+        from envdrift.sync.config import ServiceMapping, SyncConfig
+        from envdrift.vault.base import SecretNotFoundError
+
+        service_dir = tmp_path / "service"
+        service_dir.mkdir()
+        env_file = service_dir / ".env.production"
+        env_file.write_text("API_KEY=plaintext")
+        (service_dir / ".env.keys").write_text("DOTENV_PRIVATE_KEY_PRODUCTION=abc123\n")
+
+        mapping = ServiceMapping(secret_name="my-secret", folder_path=service_dir)
+        sync_config = SyncConfig(mappings=[mapping], env_keys_filename=".env.keys")
+
+        class DummyClient:
+            def get_secret(self, _name):
+                raise SecretNotFoundError("missing")
+
+            def set_secret(self, _name, _value):
+                return None
+
+        dummy_client = DummyClient()
+        monkeypatch.setattr(
+            "envdrift.cli_commands.sync.load_sync_config_and_client",
+            lambda **_kwargs: (sync_config, dummy_client, "azure", None, None),
+        )
+
+        config_file = tmp_path / "envdrift.toml"
+        config_file.write_text(
+            dedent(
+                """
+                [encryption.dotenvx]
+                auto_install = true
+                """
+            ).strip()
+            + "\n"
+        )
+
+        captured = {}
+
+        class DummyDotenvx:
+            def __init__(self, auto_install: bool = False):
+                captured["auto_install"] = auto_install
+
+            def encrypt(self, path):
+                captured["encrypted"] = Path(path)
+
+        monkeypatch.setattr("envdrift.integrations.dotenvx.DotenvxWrapper", DummyDotenvx)
+
+        result = runner.invoke(
+            app,
+            [
+                "vault-push",
+                "--all",
+                "-c",
+                str(config_file),
+                "-p",
+                "azure",
+                "--vault-url",
+                "https://example.vault.azure.net/",
+            ],
+        )
+
+        assert result.exit_code == 0
+        assert captured["auto_install"] is True
+        assert captured["encrypted"] == env_file
 
     def test_vault_push_auth_failure(self, monkeypatch, tmp_path: Path):
         """vault-push should handle authentication errors gracefully."""

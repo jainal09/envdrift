@@ -31,8 +31,15 @@ repos:
   - repo: local
     hooks:
       - id: pytest
-        name: pytest
-        entry: uv run pytest -q
+        name: pytest (unit)
+        entry: uv run pytest -q -m "not integration"
+        language: system
+        pass_filenames: false
+        always_run: true
+        stages: [pre-push]
+      - id: pytest-integration
+        name: pytest (integration)
+        entry: uv run pytest -q -m integration --cov-append
         language: system
         pass_filenames: false
         always_run: true

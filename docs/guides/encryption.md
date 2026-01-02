@@ -1,6 +1,12 @@
-# Encryption with dotenvx
+# Encryption with dotenvx and SOPS
 
-envdrift integrates with [dotenvx](https://dotenvx.com/) for encrypted `.env` files.
+envdrift supports encrypted `.env` files with [dotenvx](https://dotenvx.com/) (default)
+and [SOPS](https://github.com/getsops/sops).
+
+Supported backends:
+
+- **dotenvx**: Simple CLI-managed encryption with `.env.keys`
+- **SOPS**: KMS/age/PGP-backed encryption with `.sops.yaml` policies
 
 ## Why Encrypt?
 
@@ -43,7 +49,13 @@ Encryption ratio: 50% (3/6 variables encrypted)
 envdrift encrypt .env.production
 ```
 
-This downloads dotenvx (if needed) and encrypts the file.
+If `encryption.dotenvx.auto_install` is enabled, envdrift installs dotenvx and encrypts the file.
+
+For SOPS:
+
+```bash
+envdrift encrypt .env.production --backend sops --age age1example
+```
 
 ### Decrypt for Development
 
@@ -51,13 +63,20 @@ This downloads dotenvx (if needed) and encrypts the file.
 envdrift decrypt .env.production
 ```
 
-## How It Works
+For SOPS, ensure your key source is available (for example, set
+`SOPS_AGE_KEY_FILE=keys.txt`) and run:
 
-1. **dotenvx binary** - envdrift downloads the dotenvx binary to `.venv/bin/` on first use
+```bash
+envdrift decrypt .env.production --backend sops
+```
+
+## How dotenvx Works
+
+1. **dotenvx binary** - envdrift can auto-install the dotenvx binary to `.venv/bin/` when enabled
 2. **Encryption** - Uses AES-256-GCM encryption
 3. **Key management** - Keys stored in `.env.keys` (never commit this!)
 
-## File Structure
+## Dotenvx File Structure
 
 After encryption:
 
@@ -72,7 +91,7 @@ Your `.gitignore` should include:
 .env.keys
 ```
 
-## Encrypted File Format
+## Dotenvx Encrypted File Format
 
 ```bash
 #/---BEGIN DOTENV ENCRYPTED---/
@@ -84,6 +103,44 @@ DEBUG=false
 ```
 
 Note: Non-sensitive values like `DEBUG` remain plaintext.
+
+## SOPS Encrypted File Format
+
+SOPS encrypts values in place while keeping keys readable:
+
+```bash
+DATABASE_URL="ENC[AES256_GCM,data:...,iv:...,tag:...,type:str]"
+API_KEY="ENC[AES256_GCM,data:...,iv:...,tag:...,type:str]"
+```
+
+SOPS relies on your chosen key management system (age, KMS, PGP, etc.) and a
+`.sops.yaml` configuration in the repo.
+
+## SOPS Configuration
+
+Use envdrift config to set SOPS defaults. Auto-install is opt-in; set
+`auto_install = true` if you want envdrift to download the binary for you:
+
+```toml
+[encryption]
+backend = "sops"
+
+[encryption.sops]
+auto_install = false
+config_file = ".sops.yaml"
+age_key_file = "keys.txt"
+age_recipients = "age1example"
+# kms_arn = "arn:aws:kms:..."
+# gcp_kms = "projects/.../locations/.../keyRings/.../cryptoKeys/..."
+# azure_kv = "https://myvault.vault.azure.net/keys/my-key"
+```
+
+When decrypting locally, set your age private key:
+
+```bash
+export SOPS_AGE_KEY_FILE=keys.txt
+envdrift decrypt .env.production --backend sops
+```
 
 ## Schema Integration
 
@@ -122,7 +179,7 @@ repos:
         pass_filenames: true
 ```
 
-## Key Management
+## Dotenvx Key Management
 
 ### Development
 
@@ -157,6 +214,9 @@ key = vault.get_secret("dotenv-private-key-production")
 os.environ["DOTENV_PRIVATE_KEY_PRODUCTION"] = key.value
 ```
 
+SOPS does not use `.env.keys`; key management lives in your SOPS setup
+(age key files, KMS, or PGP) and the `.sops.yaml` policy.
+
 ## Troubleshooting
 
 ### "dotenvx not found"
@@ -176,3 +236,17 @@ envdrift encrypt .env --check  # Triggers download
 1. Check `.env.keys` exists
 2. Verify the key matches the encrypted file
 3. Check `DOTENV_PRIVATE_KEY_*` environment variable is set
+
+### "sops not found"
+
+Install SOPS and retry:
+
+```bash
+brew install sops
+```
+
+### "SOPS decryption failed"
+
+1. Confirm `SOPS_AGE_KEY_FILE` (or `SOPS_AGE_KEY`) is set for age
+2. Verify access to your KMS/PGP keys
+3. Ensure `.sops.yaml` rules match the file you're decrypting

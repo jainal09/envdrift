@@ -1,6 +1,7 @@
 # envdrift pull
 
 Pull keys from vault and decrypt all env files (one-command developer setup).
+This workflow is specific to dotenvx and does not apply to SOPS.
 
 ## Synopsis
 
