@@ -61,18 +61,22 @@ class DotenvxEncryptionBackend(EncryptionBackend):
 
     def is_installed(self) -> bool:
         """Check if dotenvx is installed."""
+        from envdrift.integrations.dotenvx import DotenvxError, DotenvxNotFoundError
+
         try:
             return self._get_wrapper().is_installed()
-        except Exception:
+        except (DotenvxNotFoundError, DotenvxError, OSError, RuntimeError):
             return False
 
     def get_version(self) -> str | None:
         """Get the installed dotenvx version."""
+        from envdrift.integrations.dotenvx import DotenvxError, DotenvxNotFoundError
+
         try:
             if not self.is_installed():
                 return None
             return self._get_wrapper().get_version()
-        except Exception:
+        except (DotenvxNotFoundError, DotenvxError, OSError, RuntimeError):
             return None
 
     def encrypt(

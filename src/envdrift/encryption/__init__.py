@@ -101,8 +101,8 @@ def detect_encryption_provider(file_path) -> EncryptionProvider | None:
     ]
     for sops_config in sops_config_locations:
         if sops_config.exists():
-            # File might be intended for SOPS even if not yet encrypted
-            return None  # Can't determine without actual encryption markers
+            # .sops.yaml alone does not prove encryption; avoid false positives for plaintext files.
+            return None
 
     return None
 
