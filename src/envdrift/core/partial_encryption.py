@@ -30,7 +30,20 @@ WARNING_HEADER = """#/---------------------------------------------------/
 class PartialEncryptionError(Exception):
     """Partial encryption operation failed."""
 
-    pass
+    @classmethod
+    def encrypt_failed(cls, path: Path, cause: Exception) -> PartialEncryptionError:
+        """Create error for encryption failure."""
+        return cls(f"Failed to encrypt {path}: {cause}")
+
+    @classmethod
+    def decrypt_failed(cls, path: Path, cause: Exception) -> PartialEncryptionError:
+        """Create error for decryption failure."""
+        return cls(f"Failed to decrypt {path}: {cause}")
+
+    @classmethod
+    def file_not_found(cls, path: Path) -> PartialEncryptionError:
+        """Create error for missing file."""
+        return cls(f"Secret file not found: {path}")
 
 
 def is_file_encrypted(file_path: Path) -> bool:
@@ -141,7 +154,7 @@ def encrypt_secret_file(env_config: PartialEncryptionEnvironmentConfig) -> None:
     try:
         dotenvx.encrypt(secret_file)
     except DotenvxError as e:
-        raise PartialEncryptionError(f"Failed to encrypt {secret_file}: {e}") from e
+        raise PartialEncryptionError.encrypt_failed(secret_file, e) from e
 
 
 def decrypt_secret_file(env_config: PartialEncryptionEnvironmentConfig) -> None:
@@ -157,7 +170,7 @@ def decrypt_secret_file(env_config: PartialEncryptionEnvironmentConfig) -> None:
     secret_file = Path(env_config.secret_file)
 
     if not secret_file.exists():
-        raise PartialEncryptionError(f"Secret file not found: {secret_file}")
+        raise PartialEncryptionError.file_not_found(secret_file)
 
     # Check if already decrypted
     if not is_file_encrypted(secret_file):
@@ -168,7 +181,7 @@ def decrypt_secret_file(env_config: PartialEncryptionEnvironmentConfig) -> None:
     try:
         dotenvx.decrypt(secret_file)
     except DotenvxError as e:
-        raise PartialEncryptionError(f"Failed to decrypt {secret_file}: {e}") from e
+        raise PartialEncryptionError.decrypt_failed(secret_file, e) from e
 
 
 def push_partial_encryption(env_config: PartialEncryptionEnvironmentConfig) -> dict[str, int]:
@@ -216,7 +229,7 @@ def pull_partial_encryption(env_config: PartialEncryptionEnvironmentConfig) -> b
     secret_file = Path(env_config.secret_file)
 
     if not secret_file.exists():
-        raise PartialEncryptionError(f"Secret file not found: {secret_file}")
+        raise PartialEncryptionError.file_not_found(secret_file)
 
     was_encrypted = is_file_encrypted(secret_file)
 
