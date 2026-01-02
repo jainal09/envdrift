@@ -118,7 +118,8 @@ SOPS relies on your chosen key management system (age, KMS, PGP, etc.) and a
 
 ## SOPS Configuration
 
-Use envdrift config to set SOPS defaults:
+Use envdrift config to set SOPS defaults. Auto-install is opt-in; set
+`auto_install = true` if you want envdrift to download the binary for you:
 
 ```toml
 [encryption]

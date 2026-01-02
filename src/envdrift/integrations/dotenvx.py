@@ -416,7 +416,7 @@ class DotenvxWrapper:
     """Wrapper around dotenvx CLI.
 
     This wrapper:
-    - Automatically installs dotenvx if not found
+    - Optionally installs dotenvx if not found (auto_install defaults to False)
     - Uses the binary from .venv/bin/ (not system-wide)
     - Provides Python-friendly interface to dotenvx commands
     """

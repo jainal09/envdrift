@@ -91,7 +91,6 @@ def vault_push(
     # --all mode implementation
     if all_services:
         from envdrift.cli_commands.sync import load_sync_config_and_client
-        from envdrift.config import ConfigNotFoundError, find_config, load_config
         from envdrift.integrations.dotenvx import DotenvxError, DotenvxWrapper
 
         # Load sync config and client
