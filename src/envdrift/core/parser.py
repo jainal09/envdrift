@@ -1,4 +1,9 @@
-"""ENV file parser with dotenvx encryption detection."""
+"""ENV file parser with multi-backend encryption detection.
+
+Supports:
+- dotenvx: Values starting with "encrypted:"
+- SOPS: Values starting with "ENC[AES256_GCM,"
+"""
 
 from __future__ import annotations
 
@@ -11,7 +16,7 @@ from pathlib import Path
 class EncryptionStatus(Enum):
     """Encryption status of an environment variable."""
 
-    ENCRYPTED = "encrypted"  # dotenvx encrypted value (starts with "encrypted:")
+    ENCRYPTED = "encrypted"  # Encrypted value (dotenvx or SOPS)
     PLAINTEXT = "plaintext"  # Unencrypted value
     EMPTY = "empty"  # No value (KEY= or KEY="")
 
@@ -25,6 +30,7 @@ class EnvVar:
     line_number: int
     encryption_status: EncryptionStatus
     raw_line: str
+    encryption_backend: str | None = None  # "dotenvx", "sops", or None
 
     @property
     def is_encrypted(self) -> bool:
@@ -110,12 +116,13 @@ class EnvFile:
 
 
 class EnvParser:
-    """Parse .env files with dotenvx encryption awareness.
+    """Parse .env files with multi-backend encryption awareness.
 
     Handles:
     - Standard KEY=value
     - Quoted values: KEY="value" or KEY='value'
     - dotenvx encrypted: KEY="encrypted:xxxx"
+    - SOPS encrypted: KEY="ENC[AES256_GCM,data:...,iv:...,tag:...,type:str]"
     - Comments and blank lines (skipped)
 
     Note:
@@ -125,7 +132,13 @@ class EnvParser:
     """
 
     # dotenvx encrypted value pattern
-    ENCRYPTED_PATTERN = re.compile(r"^encrypted:")
+    DOTENVX_ENCRYPTED_PATTERN = re.compile(r"^encrypted:")
+
+    # SOPS encrypted value pattern
+    SOPS_ENCRYPTED_PATTERN = re.compile(r"^ENC\[AES256_GCM,")
+
+    # Combined pattern for backward compatibility
+    ENCRYPTED_PATTERN = re.compile(r"^(encrypted:|ENC\[AES256_GCM,)")
 
     # Pattern to match KEY=value lines
     LINE_PATTERN = re.compile(r"^([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)$")
@@ -191,8 +204,8 @@ class EnvParser:
             # Remove surrounding quotes
             value = self._unquote(value)
 
-            # Determine encryption status
-            encryption_status = self._detect_encryption_status(value)
+            # Determine encryption status and backend
+            encryption_status, encryption_backend = self._detect_encryption_status(value)
 
             env_var = EnvVar(
                 name=key,
@@ -200,6 +213,7 @@ class EnvParser:
                 line_number=line_num,
                 encryption_status=encryption_status,
                 raw_line=original_line,
+                encryption_backend=encryption_backend,
             )
 
             env_file.variables[key] = env_var
@@ -220,20 +234,27 @@ class EnvParser:
                 return value[1:-1]
         return value
 
-    def _detect_encryption_status(self, value: str) -> EncryptionStatus:
+    def _detect_encryption_status(self, value: str) -> tuple[EncryptionStatus, str | None]:
         """
-        Detects the encryption status of an environment variable value.
+        Detects the encryption status and backend of an environment variable value.
 
         Parameters:
             value (str): The unquoted value string to classify.
 
         Returns:
-            EncryptionStatus: `EncryptionStatus.EMPTY` if the value is empty, `EncryptionStatus.ENCRYPTED` if it starts with "encrypted:", otherwise `EncryptionStatus.PLAINTEXT`.
+            tuple[EncryptionStatus, str | None]: A tuple of (status, backend) where:
+                - status is EncryptionStatus.EMPTY, ENCRYPTED, or PLAINTEXT
+                - backend is "dotenvx", "sops", or None
         """
         if not value:
-            return EncryptionStatus.EMPTY
+            return EncryptionStatus.EMPTY, None
 
-        if self.ENCRYPTED_PATTERN.match(value):
-            return EncryptionStatus.ENCRYPTED
+        # Check for dotenvx encrypted format
+        if self.DOTENVX_ENCRYPTED_PATTERN.match(value):
+            return EncryptionStatus.ENCRYPTED, "dotenvx"
 
-        return EncryptionStatus.PLAINTEXT
+        # Check for SOPS encrypted format
+        if self.SOPS_ENCRYPTED_PATTERN.match(value):
+            return EncryptionStatus.ENCRYPTED, "sops"
+
+        return EncryptionStatus.PLAINTEXT, None

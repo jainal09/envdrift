@@ -243,76 +243,51 @@ class TestEncryptCommand:
         assert result.exit_code == 0 or "encrypt" in result.output.lower()
 
     def test_encrypt_perform_encryption(self, monkeypatch, tmp_path: Path):
-        """Test encrypt without --check calls dotenvx.encrypt."""
+        """Test encrypt without --check calls encryption backend."""
+        from unittest.mock import MagicMock
+
+        from envdrift.encryption.base import EncryptionResult
 
         env_file = tmp_path / ".env"
         env_file.write_text("FOO=bar")
 
-        class DummyDotenvx:
-            def __init__(self):
-                """
-                Initialize the instance and set the `called` flag to False.
+        # Create a mock encryption backend
+        mock_backend = MagicMock()
+        mock_backend.name = "dotenvx"
+        mock_backend.is_installed.return_value = True
+        mock_backend.encrypt.return_value = EncryptionResult(
+            success=True,
+            message=f"Encrypted {env_file}",
+            file_path=env_file,
+        )
 
-                This prepares the object in an uninvoked state by creating a boolean attribute
-                `called` initialized to False.
-                """
-                self.called = False
-
-            def is_installed(self):
-                """
-                Check whether the component is installed.
-
-                This implementation always reports the component as installed.
-
-                Returns:
-                    `true` if the component is installed, `false` otherwise.
-                """
-                return True
-
-            def encrypt(self, file_path):
-                """
-                Record that the encrypt method was invoked and assert the provided path matches the expected env file.
-
-                Parameters:
-                    file_path (str | pathlib.Path): Path passed to the encrypt method; must equal the test's expected `env_file`.
-                """
-                self.called = True
-                assert Path(file_path) == env_file
-
-        dummy = DummyDotenvx()
-        monkeypatch.setattr("envdrift.integrations.dotenvx.DotenvxWrapper", lambda: dummy)
+        monkeypatch.setattr(
+            "envdrift.cli_commands.encryption.get_encryption_backend",
+            lambda *args, **kwargs: mock_backend,
+        )
 
         result = runner.invoke(app, ["encrypt", str(env_file)])
 
         assert result.exit_code == 0
-        assert dummy.called is True
+        mock_backend.encrypt.assert_called_once()
 
     def test_encrypt_prompts_install_when_missing_dotenvx(self, monkeypatch, tmp_path: Path):
-        """Encrypt should surface install instructions when dotenvx is absent."""
+        """Encrypt should surface install instructions when backend is absent."""
+        from unittest.mock import MagicMock
 
         env_file = tmp_path / ".env"
         env_file.write_text("FOO=bar")
 
-        class DummyDotenvx:
-            def is_installed(self):
-                """
-                Report whether the integration is installed and available for use.
+        # Create a mock encryption backend that is not installed
+        mock_backend = MagicMock()
+        mock_backend.name = "dotenvx"
+        mock_backend.is_installed.return_value = False
+        mock_backend.install_instructions.return_value = "npm install -g dotenvx"
 
-                Returns:
-                    `True` if the integration is installed and available, `False` otherwise.
-                """
-                return False
-
-            def install_instructions(self):
-                """
-                Provide the installation command for the `dotenvx` CLI.
-
-                Returns:
-                    installation_command (str): The exact shell command "npm install -g dotenvx" to install dotenvx globally.
-                """
-                return "npm install -g dotenvx"
-
-        monkeypatch.setattr("envdrift.integrations.dotenvx.DotenvxWrapper", lambda: DummyDotenvx())
+        monkeypatch.setattr(
+            "envdrift.cli_commands.encryption.get_encryption_backend",
+            lambda *args, **kwargs: mock_backend,
+        )
 
         result = runner.invoke(app, ["encrypt", str(env_file)])
 
@@ -400,53 +375,39 @@ class TestDecryptCommand:
         assert result.exit_code == 1
         assert "moved" in result.output.lower()
 
-    def test_decrypt_calls_dotenvx_when_installed(self, monkeypatch, tmp_path: Path):
-        """Decrypt should call dotenvx when available."""
+    def test_decrypt_calls_backend_when_installed(self, monkeypatch, tmp_path: Path):
+        """Decrypt should call encryption backend when available."""
+        from unittest.mock import MagicMock
+
+        from envdrift.encryption.base import EncryptionResult
 
         env_file = tmp_path / ".env"
         env_file.write_text("SECRET=encrypted")
 
-        class DummyDotenvx:
-            def __init__(self):
-                """
-                Create a new instance with its decrypted state initialized to False.
+        # Create a mock encryption backend
+        mock_backend = MagicMock()
+        mock_backend.name = "dotenvx"
+        mock_backend.is_installed.return_value = True
+        mock_backend.decrypt.return_value = EncryptionResult(
+            success=True,
+            message=f"Decrypted {env_file}",
+            file_path=env_file,
+        )
 
-                Attributes:
-                    decrypted: Indicates whether the instance's content has been decrypted; starts as False.
-                """
-                self.decrypted = False
-
-            def is_installed(self):
-                """
-                Check whether the component is installed.
-
-                This implementation always reports the component as installed.
-
-                Returns:
-                    `true` if the component is installed, `false` otherwise.
-                """
-                return True
-
-            def decrypt(self, file_path):
-                """
-                Mark this object as having performed decryption and verify the target file path.
-
-                Parameters:
-                    file_path (str | Path): Path to the file intended for decryption; must match the module-level `env_file`.
-
-                Raises:
-                    AssertionError: If `file_path` does not equal the expected `env_file`.
-                """
-                self.decrypted = True
-                assert Path(file_path) == env_file
-
-        dummy = DummyDotenvx()
-        monkeypatch.setattr("envdrift.integrations.dotenvx.DotenvxWrapper", lambda: dummy)
+        monkeypatch.setattr(
+            "envdrift.cli_commands.encryption.get_encryption_backend",
+            lambda *args, **kwargs: mock_backend,
+        )
+        # Also mock the detector to return a backend
+        monkeypatch.setattr(
+            "envdrift.cli_commands.encryption.EncryptionDetector.detect_backend_for_file",
+            lambda self, path: "dotenvx",
+        )
 
         result = runner.invoke(app, ["decrypt", str(env_file)])
 
         assert result.exit_code == 0
-        assert dummy.decrypted is True
+        mock_backend.decrypt.assert_called_once()
 
     def test_decrypt_verify_vault_requires_provider(self, tmp_path: Path):
         """Verify-vault should require provider and secret arguments."""

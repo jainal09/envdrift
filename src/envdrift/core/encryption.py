@@ -1,13 +1,22 @@
-"""Encryption detection for .env files."""
+"""Encryption detection for .env files.
+
+Supports multiple encryption backends:
+- dotenvx: Uses "encrypted:" prefix and dotenvx file headers
+- SOPS: Uses "ENC[AES256_GCM,..." format
+"""
 
 from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from envdrift.core.parser import EncryptionStatus, EnvFile
 from envdrift.core.schema import SchemaMetadata
+
+if TYPE_CHECKING:
+    pass
 
 
 @dataclass
@@ -23,6 +32,7 @@ class EncryptionReport:
         default_factory=set
     )  # Plaintext vars that look like secrets
     warnings: list[str] = field(default_factory=list)
+    detected_backend: str | None = None  # Which encryption backend was detected
 
     @property
     def encryption_ratio(self) -> float:
@@ -49,18 +59,39 @@ class EncryptionReport:
 
 
 class EncryptionDetector:
-    """Detect encryption status of .env files."""
+    """Detect encryption status of .env files.
+
+    Supports multiple encryption backends:
+    - dotenvx: Values prefixed with "encrypted:", file has dotenvx headers
+    - SOPS: Values in format "ENC[AES256_GCM,data:...,iv:...,tag:...,type:str]"
+    """
 
     # Patterns that indicate encrypted values (dotenvx format)
-    ENCRYPTED_PREFIXES = [
+    DOTENVX_ENCRYPTED_PREFIXES = [
         "encrypted:",
     ]
 
+    # Patterns that indicate encrypted values (SOPS format)
+    SOPS_ENCRYPTED_PATTERN = re.compile(r"^ENC\[AES256_GCM,")
+
+    # All encrypted prefixes for backward compatibility
+    ENCRYPTED_PREFIXES = DOTENVX_ENCRYPTED_PREFIXES + ["ENC["]
+
     # Header patterns that indicate the file has been encrypted by dotenvx
-    ENCRYPTED_FILE_MARKERS = [
+    DOTENVX_FILE_MARKERS = [
         "#/---BEGIN DOTENV ENCRYPTED---/",
         "DOTENV_PUBLIC_KEY",
     ]
+
+    # Header/content patterns that indicate the file has been encrypted by SOPS
+    SOPS_FILE_MARKERS = [
+        "sops:",  # YAML metadata
+        '"sops":',  # JSON metadata
+        "ENC[AES256_GCM,",  # Encrypted value marker
+    ]
+
+    # Combined file markers for backward compatibility
+    ENCRYPTED_FILE_MARKERS = DOTENVX_FILE_MARKERS + SOPS_FILE_MARKERS
 
     # Patterns for suspicious plaintext secrets
     SECRET_VALUE_PATTERNS = [
@@ -158,34 +189,141 @@ class EncryptionDetector:
 
     def has_encrypted_header(self, content: str) -> bool:
         """
-        Determine whether the given file content contains a dotenvx encryption header.
+        Determine whether the given file content contains encryption markers.
 
         Parameters:
             content (str): Raw file content to inspect for encryption markers.
 
         Returns:
-            `true` if any encrypted-file marker from ENCRYPTED_FILE_MARKERS is present in content, `false` otherwise.
+            `true` if any encrypted-file marker is present in content, `false` otherwise.
         """
         for marker in self.ENCRYPTED_FILE_MARKERS:
             if marker in content:
                 return True
         return False
 
-    def is_file_encrypted(self, path: Path) -> bool:
+    def has_dotenvx_header(self, content: str) -> bool:
         """
-        Determine whether a file contains a dotenvx encrypted header.
+        Determine whether the given file content contains a dotenvx encryption header.
+
+        Parameters:
+            content (str): Raw file content to inspect for encryption markers.
+
+        Returns:
+            `true` if any dotenvx marker is present in content, `false` otherwise.
+        """
+        for marker in self.DOTENVX_FILE_MARKERS:
+            if marker in content:
+                return True
+        return False
+
+    def has_sops_header(self, content: str) -> bool:
+        """
+        Determine whether the given file content contains SOPS encryption markers.
+
+        Parameters:
+            content (str): Raw file content to inspect for encryption markers.
+
+        Returns:
+            `true` if any SOPS marker is present in content, `false` otherwise.
+        """
+        for marker in self.SOPS_FILE_MARKERS:
+            if marker in content:
+                return True
+        return False
+
+    def detect_backend(self, content: str) -> str | None:
+        """
+        Detect which encryption backend was used for the content.
+
+        Parameters:
+            content (str): Raw file content to inspect.
+
+        Returns:
+            "dotenvx", "sops", or None if no encryption detected.
+        """
+        if self.has_dotenvx_header(content):
+            return "dotenvx"
+        if self.has_sops_header(content):
+            return "sops"
+        return None
+
+    def detect_backend_for_file(self, path: Path) -> str | None:
+        """
+        Detect which encryption backend was used for a file.
 
         Parameters:
             path (Path): Filesystem path to the file to inspect.
 
         Returns:
-            `true` if the file contains a dotenvx encrypted header, `false` otherwise.
+            "dotenvx", "sops", or None if no encryption detected.
+        """
+        if not path.exists():
+            return None
+
+        content = path.read_text(encoding="utf-8")
+        return self.detect_backend(content)
+
+    def is_file_encrypted(self, path: Path) -> bool:
+        """
+        Determine whether a file contains encryption markers.
+
+        Parameters:
+            path (Path): Filesystem path to the file to inspect.
+
+        Returns:
+            `true` if the file contains encryption markers, `false` otherwise.
         """
         if not path.exists():
             return False
 
         content = path.read_text(encoding="utf-8")
         return self.has_encrypted_header(content)
+
+    def is_value_encrypted(self, value: str) -> bool:
+        """
+        Determine whether a value is encrypted by any supported backend.
+
+        Parameters:
+            value (str): The value to check.
+
+        Returns:
+            True if the value appears encrypted, False otherwise.
+        """
+        if not value:
+            return False
+
+        # Check dotenvx format
+        for prefix in self.DOTENVX_ENCRYPTED_PREFIXES:
+            if value.startswith(prefix):
+                return True
+
+        # Check SOPS format
+        return bool(self.SOPS_ENCRYPTED_PATTERN.match(value))
+
+    def detect_value_backend(self, value: str) -> str | None:
+        """
+        Detect which encryption backend was used for a specific value.
+
+        Parameters:
+            value (str): The value to check.
+
+        Returns:
+            "dotenvx", "sops", or None if not encrypted.
+        """
+        if not value:
+            return None
+
+        # Check dotenvx format
+        for prefix in self.DOTENVX_ENCRYPTED_PREFIXES:
+            if value.startswith(prefix):
+                return "dotenvx"
+
+        # Check SOPS format
+        if self.SOPS_ENCRYPTED_PATTERN.match(value):
+            return "sops"
+
+        return None
 
     def is_value_suspicious(self, value: str) -> bool:
         """
@@ -214,24 +352,37 @@ class EncryptionDetector:
                 return True
         return False
 
-    def get_recommendations(self, report: EncryptionReport) -> list[str]:
+    def get_recommendations(
+        self,
+        report: EncryptionReport,
+        backend: str | None = None,
+    ) -> list[str]:
         """
         Builds human-readable remediation recommendations derived from an EncryptionReport.
 
         Parameters:
             report (EncryptionReport): Analysis result for a single .env file used to derive recommendations.
+            backend (str | None): Encryption backend to recommend ("dotenvx", "sops", or None for auto-detect).
 
         Returns:
             list[str]: Ordered list of recommendation strings; empty if no actions are suggested.
         """
         recommendations = []
 
+        # Use detected backend if not specified
+        if backend is None:
+            backend = report.detected_backend or "dotenvx"
+
         if report.plaintext_secrets:
             recommendations.append(
                 f"Encrypt the following variables before committing: "
                 f"{', '.join(sorted(report.plaintext_secrets))}"
             )
-            recommendations.append("Run: dotenvx encrypt -f <env_file>")
+
+            if backend == "sops":
+                recommendations.append(f"Run: sops --encrypt --in-place {report.path}")
+            else:
+                recommendations.append(f"Run: envdrift encrypt {report.path}")
 
         if not report.is_fully_encrypted and report.encrypted_vars:
             recommendations.append(

@@ -42,6 +42,25 @@ class VaultConfig:
 
 
 @dataclass
+class EncryptionConfig:
+    """Encryption backend settings."""
+
+    # Encryption backend: dotenvx (default) or sops
+    backend: str = "dotenvx"
+
+    # dotenvx-specific settings
+    dotenvx_auto_install: bool = True
+
+    # SOPS-specific settings
+    sops_config_file: str | None = None  # Path to .sops.yaml
+    sops_age_key_file: str | None = None  # Path to age key file
+    sops_age_recipients: str | None = None  # Age public key(s) for encryption
+    sops_kms_arn: str | None = None  # AWS KMS key ARN
+    sops_gcp_kms: str | None = None  # GCP KMS resource ID
+    sops_azure_kv: str | None = None  # Azure Key Vault key URL
+
+
+@dataclass
 class ValidationConfig:
     """Validation settings."""
 
@@ -72,6 +91,7 @@ class EnvdriftConfig:
     # Sub-configs
     validation: ValidationConfig = field(default_factory=ValidationConfig)
     vault: VaultConfig = field(default_factory=VaultConfig)
+    encryption: EncryptionConfig = field(default_factory=EncryptionConfig)
     precommit: PrecommitConfig = field(default_factory=PrecommitConfig)
 
     # Raw config for access to custom fields
@@ -82,7 +102,7 @@ class EnvdriftConfig:
         """
         Builds an EnvdriftConfig from a configuration dictionary.
 
-        Parses top-level sections (expected keys: "envdrift", "validation", "vault", "precommit"), applies sensible defaults for missing fields, and returns a populated EnvdriftConfig with the original dictionary stored in `raw`.
+        Parses top-level sections (expected keys: "envdrift", "validation", "vault", "encryption", "precommit"), applies sensible defaults for missing fields, and returns a populated EnvdriftConfig with the original dictionary stored in `raw`.
 
         Parameters:
             data (dict[str, Any]): Parsed TOML/pyproject data containing configuration sections.
@@ -93,6 +113,7 @@ class EnvdriftConfig:
         envdrift_section = data.get("envdrift", {})
         validation_section = data.get("validation", {})
         vault_section = data.get("vault", {})
+        encryption_section = data.get("encryption", {})
         precommit_section = data.get("precommit", {})
 
         # Build validation config
@@ -137,6 +158,20 @@ class EnvdriftConfig:
             schemas=precommit_section.get("schemas", {}),
         )
 
+        # Build encryption config
+        sops_section = encryption_section.get("sops", {})
+        dotenvx_section = encryption_section.get("dotenvx", {})
+        encryption = EncryptionConfig(
+            backend=encryption_section.get("backend", "dotenvx"),
+            dotenvx_auto_install=dotenvx_section.get("auto_install", True),
+            sops_config_file=sops_section.get("config_file"),
+            sops_age_key_file=sops_section.get("age_key_file"),
+            sops_age_recipients=sops_section.get("age_recipients"),
+            sops_kms_arn=sops_section.get("kms_arn"),
+            sops_gcp_kms=sops_section.get("gcp_kms"),
+            sops_azure_kv=sops_section.get("azure_kv"),
+        )
+
         return cls(
             schema=envdrift_section.get("schema"),
             environments=envdrift_section.get(
@@ -145,6 +180,7 @@ class EnvdriftConfig:
             env_file_pattern=envdrift_section.get("env_file_pattern", ".env.{environment}"),
             validation=validation,
             vault=vault,
+            encryption=encryption,
             precommit=precommit,
             raw=data,
         )
@@ -234,6 +270,9 @@ def load_config(path: Path | str | None = None) -> EnvdriftConfig:
             if "vault" in envdrift_section:
                 data["vault"] = envdrift_section.get("vault")
                 del envdrift_section["vault"]
+            if "encryption" in envdrift_section:
+                data["encryption"] = envdrift_section.get("encryption")
+                del envdrift_section["encryption"]
             if "precommit" in envdrift_section:
                 data["precommit"] = envdrift_section.get("precommit")
                 del envdrift_section["precommit"]
@@ -299,6 +338,23 @@ secret_patterns = [
     "^STRIPE_",
     "^TWILIO_",
 ]
+
+[encryption]
+# Encryption backend: dotenvx (default) or sops
+backend = "dotenvx"
+
+# dotenvx-specific settings
+[encryption.dotenvx]
+auto_install = true
+
+# SOPS-specific settings (only used when backend = "sops")
+[encryption.sops]
+# config_file = ".sops.yaml"  # Path to SOPS configuration
+# age_key_file = "key.txt"    # Path to age private key file
+# age_recipients = "age1..."  # Age public key(s) for encryption
+# kms_arn = "arn:aws:kms:..."  # AWS KMS key ARN
+# gcp_kms = "projects/..."    # GCP KMS resource ID
+# azure_kv = "https://..."    # Azure Key Vault key URL
 
 [vault]
 # Vault provider: azure, aws, hashicorp
