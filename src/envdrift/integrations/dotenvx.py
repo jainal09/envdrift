@@ -250,6 +250,8 @@ class DotenvxInstaller:
 
         # Replace version in URL
         url = DOWNLOAD_URLS[key]
+        if "{version}" in url:
+            return url.format(version=self.version)
         return url.replace(DOTENVX_VERSION, self.version)
 
     def download_and_extract(self, target_path: Path) -> None:
