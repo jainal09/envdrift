@@ -16,6 +16,53 @@ from envdrift.integrations.dotenvx import DotenvxError
 runner = CliRunner()
 
 
+def _mock_sync_engine_success(monkeypatch):
+    """Patch SyncEngine to return a successful result and silence output."""
+
+    class DummyEngine:
+        def __init__(self, *_args, **_kwargs):
+            pass
+
+        def sync_all(self):
+            return SimpleNamespace(services=[], has_errors=False)
+
+    monkeypatch.setattr("envdrift.sync.engine.SyncEngine", DummyEngine)
+    monkeypatch.setattr("envdrift.output.rich.print_service_sync_status", lambda *_, **__: None)
+    monkeypatch.setattr("envdrift.output.rich.print_sync_result", lambda *_, **__: None)
+    return DummyEngine
+
+
+def _mock_dotenvx(
+    monkeypatch,
+    *,
+    installed: bool = True,
+    decrypt_side_effect: Exception | None = None,
+    decrypted_paths: list[Path] | None = None,
+):
+    """Patch DotenvxWrapper with a configurable test double."""
+
+    class DummyDotenvx:
+        def __init__(self):
+            if decrypted_paths is not None:
+                self.decrypted = decrypted_paths
+
+        def is_installed(self):
+            return installed
+
+        def install_instructions(self):
+            return "install dotenvx"
+
+        def decrypt(self, env_path):
+            if decrypt_side_effect is not None:
+                raise decrypt_side_effect
+            if decrypted_paths is not None:
+                decrypted_paths.append(Path(env_path))
+
+    dummy = DummyDotenvx()
+    monkeypatch.setattr("envdrift.integrations.dotenvx.DotenvxWrapper", lambda: dummy)
+    return dummy
+
+
 class TestValidateCommand:
     """Tests for the validate CLI command."""
 
@@ -865,16 +912,7 @@ class TestSyncCommand:
 
         class DummyEngine:
             def __init__(self, config, vault_client, mode, prompt_callback, progress_callback):
-                """
-                Initialize the instance with runtime dependencies and callbacks.
-
-                Parameters:
-                    config: Configuration object or mapping that controls the instance's behavior and settings.
-                    vault_client: Vault client used to retrieve or verify secrets; expected to expose the methods the instance uses to interact with the vault.
-                    mode: Operation mode identifier that determines how the instance will perform its tasks (for example, different modes may enable verification, decryption, or sync behavior).
-                    prompt_callback: Callable used to request interactive input from the user. Expected signature: prompt_callback(prompt: str) -> str.
-                    progress_callback: Callable used to report progress or status updates. Expected signature: progress_callback(info: float | str) -> None.
-                """
+                """Test stub for SyncEngine."""
                 self.config = config
                 self.vault_client = vault_client
                 self.mode = mode
@@ -882,14 +920,7 @@ class TestSyncCommand:
                 self.progress_callback = progress_callback
 
             def sync_all(self):
-                """
-                Return a stubbed synchronization result indicating no errors.
-
-                Returns:
-                    SimpleNamespace: An object with attributes:
-                        - services: an empty list representing synchronized services.
-                        - has_errors: `False` indicating no synchronization errors occurred.
-                """
+                """Return a successful sync result."""
                 return SimpleNamespace(services=[], has_errors=False)
 
         monkeypatch.setattr("envdrift.sync.engine.SyncEngine", DummyEngine)
@@ -925,20 +956,11 @@ class TestSyncCommand:
 
         class ErrorEngine:
             def __init__(self, *_args, **_kwargs):
-                """
-                Create a new instance that accepts arbitrary positional and keyword arguments but performs no additional initialization.
-                """
+                """Test stub that returns a failed sync result."""
                 pass
 
             def sync_all(self):
-                """
-                Return a namespace representing a sync result with no services and an error state.
-
-                Returns:
-                    result (types.SimpleNamespace): An object with attributes:
-                        - services (list): An empty list of synchronized services.
-                        - has_errors (bool): True to indicate the sync encountered errors.
-                """
+                """Return a sync result with errors."""
                 return SimpleNamespace(services=[], has_errors=True)
 
         monkeypatch.setattr("envdrift.sync.engine.SyncEngine", ErrorEngine)
@@ -1302,32 +1324,15 @@ class TestPullCommand:
         monkeypatch.setattr("envdrift.output.rich.print_service_sync_status", lambda *_, **__: None)
         monkeypatch.setattr("envdrift.output.rich.print_sync_result", lambda *_, **__: None)
 
-        class DummyEngine:
-            def __init__(self, *_args, **_kwargs):
-                pass
+        _mock_sync_engine_success(monkeypatch)
 
-            def sync_all(self):
-                return SimpleNamespace(services=[], has_errors=False)
-
-        monkeypatch.setattr("envdrift.sync.engine.SyncEngine", DummyEngine)
-
-        class DummyDotenvx:
-            def __init__(self):
-                self.decrypted: list[Path] = []
-
-            def is_installed(self):
-                return True
-
-            def decrypt(self, env_path):
-                self.decrypted.append(Path(env_path))
-
-        dummy = DummyDotenvx()
-        monkeypatch.setattr("envdrift.integrations.dotenvx.DotenvxWrapper", lambda: dummy)
+        decrypted: list[Path] = []
+        _mock_dotenvx(monkeypatch, decrypted_paths=decrypted)
 
         result = runner.invoke(app, ["pull", "-c", str(config_file)])
 
         assert result.exit_code == 0
-        assert env_file in dummy.decrypted
+        assert env_file in decrypted
         assert "setup complete" in result.output.lower()
 
     def test_pull_profile_activation_invalid_path_errors(self, monkeypatch, tmp_path: Path):
@@ -1377,33 +1382,16 @@ class TestPullCommand:
         monkeypatch.setattr("envdrift.output.rich.print_service_sync_status", lambda *_, **__: None)
         monkeypatch.setattr("envdrift.output.rich.print_sync_result", lambda *_, **__: None)
 
-        class DummyEngine:
-            def __init__(self, *_args, **_kwargs):
-                pass
+        _mock_sync_engine_success(monkeypatch)
 
-            def sync_all(self):
-                return SimpleNamespace(services=[], has_errors=False)
-
-        monkeypatch.setattr("envdrift.sync.engine.SyncEngine", DummyEngine)
-
-        class DummyDotenvx:
-            def __init__(self):
-                self.decrypted: list[Path] = []
-
-            def is_installed(self):
-                return True
-
-            def decrypt(self, env_path):
-                self.decrypted.append(Path(env_path))
-
-        dummy = DummyDotenvx()
-        monkeypatch.setattr("envdrift.integrations.dotenvx.DotenvxWrapper", lambda: dummy)
+        decrypted: list[Path] = []
+        _mock_dotenvx(monkeypatch, decrypted_paths=decrypted)
 
         result = runner.invoke(app, ["pull", "-c", str(config_file), "--profile", "local"])
 
         assert result.exit_code == 1
-        assert env_a in dummy.decrypted
-        assert env_b in dummy.decrypted
+        assert env_a in decrypted
+        assert env_b in decrypted
         assert (service_a / "active.env").exists()
 
     def test_pull_dotenvx_missing_exits(self, monkeypatch, tmp_path: Path):
@@ -1436,52 +1424,8 @@ class TestPullCommand:
 
         monkeypatch.setattr("envdrift.vault.get_vault_client", lambda *_, **__: SimpleNamespace())
 
-        class DummyEngine:
-            def __init__(self, *_args, **_kwargs):
-                """
-                Create an instance without performing any additional initialization.
-                
-                Parameters:
-                    *args: Positional arguments that are accepted but ignored.
-                    **kwargs: Keyword arguments that are accepted but ignored.
-                """
-                pass
-
-            def sync_all(self):
-                """
-                Builds a sync result representing no discovered services and no errors.
-                
-                Returns:
-                    result (types.SimpleNamespace): An object with attributes:
-                        services (list): Empty list indicating no services to sync.
-                        has_errors (bool): False indicating the sync produced no errors.
-                """
-                return SimpleNamespace(services=[], has_errors=False)
-
-        monkeypatch.setattr("envdrift.sync.engine.SyncEngine", DummyEngine)
-        monkeypatch.setattr("envdrift.output.rich.print_service_sync_status", lambda *_, **__: None)
-        monkeypatch.setattr("envdrift.output.rich.print_sync_result", lambda *_, **__: None)
-
-        class DummyDotenvx:
-            def is_installed(self):
-                """
-                Check whether the component represented by this instance is installed.
-                
-                Returns:
-                    True if the component is installed, False otherwise.
-                """
-                return False
-
-            def install_instructions(self):
-                """
-                Provide a concise user-facing instruction to install the dotenvx dependency.
-                
-                Returns:
-                    str: A short install instruction string, e.g. "install dotenvx".
-                """
-                return "install dotenvx"
-
-        monkeypatch.setattr("envdrift.integrations.dotenvx.DotenvxWrapper", lambda: DummyDotenvx())
+        _mock_sync_engine_success(monkeypatch)
+        _mock_dotenvx(monkeypatch, installed=False)
 
         result = runner.invoke(app, ["pull", "-c", str(config_file)])
 
@@ -1518,55 +1462,8 @@ class TestPullCommand:
 
         monkeypatch.setattr("envdrift.vault.get_vault_client", lambda *_, **__: SimpleNamespace())
 
-        class DummyEngine:
-            def __init__(self, *_args, **_kwargs):
-                """
-                Create an instance without performing any additional initialization.
-                
-                Parameters:
-                    *args: Positional arguments that are accepted but ignored.
-                    **kwargs: Keyword arguments that are accepted but ignored.
-                """
-                pass
-
-            def sync_all(self):
-                """
-                Builds a sync result representing no discovered services and no errors.
-                
-                Returns:
-                    result (types.SimpleNamespace): An object with attributes:
-                        services (list): Empty list indicating no services to sync.
-                        has_errors (bool): False indicating the sync produced no errors.
-                """
-                return SimpleNamespace(services=[], has_errors=False)
-
-        monkeypatch.setattr("envdrift.sync.engine.SyncEngine", DummyEngine)
-        monkeypatch.setattr("envdrift.output.rich.print_service_sync_status", lambda *_, **__: None)
-        monkeypatch.setattr("envdrift.output.rich.print_sync_result", lambda *_, **__: None)
-
-        class DummyDotenvx:
-            def is_installed(self):
-                """
-                Report whether the component is installed.
-                
-                Returns:
-                    True if the component is installed.
-                """
-                return True
-
-            def decrypt(self, _path):
-                """
-                Simulate a failed decrypt operation by always raising a DotenvxError.
-                
-                Parameters:
-                    _path (str | pathlib.Path): Path to the file to decrypt (ignored).
-                
-                Raises:
-                    DotenvxError: Always raised to indicate decryption failure (message "boom").
-                """
-                raise DotenvxError("boom")
-
-        monkeypatch.setattr("envdrift.integrations.dotenvx.DotenvxWrapper", lambda: DummyDotenvx())
+        _mock_sync_engine_success(monkeypatch)
+        _mock_dotenvx(monkeypatch, decrypt_side_effect=DotenvxError("boom"))
 
         result = runner.invoke(app, ["pull", "-c", str(config_file)])
 
@@ -1603,31 +1500,8 @@ class TestPullCommand:
 
         monkeypatch.setattr("envdrift.vault.get_vault_client", lambda *_, **__: SimpleNamespace())
 
-        class DummyEngine:
-            def __init__(self, *_args, **_kwargs):
-                """
-                Create an instance without performing any additional initialization.
-                
-                Parameters:
-                    *args: Positional arguments that are accepted but ignored.
-                    **kwargs: Keyword arguments that are accepted but ignored.
-                """
-                pass
-
-            def sync_all(self):
-                """
-                Builds a sync result representing no discovered services and no errors.
-                
-                Returns:
-                    result (types.SimpleNamespace): An object with attributes:
-                        services (list): Empty list indicating no services to sync.
-                        has_errors (bool): False indicating the sync produced no errors.
-                """
-                return SimpleNamespace(services=[], has_errors=False)
-
-        monkeypatch.setattr("envdrift.sync.engine.SyncEngine", DummyEngine)
-        monkeypatch.setattr("envdrift.output.rich.print_service_sync_status", lambda *_, **__: None)
-        monkeypatch.setattr("envdrift.output.rich.print_sync_result", lambda *_, **__: None)
+        _mock_sync_engine_success(monkeypatch)
+        _mock_dotenvx(monkeypatch)
 
         result = runner.invoke(app, ["pull", "-c", str(config_file), "--profile", "prod"])
 
@@ -1664,43 +1538,8 @@ class TestPullCommand:
 
         monkeypatch.setattr("envdrift.vault.get_vault_client", lambda *_, **__: SimpleNamespace())
 
-        class DummyEngine:
-            def __init__(self, *_args, **_kwargs):
-                """
-                Create an instance without performing any additional initialization.
-                
-                Parameters:
-                    *args: Positional arguments that are accepted but ignored.
-                    **kwargs: Keyword arguments that are accepted but ignored.
-                """
-                pass
-
-            def sync_all(self):
-                """
-                Builds a sync result representing no discovered services and no errors.
-                
-                Returns:
-                    result (types.SimpleNamespace): An object with attributes:
-                        services (list): Empty list indicating no services to sync.
-                        has_errors (bool): False indicating the sync produced no errors.
-                """
-                return SimpleNamespace(services=[], has_errors=False)
-
-        monkeypatch.setattr("envdrift.sync.engine.SyncEngine", DummyEngine)
-        monkeypatch.setattr("envdrift.output.rich.print_service_sync_status", lambda *_, **__: None)
-        monkeypatch.setattr("envdrift.output.rich.print_sync_result", lambda *_, **__: None)
-
-        class DummyDotenvx:
-            def is_installed(self):
-                """
-                Report whether the component is installed.
-                
-                Returns:
-                    True if the component is installed.
-                """
-                return True
-
-        monkeypatch.setattr("envdrift.integrations.dotenvx.DotenvxWrapper", lambda: DummyDotenvx())
+        _mock_sync_engine_success(monkeypatch)
+        _mock_dotenvx(monkeypatch)
 
         result = runner.invoke(app, ["pull", "-c", str(config_file)])
 
