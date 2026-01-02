@@ -204,6 +204,30 @@ class TestGCPSecretManagerClient:
 
         assert client.is_authenticated() is False
 
+    def test_authenticate_permission_denied(self, mock_gcp):
+        """PermissionDenied should map to AuthenticationError."""
+        mock_client = MagicMock()
+        mock_client.list_secrets.side_effect = mock_gcp.google_exceptions.PermissionDenied("denied")
+        mock_gcp.secretmanager.SecretManagerServiceClient.return_value = mock_client
+
+        client = mock_gcp.GCPSecretManagerClient(project_id="my-project")
+        with pytest.raises(AuthenticationError):
+            client.authenticate()
+
+        assert client.is_authenticated() is False
+
+    def test_authenticate_google_api_error(self, mock_gcp):
+        """GoogleAPICallError should map to VaultError."""
+        mock_client = MagicMock()
+        mock_client.list_secrets.side_effect = mock_gcp.google_exceptions.GoogleAPICallError("boom")
+        mock_gcp.secretmanager.SecretManagerServiceClient.return_value = mock_client
+
+        client = mock_gcp.GCPSecretManagerClient(project_id="my-project")
+        with pytest.raises(VaultError):
+            client.authenticate()
+
+        assert client.is_authenticated() is False
+
     def test_get_secret_binary_payload(self, mock_gcp):
         """Binary payload should be base64-encoded."""
         payload = b"\xff\xff"
@@ -236,6 +260,36 @@ class TestGCPSecretManagerClient:
 
         with pytest.raises(SecretNotFoundError):
             client.get_secret("missing-secret")
+
+    def test_get_secret_permission_denied(self, mock_gcp):
+        """PermissionDenied should map to AuthenticationError."""
+        mock_client = MagicMock()
+        mock_client.list_secrets.return_value = iter([])
+        mock_client.access_secret_version.side_effect = mock_gcp.google_exceptions.PermissionDenied(
+            "denied"
+        )
+        mock_gcp.secretmanager.SecretManagerServiceClient.return_value = mock_client
+
+        client = mock_gcp.GCPSecretManagerClient(project_id="my-project")
+        client.authenticate()
+
+        with pytest.raises(AuthenticationError):
+            client.get_secret("secret-name")
+
+    def test_get_secret_google_api_error(self, mock_gcp):
+        """GoogleAPICallError should map to VaultError."""
+        mock_client = MagicMock()
+        mock_client.list_secrets.return_value = iter([])
+        mock_client.access_secret_version.side_effect = (
+            mock_gcp.google_exceptions.GoogleAPICallError("boom")
+        )
+        mock_gcp.secretmanager.SecretManagerServiceClient.return_value = mock_client
+
+        client = mock_gcp.GCPSecretManagerClient(project_id="my-project")
+        client.authenticate()
+
+        with pytest.raises(VaultError):
+            client.get_secret("secret-name")
 
     def test_list_secrets_permission_denied(self, mock_gcp):
         """PermissionDenied should map to AuthenticationError."""
@@ -281,3 +335,34 @@ class TestGCPSecretManagerClient:
 
         with pytest.raises(AuthenticationError):
             client.set_secret("write-denied", "value")
+
+    def test_set_secret_google_api_error(self, mock_gcp):
+        """GoogleAPICallError should map to VaultError."""
+        mock_client = MagicMock()
+        mock_client.list_secrets.return_value = iter([])
+        mock_client.add_secret_version.side_effect = mock_gcp.google_exceptions.GoogleAPICallError(
+            "boom"
+        )
+        mock_gcp.secretmanager.SecretManagerServiceClient.return_value = mock_client
+
+        client = mock_gcp.GCPSecretManagerClient(project_id="my-project")
+        client.authenticate()
+
+        with pytest.raises(VaultError):
+            client.set_secret("write-error", "value")
+
+    def test_set_secret_existing_secret(self, mock_gcp):
+        """AlreadyExists should be suppressed when creating secrets."""
+        mock_client = MagicMock()
+        mock_client.list_secrets.return_value = iter([])
+        mock_client.create_secret.side_effect = mock_gcp.google_exceptions.AlreadyExists("exists")
+        mock_client.add_secret_version.return_value = SimpleNamespace(
+            name="projects/my-project/secrets/my-secret/versions/9"
+        )
+        mock_gcp.secretmanager.SecretManagerServiceClient.return_value = mock_client
+
+        client = mock_gcp.GCPSecretManagerClient(project_id="my-project")
+        client.authenticate()
+
+        result = client.set_secret("my-secret", "value")
+        assert result.version == "9"

@@ -506,6 +506,28 @@ class TestDecryptCommand:
         assert result.exit_code == 1
         assert "provider" in result.output.lower()
 
+    def test_decrypt_verify_vault_requires_project_id_for_gcp(self, tmp_path: Path):
+        """Verify-vault should require --project-id for gcp provider."""
+
+        env_file = tmp_path / ".env"
+        env_file.write_text("SECRET=encrypted")
+
+        result = runner.invoke(
+            app,
+            [
+                "decrypt",
+                str(env_file),
+                "--verify-vault",
+                "--provider",
+                "gcp",
+                "--secret",
+                "key",
+            ],
+        )
+
+        assert result.exit_code == 1
+        assert "project-id" in result.output.lower()
+
 
 class TestInitCommand:
     """Tests for the init CLI command."""
@@ -743,6 +765,91 @@ class TestVaultVerification:
         assert "git restore" in joined
         assert str(env_file) in joined
         assert "envdrift sync --force" in joined
+
+    def test_verify_vault_gcp_passes_project_id(self, monkeypatch, tmp_path: Path):
+        """GCP provider should pass project_id through to the vault client."""
+        env_file = tmp_path / ".env.production"
+        env_file.write_text("SECRET=encrypted")
+
+        secret_value = SimpleNamespace(value="DOTENV_PRIVATE_KEY_PRODUCTION=vault-key")
+        captured: dict[str, object] = {}
+
+        class DummyVault:
+            def ensure_authenticated(self) -> None:
+                return None
+
+            def get_secret(self, name: str):
+                return secret_value
+
+        def fake_get_vault_client(provider, **kwargs):
+            captured["provider"] = provider
+            captured["kwargs"] = kwargs
+            return DummyVault()
+
+        monkeypatch.setattr("envdrift.vault.get_vault_client", fake_get_vault_client)
+        monkeypatch.setattr(
+            "envdrift.integrations.dotenvx.DotenvxWrapper.is_installed",
+            lambda self: True,
+        )
+        monkeypatch.setattr(
+            "envdrift.integrations.dotenvx.DotenvxWrapper.decrypt",
+            lambda *_, **__: None,
+        )
+
+        result = _verify_decryption_with_vault(
+            env_file=env_file,
+            provider="gcp",
+            vault_url=None,
+            region=None,
+            project_id="my-gcp-project",
+            secret_name="env-drift-production-key",
+        )
+
+        assert result is True
+        assert captured["provider"] == "gcp"
+        assert captured["kwargs"]["project_id"] == "my-gcp-project"
+
+    def test_verify_vault_gcp_failure_includes_project_id(self, monkeypatch, tmp_path: Path):
+        """Failure guidance should include gcp project-id in sync command."""
+        env_file = tmp_path / ".env.production"
+        env_file.write_text("SECRET=encrypted")
+
+        secret_value = SimpleNamespace(value="DOTENV_PRIVATE_KEY_PRODUCTION=vault-key")
+
+        class DummyVault:
+            def ensure_authenticated(self) -> None:
+                return None
+
+            def get_secret(self, name: str):
+                return secret_value
+
+        monkeypatch.setattr("envdrift.vault.get_vault_client", lambda *_, **__: DummyVault())
+        monkeypatch.setattr(
+            "envdrift.integrations.dotenvx.DotenvxWrapper.is_installed",
+            lambda self: True,
+        )
+        monkeypatch.setattr(
+            "envdrift.integrations.dotenvx.DotenvxWrapper.decrypt",
+            lambda *_, **__: (_ for _ in ()).throw(DotenvxError("bad key")),
+        )
+
+        printed: list[str] = []
+        monkeypatch.setattr(
+            "envdrift.output.rich.console.print", lambda msg="", *a, **k: printed.append(str(msg))
+        )
+
+        result = _verify_decryption_with_vault(
+            env_file=env_file,
+            provider="gcp",
+            vault_url=None,
+            region=None,
+            project_id="my-gcp-project",
+            secret_name="env-drift-production-key",
+        )
+
+        assert result is False
+        joined = " ".join(printed)
+        assert "--project-id my-gcp-project" in joined
 
     def test_verify_vault_aws_with_raw_secret(self, monkeypatch, tmp_path: Path):
         """Vault verification should accept raw secrets and derive key name."""
@@ -1230,6 +1337,56 @@ class TestSyncCommand:
         assert captured["provider"] == "hashicorp"
         assert captured["kwargs"]["url"] == "http://localhost:8200"
         assert captured["config"].default_vault_name == "hc"
+
+    def test_sync_autodiscovery_gcp_defaults(self, monkeypatch, tmp_path: Path):
+        """GCP provider and project ID should be read from discovered config."""
+        config_file = tmp_path / "envdrift.toml"
+        config_file.write_text(
+            dedent(
+                """
+                [vault]
+                provider = "gcp"
+
+                [vault.gcp]
+                project_id = "my-gcp-project"
+
+                [vault.sync]
+                default_vault_name = "gcp"
+
+                [[vault.sync.mappings]]
+                secret_name = "dotenv-key"
+                folder_path = "services/api"
+                """
+            )
+        )
+
+        monkeypatch.chdir(tmp_path)
+        captured: dict[str, object] = {}
+
+        def fake_get_vault_client(provider, **kwargs):
+            captured["provider"] = provider
+            captured["kwargs"] = kwargs
+            return SimpleNamespace(ensure_authenticated=lambda: None)
+
+        monkeypatch.setattr("envdrift.vault.get_vault_client", fake_get_vault_client)
+        monkeypatch.setattr("envdrift.output.rich.print_service_sync_status", lambda *_, **__: None)
+        monkeypatch.setattr("envdrift.output.rich.print_sync_result", lambda *_, **__: None)
+
+        class DummyEngine:
+            def __init__(self, config, vault_client, mode, prompt_callback, progress_callback):
+                captured["config"] = config
+
+            def sync_all(self):
+                return SimpleNamespace(services=[], has_errors=False)
+
+        monkeypatch.setattr("envdrift.sync.engine.SyncEngine", DummyEngine)
+
+        result = runner.invoke(app, ["sync"])
+
+        assert result.exit_code == 0
+        assert captured["provider"] == "gcp"
+        assert captured["kwargs"]["project_id"] == "my-gcp-project"
+        assert captured["config"].default_vault_name == "gcp"
 
     def test_sync_invalid_toml_config_errors(self, monkeypatch, tmp_path: Path):
         """Invalid TOML sync config should raise a SyncConfigError."""
@@ -1744,6 +1901,22 @@ class TestVaultPushCommand:
         assert result.exit_code == 1
         assert "vault-url required" in result.output.lower()
 
+    def test_vault_push_requires_project_id_for_gcp(self):
+        """vault-push should require project ID for gcp provider."""
+        result = runner.invoke(
+            app,
+            [
+                "vault-push",
+                "--direct",
+                "secret-name",
+                "value",
+                "-p",
+                "gcp",
+            ],
+        )
+        assert result.exit_code == 1
+        assert "project-id" in result.output.lower()
+
     def test_vault_push_normal_mode_requires_all_args(self, tmp_path: Path):
         """Normal mode requires folder, secret-name, and --env."""
         result = runner.invoke(
@@ -1864,6 +2037,53 @@ class TestVaultPushCommand:
         assert result.exit_code == 0
         assert "my-secret" in pushed_secrets
         assert pushed_secrets["my-secret"] == "DOTENV_PRIVATE_KEY_PROD=abc123"
+
+    def test_vault_push_direct_uses_gcp_project_id_from_config(self, monkeypatch, tmp_path: Path):
+        """vault-push should read gcp project_id from config when set."""
+        config_file = tmp_path / "envdrift.toml"
+        config_file.write_text(
+            dedent(
+                """
+                [vault]
+                provider = "gcp"
+
+                [vault.gcp]
+                project_id = "my-gcp-project"
+                """
+            )
+        )
+
+        monkeypatch.chdir(tmp_path)
+        captured: dict[str, object] = {}
+
+        class MockVaultClient:
+            def authenticate(self):
+                return None
+
+            def set_secret(self, name, value):
+                captured["set_secret"] = (name, value)
+                return SimpleNamespace(name=name, value=value, version=None)
+
+        def fake_get_vault_client(provider, **kwargs):
+            captured["provider"] = provider
+            captured["kwargs"] = kwargs
+            return MockVaultClient()
+
+        monkeypatch.setattr("envdrift.vault.get_vault_client", fake_get_vault_client)
+
+        result = runner.invoke(
+            app,
+            [
+                "vault-push",
+                "--direct",
+                "my-secret",
+                "DOTENV_PRIVATE_KEY_PROD=abc123",
+            ],
+        )
+
+        assert result.exit_code == 0
+        assert captured["provider"] == "gcp"
+        assert captured["kwargs"]["project_id"] == "my-gcp-project"
 
     def test_vault_push_auth_failure(self, monkeypatch, tmp_path: Path):
         """vault-push should handle authentication errors gracefully."""
