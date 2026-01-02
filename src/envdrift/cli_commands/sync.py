@@ -991,6 +991,15 @@ def lock(
 
     console.print()
     if check_only:
-        print_success("Check complete! Run without --check to encrypt files.")
+        if encrypted_count > 0:
+            # In check mode, if files would be encrypted, this is a failure
+            # (useful for CI/pre-commit hooks to ensure all files are encrypted)
+            print_warning(
+                f"Found {encrypted_count} file(s) that need encryption. "
+                "Run 'envdrift lock' to encrypt them."
+            )
+            raise typer.Exit(code=1)
+        else:
+            print_success("Check complete! All files are already encrypted.")
     else:
         print_success("Lock complete! Your environment files are encrypted and ready to commit.")

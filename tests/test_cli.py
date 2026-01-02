@@ -297,12 +297,16 @@ DEBUG=true
     try:
         os.chdir(tmp_path)
         result = runner.invoke(app, ["lock", "--check", "--force", "-c", str(config_file)])
-        # Should report files would be encrypted, or fail because dotenvx not installed
+        # Should report files would be encrypted and exit with code 1,
+        # or fail because dotenvx not installed
         assert (
             "would be encrypted" in result.stdout.lower()
-            or "check complete" in result.stdout.lower()
+            or "need encryption" in result.stdout.lower()
             or "dotenvx" in result.stdout.lower()  # dotenvx not installed in CI
         )
+        # If dotenvx is installed, check mode should fail when files need encryption
+        if "dotenvx" not in result.stdout.lower():
+            assert result.exit_code == 1
     finally:
         os.chdir(original_cwd)
 
