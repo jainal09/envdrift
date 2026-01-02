@@ -211,32 +211,6 @@ def load_sync_config_and_client(
     )
 
 
-def _get_dotenvx_auto_install(config_file: Path | None) -> bool:
-    import tomllib
-
-    from envdrift.config import ConfigNotFoundError, find_config, load_config
-
-    config_path = None
-    if config_file is not None and config_file.suffix.lower() == ".toml":
-        config_path = config_file
-    elif config_file is None:
-        config_path = find_config()
-
-    if not config_path:
-        return False
-
-    try:
-        envdrift_config = load_config(config_path)
-    except (ConfigNotFoundError, tomllib.TOMLDecodeError):
-        return False
-
-    encryption_config = getattr(envdrift_config, "encryption", None)
-    if not encryption_config:
-        return False
-
-    return encryption_config.dotenvx_auto_install
-
-
 def sync(
     config_file: Annotated[
         Path | None,
@@ -934,18 +908,32 @@ def lock(
     console.print()
 
     try:
-        from envdrift.integrations.dotenvx import DotenvxError, DotenvxWrapper
+        from envdrift.cli_commands.encryption_helpers import (
+            build_sops_encrypt_kwargs,
+            is_encrypted_content,
+            resolve_encryption_backend,
+        )
+        from envdrift.encryption import (
+            EncryptionBackendError,
+            EncryptionNotFoundError,
+            EncryptionProvider,
+            detect_encryption_provider,
+        )
 
-        dotenvx_auto_install = _get_dotenvx_auto_install(config_file)
-        dotenvx = DotenvxWrapper(auto_install=dotenvx_auto_install)
-
-        if not dotenvx.is_installed():
-            print_error("dotenvx is not installed")
-            console.print(dotenvx.install_instructions())
+        encryption_backend, backend_provider, encryption_config = resolve_encryption_backend(
+            config_file
+        )
+        if not encryption_backend.is_installed():
+            print_error(f"{encryption_backend.name} is not installed")
+            console.print(encryption_backend.install_instructions())
             raise typer.Exit(code=1)
-    except ImportError:
-        print_error("dotenvx integration not available")
+    except ValueError as e:
+        print_error(f"Unsupported encryption backend: {e}")
         raise typer.Exit(code=1) from None
+
+    sops_encrypt_kwargs = {}
+    if backend_provider == EncryptionProvider.SOPS:
+        sops_encrypt_kwargs = build_sops_encrypt_kwargs(encryption_config)
 
     encrypted_count = 0
     skipped_count = 0
@@ -978,7 +966,7 @@ def lock(
 
         # Check if .env.keys file exists (needed for encryption)
         env_keys_file = mapping.folder_path / (sync_config.env_keys_filename or ".env.keys")
-        if not env_keys_file.exists():
+        if backend_provider == EncryptionProvider.DOTENVX and not env_keys_file.exists():
             console.print(
                 f"  [yellow]![/yellow] {env_file} "
                 f"[yellow]- warning: no .env.keys file, will generate new key[/yellow]"
@@ -987,32 +975,67 @@ def lock(
 
         # Check if file is already encrypted
         content = env_file.read_text()
-        if "encrypted:" in content.lower():
-            # Check encryption ratio
-            encrypted_lines = sum(
-                1 for line in content.splitlines() if "encrypted:" in line.lower()
-            )
-            total_value_lines = sum(
-                1
-                for line in content.splitlines()
-                if line.strip() and not line.strip().startswith("#") and "=" in line
-            )
-
-            if total_value_lines > 0:
-                ratio = encrypted_lines / total_value_lines
-                if ratio >= 0.9:  # 90%+ encrypted = fully encrypted
+        if not is_encrypted_content(backend_provider, encryption_backend, content):
+            detected_provider = detect_encryption_provider(env_file)
+            if detected_provider and detected_provider != backend_provider:
+                if (
+                    detected_provider == EncryptionProvider.DOTENVX
+                    and backend_provider != EncryptionProvider.DOTENVX
+                ):
                     console.print(
-                        f"  [dim]=[/dim] {env_file} [dim]- skipped (already encrypted)[/dim]"
+                        f"  [red]![/red] {env_file} "
+                        f"[red]- encrypted with dotenvx, but config uses "
+                        f"{backend_provider.value}[/red]"
                     )
-                    already_encrypted_count += 1
+                    errors.append(
+                        f"{env_file}: encrypted with dotenvx, but config uses "
+                        f"{backend_provider.value}"
+                    )
+                    error_count += 1
                     continue
-                else:
-                    # Partially encrypted - re-encrypt to catch new values
-                    console.print(
-                        f"  [yellow]~[/yellow] {env_file} "
-                        f"[dim]- partially encrypted ({int(ratio*100)}%), re-encrypting...[/dim]"
-                    )
-                    warnings.append(f"{env_file}: was only {int(ratio*100)}% encrypted")
+                console.print(
+                    f"  [dim]=[/dim] {env_file} "
+                    f"[dim]- skipped (encrypted with {detected_provider.value}, "
+                    f"config uses {backend_provider.value})[/dim]"
+                )
+                warnings.append(
+                    f"{env_file}: encrypted with {detected_provider.value}, "
+                    f"config uses {backend_provider.value}"
+                )
+                skipped_count += 1
+                continue
+        else:
+            if backend_provider == EncryptionProvider.DOTENVX:
+                # Check encryption ratio
+                encrypted_lines = sum(
+                    1 for line in content.splitlines() if "encrypted:" in line.lower()
+                )
+                total_value_lines = sum(
+                    1
+                    for line in content.splitlines()
+                    if line.strip() and not line.strip().startswith("#") and "=" in line
+                )
+
+                if total_value_lines > 0:
+                    ratio = encrypted_lines / total_value_lines
+                    if ratio >= 0.9:  # 90%+ encrypted = fully encrypted
+                        console.print(
+                            f"  [dim]=[/dim] {env_file} [dim]- skipped (already encrypted)[/dim]"
+                        )
+                        already_encrypted_count += 1
+                        continue
+                    else:
+                        # Partially encrypted - re-encrypt to catch new values
+                        console.print(
+                            f"  [yellow]~[/yellow] {env_file} "
+                            f"[dim]- partially encrypted ({int(ratio*100)}%), "
+                            "re-encrypting...[/dim]"
+                        )
+                        warnings.append(f"{env_file}: was only {int(ratio*100)}% encrypted")
+            else:
+                console.print(f"  [dim]=[/dim] {env_file} [dim]- skipped (already encrypted)[/dim]")
+                already_encrypted_count += 1
+                continue
 
         if check_only:
             # Just report what would be encrypted
@@ -1030,11 +1053,16 @@ def lock(
 
         # Perform encryption
         try:
-            dotenvx.encrypt(env_file.resolve())
+            result = encryption_backend.encrypt(env_file.resolve(), **sops_encrypt_kwargs)
+            if not result.success:
+                console.print(f"  [red]![/red] {env_file} [red]- error: {result.message}[/red]")
+                errors.append(f"{env_file}: encryption failed - {result.message}")
+                error_count += 1
+                continue
             console.print(f"  [green]+[/green] {env_file} [dim]- encrypted[/dim]")
             encrypted_count += 1
 
-        except DotenvxError as e:
+        except (EncryptionNotFoundError, EncryptionBackendError) as e:
             console.print(f"  [red]![/red] {env_file} [red]- error: {e}[/red]")
             errors.append(f"{env_file}: encryption failed - {e}")
             error_count += 1

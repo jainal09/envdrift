@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import tomllib
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -12,6 +13,8 @@ from envdrift.encryption import EncryptionProvider, get_encryption_backend
 if TYPE_CHECKING:
     from envdrift.config import EncryptionConfig
     from envdrift.encryption.base import EncryptionBackend
+
+logger = logging.getLogger(__name__)
 
 
 def resolve_encryption_backend(
@@ -33,7 +36,8 @@ def resolve_encryption_backend(
     if config_path:
         try:
             envdrift_config = load_config(config_path)
-        except (ConfigNotFoundError, tomllib.TOMLDecodeError):
+        except (ConfigNotFoundError, tomllib.TOMLDecodeError) as exc:
+            logger.warning("Failed to load config from %s: %s", config_path, exc)
             envdrift_config = None
 
     encryption_config = getattr(envdrift_config, "encryption", None) if envdrift_config else None
