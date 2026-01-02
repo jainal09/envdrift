@@ -152,6 +152,36 @@ class TestEnvdriftConfig:
 
         assert config.raw == data
 
+    def test_from_dict_encryption_config(self):
+        """Test from_dict parses encryption settings."""
+        data = {
+            "encryption": {
+                "backend": "sops",
+                "dotenvx": {"auto_install": True},
+                "sops": {
+                    "auto_install": True,
+                    "config_file": ".sops.yaml",
+                    "age_key_file": "age.key",
+                    "age_recipients": "age1example",
+                    "kms_arn": "arn:aws:kms:us-east-1:123:key/abc",
+                    "gcp_kms": "projects/p/locations/l/keyRings/r/cryptoKeys/k",
+                    "azure_kv": "https://vault.vault.azure.net/keys/key",
+                },
+            }
+        }
+
+        config = EnvdriftConfig.from_dict(data)
+
+        assert config.encryption.backend == "sops"
+        assert config.encryption.dotenvx_auto_install is True
+        assert config.encryption.sops_auto_install is True
+        assert config.encryption.sops_config_file == ".sops.yaml"
+        assert config.encryption.sops_age_key_file == "age.key"
+        assert config.encryption.sops_age_recipients == "age1example"
+        assert config.encryption.sops_kms_arn == "arn:aws:kms:us-east-1:123:key/abc"
+        assert config.encryption.sops_gcp_kms == "projects/p/locations/l/keyRings/r/cryptoKeys/k"
+        assert config.encryption.sops_azure_kv == "https://vault.vault.azure.net/keys/key"
+
 
 class TestFindConfig:
     """Tests for find_config function."""

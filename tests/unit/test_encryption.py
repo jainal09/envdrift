@@ -198,3 +198,30 @@ NEW_FEATURE_FLAG=enabled
         assert report.total_vars == 0
         assert report.encryption_ratio == 0.0
         assert report.is_fully_encrypted is False
+
+    def test_detect_sops_backend(self, tmp_path):
+        """Detect SOPS markers in content and files."""
+        detector = EncryptionDetector()
+        content = 'KEY="ENC[AES256_GCM,data:abc,iv:xyz,tag:123,type:str]"'
+
+        assert detector.has_sops_header(content) is True
+        assert detector.detect_backend(content) == "sops"
+
+        env_file = tmp_path / ".env"
+        env_file.write_text(content)
+        assert detector.detect_backend_for_file(env_file) == "sops"
+
+    def test_detect_value_backend(self):
+        """Detect backend type for encrypted values."""
+        detector = EncryptionDetector()
+
+        assert detector.detect_value_backend("encrypted:abc") == "dotenvx"
+        assert detector.detect_value_backend("ENC[AES256_GCM,data:abc]") == "sops"
+        assert detector.detect_value_backend("plain") is None
+
+    def test_is_value_encrypted_sops(self):
+        """Treat SOPS values as encrypted."""
+        detector = EncryptionDetector()
+
+        assert detector.is_value_encrypted("ENC[AES256_GCM,data:abc]") is True
+        assert detector.is_value_encrypted("plaintext") is False

@@ -18,6 +18,14 @@ def test_get_sops_path_uses_venv_bin(monkeypatch, tmp_path: Path):
     assert get_sops_path() == tmp_path / "sops"
 
 
+def test_get_sops_path_windows(monkeypatch, tmp_path: Path):
+    """get_sops_path should use .exe on Windows."""
+    monkeypatch.setattr("envdrift.integrations.sops.get_venv_bin_dir", lambda: tmp_path)
+    monkeypatch.setattr("platform.system", lambda: "Windows")
+
+    assert get_sops_path().name == "sops.exe"
+
+
 def test_install_downloads_binary(monkeypatch, tmp_path: Path):
     """Installer downloads binary into target path."""
     target_dir = tmp_path / "bin"

@@ -347,6 +347,15 @@ class TestDotenvxInstaller:
         assert "linux" in url.lower()
         assert "amd64" in url.lower() or "x86_64" in url.lower()
 
+    @patch("platform.system", return_value="Linux")
+    @patch("platform.machine", return_value="x86_64")
+    def test_get_download_url_substitutes_version(self, mock_machine, mock_system):
+        """Test get_download_url substitutes {version} placeholder."""
+        installer = DotenvxInstaller(version="9.9.9")
+        url = installer.get_download_url()
+        assert "{version}" not in url
+        assert "9.9.9" in url
+
     @patch("platform.system", return_value="FreeBSD")
     @patch("platform.machine", return_value="x86_64")
     def test_unsupported_platform_raises(self, mock_machine, mock_system):

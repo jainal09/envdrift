@@ -476,6 +476,66 @@ class TestSOPSEncryptionBackend:
         env = backend._build_env({})
         assert env["SOPS_AGE_KEY_FILE"] == str(age_key_file)
 
+    def test_build_env_sets_age_key(self, monkeypatch):
+        """Test SOPS backend sets SOPS_AGE_KEY when provided."""
+        monkeypatch.delenv("SOPS_AGE_KEY", raising=False)
+        backend = SOPSEncryptionBackend(age_key="AGE-SECRET-KEY-1ABC")
+        env = backend._build_env({})
+        assert env["SOPS_AGE_KEY"] == "AGE-SECRET-KEY-1ABC"
+
+    def test_build_env_respects_existing_age_key(self):
+        """Test SOPS backend does not override existing SOPS_AGE_KEY."""
+        backend = SOPSEncryptionBackend(age_key="AGE-SECRET-KEY-1ABC")
+        env = backend._build_env({"SOPS_AGE_KEY": "existing-key"})
+        assert env["SOPS_AGE_KEY"] == "existing-key"
+
+    @patch("envdrift.encryption.sops.shutil.which", return_value=None)
+    def test_auto_install_uses_installer(self, mock_which, tmp_path, monkeypatch):
+        """Auto-install should invoke SopsInstaller when missing."""
+        fake_binary = tmp_path / "sops"
+        fake_binary.write_text("")
+
+        installer = MagicMock()
+        installer.install.return_value = fake_binary
+        monkeypatch.setattr("envdrift.integrations.sops.SopsInstaller", lambda: installer)
+        monkeypatch.setattr(
+            "envdrift.integrations.sops.get_sops_path", lambda: tmp_path / "missing"
+        )
+
+        backend = SOPSEncryptionBackend(auto_install=True)
+        assert backend.is_installed() is True
+        installer.install.assert_called_once()
+
+    def test_encrypt_includes_key_options(self, tmp_path, monkeypatch):
+        """Encrypt should include provided key options in SOPS args."""
+        env_file = tmp_path / ".env"
+        env_file.write_text("KEY=value")
+
+        backend = SOPSEncryptionBackend()
+        monkeypatch.setattr(backend, "is_installed", lambda: True)
+
+        captured = {}
+
+        def fake_run(args, env=None, cwd=None):
+            captured["args"] = args
+            return MagicMock(returncode=0, stderr="", stdout="")
+
+        monkeypatch.setattr(backend, "_run", fake_run)
+
+        backend.encrypt(
+            env_file,
+            age_recipients="age1example",
+            kms_arn="arn:aws:kms:us-east-1:123:key/abc",
+            gcp_kms="projects/p/locations/l/keyRings/r/cryptoKeys/k",
+            azure_kv="https://vault.vault.azure.net/keys/key",
+        )
+
+        args = captured["args"]
+        assert "--age" in args
+        assert "--kms" in args
+        assert "--gcp-kms" in args
+        assert "--azure-kv" in args
+
 
 class TestEncryptionResult:
     """Tests for EncryptionResult dataclass."""
