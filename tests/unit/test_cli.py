@@ -893,8 +893,6 @@ class TestSyncCommand:
                 return SimpleNamespace(services=[], has_errors=False)
 
         monkeypatch.setattr("envdrift.sync.engine.SyncEngine", DummyEngine)
-        monkeypatch.setattr("envdrift.output.rich.print_service_sync_status", lambda *_, **__: None)
-        monkeypatch.setattr("envdrift.output.rich.print_sync_result", lambda *_, **__: None)
 
         result = runner.invoke(
             app,
@@ -1004,8 +1002,6 @@ class TestSyncCommand:
                 return SimpleNamespace(services=[], has_errors=False)
 
         monkeypatch.setattr("envdrift.sync.engine.SyncEngine", DummyEngine)
-        monkeypatch.setattr("envdrift.output.rich.print_service_sync_status", lambda *_, **__: None)
-        monkeypatch.setattr("envdrift.output.rich.print_sync_result", lambda *_, **__: None)
 
         result = runner.invoke(app, ["sync"])
 
@@ -1314,8 +1310,6 @@ class TestPullCommand:
                 return SimpleNamespace(services=[], has_errors=False)
 
         monkeypatch.setattr("envdrift.sync.engine.SyncEngine", DummyEngine)
-        monkeypatch.setattr("envdrift.output.rich.print_service_sync_status", lambda *_, **__: None)
-        monkeypatch.setattr("envdrift.output.rich.print_sync_result", lambda *_, **__: None)
 
         class DummyDotenvx:
             def __init__(self):
@@ -1391,8 +1385,6 @@ class TestPullCommand:
                 return SimpleNamespace(services=[], has_errors=False)
 
         monkeypatch.setattr("envdrift.sync.engine.SyncEngine", DummyEngine)
-        monkeypatch.setattr("envdrift.output.rich.print_service_sync_status", lambda *_, **__: None)
-        monkeypatch.setattr("envdrift.output.rich.print_sync_result", lambda *_, **__: None)
 
         class DummyDotenvx:
             def __init__(self):

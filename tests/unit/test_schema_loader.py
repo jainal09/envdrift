@@ -120,16 +120,26 @@ def test_extract_metadata_with_config_object_and_typing():
     assert schema.fields["items"].annotation
 
 
-def test_get_schema_metadata_func_variants(tmp_path, monkeypatch):
-    """get_schema_metadata_func should return dict only when callable is present."""
+def test_get_schema_metadata_func_missing_module():
+    """get_schema_metadata_func should return None for missing modules."""
     loader = SchemaLoader()
 
     assert loader.get_schema_metadata_func("missing.module") is None
+
+
+def test_get_schema_metadata_func_non_callable(tmp_path, monkeypatch):
+    """get_schema_metadata_func should return None when attribute is not callable."""
+    loader = SchemaLoader()
 
     module_path = tmp_path / "meta_module.py"
     module_path.write_text("get_schema_metadata = 'nope'\n")
     monkeypatch.syspath_prepend(tmp_path)
     assert loader.get_schema_metadata_func("meta_module") is None
+
+
+def test_get_schema_metadata_func_callable(tmp_path, monkeypatch):
+    """get_schema_metadata_func should return result when callable is present."""
+    loader = SchemaLoader()
 
     callable_module = tmp_path / "meta_callable.py"
     callable_module.write_text(
@@ -140,6 +150,7 @@ def test_get_schema_metadata_func_variants(tmp_path, monkeypatch):
             """
         ).lstrip()
     )
+    monkeypatch.syspath_prepend(tmp_path)
     assert loader.get_schema_metadata_func("meta_callable") == {"ok": True}
 
 
