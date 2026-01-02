@@ -14,7 +14,7 @@ envdrift sync [OPTIONS]
 The `sync` command fetches `DOTENV_PRIVATE_KEY_*` secrets from cloud vaults and synchronizes them to local `.env.keys` files for dotenvx decryption.
 
 This enables secure key distribution without committing keys to source control. Keys are stored in cloud vaults (Azure Key Vault, AWS Secrets Manager,
-or HashiCorp Vault) and synced to local development environments or CI/CD pipelines.
+HashiCorp Vault, or GCP Secret Manager) and synced to local development environments or CI/CD pipelines.
 
 If `--config` is omitted, envdrift auto-discovers `envdrift.toml` or a `pyproject.toml` with `[tool.envdrift]` in the current directory tree.
 
@@ -23,6 +23,7 @@ Supported vault providers:
 - **Azure Key Vault** - Microsoft Azure's secret management service
 - **AWS Secrets Manager** - Amazon Web Services secret storage
 - **HashiCorp Vault** - Open-source secrets management
+- **GCP Secret Manager** - Google Cloud secret storage
 
 Auto-discovery usually supplies provider, vault URL, and region from your config file.
 Pass CLI flags when you need to override those defaults or when using legacy `pair.txt`, and use `-c` to pin a specific config file (common in CI).
@@ -49,7 +50,7 @@ envdrift sync --config pair.txt -p azure --vault-url https://myvault.vault.azure
 
 Vault provider to use. Required when the config doesn’t include a provider (e.g., legacy `pair.txt`); optional otherwise. Use this to override TOML defaults.
 
-Options: `azure`, `aws`, `hashicorp`
+Options: `azure`, `aws`, `hashicorp`, `gcp`
 
 TOML configs usually include the provider; pass `--provider` to override.
 
@@ -62,6 +63,12 @@ Only required when using legacy configs or overriding the TOML defaults.
 ### `--region`
 
 AWS region for Secrets Manager. Default: `us-east-1`.
+
+Only required when using legacy configs or overriding the TOML defaults.
+
+### `--project-id`
+
+GCP project ID for Secret Manager. Required for the `gcp` provider unless configured in TOML.
 
 Only required when using legacy configs or overriding the TOML defaults.
 
@@ -105,10 +112,13 @@ In `envdrift.toml`:
 
 ```toml
 [vault]
-provider = "azure"  # azure | aws | hashicorp
+provider = "azure"  # azure | aws | hashicorp | gcp
 
 [vault.azure]
 vault_url = "https://my-keyvault.vault.azure.net/"
+
+[vault.gcp]
+project_id = "my-gcp-project"
 
 [vault.sync]
 default_vault_name = "my-keyvault"

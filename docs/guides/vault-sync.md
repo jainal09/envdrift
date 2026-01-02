@@ -35,7 +35,7 @@ If the vault key cannot decrypt the file, it exits 1 and prints repair steps:
 ## Team workflow (day to day)
 
 1. **One-time setup**
-   - Store the private key in vault (Azure/AWS/HashiCorp).
+   - Store the private key in vault (Azure/AWS/HashiCorp/GCP).
    - Add `envdrift pull` to onboarding docs - one command gets developers ready.
    - Add a pre-commit or CI job that runs:
 
@@ -77,7 +77,8 @@ If the vault key cannot decrypt the file, it exits 1 and prints repair steps:
 ```text
 ┌─────────────────┐
 │   Cloud Vault   │
-│  (Azure/AWS/HC) │
+│ (Azure/AWS/HC)  │
+│       GCP       │
 │                 │
 │  ┌───────────┐  │
 │  │ app-key   │  │
@@ -114,6 +115,9 @@ pip install envdrift[aws]
 # HashiCorp Vault
 pip install envdrift[hashicorp]
 
+# GCP Secret Manager
+pip install envdrift[gcp]
+
 # All providers
 pip install envdrift[vault]
 ```
@@ -124,10 +128,13 @@ Preferred: `envdrift.toml` in your project root:
 
 ```toml
 [vault]
-provider = "azure"  # or aws/hashicorp
+provider = "azure"  # or aws/hashicorp/gcp
 
 [vault.azure]
 vault_url = "https://my-keyvault.vault.azure.net/"
+
+[vault.gcp]
+project_id = "my-gcp-project"
 
 [vault.sync]
 default_vault_name = "my-keyvault"
@@ -170,13 +177,21 @@ vault kv put secret/myapp-dotenvx-key \
   value="$(cat services/myapp/.env.keys | grep DOTENV_PRIVATE_KEY_PRODUCTION | cut -d'=' -f2)"
 ```
 
+**GCP Secret Manager:**
+
+```bash
+gcloud secrets create myapp-dotenvx-key --replication-policy="automatic"
+printf "%s" "$(cat services/myapp/.env.keys | grep DOTENV_PRIVATE_KEY_PRODUCTION | cut -d'=' -f2)" \
+  | gcloud secrets versions add myapp-dotenvx-key --data-file=-
+```
+
 ### 4. Sync keys locally
 
 Auto-discovery finds `envdrift.toml` (or `[tool.envdrift]` in `pyproject.toml`) in your project tree.
 Add `-c envdrift.toml` when running outside the repo root or if you want CI to pin the exact file.
 
 ```bash
-# Auto-discovery (Azure/AWS/HashiCorp)
+# Auto-discovery (Azure/AWS/HashiCorp/GCP)
 envdrift sync
 
 # Explicit path when auto-discovery isn’t available
@@ -329,6 +344,35 @@ vault login
 
 # Sync
 envdrift sync
+```
+
+### GCP Secret Manager
+
+#### Prerequisites
+
+1. gcloud CLI installed and authenticated
+2. Secret Manager API enabled for the project
+3. Credentials available via Application Default Credentials
+
+#### Authentication
+
+**Application Default Credentials:**
+
+```bash
+gcloud auth application-default login
+```
+
+**Service Account Key (CI):**
+
+```bash
+export GOOGLE_APPLICATION_CREDENTIALS="/path/to/service-account.json"
+```
+
+#### Example
+
+```bash
+# Sync
+envdrift sync -p gcp --project-id my-gcp-project
 ```
 
 ## Configuration

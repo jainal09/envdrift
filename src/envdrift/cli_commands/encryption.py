@@ -281,6 +281,7 @@ def _verify_decryption_with_vault(
     provider: str,
     vault_url: str | None,
     region: str | None,
+    project_id: str | None,
     secret_name: str,
     ci: bool = False,
     auto_install: bool = False,
@@ -292,9 +293,10 @@ def _verify_decryption_with_vault(
 
     Parameters:
         env_file (Path): Path to the .env file to test decryption for.
-        provider (str): Vault provider identifier (e.g., "azure", "aws", "hashicorp").
+        provider (str): Vault provider identifier (e.g., "azure", "aws", "hashicorp", "gcp").
         vault_url (str | None): Vault endpoint URL when required by the provider (e.g., Azure or HashiCorp); may be None for providers that do not require it.
         region (str | None): Region identifier for providers that require it (e.g., AWS); may be None.
+        project_id (str | None): GCP project ID for Secret Manager.
         secret_name (str): Name of the secret in the vault that contains the private key (or an environment-style value like "DOTENV_PRIVATE_KEY_ENV=key").
 
     Returns:
@@ -319,6 +321,8 @@ def _verify_decryption_with_vault(
             vault_kwargs["region"] = region or "us-east-1"
         elif provider == "hashicorp":
             vault_kwargs["url"] = vault_url
+        elif provider == "gcp":
+            vault_kwargs["project_id"] = project_id
 
         vault_client = get_vault_client(provider, **vault_kwargs)
         vault_client.ensure_authenticated()
@@ -415,6 +419,8 @@ def _verify_decryption_with_vault(
                     sync_cmd += f" --vault-url {vault_url}"
                 if region:
                     sync_cmd += f" --region {region}"
+                if project_id:
+                    sync_cmd += f" --project-id {project_id}"
                 console.print(f"  2. Restore vault key locally: {sync_cmd}")
 
                 console.print(f"  3. Re-encrypt with the vault key: envdrift encrypt {env_file}")
@@ -468,7 +474,7 @@ def decrypt_cmd(
     ] = False,
     vault_provider: Annotated[
         str | None,
-        typer.Option("--provider", "-p", help="Vault provider: azure, aws, hashicorp"),
+        typer.Option("--provider", "-p", help="Vault provider: azure, aws, hashicorp, gcp"),
     ] = None,
     vault_url: Annotated[
         str | None,
@@ -477,6 +483,10 @@ def decrypt_cmd(
     vault_region: Annotated[
         str | None,
         typer.Option("--region", help="AWS region"),
+    ] = None,
+    vault_project_id: Annotated[
+        str | None,
+        typer.Option("--project-id", help="GCP project ID (Secret Manager)"),
     ] = None,
     vault_secret: Annotated[
         str | None,
@@ -498,6 +508,19 @@ def decrypt_cmd(
         envdrift decrypt                     # Auto-detect backend
         envdrift decrypt --backend sops      # Force SOPS decryption
         envdrift decrypt --verify-vault ...  # Verify vault key (dotenvx only)
+
+    Parameters:
+        env_file (Path): Path to the encrypted .env file to operate on.
+        backend (str | None): Encryption backend to use (dotenvx or sops).
+        sops_config_file (Path | None): Path to .sops.yaml when using SOPS.
+        age_key_file (Path | None): Path to age private key file for SOPS.
+        verify_vault (bool): If true, perform a vault-based verification instead of local decryption.
+        ci (bool): CI mode (non-interactive); affects exit behavior for errors.
+        vault_provider (str | None): Vault provider identifier; supported values include "azure", "aws", "hashicorp", and "gcp". Required when --verify-vault is used.
+        vault_url (str | None): Vault URL required for providers that need it (Azure and HashiCorp) when verifying with a vault key.
+        vault_region (str | None): AWS region when using the AWS provider for vault verification.
+        vault_project_id (str | None): GCP project ID when using the GCP provider for vault verification.
+        vault_secret (str | None): Name of the vault secret that holds the private key; required when --verify-vault is used.
     """
     if not env_file.exists():
         print_error(f"ENV file not found: {env_file}")
@@ -551,12 +574,16 @@ def decrypt_cmd(
         if vault_provider in ("azure", "hashicorp") and not vault_url:
             print_error(f"--verify-vault with {vault_provider} requires --vault-url")
             raise typer.Exit(code=1)
+        if vault_provider == "gcp" and not vault_project_id:
+            print_error("--verify-vault with gcp requires --project-id")
+            raise typer.Exit(code=1)
 
         vault_check_passed = _verify_decryption_with_vault(
             env_file=env_file,
             provider=vault_provider,
             vault_url=vault_url,
             region=vault_region,
+            project_id=vault_project_id,
             secret_name=vault_secret,
             ci=ci,
             auto_install=encryption_config.dotenvx_auto_install if encryption_config else False,

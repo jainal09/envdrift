@@ -33,10 +33,11 @@ class SyncConfig:
 class VaultConfig:
     """Vault-specific configuration."""
 
-    provider: str = "azure"  # azure, aws, hashicorp
+    provider: str = "azure"  # azure, aws, hashicorp, gcp
     azure_vault_url: str | None = None
     aws_region: str = "us-east-1"
     hashicorp_url: str | None = None
+    gcp_project_id: str | None = None
     mappings: dict[str, str] = field(default_factory=dict)
     sync: SyncConfig = field(default_factory=SyncConfig)
 
@@ -149,6 +150,7 @@ class EnvdriftConfig:
             azure_vault_url=vault_section.get("azure", {}).get("vault_url"),
             aws_region=vault_section.get("aws", {}).get("region", "us-east-1"),
             hashicorp_url=vault_section.get("hashicorp", {}).get("url"),
+            gcp_project_id=vault_section.get("gcp", {}).get("project_id"),
             mappings=vault_section.get("mappings", {}),
             sync=sync_config,
         )
@@ -360,7 +362,7 @@ auto_install = false
 # azure_kv = "https://..."    # Azure Key Vault key URL
 
 [vault]
-# Vault provider: azure, aws, hashicorp
+# Vault provider: azure, aws, hashicorp, gcp
 provider = "azure"
 
 [vault.azure]
@@ -371,6 +373,9 @@ region = "us-east-1"
 
 [vault.hashicorp]
 url = "https://vault.example.com:8200"
+
+[vault.gcp]
+project_id = "my-gcp-project"
 # token from VAULT_TOKEN env var
 
 # Sync configuration for `envdrift sync` command

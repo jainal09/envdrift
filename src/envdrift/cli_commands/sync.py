@@ -22,7 +22,8 @@ def load_sync_config_and_client(
     provider: str | None,
     vault_url: str | None,
     region: str | None,
-) -> tuple[SyncConfig, Any, str, str | None, str | None]:
+    project_id: str | None,
+) -> tuple[SyncConfig, Any, str, str | None, str | None, str | None]:
     """
     Load sync configuration and instantiate a vault client using CLI arguments, discovered project config, or an explicit config file.
 
@@ -30,9 +31,10 @@ def load_sync_config_and_client(
 
     Parameters:
         config_file (Path | None): Path provided via --config. If a TOML file is given, it is used for defaults and/or as the sync config source; other extensions may be treated as legacy pair files.
-        provider (str | None): CLI provider override (e.g., "azure", "aws", "hashicorp"). If omitted, the provider from project config is used when available.
+        provider (str | None): CLI provider override (e.g., "azure", "aws", "hashicorp", "gcp"). If omitted, the provider from project config is used when available.
         vault_url (str | None): CLI vault URL override for providers that require it (Azure, HashiCorp). If omitted, the value from project config is used when present.
         region (str | None): CLI region override for AWS. If omitted, the value from project config is used when present.
+        project_id (str | None): CLI project ID override for GCP Secret Manager. If omitted, the value from project config is used when present.
 
     Returns:
         tuple[SyncConfig, Any, str, str | None, str | None]: A tuple containing:
@@ -41,6 +43,7 @@ def load_sync_config_and_client(
             - effective_provider: the resolved provider string.
             - effective_vault_url: the resolved vault URL when applicable, otherwise None.
             - effective_region: the resolved region when applicable, otherwise None.
+            - effective_project_id: the resolved GCP project ID when applicable, otherwise None.
 
     Raises:
         typer.Exit: Exits with a non-zero code if no valid sync configuration can be found, required provider options are missing, the config file is invalid or unreadable, or the vault client cannot be created.
@@ -98,6 +101,10 @@ def load_sync_config_and_client(
     effective_region = region
     if effective_region is None and vault_config:
         effective_region = getattr(vault_config, "aws_region", None)
+
+    effective_project_id = project_id
+    if effective_project_id is None and vault_config:
+        effective_project_id = getattr(vault_config, "gcp_project_id", None)
 
     vault_sync = getattr(vault_config, "sync", None)
 
@@ -157,7 +164,7 @@ def load_sync_config_and_client(
     if effective_provider is None:
         print_error(
             "--provider is required (or set [vault] provider in config). "
-            "Options: azure, aws, hashicorp"
+            "Options: azure, aws, hashicorp, gcp"
         )
         raise typer.Exit(code=1)
 
@@ -170,6 +177,10 @@ def load_sync_config_and_client(
         print_error("HashiCorp provider requires --vault-url (or [vault.hashicorp] url in config)")
         raise typer.Exit(code=1)
 
+    if effective_provider == "gcp" and not effective_project_id:
+        print_error("GCP provider requires --project-id (or [vault.gcp] project_id in config)")
+        raise typer.Exit(code=1)
+
     # Create vault client
     try:
         vault_kwargs: dict = {}
@@ -179,6 +190,8 @@ def load_sync_config_and_client(
             vault_kwargs["region"] = effective_region or "us-east-1"
         elif effective_provider == "hashicorp":
             vault_kwargs["url"] = effective_vault_url
+        elif effective_provider == "gcp":
+            vault_kwargs["project_id"] = effective_project_id
 
         vault_client = get_vault_client(effective_provider, **vault_kwargs)
     except ImportError as e:
@@ -194,6 +207,7 @@ def load_sync_config_and_client(
         effective_provider,
         effective_vault_url,
         effective_region,
+        effective_project_id,
     )
 
 
@@ -234,7 +248,7 @@ def sync(
     ] = None,
     provider: Annotated[
         str | None,
-        typer.Option("--provider", "-p", help="Vault provider: azure, aws, hashicorp"),
+        typer.Option("--provider", "-p", help="Vault provider: azure, aws, hashicorp, gcp"),
     ] = None,
     vault_url: Annotated[
         str | None,
@@ -243,6 +257,10 @@ def sync(
     region: Annotated[
         str | None,
         typer.Option("--region", help="AWS region (default: us-east-1)"),
+    ] = None,
+    project_id: Annotated[
+        str | None,
+        typer.Option("--project-id", help="GCP project ID (Secret Manager)"),
     ] = None,
     verify: Annotated[
         bool,
@@ -283,11 +301,12 @@ def sync(
     from envdrift.output.rich import print_service_sync_status, print_sync_result
     from envdrift.sync.config import SyncConfigError
 
-    sync_config, vault_client, effective_provider, _, _ = load_sync_config_and_client(
+    sync_config, vault_client, effective_provider, _, _, _ = load_sync_config_and_client(
         config_file=config_file,
         provider=provider,
         vault_url=vault_url,
         region=region,
+        project_id=project_id,
     )
 
     # Create sync engine
@@ -360,7 +379,7 @@ def pull(
     ] = None,
     provider: Annotated[
         str | None,
-        typer.Option("--provider", "-p", help="Vault provider: azure, aws, hashicorp"),
+        typer.Option("--provider", "-p", help="Vault provider: azure, aws, hashicorp, gcp"),
     ] = None,
     vault_url: Annotated[
         str | None,
@@ -369,6 +388,10 @@ def pull(
     region: Annotated[
         str | None,
         typer.Option("--region", help="AWS region (default: us-east-1)"),
+    ] = None,
+    project_id: Annotated[
+        str | None,
+        typer.Option("--project-id", help="GCP project ID (Secret Manager)"),
     ] = None,
     force: Annotated[
         bool,
@@ -417,11 +440,12 @@ def pull(
     from envdrift.output.rich import print_service_sync_status, print_sync_result
     from envdrift.sync.config import SyncConfigError
 
-    sync_config, vault_client, effective_provider, _, _ = load_sync_config_and_client(
+    sync_config, vault_client, effective_provider, _, _, _ = load_sync_config_and_client(
         config_file=config_file,
         provider=provider,
         vault_url=vault_url,
         region=region,
+        project_id=project_id,
     )
 
     # === FILTER MAPPINGS BY PROFILE ===
@@ -611,7 +635,7 @@ def lock(
     ] = None,
     provider: Annotated[
         str | None,
-        typer.Option("--provider", "-p", help="Vault provider: azure, aws, hashicorp"),
+        typer.Option("--provider", "-p", help="Vault provider: azure, aws, hashicorp, gcp"),
     ] = None,
     vault_url: Annotated[
         str | None,
@@ -620,6 +644,10 @@ def lock(
     region: Annotated[
         str | None,
         typer.Option("--region", help="AWS region (default: us-east-1)"),
+    ] = None,
+    project_id: Annotated[
+        str | None,
+        typer.Option("--project-id", help="GCP project ID (Secret Manager)"),
     ] = None,
     force: Annotated[
         bool,
@@ -694,11 +722,12 @@ def lock(
     if sync_keys:
         verify_vault = True
 
-    sync_config, vault_client, effective_provider, _, _ = load_sync_config_and_client(
+    sync_config, vault_client, effective_provider, _, _, _ = load_sync_config_and_client(
         config_file=config_file,
         provider=provider,
         vault_url=vault_url,
         region=region,
+        project_id=project_id,
     )
 
     # === FILTER MAPPINGS BY PROFILE ===

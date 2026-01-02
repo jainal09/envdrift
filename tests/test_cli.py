@@ -258,6 +258,7 @@ DEBUG=false
             or "check complete" in result.stdout.lower()
             or "skipped" in result.stdout.lower()
             or "dotenvx" in result.stdout.lower()  # dotenvx not installed in CI
+            or "azure sdk not installed" in result.stdout.lower()
         )
     finally:
         os.chdir(original_cwd)
@@ -303,9 +304,13 @@ DEBUG=true
             "would be encrypted" in result.stdout.lower()
             or "need encryption" in result.stdout.lower()
             or "dotenvx" in result.stdout.lower()  # dotenvx not installed in CI
+            or "azure sdk not installed" in result.stdout.lower()
         )
         # If dotenvx is installed, check mode should fail when files need encryption
-        if "dotenvx" not in result.stdout.lower():
+        if (
+            "dotenvx" not in result.stdout.lower()
+            and "azure sdk not installed" not in result.stdout.lower()
+        ):
             assert result.exit_code == 1
     finally:
         os.chdir(original_cwd)
@@ -343,6 +348,7 @@ environment = "production"
             "skipped" in result.stdout.lower()
             or "not found" in result.stdout.lower()
             or "dotenvx" in result.stdout.lower()  # dotenvx not installed in CI
+            or "azure sdk not installed" in result.stdout.lower()
         )
     finally:
         os.chdir(original_cwd)

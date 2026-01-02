@@ -24,6 +24,9 @@ pip install envdrift[aws]
 # HashiCorp Vault
 pip install envdrift[hashicorp]
 
+# GCP Secret Manager
+pip install envdrift[gcp]
+
 # All vault backends
 pip install envdrift[vault]
 ```

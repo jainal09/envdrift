@@ -26,6 +26,7 @@ keywords = [
     "azure",
     "aws",
     "hashicorp",
+    "gcp",
     "vault",
 ]
 classifiers = [
@@ -55,9 +56,10 @@ dependencies = [
 azure = ["azure-identity>=1.15", "azure-keyvault-secrets>=4.8"]
 aws = ["boto3>=1.34"]
 hashicorp = ["hvac>=2.0"]
+gcp = ["google-cloud-secret-manager>=2.16"]
 
 # All vault backends combined
-vault = ["envdrift[azure,aws,hashicorp]"]
+vault = ["envdrift[azure,aws,hashicorp,gcp]"]
 
 # Pre-commit hook installation (needs pyyaml)
 precommit = ["pyyaml>=6.0"]

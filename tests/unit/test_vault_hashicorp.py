@@ -6,15 +6,36 @@ by testing the code paths and exception handling.
 
 from __future__ import annotations
 
+from types import ModuleType
 from unittest.mock import MagicMock, patch
 
 import pytest
 
-from envdrift.vault.base import (
-    AuthenticationError,
-    SecretNotFoundError,
-    VaultError,
-)
+from envdrift.vault.base import AuthenticationError, SecretNotFoundError, VaultError
+
+
+@pytest.fixture(autouse=True, scope="module")
+def mock_hvac_module():
+    """Provide a stub hvac module so tests don't require the real dependency."""
+    hvac_module = ModuleType("hvac")
+    hvac_exceptions = ModuleType("hvac.exceptions")
+
+    hvac_exceptions.Forbidden = type("Forbidden", (Exception,), {})
+    hvac_exceptions.InvalidPath = type("InvalidPath", (Exception,), {})
+    hvac_exceptions.Unauthorized = type("Unauthorized", (Exception,), {})
+    hvac_module.exceptions = hvac_exceptions
+    hvac_module.Client = MagicMock()
+
+    with patch.dict(
+        "sys.modules",
+        {"hvac": hvac_module, "hvac.exceptions": hvac_exceptions},
+    ):
+        import importlib
+
+        import envdrift.vault.hashicorp as hashicorp_module
+
+        importlib.reload(hashicorp_module)
+        yield hashicorp_module
 
 
 class TestHashiCorpVaultImport:
@@ -234,6 +255,7 @@ class TestHashiCorpVaultClientWithMock:
     def test_list_secrets_invalid_path_returns_empty(self, mock_hvac_module):
         """
         Verify that list_secrets() returns an empty list when the KV backend raises InvalidPath for the requested prefix.
+
         Ensures missing paths are treated as no-results instead of propagating an error.
         """
         from envdrift.vault.hashicorp import HashiCorpVaultClient, InvalidPath

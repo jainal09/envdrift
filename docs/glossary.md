@@ -77,6 +77,12 @@ Information about a schema field including name, type, whether it's required, de
 
 A sync mode (`--force`) that updates all mismatched values without prompting for confirmation.
 
+## G
+
+### GCP Secret Manager
+
+Google Cloud's secret management service. envdrift supports syncing encryption keys from GCP Secret Manager using the `sync` command with `-p gcp`.
+
 ## H
 
 ### HashiCorp Vault
@@ -233,11 +239,11 @@ The output of validation containing:
 
 ### Vault
 
-A secure storage system for secrets. envdrift supports Azure Key Vault, AWS Secrets Manager, and HashiCorp Vault.
+A secure storage system for secrets. envdrift supports Azure Key Vault, AWS Secrets Manager, HashiCorp Vault, and GCP Secret Manager.
 
 ### Vault Provider
 
-The cloud service or tool used for secrets storage. Options: `azure`, `aws`, `hashicorp`.
+The cloud service or tool used for secrets storage. Options: `azure`, `aws`, `hashicorp`, `gcp`.
 
 ### Verify Mode
 

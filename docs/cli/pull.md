@@ -40,7 +40,7 @@ envdrift pull -c envdrift.toml
 
 ### `--provider`, `-p`
 
-Vault provider to use. Options: `azure`, `aws`, `hashicorp`.
+Vault provider to use. Options: `azure`, `aws`, `hashicorp`, `gcp`.
 
 Usually read from TOML config; use this to override.
 
@@ -53,6 +53,10 @@ Usually read from TOML config; use this to override.
 ### `--region`
 
 AWS region for Secrets Manager. Default: `us-east-1`.
+
+### `--project-id`
+
+GCP project ID for Secret Manager. Required for the `gcp` provider unless configured in TOML.
 
 ### `--force`, `-f`
 

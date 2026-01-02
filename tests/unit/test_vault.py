@@ -83,11 +83,16 @@ class TestVaultProvider:
         """Test HashiCorp provider value."""
         assert VaultProvider.HASHICORP.value == "hashicorp"
 
+    def test_gcp_provider(self):
+        """Test GCP provider value."""
+        assert VaultProvider.GCP.value == "gcp"
+
     def test_from_string(self):
         """Test creating provider from string."""
         assert VaultProvider("azure") == VaultProvider.AZURE
         assert VaultProvider("aws") == VaultProvider.AWS
         assert VaultProvider("hashicorp") == VaultProvider.HASHICORP
+        assert VaultProvider("gcp") == VaultProvider.GCP
 
     def test_invalid_provider_raises(self):
         """Test invalid provider string raises ValueError."""
@@ -146,6 +151,25 @@ class TestGetVaultClient:
 
         with patch.dict("sys.modules", {"envdrift.vault.hashicorp": mock_hashi_module}):
             client = get_vault_client("hashicorp", url="http://localhost:8200", token="mytoken")
+            assert client is not None
+
+    def test_gcp_requires_project_id(self):
+        """Test GCP provider requires project_id config."""
+        mock_gcp_module = MagicMock()
+
+        with patch.dict("sys.modules", {"envdrift.vault.gcp": mock_gcp_module}):
+            with pytest.raises(ValueError) as exc_info:
+                get_vault_client("gcp")
+            assert "project_id" in str(exc_info.value)
+
+    def test_gcp_client_creation(self):
+        """Test GCP client is created with project_id."""
+        mock_client = MagicMock()
+        mock_gcp_module = MagicMock()
+        mock_gcp_module.GCPSecretManagerClient.return_value = mock_client
+
+        with patch.dict("sys.modules", {"envdrift.vault.gcp": mock_gcp_module}):
+            client = get_vault_client("gcp", project_id="my-project")
             assert client is not None
 
     def test_unsupported_provider_raises(self):
