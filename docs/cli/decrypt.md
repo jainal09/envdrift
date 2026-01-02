@@ -42,6 +42,11 @@ envdrift decrypt .env.production --verify-vault --ci
 envdrift decrypt .env.production --verify-vault --ci \
   -p azure --vault-url https://myvault.vault.azure.net \
   --secret myapp-dotenvx-key
+
+# GCP Secret Manager
+envdrift decrypt .env.production --verify-vault --ci \
+  -p gcp --project-id my-gcp-project \
+  --secret myapp-dotenvx-key
 ```
 
 Exit code 0 if the vault key can decrypt the file, 1 if it cannot.

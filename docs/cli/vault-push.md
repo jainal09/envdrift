@@ -91,7 +91,7 @@ Path to sync config file (TOML).
 
 Vault provider to use. Required unless configured in `envdrift.toml`.
 
-Options: `azure`, `aws`, `hashicorp`
+Options: `azure`, `aws`, `hashicorp`, `gcp`
 
 ### `--vault-url`
 
@@ -100,6 +100,10 @@ Vault URL. **Required for Azure and HashiCorp** unless configured in `envdrift.t
 ### `--region`
 
 AWS region for Secrets Manager. Default: `us-east-1`.
+
+### `--project-id`
+
+GCP project ID for Secret Manager. Required for the `gcp` provider unless configured in `envdrift.toml`.
 
 ## Configuration
 
@@ -117,9 +121,12 @@ region = "us-east-1"
 
 [vault.hashicorp]
 url = "https://vault.example.com:8200"
+
+[vault.gcp]
+project_id = "my-gcp-project"
 ```
 
-When configured, you can omit the `--provider` and `--vault-url` flags.
+When configured, you can omit the `--provider`, `--vault-url`, and `--project-id` flags.
 
 ## Examples
 

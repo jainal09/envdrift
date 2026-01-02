@@ -17,6 +17,7 @@ class VaultProvider(Enum):
     AZURE = "azure"
     AWS = "aws"
     HASHICORP = "hashicorp"
+    GCP = "gcp"
 
 
 def get_vault_client(provider: VaultProvider | str, **config) -> VaultClient:
@@ -24,11 +25,12 @@ def get_vault_client(provider: VaultProvider | str, **config) -> VaultClient:
     Create and return a provider-specific VaultClient configured from the provided keyword arguments.
 
     Parameters:
-        provider (VaultProvider | str): Vault provider enum or provider name ("azure", "aws", "hashicorp").
+        provider (VaultProvider | str): Vault provider enum or provider name ("azure", "aws", "hashicorp", "gcp").
         **config: Provider-specific configuration:
             - For "azure": `vault_url` (str) — required.
             - For "aws": `region` (str) — optional, defaults to "us-east-1".
             - For "hashicorp": `url` (str) — required; `token` (str) — optional.
+            - For "gcp": `project_id` (str) — required.
 
     Returns:
         VaultClient: A configured client instance for the requested provider.
@@ -78,6 +80,19 @@ def get_vault_client(provider: VaultProvider | str, **config) -> VaultClient:
             url=url,
             token=config.get("token"),
         )
+
+    elif provider == VaultProvider.GCP:
+        try:
+            from envdrift.vault.gcp import GCPSecretManagerClient
+        except ImportError as e:
+            raise ImportError(
+                "GCP Secret Manager support requires additional dependencies. "
+                "Install with: pip install envdrift[gcp]"
+            ) from e
+        project_id = config.get("project_id")
+        if not project_id:
+            raise ValueError("GCP Secret Manager requires 'project_id' configuration")
+        return GCPSecretManagerClient(project_id=project_id)
 
     raise ValueError(f"Unsupported vault provider: {provider}")
 

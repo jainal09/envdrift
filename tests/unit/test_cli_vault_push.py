@@ -41,7 +41,7 @@ class TestVaultPushAll:
             ]
         )
 
-        mock_loader.return_value = (mock_sync_config, mock_client, "azure", None, None)
+        mock_loader.return_value = (mock_sync_config, mock_client, "azure", None, None, None)
 
         # Mock Dotenvx
         mock_dotenvx = MagicMock()
@@ -93,7 +93,7 @@ class TestVaultPushAll:
                 )
             ]
         )
-        mock_loader.return_value = (mock_sync_config, mock_client, "azure", None, None)
+        mock_loader.return_value = (mock_sync_config, mock_client, "azure", None, None, None)
 
         # Create env file
         service_dir = tmp_path / "service1"
@@ -132,7 +132,7 @@ class TestVaultPushAll:
                 )
             ]
         )
-        mock_loader.return_value = (mock_sync_config, mock_client, "azure", None, None)
+        mock_loader.return_value = (mock_sync_config, mock_client, "azure", None, None, None)
 
         mock_dotenvx = MagicMock()
         mock_dotenvx_cls.return_value = mock_dotenvx
@@ -194,7 +194,7 @@ class TestVaultPushAll:
             (tmp_path / f"s{i}").mkdir()
 
         mock_sync_config = SyncConfig(mappings=mappings)
-        mock_loader.return_value = (mock_sync_config, mock_client, "azure", None, None)
+        mock_loader.return_value = (mock_sync_config, mock_client, "azure", None, None, None)
 
         # Setup s1: No files.
 

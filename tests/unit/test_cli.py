@@ -675,6 +675,7 @@ class TestVaultVerification:
             provider="azure",
             vault_url="https://example.vault.azure.net",
             region=None,
+            project_id=None,
             secret_name="env-drift-production-key",
         )
 
@@ -733,6 +734,7 @@ class TestVaultVerification:
             provider="azure",
             vault_url="https://example.vault.azure.net",
             region=None,
+            project_id=None,
             secret_name="env-drift-production-key",
         )
 
@@ -812,6 +814,7 @@ class TestVaultVerification:
             provider="aws",
             vault_url=None,
             region="us-east-1",
+            project_id=None,
             secret_name="dotenv-key",
         )
 
@@ -1165,6 +1168,17 @@ class TestSyncCommand:
 
         assert result.exit_code == 1
         assert "vault-url" in result.output.lower()
+
+    def test_sync_requires_project_id_for_gcp(self, tmp_path: Path):
+        """GCP provider must supply --project-id."""
+
+        config_file = tmp_path / "pair.txt"
+        config_file.write_text("secret=service")
+
+        result = runner.invoke(app, ["sync", "-c", str(config_file), "-p", "gcp"])
+
+        assert result.exit_code == 1
+        assert "project-id" in result.output.lower()
 
     def test_sync_autodiscovery_hashicorp_defaults(self, monkeypatch, tmp_path: Path):
         """HashiCorp provider and URL should be read from discovered config."""

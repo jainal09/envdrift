@@ -70,7 +70,7 @@ envdrift validate .env --schema config.settings:Settings
 | Cross-env diff       | Yes                    |
 | Pre-commit hooks     | Yes                    |
 | Encryption (dotenvx) | Yes                    |
-| Vault integration    | Azure, AWS, HashiCorp  |
+| Vault integration    | Azure, AWS, HashiCorp, GCP |
 | CI/CD mode           | Yes                    |
 
 ## Documentation

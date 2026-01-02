@@ -43,7 +43,7 @@ def vault_push(
     ] = None,
     provider: Annotated[
         str | None,
-        typer.Option("--provider", "-p", help="Vault provider: azure, aws, hashicorp"),
+        typer.Option("--provider", "-p", help="Vault provider: azure, aws, hashicorp, gcp"),
     ] = None,
     vault_url: Annotated[
         str | None,
@@ -52,6 +52,10 @@ def vault_push(
     region: Annotated[
         str | None,
         typer.Option("--region", help="AWS region (default: us-east-1)"),
+    ] = None,
+    project_id: Annotated[
+        str | None,
+        typer.Option("--project-id", help="GCP project ID (Secret Manager)"),
     ] = None,
 ) -> None:
     """
@@ -94,11 +98,12 @@ def vault_push(
         from envdrift.integrations.dotenvx import DotenvxError, DotenvxWrapper
 
         # Load sync config and client
-        sync_config, client, effective_provider, _, _ = load_sync_config_and_client(
+        sync_config, client, effective_provider, _, _, _ = load_sync_config_and_client(
             config_file=config,
             provider=provider,
             vault_url=vault_url,
             region=region,
+            project_id=project_id,
         )
 
         # Initialize dotenvx for encryption checks
@@ -225,9 +230,16 @@ def vault_push(
     if effective_region is None and vault_config:
         effective_region = getattr(vault_config, "aws_region", None)
 
+    effective_project_id = project_id
+    if effective_project_id is None and vault_config:
+        effective_project_id = getattr(vault_config, "gcp_project_id", None)
+
     # Validate provider-specific requirements
     if effective_provider in ("azure", "hashicorp") and not effective_vault_url:
         print_error(f"--vault-url required for {effective_provider}")
+        raise typer.Exit(code=1)
+    if effective_provider == "gcp" and not effective_project_id:
+        print_error("--project-id required for gcp")
         raise typer.Exit(code=1)
 
     # Handle direct mode
@@ -272,6 +284,8 @@ def vault_push(
             vault_client_config["region"] = effective_region or "us-east-1"
         elif effective_provider == "hashicorp":
             vault_client_config["url"] = effective_vault_url
+        elif effective_provider == "gcp":
+            vault_client_config["project_id"] = effective_project_id
 
         client = get_vault_client(effective_provider, **vault_client_config)
         client.authenticate()

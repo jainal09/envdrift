@@ -27,6 +27,7 @@ class TestVaultConfig:
         assert config.azure_vault_url is None
         assert config.aws_region == "us-east-1"
         assert config.hashicorp_url is None
+        assert config.gcp_project_id is None
         assert config.mappings == {}
 
     def test_custom_values(self):
@@ -36,12 +37,14 @@ class TestVaultConfig:
             azure_vault_url="https://myvault.vault.azure.net",
             aws_region="us-west-2",
             hashicorp_url="https://vault.example.com",
+            gcp_project_id="my-gcp-project",
             mappings={"DB_PASSWORD": "database/password"},
         )
         assert config.provider == "aws"
         assert config.azure_vault_url == "https://myvault.vault.azure.net"
         assert config.aws_region == "us-west-2"
         assert config.hashicorp_url == "https://vault.example.com"
+        assert config.gcp_project_id == "my-gcp-project"
         assert config.mappings == {"DB_PASSWORD": "database/password"}
 
 
@@ -124,6 +127,7 @@ class TestEnvdriftConfig:
                 "aws": {"region": "eu-west-1"},
                 "azure": {"vault_url": "https://test.vault.azure.net"},
                 "hashicorp": {"url": "https://vault.test.com"},
+                "gcp": {"project_id": "test-gcp-project"},
                 "mappings": {"SECRET": "path/to/secret"},
             },
             "precommit": {
@@ -145,6 +149,7 @@ class TestEnvdriftConfig:
         assert config.vault.aws_region == "eu-west-1"
         assert config.vault.azure_vault_url == "https://test.vault.azure.net"
         assert config.vault.hashicorp_url == "https://vault.test.com"
+        assert config.vault.gcp_project_id == "test-gcp-project"
         assert config.vault.mappings == {"SECRET": "path/to/secret"}
 
         assert config.precommit.files == [".env.dev"]
