@@ -65,21 +65,21 @@ def is_file_encrypted(file_path: Path) -> bool:
 
 def combine_files(env_config: PartialEncryptionEnvironmentConfig) -> dict[str, int]:
     """
-     Combine clear and encrypted secret files into a single combined file.
+    Combine clear and encrypted secret files into a single combined file.
 
-     Process:
-     1. Read .env.{env}.clear (cleartext vars)
-    2. Read .env.{env}.secret (encrypted vars)
-     3. Combine with warning header → .env.{env}
+    Process:
+        1. Read .env.{env}.clear (cleartext vars)
+        2. Read .env.{env}.secret (encrypted vars)
+        3. Combine with warning header → .env.{env}
 
-     Args:
-         env_config: Environment configuration
+    Args:
+        env_config: Environment configuration
 
-     Returns:
-         Dict with counts: {"clear_lines": X, "secret_vars": Y}
+    Returns:
+        Dict with counts: {"clear_lines": X, "secret_vars": Y}
 
-     Raises:
-         PartialEncryptionError: If operation fails
+    Raises:
+        PartialEncryptionError: If operation fails
     """
     clear_file = Path(env_config.clear_file)
     secret_file = Path(env_config.secret_file)
