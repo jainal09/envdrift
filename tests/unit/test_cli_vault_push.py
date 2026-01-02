@@ -229,16 +229,14 @@ class TestVaultPushAll:
 
         assert result.exit_code == 0
 
+        output = result.output.replace("\n", " ").replace("  ", " ")
+
         # Verify counts
-        # Skipped: s1 (no env)
-        # Errors: s2 (encrypt), s3 (vault), s4 (no keys file), s5 (no key)
-        # Total 1 skipped, 4 errors.
+        assert "Skipped: 1" in output
+        assert "Errors: 4" in output
 
-        assert "Skipped: 1" in result.output
-        assert "Errors: 4" in result.output
-
-        assert "No .env file found" in result.output
-        assert "Failed to encrypt" in result.output
-        assert "Vault error checking" in result.output
-        assert ".env.keys not found" in result.output
-        assert "not found in keys file" in result.output
+        assert "No .env file found" in output
+        assert "Failed to encrypt" in output
+        assert "Vault error checking" in output
+        assert ".env.keys not found" in output
+        assert "not found in keys file" in output
