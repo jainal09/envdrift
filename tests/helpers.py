@@ -65,3 +65,10 @@ class DummyEncryptionBackend:
         self.decrypt_calls.append(path)
         self.decrypt_kwargs.append(kwargs)
         return EncryptionResult(success=True, message="ok", file_path=path)
+
+    def reset_tracking(self) -> None:
+        """Clear recorded encrypt/decrypt calls and kwargs."""
+        self.encrypt_calls.clear()
+        self.decrypt_calls.clear()
+        self.encrypt_kwargs.clear()
+        self.decrypt_kwargs.clear()
