@@ -332,7 +332,11 @@ class DotenvxInstaller:
                 # Resolve to absolute and ensure it's within target_dir
                 if not member_path.resolve().is_relative_to(target_dir.resolve()):
                     raise DotenvxInstallError(f"Unsafe path in archive: {member.name}")
-            tar.extractall(target_dir, filter="data")  # nosec B202
+            try:
+                tar.extractall(target_dir, filter="data")  # nosec B202
+            except TypeError:
+                # Python <3.12 doesn't support the filter argument.
+                tar.extractall(target_dir)  # nosec B202
 
     def _extract_zip(self, archive_path: Path, target_dir: Path) -> None:
         """
