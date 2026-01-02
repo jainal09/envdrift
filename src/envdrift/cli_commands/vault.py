@@ -7,6 +7,7 @@ from typing import Annotated
 
 import typer
 
+from envdrift.env_files import detect_env_file
 from envdrift.output.rich import console, print_error, print_success
 
 
@@ -32,6 +33,14 @@ def vault_push(
             help="Push a direct key-value pair (use with positional args: secret-name value)",
         ),
     ] = False,
+    all_services: Annotated[
+        bool,
+        typer.Option("--all", help="Push all secrets defined in sync config (skipping existing)"),
+    ] = False,
+    config: Annotated[
+        Path | None,
+        typer.Option("--config", "-c", help="Path to sync config file"),
+    ] = None,
     provider: Annotated[
         str | None,
         typer.Option("--provider", "-p", help="Vault provider: azure, aws, hashicorp"),
@@ -50,13 +59,16 @@ def vault_push(
 
     This is the reverse of `envdrift sync` - uploads local keys to vault.
 
-    Two modes:
+    Three modes:
 
-    1. From .env.keys file:
+    1. From .env.keys file (Single Service):
        envdrift vault-push ./services/soak soak-machine --env soak
 
     2. Direct value:
        envdrift vault-push --direct soak-machine "DOTENV_PRIVATE_KEY_SOAK=abc123..."
+
+    3. All Services (from config):
+       envdrift vault-push --all
 
     Examples:
         # Push from .env.keys (reads DOTENV_PRIVATE_KEY_SOAK)
@@ -65,8 +77,8 @@ def vault_push(
         # Push direct value
         envdrift vault-push --direct soak-machine "DOTENV_PRIVATE_KEY_SOAK=abc..." -p azure --vault-url https://myvault.vault.azure.net/
 
-        # Using config from envdrift.toml
-        envdrift vault-push ./services/soak soak-machine --env soak
+        # Push all missing secrets defined in config
+        envdrift vault-push --all
     """
     import contextlib
     import tomllib
@@ -74,13 +86,123 @@ def vault_push(
     from envdrift.config import ConfigNotFoundError, find_config, load_config
     from envdrift.sync.operations import EnvKeysFile
     from envdrift.vault import VaultError, get_vault_client
+    from envdrift.vault.base import SecretNotFoundError
 
-    # Load config for defaults
+    # --all mode implementation
+    if all_services:
+        from envdrift.cli_commands.sync import load_sync_config_and_client
+        from envdrift.integrations.dotenvx import DotenvxError, DotenvxWrapper
+
+        # Load sync config and client
+        sync_config, client, effective_provider, _, _ = load_sync_config_and_client(
+            config_file=config,
+            provider=provider,
+            vault_url=vault_url,
+            region=region,
+        )
+
+        # Initialize dotenvx for encryption checks
+        dotenvx = DotenvxWrapper(auto_install=True)
+
+        console.print("[bold]Vault Push All[/bold]")
+        console.print(f"Provider: {effective_provider}")
+        console.print(f"Services: {len(sync_config.mappings)}")
+        console.print()
+
+        pushed_count = 0
+        skipped_count = 0
+        error_count = 0
+
+        for mapping in sync_config.mappings:
+            try:
+                # Check/Detect .env file
+                env_file = mapping.folder_path / f".env.{mapping.effective_environment}"
+                effective_environment = mapping.effective_environment
+
+                if not env_file.exists():
+                    # Auto-detect logic similar to sync
+                    detected = detect_env_file(mapping.folder_path)
+                    if detected.status == "found" and detected.path:
+                        env_file = detected.path
+                        if detected.environment:
+                            effective_environment = detected.environment
+
+                if not env_file.exists():
+                    console.print(f"[dim]Skipped[/dim] {mapping.folder_path}: No .env file found")
+                    skipped_count += 1
+                    continue
+
+                # Check encryption
+                content = env_file.read_text()
+                if "encrypted:" not in content.lower():
+                    console.print(f"Encrypting {env_file}...")
+                    try:
+                        dotenvx.encrypt(env_file)
+                    except DotenvxError as e:
+                        print_error(f"Failed to encrypt {env_file}: {e}")
+                        error_count += 1
+                        continue
+
+                # Check if secret exists in vault
+                try:
+                    client.get_secret(mapping.secret_name)
+                    # If successful, secret exists
+                    console.print(
+                        f"[dim]Skipped[/dim] {mapping.folder_path}: Secret '{mapping.secret_name}' already exists"
+                    )
+                    skipped_count += 1
+                    continue
+                except SecretNotFoundError:
+                    # Secret missing, proceed to push
+                    pass
+                except VaultError as e:
+                    print_error(f"Vault error checking {mapping.secret_name}: {e}")
+                    error_count += 1
+                    continue
+
+                # Read key to push
+                env_keys_path = mapping.folder_path / sync_config.env_keys_filename
+                if not env_keys_path.exists():
+                    print_error(f"Skipped {mapping.folder_path}: .env.keys not found")
+                    error_count += 1
+                    continue
+
+                env_keys = EnvKeysFile(env_keys_path)
+                key_name = f"DOTENV_PRIVATE_KEY_{effective_environment.upper()}"
+                key_value = env_keys.read_key(key_name)
+
+                if not key_value:
+                    print_error(f"Skipped {mapping.folder_path}: {key_name} not found in keys file")
+                    error_count += 1
+                    continue
+
+                actual_value = f"{key_name}={key_value}"
+
+                # Push
+                client.set_secret(mapping.secret_name, actual_value)
+                print_success(f"Pushed {mapping.secret_name}")
+                pushed_count += 1
+
+            except (VaultError, DotenvxError, OSError, ValueError) as e:
+                print_error(f"Error processing {mapping.folder_path}: {e}")
+                error_count += 1
+
+        console.print()
+        console.print(
+            f"Done. Pushed: {pushed_count}, Skipped: {skipped_count}, Errors: {error_count}"
+        )
+        return
+
+    # Normal/Direct mode preamble
     envdrift_config = None
-    config_path = find_config()
-    if config_path:
+    if config:
         with contextlib.suppress(ConfigNotFoundError, tomllib.TOMLDecodeError):
-            envdrift_config = load_config(config_path)
+            envdrift_config = load_config(config)
+    else:
+        config_path = find_config()
+        if config_path:
+            with contextlib.suppress(ConfigNotFoundError, tomllib.TOMLDecodeError):
+                envdrift_config = load_config(config_path)
 
     vault_config = getattr(envdrift_config, "vault", None)
 
@@ -119,7 +241,9 @@ def vault_push(
     else:
         # Normal mode: read from .env.keys
         if not folder or not secret_name or not env:
-            print_error("Required: envdrift vault-push <folder> <secret-name> --env <environment>")
+            print_error(
+                "Required: envdrift vault-push <folder> <secret-name> --env <environment> (or use --all)"
+            )
             raise typer.Exit(code=1)
 
         # Read the key from .env.keys
