@@ -273,6 +273,9 @@ def load_config(path: Path | str | None = None) -> EnvdriftConfig:
             if "precommit" in envdrift_section:
                 data["precommit"] = envdrift_section.get("precommit")
                 del envdrift_section["precommit"]
+            if "partial_encryption" in envdrift_section:
+                data["partial_encryption"] = envdrift_section.get("partial_encryption")
+                del envdrift_section["partial_encryption"]
 
     return EnvdriftConfig.from_dict(data)
 
