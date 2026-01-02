@@ -2210,6 +2210,42 @@ class TestLockCommand:
         assert result.exit_code == 0
         assert "already encrypted" in result.output.lower()
 
+    def test_lock_skips_empty_dotenvx_encrypted_file(self, monkeypatch, tmp_path: Path):
+        """Lock should skip encrypted files with no value lines."""
+        service_dir = tmp_path / "service"
+        service_dir.mkdir()
+        env_file = service_dir / ".env.production"
+        env_file.write_text("#/---BEGIN DOTENV ENCRYPTED---/\n" "#/---END DOTENV ENCRYPTED---/\n")
+
+        config_file = tmp_path / "envdrift.toml"
+        config_file.write_text(
+            dedent(
+                f"""
+                [vault]
+                provider = "aws"
+
+                [vault.aws]
+                region = "us-east-1"
+
+                [vault.sync]
+                env_keys_filename = ".env.keys"
+
+                [[vault.sync.mappings]]
+                secret_name = "dotenv-key"
+                folder_path = "{service_dir.as_posix()}"
+                environment = "production"
+                """
+            ).lstrip()
+        )
+
+        monkeypatch.setattr("envdrift.vault.get_vault_client", lambda *_, **__: SimpleNamespace())
+        _mock_encryption_backend(monkeypatch, provider=EncryptionProvider.DOTENVX)
+
+        result = runner.invoke(app, ["lock", "-c", str(config_file), "--force"])
+
+        assert result.exit_code == 0
+        assert "already encrypted" in result.output.lower()
+
     def test_lock_errors_on_dotenvx_mismatch(self, monkeypatch, tmp_path: Path):
         """Lock should error when dotenvx files exist under sops config."""
         service_dir = tmp_path / "service"

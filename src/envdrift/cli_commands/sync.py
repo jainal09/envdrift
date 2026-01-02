@@ -1032,6 +1032,12 @@ def lock(
                             "re-encrypting...[/dim]"
                         )
                         warnings.append(f"{env_file}: was only {int(ratio*100)}% encrypted")
+                else:
+                    console.print(
+                        f"  [dim]=[/dim] {env_file} [dim]- skipped (already encrypted)[/dim]"
+                    )
+                    already_encrypted_count += 1
+                    continue
             else:
                 console.print(f"  [dim]=[/dim] {env_file} [dim]- skipped (already encrypted)[/dim]")
                 already_encrypted_count += 1
