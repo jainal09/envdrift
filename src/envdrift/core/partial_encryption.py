@@ -10,7 +10,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from envdrift.config import PartialEncryptionEnvironmentConfig
-from envdrift.integrations.dotenvx import DotenvxWrapper
+from envdrift.integrations.dotenvx import DotenvxError, DotenvxWrapper
 
 WARNING_HEADER = """#/---------------------------------------------------/
 #/ WARNING: AUTO-GENERATED FILE                      /
@@ -21,7 +21,7 @@ WARNING_HEADER = """#/---------------------------------------------------/
 #/ To make changes:                                  /
 #/   1. Edit: {clear_file:<36}/
 #/   2. Edit: {secret_file:<36}/
-#/   3. Run:  envdrift pull (to decrypt .secret)     /
+#/   3. Run:  envdrift pull-partial (to decrypt)     /
 #/   4. Run:  envdrift push (to regenerate this)     /
 #/---------------------------------------------------/
 """
@@ -140,7 +140,7 @@ def encrypt_secret_file(env_config: PartialEncryptionEnvironmentConfig) -> None:
     dotenvx = DotenvxWrapper()
     try:
         dotenvx.encrypt(secret_file)
-    except Exception as e:
+    except DotenvxError as e:
         raise PartialEncryptionError(f"Failed to encrypt {secret_file}: {e}") from e
 
 
@@ -167,7 +167,7 @@ def decrypt_secret_file(env_config: PartialEncryptionEnvironmentConfig) -> None:
     dotenvx = DotenvxWrapper()
     try:
         dotenvx.decrypt(secret_file)
-    except Exception as e:
+    except DotenvxError as e:
         raise PartialEncryptionError(f"Failed to decrypt {secret_file}: {e}") from e
 
 

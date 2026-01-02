@@ -216,5 +216,5 @@ def test_warning_header_format(temp_env_files):
     assert any(".env.test.secret" in line for line in lines[:15])
 
     # Check commands mentioned
-    assert any("envdrift pull" in line for line in lines[:15])
+    assert any("envdrift pull-partial" in line for line in lines[:15])
     assert any("envdrift push" in line for line in lines[:15])
