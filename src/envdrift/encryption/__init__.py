@@ -29,8 +29,11 @@ def get_encryption_backend(provider: EncryptionProvider | str, **config) -> Encr
     Parameters:
         provider (EncryptionProvider | str): Encryption provider enum or name ("dotenvx", "sops").
         **config: Provider-specific configuration:
-            - For "dotenvx": `auto_install` (bool) - optional, defaults to True.
+            - For "dotenvx": `auto_install` (bool) - optional, defaults to False.
             - For "sops": `config_file` (str) - optional path to .sops.yaml.
+                        `age_key` (str) - optional age private key (SOPS_AGE_KEY).
+                        `age_key_file` (str) - optional age key file path (SOPS_AGE_KEY_FILE).
+                        `auto_install` (bool) - optional, defaults to False.
 
     Returns:
         EncryptionBackend: A configured backend instance for the requested provider.
@@ -45,7 +48,7 @@ def get_encryption_backend(provider: EncryptionProvider | str, **config) -> Encr
         from envdrift.encryption.dotenvx import DotenvxEncryptionBackend
 
         return DotenvxEncryptionBackend(
-            auto_install=config.get("auto_install", True),
+            auto_install=config.get("auto_install", False),
         )
 
     elif provider == EncryptionProvider.SOPS:
@@ -53,6 +56,9 @@ def get_encryption_backend(provider: EncryptionProvider | str, **config) -> Encr
 
         return SOPSEncryptionBackend(
             config_file=config.get("config_file"),
+            age_key=config.get("age_key"),
+            age_key_file=config.get("age_key_file"),
+            auto_install=config.get("auto_install", False),
         )
 
     raise ValueError(f"Unsupported encryption provider: {provider}")

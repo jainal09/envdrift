@@ -59,7 +59,10 @@ def _mock_dotenvx(
                 decrypted_paths.append(Path(env_path))
 
     dummy = DummyDotenvx()
-    monkeypatch.setattr("envdrift.integrations.dotenvx.DotenvxWrapper", lambda: dummy)
+    monkeypatch.setattr(
+        "envdrift.integrations.dotenvx.DotenvxWrapper",
+        lambda *_, **__: dummy,
+    )
     return dummy
 
 
@@ -341,6 +344,62 @@ class TestEncryptCommand:
         assert result.exit_code == 1
         assert "dotenvx is not installed" in result.output
         assert "npm install" in result.output
+
+    def test_encrypt_uses_sops_config_defaults(self, monkeypatch, tmp_path: Path):
+        """Encrypt should honor SOPS defaults from config when backend is omitted."""
+        from unittest.mock import MagicMock
+
+        from envdrift.encryption import EncryptionProvider
+        from envdrift.encryption.base import EncryptionResult
+
+        env_file = tmp_path / ".env"
+        env_file.write_text("FOO=bar")
+
+        config_file = tmp_path / "envdrift.toml"
+        config_file.write_text(
+            dedent(
+                """
+                [encryption]
+                backend = "sops"
+
+                [encryption.sops]
+                config_file = ".sops.yaml"
+                age_key_file = "keys.txt"
+                age_recipients = "age1example"
+                """
+            ).strip()
+            + "\n"
+        )
+        (tmp_path / ".sops.yaml").write_text("creation_rules:\n  - age: age1example\n")
+        (tmp_path / "keys.txt").write_text("AGE-SECRET-KEY-1EXAMPLE\n")
+
+        monkeypatch.chdir(tmp_path)
+
+        mock_backend = MagicMock()
+        mock_backend.name = "sops"
+        mock_backend.is_installed.return_value = True
+        mock_backend.encrypt.return_value = EncryptionResult(
+            success=True,
+            message="Encrypted",
+            file_path=env_file,
+        )
+
+        mock_get_backend = MagicMock(return_value=mock_backend)
+        monkeypatch.setattr(
+            "envdrift.cli_commands.encryption.get_encryption_backend",
+            mock_get_backend,
+        )
+
+        result = runner.invoke(app, ["encrypt", str(env_file)])
+
+        assert result.exit_code == 0
+        args, kwargs = mock_get_backend.call_args
+        assert args[0] == EncryptionProvider.SOPS
+        assert kwargs["config_file"] == (tmp_path / ".sops.yaml").resolve()
+        assert kwargs["age_key_file"] == (tmp_path / "keys.txt").resolve()
+        mock_backend.encrypt.assert_called_once()
+        _, encrypt_kwargs = mock_backend.encrypt.call_args
+        assert encrypt_kwargs["age_recipients"] == "age1example"
 
 
 class TestDecryptCommand:
@@ -766,7 +825,10 @@ class TestVaultVerification:
                 assert env_path.exists()
 
         monkeypatch.setattr("envdrift.vault.get_vault_client", lambda *_, **__: DummyVault())
-        monkeypatch.setattr("envdrift.integrations.dotenvx.DotenvxWrapper", lambda: DummyDotenvx())
+        monkeypatch.setattr(
+            "envdrift.integrations.dotenvx.DotenvxWrapper",
+            lambda *_, **__: DummyDotenvx(),
+        )
 
         result = _verify_decryption_with_vault(
             env_file=env_file,
@@ -1551,7 +1613,10 @@ class TestLockCommand:
                 """
                 return True
 
-        monkeypatch.setattr("envdrift.integrations.dotenvx.DotenvxWrapper", lambda: DummyDotenvx())
+        monkeypatch.setattr(
+            "envdrift.integrations.dotenvx.DotenvxWrapper",
+            lambda *_, **__: DummyDotenvx(),
+        )
 
         result = runner.invoke(app, ["lock", "-c", str(config_file), "--check"])
 
@@ -1654,7 +1719,10 @@ class TestLockCommand:
                 """
                 return True
 
-        monkeypatch.setattr("envdrift.integrations.dotenvx.DotenvxWrapper", lambda: DummyDotenvx())
+        monkeypatch.setattr(
+            "envdrift.integrations.dotenvx.DotenvxWrapper",
+            lambda *_, **__: DummyDotenvx(),
+        )
 
         result = runner.invoke(app, ["lock", "-c", str(config_file), "--force"])
 

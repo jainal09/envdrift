@@ -53,6 +53,8 @@ class SOPSEncryptionBackend(EncryptionBackend):
         self,
         config_file: Path | str | None = None,
         age_key: str | None = None,
+        age_key_file: Path | str | None = None,
+        auto_install: bool = False,
     ):
         """
         Initialize the SOPS encryption backend.
@@ -61,9 +63,13 @@ class SOPSEncryptionBackend(EncryptionBackend):
             config_file (Path | str | None): Path to .sops.yaml configuration file.
             age_key (str | None): Age private key for decryption (can also be set via
                                   SOPS_AGE_KEY environment variable).
+            age_key_file (Path | str | None): Path to age key file (SOPS_AGE_KEY_FILE).
+            auto_install (bool): If True, attempt to auto-install SOPS when missing.
         """
         self._config_file = Path(config_file) if config_file else None
         self._age_key = age_key
+        self._age_key_file = Path(age_key_file) if age_key_file else None
+        self._auto_install = auto_install
         self._binary_path: Path | None = None
 
     @property
@@ -81,11 +87,31 @@ class SOPSEncryptionBackend(EncryptionBackend):
         if self._binary_path and self._binary_path.exists():
             return self._binary_path
 
+        try:
+            from envdrift.integrations.sops import get_sops_path
+
+            venv_path = get_sops_path()
+            if venv_path.exists():
+                self._binary_path = venv_path
+                return self._binary_path
+        except RuntimeError:
+            pass
+
         # Check system PATH
         sops_path = shutil.which("sops")
         if sops_path:
             self._binary_path = Path(sops_path)
             return self._binary_path
+
+        if self._auto_install:
+            from envdrift.integrations.sops import SopsInstaller, SopsInstallError
+
+            try:
+                installer = SopsInstaller()
+                self._binary_path = installer.install()
+                return self._binary_path
+            except SopsInstallError:
+                return None
 
         return None
 
@@ -125,6 +151,8 @@ class SOPSEncryptionBackend(EncryptionBackend):
         # Add age key if configured
         if self._age_key and "SOPS_AGE_KEY" not in result:
             result["SOPS_AGE_KEY"] = self._age_key
+        if self._age_key_file and "SOPS_AGE_KEY_FILE" not in result:
+            result["SOPS_AGE_KEY_FILE"] = str(self._age_key_file)
 
         return result
 
@@ -139,11 +167,13 @@ class SOPSEncryptionBackend(EncryptionBackend):
         if not binary:
             raise EncryptionNotFoundError(f"SOPS is not installed.\n{self.install_instructions()}")
 
-        cmd = [str(binary)] + args
+        cmd = [str(binary)]
 
-        # Add config file if specified
+        # Add config file before positional args; SOPS treats late flags as extra paths.
         if self._config_file and self._config_file.exists():
             cmd.extend(["--config", str(self._config_file)])
+
+        cmd.extend(args)
 
         try:
             result = subprocess.run(  # nosec B603
@@ -346,7 +376,9 @@ class SOPSEncryptionBackend(EncryptionBackend):
 
     def install_instructions(self) -> str:
         """Return installation instructions for SOPS."""
-        return """
+        from envdrift.integrations.sops import SOPS_VERSION
+
+        return f"""
 SOPS is not installed.
 
 Installation options:
@@ -356,12 +388,15 @@ macOS (Homebrew):
 
 Linux (apt):
   # Download latest release from https://github.com/getsops/sops/releases
-  wget https://github.com/getsops/sops/releases/download/v3.9.0/sops-v3.9.0.linux.amd64
-  chmod +x sops-v3.9.0.linux.amd64
-  sudo mv sops-v3.9.0.linux.amd64 /usr/local/bin/sops
+  wget https://github.com/getsops/sops/releases/download/v{SOPS_VERSION}/sops-v{SOPS_VERSION}.linux.amd64
+  chmod +x sops-v{SOPS_VERSION}.linux.amd64
+  sudo mv sops-v{SOPS_VERSION}.linux.amd64 /usr/local/bin/sops
 
 Windows (Chocolatey):
   choco install sops
+
+Optional auto-install:
+  Set [encryption.sops] auto_install = true in envdrift.toml
 
 After installing SOPS, you'll also need to set up encryption keys.
 Common options:

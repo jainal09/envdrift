@@ -49,9 +49,10 @@ class EncryptionConfig:
     backend: str = "dotenvx"
 
     # dotenvx-specific settings
-    dotenvx_auto_install: bool = True
+    dotenvx_auto_install: bool = False
 
     # SOPS-specific settings
+    sops_auto_install: bool = False
     sops_config_file: str | None = None  # Path to .sops.yaml
     sops_age_key_file: str | None = None  # Path to age key file
     sops_age_recipients: str | None = None  # Age public key(s) for encryption
@@ -163,7 +164,8 @@ class EnvdriftConfig:
         dotenvx_section = encryption_section.get("dotenvx", {})
         encryption = EncryptionConfig(
             backend=encryption_section.get("backend", "dotenvx"),
-            dotenvx_auto_install=dotenvx_section.get("auto_install", True),
+            dotenvx_auto_install=dotenvx_section.get("auto_install", False),
+            sops_auto_install=sops_section.get("auto_install", False),
             sops_config_file=sops_section.get("config_file"),
             sops_age_key_file=sops_section.get("age_key_file"),
             sops_age_recipients=sops_section.get("age_recipients"),
@@ -345,10 +347,11 @@ backend = "dotenvx"
 
 # dotenvx-specific settings
 [encryption.dotenvx]
-auto_install = true
+auto_install = false
 
 # SOPS-specific settings (only used when backend = "sops")
 [encryption.sops]
+auto_install = false
 # config_file = ".sops.yaml"  # Path to SOPS configuration
 # age_key_file = "key.txt"    # Path to age private key file
 # age_recipients = "age1..."  # Age public key(s) for encryption

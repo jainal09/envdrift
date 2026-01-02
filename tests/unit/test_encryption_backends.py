@@ -77,6 +77,19 @@ class TestGetEncryptionBackend:
         assert isinstance(backend, SOPSEncryptionBackend)
         assert backend._config_file == config_file
 
+    def test_sops_backend_with_age_key_file(self, tmp_path):
+        """Test SOPS backend respects age key file config."""
+        age_key_file = tmp_path / "age.txt"
+        backend = get_encryption_backend("sops", age_key_file=str(age_key_file))
+        assert isinstance(backend, SOPSEncryptionBackend)
+        assert backend._age_key_file == age_key_file
+
+    def test_sops_backend_with_auto_install(self):
+        """Test SOPS backend respects auto_install setting."""
+        backend = get_encryption_backend("sops", auto_install=True)
+        assert isinstance(backend, SOPSEncryptionBackend)
+        assert backend._auto_install is True
+
 
 class TestDetectEncryptionProvider:
     """Tests for detect_encryption_provider function."""
@@ -304,11 +317,13 @@ class TestSOPSEncryptionBackend:
         assert backend.is_installed() is True
 
     @patch("shutil.which")
-    def test_is_installed_false(self, mock_which):
+    def test_is_installed_false(self, mock_which, tmp_path):
         """Test is_installed when SOPS is not found."""
         mock_which.return_value = None
-        backend = SOPSEncryptionBackend()
-        assert backend.is_installed() is False
+        with patch("envdrift.integrations.sops.get_sops_path") as mock_get_sops_path:
+            mock_get_sops_path.return_value = tmp_path / "missing-sops"
+            backend = SOPSEncryptionBackend()
+            assert backend.is_installed() is False
 
     @patch("shutil.which")
     @patch("subprocess.run")
@@ -323,14 +338,15 @@ class TestSOPSEncryptionBackend:
         assert version == "3.8.1"
 
     @patch("shutil.which")
-    def test_get_version_not_installed(self, mock_which):
+    def test_get_version_not_installed(self, mock_which, tmp_path):
         """Test get_version when SOPS not installed."""
         mock_which.return_value = None
+        with patch("envdrift.integrations.sops.get_sops_path") as mock_get_sops_path:
+            mock_get_sops_path.return_value = tmp_path / "missing-sops"
+            backend = SOPSEncryptionBackend()
+            version = backend.get_version()
 
-        backend = SOPSEncryptionBackend()
-        version = backend.get_version()
-
-        assert version is None
+            assert version is None
 
     def test_encrypt_file_not_found(self, tmp_path):
         """Test encrypt with nonexistent file."""
@@ -339,6 +355,27 @@ class TestSOPSEncryptionBackend:
 
         assert result.success is False
         assert "not found" in result.message
+
+    @patch("envdrift.encryption.sops.subprocess.run")
+    def test_config_flag_precedes_path(self, mock_run, tmp_path):
+        """Ensure --config is inserted before the env file path."""
+        config_file = tmp_path / ".sops.yaml"
+        config_file.write_text("creation_rules: []")
+        env_file = tmp_path / ".env"
+        env_file.write_text("KEY=value")
+        binary = tmp_path / "sops"
+        binary.write_text("")
+
+        backend = SOPSEncryptionBackend(config_file=config_file)
+        backend._binary_path = binary
+        mock_run.return_value = MagicMock(returncode=0, stderr="", stdout="")
+
+        backend.encrypt(env_file)
+
+        cmd = mock_run.call_args[0][0]
+        config_index = cmd.index("--config")
+        env_index = cmd.index(str(env_file))
+        assert config_index < env_index
 
     def test_decrypt_file_not_found(self, tmp_path):
         """Test decrypt with nonexistent file."""
@@ -399,14 +436,15 @@ class TestSOPSEncryptionBackend:
     def test_encrypt_not_installed(self, mock_which, tmp_path):
         """Test encrypt raises when SOPS not installed."""
         mock_which.return_value = None
+        with patch("envdrift.integrations.sops.get_sops_path") as mock_get_sops_path:
+            mock_get_sops_path.return_value = tmp_path / "missing-sops"
+            env_file = tmp_path / ".env"
+            env_file.write_text("KEY=value")
 
-        env_file = tmp_path / ".env"
-        env_file.write_text("KEY=value")
+            backend = SOPSEncryptionBackend()
 
-        backend = SOPSEncryptionBackend()
-
-        with pytest.raises(EncryptionNotFoundError):
-            backend.encrypt(env_file)
+            with pytest.raises(EncryptionNotFoundError):
+                backend.encrypt(env_file)
 
     def test_install_instructions(self):
         """Test install_instructions returns formatted string."""
@@ -429,6 +467,14 @@ class TestSOPSEncryptionBackend:
         """Test SOPS backend with age key."""
         backend = SOPSEncryptionBackend(age_key="AGE-SECRET-KEY-1ABC...")
         assert backend._age_key == "AGE-SECRET-KEY-1ABC..."
+
+    def test_age_key_file_env(self, tmp_path, monkeypatch):
+        """Test SOPS backend sets SOPS_AGE_KEY_FILE."""
+        monkeypatch.delenv("SOPS_AGE_KEY_FILE", raising=False)
+        age_key_file = tmp_path / "age.txt"
+        backend = SOPSEncryptionBackend(age_key_file=age_key_file)
+        env = backend._build_env({})
+        assert env["SOPS_AGE_KEY_FILE"] == str(age_key_file)
 
 
 class TestEncryptionResult:

@@ -1,6 +1,7 @@
 # envdrift sync
 
 Sync encryption keys from cloud vaults to local .env.keys files.
+This command is specific to dotenvx keys; SOPS users should rely on SOPS/KMS key workflows.
 
 ## Synopsis
 

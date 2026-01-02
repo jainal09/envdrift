@@ -415,7 +415,7 @@ class DotenvxWrapper:
     - Provides Python-friendly interface to dotenvx commands
     """
 
-    def __init__(self, auto_install: bool = True, version: str = DOTENVX_VERSION):
+    def __init__(self, auto_install: bool = False, version: str = DOTENVX_VERSION):
         """
         Create a DotenvxWrapper that provides methods to run and manage the dotenvx CLI within a virtual environment.
 

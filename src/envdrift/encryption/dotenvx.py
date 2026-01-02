@@ -30,7 +30,7 @@ class DotenvxEncryptionBackend(EncryptionBackend):
         "DOTENV_PUBLIC_KEY",
     ]
 
-    def __init__(self, auto_install: bool = True):
+    def __init__(self, auto_install: bool = False):
         """
         Initialize the dotenvx encryption backend.
 

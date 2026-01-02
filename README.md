@@ -69,7 +69,7 @@ envdrift validate .env --schema config.settings:Settings
 | Schema validation    | Pydantic-based         |
 | Cross-env diff       | Yes                    |
 | Pre-commit hooks     | Yes                    |
-| Encryption (dotenvx) | Yes                    |
+| Encryption (dotenvx, SOPS) | Yes               |
 | Vault integration    | Azure, AWS, HashiCorp  |
 | CI/CD mode           | Yes                    |
 

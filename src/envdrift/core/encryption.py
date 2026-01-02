@@ -173,6 +173,14 @@ class EncryptionDetector:
         if non_empty_vars:
             report.is_fully_encrypted = len(report.plaintext_vars) == 0
 
+        detected_backends = {
+            env_var.encryption_backend
+            for env_var in env_file.variables.values()
+            if env_var.encryption_backend
+        }
+        if len(detected_backends) == 1:
+            report.detected_backend = next(iter(detected_backends))
+
         return report
 
     def should_block_commit(self, report: EncryptionReport) -> bool:
@@ -380,7 +388,7 @@ class EncryptionDetector:
             )
 
             if backend == "sops":
-                recommendations.append(f"Run: sops --encrypt --in-place {report.path}")
+                recommendations.append(f"Run: envdrift encrypt --backend sops {report.path}")
             else:
                 recommendations.append(f"Run: envdrift encrypt {report.path}")
 

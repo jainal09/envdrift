@@ -526,7 +526,7 @@ class TestDotenvxWrapper:
     def test_init_defaults(self):
         """Test DotenvxWrapper default values."""
         wrapper = DotenvxWrapper()
-        assert wrapper.auto_install is True
+        assert wrapper.auto_install is False
         assert wrapper.version == DOTENVX_VERSION
         assert wrapper._binary_path is None
 

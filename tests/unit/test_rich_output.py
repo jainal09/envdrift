@@ -181,7 +181,7 @@ class TestEncryptionOutput:
 
         joined = " ".join(" ".join(map(str, c.args)) for c in mock_print.call_args_list)
         assert "PLAINTEXT" in joined
-        assert "dotenvx encrypt -f" in joined
+        assert "envdrift encrypt" in joined
 
 
 class TestSyncOutput:
