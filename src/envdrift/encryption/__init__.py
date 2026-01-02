@@ -3,16 +3,13 @@
 from __future__ import annotations
 
 from enum import Enum
-from typing import TYPE_CHECKING
+from pathlib import Path
 
 from envdrift.encryption.base import (
     EncryptionBackend,
     EncryptionBackendError,
     EncryptionNotFoundError,
 )
-
-if TYPE_CHECKING:
-    pass
 
 
 class EncryptionProvider(Enum):
@@ -74,8 +71,6 @@ def detect_encryption_provider(file_path) -> EncryptionProvider | None:
     Returns:
         EncryptionProvider if detected, None if file is not encrypted or unknown format.
     """
-    from pathlib import Path
-
     path = Path(file_path)
     if not path.exists():
         return None

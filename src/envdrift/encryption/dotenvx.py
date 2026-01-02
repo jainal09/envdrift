@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import re
 from pathlib import Path
+from typing import ClassVar
 
 from envdrift.encryption.base import (
     EncryptionBackend,
@@ -22,10 +23,10 @@ class DotenvxEncryptionBackend(EncryptionBackend):
     """
 
     # Patterns that indicate encrypted values (dotenvx format)
-    ENCRYPTED_PATTERN = re.compile(r"^encrypted:")
+    ENCRYPTED_PATTERN: ClassVar[re.Pattern[str]] = re.compile(r"^encrypted:")
 
     # Header patterns that indicate the file has been encrypted by dotenvx
-    ENCRYPTED_FILE_MARKERS = [
+    ENCRYPTED_FILE_MARKERS: ClassVar[list[str]] = [
         "#/---BEGIN DOTENV ENCRYPTED---/",
         "DOTENV_PUBLIC_KEY",
     ]
