@@ -17,7 +17,7 @@ if TYPE_CHECKING:
     from envdrift.sync.config import SyncConfig
 
 
-def _load_config_and_create_vault_client(
+def load_sync_config_and_client(
     config_file: Path | None,
     provider: str | None,
     vault_url: str | None,
@@ -257,7 +257,7 @@ def sync(
     from envdrift.output.rich import print_service_sync_status, print_sync_result
     from envdrift.sync.config import SyncConfigError
 
-    sync_config, vault_client, effective_provider, _, _ = _load_config_and_create_vault_client(
+    sync_config, vault_client, effective_provider, _, _ = load_sync_config_and_client(
         config_file=config_file,
         provider=provider,
         vault_url=vault_url,
@@ -391,7 +391,7 @@ def pull(
     from envdrift.output.rich import print_service_sync_status, print_sync_result
     from envdrift.sync.config import SyncConfigError
 
-    sync_config, vault_client, effective_provider, _, _ = _load_config_and_create_vault_client(
+    sync_config, vault_client, effective_provider, _, _ = load_sync_config_and_client(
         config_file=config_file,
         provider=provider,
         vault_url=vault_url,
@@ -667,7 +667,7 @@ def lock(
     if sync_keys:
         verify_vault = True
 
-    sync_config, vault_client, effective_provider, _, _ = _load_config_and_create_vault_client(
+    sync_config, vault_client, effective_provider, _, _ = load_sync_config_and_client(
         config_file=config_file,
         provider=provider,
         vault_url=vault_url,

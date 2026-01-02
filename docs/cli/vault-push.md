@@ -45,6 +45,16 @@ Push a key-value pair directly without reading from a file.
 envdrift vault-push --direct my-secret-name "DOTENV_PRIVATE_KEY_PROD=abc123..."
 ```
 
+### All Services Mode
+
+Push all secrets defined in the sync configuration. This mode automatically checks for
+unencrypted files (encrypting them if needed) and pushes keys for any secrets
+that are missing from the vault.
+
+```bash
+envdrift vault-push --all
+```
+
 ## Options
 
 ### `FOLDER`
@@ -68,6 +78,14 @@ Enable direct mode. Push a key-value pair directly without reading from a file.
 ```bash
 envdrift vault-push --direct secret-name "KEY=value" -p aws
 ```
+
+### `--all`
+
+Push all secrets defined in sync config (skipping existing).
+
+### `--config`, `-c`
+
+Path to sync config file (TOML).
 
 ### `--provider`, `-p`
 
