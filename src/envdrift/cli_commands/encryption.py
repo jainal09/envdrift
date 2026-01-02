@@ -1,4 +1,9 @@
-"""Encryption and decryption commands for envdrift."""
+"""Encryption and decryption commands for envdrift.
+
+Supports multiple encryption backends:
+- dotenvx (default): Uses dotenvx CLI for encryption
+- sops: Uses Mozilla SOPS for encryption
+"""
 
 from __future__ import annotations
 
@@ -10,6 +15,8 @@ import typer
 from envdrift.core.encryption import EncryptionDetector
 from envdrift.core.parser import EnvParser
 from envdrift.core.schema import SchemaLoader, SchemaLoadError
+from envdrift.encryption import EncryptionProvider, get_encryption_backend
+from envdrift.encryption.base import EncryptionBackendError, EncryptionNotFoundError
 from envdrift.output.rich import (
     console,
     print_encryption_report,
@@ -20,11 +27,48 @@ from envdrift.output.rich import (
 from envdrift.vault.base import SecretNotFoundError, VaultError
 
 
+def _load_encryption_config():
+    import tomllib
+
+    from envdrift.config import ConfigNotFoundError, EnvdriftConfig, find_config, load_config
+
+    config_path = find_config()
+    if not config_path:
+        return EnvdriftConfig(), None
+
+    try:
+        return load_config(config_path), config_path
+    except tomllib.TOMLDecodeError as e:
+        print_warning(f"TOML syntax error in {config_path}: {e}")
+    except ConfigNotFoundError as e:
+        print_warning(str(e))
+
+    return EnvdriftConfig(), None
+
+
+def _resolve_config_path(config_path: Path | None, value: Path | str | None) -> Path | None:
+    if not value:
+        return None
+
+    path = Path(value)
+    if config_path and not path.is_absolute():
+        return (config_path.parent / path).resolve()
+    return path
+
+
 def encrypt_cmd(
     env_file: Annotated[Path, typer.Argument(help="Path to .env file")] = Path(".env"),
     check: Annotated[
         bool, typer.Option("--check", help="Only check encryption status, don't encrypt")
     ] = False,
+    backend: Annotated[
+        str | None,
+        typer.Option(
+            "--backend",
+            "-b",
+            help="Encryption backend to use: dotenvx or sops (defaults to config or dotenvx)",
+        ),
+    ] = None,
     schema: Annotated[
         str | None,
         typer.Option("--schema", "-s", help="Schema for sensitive field detection"),
@@ -33,6 +77,32 @@ def encrypt_cmd(
         Path | None,
         typer.Option("--service-dir", "-d", help="Service directory for imports"),
     ] = None,
+    # SOPS-specific options
+    age_recipients: Annotated[
+        str | None,
+        typer.Option("--age", help="Age public key(s) for SOPS encryption"),
+    ] = None,
+    kms_arn: Annotated[
+        str | None,
+        typer.Option("--kms", help="AWS KMS key ARN for SOPS encryption"),
+    ] = None,
+    gcp_kms: Annotated[
+        str | None,
+        typer.Option("--gcp-kms", help="GCP KMS resource ID for SOPS encryption"),
+    ] = None,
+    azure_kv: Annotated[
+        str | None,
+        typer.Option("--azure-kv", help="Azure Key Vault key URL for SOPS encryption"),
+    ] = None,
+    sops_config_file: Annotated[
+        Path | None,
+        typer.Option("--sops-config", help="Path to .sops.yaml config for SOPS"),
+    ] = None,
+    age_key_file: Annotated[
+        Path | None,
+        typer.Option("--age-key-file", help="Path to age private key file for SOPS"),
+    ] = None,
+    # Deprecated vault options
     verify_vault: Annotated[
         bool,
         typer.Option(
@@ -63,16 +133,28 @@ def encrypt_cmd(
     ] = None,
 ) -> None:
     """
-    Check encryption status of an .env file or encrypt it using dotenvx.
+    Check encryption status of an .env file or encrypt it.
 
-    When run with --check, prints an encryption report and exits with code 1 if the detector recommends blocking a commit.
-    When run without --check, attempts to perform encryption via the dotenvx integration; if dotenvx is not available, prints installation instructions and exits.
+    Supports multiple encryption backends:
+    - dotenvx (default or config): Uses dotenvx CLI for encryption
+    - sops: Uses Mozilla SOPS for encryption
 
-    Parameters:
-        env_file (Path): Path to the .env file to inspect or encrypt.
-        check (bool): If True, only analyze and report encryption status; do not modify the file.
-        schema (str | None): Optional dotted path to a Settings schema used to detect sensitive fields.
-        service_dir (Path | None): Optional directory to add to import resolution when loading the schema.
+    If --backend is not provided, envdrift uses the backend from config
+    (envdrift.toml/pyproject.toml) or falls back to dotenvx.
+
+    When run with --check, prints an encryption report and exits with code 1
+    if the detector recommends blocking a commit.
+
+    When run without --check, attempts to perform encryption using the
+    specified backend; if the tool is not available, prints installation
+    instructions and exits.
+
+    Examples:
+        envdrift encrypt                     # Encrypt with dotenvx (default)
+        envdrift encrypt --backend sops      # Encrypt with SOPS
+        envdrift encrypt --check             # Check encryption status only
+        envdrift encrypt -b sops --age AGE_PUBLIC_KEY  # SOPS with age key
+        envdrift encrypt --sops-config .sops.yaml  # SOPS with explicit config
     """
     if not env_file.exists():
         print_error(f"ENV file not found: {env_file}")
@@ -81,6 +163,41 @@ def encrypt_cmd(
     if verify_vault or vault_provider or vault_url or vault_region or vault_secret:
         print_error("Vault verification moved to `envdrift decrypt --verify-vault ...`")
         raise typer.Exit(code=1)
+
+    envdrift_config, config_path = _load_encryption_config()
+    encryption_config = getattr(envdrift_config, "encryption", None)
+
+    if backend is None:
+        backend = encryption_config.backend if encryption_config else "dotenvx"
+
+    # Validate backend
+    try:
+        backend_enum = EncryptionProvider(backend.lower())
+    except ValueError:
+        print_error(f"Unknown encryption backend: {backend}")
+        print_error("Supported backends: dotenvx, sops")
+        raise typer.Exit(code=1) from None
+
+    if encryption_config and backend_enum == EncryptionProvider.SOPS:
+        if age_recipients is None:
+            age_recipients = encryption_config.sops_age_recipients
+        if kms_arn is None:
+            kms_arn = encryption_config.sops_kms_arn
+        if gcp_kms is None:
+            gcp_kms = encryption_config.sops_gcp_kms
+        if azure_kv is None:
+            azure_kv = encryption_config.sops_azure_kv
+
+        if sops_config_file is None:
+            sops_config_file = _resolve_config_path(
+                config_path,
+                encryption_config.sops_config_file,
+            )
+        if age_key_file is None:
+            age_key_file = _resolve_config_path(
+                config_path,
+                encryption_config.sops_age_key_file,
+            )
 
     # Load schema if provided
     schema_meta = None
@@ -99,6 +216,11 @@ def encrypt_cmd(
     # Analyze encryption
     detector = EncryptionDetector()
     report = detector.analyze(env, schema_meta)
+    detected_backend = detector.detect_backend_for_file(env_file)
+    if detected_backend:
+        report.detected_backend = detected_backend
+    elif report.detected_backend is None:
+        report.detected_backend = backend_enum.value
 
     if check:
         # Just report status
@@ -107,22 +229,50 @@ def encrypt_cmd(
         if detector.should_block_commit(report):
             raise typer.Exit(code=1)
     else:
-        # Attempt encryption using dotenvx
+        # Attempt encryption using the selected backend
         try:
-            from envdrift.integrations.dotenvx import DotenvxWrapper
+            backend_config: dict[str, object] = {}
+            if encryption_config and backend_enum == EncryptionProvider.DOTENVX:
+                backend_config["auto_install"] = encryption_config.dotenvx_auto_install
+            if backend_enum == EncryptionProvider.SOPS:
+                if encryption_config:
+                    backend_config["auto_install"] = encryption_config.sops_auto_install
+                if sops_config_file:
+                    backend_config["config_file"] = sops_config_file
+                if age_key_file:
+                    backend_config["age_key_file"] = age_key_file
 
-            dotenvx = DotenvxWrapper()
+            encryption_backend = get_encryption_backend(backend_enum, **backend_config)
 
-            if not dotenvx.is_installed():
-                print_error("dotenvx is not installed")
-                console.print(dotenvx.install_instructions())
+            if not encryption_backend.is_installed():
+                print_error(f"{encryption_backend.name} is not installed")
+                console.print(encryption_backend.install_instructions())
                 raise typer.Exit(code=1)
 
-            dotenvx.encrypt(env_file)
-            print_success(f"Encrypted {env_file}")
-        except ImportError:
-            print_error("dotenvx integration not available")
-            console.print("Run: envdrift encrypt --check to check encryption status")
+            # Build kwargs for SOPS-specific options
+            encrypt_kwargs = {}
+            if backend_enum == EncryptionProvider.SOPS:
+                if age_recipients:
+                    encrypt_kwargs["age_recipients"] = age_recipients
+                if kms_arn:
+                    encrypt_kwargs["kms_arn"] = kms_arn
+                if gcp_kms:
+                    encrypt_kwargs["gcp_kms"] = gcp_kms
+                if azure_kv:
+                    encrypt_kwargs["azure_kv"] = azure_kv
+
+            result = encryption_backend.encrypt(env_file, **encrypt_kwargs)
+            if result.success:
+                print_success(f"Encrypted {env_file} using {encryption_backend.name}")
+            else:
+                print_error(result.message)
+                raise typer.Exit(code=1)
+
+        except EncryptionNotFoundError as e:
+            print_error(str(e))
+            raise typer.Exit(code=1) from None
+        except EncryptionBackendError as e:
+            print_error(f"Encryption failed: {e}")
             raise typer.Exit(code=1) from None
 
 
@@ -134,6 +284,7 @@ def _verify_decryption_with_vault(
     project_id: str | None,
     secret_name: str,
     ci: bool = False,
+    auto_install: bool = False,
 ) -> bool:
     """
     Verify that a vault-stored private key can decrypt the given .env file.
@@ -204,7 +355,7 @@ def _verify_decryption_with_vault(
 
         from envdrift.integrations.dotenvx import DotenvxError, DotenvxWrapper
 
-        dotenvx = DotenvxWrapper()
+        dotenvx = DotenvxWrapper(auto_install=auto_install)
         if not dotenvx.is_installed():
             print_error("dotenvx is not installed - cannot verify decryption")
             return False
@@ -295,6 +446,22 @@ def _verify_decryption_with_vault(
 
 def decrypt_cmd(
     env_file: Annotated[Path, typer.Argument(help="Path to encrypted .env file")] = Path(".env"),
+    backend: Annotated[
+        str | None,
+        typer.Option(
+            "--backend",
+            "-b",
+            help="Encryption backend: dotenvx, sops (auto-detects or uses config if not specified)",
+        ),
+    ] = None,
+    sops_config_file: Annotated[
+        Path | None,
+        typer.Option("--sops-config", help="Path to .sops.yaml config for SOPS"),
+    ] = None,
+    age_key_file: Annotated[
+        Path | None,
+        typer.Option("--age-key-file", help="Path to age private key file for SOPS"),
+    ] = None,
     verify_vault: Annotated[
         bool,
         typer.Option(
@@ -327,12 +494,26 @@ def decrypt_cmd(
     ] = None,
 ) -> None:
     """
-    Decrypt an encrypted .env file or verify that a vault-provided key can decrypt it without modifying the file.
+    Decrypt an encrypted .env file.
 
-    When run normally, decrypts the given env file using the dotenvx integration and reports success; if dotenvx is not available, prints installation instructions and exits. When run with --verify-vault, checks that the specified vault provider and secret contain a key capable of decrypting the file without changing the file on disk; on a successful check the function prints confirmation and does not decrypt the file.
+    Supports multiple encryption backends:
+    - dotenvx: Uses dotenvx CLI for decryption
+    - sops: Uses Mozilla SOPS for decryption
+
+    If --backend is not specified, the backend will be auto-detected based on
+    the file content. When auto-detection fails, envdrift falls back to the
+    configured backend or dotenvx.
+
+    Examples:
+        envdrift decrypt                     # Auto-detect backend
+        envdrift decrypt --backend sops      # Force SOPS decryption
+        envdrift decrypt --verify-vault ...  # Verify vault key (dotenvx only)
 
     Parameters:
         env_file (Path): Path to the encrypted .env file to operate on.
+        backend (str | None): Encryption backend to use (dotenvx or sops).
+        sops_config_file (Path | None): Path to .sops.yaml when using SOPS.
+        age_key_file (Path | None): Path to age private key file for SOPS.
         verify_vault (bool): If true, perform a vault-based verification instead of local decryption.
         ci (bool): CI mode (non-interactive); affects exit behavior for errors.
         vault_provider (str | None): Vault provider identifier; supported values include "azure", "aws", "hashicorp", and "gcp". Required when --verify-vault is used.
@@ -345,7 +526,45 @@ def decrypt_cmd(
         print_error(f"ENV file not found: {env_file}")
         raise typer.Exit(code=1)
 
+    envdrift_config, config_path = _load_encryption_config()
+    encryption_config = getattr(envdrift_config, "encryption", None)
+
+    # Auto-detect backend if not specified
+    if backend is None:
+        detector = EncryptionDetector()
+        detected = detector.detect_backend_for_file(env_file)
+        if detected:
+            backend = detected
+            console.print(f"[dim]Auto-detected encryption backend: {backend}[/dim]")
+        else:
+            backend = encryption_config.backend if encryption_config else "dotenvx"
+
+    # Validate backend
+    try:
+        backend_enum = EncryptionProvider(backend.lower())
+    except ValueError:
+        print_error(f"Unknown encryption backend: {backend}")
+        print_error("Supported backends: dotenvx, sops")
+        raise typer.Exit(code=1) from None
+
+    if encryption_config and backend_enum == EncryptionProvider.SOPS:
+        if sops_config_file is None:
+            sops_config_file = _resolve_config_path(
+                config_path,
+                encryption_config.sops_config_file,
+            )
+        if age_key_file is None:
+            age_key_file = _resolve_config_path(
+                config_path,
+                encryption_config.sops_age_key_file,
+            )
+
     if verify_vault:
+        # Vault verification currently only works with dotenvx
+        if backend_enum != EncryptionProvider.DOTENVX:
+            print_error("Vault verification is only supported with dotenvx backend")
+            raise typer.Exit(code=1)
+
         if not vault_provider:
             print_error("--verify-vault requires --provider")
             raise typer.Exit(code=1)
@@ -367,6 +586,7 @@ def decrypt_cmd(
             project_id=vault_project_id,
             secret_name=vault_secret,
             ci=ci,
+            auto_install=encryption_config.dotenvx_auto_install if encryption_config else False,
         )
         if not vault_check_passed:
             raise typer.Exit(code=1)
@@ -375,18 +595,36 @@ def decrypt_cmd(
         console.print("[dim]Run without --verify-vault to decrypt the file locally.[/dim]")
         return
 
+    # Decrypt using the selected backend
     try:
-        from envdrift.integrations.dotenvx import DotenvxWrapper
+        backend_config: dict[str, object] = {}
+        if encryption_config and backend_enum == EncryptionProvider.DOTENVX:
+            backend_config["auto_install"] = encryption_config.dotenvx_auto_install
+        if backend_enum == EncryptionProvider.SOPS:
+            if encryption_config:
+                backend_config["auto_install"] = encryption_config.sops_auto_install
+            if sops_config_file:
+                backend_config["config_file"] = sops_config_file
+            if age_key_file:
+                backend_config["age_key_file"] = age_key_file
 
-        dotenvx = DotenvxWrapper()
+        encryption_backend = get_encryption_backend(backend_enum, **backend_config)
 
-        if not dotenvx.is_installed():
-            print_error("dotenvx is not installed")
-            console.print(dotenvx.install_instructions())
+        if not encryption_backend.is_installed():
+            print_error(f"{encryption_backend.name} is not installed")
+            console.print(encryption_backend.install_instructions())
             raise typer.Exit(code=1)
 
-        dotenvx.decrypt(env_file)
-        print_success(f"Decrypted {env_file}")
-    except ImportError:
-        print_error("dotenvx integration not available")
+        result = encryption_backend.decrypt(env_file)
+        if result.success:
+            print_success(f"Decrypted {env_file} using {encryption_backend.name}")
+        else:
+            print_error(result.message)
+            raise typer.Exit(code=1)
+
+    except EncryptionNotFoundError as e:
+        print_error(str(e))
+        raise typer.Exit(code=1) from None
+    except EncryptionBackendError as e:
+        print_error(f"Decryption failed: {e}")
         raise typer.Exit(code=1) from None

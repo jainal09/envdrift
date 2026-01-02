@@ -1,6 +1,6 @@
 # envdrift encrypt
 
-Check or perform encryption on .env files using dotenvx.
+Check or perform encryption on .env files using dotenvx or SOPS.
 
 ## Synopsis
 
@@ -10,13 +10,16 @@ envdrift encrypt [ENV_FILE] [OPTIONS]
 
 ## Description
 
-The `encrypt` command works with [dotenvx](https://dotenvx.com/) to manage encryption of .env files. It can:
+The `encrypt` command works with [dotenvx](https://dotenvx.com/) or
+[SOPS](https://github.com/getsops/sops) to manage encryption of .env files. It can:
 
 - **Check encryption status** - Report which variables are encrypted/plaintext
 - **Detect plaintext secrets** - Identify sensitive values that should be encrypted
-- **Perform encryption** - Encrypt the file using dotenvx (downloads automatically)
+- **Perform encryption** - Encrypt the file using the selected backend
 
 > Vault verification has moved to `envdrift decrypt --verify-vault`. Use decrypt for drift checks; encrypt no longer supports `--verify-vault`.
+
+If `--backend` is omitted, envdrift uses the configured backend (envdrift.toml/pyproject.toml) or defaults to dotenvx.
 
 ## Arguments
 
@@ -50,6 +53,23 @@ Directory to add to Python's `sys.path` for schema imports.
 envdrift encrypt .env.production --check -s config.settings:Settings -d /app/backend
 ```
 
+### `--backend`, `-b`
+
+Select the encryption backend (`dotenvx` or `sops`). Defaults to config or dotenvx.
+
+```bash
+envdrift encrypt .env.production --backend sops
+```
+
+### SOPS Options
+
+- `--sops-config` Path to `.sops.yaml`
+- `--age` Age public key(s) for encryption
+- `--age-key-file` Age private key file for decryption (sets `SOPS_AGE_KEY_FILE`)
+- `--kms` AWS KMS key ARN
+- `--gcp-kms` GCP KMS resource ID
+- `--azure-kv` Azure Key Vault key URL
+
 ## Examples
 
 ### Check Encryption Status
@@ -81,7 +101,7 @@ WARNINGS:
   * DATABASE_URL contains credentials but is not encrypted
 
 Recommendation:
-  Run: dotenvx encrypt -f <env_file>
+  Run: envdrift encrypt <env_file>
 ```
 
 ### Check with Schema
@@ -99,7 +119,7 @@ class ProductionSettings(BaseSettings):
     DEBUG: bool = False  # Not sensitive
 ```
 
-### Encrypt a File
+### Encrypt with dotenvx
 
 ```bash
 envdrift encrypt .env.production
@@ -107,9 +127,18 @@ envdrift encrypt .env.production
 
 This will:
 
-1. Download dotenvx if not installed
+1. Install dotenvx if `encryption.dotenvx.auto_install` is enabled
 2. Encrypt the file using AES-256-GCM
 3. Create `.env.keys` with the private key (never commit this!)
+
+### Encrypt with SOPS
+
+```bash
+envdrift encrypt .env.production --backend sops --age age1example
+```
+
+SOPS uses `.sops.yaml` (or the key options above) and does not create `.env.keys`.
+Ensure the `sops` binary is installed or enable `encryption.sops.auto_install`.
 
 ### CI/CD Encryption Check
 
@@ -135,7 +164,7 @@ The `--check` option provides a detailed report:
 | Plaintext Secrets | Variables detected as secrets but not encrypted        |
 | Warnings          | Additional concerns (e.g., credentials in URLs)        |
 
-## How Encryption Works
+## How dotenvx Encryption Works
 
 envdrift integrates with [dotenvx](https://dotenvx.com/) for encryption:
 
@@ -153,6 +182,14 @@ API_KEY="encrypted:BDQEsecretkey123456..."
 DEBUG=false
 #/---END DOTENV ENCRYPTED---/
 ```
+
+## How SOPS Encryption Works
+
+envdrift shells out to [SOPS](https://github.com/getsops/sops) for encryption:
+
+1. **Encrypted format**: Values use the `ENC[AES256_GCM,...]` format
+2. **Key storage**: Keys live in your SOPS setup (age, KMS, PGP, etc.)
+3. **Config**: `.sops.yaml` controls which files and keys are used
 
 ## Sensitive Detection
 

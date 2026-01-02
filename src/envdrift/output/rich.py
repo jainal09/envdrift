@@ -266,7 +266,12 @@ def print_encryption_report(report: EncryptionReport) -> None:
     # Recommendation
     if report.plaintext_secrets:
         console.print("[bold]Recommendation:[/bold]")
-        console.print("  Run: [cyan]dotenvx encrypt -f[/cyan] [dim]<env_file>[/dim]")
+        if report.detected_backend == "sops":
+            console.print(
+                f"  Run: [cyan]envdrift encrypt --backend sops[/cyan] [dim]{report.path}[/dim]"
+            )
+        else:
+            console.print(f"  Run: [cyan]envdrift encrypt[/cyan] [dim]{report.path}[/dim]")
         console.print()
 
 

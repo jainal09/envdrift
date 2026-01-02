@@ -157,6 +157,36 @@ class TestEnvdriftConfig:
 
         assert config.raw == data
 
+    def test_from_dict_encryption_config(self):
+        """Test from_dict parses encryption settings."""
+        data = {
+            "encryption": {
+                "backend": "sops",
+                "dotenvx": {"auto_install": True},
+                "sops": {
+                    "auto_install": True,
+                    "config_file": ".sops.yaml",
+                    "age_key_file": "age.key",
+                    "age_recipients": "age1example",
+                    "kms_arn": "arn:aws:kms:us-east-1:123:key/abc",
+                    "gcp_kms": "projects/p/locations/l/keyRings/r/cryptoKeys/k",
+                    "azure_kv": "https://vault.vault.azure.net/keys/key",
+                },
+            }
+        }
+
+        config = EnvdriftConfig.from_dict(data)
+
+        assert config.encryption.backend == "sops"
+        assert config.encryption.dotenvx_auto_install is True
+        assert config.encryption.sops_auto_install is True
+        assert config.encryption.sops_config_file == ".sops.yaml"
+        assert config.encryption.sops_age_key_file == "age.key"
+        assert config.encryption.sops_age_recipients == "age1example"
+        assert config.encryption.sops_kms_arn == "arn:aws:kms:us-east-1:123:key/abc"
+        assert config.encryption.sops_gcp_kms == "projects/p/locations/l/keyRings/r/cryptoKeys/k"
+        assert config.encryption.sops_azure_kv == "https://vault.vault.azure.net/keys/key"
+
 
 class TestFindConfig:
     """Tests for find_config function."""
@@ -262,6 +292,34 @@ strict_extra = false
         assert config.schema == "myapp.settings:Config"
         assert config.validation.check_encryption is True
         assert config.validation.strict_extra is False
+
+    def test_load_config_pyproject_with_encryption(self, tmp_path: Path):
+        """pyproject.toml should map encryption sections correctly."""
+        pyproject = tmp_path / "pyproject.toml"
+        pyproject.write_text("""
+[tool.envdrift]
+schema = "myapp.settings:Config"
+
+[tool.envdrift.encryption]
+backend = "sops"
+
+[tool.envdrift.encryption.dotenvx]
+auto_install = true
+
+[tool.envdrift.encryption.sops]
+auto_install = true
+config_file = ".sops.yaml"
+age_key_file = "age.key"
+age_recipients = "age1example"
+""")
+
+        config = load_config(pyproject)
+        assert config.encryption.backend == "sops"
+        assert config.encryption.dotenvx_auto_install is True
+        assert config.encryption.sops_auto_install is True
+        assert config.encryption.sops_config_file == ".sops.yaml"
+        assert config.encryption.sops_age_key_file == "age.key"
+        assert config.encryption.sops_age_recipients == "age1example"
 
 
 class TestSyncConfig:

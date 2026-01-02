@@ -1,6 +1,7 @@
 # Vault Sync Guide
 
 This guide covers setting up vault synchronization to distribute encryption keys securely across your team and CI/CD pipelines.
+Vault sync is specific to dotenvx; SOPS users should manage keys with their SOPS/KMS setup.
 
 ## Overview
 

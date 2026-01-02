@@ -1,6 +1,7 @@
 # envdrift decrypt
 
-Decrypt an encrypted .env file using dotenvx, or verify that a vault key can decrypt a file (drift detection).
+Decrypt an encrypted .env file using dotenvx or SOPS, or verify that a vault key can
+decrypt a file (dotenvx drift detection).
 
 ## Synopsis
 
@@ -11,7 +12,7 @@ envdrift decrypt [ENV_FILE] --verify-vault [--provider ...]
 
 ## Description
 
-The `decrypt` command decrypts .env files that were encrypted with dotenvx.
+The `decrypt` command decrypts .env files that were encrypted with dotenvx or SOPS.
 It can also **verify** that a key stored in your vault can decrypt the file without actually decrypting it (useful for catching key drift in CI/pre-commit).
 
 - Local development after cloning a repo
@@ -24,6 +25,22 @@ It can also **verify** that a key stored in your vault can decrypt the file with
 | :--------- | :------------------------------ | :------ |
 | `ENV_FILE` | Path to the encrypted .env file | `.env`  |
 
+## Options
+
+### `--backend`, `-b`
+
+Select the encryption backend (`dotenvx` or `sops`). Defaults to auto-detect,
+then config, then dotenvx.
+
+```bash
+envdrift decrypt .env.production --backend sops
+```
+
+### SOPS Options
+
+- `--sops-config` Path to `.sops.yaml`
+- `--age-key-file` Age private key file for decryption (sets `SOPS_AGE_KEY_FILE`)
+
 ## Examples
 
 ### Basic Decryption
@@ -32,7 +49,16 @@ It can also **verify** that a key stored in your vault can decrypt the file with
 envdrift decrypt .env.production
 ```
 
+### Decrypt with SOPS
+
+```bash
+export SOPS_AGE_KEY_FILE=keys.txt
+envdrift decrypt .env.production --backend sops
+```
+
 ### Verify vault key (drift detection, no decryption performed)
+
+Vault verification is only supported with the dotenvx backend.
 
 ```bash
 # Auto-discovered provider/vault/secret via envdrift.toml or pyproject
@@ -59,7 +85,7 @@ envdrift decrypt .env.staging
 
 ## Requirements
 
-### Private Key
+### Dotenvx Private Key
 
 Decryption requires the private key, which can be provided via:
 
@@ -84,6 +110,19 @@ The dotenvx binary is required. envdrift will:
 1. Check if dotenvx is installed
 2. If not, provide installation instructions
 
+Enable `encryption.dotenvx.auto_install` in config to allow auto-installation.
+
+### SOPS Keys
+
+SOPS uses your configured key management system (age, KMS, PGP, etc.). For age:
+
+```bash
+export SOPS_AGE_KEY_FILE=keys.txt
+```
+
+Ensure the `sops` binary is installed (for example, `brew install sops`) or enable
+`encryption.sops.auto_install`.
+
 ## Workflow
 
 ### Local Development
@@ -97,6 +136,12 @@ echo 'DOTENV_PRIVATE_KEY_PRODUCTION="your-key-here"' > .env.keys
 
 # 3. Decrypt
 envdrift decrypt .env.production
+```
+
+For SOPS, ensure your SOPS keys are available (age/KMS/PGP) and run:
+
+```bash
+envdrift decrypt .env.production --backend sops
 ```
 
 ### CI/CD Pipeline (decrypt)
@@ -159,10 +204,19 @@ To fix:
 Install: curl -sfS https://dotenvx.sh | sh
 ```
 
+### SOPS Decryption Failed
+
+```text
+[ERROR] Decryption failed: SOPS decryption failed
+```
+
+Check `SOPS_AGE_KEY_FILE`, your KMS/PGP credentials, and `.sops.yaml` rules.
+
 ## Security Notes
 
 - Never commit `.env.keys` to version control
 - Add `.env.keys` to your `.gitignore`
+- SOPS key material is managed outside envdrift (age/KMS/PGP)
 - Use secrets management (GitHub Secrets, Vault, etc.) for CI/CD
 - Rotate keys if they are ever exposed
 - For drift tests, clear cached keys (`.env.keys`, `DOTENV_PRIVATE_KEY_*` dirs, /tmp)

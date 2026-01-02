@@ -347,6 +347,33 @@ class TestDotenvxInstaller:
         assert "linux" in url.lower()
         assert "amd64" in url.lower() or "x86_64" in url.lower()
 
+    @patch("platform.system", return_value="Linux")
+    @patch("platform.machine", return_value="x86_64")
+    def test_get_download_url_substitutes_version(self, mock_machine, mock_system):
+        """Test get_download_url substitutes {version} placeholder."""
+        installer = DotenvxInstaller(version="9.9.9")
+        url = installer.get_download_url()
+        assert "{version}" not in url
+        assert "9.9.9" in url
+
+    def test_get_download_url_replaces_pinned_version(self, monkeypatch):
+        """Test get_download_url replaces pinned version when no placeholder."""
+        installer = DotenvxInstaller(version="9.9.9")
+        monkeypatch.setattr(
+            "envdrift.integrations.dotenvx.get_platform_info",
+            lambda: ("Linux", "x86_64"),
+        )
+        pinned_url = f"https://example.com/dotenvx-v{DOTENVX_VERSION}.tar.gz"
+        monkeypatch.setitem(
+            DOWNLOAD_URLS,
+            ("Linux", "x86_64"),
+            pinned_url,
+        )
+
+        url = installer.get_download_url()
+        assert "9.9.9" in url
+        assert DOTENVX_VERSION not in url
+
     @patch("platform.system", return_value="FreeBSD")
     @patch("platform.machine", return_value="x86_64")
     def test_unsupported_platform_raises(self, mock_machine, mock_system):
@@ -526,7 +553,7 @@ class TestDotenvxWrapper:
     def test_init_defaults(self):
         """Test DotenvxWrapper default values."""
         wrapper = DotenvxWrapper()
-        assert wrapper.auto_install is True
+        assert wrapper.auto_install is False
         assert wrapper.version == DOTENVX_VERSION
         assert wrapper._binary_path is None
 
@@ -910,6 +937,40 @@ class TestTarGzExtraction:
             installer._extract_tar_gz(tar_path, target_dir)
 
         assert "Unsafe path" in str(exc_info.value)
+
+    def test_extract_tar_gz_fallback_on_typeerror(self, tmp_path, monkeypatch):
+        """Fallback to extractall without filter when TypeError occurs."""
+        import io
+        import tarfile
+
+        tar_path = tmp_path / "dotenvx.tar.gz"
+        with tarfile.open(tar_path, "w:gz") as tar:
+            data = b"binary"
+            tarinfo = tarfile.TarInfo(name="dotenvx")
+            tarinfo.size = len(data)
+            tar.addfile(tarinfo, io.BytesIO(data))
+
+        installer = DotenvxInstaller()
+        target_dir = tmp_path / "extract"
+        target_dir.mkdir()
+
+        calls = {"with_filter": False, "without_filter": False}
+        original_extractall = tarfile.TarFile.extractall
+
+        def fake_extractall(self, path, **kwargs):
+            filter_value = kwargs.get("filter")
+            if filter_value is not None:
+                calls["with_filter"] = True
+                raise TypeError("filter not supported")
+            calls["without_filter"] = True
+            return original_extractall(self, path)
+
+        monkeypatch.setattr(tarfile.TarFile, "extractall", fake_extractall)
+
+        installer._extract_tar_gz(tar_path, target_dir)
+
+        assert calls["with_filter"] is True
+        assert calls["without_filter"] is True
 
 
 class TestZipExtraction:

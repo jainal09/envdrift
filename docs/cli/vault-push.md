@@ -1,6 +1,7 @@
 # envdrift vault-push
 
 Push encryption keys from local `.env.keys` files to cloud vaults.
+This command is specific to dotenvx keys; SOPS users should use their SOPS key management workflows.
 
 ## Synopsis
 

@@ -16,8 +16,8 @@ uv add envdrift
 | ---------------------------- | ------------------------------------------------------ |
 | [validate](validate.md)      | Validate .env files against Pydantic schemas           |
 | [diff](diff.md)              | Compare two .env files and show differences            |
-| [encrypt](encrypt.md)        | Check or perform encryption using dotenvx              |
-| [decrypt](decrypt.md)        | Decrypt encrypted .env files                           |
+| [encrypt](encrypt.md)        | Check or perform encryption using dotenvx or SOPS      |
+| [decrypt](decrypt.md)        | Decrypt encrypted .env files (dotenvx or SOPS)         |
 | [pull](pull.md)              | Pull keys from vault and decrypt all env files         |
 | [sync](sync.md)              | Sync encryption keys from cloud vaults to local files  |
 | [vault-push](vault-push.md)  | Push encryption keys from local files to cloud vaults  |

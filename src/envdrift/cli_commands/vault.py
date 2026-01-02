@@ -106,8 +106,19 @@ def vault_push(
             project_id=project_id,
         )
 
+        dotenvx_auto_install = False
+        config_path = config
+        if config_path is None:
+            config_path = find_config()
+        if config_path:
+            with contextlib.suppress(ConfigNotFoundError, tomllib.TOMLDecodeError):
+                envdrift_config = load_config(config_path)
+                encryption_config = getattr(envdrift_config, "encryption", None)
+                if encryption_config:
+                    dotenvx_auto_install = encryption_config.dotenvx_auto_install
+
         # Initialize dotenvx for encryption checks
-        dotenvx = DotenvxWrapper(auto_install=True)
+        dotenvx = DotenvxWrapper(auto_install=dotenvx_auto_install)
 
         console.print("[bold]Vault Push All[/bold]")
         console.print(f"Provider: {effective_provider}")

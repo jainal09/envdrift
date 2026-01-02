@@ -211,6 +211,32 @@ def load_sync_config_and_client(
     )
 
 
+def _get_dotenvx_auto_install(config_file: Path | None) -> bool:
+    import tomllib
+
+    from envdrift.config import ConfigNotFoundError, find_config, load_config
+
+    config_path = None
+    if config_file is not None and config_file.suffix.lower() == ".toml":
+        config_path = config_file
+    elif config_file is None:
+        config_path = find_config()
+
+    if not config_path:
+        return False
+
+    try:
+        envdrift_config = load_config(config_path)
+    except (ConfigNotFoundError, tomllib.TOMLDecodeError):
+        return False
+
+    encryption_config = getattr(envdrift_config, "encryption", None)
+    if not encryption_config:
+        return False
+
+    return encryption_config.dotenvx_auto_install
+
+
 def sync(
     config_file: Annotated[
         Path | None,
@@ -495,7 +521,8 @@ def pull(
     try:
         from envdrift.integrations.dotenvx import DotenvxError, DotenvxWrapper
 
-        dotenvx = DotenvxWrapper()
+        dotenvx_auto_install = _get_dotenvx_auto_install(config_file)
+        dotenvx = DotenvxWrapper(auto_install=dotenvx_auto_install)
 
         if not dotenvx.is_installed():
             print_error("dotenvx is not installed")
@@ -877,7 +904,8 @@ def lock(
     try:
         from envdrift.integrations.dotenvx import DotenvxError, DotenvxWrapper
 
-        dotenvx = DotenvxWrapper()
+        dotenvx_auto_install = _get_dotenvx_auto_install(config_file)
+        dotenvx = DotenvxWrapper(auto_install=dotenvx_auto_install)
 
         if not dotenvx.is_installed():
             print_error("dotenvx is not installed")

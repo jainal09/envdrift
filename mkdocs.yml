@@ -57,6 +57,7 @@ nav:
   - Guides:
     - Schema Best Practices: guides/schema.md
     - CI/CD Integration: guides/cicd.md
+    - Upgrading: guides/upgrading.md
     - Encryption: guides/encryption.md
     - Vault Sync: guides/vault-sync.md
     - Releasing: guides/releasing.md

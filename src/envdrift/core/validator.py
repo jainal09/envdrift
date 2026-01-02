@@ -235,8 +235,10 @@ class Validator:
         if expected_type is None or value == "":
             return None
 
-        # Skip type check for encrypted values
-        if value.startswith("encrypted:"):
+        # Skip type check for encrypted values (supports both dotenvx and SOPS)
+        # dotenvx format: encrypted:...
+        # SOPS format: ENC[AES256_GCM,...
+        if value.startswith("encrypted:") or value.startswith("ENC["):
             return None
 
         type_name = getattr(expected_type, "__name__", str(expected_type))

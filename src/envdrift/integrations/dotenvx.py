@@ -250,6 +250,8 @@ class DotenvxInstaller:
 
         # Replace version in URL
         url = DOWNLOAD_URLS[key]
+        if "{version}" in url:
+            return url.format(version=self.version)
         return url.replace(DOTENVX_VERSION, self.version)
 
     def download_and_extract(self, target_path: Path) -> None:
@@ -332,7 +334,11 @@ class DotenvxInstaller:
                 # Resolve to absolute and ensure it's within target_dir
                 if not member_path.resolve().is_relative_to(target_dir.resolve()):
                     raise DotenvxInstallError(f"Unsafe path in archive: {member.name}")
-            tar.extractall(target_dir, filter="data")  # nosec B202
+            try:
+                tar.extractall(target_dir, filter="data")  # nosec B202
+            except TypeError:
+                # Python <3.12 doesn't support the filter argument.
+                tar.extractall(target_dir)  # nosec B202
 
     def _extract_zip(self, archive_path: Path, target_dir: Path) -> None:
         """
@@ -410,12 +416,12 @@ class DotenvxWrapper:
     """Wrapper around dotenvx CLI.
 
     This wrapper:
-    - Automatically installs dotenvx if not found
+    - Optionally installs dotenvx if not found (auto_install defaults to False)
     - Uses the binary from .venv/bin/ (not system-wide)
     - Provides Python-friendly interface to dotenvx commands
     """
 
-    def __init__(self, auto_install: bool = True, version: str = DOTENVX_VERSION):
+    def __init__(self, auto_install: bool = False, version: str = DOTENVX_VERSION):
         """
         Create a DotenvxWrapper that provides methods to run and manage the dotenvx CLI within a virtual environment.
 
