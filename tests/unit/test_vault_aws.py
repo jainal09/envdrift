@@ -96,7 +96,7 @@ class TestAWSSecretsManagerClient:
 
     def test_authenticate_success(self, mock_boto3, mock_client_factory):
         """Test successful authentication."""
-        client_factory, mock_sm_client, mock_sts_client = mock_client_factory
+        client_factory, _mock_sm_client, _mock_sts_client = mock_client_factory
 
         with patch("boto3.client") as mock_client:
             mock_client.side_effect = client_factory
