@@ -56,7 +56,7 @@ jobs:
               shouldAutoMerge: isVersionBumpAuto && isMinorBump && !isMajorBump
             };
 
-      - name: Auto-merge minor version bump
+      - name: Enable auto-merge for minor version bump
         if: steps.get-pr.outputs.result != 'null' && fromJSON(steps.get-pr.outputs.result).shouldAutoMerge
         uses: actions/github-script@v7
         with:
@@ -64,19 +64,35 @@ jobs:
             const prData = ${{ steps.get-pr.outputs.result }};
             const prNumber = prData.number;
 
-            console.log(`Auto-merging PR #${prNumber} (minor version bump)`);
+            console.log(`Enabling auto-merge for PR #${prNumber} (minor version bump)`);
 
-            // Enable auto-merge with squash
-            await github.rest.pulls.merge({
+            // Get the PR node ID for GraphQL
+            const { data: pr } = await github.rest.pulls.get({
               owner: context.repo.owner,
               repo: context.repo.repo,
-              pull_number: prNumber,
-              merge_method: 'squash',
-              commit_title: `chore(deps): auto-merge minor version bump (#${prNumber})`,
-              commit_message: '🤖 Auto-merged by version bump workflow after CI passed'
+              pull_number: prNumber
             });
 
-            console.log(`Successfully merged PR #${prNumber}`);
+            // Enable auto-merge using GraphQL mutation
+            // This queues the PR to merge once ALL required checks pass
+            await github.graphql(`
+              mutation($pullRequestId: ID!) {
+                enablePullRequestAutoMerge(input: {
+                  pullRequestId: $pullRequestId,
+                  mergeMethod: SQUASH
+                }) {
+                  pullRequest {
+                    autoMergeRequest {
+                      enabledAt
+                    }
+                  }
+                }
+              }
+            `, {
+              pullRequestId: pr.node_id
+            });
+
+            console.log(`Auto-merge enabled for PR #${prNumber} - will merge when all checks pass`);
 
       - name: Comment on major version bump
         if: steps.get-pr.outputs.result != 'null' && fromJSON(steps.get-pr.outputs.result).isMajorBump
