@@ -7,8 +7,9 @@ from unittest.mock import MagicMock, patch
 from typer.testing import CliRunner
 
 from envdrift.cli import app
+from envdrift.integrations.dotenvx import DotenvxError
 from envdrift.sync.config import ServiceMapping, SyncConfig
-from envdrift.vault.base import SecretNotFoundError, SecretValue
+from envdrift.vault.base import SecretNotFoundError, SecretValue, VaultError
 
 runner = CliRunner()
 
@@ -160,3 +161,84 @@ class TestVaultPushAll:
         mock_dotenvx.encrypt.assert_called_once()
         args, _ = mock_dotenvx.encrypt.call_args
         assert args[0] == env_file
+
+    @patch("envdrift.cli_commands.sync.load_sync_config_and_client")
+    @patch("envdrift.integrations.dotenvx.DotenvxWrapper")
+    def test_push_all_error_handling(
+        self,
+        mock_dotenvx_cls,
+        mock_loader,
+        tmp_path,
+    ):
+        """Test various error conditions in push loop to ensure coverage."""
+        mock_client = MagicMock()
+        mock_dotenvx = MagicMock()
+        mock_dotenvx_cls.return_value = mock_dotenvx
+
+        # Scenarios:
+        # 1. Missing .env file (Skipped)
+        # 2. Encryption failure (Error)
+        # 3. Vault API error (Error)
+        # 4. Missing .env.keys file (Error)
+        # 5. Missing key in .env.keys (Error)
+
+        mappings = []
+        for i in range(1, 6):
+            mappings.append(
+                ServiceMapping(
+                    secret_name=f"s{i}",
+                    folder_path=tmp_path / f"s{i}",
+                    environment="prod",
+                )
+            )
+            (tmp_path / f"s{i}").mkdir()
+
+        mock_sync_config = SyncConfig(mappings=mappings)
+        mock_loader.return_value = (mock_sync_config, mock_client, "azure", None, None)
+
+        # Setup s1: No files.
+
+        # Setup s2: Unencrypted .env, encrypt raises error
+        (tmp_path / "s2" / ".env.prod").write_text("plain=text")
+        mock_dotenvx.encrypt.side_effect = DotenvxError("encrypt failed")
+
+        # Setup s3: Encrypted .env, Vault check raises VaultError
+        (tmp_path / "s3" / ".env.prod").write_text("encrypted: yes")
+
+        # Setup s4: Encrypted .env, Secret missing in vault, Missing .env.keys
+        (tmp_path / "s4" / ".env.prod").write_text("encrypted: yes")
+
+        # Setup s5: Encrypted .env, Secret missing, .env.keys exists but missing key
+        (tmp_path / "s5" / ".env.prod").write_text("encrypted: yes")
+        (tmp_path / "s5" / ".env.keys").write_text("OTHER_KEY=val")
+
+        # Client side effects
+        # s1: skipped before client call
+        # s2: skipped before client call (encryption fail)
+        # s3: calls get_secret -> raises VaultError
+        # s4: calls get_secret -> raises SecretNotFoundError -> checks keys -> fail
+        # s5: calls get_secret -> raises SecretNotFoundError -> checks keys -> reads -> None -> fail
+
+        mock_client.get_secret.side_effect = [
+            VaultError("api error"),  # s3
+            SecretNotFoundError("miss"),  # s4
+            SecretNotFoundError("miss"),  # s5
+        ]
+
+        result = runner.invoke(app, ["vault-push", "--all"])
+
+        assert result.exit_code == 0
+
+        # Verify counts
+        # Skipped: s1 (no env)
+        # Errors: s2 (encrypt), s3 (vault), s4 (no keys file), s5 (no key)
+        # Total 1 skipped, 4 errors.
+
+        assert "Skipped: 1" in result.output
+        assert "Errors: 4" in result.output
+
+        assert "No .env file found" in result.output
+        assert "Failed to encrypt" in result.output
+        assert "Vault error checking" in result.output
+        assert ".env.keys not found" in result.output
+        assert "not found in keys file" in result.output
