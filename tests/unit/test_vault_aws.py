@@ -10,6 +10,7 @@ import pytest
 
 from envdrift.vault.base import (
     AuthenticationError,
+    SecretValue,
     VaultError,
 )
 
@@ -468,3 +469,36 @@ class TestAWSSecretsManagerClient:
 
         with pytest.raises(VaultError):
             client.update_secret("name", "value")
+
+    def test_set_secret_prefers_update(self, mock_boto3):
+        """set_secret should use update_secret when it succeeds."""
+        client = mock_boto3.AWSSecretsManagerClient()
+        client.is_authenticated = lambda: True
+
+        update_result = SecretValue(name="my-secret", value="value")
+        client.update_secret = MagicMock(return_value=update_result)
+        client.create_secret = MagicMock()
+
+        result = client.set_secret("my-secret", "value")
+
+        assert result.name == "my-secret"
+        client.update_secret.assert_called_once()
+        client.create_secret.assert_not_called()
+
+    def test_set_secret_creates_on_missing(self, mock_boto3):
+        """set_secret should create when update reports missing secret."""
+        client = mock_boto3.AWSSecretsManagerClient()
+        client.is_authenticated = lambda: True
+
+        missing_error = Exception("missing")
+        missing_error.response = {"Error": {"Code": "ResourceNotFoundException"}}
+        update_error = VaultError("update failed")
+        update_error.__cause__ = missing_error
+
+        client.update_secret = MagicMock(side_effect=update_error)
+        client.create_secret = MagicMock(return_value=SecretValue(name="my-secret", value="value"))
+
+        result = client.set_secret("my-secret", "value")
+
+        assert result.name == "my-secret"
+        client.create_secret.assert_called_once()

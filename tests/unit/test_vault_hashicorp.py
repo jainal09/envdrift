@@ -231,6 +231,53 @@ class TestHashiCorpVaultClientWithMock:
         assert "db-pass" in secrets
 
     @patch("envdrift.vault.hashicorp.hvac")
+    def test_list_secrets_invalid_path_returns_empty(self, mock_hvac_module):
+        """InvalidPath should return an empty list."""
+        from envdrift.vault.hashicorp import HashiCorpVaultClient, InvalidPath
+
+        mock_client = MagicMock()
+        mock_client.is_authenticated.return_value = True
+        mock_client.secrets.kv.v2.list_secrets.side_effect = InvalidPath("missing")
+        mock_hvac_module.Client.return_value = mock_client
+
+        client = HashiCorpVaultClient(url="http://localhost:8200", token="valid-token")
+        client.authenticate()
+
+        assert client.list_secrets(prefix="missing/") == []
+
+    @patch("envdrift.vault.hashicorp.hvac")
+    def test_get_secret_unauthorized_raises(self, mock_hvac_module):
+        """Unauthorized errors should raise AuthenticationError."""
+        from envdrift.vault.hashicorp import HashiCorpVaultClient, Unauthorized
+
+        mock_client = MagicMock()
+        mock_client.is_authenticated.return_value = True
+        mock_client.secrets.kv.v2.read_secret_version.side_effect = Unauthorized("nope")
+        mock_hvac_module.Client.return_value = mock_client
+
+        client = HashiCorpVaultClient(url="http://localhost:8200", token="valid-token")
+        client.authenticate()
+
+        with pytest.raises(AuthenticationError):
+            client.get_secret("restricted")
+
+    @patch("envdrift.vault.hashicorp.hvac")
+    def test_create_or_update_secret_forbidden_raises(self, mock_hvac_module):
+        """Forbidden errors should raise AuthenticationError."""
+        from envdrift.vault.hashicorp import Forbidden, HashiCorpVaultClient
+
+        mock_client = MagicMock()
+        mock_client.is_authenticated.return_value = True
+        mock_client.secrets.kv.v2.create_or_update_secret.side_effect = Forbidden("nope")
+        mock_hvac_module.Client.return_value = mock_client
+
+        client = HashiCorpVaultClient(url="http://localhost:8200", token="valid-token")
+        client.authenticate()
+
+        with pytest.raises(AuthenticationError):
+            client.create_or_update_secret("secret", {"value": "x"})
+
+    @patch("envdrift.vault.hashicorp.hvac")
     def test_create_or_update_secret(self, mock_hvac_module):
         """Test create_or_update_secret calls hvac client."""
         mock_client = MagicMock()

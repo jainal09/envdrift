@@ -6,6 +6,8 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from envdrift.vault.base import AuthenticationError, SecretNotFoundError, VaultError
+
 
 class TestAzureKeyVaultClient:
     """Tests for AzureKeyVaultClient."""
@@ -176,3 +178,99 @@ class TestAzureKeyVaultClient:
 
             assert result.name == "new-secret"
             assert result.value == "new-value"
+
+    def test_init_raises_without_sdk(self, mock_azure):
+        """Init should raise ImportError when Azure SDK is unavailable."""
+        mock_azure.AZURE_AVAILABLE = False
+
+        with pytest.raises(ImportError):
+            mock_azure.AzureKeyVaultClient(vault_url="https://test.vault.azure.net")
+
+    def test_authenticate_client_auth_error(self, mock_azure):
+        """Authentication errors should raise AuthenticationError."""
+
+        class ClientAuthError(Exception):
+            pass
+
+        mock_azure.ClientAuthenticationError = ClientAuthError
+
+        mock_secret_client = MagicMock()
+        mock_secret_client.list_properties_of_secrets.side_effect = ClientAuthError("bad creds")
+
+        with (
+            patch.object(mock_azure, "DefaultAzureCredential", return_value=MagicMock()),
+            patch.object(mock_azure, "SecretClient", return_value=mock_secret_client),
+        ):
+            client = mock_azure.AzureKeyVaultClient(vault_url="https://test.vault.azure.net")
+            with pytest.raises(AuthenticationError):
+                client.authenticate()
+
+    def test_authenticate_http_error(self, mock_azure):
+        """HTTP errors should raise VaultError."""
+
+        class HttpResponseError(Exception):
+            pass
+
+        class ClientAuthenticationError(Exception):
+            pass
+
+        mock_azure.ClientAuthenticationError = ClientAuthenticationError
+        mock_azure.HttpResponseError = HttpResponseError
+
+        mock_secret_client = MagicMock()
+        mock_secret_client.list_properties_of_secrets.side_effect = HttpResponseError("boom")
+
+        with (
+            patch.object(mock_azure, "DefaultAzureCredential", return_value=MagicMock()),
+            patch.object(mock_azure, "SecretClient", return_value=mock_secret_client),
+        ):
+            client = mock_azure.AzureKeyVaultClient(vault_url="https://test.vault.azure.net")
+            with pytest.raises(VaultError):
+                client.authenticate()
+
+    def test_get_secret_not_found_raises(self, mock_azure):
+        """Missing secrets should raise SecretNotFoundError."""
+
+        class ResourceNotFoundError(Exception):
+            pass
+
+        mock_azure.ResourceNotFoundError = ResourceNotFoundError
+
+        mock_credential = MagicMock()
+        mock_secret_client = MagicMock()
+        mock_secret_client.list_properties_of_secrets.return_value = iter([])
+        mock_secret_client.get_secret.side_effect = ResourceNotFoundError("missing")
+
+        with (
+            patch.object(mock_azure, "DefaultAzureCredential", return_value=mock_credential),
+            patch.object(mock_azure, "SecretClient", return_value=mock_secret_client),
+        ):
+            client = mock_azure.AzureKeyVaultClient(vault_url="https://test.vault.azure.net")
+            client.authenticate()
+
+            with pytest.raises(SecretNotFoundError):
+                client.get_secret("missing-secret")
+
+    def test_list_secrets_http_error(self, mock_azure):
+        """List failures should raise VaultError."""
+
+        class HttpResponseError(Exception):
+            pass
+
+        mock_azure.HttpResponseError = HttpResponseError
+
+        mock_credential = MagicMock()
+        mock_secret_client = MagicMock()
+        mock_secret_client.list_properties_of_secrets.return_value = iter([])
+
+        with (
+            patch.object(mock_azure, "DefaultAzureCredential", return_value=mock_credential),
+            patch.object(mock_azure, "SecretClient", return_value=mock_secret_client),
+        ):
+            client = mock_azure.AzureKeyVaultClient(vault_url="https://test.vault.azure.net")
+            client.authenticate()
+
+            mock_secret_client.list_properties_of_secrets.side_effect = HttpResponseError("boom")
+
+            with pytest.raises(VaultError):
+                client.list_secrets()

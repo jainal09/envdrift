@@ -893,6 +893,8 @@ class TestSyncCommand:
                 return SimpleNamespace(services=[], has_errors=False)
 
         monkeypatch.setattr("envdrift.sync.engine.SyncEngine", DummyEngine)
+        monkeypatch.setattr("envdrift.output.rich.print_service_sync_status", lambda *_, **__: None)
+        monkeypatch.setattr("envdrift.output.rich.print_sync_result", lambda *_, **__: None)
 
         result = runner.invoke(
             app,
@@ -1002,6 +1004,8 @@ class TestSyncCommand:
                 return SimpleNamespace(services=[], has_errors=False)
 
         monkeypatch.setattr("envdrift.sync.engine.SyncEngine", DummyEngine)
+        monkeypatch.setattr("envdrift.output.rich.print_service_sync_status", lambda *_, **__: None)
+        monkeypatch.setattr("envdrift.output.rich.print_sync_result", lambda *_, **__: None)
 
         result = runner.invoke(app, ["sync"])
 
@@ -1310,6 +1314,8 @@ class TestPullCommand:
                 return SimpleNamespace(services=[], has_errors=False)
 
         monkeypatch.setattr("envdrift.sync.engine.SyncEngine", DummyEngine)
+        monkeypatch.setattr("envdrift.output.rich.print_service_sync_status", lambda *_, **__: None)
+        monkeypatch.setattr("envdrift.output.rich.print_sync_result", lambda *_, **__: None)
 
         class DummyDotenvx:
             def __init__(self):
@@ -1385,6 +1391,8 @@ class TestPullCommand:
                 return SimpleNamespace(services=[], has_errors=False)
 
         monkeypatch.setattr("envdrift.sync.engine.SyncEngine", DummyEngine)
+        monkeypatch.setattr("envdrift.output.rich.print_service_sync_status", lambda *_, **__: None)
+        monkeypatch.setattr("envdrift.output.rich.print_sync_result", lambda *_, **__: None)
 
         class DummyDotenvx:
             def __init__(self):
@@ -1405,6 +1413,331 @@ class TestPullCommand:
         assert env_a in dummy.decrypted
         assert env_b in dummy.decrypted
         assert (service_a / "active.env").exists()
+
+    def test_pull_dotenvx_missing_exits(self, monkeypatch, tmp_path: Path):
+        """Pull should exit if dotenvx is not installed."""
+        service_dir = tmp_path / "service"
+        service_dir.mkdir()
+        env_file = service_dir / ".env.production"
+        env_file.write_text("SECRET=encrypted:abc123")
+
+        config_file = tmp_path / "envdrift.toml"
+        config_file.write_text(
+            dedent(
+                f"""
+                [vault]
+                provider = "aws"
+
+                [vault.aws]
+                region = "us-east-1"
+
+                [vault.sync]
+                env_keys_filename = ".env.keys"
+
+                [[vault.sync.mappings]]
+                secret_name = "dotenv-key"
+                folder_path = "{service_dir.as_posix()}"
+                environment = "production"
+                """
+            ).lstrip()
+        )
+
+        monkeypatch.setattr("envdrift.vault.get_vault_client", lambda *_, **__: SimpleNamespace())
+
+        class DummyEngine:
+            def __init__(self, *_args, **_kwargs):
+                pass
+
+            def sync_all(self):
+                return SimpleNamespace(services=[], has_errors=False)
+
+        monkeypatch.setattr("envdrift.sync.engine.SyncEngine", DummyEngine)
+        monkeypatch.setattr("envdrift.output.rich.print_service_sync_status", lambda *_, **__: None)
+        monkeypatch.setattr("envdrift.output.rich.print_sync_result", lambda *_, **__: None)
+
+        class DummyDotenvx:
+            def is_installed(self):
+                return False
+
+            def install_instructions(self):
+                return "install dotenvx"
+
+        monkeypatch.setattr("envdrift.integrations.dotenvx.DotenvxWrapper", lambda: DummyDotenvx())
+
+        result = runner.invoke(app, ["pull", "-c", str(config_file)])
+
+        assert result.exit_code == 1
+        assert "dotenvx is not installed" in result.output.lower()
+
+    def test_pull_decrypt_error_exits(self, monkeypatch, tmp_path: Path):
+        """Pull should exit when dotenvx fails to decrypt."""
+        service_dir = tmp_path / "service"
+        service_dir.mkdir()
+        env_file = service_dir / ".env.production"
+        env_file.write_text("SECRET=encrypted:abc123")
+
+        config_file = tmp_path / "envdrift.toml"
+        config_file.write_text(
+            dedent(
+                f"""
+                [vault]
+                provider = "aws"
+
+                [vault.aws]
+                region = "us-east-1"
+
+                [vault.sync]
+                env_keys_filename = ".env.keys"
+
+                [[vault.sync.mappings]]
+                secret_name = "dotenv-key"
+                folder_path = "{service_dir.as_posix()}"
+                environment = "production"
+                """
+            ).lstrip()
+        )
+
+        monkeypatch.setattr("envdrift.vault.get_vault_client", lambda *_, **__: SimpleNamespace())
+
+        class DummyEngine:
+            def __init__(self, *_args, **_kwargs):
+                pass
+
+            def sync_all(self):
+                return SimpleNamespace(services=[], has_errors=False)
+
+        monkeypatch.setattr("envdrift.sync.engine.SyncEngine", DummyEngine)
+        monkeypatch.setattr("envdrift.output.rich.print_service_sync_status", lambda *_, **__: None)
+        monkeypatch.setattr("envdrift.output.rich.print_sync_result", lambda *_, **__: None)
+
+        class DummyDotenvx:
+            def is_installed(self):
+                return True
+
+            def decrypt(self, _path):
+                raise DotenvxError("boom")
+
+        monkeypatch.setattr("envdrift.integrations.dotenvx.DotenvxWrapper", lambda: DummyDotenvx())
+
+        result = runner.invoke(app, ["pull", "-c", str(config_file)])
+
+        assert result.exit_code == 1
+        assert "could not be decrypted" in result.output.lower()
+
+    def test_pull_profile_missing_errors(self, monkeypatch, tmp_path: Path):
+        """Pull should fail when profile has no mappings."""
+        service_dir = tmp_path / "service"
+        service_dir.mkdir()
+        (service_dir / ".env.production").write_text("SECRET=encrypted:abc123")
+
+        config_file = tmp_path / "envdrift.toml"
+        config_file.write_text(
+            dedent(
+                f"""
+                [vault]
+                provider = "aws"
+
+                [vault.aws]
+                region = "us-east-1"
+
+                [vault.sync]
+                env_keys_filename = ".env.keys"
+
+                [[vault.sync.mappings]]
+                secret_name = "dotenv-key"
+                folder_path = "{service_dir.as_posix()}"
+                environment = "production"
+                profile = "local"
+                """
+            ).lstrip()
+        )
+
+        monkeypatch.setattr("envdrift.vault.get_vault_client", lambda *_, **__: SimpleNamespace())
+
+        result = runner.invoke(app, ["pull", "-c", str(config_file), "--profile", "prod"])
+
+        assert result.exit_code == 1
+        assert "no mappings found" in result.output.lower()
+
+    def test_pull_multiple_env_files_skips(self, monkeypatch, tmp_path: Path):
+        """Pull should skip when multiple .env.* files are present."""
+        service_dir = tmp_path / "service"
+        service_dir.mkdir()
+        (service_dir / ".env.dev").write_text("SECRET=encrypted:abc123")
+        (service_dir / ".env.staging").write_text("SECRET=encrypted:def456")
+
+        config_file = tmp_path / "envdrift.toml"
+        config_file.write_text(
+            dedent(
+                f"""
+                [vault]
+                provider = "aws"
+
+                [vault.aws]
+                region = "us-east-1"
+
+                [vault.sync]
+                env_keys_filename = ".env.keys"
+
+                [[vault.sync.mappings]]
+                secret_name = "dotenv-key"
+                folder_path = "{service_dir.as_posix()}"
+                environment = "production"
+                """
+            ).lstrip()
+        )
+
+        monkeypatch.setattr("envdrift.vault.get_vault_client", lambda *_, **__: SimpleNamespace())
+
+        class DummyEngine:
+            def __init__(self, *_args, **_kwargs):
+                pass
+
+            def sync_all(self):
+                return SimpleNamespace(services=[], has_errors=False)
+
+        monkeypatch.setattr("envdrift.sync.engine.SyncEngine", DummyEngine)
+        monkeypatch.setattr("envdrift.output.rich.print_service_sync_status", lambda *_, **__: None)
+        monkeypatch.setattr("envdrift.output.rich.print_sync_result", lambda *_, **__: None)
+
+        class DummyDotenvx:
+            def is_installed(self):
+                return True
+
+        monkeypatch.setattr("envdrift.integrations.dotenvx.DotenvxWrapper", lambda: DummyDotenvx())
+
+        result = runner.invoke(app, ["pull", "-c", str(config_file)])
+
+        assert result.exit_code == 0
+        assert "multiple .env" in result.output.lower()
+
+
+class TestLockCommand:
+    """Tests for the lock CLI command."""
+
+    def test_lock_check_mode_exits_when_unencrypted(self, monkeypatch, tmp_path: Path):
+        """Check mode should fail when a file needs encryption."""
+        service_dir = tmp_path / "service"
+        service_dir.mkdir()
+        env_file = service_dir / ".env.production"
+        env_file.write_text("SECRET=value")
+
+        config_file = tmp_path / "envdrift.toml"
+        config_file.write_text(
+            dedent(
+                f"""
+                [vault]
+                provider = "aws"
+
+                [vault.aws]
+                region = "us-east-1"
+
+                [vault.sync]
+                env_keys_filename = ".env.keys"
+
+                [[vault.sync.mappings]]
+                secret_name = "dotenv-key"
+                folder_path = "{service_dir.as_posix()}"
+                environment = "production"
+                """
+            ).lstrip()
+        )
+
+        monkeypatch.setattr("envdrift.vault.get_vault_client", lambda *_, **__: SimpleNamespace())
+
+        class DummyDotenvx:
+            def is_installed(self):
+                return True
+
+        monkeypatch.setattr("envdrift.integrations.dotenvx.DotenvxWrapper", lambda: DummyDotenvx())
+
+        result = runner.invoke(app, ["lock", "-c", str(config_file), "--check"])
+
+        assert result.exit_code == 1
+        assert "need encryption" in result.output.lower()
+
+    def test_lock_verify_vault_mismatch_fails(self, monkeypatch, tmp_path: Path):
+        """Verify vault should fail on key mismatch."""
+        service_dir = tmp_path / "service"
+        service_dir.mkdir()
+        env_keys = service_dir / ".env.keys"
+        env_keys.write_text("DOTENV_PRIVATE_KEY_PRODUCTION=local")
+
+        config_file = tmp_path / "envdrift.toml"
+        config_file.write_text(
+            dedent(
+                f"""
+                [vault]
+                provider = "aws"
+
+                [vault.aws]
+                region = "us-east-1"
+
+                [vault.sync]
+                env_keys_filename = ".env.keys"
+
+                [[vault.sync.mappings]]
+                secret_name = "dotenv-key"
+                folder_path = "{service_dir.as_posix()}"
+                environment = "production"
+                """
+            ).lstrip()
+        )
+
+        class DummyVault:
+            def ensure_authenticated(self):
+                return None
+
+            def get_secret(self, _name):
+                return SimpleNamespace(value="DOTENV_PRIVATE_KEY_PRODUCTION=remote")
+
+        monkeypatch.setattr("envdrift.vault.get_vault_client", lambda *_, **__: DummyVault())
+
+        result = runner.invoke(app, ["lock", "-c", str(config_file), "--verify-vault"])
+
+        assert result.exit_code == 1
+        assert "key mismatch" in result.output.lower()
+
+    def test_lock_skips_already_encrypted_file(self, monkeypatch, tmp_path: Path):
+        """Lock should skip fully encrypted files."""
+        service_dir = tmp_path / "service"
+        service_dir.mkdir()
+        env_file = service_dir / ".env.production"
+        env_file.write_text("SECRET=encrypted:abc123")
+
+        config_file = tmp_path / "envdrift.toml"
+        config_file.write_text(
+            dedent(
+                f"""
+                [vault]
+                provider = "aws"
+
+                [vault.aws]
+                region = "us-east-1"
+
+                [vault.sync]
+                env_keys_filename = ".env.keys"
+
+                [[vault.sync.mappings]]
+                secret_name = "dotenv-key"
+                folder_path = "{service_dir.as_posix()}"
+                environment = "production"
+                """
+            ).lstrip()
+        )
+
+        monkeypatch.setattr("envdrift.vault.get_vault_client", lambda *_, **__: SimpleNamespace())
+
+        class DummyDotenvx:
+            def is_installed(self):
+                return True
+
+        monkeypatch.setattr("envdrift.integrations.dotenvx.DotenvxWrapper", lambda: DummyDotenvx())
+
+        result = runner.invoke(app, ["lock", "-c", str(config_file), "--force"])
+
+        assert result.exit_code == 0
+        assert "already encrypted" in result.output.lower()
 
 
 class TestVaultPushCommand:
