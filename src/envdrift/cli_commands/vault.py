@@ -183,7 +183,7 @@ def vault_push(
                 print_success(f"Pushed {mapping.secret_name}")
                 pushed_count += 1
 
-            except Exception as e:
+            except (VaultError, DotenvxError, OSError, ValueError) as e:
                 print_error(f"Error processing {mapping.folder_path}: {e}")
                 error_count += 1
 
