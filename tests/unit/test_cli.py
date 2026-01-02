@@ -9,7 +9,8 @@ from types import SimpleNamespace
 
 from typer.testing import CliRunner
 
-from envdrift.cli import _verify_decryption_with_vault, app
+from envdrift.cli import app
+from envdrift.cli_commands.encryption import _verify_decryption_with_vault
 from envdrift.integrations.dotenvx import DotenvxError
 
 runner = CliRunner()
@@ -350,7 +351,9 @@ class TestDecryptCommand:
             called["verify"] = True
             return True
 
-        monkeypatch.setattr("envdrift.cli._verify_decryption_with_vault", fake_verify)
+        monkeypatch.setattr(
+            "envdrift.cli_commands.encryption._verify_decryption_with_vault", fake_verify
+        )
 
         # If decrypt were called, raise to fail the test
         monkeypatch.setattr(
