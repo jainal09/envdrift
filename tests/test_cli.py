@@ -200,14 +200,18 @@ def test_lock_no_config_found(tmp_path) -> None:
 
 def test_lock_help() -> None:
     """Test lock --help shows usage information."""
+    import re
+
     result = runner.invoke(app, ["lock", "--help"])
     assert result.exit_code == 0
-    assert "lock" in result.stdout.lower()
-    assert "--verify-vault" in result.stdout
-    assert "--sync-keys" in result.stdout
-    assert "--check" in result.stdout
-    assert "--force" in result.stdout
-    assert "--profile" in result.stdout
+    # Strip ANSI escape codes for CI compatibility
+    output = re.sub(r"\x1b\[[0-9;]*m", "", result.stdout)
+    assert "lock" in output.lower()
+    assert "--verify-vault" in output
+    assert "--sync-keys" in output
+    assert "--check" in output
+    assert "--force" in output
+    assert "--profile" in output
 
 
 def test_lock_check_only_with_encrypted_file(tmp_path) -> None:
