@@ -253,10 +253,10 @@ The `lock` command catches many edge cases and provides helpful warnings and err
 
 ## Exit Codes
 
-| Code | Meaning                                              |
-| :--- | :--------------------------------------------------- |
-| 0    | Success (all files encrypted or verified)            |
-| 1    | Error (key mismatch, encryption failure, or vault error) |
+| Code | Meaning                                                   |
+| :--- | :-------------------------------------------------------- |
+| 0    | Success (all files encrypted or verified)                 |
+| 1    | Error (key mismatch, encryption failure, or vault error)  |
 
 ## Configuration File Format
 
