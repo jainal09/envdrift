@@ -18,12 +18,10 @@ class TestVaultPushAll:
 
     @patch("envdrift.cli_commands.sync.load_sync_config_and_client")
     @patch("envdrift.integrations.dotenvx.DotenvxWrapper")
-    @patch("envdrift.cli_commands.vault.detect_env_file")
     @patch("envdrift.sync.operations.EnvKeysFile")
     def test_push_all_success(
         self,
         mock_keys_file,
-        mock_detect,
         mock_dotenvx_cls,
         mock_loader,
         tmp_path,
@@ -78,10 +76,8 @@ class TestVaultPushAll:
         )
 
     @patch("envdrift.cli_commands.sync.load_sync_config_and_client")
-    @patch("envdrift.integrations.dotenvx.DotenvxWrapper")
     def test_push_all_skips_existing(
         self,
-        mock_dotenvx_cls,
         mock_loader,
         tmp_path,
     ):
