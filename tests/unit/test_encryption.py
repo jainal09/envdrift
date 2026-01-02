@@ -198,3 +198,59 @@ NEW_FEATURE_FLAG=enabled
         assert report.total_vars == 0
         assert report.encryption_ratio == 0.0
         assert report.is_fully_encrypted is False
+
+    def test_detect_sops_backend(self, tmp_path):
+        """Detect SOPS markers in content and files."""
+        detector = EncryptionDetector()
+        content = 'KEY="ENC[AES256_GCM,data:abc,iv:xyz,tag:123,type:str]"'
+
+        assert detector.has_sops_header(content) is True
+        assert detector.detect_backend(content) == "sops"
+
+        env_file = tmp_path / ".env"
+        env_file.write_text(content)
+        assert detector.detect_backend_for_file(env_file) == "sops"
+
+    def test_detect_dotenvx_backend(self, tmp_path):
+        """Detect dotenvx headers and markers."""
+        detector = EncryptionDetector()
+        content = "#/---BEGIN DOTENV ENCRYPTED---/\nDOTENV_PUBLIC_KEY=abc\nKEY=encrypted:xyz"
+
+        assert detector.has_dotenvx_header(content) is True
+        assert detector.detect_backend(content) == "dotenvx"
+
+        env_file = tmp_path / ".env"
+        env_file.write_text(content)
+        assert detector.detect_backend_for_file(env_file) == "dotenvx"
+
+    def test_detect_value_backend(self):
+        """Detect backend type for encrypted values."""
+        detector = EncryptionDetector()
+
+        assert detector.detect_value_backend("encrypted:abc") == "dotenvx"
+        assert detector.detect_value_backend("ENC[AES256_GCM,data:abc]") == "sops"
+        assert detector.detect_value_backend("plain") is None
+
+    def test_get_recommendations_for_sops(self, tmp_path):
+        """Recommendation should use --backend sops when detected."""
+        content = "API_KEY=sk-plaintext"
+        env_file = tmp_path / ".env"
+        env_file.write_text(content)
+
+        parser = EnvParser()
+        env = parser.parse(env_file)
+
+        detector = EncryptionDetector()
+        report = detector.analyze(env)
+        report.detected_backend = "sops"
+
+        recommendations = detector.get_recommendations(report)
+
+        assert any("--backend sops" in r for r in recommendations)
+
+    def test_is_value_encrypted_sops(self):
+        """Treat SOPS values as encrypted."""
+        detector = EncryptionDetector()
+
+        assert detector.is_value_encrypted("ENC[AES256_GCM,data:abc]") is True
+        assert detector.is_value_encrypted("plaintext") is False

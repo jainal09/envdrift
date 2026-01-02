@@ -203,3 +203,54 @@ SENTRY_DSN=https://sentry.io/123
     env_file = tmp_path / ".env.production"
     env_file.write_text(content)
     return env_file
+
+
+@pytest.fixture
+def sops_encrypted_env_content():
+    """
+    Sample SOPS-format .env content where values are encrypted.
+
+    Returns:
+        str: The contents of a SOPS encrypted .env file suitable for use in tests.
+    """
+    return """DATABASE_URL="ENC[AES256_GCM,data:abc123xyz,iv:1234567890abcdef,tag:fedcba0987654321,type:str]"
+REDIS_URL="ENC[AES256_GCM,data:def456uvw,iv:abcdef1234567890,tag:123456fedcba0987,type:str]"
+API_KEY="ENC[AES256_GCM,data:ghi789rst,iv:fedcba0987654321,tag:0987654321fedcba,type:str]"
+JWT_SECRET="ENC[AES256_GCM,data:jkl012mno,iv:0123456789abcdef,tag:abcdef0123456789,type:str]"
+HOST=0.0.0.0
+PORT=8000
+DEBUG=false
+NEW_FEATURE_FLAG=enabled
+"""
+
+
+@pytest.fixture
+def tmp_sops_encrypted_env_file(tmp_path, sops_encrypted_env_content):
+    """
+    Create a temporary SOPS-encrypted .env file.
+
+    Parameters:
+        tmp_path (pathlib.Path): Temporary directory provided by pytest.
+        sops_encrypted_env_content (str): SOPS-encrypted content to write.
+
+    Returns:
+        pathlib.Path: Path to the created .env.production file.
+    """
+    env_file = tmp_path / ".env.production"
+    env_file.write_text(sops_encrypted_env_content)
+    return env_file
+
+
+@pytest.fixture
+def partial_sops_encrypted_content():
+    """
+    Sample .env content with both SOPS encrypted and plaintext values.
+
+    Returns:
+        str: Multi-line string representing a .env file with mixed encryption.
+    """
+    return """DATABASE_URL="ENC[AES256_GCM,data:abc123xyz,iv:1234567890,tag:fedcba,type:str]"
+API_KEY=sk-plaintext-key-exposed
+JWT_SECRET="ENC[AES256_GCM,data:jkl012mno,iv:0123456789,tag:abcdef,type:str]"
+DEBUG=true
+"""

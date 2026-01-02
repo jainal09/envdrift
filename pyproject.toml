@@ -146,6 +146,9 @@ indent-style = "space"
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["src"]
+markers = [
+    "integration: Integration tests that download dotenvx/sops binaries.",
+]
 addopts = [
     "--strict-markers",
     "--cov=envdrift",

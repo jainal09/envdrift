@@ -32,7 +32,7 @@ See the full guide: [Guides ➜ Contributing](guides/contributing.md).
 
 ### Dotenvx
 
-An open-source tool for encrypting `.env` files using AES-256-GCM encryption. envdrift integrates with dotenvx for encryption/decryption operations.
+An open-source tool for encrypting `.env` files using AES-256-GCM encryption. envdrift supports dotenvx for encryption/decryption operations.
 See [dotenvx.com](https://dotenvx.com).
 
 ### DOTENV_PRIVATE_KEY
@@ -141,6 +141,12 @@ An extension of Pydantic for managing application settings, including loading fr
 
 ## S
 
+### SOPS
+
+Mozilla SOPS (Secrets OPerationS) encrypts files using age, KMS, or PGP keys while
+keeping structure readable. envdrift can encrypt/decrypt `.env` files with SOPS.
+See [getsops/sops](https://github.com/getsops/sops).
+
 ### Schema
 
 A Pydantic Settings class that defines the expected structure, types, and constraints of environment variables. Example:
@@ -204,7 +210,7 @@ When a variable's value cannot be converted to the type specified in the schema 
 
 ### Unencrypted Secret
 
-A variable marked as sensitive in the schema but stored in plaintext (not encrypted with dotenvx). Shown as a warning during validation.
+A variable marked as sensitive in the schema but stored in plaintext (not encrypted with the selected backend). Shown as a warning during validation.
 
 ## V
 
