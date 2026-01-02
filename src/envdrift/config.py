@@ -59,6 +59,24 @@ class PrecommitConfig:
 
 
 @dataclass
+class PartialEncryptionEnvironmentConfig:
+    """Partial encryption configuration for a single environment."""
+
+    name: str
+    clear_file: str
+    secret_file: str
+    combined_file: str
+
+
+@dataclass
+class PartialEncryptionConfig:
+    """Partial encryption settings."""
+
+    enabled: bool = False
+    environments: list[PartialEncryptionEnvironmentConfig] = field(default_factory=list)
+
+
+@dataclass
 class EnvdriftConfig:
     """Complete envdrift configuration."""
 
@@ -73,6 +91,7 @@ class EnvdriftConfig:
     validation: ValidationConfig = field(default_factory=ValidationConfig)
     vault: VaultConfig = field(default_factory=VaultConfig)
     precommit: PrecommitConfig = field(default_factory=PrecommitConfig)
+    partial_encryption: PartialEncryptionConfig = field(default_factory=PartialEncryptionConfig)
 
     # Raw config for access to custom fields
     raw: dict[str, Any] = field(default_factory=dict)
@@ -137,6 +156,22 @@ class EnvdriftConfig:
             schemas=precommit_section.get("schemas", {}),
         )
 
+        # Build partial_encryption config
+        partial_encryption_section = data.get("partial_encryption", {})
+        partial_encryption_envs = [
+            PartialEncryptionEnvironmentConfig(
+                name=env["name"],
+                clear_file=env["clear_file"],
+                secret_file=env["secret_file"],
+                combined_file=env["combined_file"],
+            )
+            for env in partial_encryption_section.get("environments", [])
+        ]
+        partial_encryption = PartialEncryptionConfig(
+            enabled=partial_encryption_section.get("enabled", False),
+            environments=partial_encryption_envs,
+        )
+
         return cls(
             schema=envdrift_section.get("schema"),
             environments=envdrift_section.get(
@@ -146,6 +181,7 @@ class EnvdriftConfig:
             validation=validation,
             vault=vault,
             precommit=precommit,
+            partial_encryption=partial_encryption,
             raw=data,
         )
 
@@ -349,6 +385,17 @@ files = [
 [precommit.schemas]
 production = "config.settings:ProductionSettings"
 staging = "config.settings:StagingSettings"
+
+# Partial encryption configuration (optional)
+[partial_encryption]
+enabled = false
+
+# Configure environments for partial encryption
+# [[partial_encryption.environments]]
+# name = "production"
+# clear_file = ".env.production.clear"
+# secret_file = ".env.production.secret"
+# combined_file = ".env.production"
 """
 
 

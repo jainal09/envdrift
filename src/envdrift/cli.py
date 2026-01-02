@@ -8,6 +8,8 @@ from envdrift.cli_commands.diff import diff
 from envdrift.cli_commands.encryption import decrypt_cmd, encrypt_cmd
 from envdrift.cli_commands.hook import hook
 from envdrift.cli_commands.init_cmd import init as init_cmd
+from envdrift.cli_commands.partial import pull_cmd as pull_partial_cmd
+from envdrift.cli_commands.partial import push as push_cmd
 from envdrift.cli_commands.sync import lock, pull, sync
 from envdrift.cli_commands.validate import validate
 from envdrift.cli_commands.vault import vault_push
@@ -30,6 +32,10 @@ app.command()(pull)
 app.command()(lock)
 app.command("vault-push")(vault_push)
 app.command()(version)
+
+# Partial encryption commands
+app.command("push")(push_cmd)
+app.command("pull-partial")(pull_partial_cmd)
 
 
 if __name__ == "__main__":
