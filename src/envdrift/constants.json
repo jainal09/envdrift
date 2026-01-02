@@ -1,13 +1,13 @@
 {
-    "dotenvx_version": "1.51.1",
+    "dotenvx_version": "1.51.3",
     "download_urls": {
-        "darwin_amd64": "https://github.com/jainal09/envdrift/releases/download/dotenvx-v{version}/dotenvx-{version}-darwin-amd64.tar.gz",
-        "darwin_arm64": "https://github.com/jainal09/envdrift/releases/download/dotenvx-v{version}/dotenvx-{version}-darwin-arm64.tar.gz",
-        "linux_amd64": "https://github.com/jainal09/envdrift/releases/download/dotenvx-v{version}/dotenvx-{version}-linux-amd64.tar.gz",
-        "linux_arm64": "https://github.com/jainal09/envdrift/releases/download/dotenvx-v{version}/dotenvx-{version}-linux-arm64.tar.gz",
-        "windows_amd64": "https://github.com/jainal09/envdrift/releases/download/dotenvx-v{version}/dotenvx-{version}-windows-amd64.zip"
+        "darwin_amd64": "https://github.com/dotenvx/dotenvx/releases/download/v{version}/dotenvx-{version}-darwin-amd64.tar.gz",
+        "darwin_arm64": "https://github.com/dotenvx/dotenvx/releases/download/v{version}/dotenvx-{version}-darwin-arm64.tar.gz",
+        "linux_amd64": "https://github.com/dotenvx/dotenvx/releases/download/v{version}/dotenvx-{version}-linux-amd64.tar.gz",
+        "linux_arm64": "https://github.com/dotenvx/dotenvx/releases/download/v{version}/dotenvx-{version}-linux-arm64.tar.gz",
+        "windows_amd64": "https://github.com/dotenvx/dotenvx/releases/download/v{version}/dotenvx-{version}-windows-amd64.zip"
     },
-    "sops_version": "3.11.0",
+    "sops_version": "3.10.2",
     "sops_download_urls": {
         "darwin_amd64": "https://github.com/getsops/sops/releases/download/v{version}/sops-v{version}.darwin.amd64",
         "darwin_arm64": "https://github.com/getsops/sops/releases/download/v{version}/sops-v{version}.darwin.arm64",
