@@ -2,29 +2,64 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 from typer.testing import CliRunner
 
 from envdrift.cli import app
-from envdrift.integrations.dotenvx import DotenvxError
+from envdrift.encryption import EncryptionProvider
+from envdrift.encryption.base import EncryptionBackendError, EncryptionResult
 from envdrift.sync.config import ServiceMapping, SyncConfig
 from envdrift.vault.base import SecretNotFoundError, SecretValue, VaultError
 
 runner = CliRunner()
 
 
+class DummyBackend:
+    """Minimal encryption backend for vault-push tests."""
+
+    def __init__(self, *, installed: bool = True, encrypt_side_effect: Exception | None = None):
+        self._installed = installed
+        self._encrypt_side_effect = encrypt_side_effect
+        self.encrypt_calls: list[Path] = []
+
+    @property
+    def name(self) -> str:
+        return "dotenvx"
+
+    def is_installed(self) -> bool:
+        return self._installed
+
+    def install_instructions(self) -> str:
+        return "install dotenvx"
+
+    def has_encrypted_header(self, content: str) -> bool:
+        return "#/---BEGIN DOTENV ENCRYPTED---/" in content or "DOTENV_PUBLIC_KEY" in content
+
+    def encrypt(self, env_file, **_kwargs):
+        path = Path(env_file)
+        self.encrypt_calls.append(path)
+        if self._encrypt_side_effect is not None:
+            raise self._encrypt_side_effect
+        return EncryptionResult(success=True, message="ok", file_path=path)
+
+    def decrypt(self, env_file, **_kwargs):
+        path = Path(env_file)
+        return EncryptionResult(success=True, message="ok", file_path=path)
+
+
 class TestVaultPushAll:
     """Tests for vault-push --all."""
 
+    @patch("envdrift.cli_commands.encryption_helpers.resolve_encryption_backend")
     @patch("envdrift.cli_commands.sync.load_sync_config_and_client")
-    @patch("envdrift.integrations.dotenvx.DotenvxWrapper")
     @patch("envdrift.sync.operations.EnvKeysFile")
     def test_push_all_success(
         self,
         mock_keys_file,
-        mock_dotenvx_cls,
         mock_loader,
+        mock_resolve_backend,
         tmp_path,
     ):
         """Test happy path for --all."""
@@ -43,9 +78,12 @@ class TestVaultPushAll:
 
         mock_loader.return_value = (mock_sync_config, mock_client, "azure", None, None, None)
 
-        # Mock Dotenvx
-        mock_dotenvx = MagicMock()
-        mock_dotenvx_cls.return_value = mock_dotenvx
+        dummy_backend = DummyBackend()
+        mock_resolve_backend.return_value = (
+            dummy_backend,
+            EncryptionProvider.DOTENVX,
+            None,
+        )
 
         # Create env file
         service_dir = tmp_path / "service1"
@@ -76,10 +114,12 @@ class TestVaultPushAll:
             "my-secret", "DOTENV_PRIVATE_KEY_PRODUCTION=secret123"
         )
 
+    @patch("envdrift.cli_commands.encryption_helpers.resolve_encryption_backend")
     @patch("envdrift.cli_commands.sync.load_sync_config_and_client")
     def test_push_all_skips_existing(
         self,
         mock_loader,
+        mock_resolve_backend,
         tmp_path,
     ):
         """Test skipping existing secrets."""
@@ -94,6 +134,11 @@ class TestVaultPushAll:
             ]
         )
         mock_loader.return_value = (mock_sync_config, mock_client, "azure", None, None, None)
+        mock_resolve_backend.return_value = (
+            DummyBackend(),
+            EncryptionProvider.DOTENVX,
+            None,
+        )
 
         # Create env file
         service_dir = tmp_path / "service1"
@@ -111,14 +156,14 @@ class TestVaultPushAll:
         assert "already" in result.output and "exists" in result.output
         mock_client.set_secret.assert_not_called()
 
+    @patch("envdrift.cli_commands.encryption_helpers.resolve_encryption_backend")
     @patch("envdrift.cli_commands.sync.load_sync_config_and_client")
-    @patch("envdrift.integrations.dotenvx.DotenvxWrapper")
     @patch("envdrift.sync.operations.EnvKeysFile")
     def test_push_all_encrypts_unencrypted(
         self,
         mock_keys_file,
-        mock_dotenvx_cls,
         mock_loader,
+        mock_resolve_backend,
         tmp_path,
     ):
         """Test auto-encryption."""
@@ -134,8 +179,12 @@ class TestVaultPushAll:
         )
         mock_loader.return_value = (mock_sync_config, mock_client, "azure", None, None, None)
 
-        mock_dotenvx = MagicMock()
-        mock_dotenvx_cls.return_value = mock_dotenvx
+        dummy_backend = DummyBackend()
+        mock_resolve_backend.return_value = (
+            dummy_backend,
+            EncryptionProvider.DOTENVX,
+            None,
+        )
 
         # Create unencrypted env file
         service_dir = tmp_path / "service1"
@@ -158,22 +207,24 @@ class TestVaultPushAll:
         assert result.exit_code == 0
 
         # Verify encryption called
-        mock_dotenvx.encrypt.assert_called_once()
-        args, _ = mock_dotenvx.encrypt.call_args
-        assert args[0] == env_file
+        assert dummy_backend.encrypt_calls == [env_file]
 
+    @patch("envdrift.cli_commands.encryption_helpers.resolve_encryption_backend")
     @patch("envdrift.cli_commands.sync.load_sync_config_and_client")
-    @patch("envdrift.integrations.dotenvx.DotenvxWrapper")
     def test_push_all_error_handling(
         self,
-        mock_dotenvx_cls,
         mock_loader,
+        mock_resolve_backend,
         tmp_path,
     ):
         """Test various error conditions in push loop to ensure coverage."""
         mock_client = MagicMock()
-        mock_dotenvx = MagicMock()
-        mock_dotenvx_cls.return_value = mock_dotenvx
+        dummy_backend = DummyBackend(encrypt_side_effect=EncryptionBackendError("encrypt failed"))
+        mock_resolve_backend.return_value = (
+            dummy_backend,
+            EncryptionProvider.DOTENVX,
+            None,
+        )
 
         # Scenarios:
         # 1. Missing .env file (Skipped)
@@ -200,8 +251,6 @@ class TestVaultPushAll:
 
         # Setup s2: Unencrypted .env, encrypt raises error
         (tmp_path / "s2" / ".env.prod").write_text("plain=text")
-        mock_dotenvx.encrypt.side_effect = DotenvxError("encrypt failed")
-
         # Setup s3: Encrypted .env, Vault check raises VaultError
         (tmp_path / "s3" / ".env.prod").write_text("encrypted: yes")
 

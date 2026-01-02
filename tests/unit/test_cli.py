@@ -16,6 +16,8 @@ from envdrift.cli_commands.encryption import (
     _verify_decryption_with_vault,
 )
 from envdrift.config import EnvdriftConfig
+from envdrift.encryption import EncryptionProvider
+from envdrift.encryption.base import EncryptionBackendError, EncryptionResult
 from envdrift.integrations.dotenvx import DotenvxError
 
 runner = CliRunner()
@@ -43,6 +45,8 @@ def _mock_dotenvx(
     installed: bool = True,
     decrypt_side_effect: Exception | None = None,
     decrypted_paths: list[Path] | None = None,
+    encrypt_side_effect: Exception | None = None,
+    encrypted_paths: list[Path] | None = None,
 ):
     """Patch DotenvxWrapper with a configurable test double."""
 
@@ -57,16 +61,95 @@ def _mock_dotenvx(
         def install_instructions(self):
             return "install dotenvx"
 
-        def decrypt(self, env_path):
+        def _record_path(self, env_path):
+            if env_path is None:
+                return
+            target = Path(env_path)
+            if decrypted_paths is not None:
+                decrypted_paths.append(target)
+            if encrypted_paths is not None:
+                encrypted_paths.append(target)
+
+        def decrypt(self, env_path=None, **kwargs):
             if decrypt_side_effect is not None:
                 raise decrypt_side_effect
-            if decrypted_paths is not None:
-                decrypted_paths.append(Path(env_path))
+            target = kwargs.get("env_file") or env_path
+            self._record_path(target)
+
+        def encrypt(self, env_path=None, **kwargs):
+            if encrypt_side_effect is not None:
+                raise encrypt_side_effect
+            target = kwargs.get("env_file") or env_path
+            self._record_path(target)
 
     dummy = DummyDotenvx()
     monkeypatch.setattr(
         "envdrift.integrations.dotenvx.DotenvxWrapper",
         lambda *_, **__: dummy,
+    )
+    return dummy
+
+
+def _mock_encryption_backend(
+    monkeypatch,
+    *,
+    provider: EncryptionProvider = EncryptionProvider.DOTENVX,
+    installed: bool = True,
+    decrypt_side_effect: Exception | None = None,
+    decrypted_paths: list[Path] | None = None,
+    encrypt_side_effect: Exception | None = None,
+    encrypted_paths: list[Path] | None = None,
+):
+    """Patch resolve_encryption_backend with a configurable test double."""
+
+    class DummyBackend:
+        @property
+        def name(self) -> str:
+            return provider.value
+
+        def is_installed(self) -> bool:
+            return installed
+
+        def install_instructions(self) -> str:
+            return f"install {provider.value}"
+
+        def has_encrypted_header(self, content: str) -> bool:
+            return (
+                "#/---BEGIN DOTENV ENCRYPTED---/" in content
+                or "DOTENV_PUBLIC_KEY" in content
+                or "sops:" in content
+                or "ENC[AES256_GCM," in content
+            )
+
+        def _record_path(self, env_path, bucket):
+            if env_path is None or bucket is None:
+                return
+            bucket.append(Path(env_path))
+
+        def encrypt(self, env_file, **_kwargs):
+            if encrypt_side_effect is not None:
+                raise encrypt_side_effect
+            self._record_path(env_file, encrypted_paths)
+            return EncryptionResult(
+                success=True,
+                message="ok",
+                file_path=Path(env_file),
+            )
+
+        def decrypt(self, env_file, **_kwargs):
+            if decrypt_side_effect is not None:
+                raise decrypt_side_effect
+            self._record_path(env_file, decrypted_paths)
+            return EncryptionResult(
+                success=True,
+                message="ok",
+                file_path=Path(env_file),
+            )
+
+    dummy = DummyBackend()
+    monkeypatch.setattr(
+        "envdrift.cli_commands.encryption_helpers.resolve_encryption_backend",
+        lambda *_args, **_kwargs: (dummy, provider, None),
     )
     return dummy
 
@@ -1829,7 +1912,7 @@ class TestPullCommand:
         _mock_sync_engine_success(monkeypatch)
 
         decrypted: list[Path] = []
-        _mock_dotenvx(monkeypatch, decrypted_paths=decrypted)
+        _mock_encryption_backend(monkeypatch, decrypted_paths=decrypted)
 
         result = runner.invoke(app, ["pull", "-c", str(config_file)])
 
@@ -1887,7 +1970,7 @@ class TestPullCommand:
         _mock_sync_engine_success(monkeypatch)
 
         decrypted: list[Path] = []
-        _mock_dotenvx(monkeypatch, decrypted_paths=decrypted)
+        _mock_encryption_backend(monkeypatch, decrypted_paths=decrypted)
 
         result = runner.invoke(app, ["pull", "-c", str(config_file), "--profile", "local"])
 
@@ -1927,7 +2010,7 @@ class TestPullCommand:
         monkeypatch.setattr("envdrift.vault.get_vault_client", lambda *_, **__: SimpleNamespace())
 
         _mock_sync_engine_success(monkeypatch)
-        _mock_dotenvx(monkeypatch, installed=False)
+        _mock_encryption_backend(monkeypatch, installed=False)
 
         result = runner.invoke(app, ["pull", "-c", str(config_file)])
 
@@ -1965,7 +2048,7 @@ class TestPullCommand:
         monkeypatch.setattr("envdrift.vault.get_vault_client", lambda *_, **__: SimpleNamespace())
 
         _mock_sync_engine_success(monkeypatch)
-        _mock_dotenvx(monkeypatch, decrypt_side_effect=DotenvxError("boom"))
+        _mock_encryption_backend(monkeypatch, decrypt_side_effect=EncryptionBackendError("boom"))
 
         result = runner.invoke(app, ["pull", "-c", str(config_file)])
 
@@ -2003,7 +2086,7 @@ class TestPullCommand:
         monkeypatch.setattr("envdrift.vault.get_vault_client", lambda *_, **__: SimpleNamespace())
 
         _mock_sync_engine_success(monkeypatch)
-        _mock_dotenvx(monkeypatch)
+        _mock_encryption_backend(monkeypatch)
 
         result = runner.invoke(app, ["pull", "-c", str(config_file), "--profile", "prod"])
 
@@ -2041,7 +2124,7 @@ class TestPullCommand:
         monkeypatch.setattr("envdrift.vault.get_vault_client", lambda *_, **__: SimpleNamespace())
 
         _mock_sync_engine_success(monkeypatch)
-        _mock_dotenvx(monkeypatch)
+        _mock_encryption_backend(monkeypatch)
 
         result = runner.invoke(app, ["pull", "-c", str(config_file)])
 
@@ -2460,16 +2543,45 @@ class TestVaultPushCommand:
             + "\n"
         )
 
-        captured = {}
+        captured: dict[str, object] = {}
 
-        class DummyDotenvx:
-            def __init__(self, auto_install: bool = False):
-                captured["auto_install"] = auto_install
+        class DummyBackend:
+            def __init__(self):
+                self.encrypt_calls: list[Path] = []
 
-            def encrypt(self, path):
-                captured["encrypted"] = Path(path)
+            @property
+            def name(self) -> str:
+                return "dotenvx"
 
-        monkeypatch.setattr("envdrift.integrations.dotenvx.DotenvxWrapper", DummyDotenvx)
+            def is_installed(self) -> bool:
+                return True
+
+            def install_instructions(self) -> str:
+                return "install dotenvx"
+
+            def has_encrypted_header(self, _content: str) -> bool:
+                return False
+
+            def encrypt(self, env_file, **_kwargs):
+                path = Path(env_file)
+                self.encrypt_calls.append(path)
+                return EncryptionResult(success=True, message="ok", file_path=path)
+
+            def decrypt(self, env_file, **_kwargs):
+                path = Path(env_file)
+                return EncryptionResult(success=True, message="ok", file_path=path)
+
+        dummy_backend = DummyBackend()
+
+        def fake_get_encryption_backend(provider, **config):
+            captured["provider"] = provider
+            captured["auto_install"] = config.get("auto_install")
+            return dummy_backend
+
+        monkeypatch.setattr(
+            "envdrift.cli_commands.encryption_helpers.get_encryption_backend",
+            fake_get_encryption_backend,
+        )
 
         result = runner.invoke(
             app,
@@ -2487,7 +2599,8 @@ class TestVaultPushCommand:
 
         assert result.exit_code == 0
         assert captured["auto_install"] is True
-        assert captured["encrypted"] == env_file
+        assert captured["provider"] == EncryptionProvider.DOTENVX
+        assert dummy_backend.encrypt_calls == [env_file]
 
     def test_vault_push_auth_failure(self, monkeypatch, tmp_path: Path):
         """vault-push should handle authentication errors gracefully."""

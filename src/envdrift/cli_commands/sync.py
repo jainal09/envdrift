@@ -519,17 +519,24 @@ def pull(
     console.print()
 
     try:
-        from envdrift.integrations.dotenvx import DotenvxError, DotenvxWrapper
+        from envdrift.cli_commands.encryption_helpers import (
+            is_encrypted_content,
+            resolve_encryption_backend,
+        )
+        from envdrift.encryption import (
+            EncryptionBackendError,
+            EncryptionNotFoundError,
+            EncryptionProvider,
+            detect_encryption_provider,
+        )
 
-        dotenvx_auto_install = _get_dotenvx_auto_install(config_file)
-        dotenvx = DotenvxWrapper(auto_install=dotenvx_auto_install)
-
-        if not dotenvx.is_installed():
-            print_error("dotenvx is not installed")
-            console.print(dotenvx.install_instructions())
+        encryption_backend, backend_provider, _ = resolve_encryption_backend(config_file)
+        if not encryption_backend.is_installed():
+            print_error(f"{encryption_backend.name} is not installed")
+            console.print(encryption_backend.install_instructions())
             raise typer.Exit(code=1)
-    except ImportError:
-        print_error("dotenvx integration not available")
+    except ValueError as e:
+        print_error(f"Unsupported encryption backend: {e}")
         raise typer.Exit(code=1) from None
 
     decrypted_count = 0
@@ -560,13 +567,38 @@ def pull(
 
         # Check if file is encrypted
         content = env_file.read_text()
-        if "encrypted:" not in content.lower():
+        if not is_encrypted_content(backend_provider, encryption_backend, content):
+            detected_provider = detect_encryption_provider(env_file)
+            if detected_provider and detected_provider != backend_provider:
+                if (
+                    detected_provider == EncryptionProvider.DOTENVX
+                    and backend_provider != EncryptionProvider.DOTENVX
+                ):
+                    console.print(
+                        f"  [red]![/red] {env_file} "
+                        f"[red]- encrypted with dotenvx, but config uses "
+                        f"{backend_provider.value}[/red]"
+                    )
+                    error_count += 1
+                    continue
+                console.print(
+                    f"  [dim]=[/dim] {env_file} "
+                    f"[dim]- skipped (encrypted with {detected_provider.value}, "
+                    f"config uses {backend_provider.value})[/dim]"
+                )
+                skipped_count += 1
+                continue
             console.print(f"  [dim]=[/dim] {env_file} [dim]- skipped (not encrypted)[/dim]")
             skipped_count += 1
             continue
 
         try:
-            dotenvx.decrypt(env_file.resolve())
+            result = encryption_backend.decrypt(env_file.resolve())
+            if not result.success:
+                console.print(f"  [red]![/red] {env_file} [red]- error: {result.message}[/red]")
+                error_count += 1
+                continue
+
             console.print(f"  [green]+[/green] {env_file} [dim]- decrypted[/dim]")
             decrypted_count += 1
 
@@ -595,7 +627,7 @@ def pull(
                     )
                     error_count += 1
 
-        except DotenvxError as e:
+        except (EncryptionNotFoundError, EncryptionBackendError) as e:
             console.print(f"  [red]![/red] {env_file} [red]- error: {e}[/red]")
             error_count += 1
 
