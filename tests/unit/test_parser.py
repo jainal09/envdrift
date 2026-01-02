@@ -54,6 +54,19 @@ PLAINTEXT_VAR=just_plain_text
         assert result.variables["ENCRYPTED_VAR"].encryption_status == EncryptionStatus.ENCRYPTED
         assert result.variables["PLAINTEXT_VAR"].encryption_status == EncryptionStatus.PLAINTEXT
 
+    def test_parse_sops_encrypted_value(self, tmp_path):
+        """Detect SOPS ENC[AES256_GCM,...] values and backend."""
+        content = 'SOPS_VAR="ENC[AES256_GCM,data:abc,iv:xyz,tag:123,type:str]"'
+        env_file = tmp_path / ".env"
+        env_file.write_text(content)
+
+        parser = EnvParser()
+        result = parser.parse(env_file)
+
+        env_var = result.variables["SOPS_VAR"]
+        assert env_var.encryption_status == EncryptionStatus.ENCRYPTED
+        assert env_var.encryption_backend == "sops"
+
     def test_parse_empty_values(self, tmp_path):
         """Handle KEY= (empty value)."""
         content = """

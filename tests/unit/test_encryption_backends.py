@@ -191,6 +191,34 @@ class TestDotenvxEncryptionBackend:
         backend = DotenvxEncryptionBackend()
         assert backend.is_installed() is True
 
+    def test_is_installed_handles_wrapper_error(self, monkeypatch):
+        """Wrapper errors should return False for is_installed."""
+        backend = DotenvxEncryptionBackend()
+
+        def boom():
+            raise RuntimeError("bad wrapper")
+
+        monkeypatch.setattr(backend, "_get_wrapper", boom)
+        assert backend.is_installed() is False
+
+    def test_get_version_returns_none_when_not_installed(self, monkeypatch):
+        """get_version should return None when dotenvx is unavailable."""
+        backend = DotenvxEncryptionBackend()
+        monkeypatch.setattr(backend, "is_installed", lambda: False)
+        assert backend.get_version() is None
+
+    def test_get_version_handles_wrapper_error(self, monkeypatch):
+        """get_version should return None on wrapper errors."""
+        backend = DotenvxEncryptionBackend()
+        monkeypatch.setattr(backend, "is_installed", lambda: True)
+
+        class DummyWrapper:
+            def get_version(self):
+                raise RuntimeError("boom")
+
+        monkeypatch.setattr(backend, "_get_wrapper", lambda: DummyWrapper())
+        assert backend.get_version() is None
+
     @patch("envdrift.integrations.dotenvx.DotenvxWrapper")
     def test_encrypt_success(self, mock_wrapper_class, tmp_path):
         """Test successful encryption."""
@@ -207,6 +235,17 @@ class TestDotenvxEncryptionBackend:
         assert result.success is True
         assert "Encrypted" in result.message
         mock_wrapper.encrypt.assert_called_once()
+
+    def test_encrypt_not_installed(self, monkeypatch, tmp_path):
+        """encrypt should raise when dotenvx is not installed."""
+        backend = DotenvxEncryptionBackend()
+        monkeypatch.setattr(backend, "is_installed", lambda: False)
+
+        env_file = tmp_path / ".env"
+        env_file.write_text("KEY=value")
+
+        with pytest.raises(EncryptionNotFoundError):
+            backend.encrypt(env_file)
 
     def test_encrypt_file_not_found(self, tmp_path):
         """Test encrypt with nonexistent file."""
@@ -231,6 +270,40 @@ class TestDotenvxEncryptionBackend:
 
         assert result.success is True
         assert "Decrypted" in result.message
+
+    @patch("envdrift.integrations.dotenvx.DotenvxWrapper")
+    def test_encrypt_wraps_dotenvx_error(self, mock_wrapper_class, tmp_path):
+        """encrypt should wrap dotenvx errors."""
+        from envdrift.integrations.dotenvx import DotenvxError
+
+        mock_wrapper = MagicMock()
+        mock_wrapper.is_installed.return_value = True
+        mock_wrapper.encrypt.side_effect = DotenvxError("boom")
+        mock_wrapper_class.return_value = mock_wrapper
+
+        env_file = tmp_path / ".env"
+        env_file.write_text("KEY=value")
+
+        backend = DotenvxEncryptionBackend()
+        with pytest.raises(EncryptionBackendError):
+            backend.encrypt(env_file)
+
+    @patch("envdrift.integrations.dotenvx.DotenvxWrapper")
+    def test_decrypt_wraps_dotenvx_error(self, mock_wrapper_class, tmp_path):
+        """decrypt should wrap dotenvx errors."""
+        from envdrift.integrations.dotenvx import DotenvxError
+
+        mock_wrapper = MagicMock()
+        mock_wrapper.is_installed.return_value = True
+        mock_wrapper.decrypt.side_effect = DotenvxError("boom")
+        mock_wrapper_class.return_value = mock_wrapper
+
+        env_file = tmp_path / ".env"
+        env_file.write_text("KEY=encrypted:abc")
+
+        backend = DotenvxEncryptionBackend()
+        with pytest.raises(EncryptionBackendError):
+            backend.decrypt(env_file)
 
     def test_install_instructions(self):
         """Test install_instructions returns formatted string."""
@@ -432,6 +505,30 @@ class TestSOPSEncryptionBackend:
         assert result.success is True
         assert "Decrypted" in result.message
 
+    def test_decrypt_with_output_file(self, tmp_path, monkeypatch):
+        """Decrypt should write to output_file when provided."""
+        env_file = tmp_path / ".env"
+        env_file.write_text('KEY="ENC[AES256_GCM,data:abc]"')
+        output_file = tmp_path / ".env.dec"
+
+        backend = SOPSEncryptionBackend()
+        monkeypatch.setattr(backend, "is_installed", lambda: True)
+
+        captured = {}
+
+        def fake_run(args, env=None, cwd=None):
+            captured["args"] = args
+            return MagicMock(returncode=0, stderr="", stdout="")
+
+        monkeypatch.setattr(backend, "_run", fake_run)
+
+        result = backend.decrypt(env_file, output_file=output_file)
+
+        assert result.success is True
+        assert result.file_path == output_file
+        assert "--output" in captured["args"]
+        assert str(output_file) in captured["args"]
+
     @patch("shutil.which")
     def test_encrypt_not_installed(self, mock_which, tmp_path):
         """Test encrypt raises when SOPS not installed."""
@@ -505,6 +602,26 @@ class TestSOPSEncryptionBackend:
         backend = SOPSEncryptionBackend(auto_install=True)
         assert backend.is_installed() is True
         installer.install.assert_called_once()
+
+    def test_exec_env_builds_command(self, tmp_path, monkeypatch):
+        """exec_env should build SOPS exec-env arguments."""
+        env_file = tmp_path / ".env"
+        env_file.write_text('KEY="ENC[AES256_GCM,data:abc]"')
+
+        backend = SOPSEncryptionBackend()
+        monkeypatch.setattr(backend, "is_installed", lambda: True)
+
+        captured = {}
+
+        def fake_run(args, env=None, cwd=None):
+            captured["args"] = args
+            return MagicMock(returncode=0, stderr="", stdout="")
+
+        monkeypatch.setattr(backend, "_run", fake_run)
+
+        result = backend.exec_env(env_file, ["echo", "ok"])
+        assert result.returncode == 0
+        assert captured["args"][:4] == ["exec-env", "--input-type", "dotenv", str(env_file)]
 
     def test_encrypt_includes_key_options(self, tmp_path, monkeypatch):
         """Encrypt should include provided key options in SOPS args."""

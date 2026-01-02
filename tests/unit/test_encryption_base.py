@@ -71,3 +71,10 @@ def test_ensure_installed_raises():
     backend = DummyBackend(installed=False)
     with pytest.raises(EncryptionNotFoundError):
         backend.ensure_installed()
+
+
+def test_is_value_encrypted_uses_status():
+    """is_value_encrypted should reflect detect_encryption_status."""
+    backend = DummyBackend()
+    assert backend.is_value_encrypted("ENC:secret") is True
+    assert backend.is_value_encrypted("plain") is False

@@ -288,6 +288,34 @@ strict_extra = false
         assert config.validation.check_encryption is True
         assert config.validation.strict_extra is False
 
+    def test_load_config_pyproject_with_encryption(self, tmp_path: Path):
+        """pyproject.toml should map encryption sections correctly."""
+        pyproject = tmp_path / "pyproject.toml"
+        pyproject.write_text("""
+[tool.envdrift]
+schema = "myapp.settings:Config"
+
+[tool.envdrift.encryption]
+backend = "sops"
+
+[tool.envdrift.encryption.dotenvx]
+auto_install = true
+
+[tool.envdrift.encryption.sops]
+auto_install = true
+config_file = ".sops.yaml"
+age_key_file = "age.key"
+age_recipients = "age1example"
+""")
+
+        config = load_config(pyproject)
+        assert config.encryption.backend == "sops"
+        assert config.encryption.dotenvx_auto_install is True
+        assert config.encryption.sops_auto_install is True
+        assert config.encryption.sops_config_file == ".sops.yaml"
+        assert config.encryption.sops_age_key_file == "age.key"
+        assert config.encryption.sops_age_recipients == "age1example"
+
 
 class TestSyncConfig:
     """Tests for SyncConfig and SyncMappingConfig dataclasses."""

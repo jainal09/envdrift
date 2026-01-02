@@ -59,3 +59,31 @@ def test_install_unsupported_platform():
         pytest.raises(SopsInstallError),
     ):
         installer._get_download_url()
+
+
+def test_get_download_url_supported(monkeypatch):
+    """Installer returns platform download URL with version."""
+    installer = SopsInstaller(version="9.9.9")
+    monkeypatch.setattr("envdrift.integrations.sops.get_platform_info", lambda: ("Linux", "x86_64"))
+    url = installer._get_download_url()
+    assert "9.9.9" in url
+
+
+def test_install_failure_cleans_temp_file(monkeypatch, tmp_path: Path):
+    """Installer should remove temp file on failure."""
+    target = tmp_path / "sops"
+    monkeypatch.setattr("envdrift.integrations.sops.get_sops_path", lambda: target)
+    monkeypatch.setattr("envdrift.integrations.sops.platform.system", lambda: "Linux")
+
+    def fake_urlretrieve(_url: str, filename: str):
+        Path(filename).write_text("partial")
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr("envdrift.integrations.sops.urllib.request.urlretrieve", fake_urlretrieve)
+
+    installer = SopsInstaller(version="0.0.0")
+    with pytest.raises(SopsInstallError):
+        installer.install()
+
+    tmp_file = target.with_suffix(".download")
+    assert not tmp_file.exists()

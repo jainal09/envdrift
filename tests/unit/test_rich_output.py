@@ -183,6 +183,25 @@ class TestEncryptionOutput:
         assert "PLAINTEXT" in joined
         assert "envdrift encrypt" in joined
 
+    def test_print_encryption_report_sops_recommendation(self):
+        """Render SOPS-specific recommendation."""
+        report = EncryptionReport(
+            path=Path(".env"),
+            is_fully_encrypted=False,
+            encrypted_vars=set(),
+            plaintext_vars={"A"},
+            empty_vars=set(),
+            plaintext_secrets={"SECRET"},
+            warnings=[],
+            detected_backend="sops",
+        )
+
+        with patch.object(console, "print") as mock_print:
+            print_encryption_report(report)
+
+        joined = " ".join(" ".join(map(str, c.args)) for c in mock_print.call_args_list)
+        assert "--backend sops" in joined
+
 
 class TestSyncOutput:
     """Tests for sync output helpers."""
