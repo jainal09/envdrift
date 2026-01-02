@@ -1546,6 +1546,17 @@ class TestPullCommand:
 
         monkeypatch.setattr("envdrift.vault.get_vault_client", lambda *_, **__: SimpleNamespace())
 
+        class DummyEngine:
+            def __init__(self, *_args, **_kwargs):
+                pass
+
+            def sync_all(self):
+                return SimpleNamespace(services=[], has_errors=False)
+
+        monkeypatch.setattr("envdrift.sync.engine.SyncEngine", DummyEngine)
+        monkeypatch.setattr("envdrift.output.rich.print_service_sync_status", lambda *_, **__: None)
+        monkeypatch.setattr("envdrift.output.rich.print_sync_result", lambda *_, **__: None)
+
         result = runner.invoke(app, ["pull", "-c", str(config_file), "--profile", "prod"])
 
         assert result.exit_code == 1
