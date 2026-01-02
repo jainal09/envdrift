@@ -232,7 +232,11 @@ class TestHashiCorpVaultClientWithMock:
 
     @patch("envdrift.vault.hashicorp.hvac")
     def test_list_secrets_invalid_path_returns_empty(self, mock_hvac_module):
-        """InvalidPath should return an empty list."""
+        """
+        Verify that list_secrets() returns an empty list when the KV backend raises InvalidPath for the requested prefix.
+        
+        Ensures missing paths are treated as no-results instead of propagating an error.
+        """
         from envdrift.vault.hashicorp import HashiCorpVaultClient, InvalidPath
 
         mock_client = MagicMock()
