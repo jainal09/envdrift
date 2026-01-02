@@ -14,7 +14,7 @@ import pytest
 from envdrift.vault.base import AuthenticationError, SecretNotFoundError, VaultError
 
 
-@pytest.fixture(autouse=True)
+@pytest.fixture(autouse=True, scope="module")
 def mock_hvac_module():
     """Provide a stub hvac module so tests don't require the real dependency."""
     hvac_module = ModuleType("hvac")

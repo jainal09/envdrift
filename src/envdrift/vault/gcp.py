@@ -83,8 +83,10 @@ class GCPSecretManagerClient(VaultClient):
         """
         try:
             self._client = secretmanager.SecretManagerServiceClient()
-            secrets_iter = self._client.list_secrets(request={"parent": self._project_path()})
-            next(iter(secrets_iter), None)
+            secrets_iter = self._client.list_secrets(
+                request={"parent": self._project_path(), "page_size": 1}
+            )
+            next(secrets_iter.pages, None)
         except DefaultCredentialsError as e:
             self._client = None
             raise AuthenticationError(f"GCP authentication failed: {e}") from e

@@ -77,7 +77,8 @@ If the vault key cannot decrypt the file, it exits 1 and prints repair steps:
 ```text
 ┌─────────────────┐
 │   Cloud Vault   │
-│  (Azure/AWS/HC) │
+│ (Azure/AWS/HC)  │
+│       GCP       │
 │                 │
 │  ┌───────────┐  │
 │  │ app-key   │  │
