@@ -1,12 +1,19 @@
 {
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
-  "extends": ["config:recommended"],
+  "extends": [
+    "config:recommended"
+  ],
   "dependencyDashboardApproval": false,
-  "labels": ["dependencies", "version-bump-auto"],
+  "labels": [
+    "dependencies",
+    "version-bump-auto"
+  ],
   "customManagers": [
     {
       "customType": "regex",
-      "fileMatch": ["^src/envdrift/constants\\.json$"],
+      "managerFilePatterns": [
+        "/^src/envdrift/constants\\.json$/"
+      ],
       "matchStrings": [
         "\"dotenvx_version\":\\s*\"(?<currentValue>\\d+\\.\\d+\\.\\d+)\""
       ],
@@ -16,7 +23,9 @@
     },
     {
       "customType": "regex",
-      "fileMatch": ["^src/envdrift/constants\\.json$"],
+      "managerFilePatterns": [
+        "/^src/envdrift/constants\\.json$/"
+      ],
       "matchStrings": [
         "\"sops_version\":\\s*\"(?<currentValue>\\d+\\.\\d+\\.\\d+)\""
       ],
@@ -27,18 +36,29 @@
   ],
   "packageRules": [
     {
-      "matchUpdateTypes": ["minor", "patch"],
-      "addLabels": ["minor-version-bump"],
+      "matchUpdateTypes": [
+        "minor",
+        "patch"
+      ],
+      "addLabels": [
+        "minor-version-bump"
+      ],
       "commitMessagePrefix": "[auto-minor]",
       "automerge": false
     },
     {
-      "matchUpdateTypes": ["major"],
-      "addLabels": ["major-version-bump"],
+      "matchUpdateTypes": [
+        "major"
+      ],
+      "addLabels": [
+        "major-version-bump"
+      ],
       "commitMessagePrefix": "[auto-major]",
       "automerge": false
     }
   ],
   "prBodyTemplate": "{{{table}}}\n\n---\n\n🤖 **Auto-generated version bump PR**\n\nThis PR was automatically created by Renovate to update dependency versions.\n\n- **Minor/Patch updates**: Will be auto-merged after CI passes\n- **Major updates**: Requires manual review and approval",
-  "schedule": ["every weekend"]
+  "schedule": [
+    "every weekend"
+  ]
 }
