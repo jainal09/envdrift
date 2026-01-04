@@ -126,6 +126,53 @@ class TestVaultPushAll:
     @patch("envdrift.cli_commands.encryption_helpers.resolve_encryption_backend")
     @patch("envdrift.cli_commands.sync.load_sync_config_and_client")
     @patch("envdrift.sync.operations.EnvKeysFile")
+    def test_push_all_force_overwrites_existing(
+        self,
+        mock_keys_file,
+        mock_loader,
+        mock_resolve_backend,
+        tmp_path,
+    ):
+        """Test --force overwrites existing secrets."""
+        mock_client = MagicMock()
+        mock_sync_config = SyncConfig(
+            mappings=[
+                ServiceMapping(
+                    secret_name="existing-secret",
+                    folder_path=tmp_path / "service1",
+                    environment="production",
+                )
+            ]
+        )
+        mock_loader.return_value = (mock_sync_config, mock_client, "azure", None, None, None)
+        mock_resolve_backend.return_value = (
+            DummyEncryptionBackend(),
+            EncryptionProvider.DOTENVX,
+            None,
+        )
+
+        service_dir = tmp_path / "service1"
+        service_dir.mkdir()
+        (service_dir / ".env.production").write_text("encrypted: yes")
+        (service_dir / ".env.keys").write_text("DOTENV_PRIVATE_KEY_PRODUCTION=secret123")
+
+        mock_keys_instance = MagicMock()
+        mock_keys_instance.read_key.return_value = "secret123"
+        mock_keys_file.return_value = mock_keys_instance
+
+        mock_client.get_secret.return_value = SecretValue(name="existing-secret", value="val")
+
+        result = runner.invoke(app, ["vault-push", "--all", "--force"])
+
+        assert result.exit_code == 0
+        assert "Pushed existing-secret" in result.output
+        mock_client.set_secret.assert_called_with(
+            "existing-secret", "DOTENV_PRIVATE_KEY_PRODUCTION=secret123"
+        )
+
+    @patch("envdrift.cli_commands.encryption_helpers.resolve_encryption_backend")
+    @patch("envdrift.cli_commands.sync.load_sync_config_and_client")
+    @patch("envdrift.sync.operations.EnvKeysFile")
     def test_push_all_encrypts_unencrypted(
         self,
         mock_keys_file,
