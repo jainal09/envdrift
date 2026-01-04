@@ -1815,6 +1815,62 @@ class TestPullCommand:
         assert env_file in decrypted
         assert "setup complete" in result.output.lower()
 
+    def test_pull_reports_service_status(self, monkeypatch, tmp_path: Path):
+        """Pull should report service sync status when sync results include services."""
+        service_dir = tmp_path / "service"
+        service_dir.mkdir()
+        env_file = service_dir / ".env.production"
+        env_file.write_text("SECRET=encrypted:abc123")
+
+        config_file = tmp_path / "envdrift.toml"
+        config_file.write_text(
+            dedent(
+                f"""
+                [vault]
+                provider = "aws"
+
+                [vault.aws]
+                region = "us-east-1"
+
+                [vault.sync]
+                default_vault_name = "main"
+                env_keys_filename = ".env.keys"
+
+                [[vault.sync.mappings]]
+                secret_name = "dotenv-key"
+                folder_path = "{service_dir.as_posix()}"
+                environment = "production"
+                """
+            ).lstrip()
+        )
+
+        monkeypatch.setattr("envdrift.vault.get_vault_client", lambda *_, **__: SimpleNamespace())
+
+        reported: list[object] = []
+        monkeypatch.setattr(
+            "envdrift.output.rich.print_service_sync_status",
+            lambda service: reported.append(service),
+        )
+        monkeypatch.setattr("envdrift.output.rich.print_sync_result", lambda *_, **__: None)
+
+        class DummyEngine:
+            def __init__(self, *_args, **_kwargs):
+                pass
+
+            def sync_all(self):
+                return SimpleNamespace(services=[SimpleNamespace()], has_errors=False)
+
+        monkeypatch.setattr("envdrift.sync.engine.SyncEngine", DummyEngine)
+
+        decrypted: list[Path] = []
+        _mock_encryption_backend(monkeypatch, decrypted_paths=decrypted)
+
+        result = runner.invoke(app, ["pull", "-c", str(config_file)])
+
+        assert result.exit_code == 0
+        assert reported
+        assert env_file in decrypted
+
     def test_pull_sync_failure_exits(self, monkeypatch, tmp_path: Path):
         """Pull should exit when vault sync fails."""
         service_dir = tmp_path / "service"

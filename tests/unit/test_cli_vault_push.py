@@ -178,6 +178,93 @@ class TestVaultPushAll:
 
     @patch("envdrift.cli_commands.encryption_helpers.resolve_encryption_backend")
     @patch("envdrift.cli_commands.sync.load_sync_config_and_client")
+    def test_push_all_skips_mismatched_provider(
+        self,
+        mock_loader,
+        mock_resolve_backend,
+        tmp_path,
+    ):
+        """vault-push --all should skip when file is encrypted with another provider."""
+        mock_client = MagicMock()
+        mock_sync_config = SyncConfig(
+            mappings=[
+                ServiceMapping(
+                    secret_name="mismatch-secret",
+                    folder_path=tmp_path / "service1",
+                    environment="production",
+                )
+            ]
+        )
+        mock_loader.return_value = (mock_sync_config, mock_client, "azure", None, None, None)
+
+        dummy_backend = DummyEncryptionBackend(has_encrypted_header=lambda _content: False)
+        mock_resolve_backend.return_value = (
+            dummy_backend,
+            EncryptionProvider.DOTENVX,
+            None,
+        )
+
+        service_dir = tmp_path / "service1"
+        service_dir.mkdir()
+        (service_dir / ".env.production").write_text("ENC[AES256_GCM,data:abc]")
+
+        result = runner.invoke(app, ["vault-push", "--all"])
+
+        assert result.exit_code == 0
+        output = " ".join(result.output.lower().split())
+        assert "encrypted with sops" in output
+        assert "config uses dotenvx" in output
+
+    @patch("envdrift.cli_commands.encryption_helpers.resolve_encryption_backend")
+    @patch("envdrift.cli_commands.sync.load_sync_config_and_client")
+    def test_push_all_encrypt_failure_counts_error(
+        self,
+        mock_loader,
+        mock_resolve_backend,
+        tmp_path,
+    ):
+        """vault-push --all should count errors when encryption returns failure."""
+        mock_client = MagicMock()
+        mock_sync_config = SyncConfig(
+            mappings=[
+                ServiceMapping(
+                    secret_name="failing-secret",
+                    folder_path=tmp_path / "service1",
+                    environment="production",
+                )
+            ]
+        )
+        mock_loader.return_value = (mock_sync_config, mock_client, "azure", None, None, None)
+
+        dummy_backend = DummyEncryptionBackend()
+        original_encrypt = dummy_backend.encrypt
+
+        def fail_encrypt(env_file, **kwargs):
+            result = original_encrypt(env_file, **kwargs)
+            result.success = False
+            result.message = "encrypt failed"
+            return result
+
+        dummy_backend.encrypt = fail_encrypt  # type: ignore[method-assign]
+        mock_resolve_backend.return_value = (
+            dummy_backend,
+            EncryptionProvider.DOTENVX,
+            None,
+        )
+
+        service_dir = tmp_path / "service1"
+        service_dir.mkdir()
+        (service_dir / ".env.production").write_text("PLAIN=text")
+
+        result = runner.invoke(app, ["vault-push", "--all"])
+
+        assert result.exit_code == 0
+        output = result.output.lower()
+        assert "encrypt failed" in output
+        assert "errors: 1" in output
+
+    @patch("envdrift.cli_commands.encryption_helpers.resolve_encryption_backend")
+    @patch("envdrift.cli_commands.sync.load_sync_config_and_client")
     @patch("envdrift.sync.operations.EnvKeysFile")
     def test_push_all_detects_env_file_and_environment(
         self,
