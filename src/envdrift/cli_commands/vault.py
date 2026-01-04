@@ -8,7 +8,7 @@ from typing import Annotated
 import typer
 
 from envdrift.env_files import detect_env_file
-from envdrift.output.rich import console, print_error, print_success
+from envdrift.output.rich import console, print_error, print_success, print_warning
 
 
 def vault_push(
@@ -36,6 +36,10 @@ def vault_push(
     all_services: Annotated[
         bool,
         typer.Option("--all", help="Push all secrets defined in sync config (skipping existing)"),
+    ] = False,
+    skip_encrypt: Annotated[
+        bool,
+        typer.Option("--skip-encrypt", help="Skip encryption step, only push keys to vault"),
     ] = False,
     config: Annotated[
         Path | None,
@@ -83,6 +87,9 @@ def vault_push(
 
         # Push all missing secrets defined in config
         envdrift vault-push --all
+
+        # Push all without encrypting (when files are already encrypted)
+        envdrift vault-push --all --skip-encrypt
     """
     import contextlib
     import tomllib
@@ -91,6 +98,10 @@ def vault_push(
     from envdrift.sync.operations import EnvKeysFile
     from envdrift.vault import VaultError, get_vault_client
     from envdrift.vault.base import SecretNotFoundError
+
+    # Validate --skip-encrypt is only used with --all
+    if skip_encrypt and not all_services:
+        print_warning("--skip-encrypt is only applicable with --all mode, ignoring")
 
     # --all mode implementation
     if all_services:
@@ -136,6 +147,8 @@ def vault_push(
         console.print("[bold]Vault Push All[/bold]")
         console.print(f"Provider: {effective_provider}")
         console.print(f"Services: {len(sync_config.mappings)}")
+        if skip_encrypt:
+            console.print("[dim]Encryption: skipped (--skip-encrypt)[/dim]")
         console.print()
 
         pushed_count = 0
@@ -145,58 +158,62 @@ def vault_push(
 
         for mapping in sync_config.mappings:
             try:
-                # Check/Detect .env file
+                # Check/Detect .env file (unless --skip-encrypt, where we only need .env.keys)
                 env_file = mapping.folder_path / f".env.{mapping.effective_environment}"
                 effective_environment = mapping.effective_environment
 
-                if not env_file.exists():
-                    # Auto-detect logic similar to sync
-                    detected = detect_env_file(mapping.folder_path)
-                    if detected.status == "found" and detected.path:
-                        env_file = detected.path
-                        if detected.environment:
-                            effective_environment = detected.environment
+                if not skip_encrypt:
+                    if not env_file.exists():
+                        # Auto-detect logic similar to sync
+                        detected = detect_env_file(mapping.folder_path)
+                        if detected.status == "found" and detected.path:
+                            env_file = detected.path
+                            if detected.environment:
+                                effective_environment = detected.environment
 
-                if not env_file.exists():
-                    console.print(f"[dim]Skipped[/dim] {mapping.folder_path}: No .env file found")
-                    skipped_count += 1
-                    continue
-
-                # Check encryption
-                content = env_file.read_text()
-                if not is_encrypted_content(backend_provider, encryption_backend, content):
-                    detected_provider = detect_encryption_provider(env_file)
-                    if detected_provider and detected_provider != backend_provider:
-                        if (
-                            detected_provider == EncryptionProvider.DOTENVX
-                            and backend_provider != EncryptionProvider.DOTENVX
-                        ):
-                            print_error(
-                                f"{env_file}: encrypted with dotenvx, "
-                                f"but config uses {backend_provider.value}"
-                            )
-                            error_count += 1
-                            dotenvx_mismatch = True
-                            continue
+                    if not env_file.exists():
                         console.print(
-                            f"[dim]Skipped[/dim] {mapping.folder_path}: "
-                            f"Encrypted with {detected_provider.value}, "
-                            f"config uses {backend_provider.value}"
+                            f"[dim]Skipped[/dim] {mapping.folder_path}: No .env file found"
                         )
                         skipped_count += 1
                         continue
 
-                    console.print(f"Encrypting {env_file} with {encryption_backend.name}...")
-                    try:
-                        result = encryption_backend.encrypt(env_file, **sops_encrypt_kwargs)
-                        if not result.success:
-                            print_error(result.message)
+                # Check encryption (unless --skip-encrypt)
+                if not skip_encrypt:
+                    content = env_file.read_text()
+                    if not is_encrypted_content(backend_provider, encryption_backend, content):
+                        detected_provider = detect_encryption_provider(env_file)
+                        if detected_provider and detected_provider != backend_provider:
+                            if (
+                                detected_provider == EncryptionProvider.DOTENVX
+                                and backend_provider != EncryptionProvider.DOTENVX
+                            ):
+                                print_error(
+                                    f"{env_file}: encrypted with dotenvx, "
+                                    f"but config uses {backend_provider.value}"
+                                )
+                                error_count += 1
+                                dotenvx_mismatch = True
+                                continue
+                            console.print(
+                                f"[dim]Skipped[/dim] {mapping.folder_path}: "
+                                f"Encrypted with {detected_provider.value}, "
+                                f"config uses {backend_provider.value}"
+                            )
+                            skipped_count += 1
+                            continue
+
+                        console.print(f"Encrypting {env_file} with {encryption_backend.name}...")
+                        try:
+                            result = encryption_backend.encrypt(env_file, **sops_encrypt_kwargs)
+                            if not result.success:
+                                print_error(result.message)
+                                error_count += 1
+                                continue
+                        except (EncryptionNotFoundError, EncryptionBackendError) as e:
+                            print_error(f"Failed to encrypt {env_file}: {e}")
                             error_count += 1
                             continue
-                    except (EncryptionNotFoundError, EncryptionBackendError) as e:
-                        print_error(f"Failed to encrypt {env_file}: {e}")
-                        error_count += 1
-                        continue
 
                 # Check if secret exists in vault
                 try:
