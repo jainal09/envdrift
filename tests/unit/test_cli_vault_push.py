@@ -401,3 +401,128 @@ class TestVaultPushAll:
                 "azure_kv": "https://vault.vault.azure.net/keys/key/1",
             }
         ]
+
+    @patch("envdrift.cli_commands.encryption_helpers.resolve_encryption_backend")
+    @patch("envdrift.cli_commands.sync.load_sync_config_and_client")
+    @patch("envdrift.sync.operations.EnvKeysFile")
+    def test_push_all_skip_encrypt_skips_encryption(
+        self,
+        mock_keys_file,
+        mock_loader,
+        mock_resolve_backend,
+        tmp_path,
+    ):
+        """Test --skip-encrypt skips encryption step."""
+        mock_client = MagicMock()
+        mock_sync_config = SyncConfig(
+            mappings=[
+                ServiceMapping(
+                    secret_name="my-secret",
+                    folder_path=tmp_path / "service1",
+                    environment="production",
+                )
+            ]
+        )
+        mock_loader.return_value = (mock_sync_config, mock_client, "azure", None, None, None)
+
+        dummy_backend = DummyEncryptionBackend()
+        mock_resolve_backend.return_value = (
+            dummy_backend,
+            EncryptionProvider.DOTENVX,
+            None,
+        )
+
+        # Create service dir with only .env.keys (no .env file)
+        service_dir = tmp_path / "service1"
+        service_dir.mkdir()
+        keys_file = service_dir / ".env.keys"
+        keys_file.write_text("DOTENV_PRIVATE_KEY_PRODUCTION=secret123")
+
+        mock_keys_instance = MagicMock()
+        mock_keys_instance.read_key.return_value = "secret123"
+        mock_keys_file.return_value = mock_keys_instance
+
+        mock_client.get_secret.side_effect = SecretNotFoundError("missing")
+
+        result = runner.invoke(app, ["vault-push", "--all", "--skip-encrypt"])
+
+        assert result.exit_code == 0
+        assert "Pushed my-secret" in result.output
+        assert "skipped (--skip-encrypt)" in result.output.lower()
+        # Verify encryption was NOT called
+        assert dummy_backend.encrypt_calls == []
+        mock_client.set_secret.assert_called_with(
+            "my-secret", "DOTENV_PRIVATE_KEY_PRODUCTION=secret123"
+        )
+
+    @patch("envdrift.cli_commands.encryption_helpers.resolve_encryption_backend")
+    @patch("envdrift.cli_commands.sync.load_sync_config_and_client")
+    @patch("envdrift.sync.operations.EnvKeysFile")
+    def test_push_all_skip_encrypt_no_env_file_still_works(
+        self,
+        mock_keys_file,
+        mock_loader,
+        mock_resolve_backend,
+        tmp_path,
+    ):
+        """Test --skip-encrypt allows pushing keys even without .env file."""
+        mock_client = MagicMock()
+        mock_sync_config = SyncConfig(
+            mappings=[
+                ServiceMapping(
+                    secret_name="my-secret",
+                    folder_path=tmp_path / "service1",
+                    environment="staging",
+                )
+            ]
+        )
+        mock_loader.return_value = (mock_sync_config, mock_client, "azure", None, None, None)
+
+        dummy_backend = DummyEncryptionBackend()
+        mock_resolve_backend.return_value = (
+            dummy_backend,
+            EncryptionProvider.DOTENVX,
+            None,
+        )
+
+        # Create service dir with only .env.keys - NO .env file at all
+        service_dir = tmp_path / "service1"
+        service_dir.mkdir()
+        keys_file = service_dir / ".env.keys"
+        keys_file.write_text("DOTENV_PRIVATE_KEY_STAGING=stagingkey")
+
+        mock_keys_instance = MagicMock()
+        mock_keys_instance.read_key.return_value = "stagingkey"
+        mock_keys_file.return_value = mock_keys_instance
+
+        mock_client.get_secret.side_effect = SecretNotFoundError("missing")
+
+        result = runner.invoke(app, ["vault-push", "--all", "--skip-encrypt"])
+
+        assert result.exit_code == 0
+        assert "Pushed my-secret" in result.output
+        # Without --skip-encrypt, this would have been skipped due to missing .env file
+        mock_client.set_secret.assert_called_with(
+            "my-secret", "DOTENV_PRIVATE_KEY_STAGING=stagingkey"
+        )
+
+    def test_skip_encrypt_without_all_warns(self, tmp_path):
+        """Test --skip-encrypt without --all shows warning."""
+        result = runner.invoke(
+            app,
+            [
+                "vault-push",
+                "--skip-encrypt",
+                str(tmp_path),
+                "secret-name",
+                "--env",
+                "prod",
+                "-p",
+                "azure",
+                "--vault-url",
+                "https://vault.vault.azure.net",
+            ],
+        )
+
+        # Should show warning about --skip-encrypt only being for --all mode
+        assert "--skip-encrypt is only applicable with --all mode" in result.output

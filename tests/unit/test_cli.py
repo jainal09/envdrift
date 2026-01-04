@@ -2078,6 +2078,63 @@ class TestPullCommand:
         output = " ".join(result.output.lower().split())
         assert "encrypted with dotenvx" in output
 
+    def test_pull_skip_sync_skips_vault_sync(self, monkeypatch, tmp_path: Path):
+        """Pull with --skip-sync should skip vault sync and only decrypt files."""
+        service_dir = tmp_path / "service"
+        service_dir.mkdir()
+        env_file = service_dir / ".env.production"
+        env_file.write_text("SECRET=encrypted:abc123")
+
+        config_file = tmp_path / "envdrift.toml"
+        config_file.write_text(
+            dedent(
+                f"""
+                [vault]
+                provider = "aws"
+
+                [vault.aws]
+                region = "us-east-1"
+
+                [vault.sync]
+                default_vault_name = "main"
+                env_keys_filename = ".env.keys"
+
+                [[vault.sync.mappings]]
+                secret_name = "dotenv-key"
+                folder_path = "{service_dir.as_posix()}"
+                environment = "production"
+                """
+            ).lstrip()
+        )
+
+        monkeypatch.setattr("envdrift.vault.get_vault_client", lambda *_, **__: SimpleNamespace())
+
+        # Track whether sync_all was called
+        sync_all_called = []
+
+        class TrackingEngine:
+            def __init__(self, *_args, **_kwargs):
+                pass
+
+            def sync_all(self):
+                sync_all_called.append(True)
+                return SimpleNamespace(services=[], has_errors=False)
+
+        monkeypatch.setattr("envdrift.sync.engine.SyncEngine", TrackingEngine)
+        monkeypatch.setattr("envdrift.output.rich.print_service_sync_status", lambda *_, **__: None)
+        monkeypatch.setattr("envdrift.output.rich.print_sync_result", lambda *_, **__: None)
+
+        decrypted: list[Path] = []
+        _mock_encryption_backend(monkeypatch, decrypted_paths=decrypted)
+
+        result = runner.invoke(app, ["pull", "-c", str(config_file), "--skip-sync"])
+
+        assert result.exit_code == 0
+        assert len(sync_all_called) == 0, "sync_all should not be called with --skip-sync"
+        assert env_file in decrypted
+        assert "skipped (--skip-sync)" in result.output.lower()
+        assert "setup complete" in result.output.lower()
+
 
 class TestLockCommand:
     """Tests for the lock CLI command."""

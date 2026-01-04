@@ -375,6 +375,10 @@ def pull(
         str | None,
         typer.Option("--profile", help="Only process mappings for this profile"),
     ] = None,
+    skip_sync: Annotated[
+        bool,
+        typer.Option("--skip-sync", help="Skip syncing keys from vault, only decrypt files"),
+    ] = False,
 ) -> None:
     """
     Pull keys from vault and decrypt all env files (one-command developer setup).
@@ -410,6 +414,9 @@ def pull(
 
         # Force update without prompts
         envdrift pull --force
+
+        # Skip vault sync, only decrypt files (useful when keys are already local)
+        envdrift pull --skip-sync
     """
     from envdrift.output.rich import print_service_sync_status, print_sync_result
     from envdrift.sync.config import SyncConfigError
@@ -465,27 +472,32 @@ def pull(
 
     console.print()
     profile_info = f" (profile: {profile})" if profile else ""
-    console.print(f"[bold]Pull[/bold] - Syncing keys and decrypting env files{profile_info}")
+    action = "Decrypting env files" if skip_sync else "Syncing keys and decrypting env files"
+    console.print(f"[bold]Pull[/bold] - {action}{profile_info}")
     console.print(f"[dim]Provider: {effective_provider} | Services: {len(filtered_mappings)}[/dim]")
     console.print()
 
-    console.print("[bold cyan]Step 1:[/bold cyan] Syncing keys from vault...")
-    console.print()
+    # === STEP 1: SYNC KEYS FROM VAULT (unless --skip-sync) ===
+    if skip_sync:
+        console.print("[dim]Step 1: Skipped (--skip-sync)[/dim]")
+    else:
+        console.print("[bold cyan]Step 1:[/bold cyan] Syncing keys from vault...")
+        console.print()
 
-    try:
-        sync_result = engine.sync_all()
-    except (VaultError, SyncConfigError, SecretNotFoundError) as e:
-        print_error(f"Sync failed: {e}")
-        raise typer.Exit(code=1) from None
+        try:
+            sync_result = engine.sync_all()
+        except (VaultError, SyncConfigError, SecretNotFoundError) as e:
+            print_error(f"Sync failed: {e}")
+            raise typer.Exit(code=1) from None
 
-    for service_result in sync_result.services:
-        print_service_sync_status(service_result)
+        for service_result in sync_result.services:
+            print_service_sync_status(service_result)
 
-    print_sync_result(sync_result)
+        print_sync_result(sync_result)
 
-    if sync_result.has_errors:
-        print_error("Setup incomplete due to sync errors")
-        raise typer.Exit(code=1)
+        if sync_result.has_errors:
+            print_error("Setup incomplete due to sync errors")
+            raise typer.Exit(code=1)
 
     # === STEP 2: DECRYPT ENV FILES ===
     console.print()
