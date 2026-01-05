@@ -1031,6 +1031,75 @@ def lock(
                 if total_value_lines > 0:
                     ratio = encrypted_lines / total_value_lines
                     if ratio >= 0.9:  # 90%+ encrypted = fully encrypted
+                        # Check if the key name matches the expected environment
+                        # This handles the case where a file was renamed (e.g., .env.local -> .env.localenv)
+                        # but the .env.keys still has the old key name
+                        expected_key_name = f"DOTENV_PRIVATE_KEY_{effective_env.upper()}"
+                        needs_rekey = False
+                        old_key_name = None
+
+                        if env_keys_file.exists():
+                            from envdrift.sync.operations import EnvKeysFile
+
+                            keys_file = EnvKeysFile(env_keys_file)
+                            if not keys_file.read_key(expected_key_name):
+                                # Expected key not found, check for any other key
+                                keys_content = env_keys_file.read_text()
+                                for line in keys_content.splitlines():
+                                    if line.startswith("DOTENV_PRIVATE_KEY_") and "=" in line:
+                                        old_key_name = line.split("=")[0].strip()
+                                        if old_key_name != expected_key_name:
+                                            needs_rekey = True
+                                            break
+
+                        if needs_rekey and old_key_name:
+                            console.print(
+                                f"  [yellow]~[/yellow] {env_file} "
+                                f"[dim]- key name mismatch ({old_key_name} -> {expected_key_name}), "
+                                "re-encrypting...[/dim]"
+                            )
+                            warnings.append(
+                                f"{env_file}: key name mismatch, re-encrypting to generate "
+                                f"{expected_key_name}"
+                            )
+                            # Decrypt first, then re-encrypt
+                            try:
+                                decrypt_result = encryption_backend.decrypt(
+                                    env_file.resolve(), **sops_encrypt_kwargs
+                                )
+                                if not decrypt_result.success:
+                                    console.print(
+                                        f"  [red]![/red] {env_file} "
+                                        f"[red]- decrypt failed: {decrypt_result.message}[/red]"
+                                    )
+                                    errors.append(f"{env_file}: decrypt for rekey failed")
+                                    error_count += 1
+                                    continue
+                                # Now re-encrypt (will generate new key with correct name)
+                                result = encryption_backend.encrypt(
+                                    env_file.resolve(), **sops_encrypt_kwargs
+                                )
+                                if not result.success:
+                                    console.print(
+                                        f"  [red]![/red] {env_file} "
+                                        f"[red]- re-encrypt failed: {result.message}[/red]"
+                                    )
+                                    errors.append(f"{env_file}: re-encryption for rekey failed")
+                                    error_count += 1
+                                    continue
+                                console.print(
+                                    f"  [green]+[/green] {env_file} [dim]- re-encrypted with new key[/dim]"
+                                )
+                                encrypted_count += 1
+                                continue
+                            except (EncryptionNotFoundError, EncryptionBackendError) as e:
+                                console.print(
+                                    f"  [red]![/red] {env_file} [red]- rekey error: {e}[/red]"
+                                )
+                                errors.append(f"{env_file}: rekey failed - {e}")
+                                error_count += 1
+                                continue
+
                         console.print(
                             f"  [dim]=[/dim] {env_file} [dim]- skipped (already encrypted)[/dim]"
                         )
