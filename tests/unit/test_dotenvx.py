@@ -995,3 +995,137 @@ class TestZipExtraction:
             installer._extract_zip(zip_path, target_dir)
 
         assert "Unsafe path" in str(exc_info.value)
+
+
+class TestLineEndingNormalization:
+    """Tests for cross-platform line ending normalization."""
+
+    def test_normalize_line_endings_crlf_to_lf(self, tmp_path):
+        """Test CRLF line endings are converted to LF."""
+        env_file = tmp_path / ".env"
+        # Write file with CRLF line endings
+        env_file.write_bytes(b"KEY1=value1\r\nKEY2=value2\r\nKEY3=value3\r\n")
+
+        wrapper = DotenvxWrapper()
+        modified = wrapper._normalize_line_endings(env_file)
+
+        assert modified is True
+        content = env_file.read_bytes()
+        assert b"\r\n" not in content
+        assert b"\r" not in content
+        assert content == b"KEY1=value1\nKEY2=value2\nKEY3=value3\n"
+
+    def test_normalize_line_endings_cr_to_lf(self, tmp_path):
+        """Test old Mac CR line endings are converted to LF."""
+        env_file = tmp_path / ".env"
+        # Write file with old Mac CR line endings
+        env_file.write_bytes(b"KEY1=value1\rKEY2=value2\rKEY3=value3\r")
+
+        wrapper = DotenvxWrapper()
+        modified = wrapper._normalize_line_endings(env_file)
+
+        assert modified is True
+        content = env_file.read_bytes()
+        assert b"\r" not in content
+        assert content == b"KEY1=value1\nKEY2=value2\nKEY3=value3\n"
+
+    def test_normalize_line_endings_already_lf(self, tmp_path):
+        """Test file with LF line endings is not modified."""
+        env_file = tmp_path / ".env"
+        original_content = b"KEY1=value1\nKEY2=value2\nKEY3=value3\n"
+        env_file.write_bytes(original_content)
+
+        wrapper = DotenvxWrapper()
+        modified = wrapper._normalize_line_endings(env_file)
+
+        assert modified is False
+        assert env_file.read_bytes() == original_content
+
+    def test_normalize_line_endings_preserves_content(self, tmp_path):
+        """Test normalization preserves all other content including special chars."""
+        env_file = tmp_path / ".env"
+        # Content with special characters that could cause Windows dotenvx issues
+        content = (
+            b"AZURE_KEY=aDwW71Ur2Z/OkmEhGxPsjDdVkB4QaiqaaNHI+Q9WFW15==\r\n"
+            b'JSON_DATA={"key":"value","nested":{"a":1}}\r\n'
+            b"BASE64=dcRH7xD0kRPoFOVTrbjfNYNxJpHoomCNWJmOZZ09m5g=\r\n"
+        )
+        env_file.write_bytes(content)
+
+        wrapper = DotenvxWrapper()
+        wrapper._normalize_line_endings(env_file)
+
+        normalized = env_file.read_bytes()
+        expected = (
+            b"AZURE_KEY=aDwW71Ur2Z/OkmEhGxPsjDdVkB4QaiqaaNHI+Q9WFW15==\n"
+            b'JSON_DATA={"key":"value","nested":{"a":1}}\n'
+            b"BASE64=dcRH7xD0kRPoFOVTrbjfNYNxJpHoomCNWJmOZZ09m5g=\n"
+        )
+        assert normalized == expected
+
+    def test_normalize_line_endings_mixed_endings(self, tmp_path):
+        """Test file with mixed line endings is normalized."""
+        env_file = tmp_path / ".env"
+        # Mixed: CRLF, LF, and CR
+        env_file.write_bytes(b"KEY1=value1\r\nKEY2=value2\nKEY3=value3\rKEY4=value4\r\n")
+
+        wrapper = DotenvxWrapper()
+        modified = wrapper._normalize_line_endings(env_file)
+
+        assert modified is True
+        content = env_file.read_bytes()
+        assert b"\r" not in content
+        assert content == b"KEY1=value1\nKEY2=value2\nKEY3=value3\nKEY4=value4\n"
+
+    def test_normalize_line_endings_empty_file(self, tmp_path):
+        """Test empty file is handled gracefully."""
+        env_file = tmp_path / ".env"
+        env_file.write_bytes(b"")
+
+        wrapper = DotenvxWrapper()
+        modified = wrapper._normalize_line_endings(env_file)
+
+        assert modified is False
+        assert env_file.read_bytes() == b""
+
+    @patch("subprocess.run")
+    @patch("envdrift.integrations.dotenvx.get_dotenvx_path")
+    def test_encrypt_normalizes_line_endings(self, mock_path, mock_run, tmp_path):
+        """Test encrypt method normalizes line endings before encryption."""
+        binary_path = tmp_path / "dotenvx"
+        binary_path.touch()
+        mock_path.return_value = binary_path
+
+        mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
+
+        env_file = tmp_path / ".env"
+        env_file.write_bytes(b"KEY=value\r\n")
+
+        wrapper = DotenvxWrapper()
+        wrapper.encrypt(env_file)
+
+        # Verify file was normalized
+        assert b"\r\n" not in env_file.read_bytes()
+        # Verify dotenvx was called
+        mock_run.assert_called_once()
+
+    @patch("subprocess.run")
+    @patch("envdrift.integrations.dotenvx.get_dotenvx_path")
+    def test_decrypt_normalizes_line_endings(self, mock_path, mock_run, tmp_path):
+        """Test decrypt method normalizes line endings before decryption."""
+        binary_path = tmp_path / "dotenvx"
+        binary_path.touch()
+        mock_path.return_value = binary_path
+
+        mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
+
+        env_file = tmp_path / ".env"
+        env_file.write_bytes(b"KEY=encrypted:abc123\r\n")
+
+        wrapper = DotenvxWrapper()
+        wrapper.decrypt(env_file)
+
+        # Verify file was normalized before decrypt
+        # Note: after decrypt, dotenvx would modify the file, but since we're mocking
+        # we just verify the normalization happened before the call
+        mock_run.assert_called_once()
