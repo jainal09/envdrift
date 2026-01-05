@@ -95,8 +95,8 @@ def test_hook_setup_precommit_auto_installs(hook_integration_env):
 
     _run_envdrift(["encrypt", env_file.name], cwd=work_dir, env=env)
     precommit_path = work_dir / ".pre-commit-config.yaml"
-    # Hooks are enforced on decrypt/pull, so encrypt alone should not install pre-commit config.
-    assert not precommit_path.exists()
+    # Hook checks run on encrypt/decrypt; encrypt should install the pre-commit config.
+    assert precommit_path.exists()
 
     _run_envdrift(["decrypt", env_file.name], cwd=work_dir, env=env)
     assert precommit_path.exists()

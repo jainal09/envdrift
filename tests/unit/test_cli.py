@@ -287,6 +287,25 @@ class TestEncryptCommand:
         assert result.exit_code == 1
         assert "not found" in result.output.lower()
 
+    def test_encrypt_hook_check_errors_exit(self, monkeypatch, tmp_path: Path):
+        """Encrypt should stop early when hook checks fail."""
+        env_file = tmp_path / ".env"
+        env_file.write_text("SECRET=encrypted:abc123")
+
+        monkeypatch.setattr(
+            "envdrift.integrations.hook_check.ensure_git_hook_setup",
+            lambda **_kwargs: ["hook check failed"],
+        )
+        monkeypatch.setattr(
+            "envdrift.cli_commands.encryption.get_encryption_backend",
+            lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("should not run")),
+        )
+
+        result = runner.invoke(app, ["encrypt", str(env_file)])
+
+        assert result.exit_code == 1
+        assert "hook check failed" in result.output.lower()
+
     def test_encrypt_check_unencrypted_file(self, tmp_path: Path):
         """Test encrypt --check on plaintext file with secrets."""
         env_file = tmp_path / ".env"
