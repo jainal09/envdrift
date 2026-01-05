@@ -5,6 +5,7 @@ Key features:
 - Installs dotenvx binary inside .venv/bin/ (NOT system-wide)
 - Pins version from constants.json for reproducibility
 - Cross-platform support (Windows, macOS, Linux)
+- Automatic line ending normalization for cross-platform compatibility
 - No Node.js dependency required
 """
 
@@ -22,6 +23,7 @@ import tempfile
 import urllib.request
 from collections.abc import Callable
 from pathlib import Path
+from typing import ClassVar
 
 
 def _load_constants() -> dict:
@@ -91,6 +93,21 @@ class DotenvxInstallError(Exception):
     """Failed to install dotenvx."""
 
     pass
+
+
+class DotenvxFilenameError(Exception):
+    """Filename not compatible with dotenvx due to known bugs."""
+
+    pass
+
+
+# Known problematic filename patterns for dotenvx on Windows
+# See: https://github.com/dotenvx/dotenvx/issues/724
+PROBLEMATIC_FILENAME_PATTERNS = [
+    # .env.local causes "Input string must contain hex characters" on Windows
+    # because dotenvx tries to parse "LOCAL" as a hex string
+    r"^\.env\.local$",
+]
 
 
 def get_platform_info() -> tuple[str, str]:
@@ -566,6 +583,151 @@ class DotenvxWrapper:
         except FileNotFoundError as e:
             raise DotenvxNotFoundError(f"dotenvx binary not found: {e}") from e
 
+    # Error patterns that indicate encryption failure even with exit code 0
+    ENCRYPT_ERROR_PATTERNS: ClassVar[list[str]] = [
+        "does not match the existing public key",
+        "MISSING_DOTENV_KEY",
+        "private key not found",
+        "decryption failed",
+        "Input string must contain hex characters",  # Windows hex parsing error
+    ]
+
+    # Regex to strip ANSI escape codes from output
+    ANSI_ESCAPE_PATTERN: ClassVar[re.Pattern[str]] = re.compile(r"\x1b\[[0-9;]*m")
+
+    @classmethod
+    def _clean_output(cls, text: str) -> str:
+        """Strip ANSI escape codes and normalize Unicode characters for clean output."""
+        # Strip ANSI escape codes
+        text = cls.ANSI_ESCAPE_PATTERN.sub("", text)
+        # Replace Unicode ellipsis with ASCII equivalent (avoids encoding issues on Windows)
+        text = text.replace("…", "...")
+        # Also handle the mojibake version (UTF-8 ellipsis decoded as Windows-1252)
+        text = text.replace("â€¦", "...")
+        return text
+
+    @staticmethod
+    def _normalize_line_endings(file_path: Path) -> bool:
+        """
+        Normalize line endings in a file to Unix-style (LF) for cross-platform compatibility.
+
+        dotenvx has known issues on Windows when files contain CRLF line endings or
+        certain characters that get misinterpreted. This method normalizes the file
+        to use Unix line endings (LF) which works consistently across all platforms.
+
+        Parameters:
+            file_path (Path): Path to the file to normalize.
+
+        Returns:
+            bool: True if the file was modified, False if already normalized.
+        """
+        try:
+            # Read as binary to detect actual line endings
+            content = file_path.read_bytes()
+
+            # Check if normalization is needed (contains CRLF)
+            if b"\r\n" not in content and b"\r" not in content:
+                return False  # Already normalized
+
+            # Normalize: CRLF -> LF, then any remaining CR -> LF
+            normalized = content.replace(b"\r\n", b"\n").replace(b"\r", b"\n")
+
+            # Write back
+            file_path.write_bytes(normalized)
+            return True
+        except OSError:
+            # If normalization fails, proceed anyway - dotenvx might still work
+            return False
+
+    @staticmethod
+    def _validate_filename(file_path: Path) -> None:
+        """
+        Validate that the filename is compatible with dotenvx.
+
+        dotenvx has known bugs on Windows where certain filenames cause errors.
+        For example, `.env.local` causes "Input string must contain hex characters"
+        because dotenvx tries to parse the suffix "LOCAL" as a hex string.
+
+        Parameters:
+            file_path (Path): Path to the file to validate.
+
+        Raises:
+            DotenvxFilenameError: If the filename matches a known problematic pattern.
+        """
+        filename = file_path.name.lower()
+        for pattern in PROBLEMATIC_FILENAME_PATTERNS:
+            if re.match(pattern, filename, re.IGNORECASE):
+                raise DotenvxFilenameError(
+                    f"Cannot encrypt/decrypt '{file_path.name}': "
+                    f"dotenvx has a known bug on Windows where this filename causes "
+                    f"'Input string must contain hex characters in even length' error. "
+                    f"Workaround: Rename the file (e.g., '.env.localenv' or '.env.dev') "
+                    f"before encryption. See: https://github.com/dotenvx/dotenvx/issues/724"
+                )
+
+    # Regex pattern for dotenvx public key header blocks
+    DOTENVX_HEADER_BLOCK_PATTERN: ClassVar[re.Pattern[str]] = re.compile(
+        r"#/---+\[DOTENV_PUBLIC_KEY\]---+/\n"
+        r"#/[^\n]+/\n"
+        r"#/[^\n]+/\n"
+        r"#/---+/\n"
+        r'DOTENV_PUBLIC_KEY_(\w+)="[^"]+"\n\n'
+        r"# \.env\.(\w+)\n",
+        re.MULTILINE,
+    )
+
+    @classmethod
+    def _clean_mismatched_headers(cls, file_path: Path) -> bool:
+        """
+        Remove dotenvx header blocks that don't match the current filename.
+
+        When a file is renamed (e.g., .env.local -> .env.localenv), dotenvx
+        prepends a new header block without removing the old one, causing
+        duplicate headers. This method removes any header blocks where the
+        environment suffix doesn't match the current filename.
+
+        Parameters:
+            file_path (Path): Path to the env file to clean.
+
+        Returns:
+            bool: True if any headers were removed, False otherwise.
+        """
+        try:
+            content = file_path.read_text(encoding="utf-8")
+        except OSError:
+            return False
+
+        # Extract expected environment from filename (e.g., .env.localenv -> localenv)
+        filename = file_path.name
+        if filename.startswith(".env."):
+            expected_env = filename[5:].lower()  # Remove ".env." prefix
+        elif filename == ".env":
+            expected_env = ""
+        else:
+            return False  # Not a .env file
+
+        # Find all header blocks and check for mismatches
+        modified = False
+        new_content = content
+
+        for match in cls.DOTENVX_HEADER_BLOCK_PATTERN.finditer(content):
+            key_env = match.group(1).lower()  # Environment from DOTENV_PUBLIC_KEY_XXX
+            comment_env = match.group(2).lower()  # Environment from # .env.xxx comment
+
+            # If the key/comment environment doesn't match the filename, remove this block
+            if key_env != expected_env or comment_env != expected_env:
+                new_content = new_content.replace(match.group(0), "")
+                modified = True
+
+        if modified:
+            # Clean up any resulting double newlines
+            while "\n\n\n" in new_content:
+                new_content = new_content.replace("\n\n\n", "\n\n")
+            new_content = new_content.lstrip("\n")
+            file_path.write_text(new_content, encoding="utf-8")
+
+        return modified
+
     def encrypt(
         self,
         env_file: Path | str,
@@ -576,6 +738,9 @@ class DotenvxWrapper:
         """
         Encrypt the specified .env file in place.
 
+        Automatically normalizes line endings to Unix-style (LF) before encryption
+        to ensure cross-platform compatibility with dotenvx.
+
         Parameters:
             env_file (Path | str): Path to the .env file to encrypt.
             env_keys_file (Path | str | None): Optional path to the .env.keys file to use.
@@ -583,17 +748,46 @@ class DotenvxWrapper:
             cwd (Path | str | None): Optional working directory for the subprocess.
 
         Raises:
+            DotenvxFilenameError: If the filename is not compatible with dotenvx.
             DotenvxError: If the file does not exist or the encryption command fails.
         """
         env_file = Path(env_file)
         if not env_file.exists():
             raise DotenvxError(f"File not found: {env_file}")
 
+        # Validate filename for known dotenvx bugs (Windows-specific)
+        if platform.system() == "Windows":
+            self._validate_filename(env_file)
+
+        # Normalize line endings for cross-platform compatibility
+        # dotenvx on Windows can fail with "Input string must contain hex characters"
+        # when files have CRLF line endings
+        self._normalize_line_endings(env_file)
+
+        # Clean up mismatched headers from renamed files
+        # When a file is renamed (e.g., .env.local -> .env.localenv), dotenvx
+        # prepends a new header without removing the old one, causing duplicates
+        self._clean_mismatched_headers(env_file)
+
         args = ["encrypt", "-f", str(env_file)]
         if env_keys_file:
             args.extend(["-fk", str(env_keys_file)])
 
-        self._run(args, env=env, cwd=cwd)
+        # Run with check=False to handle exit code 0 errors ourselves
+        result = self._run(args, env=env, cwd=cwd, check=False)
+
+        # Check for error patterns in output (dotenvx sometimes returns 0 on errors)
+        combined_output = (result.stdout or "") + (result.stderr or "")
+        # Clean output for readable error messages
+        clean_output = self._clean_output(combined_output).strip()
+        for pattern in self.ENCRYPT_ERROR_PATTERNS:
+            if pattern.lower() in combined_output.lower():
+                raise DotenvxError(f"dotenvx encryption failed: {clean_output}")
+
+        # Also check if return code was non-zero
+        if result.returncode != 0:
+            clean_stderr = self._clean_output(result.stderr or "").strip()
+            raise DotenvxError(f"dotenvx command failed (exit {result.returncode}): {clean_stderr}")
 
     def decrypt(
         self,
@@ -605,6 +799,9 @@ class DotenvxWrapper:
         """
         Decrypt the specified dotenv file in place.
 
+        Automatically normalizes line endings to Unix-style (LF) before decryption
+        to ensure cross-platform compatibility with dotenvx.
+
         Parameters:
             env_file (Path | str): Path to the .env file to decrypt.
             env_keys_file (Path | str | None): Optional path to a .env.keys file to use for decryption.
@@ -612,12 +809,20 @@ class DotenvxWrapper:
             cwd (Path | str | None): Optional working directory for the subprocess.
 
         Raises:
+            DotenvxFilenameError: If the filename is not compatible with dotenvx.
             DotenvxError: If env_file does not exist or the decryption command fails.
             DotenvxNotFoundError: If the dotenvx binary cannot be located when running the command.
         """
         env_file = Path(env_file)
         if not env_file.exists():
             raise DotenvxError(f"File not found: {env_file}")
+
+        # Validate filename for known dotenvx bugs (Windows-specific)
+        if platform.system() == "Windows":
+            self._validate_filename(env_file)
+
+        # Normalize line endings for cross-platform compatibility
+        self._normalize_line_endings(env_file)
 
         args = ["decrypt", "-f", str(env_file)]
         if env_keys_file:
