@@ -3,7 +3,10 @@
 from __future__ import annotations
 
 import shutil
+from concurrent.futures import ThreadPoolExecutor
+from dataclasses import dataclass
 from pathlib import Path
+from threading import Lock
 from typing import TYPE_CHECKING, Annotated, Any
 
 import typer
@@ -15,6 +18,19 @@ from envdrift.vault.base import SecretNotFoundError, VaultError
 
 if TYPE_CHECKING:
     from envdrift.sync.config import SyncConfig
+
+
+@dataclass(frozen=True)
+class _DecryptTask:
+    mapping: Any
+    env_file: Path
+
+
+@dataclass(frozen=True)
+class _EncryptTask:
+    mapping: Any
+    env_file: Path
+    env_keys_file: Path
 
 
 def load_sync_config_and_client(
@@ -143,6 +159,7 @@ def load_sync_config_and_client(
             ],
             default_vault_name=vault_sync.default_vault_name,
             env_keys_filename=vault_sync.env_keys_filename,
+            max_workers=vault_sync.max_workers,
         )
     elif config_path and config_path.suffix.lower() == ".toml":
         # Try to load sync config from discovered TOML
@@ -209,6 +226,36 @@ def load_sync_config_and_client(
         effective_region,
         effective_project_id,
     )
+
+
+def _normalize_max_workers(max_workers: int | None) -> int | None:
+    if max_workers is None:
+        return None
+    if isinstance(max_workers, bool) or not isinstance(max_workers, int):
+        print_warning("Invalid max_workers value; using default thread count")
+        return None
+    if max_workers < 1:
+        print_warning("max_workers must be >= 1; using default thread count")
+        return None
+    return max_workers
+
+
+def _should_use_executor(max_workers: int | None, task_count: int) -> bool:
+    if task_count < 2:
+        return False
+    if max_workers is None:
+        return True
+    return max_workers > 1
+
+
+def _run_tasks(tasks: list[Any], worker, max_workers: int | None):
+    if not _should_use_executor(max_workers, len(tasks)):
+        return [worker(task) for task in tasks]
+    if max_workers is None:
+        with ThreadPoolExecutor() as executor:
+            return list(executor.map(worker, tasks))
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        return list(executor.map(worker, tasks))
 
 
 def sync(
@@ -462,6 +509,7 @@ def pull(
         mappings=filtered_mappings,
         default_vault_name=sync_config.default_vault_name,
         env_keys_filename=sync_config.env_keys_filename,
+        max_workers=sync_config.max_workers,
     )
 
     # === STEP 1: SYNC KEYS FROM VAULT ===
@@ -543,6 +591,7 @@ def pull(
     skipped_count = 0
     error_count = 0
     activated_count = 0
+    decrypt_tasks: list[_DecryptTask] = []
 
     for mapping in filtered_mappings:
         effective_env = mapping.effective_environment
@@ -592,44 +641,57 @@ def pull(
             skipped_count += 1
             continue
 
+        decrypt_tasks.append(_DecryptTask(mapping=mapping, env_file=env_file))
+
+    max_workers = _normalize_max_workers(sync_config.max_workers)
+
+    def _decrypt_task(task: _DecryptTask):
         try:
-            result = encryption_backend.decrypt(env_file.resolve())
-            if not result.success:
-                console.print(f"  [red]![/red] {env_file} [red]- error: {result.message}[/red]")
+            result = encryption_backend.decrypt(task.env_file.resolve())
+            return task, result, None
+        except (EncryptionNotFoundError, EncryptionBackendError) as e:
+            return task, None, e
+
+    for task, result, error in _run_tasks(decrypt_tasks, _decrypt_task, max_workers):
+        env_file = task.env_file
+        mapping = task.mapping
+        if error is not None:
+            console.print(f"  [red]![/red] {env_file} [red]- error: {error}[/red]")
+            error_count += 1
+            continue
+        if result is None or not result.success:
+            message = result.message if result else "unknown error"
+            console.print(f"  [red]![/red] {env_file} [red]- error: {message}[/red]")
+            error_count += 1
+            continue
+
+        console.print(f"  [green]+[/green] {env_file} [dim]- decrypted[/dim]")
+        decrypted_count += 1
+
+        # Activate profile: copy decrypted file to activate_to path if configured
+        if profile and mapping.profile == profile and mapping.activate_to:
+            activate_path = (mapping.folder_path / mapping.activate_to).resolve()
+            # Validate path is within folder_path to prevent directory traversal
+            try:
+                activate_path.relative_to(mapping.folder_path.resolve())
+            except ValueError:
+                console.print(
+                    f"  [red]![/red] {mapping.activate_to} [red]- invalid path (escapes folder)[/red]"
+                )
                 error_count += 1
                 continue
 
-            console.print(f"  [green]+[/green] {env_file} [dim]- decrypted[/dim]")
-            decrypted_count += 1
-
-            # Activate profile: copy decrypted file to activate_to path if configured
-            if profile and mapping.profile == profile and mapping.activate_to:
-                activate_path = (mapping.folder_path / mapping.activate_to).resolve()
-                # Validate path is within folder_path to prevent directory traversal
-                try:
-                    activate_path.relative_to(mapping.folder_path.resolve())
-                except ValueError:
-                    console.print(
-                        f"  [red]![/red] {mapping.activate_to} [red]- invalid path (escapes folder)[/red]"
-                    )
-                    error_count += 1
-                    continue
-
-                try:
-                    shutil.copy2(env_file, activate_path)
-                    console.print(
-                        f"  [cyan]→[/cyan] {activate_path} [dim]- activated from {env_file.name}[/dim]"
-                    )
-                    activated_count += 1
-                except OSError as e:
-                    console.print(
-                        f"  [red]![/red] {activate_path} [red]- activation failed: {e}[/red]"
-                    )
-                    error_count += 1
-
-        except (EncryptionNotFoundError, EncryptionBackendError) as e:
-            console.print(f"  [red]![/red] {env_file} [red]- error: {e}[/red]")
-            error_count += 1
+            try:
+                shutil.copy2(env_file, activate_path)
+                console.print(
+                    f"  [cyan]→[/cyan] {activate_path} [dim]- activated from {env_file.name}[/dim]"
+                )
+                activated_count += 1
+            except OSError as e:
+                console.print(
+                    f"  [red]![/red] {activate_path} [red]- activation failed: {e}[/red]"
+                )
+                error_count += 1
 
     # === SUMMARY ===
     console.print()
@@ -787,6 +849,7 @@ def lock(
         mappings=filtered_mappings,
         default_vault_name=sync_config.default_vault_name,
         env_keys_filename=sync_config.env_keys_filename,
+        max_workers=sync_config.max_workers,
     )
 
     console.print()
@@ -972,6 +1035,8 @@ def lock(
     skipped_count = 0
     error_count = 0
     already_encrypted_count = 0
+    encrypt_tasks: list[_EncryptTask] = []
+    dotenvx_locks: dict[Path, Lock] = {}
 
     for mapping in filtered_mappings:
         effective_env = mapping.effective_environment
@@ -1090,6 +1155,16 @@ def lock(
                 skipped_count += 1
                 continue
 
+        if force:
+            encrypt_tasks.append(
+                _EncryptTask(mapping=mapping, env_file=env_file, env_keys_file=env_keys_file)
+            )
+            if backend_provider == EncryptionProvider.DOTENVX:
+                lock_key = env_keys_file.resolve()
+                if lock_key not in dotenvx_locks:
+                    dotenvx_locks[lock_key] = Lock()
+            continue
+
         # Perform encryption
         try:
             result = encryption_backend.encrypt(env_file.resolve(), **sops_encrypt_kwargs)
@@ -1105,6 +1180,47 @@ def lock(
             console.print(f"  [red]![/red] {env_file} [red]- error: {e}[/red]")
             errors.append(f"{env_file}: encryption failed - {e}")
             error_count += 1
+
+    if force and encrypt_tasks:
+        max_workers = _normalize_max_workers(sync_config.max_workers)
+
+        def _encrypt_task(task: _EncryptTask):
+            try:
+                if backend_provider == EncryptionProvider.DOTENVX:
+                    lock_key = task.env_keys_file.resolve()
+                    lock = dotenvx_locks.get(lock_key)
+                    if lock:
+                        with lock:
+                            result = encryption_backend.encrypt(
+                                task.env_file.resolve(), **sops_encrypt_kwargs
+                            )
+                    else:
+                        result = encryption_backend.encrypt(
+                            task.env_file.resolve(), **sops_encrypt_kwargs
+                        )
+                else:
+                    result = encryption_backend.encrypt(
+                        task.env_file.resolve(), **sops_encrypt_kwargs
+                    )
+                return task, result, None
+            except (EncryptionNotFoundError, EncryptionBackendError) as e:
+                return task, None, e
+
+        for task, result, error in _run_tasks(encrypt_tasks, _encrypt_task, max_workers):
+            env_file = task.env_file
+            if error is not None:
+                console.print(f"  [red]![/red] {env_file} [red]- error: {error}[/red]")
+                errors.append(f"{env_file}: encryption failed - {error}")
+                error_count += 1
+                continue
+            if result is None or not result.success:
+                message = result.message if result else "unknown error"
+                console.print(f"  [red]![/red] {env_file} [red]- error: {message}[/red]")
+                errors.append(f"{env_file}: encryption failed - {message}")
+                error_count += 1
+                continue
+            console.print(f"  [green]+[/green] {env_file} [dim]- encrypted[/dim]")
+            encrypted_count += 1
 
     # === SUMMARY ===
     console.print()

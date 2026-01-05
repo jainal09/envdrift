@@ -27,6 +27,7 @@ class SyncConfig:
     mappings: list[SyncMappingConfig] = field(default_factory=list)
     default_vault_name: str | None = None
     env_keys_filename: str = ".env.keys"
+    max_workers: int | None = None
 
 
 @dataclass
@@ -171,6 +172,7 @@ class EnvdriftConfig:
             mappings=sync_mappings,
             default_vault_name=sync_section.get("default_vault_name"),
             env_keys_filename=sync_section.get("env_keys_filename", ".env.keys"),
+            max_workers=sync_section.get("max_workers"),
         )
 
         # Build vault config
@@ -440,6 +442,7 @@ project_id = "my-gcp-project"
 [vault.sync]
 default_vault_name = "my-keyvault"
 env_keys_filename = ".env.keys"
+# max_workers = 4  # Optional: parallelize env file decrypt/encrypt
 
 # Map vault secrets to local service directories
 [[vault.sync.mappings]]

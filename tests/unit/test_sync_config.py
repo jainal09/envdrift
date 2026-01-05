@@ -237,6 +237,19 @@ class TestSyncConfigFromToml:
         assert config.default_vault_name == "default-vault"
         assert config.mappings[0].vault_name == "other-vault"
 
+    def test_from_toml_with_max_workers(self) -> None:
+        """Test TOML config with max_workers."""
+        data = {
+            "max_workers": 4,
+            "mappings": [
+                {"secret_name": "myapp-key", "folder_path": "services/myapp"},
+            ],
+        }
+
+        config = SyncConfig.from_toml(data)
+
+        assert config.max_workers == 4
+
     def test_from_toml_missing_secret_name(self) -> None:
         """Test error when secret_name is missing."""
         data = {"mappings": [{"folder_path": "services/myapp"}]}
@@ -412,6 +425,7 @@ class TestSyncConfigFromTomlFile:
 [vault.sync]
 default_vault_name = "my-vault"
 env_keys_filename = ".env.keys"
+max_workers = 3
 
 [[vault.sync.mappings]]
 secret_name = "app-key"
@@ -429,6 +443,7 @@ environment = "staging"
 
         assert config.default_vault_name == "my-vault"
         assert config.env_keys_filename == ".env.keys"
+        assert config.max_workers == 3
         assert len(config.mappings) == 2
         assert config.mappings[0].secret_name == "app-key"
         assert config.mappings[1].vault_name == "other-vault"
@@ -439,6 +454,7 @@ environment = "staging"
         config_file.write_text("""
 [tool.envdrift.vault.sync]
 default_vault_name = "pyproject-vault"
+max_workers = 2
 
 [[tool.envdrift.vault.sync.mappings]]
 secret_name = "test-key"
@@ -448,6 +464,7 @@ folder_path = "."
         config = SyncConfig.from_toml_file(config_file)
 
         assert config.default_vault_name == "pyproject-vault"
+        assert config.max_workers == 2
         assert len(config.mappings) == 1
         assert config.mappings[0].secret_name == "test-key"
 

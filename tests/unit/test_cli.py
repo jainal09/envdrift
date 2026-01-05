@@ -2363,6 +2363,61 @@ class TestPullCommand:
         assert "skipped (--skip-sync)" in result.output.lower()
         assert "setup complete" in result.output.lower()
 
+    def test_pull_uses_threadpool_when_configured(self, monkeypatch, tmp_path: Path):
+        """Pull should use ThreadPoolExecutor when max_workers is configured."""
+        service_a = tmp_path / "service-a"
+        service_a.mkdir()
+        env_a = service_a / ".env.production"
+        env_a.write_text("SECRET=encrypted:abc123")
+
+        service_b = tmp_path / "service-b"
+        service_b.mkdir()
+        env_b = service_b / ".env.production"
+        env_b.write_text("SECRET=encrypted:def456")
+
+        from envdrift.sync.config import ServiceMapping, SyncConfig
+
+        sync_config = SyncConfig(
+            mappings=[
+                ServiceMapping(secret_name="key-a", folder_path=service_a, environment="production"),
+                ServiceMapping(secret_name="key-b", folder_path=service_b, environment="production"),
+            ],
+            env_keys_filename=".env.keys",
+            max_workers=2,
+        )
+
+        monkeypatch.setattr(
+            "envdrift.cli_commands.sync.load_sync_config_and_client",
+            lambda *args, **kwargs: (sync_config, SimpleNamespace(), "aws", None, None, None),
+        )
+        monkeypatch.setattr(
+            "envdrift.integrations.hook_check.ensure_git_hook_setup",
+            lambda **_kwargs: [],
+        )
+
+        captured = {}
+
+        class DummyExecutor:
+            def __init__(self, max_workers=None):
+                captured["max_workers"] = max_workers
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, tb):
+                return False
+
+            def map(self, func, iterable):
+                return [func(item) for item in iterable]
+
+        monkeypatch.setattr("envdrift.cli_commands.sync.ThreadPoolExecutor", DummyExecutor)
+        _mock_encryption_backend(monkeypatch)
+
+        result = runner.invoke(app, ["pull", "--skip-sync"])
+
+        assert result.exit_code == 0
+        assert captured.get("max_workers") == 2
+
 
 class TestLockCommand:
     """Tests for the lock CLI command."""
@@ -2649,6 +2704,61 @@ class TestLockCommand:
 
         assert result.exit_code == 0
         assert "already encrypted" in result.output.lower()
+
+    def test_lock_force_uses_threadpool_when_configured(self, monkeypatch, tmp_path: Path):
+        """Lock should use ThreadPoolExecutor when max_workers is configured."""
+        service_a = tmp_path / "service-a"
+        service_a.mkdir()
+        env_a = service_a / ".env.production"
+        env_a.write_text("SECRET=value")
+
+        service_b = tmp_path / "service-b"
+        service_b.mkdir()
+        env_b = service_b / ".env.production"
+        env_b.write_text("SECRET=other")
+
+        from envdrift.sync.config import ServiceMapping, SyncConfig
+
+        sync_config = SyncConfig(
+            mappings=[
+                ServiceMapping(secret_name="key-a", folder_path=service_a, environment="production"),
+                ServiceMapping(secret_name="key-b", folder_path=service_b, environment="production"),
+            ],
+            env_keys_filename=".env.keys",
+            max_workers=2,
+        )
+
+        monkeypatch.setattr(
+            "envdrift.cli_commands.sync.load_sync_config_and_client",
+            lambda *args, **kwargs: (sync_config, SimpleNamespace(), "aws", None, None, None),
+        )
+        monkeypatch.setattr(
+            "envdrift.integrations.hook_check.ensure_git_hook_setup",
+            lambda **_kwargs: [],
+        )
+
+        captured = {}
+
+        class DummyExecutor:
+            def __init__(self, max_workers=None):
+                captured["max_workers"] = max_workers
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, tb):
+                return False
+
+            def map(self, func, iterable):
+                return [func(item) for item in iterable]
+
+        monkeypatch.setattr("envdrift.cli_commands.sync.ThreadPoolExecutor", DummyExecutor)
+        _mock_encryption_backend(monkeypatch)
+
+        result = runner.invoke(app, ["lock", "--force"])
+
+        assert result.exit_code == 0
+        assert captured.get("max_workers") == 2
 
 
 class TestVaultPushCommand:
