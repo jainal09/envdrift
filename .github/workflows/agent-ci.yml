@@ -150,19 +150,19 @@ jobs:
           path: ./bin
 
       - name: Make executable
-        run: chmod +x ./bin/envdrift-agent-darwin-arm64
+        run: chmod +x ../bin/envdrift-agent-darwin-arm64
 
       - name: Test version command
-        run: ./bin/envdrift-agent-darwin-arm64 version
+        run: ../bin/envdrift-agent-darwin-arm64 version
 
       - name: Test status command
-        run: ./bin/envdrift-agent-darwin-arm64 status
+        run: ../bin/envdrift-agent-darwin-arm64 status
 
       - name: Test config command
-        run: ./bin/envdrift-agent-darwin-arm64 config
+        run: ../bin/envdrift-agent-darwin-arm64 config
 
       - name: Test help command
-        run: ./bin/envdrift-agent-darwin-arm64 --help
+        run: ../bin/envdrift-agent-darwin-arm64 --help
 
   integration-windows:
     name: Integration Tests (Windows)
@@ -179,16 +179,16 @@ jobs:
           path: ./bin
 
       - name: Test version command
-        run: .\bin\envdrift-agent-windows-amd64.exe version
+        run: ..\bin\envdrift-agent-windows-amd64.exe version
 
       - name: Test status command
-        run: .\bin\envdrift-agent-windows-amd64.exe status
+        run: ..\bin\envdrift-agent-windows-amd64.exe status
 
       - name: Test config command
-        run: .\bin\envdrift-agent-windows-amd64.exe config
+        run: ..\bin\envdrift-agent-windows-amd64.exe config
 
       - name: Test help command
-        run: .\bin\envdrift-agent-windows-amd64.exe --help
+        run: ..\bin\envdrift-agent-windows-amd64.exe --help
 
   lint:
     name: Lint
