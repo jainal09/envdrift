@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Annotated
 
 import typer
@@ -14,6 +15,14 @@ from envdrift.core.partial_encryption import (
     push_partial_encryption,
 )
 from envdrift.output.rich import console, print_error, print_success, print_warning
+from envdrift.utils import ensure_gitignore_entries
+
+
+def _ensure_combined_gitignore(envs_to_process) -> None:
+    combined_paths = [Path(env_config.combined_file) for env_config in envs_to_process]
+    added_entries = ensure_gitignore_entries(combined_paths)
+    if added_entries:
+        console.print(f"[dim]Updated .gitignore: {', '.join(added_entries)}[/dim]")
 
 
 def push(
@@ -65,6 +74,8 @@ def push(
         if not envs_to_process:
             print_error(f"No partial encryption configuration found for environment '{env}'")
             raise typer.Exit(code=1)
+
+    _ensure_combined_gitignore(envs_to_process)
 
     console.print()
     console.print("[bold]Push[/bold] - Encrypting and combining env files")
@@ -166,6 +177,8 @@ def pull_cmd(
         if not envs_to_process:
             print_error(f"No partial encryption configuration found for environment '{env}'")
             raise typer.Exit(code=1)
+
+    _ensure_combined_gitignore(envs_to_process)
 
     console.print()
     console.print("[bold]Pull[/bold] - Decrypting secret files")

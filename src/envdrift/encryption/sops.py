@@ -13,6 +13,7 @@ from __future__ import annotations
 import re
 import shutil
 import subprocess  # nosec B404
+from threading import Lock
 from pathlib import Path
 
 from envdrift.encryption.base import (
@@ -71,6 +72,7 @@ class SOPSEncryptionBackend(EncryptionBackend):
         self._age_key_file = Path(age_key_file) if age_key_file else None
         self._auto_install = auto_install
         self._binary_path: Path | None = None
+        self._binary_path_lock = Lock()
 
     @property
     def name(self) -> str:
@@ -87,31 +89,35 @@ class SOPSEncryptionBackend(EncryptionBackend):
         if self._binary_path and self._binary_path.exists():
             return self._binary_path
 
-        try:
-            from envdrift.integrations.sops import get_sops_path
-
-            venv_path = get_sops_path()
-            if venv_path.exists():
-                self._binary_path = venv_path
+        with self._binary_path_lock:
+            if self._binary_path and self._binary_path.exists():
                 return self._binary_path
-        except RuntimeError:
-            pass
-
-        # Check system PATH
-        sops_path = shutil.which("sops")
-        if sops_path:
-            self._binary_path = Path(sops_path)
-            return self._binary_path
-
-        if self._auto_install:
-            from envdrift.integrations.sops import SopsInstaller, SopsInstallError
 
             try:
-                installer = SopsInstaller()
-                self._binary_path = installer.install()
+                from envdrift.integrations.sops import get_sops_path
+
+                venv_path = get_sops_path()
+                if venv_path.exists():
+                    self._binary_path = venv_path
+                    return self._binary_path
+            except RuntimeError:
+                pass
+
+            # Check system PATH
+            sops_path = shutil.which("sops")
+            if sops_path:
+                self._binary_path = Path(sops_path)
                 return self._binary_path
-            except SopsInstallError:
-                return None
+
+            if self._auto_install:
+                from envdrift.integrations.sops import SopsInstaller, SopsInstallError
+
+                try:
+                    installer = SopsInstaller()
+                    self._binary_path = installer.install()
+                    return self._binary_path
+                except SopsInstallError:
+                    return None
 
         return None
 

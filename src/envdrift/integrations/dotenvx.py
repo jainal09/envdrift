@@ -74,6 +74,8 @@ DOWNLOAD_URLS = {
     ("Windows", "x86_64"): _URL_TEMPLATES["windows_amd64"],
 }
 
+_ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-9;?]*[ -/]*[@-~]")
+
 
 class DotenvxNotFoundError(Exception):
     """dotenvx binary not found."""
@@ -564,8 +566,15 @@ class DotenvxWrapper:
             )
 
             if check and result.returncode != 0:
+                stderr = (result.stderr or "").strip()
+                if stderr:
+                    stderr = _ANSI_ESCAPE_RE.sub("", stderr).strip()
+                    if not stderr:
+                        stderr = "no error output"
+                else:
+                    stderr = "no error output"
                 raise DotenvxError(
-                    f"dotenvx command failed (exit {result.returncode}): {result.stderr}"
+                    f"dotenvx command failed (exit {result.returncode}): {stderr}"
                 )
 
             return result

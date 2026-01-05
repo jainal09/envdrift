@@ -3,7 +3,10 @@
 from __future__ import annotations
 
 import shutil
+from concurrent.futures import ThreadPoolExecutor
+from dataclasses import dataclass
 from pathlib import Path
+from threading import Lock
 from typing import TYPE_CHECKING, Annotated, Any
 
 import typer
@@ -11,10 +14,24 @@ from rich.panel import Panel
 
 from envdrift.env_files import detect_env_file
 from envdrift.output.rich import console, print_error, print_success, print_warning
+from envdrift.utils import normalize_max_workers
 from envdrift.vault.base import SecretNotFoundError, VaultError
 
 if TYPE_CHECKING:
-    from envdrift.sync.config import SyncConfig
+    from envdrift.sync.config import ServiceMapping, SyncConfig
+
+
+@dataclass(frozen=True)
+class _DecryptTask:
+    mapping: ServiceMapping
+    env_file: Path
+
+
+@dataclass(frozen=True)
+class _EncryptTask:
+    mapping: ServiceMapping
+    env_file: Path
+    env_keys_file: Path
 
 
 def load_sync_config_and_client(
@@ -143,6 +160,7 @@ def load_sync_config_and_client(
             ],
             default_vault_name=vault_sync.default_vault_name,
             env_keys_filename=vault_sync.env_keys_filename,
+            max_workers=vault_sync.max_workers,
         )
     elif config_path and config_path.suffix.lower() == ".toml":
         # Try to load sync config from discovered TOML
@@ -209,6 +227,64 @@ def load_sync_config_and_client(
         effective_region,
         effective_project_id,
     )
+
+
+def _normalize_max_workers(max_workers: int | None) -> int | None:
+    return normalize_max_workers(max_workers, warn=print_warning)
+
+
+def _load_partial_encryption_paths(
+    config_file: Path | None,
+) -> tuple[set[Path], set[Path], set[Path]]:
+    from envdrift.config import ConfigNotFoundError, find_config, load_config
+
+    config_path = None
+    if config_file is not None and config_file.suffix.lower() == ".toml":
+        config_path = config_file
+    elif config_file is None:
+        config_path = find_config()
+
+    if not config_path:
+        return set(), set(), set()
+
+    try:
+        config = load_config(config_path)
+    except ConfigNotFoundError:
+        return set(), set(), set()
+    except (OSError, AttributeError, KeyError) as exc:
+        print_warning(f"Unable to read config for partial encryption: {exc}")
+        return set(), set(), set()
+
+    if not config.partial_encryption.enabled:
+        return set(), set(), set()
+
+    clear_files: set[Path] = set()
+    secret_files: set[Path] = set()
+    combined_files: set[Path] = set()
+    for env_config in config.partial_encryption.environments:
+        clear_files.add(Path(env_config.clear_file).resolve())
+        secret_files.add(Path(env_config.secret_file).resolve())
+        combined_files.add(Path(env_config.combined_file).resolve())
+
+    return clear_files, secret_files, combined_files
+
+
+def _should_use_executor(max_workers: int | None, task_count: int) -> bool:
+    if task_count < 2:
+        return False
+    if max_workers is None:
+        return True
+    return max_workers > 1
+
+
+def _run_tasks(tasks: list[Any], worker, max_workers: int | None):
+    if not _should_use_executor(max_workers, len(tasks)):
+        return [worker(task) for task in tasks]
+    if max_workers is None:
+        with ThreadPoolExecutor() as executor:
+            return list(executor.map(worker, tasks))
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        return list(executor.map(worker, tasks))
 
 
 def sync(
@@ -462,6 +538,7 @@ def pull(
         mappings=filtered_mappings,
         default_vault_name=sync_config.default_vault_name,
         env_keys_filename=sync_config.env_keys_filename,
+        max_workers=sync_config.max_workers,
     )
 
     # === STEP 1: SYNC KEYS FROM VAULT ===
@@ -519,10 +596,7 @@ def pull(
     console.print()
 
     try:
-        from envdrift.cli_commands.encryption_helpers import (
-            is_encrypted_content,
-            resolve_encryption_backend,
-        )
+        from envdrift.cli_commands import encryption_helpers
         from envdrift.encryption import (
             EncryptionBackendError,
             EncryptionNotFoundError,
@@ -530,7 +604,9 @@ def pull(
             detect_encryption_provider,
         )
 
-        encryption_backend, backend_provider, _ = resolve_encryption_backend(config_file)
+        encryption_backend, backend_provider, _ = encryption_helpers.resolve_encryption_backend(
+            config_file
+        )
         if not encryption_backend.is_installed():
             print_error(f"{encryption_backend.name} is not installed")
             console.print(encryption_backend.install_instructions())
@@ -543,6 +619,8 @@ def pull(
     skipped_count = 0
     error_count = 0
     activated_count = 0
+    decrypt_tasks: list[_DecryptTask] = []
+    partial_clear, _, partial_combined = _load_partial_encryption_paths(config_file)
 
     for mapping in filtered_mappings:
         effective_env = mapping.effective_environment
@@ -565,9 +643,26 @@ def pull(
                 skipped_count += 1
                 continue
 
+        resolved_env_file = env_file.resolve()
+        if resolved_env_file in partial_combined:
+            console.print(
+                f"  [dim]=[/dim] {env_file} "
+                "[dim]- skipped (partial encryption combined file)[/dim]"
+            )
+            skipped_count += 1
+            continue
+        if resolved_env_file in partial_clear:
+            console.print(
+                f"  [dim]=[/dim] {env_file} [dim]- skipped (partial encryption clear file)[/dim]"
+            )
+            skipped_count += 1
+            continue
+
         # Check if file is encrypted
         content = env_file.read_text()
-        if not is_encrypted_content(backend_provider, encryption_backend, content):
+        if not encryption_helpers.is_encrypted_content(
+            backend_provider, encryption_backend, content
+        ):
             detected_provider = detect_encryption_provider(env_file)
             if detected_provider and detected_provider != backend_provider:
                 if (
@@ -592,44 +687,57 @@ def pull(
             skipped_count += 1
             continue
 
+        decrypt_tasks.append(_DecryptTask(mapping=mapping, env_file=env_file))
+
+    max_workers = _normalize_max_workers(sync_config.max_workers)
+
+    def _decrypt_task(task: _DecryptTask):
         try:
-            result = encryption_backend.decrypt(env_file.resolve())
-            if not result.success:
-                console.print(f"  [red]![/red] {env_file} [red]- error: {result.message}[/red]")
+            result = encryption_backend.decrypt(task.env_file.resolve())
+            return task, result, None
+        except (EncryptionNotFoundError, EncryptionBackendError) as e:
+            return task, None, e
+
+    for task, result, error in _run_tasks(decrypt_tasks, _decrypt_task, max_workers):
+        env_file = task.env_file
+        mapping = task.mapping
+        if error is not None:
+            console.print(f"  [red]![/red] {env_file} [red]- error: {error}[/red]")
+            error_count += 1
+            continue
+        if result is None or not result.success:
+            message = result.message if result else "unknown error"
+            console.print(f"  [red]![/red] {env_file} [red]- error: {message}[/red]")
+            error_count += 1
+            continue
+
+        console.print(f"  [green]+[/green] {env_file} [dim]- decrypted[/dim]")
+        decrypted_count += 1
+
+        # Activate profile: copy decrypted file to activate_to path if configured
+        if profile and mapping.profile == profile and mapping.activate_to:
+            activate_path = (mapping.folder_path / mapping.activate_to).resolve()
+            # Validate path is within folder_path to prevent directory traversal
+            try:
+                activate_path.relative_to(mapping.folder_path.resolve())
+            except ValueError:
+                console.print(
+                    f"  [red]![/red] {mapping.activate_to} [red]- invalid path (escapes folder)[/red]"
+                )
                 error_count += 1
                 continue
 
-            console.print(f"  [green]+[/green] {env_file} [dim]- decrypted[/dim]")
-            decrypted_count += 1
-
-            # Activate profile: copy decrypted file to activate_to path if configured
-            if profile and mapping.profile == profile and mapping.activate_to:
-                activate_path = (mapping.folder_path / mapping.activate_to).resolve()
-                # Validate path is within folder_path to prevent directory traversal
-                try:
-                    activate_path.relative_to(mapping.folder_path.resolve())
-                except ValueError:
-                    console.print(
-                        f"  [red]![/red] {mapping.activate_to} [red]- invalid path (escapes folder)[/red]"
-                    )
-                    error_count += 1
-                    continue
-
-                try:
-                    shutil.copy2(env_file, activate_path)
-                    console.print(
-                        f"  [cyan]→[/cyan] {activate_path} [dim]- activated from {env_file.name}[/dim]"
-                    )
-                    activated_count += 1
-                except OSError as e:
-                    console.print(
-                        f"  [red]![/red] {activate_path} [red]- activation failed: {e}[/red]"
-                    )
-                    error_count += 1
-
-        except (EncryptionNotFoundError, EncryptionBackendError) as e:
-            console.print(f"  [red]![/red] {env_file} [red]- error: {e}[/red]")
-            error_count += 1
+            try:
+                shutil.copy2(env_file, activate_path)
+                console.print(
+                    f"  [cyan]→[/cyan] {activate_path} [dim]- activated from {env_file.name}[/dim]"
+                )
+                activated_count += 1
+            except OSError as e:
+                console.print(
+                    f"  [red]![/red] {activate_path} [red]- activation failed: {e}[/red]"
+                )
+                error_count += 1
 
     # === SUMMARY ===
     console.print()
@@ -787,6 +895,7 @@ def lock(
         mappings=filtered_mappings,
         default_vault_name=sync_config.default_vault_name,
         env_keys_filename=sync_config.env_keys_filename,
+        max_workers=sync_config.max_workers,
     )
 
     console.print()
@@ -801,6 +910,7 @@ def lock(
     # Tracking for summary
     warnings: list[str] = []
     errors: list[str] = []
+    partial_clear, _, partial_combined = _load_partial_encryption_paths(config_file)
 
     # === STEP 1: VERIFY/SYNC KEYS (OPTIONAL) ===
     if verify_vault:
@@ -941,12 +1051,7 @@ def lock(
     console.print()
 
     try:
-        from envdrift.cli_commands.encryption_helpers import (
-            build_sops_encrypt_kwargs,
-            is_encrypted_content,
-            resolve_encryption_backend,
-            should_skip_reencryption,
-        )
+        from envdrift.cli_commands import encryption_helpers
         from envdrift.encryption import (
             EncryptionBackendError,
             EncryptionNotFoundError,
@@ -954,8 +1059,8 @@ def lock(
             detect_encryption_provider,
         )
 
-        encryption_backend, backend_provider, encryption_config = resolve_encryption_backend(
-            config_file
+        encryption_backend, backend_provider, encryption_config = (
+            encryption_helpers.resolve_encryption_backend(config_file)
         )
         if not encryption_backend.is_installed():
             print_error(f"{encryption_backend.name} is not installed")
@@ -967,12 +1072,14 @@ def lock(
 
     sops_encrypt_kwargs = {}
     if backend_provider == EncryptionProvider.SOPS:
-        sops_encrypt_kwargs = build_sops_encrypt_kwargs(encryption_config)
+        sops_encrypt_kwargs = encryption_helpers.build_sops_encrypt_kwargs(encryption_config)
 
     encrypted_count = 0
     skipped_count = 0
     error_count = 0
     already_encrypted_count = 0
+    encrypt_tasks: list[_EncryptTask] = []
+    dotenvx_locks: dict[Path, Lock] = {}
 
     for mapping in filtered_mappings:
         effective_env = mapping.effective_environment
@@ -998,6 +1105,23 @@ def lock(
                 skipped_count += 1
                 continue
 
+        resolved_env_file = env_file.resolve()
+        if resolved_env_file in partial_combined:
+            console.print(
+                f"  [dim]=[/dim] {env_file} "
+                "[dim]- skipped (partial encryption combined file)[/dim]"
+            )
+            warnings.append(f"{env_file}: use envdrift push for partial encryption")
+            skipped_count += 1
+            continue
+        if resolved_env_file in partial_clear:
+            console.print(
+                f"  [dim]=[/dim] {env_file} [dim]- skipped (partial encryption clear file)[/dim]"
+            )
+            warnings.append(f"{env_file}: use envdrift push for partial encryption")
+            skipped_count += 1
+            continue
+
         # Check if .env.keys file exists (needed for encryption)
         env_keys_file = mapping.folder_path / (sync_config.env_keys_filename or ".env.keys")
         if backend_provider == EncryptionProvider.DOTENVX and not env_keys_file.exists():
@@ -1009,7 +1133,9 @@ def lock(
 
         # Check if file is already encrypted
         content = env_file.read_text()
-        if not is_encrypted_content(backend_provider, encryption_backend, content):
+        if not encryption_helpers.is_encrypted_content(
+            backend_provider, encryption_backend, content
+        ):
             detected_provider = detect_encryption_provider(env_file)
             if detected_provider and detected_provider != backend_provider:
                 if (
@@ -1157,9 +1283,13 @@ def lock(
         # produces different ciphertext each time, even for identical plaintext.
         # We compare the current file with the decrypted version from git;
         # if unchanged, restore the original encrypted file to avoid git noise.
-        should_skip, skip_reason = should_skip_reencryption(env_file, encryption_backend)
+        should_skip, skip_reason = encryption_helpers.should_skip_reencryption(
+            env_file, encryption_backend
+        )
         if should_skip:
-            console.print(f"  [dim]=[/dim] {env_file} [dim]- skipped ({skip_reason})[/dim]")
+            console.print(f"  [dim]=[/dim] {env_file} [dim]- skipped[/dim]")
+            if skip_reason:
+                console.print(f"    [dim]{skip_reason}[/dim]")
             already_encrypted_count += 1
             continue
 
@@ -1170,6 +1300,16 @@ def lock(
                 console.print(f"  [dim]=[/dim] {env_file} [dim]- skipped (user declined)[/dim]")
                 skipped_count += 1
                 continue
+
+        if force:
+            encrypt_tasks.append(
+                _EncryptTask(mapping=mapping, env_file=env_file, env_keys_file=env_keys_file)
+            )
+            if backend_provider == EncryptionProvider.DOTENVX:
+                lock_key = env_keys_file.resolve()
+                if lock_key not in dotenvx_locks:
+                    dotenvx_locks[lock_key] = Lock()
+            continue
 
         # Perform encryption
         try:
@@ -1186,6 +1326,47 @@ def lock(
             console.print(f"  [red]![/red] {env_file} [red]- error: {e}[/red]")
             errors.append(f"{env_file}: encryption failed - {e}")
             error_count += 1
+
+    if force and encrypt_tasks:
+        max_workers = _normalize_max_workers(sync_config.max_workers)
+
+        def _encrypt_task(task: _EncryptTask):
+            try:
+                if backend_provider == EncryptionProvider.DOTENVX:
+                    lock_key = task.env_keys_file.resolve()
+                    lock = dotenvx_locks.get(lock_key)
+                    if lock:
+                        with lock:
+                            result = encryption_backend.encrypt(
+                                task.env_file.resolve(), **sops_encrypt_kwargs
+                            )
+                    else:
+                        result = encryption_backend.encrypt(
+                            task.env_file.resolve(), **sops_encrypt_kwargs
+                        )
+                else:
+                    result = encryption_backend.encrypt(
+                        task.env_file.resolve(), **sops_encrypt_kwargs
+                    )
+                return task, result, None
+            except (EncryptionNotFoundError, EncryptionBackendError) as e:
+                return task, None, e
+
+        for task, result, error in _run_tasks(encrypt_tasks, _encrypt_task, max_workers):
+            env_file = task.env_file
+            if error is not None:
+                console.print(f"  [red]![/red] {env_file} [red]- error: {error}[/red]")
+                errors.append(f"{env_file}: encryption failed - {error}")
+                error_count += 1
+                continue
+            if result is None or not result.success:
+                message = result.message if result else "unknown error"
+                console.print(f"  [red]![/red] {env_file} [red]- error: {message}[/red]")
+                errors.append(f"{env_file}: encryption failed - {message}")
+                error_count += 1
+                continue
+            console.print(f"  [green]+[/green] {env_file} [dim]- encrypted[/dim]")
+            encrypted_count += 1
 
     # === SUMMARY ===
     console.print()

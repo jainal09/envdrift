@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import re
 import subprocess  # nosec B404
 import sys
 import textwrap
@@ -375,3 +376,118 @@ def test_sops_smart_encryption_skips_unchanged(integration_env):
         text=True,
     )
     assert result.stdout.strip() == ""
+
+
+@pytest.mark.integration
+def test_partial_push_updates_gitignore(integration_env):
+    work_dir = integration_env["base_dir"] / "partial-gitignore"
+    work_dir.mkdir()
+    env = integration_env["env"].copy()
+
+    subprocess.run(["git", "init"], cwd=work_dir, capture_output=True, check=True)
+
+    (work_dir / ".env.production.clear").write_text("APP_VERSION=1.2.3\n")
+    (work_dir / ".env.production.secret").write_text("SECRET=encrypted:dummy\n")
+
+    config = textwrap.dedent(
+        """\
+        [partial_encryption]
+        enabled = true
+
+        [[partial_encryption.environments]]
+        name = "production"
+        clear_file = ".env.production.clear"
+        secret_file = ".env.production.secret"
+        combined_file = ".env.production"
+        """
+    )
+    (work_dir / "envdrift.toml").write_text(config)
+
+    _run_envdrift(["push", "--env", "production"], cwd=work_dir, env=env)
+
+    gitignore_path = work_dir / ".gitignore"
+    assert gitignore_path.exists()
+    entries = gitignore_path.read_text().splitlines()
+    assert ".env.production" in entries
+
+
+@pytest.mark.integration
+def test_partial_push_respects_existing_gitignore(integration_env):
+    work_dir = integration_env["base_dir"] / "partial-gitignore-existing"
+    work_dir.mkdir()
+    env = integration_env["env"].copy()
+
+    subprocess.run(["git", "init"], cwd=work_dir, capture_output=True, check=True)
+
+    (work_dir / ".env.production.clear").write_text("APP_VERSION=1.2.3\n")
+    (work_dir / ".env.production.secret").write_text("SECRET=encrypted:dummy\n")
+    gitignore_path = work_dir / ".gitignore"
+    gitignore_path.write_text(".env.*\n")
+
+    config = textwrap.dedent(
+        """\
+        [partial_encryption]
+        enabled = true
+
+        [[partial_encryption.environments]]
+        name = "production"
+        clear_file = ".env.production.clear"
+        secret_file = ".env.production.secret"
+        combined_file = ".env.production"
+        """
+    )
+    (work_dir / "envdrift.toml").write_text(config)
+
+    _run_envdrift(["push", "--env", "production"], cwd=work_dir, env=env)
+
+    assert gitignore_path.read_text() == ".env.*\n"
+
+
+@pytest.mark.integration
+def test_pull_skips_partial_combined_files(integration_env):
+    pytest.importorskip("boto3")
+
+    work_dir = integration_env["base_dir"] / "pull-partial-skip"
+    work_dir.mkdir()
+    env = integration_env["env"].copy()
+
+    service_dir = work_dir / "service"
+    service_dir.mkdir()
+    (service_dir / ".env.production").write_text("APP_VERSION=1\n")
+
+    config = textwrap.dedent(
+        """\
+        [vault]
+        provider = "aws"
+
+        [vault.sync]
+        [[vault.sync.mappings]]
+        secret_name = "dummy-secret"
+        folder_path = "service"
+
+        [partial_encryption]
+        enabled = true
+
+        [[partial_encryption.environments]]
+        name = "production"
+        clear_file = "service/.env.production.clear"
+        secret_file = "service/.env.production.secret"
+        combined_file = "service/.env.production"
+
+        [encryption]
+        backend = "dotenvx"
+
+        [encryption.dotenvx]
+        auto_install = true
+        """
+    )
+    (work_dir / "envdrift.toml").write_text(config)
+
+    result = _run_envdrift(
+        ["pull", "--config", "envdrift.toml", "--skip-sync"],
+        cwd=work_dir,
+        env=env,
+    )
+
+    output = re.sub(r"\x1b\[[0-9;]*m", "", result.stdout + result.stderr)
+    assert "skipped (partial encryption combined file)" in output
