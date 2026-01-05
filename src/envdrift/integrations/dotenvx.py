@@ -626,7 +626,7 @@ class DotenvxWrapper:
             # Write back
             file_path.write_bytes(normalized)
             return True
-        except (OSError, IOError):
+        except OSError:
             # If normalization fails, proceed anyway - dotenvx might still work
             return False
 
