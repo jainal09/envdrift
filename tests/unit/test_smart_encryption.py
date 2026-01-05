@@ -14,9 +14,9 @@ class TestShouldSkipReencryption:
     """Tests for should_skip_reencryption function."""
 
     def test_returns_false_for_non_dotenvx_backend(self, tmp_path: Path):
-        """Should return False for non-dotenvx backends."""
+        """Should return False for non-dotenvx/sops backends."""
         mock_backend = MagicMock()
-        mock_backend.name = "sops"
+        mock_backend.name = "unsupported_backend"
 
         env_file = tmp_path / ".env.production"
         env_file.write_text("SECRET=value")
