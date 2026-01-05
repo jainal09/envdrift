@@ -27,6 +27,7 @@ theme:
     - navigation.sections
     - navigation.expand
     - navigation.top
+    - navigation.indexes
     - search.suggest
     - search.highlight
     - content.code.copy
@@ -37,33 +38,44 @@ extra_css:
 
 nav:
   - Home: index.md
-  - Glossary: glossary.md
   - Getting Started:
-    - Installation: getting-started/installation.md
-    - Quick Start: getting-started/quickstart.md
+      - Installation: getting-started/installation.md
+      - Quick Start: getting-started/quickstart.md
+  - Concepts:
+      - concepts/index.md
+      - How It Works: concepts/how-it-works.md
+      - Encryption Backends: concepts/encryption-backends.md
+      - Vault Providers: concepts/vault-providers.md
   - CLI Reference:
-    - Overview: cli/index.md
-    - validate: cli/validate.md
-    - diff: cli/diff.md
-    - encrypt: cli/encrypt.md
-    - decrypt: cli/decrypt.md
-    - init: cli/init.md
-    - hook: cli/hook.md
-    - sync: cli/sync.md
-    - pull: cli/pull.md
-    - lock: cli/lock.md
-    - vault-push: cli/vault-push.md
-    - version: cli/version.md
+      - Overview: cli/index.md
+      - pull: cli/pull.md
+      - lock: cli/lock.md
+      - sync: cli/sync.md
+      - vault-push: cli/vault-push.md
+      - encrypt: cli/encrypt.md
+      - decrypt: cli/decrypt.md
+      - validate: cli/validate.md
+      - diff: cli/diff.md
+      - init: cli/init.md
+      - hook: cli/hook.md
+      - version: cli/version.md
   - Guides:
-    - Schema Best Practices: guides/schema.md
-    - CI/CD Integration: guides/cicd.md
-    - Upgrading: guides/upgrading.md
-    - Encryption: guides/encryption.md
-    - Vault Sync: guides/vault-sync.md
-    - Releasing: guides/releasing.md
-    - Contributing: guides/contributing.md
+      - Vault Sync: guides/vault-sync.md
+      - Encryption: guides/encryption.md
+      - Schema Best Practices: guides/schema.md
+      - CI/CD Integration: guides/cicd.md
+      - Partial Encryption: guides/partial-encryption.md
+      - Monorepo Setup: guides/monorepo-setup.md
+      - Migrating: guides/migrating.md
+      - Upgrading: guides/upgrading.md
   - Reference:
-    - Python API: reference/api.md
+      - Configuration: reference/configuration.md
+      - Python API: reference/api.md
+      - Glossary: glossary.md
+  - Support:
+      - Troubleshooting: support/troubleshooting.md
+      - FAQ: support/faq.md
+  - Contributing: guides/contributing.md
 
 markdown_extensions:
   - pymdownx.highlight:
@@ -73,11 +85,18 @@ markdown_extensions:
   - pymdownx.inlinehilite
   - pymdownx.snippets
   - pymdownx.superfences
+  - pymdownx.emoji:
+      emoji_index: !!python/name:material.extensions.emoji.twemoji
+      emoji_generator: !!python/name:material.extensions.emoji.to_svg
   - admonition
   - pymdownx.details
+  - pymdownx.tabbed:
+      alternate_style: true
   - tables
   - toc:
       permalink: true
+  - attr_list
+  - md_in_html
 
 plugins:
   - search
