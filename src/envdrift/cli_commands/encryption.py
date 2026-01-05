@@ -167,6 +167,14 @@ def encrypt_cmd(
     envdrift_config, config_path = _load_encryption_config()
     encryption_config = getattr(envdrift_config, "encryption", None)
 
+    from envdrift.integrations.hook_check import ensure_git_hook_setup
+
+    hook_errors = ensure_git_hook_setup(config=envdrift_config, config_path=config_path)
+    if hook_errors:
+        for error in hook_errors:
+            print_error(error)
+        raise typer.Exit(code=1)
+
     if backend is None:
         backend = encryption_config.backend if encryption_config else "dotenvx"
 
@@ -260,6 +268,16 @@ def encrypt_cmd(
                     encrypt_kwargs["gcp_kms"] = gcp_kms
                 if azure_kv:
                     encrypt_kwargs["azure_kv"] = azure_kv
+
+            # === SMART ENCRYPTION: Skip re-encryption if content unchanged ===
+            # This addresses dotenvx's non-deterministic encryption (ECIES) which
+            # produces different ciphertext each time, causing unnecessary git noise.
+            from envdrift.cli_commands.encryption_helpers import should_skip_reencryption
+
+            should_skip, skip_reason = should_skip_reencryption(env_file, encryption_backend)
+            if should_skip:
+                print_success(f"Skipped re-encryption of {env_file} ({skip_reason})")
+                return
 
             result = encryption_backend.encrypt(env_file, **encrypt_kwargs)
             if result.success:
@@ -528,6 +546,14 @@ def decrypt_cmd(
 
     envdrift_config, config_path = _load_encryption_config()
     encryption_config = getattr(envdrift_config, "encryption", None)
+
+    from envdrift.integrations.hook_check import ensure_git_hook_setup
+
+    hook_errors = ensure_git_hook_setup(config=envdrift_config, config_path=config_path)
+    if hook_errors:
+        for error in hook_errors:
+            print_error(error)
+        raise typer.Exit(code=1)
 
     # Auto-detect backend if not specified
     if backend is None:

@@ -9,6 +9,7 @@ import pytest
 from envdrift.config import (
     ConfigNotFoundError,
     EnvdriftConfig,
+    GitHookCheckConfig,
     PrecommitConfig,
     ValidationConfig,
     VaultConfig,
@@ -101,6 +102,7 @@ class TestEnvdriftConfig:
         assert isinstance(config.validation, ValidationConfig)
         assert isinstance(config.vault, VaultConfig)
         assert isinstance(config.precommit, PrecommitConfig)
+        assert isinstance(config.git_hook_check, GitHookCheckConfig)
         assert config.raw == {}
 
     def test_from_dict_empty(self):
@@ -134,6 +136,10 @@ class TestEnvdriftConfig:
                 "files": [".env.dev"],
                 "schemas": {".env.dev": "config:DevSettings"},
             },
+            "git_hook_check": {
+                "method": "precommit.yaml",
+                "precommit_config": ".pre-commit-config.yaml",
+            },
         }
         config = EnvdriftConfig.from_dict(data)
 
@@ -154,6 +160,8 @@ class TestEnvdriftConfig:
 
         assert config.precommit.files == [".env.dev"]
         assert config.precommit.schemas == {".env.dev": "config:DevSettings"}
+        assert config.git_hook_check.method == "precommit.yaml"
+        assert config.git_hook_check.precommit_config == ".pre-commit-config.yaml"
 
         assert config.raw == data
 
@@ -292,6 +300,23 @@ strict_extra = false
         assert config.schema == "myapp.settings:Config"
         assert config.validation.check_encryption is True
         assert config.validation.strict_extra is False
+        assert config.git_hook_check.method is None
+
+    def test_load_config_pyproject_with_git_hook_check(self, tmp_path: Path):
+        """pyproject.toml should map git_hook_check correctly."""
+        pyproject = tmp_path / "pyproject.toml"
+        pyproject.write_text("""
+[tool.envdrift]
+schema = "myapp.settings:Config"
+
+[tool.envdrift.git_hook_check]
+method = "precommit.yaml"
+precommit_config = ".pre-commit-config.yaml"
+""")
+
+        config = load_config(pyproject)
+        assert config.git_hook_check.method == "precommit.yaml"
+        assert config.git_hook_check.precommit_config == ".pre-commit-config.yaml"
 
     def test_load_config_pyproject_with_encryption(self, tmp_path: Path):
         """pyproject.toml should map encryption sections correctly."""

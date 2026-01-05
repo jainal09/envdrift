@@ -287,6 +287,25 @@ class TestEncryptCommand:
         assert result.exit_code == 1
         assert "not found" in result.output.lower()
 
+    def test_encrypt_hook_check_errors_exit(self, monkeypatch, tmp_path: Path):
+        """Encrypt should stop early when hook checks fail."""
+        env_file = tmp_path / ".env"
+        env_file.write_text("SECRET=encrypted:abc123")
+
+        monkeypatch.setattr(
+            "envdrift.integrations.hook_check.ensure_git_hook_setup",
+            lambda **_kwargs: ["hook check failed"],
+        )
+        monkeypatch.setattr(
+            "envdrift.cli_commands.encryption.get_encryption_backend",
+            lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("should not run")),
+        )
+
+        result = runner.invoke(app, ["encrypt", str(env_file)])
+
+        assert result.exit_code == 1
+        assert "hook check failed" in result.output.lower()
+
     def test_encrypt_check_unencrypted_file(self, tmp_path: Path):
         """Test encrypt --check on plaintext file with secrets."""
         env_file = tmp_path / ".env"
@@ -509,6 +528,25 @@ class TestDecryptCommand:
         result = runner.invoke(app, ["decrypt", str(tmp_path / "missing.env")])
         assert result.exit_code == 1
         assert "not found" in result.output.lower()
+
+    def test_decrypt_hook_check_errors_exit(self, monkeypatch, tmp_path: Path):
+        """Decrypt should stop early when hook checks fail."""
+        env_file = tmp_path / ".env"
+        env_file.write_text("SECRET=encrypted:abc123")
+
+        monkeypatch.setattr(
+            "envdrift.integrations.hook_check.ensure_git_hook_setup",
+            lambda **_kwargs: ["hook check failed"],
+        )
+        monkeypatch.setattr(
+            "envdrift.cli_commands.encryption.get_encryption_backend",
+            lambda *a, **k: (_ for _ in ()).throw(AssertionError("should not run")),
+        )
+
+        result = runner.invoke(app, ["decrypt", str(env_file)])
+
+        assert result.exit_code == 1
+        assert "hook check failed" in result.output.lower()
 
     def test_decrypt_verify_vault_only(self, monkeypatch, tmp_path: Path):
         """--verify-vault should call verification and not decrypt the file."""
@@ -1288,8 +1326,10 @@ class TestHookInstall:
 class TestSyncCommand:
     """Tests for the sync CLI command."""
 
-    def test_sync_requires_config_and_provider(self, tmp_path: Path):
+    def test_sync_requires_config_and_provider(self, tmp_path: Path, monkeypatch):
         """Sync should enforce required options."""
+        # Run from isolated tmp directory to prevent auto-discovery of parent config
+        monkeypatch.chdir(tmp_path)
 
         missing_config = runner.invoke(
             app, ["sync", "-p", "azure", "--vault-url", "https://example.vault.azure.net/"]
@@ -1303,6 +1343,26 @@ class TestSyncCommand:
         missing_provider = runner.invoke(app, ["sync", "-c", str(config_file)])
         assert missing_provider.exit_code == 1
         assert "--provider" in missing_provider.output
+
+    def test_sync_hook_check_errors_exit(self, monkeypatch, tmp_path: Path):
+        """Sync should stop early when hook checks fail."""
+        config_file = tmp_path / "envdrift.toml"
+        config_file.write_text('[vault]\nprovider = "aws"\n')
+
+        dummy_config = SimpleNamespace(mappings=[])
+        monkeypatch.setattr(
+            "envdrift.cli_commands.sync.load_sync_config_and_client",
+            lambda *args, **kwargs: (dummy_config, SimpleNamespace(), "aws", None, None, None),
+        )
+        monkeypatch.setattr(
+            "envdrift.integrations.hook_check.ensure_git_hook_setup",
+            lambda **_kwargs: ["hook check failed"],
+        )
+
+        result = runner.invoke(app, ["sync", "-c", str(config_file), "-p", "aws"])
+
+        assert result.exit_code == 1
+        assert "hook check failed" in result.output.lower()
 
     def test_sync_requires_vault_url_for_azure(self, tmp_path: Path):
         """Azure provider must supply --vault-url."""
@@ -1770,6 +1830,27 @@ class TestSyncCommand:
 
 class TestPullCommand:
     """Tests for the pull CLI command."""
+
+    def test_pull_hook_check_errors_exit(self, monkeypatch, tmp_path: Path):
+        """Pull should stop early when hook checks fail."""
+        config_file = tmp_path / "envdrift.toml"
+        config_file.write_text('[vault]\nprovider = "aws"\n')
+
+        dummy_config = SimpleNamespace()
+
+        monkeypatch.setattr(
+            "envdrift.cli_commands.sync.load_sync_config_and_client",
+            lambda *args, **kwargs: (dummy_config, SimpleNamespace(), "aws", None, None, None),
+        )
+        monkeypatch.setattr(
+            "envdrift.integrations.hook_check.ensure_git_hook_setup",
+            lambda **_kwargs: ["hook check failed"],
+        )
+
+        result = runner.invoke(app, ["pull", "-c", str(config_file), "-p", "aws"])
+
+        assert result.exit_code == 1
+        assert "hook check failed" in result.output.lower()
 
     def test_pull_happy_path_decrypts_files(self, monkeypatch, tmp_path: Path):
         """Pull should sync and decrypt encrypted env files successfully."""
@@ -2288,6 +2369,26 @@ class TestPullCommand:
 class TestLockCommand:
     """Tests for the lock CLI command."""
 
+    def test_lock_hook_check_errors_exit(self, monkeypatch, tmp_path: Path):
+        """Lock should stop early when hook checks fail."""
+        config_file = tmp_path / "envdrift.toml"
+        config_file.write_text('[vault]\nprovider = "aws"\n')
+
+        dummy_config = SimpleNamespace()
+        monkeypatch.setattr(
+            "envdrift.cli_commands.sync.load_sync_config_and_client",
+            lambda *args, **kwargs: (dummy_config, SimpleNamespace(), "aws", None, None, None),
+        )
+        monkeypatch.setattr(
+            "envdrift.integrations.hook_check.ensure_git_hook_setup",
+            lambda **_kwargs: ["hook check failed"],
+        )
+
+        result = runner.invoke(app, ["lock", "-c", str(config_file), "-p", "aws"])
+
+        assert result.exit_code == 1
+        assert "hook check failed" in result.output.lower()
+
     def test_lock_check_mode_exits_when_unencrypted(self, monkeypatch, tmp_path: Path):
         """Check mode should fail when a file needs encryption."""
         service_dir = tmp_path / "service"
@@ -2555,8 +2656,13 @@ class TestLockCommand:
 class TestVaultPushCommand:
     """Tests for vault-push command."""
 
-    def test_vault_push_requires_provider(self, tmp_path: Path):
+    def test_vault_push_requires_provider(self, tmp_path: Path, monkeypatch):
         """vault-push should require a provider."""
+        # Run from isolated tmp directory to prevent auto-discovery of parent config
+        monkeypatch.chdir(tmp_path)
+        # Create .env.keys file to pass file validation
+        (tmp_path / ".env.keys").write_text("DOTENV_PRIVATE_KEY_SOAK=test")
+
         result = runner.invoke(
             app,
             ["vault-push", str(tmp_path), "secret-name", "--env", "soak"],
@@ -2564,8 +2670,13 @@ class TestVaultPushCommand:
         assert result.exit_code == 1
         assert "provider required" in result.output.lower()
 
-    def test_vault_push_requires_vault_url_for_azure(self, tmp_path: Path):
+    def test_vault_push_requires_vault_url_for_azure(self, tmp_path: Path, monkeypatch):
         """vault-push should require vault URL for azure provider."""
+        # Run from isolated tmp directory to prevent auto-discovery of parent config
+        monkeypatch.chdir(tmp_path)
+        # Create .env.keys file to pass file validation
+        (tmp_path / ".env.keys").write_text("DOTENV_PRIVATE_KEY_SOAK=test")
+
         result = runner.invoke(
             app,
             [
