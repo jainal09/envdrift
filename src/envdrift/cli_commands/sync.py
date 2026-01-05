@@ -251,7 +251,7 @@ def _load_partial_encryption_paths(
         config = load_config(config_path)
     except ConfigNotFoundError:
         return set(), set(), set()
-    except Exception as exc:
+    except (OSError, AttributeError, KeyError) as exc:
         print_warning(f"Unable to read config for partial encryption: {exc}")
         return set(), set(), set()
 

@@ -552,6 +552,8 @@ class DotenvxWrapper:
                 stderr = (result.stderr or "").strip()
                 if stderr:
                     stderr = _ANSI_ESCAPE_RE.sub("", stderr).strip()
+                    if not stderr:
+                        stderr = "no error output"
                 else:
                     stderr = "no error output"
                 raise DotenvxError(

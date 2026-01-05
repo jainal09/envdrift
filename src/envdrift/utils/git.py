@@ -220,9 +220,11 @@ def ensure_gitignore_entries(
         return []
 
     gitignore_path = git_root / ".gitignore"
+    content = ""
     existing_lines: list[str] = []
     if gitignore_path.exists():
-        existing_lines = gitignore_path.read_text(encoding="utf-8").splitlines()
+        content = gitignore_path.read_text(encoding="utf-8")
+        existing_lines = content.splitlines()
 
     existing = {line.strip() for line in existing_lines if line.strip()}
     new_entries: list[str] = []
@@ -241,7 +243,6 @@ def ensure_gitignore_entries(
             existing.add(entry)
 
     if new_entries:
-        content = gitignore_path.read_text(encoding="utf-8") if gitignore_path.exists() else ""
         with gitignore_path.open("a", encoding="utf-8") as handle:
             if content and not content.endswith("\n"):
                 handle.write("\n")
