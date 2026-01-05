@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+from threading import Lock
 from pathlib import Path
 from typing import ClassVar
 
@@ -40,6 +41,7 @@ class DotenvxEncryptionBackend(EncryptionBackend):
         """
         self._auto_install = auto_install
         self._wrapper = None
+        self._wrapper_lock = Lock()
 
     @property
     def name(self) -> str:
@@ -54,9 +56,11 @@ class DotenvxEncryptionBackend(EncryptionBackend):
     def _get_wrapper(self):
         """Lazily initialize the DotenvxWrapper."""
         if self._wrapper is None:
-            from envdrift.integrations.dotenvx import DotenvxWrapper
+            with self._wrapper_lock:
+                if self._wrapper is None:
+                    from envdrift.integrations.dotenvx import DotenvxWrapper
 
-            self._wrapper = DotenvxWrapper(auto_install=self._auto_install)
+                    self._wrapper = DotenvxWrapper(auto_install=self._auto_install)
         return self._wrapper
 
     def is_installed(self) -> bool:

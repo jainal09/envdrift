@@ -3,7 +3,10 @@
 from __future__ import annotations
 
 import shutil
+from concurrent.futures import ThreadPoolExecutor
+from dataclasses import dataclass
 from pathlib import Path
+from threading import Lock
 from typing import TYPE_CHECKING, Annotated, Any
 
 import typer
@@ -11,10 +14,24 @@ from rich.panel import Panel
 
 from envdrift.env_files import detect_env_file
 from envdrift.output.rich import console, print_error, print_success, print_warning
+from envdrift.utils import normalize_max_workers
 from envdrift.vault.base import SecretNotFoundError, VaultError
 
 if TYPE_CHECKING:
-    from envdrift.sync.config import SyncConfig
+    from envdrift.sync.config import ServiceMapping, SyncConfig
+
+
+@dataclass(frozen=True)
+class _DecryptTask:
+    mapping: ServiceMapping
+    env_file: Path
+
+
+@dataclass(frozen=True)
+class _EncryptTask:
+    mapping: ServiceMapping
+    env_file: Path
+    env_keys_file: Path
 
 
 def load_sync_config_and_client(
@@ -143,6 +160,7 @@ def load_sync_config_and_client(
             ],
             default_vault_name=vault_sync.default_vault_name,
             env_keys_filename=vault_sync.env_keys_filename,
+            max_workers=vault_sync.max_workers,
         )
     elif config_path and config_path.suffix.lower() == ".toml":
         # Try to load sync config from discovered TOML
@@ -209,6 +227,71 @@ def load_sync_config_and_client(
         effective_region,
         effective_project_id,
     )
+
+
+def _normalize_max_workers(max_workers: int | None) -> int | None:
+    return normalize_max_workers(max_workers, warn=print_warning)
+
+
+def _find_config_path(config_file: Path | None) -> Path | None:
+    """Find the config path from explicit file or auto-discovery."""
+    from envdrift.config import find_config
+
+    if config_file is not None and config_file.suffix.lower() == ".toml":
+        return config_file
+    elif config_file is None:
+        return find_config()
+    return None
+
+
+def _load_partial_encryption_paths(
+    config_file: Path | None,
+) -> tuple[set[Path], set[Path], set[Path]]:
+    from envdrift.config import ConfigNotFoundError, load_config
+
+    config_path = _find_config_path(config_file)
+
+    if not config_path:
+        return set(), set(), set()
+
+    try:
+        config = load_config(config_path)
+    except ConfigNotFoundError:
+        return set(), set(), set()
+    except (OSError, AttributeError, KeyError) as exc:
+        print_warning(f"Unable to read config for partial encryption: {exc}")
+        return set(), set(), set()
+
+    if not config.partial_encryption.enabled:
+        return set(), set(), set()
+
+    clear_files: set[Path] = set()
+    secret_files: set[Path] = set()
+    combined_files: set[Path] = set()
+    for env_config in config.partial_encryption.environments:
+        clear_files.add(Path(env_config.clear_file).resolve())
+        secret_files.add(Path(env_config.secret_file).resolve())
+        combined_files.add(Path(env_config.combined_file).resolve())
+
+    return clear_files, secret_files, combined_files
+
+
+def _should_use_executor(max_workers: int | None, task_count: int) -> bool:
+    if task_count < 2:
+        return False
+    if max_workers is None:
+        return True
+    return max_workers > 1
+
+
+def _run_tasks(tasks: list[Any], worker, max_workers: int | None):
+    if not _should_use_executor(max_workers, len(tasks)):
+        return [worker(task) for task in tasks]
+    if max_workers is None:
+        with ThreadPoolExecutor() as executor:
+            return list(executor.map(worker, tasks))
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        return list(executor.map(worker, tasks))
 
 
 def sync(
@@ -386,6 +469,14 @@ def pull(
         bool,
         typer.Option("--skip-sync", help="Skip syncing keys from vault, only decrypt files"),
     ] = False,
+    merge: Annotated[
+        bool,
+        typer.Option(
+            "--merge",
+            "-m",
+            help="For partial encryption: create combined decrypted .env file from .clear + .secret",
+        ),
+    ] = False,
 ) -> None:
     """
     Pull keys from vault and decrypt all env files (one-command developer setup).
@@ -424,6 +515,9 @@ def pull(
 
         # Skip vault sync, only decrypt files (useful when keys are already local)
         envdrift pull --skip-sync
+
+        # For partial encryption: decrypt and create combined .env file for local use
+        envdrift pull --merge
     """
     from envdrift.output.rich import print_service_sync_status, print_sync_result
     from envdrift.sync.config import SyncConfigError
@@ -462,6 +556,7 @@ def pull(
         mappings=filtered_mappings,
         default_vault_name=sync_config.default_vault_name,
         env_keys_filename=sync_config.env_keys_filename,
+        max_workers=sync_config.max_workers,
     )
 
     # === STEP 1: SYNC KEYS FROM VAULT ===
@@ -519,10 +614,7 @@ def pull(
     console.print()
 
     try:
-        from envdrift.cli_commands.encryption_helpers import (
-            is_encrypted_content,
-            resolve_encryption_backend,
-        )
+        from envdrift.cli_commands import encryption_helpers
         from envdrift.encryption import (
             EncryptionBackendError,
             EncryptionNotFoundError,
@@ -530,7 +622,9 @@ def pull(
             detect_encryption_provider,
         )
 
-        encryption_backend, backend_provider, _ = resolve_encryption_backend(config_file)
+        encryption_backend, backend_provider, _ = encryption_helpers.resolve_encryption_backend(
+            config_file
+        )
         if not encryption_backend.is_installed():
             print_error(f"{encryption_backend.name} is not installed")
             console.print(encryption_backend.install_instructions())
@@ -543,6 +637,8 @@ def pull(
     skipped_count = 0
     error_count = 0
     activated_count = 0
+    decrypt_tasks: list[_DecryptTask] = []
+    partial_clear, _, partial_combined = _load_partial_encryption_paths(config_file)
 
     for mapping in filtered_mappings:
         effective_env = mapping.effective_environment
@@ -565,9 +661,25 @@ def pull(
                 skipped_count += 1
                 continue
 
+        resolved_env_file = env_file.resolve()
+        if resolved_env_file in partial_combined:
+            console.print(
+                f"  [dim]=[/dim] {env_file} [dim]- skipped (partial encryption combined file)[/dim]"
+            )
+            skipped_count += 1
+            continue
+        if resolved_env_file in partial_clear:
+            console.print(
+                f"  [dim]=[/dim] {env_file} [dim]- skipped (partial encryption clear file)[/dim]"
+            )
+            skipped_count += 1
+            continue
+
         # Check if file is encrypted
         content = env_file.read_text()
-        if not is_encrypted_content(backend_provider, encryption_backend, content):
+        if not encryption_helpers.is_encrypted_content(
+            backend_provider, encryption_backend, content
+        ):
             detected_provider = detect_encryption_provider(env_file)
             if detected_provider and detected_provider != backend_provider:
                 if (
@@ -592,44 +704,55 @@ def pull(
             skipped_count += 1
             continue
 
+        decrypt_tasks.append(_DecryptTask(mapping=mapping, env_file=env_file))
+
+    max_workers = _normalize_max_workers(sync_config.max_workers)
+
+    def _decrypt_task(task: _DecryptTask):
         try:
-            result = encryption_backend.decrypt(env_file.resolve())
-            if not result.success:
-                console.print(f"  [red]![/red] {env_file} [red]- error: {result.message}[/red]")
+            result = encryption_backend.decrypt(task.env_file.resolve())
+            return task, result, None
+        except (EncryptionNotFoundError, EncryptionBackendError) as e:
+            return task, None, e
+
+    for task, result, error in _run_tasks(decrypt_tasks, _decrypt_task, max_workers):
+        env_file = task.env_file
+        mapping = task.mapping
+        if error is not None:
+            console.print(f"  [red]![/red] {env_file} [red]- error: {error}[/red]")
+            error_count += 1
+            continue
+        if result is None or not result.success:
+            message = result.message if result else "unknown error"
+            console.print(f"  [red]![/red] {env_file} [red]- error: {message}[/red]")
+            error_count += 1
+            continue
+
+        console.print(f"  [green]+[/green] {env_file} [dim]- decrypted[/dim]")
+        decrypted_count += 1
+
+        # Activate profile: copy decrypted file to activate_to path if configured
+        if profile and mapping.profile == profile and mapping.activate_to:
+            activate_path = (mapping.folder_path / mapping.activate_to).resolve()
+            # Validate path is within folder_path to prevent directory traversal
+            try:
+                activate_path.relative_to(mapping.folder_path.resolve())
+            except ValueError:
+                console.print(
+                    f"  [red]![/red] {mapping.activate_to} [red]- invalid path (escapes folder)[/red]"
+                )
                 error_count += 1
                 continue
 
-            console.print(f"  [green]+[/green] {env_file} [dim]- decrypted[/dim]")
-            decrypted_count += 1
-
-            # Activate profile: copy decrypted file to activate_to path if configured
-            if profile and mapping.profile == profile and mapping.activate_to:
-                activate_path = (mapping.folder_path / mapping.activate_to).resolve()
-                # Validate path is within folder_path to prevent directory traversal
-                try:
-                    activate_path.relative_to(mapping.folder_path.resolve())
-                except ValueError:
-                    console.print(
-                        f"  [red]![/red] {mapping.activate_to} [red]- invalid path (escapes folder)[/red]"
-                    )
-                    error_count += 1
-                    continue
-
-                try:
-                    shutil.copy2(env_file, activate_path)
-                    console.print(
-                        f"  [cyan]→[/cyan] {activate_path} [dim]- activated from {env_file.name}[/dim]"
-                    )
-                    activated_count += 1
-                except OSError as e:
-                    console.print(
-                        f"  [red]![/red] {activate_path} [red]- activation failed: {e}[/red]"
-                    )
-                    error_count += 1
-
-        except (EncryptionNotFoundError, EncryptionBackendError) as e:
-            console.print(f"  [red]![/red] {env_file} [red]- error: {e}[/red]")
-            error_count += 1
+            try:
+                shutil.copy2(env_file, activate_path)
+                console.print(
+                    f"  [cyan]→[/cyan] {activate_path} [dim]- activated from {env_file.name}[/dim]"
+                )
+                activated_count += 1
+            except OSError as e:
+                console.print(f"  [red]![/red] {activate_path} [red]- activation failed: {e}[/red]")
+                error_count += 1
 
     # === SUMMARY ===
     console.print()
@@ -651,6 +774,118 @@ def pull(
     if error_count > 0:
         print_warning("Some files could not be decrypted")
         raise typer.Exit(code=1)
+
+    # === STEP 3: PARTIAL ENCRYPTION (decrypt .secret files + optional merge) ===
+    partial_decrypted = 0
+    partial_merged = 0
+    partial_skipped = 0
+    partial_errors: list[str] = []
+
+    config_path = _find_config_path(config_file)
+    partial_config = None
+    if config_path:
+        try:
+            from envdrift.config import (
+                ConfigNotFoundError,
+                load_config as load_envdrift_config,
+            )
+
+            partial_config = load_envdrift_config(config_path)
+        except ConfigNotFoundError:
+            partial_config = None
+        except (OSError, AttributeError, KeyError) as exc:
+            print_warning(f"Unable to read config for partial encryption: {exc}")
+            partial_config = None
+
+    if partial_config and partial_config.partial_encryption.enabled:
+        console.print()
+        console.print("[bold cyan]Step 3:[/bold cyan] Processing partial encryption files...")
+        console.print()
+
+        from envdrift.core.partial_encryption import (
+            PartialEncryptionError,
+            pull_partial_encryption,
+        )
+
+        for env_config in partial_config.partial_encryption.environments:
+            secret_file = Path(env_config.secret_file)
+
+            if not secret_file.exists():
+                console.print(f"  [dim]=[/dim] {secret_file} [dim]- skipped (not found)[/dim]")
+                partial_skipped += 1
+                continue
+
+            try:
+                was_decrypted = pull_partial_encryption(env_config)
+
+                if was_decrypted:
+                    console.print(f"  [green]+[/green] {secret_file} [dim]- decrypted[/dim]")
+                    partial_decrypted += 1
+                else:
+                    console.print(
+                        f"  [dim]=[/dim] {secret_file} [dim]- skipped (already decrypted)[/dim]"
+                    )
+                    partial_skipped += 1
+
+                # Merge if requested
+                if merge:
+                    combined_file = Path(env_config.combined_file)
+                    clear_file = Path(env_config.clear_file)
+
+                    # Build combined content (decrypted version)
+                    combined_lines = []
+
+                    # Add clear file content
+                    if clear_file.exists():
+                        combined_lines.extend(clear_file.read_text().splitlines())
+                        combined_lines.append("")
+
+                    # Add decrypted secret file content
+                    if secret_file.exists():
+                        secret_content = secret_file.read_text().splitlines()
+                        # Skip dotenvx header comments
+                        secret_content = [
+                            line
+                            for line in secret_content
+                            if not line.strip().startswith("#/---")
+                            and not line.strip().startswith("DOTENV_PUBLIC_KEY")
+                        ]
+                        combined_lines.extend(secret_content)
+
+                    combined_file.write_text("\n".join(combined_lines) + "\n")
+                    console.print(
+                        f"  [cyan]→[/cyan] {combined_file} [dim]- merged (decrypted)[/dim]"
+                    )
+                    partial_merged += 1
+
+            except PartialEncryptionError as e:
+                console.print(f"  [red]![/red] {secret_file} [red]- error: {e}[/red]")
+                partial_errors.append(f"{env_config.name}: {e}")
+
+        # Partial encryption summary
+        console.print()
+        partial_summary = [
+            f"Decrypted: {partial_decrypted}",
+            f"Skipped: {partial_skipped}",
+        ]
+        if merge:
+            partial_summary.append(f"Merged: {partial_merged}")
+        if partial_errors:
+            partial_summary.append(f"Errors: {len(partial_errors)}")
+
+        console.print(
+            Panel(
+                "\n".join(partial_summary),
+                title="Partial Encryption Summary",
+                expand=False,
+            )
+        )
+
+        if partial_errors:
+            print_warning("Some partial encryption files had errors")
+            for err in partial_errors:
+                console.print(f"  • {err}")
+            raise typer.Exit(code=1)
 
     console.print()
     print_success("Setup complete! Your environment files are ready to use.")
@@ -703,6 +938,13 @@ def lock(
         bool,
         typer.Option("--check", help="Only check encryption status, don't encrypt"),
     ] = False,
+    all_files: Annotated[
+        bool,
+        typer.Option(
+            "--all",
+            help="Include partial encryption files: encrypt .secret files and delete combined files",
+        ),
+    ] = False,
 ) -> None:
     """
     Verify keys and encrypt all env files (opposite of pull - prepares for commit).
@@ -719,6 +961,7 @@ def lock(
     Workflow:
     - With --verify-vault: Check if local .env.keys match vault secrets
     - With --sync-keys: Fetch keys from vault to ensure consistency
+    - With --all: Also encrypt partial encryption .secret files and delete combined files
     - Then: Encrypt all .env files that are currently decrypted
 
     Use --profile to filter mappings for a specific environment.
@@ -746,6 +989,9 @@ def lock(
 
         # Force encryption without prompts
         envdrift lock --force
+
+        # Include partial encryption files (encrypt .secret, delete combined)
+        envdrift lock --all
     """
     from envdrift.output.rich import print_service_sync_status, print_sync_result
     from envdrift.sync.config import SyncConfigError
@@ -787,20 +1033,23 @@ def lock(
         mappings=filtered_mappings,
         default_vault_name=sync_config.default_vault_name,
         env_keys_filename=sync_config.env_keys_filename,
+        max_workers=sync_config.max_workers,
     )
 
     console.print()
     profile_info = f" (profile: {profile})" if profile else ""
     mode_str = "CHECK" if check_only else ("FORCE" if force else "Interactive")
+    all_info = " | Including partial encryption" if all_files else ""
     console.print(f"[bold]Lock[/bold] - Verifying keys and encrypting env files{profile_info}")
     console.print(
-        f"[dim]Provider: {effective_provider} | Mode: {mode_str} | Services: {len(filtered_mappings)}[/dim]"
+        f"[dim]Provider: {effective_provider} | Mode: {mode_str} | Services: {len(filtered_mappings)}{all_info}[/dim]"
     )
     console.print()
 
     # Tracking for summary
     warnings: list[str] = []
     errors: list[str] = []
+    partial_clear, _, partial_combined = _load_partial_encryption_paths(config_file)
 
     # === STEP 1: VERIFY/SYNC KEYS (OPTIONAL) ===
     if verify_vault:
@@ -941,12 +1190,7 @@ def lock(
     console.print()
 
     try:
-        from envdrift.cli_commands.encryption_helpers import (
-            build_sops_encrypt_kwargs,
-            is_encrypted_content,
-            resolve_encryption_backend,
-            should_skip_reencryption,
-        )
+        from envdrift.cli_commands import encryption_helpers
         from envdrift.encryption import (
             EncryptionBackendError,
             EncryptionNotFoundError,
@@ -954,8 +1198,8 @@ def lock(
             detect_encryption_provider,
         )
 
-        encryption_backend, backend_provider, encryption_config = resolve_encryption_backend(
-            config_file
+        encryption_backend, backend_provider, encryption_config = (
+            encryption_helpers.resolve_encryption_backend(config_file)
         )
         if not encryption_backend.is_installed():
             print_error(f"{encryption_backend.name} is not installed")
@@ -967,12 +1211,14 @@ def lock(
 
     sops_encrypt_kwargs = {}
     if backend_provider == EncryptionProvider.SOPS:
-        sops_encrypt_kwargs = build_sops_encrypt_kwargs(encryption_config)
+        sops_encrypt_kwargs = encryption_helpers.build_sops_encrypt_kwargs(encryption_config)
 
     encrypted_count = 0
     skipped_count = 0
     error_count = 0
     already_encrypted_count = 0
+    encrypt_tasks: list[_EncryptTask] = []
+    dotenvx_locks: dict[Path, Lock] = {}
 
     for mapping in filtered_mappings:
         effective_env = mapping.effective_environment
@@ -998,6 +1244,27 @@ def lock(
                 skipped_count += 1
                 continue
 
+        resolved_env_file = env_file.resolve()
+        if resolved_env_file in partial_combined and not all_files:
+            console.print(
+                f"  [dim]=[/dim] {env_file} "
+                "[dim]- skipped (partial encryption combined file, use --all to include)[/dim]"
+            )
+            warnings.append(
+                f"{env_file}: use envdrift lock --all or envdrift push for partial encryption"
+            )
+            skipped_count += 1
+            continue
+        if resolved_env_file in partial_clear and not all_files:
+            console.print(
+                f"  [dim]=[/dim] {env_file} [dim]- skipped (partial encryption clear file)[/dim]"
+            )
+            warnings.append(
+                f"{env_file}: use envdrift lock --all or envdrift push for partial encryption"
+            )
+            skipped_count += 1
+            continue
+
         # Check if .env.keys file exists (needed for encryption)
         env_keys_file = mapping.folder_path / (sync_config.env_keys_filename or ".env.keys")
         if backend_provider == EncryptionProvider.DOTENVX and not env_keys_file.exists():
@@ -1009,7 +1276,9 @@ def lock(
 
         # Check if file is already encrypted
         content = env_file.read_text()
-        if not is_encrypted_content(backend_provider, encryption_backend, content):
+        if not encryption_helpers.is_encrypted_content(
+            backend_provider, encryption_backend, content
+        ):
             detected_provider = detect_encryption_provider(env_file)
             if detected_provider and detected_provider != backend_provider:
                 if (
@@ -1053,6 +1322,75 @@ def lock(
                 if total_value_lines > 0:
                     ratio = encrypted_lines / total_value_lines
                     if ratio >= 0.9:  # 90%+ encrypted = fully encrypted
+                        # Check if the key name matches the expected environment
+                        # This handles the case where a file was renamed (e.g., .env.local -> .env.localenv)
+                        # but the .env.keys still has the old key name
+                        expected_key_name = f"DOTENV_PRIVATE_KEY_{effective_env.upper()}"
+                        needs_rekey = False
+                        old_key_name = None
+
+                        if env_keys_file.exists():
+                            from envdrift.sync.operations import EnvKeysFile
+
+                            keys_file = EnvKeysFile(env_keys_file)
+                            if not keys_file.read_key(expected_key_name):
+                                # Expected key not found, check for any other key
+                                keys_content = env_keys_file.read_text()
+                                for line in keys_content.splitlines():
+                                    if line.startswith("DOTENV_PRIVATE_KEY_") and "=" in line:
+                                        old_key_name = line.split("=")[0].strip()
+                                        if old_key_name != expected_key_name:
+                                            needs_rekey = True
+                                            break
+
+                        if needs_rekey and old_key_name:
+                            console.print(
+                                f"  [yellow]~[/yellow] {env_file} "
+                                f"[dim]- key name mismatch ({old_key_name} -> {expected_key_name}), "
+                                "re-encrypting...[/dim]"
+                            )
+                            warnings.append(
+                                f"{env_file}: key name mismatch, re-encrypting to generate "
+                                f"{expected_key_name}"
+                            )
+                            # Decrypt first, then re-encrypt
+                            try:
+                                decrypt_result = encryption_backend.decrypt(
+                                    env_file.resolve(), **sops_encrypt_kwargs
+                                )
+                                if not decrypt_result.success:
+                                    console.print(
+                                        f"  [red]![/red] {env_file} "
+                                        f"[red]- decrypt failed: {decrypt_result.message}[/red]"
+                                    )
+                                    errors.append(f"{env_file}: decrypt for rekey failed")
+                                    error_count += 1
+                                    continue
+                                # Now re-encrypt (will generate new key with correct name)
+                                result = encryption_backend.encrypt(
+                                    env_file.resolve(), **sops_encrypt_kwargs
+                                )
+                                if not result.success:
+                                    console.print(
+                                        f"  [red]![/red] {env_file} "
+                                        f"[red]- re-encrypt failed: {result.message}[/red]"
+                                    )
+                                    errors.append(f"{env_file}: re-encryption for rekey failed")
+                                    error_count += 1
+                                    continue
+                                console.print(
+                                    f"  [green]+[/green] {env_file} [dim]- re-encrypted with new key[/dim]"
+                                )
+                                encrypted_count += 1
+                                continue
+                            except (EncryptionNotFoundError, EncryptionBackendError) as e:
+                                console.print(
+                                    f"  [red]![/red] {env_file} [red]- rekey error: {e}[/red]"
+                                )
+                                errors.append(f"{env_file}: rekey failed - {e}")
+                                error_count += 1
+                                continue
+
                         console.print(
                             f"  [dim]=[/dim] {env_file} [dim]- skipped (already encrypted)[/dim]"
                         )
@@ -1062,10 +1400,10 @@ def lock(
                         # Partially encrypted - re-encrypt to catch new values
                         console.print(
                             f"  [yellow]~[/yellow] {env_file} "
-                            f"[dim]- partially encrypted ({int(ratio*100)}%), "
+                            f"[dim]- partially encrypted ({int(ratio * 100)}%), "
                             "re-encrypting...[/dim]"
                         )
-                        warnings.append(f"{env_file}: was only {int(ratio*100)}% encrypted")
+                        warnings.append(f"{env_file}: was only {int(ratio * 100)}% encrypted")
                 else:
                     console.print(
                         f"  [dim]=[/dim] {env_file} [dim]- skipped (already encrypted)[/dim]"
@@ -1088,9 +1426,13 @@ def lock(
         # produces different ciphertext each time, even for identical plaintext.
         # We compare the current file with the decrypted version from git;
         # if unchanged, restore the original encrypted file to avoid git noise.
-        should_skip, skip_reason = should_skip_reencryption(env_file, encryption_backend)
+        should_skip, skip_reason = encryption_helpers.should_skip_reencryption(
+            env_file, encryption_backend
+        )
         if should_skip:
-            console.print(f"  [dim]=[/dim] {env_file} [dim]- skipped ({skip_reason})[/dim]")
+            console.print(f"  [dim]=[/dim] {env_file} [dim]- skipped[/dim]")
+            if skip_reason:
+                console.print(f"    [dim]{skip_reason}[/dim]")
             already_encrypted_count += 1
             continue
 
@@ -1101,6 +1443,16 @@ def lock(
                 console.print(f"  [dim]=[/dim] {env_file} [dim]- skipped (user declined)[/dim]")
                 skipped_count += 1
                 continue
+
+        if force:
+            encrypt_tasks.append(
+                _EncryptTask(mapping=mapping, env_file=env_file, env_keys_file=env_keys_file)
+            )
+            if backend_provider == EncryptionProvider.DOTENVX:
+                lock_key = env_keys_file.resolve()
+                if lock_key not in dotenvx_locks:
+                    dotenvx_locks[lock_key] = Lock()
+            continue
 
         # Perform encryption
         try:
@@ -1118,6 +1470,150 @@ def lock(
             errors.append(f"{env_file}: encryption failed - {e}")
             error_count += 1
 
+    if force and encrypt_tasks:
+        max_workers = _normalize_max_workers(sync_config.max_workers)
+
+        def _encrypt_task(task: _EncryptTask):
+            try:
+                if backend_provider == EncryptionProvider.DOTENVX:
+                    lock_key = task.env_keys_file.resolve()
+                    lock = dotenvx_locks.get(lock_key)
+                    if lock:
+                        with lock:
+                            result = encryption_backend.encrypt(
+                                task.env_file.resolve(), **sops_encrypt_kwargs
+                            )
+                    else:
+                        result = encryption_backend.encrypt(
+                            task.env_file.resolve(), **sops_encrypt_kwargs
+                        )
+                else:
+                    result = encryption_backend.encrypt(
+                        task.env_file.resolve(), **sops_encrypt_kwargs
+                    )
+                return task, result, None
+            except (EncryptionNotFoundError, EncryptionBackendError) as e:
+                return task, None, e
+
+        for task, result, error in _run_tasks(encrypt_tasks, _encrypt_task, max_workers):
+            env_file = task.env_file
+            if error is not None:
+                console.print(f"  [red]![/red] {env_file} [red]- error: {error}[/red]")
+                errors.append(f"{env_file}: encryption failed - {error}")
+                error_count += 1
+                continue
+            if result is None or not result.success:
+                message = result.message if result else "unknown error"
+                console.print(f"  [red]![/red] {env_file} [red]- error: {message}[/red]")
+                errors.append(f"{env_file}: encryption failed - {message}")
+                error_count += 1
+                continue
+            console.print(f"  [green]+[/green] {env_file} [dim]- encrypted[/dim]")
+            encrypted_count += 1
+
+    # === STEP 3: PROCESS PARTIAL ENCRYPTION FILES (OPTIONAL) ===
+    partial_encrypted_count = 0
+    combined_deleted_count = 0
+
+    if all_files:
+        step_num = "Step 3" if verify_vault else "Step 2"
+        console.print()
+        console.print(f"[bold cyan]{step_num}:[/bold cyan] Processing partial encryption files...")
+        console.print()
+
+        # Load partial encryption config using shared helper
+        from envdrift.config import ConfigNotFoundError
+        from envdrift.config import load_config as load_envdrift_config
+
+        config_path = _find_config_path(config_file)
+
+        if config_path:
+            try:
+                envdrift_cfg = load_envdrift_config(config_path)
+                if envdrift_cfg.partial_encryption.enabled:
+                    for env_config in envdrift_cfg.partial_encryption.environments:
+                        secret_file = Path(env_config.secret_file)
+                        combined_file = Path(env_config.combined_file)
+
+                        # Encrypt the .secret file if it exists and is not encrypted
+                        if secret_file.exists():
+                            secret_content = secret_file.read_text()
+                            if not encryption_helpers.is_encrypted_content(
+                                backend_provider, encryption_backend, secret_content
+                            ):
+                                if check_only:
+                                    console.print(
+                                        f"  [cyan]?[/cyan] {secret_file} "
+                                        "[dim]- would be encrypted[/dim]"
+                                    )
+                                    partial_encrypted_count += 1
+                                else:
+                                    try:
+                                        result = encryption_backend.encrypt(
+                                            secret_file.resolve(), **sops_encrypt_kwargs
+                                        )
+                                        if result.success:
+                                            console.print(
+                                                f"  [green]+[/green] {secret_file} "
+                                                "[dim]- encrypted[/dim]"
+                                            )
+                                            partial_encrypted_count += 1
+                                        else:
+                                            console.print(
+                                                f"  [red]![/red] {secret_file} "
+                                                f"[red]- error: {result.message}[/red]"
+                                            )
+                                            errors.append(
+                                                f"{secret_file}: encryption failed - {result.message}"
+                                            )
+                                            error_count += 1
+                                    except (EncryptionNotFoundError, EncryptionBackendError) as e:
+                                        console.print(
+                                            f"  [red]![/red] {secret_file} [red]- error: {e}[/red]"
+                                        )
+                                        errors.append(f"{secret_file}: encryption failed - {e}")
+                                        error_count += 1
+                            else:
+                                console.print(
+                                    f"  [dim]=[/dim] {secret_file} "
+                                    "[dim]- skipped (already encrypted)[/dim]"
+                                )
+                                already_encrypted_count += 1
+                        else:
+                            console.print(
+                                f"  [dim]=[/dim] {secret_file} [dim]- skipped (not found)[/dim]"
+                            )
+
+                        # Delete the combined file if it exists
+                        if combined_file.exists():
+                            if check_only:
+                                console.print(
+                                    f"  [cyan]?[/cyan] {combined_file} "
+                                    "[dim]- would be deleted[/dim]"
+                                )
+                                combined_deleted_count += 1
+                            else:
+                                try:
+                                    combined_file.unlink()
+                                    console.print(
+                                        f"  [yellow]-[/yellow] {combined_file} "
+                                        "[dim]- deleted (combined file)[/dim]"
+                                    )
+                                    combined_deleted_count += 1
+                                except OSError as e:
+                                    console.print(
+                                        f"  [red]![/red] {combined_file} "
+                                        f"[red]- delete failed: {e}[/red]"
+                                    )
+                                    errors.append(f"{combined_file}: delete failed - {e}")
+                                    error_count += 1
+                else:
+                    console.print("  [dim]Partial encryption not enabled in config[/dim]")
+            except ConfigNotFoundError:
+                print_warning("Could not find partial encryption config")
+            except (OSError, AttributeError, KeyError) as e:
+                print_warning(f"Could not load partial encryption config: {e}")
+
     # === SUMMARY ===
     console.print()
     summary_lines = []
@@ -1130,6 +1626,14 @@ def lock(
     summary_lines.append(f"Already encrypted: {already_encrypted_count}")
     summary_lines.append(f"Skipped: {skipped_count}")
     summary_lines.append(f"Errors: {error_count}")
+
+    if all_files:
+        if check_only:
+            summary_lines.append(f"Partial secrets to encrypt: {partial_encrypted_count}")
+            summary_lines.append(f"Combined files to delete: {combined_deleted_count}")
+        else:
+            summary_lines.append(f"Partial secrets encrypted: {partial_encrypted_count}")
+            summary_lines.append(f"Combined files deleted: {combined_deleted_count}")
 
     console.print(
         Panel(

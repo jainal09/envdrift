@@ -138,6 +138,7 @@ project_id = "my-gcp-project"
 
 [vault.sync]
 default_vault_name = "my-keyvault"
+max_workers = 4  # Optional: parallelize pull/lock env file operations
 
 [[vault.sync.mappings]]
 secret_name = "myapp-dotenvx-key"

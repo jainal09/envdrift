@@ -7,6 +7,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from envdrift.utils import normalize_max_workers
+
 
 class SyncConfigError(Exception):
     """Error loading sync configuration."""
@@ -51,6 +53,7 @@ class SyncConfig:
     mappings: list[ServiceMapping] = field(default_factory=list)
     default_vault_name: str | None = None
     env_keys_filename: str = ".env.keys"
+    max_workers: int | None = None
 
     @classmethod
     def from_file(cls, path: Path) -> SyncConfig:
@@ -117,6 +120,7 @@ class SyncConfig:
             [vault.sync]
             default_vault_name = "my-keyvault"
             env_keys_filename = ".env.keys"
+            max_workers = 4
 
             [[vault.sync.mappings]]
             secret_name = "myapp-key"
@@ -125,6 +129,7 @@ class SyncConfig:
             environment = "staging"     # Optional
         """
         mappings: list[ServiceMapping] = []
+        max_workers = normalize_max_workers(data.get("max_workers"))
 
         for mapping_data in data.get("mappings", []):
             if "secret_name" not in mapping_data:
@@ -148,6 +153,7 @@ class SyncConfig:
             mappings=mappings,
             default_vault_name=data.get("default_vault_name"),
             env_keys_filename=data.get("env_keys_filename", ".env.keys"),
+            max_workers=max_workers,
         )
 
     def get_effective_vault_name(self, mapping: ServiceMapping) -> str | None:

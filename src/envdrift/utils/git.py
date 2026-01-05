@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import subprocess  # nosec B404
 from pathlib import Path
+from typing import Iterable
 
 
 class GitError(Exception):
@@ -193,4 +194,85 @@ def is_file_tracked(file_path: Path) -> bool:
 
         return result.returncode == 0
     except (subprocess.TimeoutExpired, FileNotFoundError, ValueError):
+        return False
+
+
+def ensure_gitignore_entries(
+    paths: Iterable[Path], *, git_root: Path | None = None
+) -> list[str]:
+    """
+    Ensure the provided paths are listed in the repo's .gitignore.
+
+    Parameters:
+        paths: Iterable of file paths to ignore.
+        git_root: Optional git root override; auto-detected when omitted.
+
+    Returns:
+        List of entries added to .gitignore (relative paths).
+    """
+    path_list = [Path(path) for path in paths]
+    if not path_list:
+        return []
+
+    if git_root is None:
+        git_root = get_git_root(path_list[0]) or get_git_root(Path.cwd())
+    if git_root is None:
+        return []
+
+    gitignore_path = git_root / ".gitignore"
+    content = ""
+    existing_lines: list[str] = []
+    if gitignore_path.exists():
+        content = gitignore_path.read_text(encoding="utf-8")
+        existing_lines = content.splitlines()
+
+    existing = {line.strip() for line in existing_lines if line.strip()}
+    new_entries: list[str] = []
+
+    for path in path_list:
+        if _is_path_ignored(path, git_root):
+            continue
+        try:
+            relative_path = path.resolve().relative_to(git_root)
+        except ValueError:
+            continue
+
+        entry = relative_path.as_posix()
+        if entry not in existing:
+            new_entries.append(entry)
+            existing.add(entry)
+
+    if new_entries:
+        with gitignore_path.open("a", encoding="utf-8") as handle:
+            if content and not content.endswith("\n"):
+                handle.write("\n")
+            for entry in new_entries:
+                handle.write(f"{entry}\n")
+
+    return new_entries
+
+
+def _is_path_ignored(path: Path, git_root: Path) -> bool:
+    try:
+        relative_path = path.resolve().relative_to(git_root)
+    except ValueError:
+        return False
+
+    try:
+        result = subprocess.run(  # nosec B603, B607
+            [
+                "git",
+                "-c",
+                "core.excludesfile=/dev/null",
+                "check-ignore",
+                "-q",
+                relative_path.as_posix(),
+            ],
+            cwd=str(git_root),
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+        return result.returncode == 0
+    except (subprocess.TimeoutExpired, FileNotFoundError):
         return False

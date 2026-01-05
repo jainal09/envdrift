@@ -219,6 +219,42 @@ SOPS does not use `.env.keys`; key management lives in your SOPS setup
 
 ## Troubleshooting
 
+### Windows: ".env.local" Encryption Fails
+
+There is a known bug in dotenvx on Windows where files named exactly `.env.local`
+cause the error:
+
+```text
+Input string must contain hex characters in even length
+```
+
+**Workaround**: Rename your file to a different suffix:
+
+```powershell
+# Instead of .env.local, use:
+.env.localenv
+.env.dev
+.env.development
+```
+
+Then update your `envdrift.toml` mapping:
+
+```toml
+[[vault.sync.mappings]]
+secret_name = "my-service-dev"
+folder_path = "my-service"
+environment = "localenv"  # matches .env.localenv
+```
+
+!!! note
+    envdrift will detect this issue and show a helpful error message with
+    workaround suggestions when you try to encrypt `.env.local` on Windows.
+
+### Cross-Platform Line Endings
+
+envdrift automatically normalizes line endings (CRLF → LF) before encryption
+to ensure files encrypted on Windows can be decrypted on Linux/macOS and vice versa.
+
 ### "dotenvx not found"
 
 The binary is downloaded automatically, but if it fails:

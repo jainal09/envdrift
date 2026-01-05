@@ -406,13 +406,13 @@ class TestVaultPushAll:
         # Setup s2: Unencrypted .env, encrypt raises error
         (tmp_path / "s2" / ".env.prod").write_text("plain=text")
         # Setup s3: Encrypted .env, Vault check raises VaultError
-        (tmp_path / "s3" / ".env.prod").write_text("encrypted: yes")
+        (tmp_path / "s3" / ".env.prod").write_text("SECRET=encrypted:abc123")
 
         # Setup s4: Encrypted .env, Secret missing in vault, Missing .env.keys
-        (tmp_path / "s4" / ".env.prod").write_text("encrypted: yes")
+        (tmp_path / "s4" / ".env.prod").write_text("SECRET=encrypted:abc123")
 
         # Setup s5: Encrypted .env, Secret missing, .env.keys exists but missing key
-        (tmp_path / "s5" / ".env.prod").write_text("encrypted: yes")
+        (tmp_path / "s5" / ".env.prod").write_text("SECRET=encrypted:abc123")
         (tmp_path / "s5" / ".env.keys").write_text("OTHER_KEY=val")
 
         # Client side effects
@@ -509,9 +509,7 @@ class TestVaultPushAll:
         service_dir.mkdir()
         env_file = service_dir / ".env.production"
         env_file.write_text(
-            "#/---BEGIN DOTENV ENCRYPTED---/\n"
-            "DOTENV_PUBLIC_KEY=abc\n"
-            "SECRET=encrypted:abc123\n"
+            "#/---BEGIN DOTENV ENCRYPTED---/\nDOTENV_PUBLIC_KEY=abc\nSECRET=encrypted:abc123\n"
         )
 
         result = runner.invoke(app, ["vault-push", "--all"])

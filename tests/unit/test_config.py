@@ -402,6 +402,7 @@ class TestSyncConfig:
         assert config.mappings == []
         assert config.default_vault_name is None
         assert config.env_keys_filename == ".env.keys"
+        assert config.max_workers is None
 
     def test_vault_config_with_sync(self):
         """Test VaultConfig includes SyncConfig."""
@@ -409,6 +410,7 @@ class TestSyncConfig:
         assert hasattr(config, "sync")
         assert config.sync.mappings == []
         assert config.sync.default_vault_name is None
+        assert config.sync.max_workers is None
 
     def test_from_dict_with_sync_mappings(self):
         """Test from_dict parses vault.sync section."""
@@ -419,6 +421,7 @@ class TestSyncConfig:
                 "sync": {
                     "default_vault_name": "my-vault",
                     "env_keys_filename": ".env.keys.custom",
+                    "max_workers": 3,
                     "mappings": [
                         {
                             "secret_name": "app-key",
@@ -439,6 +442,7 @@ class TestSyncConfig:
 
         assert config.vault.sync.default_vault_name == "my-vault"
         assert config.vault.sync.env_keys_filename == ".env.keys.custom"
+        assert config.vault.sync.max_workers == 3
         assert len(config.vault.sync.mappings) == 2
 
         first_mapping = config.vault.sync.mappings[0]
@@ -452,6 +456,26 @@ class TestSyncConfig:
         assert second_mapping.vault_name == "other-vault"
         assert second_mapping.environment == "staging"
 
+    def test_from_dict_with_invalid_max_workers(self):
+        """Test from_dict normalizes invalid max_workers values."""
+        data = {
+            "vault": {
+                "sync": {
+                    "max_workers": 0,
+                    "mappings": [
+                        {
+                            "secret_name": "app-key",
+                            "folder_path": "services/app",
+                        }
+                    ],
+                },
+            },
+        }
+
+        config = EnvdriftConfig.from_dict(data)
+
+        assert config.vault.sync.max_workers is None
+
     def test_load_config_with_sync_from_toml(self, tmp_path: Path):
         """Test load_config parses sync mappings from TOML file."""
         config_file = tmp_path / "envdrift.toml"
@@ -464,6 +488,7 @@ vault_url = "https://test.vault.azure.net"
 
 [vault.sync]
 default_vault_name = "test-vault"
+max_workers = 2
 
 [[vault.sync.mappings]]
 secret_name = "myapp-key"
@@ -481,6 +506,7 @@ environment = "staging"
         assert config.vault.provider == "azure"
         assert config.vault.azure_vault_url == "https://test.vault.azure.net"
         assert config.vault.sync.default_vault_name == "test-vault"
+        assert config.vault.sync.max_workers == 2
         assert len(config.vault.sync.mappings) == 2
         assert config.vault.sync.mappings[0].secret_name == "myapp-key"
         assert config.vault.sync.mappings[1].vault_name == "backend-vault"
