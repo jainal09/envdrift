@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import contextlib
 import logging
+import re
 import tomllib
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -88,10 +89,15 @@ def is_encrypted_content(
     content: str,
 ) -> bool:
     """Determine if file content is encrypted for the selected backend."""
+    # For DOTENVX, having a public key header doesn't mean values are encrypted.
+    # We need to check for actual "KEY=encrypted:" values in the content.
+    # Use regex to match the DOTENVX encrypted value pattern to avoid false
+    # positives from comments or other text containing "encrypted:".
+    if provider == EncryptionProvider.DOTENVX:
+        return bool(re.search(r"=\s*encrypted:", content, re.IGNORECASE))
+    # For other providers (like SOPS), the header is sufficient
     if backend.has_encrypted_header(content):
         return True
-    if provider == EncryptionProvider.DOTENVX:
-        return "encrypted:" in content.lower()
     return False
 
 
