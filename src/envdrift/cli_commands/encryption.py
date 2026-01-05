@@ -167,6 +167,14 @@ def encrypt_cmd(
     envdrift_config, config_path = _load_encryption_config()
     encryption_config = getattr(envdrift_config, "encryption", None)
 
+    from envdrift.integrations.hook_check import ensure_git_hook_setup
+
+    hook_errors = ensure_git_hook_setup(config=envdrift_config, config_path=config_path)
+    if hook_errors:
+        for error in hook_errors:
+            print_error(error)
+        raise typer.Exit(code=1)
+
     if backend is None:
         backend = encryption_config.backend if encryption_config else "dotenvx"
 
@@ -528,6 +536,14 @@ def decrypt_cmd(
 
     envdrift_config, config_path = _load_encryption_config()
     encryption_config = getattr(envdrift_config, "encryption", None)
+
+    from envdrift.integrations.hook_check import ensure_git_hook_setup
+
+    hook_errors = ensure_git_hook_setup(config=envdrift_config, config_path=config_path)
+    if hook_errors:
+        for error in hook_errors:
+            print_error(error)
+        raise typer.Exit(code=1)
 
     # Auto-detect backend if not specified
     if backend is None:

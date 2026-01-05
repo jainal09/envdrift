@@ -282,6 +282,13 @@ def sync(
         region=region,
         project_id=project_id,
     )
+    from envdrift.integrations.hook_check import ensure_git_hook_setup
+
+    hook_errors = ensure_git_hook_setup(config_file=config_file)
+    if hook_errors:
+        for error in hook_errors:
+            print_error(error)
+        raise typer.Exit(code=1)
 
     # Create sync engine
     from envdrift.sync.engine import SyncEngine, SyncMode
@@ -428,6 +435,13 @@ def pull(
         region=region,
         project_id=project_id,
     )
+    from envdrift.integrations.hook_check import ensure_git_hook_setup
+
+    hook_errors = ensure_git_hook_setup(config_file=config_file)
+    if hook_errors:
+        for error in hook_errors:
+            print_error(error)
+        raise typer.Exit(code=1)
 
     # === FILTER MAPPINGS BY PROFILE ===
     from envdrift.sync.engine import SyncEngine, SyncMode
@@ -747,6 +761,13 @@ def lock(
         region=region,
         project_id=project_id,
     )
+    from envdrift.integrations.hook_check import ensure_git_hook_setup
+
+    hook_errors = ensure_git_hook_setup(config_file=config_file)
+    if hook_errors:
+        for error in hook_errors:
+            print_error(error)
+        raise typer.Exit(code=1)
 
     # === FILTER MAPPINGS BY PROFILE ===
     from envdrift.sync.config import SyncConfig as SyncConfigClass
