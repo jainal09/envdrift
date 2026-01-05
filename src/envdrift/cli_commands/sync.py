@@ -560,10 +560,7 @@ def pull(
     console.print()
 
     try:
-        from envdrift.cli_commands.encryption_helpers import (
-            is_encrypted_content,
-            resolve_encryption_backend,
-        )
+        from envdrift.cli_commands import encryption_helpers
         from envdrift.encryption import (
             EncryptionBackendError,
             EncryptionNotFoundError,
@@ -571,7 +568,9 @@ def pull(
             detect_encryption_provider,
         )
 
-        encryption_backend, backend_provider, _ = resolve_encryption_backend(config_file)
+        encryption_backend, backend_provider, _ = encryption_helpers.resolve_encryption_backend(
+            config_file
+        )
         if not encryption_backend.is_installed():
             print_error(f"{encryption_backend.name} is not installed")
             console.print(encryption_backend.install_instructions())
@@ -609,7 +608,9 @@ def pull(
 
         # Check if file is encrypted
         content = env_file.read_text()
-        if not is_encrypted_content(backend_provider, encryption_backend, content):
+        if not encryption_helpers.is_encrypted_content(
+            backend_provider, encryption_backend, content
+        ):
             detected_provider = detect_encryption_provider(env_file)
             if detected_provider and detected_provider != backend_provider:
                 if (
@@ -997,12 +998,7 @@ def lock(
     console.print()
 
     try:
-        from envdrift.cli_commands.encryption_helpers import (
-            build_sops_encrypt_kwargs,
-            is_encrypted_content,
-            resolve_encryption_backend,
-            should_skip_reencryption,
-        )
+        from envdrift.cli_commands import encryption_helpers
         from envdrift.encryption import (
             EncryptionBackendError,
             EncryptionNotFoundError,
@@ -1010,8 +1006,8 @@ def lock(
             detect_encryption_provider,
         )
 
-        encryption_backend, backend_provider, encryption_config = resolve_encryption_backend(
-            config_file
+        encryption_backend, backend_provider, encryption_config = (
+            encryption_helpers.resolve_encryption_backend(config_file)
         )
         if not encryption_backend.is_installed():
             print_error(f"{encryption_backend.name} is not installed")
@@ -1023,7 +1019,7 @@ def lock(
 
     sops_encrypt_kwargs = {}
     if backend_provider == EncryptionProvider.SOPS:
-        sops_encrypt_kwargs = build_sops_encrypt_kwargs(encryption_config)
+        sops_encrypt_kwargs = encryption_helpers.build_sops_encrypt_kwargs(encryption_config)
 
     encrypted_count = 0
     skipped_count = 0
@@ -1067,7 +1063,9 @@ def lock(
 
         # Check if file is already encrypted
         content = env_file.read_text()
-        if not is_encrypted_content(backend_provider, encryption_backend, content):
+        if not encryption_helpers.is_encrypted_content(
+            backend_provider, encryption_backend, content
+        ):
             detected_provider = detect_encryption_provider(env_file)
             if detected_provider and detected_provider != backend_provider:
                 if (
@@ -1146,9 +1144,13 @@ def lock(
         # produces different ciphertext each time, even for identical plaintext.
         # We compare the current file with the decrypted version from git;
         # if unchanged, restore the original encrypted file to avoid git noise.
-        should_skip, skip_reason = should_skip_reencryption(env_file, encryption_backend)
+        should_skip, skip_reason = encryption_helpers.should_skip_reencryption(
+            env_file, encryption_backend
+        )
         if should_skip:
-            console.print(f"  [dim]=[/dim] {env_file} [dim]- skipped ({skip_reason})[/dim]")
+            console.print(f"  [dim]=[/dim] {env_file} [dim]- skipped[/dim]")
+            if skip_reason:
+                console.print(f"    [dim]{skip_reason}[/dim]")
             already_encrypted_count += 1
             continue
 

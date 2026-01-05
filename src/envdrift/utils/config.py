@@ -1,4 +1,4 @@
-"""Shared utility helpers for envdrift."""
+"""Configuration-related helpers."""
 
 from __future__ import annotations
 
