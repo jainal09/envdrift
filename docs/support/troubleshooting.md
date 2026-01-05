@@ -4,7 +4,9 @@ Common issues and how to resolve them.
 
 ## Known Issues
 
-- Partial encryption: `envdrift lock` could encrypt combined files (like `.env.production`) and make non-sensitive values unreadable. Fix: lock now skips `.clear` and combined files; use `envdrift push` for partial encryption workflows on older versions.
+- Partial encryption: `envdrift lock` could encrypt combined files (like `.env.production`)
+  and make non-sensitive values unreadable. Fix: lock now skips `.clear` and combined
+  files; use `envdrift push` for partial encryption workflows on older versions.
 
 ## Schema Validation Issues
 
