@@ -173,6 +173,7 @@ class TestShouldSkipReencryption:
 
         assert should_skip is False
         assert "could not decrypt" in reason
+
     def test_returns_false_when_restore_fails(self, tmp_path: Path):
         """Should return False if restoring failing despite content match."""
         # Setup git repo
@@ -214,18 +215,18 @@ class TestShouldSkipReencryption:
         # Setup basic file
         env_file = tmp_path / ".env.production"
         env_file.write_text("SECRET=value")
-        
+
         mock_backend = MagicMock()
         mock_backend.name = "dotenvx"
 
         # Mock early checks to pass
         with patch("envdrift.cli_commands.encryption_helpers.is_file_tracked", return_value=True), \
              patch("envdrift.cli_commands.encryption_helpers.get_file_from_git", return_value="encrypted:content"):
-            
+
             # Mock backend.decrypt to raise exception
             mock_backend.decrypt.side_effect = Exception("Unexpected error")
-            
+
             should_skip, reason = should_skip_reencryption(env_file, mock_backend)
-            
+
         assert should_skip is False
         assert "error comparing content" in reason
