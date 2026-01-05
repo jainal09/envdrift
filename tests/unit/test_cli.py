@@ -17,7 +17,7 @@ from envdrift.cli_commands.encryption import (
 )
 from envdrift.config import EnvdriftConfig
 from envdrift.encryption import EncryptionProvider
-from envdrift.encryption.base import EncryptionBackendError
+from envdrift.encryption.base import EncryptionBackendError, EncryptionResult
 from envdrift.integrations.dotenvx import DotenvxError
 from envdrift.vault import VaultError
 from tests.helpers import DummyEncryptionBackend
@@ -81,6 +81,35 @@ def _mock_encryption_backend(
         lambda *_args, **_kwargs: (dummy, provider, None),
     )
     return dummy
+
+
+class TestSyncHelpers:
+    """Tests for sync CLI helpers."""
+
+    def test_normalize_max_workers_invalid_values_warn(self, monkeypatch):
+        """Invalid max_workers values should warn and return None."""
+        from envdrift.cli_commands import sync as sync_module
+
+        warnings: list[str] = []
+        monkeypatch.setattr(sync_module, "print_warning", lambda msg: warnings.append(msg))
+
+        assert sync_module._normalize_max_workers("bad") is None
+        assert sync_module._normalize_max_workers(True) is None
+
+        assert any("Invalid max_workers value" in msg for msg in warnings)
+
+    def test_normalize_max_workers_negative_warns(self, monkeypatch):
+        """Negative max_workers values should warn and return None."""
+        from envdrift.cli_commands import sync as sync_module
+
+        warnings: list[str] = []
+        monkeypatch.setattr(sync_module, "print_warning", lambda msg: warnings.append(msg))
+
+        assert sync_module._normalize_max_workers(0) is None
+        assert sync_module._normalize_max_workers(-2) is None
+        assert sync_module._normalize_max_workers(2) == 2
+
+        assert any("max_workers must be >= 1" in msg for msg in warnings)
 
 
 class TestValidateCommand:
@@ -2418,6 +2447,93 @@ class TestPullCommand:
         assert result.exit_code == 0
         assert captured.get("max_workers") == 2
 
+    def test_pull_decrypt_result_failure_exits(self, monkeypatch, tmp_path: Path):
+        """Pull should exit when decrypt returns an unsuccessful result."""
+        service_dir = tmp_path / "service"
+        service_dir.mkdir()
+        env_file = service_dir / ".env.production"
+        env_file.write_text("SECRET=encrypted:abc123")
+
+        from envdrift.sync.config import ServiceMapping, SyncConfig
+
+        sync_config = SyncConfig(
+            mappings=[
+                ServiceMapping(
+                    secret_name="dotenv-key",
+                    folder_path=service_dir,
+                    environment="production",
+                )
+            ],
+            env_keys_filename=".env.keys",
+        )
+
+        monkeypatch.setattr(
+            "envdrift.cli_commands.sync.load_sync_config_and_client",
+            lambda *args, **kwargs: (sync_config, SimpleNamespace(), "aws", None, None, None),
+        )
+        monkeypatch.setattr(
+            "envdrift.integrations.hook_check.ensure_git_hook_setup",
+            lambda **_kwargs: [],
+        )
+
+        backend = DummyEncryptionBackend(name="dotenvx")
+
+        def _decrypt_failure(env_path, **_kwargs):
+            return EncryptionResult(success=False, message="bad decrypt", file_path=Path(env_path))
+
+        backend.decrypt = _decrypt_failure  # type: ignore[method-assign]
+        monkeypatch.setattr(
+            "envdrift.cli_commands.encryption_helpers.resolve_encryption_backend",
+            lambda *_args, **_kwargs: (backend, EncryptionProvider.DOTENVX, None),
+        )
+
+        result = runner.invoke(app, ["pull", "--skip-sync"])
+
+        assert result.exit_code == 1
+        assert "could not be decrypted" in result.output.lower()
+
+    def test_pull_activation_copy_failure_exits(self, monkeypatch, tmp_path: Path):
+        """Pull should report activation failures and exit non-zero."""
+        service_dir = tmp_path / "service"
+        service_dir.mkdir()
+        env_file = service_dir / ".env.production"
+        env_file.write_text("SECRET=encrypted:abc123")
+
+        from envdrift.sync.config import ServiceMapping, SyncConfig
+
+        sync_config = SyncConfig(
+            mappings=[
+                ServiceMapping(
+                    secret_name="dotenv-key",
+                    folder_path=service_dir,
+                    environment="production",
+                    profile="local",
+                    activate_to=Path("active.env"),
+                )
+            ],
+            env_keys_filename=".env.keys",
+        )
+
+        monkeypatch.setattr(
+            "envdrift.cli_commands.sync.load_sync_config_and_client",
+            lambda *args, **kwargs: (sync_config, SimpleNamespace(), "aws", None, None, None),
+        )
+        monkeypatch.setattr(
+            "envdrift.integrations.hook_check.ensure_git_hook_setup",
+            lambda **_kwargs: [],
+        )
+        monkeypatch.setattr(
+            "envdrift.cli_commands.sync.shutil.copy2",
+            lambda *_args, **_kwargs: (_ for _ in ()).throw(OSError("copy failed")),
+        )
+
+        _mock_encryption_backend(monkeypatch)
+
+        result = runner.invoke(app, ["pull", "--profile", "local", "--skip-sync"])
+
+        assert result.exit_code == 1
+        assert "activation failed" in result.output.lower()
+
 
 class TestLockCommand:
     """Tests for the lock CLI command."""
@@ -2759,6 +2875,253 @@ class TestLockCommand:
 
         assert result.exit_code == 0
         assert captured.get("max_workers") == 2
+
+    def test_lock_non_force_prompts_and_encrypts(self, monkeypatch, tmp_path: Path):
+        """Lock without --force should prompt and encrypt when accepted."""
+        service_dir = tmp_path / "service"
+        service_dir.mkdir()
+        env_file = service_dir / ".env.production"
+        env_file.write_text("SECRET=value")
+
+        from envdrift.sync.config import ServiceMapping, SyncConfig
+
+        sync_config = SyncConfig(
+            mappings=[
+                ServiceMapping(
+                    secret_name="dotenv-key",
+                    folder_path=service_dir,
+                    environment="production",
+                )
+            ],
+            env_keys_filename=".env.keys",
+        )
+
+        monkeypatch.setattr(
+            "envdrift.cli_commands.sync.load_sync_config_and_client",
+            lambda *args, **kwargs: (sync_config, SimpleNamespace(), "aws", None, None, None),
+        )
+        monkeypatch.setattr(
+            "envdrift.integrations.hook_check.ensure_git_hook_setup",
+            lambda **_kwargs: [],
+        )
+        monkeypatch.setattr("envdrift.output.rich.console.input", lambda *_args, **_kwargs: "y")
+
+        _mock_encryption_backend(monkeypatch)
+
+        result = runner.invoke(app, ["lock"])
+
+        assert result.exit_code == 0
+        assert "encrypted" in result.output.lower()
+
+    def test_lock_force_sops_encryption_path(self, monkeypatch, tmp_path: Path):
+        """Lock with --force should use the non-dotenvx encrypt path when configured."""
+        service_dir = tmp_path / "service"
+        service_dir.mkdir()
+        env_file = service_dir / ".env.production"
+        env_file.write_text("SECRET=value")
+
+        from envdrift.sync.config import ServiceMapping, SyncConfig
+
+        sync_config = SyncConfig(
+            mappings=[
+                ServiceMapping(
+                    secret_name="sops-key",
+                    folder_path=service_dir,
+                    environment="production",
+                )
+            ],
+            env_keys_filename=".env.keys",
+        )
+
+        monkeypatch.setattr(
+            "envdrift.cli_commands.sync.load_sync_config_and_client",
+            lambda *args, **kwargs: (sync_config, SimpleNamespace(), "aws", None, None, None),
+        )
+        monkeypatch.setattr(
+            "envdrift.integrations.hook_check.ensure_git_hook_setup",
+            lambda **_kwargs: [],
+        )
+
+        _mock_encryption_backend(monkeypatch, provider=EncryptionProvider.SOPS)
+
+        result = runner.invoke(app, ["lock", "--force"])
+
+        assert result.exit_code == 0
+        assert "encrypted" in result.output.lower()
+
+    def test_lock_force_reuses_dotenvx_lock(self, monkeypatch, tmp_path: Path):
+        """Lock with multiple files should reuse the dotenvx lock."""
+        service_dir = tmp_path / "service"
+        service_dir.mkdir()
+        env_prod = service_dir / ".env.production"
+        env_prod.write_text("SECRET=value")
+        env_staging = service_dir / ".env.staging"
+        env_staging.write_text("SECRET=other")
+
+        from envdrift.sync.config import ServiceMapping, SyncConfig
+
+        sync_config = SyncConfig(
+            mappings=[
+                ServiceMapping(
+                    secret_name="dotenv-key-prod",
+                    folder_path=service_dir,
+                    environment="production",
+                ),
+                ServiceMapping(
+                    secret_name="dotenv-key-staging",
+                    folder_path=service_dir,
+                    environment="staging",
+                ),
+            ],
+            env_keys_filename=".env.keys",
+        )
+
+        monkeypatch.setattr(
+            "envdrift.cli_commands.sync.load_sync_config_and_client",
+            lambda *args, **kwargs: (sync_config, SimpleNamespace(), "aws", None, None, None),
+        )
+        monkeypatch.setattr(
+            "envdrift.integrations.hook_check.ensure_git_hook_setup",
+            lambda **_kwargs: [],
+        )
+
+        class DummyExecutor:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, tb):
+                return False
+
+            def map(self, func, iterable):
+                return [func(item) for item in iterable]
+
+        monkeypatch.setattr("envdrift.cli_commands.sync.ThreadPoolExecutor", DummyExecutor)
+        _mock_encryption_backend(monkeypatch)
+
+        result = runner.invoke(app, ["lock", "--force"])
+
+        assert result.exit_code == 0
+
+    def test_lock_force_falsey_lock_skips_context(self, monkeypatch, tmp_path: Path):
+        """Lock should fall back to unlocked encrypt path when lock is falsey."""
+        service_dir = tmp_path / "service"
+        service_dir.mkdir()
+        env_file = service_dir / ".env.production"
+        env_file.write_text("SECRET=value")
+
+        from envdrift.sync.config import ServiceMapping, SyncConfig
+
+        sync_config = SyncConfig(
+            mappings=[
+                ServiceMapping(
+                    secret_name="dotenv-key",
+                    folder_path=service_dir,
+                    environment="production",
+                )
+            ],
+            env_keys_filename=".env.keys",
+        )
+
+        monkeypatch.setattr(
+            "envdrift.cli_commands.sync.load_sync_config_and_client",
+            lambda *args, **kwargs: (sync_config, SimpleNamespace(), "aws", None, None, None),
+        )
+        monkeypatch.setattr(
+            "envdrift.integrations.hook_check.ensure_git_hook_setup",
+            lambda **_kwargs: [],
+        )
+
+        class FalseyLock:
+            def __bool__(self):
+                return False
+
+        monkeypatch.setattr("envdrift.cli_commands.sync.Lock", FalseyLock)
+        _mock_encryption_backend(monkeypatch)
+
+        result = runner.invoke(app, ["lock", "--force"])
+
+        assert result.exit_code == 0
+
+    def test_lock_force_encrypt_error_reports(self, monkeypatch, tmp_path: Path):
+        """Lock should report encryption errors from the worker path."""
+        service_dir = tmp_path / "service"
+        service_dir.mkdir()
+        env_file = service_dir / ".env.production"
+        env_file.write_text("SECRET=value")
+
+        from envdrift.sync.config import ServiceMapping, SyncConfig
+
+        sync_config = SyncConfig(
+            mappings=[
+                ServiceMapping(
+                    secret_name="dotenv-key",
+                    folder_path=service_dir,
+                    environment="production",
+                )
+            ],
+            env_keys_filename=".env.keys",
+        )
+
+        monkeypatch.setattr(
+            "envdrift.cli_commands.sync.load_sync_config_and_client",
+            lambda *args, **kwargs: (sync_config, SimpleNamespace(), "aws", None, None, None),
+        )
+        monkeypatch.setattr(
+            "envdrift.integrations.hook_check.ensure_git_hook_setup",
+            lambda **_kwargs: [],
+        )
+
+        _mock_encryption_backend(monkeypatch, encrypt_side_effect=EncryptionBackendError("boom"))
+
+        result = runner.invoke(app, ["lock", "--force"])
+
+        assert result.exit_code == 1
+        assert "boom" in result.output.lower()
+
+    def test_lock_force_encrypt_result_failure_reports(self, monkeypatch, tmp_path: Path):
+        """Lock should report unsuccessful encrypt results from the worker path."""
+        service_dir = tmp_path / "service"
+        service_dir.mkdir()
+        env_file = service_dir / ".env.production"
+        env_file.write_text("SECRET=value")
+
+        from envdrift.sync.config import ServiceMapping, SyncConfig
+
+        sync_config = SyncConfig(
+            mappings=[
+                ServiceMapping(
+                    secret_name="dotenv-key",
+                    folder_path=service_dir,
+                    environment="production",
+                )
+            ],
+            env_keys_filename=".env.keys",
+        )
+
+        monkeypatch.setattr(
+            "envdrift.cli_commands.sync.load_sync_config_and_client",
+            lambda *args, **kwargs: (sync_config, SimpleNamespace(), "aws", None, None, None),
+        )
+        monkeypatch.setattr(
+            "envdrift.integrations.hook_check.ensure_git_hook_setup",
+            lambda **_kwargs: [],
+        )
+
+        backend = DummyEncryptionBackend(name="dotenvx")
+
+        def _encrypt_failure(env_path, **_kwargs):
+            return EncryptionResult(success=False, message="bad encrypt", file_path=Path(env_path))
+
+        backend.encrypt = _encrypt_failure  # type: ignore[method-assign]
+        monkeypatch.setattr(
+            "envdrift.cli_commands.encryption_helpers.resolve_encryption_backend",
+            lambda *_args, **_kwargs: (backend, EncryptionProvider.DOTENVX, None),
+        )
+
+        result = runner.invoke(app, ["lock", "--force"])
+
+        assert result.exit_code == 1
+        assert "bad encrypt" in result.output.lower()
 
 
 class TestVaultPushCommand:
