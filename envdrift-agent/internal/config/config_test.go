@@ -4,6 +4,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 	"time"
 )
@@ -59,6 +60,13 @@ func TestLoadMissingConfig(t *testing.T) {
 	os.Setenv("HOME", tempDir)
 	defer os.Setenv("HOME", originalHome)
 
+	// Windows uses USERPROFILE
+	if runtime.GOOS == "windows" {
+		originalProfile := os.Getenv("USERPROFILE")
+		os.Setenv("USERPROFILE", tempDir)
+		defer os.Setenv("USERPROFILE", originalProfile)
+	}
+
 	cfg, err := Load()
 	if err != nil {
 		t.Fatalf("Load should return defaults when config missing: %v", err)
@@ -78,6 +86,13 @@ func TestSaveAndLoad(t *testing.T) {
 	originalHome := os.Getenv("HOME")
 	os.Setenv("HOME", tempDir)
 	defer os.Setenv("HOME", originalHome)
+
+	// Windows uses USERPROFILE
+	if runtime.GOOS == "windows" {
+		originalProfile := os.Getenv("USERPROFILE")
+		os.Setenv("USERPROFILE", tempDir)
+		defer os.Setenv("USERPROFILE", originalProfile)
+	}
 
 	// Create and save config
 	cfg := DefaultConfig()

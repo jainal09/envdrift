@@ -13,7 +13,10 @@ func TestLaunchAgentPath(t *testing.T) {
 		t.Skip("macOS-only test")
 	}
 
-	path := launchAgentPath()
+	path, err := launchAgentPath()
+	if err != nil {
+		t.Fatalf("launchAgentPath failed: %v", err)
+	}
 	if path == "" {
 		t.Error("Launch agent path should not be empty")
 	}
@@ -28,7 +31,10 @@ func TestSystemdPath(t *testing.T) {
 		t.Skip("Linux-only test")
 	}
 
-	path := systemdPath()
+	path, err := systemdPath()
+	if err != nil {
+		t.Fatalf("systemdPath failed: %v", err)
+	}
 	if path == "" {
 		t.Error("Systemd path should not be empty")
 	}

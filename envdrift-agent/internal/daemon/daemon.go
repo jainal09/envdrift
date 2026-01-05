@@ -70,9 +70,12 @@ func IsRunning() bool {
 
 const macOSPlistName = "com.envdrift.guardian.plist"
 
-func launchAgentPath() string {
-	home, _ := os.UserHomeDir()
-	return filepath.Join(home, "Library", "LaunchAgents", macOSPlistName)
+func launchAgentPath() (string, error) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(home, "Library", "LaunchAgents", macOSPlistName), nil
 }
 
 func installMacOS() error {
@@ -103,7 +106,10 @@ func installMacOS() error {
 </dict>
 </plist>`, execPath)
 
-	plistPath := launchAgentPath()
+	plistPath, err := launchAgentPath()
+	if err != nil {
+		return err
+	}
 	if err := os.MkdirAll(filepath.Dir(plistPath), 0755); err != nil {
 		return err
 	}
@@ -117,7 +123,10 @@ func installMacOS() error {
 }
 
 func uninstallMacOS() error {
-	plistPath := launchAgentPath()
+	plistPath, err := launchAgentPath()
+	if err != nil {
+		return err
+	}
 
 	// Unload first
 	_ = exec.Command("launchctl", "unload", plistPath).Run()
@@ -126,7 +135,11 @@ func uninstallMacOS() error {
 }
 
 func isInstalledMacOS() bool {
-	_, err := os.Stat(launchAgentPath())
+	path, err := launchAgentPath()
+	if err != nil {
+		return false
+	}
+	_, err = os.Stat(path)
 	return err == nil
 }
 
@@ -139,9 +152,12 @@ func isRunningMacOS() bool {
 
 const linuxServiceName = "envdrift-guardian.service"
 
-func systemdPath() string {
-	home, _ := os.UserHomeDir()
-	return filepath.Join(home, ".config", "systemd", "user", linuxServiceName)
+func systemdPath() (string, error) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(home, ".config", "systemd", "user", linuxServiceName), nil
 }
 
 func installLinux() error {
@@ -163,7 +179,10 @@ RestartSec=10
 WantedBy=default.target
 `, execPath)
 
-	servicePath := systemdPath()
+	servicePath, err := systemdPath()
+	if err != nil {
+		return err
+	}
 	if err := os.MkdirAll(filepath.Dir(servicePath), 0755); err != nil {
 		return err
 	}
@@ -181,11 +200,19 @@ WantedBy=default.target
 func uninstallLinux() error {
 	_ = exec.Command("systemctl", "--user", "stop", linuxServiceName).Run()
 	_ = exec.Command("systemctl", "--user", "disable", linuxServiceName).Run()
-	return os.Remove(systemdPath())
+	path, err := systemdPath()
+	if err != nil {
+		return err
+	}
+	return os.Remove(path)
 }
 
 func isInstalledLinux() bool {
-	_, err := os.Stat(systemdPath())
+	path, err := systemdPath()
+	if err != nil {
+		return false
+	}
+	_, err = os.Stat(path)
 	return err == nil
 }
 
