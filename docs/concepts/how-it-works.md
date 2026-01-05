@@ -135,7 +135,7 @@ envdrift automatically detects which encryption backend was used:
 
 | Backend | Detection Method |
 |:--------|:-----------------|
-| dotenvx | `#/---BEGIN DOTENV ENCRYPTED---/` header or `DOTENV_PUBLIC_KEY` variable |
+| dotenvx | `DOTENV_PUBLIC_KEY` variable or values prefixed with `encrypted:` |
 | SOPS | `ENC[AES256_GCM,...]` value format |
 
 ## Sensitive Field Detection
