@@ -2,6 +2,7 @@
 
 from envdrift.utils.git import (
     GitError,
+    ensure_gitignore_entries,
     get_file_from_git,
     get_git_root,
     is_file_modified,
@@ -13,6 +14,7 @@ from envdrift.utils.config import normalize_max_workers
 
 __all__ = [
     "GitError",
+    "ensure_gitignore_entries",
     "get_file_from_git",
     "get_git_root",
     "is_file_modified",

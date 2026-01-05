@@ -233,6 +233,42 @@ def _normalize_max_workers(max_workers: int | None) -> int | None:
     return normalize_max_workers(max_workers, warn=print_warning)
 
 
+def _load_partial_encryption_paths(
+    config_file: Path | None,
+) -> tuple[set[Path], set[Path], set[Path]]:
+    from envdrift.config import ConfigNotFoundError, find_config, load_config
+
+    config_path = None
+    if config_file is not None and config_file.suffix.lower() == ".toml":
+        config_path = config_file
+    elif config_file is None:
+        config_path = find_config()
+
+    if not config_path:
+        return set(), set(), set()
+
+    try:
+        config = load_config(config_path)
+    except ConfigNotFoundError:
+        return set(), set(), set()
+    except Exception as exc:
+        print_warning(f"Unable to read config for partial encryption: {exc}")
+        return set(), set(), set()
+
+    if not config.partial_encryption.enabled:
+        return set(), set(), set()
+
+    clear_files: set[Path] = set()
+    secret_files: set[Path] = set()
+    combined_files: set[Path] = set()
+    for env_config in config.partial_encryption.environments:
+        clear_files.add(Path(env_config.clear_file).resolve())
+        secret_files.add(Path(env_config.secret_file).resolve())
+        combined_files.add(Path(env_config.combined_file).resolve())
+
+    return clear_files, secret_files, combined_files
+
+
 def _should_use_executor(max_workers: int | None, task_count: int) -> bool:
     if task_count < 2:
         return False
@@ -584,6 +620,7 @@ def pull(
     error_count = 0
     activated_count = 0
     decrypt_tasks: list[_DecryptTask] = []
+    partial_clear, _, partial_combined = _load_partial_encryption_paths(config_file)
 
     for mapping in filtered_mappings:
         effective_env = mapping.effective_environment
@@ -605,6 +642,21 @@ def pull(
                 console.print(f"  [dim]=[/dim] {env_file} [dim]- skipped (not found)[/dim]")
                 skipped_count += 1
                 continue
+
+        resolved_env_file = env_file.resolve()
+        if resolved_env_file in partial_combined:
+            console.print(
+                f"  [dim]=[/dim] {env_file} "
+                "[dim]- skipped (partial encryption combined file)[/dim]"
+            )
+            skipped_count += 1
+            continue
+        if resolved_env_file in partial_clear:
+            console.print(
+                f"  [dim]=[/dim] {env_file} [dim]- skipped (partial encryption clear file)[/dim]"
+            )
+            skipped_count += 1
+            continue
 
         # Check if file is encrypted
         content = env_file.read_text()
@@ -858,6 +910,7 @@ def lock(
     # Tracking for summary
     warnings: list[str] = []
     errors: list[str] = []
+    partial_clear, _, partial_combined = _load_partial_encryption_paths(config_file)
 
     # === STEP 1: VERIFY/SYNC KEYS (OPTIONAL) ===
     if verify_vault:
@@ -1051,6 +1104,23 @@ def lock(
                 warnings.append(f"{env_file}: file not found")
                 skipped_count += 1
                 continue
+
+        resolved_env_file = env_file.resolve()
+        if resolved_env_file in partial_combined:
+            console.print(
+                f"  [dim]=[/dim] {env_file} "
+                "[dim]- skipped (partial encryption combined file)[/dim]"
+            )
+            warnings.append(f"{env_file}: use envdrift push for partial encryption")
+            skipped_count += 1
+            continue
+        if resolved_env_file in partial_clear:
+            console.print(
+                f"  [dim]=[/dim] {env_file} [dim]- skipped (partial encryption clear file)[/dim]"
+            )
+            warnings.append(f"{env_file}: use envdrift push for partial encryption")
+            skipped_count += 1
+            continue
 
         # Check if .env.keys file exists (needed for encryption)
         env_keys_file = mapping.folder_path / (sync_config.env_keys_filename or ".env.keys")

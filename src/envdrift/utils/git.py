@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import subprocess  # nosec B404
 from pathlib import Path
+from typing import Iterable
 
 
 class GitError(Exception):
@@ -194,3 +195,55 @@ def is_file_tracked(file_path: Path) -> bool:
         return result.returncode == 0
     except (subprocess.TimeoutExpired, FileNotFoundError, ValueError):
         return False
+
+
+def ensure_gitignore_entries(
+    paths: Iterable[Path], *, git_root: Path | None = None
+) -> list[str]:
+    """
+    Ensure the provided paths are listed in the repo's .gitignore.
+
+    Parameters:
+        paths: Iterable of file paths to ignore.
+        git_root: Optional git root override; auto-detected when omitted.
+
+    Returns:
+        List of entries added to .gitignore (relative paths).
+    """
+    path_list = [Path(path) for path in paths]
+    if not path_list:
+        return []
+
+    if git_root is None:
+        git_root = get_git_root(path_list[0]) or get_git_root(Path.cwd())
+    if git_root is None:
+        return []
+
+    gitignore_path = git_root / ".gitignore"
+    existing_lines: list[str] = []
+    if gitignore_path.exists():
+        existing_lines = gitignore_path.read_text(encoding="utf-8").splitlines()
+
+    existing = {line.strip() for line in existing_lines if line.strip()}
+    new_entries: list[str] = []
+
+    for path in path_list:
+        try:
+            relative_path = path.resolve().relative_to(git_root)
+        except ValueError:
+            continue
+
+        entry = relative_path.as_posix()
+        if entry not in existing:
+            new_entries.append(entry)
+            existing.add(entry)
+
+    if new_entries:
+        content = gitignore_path.read_text(encoding="utf-8") if gitignore_path.exists() else ""
+        with gitignore_path.open("a", encoding="utf-8") as handle:
+            if content and not content.endswith("\n"):
+                handle.write("\n")
+            for entry in new_entries:
+                handle.write(f"{entry}\n")
+
+    return new_entries

@@ -7,6 +7,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from envdrift.utils.git import (
+    ensure_gitignore_entries,
     get_file_from_git,
     get_git_root,
     is_file_modified,
@@ -197,6 +198,34 @@ class TestIsFileModified:
         test_file.write_text("modified")
 
         assert is_file_modified(test_file) is True
+
+
+class TestEnsureGitignoreEntries:
+    """Tests for ensure_gitignore_entries function."""
+
+    def test_creates_gitignore_when_missing(self, tmp_path: Path):
+        """Should create .gitignore and add entries when missing."""
+        subprocess.run(["git", "init"], cwd=tmp_path, capture_output=True)
+
+        target = tmp_path / ".env.production"
+        added = ensure_gitignore_entries([target])
+
+        assert added == [".env.production"]
+        gitignore = tmp_path / ".gitignore"
+        assert gitignore.exists()
+        assert ".env.production" in gitignore.read_text()
+
+    def test_skips_existing_entries(self, tmp_path: Path):
+        """Should avoid duplicating existing entries."""
+        subprocess.run(["git", "init"], cwd=tmp_path, capture_output=True)
+        gitignore = tmp_path / ".gitignore"
+        gitignore.write_text(".env.production\n")
+
+        target = tmp_path / ".env.production"
+        added = ensure_gitignore_entries([target])
+
+        assert added == []
+        assert gitignore.read_text().splitlines().count(".env.production") == 1
 
 
 class TestGitUtilsExceptions:

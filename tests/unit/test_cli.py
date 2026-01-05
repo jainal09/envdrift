@@ -1925,6 +1925,60 @@ class TestPullCommand:
         assert env_file in decrypted
         assert "setup complete" in result.output.lower()
 
+    def test_pull_skips_partial_combined_file(self, monkeypatch, tmp_path: Path):
+        """Pull should skip combined partial-encryption files."""
+        service_dir = tmp_path / "service"
+        service_dir.mkdir()
+        env_file = service_dir / ".env.production"
+        env_file.write_text("SECRET=encrypted:abc123")
+
+        config_file = tmp_path / "envdrift.toml"
+        config_file.write_text(
+            dedent(
+                f"""
+                [vault]
+                provider = "aws"
+
+                [vault.aws]
+                region = "us-east-1"
+
+                [vault.sync]
+                env_keys_filename = ".env.keys"
+
+                [[vault.sync.mappings]]
+                secret_name = "dotenv-key"
+                folder_path = "{service_dir.as_posix()}"
+                environment = "production"
+
+                [partial_encryption]
+                enabled = true
+
+                [[partial_encryption.environments]]
+                name = "production"
+                clear_file = "{(service_dir / ".env.production.clear").as_posix()}"
+                secret_file = "{(service_dir / ".env.production.secret").as_posix()}"
+                combined_file = "{env_file.as_posix()}"
+                """
+            ).lstrip()
+        )
+
+        monkeypatch.setattr("envdrift.vault.get_vault_client", lambda *_, **__: SimpleNamespace())
+        monkeypatch.setattr(
+            "envdrift.integrations.hook_check.ensure_git_hook_setup",
+            lambda **_kwargs: [],
+        )
+
+        _mock_sync_engine_success(monkeypatch)
+
+        decrypted: list[Path] = []
+        _mock_encryption_backend(monkeypatch, decrypted_paths=decrypted)
+
+        result = runner.invoke(app, ["pull", "-c", str(config_file), "--skip-sync"])
+
+        assert result.exit_code == 0
+        assert env_file not in decrypted
+        assert "partial encryption combined file" in result.output.lower()
+
     def test_pull_reports_service_status(self, monkeypatch, tmp_path: Path):
         """Pull should report service sync status when sync results include services."""
         service_dir = tmp_path / "service"
@@ -2599,6 +2653,58 @@ class TestLockCommand:
 
         assert result.exit_code == 1
         assert "need encryption" in result.output.lower()
+
+    def test_lock_skips_partial_combined_file(self, monkeypatch, tmp_path: Path):
+        """Lock should skip combined partial-encryption files."""
+        service_dir = tmp_path / "service"
+        service_dir.mkdir()
+        env_file = service_dir / ".env.production"
+        env_file.write_text("SECRET=encrypted:abc123")
+
+        config_file = tmp_path / "envdrift.toml"
+        config_file.write_text(
+            dedent(
+                f"""
+                [vault]
+                provider = "aws"
+
+                [vault.aws]
+                region = "us-east-1"
+
+                [vault.sync]
+                env_keys_filename = ".env.keys"
+
+                [[vault.sync.mappings]]
+                secret_name = "dotenv-key"
+                folder_path = "{service_dir.as_posix()}"
+                environment = "production"
+
+                [partial_encryption]
+                enabled = true
+
+                [[partial_encryption.environments]]
+                name = "production"
+                clear_file = "{(service_dir / ".env.production.clear").as_posix()}"
+                secret_file = "{(service_dir / ".env.production.secret").as_posix()}"
+                combined_file = "{env_file.as_posix()}"
+                """
+            ).lstrip()
+        )
+
+        monkeypatch.setattr("envdrift.vault.get_vault_client", lambda *_, **__: SimpleNamespace())
+        monkeypatch.setattr(
+            "envdrift.integrations.hook_check.ensure_git_hook_setup",
+            lambda **_kwargs: [],
+        )
+
+        encrypted: list[Path] = []
+        _mock_encryption_backend(monkeypatch, encrypted_paths=encrypted)
+
+        result = runner.invoke(app, ["lock", "-c", str(config_file), "--force"])
+
+        assert result.exit_code == 0
+        assert env_file not in encrypted
+        assert "partial encryption combined file" in result.output.lower()
 
     def test_lock_verify_vault_mismatch_fails(self, monkeypatch, tmp_path: Path):
         """Verify vault should fail on key mismatch."""
