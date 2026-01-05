@@ -233,16 +233,23 @@ def _normalize_max_workers(max_workers: int | None) -> int | None:
     return normalize_max_workers(max_workers, warn=print_warning)
 
 
+def _find_config_path(config_file: Path | None) -> Path | None:
+    """Find the config path from explicit file or auto-discovery."""
+    from envdrift.config import find_config
+
+    if config_file is not None and config_file.suffix.lower() == ".toml":
+        return config_file
+    elif config_file is None:
+        return find_config()
+    return None
+
+
 def _load_partial_encryption_paths(
     config_file: Path | None,
 ) -> tuple[set[Path], set[Path], set[Path]]:
-    from envdrift.config import ConfigNotFoundError, find_config, load_config
+    from envdrift.config import ConfigNotFoundError, load_config
 
-    config_path = None
-    if config_file is not None and config_file.suffix.lower() == ".toml":
-        config_path = config_file
-    elif config_file is None:
-        config_path = find_config()
+    config_path = _find_config_path(config_file)
 
     if not config_path:
         return set(), set(), set()
@@ -1391,13 +1398,11 @@ def lock(
         console.print(f"[bold cyan]{step_num}:[/bold cyan] Processing partial encryption files...")
         console.print()
 
-        # Load partial encryption config
-        from envdrift.config import find_config as find_config_file
+        # Load partial encryption config using shared helper
+        from envdrift.config import ConfigNotFoundError
         from envdrift.config import load_config as load_envdrift_config
 
-        config_path = config_file
-        if config_path is None:
-            config_path = find_config_file()
+        config_path = _find_config_path(config_file)
 
         if config_path:
             try:
@@ -1481,7 +1486,9 @@ def lock(
                                     error_count += 1
                 else:
                     console.print("  [dim]Partial encryption not enabled in config[/dim]")
-            except Exception as e:
+            except ConfigNotFoundError:
+                print_warning("Could not find partial encryption config")
+            except (OSError, AttributeError, KeyError) as e:
                 print_warning(f"Could not load partial encryption config: {e}")
 
     # === SUMMARY ===

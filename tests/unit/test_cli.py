@@ -2344,9 +2344,7 @@ class TestPullCommand:
         service_dir.mkdir()
         env_file = service_dir / ".env.production"
         env_file.write_text(
-            "#/---BEGIN DOTENV ENCRYPTED---/\n"
-            "DOTENV_PUBLIC_KEY=abc\n"
-            "SECRET=encrypted:abc123\n"
+            "#/---BEGIN DOTENV ENCRYPTED---/\nDOTENV_PUBLIC_KEY=abc\nSECRET=encrypted:abc123\n"
         )
 
         config_file = tmp_path / "envdrift.toml"
@@ -2464,8 +2462,12 @@ class TestPullCommand:
 
         sync_config = SyncConfig(
             mappings=[
-                ServiceMapping(secret_name="key-a", folder_path=service_a, environment="production"),
-                ServiceMapping(secret_name="key-b", folder_path=service_b, environment="production"),
+                ServiceMapping(
+                    secret_name="key-a", folder_path=service_a, environment="production"
+                ),
+                ServiceMapping(
+                    secret_name="key-b", folder_path=service_b, environment="production"
+                ),
             ],
             env_keys_filename=".env.keys",
             max_workers=2,
@@ -2980,7 +2982,7 @@ class TestLockCommand:
         service_dir = tmp_path / "service"
         service_dir.mkdir()
         env_file = service_dir / ".env.production"
-        env_file.write_text("#/---BEGIN DOTENV ENCRYPTED---/\n" "#/---END DOTENV ENCRYPTED---/\n")
+        env_file.write_text("#/---BEGIN DOTENV ENCRYPTED---/\n#/---END DOTENV ENCRYPTED---/\n")
 
         config_file = tmp_path / "envdrift.toml"
         config_file.write_text(
@@ -3017,9 +3019,7 @@ class TestLockCommand:
         service_dir.mkdir()
         env_file = service_dir / ".env.production"
         env_file.write_text(
-            "#/---BEGIN DOTENV ENCRYPTED---/\n"
-            "DOTENV_PUBLIC_KEY=abc\n"
-            "SECRET=encrypted:abc123\n"
+            "#/---BEGIN DOTENV ENCRYPTED---/\nDOTENV_PUBLIC_KEY=abc\nSECRET=encrypted:abc123\n"
         )
 
         config_file = tmp_path / "envdrift.toml"
@@ -3126,8 +3126,12 @@ class TestLockCommand:
 
         sync_config = SyncConfig(
             mappings=[
-                ServiceMapping(secret_name="key-a", folder_path=service_a, environment="production"),
-                ServiceMapping(secret_name="key-b", folder_path=service_b, environment="production"),
+                ServiceMapping(
+                    secret_name="key-a", folder_path=service_a, environment="production"
+                ),
+                ServiceMapping(
+                    secret_name="key-b", folder_path=service_b, environment="production"
+                ),
             ],
             env_keys_filename=".env.keys",
             max_workers=2,
