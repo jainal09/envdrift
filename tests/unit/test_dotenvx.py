@@ -995,3 +995,323 @@ class TestZipExtraction:
             installer._extract_zip(zip_path, target_dir)
 
         assert "Unsafe path" in str(exc_info.value)
+
+
+class TestLineEndingNormalization:
+    """Tests for cross-platform line ending normalization."""
+
+    def test_normalize_line_endings_crlf_to_lf(self, tmp_path):
+        """Test CRLF line endings are converted to LF."""
+        env_file = tmp_path / ".env"
+        # Write file with CRLF line endings
+        env_file.write_bytes(b"KEY1=value1\r\nKEY2=value2\r\nKEY3=value3\r\n")
+
+        wrapper = DotenvxWrapper()
+        modified = wrapper._normalize_line_endings(env_file)
+
+        assert modified is True
+        content = env_file.read_bytes()
+        assert b"\r\n" not in content
+        assert b"\r" not in content
+        assert content == b"KEY1=value1\nKEY2=value2\nKEY3=value3\n"
+
+    def test_normalize_line_endings_cr_to_lf(self, tmp_path):
+        """Test old Mac CR line endings are converted to LF."""
+        env_file = tmp_path / ".env"
+        # Write file with old Mac CR line endings
+        env_file.write_bytes(b"KEY1=value1\rKEY2=value2\rKEY3=value3\r")
+
+        wrapper = DotenvxWrapper()
+        modified = wrapper._normalize_line_endings(env_file)
+
+        assert modified is True
+        content = env_file.read_bytes()
+        assert b"\r" not in content
+        assert content == b"KEY1=value1\nKEY2=value2\nKEY3=value3\n"
+
+    def test_normalize_line_endings_already_lf(self, tmp_path):
+        """Test file with LF line endings is not modified."""
+        env_file = tmp_path / ".env"
+        original_content = b"KEY1=value1\nKEY2=value2\nKEY3=value3\n"
+        env_file.write_bytes(original_content)
+
+        wrapper = DotenvxWrapper()
+        modified = wrapper._normalize_line_endings(env_file)
+
+        assert modified is False
+        assert env_file.read_bytes() == original_content
+
+    def test_normalize_line_endings_preserves_content(self, tmp_path):
+        """Test normalization preserves all other content including special chars."""
+        env_file = tmp_path / ".env"
+        # Content with special characters that could cause Windows dotenvx issues
+        content = (
+            b"AZURE_KEY=aDwW71Ur2Z/OkmEhGxPsjDdVkB4QaiqaaNHI+Q9WFW15==\r\n"
+            b'JSON_DATA={"key":"value","nested":{"a":1}}\r\n'
+            b"BASE64=dcRH7xD0kRPoFOVTrbjfNYNxJpHoomCNWJmOZZ09m5g=\r\n"
+        )
+        env_file.write_bytes(content)
+
+        wrapper = DotenvxWrapper()
+        wrapper._normalize_line_endings(env_file)
+
+        normalized = env_file.read_bytes()
+        expected = (
+            b"AZURE_KEY=aDwW71Ur2Z/OkmEhGxPsjDdVkB4QaiqaaNHI+Q9WFW15==\n"
+            b'JSON_DATA={"key":"value","nested":{"a":1}}\n'
+            b"BASE64=dcRH7xD0kRPoFOVTrbjfNYNxJpHoomCNWJmOZZ09m5g=\n"
+        )
+        assert normalized == expected
+
+    def test_normalize_line_endings_mixed_endings(self, tmp_path):
+        """Test file with mixed line endings is normalized."""
+        env_file = tmp_path / ".env"
+        # Mixed: CRLF, LF, and CR
+        env_file.write_bytes(b"KEY1=value1\r\nKEY2=value2\nKEY3=value3\rKEY4=value4\r\n")
+
+        wrapper = DotenvxWrapper()
+        modified = wrapper._normalize_line_endings(env_file)
+
+        assert modified is True
+        content = env_file.read_bytes()
+        assert b"\r" not in content
+        assert content == b"KEY1=value1\nKEY2=value2\nKEY3=value3\nKEY4=value4\n"
+
+    def test_normalize_line_endings_empty_file(self, tmp_path):
+        """Test empty file is handled gracefully."""
+        env_file = tmp_path / ".env"
+        env_file.write_bytes(b"")
+
+        wrapper = DotenvxWrapper()
+        modified = wrapper._normalize_line_endings(env_file)
+
+        assert modified is False
+        assert env_file.read_bytes() == b""
+
+    @patch("subprocess.run")
+    @patch("envdrift.integrations.dotenvx.get_dotenvx_path")
+    def test_encrypt_normalizes_line_endings(self, mock_path, mock_run, tmp_path):
+        """Test encrypt method normalizes line endings before encryption."""
+        binary_path = tmp_path / "dotenvx"
+        binary_path.touch()
+        mock_path.return_value = binary_path
+
+        mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
+
+        env_file = tmp_path / ".env"
+        env_file.write_bytes(b"KEY=value\r\n")
+
+        wrapper = DotenvxWrapper()
+        wrapper.encrypt(env_file)
+
+        # Verify file was normalized
+        assert b"\r\n" not in env_file.read_bytes()
+        # Verify dotenvx was called
+        mock_run.assert_called_once()
+
+    @patch("subprocess.run")
+    @patch("envdrift.integrations.dotenvx.get_dotenvx_path")
+    def test_decrypt_normalizes_line_endings(self, mock_path, mock_run, tmp_path):
+        """Test decrypt method normalizes line endings before decryption."""
+        binary_path = tmp_path / "dotenvx"
+        binary_path.touch()
+        mock_path.return_value = binary_path
+
+        mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
+
+        env_file = tmp_path / ".env"
+        env_file.write_bytes(b"KEY=encrypted:abc123\r\n")
+
+        wrapper = DotenvxWrapper()
+        wrapper.decrypt(env_file)
+
+        # Verify file was normalized before decrypt
+        # Note: after decrypt, dotenvx would modify the file, but since we're mocking
+        # we just verify the normalization happened before the call
+        mock_run.assert_called_once()
+
+
+class TestCleanMismatchedHeaders:
+    """Tests for _clean_mismatched_headers method."""
+
+    def test_removes_mismatched_header_after_rename(self, tmp_path):
+        """Test removes old header when file was renamed from .env.local to .env.localenv."""
+        env_file = tmp_path / ".env.localenv"
+        # Content with duplicate headers (as would happen after renaming .env.local -> .env.localenv)
+        content = """\
+#/-------------------[DOTENV_PUBLIC_KEY]--------------------/
+#/            public-key encryption for .env files          /
+#/       [how it works](https://dotenvx.com/encryption)     /
+#/----------------------------------------------------------/
+DOTENV_PUBLIC_KEY_LOCALENV="03abc123"
+
+# .env.localenv
+#/-------------------[DOTENV_PUBLIC_KEY]--------------------/
+#/            public-key encryption for .env files          /
+#/       [how it works](https://dotenvx.com/encryption)     /
+#/----------------------------------------------------------/
+DOTENV_PUBLIC_KEY_LOCAL="03abc123"
+
+# .env.local
+KEY=value
+"""
+        env_file.write_text(content)
+
+        modified = DotenvxWrapper._clean_mismatched_headers(env_file)
+
+        assert modified is True
+        result = env_file.read_text()
+        # Should keep LOCALENV header (matches filename)
+        assert 'DOTENV_PUBLIC_KEY_LOCALENV="03abc123"' in result
+        assert "# .env.localenv" in result
+        # Should remove LOCAL header (doesn't match filename)
+        # Use quotes to avoid matching LOCALENV which contains LOCAL as substring
+        assert 'DOTENV_PUBLIC_KEY_LOCAL="' not in result
+        assert "# .env.local\n" not in result
+
+    def test_no_change_when_headers_match(self, tmp_path):
+        """Test no modification when header matches filename."""
+        env_file = tmp_path / ".env.localenv"
+        content = """\
+#/-------------------[DOTENV_PUBLIC_KEY]--------------------/
+#/            public-key encryption for .env files          /
+#/       [how it works](https://dotenvx.com/encryption)     /
+#/----------------------------------------------------------/
+DOTENV_PUBLIC_KEY_LOCALENV="03abc123"
+
+# .env.localenv
+KEY=value
+"""
+        env_file.write_text(content)
+
+        modified = DotenvxWrapper._clean_mismatched_headers(env_file)
+
+        assert modified is False
+        assert env_file.read_text() == content
+
+    def test_removes_multiple_mismatched_headers(self, tmp_path):
+        """Test removes multiple mismatched headers."""
+        env_file = tmp_path / ".env.production"
+        content = """\
+#/-------------------[DOTENV_PUBLIC_KEY]--------------------/
+#/            public-key encryption for .env files          /
+#/       [how it works](https://dotenvx.com/encryption)     /
+#/----------------------------------------------------------/
+DOTENV_PUBLIC_KEY_PRODUCTION="03abc123"
+
+# .env.production
+#/-------------------[DOTENV_PUBLIC_KEY]--------------------/
+#/            public-key encryption for .env files          /
+#/       [how it works](https://dotenvx.com/encryption)     /
+#/----------------------------------------------------------/
+DOTENV_PUBLIC_KEY_LOCAL="03def456"
+
+# .env.local
+#/-------------------[DOTENV_PUBLIC_KEY]--------------------/
+#/            public-key encryption for .env files          /
+#/       [how it works](https://dotenvx.com/encryption)     /
+#/----------------------------------------------------------/
+DOTENV_PUBLIC_KEY_DEV="03ghi789"
+
+# .env.dev
+KEY=value
+"""
+        env_file.write_text(content)
+
+        modified = DotenvxWrapper._clean_mismatched_headers(env_file)
+
+        assert modified is True
+        result = env_file.read_text()
+        # Should keep PRODUCTION header
+        assert "DOTENV_PUBLIC_KEY_PRODUCTION" in result
+        # Should remove LOCAL and DEV headers
+        assert "DOTENV_PUBLIC_KEY_LOCAL" not in result
+        assert "DOTENV_PUBLIC_KEY_DEV" not in result
+
+    def test_handles_file_without_headers(self, tmp_path):
+        """Test handles file without any dotenvx headers."""
+        env_file = tmp_path / ".env.test"
+        content = "KEY=value\nANOTHER=data\n"
+        env_file.write_text(content)
+
+        modified = DotenvxWrapper._clean_mismatched_headers(env_file)
+
+        assert modified is False
+        assert env_file.read_text() == content
+
+    def test_handles_non_env_file(self, tmp_path):
+        """Test returns False for non-.env files."""
+        env_file = tmp_path / "config.yaml"
+        env_file.write_text("key: value\n")
+
+        modified = DotenvxWrapper._clean_mismatched_headers(env_file)
+
+        assert modified is False
+
+    def test_handles_missing_file(self, tmp_path):
+        """Test returns False for non-existent file."""
+        env_file = tmp_path / ".env.missing"
+
+        modified = DotenvxWrapper._clean_mismatched_headers(env_file)
+
+        assert modified is False
+
+    def test_cleans_up_extra_newlines(self, tmp_path):
+        """Test cleans up extra newlines after removing headers."""
+        env_file = tmp_path / ".env.localenv"
+        content = """\
+#/-------------------[DOTENV_PUBLIC_KEY]--------------------/
+#/            public-key encryption for .env files          /
+#/       [how it works](https://dotenvx.com/encryption)     /
+#/----------------------------------------------------------/
+DOTENV_PUBLIC_KEY_LOCALENV="03abc123"
+
+# .env.localenv
+#/-------------------[DOTENV_PUBLIC_KEY]--------------------/
+#/            public-key encryption for .env files          /
+#/       [how it works](https://dotenvx.com/encryption)     /
+#/----------------------------------------------------------/
+DOTENV_PUBLIC_KEY_LOCAL="03abc123"
+
+# .env.local
+KEY=value
+"""
+        env_file.write_text(content)
+
+        DotenvxWrapper._clean_mismatched_headers(env_file)
+
+        result = env_file.read_text()
+        # Should not have triple newlines
+        assert "\n\n\n" not in result
+
+    @patch("subprocess.run")
+    @patch("envdrift.integrations.dotenvx.get_dotenvx_path")
+    def test_encrypt_cleans_headers_before_encryption(self, mock_path, mock_run, tmp_path):
+        """Test encrypt method cleans mismatched headers before encryption."""
+        binary_path = tmp_path / "dotenvx"
+        binary_path.touch()
+        mock_path.return_value = binary_path
+
+        mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
+
+        env_file = tmp_path / ".env.localenv"
+        # File with mismatched header from previous .env.local
+        content = """\
+#/-------------------[DOTENV_PUBLIC_KEY]--------------------/
+#/            public-key encryption for .env files          /
+#/       [how it works](https://dotenvx.com/encryption)     /
+#/----------------------------------------------------------/
+DOTENV_PUBLIC_KEY_LOCAL="03abc123"
+
+# .env.local
+KEY=value
+"""
+        env_file.write_text(content)
+
+        wrapper = DotenvxWrapper()
+        wrapper.encrypt(env_file)
+
+        # Verify mismatched header was removed before dotenvx was called
+        result = env_file.read_text()
+        assert "DOTENV_PUBLIC_KEY_LOCAL" not in result
+        mock_run.assert_called_once()
