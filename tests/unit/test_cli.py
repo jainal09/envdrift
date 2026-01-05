@@ -510,6 +510,25 @@ class TestDecryptCommand:
         assert result.exit_code == 1
         assert "not found" in result.output.lower()
 
+    def test_decrypt_hook_check_errors_exit(self, monkeypatch, tmp_path: Path):
+        """Decrypt should stop early when hook checks fail."""
+        env_file = tmp_path / ".env"
+        env_file.write_text("SECRET=encrypted:abc123")
+
+        monkeypatch.setattr(
+            "envdrift.integrations.hook_check.ensure_git_hook_setup",
+            lambda **_kwargs: ["hook check failed"],
+        )
+        monkeypatch.setattr(
+            "envdrift.cli_commands.encryption.get_encryption_backend",
+            lambda *a, **k: (_ for _ in ()).throw(AssertionError("should not run")),
+        )
+
+        result = runner.invoke(app, ["decrypt", str(env_file)])
+
+        assert result.exit_code == 1
+        assert "hook check failed" in result.output.lower()
+
     def test_decrypt_verify_vault_only(self, monkeypatch, tmp_path: Path):
         """--verify-vault should call verification and not decrypt the file."""
 
@@ -1770,6 +1789,27 @@ class TestSyncCommand:
 
 class TestPullCommand:
     """Tests for the pull CLI command."""
+
+    def test_pull_hook_check_errors_exit(self, monkeypatch, tmp_path: Path):
+        """Pull should stop early when hook checks fail."""
+        config_file = tmp_path / "envdrift.toml"
+        config_file.write_text('[vault]\nprovider = "aws"\n')
+
+        dummy_config = SimpleNamespace()
+
+        monkeypatch.setattr(
+            "envdrift.cli_commands.sync.load_sync_config_and_client",
+            lambda *args, **kwargs: (dummy_config, SimpleNamespace(), "aws", None, None, None),
+        )
+        monkeypatch.setattr(
+            "envdrift.integrations.hook_check.ensure_git_hook_setup",
+            lambda **_kwargs: ["hook check failed"],
+        )
+
+        result = runner.invoke(app, ["pull", "-c", str(config_file), "-p", "aws"])
+
+        assert result.exit_code == 1
+        assert "hook check failed" in result.output.lower()
 
     def test_pull_happy_path_decrypts_files(self, monkeypatch, tmp_path: Path):
         """Pull should sync and decrypt encrypted env files successfully."""
