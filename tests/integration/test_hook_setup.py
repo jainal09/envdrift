@@ -95,6 +95,7 @@ def test_hook_setup_precommit_auto_installs(hook_integration_env):
 
     _run_envdrift(["encrypt", env_file.name], cwd=work_dir, env=env)
     precommit_path = work_dir / ".pre-commit-config.yaml"
+    # Hooks are enforced on decrypt/pull, so encrypt alone should not install pre-commit config.
     assert not precommit_path.exists()
 
     _run_envdrift(["decrypt", env_file.name], cwd=work_dir, env=env)
@@ -130,6 +131,7 @@ def test_hook_setup_direct_auto_installs(hook_integration_env):
 
     pre_commit = work_dir / ".git" / "hooks" / "pre-commit"
     pre_push = work_dir / ".git" / "hooks" / "pre-push"
+    # Remove hooks created during encrypt to verify decrypt reinstalls them.
     if pre_commit.exists():
         pre_commit.unlink()
     if pre_push.exists():

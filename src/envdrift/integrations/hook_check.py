@@ -117,7 +117,7 @@ def _inject_hook_block(content: str, block_lines: list[str]) -> tuple[str, bool]
             break
 
     if last_nonempty is not None and lines[last_nonempty].strip() == "exit 0":
-        new_lines = lines[:last_nonempty] + [block] + lines[last_nonempty:]
+        new_lines = [*lines[:last_nonempty], block, *lines[last_nonempty:]]
         return "".join(new_lines), True
 
     if content.endswith("\n"):
@@ -144,7 +144,7 @@ def _ensure_hook_file(path: Path, block_lines: list[str]) -> bool:
         if not (mode & 0o111):
             path.chmod(mode | 0o111)
     except OSError:
-        pass
+        pass  # Best-effort; hook may not be executable on some filesystems.
 
     return updated
 

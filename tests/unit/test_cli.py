@@ -1323,6 +1323,26 @@ class TestSyncCommand:
         assert missing_provider.exit_code == 1
         assert "--provider" in missing_provider.output
 
+    def test_sync_hook_check_errors_exit(self, monkeypatch, tmp_path: Path):
+        """Sync should stop early when hook checks fail."""
+        config_file = tmp_path / "envdrift.toml"
+        config_file.write_text('[vault]\nprovider = "aws"\n')
+
+        dummy_config = SimpleNamespace(mappings=[])
+        monkeypatch.setattr(
+            "envdrift.cli_commands.sync.load_sync_config_and_client",
+            lambda *args, **kwargs: (dummy_config, SimpleNamespace(), "aws", None, None, None),
+        )
+        monkeypatch.setattr(
+            "envdrift.integrations.hook_check.ensure_git_hook_setup",
+            lambda **_kwargs: ["hook check failed"],
+        )
+
+        result = runner.invoke(app, ["sync", "-c", str(config_file), "-p", "aws"])
+
+        assert result.exit_code == 1
+        assert "hook check failed" in result.output.lower()
+
     def test_sync_requires_vault_url_for_azure(self, tmp_path: Path):
         """Azure provider must supply --vault-url."""
 
@@ -2327,6 +2347,26 @@ class TestPullCommand:
 
 class TestLockCommand:
     """Tests for the lock CLI command."""
+
+    def test_lock_hook_check_errors_exit(self, monkeypatch, tmp_path: Path):
+        """Lock should stop early when hook checks fail."""
+        config_file = tmp_path / "envdrift.toml"
+        config_file.write_text('[vault]\nprovider = "aws"\n')
+
+        dummy_config = SimpleNamespace()
+        monkeypatch.setattr(
+            "envdrift.cli_commands.sync.load_sync_config_and_client",
+            lambda *args, **kwargs: (dummy_config, SimpleNamespace(), "aws", None, None, None),
+        )
+        monkeypatch.setattr(
+            "envdrift.integrations.hook_check.ensure_git_hook_setup",
+            lambda **_kwargs: ["hook check failed"],
+        )
+
+        result = runner.invoke(app, ["lock", "-c", str(config_file), "-p", "aws"])
+
+        assert result.exit_code == 1
+        assert "hook check failed" in result.output.lower()
 
     def test_lock_check_mode_exits_when_unencrypted(self, monkeypatch, tmp_path: Path):
         """Check mode should fail when a file needs encryption."""
