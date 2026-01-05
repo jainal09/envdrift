@@ -88,10 +88,13 @@ def is_encrypted_content(
     content: str,
 ) -> bool:
     """Determine if file content is encrypted for the selected backend."""
-    if backend.has_encrypted_header(content):
-        return True
+    # For DOTENVX, having a public key header doesn't mean values are encrypted.
+    # We need to check for actual "encrypted:" values in the content.
     if provider == EncryptionProvider.DOTENVX:
         return "encrypted:" in content.lower()
+    # For other providers (like SOPS), the header is sufficient
+    if backend.has_encrypted_header(content):
+        return True
     return False
 
 
