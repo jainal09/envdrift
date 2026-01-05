@@ -228,6 +228,8 @@ def ensure_gitignore_entries(
     new_entries: list[str] = []
 
     for path in path_list:
+        if _is_path_ignored(path, git_root):
+            continue
         try:
             relative_path = path.resolve().relative_to(git_root)
         except ValueError:
@@ -247,3 +249,29 @@ def ensure_gitignore_entries(
                 handle.write(f"{entry}\n")
 
     return new_entries
+
+
+def _is_path_ignored(path: Path, git_root: Path) -> bool:
+    try:
+        relative_path = path.resolve().relative_to(git_root)
+    except ValueError:
+        return False
+
+    try:
+        result = subprocess.run(  # nosec B603, B607
+            [
+                "git",
+                "-c",
+                "core.excludesfile=/dev/null",
+                "check-ignore",
+                "-q",
+                relative_path.as_posix(),
+            ],
+            cwd=str(git_root),
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+        return result.returncode == 0
+    except (subprocess.TimeoutExpired, FileNotFoundError):
+        return False

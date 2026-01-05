@@ -227,6 +227,18 @@ class TestEnsureGitignoreEntries:
         assert added == []
         assert gitignore.read_text().splitlines().count(".env.production") == 1
 
+    def test_skips_when_already_ignored(self, tmp_path: Path):
+        """Should avoid adding entries already ignored by patterns."""
+        subprocess.run(["git", "init"], cwd=tmp_path, capture_output=True)
+        gitignore = tmp_path / ".gitignore"
+        gitignore.write_text(".env.*\n")
+
+        target = tmp_path / ".env.production"
+        added = ensure_gitignore_entries([target])
+
+        assert added == []
+        assert gitignore.read_text().splitlines() == [".env.*"]
+
 
 class TestGitUtilsExceptions:
     """Tests for exception handling in git utilities."""
