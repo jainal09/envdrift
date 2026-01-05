@@ -1129,3 +1129,189 @@ class TestLineEndingNormalization:
         # Note: after decrypt, dotenvx would modify the file, but since we're mocking
         # we just verify the normalization happened before the call
         mock_run.assert_called_once()
+
+
+class TestCleanMismatchedHeaders:
+    """Tests for _clean_mismatched_headers method."""
+
+    def test_removes_mismatched_header_after_rename(self, tmp_path):
+        """Test removes old header when file was renamed from .env.local to .env.localenv."""
+        env_file = tmp_path / ".env.localenv"
+        # Content with duplicate headers (as would happen after renaming .env.local -> .env.localenv)
+        content = """\
+#/-------------------[DOTENV_PUBLIC_KEY]--------------------/
+#/            public-key encryption for .env files          /
+#/       [how it works](https://dotenvx.com/encryption)     /
+#/----------------------------------------------------------/
+DOTENV_PUBLIC_KEY_LOCALENV="03abc123"
+
+# .env.localenv
+#/-------------------[DOTENV_PUBLIC_KEY]--------------------/
+#/            public-key encryption for .env files          /
+#/       [how it works](https://dotenvx.com/encryption)     /
+#/----------------------------------------------------------/
+DOTENV_PUBLIC_KEY_LOCAL="03abc123"
+
+# .env.local
+KEY=value
+"""
+        env_file.write_text(content)
+
+        modified = DotenvxWrapper._clean_mismatched_headers(env_file)
+
+        assert modified is True
+        result = env_file.read_text()
+        # Should keep LOCALENV header (matches filename)
+        assert 'DOTENV_PUBLIC_KEY_LOCALENV="03abc123"' in result
+        assert "# .env.localenv" in result
+        # Should remove LOCAL header (doesn't match filename)
+        # Use quotes to avoid matching LOCALENV which contains LOCAL as substring
+        assert 'DOTENV_PUBLIC_KEY_LOCAL="' not in result
+        assert "# .env.local\n" not in result
+
+    def test_no_change_when_headers_match(self, tmp_path):
+        """Test no modification when header matches filename."""
+        env_file = tmp_path / ".env.localenv"
+        content = """\
+#/-------------------[DOTENV_PUBLIC_KEY]--------------------/
+#/            public-key encryption for .env files          /
+#/       [how it works](https://dotenvx.com/encryption)     /
+#/----------------------------------------------------------/
+DOTENV_PUBLIC_KEY_LOCALENV="03abc123"
+
+# .env.localenv
+KEY=value
+"""
+        env_file.write_text(content)
+
+        modified = DotenvxWrapper._clean_mismatched_headers(env_file)
+
+        assert modified is False
+        assert env_file.read_text() == content
+
+    def test_removes_multiple_mismatched_headers(self, tmp_path):
+        """Test removes multiple mismatched headers."""
+        env_file = tmp_path / ".env.production"
+        content = """\
+#/-------------------[DOTENV_PUBLIC_KEY]--------------------/
+#/            public-key encryption for .env files          /
+#/       [how it works](https://dotenvx.com/encryption)     /
+#/----------------------------------------------------------/
+DOTENV_PUBLIC_KEY_PRODUCTION="03abc123"
+
+# .env.production
+#/-------------------[DOTENV_PUBLIC_KEY]--------------------/
+#/            public-key encryption for .env files          /
+#/       [how it works](https://dotenvx.com/encryption)     /
+#/----------------------------------------------------------/
+DOTENV_PUBLIC_KEY_LOCAL="03def456"
+
+# .env.local
+#/-------------------[DOTENV_PUBLIC_KEY]--------------------/
+#/            public-key encryption for .env files          /
+#/       [how it works](https://dotenvx.com/encryption)     /
+#/----------------------------------------------------------/
+DOTENV_PUBLIC_KEY_DEV="03ghi789"
+
+# .env.dev
+KEY=value
+"""
+        env_file.write_text(content)
+
+        modified = DotenvxWrapper._clean_mismatched_headers(env_file)
+
+        assert modified is True
+        result = env_file.read_text()
+        # Should keep PRODUCTION header
+        assert "DOTENV_PUBLIC_KEY_PRODUCTION" in result
+        # Should remove LOCAL and DEV headers
+        assert "DOTENV_PUBLIC_KEY_LOCAL" not in result
+        assert "DOTENV_PUBLIC_KEY_DEV" not in result
+
+    def test_handles_file_without_headers(self, tmp_path):
+        """Test handles file without any dotenvx headers."""
+        env_file = tmp_path / ".env.test"
+        content = "KEY=value\nANOTHER=data\n"
+        env_file.write_text(content)
+
+        modified = DotenvxWrapper._clean_mismatched_headers(env_file)
+
+        assert modified is False
+        assert env_file.read_text() == content
+
+    def test_handles_non_env_file(self, tmp_path):
+        """Test returns False for non-.env files."""
+        env_file = tmp_path / "config.yaml"
+        env_file.write_text("key: value\n")
+
+        modified = DotenvxWrapper._clean_mismatched_headers(env_file)
+
+        assert modified is False
+
+    def test_handles_missing_file(self, tmp_path):
+        """Test returns False for non-existent file."""
+        env_file = tmp_path / ".env.missing"
+
+        modified = DotenvxWrapper._clean_mismatched_headers(env_file)
+
+        assert modified is False
+
+    def test_cleans_up_extra_newlines(self, tmp_path):
+        """Test cleans up extra newlines after removing headers."""
+        env_file = tmp_path / ".env.localenv"
+        content = """\
+#/-------------------[DOTENV_PUBLIC_KEY]--------------------/
+#/            public-key encryption for .env files          /
+#/       [how it works](https://dotenvx.com/encryption)     /
+#/----------------------------------------------------------/
+DOTENV_PUBLIC_KEY_LOCALENV="03abc123"
+
+# .env.localenv
+#/-------------------[DOTENV_PUBLIC_KEY]--------------------/
+#/            public-key encryption for .env files          /
+#/       [how it works](https://dotenvx.com/encryption)     /
+#/----------------------------------------------------------/
+DOTENV_PUBLIC_KEY_LOCAL="03abc123"
+
+# .env.local
+KEY=value
+"""
+        env_file.write_text(content)
+
+        DotenvxWrapper._clean_mismatched_headers(env_file)
+
+        result = env_file.read_text()
+        # Should not have triple newlines
+        assert "\n\n\n" not in result
+
+    @patch("subprocess.run")
+    @patch("envdrift.integrations.dotenvx.get_dotenvx_path")
+    def test_encrypt_cleans_headers_before_encryption(self, mock_path, mock_run, tmp_path):
+        """Test encrypt method cleans mismatched headers before encryption."""
+        binary_path = tmp_path / "dotenvx"
+        binary_path.touch()
+        mock_path.return_value = binary_path
+
+        mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
+
+        env_file = tmp_path / ".env.localenv"
+        # File with mismatched header from previous .env.local
+        content = """\
+#/-------------------[DOTENV_PUBLIC_KEY]--------------------/
+#/            public-key encryption for .env files          /
+#/       [how it works](https://dotenvx.com/encryption)     /
+#/----------------------------------------------------------/
+DOTENV_PUBLIC_KEY_LOCAL="03abc123"
+
+# .env.local
+KEY=value
+"""
+        env_file.write_text(content)
+
+        wrapper = DotenvxWrapper()
+        wrapper.encrypt(env_file)
+
+        # Verify mismatched header was removed before dotenvx was called
+        result = env_file.read_text()
+        assert "DOTENV_PUBLIC_KEY_LOCAL" not in result
+        mock_run.assert_called_once()

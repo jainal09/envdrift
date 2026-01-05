@@ -656,6 +656,69 @@ class DotenvxWrapper:
                     f"before encryption. See: https://github.com/dotenvx/dotenvx/issues/XXX"
                 )
 
+    # Regex pattern for dotenvx public key header blocks
+    DOTENVX_HEADER_BLOCK_PATTERN: ClassVar[re.Pattern[str]] = re.compile(
+        r"#/---+\[DOTENV_PUBLIC_KEY\]---+/\n"
+        r"#/[^\n]+/\n"
+        r"#/[^\n]+/\n"
+        r"#/---+/\n"
+        r'DOTENV_PUBLIC_KEY_(\w+)="[^"]+"\n\n'
+        r"# \.env\.(\w+)\n",
+        re.MULTILINE,
+    )
+
+    @classmethod
+    def _clean_mismatched_headers(cls, file_path: Path) -> bool:
+        """
+        Remove dotenvx header blocks that don't match the current filename.
+
+        When a file is renamed (e.g., .env.local -> .env.localenv), dotenvx
+        prepends a new header block without removing the old one, causing
+        duplicate headers. This method removes any header blocks where the
+        environment suffix doesn't match the current filename.
+
+        Parameters:
+            file_path (Path): Path to the env file to clean.
+
+        Returns:
+            bool: True if any headers were removed, False otherwise.
+        """
+        try:
+            content = file_path.read_text(encoding="utf-8")
+        except OSError:
+            return False
+
+        # Extract expected environment from filename (e.g., .env.localenv -> localenv)
+        filename = file_path.name
+        if filename.startswith(".env."):
+            expected_env = filename[5:].lower()  # Remove ".env." prefix
+        elif filename == ".env":
+            expected_env = ""
+        else:
+            return False  # Not a .env file
+
+        # Find all header blocks and check for mismatches
+        modified = False
+        new_content = content
+
+        for match in cls.DOTENVX_HEADER_BLOCK_PATTERN.finditer(content):
+            key_env = match.group(1).lower()  # Environment from DOTENV_PUBLIC_KEY_XXX
+            comment_env = match.group(2).lower()  # Environment from # .env.xxx comment
+
+            # If the key/comment environment doesn't match the filename, remove this block
+            if key_env != expected_env or comment_env != expected_env:
+                new_content = new_content.replace(match.group(0), "")
+                modified = True
+
+        if modified:
+            # Clean up any resulting double newlines
+            while "\n\n\n" in new_content:
+                new_content = new_content.replace("\n\n\n", "\n\n")
+            new_content = new_content.lstrip("\n")
+            file_path.write_text(new_content, encoding="utf-8")
+
+        return modified
+
     def encrypt(
         self,
         env_file: Path | str,
@@ -691,6 +754,11 @@ class DotenvxWrapper:
         # dotenvx on Windows can fail with "Input string must contain hex characters"
         # when files have CRLF line endings
         self._normalize_line_endings(env_file)
+
+        # Clean up mismatched headers from renamed files
+        # When a file is renamed (e.g., .env.local -> .env.localenv), dotenvx
+        # prepends a new header without removing the old one, causing duplicates
+        self._clean_mismatched_headers(env_file)
 
         args = ["encrypt", "-f", str(env_file)]
         if env_keys_file:
