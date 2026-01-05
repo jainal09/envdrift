@@ -469,6 +469,14 @@ def pull(
         bool,
         typer.Option("--skip-sync", help="Skip syncing keys from vault, only decrypt files"),
     ] = False,
+    merge: Annotated[
+        bool,
+        typer.Option(
+            "--merge",
+            "-m",
+            help="For partial encryption: create combined decrypted .env file from .clear + .secret",
+        ),
+    ] = False,
 ) -> None:
     """
     Pull keys from vault and decrypt all env files (one-command developer setup).
@@ -507,6 +515,9 @@ def pull(
 
         # Skip vault sync, only decrypt files (useful when keys are already local)
         envdrift pull --skip-sync
+
+        # For partial encryption: decrypt and create combined .env file for local use
+        envdrift pull --merge
     """
     from envdrift.output.rich import print_service_sync_status, print_sync_result
     from envdrift.sync.config import SyncConfigError
@@ -763,6 +774,112 @@ def pull(
     if error_count > 0:
         print_warning("Some files could not be decrypted")
         raise typer.Exit(code=1)
+
+    # === STEP 3: PARTIAL ENCRYPTION (decrypt .secret files + optional merge) ===
+    partial_decrypted = 0
+    partial_merged = 0
+    partial_skipped = 0
+    partial_errors: list[str] = []
+
+    config_path = _find_config_path(config_file)
+    partial_config = None
+    if config_path:
+        try:
+            from envdrift.config import load_config as load_envdrift_config
+
+            partial_config = load_envdrift_config(config_path)
+        except Exception:
+            partial_config = None
+
+    if partial_config and partial_config.partial_encryption.enabled:
+        console.print()
+        console.print("[bold cyan]Step 3:[/bold cyan] Processing partial encryption files...")
+        console.print()
+
+        from envdrift.core.partial_encryption import (
+            PartialEncryptionError,
+            pull_partial_encryption,
+        )
+
+        for env_config in partial_config.partial_encryption.environments:
+            secret_file = Path(env_config.secret_file)
+
+            if not secret_file.exists():
+                console.print(f"  [dim]=[/dim] {secret_file} [dim]- skipped (not found)[/dim]")
+                partial_skipped += 1
+                continue
+
+            try:
+                was_decrypted = pull_partial_encryption(env_config)
+
+                if was_decrypted:
+                    console.print(f"  [green]+[/green] {secret_file} [dim]- decrypted[/dim]")
+                    partial_decrypted += 1
+                else:
+                    console.print(
+                        f"  [dim]=[/dim] {secret_file} [dim]- skipped (already decrypted)[/dim]"
+                    )
+                    partial_skipped += 1
+
+                # Merge if requested
+                if merge:
+                    combined_file = Path(env_config.combined_file)
+                    clear_file = Path(env_config.clear_file)
+
+                    # Build combined content (decrypted version)
+                    combined_lines = []
+
+                    # Add clear file content
+                    if clear_file.exists():
+                        combined_lines.extend(clear_file.read_text().splitlines())
+                        combined_lines.append("")
+
+                    # Add decrypted secret file content
+                    if secret_file.exists():
+                        secret_content = secret_file.read_text().splitlines()
+                        # Skip dotenvx header comments
+                        secret_content = [
+                            line
+                            for line in secret_content
+                            if not line.strip().startswith("#/---")
+                            and not line.strip().startswith("DOTENV_PUBLIC_KEY")
+                        ]
+                        combined_lines.extend(secret_content)
+
+                    combined_file.write_text("\n".join(combined_lines) + "\n")
+                    console.print(
+                        f"  [cyan]→[/cyan] {combined_file} [dim]- merged (decrypted)[/dim]"
+                    )
+                    partial_merged += 1
+
+            except PartialEncryptionError as e:
+                console.print(f"  [red]![/red] {secret_file} [red]- error: {e}[/red]")
+                partial_errors.append(f"{env_config.name}: {e}")
+
+        # Partial encryption summary
+        console.print()
+        partial_summary = [
+            f"Decrypted: {partial_decrypted}",
+            f"Skipped: {partial_skipped}",
+        ]
+        if merge:
+            partial_summary.append(f"Merged: {partial_merged}")
+        if partial_errors:
+            partial_summary.append(f"Errors: {len(partial_errors)}")
+
+        console.print(
+            Panel(
+                "\n".join(partial_summary),
+                title="Partial Encryption Summary",
+                expand=False,
+            )
+        )
+
+        if partial_errors:
+            print_warning("Some partial encryption files had errors")
+            for err in partial_errors:
+                console.print(f"  • {err}")
+            raise typer.Exit(code=1)
 
     console.print()
     print_success("Setup complete! Your environment files are ready to use.")

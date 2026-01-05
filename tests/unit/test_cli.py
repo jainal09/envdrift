@@ -2596,6 +2596,197 @@ class TestPullCommand:
         assert result.exit_code == 1
         assert "activation failed" in result.output.lower()
 
+    def test_pull_with_partial_encryption_decrypts_secret_files(
+        self,
+        monkeypatch,
+        tmp_path: Path,
+    ):
+        """Pull should decrypt partial encryption .secret files when enabled."""
+        service_dir = tmp_path / "service"
+        service_dir.mkdir()
+
+        # Create partial encryption files
+        clear_file = service_dir / ".env.prod.clear"
+        secret_file = service_dir / ".env.prod.secret"
+        clear_file.write_text("APP_NAME=myapp\nDEBUG=true\n")
+        secret_file.write_text("API_KEY=encrypted:abc123\nDB_PASS=encrypted:secret\n")
+
+        config_file = tmp_path / "envdrift.toml"
+        config_file.write_text(
+            dedent(
+                f"""
+                [vault]
+                provider = "aws"
+
+                [vault.sync]
+                [[vault.sync.mappings]]
+                secret_name = "key"
+                folder_path = "{service_dir.as_posix()}"
+                environment = "prod"
+
+                [partial_encryption]
+                enabled = true
+
+                [[partial_encryption.environments]]
+                name = "prod"
+                clear_file = "{clear_file.as_posix()}"
+                secret_file = "{secret_file.as_posix()}"
+                combined_file = "{(service_dir / ".env.prod").as_posix()}"
+                """
+            ).lstrip()
+        )
+
+        monkeypatch.setattr(
+            "envdrift.cli_commands.encryption_helpers.resolve_encryption_backend",
+            lambda *_args, **_kwargs: (
+                DummyEncryptionBackend(
+                    name="dotenvx",
+                    installed=True,
+                    has_encrypted_header=lambda _: False,
+                ),
+                EncryptionProvider.DOTENVX,
+                None,
+            ),
+        )
+
+        # Mock partial encryption pull
+        decrypted_secrets = []
+
+        def mock_pull_partial(env_config):
+            decrypted_secrets.append(env_config.name)
+            # Simulate decryption
+            secret_path = Path(env_config.secret_file)
+            secret_path.write_text("API_KEY=decrypted_key\nDB_PASS=decrypted_pass\n")
+            return True
+
+        monkeypatch.setattr(
+            "envdrift.core.partial_encryption.pull_partial_encryption",
+            mock_pull_partial,
+        )
+
+        from envdrift.sync.config import ServiceMapping, SyncConfig
+
+        sync_config = SyncConfig(
+            mappings=[
+                ServiceMapping(
+                    secret_name="key",
+                    folder_path=service_dir,
+                    environment="prod",
+                )
+            ],
+        )
+
+        monkeypatch.setattr(
+            "envdrift.cli_commands.sync.load_sync_config_and_client",
+            lambda *args, **kwargs: (sync_config, SimpleNamespace(), "aws", None, None, None),
+        )
+        monkeypatch.setattr(
+            "envdrift.integrations.hook_check.ensure_git_hook_setup",
+            lambda **_kwargs: [],
+        )
+
+        result = runner.invoke(app, ["pull", "-c", str(config_file), "--skip-sync"])
+
+        assert result.exit_code == 0
+        assert "Step 3" in result.output
+        assert "Partial Encryption Summary" in result.output
+        assert "prod" in decrypted_secrets
+
+    def test_pull_merge_creates_combined_file(
+        self,
+        monkeypatch,
+        tmp_path: Path,
+    ):
+        """Pull --merge should create combined decrypted file from .clear + .secret."""
+        service_dir = tmp_path / "service"
+        service_dir.mkdir()
+
+        # Create partial encryption files
+        clear_file = service_dir / ".env.prod.clear"
+        secret_file = service_dir / ".env.prod.secret"
+        combined_file = service_dir / ".env.prod"
+
+        clear_file.write_text("APP_NAME=myapp\nDEBUG=true\n")
+        secret_file.write_text("API_KEY=decrypted_key\nDB_PASS=decrypted_pass\n")
+
+        config_file = tmp_path / "envdrift.toml"
+        config_file.write_text(
+            dedent(
+                f"""
+                [vault]
+                provider = "aws"
+
+                [vault.sync]
+                [[vault.sync.mappings]]
+                secret_name = "key"
+                folder_path = "{service_dir.as_posix()}"
+                environment = "prod"
+
+                [partial_encryption]
+                enabled = true
+
+                [[partial_encryption.environments]]
+                name = "prod"
+                clear_file = "{clear_file.as_posix()}"
+                secret_file = "{secret_file.as_posix()}"
+                combined_file = "{combined_file.as_posix()}"
+                """
+            ).lstrip()
+        )
+
+        monkeypatch.setattr(
+            "envdrift.cli_commands.encryption_helpers.resolve_encryption_backend",
+            lambda *_args, **_kwargs: (
+                DummyEncryptionBackend(
+                    name="dotenvx",
+                    installed=True,
+                    has_encrypted_header=lambda _: False,
+                ),
+                EncryptionProvider.DOTENVX,
+                None,
+            ),
+        )
+
+        # Mock partial encryption pull (already decrypted)
+        monkeypatch.setattr(
+            "envdrift.core.partial_encryption.pull_partial_encryption",
+            lambda _: False,  # Already decrypted
+        )
+
+        from envdrift.sync.config import ServiceMapping, SyncConfig
+
+        sync_config = SyncConfig(
+            mappings=[
+                ServiceMapping(
+                    secret_name="key",
+                    folder_path=service_dir,
+                    environment="prod",
+                )
+            ],
+        )
+
+        monkeypatch.setattr(
+            "envdrift.cli_commands.sync.load_sync_config_and_client",
+            lambda *args, **kwargs: (sync_config, SimpleNamespace(), "aws", None, None, None),
+        )
+        monkeypatch.setattr(
+            "envdrift.integrations.hook_check.ensure_git_hook_setup",
+            lambda **_kwargs: [],
+        )
+
+        result = runner.invoke(app, ["pull", "-c", str(config_file), "--skip-sync", "--merge"])
+
+        assert result.exit_code == 0
+        assert "merged (decrypted)" in result.output.lower()
+        assert combined_file.exists()
+
+        # Check combined file content
+        content = combined_file.read_text()
+        assert "APP_NAME=myapp" in content
+        assert "DEBUG=true" in content
+        assert "API_KEY=decrypted_key" in content
+        assert "DB_PASS=decrypted_pass" in content
+
 
 class TestLockCommand:
     """Tests for the lock CLI command."""

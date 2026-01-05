@@ -83,6 +83,33 @@ When a profile is specified:
 - Only the matching profile mapping is processed
 - If `activate_to` is configured, the decrypted file is copied to that path
 
+### `--skip-sync`
+
+Skip syncing keys from vault, only decrypt files. Useful when keys are already local.
+
+```bash
+envdrift pull --skip-sync
+```
+
+### `--merge`, `-m`
+
+For partial encryption setups: create a combined decrypted `.env` file from `.clear` + `.secret` files.
+
+When this flag is used with partial encryption enabled, the command will:
+
+1. Decrypt `.env.{env}.secret` files
+2. Merge `.env.{env}.clear` + decrypted `.env.{env}.secret` → `.env.{env}`
+
+This creates a single usable `.env` file for local development.
+
+```bash
+# Decrypt and merge partial encryption files
+envdrift pull --merge
+
+# Combined with skip-sync when keys are already local
+envdrift pull --skip-sync --merge
+```
+
 ## Examples
 
 ### Basic Pull
