@@ -136,18 +136,22 @@ def install_hooks(
     if "repos" not in config:
         config["repos"] = []
 
-    # Check if envdrift hooks already exist
-    has_envdrift = False
+    # Check which envdrift hooks already exist
+    existing_envdrift: set[str] = set()
     for repo in config["repos"]:
         if repo.get("repo") == "local":
             hooks = repo.get("hooks", [])
             for hook in hooks:
-                if hook.get("id", "").startswith("envdrift-"):
-                    has_envdrift = True
-                    break
+                hook_id = hook.get("id", "")
+                if hook_id.startswith("envdrift-"):
+                    existing_envdrift.add(hook_id)
+
+    missing_hooks = [
+        dict(hook) for hook in HOOK_ENTRY["hooks"] if hook["id"] not in existing_envdrift
+    ]
 
     # Add hooks if not present
-    if not has_envdrift:
+    if missing_hooks:
         # Find existing local repo or create new one
         local_repo = None
         for repo in config["repos"]:
@@ -159,10 +163,10 @@ def install_hooks(
             # Add to existing local repo
             if "hooks" not in local_repo:
                 local_repo["hooks"] = []
-            local_repo["hooks"].extend(HOOK_ENTRY["hooks"])
+            local_repo["hooks"].extend(missing_hooks)
         else:
             # Add new local repo entry
-            config["repos"].append(HOOK_ENTRY)
+            config["repos"].append({"repo": "local", "hooks": missing_hooks})
 
     # Write config
     with open(config_path, "w") as f:

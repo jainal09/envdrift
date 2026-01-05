@@ -151,6 +151,37 @@ class TestInstallHooks:
         assert "custom-hook" in hook_ids
         assert "envdrift-validate" in hook_ids
 
+    def test_adds_missing_envdrift_hook(self, tmp_path: Path):
+        """Test adds missing envdrift hooks when some already exist."""
+        config_file = tmp_path / ".pre-commit-config.yaml"
+        existing_config = {
+            "repos": [
+                {
+                    "repo": "local",
+                    "hooks": [
+                        {
+                            "id": "envdrift-validate",
+                            "entry": "envdrift validate --ci",
+                            "language": "system",
+                        }
+                    ],
+                }
+            ]
+        }
+        with open(config_file, "w") as f:
+            yaml.dump(existing_config, f)
+
+        result = install_hooks(config_path=config_file)
+
+        assert result is True
+        with open(config_file) as f:
+            updated_config = yaml.safe_load(f)
+
+        local_repo = next(r for r in updated_config["repos"] if r["repo"] == "local")
+        hook_ids = [h["id"] for h in local_repo["hooks"]]
+        assert "envdrift-validate" in hook_ids
+        assert "envdrift-encryption" in hook_ids
+
     def test_raises_when_config_not_found_and_no_create(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ):

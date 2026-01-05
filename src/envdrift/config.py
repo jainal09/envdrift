@@ -80,6 +80,14 @@ class PrecommitConfig:
 
 
 @dataclass
+class GitHookCheckConfig:
+    """Git hook check settings."""
+
+    method: str | None = None
+    precommit_config: str | None = None
+
+
+@dataclass
 class PartialEncryptionEnvironmentConfig:
     """Partial encryption configuration for a single environment."""
 
@@ -113,6 +121,7 @@ class EnvdriftConfig:
     vault: VaultConfig = field(default_factory=VaultConfig)
     encryption: EncryptionConfig = field(default_factory=EncryptionConfig)
     precommit: PrecommitConfig = field(default_factory=PrecommitConfig)
+    git_hook_check: GitHookCheckConfig = field(default_factory=GitHookCheckConfig)
     partial_encryption: PartialEncryptionConfig = field(default_factory=PartialEncryptionConfig)
 
     # Raw config for access to custom fields
@@ -123,7 +132,7 @@ class EnvdriftConfig:
         """
         Builds an EnvdriftConfig from a configuration dictionary.
 
-        Parses top-level sections (expected keys: "envdrift", "validation", "vault", "encryption", "precommit"), applies sensible defaults for missing fields, and returns a populated EnvdriftConfig with the original dictionary stored in `raw`.
+        Parses top-level sections (expected keys: "envdrift", "validation", "vault", "encryption", "precommit", "git_hook_check"), applies sensible defaults for missing fields, and returns a populated EnvdriftConfig with the original dictionary stored in `raw`.
 
         Parameters:
             data (dict[str, Any]): Parsed TOML/pyproject data containing configuration sections.
@@ -136,6 +145,7 @@ class EnvdriftConfig:
         vault_section = data.get("vault", {})
         encryption_section = data.get("encryption", {})
         precommit_section = data.get("precommit", {})
+        git_hook_check_section = data.get("git_hook_check", {})
 
         # Build validation config
         validation = ValidationConfig(
@@ -180,6 +190,11 @@ class EnvdriftConfig:
             schemas=precommit_section.get("schemas", {}),
         )
 
+        git_hook_check = GitHookCheckConfig(
+            method=git_hook_check_section.get("method"),
+            precommit_config=git_hook_check_section.get("precommit_config"),
+        )
+
         # Build partial_encryption config
         partial_encryption_section = data.get("partial_encryption", {})
         partial_encryption_envs = [
@@ -221,6 +236,7 @@ class EnvdriftConfig:
             vault=vault,
             encryption=encryption,
             precommit=precommit,
+            git_hook_check=git_hook_check,
             partial_encryption=partial_encryption,
             raw=data,
         )
@@ -316,6 +332,9 @@ def load_config(path: Path | str | None = None) -> EnvdriftConfig:
             if "precommit" in envdrift_section:
                 data["precommit"] = envdrift_section.get("precommit")
                 del envdrift_section["precommit"]
+            if "git_hook_check" in envdrift_section:
+                data["git_hook_check"] = envdrift_section.get("git_hook_check")
+                del envdrift_section["git_hook_check"]
             if "partial_encryption" in envdrift_section:
                 data["partial_encryption"] = envdrift_section.get("partial_encryption")
                 del envdrift_section["partial_encryption"]
@@ -452,6 +471,11 @@ files = [
 [precommit.schemas]
 production = "config.settings:ProductionSettings"
 staging = "config.settings:StagingSettings"
+
+# Git hook verification (optional)
+[git_hook_check]
+# method = "precommit.yaml"  # or "direct git hook"
+# precommit_config = ".pre-commit-config.yaml"
 
 # Partial encryption configuration (optional)
 [partial_encryption]
