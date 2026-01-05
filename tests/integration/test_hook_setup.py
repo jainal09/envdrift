@@ -39,9 +39,13 @@ def _init_git_repo(path: Path) -> None:
     git_path = shutil.which("git")
     if git_path is None:
         pytest.skip("git is not available")
+    env = os.environ.copy()
+    for key in ("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_COMMON_DIR"):
+        env.pop(key, None)
     subprocess.run(  # nosec B603
         [git_path, "init"],
         cwd=str(path),
+        env=env,
         check=True,
         capture_output=True,
         text=True,
