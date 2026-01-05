@@ -1,4 +1,4 @@
-.PHONY: install dev lint format typecheck security test build clean publish docs docs-serve lint-docs help
+.PHONY: install dev lint format typecheck security test test-integration test-integration-up test-integration-down build clean publish docs docs-serve lint-docs help
 
 # Default target
 help:
@@ -18,6 +18,9 @@ help:
 	@echo "  docs        Build documentation"
 	@echo "  docs-serve  Serve documentation locally"
 	@echo "  lint-docs   Run markdown linting on docs"
+	@echo "  test-integration      Run integration tests (requires Docker)"
+	@echo "  test-integration-up   Start integration test containers"
+	@echo "  test-integration-down Stop integration test containers"
 	@echo "  build       Build package for distribution"
 	@echo "  publish     Publish to PyPI"
 	@echo "  clean       Remove build artifacts"
@@ -50,6 +53,25 @@ security:
 # Run tests
 test:
 	uv run pytest
+
+# Start integration test containers
+test-integration-up:
+	docker compose -f tests/docker-compose.test.yml up -d
+	@echo "Waiting for services to be ready..."
+	@sleep 5
+	@echo "Services started. Run 'make test-integration' to run tests."
+
+# Stop integration test containers
+test-integration-down:
+	docker compose -f tests/docker-compose.test.yml down -v
+
+# Run integration tests (starts containers if needed)
+test-integration:
+	@if ! docker compose -f tests/docker-compose.test.yml ps --status running 2>/dev/null | grep -q localstack; then \
+		echo "Starting containers..."; \
+		$(MAKE) test-integration-up; \
+	fi
+	uv run --extra test-integration pytest -m "integration" -v
 
 # Run all checks
 check: lint typecheck security test
