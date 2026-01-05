@@ -51,7 +51,8 @@ def test_sops_find_binary_install_error():
 
     with patch("envdrift.integrations.sops.get_sops_path") as mock_get_path, \
          patch("shutil.which", return_value=None), \
-         patch("envdrift.integrations.sops.SopsInstaller") as mock_installer_cls:
+         patch("envdrift.integrations.sops.SopsInstaller") as mock_installer_cls, \
+         patch("pathlib.Path.exists", return_value=False):
         
         mock_get_path.return_value = Path("/nonexistent")
         
@@ -67,7 +68,8 @@ def test_sops_find_binary_auto_install():
     
     with patch("envdrift.integrations.sops.get_sops_path") as mock_get_path, \
          patch("shutil.which", return_value=None), \
-         patch("envdrift.integrations.sops.SopsInstaller") as mock_installer_cls:
+         patch("envdrift.integrations.sops.SopsInstaller") as mock_installer_cls, \
+         patch("pathlib.Path.exists", return_value=False):
         
         # Venv sops does not exist
         mock_get_path.return_value = Path("/nonexistent")
@@ -87,7 +89,8 @@ def test_sops_find_binary_not_found():
     """Test when binary is not found anywhere."""
     
     with patch("envdrift.integrations.sops.get_sops_path") as mock_get_path, \
-         patch("shutil.which", return_value=None):
+         patch("shutil.which", return_value=None), \
+         patch("pathlib.Path.exists", return_value=False):
         
         # Venv sops does not exist
         mock_get_path.return_value = Path("/nonexistent")
