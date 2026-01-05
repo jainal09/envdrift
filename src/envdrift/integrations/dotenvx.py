@@ -13,6 +13,7 @@ from __future__ import annotations
 import json
 import os
 import platform
+import re
 import shutil
 import stat
 import subprocess  # nosec B404
@@ -70,6 +71,8 @@ DOWNLOAD_URLS = {
     ("Windows", "AMD64"): _URL_TEMPLATES["windows_amd64"],
     ("Windows", "x86_64"): _URL_TEMPLATES["windows_amd64"],
 }
+
+_ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-9;?]*[ -/]*[@-~]")
 
 
 class DotenvxNotFoundError(Exception):
@@ -546,8 +549,13 @@ class DotenvxWrapper:
             )
 
             if check and result.returncode != 0:
+                stderr = (result.stderr or "").strip()
+                if stderr:
+                    stderr = _ANSI_ESCAPE_RE.sub("", stderr).strip()
+                else:
+                    stderr = "no error output"
                 raise DotenvxError(
-                    f"dotenvx command failed (exit {result.returncode}): {result.stderr}"
+                    f"dotenvx command failed (exit {result.returncode}): {stderr}"
                 )
 
             return result
