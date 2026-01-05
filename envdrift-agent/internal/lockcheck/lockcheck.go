@@ -59,17 +59,10 @@ func isFileOpenWindows(path string) bool {
 
 // isFileOpenWindowsPowerShell fallback using PowerShell
 func isFileOpenWindowsPowerShell(path string) bool {
-	// Try to open file exclusively - if it fails, it's open
-	script := `
-		try {
-			$fs = [System.IO.File]::Open('` + path + `', 'Open', 'ReadWrite', 'None')
-			$fs.Close()
-			exit 0
-		} catch {
-			exit 1
-		}
-	`
-	cmd := exec.Command("powershell", "-NoProfile", "-Command", script)
+	// Use PowerShell with proper argument escaping
+	cmd := exec.Command("powershell", "-NoProfile", "-Command",
+		"try { $fs = [System.IO.File]::Open($args[0], 'Open', 'ReadWrite', 'None'); $fs.Close(); exit 0 } catch { exit 1 }",
+		path)
 	err := cmd.Run()
 	return err != nil // Error means file is locked
 }

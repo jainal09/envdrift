@@ -41,7 +41,7 @@ func TestIsEncrypted(t *testing.T) {
 		{
 			name:     "encrypted in comment",
 			content:  "# encrypted: values below\nKEY=value",
-			expected: true,
+			expected: false, // Comments should be ignored
 		},
 	}
 
