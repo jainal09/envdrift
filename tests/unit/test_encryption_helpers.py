@@ -122,3 +122,63 @@ def test_is_encrypted_content_checks_dotenvx_marker():
     content = "API_KEY=encrypted:abc123"
 
     assert is_encrypted_content(EncryptionProvider.DOTENVX, backend, content) is True
+
+
+def test_is_encrypted_content_dotenvx_header_but_plaintext_values():
+    """is_encrypted_content should return False when DOTENVX has header but no encrypted values.
+
+    This tests the critical case where a .secret file has a DOTENV_PUBLIC_KEY header
+    (from a previous partial merge) but the actual values are still plaintext.
+    The function should NOT treat this as "already encrypted".
+    """
+    backend = DummyEncryptionBackend(
+        name="dotenvx",
+        has_encrypted_header=lambda _c: True,  # Header IS present
+    )
+    # Content has header but values are plaintext (no "encrypted:" prefix)
+    content = """\
+#/-------------------[DOTENV_PUBLIC_KEY]--------------------/
+#/            public-key encryption for .env files          /
+#/       [how it works](https://dotenvx.com/encryption)     /
+#/----------------------------------------------------------/
+DOTENV_PUBLIC_KEY_SECRET="034c65f520ec607225d1344fdbace9c31b06c1c8095f413c9cc50abb105f7124e3"
+
+# .env.soak.secret
+API_KEY=plaintext_secret_value
+DATABASE_PASSWORD=another_plaintext_value
+"""
+    # Should return False because there are no "encrypted:" values
+    assert is_encrypted_content(EncryptionProvider.DOTENVX, backend, content) is False
+
+
+def test_is_encrypted_content_dotenvx_header_with_encrypted_values():
+    """is_encrypted_content should return True when DOTENVX has header AND encrypted values."""
+    backend = DummyEncryptionBackend(
+        name="dotenvx",
+        has_encrypted_header=lambda _c: True,
+    )
+    content = """\
+#/-------------------[DOTENV_PUBLIC_KEY]--------------------/
+DOTENV_PUBLIC_KEY_SECRET="034c65f520ec607225d1344fdbace9c31b06c1c8095f413c9cc50abb105f7124e3"
+
+API_KEY=encrypted:BJxUJmUB/UdA5MEUSduzwIrW20EM9mQegxI0t5/Urj83ZEKcbPok4ntuCgE6o6aXmRNdbn
+DATABASE_PASSWORD=encrypted:BDMo6jyFdvRLdd2nkCk6l/7yPmULsTQtXuIIP4j7vrZewJ4bMVXIiEHHGWKBHHS0Mz5a
+"""
+    assert is_encrypted_content(EncryptionProvider.DOTENVX, backend, content) is True
+
+
+def test_is_encrypted_content_sops_uses_header():
+    """For SOPS provider, is_encrypted_content should use has_encrypted_header."""
+    # SOPS with header = encrypted
+    backend_with_header = DummyEncryptionBackend(
+        name="sops",
+        has_encrypted_header=lambda _c: True,
+    )
+    assert is_encrypted_content(EncryptionProvider.SOPS, backend_with_header, "any") is True
+
+    # SOPS without header = not encrypted
+    backend_no_header = DummyEncryptionBackend(
+        name="sops",
+        has_encrypted_header=lambda _c: False,
+    )
+    assert is_encrypted_content(EncryptionProvider.SOPS, backend_no_header, "any") is False
