@@ -509,9 +509,7 @@ class TestVaultPushAll:
         service_dir.mkdir()
         env_file = service_dir / ".env.production"
         env_file.write_text(
-            "#/---BEGIN DOTENV ENCRYPTED---/\n"
-            "DOTENV_PUBLIC_KEY=abc\n"
-            "SECRET=encrypted:abc123\n"
+            "#/---BEGIN DOTENV ENCRYPTED---/\nDOTENV_PUBLIC_KEY=abc\nSECRET=encrypted:abc123\n"
         )
 
         result = runner.invoke(app, ["vault-push", "--all"])

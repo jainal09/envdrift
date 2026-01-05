@@ -264,9 +264,9 @@ def test_dotenvx_smart_encryption_skips_unchanged(integration_env):
         capture_output=True,
         text=True,
     )
-    assert (
-        result.stdout.strip() == ""
-    ), f"File should have no git changes after smart encryption, but got: {result.stdout}"
+    assert result.stdout.strip() == "", (
+        f"File should have no git changes after smart encryption, but got: {result.stdout}"
+    )
 
 
 @pytest.mark.integration
@@ -364,9 +364,9 @@ def test_sops_smart_encryption_skips_unchanged(integration_env):
     encrypted_content_v2 = env_file.read_text()
 
     # Should be identical (restored from git)
-    assert (
-        encrypted_content_v2 == encrypted_content_v1
-    ), "Smart encryption should restore sops file when content unchanged."
+    assert encrypted_content_v2 == encrypted_content_v1, (
+        "Smart encryption should restore sops file when content unchanged."
+    )
 
     # Verify git status clean
     result = subprocess.run(
@@ -491,3 +491,141 @@ def test_pull_skips_partial_combined_files(integration_env):
 
     output = re.sub(r"\x1b\[[0-9;]*m", "", result.stdout + result.stderr)
     assert "skipped (partial encryption combined file)" in output
+
+
+@pytest.mark.integration
+def test_full_lock_pull_merge_cycle(integration_env):
+    """
+    Integration test for the complete lock -> pull --merge -> lock cycle.
+
+    This tests:
+    1. lock --all encrypts .secret files
+    2. pull --merge --skip-sync decrypts and creates combined files
+    3. lock --all re-encrypts and deletes combined files
+
+    Note: Uses --skip-sync to avoid needing actual vault connectivity.
+    The encryption/decryption happens locally using .env.keys files.
+    """
+    work_dir = integration_env["base_dir"] / "lock-pull-merge-cycle"
+    work_dir.mkdir()
+    env = integration_env["env"].copy()
+
+    # Create partial encryption structure
+    service_dir = work_dir / "service"
+    service_dir.mkdir()
+
+    # Create .clear file (non-sensitive vars)
+    clear_file = service_dir / ".env.prod.clear"
+    clear_file.write_text(
+        textwrap.dedent(
+            """\
+            APP_NAME=myapp
+            DEBUG=false
+            LOG_LEVEL=info
+            """
+        )
+    )
+
+    # Create .secret file (sensitive vars - plaintext initially)
+    secret_file = service_dir / ".env.prod.secret"
+    secret_file.write_text(
+        textwrap.dedent(
+            """\
+            API_KEY=super_secret_key
+            DATABASE_URL=postgres://user:pass@localhost/db
+            JWT_SECRET=my_jwt_secret
+            """
+        )
+    )
+
+    # Create config with vault section (required by lock command, but we use --skip-sync)
+    config = textwrap.dedent(
+        f"""\
+        [encryption]
+        backend = "dotenvx"
+
+        [encryption.dotenvx]
+        auto_install = true
+
+        [vault]
+        provider = "azure"
+
+        [vault.azure]
+        vault_url = "https://fake-vault.vault.azure.net/"
+
+        [vault.sync]
+        [[vault.sync.mappings]]
+        secret_name = "test-key"
+        folder_path = "{service_dir.as_posix()}"
+        environment = "prod"
+
+        [partial_encryption]
+        enabled = true
+
+        [[partial_encryption.environments]]
+        name = "prod"
+        clear_file = "{clear_file.as_posix()}"
+        secret_file = "{secret_file.as_posix()}"
+        combined_file = "{(service_dir / ".env.prod").as_posix()}"
+        """
+    )
+    (work_dir / "envdrift.toml").write_text(config)
+
+    # Create empty .env.keys (dotenvx will populate on first encrypt)
+    keys_file = service_dir / ".env.keys"
+    keys_file.write_text("")
+
+    # === Step 1: lock --all - encrypt the .secret file ===
+    # Note: No --skip-verify needed, lock encrypts locally without vault check by default
+    result = _run_envdrift(
+        ["lock", "--all", "--force", "--config", "envdrift.toml"],
+        cwd=work_dir,
+        env=env,
+    )
+    output = re.sub(r"\x1b\[[0-9;]*m", "", result.stdout + result.stderr)
+    assert "encrypted" in output.lower(), f"Expected 'encrypted' in output: {output}"
+
+    # Verify .secret file is encrypted
+    secret_content = secret_file.read_text()
+    assert "=encrypted:" in secret_content, "Secret file should contain encrypted values"
+
+    # Verify combined file does not exist yet
+    combined_file = service_dir / ".env.prod"
+    assert not combined_file.exists(), "Combined file should not exist after lock"
+
+    # === Step 2: pull --merge --skip-sync - decrypt and create combined file ===
+    result = _run_envdrift(
+        ["pull", "--merge", "--skip-sync", "--force", "--config", "envdrift.toml"],
+        cwd=work_dir,
+        env=env,
+    )
+    output = re.sub(r"\x1b\[[0-9;]*m", "", result.stdout + result.stderr)
+    assert "merged" in output.lower(), f"Expected 'merged' in output: {output}"
+
+    # Verify combined file exists and has decrypted content
+    assert combined_file.exists(), "Combined file should exist after pull --merge"
+    combined_content = combined_file.read_text()
+
+    # Check that combined file has content from both .clear and .secret
+    assert "APP_NAME=myapp" in combined_content, "Combined should have clear vars"
+    assert "DEBUG=false" in combined_content, "Combined should have clear vars"
+    assert "API_KEY=" in combined_content, "Combined should have secret vars"
+    assert "DATABASE_URL=" in combined_content, "Combined should have secret vars"
+    # Verify it's decrypted (no encrypted: prefix)
+    assert "=encrypted:" not in combined_content, "Combined file should be decrypted"
+
+    # === Step 3: lock --all again - re-encrypt and delete combined file ===
+    result = _run_envdrift(
+        ["lock", "--all", "--force", "--config", "envdrift.toml"],
+        cwd=work_dir,
+        env=env,
+    )
+    output = re.sub(r"\x1b\[[0-9;]*m", "", result.stdout + result.stderr)
+    assert "deleted" in output.lower(), f"Expected 'deleted' in output: {output}"
+
+    # Verify combined file is deleted
+    assert not combined_file.exists(), "Combined file should be deleted after lock --all"
+
+    # Verify .secret file is encrypted again
+    secret_content = secret_file.read_text()
+    assert "=encrypted:" in secret_content, "Secret file should be encrypted after lock"
