@@ -86,6 +86,7 @@ make build-all
 ## Testing on Different Platforms
 
 The CI automatically tests on:
+
 - Ubuntu (Linux)
 - macOS
 - Windows

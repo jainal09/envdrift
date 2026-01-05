@@ -121,7 +121,7 @@ make lint            # Run linter
 
 ### Project Structure
 
-```
+```text
 envdrift-agent/
 ├── cmd/envdrift-agent/     # Entry point
 ├── internal/
