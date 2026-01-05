@@ -251,8 +251,15 @@ func isInstalledWindows() bool {
 }
 
 func isRunningWindows() bool {
+	// Get our actual executable name
+	execPath, err := os.Executable()
+	if err != nil {
+		return false
+	}
+	execName := filepath.Base(execPath)
+
 	// Check if our process is running
-	cmd := exec.Command("tasklist", "/fi", "imagename eq envdrift-agent.exe")
+	cmd := exec.Command("tasklist", "/fi", fmt.Sprintf("imagename eq %s", execName))
 	output, _ := cmd.Output()
-	return strings.Contains(string(output), "envdrift-agent.exe")
+	return strings.Contains(string(output), execName)
 }
