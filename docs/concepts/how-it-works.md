@@ -47,9 +47,11 @@ Two backends are supported:
 - **dotenvx** — Simple, file-based encryption with `.env.keys`
 - **SOPS** — Enterprise-grade encryption with KMS integration
 
+See [Encryption Backends](encryption-backends.md) for a detailed comparison.
+
 ### 3. Vault Sync
 
-For team workflows, encryption keys need to be shared. envdrift integrates with cloud vaults:
+For team workflows, encryption keys need to be shared. envdrift integrates with cloud vaults (see [Vault Providers](vault-providers.md)):
 
 ```text
 Developer A                    Cloud Vault                    Developer B
