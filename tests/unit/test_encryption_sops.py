@@ -4,7 +4,7 @@ from pathlib import Path
 import pytest
 from envdrift.encryption.sops import SOPSEncryptionBackend
 
-def test_sops_find_binary_cached(tmp_path):
+def test_sops_find_binary_cached():
     """Test regarding the binary path caching mechanism."""
     
     # Setup - mock exists() to be true
