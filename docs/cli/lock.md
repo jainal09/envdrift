@@ -111,6 +111,27 @@ Check encryption status only (dry run). Reports what would be encrypted without 
 envdrift lock --check
 ```
 
+### `--all`
+
+Include partial encryption files in the locking process. When set:
+
+1. **No longer skips combined files** - Partial encryption combined files (e.g., `.env.production`) get encrypted like regular files
+2. **Encrypts `.secret` files** - Ensures partial encryption secret files are also locked
+3. **Deletes combined files** - Removes the merged combined files after locking
+
+This is useful when you want to lock everything and clean up generated files before committing.
+
+```bash
+# Lock everything including partial encryption files
+envdrift lock --all
+
+# Force mode with partial encryption
+envdrift lock -f --all
+
+# Check what would happen
+envdrift lock --check --all
+```
+
 ## Examples
 
 ### Basic Lock
@@ -146,6 +167,13 @@ envdrift lock --check
 ```bash
 # Lock a specific profile
 envdrift lock --profile local
+```
+
+### Lock Including Partial Encryption Files
+
+```bash
+# Lock everything, including partial encryption files
+envdrift lock -f --all
 ```
 
 ### Force Lock Without Prompts
@@ -231,21 +259,51 @@ Step 2: Encrypting environment files...
 Lock complete! Your environment files are encrypted and ready to commit.
 ```
 
+### With --all (Partial Encryption)
+
+```text
+Lock - Verifying keys and encrypting env files
+Provider: azure | Mode: FORCE | Services: 3 | Including partial encryption
+
+Step 1: Encrypting environment files...
+
+  + services/api/.env.production - encrypted
+  = services/auth/.env.production - skipped (already encrypted)
+  + synapse/.env.production - encrypted
+
+Step 2: Processing partial encryption files...
+
+  = synapse/.env.production.secret - skipped (already encrypted)
+  - synapse/.env.production - deleted (combined file)
+
+╭──────────── Lock Summary ────────────╮
+│ Encrypted: 2                         │
+│ Already encrypted: 1                 │
+│ Skipped: 0                           │
+│ Errors: 0                            │
+│ Partial secrets encrypted: 0         │
+│ Combined files deleted: 1            │
+╰──────────────────────────────────────╯
+
+Lock complete! Your environment files are encrypted and ready to commit.
+```
+
 ## Warnings and Errors
 
 The `lock` command catches many edge cases and provides helpful warnings and errors:
 
 ### Warnings
 
-| Warning                        | Meaning                                                              |
-|:-------------------------------|:---------------------------------------------------------------------|
-| `.env.keys not found`          | No encryption keys file exists; a new key will be generated           |
-| `{KEY} missing from .env.keys` | The expected private key for this environment isn't in the keys file  |
-| `vault secret is empty`        | The vault secret exists but has no value                             |
-| `vault secret not found`       | The secret doesn't exist in the vault                                |
-| `multiple .env files found`    | Multiple `.env.*` files exist; specify the environment explicitly      |
-| `file not found`               | The expected `.env.<environment>` file doesn't exist                   |
-| `partially encrypted (N%)`     | The file is only partially encrypted; will re-encrypt                 |
+| Warning                                    | Meaning                                                              |
+|:-------------------------------------------|:---------------------------------------------------------------------|
+| `.env.keys not found`                      | No encryption keys file exists; a new key will be generated           |
+| `{KEY} missing from .env.keys`             | The expected private key for this environment isn't in the keys file  |
+| `vault secret is empty`                    | The vault secret exists but has no value                             |
+| `vault secret not found`                   | The secret doesn't exist in the vault                                |
+| `multiple .env files found`                | Multiple `.env.*` files exist; specify the environment explicitly      |
+| `file not found`                           | The expected `.env.<environment>` file doesn't exist                   |
+| `partially encrypted (N%)`                 | The file is only partially encrypted; will re-encrypt                 |
+| `partial encryption combined file`         | File is a generated combined file; use `--all` to include             |
 
 ### Errors
 

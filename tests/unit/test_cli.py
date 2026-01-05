@@ -2344,9 +2344,7 @@ class TestPullCommand:
         service_dir.mkdir()
         env_file = service_dir / ".env.production"
         env_file.write_text(
-            "#/---BEGIN DOTENV ENCRYPTED---/\n"
-            "DOTENV_PUBLIC_KEY=abc\n"
-            "SECRET=encrypted:abc123\n"
+            "#/---BEGIN DOTENV ENCRYPTED---/\nDOTENV_PUBLIC_KEY=abc\nSECRET=encrypted:abc123\n"
         )
 
         config_file = tmp_path / "envdrift.toml"
@@ -2464,8 +2462,12 @@ class TestPullCommand:
 
         sync_config = SyncConfig(
             mappings=[
-                ServiceMapping(secret_name="key-a", folder_path=service_a, environment="production"),
-                ServiceMapping(secret_name="key-b", folder_path=service_b, environment="production"),
+                ServiceMapping(
+                    secret_name="key-a", folder_path=service_a, environment="production"
+                ),
+                ServiceMapping(
+                    secret_name="key-b", folder_path=service_b, environment="production"
+                ),
             ],
             env_keys_filename=".env.keys",
             max_workers=2,
@@ -2705,6 +2707,183 @@ class TestLockCommand:
         assert result.exit_code == 0
         assert env_file not in encrypted
         assert "partial encryption combined file" in result.output.lower()
+        assert "use --all" in result.output.lower()
+
+    def test_lock_all_processes_partial_encryption_files(self, monkeypatch, tmp_path: Path):
+        """Lock --all should encrypt .secret files and delete combined files."""
+        service_dir = tmp_path / "service"
+        service_dir.mkdir()
+        env_file = service_dir / ".env.production"
+        env_file.write_text("SECRET=value")
+        secret_file = service_dir / ".env.production.secret"
+        secret_file.write_text("DB_PASSWORD=secret123")
+        clear_file = service_dir / ".env.production.clear"
+        clear_file.write_text("APP_NAME=myapp")
+
+        config_file = tmp_path / "envdrift.toml"
+        config_file.write_text(
+            dedent(
+                f"""
+                [vault]
+                provider = "aws"
+
+                [vault.aws]
+                region = "us-east-1"
+
+                [vault.sync]
+                env_keys_filename = ".env.keys"
+
+                [[vault.sync.mappings]]
+                secret_name = "dotenv-key"
+                folder_path = "{service_dir.as_posix()}"
+                environment = "production"
+
+                [partial_encryption]
+                enabled = true
+
+                [[partial_encryption.environments]]
+                name = "production"
+                clear_file = "{clear_file.as_posix()}"
+                secret_file = "{secret_file.as_posix()}"
+                combined_file = "{env_file.as_posix()}"
+                """
+            ).lstrip()
+        )
+
+        monkeypatch.setattr("envdrift.vault.get_vault_client", lambda *_, **__: SimpleNamespace())
+        monkeypatch.setattr(
+            "envdrift.integrations.hook_check.ensure_git_hook_setup",
+            lambda **_kwargs: [],
+        )
+
+        encrypted: list[Path] = []
+        _mock_encryption_backend(monkeypatch, encrypted_paths=encrypted)
+
+        result = runner.invoke(app, ["lock", "-c", str(config_file), "--force", "--all"])
+
+        assert result.exit_code == 0
+        # Both the main env file and the secret file should be encrypted
+        assert env_file.resolve() in [p.resolve() for p in encrypted]
+        assert secret_file.resolve() in [p.resolve() for p in encrypted]
+        # Combined file should be deleted
+        assert not env_file.exists()
+        assert "combined files deleted" in result.output.lower()
+        assert "including partial encryption" in result.output.lower()
+
+    def test_lock_all_deletes_combined_file(self, monkeypatch, tmp_path: Path):
+        """Lock --all should delete combined files after processing."""
+        service_dir = tmp_path / "service"
+        service_dir.mkdir()
+        env_file = service_dir / ".env.production"
+        env_file.write_text("SECRET=encrypted:abc123")  # Already encrypted
+        secret_file = service_dir / ".env.production.secret"
+        secret_file.write_text("DB_PASSWORD=encrypted:xyz789")  # Already encrypted
+
+        config_file = tmp_path / "envdrift.toml"
+        config_file.write_text(
+            dedent(
+                f"""
+                [vault]
+                provider = "aws"
+
+                [vault.aws]
+                region = "us-east-1"
+
+                [vault.sync]
+                env_keys_filename = ".env.keys"
+
+                [[vault.sync.mappings]]
+                secret_name = "dotenv-key"
+                folder_path = "{service_dir.as_posix()}"
+                environment = "production"
+
+                [partial_encryption]
+                enabled = true
+
+                [[partial_encryption.environments]]
+                name = "production"
+                clear_file = "{(service_dir / ".env.production.clear").as_posix()}"
+                secret_file = "{secret_file.as_posix()}"
+                combined_file = "{env_file.as_posix()}"
+                """
+            ).lstrip()
+        )
+
+        monkeypatch.setattr("envdrift.vault.get_vault_client", lambda *_, **__: SimpleNamespace())
+        monkeypatch.setattr(
+            "envdrift.integrations.hook_check.ensure_git_hook_setup",
+            lambda **_kwargs: [],
+        )
+
+        # Mark content as already encrypted
+        dummy = _mock_encryption_backend(monkeypatch)
+        dummy.is_encrypted = lambda content: "encrypted:" in content
+
+        result = runner.invoke(app, ["lock", "-c", str(config_file), "--force", "--all"])
+
+        assert result.exit_code == 0
+        # Combined file should be deleted even if secret was already encrypted
+        assert not env_file.exists()
+
+    def test_lock_all_check_mode_reports_but_does_not_modify(self, monkeypatch, tmp_path: Path):
+        """Lock --all --check should report what would be done without modifying."""
+        service_dir = tmp_path / "service"
+        service_dir.mkdir()
+        env_file = service_dir / ".env.production"
+        env_file.write_text("SECRET=value")
+        secret_file = service_dir / ".env.production.secret"
+        secret_file.write_text("DB_PASSWORD=secret123")
+
+        config_file = tmp_path / "envdrift.toml"
+        config_file.write_text(
+            dedent(
+                f"""
+                [vault]
+                provider = "aws"
+
+                [vault.aws]
+                region = "us-east-1"
+
+                [vault.sync]
+                env_keys_filename = ".env.keys"
+
+                [[vault.sync.mappings]]
+                secret_name = "dotenv-key"
+                folder_path = "{service_dir.as_posix()}"
+                environment = "production"
+
+                [partial_encryption]
+                enabled = true
+
+                [[partial_encryption.environments]]
+                name = "production"
+                clear_file = "{(service_dir / ".env.production.clear").as_posix()}"
+                secret_file = "{secret_file.as_posix()}"
+                combined_file = "{env_file.as_posix()}"
+                """
+            ).lstrip()
+        )
+
+        monkeypatch.setattr("envdrift.vault.get_vault_client", lambda *_, **__: SimpleNamespace())
+        monkeypatch.setattr(
+            "envdrift.integrations.hook_check.ensure_git_hook_setup",
+            lambda **_kwargs: [],
+        )
+
+        encrypted: list[Path] = []
+        _mock_encryption_backend(monkeypatch, encrypted_paths=encrypted)
+
+        result = runner.invoke(app, ["lock", "-c", str(config_file), "--check", "--all"])
+
+        # Check mode should exit with 1 when files need encryption
+        assert result.exit_code == 1
+        # Files should NOT be modified
+        assert env_file.exists()
+        assert secret_file.exists()
+        # No files should have been encrypted
+        assert len(encrypted) == 0
+        assert "would be encrypted" in result.output.lower()
+        assert "would be deleted" in result.output.lower()
 
     def test_lock_verify_vault_mismatch_fails(self, monkeypatch, tmp_path: Path):
         """Verify vault should fail on key mismatch."""
@@ -2803,7 +2982,7 @@ class TestLockCommand:
         service_dir = tmp_path / "service"
         service_dir.mkdir()
         env_file = service_dir / ".env.production"
-        env_file.write_text("#/---BEGIN DOTENV ENCRYPTED---/\n" "#/---END DOTENV ENCRYPTED---/\n")
+        env_file.write_text("#/---BEGIN DOTENV ENCRYPTED---/\n#/---END DOTENV ENCRYPTED---/\n")
 
         config_file = tmp_path / "envdrift.toml"
         config_file.write_text(
@@ -2840,9 +3019,7 @@ class TestLockCommand:
         service_dir.mkdir()
         env_file = service_dir / ".env.production"
         env_file.write_text(
-            "#/---BEGIN DOTENV ENCRYPTED---/\n"
-            "DOTENV_PUBLIC_KEY=abc\n"
-            "SECRET=encrypted:abc123\n"
+            "#/---BEGIN DOTENV ENCRYPTED---/\nDOTENV_PUBLIC_KEY=abc\nSECRET=encrypted:abc123\n"
         )
 
         config_file = tmp_path / "envdrift.toml"
@@ -2949,8 +3126,12 @@ class TestLockCommand:
 
         sync_config = SyncConfig(
             mappings=[
-                ServiceMapping(secret_name="key-a", folder_path=service_a, environment="production"),
-                ServiceMapping(secret_name="key-b", folder_path=service_b, environment="production"),
+                ServiceMapping(
+                    secret_name="key-a", folder_path=service_a, environment="production"
+                ),
+                ServiceMapping(
+                    secret_name="key-b", folder_path=service_b, environment="production"
+                ),
             ],
             env_keys_filename=".env.keys",
             max_workers=2,

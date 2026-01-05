@@ -198,3 +198,22 @@ git commit -m "Migrate to partial encryption"
 - ✅ **Run `push` before committing** to ensure combined file is up-to-date
 - ✅ **Run `pull-partial` after pulling** to decrypt secret files
 - ✅ **Use version control** to track changes to cleartext vars
+
+## Alternative: Using `lock --all`
+
+If you prefer to use `envdrift lock` for all encryption (including partial encryption files),
+you can use the `--all` flag:
+
+```bash
+# Lock everything, including partial encryption files
+envdrift lock -f --all
+```
+
+This will:
+
+1. Encrypt all regular `.env.*` files
+2. Encrypt all `.secret` files
+3. Delete the combined files (since they're generated)
+
+This is useful when you want a single command to lock all files before committing,
+rather than using separate `push` and `lock` commands.
