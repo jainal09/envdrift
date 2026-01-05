@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import logging
 import tomllib
 from pathlib import Path
@@ -9,6 +10,7 @@ from typing import TYPE_CHECKING
 
 from envdrift.config import ConfigNotFoundError, find_config, load_config
 from envdrift.encryption import EncryptionProvider, get_encryption_backend
+from envdrift.utils.git import get_file_from_git, is_file_tracked, restore_file_from_git
 
 if TYPE_CHECKING:
     from envdrift.config import EncryptionConfig
@@ -91,3 +93,94 @@ def is_encrypted_content(
     if provider == EncryptionProvider.DOTENVX:
         return "encrypted:" in content.lower()
     return False
+
+
+def should_skip_reencryption(
+    env_file: Path,
+    backend: EncryptionBackend,
+) -> tuple[bool, str]:
+    """
+    Determine if re-encryption should be skipped because content is unchanged.
+
+    This function addresses the issue where dotenvx uses non-deterministic encryption
+    (ECIES with ephemeral keys), causing the encrypted output to change even when
+    the plaintext is unchanged. This creates unnecessary git noise.
+
+    The solution:
+    1. Check if the file is tracked in git
+    2. Get the encrypted version from git (HEAD)
+    3. Decrypt the git version to a temp file
+    4. Compare the decrypted content with the current file content
+    5. If identical, restore the original encrypted version from git
+
+    Parameters:
+        env_file: Path to the currently decrypted .env file.
+        backend: The encryption backend (must support decrypt).
+
+    Returns:
+        A tuple of (should_skip, reason):
+        - should_skip: True if re-encryption should be skipped
+        - reason: Human-readable explanation of the decision
+    """
+    # Only supported for dotenvx and sops backends currently
+    if backend.name.lower() not in ("dotenvx", "sops"):
+        return False, "smart encryption not supported for this backend"
+
+    # Check if file is tracked in git
+    if not is_file_tracked(env_file):
+        return False, "file is not tracked in git"
+
+    # Get the encrypted version from git
+    git_content = get_file_from_git(env_file)
+    if git_content is None:
+        return False, "could not retrieve file from git"
+
+    # Check if git version is encrypted
+    if backend.name.lower() == "dotenvx":
+        if "encrypted:" not in git_content.lower():
+            return False, "git version is not encrypted"
+    elif not backend.has_encrypted_header(git_content):
+        # Fallback check for SOPS if has_encrypted_header misses it
+        # (though sops backend usually implements this correctly)
+        if "sops_mac=" not in git_content and "ENC[" not in git_content:
+            return False, "git version is not encrypted"
+
+    # Decrypt the git version to compare
+    temp_path = env_file.with_name(f".{env_file.name}.envdrift-tmp")
+    try:
+        try:
+            temp_path.write_text(git_content)
+
+            # Try to decrypt the git version
+            result = backend.decrypt(temp_path)
+            if not result.success:
+                return False, f"could not decrypt git version: {result.message}"
+
+            # Read the decrypted content from git
+            git_decrypted = temp_path.read_text()
+        finally:
+            # Cleanup temp file
+            with contextlib.suppress(OSError):
+                if temp_path.exists():
+                    temp_path.unlink()
+
+        # Read current file content
+        current_content = env_file.read_text()
+
+        # Normalize line endings for comparison
+        git_decrypted_normalized = git_decrypted.replace("\r\n", "\n").strip()
+        current_normalized = current_content.replace("\r\n", "\n").strip()
+
+        # Compare contents
+        if git_decrypted_normalized == current_normalized:
+            # Content unchanged! Restore the original encrypted version
+            if restore_file_from_git(env_file):
+                return True, "content unchanged, restored encrypted version from git"
+            else:
+                return False, "content unchanged but failed to restore from git"
+        else:
+            return False, "content has changed, re-encryption required"
+
+    except Exception as e:
+        logger.debug("Error during smart encryption comparison: %s", e)
+        return False, f"error comparing content: {e}"

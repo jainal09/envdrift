@@ -135,6 +135,7 @@ ignore = [
     "S310",   # URL open audit - we control the URL source
     "S202",   # tarfile extractall - trusted source (GitHub releases)
     "S603",   # subprocess call - we control the input
+    "S607",   # partial path - git/dotenvx should be in PATH
     "RUF005", # list concat - readability preference
 ]
 

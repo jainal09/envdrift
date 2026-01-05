@@ -1355,8 +1355,10 @@ class TestHookInstall:
 class TestSyncCommand:
     """Tests for the sync CLI command."""
 
-    def test_sync_requires_config_and_provider(self, tmp_path: Path):
+    def test_sync_requires_config_and_provider(self, tmp_path: Path, monkeypatch):
         """Sync should enforce required options."""
+        # Run from isolated tmp directory to prevent auto-discovery of parent config
+        monkeypatch.chdir(tmp_path)
 
         missing_config = runner.invoke(
             app, ["sync", "-p", "azure", "--vault-url", "https://example.vault.azure.net/"]
@@ -3131,8 +3133,13 @@ class TestLockCommand:
 class TestVaultPushCommand:
     """Tests for vault-push command."""
 
-    def test_vault_push_requires_provider(self, tmp_path: Path):
+    def test_vault_push_requires_provider(self, tmp_path: Path, monkeypatch):
         """vault-push should require a provider."""
+        # Run from isolated tmp directory to prevent auto-discovery of parent config
+        monkeypatch.chdir(tmp_path)
+        # Create .env.keys file to pass file validation
+        (tmp_path / ".env.keys").write_text("DOTENV_PRIVATE_KEY_SOAK=test")
+
         result = runner.invoke(
             app,
             ["vault-push", str(tmp_path), "secret-name", "--env", "soak"],
@@ -3140,8 +3147,13 @@ class TestVaultPushCommand:
         assert result.exit_code == 1
         assert "provider required" in result.output.lower()
 
-    def test_vault_push_requires_vault_url_for_azure(self, tmp_path: Path):
+    def test_vault_push_requires_vault_url_for_azure(self, tmp_path: Path, monkeypatch):
         """vault-push should require vault URL for azure provider."""
+        # Run from isolated tmp directory to prevent auto-discovery of parent config
+        monkeypatch.chdir(tmp_path)
+        # Create .env.keys file to pass file validation
+        (tmp_path / ".env.keys").write_text("DOTENV_PRIVATE_KEY_SOAK=test")
+
         result = runner.invoke(
             app,
             [
