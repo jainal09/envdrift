@@ -11,7 +11,7 @@ from envdrift.cli import app
 runner = CliRunner()
 
 @patch("envdrift.cli_commands.encryption_helpers.should_skip_reencryption")
-@patch("envdrift.encryption.get_encryption_backend")
+@patch("envdrift.cli_commands.encryption.get_encryption_backend")
 def test_encrypt_command_skips_when_smart_encryption_says_so(
     mock_get_backend, mock_should_skip, tmp_path
 ):
@@ -33,7 +33,7 @@ def test_encrypt_command_skips_when_smart_encryption_says_so(
     # We invoke 'encrypt' command.
     result = runner.invoke(app, ["encrypt", str(env_file), "--backend", "dotenvx"])
 
-    assert result.exit_code == 0
+    assert result.exit_code == 0, f"Command failed with: {result.output}"
     # Normalize whitespace since terminal output may wrap lines
     stdout_normalized = " ".join(result.stdout.split())
     assert "Skipped" in stdout_normalized or "skipped" in stdout_normalized.lower()
