@@ -46,6 +46,9 @@ class EncryptionBackend(ABC):
     - is_installed: Check if the encryption tool is available
     - detect_encryption_status: Detect if a value is encrypted by this backend
     - has_encrypted_header: Check if file content has encryption markers
+
+    Implementations should be safe for concurrent use; protect any shared lazy
+    initialization of backend state with locks.
     """
 
     @property

@@ -7,21 +7,13 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from envdrift.utils import normalize_max_workers
+
 
 class SyncConfigError(Exception):
     """Error loading sync configuration."""
 
     pass
-
-
-def _normalize_max_workers(value: Any) -> int | None:
-    if value is None:
-        return None
-    if isinstance(value, bool) or not isinstance(value, int):
-        return None
-    if value < 1:
-        return None
-    return value
 
 
 @dataclass
@@ -137,7 +129,7 @@ class SyncConfig:
             environment = "staging"     # Optional
         """
         mappings: list[ServiceMapping] = []
-        max_workers = _normalize_max_workers(data.get("max_workers"))
+        max_workers = normalize_max_workers(data.get("max_workers"))
 
         for mapping_data in data.get("mappings", []):
             if "secret_name" not in mapping_data:

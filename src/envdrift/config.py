@@ -7,15 +7,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-
-def _normalize_max_workers(value: Any) -> int | None:
-    if value is None:
-        return None
-    if isinstance(value, bool) or not isinstance(value, int):
-        return None
-    if value < 1:
-        return None
-    return value
+from envdrift.utils import normalize_max_workers
 
 
 @dataclass
@@ -167,7 +159,7 @@ class EnvdriftConfig:
 
         # Build sync config from vault.sync section
         sync_section = vault_section.get("sync", {})
-        max_workers = _normalize_max_workers(sync_section.get("max_workers"))
+        max_workers = normalize_max_workers(sync_section.get("max_workers"))
         sync_mappings = [
             SyncMappingConfig(
                 secret_name=m["secret_name"],

@@ -14,6 +14,7 @@ from rich.panel import Panel
 
 from envdrift.env_files import detect_env_file
 from envdrift.output.rich import console, print_error, print_success, print_warning
+from envdrift.utils import normalize_max_workers
 from envdrift.vault.base import SecretNotFoundError, VaultError
 
 if TYPE_CHECKING:
@@ -229,15 +230,7 @@ def load_sync_config_and_client(
 
 
 def _normalize_max_workers(max_workers: int | None) -> int | None:
-    if max_workers is None:
-        return None
-    if isinstance(max_workers, bool) or not isinstance(max_workers, int):
-        print_warning("Invalid max_workers value; using default thread count")
-        return None
-    if max_workers < 1:
-        print_warning("max_workers must be >= 1; using default thread count")
-        return None
-    return max_workers
+    return normalize_max_workers(max_workers, warn=print_warning)
 
 
 def _should_use_executor(max_workers: int | None, task_count: int) -> bool:
