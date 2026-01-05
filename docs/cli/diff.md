@@ -27,8 +27,8 @@ This is useful for:
 
 | Argument | Description                           |
 | :------- | :------------------------------------ |
-| `ENV1`   | Path to first .env file (baseline)    |
-| `ENV2`   | Path to second .env file (comparison) |
+| `ENV1`   | Path to first .env file (baseline)      |
+| `ENV2`   | Path to second .env file (comparison)  |
 
 ## Options
 
