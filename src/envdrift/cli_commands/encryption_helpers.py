@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
+import contextlib
 import logging
-import tempfile
 import tomllib
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -146,9 +146,9 @@ def should_skip_reencryption(
             return False, "git version is not encrypted"
 
     # Decrypt the git version to compare
+    temp_path = env_file.with_name(f".{env_file.name}.envdrift-tmp")
     try:
-        with tempfile.TemporaryDirectory(prefix=".envdrift-compare-") as temp_dir:
-            temp_path = Path(temp_dir) / env_file.name
+        try:
             temp_path.write_text(git_content)
 
             # Try to decrypt the git version
@@ -158,23 +158,28 @@ def should_skip_reencryption(
 
             # Read the decrypted content from git
             git_decrypted = temp_path.read_text()
+        finally:
+            # Cleanup temp file
+            with contextlib.suppress(OSError):
+                if temp_path.exists():
+                    temp_path.unlink()
 
-            # Read current file content
-            current_content = env_file.read_text()
+        # Read current file content
+        current_content = env_file.read_text()
 
-            # Normalize line endings for comparison
-            git_decrypted_normalized = git_decrypted.replace("\r\n", "\n").strip()
-            current_normalized = current_content.replace("\r\n", "\n").strip()
+        # Normalize line endings for comparison
+        git_decrypted_normalized = git_decrypted.replace("\r\n", "\n").strip()
+        current_normalized = current_content.replace("\r\n", "\n").strip()
 
-            # Compare contents
-            if git_decrypted_normalized == current_normalized:
-                # Content unchanged! Restore the original encrypted version
-                if restore_file_from_git(env_file):
-                    return True, "content unchanged, restored encrypted version from git"
-                else:
-                    return False, "content unchanged but failed to restore from git"
+        # Compare contents
+        if git_decrypted_normalized == current_normalized:
+            # Content unchanged! Restore the original encrypted version
+            if restore_file_from_git(env_file):
+                return True, "content unchanged, restored encrypted version from git"
             else:
-                return False, "content has changed, re-encryption required"
+                return False, "content unchanged but failed to restore from git"
+        else:
+            return False, "content has changed, re-encryption required"
 
     except Exception as e:
         logger.debug("Error during smart encryption comparison: %s", e)
