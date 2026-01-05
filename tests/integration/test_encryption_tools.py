@@ -166,3 +166,103 @@ def test_sops_encrypt_decrypt_roundtrip(integration_env):
     decrypted = env_file.read_text()
     assert "DB_PASSWORD=hunter2" in decrypted
     assert "ENC[" not in decrypted
+
+
+@pytest.mark.integration
+def test_dotenvx_smart_encryption_skips_unchanged(integration_env):
+    """Smart encryption should restore from git when content is unchanged.
+
+    This tests the fix for dotenvx's non-deterministic encryption (ECIES)
+    which produces different ciphertext each time, causing unnecessary git noise.
+    """
+    work_dir = integration_env["base_dir"] / "dotenvx-smart"
+    work_dir.mkdir()
+    env = integration_env["env"].copy()
+
+    # Initialize git repo
+    subprocess.run(["git", "init"], cwd=work_dir, capture_output=True, check=True)
+    subprocess.run(
+        ["git", "config", "user.email", "test@test.com"],
+        cwd=work_dir,
+        capture_output=True,
+        check=True,
+    )
+    subprocess.run(
+        ["git", "config", "user.name", "Test"],
+        cwd=work_dir,
+        capture_output=True,
+        check=True,
+    )
+
+    # Create env file
+    env_file = work_dir / ".env.production"
+    env_file.write_text(
+        textwrap.dedent(
+            """\
+            API_URL=https://example.com
+            SECRET_KEY=mysupersecretkey123
+            DEBUG=false
+            """
+        )
+    )
+
+    # Create config
+    config = textwrap.dedent(
+        """\
+        [encryption]
+        backend = "dotenvx"
+
+        [encryption.dotenvx]
+        auto_install = true
+        """
+    )
+    (work_dir / "envdrift.toml").write_text(config)
+
+    # Encrypt the file
+    _run_envdrift(["encrypt", env_file.name], cwd=work_dir, env=env)
+    encrypted_content_v1 = env_file.read_text()
+    assert "encrypted:" in encrypted_content_v1
+
+    # Commit the encrypted file to git
+    subprocess.run(
+        ["git", "add", ".env.production", "envdrift.toml"],
+        cwd=work_dir,
+        capture_output=True,
+        check=True,
+    )
+    subprocess.run(
+        ["git", "commit", "-m", "initial"],
+        cwd=work_dir,
+        capture_output=True,
+        check=True,
+    )
+
+    # Decrypt the file (simulating `envdrift pull`)
+    _run_envdrift(["decrypt", env_file.name], cwd=work_dir, env=env)
+    decrypted_content = env_file.read_text()
+    assert "SECRET_KEY=mysupersecretkey123" in decrypted_content
+    assert "encrypted:" not in decrypted_content
+
+    # Now re-encrypt WITHOUT changing the content
+    # The smart encryption should detect the content is unchanged
+    # and restore the original encrypted file from git
+    _run_envdrift(["encrypt", env_file.name], cwd=work_dir, env=env)
+    encrypted_content_v2 = env_file.read_text()
+
+    # The encrypted content should be IDENTICAL to v1 (restored from git)
+    # If smart encryption works, the file should not have changed
+    assert encrypted_content_v2 == encrypted_content_v1, (
+        "Smart encryption should restore original encrypted file when content unchanged. "
+        "Got different ciphertext, meaning file was re-encrypted instead of restored."
+    )
+
+    # Verify git shows no changes
+    result = subprocess.run(
+        ["git", "status", "--porcelain", ".env.production"],
+        cwd=work_dir,
+        capture_output=True,
+        text=True,
+    )
+    assert (
+        result.stdout.strip() == ""
+    ), f"File should have no git changes after smart encryption, but got: {result.stdout}"

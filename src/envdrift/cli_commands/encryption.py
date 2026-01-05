@@ -261,6 +261,16 @@ def encrypt_cmd(
                 if azure_kv:
                     encrypt_kwargs["azure_kv"] = azure_kv
 
+            # === SMART ENCRYPTION: Skip re-encryption if content unchanged ===
+            # This addresses dotenvx's non-deterministic encryption (ECIES) which
+            # produces different ciphertext each time, causing unnecessary git noise.
+            from envdrift.cli_commands.encryption_helpers import should_skip_reencryption
+
+            should_skip, skip_reason = should_skip_reencryption(env_file, encryption_backend)
+            if should_skip:
+                print_success(f"Skipped re-encryption of {env_file} ({skip_reason})")
+                return
+
             result = encryption_backend.encrypt(env_file, **encrypt_kwargs)
             if result.success:
                 print_success(f"Encrypted {env_file} using {encryption_backend.name}")
