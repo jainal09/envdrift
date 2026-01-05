@@ -100,7 +100,7 @@ class DotenvxFilenameError(Exception):
 
 
 # Known problematic filename patterns for dotenvx on Windows
-# See: https://github.com/dotenvx/dotenvx/issues/XXX
+# See: https://github.com/dotenvx/dotenvx/issues/724
 PROBLEMATIC_FILENAME_PATTERNS = [
     # .env.local causes "Input string must contain hex characters" on Windows
     # because dotenvx tries to parse "LOCAL" as a hex string
@@ -653,7 +653,7 @@ class DotenvxWrapper:
                     f"dotenvx has a known bug on Windows where this filename causes "
                     f"'Input string must contain hex characters in even length' error. "
                     f"Workaround: Rename the file (e.g., '.env.localenv' or '.env.dev') "
-                    f"before encryption. See: https://github.com/dotenvx/dotenvx/issues/XXX"
+                    f"before encryption. See: https://github.com/dotenvx/dotenvx/issues/724"
                 )
 
     # Regex pattern for dotenvx public key header blocks
