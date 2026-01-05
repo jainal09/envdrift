@@ -24,12 +24,17 @@ pip install "envdrift[azure]"
 
 ### Authentication
 
-Uses Azure Identity SDK's `DefaultAzureCredential`:
+Uses Azure Identity SDK's `DefaultAzureCredential`, which tries providers in this order:
 
-1. Environment variables (`AZURE_CLIENT_ID`, `AZURE_CLIENT_SECRET`, `AZURE_TENANT_ID`)
-2. Azure CLI (`az login`)
-3. Managed Identity (in Azure environments)
-4. Visual Studio Code
+1. **Environment variables** (`AZURE_CLIENT_ID`, `AZURE_CLIENT_SECRET`, `AZURE_TENANT_ID`)
+2. **Workload Identity** (Kubernetes with Azure AD Workload Identity)
+3. **Managed Identity** (VMs, App Service, Functions, etc.)
+4. **Azure CLI** (`az login`)
+5. **Azure PowerShell** (`Connect-AzAccount`)
+6. **Azure Developer CLI** (`azd auth login`)
+7. **Interactive Browser** (prompts for login)
+8. **Visual Studio Code** (VS Code Azure extension)
+9. **Shared Token Cache** (tokens cached by other Azure tools)
 
 ### Configuration
 
@@ -81,12 +86,17 @@ pip install "envdrift[aws]"
 
 ### Authentication
 
-Uses boto3's credential chain:
+Uses boto3's credential chain, which tries providers in this order:
 
-1. Environment variables (`AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`)
-2. AWS credentials file (`~/.aws/credentials`)
-3. IAM role (in AWS environments)
-4. AWS SSO
+1. **Explicit credentials** passed to `boto3.client()` or `boto3.Session()`
+2. **Environment variables** (`AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_SESSION_TOKEN`)
+3. **Assume Role providers** (profiles with `role_arn` and `source_profile`)
+4. **Assume Role with Web Identity** (IRSA for Kubernetes, web identity tokens)
+5. **AWS IAM Identity Center (SSO)** credential provider
+6. **Shared credentials file** (`~/.aws/credentials`)
+7. **AWS config file** (`~/.aws/config`)
+8. **Container credential provider** (ECS/EKS task roles)
+9. **Instance Metadata Service (IMDS)** (EC2 instance profile)
 
 ### Configuration
 
@@ -201,11 +211,12 @@ pip install "envdrift[gcp]"
 
 ### Authentication
 
-Uses Google Cloud SDK:
+Uses Google Cloud's Application Default Credentials (ADC), which tries providers in this order:
 
-1. Application Default Credentials (`gcloud auth application-default login`)
-2. Service account key file (`GOOGLE_APPLICATION_CREDENTIALS`)
-3. Attached service account (in GCP environments)
+1. **`GOOGLE_APPLICATION_CREDENTIALS` env var** → path to service account JSON key
+2. **User credentials** from `gcloud auth application-default login`
+3. **Attached service account** via metadata server (GCE, GKE, Cloud Run, Cloud Functions)
+4. **Workload Identity Federation** (for non-GCP identity providers and CI/CD)
 
 ### Configuration
 

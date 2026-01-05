@@ -157,14 +157,16 @@ DATABASE__POOL_SIZE=10
 Yes, create environment-specific classes:
 
 ```python
-class BaseSettings(BaseSettings):
+from pydantic_settings import BaseSettings
+
+class AppSettings(BaseSettings):
     DATABASE_URL: str
     API_KEY: str
 
-class DevelopmentSettings(BaseSettings):
+class DevelopmentSettings(AppSettings):
     DEBUG: bool = True
 
-class ProductionSettings(BaseSettings):
+class ProductionSettings(AppSettings):
     DEBUG: bool = False
     SENTRY_DSN: str  # Required only in production
 ```
