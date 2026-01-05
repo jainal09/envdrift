@@ -120,7 +120,7 @@ func uninstallMacOS() error {
 	plistPath := launchAgentPath()
 
 	// Unload first
-	exec.Command("launchctl", "unload", plistPath).Run()
+	_ = exec.Command("launchctl", "unload", plistPath).Run()
 
 	return os.Remove(plistPath)
 }
@@ -173,14 +173,14 @@ WantedBy=default.target
 	}
 
 	// Reload and enable
-	exec.Command("systemctl", "--user", "daemon-reload").Run()
-	exec.Command("systemctl", "--user", "enable", linuxServiceName).Run()
+	_ = exec.Command("systemctl", "--user", "daemon-reload").Run()
+	_ = exec.Command("systemctl", "--user", "enable", linuxServiceName).Run()
 	return exec.Command("systemctl", "--user", "start", linuxServiceName).Run()
 }
 
 func uninstallLinux() error {
-	exec.Command("systemctl", "--user", "stop", linuxServiceName).Run()
-	exec.Command("systemctl", "--user", "disable", linuxServiceName).Run()
+	_ = exec.Command("systemctl", "--user", "stop", linuxServiceName).Run()
+	_ = exec.Command("systemctl", "--user", "disable", linuxServiceName).Run()
 	return os.Remove(systemdPath())
 }
 

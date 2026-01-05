@@ -8,10 +8,6 @@ import (
 	"github.com/gen2brain/beeep"
 )
 
-const (
-	appName = "EnvDrift Guardian"
-)
-
 // Encrypted sends a notification that a file was encrypted
 func Encrypted(path string) error {
 	title := "🔐 File Encrypted"

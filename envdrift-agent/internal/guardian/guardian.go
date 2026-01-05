@@ -63,7 +63,7 @@ func (g *Guardian) Start(ctx context.Context) error {
 
 	// Also watch current directory
 	if cwd, err := os.Getwd(); err == nil {
-		g.watcher.AddDirectory(cwd)
+		_ = g.watcher.AddDirectory(cwd)
 	}
 
 	g.watcher.Start()
@@ -125,19 +125,18 @@ func (g *Guardian) checkIdleFiles() {
 			continue
 		}
 
-		// Encrypt the file!
 		log.Printf("Encrypting idle file: %s", path)
 		if err := encrypt.EncryptSilent(path); err != nil {
 			log.Printf("Error encrypting %s: %v", path, err)
 			if g.config.Guardian.Notify {
-				notify.Error("Failed to encrypt: " + path)
+				_ = notify.Error("Failed to encrypt: " + path)
 			}
 			continue
 		}
 
 		log.Printf("Successfully encrypted: %s", path)
 		if g.config.Guardian.Notify {
-			notify.Encrypted(path)
+			_ = notify.Encrypted(path)
 		}
 
 		// Remove from tracking
