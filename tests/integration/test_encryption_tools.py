@@ -412,6 +412,38 @@ def test_partial_push_updates_gitignore(integration_env):
 
 
 @pytest.mark.integration
+def test_partial_push_respects_existing_gitignore(integration_env):
+    work_dir = integration_env["base_dir"] / "partial-gitignore-existing"
+    work_dir.mkdir()
+    env = integration_env["env"].copy()
+
+    subprocess.run(["git", "init"], cwd=work_dir, capture_output=True, check=True)
+
+    (work_dir / ".env.production.clear").write_text("APP_VERSION=1.2.3\n")
+    (work_dir / ".env.production.secret").write_text("SECRET=encrypted:dummy\n")
+    gitignore_path = work_dir / ".gitignore"
+    gitignore_path.write_text(".env.*\n")
+
+    config = textwrap.dedent(
+        """\
+        [partial_encryption]
+        enabled = true
+
+        [[partial_encryption.environments]]
+        name = "production"
+        clear_file = ".env.production.clear"
+        secret_file = ".env.production.secret"
+        combined_file = ".env.production"
+        """
+    )
+    (work_dir / "envdrift.toml").write_text(config)
+
+    _run_envdrift(["push", "--env", "production"], cwd=work_dir, env=env)
+
+    assert gitignore_path.read_text() == ".env.*\n"
+
+
+@pytest.mark.integration
 def test_pull_skips_partial_combined_files(integration_env):
     pytest.importorskip("boto3")
 
