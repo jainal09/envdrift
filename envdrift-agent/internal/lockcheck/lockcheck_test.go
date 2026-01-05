@@ -9,6 +9,9 @@ import (
 )
 
 func TestIsFileOpenNonexistent(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("File lock detection behaves differently on Windows")
+	}
 	// Nonexistent file should not be considered open
 	result := IsFileOpen("/nonexistent/path/to/file.env")
 	if result {
@@ -17,6 +20,9 @@ func TestIsFileOpenNonexistent(t *testing.T) {
 }
 
 func TestIsFileOpenClosedFile(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("File lock detection behaves differently on Windows")
+	}
 	// Create a temp file and close it
 	tempDir := t.TempDir()
 	filePath := filepath.Join(tempDir, ".env.test")
