@@ -17,18 +17,18 @@ from envdrift.output.rich import console, print_error, print_success, print_warn
 from envdrift.vault.base import SecretNotFoundError, VaultError
 
 if TYPE_CHECKING:
-    from envdrift.sync.config import SyncConfig
+    from envdrift.sync.config import ServiceMapping, SyncConfig
 
 
 @dataclass(frozen=True)
 class _DecryptTask:
-    mapping: Any
+    mapping: ServiceMapping
     env_file: Path
 
 
 @dataclass(frozen=True)
 class _EncryptTask:
-    mapping: Any
+    mapping: ServiceMapping
     env_file: Path
     env_keys_file: Path
 

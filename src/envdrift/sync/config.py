@@ -14,6 +14,16 @@ class SyncConfigError(Exception):
     pass
 
 
+def _normalize_max_workers(value: Any) -> int | None:
+    if value is None:
+        return None
+    if isinstance(value, bool) or not isinstance(value, int):
+        return None
+    if value < 1:
+        return None
+    return value
+
+
 @dataclass
 class ServiceMapping:
     """Mapping of a vault secret to a local service folder."""
@@ -127,6 +137,7 @@ class SyncConfig:
             environment = "staging"     # Optional
         """
         mappings: list[ServiceMapping] = []
+        max_workers = _normalize_max_workers(data.get("max_workers"))
 
         for mapping_data in data.get("mappings", []):
             if "secret_name" not in mapping_data:
@@ -150,7 +161,7 @@ class SyncConfig:
             mappings=mappings,
             default_vault_name=data.get("default_vault_name"),
             env_keys_filename=data.get("env_keys_filename", ".env.keys"),
-            max_workers=data.get("max_workers"),
+            max_workers=max_workers,
         )
 
     def get_effective_vault_name(self, mapping: ServiceMapping) -> str | None:

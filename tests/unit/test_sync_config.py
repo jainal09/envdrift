@@ -250,6 +250,32 @@ class TestSyncConfigFromToml:
 
         assert config.max_workers == 4
 
+    def test_from_toml_with_invalid_max_workers(self) -> None:
+        """Test TOML config with invalid max_workers values."""
+        data = {
+            "max_workers": 0,
+            "mappings": [
+                {"secret_name": "myapp-key", "folder_path": "services/myapp"},
+            ],
+        }
+
+        config = SyncConfig.from_toml(data)
+
+        assert config.max_workers is None
+
+    def test_from_toml_with_non_int_max_workers(self) -> None:
+        """Test TOML config with non-integer max_workers."""
+        data = {
+            "max_workers": "fast",
+            "mappings": [
+                {"secret_name": "myapp-key", "folder_path": "services/myapp"},
+            ],
+        }
+
+        config = SyncConfig.from_toml(data)
+
+        assert config.max_workers is None
+
     def test_from_toml_missing_secret_name(self) -> None:
         """Test error when secret_name is missing."""
         data = {"mappings": [{"folder_path": "services/myapp"}]}

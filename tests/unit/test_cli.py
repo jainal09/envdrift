@@ -2522,9 +2522,13 @@ class TestPullCommand:
             "envdrift.integrations.hook_check.ensure_git_hook_setup",
             lambda **_kwargs: [],
         )
+
+        def _raise_copy_error(*_args, **_kwargs):
+            raise OSError("copy failed")
+
         monkeypatch.setattr(
             "envdrift.cli_commands.sync.shutil.copy2",
-            lambda *_args, **_kwargs: (_ for _ in ()).throw(OSError("copy failed")),
+            _raise_copy_error,
         )
 
         _mock_encryption_backend(monkeypatch)

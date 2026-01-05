@@ -8,6 +8,16 @@ from pathlib import Path
 from typing import Any
 
 
+def _normalize_max_workers(value: Any) -> int | None:
+    if value is None:
+        return None
+    if isinstance(value, bool) or not isinstance(value, int):
+        return None
+    if value < 1:
+        return None
+    return value
+
+
 @dataclass
 class SyncMappingConfig:
     """Sync mapping configuration for vault key synchronization."""
@@ -157,6 +167,7 @@ class EnvdriftConfig:
 
         # Build sync config from vault.sync section
         sync_section = vault_section.get("sync", {})
+        max_workers = _normalize_max_workers(sync_section.get("max_workers"))
         sync_mappings = [
             SyncMappingConfig(
                 secret_name=m["secret_name"],
@@ -172,7 +183,7 @@ class EnvdriftConfig:
             mappings=sync_mappings,
             default_vault_name=sync_section.get("default_vault_name"),
             env_keys_filename=sync_section.get("env_keys_filename", ".env.keys"),
-            max_workers=sync_section.get("max_workers"),
+            max_workers=max_workers,
         )
 
         # Build vault config

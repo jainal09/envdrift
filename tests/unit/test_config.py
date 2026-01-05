@@ -456,6 +456,26 @@ class TestSyncConfig:
         assert second_mapping.vault_name == "other-vault"
         assert second_mapping.environment == "staging"
 
+    def test_from_dict_with_invalid_max_workers(self):
+        """Test from_dict normalizes invalid max_workers values."""
+        data = {
+            "vault": {
+                "sync": {
+                    "max_workers": 0,
+                    "mappings": [
+                        {
+                            "secret_name": "app-key",
+                            "folder_path": "services/app",
+                        }
+                    ],
+                },
+            },
+        }
+
+        config = EnvdriftConfig.from_dict(data)
+
+        assert config.vault.sync.max_workers is None
+
     def test_load_config_with_sync_from_toml(self, tmp_path: Path):
         """Test load_config parses sync mappings from TOML file."""
         config_file = tmp_path / "envdrift.toml"

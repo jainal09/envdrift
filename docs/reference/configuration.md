@@ -197,7 +197,7 @@ Configuration for the `envdrift sync`, `envdrift pull`, and `envdrift lock` comm
 |:-------|:-----|:--------|:------------|
 | `default_vault_name` | `string` | `null` | Default vault name for mappings |
 | `env_keys_filename` | `string` | `".env.keys"` | Name of the keys file |
-| `max_workers` | `int` | `null` | Parallel workers for pull/lock file operations |
+| `max_workers` | `int | None` | `null` | Parallel workers for pull/lock file operations |
 
 ```toml
 [vault.sync]
