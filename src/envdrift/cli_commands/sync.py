@@ -646,8 +646,7 @@ def pull(
         resolved_env_file = env_file.resolve()
         if resolved_env_file in partial_combined:
             console.print(
-                f"  [dim]=[/dim] {env_file} "
-                "[dim]- skipped (partial encryption combined file)[/dim]"
+                f"  [dim]=[/dim] {env_file} [dim]- skipped (partial encryption combined file)[/dim]"
             )
             skipped_count += 1
             continue
@@ -734,9 +733,7 @@ def pull(
                 )
                 activated_count += 1
             except OSError as e:
-                console.print(
-                    f"  [red]![/red] {activate_path} [red]- activation failed: {e}[/red]"
-                )
+                console.print(f"  [red]![/red] {activate_path} [red]- activation failed: {e}[/red]")
                 error_count += 1
 
     # === SUMMARY ===
@@ -811,6 +808,13 @@ def lock(
         bool,
         typer.Option("--check", help="Only check encryption status, don't encrypt"),
     ] = False,
+    all_files: Annotated[
+        bool,
+        typer.Option(
+            "--all",
+            help="Include partial encryption files: encrypt .secret files and delete combined files",
+        ),
+    ] = False,
 ) -> None:
     """
     Verify keys and encrypt all env files (opposite of pull - prepares for commit).
@@ -827,6 +831,7 @@ def lock(
     Workflow:
     - With --verify-vault: Check if local .env.keys match vault secrets
     - With --sync-keys: Fetch keys from vault to ensure consistency
+    - With --all: Also encrypt partial encryption .secret files and delete combined files
     - Then: Encrypt all .env files that are currently decrypted
 
     Use --profile to filter mappings for a specific environment.
@@ -854,6 +859,9 @@ def lock(
 
         # Force encryption without prompts
         envdrift lock --force
+
+        # Include partial encryption files (encrypt .secret, delete combined)
+        envdrift lock --all
     """
     from envdrift.output.rich import print_service_sync_status, print_sync_result
     from envdrift.sync.config import SyncConfigError
@@ -901,9 +909,10 @@ def lock(
     console.print()
     profile_info = f" (profile: {profile})" if profile else ""
     mode_str = "CHECK" if check_only else ("FORCE" if force else "Interactive")
+    all_info = " | Including partial encryption" if all_files else ""
     console.print(f"[bold]Lock[/bold] - Verifying keys and encrypting env files{profile_info}")
     console.print(
-        f"[dim]Provider: {effective_provider} | Mode: {mode_str} | Services: {len(filtered_mappings)}[/dim]"
+        f"[dim]Provider: {effective_provider} | Mode: {mode_str} | Services: {len(filtered_mappings)}{all_info}[/dim]"
     )
     console.print()
 
@@ -1106,19 +1115,23 @@ def lock(
                 continue
 
         resolved_env_file = env_file.resolve()
-        if resolved_env_file in partial_combined:
+        if resolved_env_file in partial_combined and not all_files:
             console.print(
                 f"  [dim]=[/dim] {env_file} "
-                "[dim]- skipped (partial encryption combined file)[/dim]"
+                "[dim]- skipped (partial encryption combined file, use --all to include)[/dim]"
             )
-            warnings.append(f"{env_file}: use envdrift push for partial encryption")
+            warnings.append(
+                f"{env_file}: use envdrift lock --all or envdrift push for partial encryption"
+            )
             skipped_count += 1
             continue
-        if resolved_env_file in partial_clear:
+        if resolved_env_file in partial_clear and not all_files:
             console.print(
                 f"  [dim]=[/dim] {env_file} [dim]- skipped (partial encryption clear file)[/dim]"
             )
-            warnings.append(f"{env_file}: use envdrift push for partial encryption")
+            warnings.append(
+                f"{env_file}: use envdrift lock --all or envdrift push for partial encryption"
+            )
             skipped_count += 1
             continue
 
@@ -1257,10 +1270,10 @@ def lock(
                         # Partially encrypted - re-encrypt to catch new values
                         console.print(
                             f"  [yellow]~[/yellow] {env_file} "
-                            f"[dim]- partially encrypted ({int(ratio*100)}%), "
+                            f"[dim]- partially encrypted ({int(ratio * 100)}%), "
                             "re-encrypting...[/dim]"
                         )
-                        warnings.append(f"{env_file}: was only {int(ratio*100)}% encrypted")
+                        warnings.append(f"{env_file}: was only {int(ratio * 100)}% encrypted")
                 else:
                     console.print(
                         f"  [dim]=[/dim] {env_file} [dim]- skipped (already encrypted)[/dim]"
@@ -1368,6 +1381,109 @@ def lock(
             console.print(f"  [green]+[/green] {env_file} [dim]- encrypted[/dim]")
             encrypted_count += 1
 
+    # === STEP 3: PROCESS PARTIAL ENCRYPTION FILES (OPTIONAL) ===
+    partial_encrypted_count = 0
+    combined_deleted_count = 0
+
+    if all_files:
+        step_num = "Step 3" if verify_vault else "Step 2"
+        console.print()
+        console.print(f"[bold cyan]{step_num}:[/bold cyan] Processing partial encryption files...")
+        console.print()
+
+        # Load partial encryption config
+        from envdrift.config import find_config as find_config_file
+        from envdrift.config import load_config as load_envdrift_config
+
+        config_path = config_file
+        if config_path is None:
+            config_path = find_config_file()
+
+        if config_path:
+            try:
+                envdrift_cfg = load_envdrift_config(config_path)
+                if envdrift_cfg.partial_encryption.enabled:
+                    for env_config in envdrift_cfg.partial_encryption.environments:
+                        secret_file = Path(env_config.secret_file)
+                        combined_file = Path(env_config.combined_file)
+
+                        # Encrypt the .secret file if it exists and is not encrypted
+                        if secret_file.exists():
+                            secret_content = secret_file.read_text()
+                            if not encryption_helpers.is_encrypted_content(
+                                backend_provider, encryption_backend, secret_content
+                            ):
+                                if check_only:
+                                    console.print(
+                                        f"  [cyan]?[/cyan] {secret_file} "
+                                        "[dim]- would be encrypted[/dim]"
+                                    )
+                                    partial_encrypted_count += 1
+                                else:
+                                    try:
+                                        result = encryption_backend.encrypt(
+                                            secret_file.resolve(), **sops_encrypt_kwargs
+                                        )
+                                        if result.success:
+                                            console.print(
+                                                f"  [green]+[/green] {secret_file} "
+                                                "[dim]- encrypted[/dim]"
+                                            )
+                                            partial_encrypted_count += 1
+                                        else:
+                                            console.print(
+                                                f"  [red]![/red] {secret_file} "
+                                                f"[red]- error: {result.message}[/red]"
+                                            )
+                                            errors.append(
+                                                f"{secret_file}: encryption failed - {result.message}"
+                                            )
+                                            error_count += 1
+                                    except (EncryptionNotFoundError, EncryptionBackendError) as e:
+                                        console.print(
+                                            f"  [red]![/red] {secret_file} [red]- error: {e}[/red]"
+                                        )
+                                        errors.append(f"{secret_file}: encryption failed - {e}")
+                                        error_count += 1
+                            else:
+                                console.print(
+                                    f"  [dim]=[/dim] {secret_file} "
+                                    "[dim]- skipped (already encrypted)[/dim]"
+                                )
+                                already_encrypted_count += 1
+                        else:
+                            console.print(
+                                f"  [dim]=[/dim] {secret_file} [dim]- skipped (not found)[/dim]"
+                            )
+
+                        # Delete the combined file if it exists
+                        if combined_file.exists():
+                            if check_only:
+                                console.print(
+                                    f"  [cyan]?[/cyan] {combined_file} "
+                                    "[dim]- would be deleted[/dim]"
+                                )
+                                combined_deleted_count += 1
+                            else:
+                                try:
+                                    combined_file.unlink()
+                                    console.print(
+                                        f"  [yellow]-[/yellow] {combined_file} "
+                                        "[dim]- deleted (combined file)[/dim]"
+                                    )
+                                    combined_deleted_count += 1
+                                except OSError as e:
+                                    console.print(
+                                        f"  [red]![/red] {combined_file} "
+                                        f"[red]- delete failed: {e}[/red]"
+                                    )
+                                    errors.append(f"{combined_file}: delete failed - {e}")
+                                    error_count += 1
+                else:
+                    console.print("  [dim]Partial encryption not enabled in config[/dim]")
+            except Exception as e:
+                print_warning(f"Could not load partial encryption config: {e}")
+
     # === SUMMARY ===
     console.print()
     summary_lines = []
@@ -1380,6 +1496,14 @@ def lock(
     summary_lines.append(f"Already encrypted: {already_encrypted_count}")
     summary_lines.append(f"Skipped: {skipped_count}")
     summary_lines.append(f"Errors: {error_count}")
+
+    if all_files:
+        if check_only:
+            summary_lines.append(f"Partial secrets to encrypt: {partial_encrypted_count}")
+            summary_lines.append(f"Combined files to delete: {combined_deleted_count}")
+        else:
+            summary_lines.append(f"Partial secrets encrypted: {partial_encrypted_count}")
+            summary_lines.append(f"Combined files deleted: {combined_deleted_count}")
 
     console.print(
         Panel(
