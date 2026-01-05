@@ -198,9 +198,44 @@ class TestIsFileModified:
 
         assert is_file_modified(test_file) is True
 
-    def test_returns_true_for_non_git_repo(self, tmp_path: Path):
-        """Should return True (treat as modified) when not in a git repo."""
-        test_file = tmp_path / "test.txt"
-        test_file.write_text("content")
 
-        assert is_file_modified(test_file) is True
+class TestGitUtilsExceptions:
+    """Tests for exception handling in git utilities."""
+
+    def test_is_git_repo_handles_exceptions(self, tmp_path: Path):
+        """Should return False on subprocess exceptions."""
+        with patch("subprocess.run", side_effect=subprocess.TimeoutExpired(cmd="git", timeout=10)):
+            assert is_git_repo(tmp_path) is False
+        
+        with patch("subprocess.run", side_effect=FileNotFoundError):
+            assert is_git_repo(tmp_path) is False
+
+    def test_get_git_root_handles_exceptions(self, tmp_path: Path):
+        """Should return None on subprocess exceptions."""
+        with patch("subprocess.run", side_effect=subprocess.TimeoutExpired(cmd="git", timeout=10)):
+            assert get_git_root(tmp_path) is None
+
+    def test_get_file_from_git_handles_exceptions(self, tmp_path: Path):
+        """Should return None on exceptions."""
+        # Mock get_git_root to return a path so we reach the subprocess call
+        with patch("envdrift.utils.git.get_git_root", return_value=tmp_path):
+            with patch("subprocess.run", side_effect=ValueError):
+                assert get_file_from_git(tmp_path / "test.txt") is None
+
+    def test_is_file_modified_handles_exceptions(self, tmp_path: Path):
+        """Should return True (modified) on exceptions."""
+        with patch("envdrift.utils.git.get_git_root", return_value=tmp_path):
+            with patch("subprocess.run", side_effect=FileNotFoundError):
+                assert is_file_modified(tmp_path / "test.txt") is True
+
+    def test_restore_file_from_git_handles_exceptions(self, tmp_path: Path):
+        """Should return False on exceptions."""
+        with patch("envdrift.utils.git.get_git_root", return_value=tmp_path):
+            with patch("subprocess.run", side_effect=ValueError):
+                assert restore_file_from_git(tmp_path / "test.txt") is False
+
+    def test_is_file_tracked_handles_exceptions(self, tmp_path: Path):
+        """Should return False on exceptions."""
+        with patch("envdrift.utils.git.get_git_root", return_value=tmp_path):
+            with patch("subprocess.run", side_effect=subprocess.TimeoutExpired(cmd="git", timeout=10)):
+                assert is_file_tracked(tmp_path / "test.txt") is False
