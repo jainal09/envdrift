@@ -56,6 +56,12 @@ that are missing from the vault.
 envdrift vault-push --all
 ```
 
+To overwrite existing secrets instead of skipping them, add `--force`:
+
+```bash
+envdrift vault-push --all --force
+```
+
 ## Options
 
 ### `FOLDER`
@@ -82,7 +88,11 @@ envdrift vault-push --direct secret-name "KEY=value" -p aws
 
 ### `--all`
 
-Push all secrets defined in sync config (skipping existing).
+Push all secrets defined in sync config (skipping existing unless `--force` is set).
+
+### `--force`, `-f`
+
+Push all secrets in `--all` mode even if they already exist.
 
 ### `--config`, `-c`
 

@@ -35,7 +35,14 @@ def vault_push(
     ] = False,
     all_services: Annotated[
         bool,
-        typer.Option("--all", help="Push all secrets defined in sync config (skipping existing)"),
+        typer.Option(
+            "--all",
+            help="Push all secrets defined in sync config (skipping existing unless --force)",
+        ),
+    ] = False,
+    force: Annotated[
+        bool,
+        typer.Option("--force", "-f", help="Push all secrets even if they already exist"),
     ] = False,
     skip_encrypt: Annotated[
         bool,
@@ -88,6 +95,9 @@ def vault_push(
         # Push all missing secrets defined in config
         envdrift vault-push --all
 
+        # Push all secrets, overwriting existing ones
+        envdrift vault-push --all --force
+
         # Push all without encrypting (when files are already encrypted)
         envdrift vault-push --all --skip-encrypt
     """
@@ -102,6 +112,10 @@ def vault_push(
     # Validate --skip-encrypt is only used with --all
     if skip_encrypt and not all_services:
         print_warning("--skip-encrypt is only applicable with --all mode, ignoring")
+
+    # Validate --force is only used with --all
+    if force and not all_services:
+        print_warning("--force is only applicable with --all mode, ignoring")
 
     # --all mode implementation
     if all_services:
@@ -147,6 +161,8 @@ def vault_push(
         console.print("[bold]Vault Push All[/bold]")
         console.print(f"Provider: {effective_provider}")
         console.print(f"Services: {len(sync_config.mappings)}")
+        if force:
+            console.print("[dim]Force: overwrite existing secrets (--force)[/dim]")
         if skip_encrypt:
             console.print("[dim]Encryption: skipped (--skip-encrypt)[/dim]")
         console.print()
@@ -216,21 +232,23 @@ def vault_push(
                             continue
 
                 # Check if secret exists in vault
-                try:
-                    client.get_secret(mapping.secret_name)
-                    # If successful, secret exists
-                    console.print(
-                        f"[dim]Skipped[/dim] {mapping.folder_path}: Secret '{mapping.secret_name}' already exists"
-                    )
-                    skipped_count += 1
-                    continue
-                except SecretNotFoundError:
-                    # Secret missing, proceed to push
-                    pass
-                except VaultError as e:
-                    print_error(f"Vault error checking {mapping.secret_name}: {e}")
-                    error_count += 1
-                    continue
+                if not force:
+                    try:
+                        client.get_secret(mapping.secret_name)
+                        # If successful, secret exists
+                        console.print(
+                            f"[dim]Skipped[/dim] {mapping.folder_path}: "
+                            f"Secret '{mapping.secret_name}' already exists"
+                        )
+                        skipped_count += 1
+                        continue
+                    except SecretNotFoundError:
+                        # Secret missing, proceed to push
+                        pass
+                    except VaultError as e:
+                        print_error(f"Vault error checking {mapping.secret_name}: {e}")
+                        error_count += 1
+                        continue
 
                 # Read key to push
                 env_keys_path = mapping.folder_path / sync_config.env_keys_filename
