@@ -945,6 +945,7 @@ def lock(
             build_sops_encrypt_kwargs,
             is_encrypted_content,
             resolve_encryption_backend,
+            should_skip_reencryption,
         )
         from envdrift.encryption import (
             EncryptionBackendError,
@@ -1080,6 +1081,17 @@ def lock(
             # Just report what would be encrypted
             console.print(f"  [cyan]?[/cyan] {env_file} [dim]- would be encrypted[/dim]")
             encrypted_count += 1
+            continue
+
+        # === SMART ENCRYPTION: Skip re-encryption if content unchanged ===
+        # This addresses dotenvx's non-deterministic encryption (ECIES) which
+        # produces different ciphertext each time, even for identical plaintext.
+        # We compare the current file with the decrypted version from git;
+        # if unchanged, restore the original encrypted file to avoid git noise.
+        should_skip, skip_reason = should_skip_reencryption(env_file, encryption_backend)
+        if should_skip:
+            console.print(f"  [dim]=[/dim] {env_file} [dim]- skipped ({skip_reason})[/dim]")
+            already_encrypted_count += 1
             continue
 
         # Prompt before encrypting (unless force mode)
