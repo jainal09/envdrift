@@ -2678,7 +2678,7 @@ class TestPullCommand:
 
         monkeypatch.setattr(
             "envdrift.cli_commands.sync.load_sync_config_and_client",
-            lambda *args, **kwargs: (sync_config, SimpleNamespace(), "aws", None, None, None),
+            lambda *_args, **_kwargs: (sync_config, SimpleNamespace(), "aws", None, None, None),
         )
         monkeypatch.setattr(
             "envdrift.integrations.hook_check.ensure_git_hook_setup",
@@ -2767,7 +2767,7 @@ class TestPullCommand:
 
         monkeypatch.setattr(
             "envdrift.cli_commands.sync.load_sync_config_and_client",
-            lambda *args, **kwargs: (sync_config, SimpleNamespace(), "aws", None, None, None),
+            lambda *_args, **_kwargs: (sync_config, SimpleNamespace(), "aws", None, None, None),
         )
         monkeypatch.setattr(
             "envdrift.integrations.hook_check.ensure_git_hook_setup",

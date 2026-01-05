@@ -785,10 +785,16 @@ def pull(
     partial_config = None
     if config_path:
         try:
-            from envdrift.config import load_config as load_envdrift_config
+            from envdrift.config import (
+                ConfigNotFoundError,
+                load_config as load_envdrift_config,
+            )
 
             partial_config = load_envdrift_config(config_path)
-        except Exception:
+        except ConfigNotFoundError:
+            partial_config = None
+        except (OSError, AttributeError, KeyError) as exc:
+            print_warning(f"Unable to read config for partial encryption: {exc}")
             partial_config = None
 
     if partial_config and partial_config.partial_encryption.enabled:

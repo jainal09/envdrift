@@ -95,6 +95,9 @@ envdrift pull --skip-sync
 
 For partial encryption setups: create a combined decrypted `.env` file from `.clear` + `.secret` files.
 
+> **Note:** This flag only has effect when partial encryption is enabled in your config.
+> Without partial encryption configuration, `--merge` behaves like a normal pull.
+
 When this flag is used with partial encryption enabled, the command will:
 
 1. Decrypt `.env.{env}.secret` files
