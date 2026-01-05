@@ -1,0 +1,23 @@
+[git_hook_check]
+method = "precommit.yaml"
+precommit_config = ".pre-commit-config.yaml"
+
+[encryption]
+backend = "dotenvx"
+
+[encryption.dotenvx]
+auto_install = true
+
+[vault]
+provider = "hashicorp"
+
+[vault.hashicorp]
+url = "https://example.vault.local"
+
+[vault.sync]
+default_vault_name = "dummy"
+
+[[vault.sync.mappings]]
+secret_name = "dummy-key"
+folder_path = "."
+environment = "production"

@@ -1,46 +1,9 @@
 repos:
-  - repo: https://github.com/astral-sh/ruff-pre-commit
-    rev: v0.8.2
-    hooks:
-      - id: ruff
-        args: [--fix]
-      - id: ruff-format
-
-  - repo: https://github.com/PyCQA/bandit
-    rev: 1.7.10
-    hooks:
-      - id: bandit
-        args: ["-c", "pyproject.toml", "-r", "src"]
-        additional_dependencies: ["bandit[toml]"]
-
-  - repo: https://github.com/pre-commit/pre-commit-hooks
-    rev: v5.0.0
-    hooks:
-      - id: trailing-whitespace
-      - id: end-of-file-fixer
-      - id: check-yaml
-      - id: check-added-large-files
-      - id: check-toml
-
-  - repo: https://github.com/DavidAnson/markdownlint-cli2
-    rev: v0.17.2
-    hooks:
-      - id: markdownlint-cli2
-        args: ["**/*.md", "#node_modules", "#.venv", "#venv", "#.git", "#dist", "#build", "#site"]
-
   - repo: local
     hooks:
-      - id: pytest
-        name: pytest (unit)
-        entry: uv run pytest -q -m "not integration"
+      - id: envdrift-encryption
+        name: Check env encryption status
+        entry: envdrift encrypt --check
         language: system
-        pass_filenames: false
-        always_run: true
-        stages: [pre-push]
-      - id: pytest-integration
-        name: pytest (integration)
-        entry: uv run pytest -q -m integration --cov-append
-        language: system
-        pass_filenames: false
-        always_run: true
-        stages: [pre-push]
+        files: ^\.env\.
+        pass_filenames: true

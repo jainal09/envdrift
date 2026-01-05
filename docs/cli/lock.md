@@ -175,10 +175,10 @@ Step 1: Encrypting environment files...
   = services/auth/.env.production - skipped (already encrypted)
 
 ╭──────────── Lock Summary ────────────╮
-│ Encrypted: 1                          │
-│ Already encrypted: 1                  │
-│ Skipped: 0                            │
-│ Errors: 0                             │
+│ Encrypted: 1                         │
+│ Already encrypted: 1                 │
+│ Skipped: 0                           │
+│ Errors: 0                            │
 ╰──────────────────────────────────────╯
 
 Lock complete! Your environment files are encrypted and ready to commit.
@@ -222,10 +222,10 @@ Step 2: Encrypting environment files...
   + ./.env.local - encrypted
 
 ╭──────────── Lock Summary ────────────╮
-│ Encrypted: 1                          │
-│ Already encrypted: 0                  │
-│ Skipped: 0                            │
-│ Errors: 0                             │
+│ Encrypted: 1                         │
+│ Already encrypted: 0                 │
+│ Skipped: 0                           │
+│ Errors: 0                            │
 ╰──────────────────────────────────────╯
 
 Lock complete! Your environment files are encrypted and ready to commit.
@@ -237,31 +237,31 @@ The `lock` command catches many edge cases and provides helpful warnings and err
 
 ### Warnings
 
-| Warning | Meaning |
-| :------ | :------ |
-| `.env.keys not found` | No encryption keys file exists; a new key will be generated |
-| `{KEY} missing from .env.keys` | The expected private key for this environment isn't in the keys file |
-| `vault secret is empty` | The vault secret exists but has no value |
-| `vault secret not found` | The secret doesn't exist in the vault |
-| `multiple .env files found` | Multiple `.env.*` files exist; specify the environment explicitly |
-| `file not found` | The expected `.env.<environment>` file doesn't exist |
-| `partially encrypted (N%)` | The file is only partially encrypted; will re-encrypt |
+| Warning                        | Meaning                                                              |
+|:-------------------------------|:---------------------------------------------------------------------|
+| `.env.keys not found`          | No encryption keys file exists; a new key will be generated           |
+| `{KEY} missing from .env.keys` | The expected private key for this environment isn't in the keys file  |
+| `vault secret is empty`        | The vault secret exists but has no value                             |
+| `vault secret not found`       | The secret doesn't exist in the vault                                |
+| `multiple .env files found`    | Multiple `.env.*` files exist; specify the environment explicitly      |
+| `file not found`               | The expected `.env.<environment>` file doesn't exist                   |
+| `partially encrypted (N%)`     | The file is only partially encrypted; will re-encrypt                 |
 
 ### Errors
 
-| Error | Meaning |
-| :---- | :------ |
-| `KEY MISMATCH` | Local key differs from vault key - potential key drift |
-| `vault error` | Failed to access or authenticate with the vault |
-| `encryption failed` | dotenvx failed to encrypt the file |
-| `Key sync failed` | Could not sync keys from vault |
+| Error               | Meaning                                                |
+|:--------------------|:-------------------------------------------------------|
+| `KEY MISMATCH`      | Local key differs from vault key - potential key drift |
+| `vault error`       | Failed to access or authenticate with the vault        |
+| `encryption failed` | dotenvx failed to encrypt the file                      |
+| `Key sync failed`   | Could not sync keys from vault                         |
 
 ## Exit Codes
 
-| Code | Meaning                                                   |
-| :--- | :-------------------------------------------------------- |
-| 0    | Success (all files encrypted or verified)                 |
-| 1    | Error (key mismatch, encryption failure, or vault error)  |
+| Code | Meaning                                                  |
+|:-----|:---------------------------------------------------------|
+| 0    | Success (all files encrypted or verified)                  |
+| 1    | Error (key mismatch, encryption failure, or vault error) |
 
 ## Configuration File Format
 
