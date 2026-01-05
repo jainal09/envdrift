@@ -122,8 +122,8 @@ def should_skip_reencryption(
         - should_skip: True if re-encryption should be skipped
         - reason: Human-readable explanation of the decision
     """
-    # Only supported for dotenvx backend currently
-    if backend.name.lower() != "dotenvx":
+    # Only supported for dotenvx and sops backends currently
+    if backend.name.lower() not in ("dotenvx", "sops"):
         return False, "smart encryption not supported for this backend"
 
     # Check if file is tracked in git
@@ -136,8 +136,14 @@ def should_skip_reencryption(
         return False, "could not retrieve file from git"
 
     # Check if git version is encrypted
-    if "encrypted:" not in git_content.lower():
-        return False, "git version is not encrypted"
+    if backend.name.lower() == "dotenvx":
+        if "encrypted:" not in git_content.lower():
+            return False, "git version is not encrypted"
+    elif not backend.has_encrypted_header(git_content):
+        # Fallback check for SOPS if has_encrypted_header misses it
+        # (though sops backend usually implements this correctly)
+        if "sops_mac=" not in git_content and "ENC[" not in git_content:
+            return False, "git version is not encrypted"
 
     # Decrypt the git version to compare
     try:
