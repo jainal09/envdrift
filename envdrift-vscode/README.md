@@ -59,6 +59,7 @@ pip install envdrift
 ## Documentation
 
 📖 **See the [comprehensive guide](../docs/guides/vscode-extension.md) for:**
+
 - Detailed configuration options
 - Troubleshooting
 - Integration with envdrift.toml

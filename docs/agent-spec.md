@@ -5,14 +5,17 @@ This document outlines future improvements for the envdrift-agent and VS Code ex
 ## Current Issues
 
 ### 1. Aggressive Default Watching
+
 - **Problem**: Default behavior watches `~` recursively, causing CPU spikes
 - **Solution**: Require explicit directory registration, no auto-watch
 
 ### 2. Separate Config Files
+
 - **Problem**: `guardian.toml` is separate from `envdrift.toml`
 - **Solution**: Add `[guardian]` section to `envdrift.toml`
 
 ### 3. Config Discovery
+
 - **Problem**: Agent doesn't know where `envdrift.toml` files are located
 - **Solution**: User registers projects with the agent
 
@@ -86,13 +89,14 @@ notify = true
 ```
 
 When `[guardian].enabled = true`:
+
 1. CLI automatically calls agent to register directory
 2. Agent reads settings from project's `envdrift.toml`
 3. No separate registration step needed
 
 #### Communication Mechanism
 
-```
+```text
 ┌──────────────────┐     IPC/File      ┌──────────────────┐
 │   envdrift CLI   │ ◄──────────────► │  envdrift-agent  │
 │   (Python)       │                   │  (Go)            │
@@ -131,6 +135,7 @@ envdrift install agent
 ```
 
 **Behavior:**
+
 1. Detect platform (macOS/Linux/Windows + arch)
 2. Download latest binary from GitHub releases
 3. Install to standard location (`/usr/local/bin`, etc.)
@@ -251,7 +256,7 @@ Instead of watching entire directories, the agent:
 
 ### Architecture
 
-```
+```text
 ┌─────────────────────────────────────────┐
 │           ~/.envdrift/agent.toml        │
 │  registered_projects = [A, B, C]        │
@@ -275,25 +280,79 @@ Instead of watching entire directories, the agent:
 
 ---
 
+## Phase 2E: VS Code Agent Status Indicator
+
+### Feature
+
+Add a status indicator in VS Code that shows whether the background agent is running and healthy.
+
+### Status Bar Display
+
+| Status | Icon | Color | Meaning |
+|--------|------|-------|---------|
+| Running | ⚡ | 🟢 Green | Agent is running and healthy |
+| Stopped | ⭕ | 🔴 Red | Agent is not running |
+| Error | ⚠️ | 🟡 Yellow | Agent has issues |
+
+### Implementation
+
+```typescript
+// src/agentStatus.ts
+
+async function checkAgentStatus(): Promise<'running' | 'stopped' | 'error'> {
+    try {
+        // Check if agent process is running
+        const result = await execCommand('envdrift-agent status');
+        if (result.includes('running')) return 'running';
+        return 'stopped';
+    } catch {
+        return 'error';
+    }
+}
+
+// Update status bar every 30 seconds
+setInterval(updateAgentStatusBar, 30000);
+```
+
+### Status Bar Click Actions
+
+- **If running**: Show info message with agent version
+- **If stopped**: Offer to start agent or install it
+- **If error**: Show error details and troubleshooting link
+
+### Communication with Agent
+
+Extension can read agent status from:
+
+1. **Process check**: `envdrift-agent status` command
+2. **Status file**: `~/.envdrift/agent.status` (JSON)
+3. **Health endpoint**: Future HTTP API (optional)
+
+---
+
 ## Implementation Order
 
 1. **Phase 2A** - Config improvements (merge configs, project registration)
 2. **Phase 2B** - CLI install command (download from releases)
 3. **Phase 2C** - Build pipelines (auto-release on tag)
 4. **Phase 2D** - Agent improvements (per-project watching)
+5. **Phase 2E** - VS Code agent status indicator
 
 ---
 
 ## Not Implementing Now
 
 These features are deferred to a future branch:
+
 - ❌ Config merge (guardian → envdrift.toml)
 - ❌ Project registration commands
 - ❌ `envdrift install agent` command
 - ❌ Release workflows
 - ❌ Per-project watching
+- ❌ VS Code agent status indicator
 
 Current branch focuses on:
+
 - ✅ Basic agent functionality
 - ✅ VS Code extension
 - ✅ Documentation

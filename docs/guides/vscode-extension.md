@@ -16,17 +16,19 @@ The extension provides:
 
 Before using the extension, ensure you have:
 
-1. **VS Code** version 1.85.0 or later
+### 1. VS Code version 1.85.0 or later
 
-2. **envdrift** installed:
-   ```bash
-   pip install envdrift
-   ```
+### 2. envdrift installed
 
-3. **dotenvx** (used internally by envdrift):
-   ```bash
-   npm install -g @dotenvx/dotenvx
-   ```
+```bash
+pip install envdrift
+```
+
+### 3. dotenvx (used internally by envdrift)
+
+```bash
+npm install -g @dotenvx/dotenvx
+```
 
 ## Installation
 
@@ -91,7 +93,7 @@ Access via Command Palette (`Cmd+Shift+P` / `Ctrl+Shift+P`):
 
 ## How It Works
 
-```
+```text
 ┌─────────────────────────────────────────────────────┐
 │                    VS Code                          │
 ├─────────────────────────────────────────────────────┤
@@ -147,6 +149,7 @@ enabled = true            # Never write keys to disk
 ```
 
 When the extension encrypts a file:
+
 - **Partial encryption** applies if configured
 - **Vault sync** happens if configured
 - **Ephemeral keys** are used if enabled
@@ -206,14 +209,16 @@ python -m envdrift --version
 
 1. Check Output panel: `View > Output > EnvDrift`
 2. Verify `envdrift.toml` is valid
-3. Ensure dotenvx is installed:
-   ```bash
-   npm install -g @dotenvx/dotenvx
-   ```
+3. Ensure dotenvx is installed
+
+```bash
+npm install -g @dotenvx/dotenvx
+```
 
 ### File already encrypted
 
 If a file is already encrypted, the extension skips it. Look for:
+
 - `DOTENV_PUBLIC_KEY` in comments
 - `encrypted:` prefix in values
 

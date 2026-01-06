@@ -1,6 +1,8 @@
 # EnvDrift Agent Setup Guide
 
-The EnvDrift Agent is a background daemon that automatically encrypts `.env` files when they're not in active use. This guide covers installation, configuration, and troubleshooting.
+The EnvDrift Agent is a background daemon that automatically encrypts `.env` files
+when they're not in active use. This guide covers installation, configuration,
+and troubleshooting.
 
 ## Overview
 
@@ -16,19 +18,21 @@ The agent runs silently in the background and:
 
 Before installing the agent, ensure you have:
 
-1. **envdrift** installed:
-   ```bash
-   pip install envdrift
-   ```
+### 1. envdrift installed
 
-2. **dotenvx** (used internally by envdrift):
-   ```bash
-   # macOS
-   brew install dotenvx/brew/dotenvx
-   
-   # Any platform
-   npm install -g @dotenvx/dotenvx
-   ```
+```bash
+pip install envdrift
+```
+
+### 2. dotenvx (used internally by envdrift)
+
+```bash
+# macOS
+brew install dotenvx/brew/dotenvx
+
+# Any platform
+npm install -g @dotenvx/dotenvx
+```
 
 ## Installation
 
@@ -97,6 +101,7 @@ recursive = true                   # Watch subdirectories
 ### Duration Format
 
 The `idle_timeout` accepts Go duration strings:
+
 - `"30s"` - 30 seconds
 - `"5m"` - 5 minutes
 - `"1h"` - 1 hour
@@ -104,7 +109,7 @@ The `idle_timeout` accepts Go duration strings:
 
 ## How It Works
 
-```
+```text
                     ┌─────────────────┐
                     │ File System     │
                     │ (.env files)    │
