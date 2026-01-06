@@ -9,7 +9,9 @@ import (
 )
 
 // IsFileOpen checks if a file is currently open by any process.
-// Uses lsof on Unix systems and handle.exe on Windows.
+// IsFileOpen reports whether the file at path is currently open by any process.
+// On Darwin and Linux it checks via lsof; on Windows it uses handle.exe with a PowerShell fallback.
+// It returns true if the file is open, and false if the file is not open, the check cannot be performed, or the platform is unsupported.
 func IsFileOpen(path string) bool {
 	switch runtime.GOOS {
 	case "darwin", "linux":
@@ -21,7 +23,8 @@ func IsFileOpen(path string) bool {
 	}
 }
 
-// isFileOpenUnix uses lsof to check if file is open
+// isFileOpenUnix reports whether the file at path is open by any process on Unix-like systems.
+// It invokes `lsof` for the path and returns `true` if `lsof` reports any output; if the command fails or returns no output it returns `false`.
 func isFileOpenUnix(path string) bool {
 	// lsof exits with 0 if file is open, 1 if not
 	cmd := exec.Command("lsof", "--", path)
@@ -39,7 +42,9 @@ func isFileOpenUnix(path string) bool {
 }
 
 // isFileOpenWindows uses handle.exe to check if file is open
-// Requires handle.exe from Sysinternals to be in PATH
+// isFileOpenWindows reports whether the file at path is open by any process on Windows.
+// It uses `handle.exe -nobanner` when available; if `handle.exe` is unavailable or returns an error,
+// it falls back to a PowerShell-based exclusive-open check.
 func isFileOpenWindows(path string) bool {
 	// First try handle.exe (Sysinternals)
 	cmd := exec.Command("handle.exe", "-nobanner", path)
@@ -57,7 +62,8 @@ func isFileOpenWindows(path string) bool {
 	return !strings.Contains(output, "No matching handles found")
 }
 
-// isFileOpenWindowsPowerShell fallback using PowerShell
+// isFileOpenWindowsPowerShell attempts to determine whether the file at path is open by another process using a PowerShell-based exclusive open attempt.
+// It returns true if the open attempt fails (indicating the file is locked), false otherwise.
 func isFileOpenWindowsPowerShell(path string) bool {
 	// Use PowerShell with proper argument escaping
 	cmd := exec.Command("powershell", "-NoProfile", "-Command",
@@ -68,7 +74,9 @@ func isFileOpenWindowsPowerShell(path string) bool {
 }
 
 // GetOpenProcesses returns list of processes that have the file open.
-// Returns empty slice if file is not open or on error.
+// GetOpenProcesses returns the process IDs of processes that have the specified file open.
+// It runs `lsof -t -- <path>` on Darwin and Linux and returns a slice of PID strings.
+// Returns nil on non-Darwin/Linux platforms, if `lsof` fails, or if no processes are found.
 func GetOpenProcesses(path string) []string {
 	if runtime.GOOS != "darwin" && runtime.GOOS != "linux" {
 		return nil
