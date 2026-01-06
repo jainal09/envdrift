@@ -65,8 +65,12 @@ class SyncEngine:
             service_result = self._sync_service(mapping)
             result.services.append(service_result)
 
-            # Decryption test if enabled and sync succeeded
-            if self.mode.check_decryption and service_result.action != SyncAction.ERROR:
+            # Decryption test if enabled and sync succeeded (skip for ephemeral mode)
+            if (
+                self.mode.check_decryption
+                and service_result.action != SyncAction.ERROR
+                and service_result.action != SyncAction.EPHEMERAL
+            ):
                 self._progress(f"Testing decryption: {mapping.folder_path}")
                 service_result.decryption_result = self._test_decryption(mapping)
 

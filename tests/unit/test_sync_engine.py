@@ -753,3 +753,36 @@ class TestSyncEngineEphemeralKeys:
 
         assert result.ephemeral_count == 3
         assert result.created_count == 0
+
+    def test_ephemeral_mode_skips_decryption_test(
+        self, mock_vault_client: MagicMock, tmp_path: Path
+    ) -> None:
+        """Test that decryption test is skipped in ephemeral mode."""
+        mock_vault_client.get_secret.return_value = SecretValue(
+            name="test-key", value="ephemeral_secret"
+        )
+
+        service_dir = tmp_path / "service"
+        service_dir.mkdir()
+        (service_dir / ".env.production").write_text(
+            'DOTENV_PUBLIC_KEY="xyz"\nSECRET="encrypted:abc"\n'
+        )
+
+        config = SyncConfig(
+            mappings=[
+                ServiceMapping(secret_name="test-key", folder_path=service_dir),
+            ],
+            ephemeral_keys=True,
+        )
+
+        engine = SyncEngine(
+            config=config,
+            vault_client=mock_vault_client,
+            mode=SyncMode(check_decryption=True),  # Enable decryption test
+        )
+        result = engine.sync_all()
+
+        # Should be ephemeral action with no decryption result (skipped)
+        assert result.services[0].action == SyncAction.EPHEMERAL
+        assert result.services[0].decryption_result is None
+
