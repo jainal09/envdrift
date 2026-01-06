@@ -940,17 +940,28 @@ class TestSOPSBackend:
         work_dir: Path,
         integration_pythonpath: str,
     ):
-        """Test SOPS encryption when sops CLI is not available."""
+        """Test SOPS encryption when sops CLI is not available.
+
+        Instead of clearing PATH entirely (which would break envdrift),
+        we filter out the directory containing the sops binary.
+        """
         env_file = work_dir / ".env"
         env_file.write_text("SECRET=value\n")
 
         env = os.environ.copy()
         env["PYTHONPATH"] = integration_pythonpath
-        # Ensure sops is not in PATH by using empty PATH
-        env["PATH"] = ""
+
+        # Filter out the sops binary directory from PATH if it exists
+        # This simulates sops not being installed without breaking other tools
+        sops_path = shutil.which("sops")
+        if sops_path:
+            sops_dir = str(Path(sops_path).parent)
+            path_dirs = env.get("PATH", "").split(os.pathsep)
+            filtered_path = os.pathsep.join(d for d in path_dirs if d != sops_dir)
+            env["PATH"] = filtered_path
 
         result = subprocess.run(
-            _get_envdrift_cmd() + ["encrypt", str(env_file), "--backend", "sops"],
+            [*_get_envdrift_cmd(), "encrypt", str(env_file), "--backend", "sops"],
             cwd=work_dir,
             env=env,
             capture_output=True,
@@ -959,4 +970,5 @@ class TestSOPSBackend:
         )
 
         # Should fail gracefully when sops is not available
+        # Exit code 1 expected for "sops not found" error
         assert result.returncode in (0, 1, 2), f"Unexpected crash: {result.stderr}"
