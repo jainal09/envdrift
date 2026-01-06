@@ -18,6 +18,7 @@ from envdrift.scanner.base import (
 from envdrift.scanner.engine import GuardConfig, ScanEngine
 from envdrift.scanner.gitleaks import GitleaksScanner
 from envdrift.scanner.native import NativeScanner
+from envdrift.scanner.trufflehog import TrufflehogScanner
 
 __all__ = [
     "AggregatedScanResult",
@@ -29,4 +30,5 @@ __all__ = [
     "ScanFinding",
     "ScannerBackend",
     "ScanResult",
+    "TrufflehogScanner",
 ]

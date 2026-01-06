@@ -22,5 +22,13 @@
         "linux_amd64": "https://github.com/gitleaks/gitleaks/releases/download/v{version}/gitleaks_{version}_linux_amd64.tar.gz",
         "linux_arm64": "https://github.com/gitleaks/gitleaks/releases/download/v{version}/gitleaks_{version}_linux_arm64.tar.gz",
         "windows_amd64": "https://github.com/gitleaks/gitleaks/releases/download/v{version}/gitleaks_{version}_windows_amd64.zip"
+    },
+    "trufflehog_version": "3.88.3",
+    "trufflehog_download_urls": {
+        "darwin_amd64": "https://github.com/trufflesecurity/trufflehog/releases/download/v{version}/trufflehog_{version}_darwin_amd64.tar.gz",
+        "darwin_arm64": "https://github.com/trufflesecurity/trufflehog/releases/download/v{version}/trufflehog_{version}_darwin_arm64.tar.gz",
+        "linux_amd64": "https://github.com/trufflesecurity/trufflehog/releases/download/v{version}/trufflehog_{version}_linux_amd64.tar.gz",
+        "linux_arm64": "https://github.com/trufflesecurity/trufflehog/releases/download/v{version}/trufflehog_{version}_linux_arm64.tar.gz",
+        "windows_amd64": "https://github.com/trufflesecurity/trufflehog/releases/download/v{version}/trufflehog_{version}_windows_amd64.zip"
     }
 }
