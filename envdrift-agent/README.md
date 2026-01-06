@@ -36,7 +36,13 @@ make build
 
 ## Prerequisites
 
-This agent uses [dotenvx](https://dotenvx.com/) for encryption. Install it first:
+This agent uses [envdrift](https://github.com/jainal09/envdrift) for encryption:
+
+```bash
+pip install envdrift
+```
+
+envdrift requires [dotenvx](https://dotenvx.com/) which will be used internally:
 
 ```bash
 # macOS
@@ -44,8 +50,6 @@ brew install dotenvx/brew/dotenvx
 
 # npm (any platform)
 npm install -g @dotenvx/dotenvx
-
-# Or see https://dotenvx.com for more options
 ```
 
 ## Usage
@@ -97,8 +101,10 @@ recursive = true
 2. **Tracks** last modification time for each file
 3. **Checks** if file is idle (not modified for `idle_timeout`)
 4. **Verifies** file is not open by another process
-5. **Encrypts** using `dotenvx encrypt` if file is plaintext
+5. **Encrypts** using `envdrift lock` (respects `envdrift.toml`)
 6. **Notifies** (optional) via desktop notification
+
+> 📖 **See the [comprehensive setup guide](../docs/guides/agent-setup.md) for detailed configuration and troubleshooting.**
 
 ## Platform-Specific Details
 

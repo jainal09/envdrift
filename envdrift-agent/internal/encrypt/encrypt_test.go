@@ -73,14 +73,9 @@ func TestIsEncryptedMissingFile(t *testing.T) {
 	}
 }
 
-func TestIsDotenvxAvailable(t *testing.T) {
+func TestIsEnvdriftAvailable(t *testing.T) {
 	// This test just ensures the function doesn't panic
-	// Result depends on whether dotenvx is installed
-	_ = IsDotenvxAvailable()
-}
-
-func TestGetDotenvxPath(t *testing.T) {
-	// This test just ensures the function doesn't panic
-	path := GetDotenvxPath()
-	t.Logf("dotenvx path: %q", path)
+	// Result depends on whether envdrift is installed
+	available := IsEnvdriftAvailable()
+	t.Logf("envdrift available: %v", available)
 }

@@ -98,8 +98,8 @@ docs-serve:
 # Lint markdown documentation
 lint-docs:
 	@echo "Linting markdown files..."
-	npx markdownlint-cli2 "**/*.md" "#node_modules" "#.venv" "#venv" "#.git" "#dist" "#build" "#site" "#.pytest_cache" \
-	 "#.ruff_cache" "#.uv-cache"
+	npx markdownlint-cli2 "**/*.md" "!**/node_modules/**" "!.venv/**" "!venv/**" "!.git/**" "!dist/**" "!build/**" "!site/**" "!.pytest_cache/**" \
+	 "!.ruff_cache/**" "!.uv-cache/**"
 
 # Clean build artifacts
 clean:

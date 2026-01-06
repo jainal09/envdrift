@@ -99,9 +99,9 @@ func Execute() error {
 func runInstall(cmd *cobra.Command, args []string) error {
 	fmt.Println("Installing envdrift-agent...")
 
-	// Check dotenvx first
-	if !encrypt.IsDotenvxAvailable() {
-		fmt.Println("⚠️  Warning: dotenvx not found. Install it first: https://dotenvx.com")
+	// Check envdrift first
+	if !encrypt.IsEnvdriftAvailable() {
+		fmt.Println("⚠️  Warning: envdrift not found. Install it: pip install envdrift")
 	}
 
 	// Create default config if none exists
@@ -124,7 +124,7 @@ func runInstall(cmd *cobra.Command, args []string) error {
 }
 
 // runUninstall removes the agent from system startup, printing progress messages.
-// 
+//
 // It performs the uninstallation and returns an error if the removal fails.
 func runUninstall(cmd *cobra.Command, args []string) error {
 	fmt.Println("Uninstalling envdrift-agent...")
@@ -148,7 +148,7 @@ func runStatus(cmd *cobra.Command, args []string) error {
 	fmt.Printf("Installed: %v\n", installed)
 	fmt.Printf("Running:   %v\n", running)
 	fmt.Printf("Config:    %s\n", config.ConfigPath())
-	fmt.Printf("dotenvx:   %s\n", encrypt.GetDotenvxPath())
+	fmt.Printf("envdrift:  %v\n", encrypt.IsEnvdriftAvailable())
 
 	return nil
 }
