@@ -14,7 +14,6 @@ Tests cover:
 from __future__ import annotations
 
 import contextlib
-import os
 import subprocess
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -62,13 +61,13 @@ def populated_secrets(aws_secrets_client) -> Generator[dict[str, str], None, Non
 
 
 @pytest.fixture
-def aws_client_configured(localstack_endpoint: str):
+def aws_client_configured(localstack_endpoint: str, monkeypatch):
     """Return a configured AWSSecretsManagerClient for LocalStack."""
-    # Set environment for the client
-    os.environ["AWS_ENDPOINT_URL"] = localstack_endpoint
-    os.environ["AWS_ACCESS_KEY_ID"] = "test"
-    os.environ["AWS_SECRET_ACCESS_KEY"] = "test"
-    os.environ["AWS_DEFAULT_REGION"] = "us-east-1"
+    # Set environment for the client (monkeypatch auto-restores after test)
+    monkeypatch.setenv("AWS_ENDPOINT_URL", localstack_endpoint)
+    monkeypatch.setenv("AWS_ACCESS_KEY_ID", "test")
+    monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "test")
+    monkeypatch.setenv("AWS_DEFAULT_REGION", "us-east-1")
 
     from envdrift.vault.aws import AWSSecretsManagerClient
 
@@ -456,9 +455,17 @@ environment = "production"
             timeout=60,
         )
 
-        # Command should report the error but not crash
-        # (Specific behavior depends on implementation - adjust as needed)
-        assert "not found" in result.stdout.lower() or "error" in result.stdout.lower() or result.returncode != 0
+        # The command should either:
+        # 1. Exit with non-zero and include a meaningful error message, OR
+        # 2. Log the missing secret error but continue gracefully
+        combined_output = (result.stdout + result.stderr).lower()
+        has_not_found_message = "not found" in combined_output or "does not exist" in combined_output
+
+        # Verify the error was reported (not silently swallowed)
+        assert has_not_found_message or result.returncode != 0, (
+            f"Expected 'not found' message or non-zero exit code.\n"
+            f"stdout: {result.stdout}\nstderr: {result.stderr}"
+        )
 
 
 # --- Category A: Region Handling Tests ---
@@ -481,12 +488,12 @@ class TestAWSRegionHandling:
         assert secret.value == "ec1234567890abcdef"
 
     def test_client_with_different_region(
-        self, localstack_endpoint: str, populated_secrets: dict[str, str]
+        self, localstack_endpoint: str, populated_secrets: dict[str, str], monkeypatch
     ) -> None:
         """Test creating client with different region."""
-        os.environ["AWS_ENDPOINT_URL"] = localstack_endpoint
-        os.environ["AWS_ACCESS_KEY_ID"] = "test"
-        os.environ["AWS_SECRET_ACCESS_KEY"] = "test"
+        monkeypatch.setenv("AWS_ENDPOINT_URL", localstack_endpoint)
+        monkeypatch.setenv("AWS_ACCESS_KEY_ID", "test")
+        monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "test")
 
         from envdrift.vault.aws import AWSSecretsManagerClient
 
