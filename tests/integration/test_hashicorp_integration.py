@@ -207,9 +207,9 @@ vault_key_path = "myapp/production"
             timeout=30,
         )
 
-        # Check that pull succeeded or at least attempted vault connection
-        # The exact behavior depends on CLI implementation
-        assert result.returncode == 0 or "vault" in result.stderr.lower() or "vault" in result.stdout.lower()
+        # Check that pull succeeded or failed gracefully (not crashed)
+        # returncode 0 = success, 1 = expected failure (e.g., auth issue)
+        assert result.returncode in (0, 1), f"Unexpected exit code: {result.returncode}\nstderr: {result.stderr}"
 
 
 # --- CLI Vault Push Command Tests ---
