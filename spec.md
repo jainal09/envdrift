@@ -3,6 +3,7 @@
 ## Current State
 
 ### Existing Coverage (10 tests)
+
 - dotenvx encrypt/decrypt roundtrip
 - SOPS encrypt/decrypt roundtrip
 - Smart encryption (git restore on unchanged content)
@@ -11,6 +12,7 @@
 - Full lock → pull --merge → lock cycle (partial encryption workflow)
 
 ### Major Gaps
+
 The current integration tests **do not** test actual cloud provider interactions. All vault operations are either mocked or skipped.
 
 ---
@@ -20,6 +22,7 @@ The current integration tests **do not** test actual cloud provider interactions
 ### 1. LocalStack (AWS Secrets Manager)
 
 **Container Setup:**
+
 ```yaml
 # docker-compose.test.yml
 services:
@@ -35,6 +38,7 @@ services:
 ```
 
 **Test Configuration:**
+
 ```python
 @pytest.fixture(scope="session")
 def localstack_aws():
@@ -51,6 +55,7 @@ def localstack_aws():
 ### 2. HashiCorp Vault (Dev Mode Container)
 
 **Container Setup:**
+
 ```yaml
 # docker-compose.test.yml
 services:
@@ -66,6 +71,7 @@ services:
 ```
 
 **Test Configuration:**
+
 ```python
 @pytest.fixture(scope="session")
 def vault_server():
@@ -80,6 +86,7 @@ def vault_server():
 **Status:** No official local emulator exists.
 
 **Options:**
+
 1. **Fake Server** - Use `google-cloud-secret-manager` with a custom gRPC server (complex)
 2. **Conditional Skip** - Skip GCP tests unless `ENVDRIFT_TEST_GCP=1` is set with real credentials
 3. **Mock at SDK Level** - Use `unittest.mock` to patch `google.cloud.secretmanager` client
@@ -89,6 +96,7 @@ def vault_server():
 ### 4. Azure Key Vault (Lowkey Vault)
 
 **Container Setup:**
+
 ```yaml
 # docker-compose.test.yml
 services:
@@ -101,6 +109,7 @@ services:
 ```
 
 **Test Configuration:**
+
 ```python
 @pytest.fixture(scope="session")
 def azure_keyvault():
@@ -112,6 +121,7 @@ def azure_keyvault():
 ```
 
 **Notes:**
+
 - [Lowkey Vault](https://github.com/nagyesta/lowkey-vault) is a test double for Azure Key Vault
 - Compatible with Azure SDK clients
 - Some encryption algorithms not supported (acceptable for secrets testing)
@@ -235,9 +245,11 @@ Each phase is a single PR. Phases are designed to be independently mergeable.
 ---
 
 ### Phase 1: Infrastructure Setup
+
 **PR Title:** `test: add integration test infrastructure with LocalStack and Vault`
 
 **Deliverables:**
+
 - [ ] `tests/docker-compose.test.yml` - LocalStack + Vault containers
 - [ ] `tests/integration/conftest.py` - Session-scoped container fixtures
 - [ ] `pyproject.toml` - New markers (`aws`, `vault`, `slow`) and `test-integration` deps
@@ -245,7 +257,8 @@ Each phase is a single PR. Phases are designed to be independently mergeable.
 - [ ] Smoke test to verify containers start and are accessible
 
 **Files Changed:**
-```
+
+```text
 tests/docker-compose.test.yml      (new)
 tests/integration/conftest.py      (modify - add fixtures)
 pyproject.toml                     (modify - deps + markers)
@@ -253,6 +266,7 @@ Makefile                           (modify - new target)
 ```
 
 **Acceptance Criteria:**
+
 - `make test-integration` starts containers and runs existing integration tests
 - Fixtures auto-skip if Docker unavailable
 - No changes to existing test behavior
@@ -260,14 +274,17 @@ Makefile                           (modify - new target)
 ---
 
 ### Phase 2: AWS Secrets Manager Tests (LocalStack)
+
 **PR Title:** `test: add AWS Secrets Manager integration tests via LocalStack`
 
 **Deliverables:**
+
 - [ ] `tests/integration/test_aws_integration.py` - Category A tests (P0 + P1)
 - [ ] Fixture to pre-populate LocalStack with test secrets
 - [ ] Test `sync`, `vault-push`, and error handling
 
 **Tests Included:**
+
 - `test_aws_sync_pull_single_secret`
 - `test_aws_sync_pull_multiple_secrets`
 - `test_aws_vault_push_from_env_keys`
@@ -277,6 +294,7 @@ Makefile                           (modify - new target)
 - `test_aws_secret_not_found`
 
 **Acceptance Criteria:**
+
 - All tests pass with LocalStack
 - Tests skip gracefully without Docker
 - Coverage for `src/envdrift/vault/aws.py`
@@ -284,15 +302,18 @@ Makefile                           (modify - new target)
 ---
 
 ### Phase 3: HashiCorp Vault + Azure Key Vault Tests
+
 **PR Title:** `test: add HashiCorp Vault and Azure Key Vault integration tests`
 
 **Deliverables:**
+
 - [ ] `tests/integration/test_hashicorp_integration.py` - Category B tests
 - [ ] `tests/integration/test_azure_integration.py` - Category B2 tests
 - [ ] Fixtures for Vault KV v2 and Lowkey Vault
 - [ ] Test sync/push with token auth (HashiCorp) and managed identity mock (Azure)
 
 **Tests Included (HashiCorp):**
+
 - `test_hcv_sync_pull_kv_secret`
 - `test_hcv_vault_push_kv_secret`
 - `test_hcv_sync_multiple_paths`
@@ -300,12 +321,14 @@ Makefile                           (modify - new target)
 - `test_hcv_secret_not_found`
 
 **Tests Included (Azure):**
+
 - `test_azure_sync_pull_secret`
 - `test_azure_vault_push_secret`
 - `test_azure_sync_multiple_secrets`
 - `test_azure_secret_not_found`
 
 **Acceptance Criteria:**
+
 - All tests pass with Vault + Lowkey Vault containers
 - Tests skip gracefully without Docker
 - Coverage for `src/envdrift/vault/hashicorp.py` and `src/envdrift/vault/azure.py`
@@ -313,14 +336,17 @@ Makefile                           (modify - new target)
 ---
 
 ### Phase 4: End-to-End Workflow Tests
+
 **PR Title:** `test: add end-to-end workflow integration tests`
 
 **Deliverables:**
+
 - [ ] `tests/integration/test_e2e_workflows.py` - Category C tests
 - [ ] Full `pull` → decrypt → edit → encrypt → `lock` cycle
 - [ ] Multi-service monorepo scenarios
 
 **Tests Included:**
+
 - `test_e2e_pull_decrypt_workflow`
 - `test_e2e_lock_push_workflow`
 - `test_e2e_monorepo_multi_service`
@@ -328,6 +354,7 @@ Makefile                           (modify - new target)
 - `test_e2e_ci_mode_noninteractive`
 
 **Acceptance Criteria:**
+
 - Tests exercise real CLI commands end-to-end
 - Uses LocalStack for vault operations
 - Documents realistic usage patterns
@@ -335,13 +362,16 @@ Makefile                           (modify - new target)
 ---
 
 ### Phase 5: Encryption Edge Cases
+
 **PR Title:** `test: add encryption edge case tests`
 
 **Deliverables:**
+
 - [ ] `tests/integration/test_encryption_edge_cases.py` - Category D tests
 - [ ] Edge cases for unicode, multiline, empty files, wrong backend
 
 **Tests Included:**
+
 - `test_encrypt_empty_file`
 - `test_encrypt_unicode_values`
 - `test_encrypt_multiline_values`
@@ -352,59 +382,71 @@ Makefile                           (modify - new target)
 - `test_decrypt_wrong_key`
 
 **Acceptance Criteria:**
+
 - All edge cases handled gracefully
 - Clear error messages for failure cases
 
 ---
 
 ### Phase 6: Git Hook Advanced Tests
+
 **PR Title:** `test: add advanced git hook integration tests`
 
 **Deliverables:**
+
 - [ ] `tests/integration/test_git_hooks_advanced.py` - Category H tests
 - [ ] Test hooks actually block/allow commits
 
 **Tests Included:**
+
 - `test_hook_blocks_unencrypted_commit`
 - `test_hook_allows_encrypted_commit`
 - `test_hook_pre_push_lock_check`
 - `test_smart_encrypt_dirty_workdir`
 
 **Acceptance Criteria:**
+
 - Simulates real git commit/push operations
 - Validates hook scripts work correctly
 
 ---
 
 ### Phase 7: Error Handling & Concurrency
+
 **PR Title:** `test: add error handling and concurrency tests`
 
 **Deliverables:**
+
 - [ ] `tests/integration/test_error_handling.py` - Category G tests
 - [ ] `tests/integration/test_concurrency.py` - Category F tests
 
 **Tests Included:**
+
 - `test_network_timeout_vault`
 - `test_partial_sync_failure`
 - `test_corrupt_env_file`
 - `test_parallel_sync_thread_safety`
 
 **Acceptance Criteria:**
+
 - Error scenarios don't crash, provide helpful messages
 - Concurrent operations are thread-safe
 
 ---
 
 ### Phase 8: CI Pipeline Integration
+
 **PR Title:** `ci: add integration test workflow with containers`
 
 **Deliverables:**
+
 - [ ] `.github/workflows/integration-tests.yml`
 - [ ] Matrix for Python 3.11, 3.12, 3.13
 - [ ] Docker service containers for LocalStack + Vault
 - [ ] Optional GCP/Azure tests with repository secrets
 
 **Acceptance Criteria:**
+
 - Integration tests run on every PR
 - Clear pass/fail status
 - Reasonable runtime (<10 minutes)
@@ -507,7 +549,7 @@ test-integration = [
 
 ## File Structure
 
-```
+```text
 tests/
 ├── integration/
 │   ├── conftest.py              # Shared fixtures, container setup
@@ -548,18 +590,23 @@ markers = [
 ## Notes
 
 ### Why No GCP Emulator?
+
 Google does not provide a local emulator for Secret Manager. Options:
+
 - Use real GCP project with test credentials in CI secrets
 - Mock at the SDK level for unit tests
 - Skip in local development, run in CI only
 
 ### Why No Azure Emulator?
+
 Azurite only supports Storage services, not Key Vault. Same approach as GCP.
 
 ### Container Startup Time
+
 LocalStack and Vault containers add ~5-10 seconds startup time. Use session-scoped fixtures to start once per test run.
 
 ### CI Considerations
+
 - Use GitHub Actions services for containers
 - Cache Docker images between runs
 - Consider separate CI job for integration tests
