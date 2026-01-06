@@ -31,24 +31,44 @@ export async function findEnvdrift(): Promise<{ executable: string; args: string
 }
 
 /**
- * Check if a command exists
+ * Check if a command exists (with 5 second timeout)
  */
 async function commandExists(cmd: string): Promise<boolean> {
     return new Promise((resolve) => {
         const proc = cp.spawn(cmd, ['--version'], { stdio: 'ignore' });
-        proc.on('error', () => resolve(false));
-        proc.on('close', (code) => resolve(code === 0));
+        const timeout = setTimeout(() => {
+            proc.kill('SIGTERM');
+            resolve(false);
+        }, 5000);
+        proc.on('error', () => {
+            clearTimeout(timeout);
+            resolve(false);
+        });
+        proc.on('close', (code) => {
+            clearTimeout(timeout);
+            resolve(code === 0);
+        });
     });
 }
 
 /**
- * Test if a Python module can be run
+ * Test if a Python module can be run (with 5 second timeout)
  */
 async function testPythonModule(python: string, module: string): Promise<boolean> {
     return new Promise((resolve) => {
         const proc = cp.spawn(python, ['-m', module, '--version'], { stdio: 'ignore' });
-        proc.on('error', () => resolve(false));
-        proc.on('close', (code) => resolve(code === 0));
+        const timeout = setTimeout(() => {
+            proc.kill('SIGTERM');
+            resolve(false);
+        }, 5000);
+        proc.on('error', () => {
+            clearTimeout(timeout);
+            resolve(false);
+        });
+        proc.on('close', (code) => {
+            clearTimeout(timeout);
+            resolve(code === 0);
+        });
     });
 }
 
@@ -64,8 +84,16 @@ export async function isEncrypted(filePath: string): Promise<boolean> {
         const lines = content.split('\n');
         for (const line of lines) {
             const trimmed = line.trim();
-            // Skip empty lines and comments
-            if (!trimmed || trimmed.startsWith('#')) {
+            // Skip empty lines
+            if (!trimmed) {
+                continue;
+            }
+            // Check for DOTENV_PUBLIC_KEY header (indicates encrypted file)
+            if (trimmed.startsWith('#') && trimmed.includes('DOTENV_PUBLIC_KEY')) {
+                return true;
+            }
+            // Skip other comments
+            if (trimmed.startsWith('#')) {
                 continue;
             }
             // dotenvx uses "encrypted:" prefix in values
