@@ -4,14 +4,19 @@ import * as path from 'path';
 import { getConfig } from './config';
 
 /**
- * Find dotenvx binary path
+ * Find dotenvx binary path - always falls back to npx which auto-installs
  */
-export async function findDotenvx(): Promise<string | null> {
+export async function findDotenvx(): Promise<string> {
     const config = getConfig();
 
     // Check custom path first
     if (config.dotenvxPath) {
-        return config.dotenvxPath;
+        try {
+            await execCommand(`"${config.dotenvxPath}" --version`);
+            return config.dotenvxPath;
+        } catch {
+            // Fall through to other options
+        }
     }
 
     // Common locations
@@ -30,13 +35,8 @@ export async function findDotenvx(): Promise<string | null> {
         }
     }
 
-    // Try npx
-    try {
-        await execCommand('npx dotenvx --version');
-        return 'npx dotenvx';
-    } catch {
-        return null;
-    }
+    // Always fallback to npx -y which auto-installs if needed
+    return 'npx -y @dotenvx/dotenvx';
 }
 
 /**
@@ -71,13 +71,6 @@ export async function isEncrypted(filePath: string): Promise<boolean> {
  */
 export async function encryptFile(filePath: string): Promise<{ success: boolean; message: string }> {
     const dotenvx = await findDotenvx();
-
-    if (!dotenvx) {
-        return {
-            success: false,
-            message: 'dotenvx not found. Please install it: npm install -g @dotenvx/dotenvx',
-        };
-    }
 
     // Check if already encrypted
     if (await isEncrypted(filePath)) {
