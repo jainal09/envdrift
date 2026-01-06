@@ -352,3 +352,109 @@ class TestEncryptLargeFile:
 
         # Should handle large file without crashing or timing out
         assert result.returncode in (0, 1), f"Unexpected exit code: {result.returncode}\nstderr: {result.stderr}"
+
+
+class TestDuplicatePublicKeys:
+    """Test handling of duplicate public keys in files."""
+
+    def test_encrypt_duplicate_public_key(
+        self,
+        work_dir: Path,
+        integration_pythonpath: str,
+    ):
+        """Test handling of .env files with duplicate DOTENV_PUBLIC_KEY entries.
+        
+        This is a real-world edge case where files accidentally end up with
+        multiple public key entries due to merges or manual edits.
+        """
+        # Create .env with duplicate public keys
+        env_file = work_dir / ".env"
+        env_file.write_text(
+            '#/-------------------[DOTENV][signature]--------------------/\n'
+            'DOTENV_PUBLIC_KEY="ec1a2b3c4d5e6f"\n'
+            'DOTENV_PUBLIC_KEY="ec1a2b3c4d5e6f"\n'  # Duplicate!
+            'SECRET_VALUE="encrypted:somevalue"\n'
+            'ANOTHER_KEY="encrypted:anothervalue"\n'
+        )
+
+        env = os.environ.copy()
+        env["PYTHONPATH"] = integration_pythonpath
+
+        result = subprocess.run(
+            _get_envdrift_cmd() + ["encrypt", str(env_file), "--check"],
+            cwd=work_dir,
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+
+        # Should handle duplicate keys gracefully
+        assert result.returncode in (0, 1), f"Unexpected exit code: {result.returncode}\nstderr: {result.stderr}"
+
+    def test_env_keys_duplicate_private_key(
+        self,
+        work_dir: Path,
+        integration_pythonpath: str,
+    ):
+        """Test handling of .env.keys with duplicate DOTENV_PRIVATE_KEY entries."""
+        # Create .env.keys with duplicate private keys
+        env_keys = work_dir / ".env.keys"
+        env_keys.write_text(
+            'DOTENV_PRIVATE_KEY="key1234567890"\n'
+            'DOTENV_PRIVATE_KEY="key1234567890"\n'  # Duplicate!
+            'DOTENV_PRIVATE_KEY_PRODUCTION="prodkey"\n'
+        )
+
+        # Create corresponding .env file
+        env_file = work_dir / ".env"
+        env_file.write_text(
+            'DOTENV_PUBLIC_KEY="pubkey123"\n'
+            'APP_SECRET="encrypted:xyz"\n'
+        )
+
+        env = os.environ.copy()
+        env["PYTHONPATH"] = integration_pythonpath
+
+        result = subprocess.run(
+            _get_envdrift_cmd() + ["decrypt", str(env_file)],
+            cwd=work_dir,
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+
+        # Should handle duplicate keys gracefully (use first or dedupe)
+        assert result.returncode in (0, 1), f"Unexpected exit code: {result.returncode}\nstderr: {result.stderr}"
+
+    def test_multiple_different_public_keys(
+        self,
+        work_dir: Path,
+        integration_pythonpath: str,
+    ):
+        """Test handling of .env with multiple DIFFERENT public keys (conflicting)."""
+        # Create .env with conflicting public keys
+        env_file = work_dir / ".env"
+        env_file.write_text(
+            '#/-------------------[DOTENV][signature]--------------------/\n'
+            'DOTENV_PUBLIC_KEY="ec_first_key_abc"\n'
+            'DOTENV_PUBLIC_KEY="ec_second_key_xyz"\n'  # Different value - conflict!
+            'SECRET_VALUE="encrypted:somevalue"\n'
+        )
+
+        env = os.environ.copy()
+        env["PYTHONPATH"] = integration_pythonpath
+
+        result = subprocess.run(
+            _get_envdrift_cmd() + ["encrypt", str(env_file), "--check"],
+            cwd=work_dir,
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+
+        # Should handle conflicting keys gracefully
+        assert result.returncode in (0, 1), f"Unexpected exit code: {result.returncode}\nstderr: {result.stderr}"
+
