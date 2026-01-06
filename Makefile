@@ -56,9 +56,7 @@ test:
 
 # Start integration test containers
 test-integration-up:
-	docker compose -f tests/docker-compose.test.yml up -d
-	@echo "Waiting for services to be ready..."
-	@sleep 5
+	docker compose -f tests/docker-compose.test.yml up -d --wait
 	@echo "Services started. Run 'make test-integration' to run tests."
 
 # Stop integration test containers
@@ -67,7 +65,8 @@ test-integration-down:
 
 # Run integration tests (starts containers if needed)
 test-integration:
-	@if ! docker compose -f tests/docker-compose.test.yml ps --status running 2>/dev/null | grep -q localstack; then \
+	@running=$$(docker compose -f tests/docker-compose.test.yml ps --status running --format json 2>/dev/null | grep -c '"Service"' || echo 0); \
+	if [ "$$running" -lt 3 ]; then \
 		echo "Starting containers..."; \
 		$(MAKE) test-integration-up; \
 	fi

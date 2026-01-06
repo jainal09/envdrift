@@ -27,12 +27,12 @@ The current integration tests **do not** test actual cloud provider interactions
 # docker-compose.test.yml
 services:
   localstack:
-    image: localstack/localstack:latest
+    image: localstack/localstack:4.0
     ports:
       - "4566:4566"
     environment:
       - SERVICES=secretsmanager
-      - DEBUG=1
+      - DEBUG=0
     volumes:
       - "/var/run/docker.sock:/var/run/docker.sock"
 ```
@@ -60,11 +60,11 @@ def localstack_aws():
 # docker-compose.test.yml
 services:
   vault:
-    image: hashicorp/vault:latest
+    image: hashicorp/vault:1.18
     ports:
       - "8200:8200"
     environment:
-      - VAULT_DEV_ROOT_TOKEN_ID=test-token
+      - VAULT_DEV_ROOT_TOKEN_ID=test-root-token
       - VAULT_DEV_LISTEN_ADDRESS=0.0.0.0:8200
     cap_add:
       - IPC_LOCK
@@ -77,7 +77,7 @@ services:
 def vault_server():
     """Start Vault dev server and return client."""
     os.environ["VAULT_ADDR"] = "http://localhost:8200"
-    os.environ["VAULT_TOKEN"] = "test-token"
+    os.environ["VAULT_TOKEN"] = "test-root-token"
     yield "http://localhost:8200"
 ```
 
@@ -101,7 +101,7 @@ def vault_server():
 # docker-compose.test.yml
 services:
   lowkey-vault:
-    image: nagyesta/lowkey-vault:latest
+    image: nagyesta/lowkey-vault:2.4
     ports:
       - "8443:8443"
     environment:

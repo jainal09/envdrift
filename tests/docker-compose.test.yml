@@ -8,7 +8,7 @@
 
 services:
   localstack:
-    image: localstack/localstack:latest
+    image: localstack/localstack:4.0  # Pin to v4.x for stability
     ports:
       - "4566:4566"
     environment:
@@ -23,7 +23,7 @@ services:
       start_period: 10s
 
   vault:
-    image: hashicorp/vault:latest
+    image: hashicorp/vault:1.18  # Pin to v1.18.x for stability
     ports:
       - "8200:8200"
     environment:
@@ -40,7 +40,7 @@ services:
       start_period: 5s
 
   lowkey-vault:
-    image: nagyesta/lowkey-vault:latest
+    image: nagyesta/lowkey-vault:2.4  # Pin to v2.4.x for stability
     ports:
       - "8443:8443"
     environment:

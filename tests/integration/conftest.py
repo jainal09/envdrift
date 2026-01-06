@@ -54,19 +54,6 @@ def _wait_for_port(host: str, port: int, timeout: float = 30.0, interval: float 
     return False
 
 
-def _is_docker_available() -> bool:
-    """Check if Docker is available and running."""
-    try:
-        result = subprocess.run(
-            ["docker", "info"],
-            capture_output=True,
-            timeout=5,
-        )
-        return result.returncode == 0
-    except (subprocess.TimeoutExpired, FileNotFoundError):
-        return False
-
-
 def _is_compose_running() -> bool:
     """Check if docker-compose services are running."""
     return (
