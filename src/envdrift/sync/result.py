@@ -13,6 +13,7 @@ class SyncAction(Enum):
     CREATED = "created"
     UPDATED = "updated"
     SKIPPED = "skipped"
+    EPHEMERAL = "ephemeral"  # Key fetched from vault, not stored locally
     ERROR = "error"
 
 
@@ -38,6 +39,7 @@ class ServiceSyncResult:
     decryption_result: DecryptionTestResult | None = None
     schema_valid: bool | None = None
     error: str | None = None
+    vault_key_value: str | None = None  # For ephemeral mode: actual key value
 
 
 @dataclass
@@ -70,6 +72,11 @@ class SyncResult:
     def error_count(self) -> int:
         """Number of services that failed."""
         return sum(1 for s in self.services if s.action == SyncAction.ERROR)
+
+    @property
+    def ephemeral_count(self) -> int:
+        """Number of services with ephemeral keys (fetched, not stored)."""
+        return sum(1 for s in self.services if s.action == SyncAction.EPHEMERAL)
 
     @property
     def decryption_tested(self) -> int:

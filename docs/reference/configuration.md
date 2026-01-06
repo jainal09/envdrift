@@ -198,12 +198,14 @@ Configuration for the `envdrift sync`, `envdrift pull`, and `envdrift lock` comm
 | `default_vault_name` | `string` | `null` | Default vault name for mappings |
 | `env_keys_filename` | `string` | `".env.keys"` | Name of the keys file |
 | `max_workers` | `int \| None` | `null` | Parallel workers for pull/lock file operations |
+| `ephemeral_keys` | `bool` | `false` | Never store `.env.keys` locally; fetch from vault on-demand |
 
 ```toml
 [vault.sync]
 default_vault_name = "my-keyvault"
 env_keys_filename = ".env.keys"
 max_workers = 4
+ephemeral_keys = false  # Set true to never store keys locally
 ```
 
 #### [[vault.sync.mappings]] — Sync Mappings
@@ -218,6 +220,7 @@ Each mapping defines how a vault secret maps to a local service directory.
 | `environment` | `string` | `null` | Environment suffix (e.g., `production` for `DOTENV_PRIVATE_KEY_PRODUCTION`) |
 | `profile` | `string` | `null` | Profile name for filtering with `--profile` |
 | `activate_to` | `string` | `null` | Path to copy decrypted file when profile is activated |
+| `ephemeral_keys` | `bool` | `null` | Per-mapping override for ephemeral mode |
 
 ```toml
 # Basic mapping
@@ -239,6 +242,12 @@ secret_name = "local-dev-key"
 folder_path = "."
 profile = "local"
 activate_to = ".env"  # Copy .env.local to .env after decrypt
+
+# Ephemeral mapping (never stores keys locally for this service)
+[[vault.sync.mappings]]
+secret_name = "ci-service-key"
+folder_path = "services/ci"
+ephemeral_keys = true  # Always fetch from vault
 ```
 
 ### [precommit] — Pre-commit Hook Settings

@@ -20,6 +20,7 @@ class SyncMappingConfig:
     environment: str | None = None  # None = derive from profile or default to "production"
     profile: str | None = None  # Profile name for filtering (e.g., "local", "prod")
     activate_to: str | None = None  # Path to copy decrypted file when profile is activated
+    ephemeral_keys: bool | None = None  # None = inherit from central SyncConfig
 
 
 @dataclass
@@ -30,6 +31,7 @@ class SyncConfig:
     default_vault_name: str | None = None
     env_keys_filename: str = ".env.keys"
     max_workers: int | None = None
+    ephemeral_keys: bool = False  # When True, never store .env.keys locally
 
 
 @dataclass
@@ -168,6 +170,7 @@ class EnvdriftConfig:
                 environment=m.get("environment"),  # None = derive from profile
                 profile=m.get("profile"),
                 activate_to=m.get("activate_to"),
+                ephemeral_keys=m.get("ephemeral_keys"),  # None = inherit from central
             )
             for m in sync_section.get("mappings", [])
         ]
@@ -176,6 +179,7 @@ class EnvdriftConfig:
             default_vault_name=sync_section.get("default_vault_name"),
             env_keys_filename=sync_section.get("env_keys_filename", ".env.keys"),
             max_workers=max_workers,
+            ephemeral_keys=sync_section.get("ephemeral_keys", False),
         )
 
         # Build vault config
