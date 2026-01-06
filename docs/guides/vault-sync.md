@@ -408,7 +408,9 @@ vault_name = "production-vault"  # Override default
 
 ### Ephemeral Keys Mode
 
-Ephemeral keys mode prevents local storage of `.env.keys` files. Keys are fetched from vault on-demand and passed directly to dotenvx via environment variables. This is ideal for:
+Ephemeral keys mode prevents local storage of `.env.keys` files.
+Keys are fetched from vault on-demand and passed directly to dotenvx via environment variables.
+This is ideal for:
 
 - **CI/CD pipelines** where you don't want keys persisted to disk
 - **Security-sensitive environments** where keys should only exist in memory
@@ -453,8 +455,8 @@ ephemeral_keys = true  # Override: never store locally
 3. Files are decrypted in-place
 4. **No `.env.keys` file is created**
 
-> **Note**: In ephemeral mode, if the vault is unavailable, commands will fail. There is no fallback to local keys.
-
+> **Note**: In ephemeral mode, if the vault is unavailable, commands will fail.
+> There is no fallback to local keys.
 
 ### Profile Configuration
 
