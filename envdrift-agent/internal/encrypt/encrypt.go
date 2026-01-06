@@ -1,17 +1,18 @@
-// Package encrypt handles encryption integration.
-// Prefers envdrift CLI (respects envdrift.toml, vault, ephemeral keys),
-// falls back to dotenvx if envdrift is not available.
+// Package encrypt handles encryption via envdrift lock.
+// Requires envdrift CLI to be installed (pip install envdrift).
 package encrypt
 
 import (
 	"bufio"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 )
 
-const npxMarker = "npx:dotenvx"
+// ErrEnvdriftNotFound is returned when envdrift CLI is not installed.
+var ErrEnvdriftNotFound = errors.New("envdrift not found. Install it: pip install envdrift")
 
 // IsEncrypted checks if a .env file is already encrypted.
 func IsEncrypted(path string) (bool, error) {
@@ -24,11 +25,9 @@ func IsEncrypted(path string) (bool, error) {
 	scanner := bufio.NewScanner(file)
 	for scanner.Scan() {
 		line := strings.TrimSpace(scanner.Text())
-		// Skip empty lines and comments
 		if line == "" || strings.HasPrefix(line, "#") {
 			continue
 		}
-		// Check for encrypted marker in actual values
 		if strings.Contains(strings.ToLower(line), "encrypted:") {
 			return true, nil
 		}
@@ -37,7 +36,7 @@ func IsEncrypted(path string) (bool, error) {
 	return false, scanner.Err()
 }
 
-// Encrypt encrypts a .env file, preferring envdrift lock over dotenvx.
+// Encrypt encrypts a .env file using envdrift lock.
 func Encrypt(path string) error {
 	cmd, err := buildEncryptCommand(path)
 	if err != nil {
@@ -63,105 +62,43 @@ func IsEnvdriftAvailable() bool {
 	return err == nil
 }
 
-// IsDotenvxAvailable checks if dotenvx is available.
-func IsDotenvxAvailable() bool {
-	_, err := findDotenvx()
-	return err == nil
-}
-
-// buildEncryptCommand builds the encryption command.
-// Tries envdrift lock first, falls back to dotenvx encrypt.
+// buildEncryptCommand builds the envdrift lock command.
 func buildEncryptCommand(path string) (*exec.Cmd, error) {
 	dir := filepath.Dir(path)
 	fileName := filepath.Base(path)
 
-	// Try envdrift first (respects envdrift.toml, vault, ephemeral keys)
-	if envdrift, err := findEnvdrift(); err == nil {
-		cmd := exec.Command(envdrift, "lock", fileName)
-		cmd.Dir = dir
-		return cmd, nil
-	}
-
-	// Fallback to dotenvx
-	dotenvx, err := findDotenvx()
+	envdrift, err := findEnvdrift()
 	if err != nil {
-		return nil, err
+		return nil, ErrEnvdriftNotFound
 	}
 
-	// Handle npx case
-	if dotenvx == npxMarker {
-		cmd := exec.Command("npx", "-y", "@dotenvx/dotenvx", "encrypt", "-f", path)
-		cmd.Dir = dir
-		return cmd, nil
-	}
-
-	cmd := exec.Command(dotenvx, "encrypt", "-f", path)
+	cmd := exec.Command(envdrift, "lock", fileName)
 	cmd.Dir = dir
 	return cmd, nil
 }
 
 // findEnvdrift locates the envdrift executable.
 func findEnvdrift() (string, error) {
-	candidates := []string{
-		"envdrift", // In PATH
+	// Check if envdrift is in PATH
+	if path, err := exec.LookPath("envdrift"); err == nil {
+		return path, nil
 	}
 
-	for _, candidate := range candidates {
-		if path, err := exec.LookPath(candidate); err == nil {
-			return path, nil
+	// Try python3 -m envdrift
+	if python, err := exec.LookPath("python3"); err == nil {
+		cmd := exec.Command(python, "-m", "envdrift", "--version")
+		if cmd.Run() == nil {
+			return python, nil // Will need special handling
 		}
 	}
 
 	// Try python -m envdrift
-	if python, err := exec.LookPath("python3"); err == nil {
-		cmd := exec.Command(python, "-m", "envdrift", "--version")
-		if cmd.Run() == nil {
-			return "python3 -m envdrift", nil
-		}
-	}
 	if python, err := exec.LookPath("python"); err == nil {
 		cmd := exec.Command(python, "-m", "envdrift", "--version")
 		if cmd.Run() == nil {
-			return "python -m envdrift", nil
+			return python, nil
 		}
 	}
 
 	return "", exec.ErrNotFound
-}
-
-// findDotenvx locates the dotenvx executable.
-func findDotenvx() (string, error) {
-	candidates := []string{
-		"dotenvx",
-		"/usr/local/bin/dotenvx",
-		"/opt/homebrew/bin/dotenvx",
-	}
-
-	for _, candidate := range candidates {
-		if path, err := exec.LookPath(candidate); err == nil {
-			return path, nil
-		}
-	}
-
-	// Fallback to npx
-	if npx, err := exec.LookPath("npx"); err == nil {
-		cmd := exec.Command(npx, "dotenvx", "--version")
-		if cmd.Run() == nil {
-			return npxMarker, nil
-		}
-	}
-
-	return "", exec.ErrNotFound
-}
-
-// GetDotenvxPath returns the path to dotenvx (for backwards compatibility).
-func GetDotenvxPath() string {
-	path, err := findDotenvx()
-	if err != nil {
-		return ""
-	}
-	if path == npxMarker {
-		return "npx dotenvx"
-	}
-	return path
 }

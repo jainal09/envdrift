@@ -3,6 +3,7 @@ package guardian
 
 import (
 	"context"
+	"fmt"
 	"log"
 	"os"
 	"time"
@@ -13,6 +14,8 @@ import (
 	"github.com/jainal09/envdrift-agent/internal/notify"
 	"github.com/jainal09/envdrift-agent/internal/watcher"
 )
+
+var errNoEnvdrift = fmt.Errorf("envdrift not found. Install it: pip install envdrift")
 
 // Guardian orchestrates file watching and auto-encryption
 type Guardian struct {
@@ -44,9 +47,9 @@ func New(cfg *config.Config) (*Guardian, error) {
 
 // Start begins the guardian loop
 func (g *Guardian) Start(ctx context.Context) error {
-	// Check dotenvx availability
-	if !encrypt.IsDotenvxAvailable() {
-		return errNoDotenvx
+	// Check envdrift availability
+	if !encrypt.IsEnvdriftAvailable() {
+		return errNoEnvdrift
 	}
 
 	log.Println("EnvDrift Guardian starting...")
