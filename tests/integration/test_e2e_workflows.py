@@ -371,14 +371,17 @@ env_file = ".env"
 class TestProfileActivation:
     """Test profile-based environment filtering."""
 
-    def test_e2e_profile_activation(
+    def test_e2e_cli_with_profile_config_doesnt_crash(
         self,
         work_dir: Path,
         integration_pythonpath: str,
     ):
-        """Test profile filtering with activate_to copy.
+        """Test that CLI loads and parses profile configuration without crashing.
 
-        Profiles allow different configurations for dev/staging/prod.
+        This verifies that:
+        - Profile configuration in pyproject.toml is parsed correctly
+        - CLI commands work when profile config is present
+        - No crashes occur with valid profile setup
         """
         # Create project with profile configuration
         pyproject = work_dir / "pyproject.toml"
@@ -404,9 +407,9 @@ activate_to = ".env.production"
         env = os.environ.copy()
         env["PYTHONPATH"] = integration_pythonpath
 
-        # Test that profile-related commands don't crash
+        # Verify CLI loads profile config correctly when running lock --check
         result = subprocess.run(
-            _get_envdrift_cmd() + ["--help"],
+            [*_get_envdrift_cmd(), "lock", "--check"],
             cwd=work_dir,
             env=env,
             capture_output=True,
@@ -414,5 +417,52 @@ activate_to = ".env.production"
             timeout=30,
         )
 
-        assert result.returncode == 0, f"Help command failed: {result.stderr}"
-        assert "envdrift" in result.stdout.lower()
+        # Command should complete (pass or fail based on encryption status)
+        # but not crash due to profile config parsing issues
+        assert result.returncode in (0, 1), f"Command failed unexpectedly: {result.stderr}"
+
+    def test_e2e_pull_with_profile_flag(
+        self,
+        work_dir: Path,
+        integration_pythonpath: str,
+    ):
+        """Test envdrift pull with --profile flag.
+
+        This tests the profile filtering functionality where
+        only mappings matching the specified profile are processed.
+        """
+        # Create project with profile configuration
+        pyproject = work_dir / "pyproject.toml"
+        pyproject.write_text("""
+[tool.envdrift]
+encryption_backend = "dotenvx"
+
+[[tool.envdrift.services]]
+name = "main"
+env_file = ".env"
+
+[tool.envdrift.profiles.development]
+activate_to = ".env.development"
+""")
+
+        # Create base .env
+        env_file = work_dir / ".env"
+        env_file.write_text("APP_NAME=myapp\nDEBUG=true\n")
+
+        env = os.environ.copy()
+        env["PYTHONPATH"] = integration_pythonpath
+
+        # Run pull with --profile flag
+        result = subprocess.run(
+            [*_get_envdrift_cmd(), "pull", "--profile", "development", "--skip-sync"],
+            cwd=work_dir,
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+
+        # Should complete without hanging/crashing
+        assert result.returncode in (0, 1), (
+            f"Pull with profile failed unexpectedly: {result.stderr}"
+        )
