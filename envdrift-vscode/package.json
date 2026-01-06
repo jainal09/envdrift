@@ -1,9 +1,15 @@
 {
   "name": "envdrift-vscode",
   "displayName": "EnvDrift - Auto Encrypt .env Files",
-  "description": "Automatically encrypt .env files when closed using dotenvx",
+  "description": "Automatically encrypt .env files when closed using envdrift",
   "version": "0.1.0",
   "publisher": "envdrift",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/jainal09/envdrift"
+  },
+  "homepage": "https://github.com/jainal09/envdrift/tree/main/envdrift-vscode",
   "engines": {
     "vscode": "^1.85.0"
   },
@@ -50,20 +56,25 @@
         },
         "envdrift.patterns": {
           "type": "array",
-          "default": [".env*"],
-          "items": { "type": "string" },
+          "default": [
+            ".env*"
+          ],
+          "items": {
+            "type": "string"
+          },
           "description": "File patterns to watch for encryption"
         },
         "envdrift.exclude": {
           "type": "array",
-          "default": [".env.example", ".env.sample", ".env.keys"],
-          "items": { "type": "string" },
+          "default": [
+            ".env.example",
+            ".env.sample",
+            ".env.keys"
+          ],
+          "items": {
+            "type": "string"
+          },
           "description": "File patterns to exclude from encryption"
-        },
-        "envdrift.dotenvxPath": {
-          "type": "string",
-          "default": "",
-          "description": "Custom path to dotenvx binary (leave empty for auto-detect)"
         },
         "envdrift.showNotifications": {
           "type": "boolean",
@@ -77,8 +88,7 @@
     "vscode:prepublish": "npm run compile",
     "compile": "tsc -p ./",
     "watch": "tsc -watch -p ./",
-    "lint": "eslint src --ext ts",
-    "test": "node ./out/test/runTest.js"
+    "lint": "eslint src --ext ts"
   },
   "devDependencies": {
     "@types/node": "^20.0.0",

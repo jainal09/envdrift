@@ -2,22 +2,28 @@ import * as vscode from 'vscode';
 import * as cp from 'child_process';
 import * as path from 'path';
 
-/**
- * Find envdrift CLI
- */
-export async function findEnvdrift(): Promise<string | null> {
-    const candidates = [
-        'envdrift',
-        'python -m envdrift',
-        'python3 -m envdrift',
-    ];
+const ENCRYPTION_TIMEOUT_MS = 30000; // 30 second timeout
 
-    for (const candidate of candidates) {
-        try {
-            await execCommand(`${candidate} --version`);
-            return candidate;
-        } catch {
-            // Try next candidate
+/**
+ * Find envdrift CLI and return executable info
+ */
+export async function findEnvdrift(): Promise<{ executable: string; args: string[] } | null> {
+    // Try envdrift directly
+    if (await commandExists('envdrift')) {
+        return { executable: 'envdrift', args: [] };
+    }
+
+    // Try python3 -m envdrift
+    if (await commandExists('python3')) {
+        if (await testPythonModule('python3', 'envdrift')) {
+            return { executable: 'python3', args: ['-m', 'envdrift'] };
+        }
+    }
+
+    // Try python -m envdrift
+    if (await commandExists('python')) {
+        if (await testPythonModule('python', 'envdrift')) {
+            return { executable: 'python', args: ['-m', 'envdrift'] };
         }
     }
 
@@ -25,20 +31,45 @@ export async function findEnvdrift(): Promise<string | null> {
 }
 
 /**
- * Check if a file is already encrypted
+ * Check if a command exists
+ */
+async function commandExists(cmd: string): Promise<boolean> {
+    return new Promise((resolve) => {
+        const proc = cp.spawn(cmd, ['--version'], { stdio: 'ignore' });
+        proc.on('error', () => resolve(false));
+        proc.on('close', (code) => resolve(code === 0));
+    });
+}
+
+/**
+ * Test if a Python module can be run
+ */
+async function testPythonModule(python: string, module: string): Promise<boolean> {
+    return new Promise((resolve) => {
+        const proc = cp.spawn(python, ['-m', module, '--version'], { stdio: 'ignore' });
+        proc.on('error', () => resolve(false));
+        proc.on('close', (code) => resolve(code === 0));
+    });
+}
+
+/**
+ * Check if a file is already encrypted (dotenvx format)
  */
 export async function isEncrypted(filePath: string): Promise<boolean> {
     try {
         const document = await vscode.workspace.openTextDocument(filePath);
         const content = document.getText();
 
+        // Check for dotenvx encryption markers
         const lines = content.split('\n');
         for (const line of lines) {
             const trimmed = line.trim();
-            if (trimmed.startsWith('#')) {
+            // Skip empty lines and comments
+            if (!trimmed || trimmed.startsWith('#')) {
                 continue;
             }
-            if (trimmed.toLowerCase().includes('encrypted:')) {
+            // dotenvx uses "encrypted:" prefix in values
+            if (/=.*encrypted:/i.test(trimmed)) {
                 return true;
             }
         }
@@ -60,8 +91,8 @@ export async function encryptFile(filePath: string): Promise<{ success: boolean;
         };
     }
 
-    const envdrift = await findEnvdrift();
-    if (!envdrift) {
+    const envdriftInfo = await findEnvdrift();
+    if (!envdriftInfo) {
         return {
             success: false,
             message: 'envdrift not found. Install it: pip install envdrift',
@@ -72,8 +103,9 @@ export async function encryptFile(filePath: string): Promise<{ success: boolean;
     const fileName = path.basename(filePath);
 
     try {
-        // Use envdrift lock - respects envdrift.toml, vault, ephemeral keys
-        await execCommand(`${envdrift} lock "${fileName}"`, cwd);
+        // Use spawn with args array to prevent command injection
+        const args = [...envdriftInfo.args, 'lock', fileName];
+        await spawnWithTimeout(envdriftInfo.executable, args, cwd, ENCRYPTION_TIMEOUT_MS);
 
         return {
             success: true,
@@ -88,17 +120,39 @@ export async function encryptFile(filePath: string): Promise<{ success: boolean;
 }
 
 /**
- * Execute a shell command
+ * Execute a command with timeout using spawn (no shell = no injection)
  */
-function execCommand(command: string, cwd?: string): Promise<string> {
+function spawnWithTimeout(
+    command: string,
+    args: string[],
+    cwd: string,
+    timeoutMs: number
+): Promise<string> {
     return new Promise((resolve, reject) => {
-        cp.exec(command, { cwd }, (error, stdout, stderr) => {
-            if (error) {
-                reject(new Error(stderr || error.message));
-            } else {
+        const proc = cp.spawn(command, args, { cwd, stdio: 'pipe' });
+        let stdout = '';
+        let stderr = '';
+
+        const timeout = setTimeout(() => {
+            proc.kill('SIGTERM');
+            reject(new Error(`Command timed out after ${timeoutMs / 1000}s`));
+        }, timeoutMs);
+
+        proc.stdout?.on('data', (data) => { stdout += data.toString(); });
+        proc.stderr?.on('data', (data) => { stderr += data.toString(); });
+
+        proc.on('error', (err) => {
+            clearTimeout(timeout);
+            reject(err);
+        });
+
+        proc.on('close', (code) => {
+            clearTimeout(timeout);
+            if (code === 0) {
                 resolve(stdout);
+            } else {
+                reject(new Error(stderr || `Process exited with code ${code}`));
             }
         });
     });
 }
-

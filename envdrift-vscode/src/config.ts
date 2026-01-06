@@ -7,7 +7,6 @@ export interface EnvDriftConfig {
     enabled: boolean;
     patterns: string[];
     exclude: string[];
-    dotenvxPath: string;
     showNotifications: boolean;
 }
 
@@ -20,7 +19,6 @@ export function getConfig(): EnvDriftConfig {
         enabled: config.get<boolean>('enabled', true),
         patterns: config.get<string[]>('patterns', ['.env*']),
         exclude: config.get<string[]>('exclude', ['.env.example', '.env.sample', '.env.keys']),
-        dotenvxPath: config.get<string>('dotenvxPath', ''),
         showNotifications: config.get<boolean>('showNotifications', true),
     };
 }
@@ -31,8 +29,9 @@ export function getConfig(): EnvDriftConfig {
 export function matchesPatterns(fileName: string, patterns: string[]): boolean {
     const baseName = fileName.split('/').pop() || fileName;
     return patterns.some(pattern => {
-        // Convert glob-like pattern to regex
-        const regex = new RegExp('^' + pattern.replace(/\*/g, '.*') + '$');
+        // Escape regex special chars except *, then convert * to .*
+        const escaped = pattern.replace(/[.+?^${}()|[\]\\]/g, '\\$&');
+        const regex = new RegExp('^' + escaped.replace(/\*/g, '.*') + '$');
         return regex.test(baseName);
     });
 }

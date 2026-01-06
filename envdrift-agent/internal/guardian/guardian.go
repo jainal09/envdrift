@@ -152,5 +152,3 @@ func (g *Guardian) checkIdleFiles() {
 type guardianError string
 
 func (e guardianError) Error() string { return string(e) }
-
-const errNoDotenvx = guardianError("dotenvx not found - please install it first (https://dotenvx.com)")

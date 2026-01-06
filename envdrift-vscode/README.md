@@ -6,15 +6,16 @@ Automatically encrypt `.env` files when you close them in VS Code.
 
 - 🔐 **Auto-Encryption** - Encrypts `.env` files when closed
 - 📊 **Status Bar** - Shows encryption status with toggle
-- ⚙️ **Configurable** - Custom patterns, exclusions, and dotenvx path
+- ⚙️ **Configurable** - Custom patterns and exclusions
 - 🔔 **Notifications** - Optional success/failure alerts
 
 ## Requirements
 
-- [dotenvx](https://dotenvx.com/) must be installed:
-  ```bash
-  npm install -g @dotenvx/dotenvx
-  ```
+[envdrift](https://github.com/jainal09/envdrift) must be installed:
+
+```bash
+pip install envdrift
+```
 
 ## Extension Settings
 
@@ -23,7 +24,6 @@ Automatically encrypt `.env` files when you close them in VS Code.
 | `envdrift.enabled` | `true` | Enable auto-encryption |
 | `envdrift.patterns` | `[".env*"]` | File patterns to watch |
 | `envdrift.exclude` | `[".env.example", ...]` | Patterns to exclude |
-| `envdrift.dotenvxPath` | `""` | Custom dotenvx path |
 | `envdrift.showNotifications` | `true` | Show notifications |
 
 ## Commands
@@ -38,11 +38,12 @@ Automatically encrypt `.env` files when you close them in VS Code.
 1. Open a `.env` file in VS Code
 2. Make your changes
 3. Close the file (or close VS Code)
-4. EnvDrift automatically encrypts it using dotenvx
+4. EnvDrift automatically encrypts it using `envdrift lock`
 
 ## Status Bar
 
 The status bar shows:
+
 - 🔐 **Lock icon** - Auto-encryption is enabled
 - 🔓 **Unlock icon** - Auto-encryption is disabled
 
