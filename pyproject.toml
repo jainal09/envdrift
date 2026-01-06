@@ -80,6 +80,12 @@ dev = [
     "mkdocs-material>=9.5",
 ]
 
+# Integration test dependencies (requires Docker)
+test-integration = [
+    "envdrift[dev,vault]",
+    "docker>=7.0.0",
+]
+
 # All optional dependencies
 all = ["envdrift[vault,precommit]"]
 
@@ -151,6 +157,11 @@ testpaths = ["tests"]
 pythonpath = ["src"]
 markers = [
     "integration: Integration tests that download dotenvx/sops binaries.",
+    "aws: Tests requiring LocalStack (AWS Secrets Manager).",
+    "vault: Tests requiring HashiCorp Vault container.",
+    "azure: Tests requiring Lowkey Vault (Azure Key Vault emulator).",
+    "gcp: Tests requiring GCP credentials (skipped by default).",
+    "slow: Tests that take >10 seconds.",
 ]
 addopts = [
     "--strict-markers",
