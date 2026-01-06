@@ -34,8 +34,6 @@ class _EncryptTask:
     mapping: ServiceMapping
     env_file: Path
     env_keys_file: Path
-    ephemeral_key: str | None = None  # Key value for ephemeral mode
-    ephemeral_key_name: str | None = None  # Key name (e.g., DOTENV_PRIVATE_KEY_PRODUCTION)
 
 
 def load_sync_config_and_client(
