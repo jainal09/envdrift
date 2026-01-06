@@ -59,6 +59,65 @@ envdrift agent list
 envdrift agent status
 ```
 
+### CLI-Agent Communication
+
+Two approaches for registering directories with the agent:
+
+#### Option A: CLI Flag
+
+```bash
+# Add --watch flag to enable agent watching
+envdrift init --watch
+envdrift lock --watch
+
+# Or dedicated command
+envdrift watch enable
+envdrift watch disable
+```
+
+#### Option B: Config Setting (Preferred)
+
+```toml
+# envdrift.toml
+[guardian]
+enabled = true        # Registers this directory with the agent
+idle_timeout = "5m"
+notify = true
+```
+
+When `[guardian].enabled = true`:
+1. CLI automatically calls agent to register directory
+2. Agent reads settings from project's `envdrift.toml`
+3. No separate registration step needed
+
+#### Communication Mechanism
+
+```
+┌──────────────────┐     IPC/File      ┌──────────────────┐
+│   envdrift CLI   │ ◄──────────────► │  envdrift-agent  │
+│   (Python)       │                   │  (Go)            │
+└──────────────────┘                   └──────────────────┘
+
+Options:
+1. Unix socket: ~/.envdrift/agent.sock
+2. File-based: ~/.envdrift/projects.json (agent watches)
+3. Signal: Agent reloads config on SIGHUP
+```
+
+**Recommended**: File-based (`projects.json`) - simplest, cross-platform
+
+```json
+// ~/.envdrift/projects.json
+{
+  "projects": [
+    {"path": "/Users/dev/myapp", "added": "2025-01-01T00:00:00Z"},
+    {"path": "/Users/dev/api", "added": "2025-01-02T00:00:00Z"}
+  ]
+}
+```
+
+Agent uses `fsnotify` to watch this file and auto-reload when CLI modifies it.
+
 ---
 
 ## Phase 2B: CLI Install Command
