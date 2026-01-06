@@ -110,8 +110,30 @@ Options:
 
 **Recommended**: File-based (`projects.json`) - simplest, cross-platform
 
+### Central Registry Architecture
+
+**One `projects.json` per machine** at `~/.envdrift/projects.json` acts as the central
+registry of all projects the agent should watch on this machine.
+
+```text
+Machine (your laptop)
+│
+├── ~/.envdrift/
+│   └── projects.json          ← CENTRAL registry (1 per machine)
+│
+├── ~/myapp/
+│   └── envdrift.toml          ← Project-specific settings
+│
+├── ~/api-server/
+│   └── envdrift.toml
+│
+└── ~/frontend/
+    └── envdrift.toml
+```
+
+### projects.json Format
+
 ```json
-// ~/.envdrift/projects.json
 {
   "projects": [
     {"path": "/Users/dev/myapp", "added": "2025-01-01T00:00:00Z"},
@@ -120,7 +142,21 @@ Options:
 }
 ```
 
-Agent uses `fsnotify` to watch this file and auto-reload when CLI modifies it.
+### How It Works
+
+1. **User runs** `envdrift init --watch` or sets `[guardian].enabled = true`
+2. **CLI adds** the project path to `~/.envdrift/projects.json`
+3. **Agent watches** `projects.json` for changes (via fsnotify)
+4. **Agent reads** each project's `envdrift.toml` for patterns/excludes
+5. **Agent encrypts** based on each project's individual config
+
+### Benefits
+
+- ✅ **One file to manage** - no config sprawl
+- ✅ **Agent only watches registered projects** - no CPU spike
+- ✅ **Cross-platform** - JSON file works everywhere
+- ✅ **Hot reload** - Agent auto-updates when projects.json changes
+
 
 ---
 
