@@ -1,6 +1,6 @@
 # EnvDrift Guard Command Specification
 
-> **Status:** Draft
+> **Status:** Implemented (Phase 1-4 Complete)
 > **Author:** Claude
 > **Created:** 2025-01-06
 > **Last Updated:** 2025-01-06
@@ -1771,6 +1771,9 @@ entropy_threshold = 4.5
 # Minimum severity to cause non-zero exit
 # Options: "critical", "high", "medium", "low"
 fail_on_severity = "high"
+
+# Enable trufflehog secret verification (checks if secrets are valid)
+verify_secrets = false
 
 # Paths to ignore (glob patterns)
 ignore_paths = [

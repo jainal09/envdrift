@@ -5,6 +5,15 @@ The guard command provides defense-in-depth by detecting:
 - Common secret patterns (API keys, tokens, passwords)
 - High-entropy strings (potential secrets)
 - Previously committed secrets (in git history, with --history)
+
+Configuration can be set in envdrift.toml:
+    [guard]
+    scanners = ["native", "gitleaks"]  # or ["native", "gitleaks", "trufflehog"]
+    auto_install = true
+    include_history = false
+    check_entropy = false
+    fail_on_severity = "high"
+    ignore_paths = ["tests/**", "*.test.py"]
 """
 
 from __future__ import annotations
@@ -15,6 +24,7 @@ from typing import Annotated
 import typer
 from rich.console import Console
 
+from envdrift.config import load_config
 from envdrift.scanner.base import FindingSeverity
 from envdrift.scanner.engine import GuardConfig, ScanEngine
 from envdrift.scanner.output import format_json, format_rich, format_sarif
@@ -116,6 +126,15 @@ def guard(
             help="Show detailed output including scanner info",
         ),
     ] = False,
+    # Config file
+    config_file: Annotated[
+        Path | None,
+        typer.Option(
+            "--config",
+            "-c",
+            help="Path to envdrift.toml config file (auto-detected if not specified)",
+        ),
+    ] = None,
 ) -> None:
     """Scan for unencrypted secrets and policy violations.
 
@@ -148,7 +167,13 @@ def guard(
             console.print(f"[red]Error:[/red] Path not found: {path}")
             raise typer.Exit(code=1)
 
-    # Parse fail_on severity
+    # Load configuration from envdrift.toml (if available)
+    file_config = load_config(config_file)
+    guard_cfg = file_config.guard
+
+    # Determine fail_on severity (CLI overrides config)
+    # Note: typer doesn't distinguish between explicit arg and default,
+    # so we always use CLI value (which defaults to "high")
     try:
         fail_severity = FindingSeverity(fail_on.lower())
     except ValueError:
@@ -158,14 +183,26 @@ def guard(
         )
         raise typer.Exit(code=1)
 
-    # Build configuration
+    # Determine which scanners to use
+    # CLI flags override config file settings
+    use_gitleaks_final = gitleaks and not native_only
+    use_trufflehog_final = trufflehog and not native_only
+
+    # If native_only is not set and user didn't explicitly enable trufflehog,
+    # check if config has trufflehog enabled
+    if not native_only and not trufflehog and "trufflehog" in guard_cfg.scanners:
+        use_trufflehog_final = True
+
+    # Build configuration merging file config with CLI overrides
     config = GuardConfig(
         use_native=True,
-        use_gitleaks=gitleaks and not native_only,
-        use_trufflehog=trufflehog and not native_only,
+        use_gitleaks=use_gitleaks_final,
+        use_trufflehog=use_trufflehog_final,
         auto_install=auto_install,
-        include_git_history=history,
-        check_entropy=entropy,
+        include_git_history=history or guard_cfg.include_history,
+        check_entropy=entropy or guard_cfg.check_entropy,
+        entropy_threshold=guard_cfg.entropy_threshold,
+        ignore_paths=guard_cfg.ignore_paths,
         fail_on_severity=fail_severity,
     )
 
