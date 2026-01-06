@@ -16,11 +16,13 @@ from envdrift.scanner.base import (
     ScanResult,
 )
 from envdrift.scanner.engine import GuardConfig, ScanEngine
+from envdrift.scanner.gitleaks import GitleaksScanner
 from envdrift.scanner.native import NativeScanner
 
 __all__ = [
     "AggregatedScanResult",
     "FindingSeverity",
+    "GitleaksScanner",
     "GuardConfig",
     "NativeScanner",
     "ScanEngine",
