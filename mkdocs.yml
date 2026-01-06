@@ -60,6 +60,9 @@ nav:
       - hook: cli/hook.md
       - version: cli/version.md
   - Guides:
+      - Quick Start: getting-started/quickstart.md
+      - Agent Setup: guides/agent-setup.md
+      - VS Code Extension: guides/vscode-extension.md
       - Vault Sync: guides/vault-sync.md
       - Encryption: guides/encryption.md
       - Schema Best Practices: guides/schema.md
@@ -71,6 +74,7 @@ nav:
   - Reference:
       - Configuration: reference/configuration.md
       - Python API: reference/api.md
+      - Agent Specification (Phase 2): agent-spec.md
       - Glossary: glossary.md
   - Support:
       - Troubleshooting: support/troubleshooting.md
