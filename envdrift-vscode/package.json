@@ -1,0 +1,101 @@
+{
+  "name": "envdrift-vscode",
+  "displayName": "EnvDrift - Auto Encrypt .env Files",
+  "description": "Automatically encrypt .env files when closed using envdrift",
+  "version": "0.1.0",
+  "publisher": "envdrift",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/jainal09/envdrift"
+  },
+  "homepage": "https://github.com/jainal09/envdrift/tree/main/envdrift-vscode",
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "keywords": [
+    "env",
+    "dotenv",
+    "encrypt",
+    "dotenvx",
+    "security"
+  ],
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "main": "./out/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "envdrift.enable",
+        "title": "EnvDrift: Enable Auto-Encryption"
+      },
+      {
+        "command": "envdrift.disable",
+        "title": "EnvDrift: Disable Auto-Encryption"
+      },
+      {
+        "command": "envdrift.encryptNow",
+        "title": "EnvDrift: Encrypt Current File"
+      },
+      {
+        "command": "envdrift.showStatus",
+        "title": "EnvDrift: Show Status"
+      }
+    ],
+    "configuration": {
+      "title": "EnvDrift",
+      "properties": {
+        "envdrift.enabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "Enable automatic encryption of .env files on close"
+        },
+        "envdrift.patterns": {
+          "type": "array",
+          "default": [
+            ".env*"
+          ],
+          "items": {
+            "type": "string"
+          },
+          "description": "File patterns to watch for encryption"
+        },
+        "envdrift.exclude": {
+          "type": "array",
+          "default": [
+            ".env.example",
+            ".env.sample",
+            ".env.keys"
+          ],
+          "items": {
+            "type": "string"
+          },
+          "description": "File patterns to exclude from encryption"
+        },
+        "envdrift.showNotifications": {
+          "type": "boolean",
+          "default": true,
+          "description": "Show notifications when files are encrypted"
+        }
+      }
+    }
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run compile",
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "lint": "eslint src --ext ts"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "@types/vscode": "^1.85.0",
+    "@typescript-eslint/eslint-plugin": "^8.0.0",
+    "@typescript-eslint/parser": "^8.0.0",
+    "eslint": "^9.0.0",
+    "typescript": "^5.3.0"
+  }
+}
