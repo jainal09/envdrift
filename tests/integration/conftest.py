@@ -180,7 +180,8 @@ def vault_client(vault_endpoint: str):
 
     client = hvac.Client(url=vault_endpoint, token=VAULT_ROOT_TOKEN)
 
-    # Ensure KV v2 is enabled at secret/ (may already be enabled)
+    # Ensure KV v2 is enabled at secret/ path.
+    # InvalidRequest is raised if KV v2 is already enabled, which is expected.
     with contextlib.suppress(hvac.exceptions.InvalidRequest):
         client.sys.enable_secrets_engine(
             backend_type="kv",
@@ -251,8 +252,8 @@ def all_services_env(
     azure_test_env: dict[str, str],
 ) -> dict[str, str]:
     """Combined environment with all service configurations."""
-    env = os.environ.copy()
-    env.update(aws_test_env)
+    # aws_test_env already contains os.environ; layer service configs on top
+    env = aws_test_env.copy()
     env.update(vault_test_env)
     env.update(azure_test_env)
     return env
@@ -280,6 +281,12 @@ def work_dir(tmp_path: Path) -> Path:
 @pytest.fixture
 def git_repo(work_dir: Path) -> Path:
     """Initialize a git repository in the work directory."""
+    # Check git availability
+    try:
+        subprocess.run(["git", "--version"], capture_output=True, check=True)
+    except (FileNotFoundError, subprocess.CalledProcessError):
+        pytest.skip("git not available")
+
     subprocess.run(
         ["git", "init"],
         cwd=work_dir,
