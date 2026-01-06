@@ -147,8 +147,3 @@ func (g *Guardian) checkIdleFiles() {
 		delete(g.lastMod, path)
 	}
 }
-
-// Error types
-type guardianError string
-
-func (e guardianError) Error() string { return string(e) }
