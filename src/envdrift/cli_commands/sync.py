@@ -618,10 +618,9 @@ def pull(
         from envdrift.sync.result import SyncAction
 
         for service_result in sync_result.services:
-            if (
-                service_result.action == SyncAction.EPHEMERAL
-                and service_result.vault_key_value
-            ):
+            action = getattr(service_result, "action", None)
+            vault_key_value = getattr(service_result, "vault_key_value", None)
+            if action == SyncAction.EPHEMERAL and vault_key_value:
                 key_name = f"DOTENV_PRIVATE_KEY_{service_result.folder_path.name.upper()}"
                 # Find the matching mapping to get the effective environment
                 for m in filtered_mappings:
@@ -630,7 +629,7 @@ def pull(
                         break
                 ephemeral_keys_map[service_result.folder_path] = (
                     key_name,
-                    service_result.vault_key_value,
+                    vault_key_value,
                 )
 
     # === STEP 2: DECRYPT ENV FILES ===
