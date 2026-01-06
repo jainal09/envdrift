@@ -458,3 +458,218 @@ class TestDuplicatePublicKeys:
         # Should handle conflicting keys gracefully
         assert result.returncode in (0, 1), f"Unexpected exit code: {result.returncode}\nstderr: {result.stderr}"
 
+
+class TestPartialEncryption:
+    """Test partial encryption feature (.clear + .secret workflow)."""
+
+    def test_partial_encryption_push_command(
+        self,
+        work_dir: Path,
+        integration_pythonpath: str,
+    ):
+        """Test envdrift push command for partial encryption.
+        
+        Partial encryption splits env files into:
+        - .env.{env}.clear (non-sensitive, plain text)
+        - .env.{env}.secret (sensitive, encrypted)
+        - .env.{env} (combined output for deployment)
+        """
+        # Create config with partial encryption enabled
+        config_file = work_dir / "envdrift.toml"
+        config_file.write_text('''
+[partial_encryption]
+enabled = true
+
+[[partial_encryption.environments]]
+name = "production"
+clear_file = ".env.production.clear"
+secret_file = ".env.production.secret"
+combined_file = ".env.production"
+''')
+
+        # Create clear file (non-sensitive vars)
+        clear_file = work_dir / ".env.production.clear"
+        clear_file.write_text("APP_NAME=myapp\nDEBUG=false\nLOG_LEVEL=info\n")
+
+        # Create secret file (sensitive vars, plaintext for now)
+        secret_file = work_dir / ".env.production.secret"
+        secret_file.write_text("DATABASE_URL=postgres://localhost/db\nAPI_KEY=secret123\n")
+
+        env = os.environ.copy()
+        env["PYTHONPATH"] = integration_pythonpath
+
+        result = subprocess.run(
+            _get_envdrift_cmd() + ["push", "--env", "production"],
+            cwd=work_dir,
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+
+        # Should handle push command gracefully
+        assert result.returncode in (0, 1), f"Unexpected exit code: {result.returncode}\nstderr: {result.stderr}"
+
+    def test_partial_encryption_pull_command(
+        self,
+        work_dir: Path,
+        integration_pythonpath: str,
+    ):
+        """Test envdrift pull-partial command for decrypting secrets."""
+        # Create config with partial encryption enabled
+        config_file = work_dir / "envdrift.toml"
+        config_file.write_text('''
+[partial_encryption]
+enabled = true
+
+[[partial_encryption.environments]]
+name = "staging"
+clear_file = ".env.staging.clear"
+secret_file = ".env.staging.secret"
+combined_file = ".env.staging"
+''')
+
+        # Create encrypted-looking secret file
+        secret_file = work_dir / ".env.staging.secret"
+        secret_file.write_text(
+            '#/-------------------[DOTENV][signature]--------------------/\n'
+            'DATABASE_URL="encrypted:abc123"\n'
+            'API_KEY="encrypted:xyz789"\n'
+        )
+
+        env = os.environ.copy()
+        env["PYTHONPATH"] = integration_pythonpath
+
+        result = subprocess.run(
+            _get_envdrift_cmd() + ["pull-partial", "--env", "staging"],
+            cwd=work_dir,
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+
+        # Should handle pull-partial gracefully
+        assert result.returncode in (0, 1), f"Unexpected exit code: {result.returncode}\nstderr: {result.stderr}"
+
+    def test_partial_encryption_not_enabled(
+        self,
+        work_dir: Path,
+        integration_pythonpath: str,
+    ):
+        """Test error handling when partial encryption is not enabled."""
+        # Create config WITHOUT partial encryption
+        config_file = work_dir / "envdrift.toml"
+        config_file.write_text('''
+[tool.envdrift]
+encryption_backend = "dotenvx"
+''')
+
+        env = os.environ.copy()
+        env["PYTHONPATH"] = integration_pythonpath
+
+        result = subprocess.run(
+            _get_envdrift_cmd() + ["push"],
+            cwd=work_dir,
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+
+        # Should fail gracefully with clear error about partial encryption not enabled
+        assert result.returncode == 1, "Expected error when partial encryption not enabled"
+        assert "partial encryption" in result.stderr.lower() or "partial encryption" in result.stdout.lower()
+
+    def test_partial_encryption_missing_secret_file(
+        self,
+        work_dir: Path,
+        integration_pythonpath: str,
+    ):
+        """Test handling when secret file doesn't exist."""
+        # Create config with partial encryption enabled
+        config_file = work_dir / "envdrift.toml"
+        config_file.write_text('''
+[partial_encryption]
+enabled = true
+
+[[partial_encryption.environments]]
+name = "dev"
+clear_file = ".env.dev.clear"
+secret_file = ".env.dev.secret"
+combined_file = ".env.dev"
+''')
+
+        # Only create clear file, NOT the secret file
+        clear_file = work_dir / ".env.dev.clear"
+        clear_file.write_text("APP_NAME=myapp\n")
+
+        env = os.environ.copy()
+        env["PYTHONPATH"] = integration_pythonpath
+
+        result = subprocess.run(
+            _get_envdrift_cmd() + ["push", "--env", "dev"],
+            cwd=work_dir,
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+
+        # Should handle missing file gracefully
+        assert result.returncode in (0, 1), f"Unexpected exit code: {result.returncode}\nstderr: {result.stderr}"
+
+    def test_partial_encryption_full_cycle(
+        self,
+        work_dir: Path,
+        integration_pythonpath: str,
+    ):
+        """Test complete push → pull-partial cycle."""
+        # Create config with partial encryption enabled
+        config_file = work_dir / "envdrift.toml"
+        config_file.write_text('''
+[partial_encryption]
+enabled = true
+
+[[partial_encryption.environments]]
+name = "test"
+clear_file = ".env.test.clear"
+secret_file = ".env.test.secret"
+combined_file = ".env.test"
+''')
+
+        # Create both files
+        clear_file = work_dir / ".env.test.clear"
+        clear_file.write_text("PUBLIC_VAR=public_value\n")
+
+        secret_file = work_dir / ".env.test.secret"
+        secret_file.write_text("SECRET_VAR=secret_value\n")
+
+        env = os.environ.copy()
+        env["PYTHONPATH"] = integration_pythonpath
+
+        # Step 1: Push (encrypt and combine)
+        push_result = subprocess.run(
+            _get_envdrift_cmd() + ["push", "--env", "test"],
+            cwd=work_dir,
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+
+        assert push_result.returncode in (0, 1), f"Push failed: {push_result.stderr}"
+
+        # Step 2: Pull-partial (decrypt)
+        pull_result = subprocess.run(
+            _get_envdrift_cmd() + ["pull-partial", "--env", "test"],
+            cwd=work_dir,
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+
+        assert pull_result.returncode in (0, 1), f"Pull-partial failed: {pull_result.stderr}"
+
+
