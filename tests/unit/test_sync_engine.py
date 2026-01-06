@@ -662,3 +662,127 @@ class TestSyncResult:
 
         assert result.exit_code == 1
         assert result.has_errors
+
+
+class TestSyncEngineEphemeralKeys:
+    """Tests for ephemeral keys mode."""
+
+    def test_ephemeral_mode_fetches_key_but_does_not_write_file(
+        self, mock_vault_client: MagicMock, tmp_path: Path
+    ) -> None:
+        """Test ephemeral mode returns key but doesn't create .env.keys file."""
+        mock_vault_client.get_secret.return_value = SecretValue(
+            name="test-key", value="ephemeral_secret_123"
+        )
+
+        service_dir = tmp_path / "service1"
+        service_dir.mkdir()
+        (service_dir / ".env.production").write_text("DB_URL=encrypted:xyz\n")
+
+        config = SyncConfig(
+            mappings=[
+                ServiceMapping(
+                    secret_name="test-key",
+                    folder_path=service_dir,
+                ),
+            ],
+            ephemeral_keys=True,  # Central ephemeral mode
+        )
+
+        engine = SyncEngine(config=config, vault_client=mock_vault_client)
+        result = engine.sync_all()
+
+        assert result.services[0].action == SyncAction.EPHEMERAL
+        assert result.services[0].vault_key_value == "ephemeral_secret_123"
+        assert not (service_dir / ".env.keys").exists()
+
+    def test_ephemeral_mode_per_mapping_override(
+        self, mock_vault_client: MagicMock, tmp_path: Path
+    ) -> None:
+        """Test per-mapping ephemeral override takes precedence over central."""
+        mock_vault_client.get_secret.return_value = SecretValue(
+            name="test-key", value="secret_value"
+        )
+
+        service_dir = tmp_path / "service1"
+        service_dir.mkdir()
+        (service_dir / ".env.production").write_text("DB_URL=encrypted:xyz\n")
+
+        config = SyncConfig(
+            mappings=[
+                ServiceMapping(
+                    secret_name="test-key",
+                    folder_path=service_dir,
+                    ephemeral_keys=True,  # Override: enable ephemeral for this mapping
+                ),
+            ],
+            ephemeral_keys=False,  # Central: disabled
+        )
+
+        engine = SyncEngine(config=config, vault_client=mock_vault_client)
+        result = engine.sync_all()
+
+        # Per-mapping ephemeral=True should override central False
+        assert result.services[0].action == SyncAction.EPHEMERAL
+        assert not (service_dir / ".env.keys").exists()
+
+    def test_ephemeral_count_in_result(
+        self, mock_vault_client: MagicMock, tmp_path: Path
+    ) -> None:
+        """Test ephemeral_count property in SyncResult."""
+        mock_vault_client.get_secret.return_value = SecretValue(
+            name="test-key", value="secret"
+        )
+
+        for i in range(3):
+            service_dir = tmp_path / f"service{i}"
+            service_dir.mkdir()
+            (service_dir / ".env.production").write_text("DB_URL=encrypted:xyz\n")
+
+        config = SyncConfig(
+            mappings=[
+                ServiceMapping(secret_name="key1", folder_path=tmp_path / "service0"),
+                ServiceMapping(secret_name="key2", folder_path=tmp_path / "service1"),
+                ServiceMapping(secret_name="key3", folder_path=tmp_path / "service2"),
+            ],
+            ephemeral_keys=True,
+        )
+
+        engine = SyncEngine(config=config, vault_client=mock_vault_client)
+        result = engine.sync_all()
+
+        assert result.ephemeral_count == 3
+        assert result.created_count == 0
+
+    def test_ephemeral_mode_skips_decryption_test(
+        self, mock_vault_client: MagicMock, tmp_path: Path
+    ) -> None:
+        """Test that decryption test is skipped in ephemeral mode."""
+        mock_vault_client.get_secret.return_value = SecretValue(
+            name="test-key", value="ephemeral_secret"
+        )
+
+        service_dir = tmp_path / "service"
+        service_dir.mkdir()
+        (service_dir / ".env.production").write_text(
+            'DOTENV_PUBLIC_KEY="xyz"\nSECRET="encrypted:abc"\n'
+        )
+
+        config = SyncConfig(
+            mappings=[
+                ServiceMapping(secret_name="test-key", folder_path=service_dir),
+            ],
+            ephemeral_keys=True,
+        )
+
+        engine = SyncEngine(
+            config=config,
+            vault_client=mock_vault_client,
+            mode=SyncMode(check_decryption=True),  # Enable decryption test
+        )
+        result = engine.sync_all()
+
+        # Should be ephemeral action with no decryption result (skipped)
+        assert result.services[0].action == SyncAction.EPHEMERAL
+        assert result.services[0].decryption_result is None
+

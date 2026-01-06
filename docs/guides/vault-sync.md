@@ -406,6 +406,58 @@ folder_path = "services/prod"
 vault_name = "production-vault"  # Override default
 ```
 
+### Ephemeral Keys Mode
+
+Ephemeral keys mode prevents local storage of `.env.keys` files.
+Keys are fetched from vault on-demand and passed directly to dotenvx via environment variables.
+This is ideal for:
+
+- **CI/CD pipelines** where you don't want keys persisted to disk
+- **Security-sensitive environments** where keys should only exist in memory
+- **Ephemeral workloads** that spin up and down frequently
+
+#### Central Configuration
+
+Enable for all mappings:
+
+```toml
+[vault.sync]
+ephemeral_keys = true  # Never store .env.keys locally
+
+[[vault.sync.mappings]]
+secret_name = "myapp-key"
+folder_path = "."
+```
+
+#### Per-Mapping Configuration
+
+Enable for specific services:
+
+```toml
+[vault.sync]
+# Central: default behavior (store keys locally)
+
+[[vault.sync.mappings]]
+secret_name = "dev-key"
+folder_path = "services/dev"
+# Uses local .env.keys (default)
+
+[[vault.sync.mappings]]
+secret_name = "ci-key"
+folder_path = "services/ci"
+ephemeral_keys = true  # Override: never store locally
+```
+
+#### How It Works
+
+1. `envdrift pull` fetches keys from vault
+2. Keys are passed to dotenvx via `DOTENV_PRIVATE_KEY_*` env vars
+3. Files are decrypted in-place
+4. **No `.env.keys` file is created**
+
+> **Note**: In ephemeral mode, if the vault is unavailable, commands will fail.
+> There is no fallback to local keys.
+
 ### Profile Configuration
 
 Profiles allow multiple environment configurations in a single project (e.g., local development, staging, production).
@@ -730,6 +782,7 @@ This shows what would change without making modifications.
 4. **Use OIDC in CI/CD** - Avoid storing long-lived credentials
 5. **Verify in CI before deploy** - Use `--check-decryption --ci`
 6. **Backup keys** - Store copies in secure location
+7. **Use ephemeral keys in CI/CD** - Set `ephemeral_keys = true` to avoid persisting keys to disk
 
 ## See Also
 

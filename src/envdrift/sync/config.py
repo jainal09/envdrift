@@ -26,6 +26,7 @@ class ServiceMapping:
     environment: str | None = None  # Defaults to profile if set, else "production"
     profile: str | None = None  # Profile name for filtering (e.g., "local", "prod")
     activate_to: Path | None = None  # Path to copy decrypted file when profile is activated
+    ephemeral_keys: bool | None = None  # None = inherit from central SyncConfig
 
     @property
     def effective_environment(self) -> str:
@@ -54,6 +55,7 @@ class SyncConfig:
     default_vault_name: str | None = None
     env_keys_filename: str = ".env.keys"
     max_workers: int | None = None
+    ephemeral_keys: bool = False  # When True, never store .env.keys locally
 
     @classmethod
     def from_file(cls, path: Path) -> SyncConfig:
@@ -146,6 +148,7 @@ class SyncConfig:
                     environment=mapping_data.get("environment"),  # None = use effective_environment
                     profile=mapping_data.get("profile"),
                     activate_to=Path(activate_to) if activate_to else None,
+                    ephemeral_keys=mapping_data.get("ephemeral_keys"),  # None = inherit
                 )
             )
 
@@ -154,11 +157,22 @@ class SyncConfig:
             default_vault_name=data.get("default_vault_name"),
             env_keys_filename=data.get("env_keys_filename", ".env.keys"),
             max_workers=max_workers,
+            ephemeral_keys=data.get("ephemeral_keys", False),
         )
 
     def get_effective_vault_name(self, mapping: ServiceMapping) -> str | None:
         """Get the effective vault name for a mapping (mapping override or default)."""
         return mapping.vault_name or self.default_vault_name
+
+    def get_effective_ephemeral(self, mapping: ServiceMapping) -> bool:
+        """Get effective ephemeral_keys setting for a mapping.
+
+        Returns:
+            True if ephemeral mode is enabled (mapping override or central default).
+        """
+        if mapping.ephemeral_keys is not None:
+            return mapping.ephemeral_keys
+        return self.ephemeral_keys
 
     def filter_by_profile(self, profile: str | None) -> list[ServiceMapping]:
         """

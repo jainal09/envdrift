@@ -65,8 +65,12 @@ class SyncEngine:
             service_result = self._sync_service(mapping)
             result.services.append(service_result)
 
-            # Decryption test if enabled and sync succeeded
-            if self.mode.check_decryption and service_result.action != SyncAction.ERROR:
+            # Decryption test if enabled and sync succeeded (skip for ephemeral mode)
+            if (
+                self.mode.check_decryption
+                and service_result.action != SyncAction.ERROR
+                and service_result.action != SyncAction.EPHEMERAL
+            ):
                 self._progress(f"Testing decryption: {mapping.folder_path}")
                 service_result.decryption_result = self._test_decryption(mapping)
 
@@ -103,6 +107,20 @@ class SyncEngine:
             # Fetch secret from vault
             vault_value = self._fetch_vault_secret(mapping)
             vault_preview = preview_value(vault_value)
+
+            # Check for ephemeral mode - skip local file operations
+            is_ephemeral = self.config.get_effective_ephemeral(mapping)
+            if is_ephemeral:
+                # In ephemeral mode, we don't store keys locally
+                # Just return the key for downstream use
+                return ServiceSyncResult(
+                    secret_name=mapping.secret_name,
+                    folder_path=mapping.folder_path,
+                    action=SyncAction.EPHEMERAL,
+                    message="Ephemeral mode: key fetched from vault (not stored locally)",
+                    vault_value_preview=vault_preview,
+                    vault_key_value=vault_value,  # Pass actual key for downstream use
+                )
 
             # Ensure folder exists
             if not mapping.folder_path.exists():
@@ -142,6 +160,7 @@ class SyncEngine:
                     message="Created new .env.keys file",
                     vault_value_preview=vault_preview,
                 )
+
 
             elif local_value == vault_value:
                 # Values match - skip

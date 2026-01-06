@@ -548,3 +548,89 @@ folder_path = "."
 
         with pytest.raises(SyncConfigError, match="Missing 'secret_name'"):
             SyncConfig.from_toml_file(config_file)
+
+
+class TestSyncConfigEphemeralKeys:
+    """Tests for ephemeral_keys configuration."""
+
+    def test_from_toml_with_central_ephemeral_keys(self) -> None:
+        """Test parsing central ephemeral_keys setting."""
+        data = {
+            "ephemeral_keys": True,
+            "mappings": [
+                {"secret_name": "key", "folder_path": "."},
+            ],
+        }
+
+        config = SyncConfig.from_toml(data)
+
+        assert config.ephemeral_keys is True
+
+    def test_from_toml_with_per_mapping_ephemeral_keys(self) -> None:
+        """Test parsing per-mapping ephemeral_keys setting."""
+        data = {
+            "mappings": [
+                {"secret_name": "key", "folder_path": ".", "ephemeral_keys": True},
+            ],
+        }
+
+        config = SyncConfig.from_toml(data)
+
+        assert config.ephemeral_keys is False  # Central default
+        assert config.mappings[0].ephemeral_keys is True
+
+    def test_get_effective_ephemeral_central(self) -> None:
+        """Test get_effective_ephemeral uses central setting."""
+        config = SyncConfig(ephemeral_keys=True)
+        mapping = ServiceMapping(
+            secret_name="key",
+            folder_path=Path("."),
+            ephemeral_keys=None,  # Inherit
+        )
+
+        result = config.get_effective_ephemeral(mapping)
+
+        assert result is True
+
+    def test_get_effective_ephemeral_mapping_override(self) -> None:
+        """Test per-mapping ephemeral_keys overrides central."""
+        config = SyncConfig(ephemeral_keys=False)
+        mapping = ServiceMapping(
+            secret_name="key",
+            folder_path=Path("."),
+            ephemeral_keys=True,  # Override
+        )
+
+        result = config.get_effective_ephemeral(mapping)
+
+        assert result is True
+
+    def test_get_effective_ephemeral_mapping_explicit_false(self) -> None:
+        """Test per-mapping can explicitly disable ephemeral."""
+        config = SyncConfig(ephemeral_keys=True)
+        mapping = ServiceMapping(
+            secret_name="key",
+            folder_path=Path("."),
+            ephemeral_keys=False,  # Explicit disable
+        )
+
+        result = config.get_effective_ephemeral(mapping)
+
+        assert result is False
+
+    def test_from_toml_file_with_ephemeral_keys(self, tmp_path: Path) -> None:
+        """Test loading ephemeral_keys from TOML file."""
+        config_file = tmp_path / "envdrift.toml"
+        config_file.write_text("""
+[vault.sync]
+ephemeral_keys = true
+
+[[vault.sync.mappings]]
+secret_name = "key"
+folder_path = "."
+""")
+
+        config = SyncConfig.from_toml_file(config_file)
+
+        assert config.ephemeral_keys is True
+
