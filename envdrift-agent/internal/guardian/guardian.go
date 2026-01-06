@@ -22,7 +22,8 @@ type Guardian struct {
 	checkTick time.Duration
 }
 
-// New creates a new Guardian instance
+// New creates a Guardian configured with cfg, initializing its file watcher, last-mod tracking, and a 30-second idle-check interval.
+// It returns an error if the underlying watcher cannot be created.
 func New(cfg *config.Config) (*Guardian, error) {
 	w, err := watcher.New(
 		cfg.Guardian.Patterns,

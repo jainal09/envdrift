@@ -31,7 +31,8 @@ type Watcher struct {
 	lastMod   map[string]time.Time
 }
 
-// New creates a new watcher
+// New creates and returns a Watcher configured with the provided filename include patterns, exclude patterns, and recursion setting.
+// It returns an error if the underlying fsnotify watcher cannot be created.
 func New(patterns, exclude []string, recursive bool) (*Watcher, error) {
 	fsw, err := fsnotify.NewWatcher()
 	if err != nil {
@@ -171,6 +172,8 @@ func (w *Watcher) LastModified(path string) time.Time {
 	return w.lastMod[path]
 }
 
+// expandPath expands a leading "~/" in path to the current user's home directory.
+// If path does not start with "~/", it is returned unchanged.
 func expandPath(path string) string {
 	if strings.HasPrefix(path, "~/") {
 		home, _ := os.UserHomeDir()

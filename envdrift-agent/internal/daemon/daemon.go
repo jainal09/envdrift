@@ -10,7 +10,8 @@ import (
 	"strings"
 )
 
-// Install installs the agent as a system service
+// Install installs the agent as a system service for the current operating system.
+// It returns an error if installation fails or if the platform is unsupported.
 func Install() error {
 	switch runtime.GOOS {
 	case "darwin":
@@ -24,7 +25,8 @@ func Install() error {
 	}
 }
 
-// Uninstall removes the agent from system services
+// Uninstall removes the EnvDrift Guardian agent from system services on the current platform.
+// It delegates to the platform-specific uninstall implementation and returns an error if the operation fails or the platform is unsupported.
 func Uninstall() error {
 	switch runtime.GOOS {
 	case "darwin":
@@ -38,7 +40,8 @@ func Uninstall() error {
 	}
 }
 
-// IsInstalled checks if the agent is installed as a service
+// IsInstalled reports whether the agent is installed as a background service for the current user on the running platform.
+// It returns `true` if the platform-specific service/unit/task is present, `false` otherwise.
 func IsInstalled() bool {
 	switch runtime.GOOS {
 	case "darwin":
@@ -52,7 +55,8 @@ func IsInstalled() bool {
 	}
 }
 
-// IsRunning checks if the agent service is currently running
+// IsRunning reports whether the agent service is currently running on the host.
+// It returns true when the platform-specific runtime indicates the agent is active and false on unsupported platforms.
 func IsRunning() bool {
 	switch runtime.GOOS {
 	case "darwin":
@@ -70,6 +74,9 @@ func IsRunning() bool {
 
 const macOSPlistName = "com.envdrift.guardian.plist"
 
+// launchAgentPath returns the filesystem path to the user's LaunchAgents plist for this daemon.
+// It yields the full path to the plist file under the current user's Home directory (Library/LaunchAgents/com.envdrift.guardian.plist)
+// or an error if the user's home directory cannot be determined.
 func launchAgentPath() (string, error) {
 	home, err := os.UserHomeDir()
 	if err != nil {
@@ -78,6 +85,11 @@ func launchAgentPath() (string, error) {
 	return filepath.Join(home, "Library", "LaunchAgents", macOSPlistName), nil
 }
 
+// installMacOS creates a user LaunchAgent plist for the EnvDrift guardian and loads it with launchctl.
+// 
+// The plist will run the current executable with the "start" argument, configure the agent to run at
+// login and keep alive, and redirect stdout/stderr to /tmp. It returns an error if writing the plist,
+// creating the target directory, obtaining the executable path, or loading the LaunchAgent fails.
 func installMacOS() error {
 	execPath, err := os.Executable()
 	if err != nil {
@@ -122,6 +134,8 @@ func installMacOS() error {
 	return exec.Command("launchctl", "load", plistPath).Run()
 }
 
+// uninstallMacOS removes the per-user LaunchAgent plist for com.envdrift.guardian and attempts to unload it from launchd.
+// It returns any error encountered while resolving the plist path or removing the plist file; unload failures are ignored.
 func uninstallMacOS() error {
 	plistPath, err := launchAgentPath()
 	if err != nil {
@@ -134,6 +148,8 @@ func uninstallMacOS() error {
 	return os.Remove(plistPath)
 }
 
+// isInstalledMacOS reports whether the macOS LaunchAgent plist for EnvDrift Guardian exists.
+// It returns `true` if the plist file exists at the user's ~/Library/LaunchAgents path, `false` if it does not or if the path cannot be determined.
 func isInstalledMacOS() bool {
 	path, err := launchAgentPath()
 	if err != nil {
@@ -143,6 +159,7 @@ func isInstalledMacOS() bool {
 	return err == nil
 }
 
+// isRunningMacOS reports whether the macOS LaunchAgent "com.envdrift.guardian" is currently loaded according to launchctl.
 func isRunningMacOS() bool {
 	cmd := exec.Command("launchctl", "list", "com.envdrift.guardian")
 	return cmd.Run() == nil
@@ -152,6 +169,8 @@ func isRunningMacOS() bool {
 
 const linuxServiceName = "envdrift-guardian.service"
 
+// systemdPath returns the path to the per-user systemd unit file for the service.
+// It yields the full file path under the current user's ~/.config/systemd/user directory, or an error if the user's home directory cannot be determined.
 func systemdPath() (string, error) {
 	home, err := os.UserHomeDir()
 	if err != nil {
@@ -160,6 +179,8 @@ func systemdPath() (string, error) {
 	return filepath.Join(home, ".config", "systemd", "user", linuxServiceName), nil
 }
 
+// installLinux creates a user-level systemd service unit for EnvDrift Guardian, writes it to the user's systemd directory, reloads the user daemon, enables the service, and starts it.
+// It returns an error if determining the executable path, resolving the target path, creating directories, writing the unit file, or starting the service fails.
 func installLinux() error {
 	execPath, err := os.Executable()
 	if err != nil {
@@ -197,6 +218,8 @@ WantedBy=default.target
 	return exec.Command("systemctl", "--user", "start", linuxServiceName).Run()
 }
 
+// uninstallLinux stops and disables the user systemd service and removes its unit file from the user's systemd directory.
+// It returns an error if computing the unit file path or removing the file fails.
 func uninstallLinux() error {
 	_ = exec.Command("systemctl", "--user", "stop", linuxServiceName).Run()
 	_ = exec.Command("systemctl", "--user", "disable", linuxServiceName).Run()
@@ -207,6 +230,8 @@ func uninstallLinux() error {
 	return os.Remove(path)
 }
 
+// isInstalledLinux reports whether the systemd user unit file for the daemon exists at the user's systemd configuration path.
+// It returns `true` if the unit file exists and `false` otherwise.
 func isInstalledLinux() bool {
 	path, err := systemdPath()
 	if err != nil {
@@ -216,13 +241,16 @@ func isInstalledLinux() bool {
 	return err == nil
 }
 
+// isRunningLinux reports whether the Linux user systemd service envdrift-guardian.service is active.
+// It returns true if the service is active, false otherwise.
 func isRunningLinux() bool {
 	cmd := exec.Command("systemctl", "--user", "is-active", linuxServiceName)
 	output, _ := cmd.Output()
 	return strings.TrimSpace(string(output)) == "active"
 }
 
-// --- Windows ---
+// installWindows creates a Windows scheduled task named "EnvDriftGuardian" that runs the current executable with the "start" argument at user logon using limited privileges.
+// It returns an error if the current executable path cannot be determined or if creating the scheduled task via `schtasks` fails.
 
 func installWindows() error {
 	execPath, err := os.Executable()
@@ -241,15 +269,21 @@ func installWindows() error {
 	return cmd.Run()
 }
 
+// uninstallWindows removes the Windows scheduled task named "EnvDriftGuardian".
+// It returns any error encountered while executing the schtasks delete command.
 func uninstallWindows() error {
 	return exec.Command("schtasks", "/delete", "/tn", "EnvDriftGuardian", "/f").Run()
 }
 
+// isInstalledWindows reports whether the "EnvDriftGuardian" scheduled task exists on Windows.
+// It returns true if the scheduled task query succeeds, false otherwise.
 func isInstalledWindows() bool {
 	cmd := exec.Command("schtasks", "/query", "/tn", "EnvDriftGuardian")
 	return cmd.Run() == nil
 }
 
+// isRunningWindows reports whether the current executable is present in the Windows process list.
+// It returns `true` if a process with the same executable name appears in tasklist output, `false` otherwise (including when the executable path cannot be determined).
 func isRunningWindows() bool {
 	// Get our actual executable name
 	execPath, err := os.Executable()

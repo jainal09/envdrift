@@ -75,6 +75,7 @@ var configCmd = &cobra.Command{
 	RunE:  runConfig,
 }
 
+// init registers all subcommands with rootCmd: version, install, uninstall, status, start, stop, and config.
 func init() {
 	rootCmd.AddCommand(versionCmd)
 	rootCmd.AddCommand(installCmd)
@@ -90,6 +91,11 @@ func Execute() error {
 	return rootCmd.Execute()
 }
 
+// runInstall installs the envdrift-agent as a system service and prints progress and status messages.
+//
+// It checks for dotenvx availability, ensures a configuration file exists (creating/saving a default if needed),
+// reports the config path, and invokes daemon.Install. It returns any error encountered during loading or
+// installing the agent; non-fatal failures to save the config are reported to stdout but do not stop installation.
 func runInstall(cmd *cobra.Command, args []string) error {
 	fmt.Println("Installing envdrift-agent...")
 
@@ -117,6 +123,9 @@ func runInstall(cmd *cobra.Command, args []string) error {
 	return nil
 }
 
+// runUninstall removes the agent from system startup, printing progress messages.
+// 
+// It performs the uninstallation and returns an error if the removal fails.
 func runUninstall(cmd *cobra.Command, args []string) error {
 	fmt.Println("Uninstalling envdrift-agent...")
 
@@ -128,6 +137,10 @@ func runUninstall(cmd *cobra.Command, args []string) error {
 	return nil
 }
 
+// runStatus reports whether the agent is installed and running and prints
+// the configured paths for the config file and dotenvx.
+//
+// It writes four status lines to stdout: Installed, Running, Config, and dotenvx, and always returns nil.
 func runStatus(cmd *cobra.Command, args []string) error {
 	installed := daemon.IsInstalled()
 	running := daemon.IsRunning()
@@ -140,6 +153,8 @@ func runStatus(cmd *cobra.Command, args []string) error {
 	return nil
 }
 
+// runStart starts the agent in the foreground and runs the guardian until interrupted.
+// It loads the configuration, creates and starts a guardian, and cancels execution when a SIGINT or SIGTERM is received; returns any error encountered while loading the config, creating the guardian, or starting it.
 func runStart(cmd *cobra.Command, args []string) error {
 	fmt.Println("Starting envdrift-agent in foreground...")
 	fmt.Println("Press Ctrl+C to stop")
@@ -169,6 +184,10 @@ func runStart(cmd *cobra.Command, args []string) error {
 	return g.Start(ctx)
 }
 
+// runStop reports whether the agent is currently running and prints guidance on how to stop it.
+//
+// It prints a stopping header and then either informs the user that the agent is running
+// (suggesting the 'envdrift-agent uninstall' command to stop it) or that the agent is not running.
 func runStop(cmd *cobra.Command, args []string) error {
 	fmt.Println("Stopping envdrift-agent...")
 	// For daemon mode, we'd need to signal the process
@@ -181,6 +200,9 @@ func runStop(cmd *cobra.Command, args []string) error {
 	return nil
 }
 
+// runConfig displays the configuration file path, creates and saves a default
+// configuration if the file is missing, and prints the current configuration
+// settings to stdout. It returns an error if saving or loading the configuration fails.
 func runConfig(cmd *cobra.Command, args []string) error {
 	configPath := config.ConfigPath()
 
