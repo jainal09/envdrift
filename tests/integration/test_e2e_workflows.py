@@ -13,10 +13,10 @@ Test categories:
 
 from __future__ import annotations
 
+import contextlib
 import os
 import shutil
 import subprocess
-import sys
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -51,7 +51,7 @@ class TestPullDecryptWorkflow:
         integration_pythonpath: str,
     ):
         """Test full envdrift pull from vault → decrypt cycle.
-        
+
         This test:
         1. Creates a secret in LocalStack (simulating vault)
         2. Creates a project with pyproject.toml config
@@ -61,7 +61,7 @@ class TestPullDecryptWorkflow:
         # Step 1: Create secret in LocalStack
         secret_name = "e2e-test/pull-decrypt-key"
         secret_value = "DOTENV_PRIVATE_KEY=ec1234567890abcdef"
-        
+
         try:
             aws_secrets_client.create_secret(
                 Name=secret_name,
@@ -110,16 +110,16 @@ env_file = ".env"
 
         # Step 4: Verify results
         # The command should either succeed or fail gracefully
-        assert result.returncode in (0, 1), f"Unexpected exit code: {result.returncode}\nstderr: {result.stderr}"
+        assert result.returncode in (0, 1), (
+            f"Unexpected exit code: {result.returncode}\nstderr: {result.stderr}"
+        )
 
         # Cleanup
-        try:
+        with contextlib.suppress(Exception):
             aws_secrets_client.delete_secret(
                 SecretId=secret_name,
                 ForceDeleteWithoutRecovery=True,
             )
-        except Exception:
-            pass
 
 
 class TestLockPushWorkflow:
@@ -135,7 +135,7 @@ class TestLockPushWorkflow:
         integration_pythonpath: str,
     ):
         """Test full envdrift lock → push cycle.
-        
+
         This test:
         1. Creates a project with .env and .env.keys files
         2. Runs `envdrift lock --check` to verify encryption status
@@ -143,7 +143,7 @@ class TestLockPushWorkflow:
         """
         # Step 1: Create project structure
         secret_name = "e2e-test/lock-push-key"
-        
+
         pyproject = work_dir / "pyproject.toml"
         pyproject.write_text(f'''
 [tool.envdrift]
@@ -179,7 +179,9 @@ env_file = ".env"
 
         # lock --check may return 0 (all encrypted) or 1 (plaintext found)
         # Both are valid outcomes for this test
-        assert result.returncode in (0, 1), f"Unexpected exit code: {result.returncode}\nstderr: {result.stderr}"
+        assert result.returncode in (0, 1), (
+            f"Unexpected exit code: {result.returncode}\nstderr: {result.stderr}"
+        )
 
 
 class TestMonorepoMultiService:
@@ -194,7 +196,7 @@ class TestMonorepoMultiService:
         integration_pythonpath: str,
     ):
         """Test envdrift with multiple services in a monorepo.
-        
+
         This test:
         1. Creates a monorepo structure with multiple services
         2. Each service has its own .env and vault path
@@ -220,25 +222,27 @@ class TestMonorepoMultiService:
                 )
 
         # Step 2: Create monorepo structure
-        services_config = "\n".join([
-            f'''
+        services_config = "\n".join(
+            [
+                f'''
 [[tool.envdrift.services]]
 name = "{name}"
 path = "services/{name}"
 env_file = ".env"
 vault_key_path = "{path}"
 '''
-            for name, path in services.items()
-        ])
+                for name, path in services.items()
+            ]
+        )
 
         pyproject = work_dir / "pyproject.toml"
-        pyproject.write_text(f'''
+        pyproject.write_text(f"""
 [tool.envdrift]
 vault_backend = "aws"
 encryption_backend = "dotenvx"
 
 {services_config}
-''')
+""")
 
         # Create service directories
         for service_name in services:
@@ -261,17 +265,17 @@ encryption_backend = "dotenvx"
         )
 
         # Should not crash
-        assert result.returncode in (0, 1), f"Unexpected exit code: {result.returncode}\nstderr: {result.stderr}"
+        assert result.returncode in (0, 1), (
+            f"Unexpected exit code: {result.returncode}\nstderr: {result.stderr}"
+        )
 
         # Cleanup
         for secret_name in services.values():
-            try:
+            with contextlib.suppress(Exception):
                 aws_secrets_client.delete_secret(
                     SecretId=secret_name,
                     ForceDeleteWithoutRecovery=True,
                 )
-            except Exception:
-                pass
 
 
 class TestCIModeNonInteractive:
@@ -283,7 +287,7 @@ class TestCIModeNonInteractive:
         integration_pythonpath: str,
     ):
         """Test that --ci flag prevents prompts and returns proper exit codes.
-        
+
         In CI mode:
         - No interactive prompts should appear
         - Commands should return non-zero exit codes on failure
@@ -291,7 +295,7 @@ class TestCIModeNonInteractive:
         """
         # Create minimal project
         pyproject = work_dir / "pyproject.toml"
-        pyproject.write_text('''
+        pyproject.write_text("""
 [tool.envdrift]
 vault_backend = "aws"
 vault_key_path = "nonexistent/secret"
@@ -300,7 +304,7 @@ encryption_backend = "dotenvx"
 [[tool.envdrift.services]]
 name = "main"
 env_file = ".env"
-''')
+""")
 
         env_file = work_dir / ".env"
         env_file.write_text("APP_NAME=test\n")
@@ -332,14 +336,14 @@ env_file = ".env"
         """Test that lock --check in CI mode returns non-zero for unencrypted files."""
         # Create project with plaintext .env (not encrypted)
         pyproject = work_dir / "pyproject.toml"
-        pyproject.write_text('''
+        pyproject.write_text("""
 [tool.envdrift]
 encryption_backend = "dotenvx"
 
 [[tool.envdrift.services]]
 name = "main"
 env_file = ".env"
-''')
+""")
 
         # Create plaintext .env with sensitive-looking content
         env_file = work_dir / ".env"
@@ -359,7 +363,9 @@ env_file = ".env"
 
         # lock --check should return non-zero when plaintext secrets are found
         # This is the expected behavior for CI gates
-        assert result.returncode in (0, 1), f"Unexpected exit code: {result.returncode}\nstderr: {result.stderr}"
+        assert result.returncode in (0, 1), (
+            f"Unexpected exit code: {result.returncode}\nstderr: {result.stderr}"
+        )
 
 
 class TestProfileActivation:
@@ -371,12 +377,12 @@ class TestProfileActivation:
         integration_pythonpath: str,
     ):
         """Test profile filtering with activate_to copy.
-        
+
         Profiles allow different configurations for dev/staging/prod.
         """
         # Create project with profile configuration
         pyproject = work_dir / "pyproject.toml"
-        pyproject.write_text('''
+        pyproject.write_text("""
 [tool.envdrift]
 encryption_backend = "dotenvx"
 
@@ -389,7 +395,7 @@ activate_to = ".env.development"
 
 [tool.envdrift.profiles.production]
 activate_to = ".env.production"
-''')
+""")
 
         # Create base .env
         env_file = work_dir / ".env"
