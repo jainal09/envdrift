@@ -4,39 +4,53 @@ import * as path from 'path';
 import { getConfig } from './config';
 
 /**
- * Find dotenvx binary path - always falls back to npx which auto-installs
+ * Find envdrift CLI - falls back to dotenvx if envdrift not available
  */
-export async function findDotenvx(): Promise<string> {
-    const config = getConfig();
-
-    // Check custom path first
-    if (config.dotenvxPath) {
-        try {
-            await execCommand(`"${config.dotenvxPath}" --version`);
-            return config.dotenvxPath;
-        } catch {
-            // Fall through to other options
-        }
-    }
-
-    // Common locations
-    const candidates = [
-        'dotenvx',
-        '/usr/local/bin/dotenvx',
-        '/opt/homebrew/bin/dotenvx',
+export async function findEnvdrift(): Promise<{ cmd: string; useEnvdrift: boolean }> {
+    // Try envdrift first (respects envdrift.toml, vault, ephemeral keys)
+    const envdriftCandidates = [
+        'envdrift',
+        'python -m envdrift',
+        'python3 -m envdrift',
     ];
 
-    for (const candidate of candidates) {
+    for (const candidate of envdriftCandidates) {
         try {
             await execCommand(`${candidate} --version`);
-            return candidate;
+            return { cmd: candidate, useEnvdrift: true };
         } catch {
             // Try next candidate
         }
     }
 
-    // Always fallback to npx -y which auto-installs if needed
-    return 'npx -y @dotenvx/dotenvx';
+    // Fallback to dotenvx (direct encryption, no envdrift features)
+    const config = getConfig();
+    if (config.dotenvxPath) {
+        try {
+            await execCommand(`"${config.dotenvxPath}" --version`);
+            return { cmd: config.dotenvxPath, useEnvdrift: false };
+        } catch {
+            // Fall through
+        }
+    }
+
+    const dotenvxCandidates = [
+        'dotenvx',
+        '/usr/local/bin/dotenvx',
+        '/opt/homebrew/bin/dotenvx',
+    ];
+
+    for (const candidate of dotenvxCandidates) {
+        try {
+            await execCommand(`${candidate} --version`);
+            return { cmd: candidate, useEnvdrift: false };
+        } catch {
+            // Try next candidate
+        }
+    }
+
+    // Ultimate fallback: npx dotenvx
+    return { cmd: 'npx -y @dotenvx/dotenvx', useEnvdrift: false };
 }
 
 /**
@@ -67,11 +81,9 @@ export async function isEncrypted(filePath: string): Promise<boolean> {
 }
 
 /**
- * Encrypt a .env file using dotenvx
+ * Encrypt a .env file using envdrift lock (preferred) or dotenvx
  */
 export async function encryptFile(filePath: string): Promise<{ success: boolean; message: string }> {
-    const dotenvx = await findDotenvx();
-
     // Check if already encrypted
     if (await isEncrypted(filePath)) {
         return {
@@ -80,16 +92,28 @@ export async function encryptFile(filePath: string): Promise<{ success: boolean;
         };
     }
 
+    const { cmd, useEnvdrift } = await findEnvdrift();
+    const cwd = path.dirname(filePath);
+    const fileName = path.basename(filePath);
+
     try {
-        const command = dotenvx.startsWith('npx ')
-            ? `${dotenvx} encrypt -f "${filePath}"`
-            : `"${dotenvx}" encrypt -f "${filePath}"`;
+        let command: string;
+        if (useEnvdrift) {
+            // Use envdrift lock - respects envdrift.toml, vault, ephemeral keys
+            command = `${cmd} lock "${fileName}"`;
+        } else {
+            // Fallback to direct dotenvx - no envdrift features
+            command = cmd.startsWith('npx ')
+                ? `${cmd} encrypt -f "${filePath}"`
+                : `"${cmd}" encrypt -f "${filePath}"`;
+        }
 
-        await execCommand(command, path.dirname(filePath));
+        await execCommand(command, cwd);
 
+        const method = useEnvdrift ? 'envdrift' : 'dotenvx';
         return {
             success: true,
-            message: `Encrypted: ${path.basename(filePath)}`,
+            message: `Encrypted: ${fileName} (via ${method})`,
         };
     } catch (error) {
         return {
@@ -113,3 +137,4 @@ function execCommand(command: string, cwd?: string): Promise<string> {
         });
     });
 }
+
