@@ -157,7 +157,6 @@ Machine (your laptop)
 - ✅ **Cross-platform** - JSON file works everywhere
 - ✅ **Hot reload** - Agent auto-updates when projects.json changes
 
-
 ---
 
 ## Phase 2B: CLI Install Command
