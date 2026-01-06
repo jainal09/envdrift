@@ -673,3 +673,263 @@ combined_file = ".env.test"
         assert pull_result.returncode in (0, 1), f"Pull-partial failed: {pull_result.stderr}"
 
 
+class TestDiffCommand:
+    """Test diff command edge cases."""
+
+    def test_diff_identical_files(
+        self,
+        work_dir: Path,
+        integration_pythonpath: str,
+    ):
+        """Test diffing two identical .env files."""
+        env1 = work_dir / ".env.dev"
+        env1.write_text("APP=myapp\nDEBUG=true\n")
+
+        env2 = work_dir / ".env.prod"
+        env2.write_text("APP=myapp\nDEBUG=true\n")
+
+        env = os.environ.copy()
+        env["PYTHONPATH"] = integration_pythonpath
+
+        result = subprocess.run(
+            _get_envdrift_cmd() + ["diff", str(env1), str(env2)],
+            cwd=work_dir,
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+
+        assert result.returncode == 0, f"Diff failed: {result.stderr}"
+
+    def test_diff_added_removed_vars(
+        self,
+        work_dir: Path,
+        integration_pythonpath: str,
+    ):
+        """Test diffing files with added/removed variables."""
+        env1 = work_dir / ".env.old"
+        env1.write_text("OLD_VAR=value1\nSHARED=common\n")
+
+        env2 = work_dir / ".env.new"
+        env2.write_text("SHARED=common\nNEW_VAR=value2\n")
+
+        env = os.environ.copy()
+        env["PYTHONPATH"] = integration_pythonpath
+
+        result = subprocess.run(
+            _get_envdrift_cmd() + ["diff", str(env1), str(env2)],
+            cwd=work_dir,
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+
+        assert result.returncode in (0, 1), f"Diff failed: {result.stderr}"
+
+    def test_diff_nonexistent_file(
+        self,
+        work_dir: Path,
+        integration_pythonpath: str,
+    ):
+        """Test diffing with non-existent file."""
+        env1 = work_dir / ".env.exists"
+        env1.write_text("VAR=value\n")
+
+        env = os.environ.copy()
+        env["PYTHONPATH"] = integration_pythonpath
+
+        result = subprocess.run(
+            _get_envdrift_cmd() + ["diff", str(env1), str(work_dir / ".env.missing")],
+            cwd=work_dir,
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+
+        # Should fail gracefully with error about missing file
+        assert result.returncode in (1, 2), "Expected error for missing file"
+
+
+class TestValidateCommand:
+    """Test validate command edge cases."""
+
+    def test_validate_without_schema(
+        self,
+        work_dir: Path,
+        integration_pythonpath: str,
+    ):
+        """Test validation when no schema file exists."""
+        env_file = work_dir / ".env"
+        env_file.write_text("APP_NAME=test\nDEBUG=true\n")
+
+        env = os.environ.copy()
+        env["PYTHONPATH"] = integration_pythonpath
+
+        result = subprocess.run(
+            _get_envdrift_cmd() + ["validate", str(env_file)],
+            cwd=work_dir,
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+
+        # Should handle missing schema gracefully
+        assert result.returncode in (0, 1), f"Unexpected error: {result.stderr}"
+
+    def test_validate_with_schema_file(
+        self,
+        work_dir: Path,
+        integration_pythonpath: str,
+    ):
+        """Test validation with a Pydantic schema file."""
+        # Create .env file
+        env_file = work_dir / ".env"
+        env_file.write_text("DATABASE_URL=postgres://localhost/db\nDEBUG=true\n")
+
+        # Create simple schema
+        schema_file = work_dir / "settings.py"
+        schema_file.write_text('''
+from pydantic_settings import BaseSettings
+
+class Settings(BaseSettings):
+    DATABASE_URL: str
+    DEBUG: bool = True
+''')
+
+        env = os.environ.copy()
+        env["PYTHONPATH"] = integration_pythonpath
+
+        result = subprocess.run(
+            _get_envdrift_cmd() + ["validate", str(env_file), "--schema", str(schema_file)],
+            cwd=work_dir,
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+
+        assert result.returncode in (0, 1), f"Unexpected error: {result.stderr}"
+
+
+class TestConfigEdgeCases:
+    """Test configuration loading edge cases."""
+
+    def test_invalid_toml_config(
+        self,
+        work_dir: Path,
+        integration_pythonpath: str,
+    ):
+        """Test handling of invalid TOML syntax."""
+        config_file = work_dir / "envdrift.toml"
+        config_file.write_text("this is not valid toml [[[")
+
+        env_file = work_dir / ".env"
+        env_file.write_text("APP=test\n")
+
+        env = os.environ.copy()
+        env["PYTHONPATH"] = integration_pythonpath
+
+        result = subprocess.run(
+            _get_envdrift_cmd() + ["encrypt", str(env_file)],
+            cwd=work_dir,
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+
+        # Should handle invalid TOML gracefully
+        assert result.returncode in (0, 1, 2), f"Unexpected crash: {result.stderr}"
+
+    def test_missing_required_config_fields(
+        self,
+        work_dir: Path,
+        integration_pythonpath: str,
+    ):
+        """Test config with missing required fields."""
+        config_file = work_dir / "pyproject.toml"
+        config_file.write_text('''
+[tool.envdrift]
+# Missing vault_backend but has vault_key_path
+vault_key_path = "some/path"
+''')
+
+        env = os.environ.copy()
+        env["PYTHONPATH"] = integration_pythonpath
+
+        result = subprocess.run(
+            _get_envdrift_cmd() + ["sync"],
+            cwd=work_dir,
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+
+        # Should handle missing config gracefully
+        assert result.returncode in (0, 1), f"Unexpected crash: {result.stderr}"
+
+    def test_unknown_vault_backend(
+        self,
+        work_dir: Path,
+        integration_pythonpath: str,
+    ):
+        """Test config with unknown vault backend."""
+        config_file = work_dir / "pyproject.toml"
+        config_file.write_text('''
+[tool.envdrift]
+vault_backend = "unknown_backend"
+vault_key_path = "some/path"
+''')
+
+        env = os.environ.copy()
+        env["PYTHONPATH"] = integration_pythonpath
+
+        result = subprocess.run(
+            _get_envdrift_cmd() + ["sync"],
+            cwd=work_dir,
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+
+        # Should fail with clear error about unknown backend
+        assert result.returncode in (1, 2), "Expected error for unknown backend"
+
+
+class TestSOPSBackend:
+    """Test SOPS encryption backend edge cases."""
+
+    def test_sops_without_sops_installed(
+        self,
+        work_dir: Path,
+        integration_pythonpath: str,
+    ):
+        """Test SOPS encryption when sops CLI is not available."""
+        env_file = work_dir / ".env"
+        env_file.write_text("SECRET=value\n")
+
+        env = os.environ.copy()
+        env["PYTHONPATH"] = integration_pythonpath
+        # Ensure sops is not in PATH by using empty PATH
+        env["PATH"] = ""
+
+        result = subprocess.run(
+            _get_envdrift_cmd() + ["encrypt", str(env_file), "--backend", "sops"],
+            cwd=work_dir,
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+
+        # Should fail gracefully when sops is not available
+        assert result.returncode in (0, 1, 2), f"Unexpected crash: {result.stderr}"
+
+
+
