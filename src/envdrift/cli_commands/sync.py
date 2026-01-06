@@ -25,6 +25,8 @@ if TYPE_CHECKING:
 class _DecryptTask:
     mapping: ServiceMapping
     env_file: Path
+    ephemeral_key: str | None = None  # Key value for ephemeral mode
+    ephemeral_key_name: str | None = None  # Key name (e.g., DOTENV_PRIVATE_KEY_PRODUCTION)
 
 
 @dataclass(frozen=True)
@@ -32,6 +34,8 @@ class _EncryptTask:
     mapping: ServiceMapping
     env_file: Path
     env_keys_file: Path
+    ephemeral_key: str | None = None  # Key value for ephemeral mode
+    ephemeral_key_name: str | None = None  # Key name (e.g., DOTENV_PRIVATE_KEY_PRODUCTION)
 
 
 def load_sync_config_and_client(
@@ -608,6 +612,27 @@ def pull(
             print_error("Setup incomplete due to sync errors")
             raise typer.Exit(code=1)
 
+    # Build ephemeral keys map for decryption (folder_path -> (key_name, key_value))
+    ephemeral_keys_map: dict[Path, tuple[str, str]] = {}
+    if not skip_sync:
+        from envdrift.sync.result import SyncAction
+
+        for service_result in sync_result.services:
+            if (
+                service_result.action == SyncAction.EPHEMERAL
+                and service_result.vault_key_value
+            ):
+                key_name = f"DOTENV_PRIVATE_KEY_{service_result.folder_path.name.upper()}"
+                # Find the matching mapping to get the effective environment
+                for m in filtered_mappings:
+                    if m.folder_path == service_result.folder_path:
+                        key_name = f"DOTENV_PRIVATE_KEY_{m.effective_environment.upper()}"
+                        break
+                ephemeral_keys_map[service_result.folder_path] = (
+                    key_name,
+                    service_result.vault_key_value,
+                )
+
     # === STEP 2: DECRYPT ENV FILES ===
     console.print()
     console.print("[bold cyan]Step 2:[/bold cyan] Decrypting environment files...")
@@ -704,13 +729,31 @@ def pull(
             skipped_count += 1
             continue
 
-        decrypt_tasks.append(_DecryptTask(mapping=mapping, env_file=env_file))
+        decrypt_tasks.append(
+            _DecryptTask(
+                mapping=mapping,
+                env_file=env_file,
+                ephemeral_key=ephemeral_keys_map.get(mapping.folder_path, (None, None))[1],
+                ephemeral_key_name=ephemeral_keys_map.get(mapping.folder_path, (None, None))[0],
+            )
+        )
 
     max_workers = _normalize_max_workers(sync_config.max_workers)
 
     def _decrypt_task(task: _DecryptTask):
         try:
-            result = encryption_backend.decrypt(task.env_file.resolve())
+            # Build env dict with ephemeral key if available
+            env_override = None
+            if task.ephemeral_key and task.ephemeral_key_name:
+                import os
+
+                env_override = dict(os.environ)
+                env_override[task.ephemeral_key_name] = task.ephemeral_key
+
+            result = encryption_backend.decrypt(
+                task.env_file.resolve(),
+                env=env_override,
+            )
             return task, result, None
         except (EncryptionNotFoundError, EncryptionBackendError) as e:
             return task, None, e
