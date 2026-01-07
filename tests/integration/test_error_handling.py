@@ -455,11 +455,12 @@ class TestVaultClientErrorHandling:
 
     def test_aws_client_authentication_failure(self, monkeypatch) -> None:
         """Test AWS client handles authentication failures gracefully."""
-        # Set invalid credentials
+        # Set invalid credentials and explicitly unset any LocalStack endpoint
         monkeypatch.setenv("AWS_ACCESS_KEY_ID", "invalid")
         monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "invalid")
         monkeypatch.setenv("AWS_DEFAULT_REGION", "us-east-1")
-        # Don't set endpoint URL - will try real AWS
+        # Unset endpoint URL to force using real AWS (which will fail auth)
+        monkeypatch.delenv("AWS_ENDPOINT_URL", raising=False)
 
         from envdrift.vault.aws import AWS_AVAILABLE
 
