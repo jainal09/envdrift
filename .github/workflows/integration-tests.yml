@@ -105,6 +105,11 @@ jobs:
           # Install optional integration test dependencies
           uv pip install boto3 hvac
 
+      - name: Install dotenvx
+        run: |
+          curl -sfS "https://dotenvx.sh?directory=$HOME/.local/bin" | sh -s -- --version=1.51.4
+          echo "$HOME/.local/bin" >> $GITHUB_PATH
+
       - name: Verify services are accessible
         run: |
           # Wait for services to fully start after health checks pass
