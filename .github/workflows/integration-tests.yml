@@ -234,17 +234,18 @@ jobs:
           uv pip install boto3 hvac google-cloud-secret-manager azure-keyvault-secrets azure-identity
 
       - name: Run GCP tests (if configured)
-        if: env.ENVDRIFT_TEST_GCP == '1'
+        if: secrets.ENVDRIFT_TEST_GCP == '1'
         env:
-          ENVDRIFT_TEST_GCP: ${{ secrets.ENVDRIFT_TEST_GCP }}
-          GOOGLE_APPLICATION_CREDENTIALS: ${{ secrets.GCP_SERVICE_ACCOUNT_KEY }}
+          GCP_KEY_CONTENT: ${{ secrets.GCP_SERVICE_ACCOUNT_KEY }}
         run: |
+          echo "$GCP_KEY_CONTENT" > gcp_key.json
+          export GOOGLE_APPLICATION_CREDENTIALS=$(pwd)/gcp_key.json
           uv run pytest tests/integration/ -v -m gcp --timeout=120
+          rm gcp_key.json
 
       - name: Run Azure tests (if configured)
-        if: env.ENVDRIFT_TEST_AZURE == '1'
+        if: secrets.ENVDRIFT_TEST_AZURE == '1'
         env:
-          ENVDRIFT_TEST_AZURE: ${{ secrets.ENVDRIFT_TEST_AZURE }}
           AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
           AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
           AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
