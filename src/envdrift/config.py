@@ -93,6 +93,31 @@ class GitHookCheckConfig:
 
 
 @dataclass
+class GuardConfig:
+    """Guard command configuration for secret scanning.
+
+    Example envdrift.toml:
+        [guard]
+        scanners = ["native", "gitleaks"]
+        auto_install = true
+        include_history = false
+        check_entropy = false
+        entropy_threshold = 4.5
+        fail_on_severity = "high"
+        ignore_paths = ["*.test.py", "tests/**"]
+    """
+
+    scanners: list[str] = field(default_factory=lambda: ["native", "gitleaks"])
+    auto_install: bool = True
+    include_history: bool = False
+    check_entropy: bool = False
+    entropy_threshold: float = 4.5
+    fail_on_severity: str = "high"
+    ignore_paths: list[str] = field(default_factory=list)
+    verify_secrets: bool = False  # For trufflehog verification
+
+
+@dataclass
 class PartialEncryptionEnvironmentConfig:
     """Partial encryption configuration for a single environment."""
 
@@ -128,6 +153,7 @@ class EnvdriftConfig:
     precommit: PrecommitConfig = field(default_factory=PrecommitConfig)
     git_hook_check: GitHookCheckConfig = field(default_factory=GitHookCheckConfig)
     partial_encryption: PartialEncryptionConfig = field(default_factory=PartialEncryptionConfig)
+    guard: GuardConfig = field(default_factory=GuardConfig)
 
     # Raw config for access to custom fields
     raw: dict[str, Any] = field(default_factory=dict)
@@ -235,6 +261,22 @@ class EnvdriftConfig:
             sops_azure_kv=sops_section.get("azure_kv"),
         )
 
+        # Build guard config
+        guard_section = data.get("guard", {})
+        scanners = guard_section.get("scanners", ["native", "gitleaks"])
+        if isinstance(scanners, str):
+            scanners = [scanners]
+        guard = GuardConfig(
+            scanners=scanners,
+            auto_install=guard_section.get("auto_install", True),
+            include_history=guard_section.get("include_history", False),
+            check_entropy=guard_section.get("check_entropy", False),
+            entropy_threshold=guard_section.get("entropy_threshold", 4.5),
+            fail_on_severity=guard_section.get("fail_on_severity", "high"),
+            ignore_paths=guard_section.get("ignore_paths", []),
+            verify_secrets=guard_section.get("verify_secrets", False),
+        )
+
         return cls(
             schema=envdrift_section.get("schema"),
             environments=envdrift_section.get(
@@ -247,6 +289,7 @@ class EnvdriftConfig:
             precommit=precommit,
             git_hook_check=git_hook_check,
             partial_encryption=partial_encryption,
+            guard=guard,
             raw=data,
         )
 
@@ -347,6 +390,9 @@ def load_config(path: Path | str | None = None) -> EnvdriftConfig:
             if "partial_encryption" in envdrift_section:
                 data["partial_encryption"] = envdrift_section.get("partial_encryption")
                 del envdrift_section["partial_encryption"]
+            if "guard" in envdrift_section:
+                data["guard"] = envdrift_section.get("guard")
+                del envdrift_section["guard"]
 
     return EnvdriftConfig.from_dict(data)
 

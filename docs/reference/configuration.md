@@ -26,6 +26,10 @@ provider = "azure"
 [encryption]
 backend = "dotenvx"
 # ... encryption settings ...
+
+[guard]
+scanners = ["native", "gitleaks"]
+# ... guard settings ...
 ```
 
 ### pyproject.toml
@@ -41,6 +45,10 @@ provider = "azure"
 [tool.envdrift.encryption]
 backend = "dotenvx"
 # ... encryption settings ...
+
+[tool.envdrift.guard]
+scanners = ["native", "gitleaks"]
+# ... guard settings ...
 ```
 
 ## Sections
@@ -82,6 +90,38 @@ secret_patterns = [
     "^SENDGRID_",
 ]
 ```
+
+### [guard] — Secret Scanning Settings
+
+Configuration for the `envdrift guard` command.
+
+| Option | Type | Default | Description |
+|:-------|:-----|:--------|:------------|
+| `scanners` | `list[string]` | `["native", "gitleaks"]` | Scanners to enable (`native`, `gitleaks`, `trufflehog`, `detect-secrets`) |
+| `auto_install` | `bool` | `true` | Auto-install missing external scanners |
+| `include_history` | `bool` | `false` | Scan git history for secrets |
+| `check_entropy` | `bool` | `false` | Enable entropy detection in the native scanner |
+| `entropy_threshold` | `float` | `4.5` | Minimum entropy to flag a value as suspicious |
+| `fail_on_severity` | `string` | `"high"` | Severity threshold used by `envdrift guard --ci` |
+| `ignore_paths` | `list[string]` | `[]` | Glob patterns ignored by the native scanner |
+| `verify_secrets` | `bool` | `false` | Reserved for future verified secret checks |
+
+```toml
+[guard]
+scanners = ["native", "gitleaks", "trufflehog", "detect-secrets"]
+auto_install = true
+include_history = false
+check_entropy = true
+entropy_threshold = 4.5
+fail_on_severity = "high"
+ignore_paths = ["tests/**", "*.test.py"]
+verify_secrets = false
+```
+
+Notes:
+
+- `ignore_paths` applies to the native scanner's file walk.
+- `scanners` can be set under `[tool.envdrift.guard]` in `pyproject.toml`.
 
 ### [encryption] — Encryption Settings
 
@@ -323,6 +363,11 @@ env_file_pattern = ".env.{environment}"
 check_encryption = true
 strict_extra = true
 secret_patterns = ["^STRIPE_", "^TWILIO_"]
+
+[guard]
+scanners = ["native", "gitleaks"]
+fail_on_severity = "high"
+ignore_paths = ["tests/**"]
 
 [encryption]
 backend = "dotenvx"

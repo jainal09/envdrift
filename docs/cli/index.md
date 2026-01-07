@@ -1,6 +1,8 @@
 # CLI Reference
 
-envdrift provides a command-line interface for validating environment files against Pydantic schemas, comparing environments, and managing encryption.
+envdrift provides a command-line interface for validating environment files
+against Pydantic schemas, comparing environments, managing encryption, and
+scanning for exposed secrets.
 
 ## Installation
 
@@ -18,6 +20,7 @@ uv add envdrift
 | [diff](diff.md)              | Compare two .env files and show differences            |
 | [encrypt](encrypt.md)        | Check or perform encryption using dotenvx or SOPS      |
 | [decrypt](decrypt.md)        | Decrypt encrypted .env files (dotenvx or SOPS)         |
+| [guard](guard.md)            | Scan for unencrypted .env files and exposed secrets    |
 | [pull](pull.md)              | Pull keys from vault and decrypt all env files         |
 | [sync](sync.md)              | Sync encryption keys from cloud vaults to local files  |
 | [vault-push](vault-push.md)  | Push encryption keys from local files to cloud vaults  |
@@ -46,6 +49,9 @@ envdrift diff .env.development .env.production
 
 # Check if secrets are encrypted
 envdrift encrypt .env.production --check
+
+# Guard against plaintext secrets
+envdrift guard --ci --fail-on high
 
 # Generate schema from existing .env
 envdrift init .env --output settings.py

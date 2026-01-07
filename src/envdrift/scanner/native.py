@@ -1,0 +1,407 @@
+"""Native scanner - zero external dependencies.
+
+This scanner provides built-in secret detection capabilities without requiring
+any external tools. It checks for:
+
+1. Unencrypted .env files (missing dotenvx/SOPS encryption markers)
+2. Common secret patterns (API keys, tokens, passwords)
+3. High-entropy strings (optional, for detecting random secrets)
+"""
+
+from __future__ import annotations
+
+import fnmatch
+import time
+from pathlib import Path
+
+from envdrift.scanner.base import (
+    FindingSeverity,
+    ScanFinding,
+    ScannerBackend,
+    ScanResult,
+)
+from envdrift.scanner.patterns import (
+    ALL_PATTERNS,
+    calculate_entropy,
+    redact_secret,
+)
+
+# Encryption markers for dotenvx
+DOTENVX_MARKERS = (
+    "#/---[DOTENV_PUBLIC_KEY]",
+    "DOTENV_PUBLIC_KEY",
+    "encrypted:",
+)
+
+# Encryption markers for SOPS
+SOPS_MARKERS = (
+    "sops:",
+    "sops_",
+    "ENC[AES256_GCM,",
+)
+
+# Default patterns to ignore
+DEFAULT_IGNORE_PATTERNS = (
+    ".env.example",
+    ".env.sample",
+    ".env.template",
+    "*.md",
+    "*.txt",
+    "*.lock",
+    "*.sum",
+    "node_modules/**",
+    ".git/**",
+    "__pycache__/**",
+    ".venv/**",
+    "venv/**",
+    ".tox/**",
+    ".nox/**",
+    ".pytest_cache/**",
+    ".mypy_cache/**",
+    ".ruff_cache/**",
+    "*.pyc",
+    "*.pyo",
+    ".DS_Store",
+    "Thumbs.db",
+)
+
+
+class NativeScanner(ScannerBackend):
+    """Built-in scanner with zero external dependencies.
+
+    This scanner provides basic secret detection without requiring any external
+    tools to be installed. It's always available and serves as the foundation
+    for the guard command.
+
+    Features:
+    - Detects unencrypted .env files
+    - Matches common secret patterns (AWS keys, GitHub tokens, etc.)
+    - Optional entropy-based detection for random secrets
+    - Configurable ignore patterns
+
+    Example:
+        scanner = NativeScanner()
+        result = scanner.scan([Path(".")])
+        for finding in result.findings:
+            print(f"{finding.severity}: {finding.description}")
+    """
+
+    def __init__(
+        self,
+        check_entropy: bool = False,
+        entropy_threshold: float = 4.5,
+        ignore_patterns: list[str] | None = None,
+        additional_ignore_patterns: list[str] | None = None,
+    ) -> None:
+        """Initialize the native scanner.
+
+        Args:
+            check_entropy: Enable entropy-based secret detection.
+            entropy_threshold: Minimum entropy to flag as potential secret.
+            ignore_patterns: Patterns to ignore (replaces defaults if provided).
+            additional_ignore_patterns: Additional patterns to ignore (added to defaults).
+        """
+        self._check_entropy = check_entropy
+        self._entropy_threshold = entropy_threshold
+
+        if ignore_patterns is not None:
+            self._ignore_patterns = tuple(ignore_patterns)
+        else:
+            self._ignore_patterns = DEFAULT_IGNORE_PATTERNS
+
+        if additional_ignore_patterns:
+            self._ignore_patterns = self._ignore_patterns + tuple(
+                additional_ignore_patterns
+            )
+
+    @property
+    def name(self) -> str:
+        """Return scanner identifier."""
+        return "native"
+
+    @property
+    def description(self) -> str:
+        """Return scanner description."""
+        return "Built-in scanner (encryption markers + secret patterns)"
+
+    def is_installed(self) -> bool:
+        """Check if scanner is available (always True for native)."""
+        return True
+
+    def scan(
+        self,
+        paths: list[Path],
+        include_git_history: bool = False,
+    ) -> ScanResult:
+        """Scan paths for secrets and policy violations.
+
+        Args:
+            paths: List of files or directories to scan.
+            include_git_history: Ignored for native scanner (no git support).
+
+        Returns:
+            ScanResult containing all findings.
+        """
+        start_time = time.time()
+        findings: list[ScanFinding] = []
+        files_scanned = 0
+
+        for path in paths:
+            if not path.exists():
+                continue
+
+            files_to_scan = [path] if path.is_file() else self._collect_files(path)
+
+            for file_path in files_to_scan:
+                if self._should_ignore(file_path, path):
+                    continue
+
+                files_scanned += 1
+                file_findings = self._scan_file(file_path)
+                findings.extend(file_findings)
+
+        duration_ms = int((time.time() - start_time) * 1000)
+
+        return ScanResult(
+            scanner_name=self.name,
+            findings=findings,
+            files_scanned=files_scanned,
+            duration_ms=duration_ms,
+        )
+
+    def _collect_files(self, directory: Path) -> list[Path]:
+        """Collect all files in a directory recursively.
+
+        Args:
+            directory: Directory to scan.
+
+        Returns:
+            List of file paths.
+        """
+        files = []
+        try:
+            for item in directory.rglob("*"):
+                if item.is_file():
+                    files.append(item)
+        except PermissionError:
+            pass
+        return files
+
+    def _should_ignore(self, file_path: Path, base_path: Path) -> bool:
+        """Check if a file should be ignored based on patterns.
+
+        Args:
+            file_path: Path to the file.
+            base_path: Base path for relative matching.
+
+        Returns:
+            True if the file should be ignored.
+        """
+        # Get relative path for matching
+        try:
+            relative_path = file_path.relative_to(base_path)
+        except ValueError:
+            relative_path = file_path
+
+        path_str = str(relative_path)
+        name = file_path.name
+
+        for pattern in self._ignore_patterns:
+            # Match against full relative path
+            if fnmatch.fnmatch(path_str, pattern):
+                return True
+            # Match against filename only
+            if fnmatch.fnmatch(name, pattern):
+                return True
+            # Match against path parts
+            if any(fnmatch.fnmatch(part, pattern) for part in relative_path.parts):
+                return True
+
+        return False
+
+    def _scan_file(self, file_path: Path) -> list[ScanFinding]:
+        """Scan a single file for secrets.
+
+        Args:
+            file_path: Path to the file to scan.
+
+        Returns:
+            List of findings from this file.
+        """
+        findings: list[ScanFinding] = []
+
+        # Try to read file content
+        try:
+            content = file_path.read_text(encoding="utf-8", errors="ignore")
+        except (OSError, UnicodeDecodeError):
+            return findings
+
+        # Skip empty files
+        if not content.strip():
+            return findings
+
+        # Skip binary files (heuristic: check for null bytes)
+        if "\x00" in content[:8192]:
+            return findings
+
+        # Check 1: Is this an unencrypted .env file?
+        if self._is_env_file(file_path):
+            if not self._is_encrypted(content):
+                findings.append(
+                    ScanFinding(
+                        file_path=file_path,
+                        rule_id="unencrypted-env-file",
+                        rule_description="Unencrypted Environment File",
+                        description=(
+                            f"Environment file '{file_path.name}' is not encrypted. "
+                            f"Run 'envdrift encrypt {file_path}' before committing."
+                        ),
+                        severity=FindingSeverity.HIGH,
+                        scanner=self.name,
+                    )
+                )
+
+        # Check 2: Scan for secret patterns
+        findings.extend(self._scan_patterns(file_path, content))
+
+        # Check 3: High-entropy strings (optional)
+        if self._check_entropy:
+            findings.extend(self._scan_entropy(file_path, content))
+
+        return findings
+
+    def _is_env_file(self, path: Path) -> bool:
+        """Check if a file is an environment file.
+
+        Args:
+            path: Path to check.
+
+        Returns:
+            True if this is a .env file.
+        """
+        name = path.name
+        return name == ".env" or name.startswith(".env.")
+
+    def _is_encrypted(self, content: str) -> bool:
+        """Check if file content has encryption markers.
+
+        Args:
+            content: File content to check.
+
+        Returns:
+            True if encryption markers are present.
+        """
+        # Check dotenvx markers
+        for marker in DOTENVX_MARKERS:
+            if marker in content:
+                return True
+
+        # Check SOPS markers
+        for marker in SOPS_MARKERS:
+            if marker in content:
+                return True
+
+        return False
+
+    def _scan_patterns(self, file_path: Path, content: str) -> list[ScanFinding]:
+        """Scan content for secret patterns.
+
+        Args:
+            file_path: Path to the file being scanned.
+            content: File content to scan.
+
+        Returns:
+            List of pattern-matched findings.
+        """
+        findings: list[ScanFinding] = []
+        lines = content.splitlines()
+
+        for line_num, line in enumerate(lines, start=1):
+            # Skip empty lines and comments
+            stripped = line.strip()
+            if not stripped or stripped.startswith("#"):
+                continue
+
+            for pattern in ALL_PATTERNS:
+                match = pattern.pattern.search(line)
+                if match:
+                    # Extract the secret (first group or full match)
+                    secret = match.group(1) if match.groups() else match.group(0)
+
+                    # Calculate column number
+                    col_num = match.start() + 1
+
+                    findings.append(
+                        ScanFinding(
+                            file_path=file_path,
+                            line_number=line_num,
+                            column_number=col_num,
+                            rule_id=pattern.id,
+                            rule_description=pattern.description,
+                            description=f"Potential {pattern.description} detected",
+                            severity=pattern.severity,
+                            secret_preview=redact_secret(secret),
+                            scanner=self.name,
+                        )
+                    )
+
+        return findings
+
+    def _scan_entropy(self, file_path: Path, content: str) -> list[ScanFinding]:
+        """Scan content for high-entropy strings.
+
+        Args:
+            file_path: Path to the file being scanned.
+            content: File content to scan.
+
+        Returns:
+            List of entropy-based findings.
+        """
+        import re
+
+        findings: list[ScanFinding] = []
+        lines = content.splitlines()
+
+        # Pattern for assignment-like statements
+        assignment_pattern = re.compile(
+            r"[A-Z_][A-Z0-9_]*\s*[=:]\s*[\"']?([^\"'\s=]{16,})[\"']?"
+        )
+
+        for line_num, line in enumerate(lines, start=1):
+            # Skip comments
+            stripped = line.strip()
+            if stripped.startswith("#") or stripped.startswith("//"):
+                continue
+
+            for match in assignment_pattern.finditer(line):
+                value = match.group(1)
+
+                # Skip if it looks like a URL or path
+                if value.startswith(("http://", "https://", "/", "./")):
+                    continue
+
+                # Skip if it's all lowercase or all uppercase letters only
+                if value.isalpha() and (value.islower() or value.isupper()):
+                    continue
+
+                entropy = calculate_entropy(value)
+
+                if entropy >= self._entropy_threshold:
+                    findings.append(
+                        ScanFinding(
+                            file_path=file_path,
+                            line_number=line_num,
+                            rule_id="high-entropy-string",
+                            rule_description="High Entropy String",
+                            description=(
+                                f"High-entropy string detected (entropy: {entropy:.2f}). "
+                                f"This may be a secret."
+                            ),
+                            severity=FindingSeverity.MEDIUM,
+                            secret_preview=redact_secret(value),
+                            entropy=entropy,
+                            scanner=self.name,
+                        )
+                    )
+
+        return findings

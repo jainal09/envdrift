@@ -6,6 +6,7 @@ import typer
 
 from envdrift.cli_commands.diff import diff
 from envdrift.cli_commands.encryption import decrypt_cmd, encrypt_cmd
+from envdrift.cli_commands.guard import guard
 from envdrift.cli_commands.hook import hook
 from envdrift.cli_commands.init_cmd import init as init_cmd
 from envdrift.cli_commands.partial import pull_cmd as pull_partial_cmd
@@ -26,6 +27,7 @@ app.command()(diff)
 app.command("encrypt")(encrypt_cmd)
 app.command("decrypt")(decrypt_cmd)
 app.command("init")(init_cmd)
+app.command()(guard)
 app.command()(hook)
 app.command()(sync)
 app.command()(pull)
