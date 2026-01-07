@@ -1,0 +1,219 @@
+# Integration Tests CI Workflow
+#
+# Runs integration tests with Docker service containers
+# for LocalStack (AWS) and HashiCorp Vault.
+#
+# Triggered on:
+# - Pull requests to main
+# - Pushes to main
+# - Manual dispatch
+
+name: Integration Tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# Cancel in-progress runs for the same PR/branch
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+env:
+  # Common environment for all jobs
+  PYTHONUNBUFFERED: "1"
+  FORCE_COLOR: "1"
+
+jobs:
+  integration-tests:
+    name: Integration Tests (Python ${{ matrix.python-version }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.12", "3.13"]
+
+    # Service containers for integration tests
+    services:
+      localstack:
+        image: localstack/localstack:4.0
+        ports:
+          - 4566:4566
+        env:
+          SERVICES: secretsmanager
+          DEBUG: "0"
+          EAGER_SERVICE_LOADING: "1"
+        options: >-
+          --health-cmd="curl -f http://localhost:4566/_localstack/health"
+          --health-interval=5s
+          --health-timeout=5s
+          --health-retries=10
+          --health-start-period=10s
+
+      vault:
+        image: hashicorp/vault:1.18
+        ports:
+          - 8200:8200
+        env:
+          VAULT_DEV_ROOT_TOKEN_ID: test-root-token
+          VAULT_DEV_LISTEN_ADDRESS: 0.0.0.0:8200
+          VAULT_ADDR: http://0.0.0.0:8200
+        options: >-
+          --cap-add=IPC_LOCK
+          --health-cmd="vault status || exit 0"
+          --health-interval=5s
+          --health-timeout=5s
+          --health-retries=10
+          --health-start-period=5s
+
+      lowkey-vault:
+        image: nagyesta/lowkey-vault:2.4
+        ports:
+          - 8443:8443
+        env:
+          LOWKEY_VAULT_NAMES: envdrift-test-vault
+        options: >-
+          --health-cmd="curl -f -k https://localhost:8443/ping || exit 0"
+          --health-interval=5s
+          --health-timeout=5s
+          --health-retries=10
+          --health-start-period=5s
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v4
+
+      - name: Install dependencies
+        run: |
+          uv sync --all-extras
+          # Install optional integration test dependencies
+          uv pip install boto3 hvac
+
+      - name: Wait for services to be ready
+        run: |
+          echo "Waiting for LocalStack..."
+          timeout 60 bash -c 'until curl -s http://localhost:4566/_localstack/health | grep -q "running"; do sleep 2; done'
+
+          echo "Waiting for Vault..."
+          timeout 60 bash -c 'until curl -s http://localhost:8200/v1/sys/health | grep -q "initialized"; do sleep 2; done'
+
+          echo "All services ready!"
+
+      - name: Run integration tests
+        env:
+          # AWS (LocalStack) configuration
+          AWS_ENDPOINT_URL: http://localhost:4566
+          AWS_ACCESS_KEY_ID: test
+          AWS_SECRET_ACCESS_KEY: test
+          AWS_DEFAULT_REGION: us-east-1
+          AWS_MAX_ATTEMPTS: "3"
+          # HashiCorp Vault configuration
+          VAULT_ADDR: http://localhost:8200
+          VAULT_TOKEN: test-root-token
+          # Azure (Lowkey Vault) configuration
+          AZURE_KEYVAULT_URL: https://localhost:8443
+          CURL_CA_BUNDLE: ""
+          REQUESTS_CA_BUNDLE: ""
+          AZURE_CLI_DISABLE_CONNECTION_VERIFICATION: "1"
+        run: |
+          uv run pytest tests/integration/ \
+            -v \
+            --tb=short \
+            --timeout=300 \
+            -x \
+            --cov=src/envdrift \
+            --cov-report=xml:coverage-integration.xml \
+            --cov-report=term-missing
+
+      - name: Upload coverage artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-integration-py${{ matrix.python-version }}
+          path: coverage-integration.xml
+          retention-days: 7
+
+  # Job to collect and report coverage
+  coverage-report:
+    name: Coverage Report
+    runs-on: ubuntu-latest
+    needs: integration-tests
+    if: always()
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Download coverage artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: coverage-integration-*
+          path: coverage-reports
+          merge-multiple: true
+
+      - name: Upload to Codecov
+        uses: codecov/codecov-action@v4
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+          files: coverage-reports/coverage-integration*.xml
+          flags: integration
+          fail_ci_if_error: false
+          verbose: true
+
+  # Optional: Run tests with real cloud credentials (manual trigger only)
+  cloud-integration-tests:
+    name: Cloud Provider Tests
+    runs-on: ubuntu-latest
+    if: github.event_name == 'workflow_dispatch'
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v4
+
+      - name: Install dependencies
+        run: |
+          uv sync --all-extras
+          uv pip install boto3 hvac google-cloud-secret-manager azure-keyvault-secrets azure-identity
+
+      - name: Run GCP tests (if configured)
+        if: env.ENVDRIFT_TEST_GCP == '1'
+        env:
+          ENVDRIFT_TEST_GCP: ${{ secrets.ENVDRIFT_TEST_GCP }}
+          GOOGLE_APPLICATION_CREDENTIALS: ${{ secrets.GCP_SERVICE_ACCOUNT_KEY }}
+        run: |
+          uv run pytest tests/integration/ -v -m gcp --timeout=120
+
+      - name: Run Azure tests (if configured)
+        if: env.ENVDRIFT_TEST_AZURE == '1'
+        env:
+          ENVDRIFT_TEST_AZURE: ${{ secrets.ENVDRIFT_TEST_AZURE }}
+          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+          AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
+          AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+          AZURE_KEYVAULT_URL: ${{ secrets.AZURE_KEYVAULT_URL }}
+        run: |
+          uv run pytest tests/integration/ -v -m azure --timeout=120
