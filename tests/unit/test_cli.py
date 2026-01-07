@@ -3073,8 +3073,10 @@ class TestLockCommand:
         assert secret_file.exists()
         # No files should have been encrypted
         assert len(encrypted) == 0
-        assert "would be encrypted" in result.output.lower()
-        assert "would be deleted" in result.output.lower()
+        # Normalize whitespace to handle terminal line wrapping
+        normalized_output = " ".join(result.output.lower().split())
+        assert "would be encrypted" in normalized_output
+        assert "would be deleted" in normalized_output
 
     def test_lock_verify_vault_mismatch_fails(self, monkeypatch, tmp_path: Path):
         """Verify vault should fail on key mismatch."""
