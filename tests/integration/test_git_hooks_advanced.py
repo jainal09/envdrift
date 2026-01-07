@@ -294,9 +294,13 @@ def test_hook_pre_push_lock_check(git_hook_env):
     _run_git(["init", "--bare"], cwd=remote_dir)
     _run_git(["remote", "add", "origin", str(remote_dir)], cwd=work_dir)
 
+    # Get current branch name (handles both "master" and "main" defaults)
+    branch_result = _run_git(["branch", "--show-current"], cwd=work_dir)
+    current_branch = branch_result.stdout.strip()
+
     # Try to push - should fail due to lock --check
     result = _run_git(
-        ["push", "origin", "master"],
+        ["push", "origin", current_branch],
         cwd=work_dir,
         check=False,
     )
