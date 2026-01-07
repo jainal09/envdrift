@@ -39,6 +39,7 @@ Enable “Format on Save” with Ruff to match CI formatting (`ruff format` + `r
 - **Types**: Pyrefly (`make typecheck`).
 - **Security**: Bandit (`make security`).
 - **Tests**: Pytest (`make test`); add coverage for new code paths.
+  See the [Testing Guide](../reference/testing.md) for integration tests with Docker.
 - **Docs**: `make docs` must pass; lint docs with `make lint-docs` (markdownlint rules: headings increment, fenced code blocks, no trailing spaces).
 
 ## PR checklist

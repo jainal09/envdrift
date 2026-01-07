@@ -74,6 +74,7 @@ nav:
   - Reference:
       - Configuration: reference/configuration.md
       - Python API: reference/api.md
+      - Testing Guide: reference/testing.md
       - Agent Specification (Phase 2): agent-spec.md
       - Glossary: glossary.md
   - Support:
