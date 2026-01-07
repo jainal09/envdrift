@@ -68,7 +68,9 @@
 
 ## Overview
 
-The `envdrift guard` command provides a vendor-neutral, defense-in-depth mechanism to detect unencrypted secrets and exposed `.env` files. It serves as the last line of defense when other guardrails (git hooks, CI pipelines) fail.
+The `envdrift guard` command provides a vendor-neutral, defense-in-depth mechanism to
+detect unencrypted secrets and exposed `.env` files. It serves as the last line of
+defense when other guardrails (git hooks, CI pipelines) fail.
 
 ### Key Principles
 
@@ -139,7 +141,7 @@ envdrift guard --ci
 
 ### Component Diagram
 
-```
+```text
 ┌──────────────────────────────────────────────────────────────────────────────┐
 │                              envdrift guard                                   │
 ├──────────────────────────────────────────────────────────────────────────────┤
@@ -178,7 +180,7 @@ envdrift guard --ci
 
 ### Module Structure
 
-```
+```text
 src/envdrift/
 ├── scanner/
 │   ├── __init__.py           # Public API exports
@@ -2351,7 +2353,8 @@ class TestGuardEndToEnd:
 
 ## Success Criteria
 
-### Phase 1 Complete When:
+### Phase 1 Complete When
+
 - [ ] `envdrift guard` runs without external dependencies
 - [ ] Detects unencrypted `.env` files (missing dotenvx/SOPS markers)
 - [ ] Detects 15+ common secret patterns
@@ -2359,19 +2362,22 @@ class TestGuardEndToEnd:
 - [ ] Exit codes work correctly
 - [ ] 90%+ test coverage for scanner module
 
-### Phase 2 Complete When:
+### Phase 2 Complete When
+
 - [ ] Gitleaks auto-installs on first use
 - [ ] Gitleaks findings parsed correctly
 - [ ] Git history scanning works
 - [ ] Findings deduplicated between native and gitleaks
 
-### Phase 3 Complete When:
+### Phase 3 Complete When
+
 - [ ] Trufflehog auto-installs on first use
 - [ ] Trufflehog findings parsed correctly
 - [ ] Verified secrets flagged appropriately
 - [ ] All three scanners work together
 
-### Phase 4 Complete When:
+### Phase 4 Complete When
+
 - [ ] Full CLI with all options working
 - [ ] Configuration via `envdrift.toml` working
 - [ ] Documentation complete
@@ -2419,6 +2425,7 @@ class TestGuardEndToEnd:
 ### C. Exit Code Conventions
 
 Following Unix conventions and CI best practices:
+
 - 0 = Success
 - 1-125 = Application-specific errors
 - 126-127 = Shell errors
