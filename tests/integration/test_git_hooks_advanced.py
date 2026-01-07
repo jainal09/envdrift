@@ -219,7 +219,7 @@ def test_hook_allows_encrypted_commit(git_hook_env):
     # Stage the encrypted file
     _run_git(["add", env_file.name], cwd=work_dir)
 
-    # Also stage .env.keys (hook should block this, but let's also add config)
+    # Also stage the config file for a complete commit
     _run_git(["add", "envdrift.toml"], cwd=work_dir)
 
     # Commit should succeed
