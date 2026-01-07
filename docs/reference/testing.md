@@ -125,7 +125,7 @@ Available markers:
 
 Runs on every PR:
 
-- Python 3.14
+- Python 3.12
 - Unit tests + integration tests (containers skipped if unavailable)
 - Linting and coverage upload
 

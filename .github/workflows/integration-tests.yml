@@ -118,34 +118,52 @@ jobs:
           sleep 10
           
           echo "Checking LocalStack..."
+          LOCALSTACK_READY=false
           for i in {1..30}; do
             if curl -sf http://localhost:4566/_localstack/health > /dev/null 2>&1; then
               echo "LocalStack is ready!"
+              LOCALSTACK_READY=true
               break
             fi
             echo "Waiting for LocalStack... ($i/30)"
             sleep 2
           done
+          if [ "$LOCALSTACK_READY" != "true" ]; then
+            echo "ERROR: LocalStack failed to become ready within timeout"
+            exit 1
+          fi
           
           echo "Checking Vault..."
+          VAULT_READY=false
           for i in {1..30}; do
             if curl -sf http://localhost:8200/v1/sys/health > /dev/null 2>&1; then
               echo "Vault is ready!"
+              VAULT_READY=true
               break
             fi
             echo "Waiting for Vault... ($i/30)"
             sleep 2
           done
+          if [ "$VAULT_READY" != "true" ]; then
+            echo "ERROR: Vault failed to become ready within timeout"
+            exit 1
+          fi
           
           echo "Checking Lowkey Vault..."
+          LOWKEY_VAULT_READY=false
           for i in {1..30}; do
             if curl -sfk https://localhost:8443/ping > /dev/null 2>&1; then
               echo "Lowkey Vault is ready!"
+              LOWKEY_VAULT_READY=true
               break
             fi
             echo "Waiting for Lowkey Vault... ($i/30)"
             sleep 2
           done
+          if [ "$LOWKEY_VAULT_READY" != "true" ]; then
+            echo "ERROR: Lowkey Vault failed to become ready within timeout"
+            exit 1
+          fi
           
           echo "All services ready!"
 
@@ -215,6 +233,11 @@ jobs:
     name: Cloud Provider Tests
     runs-on: ubuntu-latest
     if: github.event_name == 'workflow_dispatch'
+    
+    env:
+      # Map secrets to env vars at job level for step conditional access
+      ENVDRIFT_TEST_GCP: ${{ secrets.ENVDRIFT_TEST_GCP }}
+      ENVDRIFT_TEST_AZURE: ${{ secrets.ENVDRIFT_TEST_AZURE }}
 
     steps:
       - name: Checkout
@@ -234,7 +257,7 @@ jobs:
           uv pip install boto3 hvac google-cloud-secret-manager azure-keyvault-secrets azure-identity
 
       - name: Run GCP tests (if configured)
-        if: secrets.ENVDRIFT_TEST_GCP == '1'
+        if: env.ENVDRIFT_TEST_GCP == '1'
         env:
           GCP_KEY_CONTENT: ${{ secrets.GCP_SERVICE_ACCOUNT_KEY }}
         run: |
@@ -244,7 +267,7 @@ jobs:
           rm gcp_key.json
 
       - name: Run Azure tests (if configured)
-        if: secrets.ENVDRIFT_TEST_AZURE == '1'
+        if: env.ENVDRIFT_TEST_AZURE == '1'
         env:
           AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
           AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
