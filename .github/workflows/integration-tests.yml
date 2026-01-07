@@ -105,14 +105,42 @@ jobs:
           # Install optional integration test dependencies
           uv pip install boto3 hvac
 
-      - name: Wait for services to be ready
+      - name: Verify services are accessible
         run: |
-          echo "Waiting for LocalStack..."
-          timeout 60 bash -c 'until curl -s http://localhost:4566/_localstack/health | grep -q "running"; do sleep 2; done'
-
-          echo "Waiting for Vault..."
-          timeout 60 bash -c 'until curl -s http://localhost:8200/v1/sys/health | grep -q "initialized"; do sleep 2; done'
-
+          # Wait for services to fully start after health checks pass
+          echo "Waiting for services to be fully ready..."
+          sleep 10
+          
+          echo "Checking LocalStack..."
+          for i in {1..30}; do
+            if curl -sf http://localhost:4566/_localstack/health > /dev/null 2>&1; then
+              echo "LocalStack is ready!"
+              break
+            fi
+            echo "Waiting for LocalStack... ($i/30)"
+            sleep 2
+          done
+          
+          echo "Checking Vault..."
+          for i in {1..30}; do
+            if curl -sf http://localhost:8200/v1/sys/health > /dev/null 2>&1; then
+              echo "Vault is ready!"
+              break
+            fi
+            echo "Waiting for Vault... ($i/30)"
+            sleep 2
+          done
+          
+          echo "Checking Lowkey Vault..."
+          for i in {1..30}; do
+            if curl -sfk https://localhost:8443/ping > /dev/null 2>&1; then
+              echo "Lowkey Vault is ready!"
+              break
+            fi
+            echo "Waiting for Lowkey Vault... ($i/30)"
+            sleep 2
+          done
+          
           echo "All services ready!"
 
       - name: Run integration tests
