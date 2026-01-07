@@ -14,6 +14,7 @@ Tests cover:
 from __future__ import annotations
 
 import contextlib
+import shutil
 import subprocess
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -26,6 +27,16 @@ if TYPE_CHECKING:
 
 # Mark all tests in this module as requiring AWS (LocalStack)
 pytestmark = [pytest.mark.integration, pytest.mark.aws]
+
+
+def _get_envdrift_cmd() -> list[str]:
+    """Get the command to run envdrift CLI."""
+    # Try to find envdrift in PATH (installed via uv)
+    envdrift_path = shutil.which("envdrift")
+    if envdrift_path:
+        return [envdrift_path]
+    # Fallback: use uv run
+    return ["uv", "run", "envdrift"]
 
 
 # --- Fixtures for AWS Tests ---
@@ -217,7 +228,7 @@ DATABASE_URL="encrypted:abc123..."
         env["PYTHONPATH"] = integration_pythonpath
 
         result = subprocess.run(
-            ["python", "-m", "envdrift", "pull", ""],
+            [*_get_envdrift_cmd(), "pull"],
             cwd=env_project,
             env=env,
             capture_output=True,
@@ -280,7 +291,7 @@ environment = "production"
         env["PYTHONPATH"] = integration_pythonpath
 
         result = subprocess.run(
-            ["python", "-m", "envdrift", "pull", ""],
+            [*_get_envdrift_cmd(), "pull"],
             cwd=work_dir,
             env=env,
             capture_output=True,
@@ -352,7 +363,7 @@ environment = "staging"
 
         try:
             result = subprocess.run(
-                ["python", "-m", "envdrift", "vault-push", "--all", "--skip-encrypt"],
+                [*_get_envdrift_cmd(), "vault-push", "--all", "--skip-encrypt"],
                 cwd=work_dir,
                 env=env,
                 capture_output=True,
@@ -389,7 +400,7 @@ environment = "staging"
         try:
             result = subprocess.run(
                 [
-                    "python", "-m", "envdrift", "vault-push",
+                    *_get_envdrift_cmd(), "vault-push",
                     "--direct", secret_name, secret_value,
                     "--provider", "aws",
                     "--region", "us-east-1",
@@ -447,7 +458,7 @@ environment = "production"
         env["PYTHONPATH"] = integration_pythonpath
 
         result = subprocess.run(
-            ["python", "-m", "envdrift", "pull", ""],
+            [*_get_envdrift_cmd(), "pull"],
             cwd=work_dir,
             env=env,
             capture_output=True,
