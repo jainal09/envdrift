@@ -20,7 +20,7 @@ import subprocess
 import sys
 import time
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, ClassVar
 
 from envdrift.scanner.base import (
     FindingSeverity,
@@ -209,7 +209,7 @@ class DetectSecretsScanner(ScannerBackend):
     """
 
     # All available plugins for "final boss" mode
-    ALL_PLUGINS = [
+    ALL_PLUGINS: ClassVar[list[str]] = [
         "ArtifactoryDetector",
         "AWSKeyDetector",
         "AzureStorageKeyDetector",
@@ -349,7 +349,7 @@ class DetectSecretsScanner(ScannerBackend):
     def scan(
         self,
         paths: list[Path],
-        include_git_history: bool = False,
+        include_git_history: bool = False,  # noqa: ARG002
     ) -> ScanResult:
         """Scan paths for secrets using detect-secrets.
 

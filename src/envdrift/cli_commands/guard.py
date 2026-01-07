@@ -41,26 +41,26 @@ def guard(
     ] = None,
     # Scanner selection
     gitleaks: Annotated[
-        bool,
+        bool | None,
         typer.Option(
             "--gitleaks/--no-gitleaks",
             help="Use gitleaks scanner (auto-installs if missing)",
         ),
-    ] = True,
+    ] = None,
     trufflehog: Annotated[
-        bool,
+        bool | None,
         typer.Option(
             "--trufflehog/--no-trufflehog",
             help="Use trufflehog scanner (auto-installs if missing)",
         ),
-    ] = False,
+    ] = None,
     detect_secrets: Annotated[
-        bool,
+        bool | None,
         typer.Option(
             "--detect-secrets/--no-detect-secrets",
             help="Use detect-secrets scanner - the 'final boss' with 27+ detectors",
         ),
-    ] = False,
+    ] = None,
     native_only: Annotated[
         bool,
         typer.Option(
@@ -191,17 +191,23 @@ def guard(
         raise typer.Exit(code=1) from e
 
     # Determine which scanners to use
-    # CLI flags override config file settings
-    use_gitleaks_final = gitleaks and not native_only
-    use_trufflehog_final = trufflehog and not native_only
-    use_detect_secrets_final = detect_secrets and not native_only
+    # CLI flags override config file settings when provided
+    use_gitleaks_final = (
+        gitleaks if gitleaks is not None else "gitleaks" in guard_cfg.scanners
+    )
+    use_trufflehog_final = (
+        trufflehog if trufflehog is not None else "trufflehog" in guard_cfg.scanners
+    )
+    use_detect_secrets_final = (
+        detect_secrets
+        if detect_secrets is not None
+        else "detect-secrets" in guard_cfg.scanners
+    )
 
-    # If native_only is not set and user didn't explicitly enable scanners,
-    # check if config has them enabled
-    if not native_only and not trufflehog and "trufflehog" in guard_cfg.scanners:
-        use_trufflehog_final = True
-    if not native_only and not detect_secrets and "detect-secrets" in guard_cfg.scanners:
-        use_detect_secrets_final = True
+    if native_only:
+        use_gitleaks_final = False
+        use_trufflehog_final = False
+        use_detect_secrets_final = False
 
     # Build configuration merging file config with CLI overrides
     config = GuardConfig(

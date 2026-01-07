@@ -26,7 +26,7 @@ import time
 import urllib.request
 import zipfile
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, ClassVar
 
 from envdrift.scanner.base import (
     FindingSeverity,
@@ -165,7 +165,7 @@ class TrufflehogInstaller:
         "v{version}/trufflehog_{version}_{os}_{arch}.{ext}"
     )
 
-    PLATFORM_MAP = {
+    PLATFORM_MAP: ClassVar[dict[tuple[str, str], tuple[str, str, str]]] = {
         ("Darwin", "x86_64"): ("darwin", "amd64", "tar.gz"),
         ("Darwin", "arm64"): ("darwin", "arm64", "tar.gz"),
         ("Linux", "x86_64"): ("linux", "amd64", "tar.gz"),

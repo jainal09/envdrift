@@ -100,10 +100,69 @@ def test_guard_uses_config_scanners(tmp_path: Path, monkeypatch):
     assert guard_config.ignore_paths == ["vendor/**"]
 
 
+def test_guard_config_can_disable_gitleaks(tmp_path: Path, monkeypatch):
+    """Config scanners can disable gitleaks when not listed."""
+    config = EnvdriftConfig(guard=FileGuardConfig(scanners=["native"]))
+    created_configs, _info_calls = _patch_guard_dependencies(
+        monkeypatch, config, _build_result([])
+    )
+
+    result = runner.invoke(app, ["guard", str(tmp_path)])
+    assert result.exit_code == 0
+
+    guard_config = created_configs[0]
+    assert guard_config.use_gitleaks is False
+
+
+def test_guard_cli_overrides_config_scanners(tmp_path: Path, monkeypatch):
+    """CLI flags override config scanner selection."""
+    config = EnvdriftConfig(
+        guard=FileGuardConfig(
+            scanners=["native", "gitleaks", "trufflehog", "detect-secrets"]
+        )
+    )
+    created_configs, _info_calls = _patch_guard_dependencies(
+        monkeypatch, config, _build_result([])
+    )
+
+    result = runner.invoke(
+        app,
+        [
+            "guard",
+            str(tmp_path),
+            "--no-gitleaks",
+            "--no-trufflehog",
+            "--no-detect-secrets",
+        ],
+    )
+    assert result.exit_code == 0
+
+    guard_config = created_configs[0]
+    assert guard_config.use_gitleaks is False
+    assert guard_config.use_trufflehog is False
+    assert guard_config.use_detect_secrets is False
+
+
+def test_guard_cli_enables_gitleaks_when_config_disables(tmp_path: Path, monkeypatch):
+    """CLI --gitleaks enables gitleaks even when config disables it."""
+    config = EnvdriftConfig(guard=FileGuardConfig(scanners=["native"]))
+    created_configs, _info_calls = _patch_guard_dependencies(
+        monkeypatch, config, _build_result([])
+    )
+
+    result = runner.invoke(app, ["guard", str(tmp_path), "--gitleaks"])
+    assert result.exit_code == 0
+
+    guard_config = created_configs[0]
+    assert guard_config.use_gitleaks is True
+
+
 def test_guard_native_only_disables_external_scanners(tmp_path: Path, monkeypatch):
     """--native-only disables external scanners."""
     config = EnvdriftConfig(
-        guard=FileGuardConfig(scanners=["native", "gitleaks", "trufflehog", "detect-secrets"])
+        guard=FileGuardConfig(
+            scanners=["native", "gitleaks", "trufflehog", "detect-secrets"]
+        )
     )
     created_configs, _info_calls = _patch_guard_dependencies(
         monkeypatch, config, _build_result([])
