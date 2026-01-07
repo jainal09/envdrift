@@ -222,9 +222,11 @@ def guard(
     if ci or json_output or sarif:
         output_console = Console(force_terminal=False, no_color=True)
 
+    # Create scan engine
+    engine = ScanEngine(config)
+
     # Show scanner info in verbose mode
     if verbose and not json_output and not sarif:
-        engine = ScanEngine(config)
         output_console.print("[bold]Scanners:[/bold]")
         for info in engine.get_scanner_info():
             status = "[green]installed[/green]" if info["installed"] else "[yellow]not installed[/yellow]"
@@ -233,7 +235,6 @@ def guard(
         output_console.print()
 
     # Run scan
-    engine = ScanEngine(config)
     result = engine.scan(paths)
 
     # Output results
