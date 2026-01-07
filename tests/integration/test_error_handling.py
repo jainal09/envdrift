@@ -28,7 +28,14 @@ pytestmark = [pytest.mark.integration]
 
 
 def _get_envdrift_cmd() -> list[str]:
-    """Get the command to run envdrift CLI."""
+    """
+    Determine the command invocation for running the envdrift CLI.
+    
+    Returns:
+        list[str]: Command and arguments to execute envdrift. Prefers a system-installed
+        `envdrift` binary when available; otherwise returns a fallback invocation
+        using `uv run envdrift`.
+    """
     # Try to find envdrift in PATH (installed via uv)
     envdrift_path = shutil.which("envdrift")
     if envdrift_path:
@@ -246,7 +253,11 @@ class TestCorruptEnvFile:
         work_dir: Path,
         integration_pythonpath: str,
     ) -> None:
-        """Test that malformed .env files are handled gracefully."""
+        """
+        Verify that running `lock --check` does not produce an unhandled exception when the project contains a malformed `.env` file.
+        
+        This test writes a malformed `.env` and a minimal `envdrift.toml`, runs the CLI command `lock --check`, and asserts that the command's stderr does not contain a Python traceback.
+        """
         # Create various malformed .env files
         malformed_content = """\
 # This is a comment
@@ -320,7 +331,11 @@ backend = "dotenvx"
         work_dir: Path,
         integration_pythonpath: str,
     ) -> None:
-        """Test handling of empty .env files."""
+        """
+        Verify that running `envdrift lock --check` on an empty `.env` file completes without unhandled exceptions.
+        
+        Writes an empty `.env` and a minimal `envdrift.toml`, runs the CLI under the provided PYTHONPATH, and asserts there is no traceback in stderr.
+        """
         (work_dir / ".env").write_text("")
 
         config_content = """\
@@ -565,18 +580,56 @@ class TestMockVaultTimeouts:
         # Create a mock vault client that times out
         class TimeoutVaultClient(VaultClient):
             def authenticate(self) -> None:
+                """
+                Authenticate the client so it can perform subsequent vault operations.
+                
+                This method establishes or refreshes the client's authentication state; implementations may perform network requests or credential exchanges as needed.
+                """
                 pass
 
             def is_authenticated(self) -> bool:
+                """
+                Indicates whether the client is currently authenticated.
+                
+                Returns:
+                    `True` if the client is authenticated, `False` otherwise.
+                """
                 return True
 
             def get_secret(self, name: str):
+                """
+                Attempt to retrieve a secret by name but always raise a connection timeout error.
+                
+                Parameters:
+                    name (str): Identifier of the secret to retrieve.
+                
+                Raises:
+                    VaultError: Always raised with the message "Connection timed out".
+                """
                 raise VaultError("Connection timed out")
 
             def list_secrets(self, prefix: str = "") -> list[str]:
+                """
+                Return the names of secrets stored under the given prefix.
+                
+                Parameters:
+                	prefix (str): Path prefix or namespace to filter secrets; empty string lists all top-level secrets.
+                
+                Returns:
+                	list[str]: A list of secret names found under the specified prefix.
+                
+                Raises:
+                	VaultError: If the vault operation fails (e.g., connection timeout or authentication failure).
+                """
                 raise VaultError("Connection timed out")
 
             def set_secret(self, name: str, value: str):
+                """
+                Simulates a secret write operation that always fails with a connection timeout.
+                
+                Raises:
+                    VaultError: always raised with the message "Connection timed out".
+                """
                 raise VaultError("Connection timed out")
 
         # Create test directory and files

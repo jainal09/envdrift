@@ -31,7 +31,14 @@ pytestmark = [pytest.mark.integration]
 
 
 def _get_envdrift_cmd() -> list[str]:
-    """Get the command to run envdrift CLI."""
+    """
+    Choose the command invocation for the envdrift CLI.
+    
+    If an envdrift executable is found on the system PATH, returns its path as a single-item list; otherwise returns the fallback invocation ["uv", "run", "envdrift"].
+    
+    Returns:
+        command (list[str]): Command and arguments to execute the envdrift CLI.
+    """
     # Try to find envdrift in PATH (installed via uv)
     envdrift_path = shutil.which("envdrift")
     if envdrift_path:
@@ -159,7 +166,11 @@ max_workers = {num_services}
         vault_client,
         integration_pythonpath: str,
     ) -> None:
-        """Test parallel sync with HashiCorp Vault is thread-safe."""
+        """
+        Verify envdrift performs a parallel HashiCorp Vault synchronization across multiple service mappings without thread-safety failures.
+        
+        Sets up multiple Vault KV secrets and corresponding service mappings, runs `envdrift pull --skip-decrypt` with parallel workers, and asserts the command succeeds and that each service directory receives an `.env.keys` file.
+        """
         num_services = 3
         secrets = {}
 
@@ -263,7 +274,11 @@ backend = "dotenvx"
         errors = []
 
         def run_lock_check():
-            """Run lock --check command."""
+            """
+            Execute the 'envdrift lock --check' command in the configured working directory and record the outcome.
+            
+            On success, appends the subprocess return code to the outer-scope `results` list; on failure, appends the exception string to the outer-scope `errors` list. The subprocess is run with the test `env` and a 30-second timeout.
+            """
             try:
                 result = subprocess.run(
                     [*_get_envdrift_cmd(), "lock", "--check"],
@@ -338,6 +353,15 @@ backend = "dotenvx"
 
         # Run lock --check on each service in parallel
         def check_service(service_idx):
+            """
+            Run `envdrift lock --check` inside the service's directory and return the execution result.
+            
+            Parameters:
+            	service_idx (int): Index of the service; used to locate the directory `decrypt-service-<service_idx>` under the test work directory.
+            
+            Returns:
+            	tuple: `(service_idx, return_code, stderr)` where `return_code` is the process exit code and `stderr` is the captured standard error output.
+            """
             service_dir = work_dir / f"decrypt-service-{service_idx}"
             result = subprocess.run(
                 [*_get_envdrift_cmd(), "lock", "--check"],
@@ -456,6 +480,14 @@ class TestRaceConditions:
         errors = []
 
         def write_file(idx: int):
+            """
+            Write and repeatedly verify a test .env.keys file to detect race conditions.
+            
+            Performs multiple write-read cycles to work_dir/race-test-<idx>.env.keys, verifying the file content remains stable between writes. On any mismatch or exception, records an error to the surrounding `errors` list; on success, marks `results[idx] = True`.
+            
+            Parameters:
+                idx (int): Numeric index used to name the target test file and embed in its content.
+            """
             try:
                 file_path = work_dir / f"race-test-{idx}.env.keys"
                 content = f"DOTENV_PRIVATE_KEY_TEST_{idx}=key-value-{idx}\n"
@@ -495,6 +527,14 @@ class TestRaceConditions:
         errors = []
 
         def create_nested_dir(idx: int):
+            """
+            Create a nested directory under the captured `base_dir` using `idx` to name levels and record any errors.
+            
+            Creates the path: base_dir / f"level1-{idx % 3}" / f"level2-{idx}" and ensures the directory exists. On failure, appends an error message to the captured `errors` list.
+             
+            Parameters:
+                idx (int): Index used to derive the level1 and level2 directory names.
+            """
             try:
                 dir_path = base_dir / f"level1-{idx % 3}" / f"level2-{idx}"
                 ensure_directory(dir_path)
