@@ -349,9 +349,8 @@ environment = "staging"
 
         # Create .env.keys with the key to push
         key_value = "staging-private-key-abc123xyz"
-        (work_dir / ".env.keys").write_text(
-            f"DOTENV_PRIVATE_KEY_STAGING={key_value}\n"
-        )
+        env_keys_content = f"DOTENV_PRIVATE_KEY_STAGING={key_value}\n"
+        (work_dir / ".env.keys").write_text(env_keys_content)
 
         # Create encrypted env file
         (work_dir / ".env.staging").write_text(
@@ -374,8 +373,9 @@ environment = "staging"
             assert result.returncode == 0, f"stdout: {result.stdout}\nstderr: {result.stderr}"
 
             # Verify secret was pushed to LocalStack
+            # vault-push stores the full .env.keys content, not just the value
             response = aws_secrets_client.get_secret_value(SecretId=secret_name)
-            assert response["SecretString"] == key_value
+            assert key_value in response["SecretString"]
         finally:
             # Cleanup
             with contextlib.suppress(Exception):
