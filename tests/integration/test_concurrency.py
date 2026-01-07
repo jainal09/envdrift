@@ -248,7 +248,6 @@ class TestParallelEncryptAttempts:
     def test_concurrent_encrypt_same_file(
         self,
         work_dir: Path,
-        git_repo: Path,
         integration_pythonpath: str,
         envdrift_cmd: list[str],
     ) -> None:

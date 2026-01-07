@@ -44,7 +44,7 @@ jobs:
     # Service containers for integration tests
     services:
       localstack:
-        image: localstack/localstack:4.0
+        image: localstack/localstack:4.12
         ports:
           - 4566:4566
         env:
@@ -59,7 +59,7 @@ jobs:
           --health-start-period=10s
 
       vault:
-        image: hashicorp/vault:1.18
+        image: hashicorp/vault:1.21
         ports:
           - 8200:8200
         env:
@@ -89,15 +89,15 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Set up Python ${{ matrix.python-version }}
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: ${{ matrix.python-version }}
 
       - name: Install uv
-        uses: astral-sh/setup-uv@v4
+        uses: astral-sh/setup-uv@v7
 
       - name: Install dependencies
         run: |
@@ -192,7 +192,7 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Download coverage artifacts
         uses: actions/download-artifact@v4
@@ -218,15 +218,15 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Set up Python 3.12
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: "3.12"
 
       - name: Install uv
-        uses: astral-sh/setup-uv@v4
+        uses: astral-sh/setup-uv@v7
 
       - name: Install dependencies
         run: |
