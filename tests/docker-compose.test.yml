@@ -40,7 +40,7 @@ services:
       start_period: 5s
 
   lowkey-vault:
-    image: nagyesta/lowkey-vault:2.4  # Pin to v2.4.x for stability
+    image: nagyesta/lowkey-vault:7.0.3  # Pin to v7.x for stability
     ports:
       - "8443:8443"
     environment:
