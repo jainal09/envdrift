@@ -406,7 +406,7 @@ class TestHookConfigEdgeCases:
         env_file.write_text("SECRET=value\n")
 
         # Should not crash when not in git repo
-        result = _run_envdrift(["encrypt", env_file.name], cwd=work_dir, env=env, check=False)
+        _run_envdrift(["encrypt", env_file.name], cwd=work_dir, env=env, check=False)
         
         # Encryption should still work
         assert env_file.exists()
@@ -469,7 +469,7 @@ class TestHookConfigEdgeCases:
 
         # Should create config at custom path
         precommit_path = work_dir / "config" / ".pre-commit-config.yaml"
-        assert precommit_path.exists(), f"Pre-commit config should be at custom path"
+        assert precommit_path.exists(), "Pre-commit config should be at custom path"
 
 
 @pytest.mark.integration

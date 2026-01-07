@@ -18,14 +18,10 @@ from __future__ import annotations
 import subprocess
 import sys
 import textwrap
-import tempfile
 from pathlib import Path
-from typing import TYPE_CHECKING
 
 import pytest
 
-if TYPE_CHECKING:
-    pass
 
 # Mark all tests in this module
 pytestmark = [pytest.mark.integration]
@@ -616,5 +612,4 @@ class TestValidateCommand:
         
         # Should exit with error
         assert result.returncode != 0
-        combined = result.stdout + result.stderr
         assert "Traceback" not in result.stderr, "Should not crash with traceback"
