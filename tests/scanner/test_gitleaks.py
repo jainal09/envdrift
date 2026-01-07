@@ -348,7 +348,7 @@ class TestGitleaksScanExecution:
         return scanner
 
     def test_scan_parses_json_output(self, mock_scanner: GitleaksScanner, tmp_path: Path):
-        """Test that scan correctly parses JSON output."""
+        """Test that scan correctly parses JSON output from report file."""
         findings_json = json.dumps([
             {
                 "Description": "AWS Key",
@@ -359,13 +359,17 @@ class TestGitleaksScanExecution:
             }
         ])
 
+        def write_report_file(*args, **kwargs):
+            """Mock subprocess that writes JSON to the report file."""
+            # Find --report-path in args
+            cmd_args = args[0]
+            report_idx = cmd_args.index("--report-path")
+            report_path = Path(cmd_args[report_idx + 1])
+            report_path.write_text(findings_json)
+            return MagicMock(stdout="", stderr="", returncode=0)
+
         with patch.object(mock_scanner, "_find_binary", return_value=mock_scanner._binary_path):
-            with patch("subprocess.run") as mock_run:
-                mock_run.return_value = MagicMock(
-                    stdout=findings_json,
-                    stderr="",
-                    returncode=0,
-                )
+            with patch("subprocess.run", side_effect=write_report_file):
                 result = mock_scanner.scan([tmp_path])
 
         assert result.success is True
@@ -373,9 +377,10 @@ class TestGitleaksScanExecution:
         assert result.findings[0].rule_id == "gitleaks-aws-key"
 
     def test_scan_handles_empty_output(self, mock_scanner: GitleaksScanner, tmp_path: Path):
-        """Test that scan handles empty output."""
+        """Test that scan handles empty report file."""
         with patch.object(mock_scanner, "_find_binary", return_value=mock_scanner._binary_path):
             with patch("subprocess.run") as mock_run:
+                # Don't write anything to report file - it stays empty
                 mock_run.return_value = MagicMock(
                     stdout="",
                     stderr="",
@@ -387,14 +392,17 @@ class TestGitleaksScanExecution:
         assert len(result.findings) == 0
 
     def test_scan_handles_invalid_json(self, mock_scanner: GitleaksScanner, tmp_path: Path):
-        """Test that scan handles invalid JSON gracefully."""
+        """Test that scan handles invalid JSON in report file gracefully."""
+        def write_invalid_json(*args, **kwargs):
+            """Mock subprocess that writes invalid JSON to report file."""
+            cmd_args = args[0]
+            report_idx = cmd_args.index("--report-path")
+            report_path = Path(cmd_args[report_idx + 1])
+            report_path.write_text("not valid json")
+            return MagicMock(stdout="", stderr="", returncode=0)
+
         with patch.object(mock_scanner, "_find_binary", return_value=mock_scanner._binary_path):
-            with patch("subprocess.run") as mock_run:
-                mock_run.return_value = MagicMock(
-                    stdout="not valid json",
-                    stderr="",
-                    returncode=0,
-                )
+            with patch("subprocess.run", side_effect=write_invalid_json):
                 result = mock_scanner.scan([tmp_path])
 
         assert result.success is True

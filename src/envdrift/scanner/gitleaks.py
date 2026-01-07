@@ -491,24 +491,32 @@ class GitleaksScanner(ScannerBackend):
             if not path.exists():
                 continue
 
-            # Build command
-            args = [
-                str(binary),
-                "detect",
-                "--source",
-                str(path),
-                "--report-format",
-                "json",
-                "--exit-code",
-                "0",  # Don't fail on findings, we handle that
-            ]
-
-            # If not scanning git history, use --no-git
-            if not include_git_history:
-                args.append("--no-git")
+            # Create temp file for JSON output (gitleaks requires --report-path for JSON)
+            with tempfile.NamedTemporaryFile(
+                mode="w", suffix=".json", delete=False
+            ) as report_file:
+                report_path = Path(report_file.name)
 
             try:
-                result = subprocess.run(
+                # Build command
+                args = [
+                    str(binary),
+                    "detect",
+                    "--source",
+                    str(path),
+                    "--report-format",
+                    "json",
+                    "--report-path",
+                    str(report_path),
+                    "--exit-code",
+                    "0",  # Don't fail on findings, we handle that
+                ]
+
+                # If not scanning git history, use --no-git
+                if not include_git_history:
+                    args.append("--no-git")
+
+                subprocess.run(
                     args,
                     capture_output=True,
                     text=True,
@@ -516,10 +524,10 @@ class GitleaksScanner(ScannerBackend):
                     cwd=str(path) if path.is_dir() else str(path.parent),
                 )
 
-                # Parse JSON output
-                if result.stdout.strip():
+                # Parse JSON output from report file
+                if report_path.exists() and report_path.stat().st_size > 0:
                     try:
-                        findings_data = json.loads(result.stdout)
+                        findings_data = json.loads(report_path.read_text())
                         if findings_data and isinstance(findings_data, list):
                             for item in findings_data:
                                 finding = self._parse_finding(item, path)
@@ -543,6 +551,10 @@ class GitleaksScanner(ScannerBackend):
                     error=str(e),
                     duration_ms=int((time.time() - start_time) * 1000),
                 )
+            finally:
+                # Clean up temp report file
+                if report_path.exists():
+                    report_path.unlink()
 
         return ScanResult(
             scanner_name=self.name,

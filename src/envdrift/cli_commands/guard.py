@@ -8,7 +8,7 @@ The guard command provides defense-in-depth by detecting:
 
 Configuration can be set in envdrift.toml:
     [guard]
-    scanners = ["native", "gitleaks"]  # or ["native", "gitleaks", "trufflehog"]
+    scanners = ["native", "gitleaks"]  # or add "trufflehog", "detect-secrets"
     auto_install = true
     include_history = false
     check_entropy = false
@@ -52,6 +52,13 @@ def guard(
         typer.Option(
             "--trufflehog/--no-trufflehog",
             help="Use trufflehog scanner (auto-installs if missing)",
+        ),
+    ] = False,
+    detect_secrets: Annotated[
+        bool,
+        typer.Option(
+            "--detect-secrets/--no-detect-secrets",
+            help="Use detect-secrets scanner - the 'final boss' with 27+ detectors",
         ),
     ] = False,
     native_only: Annotated[
@@ -187,17 +194,21 @@ def guard(
     # CLI flags override config file settings
     use_gitleaks_final = gitleaks and not native_only
     use_trufflehog_final = trufflehog and not native_only
+    use_detect_secrets_final = detect_secrets and not native_only
 
-    # If native_only is not set and user didn't explicitly enable trufflehog,
-    # check if config has trufflehog enabled
+    # If native_only is not set and user didn't explicitly enable scanners,
+    # check if config has them enabled
     if not native_only and not trufflehog and "trufflehog" in guard_cfg.scanners:
         use_trufflehog_final = True
+    if not native_only and not detect_secrets and "detect-secrets" in guard_cfg.scanners:
+        use_detect_secrets_final = True
 
     # Build configuration merging file config with CLI overrides
     config = GuardConfig(
         use_native=True,
         use_gitleaks=use_gitleaks_final,
         use_trufflehog=use_trufflehog_final,
+        use_detect_secrets=use_detect_secrets_final,
         auto_install=auto_install,
         include_git_history=history or guard_cfg.include_history,
         check_entropy=entropy or guard_cfg.check_entropy,
