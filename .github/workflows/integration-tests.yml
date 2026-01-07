@@ -107,6 +107,7 @@ jobs:
 
       - name: Install dotenvx
         run: |
+          mkdir -p "$HOME/.local/bin"
           curl -sfS "https://dotenvx.sh?directory=$HOME/.local/bin" | sh -s -- --version=1.51.4
           echo "$HOME/.local/bin" >> $GITHUB_PATH
 
