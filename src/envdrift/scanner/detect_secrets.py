@@ -18,7 +18,6 @@ import json
 import shutil
 import subprocess
 import sys
-import tempfile
 import time
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -379,12 +378,6 @@ class DetectSecretsScanner(ScannerBackend):
             if not path.exists():
                 continue
 
-            # Create temp file for baseline output
-            with tempfile.NamedTemporaryFile(
-                mode="w", suffix=".json", delete=False
-            ) as baseline_file:
-                baseline_path = Path(baseline_file.name)
-
             try:
                 # Build command with all plugins enabled ("final boss" mode)
                 args = [
@@ -413,8 +406,14 @@ class DetectSecretsScanner(ScannerBackend):
                         all_findings.extend(findings)
                         total_files += len(baseline.get("results", {}))
                     except json.JSONDecodeError:
-                        # Not valid JSON
-                        pass
+                        # Log stderr for debugging if JSON parsing fails
+                        if result.stderr:
+                            return ScanResult(
+                                scanner_name=self.name,
+                                findings=all_findings,
+                                error=f"detect-secrets output error: {result.stderr[:200]}",
+                                duration_ms=int((time.time() - start_time) * 1000),
+                            )
 
             except subprocess.TimeoutExpired:
                 return ScanResult(
@@ -430,10 +429,6 @@ class DetectSecretsScanner(ScannerBackend):
                     error=str(e),
                     duration_ms=int((time.time() - start_time) * 1000),
                 )
-            finally:
-                # Clean up temp file
-                if baseline_path.exists():
-                    baseline_path.unlink()
 
         return ScanResult(
             scanner_name=self.name,

@@ -529,18 +529,28 @@ class TrufflehogScanner(ScannerBackend):
 
                 # Parse JSON lines output (trufflehog outputs one JSON per line)
                 if result.stdout.strip():
+                    files_with_findings: set[str] = set()
                     for line in result.stdout.strip().split("\n"):
                         line = line.strip()
                         if not line:
                             continue
                         try:
                             item = json.loads(line)
+                            # Track unique files from findings
+                            source_meta = item.get("SourceMetadata", {}).get("Data", {})
+                            file_path_str = (
+                                source_meta.get("Filesystem", {}).get("file", "")
+                                or source_meta.get("Git", {}).get("file", "")
+                            )
+                            if file_path_str:
+                                files_with_findings.add(file_path_str)
                             finding = self._parse_finding(item, path)
                             if finding:
                                 all_findings.append(finding)
                         except json.JSONDecodeError:
                             # Skip non-JSON lines (progress output, etc.)
                             continue
+                    total_files += len(files_with_findings)
 
             except subprocess.TimeoutExpired:
                 return ScanResult(

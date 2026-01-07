@@ -113,7 +113,7 @@ class TestTrufflehogInstaller:
     def test_default_version_from_constants(self):
         """Test that installer uses version from constants."""
         installer = TrufflehogInstaller()
-        assert installer.version == "3.88.3"
+        assert installer.version == "3.92.4"
 
     def test_custom_version(self):
         """Test that custom version can be specified."""
@@ -153,7 +153,7 @@ class TestTrufflehogInstaller:
         installer = TrufflehogInstaller(version="3.88.3")
         url = installer.get_download_url()
         assert "windows" in url
-        assert ".zip" in url
+        assert ".tar.gz" in url
 
     @patch("envdrift.scanner.trufflehog.get_platform_info")
     def test_unsupported_platform_raises_error(self, mock_platform: MagicMock):
@@ -362,15 +362,17 @@ class TestFindingParsing:
         assert finding is not None
         assert finding.file_path == tmp_path
 
-    def test_parse_finding_returns_none_on_exception(
+    def test_parse_finding_handles_empty_data(
         self, scanner: TrufflehogScanner, tmp_path: Path
     ):
-        """Test that invalid data returns None instead of raising."""
+        """Test that empty data creates a finding with defaults instead of raising."""
         # Missing all fields
         item: dict[str, Any] = {}
         finding = scanner._parse_finding(item, tmp_path)
-        # Should return None gracefully
-        assert finding is None or finding is not None  # Either is acceptable
+        # Based on implementation, empty dict still creates a finding with defaults
+        assert finding is not None
+        assert finding.file_path == tmp_path
+        assert finding.rule_id == "trufflehog-unknown"
 
 
 class TestTrufflehogScanExecution:

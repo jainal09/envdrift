@@ -183,12 +183,12 @@ def guard(
     # so we always use CLI value (which defaults to "high")
     try:
         fail_severity = FindingSeverity(fail_on.lower())
-    except ValueError:
+    except ValueError as e:
         console.print(
             f"[red]Error:[/red] Invalid severity '{fail_on}'. "
             f"Valid options: critical, high, medium, low"
         )
-        raise typer.Exit(code=1)
+        raise typer.Exit(code=1) from e
 
     # Determine which scanners to use
     # CLI flags override config file settings

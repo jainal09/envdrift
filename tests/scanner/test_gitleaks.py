@@ -113,7 +113,7 @@ class TestGitleaksInstaller:
     def test_default_version_from_constants(self):
         """Test that installer uses version from constants."""
         installer = GitleaksInstaller()
-        assert installer.version == "8.21.2"
+        assert installer.version == "8.30.0"
 
     def test_custom_version(self):
         """Test that custom version can be specified."""
@@ -323,16 +323,17 @@ class TestFindingParsing:
         assert finding is not None
         assert finding.file_path == tmp_path
 
-    def test_parse_finding_returns_none_on_invalid_data(
+    def test_parse_finding_handles_empty_data(
         self, scanner: GitleaksScanner, tmp_path: Path
     ):
-        """Test that invalid data returns None instead of raising."""
+        """Test that empty data creates a finding with defaults instead of raising."""
         # Missing required fields
         item: dict[str, Any] = {}
         finding = scanner._parse_finding(item, tmp_path)
-        # Should not raise, just return a finding with defaults or None
-        # Based on implementation, it should still create a finding
-        assert finding is not None or finding is None  # Either is acceptable
+        # Based on implementation, empty dict still creates a finding with defaults
+        assert finding is not None
+        assert finding.file_path == tmp_path
+        assert finding.rule_id == "gitleaks-unknown"
 
 
 class TestGitleaksScanExecution:

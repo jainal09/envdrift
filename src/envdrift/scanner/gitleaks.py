@@ -529,6 +529,11 @@ class GitleaksScanner(ScannerBackend):
                     try:
                         findings_data = json.loads(report_path.read_text())
                         if findings_data and isinstance(findings_data, list):
+                            # Count unique files with findings
+                            files_with_findings = {
+                                item.get("File") for item in findings_data if item.get("File")
+                            }
+                            total_files += len(files_with_findings)
                             for item in findings_data:
                                 finding = self._parse_finding(item, path)
                                 if finding:
