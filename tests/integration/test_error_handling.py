@@ -320,7 +320,9 @@ backend = "dotenvx"
         )
 
         # Should handle gracefully without crashing
-        assert "Traceback" not in result.stderr or result.returncode != 0
+        assert "Traceback" not in result.stderr, (
+            f"Should not have unhandled exception.\nstderr: {result.stderr}"
+        )
 
     def test_empty_env_file(
         self,
@@ -557,7 +559,9 @@ environment = "production"
             )
 
             # Should not crash with unhandled exception
-            assert "Traceback" not in result.stderr or "Permission" in result.stderr
+            assert "Traceback" not in result.stderr, (
+                f"Should not have unhandled exception.\nstderr: {result.stderr}"
+            )
         finally:
             # Restore write permission for cleanup
             env_keys.chmod(stat.S_IWUSR | stat.S_IRUSR)
