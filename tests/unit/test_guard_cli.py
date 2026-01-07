@@ -74,6 +74,33 @@ def test_guard_invalid_fail_on_exits(tmp_path: Path, monkeypatch):
     assert "invalid severity" in result.output.lower()
 
 
+def test_guard_defaults_to_cwd(monkeypatch):
+    """No path arguments default to the current directory."""
+    config = EnvdriftConfig()
+    dummy_result = _build_result([])
+    scan_paths: list[list[Path]] = []
+
+    class DummyEngine:
+        def __init__(self, guard_config):
+            pass
+
+        def get_scanner_info(self):
+            return []
+
+        def scan(self, paths):
+            scan_paths.append(paths)
+            return dummy_result
+
+    monkeypatch.setattr("envdrift.cli_commands.guard.load_config", lambda _p=None: config)
+    monkeypatch.setattr("envdrift.cli_commands.guard.ScanEngine", DummyEngine)
+
+    with runner.isolated_filesystem():
+        result = runner.invoke(app, ["guard"])
+        assert result.exit_code == 0
+        assert scan_paths
+        assert scan_paths[0] == [Path.cwd()]
+
+
 def test_guard_uses_config_scanners(tmp_path: Path, monkeypatch):
     """Config scanners enable trufflehog and detect-secrets by default."""
     config = EnvdriftConfig(
@@ -218,6 +245,16 @@ def test_guard_ci_respects_fail_on_threshold(tmp_path: Path, monkeypatch):
     result = runner.invoke(app, ["guard", str(tmp_path), "--ci", "--fail-on", "critical"])
     assert result.exit_code == 0
     assert created_configs
+
+
+def test_guard_exits_with_findings_non_ci(tmp_path: Path, monkeypatch):
+    """Non-CI runs exit with scan-derived exit codes."""
+    config = EnvdriftConfig()
+    findings = [_make_finding(FindingSeverity.HIGH)]
+    _patch_guard_dependencies(monkeypatch, config, _build_result(findings))
+
+    result = runner.invoke(app, ["guard", str(tmp_path)])
+    assert result.exit_code == 2
 
 
 def test_guard_json_output(tmp_path: Path, monkeypatch):

@@ -13,7 +13,8 @@ from envdrift.scanner.base import (
     ScanFinding,
     ScanResult,
 )
-from envdrift.scanner.output import format_json, format_sarif
+from envdrift.scanner.output import format_json, format_rich, format_sarif
+from rich.console import Console
 
 
 class TestJsonOutput:
@@ -291,3 +292,49 @@ class TestSarifOutput:
 
         assert data["runs"][0]["results"] == []
         assert data["runs"][0]["tool"]["driver"]["rules"] == []
+
+
+class TestRichOutput:
+    """Tests for Rich output formatting."""
+
+    def test_format_rich_no_findings(self):
+        """No findings prints a success panel."""
+        result = AggregatedScanResult(
+            results=[],
+            total_findings=0,
+            unique_findings=[],
+            scanners_used=["native"],
+            total_duration_ms=10,
+        )
+        console = Console(record=True, force_terminal=True)
+        format_rich(result, console)
+        output = console.export_text()
+
+        assert "No secrets or policy violations detected" in output
+        assert "Scanners:" in output
+
+    def test_format_rich_with_findings(self):
+        """Findings print a summary and remediation hint."""
+        findings = [
+            ScanFinding(
+                file_path=Path(".env"),
+                rule_id="unencrypted-env-file",
+                rule_description="Unencrypted .env File",
+                description="File is not encrypted",
+                severity=FindingSeverity.HIGH,
+                scanner="native",
+            )
+        ]
+        result = AggregatedScanResult(
+            results=[ScanResult(scanner_name="native", findings=findings)],
+            total_findings=1,
+            unique_findings=findings,
+            scanners_used=["native"],
+            total_duration_ms=10,
+        )
+        console = Console(record=True, force_terminal=True, width=120)
+        format_rich(result, console)
+        output = console.export_text()
+
+        assert "Findings Summary" in output
+        assert "Remediation" in output

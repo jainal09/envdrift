@@ -4,7 +4,11 @@ from __future__ import annotations
 
 import json
 import platform
+import shutil
 import subprocess
+import sys
+import tarfile
+import zipfile
 from pathlib import Path
 from typing import Any
 from unittest.mock import MagicMock, patch
@@ -22,6 +26,28 @@ from envdrift.scanner.gitleaks import (
     get_platform_info,
     get_venv_bin_dir,
 )
+
+
+def _create_tar_gz(tmp_path: Path, binary_name: str) -> Path:
+    payload_dir = tmp_path / "payload"
+    payload_dir.mkdir()
+    binary_path = payload_dir / binary_name
+    binary_path.write_text("binary")
+    archive_path = tmp_path / "archive.tar.gz"
+    with tarfile.open(archive_path, "w:gz") as tar:
+        tar.add(binary_path, arcname=binary_name)
+    return archive_path
+
+
+def _create_zip(tmp_path: Path, binary_name: str) -> Path:
+    payload_dir = tmp_path / "payload_zip"
+    payload_dir.mkdir()
+    binary_path = payload_dir / binary_name
+    binary_path.write_text("binary")
+    archive_path = tmp_path / "archive.zip"
+    with zipfile.ZipFile(archive_path, "w") as zip_file:
+        zip_file.write(binary_path, arcname=binary_name)
+    return archive_path
 
 
 class TestPlatformDetection:
@@ -81,6 +107,51 @@ class TestGetVenvBinDir:
         """Test that Windows venv returns Scripts directory."""
         bin_dir = get_venv_bin_dir()
         assert bin_dir == Path("/path/to/venv/Scripts")
+
+    def test_returns_venv_from_sys_path(self, tmp_path: Path, monkeypatch):
+        """Test resolving venv from sys.path entries."""
+        venv_site = tmp_path / ".venv" / "lib" / "site-packages"
+        venv_site.mkdir(parents=True)
+        monkeypatch.delenv("VIRTUAL_ENV", raising=False)
+        monkeypatch.setattr(sys, "path", [str(venv_site)])
+        monkeypatch.setattr(platform, "system", lambda: "Linux")
+
+        bin_dir = get_venv_bin_dir()
+        assert bin_dir == tmp_path / ".venv" / "bin"
+
+    def test_returns_cwd_venv_when_present(self, tmp_path: Path, monkeypatch):
+        """Test resolving .venv in current directory."""
+        monkeypatch.delenv("VIRTUAL_ENV", raising=False)
+        monkeypatch.setattr(sys, "path", [str(tmp_path / "site-packages")])
+        monkeypatch.chdir(tmp_path)
+        (tmp_path / ".venv").mkdir()
+        monkeypatch.setattr(platform, "system", lambda: "Linux")
+
+        bin_dir = get_venv_bin_dir()
+        assert bin_dir == tmp_path / ".venv" / "bin"
+
+    def test_fallbacks_to_user_bin(self, tmp_path: Path, monkeypatch):
+        """Test fallback to user bin when no venv is found."""
+        monkeypatch.delenv("VIRTUAL_ENV", raising=False)
+        monkeypatch.setattr(sys, "path", [str(tmp_path / "site-packages")])
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.setenv("HOME", str(tmp_path))
+        monkeypatch.setattr(platform, "system", lambda: "Linux")
+
+        bin_dir = get_venv_bin_dir()
+        assert bin_dir == tmp_path / ".local" / "bin"
+        assert bin_dir.exists()
+
+    def test_fallbacks_to_windows_appdata(self, tmp_path: Path, monkeypatch):
+        """Test Windows fallback to APPDATA Scripts directory."""
+        monkeypatch.delenv("VIRTUAL_ENV", raising=False)
+        monkeypatch.setattr(sys, "path", [str(tmp_path / "site-packages")])
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.setenv("APPDATA", str(tmp_path / "AppData"))
+        monkeypatch.setattr(platform, "system", lambda: "Windows")
+
+        bin_dir = get_venv_bin_dir()
+        assert bin_dir == Path(tmp_path / "AppData" / "Python" / "Scripts")
 
 
 class TestGetGitleaksPath:
@@ -173,6 +244,48 @@ class TestGitleaksInstaller:
             ("Windows", "x86_64"),
         }
         assert set(GitleaksInstaller.PLATFORM_MAP.keys()) == expected_platforms
+
+    def test_download_and_extract_tar_gz(self, tmp_path: Path, monkeypatch):
+        """Tarball downloads are extracted and installed."""
+        archive_path = _create_tar_gz(tmp_path, "gitleaks")
+
+        installer = GitleaksInstaller(version="8.30.0")
+        monkeypatch.setattr(installer, "get_download_url", lambda: "https://example.com/gitleaks.tar.gz")
+        monkeypatch.setattr(platform, "system", lambda: "Linux")
+
+        def fake_urlretrieve(_url: str, filename: str):
+            shutil.copy2(archive_path, filename)
+            return filename, None
+
+        monkeypatch.setattr(
+            "envdrift.scanner.gitleaks.urllib.request.urlretrieve",
+            fake_urlretrieve,
+        )
+
+        target_path = tmp_path / "bin" / "gitleaks"
+        installer.download_and_extract(target_path)
+        assert target_path.exists()
+
+    def test_download_and_extract_zip(self, tmp_path: Path, monkeypatch):
+        """Zip downloads are extracted and installed."""
+        archive_path = _create_zip(tmp_path, "gitleaks.exe")
+
+        installer = GitleaksInstaller(version="8.30.0")
+        monkeypatch.setattr(installer, "get_download_url", lambda: "https://example.com/gitleaks.zip")
+        monkeypatch.setattr(platform, "system", lambda: "Windows")
+
+        def fake_urlretrieve(_url: str, filename: str):
+            shutil.copy2(archive_path, filename)
+            return filename, None
+
+        monkeypatch.setattr(
+            "envdrift.scanner.gitleaks.urllib.request.urlretrieve",
+            fake_urlretrieve,
+        )
+
+        target_path = tmp_path / "bin" / "gitleaks.exe"
+        installer.download_and_extract(target_path)
+        assert target_path.exists()
 
 
 class TestGitleaksScanner:

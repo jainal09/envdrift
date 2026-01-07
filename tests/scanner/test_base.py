@@ -10,6 +10,7 @@ from envdrift.scanner.base import (
     AggregatedScanResult,
     FindingSeverity,
     ScanFinding,
+    ScannerBackend,
     ScanResult,
 )
 
@@ -55,6 +56,11 @@ class TestFindingSeverity:
         """Test that comparison with non-severity returns NotImplemented."""
         assert FindingSeverity.HIGH.__lt__("high") == NotImplemented
         assert FindingSeverity.HIGH.__gt__(5) == NotImplemented
+
+    def test_severity_le_ge_with_non_severity(self):
+        """Test <= and >= with non-severity return NotImplemented."""
+        assert FindingSeverity.HIGH.__le__("high") == NotImplemented
+        assert FindingSeverity.HIGH.__ge__(5) == NotImplemented
 
 
 class TestScanFinding:
@@ -341,3 +347,29 @@ class TestAggregatedScanResult:
         assert summary["medium"] == 1
         assert summary["low"] == 0
         assert summary["info"] == 0
+
+
+class TestScannerBackendDefaults:
+    """Tests for ScannerBackend default implementations."""
+
+    def test_default_install_and_version(self):
+        """install/get_version default to None for base scanners."""
+
+        class DummyScanner(ScannerBackend):
+            @property
+            def name(self) -> str:
+                return "dummy"
+
+            @property
+            def description(self) -> str:
+                return "dummy scanner"
+
+            def is_installed(self) -> bool:
+                return True
+
+            def scan(self, paths: list[Path], include_git_history: bool = False) -> ScanResult:
+                return ScanResult(scanner_name=self.name)
+
+        scanner = DummyScanner()
+        assert scanner.install() is None
+        assert scanner.get_version() is None

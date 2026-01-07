@@ -41,6 +41,31 @@ class TestDetectSecretsInstaller:
         installer.progress("hello")
         assert messages == ["hello"]
 
+    @patch.object(DetectSecretsInstaller, "_is_installed", return_value=True)
+    @patch("subprocess.run")
+    def test_install_short_circuits_when_installed(
+        self,
+        mock_run: MagicMock,
+        _mock_is_installed: MagicMock,
+    ):
+        """Installer returns early when already installed."""
+        installer = DetectSecretsInstaller(version="1.5.0")
+        assert installer.install() is True
+        mock_run.assert_not_called()
+
+    @patch("subprocess.run")
+    def test_is_installed_returns_true(self, mock_run: MagicMock):
+        """_is_installed returns True on version success."""
+        mock_run.return_value = SimpleNamespace(returncode=0, stderr="", stdout="")
+        installer = DetectSecretsInstaller(version="1.5.0")
+        assert installer._is_installed() is True
+
+    @patch("subprocess.run", side_effect=RuntimeError("boom"))
+    def test_is_installed_handles_exception(self, _mock_run: MagicMock):
+        """_is_installed returns False on errors."""
+        installer = DetectSecretsInstaller(version="1.5.0")
+        assert installer._is_installed() is False
+
     @patch.object(DetectSecretsInstaller, "_is_installed", return_value=False)
     @patch("shutil.which", return_value="/usr/bin/uv")
     @patch("subprocess.run")
@@ -135,6 +160,22 @@ class TestDetectSecretsScanner:
         mock_run.side_effect = RuntimeError("boom")
         scanner = DetectSecretsScanner(auto_install=False)
         assert scanner.is_installed() is False
+
+    @patch("subprocess.run")
+    def test_is_installed_sets_cache_true(self, mock_run: MagicMock):
+        """is_installed caches True when detect-secrets is available."""
+        mock_run.return_value = SimpleNamespace(returncode=0, stderr="", stdout="")
+        scanner = DetectSecretsScanner(auto_install=False)
+        assert scanner.is_installed() is True
+        assert scanner._installed is True
+
+    @patch("subprocess.run")
+    def test_is_installed_sets_cache_false(self, mock_run: MagicMock):
+        """is_installed caches False when command fails."""
+        mock_run.return_value = SimpleNamespace(returncode=1, stderr="", stdout="")
+        scanner = DetectSecretsScanner(auto_install=False)
+        assert scanner.is_installed() is False
+        assert scanner._installed is False
 
     @patch("subprocess.run")
     def test_get_version_parses_output(self, mock_run: MagicMock):

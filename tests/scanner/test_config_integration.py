@@ -128,6 +128,27 @@ ignore_paths = ["vendor/**"]
         assert config.guard.fail_on_severity == "medium"
         assert config.guard.ignore_paths == ["vendor/**"]
 
+    def test_load_config_from_pyproject_guard_section(self, tmp_path: Path, monkeypatch):
+        """Test loading guard settings from pyproject.toml."""
+        pyproject = tmp_path / "pyproject.toml"
+        pyproject.write_text("""
+[tool.envdrift]
+schema = "config.settings:ProductionSettings"
+
+[tool.envdrift.guard]
+scanners = ["native", "trufflehog"]
+include_history = true
+fail_on_severity = "medium"
+ignore_paths = ["vendor/**"]
+""")
+        monkeypatch.chdir(tmp_path)
+        config = load_config(pyproject)
+
+        assert config.guard.scanners == ["native", "trufflehog"]
+        assert config.guard.include_history is True
+        assert config.guard.fail_on_severity == "medium"
+        assert config.guard.ignore_paths == ["vendor/**"]
+
 
 class TestGuardConfigToScannerConfig:
     """Tests for converting config.GuardConfig to scanner.engine.GuardConfig."""

@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 from pathlib import Path
+import sys
+import types
 
-from envdrift.scanner.base import FindingSeverity, ScanFinding
+from envdrift.scanner.base import FindingSeverity, ScanFinding, ScanResult, ScannerBackend
 from envdrift.scanner.engine import GuardConfig, ScanEngine
 
 
@@ -80,6 +82,13 @@ class TestGuardConfig:
 
         assert config.fail_on_severity == FindingSeverity.HIGH
 
+    def test_config_from_dict_with_string_scanner(self):
+        """Test config handles scanners as a string."""
+        config = GuardConfig.from_dict({"guard": {"scanners": "gitleaks"}})
+
+        assert config.use_native is False
+        assert config.use_gitleaks is True
+
 
 class TestScanEngine:
     """Tests for ScanEngine class."""
@@ -114,6 +123,174 @@ class TestScanEngine:
 
         assert len(engine.scanners) == 0
 
+    def test_engine_initializes_external_scanners(self, monkeypatch):
+        """External scanners are added when installed."""
+
+        def make_scanner(class_name: str, scanner_name: str, installed: bool):
+            def __init__(self, auto_install: bool = True):
+                self._installed = installed
+
+            def name(self) -> str:
+                return scanner_name
+
+            def description(self) -> str:
+                return f"{scanner_name} scanner"
+
+            def is_installed(self) -> bool:
+                return self._installed
+
+            def scan(
+                self,
+                paths: list[Path],
+                include_git_history: bool = False,
+            ) -> ScanResult:
+                return ScanResult(scanner_name=self.name)
+
+            return type(
+                class_name,
+                (ScannerBackend,),
+                {
+                    "__init__": __init__,
+                    "name": property(name),
+                    "description": property(description),
+                    "is_installed": is_installed,
+                    "scan": scan,
+                },
+            )
+
+        gitleaks_mod = types.ModuleType("envdrift.scanner.gitleaks")
+        gitleaks_mod.GitleaksScanner = make_scanner(
+            "GitleaksScanner", "gitleaks", True
+        )
+        truffle_mod = types.ModuleType("envdrift.scanner.trufflehog")
+        truffle_mod.TrufflehogScanner = make_scanner(
+            "TrufflehogScanner", "trufflehog", True
+        )
+        detect_mod = types.ModuleType("envdrift.scanner.detect_secrets")
+        detect_mod.DetectSecretsScanner = make_scanner(
+            "DetectSecretsScanner", "detect-secrets", True
+        )
+
+        monkeypatch.setitem(sys.modules, "envdrift.scanner.gitleaks", gitleaks_mod)
+        monkeypatch.setitem(sys.modules, "envdrift.scanner.trufflehog", truffle_mod)
+        monkeypatch.setitem(sys.modules, "envdrift.scanner.detect_secrets", detect_mod)
+
+        config = GuardConfig(
+            use_native=False,
+            use_gitleaks=True,
+            use_trufflehog=True,
+            use_detect_secrets=True,
+            auto_install=False,
+        )
+        engine = ScanEngine(config)
+        names = {scanner.name for scanner in engine.scanners}
+
+        assert names == {"gitleaks", "trufflehog", "detect-secrets"}
+
+    def test_engine_auto_install_adds_uninstalled_scanner(self, monkeypatch):
+        """Auto-install allows uninstalled scanners to be added."""
+
+        def make_scanner(class_name: str, scanner_name: str):
+            def __init__(self, auto_install: bool = True):
+                self._installed = False
+
+            def name(self) -> str:
+                return scanner_name
+
+            def description(self) -> str:
+                return f"{scanner_name} scanner"
+
+            def is_installed(self) -> bool:
+                return self._installed
+
+            def scan(
+                self,
+                paths: list[Path],
+                include_git_history: bool = False,
+            ) -> ScanResult:
+                return ScanResult(scanner_name=self.name)
+
+            return type(
+                class_name,
+                (ScannerBackend,),
+                {
+                    "__init__": __init__,
+                    "name": property(name),
+                    "description": property(description),
+                    "is_installed": is_installed,
+                    "scan": scan,
+                },
+            )
+
+        gitleaks_mod = types.ModuleType("envdrift.scanner.gitleaks")
+        gitleaks_mod.GitleaksScanner = make_scanner(
+            "GitleaksScanner", "gitleaks"
+        )
+        monkeypatch.setitem(sys.modules, "envdrift.scanner.gitleaks", gitleaks_mod)
+
+        config = GuardConfig(
+            use_native=False,
+            use_gitleaks=True,
+            use_trufflehog=False,
+            use_detect_secrets=False,
+            auto_install=True,
+        )
+        engine = ScanEngine(config)
+        names = [scanner.name for scanner in engine.scanners]
+
+        assert names == ["gitleaks"]
+
+    def test_engine_skips_uninstalled_when_auto_install_disabled(self, monkeypatch):
+        """Disabled auto-install skips unavailable scanners."""
+
+        def make_scanner(class_name: str, scanner_name: str):
+            def __init__(self, auto_install: bool = True):
+                self._installed = False
+
+            def name(self) -> str:
+                return scanner_name
+
+            def description(self) -> str:
+                return f"{scanner_name} scanner"
+
+            def is_installed(self) -> bool:
+                return self._installed
+
+            def scan(
+                self,
+                paths: list[Path],
+                include_git_history: bool = False,
+            ) -> ScanResult:
+                return ScanResult(scanner_name=self.name)
+
+            return type(
+                class_name,
+                (ScannerBackend,),
+                {
+                    "__init__": __init__,
+                    "name": property(name),
+                    "description": property(description),
+                    "is_installed": is_installed,
+                    "scan": scan,
+                },
+            )
+
+        gitleaks_mod = types.ModuleType("envdrift.scanner.gitleaks")
+        gitleaks_mod.GitleaksScanner = make_scanner(
+            "GitleaksScanner", "gitleaks"
+        )
+        monkeypatch.setitem(sys.modules, "envdrift.scanner.gitleaks", gitleaks_mod)
+
+        config = GuardConfig(
+            use_native=False,
+            use_gitleaks=True,
+            use_trufflehog=False,
+            use_detect_secrets=False,
+            auto_install=False,
+        )
+        engine = ScanEngine(config)
+        assert engine.scanners == []
+
     def test_scan_empty_directory(self, tmp_path: Path):
         """Test scanning an empty directory."""
         config = GuardConfig(use_native=True, use_gitleaks=False)
@@ -138,6 +315,41 @@ class TestScanEngine:
 
         assert result.total_findings >= 1
         assert len(result.unique_findings) >= 1
+
+    def test_scan_records_scanner_errors(self):
+        """Scanner errors are captured without failing the run."""
+
+        class FailingScanner(ScannerBackend):
+            @property
+            def name(self) -> str:
+                return "failing"
+
+            @property
+            def description(self) -> str:
+                return "failing scanner"
+
+            def is_installed(self) -> bool:
+                return True
+
+            def scan(
+                self,
+                paths: list[Path],
+                include_git_history: bool = False,
+            ) -> ScanResult:
+                raise RuntimeError("boom")
+
+        config = GuardConfig(
+            use_native=False,
+            use_gitleaks=False,
+            use_trufflehog=False,
+            use_detect_secrets=False,
+        )
+        engine = ScanEngine(config)
+        engine.scanners = [FailingScanner()]
+
+        result = engine.scan([Path(".")])
+
+        assert result.results[0].error == "boom"
 
     def test_get_scanner_info(self):
         """Test getting scanner information."""

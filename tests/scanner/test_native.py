@@ -46,6 +46,55 @@ class TestNativeScanner:
         assert result.files_scanned == 0
 
 
+class TestNativeScannerInternals:
+    """Tests for internal native scanner behaviors."""
+
+    def test_collect_files_handles_permission_error(self, tmp_path: Path, monkeypatch):
+        """Permission errors during rglob return empty results."""
+        scanner = NativeScanner()
+
+        def raise_permission(self, _pattern: str):
+            raise PermissionError("nope")
+
+        monkeypatch.setattr(Path, "rglob", raise_permission)
+        assert scanner._collect_files(tmp_path) == []
+
+    def test_should_ignore_handles_outside_base(self):
+        """Relative path failures fall back to full path matching."""
+        scanner = NativeScanner(ignore_patterns=["secret.txt"])
+        assert scanner._should_ignore(
+            Path("/outside/secret.txt"), Path("/base")
+        ) is True
+
+    def test_should_ignore_matches_path_parts(self, tmp_path: Path):
+        """Ignore patterns match individual path parts."""
+        scanner = NativeScanner(ignore_patterns=["secrets"])
+        file_path = tmp_path / "nested" / "secrets" / "file.txt"
+        assert scanner._should_ignore(file_path, tmp_path) is True
+
+    def test_scan_file_handles_read_errors(self, tmp_path: Path, monkeypatch):
+        """Read failures return no findings."""
+        scanner = NativeScanner()
+        file_path = tmp_path / "config.py"
+        file_path.write_text("SECRET=VALUE")
+        original_read_text = Path.read_text
+
+        def raise_error(self, *args, **kwargs):
+            if self == file_path:
+                raise OSError("boom")
+            return original_read_text(self, *args, **kwargs)
+
+        monkeypatch.setattr(Path, "read_text", raise_error)
+        assert scanner._scan_file(file_path) == []
+
+    def test_scan_file_skips_empty_content(self, tmp_path: Path):
+        """Empty files return no findings."""
+        scanner = NativeScanner()
+        file_path = tmp_path / "empty.txt"
+        file_path.write_text("")
+        assert scanner._scan_file(file_path) == []
+
+
 class TestUnencryptedEnvDetection:
     """Tests for unencrypted .env file detection."""
 
@@ -281,6 +330,25 @@ class TestEntropyDetection:
             f for f in result.findings if f.rule_id == "high-entropy-string"
         ]
         assert len(entropy_findings) == 0
+
+    def test_skips_comments_and_paths(self, scanner: NativeScanner, tmp_path: Path):
+        """Comment lines and path-like values are skipped."""
+        content = (
+            "# SECRET = ABCDEFGHIJKLMNOP\n"
+            "PATH = /var/tmp/abcdefghijklmnop\n"
+            "REL = ./abcdefghijklmnop\n"
+        )
+        findings = scanner._scan_entropy(tmp_path / "config.py", content)
+        assert findings == []
+
+    def test_skips_alpha_only_values(self, scanner: NativeScanner, tmp_path: Path):
+        """Alpha-only uppercase or lowercase values are skipped."""
+        content = (
+            "LOWER = abcdefghijklmnop\n"
+            "UPPER = ABCDEFGHIJKLMNOP\n"
+        )
+        findings = scanner._scan_entropy(tmp_path / "config.py", content)
+        assert findings == []
 
     def test_disabled_by_default(self, tmp_path: Path):
         """Test that entropy detection is disabled by default."""
