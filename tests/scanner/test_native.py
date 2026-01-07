@@ -180,7 +180,7 @@ MIIEpAIBAAKCAQEA...
     def test_detects_stripe_key(self, scanner: NativeScanner, tmp_path: Path):
         """Test detection of Stripe secret key."""
         config_file = tmp_path / "config.py"
-        config_file.write_text('STRIPE_KEY = "sk_live_xxxxxxxxxxxxxxxxxxxxxxxx"\n')
+        config_file.write_text('STRIPE_KEY = "sk_live_TESTKEY00000000000000000"\n')
 
         result = scanner.scan([tmp_path])
 

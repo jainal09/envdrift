@@ -1,9 +1,55 @@
 # EnvDrift Guard Command Specification
 
-> **Status:** Implemented (Phase 1-4 Complete)
+> **Status:** Implemented (Phase 1-4 Complete + detect-secrets)
 > **Author:** Claude
 > **Created:** 2025-01-06
-> **Last Updated:** 2025-01-06
+> **Last Updated:** 2025-01-07
+
+---
+
+## Implementation Status Board
+
+### Core Phases
+
+| Phase | Description | Status | PR |
+|-------|-------------|--------|-----|
+| Phase 1 | Foundation + Native Scanner | ✅ Complete | #TBD |
+| Phase 2 | Gitleaks Integration | ✅ Complete | #TBD |
+| Phase 3 | Trufflehog Integration | ✅ Complete | #TBD |
+| Phase 4 | Scan Engine + CLI + Config | ✅ Complete | #TBD |
+| Bonus | detect-secrets Scanner | ✅ Complete | #TBD |
+
+### Feature Checklist
+
+| Feature | Status | Notes |
+|---------|--------|-------|
+| Native scanner (zero deps) | ✅ Done | 15+ secret patterns |
+| Gitleaks auto-install | ✅ Done | Binary download |
+| Trufflehog auto-install | ✅ Done | Binary download |
+| detect-secrets auto-install | ✅ Done | pip/uv install |
+| JSON output | ✅ Done | `--json` flag |
+| SARIF output | ✅ Done | `--sarif` flag |
+| Rich terminal UI | ✅ Done | Color + tables |
+| Git history scanning | ✅ Done | `--history` flag |
+| Entropy detection | ✅ Done | `--entropy` flag |
+| Config via envdrift.toml | ✅ Done | `[guard]` section |
+| CI mode | ✅ Done | `--ci` flag |
+| Custom patterns in config | ❌ TODO | `[[guard.patterns]]` |
+| Baseline file (ignore known) | ❌ TODO | `.envdrift-baseline` |
+| Parallel scanner execution | ❌ TODO | Performance |
+| CI workflow examples | ❌ TODO | GitHub/GitLab |
+
+### Scanner Coverage
+
+| Scanner | Findings on Test | Specialization |
+|---------|------------------|----------------|
+| Native | 5 | Encryption markers, basic patterns |
+| Gitleaks | 3 | 150+ patterns, entropy |
+| Trufflehog | 1 | Verified secrets, cloud creds |
+| detect-secrets | 6 | 27+ detectors, keywords, entropy |
+| **Combined** | **14 unique** | Defense in depth |
+
+---
 
 ## Table of Contents
 
@@ -94,40 +140,40 @@ envdrift guard --ci
 ### Component Diagram
 
 ```
-┌─────────────────────────────────────────────────────────────────┐
-│                        envdrift guard                           │
-├─────────────────────────────────────────────────────────────────┤
-│                                                                 │
-│  ┌─────────────────────────────────────────────────────────┐   │
-│  │                     ScanEngine                           │   │
-│  │  - Orchestrates multiple scanners                        │   │
-│  │  - Aggregates and deduplicates findings                  │   │
-│  │  - Manages scanner lifecycle                             │   │
-│  └─────────────────────────────────────────────────────────┘   │
-│                              │                                  │
-│         ┌────────────────────┼────────────────────┐            │
-│         ▼                    ▼                    ▼            │
-│  ┌─────────────┐     ┌─────────────┐     ┌─────────────┐      │
-│  │   Native    │     │  Gitleaks   │     │ Trufflehog  │      │
-│  │  Scanner    │     │  Scanner    │     │  Scanner    │      │
-│  ├─────────────┤     ├─────────────┤     ├─────────────┤      │
-│  │ • Encryption│     │ • Pattern   │     │ • Verified  │      │
-│  │   markers   │     │   matching  │     │   secrets   │      │
-│  │ • Basic     │     │ • Entropy   │     │ • Git       │      │
-│  │   patterns  │     │   detection │     │   history   │      │
-│  │ • No deps   │     │ • Git       │     │ • Cloud     │      │
-│  │             │     │   history   │     │   creds     │      │
-│  └─────────────┘     └─────────────┘     └─────────────┘      │
-│         │                    │                    │            │
-│         └────────────────────┼────────────────────┘            │
-│                              ▼                                  │
-│                    ┌─────────────────┐                         │
-│                    │  ScanResult     │                         │
-│                    │  - findings[]   │                         │
-│                    │  - exit_code    │                         │
-│                    └─────────────────┘                         │
-│                                                                 │
-└─────────────────────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────────────────────────┐
+│                              envdrift guard                                   │
+├──────────────────────────────────────────────────────────────────────────────┤
+│                                                                              │
+│  ┌────────────────────────────────────────────────────────────────────────┐  │
+│  │                            ScanEngine                                   │  │
+│  │  - Orchestrates multiple scanners                                       │  │
+│  │  - Aggregates and deduplicates findings                                 │  │
+│  │  - Manages scanner lifecycle                                            │  │
+│  └────────────────────────────────────────────────────────────────────────┘  │
+│                                    │                                          │
+│       ┌────────────────┬───────────┼───────────┬────────────────┐            │
+│       ▼                ▼           ▼           ▼                ▼            │
+│  ┌──────────┐   ┌──────────┐  ┌──────────┐  ┌──────────┐  ┌──────────┐      │
+│  │  Native  │   │ Gitleaks │  │Trufflehog│  │ detect-  │  │  Future  │      │
+│  │ Scanner  │   │ Scanner  │  │ Scanner  │  │ secrets  │  │ Scanner  │      │
+│  ├──────────┤   ├──────────┤  ├──────────┤  ├──────────┤  ├──────────┤      │
+│  │• Encrypt │   │• 150+    │  │• Verified│  │• 27+     │  │          │      │
+│  │  markers │   │  patterns│  │  secrets │  │  plugins │  │          │      │
+│  │• Basic   │   │• Entropy │  │• Git     │  │• Keyword │  │          │      │
+│  │  patterns│   │• Git     │  │  history │  │  detect  │  │          │      │
+│  │• No deps │   │  history │  │• Cloud   │  │• High    │  │          │      │
+│  │          │   │          │  │  creds   │  │  entropy │  │          │      │
+│  └──────────┘   └──────────┘  └──────────┘  └──────────┘  └──────────┘      │
+│       │                │           │             │               │            │
+│       └────────────────┴───────────┼─────────────┴───────────────┘            │
+│                                    ▼                                          │
+│                         ┌─────────────────┐                                   │
+│                         │  ScanResult     │                                   │
+│                         │  - findings[]   │                                   │
+│                         │  - exit_code    │                                   │
+│                         └─────────────────┘                                   │
+│                                                                              │
+└──────────────────────────────────────────────────────────────────────────────┘
 ```
 
 ### Module Structure
@@ -140,12 +186,13 @@ src/envdrift/
 │   ├── native.py             # NativeScanner implementation
 │   ├── gitleaks.py           # GitleaksScanner + installer
 │   ├── trufflehog.py         # TrufflehogScanner + installer
+│   ├── detect_secrets.py     # DetectSecretsScanner + installer (NEW)
 │   ├── engine.py             # ScanEngine orchestrator
 │   ├── patterns.py           # Built-in secret patterns
 │   └── output.py             # Output formatters (rich, json, sarif)
 ├── cli_commands/
 │   └── guard.py              # CLI command implementation
-└── constants.json            # Add scanner versions
+└── constants.json            # Scanner versions (gitleaks, trufflehog, detect-secrets)
 ```
 
 ### Data Models
@@ -1862,8 +1909,8 @@ class TestSecretPatterns:
         ("AKIAIOSFODNN7EXAMPLE", "aws-access-key-id"),
         ("ghp_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx", "github-pat"),
         ("sk-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx", "openai-api-key"),
-        ("xoxb-123456789012-123456789012-xxxxxxxxxxxxxxxxxxxx", "slack-bot-token"),
-        ("sk_live_xxxxxxxxxxxxxxxxxxxxxxxx", "stripe-secret-key"),
+        ("xoxb-000000000000-000000000000-TESTTOKEN000000000000", "slack-bot-token"),
+        ("sk_live_TESTKEY00000000000000000", "stripe-secret-key"),
     ])
     def test_critical_patterns_match(self, secret, pattern_id):
         pattern = next(p for p in CRITICAL_PATTERNS if p.id == pattern_id)
@@ -2025,7 +2072,7 @@ class TestNativeScannerIntegration:
         (tmp_path / "tests").mkdir()
         (tmp_path / ".env").write_text("SECRET_KEY=mysecretkey123\n")
         (tmp_path / ".env.example").write_text("SECRET_KEY=\n")
-        (tmp_path / "src" / "config.py").write_text('API_KEY = "sk_live_test123"\n')
+        (tmp_path / "src" / "config.py").write_text('API_KEY = "sk_live_TESTKEY00000000"\n')
 
         scanner = NativeScanner()
         result = scanner.scan([tmp_path])

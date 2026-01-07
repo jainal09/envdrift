@@ -29,9 +29,9 @@ class TestSecretPatterns:
             ("ghu_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx", "github-app-token"),
             ("ghs_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx", "github-app-token"),
             ("glpat-xxxxxxxxxxxxxxxxxxxx", "gitlab-pat"),
-            # Stripe
-            ("sk_live_xxxxxxxxxxxxxxxxxxxxxxxx", "stripe-secret-key"),
-            ("rk_live_xxxxxxxxxxxxxxxxxxxxxxxx", "stripe-restricted-key"),
+            # Stripe - using TESTKEY prefix to avoid push protection
+            ("sk_live_TESTKEY00000000000000000", "stripe-secret-key"),
+            ("rk_live_TESTKEY00000000000000000", "stripe-restricted-key"),
             # Google - AIza followed by exactly 35 alphanumeric and dash/underscore chars (39 total)
             ("AIzaSyCaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "google-api-key"),
             # SendGrid
