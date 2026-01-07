@@ -166,26 +166,27 @@ max_workers = {num_services}
         secrets = {}
 
         # Create test secrets in Vault
-        for i in range(num_services):
-            path = f"parallel-vault-{i}"
-            value = f"vault-parallel-key-{i}"
-            secrets[path] = value
-            vault_client.secrets.kv.v2.create_or_update_secret(
-                path=path,
-                secret={"DOTENV_PRIVATE_KEY_PRODUCTION": value},
-            )
+        try:
+            for i in range(num_services):
+                path = f"parallel-vault-{i}"
+                value = f"vault-parallel-key-{i}"
+                secrets[path] = value
+                vault_client.secrets.kv.v2.create_or_update_secret(
+                    path=path,
+                    secret={"DOTENV_PRIVATE_KEY_PRODUCTION": value},
+                )
 
-        # Create config with multiple mappings
-        mappings = []
-        for i in range(num_services):
-            mappings.append(f"""
+            # Create config with multiple mappings
+            mappings = []
+            for i in range(num_services):
+                mappings.append(f"""
 [[vault.sync.mappings]]
 secret_name = "parallel-vault-{i}"
 folder_path = "vault-service-{i}"
 environment = "production"
 """)
 
-        config_content = f"""\
+            config_content = f"""\
 [encryption]
 backend = "dotenvx"
 
@@ -201,36 +202,44 @@ max_workers = {num_services}
 
 {''.join(mappings)}
 """
-        (work_dir / "envdrift.toml").write_text(config_content)
+            (work_dir / "envdrift.toml").write_text(config_content)
 
-        # Create service directories
-        for i in range(num_services):
-            service_dir = work_dir / f"vault-service-{i}"
-            service_dir.mkdir()
-            (service_dir / ".env.production").write_text(
-                'DOTENV_PUBLIC_KEY_PRODUCTION="key"\nSECRET="encrypted:..."'
+            # Create service directories
+            for i in range(num_services):
+                service_dir = work_dir / f"vault-service-{i}"
+                service_dir.mkdir()
+                (service_dir / ".env.production").write_text(
+                    'DOTENV_PUBLIC_KEY_PRODUCTION="key"\nSECRET="encrypted:..."'
+                )
+
+            env = vault_test_env.copy()
+            env["PYTHONPATH"] = integration_pythonpath
+
+            result = subprocess.run(
+                [*envdrift_cmd, "pull"],
+                cwd=work_dir,
+                env=env,
+                capture_output=True,
+                text=True,
+                timeout=120,
             )
 
-        env = vault_test_env.copy()
-        env["PYTHONPATH"] = integration_pythonpath
+            assert result.returncode == 0, (
+                f"Vault parallel sync failed.\nstdout: {result.stdout}\nstderr: {result.stderr}"
+            )
 
-        result = subprocess.run(
-            [*envdrift_cmd, "pull"],
-            cwd=work_dir,
-            env=env,
-            capture_output=True,
-            text=True,
-            timeout=120,
-        )
+            # Verify all services got their keys
+            for i in range(num_services):
+                env_keys = work_dir / f"vault-service-{i}" / ".env.keys"
+                assert env_keys.exists(), f"vault-service-{i} should have .env.keys"
 
-        assert result.returncode == 0, (
-            f"Vault parallel sync failed.\nstdout: {result.stdout}\nstderr: {result.stderr}"
-        )
-
-        # Verify all services got their keys
-        for i in range(num_services):
-            env_keys = work_dir / f"vault-service-{i}" / ".env.keys"
-            assert env_keys.exists(), f"vault-service-{i} should have .env.keys"
+        finally:
+            # Cleanup secrets
+            for i in range(num_services):
+                with contextlib.suppress(Exception):
+                    vault_client.secrets.kv.v2.delete_metadata_and_all_versions(
+                        path=f"parallel-vault-{i}"
+                    )
 
 
 class TestParallelEncryptAttempts:

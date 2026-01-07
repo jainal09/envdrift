@@ -13,6 +13,7 @@ Requires: docker-compose -f tests/docker-compose.test.yml up -d
 
 from __future__ import annotations
 
+import contextlib
 import shutil
 import subprocess
 from pathlib import Path
@@ -230,7 +231,7 @@ environment = "production"
 
         finally:
             # Cleanup
-            import contextlib
+
 
             with contextlib.suppress(Exception):
                 aws_secrets_client.delete_secret(
