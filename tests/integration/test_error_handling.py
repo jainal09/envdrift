@@ -81,7 +81,7 @@ environment = "production"
 
         # Run with a timeout - the command should fail gracefully, not hang
         result = subprocess.run(
-            [*_get_envdrift_cmd(), "pull", "--skip-decrypt"],
+            [*_get_envdrift_cmd(), "pull"],
             cwd=work_dir,
             env=env,
             capture_output=True,
@@ -110,17 +110,8 @@ environment = "production"
         self,
         work_dir: Path,
         integration_pythonpath: str,
-        monkeypatch,
     ) -> None:
         """Test AWS client handles unreachable endpoint gracefully."""
-        # Configure AWS to use an unreachable endpoint
-        monkeypatch.setenv("AWS_ENDPOINT_URL", "http://192.0.2.1:4566")
-        monkeypatch.setenv("AWS_ACCESS_KEY_ID", "test")
-        monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "test")
-        monkeypatch.setenv("AWS_DEFAULT_REGION", "us-east-1")
-        # Reduce retries to speed up test
-        monkeypatch.setenv("AWS_MAX_ATTEMPTS", "1")
-
         config_content = """\
 [encryption]
 backend = "dotenvx"
@@ -137,9 +128,22 @@ environment = "production"
         (work_dir / "envdrift.toml").write_text(config_content)
         (work_dir / ".env.production").write_text('SECRET="encrypted:..."')
 
+        # Build environment with unreachable endpoint (port that's not listening)
+        # Using localhost with wrong port fails fast (connection refused)
+        env = {
+            "PYTHONPATH": integration_pythonpath,
+            "AWS_ENDPOINT_URL": "http://127.0.0.1:59999",  # Port not listening
+            "AWS_ACCESS_KEY_ID": "test",
+            "AWS_SECRET_ACCESS_KEY": "test",
+            "AWS_DEFAULT_REGION": "us-east-1",
+            "AWS_MAX_ATTEMPTS": "1",
+            "AWS_RETRY_MODE": "standard",
+        }
+
         result = subprocess.run(
-            [*_get_envdrift_cmd(), "pull", "--skip-decrypt"],
+            [*_get_envdrift_cmd(), "pull"],
             cwd=work_dir,
+            env=env,
             capture_output=True,
             text=True,
             timeout=30,
@@ -214,7 +218,7 @@ environment = "production"
 
         try:
             result = subprocess.run(
-                [*_get_envdrift_cmd(), "pull", "--skip-decrypt"],
+                [*_get_envdrift_cmd(), "pull"],
                 cwd=work_dir,
                 env=env,
                 capture_output=True,
@@ -478,7 +482,7 @@ class TestVaultClientErrorHandling:
         if not HVAC_AVAILABLE:
             pytest.skip("hvac not installed")
 
-        from envdrift.vault.base import AuthenticationError
+        from envdrift.vault.base import AuthenticationError, VaultError
         from envdrift.vault.hashicorp import HashiCorpVaultClient
 
         client = HashiCorpVaultClient(
@@ -486,14 +490,9 @@ class TestVaultClientErrorHandling:
             token="invalid-token-that-does-not-exist",
         )
 
-        # Should either raise on auth or on first operation
-        try:
+        # Should raise AuthenticationError or VaultError on authenticate()
+        with pytest.raises((AuthenticationError, VaultError)):
             client.authenticate()
-            # If auth doesn't fail, get_secret should fail
-            with pytest.raises(AuthenticationError):
-                client.get_secret("test/secret")
-        except AuthenticationError:
-            pass  # Expected
 
     def test_hashicorp_client_secret_not_found(
         self, vault_endpoint: str, vault_client

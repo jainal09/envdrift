@@ -126,7 +126,7 @@ max_workers = {num_services}
 
             # Run parallel sync
             result = subprocess.run(
-                [*_get_envdrift_cmd(), "pull", "--skip-decrypt"],
+                [*_get_envdrift_cmd(), "pull"],
                 cwd=work_dir,
                 env=env,
                 capture_output=True,
@@ -200,7 +200,9 @@ backend = "dotenvx"
 
 [vault]
 provider = "hashicorp"
-address = "{vault_endpoint}"
+
+[vault.hashicorp]
+url = "{vault_endpoint}"
 token = "test-root-token"
 
 [vault.sync]
@@ -222,7 +224,7 @@ max_workers = {num_services}
         env["PYTHONPATH"] = integration_pythonpath
 
         result = subprocess.run(
-            [*_get_envdrift_cmd(), "pull", "--skip-decrypt"],
+            [*_get_envdrift_cmd(), "pull"],
             cwd=work_dir,
             env=env,
             capture_output=True,

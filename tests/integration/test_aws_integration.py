@@ -217,7 +217,7 @@ DATABASE_URL="encrypted:abc123..."
         env["PYTHONPATH"] = integration_pythonpath
 
         result = subprocess.run(
-            ["python", "-m", "envdrift", "pull", "--skip-decrypt"],
+            ["python", "-m", "envdrift", "pull", ""],
             cwd=env_project,
             env=env,
             capture_output=True,
@@ -280,7 +280,7 @@ environment = "production"
         env["PYTHONPATH"] = integration_pythonpath
 
         result = subprocess.run(
-            ["python", "-m", "envdrift", "pull", "--skip-decrypt"],
+            ["python", "-m", "envdrift", "pull", ""],
             cwd=work_dir,
             env=env,
             capture_output=True,
@@ -447,7 +447,7 @@ environment = "production"
         env["PYTHONPATH"] = integration_pythonpath
 
         result = subprocess.run(
-            ["python", "-m", "envdrift", "pull", "--skip-decrypt"],
+            ["python", "-m", "envdrift", "pull", ""],
             cwd=work_dir,
             env=env,
             capture_output=True,
