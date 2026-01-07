@@ -29,14 +29,7 @@ if TYPE_CHECKING:
 pytestmark = [pytest.mark.integration]
 
 
-def _get_envdrift_cmd() -> list[str]:
-    """Get the command to run envdrift CLI."""
-    # Try to find envdrift in PATH (installed via uv)
-    envdrift_path = shutil.which("envdrift")
-    if envdrift_path:
-        return [envdrift_path]
-    # Fallback: use uv run
-    return ["uv", "run", "envdrift"]
+
 
 
 class TestPullDecryptWorkflow:
@@ -49,6 +42,7 @@ class TestPullDecryptWorkflow:
         aws_secrets_client,
         work_dir: Path,
         integration_pythonpath: str,
+        envdrift_cmd: list[str],
     ):
         """Test full envdrift pull from vault → decrypt cycle.
 
@@ -77,14 +71,15 @@ class TestPullDecryptWorkflow:
         # Step 2: Create project structure
         pyproject = work_dir / "pyproject.toml"
         pyproject.write_text(f'''
-[tool.envdrift]
-vault_backend = "aws"
-vault_key_path = "{secret_name}"
-encryption_backend = "dotenvx"
+[tool.envdrift.vault]
+provider = "aws"
 
-[[tool.envdrift.services]]
-name = "main"
-env_file = ".env"
+[tool.envdrift.encryption]
+backend = "dotenvx"
+
+[[tool.envdrift.vault.sync.mappings]]
+secret_name = "{secret_name}"
+folder_path = "."
 ''')
 
         # Create empty .env.keys file
@@ -100,7 +95,7 @@ env_file = ".env"
         env["PYTHONPATH"] = integration_pythonpath
 
         result = subprocess.run(
-            _get_envdrift_cmd() + ["pull"],
+            [*envdrift_cmd, "pull", "-f"],
             cwd=work_dir,
             env=env,
             capture_output=True,
@@ -109,10 +104,13 @@ env_file = ".env"
         )
 
         # Step 4: Verify results
-        # The command should either succeed or fail gracefully
-        assert result.returncode in (0, 1), (
-            f"Unexpected exit code: {result.returncode}\nstderr: {result.stderr}"
+        assert result.returncode == 0, (
+            f"Pull failed: code={result.returncode}\nstderr={result.stderr}\nstdout={result.stdout}"
         )
+
+        # Verify .env.keys is populated
+        keys_content = env_keys.read_text()
+        assert "ec1234567890abcdef" in keys_content
 
         # Cleanup
         with contextlib.suppress(Exception):
@@ -129,10 +127,9 @@ class TestLockPushWorkflow:
         self,
         localstack_endpoint: str,
         aws_test_env: dict,
-        aws_secrets_client,
         work_dir: Path,
-        git_repo: Path,
         integration_pythonpath: str,
+        envdrift_cmd: list[str],
     ):
         """Test full envdrift lock → push cycle.
 
@@ -146,14 +143,15 @@ class TestLockPushWorkflow:
 
         pyproject = work_dir / "pyproject.toml"
         pyproject.write_text(f'''
-[tool.envdrift]
-vault_backend = "aws"
-vault_key_path = "{secret_name}"
-encryption_backend = "dotenvx"
+[tool.envdrift.vault]
+provider = "aws"
 
-[[tool.envdrift.services]]
-name = "main"
-env_file = ".env"
+[tool.envdrift.encryption]
+backend = "dotenvx"
+
+[[tool.envdrift.vault.sync.mappings]]
+secret_name = "{secret_name}"
+folder_path = "."
 ''')
 
         # Create .env.keys with a test key
@@ -169,7 +167,7 @@ env_file = ".env"
         env["PYTHONPATH"] = integration_pythonpath
 
         result = subprocess.run(
-            _get_envdrift_cmd() + ["lock", "--check"],
+            [*envdrift_cmd, "lock", "--check"],
             cwd=work_dir,
             env=env,
             capture_output=True,
@@ -194,6 +192,7 @@ class TestMonorepoMultiService:
         aws_secrets_client,
         work_dir: Path,
         integration_pythonpath: str,
+        envdrift_cmd: list[str],
     ):
         """Test envdrift with multiple services in a monorepo.
 
@@ -225,11 +224,9 @@ class TestMonorepoMultiService:
         services_config = "\n".join(
             [
                 f'''
-[[tool.envdrift.services]]
-name = "{name}"
-path = "services/{name}"
-env_file = ".env"
-vault_key_path = "{path}"
+[[tool.envdrift.vault.sync.mappings]]
+folder_path = "services/{name}"
+secret_name = "{path}"
 '''
                 for name, path in services.items()
             ]
@@ -237,9 +234,11 @@ vault_key_path = "{path}"
 
         pyproject = work_dir / "pyproject.toml"
         pyproject.write_text(f"""
-[tool.envdrift]
-vault_backend = "aws"
-encryption_backend = "dotenvx"
+[tool.envdrift.vault]
+provider = "aws"
+
+[tool.envdrift.encryption]
+backend = "dotenvx"
 
 {services_config}
 """)
@@ -256,7 +255,7 @@ encryption_backend = "dotenvx"
         env["PYTHONPATH"] = integration_pythonpath
 
         result = subprocess.run(
-            _get_envdrift_cmd() + ["pull"],
+            [*envdrift_cmd, "pull", "-f"],
             cwd=work_dir,
             env=env,
             capture_output=True,
@@ -264,9 +263,8 @@ encryption_backend = "dotenvx"
             timeout=60,
         )
 
-        # Should not crash
-        assert result.returncode in (0, 1), (
-            f"Unexpected exit code: {result.returncode}\nstderr: {result.stderr}"
+        assert result.returncode == 0, (
+            f"Pull failed: code={result.returncode}\nstderr={result.stderr}\nstdout={result.stdout}"
         )
 
         # Cleanup
@@ -285,6 +283,7 @@ class TestCIModeNonInteractive:
         self,
         work_dir: Path,
         integration_pythonpath: str,
+        envdrift_cmd: list[str],
     ):
         """Test that --ci flag prevents prompts and returns proper exit codes.
 
@@ -296,14 +295,15 @@ class TestCIModeNonInteractive:
         # Create minimal project
         pyproject = work_dir / "pyproject.toml"
         pyproject.write_text("""
-[tool.envdrift]
-vault_backend = "aws"
-vault_key_path = "nonexistent/secret"
-encryption_backend = "dotenvx"
+[tool.envdrift.vault]
+provider = "aws"
 
-[[tool.envdrift.services]]
-name = "main"
-env_file = ".env"
+[tool.envdrift.encryption]
+backend = "dotenvx"
+
+[[tool.envdrift.vault.sync.mappings]]
+secret_name = "nonexistent/secret"
+folder_path = "."
 """)
 
         env_file = work_dir / ".env"
@@ -315,7 +315,7 @@ env_file = ".env"
         # Don't set AWS credentials - we want it to fail
 
         result = subprocess.run(
-            _get_envdrift_cmd() + ["lock", "--check"],
+            [*envdrift_cmd, "lock", "--check"],
             cwd=work_dir,
             env=env,
             capture_output=True,
@@ -332,17 +332,18 @@ env_file = ".env"
         work_dir: Path,
         git_repo: Path,
         integration_pythonpath: str,
+        envdrift_cmd: list[str],
     ):
         """Test that lock --check in CI mode returns non-zero for unencrypted files."""
         # Create project with plaintext .env (not encrypted)
         pyproject = work_dir / "pyproject.toml"
         pyproject.write_text("""
-[tool.envdrift]
-encryption_backend = "dotenvx"
+[tool.envdrift.encryption]
+backend = "dotenvx"
 
-[[tool.envdrift.services]]
-name = "main"
-env_file = ".env"
+[[tool.envdrift.vault.sync.mappings]]
+secret_name = "dummy"
+folder_path = "."
 """)
 
         # Create plaintext .env with sensitive-looking content
@@ -353,7 +354,7 @@ env_file = ".env"
         env["PYTHONPATH"] = integration_pythonpath
 
         result = subprocess.run(
-            _get_envdrift_cmd() + ["lock", "--check"],
+            [*envdrift_cmd, "lock", "--check"],
             cwd=work_dir,
             env=env,
             capture_output=True,
@@ -375,6 +376,7 @@ class TestProfileActivation:
         self,
         work_dir: Path,
         integration_pythonpath: str,
+        envdrift_cmd: list[str],
     ):
         """Test that CLI loads and parses profile configuration without crashing.
 
@@ -386,17 +388,23 @@ class TestProfileActivation:
         # Create project with profile configuration
         pyproject = work_dir / "pyproject.toml"
         pyproject.write_text("""
-[tool.envdrift]
-encryption_backend = "dotenvx"
+[tool.envdrift.encryption]
+backend = "dotenvx"
 
-[[tool.envdrift.services]]
-name = "main"
-env_file = ".env"
+[[tool.envdrift.vault.sync.mappings]]
+secret_name = "main"
+folder_path = "."
 
-[tool.envdrift.profiles.development]
+[[tool.envdrift.vault.sync.mappings]]
+secret_name = "dev"
+folder_path = "."
+profile = "development"
 activate_to = ".env.development"
 
-[tool.envdrift.profiles.production]
+[[tool.envdrift.vault.sync.mappings]]
+secret_name = "prod"
+folder_path = "."
+profile = "production"
 activate_to = ".env.production"
 """)
 
@@ -409,7 +417,7 @@ activate_to = ".env.production"
 
         # Verify CLI loads profile config correctly when running lock --check
         result = subprocess.run(
-            [*_get_envdrift_cmd(), "lock", "--check"],
+            [*envdrift_cmd, "lock", "--check"],
             cwd=work_dir,
             env=env,
             capture_output=True,
@@ -425,6 +433,7 @@ activate_to = ".env.production"
         self,
         work_dir: Path,
         integration_pythonpath: str,
+        envdrift_cmd: list[str],
     ):
         """Test envdrift pull with --profile flag.
 
@@ -434,14 +443,17 @@ activate_to = ".env.production"
         # Create project with profile configuration
         pyproject = work_dir / "pyproject.toml"
         pyproject.write_text("""
-[tool.envdrift]
-encryption_backend = "dotenvx"
+[tool.envdrift.encryption]
+backend = "dotenvx"
 
-[[tool.envdrift.services]]
-name = "main"
-env_file = ".env"
+[[tool.envdrift.vault.sync.mappings]]
+secret_name = "main"
+folder_path = "."
 
-[tool.envdrift.profiles.development]
+[[tool.envdrift.vault.sync.mappings]]
+secret_name = "dev"
+folder_path = "."
+profile = "development"
 activate_to = ".env.development"
 """)
 
@@ -454,7 +466,7 @@ activate_to = ".env.development"
 
         # Run pull with --profile flag
         result = subprocess.run(
-            [*_get_envdrift_cmd(), "pull", "--profile", "development", "--skip-sync"],
+            [*envdrift_cmd, "pull", "--profile", "development", "--skip-sync"],
             cwd=work_dir,
             env=env,
             capture_output=True,

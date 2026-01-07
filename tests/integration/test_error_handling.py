@@ -27,21 +27,7 @@ if TYPE_CHECKING:
 pytestmark = [pytest.mark.integration]
 
 
-def _get_envdrift_cmd() -> list[str]:
-    """
-    Determine the command invocation for running the envdrift CLI.
-    
-    Returns:
-        list[str]: Command and arguments to execute envdrift. Prefers a system-installed
-        `envdrift` binary when available; otherwise returns a fallback invocation
-        using `uv run envdrift`.
-    """
-    # Try to find envdrift in PATH (installed via uv)
-    envdrift_path = shutil.which("envdrift")
-    if envdrift_path:
-        return [envdrift_path]
-    # Fallback: use uv run
-    return ["uv", "run", "envdrift"]
+
 
 
 class TestNetworkTimeoutVault:
@@ -51,6 +37,7 @@ class TestNetworkTimeoutVault:
         self,
         work_dir: Path,
         integration_pythonpath: str,
+        envdrift_cmd: list[str],
     ) -> None:
         """Test that operations timeout gracefully when vault is unreachable.
 
@@ -81,7 +68,7 @@ environment = "production"
 
         # Run with a timeout - the command should fail gracefully, not hang
         result = subprocess.run(
-            [*_get_envdrift_cmd(), "pull"],
+            [*envdrift_cmd, "pull"],
             cwd=work_dir,
             env=env,
             capture_output=True,
@@ -110,6 +97,7 @@ environment = "production"
         self,
         work_dir: Path,
         integration_pythonpath: str,
+        envdrift_cmd: list[str],
     ) -> None:
         """Test AWS client handles unreachable endpoint gracefully."""
         config_content = """\
@@ -141,7 +129,7 @@ environment = "production"
         }
 
         result = subprocess.run(
-            [*_get_envdrift_cmd(), "pull"],
+            [*envdrift_cmd, "pull"],
             cwd=work_dir,
             env=env,
             capture_output=True,
@@ -164,6 +152,7 @@ class TestPartialSyncFailure:
         aws_test_env: dict[str, str],
         aws_secrets_client,
         integration_pythonpath: str,
+        envdrift_cmd: list[str],
     ) -> None:
         """Test that sync continues for valid secrets when some fail.
 
@@ -218,7 +207,7 @@ environment = "production"
 
         try:
             result = subprocess.run(
-                [*_get_envdrift_cmd(), "pull"],
+                [*envdrift_cmd, "pull"],
                 cwd=work_dir,
                 env=env,
                 capture_output=True,
@@ -256,6 +245,7 @@ class TestCorruptEnvFile:
         self,
         work_dir: Path,
         integration_pythonpath: str,
+        envdrift_cmd: list[str],
     ) -> None:
         """
         Verify that running `lock --check` does not produce an unhandled exception when the project contains a malformed `.env` file.
@@ -286,7 +276,7 @@ backend = "dotenvx"
 
         # Run lock --check which will parse the .env file
         result = subprocess.run(
-            [*_get_envdrift_cmd(), "lock", "--check"],
+            [*envdrift_cmd, "lock", "--check"],
             cwd=work_dir,
             env=env,
             capture_output=True,
@@ -304,6 +294,7 @@ backend = "dotenvx"
         self,
         work_dir: Path,
         integration_pythonpath: str,
+        envdrift_cmd: list[str],
     ) -> None:
         """Test handling of binary content in .env files."""
         # Write binary content
@@ -319,7 +310,7 @@ backend = "dotenvx"
         env = {"PYTHONPATH": integration_pythonpath}
 
         result = subprocess.run(
-            [*_get_envdrift_cmd(), "lock", "--check"],
+            [*envdrift_cmd, "lock", "--check"],
             cwd=work_dir,
             env=env,
             capture_output=True,
@@ -334,6 +325,7 @@ backend = "dotenvx"
         self,
         work_dir: Path,
         integration_pythonpath: str,
+        envdrift_cmd: list[str],
     ) -> None:
         """
         Verify that running `envdrift lock --check` on an empty `.env` file completes without unhandled exceptions.
@@ -351,7 +343,7 @@ backend = "dotenvx"
         env = {"PYTHONPATH": integration_pythonpath}
 
         result = subprocess.run(
-            [*_get_envdrift_cmd(), "lock", "--check"],
+            [*envdrift_cmd, "lock", "--check"],
             cwd=work_dir,
             env=env,
             capture_output=True,
@@ -370,6 +362,7 @@ class TestCorruptEncryptedFile:
         self,
         work_dir: Path,
         integration_pythonpath: str,
+        envdrift_cmd: list[str],
     ) -> None:
         """Test that tampered encrypted content is detected."""
         # Create a file with corrupted encrypted content
@@ -400,7 +393,7 @@ backend = "dotenvx"
 
         # Try to decrypt - should fail gracefully
         result = subprocess.run(
-            [*_get_envdrift_cmd(), "lock", "--check"],
+            [*envdrift_cmd, "lock", "--check"],
             cwd=work_dir,
             env=env,
             capture_output=True,
@@ -415,6 +408,7 @@ backend = "dotenvx"
         self,
         work_dir: Path,
         integration_pythonpath: str,
+        envdrift_cmd: list[str],
     ) -> None:
         """Test handling of files with incomplete encryption markers."""
         # Encrypted marker present but value is not properly formatted
@@ -438,7 +432,7 @@ backend = "dotenvx"
         env = {"PYTHONPATH": integration_pythonpath}
 
         result = subprocess.run(
-            [*_get_envdrift_cmd(), "lock", "--check"],
+            [*envdrift_cmd, "lock", "--check"],
             cwd=work_dir,
             env=env,
             capture_output=True,
@@ -519,6 +513,7 @@ class TestFilePermissionErrors:
         self,
         work_dir: Path,
         integration_pythonpath: str,
+        envdrift_cmd: list[str],
     ) -> None:
         """Test handling when .env.keys is read-only."""
         import stat
@@ -552,7 +547,7 @@ environment = "production"
             # This would try to write to .env.keys
             # Should handle permission error gracefully
             result = subprocess.run(
-                [*_get_envdrift_cmd(), "lock", "--check"],
+                [*envdrift_cmd, "lock", "--check"],
                 cwd=work_dir,
                 env=env,
                 capture_output=True,

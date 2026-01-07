@@ -29,14 +29,7 @@ if TYPE_CHECKING:
 pytestmark = [pytest.mark.integration, pytest.mark.aws]
 
 
-def _get_envdrift_cmd() -> list[str]:
-    """Get the command to run envdrift CLI."""
-    # Try to find envdrift in PATH (installed via uv)
-    envdrift_path = shutil.which("envdrift")
-    if envdrift_path:
-        return [envdrift_path]
-    # Fallback: use uv run
-    return ["uv", "run", "envdrift"]
+
 
 
 # --- Fixtures for AWS Tests ---
@@ -222,13 +215,14 @@ DATABASE_URL="encrypted:abc123..."
         env_project: Path,
         aws_test_env: dict[str, str],
         integration_pythonpath: str,
+        envdrift_cmd: list[str],
     ) -> None:
         """Test pulling a single secret from AWS to .env.keys."""
         env = aws_test_env.copy()
         env["PYTHONPATH"] = integration_pythonpath
 
         result = subprocess.run(
-            [*_get_envdrift_cmd(), "pull"],
+            [*envdrift_cmd, "pull"],
             cwd=env_project,
             env=env,
             capture_output=True,
@@ -253,6 +247,7 @@ DATABASE_URL="encrypted:abc123..."
         aws_test_env: dict[str, str],
         integration_pythonpath: str,
         populated_secrets: dict[str, str],
+        envdrift_cmd: list[str],
     ) -> None:
         """Test pulling multiple secrets in parallel."""
         # Create config with multiple mappings
@@ -291,7 +286,7 @@ environment = "production"
         env["PYTHONPATH"] = integration_pythonpath
 
         result = subprocess.run(
-            [*_get_envdrift_cmd(), "pull"],
+            [*envdrift_cmd, "pull"],
             cwd=work_dir,
             env=env,
             capture_output=True,
@@ -325,6 +320,7 @@ class TestAWSVaultPushCommand:
         aws_test_env: dict[str, str],
         aws_secrets_client,
         integration_pythonpath: str,
+        envdrift_cmd: list[str],
     ) -> None:
         """Test pushing a key from .env.keys to AWS vault."""
         secret_name = "envdrift-test/pushed-from-file"
@@ -362,7 +358,7 @@ environment = "staging"
 
         try:
             result = subprocess.run(
-                [*_get_envdrift_cmd(), "vault-push", "--all", "--skip-encrypt"],
+                [*envdrift_cmd, "vault-push", "--all", "--skip-encrypt"],
                 cwd=work_dir,
                 env=env,
                 capture_output=True,
@@ -389,6 +385,7 @@ environment = "staging"
         aws_test_env: dict[str, str],
         aws_secrets_client,
         integration_pythonpath: str,
+        envdrift_cmd: list[str],
     ) -> None:
         """Test pushing a direct key-value to AWS vault."""
         secret_name = "envdrift-test/direct-push"
@@ -400,7 +397,7 @@ environment = "staging"
         try:
             result = subprocess.run(
                 [
-                    *_get_envdrift_cmd(), "vault-push",
+                    *envdrift_cmd, "vault-push",
                     "--direct", secret_name, secret_value,
                     "--provider", "aws",
                     "--region", "us-east-1",
@@ -436,6 +433,7 @@ class TestAWSErrorHandling:
         work_dir: Path,
         aws_test_env: dict[str, str],
         integration_pythonpath: str,
+        envdrift_cmd: list[str],
     ) -> None:
         """Test that sync handles missing secrets gracefully."""
         config_content = """\
@@ -458,7 +456,7 @@ environment = "production"
         env["PYTHONPATH"] = integration_pythonpath
 
         result = subprocess.run(
-            [*_get_envdrift_cmd(), "pull"],
+            [*envdrift_cmd, "pull"],
             cwd=work_dir,
             env=env,
             capture_output=True,

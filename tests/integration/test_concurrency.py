@@ -13,6 +13,7 @@ Requires: docker-compose -f tests/docker-compose.test.yml up -d
 from __future__ import annotations
 
 import contextlib
+import os
 import shutil
 import subprocess
 import threading
@@ -30,21 +31,7 @@ if TYPE_CHECKING:
 pytestmark = [pytest.mark.integration]
 
 
-def _get_envdrift_cmd() -> list[str]:
-    """
-    Choose the command invocation for the envdrift CLI.
-    
-    If an envdrift executable is found on the system PATH, returns its path as a single-item list; otherwise returns the fallback invocation ["uv", "run", "envdrift"].
-    
-    Returns:
-        command (list[str]): Command and arguments to execute the envdrift CLI.
-    """
-    # Try to find envdrift in PATH (installed via uv)
-    envdrift_path = shutil.which("envdrift")
-    if envdrift_path:
-        return [envdrift_path]
-    # Fallback: use uv run
-    return ["uv", "run", "envdrift"]
+
 
 
 class TestParallelSyncThreadSafety:
@@ -54,15 +41,16 @@ class TestParallelSyncThreadSafety:
     def test_parallel_sync_different_secrets(
         self,
         work_dir: Path,
-        localstack_endpoint: str,
         aws_test_env: dict[str, str],
         aws_secrets_client,
         integration_pythonpath: str,
+        envdrift_cmd: list[str],
     ) -> None:
-        """Test multiple threads syncing different secrets concurrently.
-
-        This test creates multiple secrets and multiple service directories,
-        then runs sync operations in parallel to verify thread safety.
+        """
+        Verify envdrift concurrently pulls distinct secrets for multiple services without race conditions.
+        
+        Creates 5 unique secrets in AWS Secrets Manager and a matching envdrift config.
+        Executes `envdrift pull` and asserts all 5 services receive the correct keys in their `.env.keys` files.
         """
         num_services = 5
         secrets = {}
@@ -126,7 +114,7 @@ max_workers = {num_services}
 
             # Run parallel sync
             result = subprocess.run(
-                [*_get_envdrift_cmd(), "pull"],
+                [*envdrift_cmd, "pull"],
                 cwd=work_dir,
                 env=env,
                 capture_output=True,
@@ -151,11 +139,13 @@ max_workers = {num_services}
 
         finally:
             # Cleanup secrets
-            for secret_name in created_secrets:
-                with contextlib.suppress(Exception):
+            for name in created_secrets:
+                try:
                     aws_secrets_client.delete_secret(
-                        SecretId=secret_name, ForceDeleteWithoutRecovery=True
+                        SecretId=name, ForceDeleteWithoutRecovery=True
                     )
+                except Exception:
+                    pass
 
     @pytest.mark.vault
     def test_parallel_sync_vault_thread_safety(
@@ -165,6 +155,7 @@ max_workers = {num_services}
         vault_test_env: dict[str, str],
         vault_client,
         integration_pythonpath: str,
+        envdrift_cmd: list[str],
     ) -> None:
         """
         Verify envdrift performs a parallel HashiCorp Vault synchronization across multiple service mappings without thread-safety failures.
@@ -224,7 +215,7 @@ max_workers = {num_services}
         env["PYTHONPATH"] = integration_pythonpath
 
         result = subprocess.run(
-            [*_get_envdrift_cmd(), "pull"],
+            [*envdrift_cmd, "pull"],
             cwd=work_dir,
             env=env,
             capture_output=True,
@@ -250,6 +241,7 @@ class TestParallelEncryptAttempts:
         work_dir: Path,
         git_repo: Path,
         integration_pythonpath: str,
+        envdrift_cmd: list[str],
     ) -> None:
         """Test that concurrent encrypt attempts on same file are handled safely.
 
@@ -265,12 +257,23 @@ SECRET_TOKEN=token456
         (work_dir / ".env").write_text(env_content)
 
         config_content = """\
+[vault]
+provider = "hashicorp"
+
+[vault.hashicorp]
+url = "http://localhost:8200"
+
 [encryption]
 backend = "dotenvx"
+
+[[vault.sync.mappings]]
+secret_name = "dummy"
+folder_path = "."
 """
         (work_dir / "envdrift.toml").write_text(config_content)
 
-        env = {"PYTHONPATH": integration_pythonpath}
+        env = os.environ.copy()
+        env["PYTHONPATH"] = integration_pythonpath
 
         results = []
         errors = []
@@ -283,75 +286,71 @@ backend = "dotenvx"
             """
             try:
                 result = subprocess.run(
-                    [*_get_envdrift_cmd(), "lock", "--check"],
+                    [*envdrift_cmd, "lock", "-f"],
                     cwd=work_dir,
                     env=env,
                     capture_output=True,
                     text=True,
                     timeout=30,
                 )
+                if result.returncode != 0:
+                    errors.append(f"Command failed with code {result.returncode}. Stderr: {result.stderr}. Stdout: {result.stdout}")
                 results.append(result.returncode)
             except Exception as e:
                 errors.append(str(e))
 
-        # Run multiple lock checks concurrently
-        threads = []
-        for _ in range(5):
-            t = threading.Thread(target=run_lock_check)
-            threads.append(t)
-            t.start()
+        # Run multiple checks concurrently
+        with ThreadPoolExecutor(max_workers=3) as executor:
+            futures = [executor.submit(run_lock_check) for _ in range(3)]
+            # Wait for all to complete
+            for f in futures:
+                f.result()
 
-        # Wait for all threads
-        for t in threads:
-            t.join()
-
-        # Should not have any errors
-        assert len(errors) == 0, f"Concurrent operations raised errors: {errors}"
-
-        # All operations should complete (either success or expected failure)
-        assert len(results) == 5
+        assert not errors, f"Concurrent operations raised exceptions: {errors}"
+        # At least one should succeed (return code 0)
+        assert 0 in results, "At least one operation should succeed"
 
 
 class TestParallelDecryptDifferentFiles:
-    """Test parallel decryption of multiple files."""
+    """Test parallel operations on different files."""
 
     def test_parallel_decrypt_multiple_services(
         self,
         work_dir: Path,
         integration_pythonpath: str,
+        envdrift_cmd: list[str],
     ) -> None:
-        """Test decrypting multiple env files in parallel.
+        """Test decrypting multiple unrelated services in parallel.
 
-        This verifies that parallel decryption of different files
-        doesn't cause race conditions or file corruption.
+        Creates separate service directories, each with its own .env.keys and
+        encrypted .env files. Runs multiple processes concurrently to ensure
+        they don't interfere with each other.
         """
-        num_services = 3
+        num_services = 5
 
-        # Create encrypted env files for each service
         for i in range(num_services):
             service_dir = work_dir / f"decrypt-service-{i}"
             service_dir.mkdir()
-
-            env_content = f"""\
-#/-------------------[DOTENV][Load]--------------------/#
-#/         public-key encryption for .env files        /#
-#/  https://github.com/dotenvx/dotenvx-pro?encrypted   /#
-#/--------------------------------------------------/#
-DOTENV_PUBLIC_KEY_PRODUCTION="034a5e..."
-SERVICE_ID="encrypted:service{i}"
-"""
-            (service_dir / ".env.production").write_text(env_content)
+            # Create valid encrypted file and keys
+            (service_dir / ".env").write_text(
+                'DOTENV_PUBLIC_KEY="key"\nSECRET="encrypted:..."'
+            )
             (service_dir / ".env.keys").write_text(
-                f"DOTENV_PRIVATE_KEY_PRODUCTION=key-{i}\n"
+                "DOTENV_PRIVATE_KEY=key"
             )
 
         config_content = """\
 [encryption]
 backend = "dotenvx"
+
+[[vault.sync.mappings]]
+secret_name = "dummy"
+folder_path = "."
 """
         (work_dir / "envdrift.toml").write_text(config_content)
 
-        env = {"PYTHONPATH": integration_pythonpath}
+        env = os.environ.copy()
+        env["PYTHONPATH"] = integration_pythonpath
 
         # Run lock --check on each service in parallel
         def check_service(service_idx):
@@ -366,7 +365,7 @@ backend = "dotenvx"
             """
             service_dir = work_dir / f"decrypt-service-{service_idx}"
             result = subprocess.run(
-                [*_get_envdrift_cmd(), "lock", "--check"],
+                [*envdrift_cmd, "lock", "--check"],
                 cwd=service_dir,
                 env=env,
                 capture_output=True,

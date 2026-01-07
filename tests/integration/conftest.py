@@ -44,6 +44,23 @@ def _is_port_open(host: str, port: int, timeout: float = 1.0) -> bool:
         return False
 
 
+@pytest.fixture(scope="session")
+def envdrift_cmd() -> list[str]:
+    """Get the command to run envdrift CLI.
+
+    Returns:
+        List of command parts (e.g. ["uv", "run", "envdrift"])
+    """
+    import shutil
+
+    # Try to find envdrift in PATH (installed via uv)
+    envdrift_path = shutil.which("envdrift")
+    if envdrift_path:
+        return [envdrift_path]
+    # Fallback: use uv run
+    return ["uv", "run", "envdrift"]
+
+
 def _wait_for_port(host: str, port: int, timeout: float = 30.0, interval: float = 0.5) -> bool:
     """Wait for a port to become available."""
     start = time.time()

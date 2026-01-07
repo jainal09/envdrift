@@ -25,12 +25,7 @@ import pytest
 pytestmark = [pytest.mark.integration]
 
 
-def _get_envdrift_cmd() -> list[str]:
-    """Get the command to run envdrift CLI."""
-    envdrift_path = shutil.which("envdrift")
-    if envdrift_path:
-        return [envdrift_path]
-    return ["uv", "run", "envdrift"]
+
 
 
 class TestEncryptEmptyFile:
@@ -40,6 +35,7 @@ class TestEncryptEmptyFile:
         self,
         work_dir: Path,
         integration_pythonpath: str,
+        envdrift_cmd: list[str],
     ):
         """Test that encrypting an empty .env file is handled gracefully."""
         # Create empty .env file
@@ -50,7 +46,7 @@ class TestEncryptEmptyFile:
         env["PYTHONPATH"] = integration_pythonpath
 
         result = subprocess.run(
-            _get_envdrift_cmd() + ["encrypt", str(env_file)],
+            [*envdrift_cmd, "encrypt", str(env_file)],
             cwd=work_dir,
             env=env,
             capture_output=True,
@@ -71,6 +67,7 @@ class TestEncryptUnicodeValues:
         self,
         work_dir: Path,
         integration_pythonpath: str,
+        envdrift_cmd: list[str],
     ):
         """Test that unicode characters in values are preserved."""
         # Create .env with unicode values
@@ -89,7 +86,7 @@ class TestEncryptUnicodeValues:
         env["PYTHONPATH"] = integration_pythonpath
 
         result = subprocess.run(
-            _get_envdrift_cmd() + ["encrypt", str(env_file), "--check"],
+            [*envdrift_cmd, "encrypt", str(env_file), "--check"],
             cwd=work_dir,
             env=env,
             capture_output=True,
@@ -114,6 +111,7 @@ class TestEncryptMultilineValues:
         self,
         work_dir: Path,
         integration_pythonpath: str,
+        envdrift_cmd: list[str],
     ):
         """Test handling of multiline values in .env files."""
         # Create .env with multiline values (using quotes)
@@ -130,7 +128,7 @@ class TestEncryptMultilineValues:
         env["PYTHONPATH"] = integration_pythonpath
 
         result = subprocess.run(
-            _get_envdrift_cmd() + ["encrypt", str(env_file), "--check"],
+            [*envdrift_cmd, "encrypt", str(env_file), "--check"],
             cwd=work_dir,
             env=env,
             capture_output=True,
@@ -151,6 +149,7 @@ class TestEncryptSpecialCharsKeys:
         self,
         work_dir: Path,
         integration_pythonpath: str,
+        envdrift_cmd: list[str],
     ):
         """Test keys containing dots, dashes, and underscores."""
         # Create .env with special character keys
@@ -168,7 +167,7 @@ class TestEncryptSpecialCharsKeys:
         env["PYTHONPATH"] = integration_pythonpath
 
         result = subprocess.run(
-            _get_envdrift_cmd() + ["encrypt", str(env_file), "--check"],
+            [*envdrift_cmd, "encrypt", str(env_file), "--check"],
             cwd=work_dir,
             env=env,
             capture_output=True,
@@ -189,6 +188,7 @@ class TestEncryptAlreadyEncrypted:
         self,
         work_dir: Path,
         integration_pythonpath: str,
+        envdrift_cmd: list[str],
     ):
         """Test that re-encrypting an already encrypted file is handled."""
         # Create a file that looks like dotenvx encrypted content
@@ -204,7 +204,7 @@ class TestEncryptAlreadyEncrypted:
         env["PYTHONPATH"] = integration_pythonpath
 
         result = subprocess.run(
-            _get_envdrift_cmd() + ["encrypt", str(env_file), "--check"],
+            [*envdrift_cmd, "encrypt", str(env_file), "--check"],
             cwd=work_dir,
             env=env,
             capture_output=True,
@@ -225,6 +225,7 @@ class TestEncryptMixedState:
         self,
         work_dir: Path,
         integration_pythonpath: str,
+        envdrift_cmd: list[str],
     ):
         """Test handling of files with some encrypted and some plain values."""
         # Create a file with mixed state
@@ -240,7 +241,7 @@ class TestEncryptMixedState:
         env["PYTHONPATH"] = integration_pythonpath
 
         result = subprocess.run(
-            _get_envdrift_cmd() + ["encrypt", str(env_file), "--check"],
+            [*envdrift_cmd, "encrypt", str(env_file), "--check"],
             cwd=work_dir,
             env=env,
             capture_output=True,
@@ -261,6 +262,7 @@ class TestDecryptMissingKey:
         self,
         work_dir: Path,
         integration_pythonpath: str,
+        envdrift_cmd: list[str],
     ):
         """Test that decryption without private key gives clear error."""
         # Create an encrypted-looking file
@@ -284,7 +286,7 @@ class TestDecryptMissingKey:
         env.pop("DOTENV_PRIVATE_KEY_PRODUCTION", None)
 
         result = subprocess.run(
-            _get_envdrift_cmd() + ["decrypt", str(env_file)],
+            [*envdrift_cmd, "decrypt", str(env_file)],
             cwd=work_dir,
             env=env,
             capture_output=True,
@@ -306,6 +308,7 @@ class TestDecryptWrongKey:
         self,
         work_dir: Path,
         integration_pythonpath: str,
+        envdrift_cmd: list[str],
     ):
         """Test decryption with a key that doesn't match the encrypted content."""
         # Create an encrypted-looking file
@@ -325,7 +328,7 @@ class TestDecryptWrongKey:
         env["PYTHONPATH"] = integration_pythonpath
 
         result = subprocess.run(
-            _get_envdrift_cmd() + ["decrypt", str(env_file)],
+            [*envdrift_cmd, "decrypt", str(env_file)],
             cwd=work_dir,
             env=env,
             capture_output=True,
@@ -347,6 +350,7 @@ class TestEncryptLargeFile:
         self,
         work_dir: Path,
         integration_pythonpath: str,
+        envdrift_cmd: list[str],
     ):
         """Test encryption handling of files with many variables (1000+)."""
         # Create large .env file with 1000+ variables
@@ -358,7 +362,7 @@ class TestEncryptLargeFile:
         env["PYTHONPATH"] = integration_pythonpath
 
         result = subprocess.run(
-            _get_envdrift_cmd() + ["encrypt", str(env_file), "--check"],
+            [*envdrift_cmd, "encrypt", str(env_file), "--check"],
             cwd=work_dir,
             env=env,
             capture_output=True,
@@ -379,6 +383,7 @@ class TestDuplicatePublicKeys:
         self,
         work_dir: Path,
         integration_pythonpath: str,
+        envdrift_cmd: list[str],
     ):
         """Test handling of .env files with duplicate DOTENV_PUBLIC_KEY entries.
 
@@ -399,7 +404,7 @@ class TestDuplicatePublicKeys:
         env["PYTHONPATH"] = integration_pythonpath
 
         result = subprocess.run(
-            _get_envdrift_cmd() + ["encrypt", str(env_file), "--check"],
+            [*envdrift_cmd, "encrypt", str(env_file), "--check"],
             cwd=work_dir,
             env=env,
             capture_output=True,
@@ -416,6 +421,7 @@ class TestDuplicatePublicKeys:
         self,
         work_dir: Path,
         integration_pythonpath: str,
+        envdrift_cmd: list[str],
     ):
         """Test handling of .env.keys with duplicate DOTENV_PRIVATE_KEY entries."""
         # Create .env.keys with duplicate private keys
@@ -434,7 +440,7 @@ class TestDuplicatePublicKeys:
         env["PYTHONPATH"] = integration_pythonpath
 
         result = subprocess.run(
-            _get_envdrift_cmd() + ["decrypt", str(env_file)],
+            [*envdrift_cmd, "decrypt", str(env_file)],
             cwd=work_dir,
             env=env,
             capture_output=True,
@@ -451,6 +457,7 @@ class TestDuplicatePublicKeys:
         self,
         work_dir: Path,
         integration_pythonpath: str,
+        envdrift_cmd: list[str],
     ):
         """Test handling of .env with multiple DIFFERENT public keys (conflicting)."""
         # Create .env with conflicting public keys
@@ -466,7 +473,7 @@ class TestDuplicatePublicKeys:
         env["PYTHONPATH"] = integration_pythonpath
 
         result = subprocess.run(
-            _get_envdrift_cmd() + ["encrypt", str(env_file), "--check"],
+            [*envdrift_cmd, "encrypt", str(env_file), "--check"],
             cwd=work_dir,
             env=env,
             capture_output=True,
@@ -487,6 +494,7 @@ class TestPartialEncryption:
         self,
         work_dir: Path,
         integration_pythonpath: str,
+        envdrift_cmd: list[str],
     ):
         """Test envdrift push command for partial encryption.
 
@@ -520,7 +528,7 @@ combined_file = ".env.production"
         env["PYTHONPATH"] = integration_pythonpath
 
         result = subprocess.run(
-            _get_envdrift_cmd() + ["push", "--env", "production"],
+            [*envdrift_cmd,"push", "--env", "production"],
             cwd=work_dir,
             env=env,
             capture_output=True,
@@ -537,6 +545,7 @@ combined_file = ".env.production"
         self,
         work_dir: Path,
         integration_pythonpath: str,
+        envdrift_cmd: list[str],
     ):
         """Test envdrift pull-partial command for decrypting secrets."""
         # Create config with partial encryption enabled
@@ -564,7 +573,7 @@ combined_file = ".env.staging"
         env["PYTHONPATH"] = integration_pythonpath
 
         result = subprocess.run(
-            _get_envdrift_cmd() + ["pull-partial", "--env", "staging"],
+            [*envdrift_cmd,"pull-partial", "--env", "staging"],
             cwd=work_dir,
             env=env,
             capture_output=True,
@@ -581,6 +590,7 @@ combined_file = ".env.staging"
         self,
         work_dir: Path,
         integration_pythonpath: str,
+        envdrift_cmd: list[str],
     ):
         """Test error handling when partial encryption is not enabled."""
         # Create config WITHOUT partial encryption
@@ -594,7 +604,7 @@ encryption_backend = "dotenvx"
         env["PYTHONPATH"] = integration_pythonpath
 
         result = subprocess.run(
-            _get_envdrift_cmd() + ["push"],
+            [*envdrift_cmd,"push"],
             cwd=work_dir,
             env=env,
             capture_output=True,
@@ -613,6 +623,7 @@ encryption_backend = "dotenvx"
         self,
         work_dir: Path,
         integration_pythonpath: str,
+        envdrift_cmd: list[str],
     ):
         """Test handling when secret file doesn't exist."""
         # Create config with partial encryption enabled
@@ -636,7 +647,7 @@ combined_file = ".env.dev"
         env["PYTHONPATH"] = integration_pythonpath
 
         result = subprocess.run(
-            _get_envdrift_cmd() + ["push", "--env", "dev"],
+            [*envdrift_cmd,"push", "--env", "dev"],
             cwd=work_dir,
             env=env,
             capture_output=True,
@@ -653,6 +664,7 @@ combined_file = ".env.dev"
         self,
         work_dir: Path,
         integration_pythonpath: str,
+        envdrift_cmd: list[str],
     ):
         """Test complete push → pull-partial cycle."""
         # Create config with partial encryption enabled
@@ -680,7 +692,7 @@ combined_file = ".env.test"
 
         # Step 1: Push (encrypt and combine)
         push_result = subprocess.run(
-            _get_envdrift_cmd() + ["push", "--env", "test"],
+            [*envdrift_cmd,"push", "--env", "test"],
             cwd=work_dir,
             env=env,
             capture_output=True,
@@ -692,7 +704,7 @@ combined_file = ".env.test"
 
         # Step 2: Pull-partial (decrypt)
         pull_result = subprocess.run(
-            _get_envdrift_cmd() + ["pull-partial", "--env", "test"],
+            [*envdrift_cmd,"pull-partial", "--env", "test"],
             cwd=work_dir,
             env=env,
             capture_output=True,
@@ -710,6 +722,7 @@ class TestDiffCommand:
         self,
         work_dir: Path,
         integration_pythonpath: str,
+        envdrift_cmd: list[str],
     ):
         """Test diffing two identical .env files."""
         env1 = work_dir / ".env.dev"
@@ -722,7 +735,7 @@ class TestDiffCommand:
         env["PYTHONPATH"] = integration_pythonpath
 
         result = subprocess.run(
-            _get_envdrift_cmd() + ["diff", str(env1), str(env2)],
+            [*envdrift_cmd,"diff", str(env1), str(env2)],
             cwd=work_dir,
             env=env,
             capture_output=True,
@@ -736,6 +749,7 @@ class TestDiffCommand:
         self,
         work_dir: Path,
         integration_pythonpath: str,
+        envdrift_cmd: list[str],
     ):
         """Test diffing files with added/removed variables."""
         env1 = work_dir / ".env.old"
@@ -748,7 +762,7 @@ class TestDiffCommand:
         env["PYTHONPATH"] = integration_pythonpath
 
         result = subprocess.run(
-            _get_envdrift_cmd() + ["diff", str(env1), str(env2)],
+            [*envdrift_cmd,"diff", str(env1), str(env2)],
             cwd=work_dir,
             env=env,
             capture_output=True,
@@ -762,6 +776,7 @@ class TestDiffCommand:
         self,
         work_dir: Path,
         integration_pythonpath: str,
+        envdrift_cmd: list[str],
     ):
         """Test diffing with non-existent file."""
         env1 = work_dir / ".env.exists"
@@ -771,7 +786,7 @@ class TestDiffCommand:
         env["PYTHONPATH"] = integration_pythonpath
 
         result = subprocess.run(
-            _get_envdrift_cmd() + ["diff", str(env1), str(work_dir / ".env.missing")],
+            [*envdrift_cmd,"diff", str(env1), str(work_dir / ".env.missing")],
             cwd=work_dir,
             env=env,
             capture_output=True,
@@ -790,6 +805,7 @@ class TestValidateCommand:
         self,
         work_dir: Path,
         integration_pythonpath: str,
+        envdrift_cmd: list[str],
     ):
         """Test validation when no schema file exists."""
         env_file = work_dir / ".env"
@@ -799,7 +815,7 @@ class TestValidateCommand:
         env["PYTHONPATH"] = integration_pythonpath
 
         result = subprocess.run(
-            _get_envdrift_cmd() + ["validate", str(env_file)],
+            [*envdrift_cmd, "validate", str(env_file)],
             cwd=work_dir,
             env=env,
             capture_output=True,
@@ -814,6 +830,7 @@ class TestValidateCommand:
         self,
         work_dir: Path,
         integration_pythonpath: str,
+        envdrift_cmd: list[str],
     ):
         """Test validation with a Pydantic schema file."""
         # Create .env file
@@ -834,7 +851,7 @@ class Settings(BaseSettings):
         env["PYTHONPATH"] = integration_pythonpath
 
         result = subprocess.run(
-            _get_envdrift_cmd() + ["validate", str(env_file), "--schema", str(schema_file)],
+            [*envdrift_cmd, "validate", str(env_file), "--schema", str(schema_file)],
             cwd=work_dir,
             env=env,
             capture_output=True,
@@ -852,6 +869,7 @@ class TestConfigEdgeCases:
         self,
         work_dir: Path,
         integration_pythonpath: str,
+        envdrift_cmd: list[str],
     ):
         """Test handling of invalid TOML syntax."""
         config_file = work_dir / "envdrift.toml"
@@ -864,7 +882,7 @@ class TestConfigEdgeCases:
         env["PYTHONPATH"] = integration_pythonpath
 
         result = subprocess.run(
-            _get_envdrift_cmd() + ["encrypt", str(env_file)],
+            [*envdrift_cmd, "encrypt", str(env_file)],
             cwd=work_dir,
             env=env,
             capture_output=True,
@@ -879,6 +897,7 @@ class TestConfigEdgeCases:
         self,
         work_dir: Path,
         integration_pythonpath: str,
+        envdrift_cmd: list[str],
     ):
         """Test config with missing required fields."""
         config_file = work_dir / "pyproject.toml"
@@ -892,7 +911,7 @@ vault_key_path = "some/path"
         env["PYTHONPATH"] = integration_pythonpath
 
         result = subprocess.run(
-            _get_envdrift_cmd() + ["sync"],
+            [*envdrift_cmd, "sync"],
             cwd=work_dir,
             env=env,
             capture_output=True,
@@ -907,6 +926,7 @@ vault_key_path = "some/path"
         self,
         work_dir: Path,
         integration_pythonpath: str,
+        envdrift_cmd: list[str],
     ):
         """Test config with unknown vault backend."""
         config_file = work_dir / "pyproject.toml"
@@ -920,7 +940,7 @@ vault_key_path = "some/path"
         env["PYTHONPATH"] = integration_pythonpath
 
         result = subprocess.run(
-            _get_envdrift_cmd() + ["sync"],
+            [*envdrift_cmd, "sync"],
             cwd=work_dir,
             env=env,
             capture_output=True,
@@ -939,6 +959,7 @@ class TestSOPSBackend:
         self,
         work_dir: Path,
         integration_pythonpath: str,
+        envdrift_cmd: list[str],
     ):
         """Test SOPS encryption when sops CLI is not available.
 
@@ -961,7 +982,7 @@ class TestSOPSBackend:
             env["PATH"] = filtered_path
 
         result = subprocess.run(
-            [*_get_envdrift_cmd(), "encrypt", str(env_file), "--backend", "sops"],
+            [*envdrift_cmd, "encrypt", str(env_file), "--backend", "sops"],
             cwd=work_dir,
             env=env,
             capture_output=True,
