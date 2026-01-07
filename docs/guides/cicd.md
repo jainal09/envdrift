@@ -43,6 +43,10 @@ jobs:
         run: |
           envdrift encrypt .env.production --check
 
+      - name: Guard for plaintext secrets
+        run: |
+          envdrift guard --ci --fail-on high
+
       - name: Diff dev vs prod
         run: |
           envdrift diff .env.development .env.production --format json
@@ -59,6 +63,7 @@ validate-env:
     - pip install envdrift
     - envdrift validate .env.production --schema config.settings:ProductionSettings --ci
     - envdrift encrypt .env.production --check
+    - envdrift guard --ci --fail-on high
   only:
     changes:
       - .env.*

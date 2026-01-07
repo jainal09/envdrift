@@ -54,6 +54,7 @@ nav:
       - vault-push: cli/vault-push.md
       - encrypt: cli/encrypt.md
       - decrypt: cli/decrypt.md
+      - guard: cli/guard.md
       - validate: cli/validate.md
       - diff: cli/diff.md
       - init: cli/init.md
@@ -65,6 +66,7 @@ nav:
       - VS Code Extension: guides/vscode-extension.md
       - Vault Sync: guides/vault-sync.md
       - Encryption: guides/encryption.md
+      - Guard Scanning: guides/guard.md
       - Schema Best Practices: guides/schema.md
       - CI/CD Integration: guides/cicd.md
       - Partial Encryption: guides/partial-encryption.md
