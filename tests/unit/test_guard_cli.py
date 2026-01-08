@@ -290,7 +290,7 @@ def test_guard_sarif_output(tmp_path: Path, monkeypatch):
     assert created_configs
 
 
-def test_guard_staged_with_no_staged_files(tmp_path: Path, monkeypatch):
+def test_guard_staged_with_no_staged_files(monkeypatch):
     """--staged with no staged files exits cleanly."""
     import subprocess
     
@@ -310,7 +310,7 @@ def test_guard_staged_with_no_staged_files(tmp_path: Path, monkeypatch):
         assert "no staged files" in result.output.lower()
 
 
-def test_guard_staged_scans_only_staged_files(tmp_path: Path, monkeypatch):
+def test_guard_staged_scans_only_staged_files(monkeypatch):
     """--staged only scans git staged files."""
     import subprocess
     
@@ -355,7 +355,7 @@ def test_guard_staged_scans_only_staged_files(tmp_path: Path, monkeypatch):
         assert len(scan_paths[0]) == 2  # Two staged files
 
 
-def test_guard_staged_without_git_fails(tmp_path: Path, monkeypatch):
+def test_guard_staged_without_git_fails(monkeypatch):
     """--staged fails gracefully without git."""
     config = EnvdriftConfig()
     _patch_guard_dependencies(monkeypatch, config, _build_result([]))
@@ -372,7 +372,7 @@ def test_guard_staged_without_git_fails(tmp_path: Path, monkeypatch):
         assert "git not found" in result.output.lower()
 
 
-def test_guard_pr_base_with_no_changed_files(tmp_path: Path, monkeypatch):
+def test_guard_pr_base_with_no_changed_files(monkeypatch):
     """--pr-base with no changed files exits cleanly."""
     import subprocess
     
@@ -395,7 +395,7 @@ def test_guard_pr_base_with_no_changed_files(tmp_path: Path, monkeypatch):
         assert "no changed files" in result.output.lower()
 
 
-def test_guard_pr_base_scans_diff_files(tmp_path: Path, monkeypatch):
+def test_guard_pr_base_scans_diff_files(monkeypatch):
     """--pr-base scans files changed since base."""
     import subprocess
     
@@ -440,7 +440,7 @@ def test_guard_pr_base_scans_diff_files(tmp_path: Path, monkeypatch):
         assert len(scan_paths[0]) == 1
 
 
-def test_guard_pr_base_without_git_fails(tmp_path: Path, monkeypatch):
+def test_guard_pr_base_without_git_fails(monkeypatch):
     """--pr-base fails gracefully without git."""
     config = EnvdriftConfig()
     _patch_guard_dependencies(monkeypatch, config, _build_result([]))

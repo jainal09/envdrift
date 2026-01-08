@@ -396,7 +396,7 @@ class DetectSecretsScanner(ScannerBackend):
                     "scan",
                     # Default: only scan git tracked files (fast, respects .gitignore)
                     "--force-use-all-plugins",  # Enable ALL 27+ detectors
-                    "--exclude-files", r"(node_modules|\.venv|\.git|__pycache__|\.min\.)",
+                    "--exclude-files", r"(node_modules|\.venv|\.git|__pycache__|\.min\.|dist|build|vendor|coverage)",
                     scan_path,
                 ]
 
