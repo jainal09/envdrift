@@ -200,12 +200,12 @@ def guard(
             else:
                 console.print("[green]No staged files to scan.[/green]")
                 raise typer.Exit(code=0)
-        except subprocess.TimeoutExpired:
+        except subprocess.TimeoutExpired as err:
             console.print("[red]Error:[/red] Git command timed out")
-            raise typer.Exit(code=1)
-        except FileNotFoundError:
+            raise typer.Exit(code=1) from err
+        except FileNotFoundError as err:
             console.print("[red]Error:[/red] Git not found. --staged requires git.")
-            raise typer.Exit(code=1)
+            raise typer.Exit(code=1) from err
 
     # Handle --pr-base flag (CI mode for PRs)
     elif pr_base:
@@ -233,12 +233,12 @@ def guard(
             else:
                 console.print("[green]No changed files to scan in this PR.[/green]")
                 raise typer.Exit(code=0)
-        except subprocess.TimeoutExpired:
+        except subprocess.TimeoutExpired as err:
             console.print("[red]Error:[/red] Git command timed out")
-            raise typer.Exit(code=1)
-        except FileNotFoundError:
+            raise typer.Exit(code=1) from err
+        except FileNotFoundError as err:
             console.print("[red]Error:[/red] Git not found. --pr-base requires git.")
-            raise typer.Exit(code=1)
+            raise typer.Exit(code=1) from err
 
     # Default behavior: use provided paths or current directory
     else:

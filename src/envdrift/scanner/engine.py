@@ -208,6 +208,16 @@ class ScanEngine:
         start_time = time.time()
         results: list[ScanResult] = []
 
+        # Early return if no scanners configured
+        if not self.scanners:
+            return AggregatedScanResult(
+                results=[],
+                total_findings=0,
+                unique_findings=[],
+                scanners_used=[],
+                total_duration_ms=int((time.time() - start_time) * 1000),
+            )
+
         # Run scanners in parallel using ThreadPoolExecutor
         # Use at most 4 workers to avoid overwhelming the system
         max_workers = min(len(self.scanners), 4)
@@ -235,7 +245,7 @@ class ScanEngine:
                     results.append(
                         ScanResult(
                             scanner_name=scanner.name,
-                            error=f"Scanner failed: {str(e)}",
+                            error=f"Scanner failed: {e!s}",
                         )
                     )
 

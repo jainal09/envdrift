@@ -39,9 +39,14 @@ def _patch_guard_dependencies(monkeypatch, config: EnvdriftConfig, result: Aggre
     created_configs: list[object] = []
     info_calls: list[bool] = []
 
+    class DummyScanner:
+        def __init__(self, name: str):
+            self.name = name
+
     class DummyEngine:
         def __init__(self, guard_config):
             created_configs.append(guard_config)
+            self.scanners = [DummyScanner("native")]
 
         def get_scanner_info(self):
             info_calls.append(True)
@@ -82,7 +87,7 @@ def test_guard_defaults_to_cwd(monkeypatch):
 
     class DummyEngine:
         def __init__(self, guard_config):
-            pass
+            self.scanners = []
 
         def get_scanner_info(self):
             return []

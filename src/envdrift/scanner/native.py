@@ -542,10 +542,17 @@ class NativeScanner(ScannerBackend):
         if not self._allowed_clear_files:
             return False
 
-        # Check both absolute and relative paths
+        # Check against filename and path with strict matching
+        name = path.name
         path_str = str(path)
+        
         for allowed in self._allowed_clear_files:
-            if path_str.endswith(allowed) or allowed in path_str:
+            allowed_path = Path(allowed)
+            # If allowed is just a filename, match by filename only
+            if allowed_path.name == allowed and name == allowed:
+                return True
+            # Match by path suffix (e.g., "config/.env.clear" matches "/path/to/config/.env.clear")
+            if path_str.endswith(f"/{allowed}") or path_str == allowed:
                 return True
         return False
 
