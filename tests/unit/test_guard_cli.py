@@ -7,7 +7,12 @@ from pathlib import Path
 from typer.testing import CliRunner
 
 from envdrift.cli import app
-from envdrift.config import EnvdriftConfig, GuardConfig as FileGuardConfig
+from envdrift.config import (
+    EnvdriftConfig,
+    GuardConfig as FileGuardConfig,
+    PartialEncryptionConfig,
+    PartialEncryptionEnvironmentConfig,
+)
 from envdrift.scanner.base import AggregatedScanResult, FindingSeverity, ScanFinding
 
 runner = CliRunner()
@@ -467,3 +472,86 @@ def test_guard_history_flag(tmp_path: Path, monkeypatch):
     assert result.exit_code == 0
     assert created_configs
     assert created_configs[0].include_git_history is True
+
+
+def test_guard_staged_timeout(monkeypatch):
+    """--staged handles git timeout gracefully."""
+    import subprocess
+    
+    config = EnvdriftConfig()
+    _patch_guard_dependencies(monkeypatch, config, _build_result([]))
+    
+    def mock_run(*args, **kwargs):
+        raise subprocess.TimeoutExpired(cmd="git", timeout=10)
+    
+    monkeypatch.setattr("subprocess.run", mock_run)
+    
+    with runner.isolated_filesystem():
+        result = runner.invoke(app, ["guard", "--staged"])
+        assert result.exit_code == 1
+        assert "timed out" in result.output.lower()
+
+
+def test_guard_pr_base_timeout(monkeypatch):
+    """--pr-base handles git timeout gracefully."""
+    import subprocess
+    
+    config = EnvdriftConfig()
+    _patch_guard_dependencies(monkeypatch, config, _build_result([]))
+    
+    def mock_run(*args, **kwargs):
+        raise subprocess.TimeoutExpired(cmd="git", timeout=10)
+    
+    monkeypatch.setattr("subprocess.run", mock_run)
+    
+    with runner.isolated_filesystem():
+        result = runner.invoke(app, ["guard", "--pr-base", "origin/main"])
+        assert result.exit_code == 1
+        assert "timed out" in result.output.lower()
+
+
+def test_guard_staged_files_not_exist(monkeypatch):
+    """--staged handles staged files that no longer exist on disk."""
+    import subprocess
+    
+    config = EnvdriftConfig()
+    _patch_guard_dependencies(monkeypatch, config, _build_result([]))
+    
+    # Mock git to return files that don't exist
+    def mock_run(cmd, *args, **kwargs):
+        if "diff" in cmd and "--cached" in cmd:
+            return subprocess.CompletedProcess(cmd, 0, stdout="deleted_file.py\n", stderr="")
+        return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+    
+    monkeypatch.setattr("subprocess.run", mock_run)
+    
+    with runner.isolated_filesystem():
+        # Don't create the file - it should show "no staged files"
+        result = runner.invoke(app, ["guard", "--staged"])
+        assert result.exit_code == 0
+        assert "no staged files" in result.output.lower()
+
+
+def test_guard_with_partial_encryption_config(tmp_path: Path, monkeypatch):
+    """Guard passes allowed_clear_files from partial_encryption config."""
+    partial_encryption = PartialEncryptionConfig(
+        enabled=True,
+        environments=[
+            PartialEncryptionEnvironmentConfig(
+                name="production",
+                clear_file=".env.production.clear",
+                secret_file=".env.production.secret",
+                combined_file=".env.production",
+            ),
+        ],
+    )
+    config = EnvdriftConfig(partial_encryption=partial_encryption)
+    created_configs, _info_calls = _patch_guard_dependencies(
+        monkeypatch, config, _build_result([])
+    )
+
+    result = runner.invoke(app, ["guard", str(tmp_path)])
+    assert result.exit_code == 0
+    assert created_configs
+    # Verify clear_file was passed to guard config
+    assert created_configs[0].allowed_clear_files == [".env.production.clear"]
