@@ -380,14 +380,24 @@ class DetectSecretsScanner(ScannerBackend):
 
             try:
                 # Build command with all plugins enabled ("final boss" mode)
+                # When scanning a directory, use "." as path since cwd is set to the directory
+                # When scanning a file, use the filename since cwd is set to parent
+                if path.is_dir():
+                    scan_path = "."
+                    working_dir = str(path)
+                else:
+                    scan_path = path.name
+                    working_dir = str(path.parent)
+
                 args = [
                     sys.executable,
                     "-m",
                     "detect_secrets",
                     "scan",
-                    "--all-files",  # Scan all files, not just tracked
+                    # Default: only scan git tracked files (fast, respects .gitignore)
                     "--force-use-all-plugins",  # Enable ALL 27+ detectors
-                    str(path),
+                    "--exclude-files", r"(^|.*/)(node_modules|\.venv|\.git|__pycache__|\.min\.|dist|build|vendor|coverage)(/.*|$)",
+                    scan_path,
                 ]
 
                 result = subprocess.run(
@@ -395,7 +405,7 @@ class DetectSecretsScanner(ScannerBackend):
                     capture_output=True,
                     text=True,
                     timeout=300,  # 5 minute timeout
-                    cwd=str(path) if path.is_dir() else str(path.parent),
+                    cwd=working_dir,
                 )
 
                 # detect-secrets outputs JSON baseline to stdout
@@ -453,10 +463,14 @@ class DetectSecretsScanner(ScannerBackend):
         results = baseline.get("results", {})
 
         for file_path_str, secrets in results.items():
-            # Resolve file path
+            # Resolve file path - handle both directory and file base paths
             file_path = Path(file_path_str)
             if not file_path.is_absolute():
-                file_path = base_path / file_path
+                # If base_path is a file, paths are relative to its parent directory
+                if base_path.is_file():
+                    file_path = base_path.parent / file_path
+                else:
+                    file_path = base_path / file_path
 
             for secret in secrets:
                 finding = self._parse_secret(secret, file_path)
