@@ -69,6 +69,21 @@ def guard(
         ),
     ] = False,
     # Scan options
+    staged: Annotated[
+        bool,
+        typer.Option(
+            "--staged",
+            "-s",
+            help="Only scan staged files (for pre-commit hooks)",
+        ),
+    ] = False,
+    pr_base: Annotated[
+        str | None,
+        typer.Option(
+            "--pr-base",
+            help="Scan all files changed since this base branch/commit (for CI, e.g., 'origin/main')",
+        ),
+    ] = None,
     history: Annotated[
         bool,
         typer.Option(
@@ -164,15 +179,77 @@ def guard(
       envdrift guard --json              # JSON output for automation
       envdrift guard ./src ./config      # Scan specific directories
     """
-    # Default to current directory
-    if not paths:
-        paths = [Path.cwd()]
+    import subprocess
 
-    # Validate paths exist
-    for path in paths:
-        if not path.exists():
-            console.print(f"[red]Error:[/red] Path not found: {path}")
+    # Handle --staged flag (pre-commit mode)
+    if staged:
+        try:
+            result = subprocess.run(
+                ["git", "diff", "--cached", "--name-only", "--diff-filter=ACMR"],
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+            if result.returncode == 0 and result.stdout.strip():
+                staged_files = [Path(f) for f in result.stdout.strip().split("\n") if f]
+                paths = [f for f in staged_files if f.exists()]
+                if not paths:
+                    console.print("[green]No staged files to scan.[/green]")
+                    raise typer.Exit(code=0)
+                console.print(f"[dim]Scanning {len(paths)} staged file(s)...[/dim]")
+            else:
+                console.print("[green]No staged files to scan.[/green]")
+                raise typer.Exit(code=0)
+        except subprocess.TimeoutExpired:
+            console.print("[red]Error:[/red] Git command timed out")
             raise typer.Exit(code=1)
+        except FileNotFoundError:
+            console.print("[red]Error:[/red] Git not found. --staged requires git.")
+            raise typer.Exit(code=1)
+
+    # Handle --pr-base flag (CI mode for PRs)
+    elif pr_base:
+        try:
+            # Fetch the base branch first to ensure it's up to date
+            subprocess.run(
+                ["git", "fetch", "origin", pr_base.replace("origin/", "")],
+                capture_output=True,
+                timeout=30,
+            )
+            # Get all files changed between base and HEAD
+            result = subprocess.run(
+                ["git", "diff", "--name-only", "--diff-filter=ACMR", f"{pr_base}...HEAD"],
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+            if result.returncode == 0 and result.stdout.strip():
+                changed_files = [Path(f) for f in result.stdout.strip().split("\n") if f]
+                paths = [f for f in changed_files if f.exists()]
+                if not paths:
+                    console.print("[green]No changed files to scan in this PR.[/green]")
+                    raise typer.Exit(code=0)
+                console.print(f"[bold]Scanning {len(paths)} file(s) changed since {pr_base}...[/bold]")
+            else:
+                console.print("[green]No changed files to scan in this PR.[/green]")
+                raise typer.Exit(code=0)
+        except subprocess.TimeoutExpired:
+            console.print("[red]Error:[/red] Git command timed out")
+            raise typer.Exit(code=1)
+        except FileNotFoundError:
+            console.print("[red]Error:[/red] Git not found. --pr-base requires git.")
+            raise typer.Exit(code=1)
+
+    # Default behavior: use provided paths or current directory
+    else:
+        if not paths:
+            paths = [Path.cwd()]
+
+        # Validate paths exist
+        for path in paths:
+            if not path.exists():
+                console.print(f"[red]Error:[/red] Path not found: {path}")
+                raise typer.Exit(code=1)
 
     # Load configuration from envdrift.toml (if available)
     file_config = load_config(config_file)
@@ -209,6 +286,14 @@ def guard(
         use_trufflehog_final = False
         use_detect_secrets_final = False
 
+    # Extract allowed clear files from partial_encryption config
+    # These files are intentionally unencrypted and should not be flagged
+    allowed_clear_files = []
+    if file_config.partial_encryption.enabled:
+        for env in file_config.partial_encryption.environments:
+            if env.clear_file:
+                allowed_clear_files.append(env.clear_file)
+
     # Build configuration merging file config with CLI overrides
     config = GuardConfig(
         use_native=True,
@@ -221,6 +306,7 @@ def guard(
         entropy_threshold=guard_cfg.entropy_threshold,
         ignore_paths=guard_cfg.ignore_paths,
         fail_on_severity=fail_severity,
+        allowed_clear_files=allowed_clear_files,
     )
 
     # Create output console (suppress colors in CI mode or JSON/SARIF output)
@@ -231,14 +317,21 @@ def guard(
     # Create scan engine
     engine = ScanEngine(config)
 
-    # Show scanner info in verbose mode
-    if verbose and not json_output and not sarif:
-        output_console.print("[bold]Scanners:[/bold]")
-        for info in engine.get_scanner_info():
-            status = "[green]installed[/green]" if info["installed"] else "[yellow]not installed[/yellow]"
-            version = f" (v{info['version']})" if info["version"] else ""
-            output_console.print(f"  - {info['name']}: {status}{version}")
-        output_console.print()
+    # Show scanner info in verbose mode or when running interactively
+    if not json_output and not sarif:
+        scanner_names = [s.name for s in engine.scanners]
+        if scanner_names:
+            output_console.print(f"[bold]Running scanners:[/bold] {', '.join(scanner_names)}")
+            output_console.print("[dim]Scanners run in parallel for better performance...[/dim]")
+            output_console.print()
+        
+        if verbose:
+            output_console.print("[bold]Scanner details:[/bold]")
+            for info in engine.get_scanner_info():
+                status = "[green]installed[/green]" if info["installed"] else "[yellow]not installed[/yellow]"
+                version = f" (v{info['version']})" if info["version"] else ""
+                output_console.print(f"  - {info['name']}: {status}{version}")
+            output_console.print()
 
     # Run scan
     result = engine.scan(paths)

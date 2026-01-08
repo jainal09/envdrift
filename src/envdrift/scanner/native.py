@@ -28,8 +28,8 @@ from envdrift.scanner.patterns import (
 
 # Encryption markers for dotenvx
 DOTENVX_MARKERS = (
-    "#/---[DOTENV_PUBLIC_KEY]",
-    "DOTENV_PUBLIC_KEY",
+    # Only check for actual encrypted values, not just the public key header
+    # DOTENV_PUBLIC_KEY header means file CAN be encrypted, not that it IS encrypted
     "encrypted:",
 )
 
@@ -40,29 +40,188 @@ SOPS_MARKERS = (
     "ENC[AES256_GCM,",
 )
 
-# Default patterns to ignore
+# Default patterns to ignore - comprehensive list for all major languages and tools
 DEFAULT_IGNORE_PATTERNS = (
+    # Env file examples/templates
     ".env.example",
     ".env.sample",
     ".env.template",
+    ".env.test",
+    ".env.local",
+    
+    # Documentation and text files
     "*.md",
     "*.txt",
+    "*.rst",
+    "*.adoc",
+    
+    # Lock and checksum files
     "*.lock",
     "*.sum",
-    "node_modules/**",
-    ".git/**",
+    "*-lock.json",
+    "*.lock.json",
+
+    # Minified files (high entropy but not secrets)
+    "*.min.js",
+    "*.min.css",
+    "*.bundle.js",
+    "*.chunk.js",
+    
+    # Python
     "__pycache__/**",
+    "*.pyc",
+    "*.pyo",
+    "*.pyd",
+    ".Python",
     ".venv/**",
     "venv/**",
+    "env/**",
+    "ENV/**",
     ".tox/**",
     ".nox/**",
     ".pytest_cache/**",
     ".mypy_cache/**",
     ".ruff_cache/**",
-    "*.pyc",
-    "*.pyo",
+    ".hypothesis/**",
+    "*.egg-info/**",
+    "*.egg",
+    "dist/**",
+    "build/**",
+    "*.whl",
+    ".coverage",
+    "htmlcov/**",
+    ".cache/**",
+    
+    # Node.js / JavaScript / TypeScript
+    "node_modules/**",
+    ".npm/**",
+    ".yarn/**",
+    ".pnp.*",
+    "*.log",
+    "npm-debug.log*",
+    "yarn-debug.log*",
+    "yarn-error.log*",
+    "lerna-debug.log*",
+    ".pnpm-debug.log*",
+    ".next/**",
+    "out/**",
+    ".nuxt/**",
+    ".cache/**",
+    ".parcel-cache/**",
+    ".svelte-kit/**",
+    "dist/**",
+    "build/**",
+    "coverage/**",
+    ".turbo/**",
+    
+    # Java / Maven / Gradle
+    "target/**",
+    "*.class",
+    "*.jar",
+    "*.war",
+    "*.ear",
+    ".gradle/**",
+    "build/**",
+    ".mvn/**",
+    
+    # .NET / C#
+    "bin/**",
+    "obj/**",
+    "*.dll",
+    "*.exe",
+    "*.pdb",
+    "packages/**",
+    ".vs/**",
+    "*.user",
+    "*.suo",
+    
+    # Go
+    "vendor/**",
+    "*.exe",
+    "*.test",
+    "*.out",
+    
+    # Rust
+    "target/**",
+    "Cargo.lock",
+    
+    # Ruby
+    ".bundle/**",
+    "vendor/bundle/**",
+    "*.gem",
+    
+    # PHP
+    "vendor/**",
+    "composer.lock",
+    
+    # Version control
+    ".git/**",
+    ".svn/**",
+    ".hg/**",
+    ".bzr/**",
+    
+    # IDEs and editors
+    ".idea/**",
+    ".vscode/**",
+    ".vs/**",
+    "*.swp",
+    "*.swo",
+    "*~",
+    ".project",
+    ".classpath",
+    ".settings/**",
+    "*.sublime-*",
+    
+    # OS files
     ".DS_Store",
     "Thumbs.db",
+    "desktop.ini",
+    
+    # Docker
+    ".docker/**",
+    
+    # Terraform
+    ".terraform/**",
+    "*.tfstate",
+    "*.tfstate.*",
+    
+    # Large binary and media files
+    "*.zip",
+    "*.tar",
+    "*.tar.gz",
+    "*.rar",
+    "*.7z",
+    "*.iso",
+    "*.dmg",
+    "*.pkg",
+    "*.jpg",
+    "*.jpeg",
+    "*.png",
+    "*.gif",
+    "*.bmp",
+    "*.ico",
+    "*.svg",
+    "*.mp3",
+    "*.mp4",
+    "*.avi",
+    "*.mov",
+    "*.pdf",
+    "*.woff",
+    "*.woff2",
+    "*.ttf",
+    "*.eot",
+    
+    # Logs
+    "*.log",
+    "logs/**",
+    
+    # Temporary files
+    "tmp/**",
+    "temp/**",
+    "*.tmp",
+    "*.temp",
+    "*.bak",
+    "*.backup",
 )
 
 
@@ -92,6 +251,7 @@ class NativeScanner(ScannerBackend):
         entropy_threshold: float = 4.5,
         ignore_patterns: list[str] | None = None,
         additional_ignore_patterns: list[str] | None = None,
+        allowed_clear_files: list[str] | None = None,
     ) -> None:
         """Initialize the native scanner.
 
@@ -100,9 +260,11 @@ class NativeScanner(ScannerBackend):
             entropy_threshold: Minimum entropy to flag as potential secret.
             ignore_patterns: Patterns to ignore (replaces defaults if provided).
             additional_ignore_patterns: Additional patterns to ignore (added to defaults).
+            allowed_clear_files: Files that are intentionally unencrypted (from partial_encryption config).
         """
         self._check_entropy = check_entropy
         self._entropy_threshold = entropy_threshold
+        self._allowed_clear_files = set(allowed_clear_files or [])
 
         if ignore_patterns is not None:
             self._ignore_patterns = tuple(ignore_patterns)
@@ -110,9 +272,7 @@ class NativeScanner(ScannerBackend):
             self._ignore_patterns = DEFAULT_IGNORE_PATTERNS
 
         if additional_ignore_patterns:
-            self._ignore_patterns = self._ignore_patterns + tuple(
-                additional_ignore_patterns
-            )
+            self._ignore_patterns = self._ignore_patterns + tuple(additional_ignore_patterns)
 
     @property
     def name(self) -> str:
@@ -170,7 +330,11 @@ class NativeScanner(ScannerBackend):
         )
 
     def _collect_files(self, directory: Path) -> list[Path]:
-        """Collect all files in a directory recursively.
+        """Collect files using hybrid approach: git ls-files + untracked .env files.
+
+        This is much faster than rglob because:
+        1. git ls-files reads from git's index (no filesystem traversal)
+        2. Untracked .env files are found via git, respecting .gitignore
 
         Args:
             directory: Directory to scan.
@@ -178,13 +342,86 @@ class NativeScanner(ScannerBackend):
         Returns:
             List of file paths.
         """
-        files = []
+        import subprocess
+
+        files: set[Path] = set()
+        directory = directory.resolve()
+
+        # Method 1: Get tracked files from git (fast - reads index)
         try:
-            for item in directory.rglob("*"):
-                if item.is_file():
-                    files.append(item)
+            result = subprocess.run(
+                ["git", "ls-files"],
+                capture_output=True,
+                text=True,
+                cwd=directory,
+                timeout=30,
+            )
+            if result.returncode != 0:
+                # Not a git repo or git error - use fallback
+                return self._collect_files_fallback(directory)
+
+            for rel_path in result.stdout.splitlines():
+                if rel_path:
+                    files.add(directory / rel_path)
+
+        except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
+            # git not available - fall back to os.walk
+            return self._collect_files_fallback(directory)
+
+        # Method 2: Get untracked .env* files (respects .gitignore)
+        # These are files developers might forget to encrypt before committing
+        try:
+            result = subprocess.run(
+                ["git", "ls-files", "--others", "--exclude-standard"],
+                capture_output=True,
+                text=True,
+                cwd=directory,
+                timeout=30,
+            )
+            if result.returncode == 0:
+                for rel_path in result.stdout.splitlines():
+                    if rel_path:
+                        file_name = Path(rel_path).name
+                        # Only include .env* files from untracked
+                        if file_name == ".env" or file_name.startswith(".env."):
+                            files.add(directory / rel_path)
+        except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
+            pass
+
+        return list(files)
+
+    def _collect_files_fallback(self, directory: Path) -> list[Path]:
+        """Fallback file collection using os.walk with early directory pruning.
+
+        Used when git is not available or directory is not a git repository.
+
+        Args:
+            directory: Directory to scan.
+
+        Returns:
+            List of file paths.
+        """
+        import os
+
+        files = []
+        skip_dirs = {
+            "node_modules", ".git", ".venv", "venv", "__pycache__",
+            ".next", "dist", "build", ".tox", ".nox", "coverage",
+            ".gradle", "target", "vendor", ".idea", ".vscode",
+            ".terraform", "bin", "obj", ".cache", ".pytest_cache",
+            ".mypy_cache", ".ruff_cache", "htmlcov", ".svn", ".hg",
+        }
+
+        try:
+            for root, dirs, filenames in os.walk(directory):
+                # Prune directories in-place to skip them entirely
+                dirs[:] = [d for d in dirs if d not in skip_dirs]
+
+                for filename in filenames:
+                    files.append(Path(root) / filename)
         except PermissionError:
             pass
+
         return files
 
     def _should_ignore(self, file_path: Path, base_path: Path) -> bool:
@@ -245,27 +482,36 @@ class NativeScanner(ScannerBackend):
             return findings
 
         # Check 1: Is this an unencrypted .env file?
-        if self._is_env_file(file_path):
-            if not self._is_encrypted(content):
-                findings.append(
-                    ScanFinding(
-                        file_path=file_path,
-                        rule_id="unencrypted-env-file",
-                        rule_description="Unencrypted Environment File",
-                        description=(
-                            f"Environment file '{file_path.name}' is not encrypted. "
-                            f"Run 'envdrift encrypt {file_path}' before committing."
-                        ),
-                        severity=FindingSeverity.HIGH,
-                        scanner=self.name,
-                    )
+        is_env_file = self._is_env_file(file_path)
+        is_encrypted = self._is_encrypted(content)
+
+        # Check if file is an allowed clear file (from partial_encryption config)
+        is_allowed_clear = self._is_allowed_clear_file(file_path)
+
+        if is_env_file and not is_encrypted and not is_allowed_clear:
+            findings.append(
+                ScanFinding(
+                    file_path=file_path,
+                    rule_id="unencrypted-env-file",
+                    rule_description="Unencrypted Environment File",
+                    description=(
+                        f"Environment file '{file_path.name}' is not encrypted. "
+                        f"Run 'envdrift encrypt {file_path}' before committing."
+                    ),
+                    severity=FindingSeverity.HIGH,
+                    scanner=self.name,
                 )
+            )
 
         # Check 2: Scan for secret patterns
-        findings.extend(self._scan_patterns(file_path, content))
+        # Skip pattern scanning for encrypted files to avoid false positives
+        if not is_encrypted:
+            findings.extend(self._scan_patterns(file_path, content))
 
-        # Check 3: High-entropy strings (optional)
-        if self._check_entropy:
+        # Check 3: High-entropy strings
+        # Always run for env files (they're the primary place for secrets)
+        # For other files, only run if check_entropy is enabled
+        if is_env_file or self._check_entropy:
             findings.extend(self._scan_entropy(file_path, content))
 
         return findings
@@ -281,6 +527,27 @@ class NativeScanner(ScannerBackend):
         """
         name = path.name
         return name == ".env" or name.startswith(".env.")
+
+    def _is_allowed_clear_file(self, path: Path) -> bool:
+        """Check if a file is an allowed clear file from partial_encryption config.
+
+        These files are intentionally unencrypted (contain non-sensitive variables).
+
+        Args:
+            path: Path to check.
+
+        Returns:
+            True if this file is configured as a clear_file in partial_encryption.
+        """
+        if not self._allowed_clear_files:
+            return False
+
+        # Check both absolute and relative paths
+        path_str = str(path)
+        for allowed in self._allowed_clear_files:
+            if path_str.endswith(allowed) or allowed in path_str:
+                return True
+        return False
 
     def _is_encrypted(self, content: str) -> bool:
         """Check if file content has encryption markers.
@@ -322,11 +589,33 @@ class NativeScanner(ScannerBackend):
             if not stripped or stripped.startswith("#"):
                 continue
 
+            # Skip lines with encrypted values (dotenvx or SOPS)
+            # This handles partially encrypted files or mixed content
+            if "encrypted:" in line or "ENC[" in line:
+                continue
+
             for pattern in ALL_PATTERNS:
                 match = pattern.pattern.search(line)
                 if match:
                     # Extract the secret (first group or full match)
                     secret = match.group(1) if match.groups() else match.group(0)
+
+                    # For generic-secret pattern, apply entropy filter to reduce false positives
+                    # Real secrets have high entropy (randomness), code variables don't
+                    if pattern.id == "generic-secret":
+                        entropy = calculate_entropy(secret)
+                        # Entropy threshold 4.0 filters out most variable names/code patterns
+                        # Real API keys, tokens, passwords typically have entropy > 4.0
+                        if entropy < 4.0:
+                            continue
+                        # Skip variable references - these point to secrets, not the secrets themselves
+                        # Universal patterns: ${VAR}, $(cmd), $VAR, %VAR%, {{var}}, {var}, \${var}
+                        if secret.startswith(("${", "$(", "$", "%", "{{", "{", "\\${")):
+                            continue
+                        # Skip code patterns - method/property access (real secrets don't have dots)
+                        # e.g., "config.Password", "handler.ReadToken()", "obj?.Property"
+                        if "." in secret or "?" in secret:
+                            continue
 
                     # Calculate column number
                     col_num = match.start() + 1
@@ -363,9 +652,7 @@ class NativeScanner(ScannerBackend):
         lines = content.splitlines()
 
         # Pattern for assignment-like statements
-        assignment_pattern = re.compile(
-            r"[A-Z_][A-Z0-9_]*\s*[=:]\s*[\"']?([^\"'\s=]{16,})[\"']?"
-        )
+        assignment_pattern = re.compile(r"[A-Z_][A-Z0-9_]*\s*[=:]\s*[\"']?([^\"'\s=]{16,})[\"']?")
 
         for line_num, line in enumerate(lines, start=1):
             # Skip comments

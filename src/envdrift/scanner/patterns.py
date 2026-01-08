@@ -351,7 +351,7 @@ HIGH_PATTERNS: list[SecretPattern] = [
         id="generic-secret",
         description="Generic Secret",
         pattern=re.compile(
-            r"(?i)(?:secret|token|password|passwd|pwd|auth[_-]?token)"
+            r"(?i)\b(?:secret|token|password|passwd|pwd|auth[_-]?token)"
             r"\s*[=:]\s*['\"]?([a-zA-Z0-9_!@#$%^&*(),.?\":{}|<>\[\]\\;'`~\-+=]{8,})['\"]?"
         ),
         severity=FindingSeverity.HIGH,

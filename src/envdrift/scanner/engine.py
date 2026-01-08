@@ -2,7 +2,7 @@
 
 The ScanEngine is responsible for:
 - Initializing and managing scanner instances
-- Running scans across multiple scanners
+- Running scans across multiple scanners in parallel
 - Aggregating and deduplicating findings
 - Handling scanner failures gracefully
 """
@@ -10,6 +10,7 @@ The ScanEngine is responsible for:
 from __future__ import annotations
 
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -42,6 +43,7 @@ class GuardConfig:
         entropy_threshold: Minimum entropy to flag as potential secret.
         ignore_paths: Glob patterns for paths to ignore.
         fail_on_severity: Minimum severity to cause non-zero exit.
+        allowed_clear_files: Files that are intentionally unencrypted (from partial_encryption config).
     """
 
     use_native: bool = True
@@ -54,6 +56,7 @@ class GuardConfig:
     entropy_threshold: float = 4.5
     ignore_paths: list[str] = field(default_factory=list)
     fail_on_severity: FindingSeverity = FindingSeverity.HIGH
+    allowed_clear_files: list[str] = field(default_factory=list)
 
     @classmethod
     def from_dict(cls, config: dict) -> GuardConfig:
@@ -96,7 +99,7 @@ class GuardConfig:
 class ScanEngine:
     """Orchestrates multiple secret scanners.
 
-    The engine manages scanner lifecycle, runs scans in sequence,
+    The engine manages scanner lifecycle, runs scans in parallel,
     and aggregates results from all scanners.
 
     Example:
@@ -117,6 +120,33 @@ class ScanEngine:
 
         self._initialize_scanners()
 
+    def _run_scanner(
+        self,
+        scanner: ScannerBackend,
+        paths: list[Path],
+        include_git_history: bool
+    ) -> ScanResult:
+        """Run a single scanner (for parallel execution).
+
+        Args:
+            scanner: The scanner to run.
+            paths: Paths to scan.
+            include_git_history: Whether to include git history.
+
+        Returns:
+            ScanResult from the scanner.
+        """
+        try:
+            return scanner.scan(
+                paths=paths,
+                include_git_history=include_git_history,
+            )
+        except Exception as e:
+            return ScanResult(
+                scanner_name=scanner.name,
+                error=str(e),
+            )
+
     def _initialize_scanners(self) -> None:
         """Initialize scanner instances based on configuration."""
         # Native scanner (always available)
@@ -126,6 +156,7 @@ class ScanEngine:
                     check_entropy=self.config.check_entropy,
                     entropy_threshold=self.config.entropy_threshold,
                     additional_ignore_patterns=self.config.ignore_paths,
+                    allowed_clear_files=self.config.allowed_clear_files,
                 )
             )
 
@@ -163,7 +194,10 @@ class ScanEngine:
                 pass  # detect-secrets not yet implemented
 
     def scan(self, paths: list[Path]) -> AggregatedScanResult:
-        """Run all configured scanners on the given paths.
+        """Run all configured scanners on the given paths in parallel.
+
+        Scanners run concurrently to improve performance on large repositories.
+        Each scanner has its own timeout and error handling.
 
         Args:
             paths: List of files or directories to scan.
@@ -174,21 +208,36 @@ class ScanEngine:
         start_time = time.time()
         results: list[ScanResult] = []
 
-        for scanner in self.scanners:
-            try:
-                result = scanner.scan(
-                    paths=paths,
-                    include_git_history=self.config.include_git_history,
-                )
-                results.append(result)
-            except Exception as e:
-                # Record scanner failure but continue with others
-                results.append(
-                    ScanResult(
-                        scanner_name=scanner.name,
-                        error=str(e),
+        # Run scanners in parallel using ThreadPoolExecutor
+        # Use at most 4 workers to avoid overwhelming the system
+        max_workers = min(len(self.scanners), 4)
+        
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            # Submit all scanner tasks
+            future_to_scanner = {
+                executor.submit(
+                    self._run_scanner,
+                    scanner,
+                    paths,
+                    self.config.include_git_history
+                ): scanner
+                for scanner in self.scanners
+            }
+            
+            # Collect results as they complete
+            for future in as_completed(future_to_scanner):
+                scanner = future_to_scanner[future]
+                try:
+                    result = future.result(timeout=600)  # 10 minute per-scanner timeout
+                    results.append(result)
+                except Exception as e:
+                    # Record scanner failure but continue with others
+                    results.append(
+                        ScanResult(
+                            scanner_name=scanner.name,
+                            error=f"Scanner failed: {str(e)}",
+                        )
                     )
-                )
 
         # Collect all findings
         all_findings: list[ScanFinding] = []
