@@ -396,7 +396,7 @@ class DetectSecretsScanner(ScannerBackend):
                     "scan",
                     # Default: only scan git tracked files (fast, respects .gitignore)
                     "--force-use-all-plugins",  # Enable ALL 27+ detectors
-                    "--exclude-files", r"(node_modules|\.venv|\.git|__pycache__|\.min\.|dist|build|vendor|coverage)",
+                    "--exclude-files", r"(^|.*/)(node_modules|\.venv|\.git|__pycache__|\.min\.|dist|build|vendor|coverage)(/.*|$)",
                     scan_path,
                 ]
 
@@ -463,10 +463,14 @@ class DetectSecretsScanner(ScannerBackend):
         results = baseline.get("results", {})
 
         for file_path_str, secrets in results.items():
-            # Resolve file path
+            # Resolve file path - handle both directory and file base paths
             file_path = Path(file_path_str)
             if not file_path.is_absolute():
-                file_path = base_path / file_path
+                # If base_path is a file, paths are relative to its parent directory
+                if base_path.is_file():
+                    file_path = base_path.parent / file_path
+                else:
+                    file_path = base_path / file_path
 
             for secret in secrets:
                 finding = self._parse_secret(secret, file_path)
