@@ -135,6 +135,22 @@ Specify a config file path. If omitted, envdrift searches for `envdrift.toml` or
 envdrift guard --config ./envdrift.toml
 ```
 
+### `--staged`, `-s`
+
+Scan only git staged files. Useful for pre-commit hooks.
+
+```bash
+envdrift guard --staged
+```
+
+### `--pr-base`
+
+Scan only files changed since the specified base branch. Useful for CI/CD PR checks.
+
+```bash
+envdrift guard --pr-base origin/main
+```
+
 ## Examples
 
 ### Basic scan
@@ -159,6 +175,25 @@ envdrift guard --native-only
 
 ```bash
 envdrift guard --ci --sarif > guard.sarif
+```
+
+### Pre-commit hook (staged files only)
+
+```bash
+envdrift guard --staged
+```
+
+### CI/CD PR scanning
+
+```bash
+# In GitHub Actions, scan only files changed in the PR
+envdrift guard --pr-base origin/main --ci --fail-on high
+```
+
+### Scan git history for leaked secrets
+
+```bash
+envdrift guard --history --trufflehog
 ```
 
 ## Exit Codes

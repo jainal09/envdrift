@@ -288,3 +288,182 @@ def test_guard_sarif_output(tmp_path: Path, monkeypatch):
     assert result.exit_code == 0
     assert "SARIF-OUT" in result.output
     assert created_configs
+
+
+def test_guard_staged_with_no_staged_files(tmp_path: Path, monkeypatch):
+    """--staged with no staged files exits cleanly."""
+    import subprocess
+    
+    config = EnvdriftConfig()
+    _patch_guard_dependencies(monkeypatch, config, _build_result([]))
+    
+    # Mock git diff --cached to return empty
+    def mock_run(*args, **kwargs):
+        result = subprocess.CompletedProcess(args[0], 0, stdout="", stderr="")
+        return result
+    
+    monkeypatch.setattr("subprocess.run", mock_run)
+    
+    with runner.isolated_filesystem():
+        result = runner.invoke(app, ["guard", "--staged"])
+        assert result.exit_code == 0
+        assert "no staged files" in result.output.lower()
+
+
+def test_guard_staged_scans_only_staged_files(tmp_path: Path, monkeypatch):
+    """--staged only scans git staged files."""
+    import subprocess
+    
+    config = EnvdriftConfig()
+    scan_paths: list[list[Path]] = []
+    dummy_result = _build_result([])
+    
+    class DummyScanner:
+        def __init__(self, name: str):
+            self.name = name
+
+    class DummyEngine:
+        def __init__(self, guard_config):
+            self.scanners = [DummyScanner("native")]
+
+        def get_scanner_info(self):
+            return []
+
+        def scan(self, paths):
+            scan_paths.append(paths)
+            return dummy_result
+    
+    monkeypatch.setattr("envdrift.cli_commands.guard.load_config", lambda _p=None: config)
+    monkeypatch.setattr("envdrift.cli_commands.guard.ScanEngine", DummyEngine)
+    
+    # Mock git diff --cached to return staged files
+    def mock_run(cmd, *args, **kwargs):
+        if "diff" in cmd and "--cached" in cmd:
+            return subprocess.CompletedProcess(cmd, 0, stdout="file1.py\nfile2.env\n", stderr="")
+        return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+    
+    monkeypatch.setattr("subprocess.run", mock_run)
+    
+    with runner.isolated_filesystem():
+        # Create the staged files
+        Path("file1.py").write_text("# test")
+        Path("file2.env").write_text("SECRET=value")
+        
+        result = runner.invoke(app, ["guard", "--staged"])
+        assert result.exit_code == 0
+        assert scan_paths  # Verify scan was called
+        assert len(scan_paths[0]) == 2  # Two staged files
+
+
+def test_guard_staged_without_git_fails(tmp_path: Path, monkeypatch):
+    """--staged fails gracefully without git."""
+    config = EnvdriftConfig()
+    _patch_guard_dependencies(monkeypatch, config, _build_result([]))
+    
+    # Mock subprocess.run to raise FileNotFoundError (git not installed)
+    def mock_run(*args, **kwargs):
+        raise FileNotFoundError("git not found")
+    
+    monkeypatch.setattr("subprocess.run", mock_run)
+    
+    with runner.isolated_filesystem():
+        result = runner.invoke(app, ["guard", "--staged"])
+        assert result.exit_code == 1
+        assert "git not found" in result.output.lower()
+
+
+def test_guard_pr_base_with_no_changed_files(tmp_path: Path, monkeypatch):
+    """--pr-base with no changed files exits cleanly."""
+    import subprocess
+    
+    config = EnvdriftConfig()
+    _patch_guard_dependencies(monkeypatch, config, _build_result([]))
+    
+    # Mock git commands
+    def mock_run(cmd, *args, **kwargs):
+        if "fetch" in cmd:
+            return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+        if "diff" in cmd:
+            return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+        return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+    
+    monkeypatch.setattr("subprocess.run", mock_run)
+    
+    with runner.isolated_filesystem():
+        result = runner.invoke(app, ["guard", "--pr-base", "origin/main"])
+        assert result.exit_code == 0
+        assert "no changed files" in result.output.lower()
+
+
+def test_guard_pr_base_scans_diff_files(tmp_path: Path, monkeypatch):
+    """--pr-base scans files changed since base."""
+    import subprocess
+    
+    config = EnvdriftConfig()
+    scan_paths: list[list[Path]] = []
+    dummy_result = _build_result([])
+    
+    class DummyScanner:
+        def __init__(self, name: str):
+            self.name = name
+
+    class DummyEngine:
+        def __init__(self, guard_config):
+            self.scanners = [DummyScanner("native")]
+
+        def get_scanner_info(self):
+            return []
+
+        def scan(self, paths):
+            scan_paths.append(paths)
+            return dummy_result
+    
+    monkeypatch.setattr("envdrift.cli_commands.guard.load_config", lambda _p=None: config)
+    monkeypatch.setattr("envdrift.cli_commands.guard.ScanEngine", DummyEngine)
+    
+    # Mock git commands
+    def mock_run(cmd, *args, **kwargs):
+        if "fetch" in cmd:
+            return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+        if "diff" in cmd:
+            return subprocess.CompletedProcess(cmd, 0, stdout="changed.py\n", stderr="")
+        return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+    
+    monkeypatch.setattr("subprocess.run", mock_run)
+    
+    with runner.isolated_filesystem():
+        Path("changed.py").write_text("# changed file")
+        
+        result = runner.invoke(app, ["guard", "--pr-base", "origin/main"])
+        assert result.exit_code == 0
+        assert scan_paths
+        assert len(scan_paths[0]) == 1
+
+
+def test_guard_pr_base_without_git_fails(tmp_path: Path, monkeypatch):
+    """--pr-base fails gracefully without git."""
+    config = EnvdriftConfig()
+    _patch_guard_dependencies(monkeypatch, config, _build_result([]))
+    
+    def mock_run(*args, **kwargs):
+        raise FileNotFoundError("git not found")
+    
+    monkeypatch.setattr("subprocess.run", mock_run)
+    
+    with runner.isolated_filesystem():
+        result = runner.invoke(app, ["guard", "--pr-base", "origin/main"])
+        assert result.exit_code == 1
+        assert "git not found" in result.output.lower()
+
+
+def test_guard_history_flag(tmp_path: Path, monkeypatch):
+    """--history flag enables git history scanning."""
+    config = EnvdriftConfig()
+    created_configs, _info_calls = _patch_guard_dependencies(
+        monkeypatch, config, _build_result([])
+    )
+
+    result = runner.invoke(app, ["guard", str(tmp_path), "--history"])
+    assert result.exit_code == 0
+    assert created_configs
+    assert created_configs[0].include_git_history is True
