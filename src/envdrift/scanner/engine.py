@@ -106,6 +106,7 @@ class GuardConfig:
             include_git_history=guard_config.get("include_history", False),
             check_entropy=guard_config.get("check_entropy", False),
             entropy_threshold=guard_config.get("entropy_threshold", 4.5),
+            skip_clear_files=guard_config.get("skip_clear_files", False),
             ignore_paths=guard_config.get("ignore_paths", []),
             ignore_rules=guard_config.get("ignore_rules", {}),
             fail_on_severity=fail_severity,
