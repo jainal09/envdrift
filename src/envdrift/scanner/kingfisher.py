@@ -247,7 +247,7 @@ class KingfisherScanner(ScannerBackend):
                 [brew_path, "install", "kingfisher"],
                 capture_output=True,
                 text=True,
-                timeout=300,  # 5 minute timeout
+                timeout=120,  # 2 minute timeout
             )
 
             if result.returncode != 0:
@@ -325,8 +325,19 @@ class KingfisherScanner(ScannerBackend):
                 continue
 
             # Create temp file for JSON output
-            with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as report_file:
-                report_path = Path(report_file.name)
+            report_path = None
+            try:
+                with tempfile.NamedTemporaryFile(
+                    mode="w", suffix=".json", delete=False
+                ) as report_file:
+                    report_path = Path(report_file.name)
+            except OSError as e:
+                return ScanResult(
+                    scanner_name=self.name,
+                    findings=all_findings,
+                    error=f"Failed to create temp file: {e}",
+                    duration_ms=int((time.time() - start_time) * 1000),
+                )
 
             try:
                 # Build command with maximum detection options
@@ -386,14 +397,15 @@ class KingfisherScanner(ScannerBackend):
 
                 # Exit codes: 0 = no findings, 200 = findings detected, others = error
                 if result.returncode not in (0, 200):
-                    # Check if it's a real error
-                    if result.stderr and "error" in result.stderr.lower():
-                        return ScanResult(
-                            scanner_name=self.name,
-                            findings=all_findings,
-                            error=f"Kingfisher error: {result.stderr}",
-                            duration_ms=int((time.time() - start_time) * 1000),
-                        )
+                    error_msg = (
+                        result.stderr.strip() if result.stderr else f"Exit code {result.returncode}"
+                    )
+                    return ScanResult(
+                        scanner_name=self.name,
+                        findings=all_findings,
+                        error=f"Kingfisher error: {error_msg}",
+                        duration_ms=int((time.time() - start_time) * 1000),
+                    )
 
                 # Parse JSON output from report file
                 if report_path.exists() and report_path.stat().st_size > 0:
@@ -434,7 +446,7 @@ class KingfisherScanner(ScannerBackend):
                 )
             finally:
                 # Clean up temp report file
-                if report_path.exists():
+                if report_path and report_path.exists():
                     report_path.unlink()
 
         return ScanResult(
