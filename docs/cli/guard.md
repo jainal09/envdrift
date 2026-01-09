@@ -276,4 +276,3 @@ Notes:
 - `ignore_paths` applies to the native scanner's file walk.
 - CLI flags override config values.
 - `git-secrets` is ideal for AWS-heavy environments.
-
