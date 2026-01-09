@@ -5,6 +5,7 @@ This module provides secret detection capabilities through multiple scanner back
 - GitleaksScanner: Integration with gitleaks (auto-installable)
 - TrufflehogScanner: Integration with trufflehog (auto-installable)
 - DetectSecretsScanner: Yelp's detect-secrets - the "final boss" (auto-installable)
+- KingfisherScanner: MongoDB's Kingfisher - 700+ rules, password hashes, validation
 
 The ScanEngine orchestrates multiple scanners and aggregates results.
 """
@@ -19,6 +20,7 @@ from envdrift.scanner.base import (
 from envdrift.scanner.detect_secrets import DetectSecretsScanner
 from envdrift.scanner.engine import GuardConfig, ScanEngine
 from envdrift.scanner.gitleaks import GitleaksScanner
+from envdrift.scanner.kingfisher import KingfisherScanner
 from envdrift.scanner.native import NativeScanner
 from envdrift.scanner.trufflehog import TrufflehogScanner
 
@@ -28,6 +30,7 @@ __all__ = [
     "FindingSeverity",
     "GitleaksScanner",
     "GuardConfig",
+    "KingfisherScanner",
     "NativeScanner",
     "ScanEngine",
     "ScanFinding",

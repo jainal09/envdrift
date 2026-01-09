@@ -23,12 +23,23 @@ import pytest
 if TYPE_CHECKING:
     from collections.abc import Generator
 
-# Mark all tests in this module
-pytestmark = [pytest.mark.integration, pytest.mark.vault]
-
 # Import test constants from conftest
+# Check if hvac is available
+import importlib.util
+
 from tests.integration.conftest import VAULT_ROOT_TOKEN
 
+HVAC_AVAILABLE = importlib.util.find_spec("hvac") is not None
+
+# Mark all tests in this module - skip if hvac not installed
+pytestmark = [
+    pytest.mark.integration,
+    pytest.mark.vault,
+    pytest.mark.skipif(
+        not HVAC_AVAILABLE,
+        reason="hvac not installed - install with: pip install envdrift[hashicorp]",
+    ),
+]
 
 # --- Fixtures ---
 
@@ -209,7 +220,9 @@ vault_key_path = "myapp/production"
 
         # Check that pull succeeded or failed gracefully (not crashed)
         # returncode 0 = success, 1 = expected failure (e.g., auth issue)
-        assert result.returncode in (0, 1), f"Unexpected exit code: {result.returncode}\nstderr: {result.stderr}"
+        assert result.returncode in (0, 1), (
+            f"Unexpected exit code: {result.returncode}\nstderr: {result.stderr}"
+        )
 
 
 # --- CLI Vault Push Command Tests ---

@@ -164,9 +164,7 @@ class DetectSecretsInstaller:
             )
 
             if result.returncode != 0:
-                raise DetectSecretsInstallError(
-                    f"Install failed: {result.stderr}"
-                )
+                raise DetectSecretsInstallError(f"Install failed: {result.stderr}")
 
             self.progress(f"Installed detect-secrets v{self.version}")
             return True
@@ -396,7 +394,8 @@ class DetectSecretsScanner(ScannerBackend):
                     "scan",
                     # Default: only scan git tracked files (fast, respects .gitignore)
                     "--force-use-all-plugins",  # Enable ALL 27+ detectors
-                    "--exclude-files", r"(^|.*/)(node_modules|\.venv|\.git|__pycache__|\.min\.|dist|build|vendor|coverage)(/.*|$)",
+                    "--exclude-files",
+                    r"(^|.*/)(node_modules|\.venv|\.git|__pycache__|\.min\.|dist|build|vendor|coverage)(/.*|$)",
                     scan_path,
                 ]
 
@@ -447,9 +446,7 @@ class DetectSecretsScanner(ScannerBackend):
             duration_ms=int((time.time() - start_time) * 1000),
         )
 
-    def _parse_baseline(
-        self, baseline: dict[str, Any], base_path: Path
-    ) -> list[ScanFinding]:
+    def _parse_baseline(self, baseline: dict[str, Any], base_path: Path) -> list[ScanFinding]:
         """Parse detect-secrets baseline into findings.
 
         Args:
@@ -479,9 +476,7 @@ class DetectSecretsScanner(ScannerBackend):
 
         return findings
 
-    def _parse_secret(
-        self, secret: dict[str, Any], file_path: Path
-    ) -> ScanFinding | None:
+    def _parse_secret(self, secret: dict[str, Any], file_path: Path) -> ScanFinding | None:
         """Parse a single secret entry into a finding.
 
         Args:

@@ -121,9 +121,7 @@ def test_guard_uses_config_scanners(tmp_path: Path, monkeypatch):
             ignore_paths=["vendor/**"],
         )
     )
-    created_configs, _info_calls = _patch_guard_dependencies(
-        monkeypatch, config, _build_result([])
-    )
+    created_configs, _info_calls = _patch_guard_dependencies(monkeypatch, config, _build_result([]))
 
     result = runner.invoke(app, ["guard", str(tmp_path)])
     assert result.exit_code == 0
@@ -140,9 +138,7 @@ def test_guard_uses_config_scanners(tmp_path: Path, monkeypatch):
 def test_guard_config_can_disable_gitleaks(tmp_path: Path, monkeypatch):
     """Config scanners can disable gitleaks when not listed."""
     config = EnvdriftConfig(guard=FileGuardConfig(scanners=["native"]))
-    created_configs, _info_calls = _patch_guard_dependencies(
-        monkeypatch, config, _build_result([])
-    )
+    created_configs, _info_calls = _patch_guard_dependencies(monkeypatch, config, _build_result([]))
 
     result = runner.invoke(app, ["guard", str(tmp_path)])
     assert result.exit_code == 0
@@ -154,13 +150,9 @@ def test_guard_config_can_disable_gitleaks(tmp_path: Path, monkeypatch):
 def test_guard_cli_overrides_config_scanners(tmp_path: Path, monkeypatch):
     """CLI flags override config scanner selection."""
     config = EnvdriftConfig(
-        guard=FileGuardConfig(
-            scanners=["native", "gitleaks", "trufflehog", "detect-secrets"]
-        )
+        guard=FileGuardConfig(scanners=["native", "gitleaks", "trufflehog", "detect-secrets"])
     )
-    created_configs, _info_calls = _patch_guard_dependencies(
-        monkeypatch, config, _build_result([])
-    )
+    created_configs, _info_calls = _patch_guard_dependencies(monkeypatch, config, _build_result([]))
 
     result = runner.invoke(
         app,
@@ -183,9 +175,7 @@ def test_guard_cli_overrides_config_scanners(tmp_path: Path, monkeypatch):
 def test_guard_cli_enables_gitleaks_when_config_disables(tmp_path: Path, monkeypatch):
     """CLI --gitleaks enables gitleaks even when config disables it."""
     config = EnvdriftConfig(guard=FileGuardConfig(scanners=["native"]))
-    created_configs, _info_calls = _patch_guard_dependencies(
-        monkeypatch, config, _build_result([])
-    )
+    created_configs, _info_calls = _patch_guard_dependencies(monkeypatch, config, _build_result([]))
 
     result = runner.invoke(app, ["guard", str(tmp_path), "--gitleaks"])
     assert result.exit_code == 0
@@ -197,13 +187,9 @@ def test_guard_cli_enables_gitleaks_when_config_disables(tmp_path: Path, monkeyp
 def test_guard_native_only_disables_external_scanners(tmp_path: Path, monkeypatch):
     """--native-only disables external scanners."""
     config = EnvdriftConfig(
-        guard=FileGuardConfig(
-            scanners=["native", "gitleaks", "trufflehog", "detect-secrets"]
-        )
+        guard=FileGuardConfig(scanners=["native", "gitleaks", "trufflehog", "detect-secrets"])
     )
-    created_configs, _info_calls = _patch_guard_dependencies(
-        monkeypatch, config, _build_result([])
-    )
+    created_configs, _info_calls = _patch_guard_dependencies(monkeypatch, config, _build_result([]))
 
     result = runner.invoke(app, ["guard", str(tmp_path), "--native-only"])
     assert result.exit_code == 0
@@ -216,12 +202,8 @@ def test_guard_native_only_disables_external_scanners(tmp_path: Path, monkeypatc
 
 def test_guard_history_and_entropy_flags_override_config(tmp_path: Path, monkeypatch):
     """--history and --entropy override config defaults."""
-    config = EnvdriftConfig(
-        guard=FileGuardConfig(include_history=False, check_entropy=False)
-    )
-    created_configs, _info_calls = _patch_guard_dependencies(
-        monkeypatch, config, _build_result([])
-    )
+    config = EnvdriftConfig(guard=FileGuardConfig(include_history=False, check_entropy=False))
+    created_configs, _info_calls = _patch_guard_dependencies(monkeypatch, config, _build_result([]))
 
     result = runner.invoke(app, ["guard", str(tmp_path), "--history", "--entropy"])
     assert result.exit_code == 0
@@ -234,9 +216,7 @@ def test_guard_history_and_entropy_flags_override_config(tmp_path: Path, monkeyp
 def test_guard_verbose_prints_scanner_info(tmp_path: Path, monkeypatch):
     """--verbose triggers scanner info output."""
     config = EnvdriftConfig()
-    created_configs, info_calls = _patch_guard_dependencies(
-        monkeypatch, config, _build_result([])
-    )
+    created_configs, info_calls = _patch_guard_dependencies(monkeypatch, config, _build_result([]))
 
     result = runner.invoke(app, ["guard", str(tmp_path), "--verbose"])
     assert result.exit_code == 0
@@ -270,9 +250,7 @@ def test_guard_exits_with_findings_non_ci(tmp_path: Path, monkeypatch):
 def test_guard_json_output(tmp_path: Path, monkeypatch):
     """--json outputs serialized results."""
     config = EnvdriftConfig()
-    created_configs, _info_calls = _patch_guard_dependencies(
-        monkeypatch, config, _build_result([])
-    )
+    created_configs, _info_calls = _patch_guard_dependencies(monkeypatch, config, _build_result([]))
     monkeypatch.setattr("envdrift.cli_commands.guard.format_json", lambda _r: "JSON-OUT")
 
     result = runner.invoke(app, ["guard", str(tmp_path), "--json"])
@@ -284,9 +262,7 @@ def test_guard_json_output(tmp_path: Path, monkeypatch):
 def test_guard_sarif_output(tmp_path: Path, monkeypatch):
     """--sarif outputs SARIF content."""
     config = EnvdriftConfig()
-    created_configs, _info_calls = _patch_guard_dependencies(
-        monkeypatch, config, _build_result([])
-    )
+    created_configs, _info_calls = _patch_guard_dependencies(monkeypatch, config, _build_result([]))
     monkeypatch.setattr("envdrift.cli_commands.guard.format_sarif", lambda _r: "SARIF-OUT")
 
     result = runner.invoke(app, ["guard", str(tmp_path), "--sarif"])
@@ -298,17 +274,17 @@ def test_guard_sarif_output(tmp_path: Path, monkeypatch):
 def test_guard_staged_with_no_staged_files(monkeypatch):
     """--staged with no staged files exits cleanly."""
     import subprocess
-    
+
     config = EnvdriftConfig()
     _patch_guard_dependencies(monkeypatch, config, _build_result([]))
-    
+
     # Mock git diff --cached to return empty
     def mock_run(*args, **kwargs):
         result = subprocess.CompletedProcess(args[0], 0, stdout="", stderr="")
         return result
-    
+
     monkeypatch.setattr("subprocess.run", mock_run)
-    
+
     with runner.isolated_filesystem():
         result = runner.invoke(app, ["guard", "--staged"])
         assert result.exit_code == 0
@@ -318,11 +294,11 @@ def test_guard_staged_with_no_staged_files(monkeypatch):
 def test_guard_staged_scans_only_staged_files(monkeypatch):
     """--staged only scans git staged files."""
     import subprocess
-    
+
     config = EnvdriftConfig()
     scan_paths: list[list[Path]] = []
     dummy_result = _build_result([])
-    
+
     class DummyScanner:
         def __init__(self, name: str):
             self.name = name
@@ -337,23 +313,23 @@ def test_guard_staged_scans_only_staged_files(monkeypatch):
         def scan(self, paths):
             scan_paths.append(paths)
             return dummy_result
-    
+
     monkeypatch.setattr("envdrift.cli_commands.guard.load_config", lambda _p=None: config)
     monkeypatch.setattr("envdrift.cli_commands.guard.ScanEngine", DummyEngine)
-    
+
     # Mock git diff --cached to return staged files
     def mock_run(cmd, *args, **kwargs):
         if "diff" in cmd and "--cached" in cmd:
             return subprocess.CompletedProcess(cmd, 0, stdout="file1.py\nfile2.env\n", stderr="")
         return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
-    
+
     monkeypatch.setattr("subprocess.run", mock_run)
-    
+
     with runner.isolated_filesystem():
         # Create the staged files
         Path("file1.py").write_text("# test")
         Path("file2.env").write_text("SECRET=value")
-        
+
         result = runner.invoke(app, ["guard", "--staged"])
         assert result.exit_code == 0
         assert scan_paths  # Verify scan was called
@@ -364,13 +340,13 @@ def test_guard_staged_without_git_fails(monkeypatch):
     """--staged fails gracefully without git."""
     config = EnvdriftConfig()
     _patch_guard_dependencies(monkeypatch, config, _build_result([]))
-    
+
     # Mock subprocess.run to raise FileNotFoundError (git not installed)
     def mock_run(*args, **kwargs):
         raise FileNotFoundError("git not found")
-    
+
     monkeypatch.setattr("subprocess.run", mock_run)
-    
+
     with runner.isolated_filesystem():
         result = runner.invoke(app, ["guard", "--staged"])
         assert result.exit_code == 1
@@ -380,10 +356,10 @@ def test_guard_staged_without_git_fails(monkeypatch):
 def test_guard_pr_base_with_no_changed_files(monkeypatch):
     """--pr-base with no changed files exits cleanly."""
     import subprocess
-    
+
     config = EnvdriftConfig()
     _patch_guard_dependencies(monkeypatch, config, _build_result([]))
-    
+
     # Mock git commands
     def mock_run(cmd, *args, **kwargs):
         if "fetch" in cmd:
@@ -391,9 +367,9 @@ def test_guard_pr_base_with_no_changed_files(monkeypatch):
         if "diff" in cmd:
             return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
         return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
-    
+
     monkeypatch.setattr("subprocess.run", mock_run)
-    
+
     with runner.isolated_filesystem():
         result = runner.invoke(app, ["guard", "--pr-base", "origin/main"])
         assert result.exit_code == 0
@@ -403,11 +379,11 @@ def test_guard_pr_base_with_no_changed_files(monkeypatch):
 def test_guard_pr_base_scans_diff_files(monkeypatch):
     """--pr-base scans files changed since base."""
     import subprocess
-    
+
     config = EnvdriftConfig()
     scan_paths: list[list[Path]] = []
     dummy_result = _build_result([])
-    
+
     class DummyScanner:
         def __init__(self, name: str):
             self.name = name
@@ -422,10 +398,10 @@ def test_guard_pr_base_scans_diff_files(monkeypatch):
         def scan(self, paths):
             scan_paths.append(paths)
             return dummy_result
-    
+
     monkeypatch.setattr("envdrift.cli_commands.guard.load_config", lambda _p=None: config)
     monkeypatch.setattr("envdrift.cli_commands.guard.ScanEngine", DummyEngine)
-    
+
     # Mock git commands
     def mock_run(cmd, *args, **kwargs):
         if "fetch" in cmd:
@@ -433,12 +409,12 @@ def test_guard_pr_base_scans_diff_files(monkeypatch):
         if "diff" in cmd:
             return subprocess.CompletedProcess(cmd, 0, stdout="changed.py\n", stderr="")
         return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
-    
+
     monkeypatch.setattr("subprocess.run", mock_run)
-    
+
     with runner.isolated_filesystem():
         Path("changed.py").write_text("# changed file")
-        
+
         result = runner.invoke(app, ["guard", "--pr-base", "origin/main"])
         assert result.exit_code == 0
         assert scan_paths
@@ -449,12 +425,12 @@ def test_guard_pr_base_without_git_fails(monkeypatch):
     """--pr-base fails gracefully without git."""
     config = EnvdriftConfig()
     _patch_guard_dependencies(monkeypatch, config, _build_result([]))
-    
+
     def mock_run(*args, **kwargs):
         raise FileNotFoundError("git not found")
-    
+
     monkeypatch.setattr("subprocess.run", mock_run)
-    
+
     with runner.isolated_filesystem():
         result = runner.invoke(app, ["guard", "--pr-base", "origin/main"])
         assert result.exit_code == 1
@@ -464,9 +440,7 @@ def test_guard_pr_base_without_git_fails(monkeypatch):
 def test_guard_history_flag(tmp_path: Path, monkeypatch):
     """--history flag enables git history scanning."""
     config = EnvdriftConfig()
-    created_configs, _info_calls = _patch_guard_dependencies(
-        monkeypatch, config, _build_result([])
-    )
+    created_configs, _info_calls = _patch_guard_dependencies(monkeypatch, config, _build_result([]))
 
     result = runner.invoke(app, ["guard", str(tmp_path), "--history"])
     assert result.exit_code == 0
@@ -477,15 +451,15 @@ def test_guard_history_flag(tmp_path: Path, monkeypatch):
 def test_guard_staged_timeout(monkeypatch):
     """--staged handles git timeout gracefully."""
     import subprocess
-    
+
     config = EnvdriftConfig()
     _patch_guard_dependencies(monkeypatch, config, _build_result([]))
-    
+
     def mock_run(*args, **kwargs):
         raise subprocess.TimeoutExpired(cmd="git", timeout=10)
-    
+
     monkeypatch.setattr("subprocess.run", mock_run)
-    
+
     with runner.isolated_filesystem():
         result = runner.invoke(app, ["guard", "--staged"])
         assert result.exit_code == 1
@@ -495,15 +469,15 @@ def test_guard_staged_timeout(monkeypatch):
 def test_guard_pr_base_timeout(monkeypatch):
     """--pr-base handles git timeout gracefully."""
     import subprocess
-    
+
     config = EnvdriftConfig()
     _patch_guard_dependencies(monkeypatch, config, _build_result([]))
-    
+
     def mock_run(*args, **kwargs):
         raise subprocess.TimeoutExpired(cmd="git", timeout=10)
-    
+
     monkeypatch.setattr("subprocess.run", mock_run)
-    
+
     with runner.isolated_filesystem():
         result = runner.invoke(app, ["guard", "--pr-base", "origin/main"])
         assert result.exit_code == 1
@@ -513,18 +487,18 @@ def test_guard_pr_base_timeout(monkeypatch):
 def test_guard_staged_files_not_exist(monkeypatch):
     """--staged handles staged files that no longer exist on disk."""
     import subprocess
-    
+
     config = EnvdriftConfig()
     _patch_guard_dependencies(monkeypatch, config, _build_result([]))
-    
+
     # Mock git to return files that don't exist
     def mock_run(cmd, *args, **kwargs):
         if "diff" in cmd and "--cached" in cmd:
             return subprocess.CompletedProcess(cmd, 0, stdout="deleted_file.py\n", stderr="")
         return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
-    
+
     monkeypatch.setattr("subprocess.run", mock_run)
-    
+
     with runner.isolated_filesystem():
         # Don't create the file - it should show "no staged files"
         result = runner.invoke(app, ["guard", "--staged"])
@@ -546,9 +520,7 @@ def test_guard_with_partial_encryption_config(tmp_path: Path, monkeypatch):
         ],
     )
     config = EnvdriftConfig(partial_encryption=partial_encryption)
-    created_configs, _info_calls = _patch_guard_dependencies(
-        monkeypatch, config, _build_result([])
-    )
+    created_configs, _info_calls = _patch_guard_dependencies(monkeypatch, config, _build_result([]))
 
     result = runner.invoke(app, ["guard", str(tmp_path)])
     assert result.exit_code == 0

@@ -17,20 +17,35 @@ Note: Lowkey Vault requires special handling:
 from __future__ import annotations
 
 import contextlib
-import os
 import subprocess
 import sys
 from pathlib import Path
 from typing import TYPE_CHECKING
-from unittest import mock
 
 import pytest
 
 if TYPE_CHECKING:
     from collections.abc import Generator
 
-# Mark all tests in this module
-pytestmark = [pytest.mark.integration, pytest.mark.azure]
+# Check if azure SDK and requests are available
+import importlib.util
+
+REQUESTS_AVAILABLE = importlib.util.find_spec("requests") is not None
+try:
+    AZURE_AVAILABLE = importlib.util.find_spec("azure.identity") is not None
+except ModuleNotFoundError:
+    AZURE_AVAILABLE = False
+
+# Mark all tests in this module - skip if dependencies not installed
+pytestmark = [
+    pytest.mark.integration,
+    pytest.mark.azure,
+    pytest.mark.skipif(not REQUESTS_AVAILABLE, reason="requests not installed"),
+    pytest.mark.skipif(
+        not AZURE_AVAILABLE,
+        reason="azure SDK not installed - install with: pip install envdrift[azure]",
+    ),
+]
 
 
 # --- Fixtures ---
@@ -67,8 +82,6 @@ def populated_azure_secrets(lowkey_vault_client) -> Generator[dict[str, str], No
     """
     session, endpoint = lowkey_vault_client
 
-    # Lowkey Vault vault name from docker-compose
-    vault_name = "envdrift-test-vault"
     base_url = f"{endpoint}/secrets"
 
     secrets = {

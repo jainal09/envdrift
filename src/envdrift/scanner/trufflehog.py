@@ -254,9 +254,7 @@ class TrufflehogInstaller:
                 raise TrufflehogInstallError(f"Unknown archive format: {archive_name}")
 
             # Find the binary
-            binary_name = (
-                "trufflehog.exe" if platform.system() == "Windows" else "trufflehog"
-            )
+            binary_name = "trufflehog.exe" if platform.system() == "Windows" else "trufflehog"
             extracted_binary = None
 
             for f in tmp_path.rglob(binary_name):
@@ -265,9 +263,7 @@ class TrufflehogInstaller:
                     break
 
             if not extracted_binary:
-                raise TrufflehogInstallError(
-                    f"Binary '{binary_name}' not found in archive"
-                )
+                raise TrufflehogInstallError(f"Binary '{binary_name}' not found in archive")
 
             # Ensure target directory exists
             target_path.parent.mkdir(parents=True, exist_ok=True)
@@ -290,9 +286,7 @@ class TrufflehogInstaller:
             for member in tar.getmembers():
                 member_path = target_dir / member.name
                 if not member_path.resolve().is_relative_to(target_dir.resolve()):
-                    raise TrufflehogInstallError(
-                        f"Unsafe path in archive: {member.name}"
-                    )
+                    raise TrufflehogInstallError(f"Unsafe path in archive: {member.name}")
             tar.extractall(target_dir, filter="data")  # nosec B202
 
     def _extract_zip(self, archive_path: Path, target_dir: Path) -> None:
@@ -503,7 +497,9 @@ class TrufflehogScanner(ScannerBackend):
                 args = [
                     str(binary),
                     "git",
-                    f"file://{path.resolve()}" if path.is_dir() else f"file://{path.parent.resolve()}",
+                    f"file://{path.resolve()}"
+                    if path.is_dir()
+                    else f"file://{path.parent.resolve()}",
                     "--json",
                 ]
             else:
@@ -538,10 +534,9 @@ class TrufflehogScanner(ScannerBackend):
                             item = json.loads(line)
                             # Track unique files from findings
                             source_meta = item.get("SourceMetadata", {}).get("Data", {})
-                            file_path_str = (
-                                source_meta.get("Filesystem", {}).get("file", "")
-                                or source_meta.get("Git", {}).get("file", "")
-                            )
+                            file_path_str = source_meta.get("Filesystem", {}).get(
+                                "file", ""
+                            ) or source_meta.get("Git", {}).get("file", "")
                             if file_path_str:
                                 files_with_findings.add(file_path_str)
                             finding = self._parse_finding(item, path)

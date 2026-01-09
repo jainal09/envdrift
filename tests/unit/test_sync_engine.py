@@ -726,13 +726,9 @@ class TestSyncEngineEphemeralKeys:
         assert result.services[0].action == SyncAction.EPHEMERAL
         assert not (service_dir / ".env.keys").exists()
 
-    def test_ephemeral_count_in_result(
-        self, mock_vault_client: MagicMock, tmp_path: Path
-    ) -> None:
+    def test_ephemeral_count_in_result(self, mock_vault_client: MagicMock, tmp_path: Path) -> None:
         """Test ephemeral_count property in SyncResult."""
-        mock_vault_client.get_secret.return_value = SecretValue(
-            name="test-key", value="secret"
-        )
+        mock_vault_client.get_secret.return_value = SecretValue(name="test-key", value="secret")
 
         for i in range(3):
             service_dir = tmp_path / f"service{i}"
@@ -785,4 +781,3 @@ class TestSyncEngineEphemeralKeys:
         # Should be ephemeral action with no decryption result (skipped)
         assert result.services[0].action == SyncAction.EPHEMERAL
         assert result.services[0].decryption_result is None
-

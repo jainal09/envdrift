@@ -25,9 +25,6 @@ import pytest
 pytestmark = [pytest.mark.integration]
 
 
-
-
-
 class TestEncryptEmptyFile:
     """Test encryption handling of empty files."""
 
@@ -528,7 +525,7 @@ combined_file = ".env.production"
         env["PYTHONPATH"] = integration_pythonpath
 
         result = subprocess.run(
-            [*envdrift_cmd,"push", "--env", "production"],
+            [*envdrift_cmd, "push", "--env", "production"],
             cwd=work_dir,
             env=env,
             capture_output=True,
@@ -573,7 +570,7 @@ combined_file = ".env.staging"
         env["PYTHONPATH"] = integration_pythonpath
 
         result = subprocess.run(
-            [*envdrift_cmd,"pull-partial", "--env", "staging"],
+            [*envdrift_cmd, "pull-partial", "--env", "staging"],
             cwd=work_dir,
             env=env,
             capture_output=True,
@@ -604,7 +601,7 @@ encryption_backend = "dotenvx"
         env["PYTHONPATH"] = integration_pythonpath
 
         result = subprocess.run(
-            [*envdrift_cmd,"push"],
+            [*envdrift_cmd, "push"],
             cwd=work_dir,
             env=env,
             capture_output=True,
@@ -647,7 +644,7 @@ combined_file = ".env.dev"
         env["PYTHONPATH"] = integration_pythonpath
 
         result = subprocess.run(
-            [*envdrift_cmd,"push", "--env", "dev"],
+            [*envdrift_cmd, "push", "--env", "dev"],
             cwd=work_dir,
             env=env,
             capture_output=True,
@@ -692,7 +689,7 @@ combined_file = ".env.test"
 
         # Step 1: Push (encrypt and combine)
         push_result = subprocess.run(
-            [*envdrift_cmd,"push", "--env", "test"],
+            [*envdrift_cmd, "push", "--env", "test"],
             cwd=work_dir,
             env=env,
             capture_output=True,
@@ -704,7 +701,7 @@ combined_file = ".env.test"
 
         # Step 2: Pull-partial (decrypt)
         pull_result = subprocess.run(
-            [*envdrift_cmd,"pull-partial", "--env", "test"],
+            [*envdrift_cmd, "pull-partial", "--env", "test"],
             cwd=work_dir,
             env=env,
             capture_output=True,
@@ -735,7 +732,7 @@ class TestDiffCommand:
         env["PYTHONPATH"] = integration_pythonpath
 
         result = subprocess.run(
-            [*envdrift_cmd,"diff", str(env1), str(env2)],
+            [*envdrift_cmd, "diff", str(env1), str(env2)],
             cwd=work_dir,
             env=env,
             capture_output=True,
@@ -762,7 +759,7 @@ class TestDiffCommand:
         env["PYTHONPATH"] = integration_pythonpath
 
         result = subprocess.run(
-            [*envdrift_cmd,"diff", str(env1), str(env2)],
+            [*envdrift_cmd, "diff", str(env1), str(env2)],
             cwd=work_dir,
             env=env,
             capture_output=True,
@@ -786,7 +783,7 @@ class TestDiffCommand:
         env["PYTHONPATH"] = integration_pythonpath
 
         result = subprocess.run(
-            [*envdrift_cmd,"diff", str(env1), str(work_dir / ".env.missing")],
+            [*envdrift_cmd, "diff", str(env1), str(work_dir / ".env.missing")],
             cwd=work_dir,
             env=env,
             capture_output=True,

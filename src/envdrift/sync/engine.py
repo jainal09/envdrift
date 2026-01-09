@@ -161,7 +161,6 @@ class SyncEngine:
                     vault_value_preview=vault_preview,
                 )
 
-
             elif local_value == vault_value:
                 # Values match - skip
                 return ServiceSyncResult(

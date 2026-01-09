@@ -37,6 +37,7 @@ class GuardConfig:
         use_gitleaks: Enable gitleaks scanner (if available).
         use_trufflehog: Enable trufflehog scanner (if available).
         use_detect_secrets: Enable detect-secrets scanner - the "final boss".
+        use_kingfisher: Enable Kingfisher scanner (700+ rules, password hashes).
         auto_install: Auto-install missing external scanners.
         include_git_history: Scan git history for secrets.
         check_entropy: Enable entropy-based secret detection.
@@ -50,6 +51,7 @@ class GuardConfig:
     use_gitleaks: bool = True
     use_trufflehog: bool = False
     use_detect_secrets: bool = False
+    use_kingfisher: bool = False
     auto_install: bool = True
     include_git_history: bool = False
     check_entropy: bool = False
@@ -87,6 +89,7 @@ class GuardConfig:
             use_gitleaks="gitleaks" in scanners,
             use_trufflehog="trufflehog" in scanners,
             use_detect_secrets="detect-secrets" in scanners,
+            use_kingfisher="kingfisher" in scanners,
             auto_install=guard_config.get("auto_install", True),
             include_git_history=guard_config.get("include_history", False),
             check_entropy=guard_config.get("check_entropy", False),
@@ -121,10 +124,7 @@ class ScanEngine:
         self._initialize_scanners()
 
     def _run_scanner(
-        self,
-        scanner: ScannerBackend,
-        paths: list[Path],
-        include_git_history: bool
+        self, scanner: ScannerBackend, paths: list[Path], include_git_history: bool
     ) -> ScanResult:
         """Run a single scanner (for parallel execution).
 
@@ -193,6 +193,23 @@ class ScanEngine:
             except ImportError:
                 pass  # detect-secrets not yet implemented
 
+        # Kingfisher scanner - 700+ rules, password hashes, validation
+        if self.config.use_kingfisher:
+            try:
+                from envdrift.scanner.kingfisher import KingfisherScanner
+
+                scanner = KingfisherScanner(
+                    auto_install=self.config.auto_install,
+                    validate_secrets=True,
+                    confidence="low",  # Maximum detection
+                    scan_binary_files=True,
+                    extract_archives=True,
+                )
+                if scanner.is_installed() or self.config.auto_install:
+                    self.scanners.append(scanner)
+            except ImportError:
+                pass  # Kingfisher not available
+
     def scan(self, paths: list[Path]) -> AggregatedScanResult:
         """Run all configured scanners on the given paths in parallel.
 
@@ -221,19 +238,16 @@ class ScanEngine:
         # Run scanners in parallel using ThreadPoolExecutor
         # Use at most 4 workers to avoid overwhelming the system
         max_workers = min(len(self.scanners), 4)
-        
+
         with ThreadPoolExecutor(max_workers=max_workers) as executor:
             # Submit all scanner tasks
             future_to_scanner = {
                 executor.submit(
-                    self._run_scanner,
-                    scanner,
-                    paths,
-                    self.config.include_git_history
+                    self._run_scanner, scanner, paths, self.config.include_git_history
                 ): scanner
                 for scanner in self.scanners
             }
-            
+
             # Collect results as they complete
             for future in as_completed(future_to_scanner):
                 scanner = future_to_scanner[future]
@@ -291,7 +305,9 @@ class ScanEngine:
             else:
                 existing = seen[key]
                 # Keep higher severity
-                if finding.severity > existing.severity or (finding.verified and not existing.verified):
+                if finding.severity > existing.severity or (
+                    finding.verified and not existing.verified
+                ):
                     seen[key] = finding
 
         # Sort by severity (highest first), then by file path

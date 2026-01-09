@@ -369,9 +369,8 @@ class TestGitWorktreeSupport:
         worktree_hooks = worktree_path / ".git" / "hooks"
 
         # The hooks could be in either location depending on git version
-        hook_exists = (
-            (main_hooks / "pre-commit").exists() or
-            (worktree_hooks.is_dir() and (worktree_hooks / "pre-commit").exists())
+        hook_exists = (main_hooks / "pre-commit").exists() or (
+            worktree_hooks.is_dir() and (worktree_hooks / "pre-commit").exists()
         )
         assert hook_exists, "pre-commit hook should be installed somewhere"
 
@@ -407,7 +406,7 @@ class TestHookConfigEdgeCases:
 
         # Should not crash when not in git repo
         _run_envdrift(["encrypt", env_file.name], cwd=work_dir, env=env, check=False)
-        
+
         # Encryption should still work
         assert env_file.exists()
 
@@ -530,9 +529,7 @@ class TestHookAutoFixVsCheckOnly:
         env_file = work_dir / ".env.production"
         env_file.write_text("SECRET=plaintext\n")
 
-        result = _run_envdrift(
-            ["lock", "--check"], cwd=work_dir, env=env, check=False
-        )
+        result = _run_envdrift(["lock", "--check"], cwd=work_dir, env=env, check=False)
 
         # Should fail because file is not encrypted
         assert result.returncode != 0, (
@@ -630,7 +627,7 @@ class TestHookScriptContent:
         _run_envdrift(["encrypt", env_file.name], cwd=work_dir, env=env)
 
         pre_commit = work_dir / ".git" / "hooks" / "pre-commit"
-        
+
         # Check file is executable
         assert os.access(str(pre_commit), os.X_OK), "Hook should be executable"
 

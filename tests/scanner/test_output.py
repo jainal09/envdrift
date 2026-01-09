@@ -101,9 +101,7 @@ class TestJsonOutput:
         assert "exit_code" in data
         assert data["exit_code"] == 1  # CRITICAL finding
 
-    def test_json_has_blocking_findings_flag(
-        self, sample_result: AggregatedScanResult
-    ):
+    def test_json_has_blocking_findings_flag(self, sample_result: AggregatedScanResult):
         """Test that JSON contains blocking findings flag."""
         output = format_json(sample_result)
         data = json.loads(output)
@@ -239,10 +237,7 @@ class TestSarifOutput:
         data = json.loads(output)
 
         # Find result with line number
-        result = next(
-            r for r in data["runs"][0]["results"]
-            if r["ruleId"] == "aws-access-key-id"
-        )
+        result = next(r for r in data["runs"][0]["results"] if r["ruleId"] == "aws-access-key-id")
         location = result["locations"][0]["physicalLocation"]
 
         assert "artifactLocation" in location
@@ -258,15 +253,11 @@ class TestSarifOutput:
         results = data["runs"][0]["results"]
 
         # Find critical result
-        critical_result = next(
-            r for r in results if r["ruleId"] == "aws-access-key-id"
-        )
+        critical_result = next(r for r in results if r["ruleId"] == "aws-access-key-id")
         assert critical_result["level"] == "error"
 
         # Find high result
-        high_result = next(
-            r for r in results if r["ruleId"] == "unencrypted-env-file"
-        )
+        high_result = next(r for r in results if r["ruleId"] == "unencrypted-env-file")
         assert high_result["level"] == "error"
 
     def test_sarif_fingerprints(self, sample_result: AggregatedScanResult):

@@ -31,9 +31,6 @@ if TYPE_CHECKING:
 pytestmark = [pytest.mark.integration]
 
 
-
-
-
 class TestParallelSyncThreadSafety:
     """Test thread safety of parallel sync operations."""
 
@@ -48,7 +45,7 @@ class TestParallelSyncThreadSafety:
     ) -> None:
         """
         Verify envdrift concurrently pulls distinct secrets for multiple services without race conditions.
-        
+
         Creates 5 unique secrets in AWS Secrets Manager and a matching envdrift config.
         Executes `envdrift pull` and asserts all 5 services receive the correct keys in their `.env.keys` files.
         """
@@ -97,7 +94,7 @@ region = "us-east-1"
 [vault.sync]
 max_workers = {num_services}
 
-{''.join(mappings)}
+{"".join(mappings)}
 """
             (work_dir / "envdrift.toml").write_text(config_content)
 
@@ -133,17 +130,13 @@ max_workers = {num_services}
 
                 content = env_keys.read_text()
                 expected_value = secrets[f"envdrift-test/parallel-sync-{i}"]
-                assert expected_value in content, (
-                    f"service-{i} should have correct key value"
-                )
+                assert expected_value in content, f"service-{i} should have correct key value"
 
         finally:
             # Cleanup secrets
             for name in created_secrets:
                 try:
-                    aws_secrets_client.delete_secret(
-                        SecretId=name, ForceDeleteWithoutRecovery=True
-                    )
+                    aws_secrets_client.delete_secret(SecretId=name, ForceDeleteWithoutRecovery=True)
                 except Exception:
                     pass
 
@@ -159,7 +152,7 @@ max_workers = {num_services}
     ) -> None:
         """
         Verify envdrift performs a parallel HashiCorp Vault synchronization across multiple service mappings without thread-safety failures.
-        
+
         Sets up multiple Vault KV secrets and corresponding service mappings, runs `envdrift pull --skip-decrypt` with parallel workers, and asserts the command succeeds and that each service directory receives an `.env.keys` file.
         """
         num_services = 3
@@ -200,7 +193,7 @@ token = "test-root-token"
 [vault.sync]
 max_workers = {num_services}
 
-{''.join(mappings)}
+{"".join(mappings)}
 """
             (work_dir / "envdrift.toml").write_text(config_content)
 
@@ -290,7 +283,7 @@ folder_path = "."
         def run_lock_check():
             """
             Execute the 'envdrift lock --check' command in the configured working directory and record the outcome.
-            
+
             Appends the return code to results list. Only records to crashes list
             if there's an actual exception or traceback (not just non-zero exit).
             """
@@ -346,12 +339,8 @@ class TestParallelDecryptDifferentFiles:
             service_dir = work_dir / f"decrypt-service-{i}"
             service_dir.mkdir()
             # Create valid encrypted file and keys
-            (service_dir / ".env").write_text(
-                'DOTENV_PUBLIC_KEY="key"\nSECRET="encrypted:..."'
-            )
-            (service_dir / ".env.keys").write_text(
-                "DOTENV_PRIVATE_KEY=key"
-            )
+            (service_dir / ".env").write_text('DOTENV_PUBLIC_KEY="key"\nSECRET="encrypted:..."')
+            (service_dir / ".env.keys").write_text("DOTENV_PRIVATE_KEY=key")
 
         config_content = """\
 [encryption]
@@ -370,12 +359,12 @@ folder_path = "."
         def check_service(service_idx):
             """
             Run `envdrift lock --check` inside the service's directory and return the execution result.
-            
+
             Parameters:
-            	service_idx (int): Index of the service; used to locate the directory `decrypt-service-<service_idx>` under the test work directory.
-            
+                service_idx (int): Index of the service; used to locate the directory `decrypt-service-<service_idx>` under the test work directory.
+
             Returns:
-            	tuple: `(service_idx, return_code, stderr)` where `return_code` is the process exit code and `stderr` is the captured standard error output.
+                tuple: `(service_idx, return_code, stderr)` where `return_code` is the process exit code and `stderr` is the captured standard error output.
             """
             service_dir = work_dir / f"decrypt-service-{service_idx}"
             result = subprocess.run(
@@ -394,9 +383,7 @@ folder_path = "."
 
         # All should complete without crashing
         for idx, _code, stderr in results:
-            assert "Traceback" not in stderr, (
-                f"Service {idx} crashed with traceback: {stderr}"
-            )
+            assert "Traceback" not in stderr, f"Service {idx} crashed with traceback: {stderr}"
 
 
 class TestSyncEngineThreadSafety:
@@ -438,9 +425,7 @@ class TestSyncEngineThreadSafety:
             for i in range(3):
                 service_dir = work_dir / f"concurrent-service-{i}"
                 service_dir.mkdir()
-                (service_dir / ".env.production").write_text(
-                    'SECRET="encrypted:..."'
-                )
+                (service_dir / ".env.production").write_text('SECRET="encrypted:..."')
                 mappings.append(
                     ServiceMapping(
                         secret_name=f"envdrift-test/engine-concurrent-{i}",
@@ -480,9 +465,7 @@ class TestSyncEngineThreadSafety:
             # Cleanup
             for name in secret_names:
                 with contextlib.suppress(Exception):
-                    aws_secrets_client.delete_secret(
-                        SecretId=name, ForceDeleteWithoutRecovery=True
-                    )
+                    aws_secrets_client.delete_secret(SecretId=name, ForceDeleteWithoutRecovery=True)
 
 
 class TestRaceConditions:
@@ -497,9 +480,9 @@ class TestRaceConditions:
         def write_file(idx: int):
             """
             Write and repeatedly verify a test .env.keys file to detect race conditions.
-            
+
             Performs multiple write-read cycles to work_dir/race-test-<idx>.env.keys, verifying the file content remains stable between writes. On any mismatch or exception, records an error to the surrounding `errors` list; on success, marks `results[idx] = True`.
-            
+
             Parameters:
                 idx (int): Numeric index used to name the target test file and embed in its content.
             """
@@ -544,9 +527,9 @@ class TestRaceConditions:
         def create_nested_dir(idx: int):
             """
             Create a nested directory under the captured `base_dir` using `idx` to name levels and record any errors.
-            
+
             Creates the path: base_dir / f"level1-{idx % 3}" / f"level2-{idx}" and ensures the directory exists. On failure, appends an error message to the captured `errors` list.
-             
+
             Parameters:
                 idx (int): Index used to derive the level1 and level2 directory names.
             """

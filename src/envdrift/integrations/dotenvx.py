@@ -573,9 +573,7 @@ class DotenvxWrapper:
                         stderr = "no error output"
                 else:
                     stderr = "no error output"
-                raise DotenvxError(
-                    f"dotenvx command failed (exit {result.returncode}): {stderr}"
-                )
+                raise DotenvxError(f"dotenvx command failed (exit {result.returncode}): {stderr}")
 
             return result
         except subprocess.TimeoutExpired as e:
