@@ -347,7 +347,7 @@ class DetectSecretsScanner(ScannerBackend):
     def scan(
         self,
         paths: list[Path],
-        include_git_history: bool = False,
+        include_git_history: bool = False,  # noqa: ARG002 - intentionally unused for interface compatibility
     ) -> ScanResult:
         """Scan paths for secrets using detect-secrets.
 
