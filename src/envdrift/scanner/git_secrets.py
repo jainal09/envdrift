@@ -425,6 +425,10 @@ class GitSecretsScanner(ScannerBackend):
             if not path.exists():
                 continue
 
+            # Count file for files_scanned metric
+            if path.is_file():
+                total_files += 1
+
             # Determine working directory and scan paths
             # Store original file path for proper resolution later
             original_path = path.resolve()
@@ -483,7 +487,9 @@ class GitSecretsScanner(ScannerBackend):
                 if result.returncode != 0 and result.stdout:
                     findings = self._parse_output(result.stdout, cwd)
                     all_findings.extend(findings)
-                    total_files += len({f.file_path for f in findings})
+                    # For directories, add unique files found in findings to total
+                    if path.is_dir():
+                        total_files += len({f.file_path for f in findings})
 
                 # Also check stderr for findings
                 if result.stderr:
