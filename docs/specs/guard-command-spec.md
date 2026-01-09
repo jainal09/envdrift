@@ -1,9 +1,9 @@
 # EnvDrift Guard Command Specification
 
-> **Status:** Implemented (Phase 1-4 Complete + detect-secrets)
+> **Status:** Implemented (Phase 1-4 Complete + detect-secrets + git-hound + git-secrets)
 > **Author:** Claude
 > **Created:** 2025-01-06
-> **Last Updated:** 2025-01-07
+> **Last Updated:** 2026-01-09
 
 ---
 
@@ -18,6 +18,8 @@
 | Phase 3 | Trufflehog Integration | ✅ Complete | #TBD |
 | Phase 4 | Scan Engine + CLI + Config | ✅ Complete | #TBD |
 | Bonus | detect-secrets Scanner | ✅ Complete | #TBD |
+| Bonus | GitHound Scanner | ✅ Complete | #TBD |
+| Bonus | git-secrets Scanner | ✅ Complete | #TBD |
 
 ### Feature Checklist
 
@@ -27,6 +29,8 @@
 | Gitleaks auto-install | ✅ Done | Binary download |
 | Trufflehog auto-install | ✅ Done | Binary download |
 | detect-secrets auto-install | ✅ Done | pip/uv install |
+| GitHound auto-install | ✅ Done | Binary download, GitHub dorks |
+| git-secrets auto-install | ✅ Done | Homebrew/source, AWS patterns |
 | JSON output | ✅ Done | `--json` flag |
 | SARIF output | ✅ Done | `--sarif` flag |
 | Rich terminal UI | ✅ Done | Color + tables |
@@ -36,7 +40,7 @@
 | CI mode | ✅ Done | `--ci` flag |
 | Custom patterns in config | ❌ TODO | `[[guard.patterns]]` |
 | Baseline file (ignore known) | ❌ TODO | `.envdrift-baseline` |
-| Parallel scanner execution | ❌ TODO | Performance |
+| Parallel scanner execution | ✅ Done | ThreadPoolExecutor |
 | CI workflow examples | ❌ TODO | GitHub/GitLab |
 
 ### Scanner Coverage
@@ -47,7 +51,9 @@
 | Gitleaks | 3 | 150+ patterns, entropy |
 | Trufflehog | 1 | Verified secrets, cloud creds |
 | detect-secrets | 6 | 27+ detectors, keywords, entropy |
-| **Combined** | **14 unique** | Defense in depth |
+| GitHound | - | GitHub dorks, org-wide scanning |
+| git-secrets | - | AWS patterns, pre-commit hooks |
+| **Combined** | **14+ unique** | Defense in depth |
 
 ---
 
