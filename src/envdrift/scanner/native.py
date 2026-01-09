@@ -494,11 +494,13 @@ class NativeScanner(ScannerBackend):
         # Check 1: Is this an unencrypted .env file?
         is_env_file = self._is_env_file(file_path)
         is_encrypted = self._is_encrypted(content)
+        is_clear_file = self._is_clear_file(file_path)
 
         # Check if file is an allowed clear file (from partial_encryption config)
         is_allowed_clear = self._is_allowed_clear_file(file_path)
 
-        if is_env_file and not is_encrypted and not is_allowed_clear:
+        # .clear files are semantically meant to be unencrypted, so don't flag them
+        if is_env_file and not is_encrypted and not is_allowed_clear and not is_clear_file:
             findings.append(
                 ScanFinding(
                     file_path=file_path,

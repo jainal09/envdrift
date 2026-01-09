@@ -183,6 +183,12 @@ Common rule IDs:
 By default, `.clear` files ARE scanned. This ensures all configuration files
 are checked for accidentally included secrets. To skip them:
 
+> **Note:** `skip_clear_files` takes precedence over the `partial_encryption.clear_file`
+> allowlist. When enabled, ALL `.clear` files are skipped entirely--even those declared in
+> `partial_encryption.environments`. The allowlist only affects behavior when `skip_clear_files=false`,
+> exempting specified files from the "unencrypted-env-file" check while still scanning them for
+> secret patterns.
+
 #### Option 1: Skip all .clear files globally
 
 ```toml
@@ -220,6 +226,24 @@ clear_file = "app/.env.production.clear"
 secret_file = "app/.env.production.secret"
 combined_file = "app/.env.production"
 ```
+
+#### Precedence Example
+
+```toml
+[guard]
+skip_clear_files = true  # Takes precedence
+
+[[partial_encryption.environments]]
+name = "production"
+clear_file = "app/.env.production.clear"  # Will NOT be scanned when skip_clear_files=true
+secret_file = "app/.env.production.secret"
+combined_file = "app/.env.production"
+```
+
+With `skip_clear_files = true`: `app/.env.production.clear` is **completely skipped** from scanning.
+
+With `skip_clear_files = false` (default): `app/.env.production.clear` is **scanned for patterns** but
+exempt from the "unencrypted-env-file" check.
 
 ## Tips
 

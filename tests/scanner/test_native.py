@@ -445,6 +445,11 @@ class TestSkipClearFiles:
         assert result.files_scanned == 1
         aws_findings = [f for f in result.findings if "aws" in f.rule_id.lower()]
         assert len(aws_findings) >= 1
+        # .clear files should not be flagged as unencrypted even if not in allowed list
+        unencrypted_findings = [
+            f for f in result.findings if f.rule_id == "unencrypted-env-file"
+        ]
+        assert len(unencrypted_findings) == 0
 
     def test_clear_files_skipped_when_enabled(self, tmp_path: Path):
         """Test that .clear files produce no findings when skip_clear_files=True."""

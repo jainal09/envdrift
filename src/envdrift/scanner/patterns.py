@@ -341,6 +341,7 @@ CRITICAL_PATTERNS: list[SecretPattern] = [
         description="Mailgun API Key",
         pattern=re.compile(r"(key-[a-zA-Z0-9]{32})"),
         severity=FindingSeverity.CRITICAL,
+        keywords=("mailgun",),
     ),
     # Twilio additional patterns
     SecretPattern(
@@ -381,7 +382,7 @@ CRITICAL_PATTERNS: list[SecretPattern] = [
     SecretPattern(
         id="putty-private-key",
         description="PuTTY Private Key",
-        pattern=re.compile(r"(PuTTY-User-Key-File-[0-9]+:.*)"),
+        pattern=re.compile(r"(PuTTY-User-Key-File-[0-9]+:[^\n]+)"),
         severity=FindingSeverity.CRITICAL,
     ),
     # GitHub App Client ID
