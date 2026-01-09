@@ -42,6 +42,10 @@ from envdrift.scanner.patterns import redact_secret
 if TYPE_CHECKING:
     from collections.abc import Callable
 
+import logging
+
+logger = logging.getLogger(__name__)
+
 
 def _load_constants() -> dict:
     """Load constants from the package's constants.json."""
@@ -289,22 +293,30 @@ class GitHoundInstaller:
             self.progress(f"Installed to {target_path}")
 
     def _extract_tar_gz(self, archive_path: Path, target_dir: Path) -> None:
-        """Extract a tar.gz archive."""
+        """Extract a tar.gz archive with path traversal protection."""
         with tarfile.open(archive_path, "r:gz") as tar:
-            # Security: check for path traversal
+            # Security: check for path traversal and absolute paths
             for member in tar.getmembers():
-                member_path = target_dir / member.name
-                if not member_path.resolve().is_relative_to(target_dir.resolve()):
+                # Reject absolute paths
+                if member.name.startswith("/") or member.name.startswith(".."):
+                    raise GitHoundInstallError(f"Unsafe path in archive: {member.name}")
+                # Normalize the path and check it stays within target
+                member_path = (target_dir / member.name).resolve()
+                if not member_path.is_relative_to(target_dir.resolve()):
                     raise GitHoundInstallError(f"Unsafe path in archive: {member.name}")
             tar.extractall(target_dir, filter="data")  # nosec B202
 
     def _extract_zip(self, archive_path: Path, target_dir: Path) -> None:
-        """Extract a zip archive."""
+        """Extract a zip archive with path traversal protection."""
         with zipfile.ZipFile(archive_path, "r") as zip_ref:
-            # Security: check for path traversal
+            # Security: check for path traversal and absolute paths
             for name in zip_ref.namelist():
-                member_path = target_dir / name
-                if not member_path.resolve().is_relative_to(target_dir.resolve()):
+                # Reject absolute paths and parent directory references
+                if name.startswith("/") or name.startswith("..") or "/../" in name:
+                    raise GitHoundInstallError(f"Unsafe path in archive: {name}")
+                # Normalize the path and check it stays within target
+                member_path = (target_dir / name).resolve()
+                if not member_path.is_relative_to(target_dir.resolve()):
                     raise GitHoundInstallError(f"Unsafe path in archive: {name}")
             zip_ref.extractall(target_dir)  # nosec B202
 
@@ -505,19 +517,16 @@ class GitHoundScanner(ScannerBackend):
             )
 
         all_findings: list[ScanFinding] = []
-        total_files = 0
+        scanned_files: set[Path] = set()
 
         for path in paths:
             if not path.exists():
                 continue
 
-            # Create temp file for JSON output
-            with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as report_file:
-                report_path = Path(report_file.name)
-
             try:
                 # Build command for local file scanning
-                # GitHound can scan local files in a repo with specific flags
+                # Note: GitHound is designed for GitHub-wide scanning.
+                # For local scanning, we use --dig-files mode but results may be limited.
                 args = [
                     str(binary),
                     "--json",  # JSON output
@@ -530,13 +539,14 @@ class GitHoundScanner(ScannerBackend):
                 if self._config_path and self._config_path.exists():
                     args.extend(["--config-file", str(self._config_path)])
 
-                # For local scanning, we need to set the query or use stdin
-                # GitHound expects a query via stdin or --query flag
+                # For local scanning, GitHound expects a query
+                # Use the provided query or a generic pattern
                 if query:
                     args.extend(["--query", query])
                 else:
-                    # Use repo path as context
-                    args.extend(["--query", str(path)])
+                    # Use a broad pattern for local file scanning
+                    # GitHound doesn't support true local-only scanning
+                    args.extend(["--query", "password OR secret OR api_key OR token"])
 
                 result = subprocess.run(
                     args,
@@ -546,25 +556,30 @@ class GitHoundScanner(ScannerBackend):
                     cwd=str(path) if path.is_dir() else str(path.parent),
                 )
 
+                # Check for errors
+                if result.returncode != 0 and not result.stdout:
+                    logger.debug(
+                        "git-hound returned non-zero exit code: %d, stderr: %s",
+                        result.returncode,
+                        result.stderr[:200] if result.stderr else "(empty)",
+                    )
+
                 # Parse JSON output from stdout
                 if result.stdout:
                     try:
                         # GitHound outputs one JSON object per line
-                        findings_data = []
                         for line in result.stdout.strip().split("\n"):
                             if line.strip():
                                 try:
-                                    findings_data.append(json.loads(line))
+                                    item = json.loads(line)
+                                    finding = self._parse_finding(item, path)
+                                    if finding:
+                                        all_findings.append(finding)
+                                        scanned_files.add(finding.file_path)
                                 except json.JSONDecodeError:
                                     continue
-
-                        for item in findings_data:
-                            finding = self._parse_finding(item, path)
-                            if finding:
-                                all_findings.append(finding)
-                                total_files += 1
-                    except Exception:
-                        pass  # Parsing failed, continue
+                    except Exception as e:
+                        logger.debug("Error parsing git-hound output: %s", e)
 
             except subprocess.TimeoutExpired:
                 return ScanResult(
@@ -574,21 +589,18 @@ class GitHoundScanner(ScannerBackend):
                     duration_ms=int((time.time() - start_time) * 1000),
                 )
             except Exception as e:
+                logger.debug("Error running git-hound: %s", e)
                 return ScanResult(
                     scanner_name=self.name,
                     findings=all_findings,
                     error=str(e),
                     duration_ms=int((time.time() - start_time) * 1000),
                 )
-            finally:
-                # Clean up temp report file
-                if report_path.exists():
-                    report_path.unlink()
 
         return ScanResult(
             scanner_name=self.name,
             findings=all_findings,
-            files_scanned=total_files,
+            files_scanned=len(scanned_files),
             duration_ms=int((time.time() - start_time) * 1000),
         )
 

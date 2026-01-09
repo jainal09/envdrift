@@ -27,6 +27,10 @@ from envdrift.scanner.native import NativeScanner
 if TYPE_CHECKING:
     pass
 
+import logging
+
+logger = logging.getLogger(__name__)
+
 
 @dataclass
 class GuardConfig:
@@ -214,7 +218,7 @@ class ScanEngine:
                 if scanner.is_installed() or self.config.auto_install:
                     self.scanners.append(scanner)
             except ImportError:
-                pass  # Kingfisher not available
+                logger.debug("Kingfisher scanner not available - module not found")
 
         # GitHound scanner - GitHub dorks + patterns + entropy
         if self.config.use_git_hound:
@@ -225,7 +229,7 @@ class ScanEngine:
                 if scanner.is_installed() or self.config.auto_install:
                     self.scanners.append(scanner)
             except ImportError:
-                pass  # GitHound not available
+                logger.debug("GitHound scanner not available - module not found")
 
         # git-secrets scanner - AWS credential detection + pre-commit hooks
         if self.config.use_git_secrets:
@@ -239,7 +243,7 @@ class ScanEngine:
                 if scanner.is_installed() or self.config.auto_install:
                     self.scanners.append(scanner)
             except ImportError:
-                pass  # git-secrets not available
+                logger.debug("git-secrets scanner not available - module not found")
 
     def scan(self, paths: list[Path]) -> AggregatedScanResult:
         """Run all configured scanners on the given paths in parallel.

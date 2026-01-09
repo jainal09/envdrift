@@ -358,6 +358,8 @@ class DetectSecretsScanner(ScannerBackend):
         Returns:
             ScanResult containing all findings.
         """
+        # Note: detect-secrets doesn't support git history scanning
+        _ = include_git_history  # intentionally ignored (interface compatibility)
         start_time = time.time()
 
         try:

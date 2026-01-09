@@ -422,35 +422,49 @@ class GitSecretsScanner(ScannerBackend):
             if not path.exists():
                 continue
 
-            # Determine working directory
+            # Determine working directory and scan paths
+            # Store original file path for proper resolution later
+            original_path = path.resolve()
             if path.is_file():
-                cwd = path.parent
+                cwd = path.parent.resolve()
                 scan_paths = [path.name]
             else:
-                cwd = path
+                cwd = path.resolve()
                 scan_paths = ["."]
 
-            # Check if this is a git repository
+            # Check if this is a git repository - find the git root
+            git_root = cwd
             git_dir = cwd / ".git"
             if not git_dir.exists():
                 # Try to find parent git repo
                 current = cwd
                 while current.parent != current:
                     if (current / ".git").exists():
-                        cwd = current
+                        git_root = current
+                        # Update scan_paths to be relative to git root
+                        if path.is_file():
+                            scan_paths = [str(original_path.relative_to(git_root))]
                         break
                     current = current.parent
+            # Use git_root as cwd for git-secrets commands
+            cwd = git_root
 
             try:
-                # First, try to install git-secrets hooks if in a git repo
+                # First, try to register AWS patterns if in a git repo
                 if (cwd / ".git").exists():
                     # Check if git-secrets is installed in this repo
                     list_result = self._run_git_secrets(["--list"], cwd)
 
-                    # Register AWS patterns if enabled and not already registered
-                    if self._register_aws and "aws" not in list_result.stdout.lower():
-                        with contextlib.suppress(Exception):
-                            self._run_git_secrets(["--register-aws"], cwd)
+                    # Register AWS patterns if enabled
+                    # Check for specific AWS pattern markers, not just 'aws' substring
+                    if self._register_aws:
+                        aws_patterns_installed = (
+                            "AKIA" in list_result.stdout
+                            or "secrets.providers" in list_result.stdout
+                        )
+                        if not aws_patterns_installed:
+                            with contextlib.suppress(Exception):
+                                self._run_git_secrets(["--register-aws"], cwd)
 
                 # Run the scan
                 if include_git_history:
@@ -622,17 +636,18 @@ class GitSecretsScanner(ScannerBackend):
         """
         # Common patterns for secret assignments
         patterns = [
+            # AWS Access Key ID (20 chars, starts with AKIA or ASIA)
+            r"(AKIA[A-Z0-9]{16})",
+            r"(ASIA[A-Z0-9]{16})",
+            # AWS Secret Access Key (40 chars, base64-like, adjacent to known keys)
+            r"(?:aws_secret_access_key|secret_access_key|AWS_SECRET)\s*[=:]\s*[\"']?([A-Za-z0-9/+=]{40})[\"']?",
             # KEY=VALUE or KEY: VALUE
             r'=\s*["\']?([^"\'\s]+)["\']?',
             r':\s*["\']?([^"\'\s]+)["\']?',
-            # AWS patterns
-            r"(AKIA[A-Z0-9]{16})",
-            r"(ASIA[A-Z0-9]{16})",
-            r"([A-Za-z0-9/+=]{40})",  # AWS secret key pattern
         ]
 
         for pattern in patterns:
-            match = re.search(pattern, content)
+            match = re.search(pattern, content, re.IGNORECASE)
             if match:
                 return match.group(1)
 

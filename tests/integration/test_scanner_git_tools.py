@@ -61,13 +61,19 @@ class TestGitHoundCLI:
 
     def test_git_hound_flag_shown_in_help(self, scanner_test_env):
         """Test that --git-hound flag appears in guard help."""
+        import re
+
         work_dir = scanner_test_env["work_dir"]
         env = scanner_test_env["env"]
 
         result = _run_envdrift(["guard", "--help"], cwd=work_dir, env=env)
 
-        assert "--git-hound" in result.stdout
-        assert "--no-git-hound" in result.stdout
+        # Strip ANSI escape codes for comparison
+        ansi_escape = re.compile(r"\x1B(?:[@-Z\\-_]|\\[0-?]*[ -/]*[@-~])")
+        clean_output = ansi_escape.sub("", result.stdout)
+
+        assert "--git-hound" in clean_output, f"--git-hound not found in help output: {clean_output[:500]}"
+        assert "--no-git-hound" in clean_output
 
     def test_git_hound_flag_enables_scanner(self, scanner_test_env):
         """Test that --git-hound flag enables the GitHound scanner."""
@@ -123,13 +129,19 @@ class TestGitSecretsCLI:
 
     def test_git_secrets_flag_shown_in_help(self, scanner_test_env):
         """Test that --git-secrets flag appears in guard help."""
+        import re
+
         work_dir = scanner_test_env["work_dir"]
         env = scanner_test_env["env"]
 
         result = _run_envdrift(["guard", "--help"], cwd=work_dir, env=env)
 
-        assert "--git-secrets" in result.stdout
-        assert "--no-git-secrets" in result.stdout
+        # Strip ANSI escape codes for comparison
+        ansi_escape = re.compile(r"\x1B(?:[@-Z\\-_]|\\[0-?]*[ -/]*[@-~])")
+        clean_output = ansi_escape.sub("", result.stdout)
+
+        assert "--git-secrets" in clean_output, f"--git-secrets not found in help output: {clean_output[:500]}"
+        assert "--no-git-secrets" in clean_output
 
     def test_git_secrets_flag_enables_scanner(self, scanner_test_env):
         """Test that --git-secrets flag enables the git-secrets scanner."""
