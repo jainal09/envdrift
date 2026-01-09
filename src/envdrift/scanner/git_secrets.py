@@ -486,10 +486,6 @@ class GitSecretsScanner(ScannerBackend):
                     args = ["--scan", "-r"] + scan_paths
                     result = self._run_git_secrets(args, cwd)
 
-                # Count files scanned - for files it's 1, for directories estimate from scan
-                if path.is_file():
-                    total_files += 1
-
                 # Parse output
                 # git-secrets outputs format: path:line_number:content
                 if result.returncode != 0 and result.stdout:
