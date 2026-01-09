@@ -78,21 +78,6 @@ Kingfisher provides:
 envdrift guard --kingfisher
 ```
 
-### `--git-hound` / `--no-git-hound`
-
-Enable or disable GitHound scanner. Disabled by default.
-
-GitHound provides:
-
-- GitHub dork-based secret discovery
-- Organization-wide repository scanning
-- Pattern matching with entropy detection
-- Commit history digging
-
-```bash
-envdrift guard --git-hound
-```
-
 ### `--git-secrets` / `--no-git-secrets`
 
 Enable or disable git-secrets scanner. Disabled by default.
@@ -276,7 +261,7 @@ Guard settings live under `[guard]` in `envdrift.toml` or
 
 ```toml
 [guard]
-scanners = ["native", "gitleaks", "trufflehog", "detect-secrets", "kingfisher", "git-hound", "git-secrets"]
+scanners = ["native", "gitleaks", "trufflehog", "detect-secrets", "kingfisher", "git-secrets"]
 auto_install = true
 include_history = false
 check_entropy = true
@@ -290,5 +275,5 @@ Notes:
 - `scanners` controls which external scanners are enabled by default.
 - `ignore_paths` applies to the native scanner's file walk.
 - CLI flags override config values.
-- `git-hound` and `git-secrets` are ideal for AWS-heavy environments.
+- `git-secrets` is ideal for AWS-heavy environments.
 

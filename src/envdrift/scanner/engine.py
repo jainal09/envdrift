@@ -42,7 +42,6 @@ class GuardConfig:
         use_trufflehog: Enable trufflehog scanner (if available).
         use_detect_secrets: Enable detect-secrets scanner - the "final boss".
         use_kingfisher: Enable Kingfisher scanner (700+ rules, password hashes).
-        use_git_hound: Enable GitHound scanner (GitHub dorks + patterns).
         use_git_secrets: Enable git-secrets scanner (AWS credential detection).
         auto_install: Auto-install missing external scanners.
         include_git_history: Scan git history for secrets.
@@ -58,7 +57,6 @@ class GuardConfig:
     use_trufflehog: bool = False
     use_detect_secrets: bool = False
     use_kingfisher: bool = False
-    use_git_hound: bool = False
     use_git_secrets: bool = False
     auto_install: bool = True
     include_git_history: bool = False
@@ -98,7 +96,6 @@ class GuardConfig:
             use_trufflehog="trufflehog" in scanners,
             use_detect_secrets="detect-secrets" in scanners,
             use_kingfisher="kingfisher" in scanners,
-            use_git_hound="git-hound" in scanners,
             use_git_secrets="git-secrets" in scanners,
             auto_install=guard_config.get("auto_install", True),
             include_git_history=guard_config.get("include_history", False),
@@ -219,17 +216,6 @@ class ScanEngine:
                     self.scanners.append(scanner)
             except ImportError:
                 logger.debug("Kingfisher scanner not available - module not found")
-
-        # GitHound scanner - GitHub dorks + patterns + entropy
-        if self.config.use_git_hound:
-            try:
-                from envdrift.scanner.git_hound import GitHoundScanner
-
-                scanner = GitHoundScanner(auto_install=self.config.auto_install)
-                if scanner.is_installed() or self.config.auto_install:
-                    self.scanners.append(scanner)
-            except ImportError:
-                logger.debug("GitHound scanner not available - module not found")
 
         # git-secrets scanner - AWS credential detection + pre-commit hooks
         if self.config.use_git_secrets:

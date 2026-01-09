@@ -31,13 +31,6 @@
         "linux_arm64": "https://github.com/trufflesecurity/trufflehog/releases/download/v{version}/trufflehog_{version}_linux_arm64.tar.gz",
         "windows_amd64": "https://github.com/trufflesecurity/trufflehog/releases/download/v{version}/trufflehog_{version}_windows_amd64.tar.gz"
     },
-    "detect_secrets_version": "1.5.0",
-    "git_hound_version": "3.3.1",
-    "git_hound_download_urls": {
-        "darwin_amd64": "https://github.com/tillson/git-hound/releases/download/v{version}/git-hound_{version}_darwin_amd64.tar.gz",
-        "darwin_arm64": "https://github.com/tillson/git-hound/releases/download/v{version}/git-hound_{version}_darwin_arm64.tar.gz",
-        "linux_amd64": "https://github.com/tillson/git-hound/releases/download/v{version}/git-hound_{version}_linux_amd64.tar.gz",
-        "linux_arm64": "https://github.com/tillson/git-hound/releases/download/v{version}/git-hound_{version}_linux_arm64.tar.gz"
-    }
+    "detect_secrets_version": "1.5.0"
 }
 

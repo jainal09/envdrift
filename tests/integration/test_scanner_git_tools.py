@@ -1,7 +1,7 @@
-"""Integration tests for GitHound and git-secrets scanner integration.
+"""Integration tests for git-secrets scanner integration.
 
 Tests for:
-- Scanner CLI flags (--git-hound, --git-secrets)
+- Scanner CLI flags (--git-secrets)
 - Scanner configuration via envdrift.toml
 - Scanner detection and findings on test data
 """
@@ -53,74 +53,6 @@ def scanner_test_env(tmp_path):
     env["PYTHONPATH"] = f"{PYTHONPATH}{os.pathsep}{env.get('PYTHONPATH', '')}"
 
     return {"work_dir": work_dir, "env": env, "tmp_path": tmp_path}
-
-
-@pytest.mark.integration
-class TestGitHoundCLI:
-    """Test GitHound scanner CLI integration."""
-
-    def test_git_hound_flag_shown_in_help(self, scanner_test_env):
-        """Test that --git-hound flag appears in guard help."""
-        import re
-
-        work_dir = scanner_test_env["work_dir"]
-        env = scanner_test_env["env"]
-
-        result = _run_envdrift(["guard", "--help"], cwd=work_dir, env=env)
-
-        # Strip ANSI escape codes for comparison
-        ansi_escape = re.compile(r"\x1B(?:[@-Z\\-_]|\\[0-?]*[ -/]*[@-~])")
-        clean_output = ansi_escape.sub("", result.stdout)
-
-        assert "--git-hound" in clean_output, f"--git-hound not found in help output: {clean_output[:500]}"
-        assert "--no-git-hound" in clean_output
-
-    def test_git_hound_flag_enables_scanner(self, scanner_test_env):
-        """Test that --git-hound flag enables the GitHound scanner."""
-        work_dir = scanner_test_env["work_dir"]
-        env = scanner_test_env["env"]
-
-        # Create a test file
-        test_file = work_dir / "test.txt"
-        test_file.write_text("No secrets here\n")
-
-        result = _run_envdrift(
-            ["guard", "--git-hound", "--verbose", str(work_dir)],
-            cwd=work_dir,
-            env=env,
-            check=False,
-        )
-
-        # Should show git-hound in scanner list
-        # Note: It might not be installed, but the flag should be recognized
-        assert "--git-hound" not in result.stderr  # No error about unknown flag
-
-    def test_git_hound_config_enables_scanner(self, scanner_test_env):
-        """Test that git-hound in config enables the scanner."""
-        work_dir = scanner_test_env["work_dir"]
-        env = scanner_test_env["env"]
-
-        config = textwrap.dedent(
-            """\
-            [guard]
-            scanners = ["native", "git-hound"]
-            auto_install = false
-            """
-        )
-        (work_dir / "envdrift.toml").write_text(config)
-
-        test_file = work_dir / "test.txt"
-        test_file.write_text("No secrets here\n")
-
-        result = _run_envdrift(
-            ["guard", "--verbose", str(work_dir)],
-            cwd=work_dir,
-            env=env,
-            check=False,
-        )
-
-        # Should recognize git-hound from config
-        assert result.returncode is not None  # Command completed
 
 
 @pytest.mark.integration
@@ -299,7 +231,7 @@ class TestScannerConfiguration:
         config = textwrap.dedent(
             """\
             [guard]
-            scanners = ["native", "gitleaks", "git-hound", "git-secrets"]
+            scanners = ["native", "gitleaks", "git-secrets"]
             auto_install = false
             """
         )
@@ -353,7 +285,7 @@ class TestScannerConfiguration:
         config = textwrap.dedent(
             """\
             [guard]
-            scanners = ["native", "gitleaks", "git-hound", "git-secrets"]
+            scanners = ["native", "gitleaks", "git-secrets"]
             """
         )
         (work_dir / "envdrift.toml").write_text(config)
@@ -370,5 +302,5 @@ class TestScannerConfiguration:
 
         # Only native should run
         output = result.stdout + result.stderr
-        # git-hound and git-secrets should not be in running scanners
+        # git-secrets should not be in running scanners
         assert "Running scanners: native" in output or "native" in output
