@@ -68,8 +68,8 @@ class TestGitSecretsCLI:
 
         result = _run_envdrift(["guard", "--help"], cwd=work_dir, env=env)
 
-        # Strip ANSI escape codes for comparison
-        ansi_escape = re.compile(r"\x1B(?:[@-Z\\-_]|\\[0-?]*[ -/]*[@-~])")
+        # Strip ANSI escape codes for comparison - more comprehensive pattern
+        ansi_escape = re.compile(r"\x1B\[[0-9;]*[A-Za-z]|\x1B[@-Z\\-_]")
         clean_output = ansi_escape.sub("", result.stdout)
 
         assert "--git-secrets" in clean_output, f"--git-secrets not found in help output: {clean_output[:500]}"
