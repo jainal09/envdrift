@@ -782,6 +782,8 @@ class GitSecretsScanner(ScannerBackend):
                             result_dict["providers"].append(parts[1].strip())
 
         except Exception:
+            # If git-secrets is not available or command fails, return empty dict
+            # This allows graceful degradation when git-secrets is not configured
             pass
 
         return result_dict
