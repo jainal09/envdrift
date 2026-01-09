@@ -360,7 +360,7 @@ CRITICAL_PATTERNS: list[SecretPattern] = [
     SecretPattern(
         id="square-oauth-secret",
         description="Square OAuth Secret",
-        pattern=re.compile(r"(sq0csp-[a-zA-Z0-9_\- ]{40,})"),
+        pattern=re.compile(r"(sq0csp-[a-zA-Z0-9_-]{40,})"),
         severity=FindingSeverity.CRITICAL,
     ),
     # Braintree/PayPal
@@ -381,7 +381,7 @@ CRITICAL_PATTERNS: list[SecretPattern] = [
     SecretPattern(
         id="putty-private-key",
         description="PuTTY Private Key",
-        pattern=re.compile(r"PuTTY-User-Key-File-[0-9]+:"),
+        pattern=re.compile(r"(PuTTY-User-Key-File-[0-9]+:.*)"),
         severity=FindingSeverity.CRITICAL,
     ),
     # GitHub App Client ID

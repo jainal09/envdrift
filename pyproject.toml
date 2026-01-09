@@ -189,3 +189,8 @@ exclude_lines = [
 [tool.bandit]
 exclude_dirs = ["tests", ".venv"]
 skips = ["B101"]
+
+[dependency-groups]
+dev = [
+    "pyyaml>=6.0.3",
+]

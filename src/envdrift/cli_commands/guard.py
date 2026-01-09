@@ -6,10 +6,11 @@ The guard command provides defense-in-depth by detecting:
 - High-entropy strings (potential secrets)
 - Previously committed secrets (in git history, with --history)
 - Password hashes (bcrypt, sha512crypt, etc.) with Kingfisher
+- AWS credentials (with git-secrets)
 
 Configuration can be set in envdrift.toml:
     [guard]
-    scanners = ["native", "gitleaks"]  # or add "trufflehog", "detect-secrets", "kingfisher"
+    scanners = ["native", "gitleaks"]  # or add "trufflehog", "detect-secrets", "kingfisher", "git-secrets"
     auto_install = true
     include_history = false
     check_entropy = false
@@ -67,6 +68,13 @@ def guard(
         typer.Option(
             "--kingfisher/--no-kingfisher",
             help="Use Kingfisher scanner - 700+ rules, password hashes, secret validation",
+        ),
+    ] = None,
+    git_secrets: Annotated[
+        bool | None,
+        typer.Option(
+            "--git-secrets/--no-git-secrets",
+            help="Use git-secrets scanner - AWS credential detection, pre-commit hooks",
         ),
     ] = None,
     native_only: Annotated[
@@ -296,12 +304,16 @@ def guard(
     use_kingfisher_final = (
         kingfisher if kingfisher is not None else "kingfisher" in guard_cfg.scanners
     )
+    use_git_secrets_final = (
+        git_secrets if git_secrets is not None else "git-secrets" in guard_cfg.scanners
+    )
 
     if native_only:
         use_gitleaks_final = False
         use_trufflehog_final = False
         use_detect_secrets_final = False
         use_kingfisher_final = False
+        use_git_secrets_final = False
 
     # Extract allowed clear files from partial_encryption config
     # These files are intentionally unencrypted and should not be flagged
@@ -321,6 +333,7 @@ def guard(
         use_trufflehog=use_trufflehog_final,
         use_detect_secrets=use_detect_secrets_final,
         use_kingfisher=use_kingfisher_final,
+        use_git_secrets=use_git_secrets_final,
         auto_install=auto_install,
         include_git_history=history or guard_cfg.include_history,
         check_entropy=entropy or guard_cfg.check_entropy,

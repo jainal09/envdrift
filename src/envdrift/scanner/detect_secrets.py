@@ -347,7 +347,7 @@ class DetectSecretsScanner(ScannerBackend):
     def scan(
         self,
         paths: list[Path],
-        include_git_history: bool = False,  # noqa: ARG002
+        include_git_history: bool = False,  # noqa: ARG002 - intentionally unused for interface compatibility
     ) -> ScanResult:
         """Scan paths for secrets using detect-secrets.
 
@@ -358,6 +358,8 @@ class DetectSecretsScanner(ScannerBackend):
         Returns:
             ScanResult containing all findings.
         """
+        # Note: detect-secrets doesn't support git history scanning
+        _ = include_git_history  # intentionally ignored (interface compatibility)
         start_time = time.time()
 
         try:

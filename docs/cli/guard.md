@@ -78,6 +78,21 @@ Kingfisher provides:
 envdrift guard --kingfisher
 ```
 
+### `--git-secrets` / `--no-git-secrets`
+
+Enable or disable git-secrets scanner. Disabled by default.
+
+git-secrets provides:
+
+- AWS credential detection (access keys, secret keys)
+- Pre-commit hook integration
+- Custom pattern support
+- Allowed patterns for false positive management
+
+```bash
+envdrift guard --git-secrets
+```
+
 ### `--history`, `-H`
 
 Include git history in the scan. Requires a git repository.
@@ -259,7 +274,7 @@ Guard settings live under `[guard]` in `envdrift.toml` or
 
 ```toml
 [guard]
-scanners = ["native", "gitleaks", "trufflehog", "detect-secrets", "kingfisher"]
+scanners = ["native", "gitleaks", "trufflehog", "detect-secrets", "kingfisher", "git-secrets"]
 auto_install = true
 include_history = false
 check_entropy = true
@@ -281,11 +296,12 @@ Notes:
 - `ignore_paths` applies globally to all scanners.
 - `ignore_rules` allows ignoring specific rules in specific path patterns.
 - CLI flags override config values.
+- `git-secrets` is ideal for AWS-heavy environments.
 
 ## Handling False Positives
 
 Envdrift provides a **centralized ignore system** that works across ALL scanners
-(native, gitleaks, trufflehog, detect-secrets, kingfisher).
+(native, gitleaks, trufflehog, detect-secrets, kingfisher, git-secrets).
 
 ### Inline Ignore Comments
 

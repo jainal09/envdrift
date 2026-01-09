@@ -601,45 +601,6 @@ class NativeScanner(ScannerBackend):
 
         return False
 
-    def _has_ignore_comment(self, line: str, rule_id: str | None = None) -> bool:
-        """Check if a line has an envdrift:ignore comment.
-
-        Supports multiple formats:
-        - `# envdrift:ignore` - ignore all rules on this line
-        - `// envdrift:ignore` - same, for C-style comments
-        - `# envdrift:ignore:rule-id` - ignore specific rule
-        - `# envdrift:ignore reason="explanation"` - with reason (recommended)
-
-        Args:
-            line: The line of code to check.
-            rule_id: If provided, check if this specific rule is ignored.
-
-        Returns:
-            True if the line should be ignored.
-        """
-        import re
-
-        # Look for ignore comments in various formats
-        # Matches: # envdrift:ignore, // envdrift:ignore, /* envdrift:ignore */
-        ignore_pattern = re.compile(
-            r'(?:#|//|/\*)\s*envdrift:ignore(?::([a-zA-Z0-9_-]+))?'
-        )
-
-        match = ignore_pattern.search(line)
-        if not match:
-            return False
-
-        # If no specific rule in comment, ignore all rules
-        ignored_rule = match.group(1)
-        if ignored_rule is None:
-            return True
-
-        # If specific rule in comment, only ignore that rule
-        if rule_id is not None and ignored_rule == rule_id:
-            return True
-
-        return False
-
     def _scan_patterns(self, file_path: Path, content: str) -> list[ScanFinding]:
         """Scan content for secret patterns.
 
