@@ -39,13 +39,9 @@ if TYPE_CHECKING:
 class KingfisherNotFoundError(Exception):
     """Kingfisher binary not found."""
 
-    pass
-
 
 class KingfisherInstallError(Exception):
     """Failed to install Kingfisher."""
-
-    pass
 
 
 # Severity mapping based on rule types
@@ -442,7 +438,7 @@ class KingfisherScanner(ScannerBackend):
                 return ScanResult(
                     scanner_name=self.name,
                     findings=all_findings,
-                    error=str(e),
+                    error=f"{type(e).__name__}: {e}",
                     duration_ms=int((time.time() - start_time) * 1000),
                 )
             finally:
