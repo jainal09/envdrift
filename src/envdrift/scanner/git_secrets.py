@@ -470,6 +470,10 @@ class GitSecretsScanner(ScannerBackend):
                             or "secrets.providers" in list_result.stdout
                         )
                         if not aws_patterns_installed:
+                            logger.debug(
+                                "Registering AWS patterns in git-secrets for repo: %s",
+                                cwd,
+                            )
                             with contextlib.suppress(Exception):
                                 self._run_git_secrets(["--register-aws"], cwd)
 
