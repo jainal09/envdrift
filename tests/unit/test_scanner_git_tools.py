@@ -14,8 +14,6 @@ from envdrift.scanner.git_hound import (
     get_platform_info,
 )
 from envdrift.scanner.git_secrets import (
-    GitSecretsInstallError,
-    GitSecretsNotFoundError,
     GitSecretsScanner,
 )
 
