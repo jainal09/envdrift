@@ -326,8 +326,11 @@ class GitSecretsScanner(ScannerBackend):
                 # git-secrets is available as git subcommand
                 self._binary_path = Path("git-secrets")
                 return self._binary_path
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug(
+                "Failed to detect git-secrets via 'git secrets --list': %s",
+                exc,
+            )
 
         # Auto-install if enabled
         if self._auto_install:
