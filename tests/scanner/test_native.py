@@ -429,3 +429,99 @@ class TestScanSingleFile:
         # Binary file should be scanned but no findings from pattern matching
         # because we skip files with null bytes
         assert len(result.findings) == 0
+
+
+class TestSkipClearFiles:
+    """Tests for skip_clear_files feature."""
+
+    def test_clear_files_scanned_by_default(self, tmp_path: Path):
+        """Test that .clear files ARE scanned by default."""
+        scanner = NativeScanner()
+        clear_file = tmp_path / ".env.production.clear"
+        clear_file.write_text('AWS_KEY="AKIAIOSFODNN7EXAMPLE"\n')
+
+        result = scanner.scan([tmp_path])
+
+        assert result.files_scanned == 1
+        aws_findings = [f for f in result.findings if "aws" in f.rule_id.lower()]
+        assert len(aws_findings) >= 1
+
+    def test_clear_files_skipped_when_enabled(self, tmp_path: Path):
+        """Test that .clear files produce no findings when skip_clear_files=True."""
+        scanner = NativeScanner(skip_clear_files=True)
+        clear_file = tmp_path / ".env.production.clear"
+        clear_file.write_text('AWS_KEY="AKIAIOSFODNN7EXAMPLE"\n')
+
+        result = scanner.scan([tmp_path])
+
+        # File is processed but should produce no findings
+        assert len(result.findings) == 0
+
+    def test_skip_clear_does_not_affect_regular_env_files(self, tmp_path: Path):
+        """Test that skip_clear_files doesn't affect regular .env files."""
+        scanner = NativeScanner(skip_clear_files=True)
+        env_file = tmp_path / ".env"
+        env_file.write_text('DATABASE_URL=postgres://localhost/db\n')
+
+        result = scanner.scan([tmp_path])
+
+        # Regular .env file should still be scanned
+        assert result.files_scanned == 1
+        unencrypted_findings = [f for f in result.findings if f.rule_id == "unencrypted-env-file"]
+        assert len(unencrypted_findings) == 1
+
+    def test_skip_clear_with_multiple_clear_extensions(self, tmp_path: Path):
+        """Test that various .clear file patterns produce no findings."""
+        scanner = NativeScanner(skip_clear_files=True)
+
+        # Create various .clear file patterns with secrets
+        (tmp_path / ".env.clear").write_text('AWS_KEY="AKIAIOSFODNN7EXAMPLE"\n')
+        (tmp_path / ".env.localenv.clear").write_text('AWS_KEY="AKIAIOSFODNN7EXAMPLE"\n')
+        (tmp_path / ".env.production.clear").write_text('AWS_KEY="AKIAIOSFODNN7EXAMPLE"\n')
+        (tmp_path / "config.clear").write_text('AWS_KEY="AKIAIOSFODNN7EXAMPLE"\n')
+
+        result = scanner.scan([tmp_path])
+
+        # All .clear files should produce no findings
+        assert len(result.findings) == 0
+
+    def test_skip_clear_false_scans_all_clear_files(self, tmp_path: Path):
+        """Test that skip_clear_files=False scans all .clear files."""
+        scanner = NativeScanner(skip_clear_files=False)
+
+        # Create .clear files with secrets
+        (tmp_path / ".env.production.clear").write_text('AWS_KEY="AKIAIOSFODNN7EXAMPLE"\n')
+
+        result = scanner.scan([tmp_path])
+
+        # .clear file should be scanned
+        assert result.files_scanned == 1
+
+    def test_is_clear_file_detection(self, tmp_path: Path):
+        """Test the _is_clear_file method."""
+        scanner = NativeScanner()
+
+        # Should be detected as .clear files
+        assert scanner._is_clear_file(Path(".env.clear")) is True
+        assert scanner._is_clear_file(Path(".env.production.clear")) is True
+        assert scanner._is_clear_file(Path("config.clear")) is True
+        assert scanner._is_clear_file(Path("path/to/.env.localenv.clear")) is True
+
+        # Should NOT be detected as .clear files
+        assert scanner._is_clear_file(Path(".env")) is False
+        assert scanner._is_clear_file(Path(".env.production")) is False
+        assert scanner._is_clear_file(Path("config.py")) is False
+        assert scanner._is_clear_file(Path(".env.secret")) is False
+
+    def test_clear_files_not_flagged_as_unencrypted_when_in_allowed_list(self, tmp_path: Path):
+        """Test that allowed .clear files are not flagged as unencrypted."""
+        clear_file = tmp_path / ".env.production.clear"
+        clear_file.write_text("DATABASE_URL=postgres://localhost/db\n")
+
+        scanner = NativeScanner(allowed_clear_files=[str(clear_file)])
+
+        result = scanner.scan([tmp_path])
+
+        # Should be scanned but not flagged as unencrypted
+        unencrypted_findings = [f for f in result.findings if f.rule_id == "unencrypted-env-file"]
+        assert len(unencrypted_findings) == 0

@@ -322,6 +322,84 @@ CRITICAL_PATTERNS: list[SecretPattern] = [
         severity=FindingSeverity.HIGH,
         keywords=("datadog",),
     ),
+    # Additional Slack tokens
+    SecretPattern(
+        id="slack-oauth-access-token",
+        description="Slack OAuth Access Token",
+        pattern=re.compile(r"(xoxa-[0-9]+-[0-9]+-[0-9]+-[a-f0-9]+)"),
+        severity=FindingSeverity.CRITICAL,
+    ),
+    SecretPattern(
+        id="slack-refresh-token",
+        description="Slack Refresh Token",
+        pattern=re.compile(r"(xoxr-[0-9]+-[a-zA-Z0-9]+)"),
+        severity=FindingSeverity.CRITICAL,
+    ),
+    # Mailgun
+    SecretPattern(
+        id="mailgun-api-key",
+        description="Mailgun API Key",
+        pattern=re.compile(r"(key-[a-zA-Z0-9]{32})"),
+        severity=FindingSeverity.CRITICAL,
+    ),
+    # Twilio additional patterns
+    SecretPattern(
+        id="twilio-app-sid",
+        description="Twilio Application SID",
+        pattern=re.compile(r"(AP[a-f0-9]{32})"),
+        severity=FindingSeverity.HIGH,
+        keywords=("twilio",),
+    ),
+    # Square
+    SecretPattern(
+        id="square-access-token",
+        description="Square Access Token",
+        pattern=re.compile(r"(sqOatp-[a-zA-Z0-9_-]{22,})"),
+        severity=FindingSeverity.CRITICAL,
+    ),
+    SecretPattern(
+        id="square-oauth-secret",
+        description="Square OAuth Secret",
+        pattern=re.compile(r"(sq0csp-[a-zA-Z0-9_\- ]{40,})"),
+        severity=FindingSeverity.CRITICAL,
+    ),
+    # Braintree/PayPal
+    SecretPattern(
+        id="braintree-access-token",
+        description="Braintree Access Token",
+        pattern=re.compile(r"(access_token\$production\$[a-z0-9]+\$[a-f0-9]{32})"),
+        severity=FindingSeverity.CRITICAL,
+    ),
+    # Facebook
+    SecretPattern(
+        id="facebook-access-token",
+        description="Facebook Access Token",
+        pattern=re.compile(r"(EAACEdEose0cBA[a-zA-Z0-9]+)"),
+        severity=FindingSeverity.CRITICAL,
+    ),
+    # PuTTY private key
+    SecretPattern(
+        id="putty-private-key",
+        description="PuTTY Private Key",
+        pattern=re.compile(r"PuTTY-User-Key-File-[0-9]+:"),
+        severity=FindingSeverity.CRITICAL,
+    ),
+    # GitHub App Client ID
+    SecretPattern(
+        id="github-app-client-id",
+        description="GitHub App Client ID",
+        pattern=re.compile(r"(Iv1\.[a-f0-9]{16})"),
+        severity=FindingSeverity.HIGH,
+        keywords=("github",),
+    ),
+    # Google reCAPTCHA secret
+    SecretPattern(
+        id="google-recaptcha-secret",
+        description="Google reCAPTCHA Secret",
+        pattern=re.compile(r"(6L[a-zA-Z0-9_-]{38})"),
+        severity=FindingSeverity.HIGH,
+        keywords=("recaptcha", "captcha"),
+    ),
 ]
 
 # Medium-confidence patterns - generic patterns that may indicate secrets
@@ -382,6 +460,229 @@ HIGH_PATTERNS: list[SecretPattern] = [
         id="redis-url",
         description="Redis Connection String",
         pattern=re.compile(r"(?i)redis://(?:[^:]+:)?([^@]+)@[^\s]+"),
+        severity=FindingSeverity.HIGH,
+    ),
+    # Password hashes (dangerous if leaked)
+    SecretPattern(
+        id="bcrypt-hash",
+        description="Bcrypt Password Hash",
+        pattern=re.compile(r"(\$2[ayb]\$[0-9]{2}\$[a-zA-Z0-9./]{53})"),
+        severity=FindingSeverity.HIGH,
+    ),
+    SecretPattern(
+        id="sha512crypt-hash",
+        description="SHA-512 Crypt Password Hash",
+        pattern=re.compile(r"(\$6\$[a-zA-Z0-9./]{8,16}\$[a-zA-Z0-9./]{86})"),
+        severity=FindingSeverity.HIGH,
+    ),
+    # Docker registry auth
+    SecretPattern(
+        id="docker-auth",
+        description="Docker Registry Auth",
+        pattern=re.compile(r'"auth"\s*:\s*"([a-zA-Z0-9+/=]{20,})"'),
+        severity=FindingSeverity.HIGH,
+    ),
+    # NPM auth tokens (must start with _auth specifically, not just end with auth)
+    SecretPattern(
+        id="npmrc-auth",
+        description="NPM Auth Token (.npmrc)",
+        pattern=re.compile(r"(?m)^_auth\s*=\s*([a-zA-Z0-9+/=]{20,})"),
+        severity=FindingSeverity.HIGH,
+    ),
+    SecretPattern(
+        id="npmrc-authtoken",
+        description="NPM Auth Token (.npmrc)",
+        pattern=re.compile(r"(?i):_authToken\s*=\s*([a-zA-Z0-9-]+)"),
+        severity=FindingSeverity.HIGH,
+    ),
+    # Git credentials
+    SecretPattern(
+        id="git-credentials",
+        description="Git Credentials URL",
+        pattern=re.compile(r"https?://[^:]+:([^@\s]+)@(?:github|gitlab|bitbucket)"),
+        severity=FindingSeverity.CRITICAL,
+    ),
+    # Laravel APP_KEY
+    SecretPattern(
+        id="laravel-app-key",
+        description="Laravel Application Key",
+        pattern=re.compile(r"(?i)APP_KEY\s*=\s*['\"]?(base64:[a-zA-Z0-9+/=]{43,44})['\"]?"),
+        severity=FindingSeverity.HIGH,
+    ),
+    # Django SECRET_KEY
+    SecretPattern(
+        id="django-secret-key",
+        description="Django Secret Key",
+        pattern=re.compile(r"(?i)SECRET_KEY\s*=\s*['\"]([^'\"]{40,})['\"]"),
+        severity=FindingSeverity.HIGH,
+    ),
+    # WordPress salts/keys
+    SecretPattern(
+        id="wordpress-auth-key",
+        description="WordPress Authentication Key",
+        pattern=re.compile(
+            r"(?i)define\s*\(\s*['\"](?:AUTH_KEY|SECURE_AUTH_KEY|LOGGED_IN_KEY|NONCE_KEY|"
+            r"AUTH_SALT|SECURE_AUTH_SALT|LOGGED_IN_SALT|NONCE_SALT)['\"]"
+            r"\s*,\s*['\"]([^'\"]{30,})['\"]"
+        ),
+        severity=FindingSeverity.HIGH,
+    ),
+    # Database password in define() - PHP style
+    SecretPattern(
+        id="php-db-password",
+        description="PHP Database Password",
+        pattern=re.compile(r"(?i)define\s*\(\s*['\"]DB_PASSWORD['\"]?\s*,\s*['\"]([^'\"]+)['\"]"),
+        severity=FindingSeverity.HIGH,
+    ),
+    # Connection string with password (require semicolon delimiter for connection strings)
+    SecretPattern(
+        id="connection-string-password",
+        description="Connection String with Password",
+        # Match: Password=value; (connection string style with semicolon)
+        pattern=re.compile(r"(?i)(?:password|pwd)\s*=\s*([^;'\"\s]{4,});"),
+        severity=FindingSeverity.HIGH,
+    ),
+    # FTP/SFTP password in config files
+    SecretPattern(
+        id="ftp-password",
+        description="FTP/SFTP Password",
+        pattern=re.compile(r'"(?:password|pass|passphrase)"\s*:\s*"([^"]+)"'),
+        severity=FindingSeverity.HIGH,
+    ),
+    # Generic credentials in XML
+    SecretPattern(
+        id="xml-password",
+        description="Password in XML",
+        pattern=re.compile(r"<(?:password|passwd|pass|secret)>([^<]+)</"),
+        severity=FindingSeverity.HIGH,
+    ),
+    # Base64 encoded auth (like _auth in .npmrc or Docker)
+    SecretPattern(
+        id="base64-auth-token",
+        description="Base64 Encoded Auth",
+        pattern=re.compile(r"(?i)(?:_auth|auth|authorization)\s*[=:]\s*['\"]?([A-Za-z0-9+/]{40,}={0,2})['\"]?"),
+        severity=FindingSeverity.MEDIUM,
+    ),
+    # Hashicorp Vault Token
+    SecretPattern(
+        id="vault-token",
+        description="Hashicorp Vault Token",
+        pattern=re.compile(r"(hvs\.[a-zA-Z0-9_-]{24,})"),
+        severity=FindingSeverity.CRITICAL,
+    ),
+    SecretPattern(
+        id="vault-batch-token",
+        description="Hashicorp Vault Batch Token",
+        pattern=re.compile(r"(hvb\.[a-zA-Z0-9_-]{24,})"),
+        severity=FindingSeverity.CRITICAL,
+    ),
+    # Shopify
+    SecretPattern(
+        id="shopify-access-token",
+        description="Shopify Access Token",
+        pattern=re.compile(r"(shpat_[a-fA-F0-9]{32})"),
+        severity=FindingSeverity.CRITICAL,
+    ),
+    SecretPattern(
+        id="shopify-shared-secret",
+        description="Shopify Shared Secret",
+        pattern=re.compile(r"(shpss_[a-fA-F0-9]{32})"),
+        severity=FindingSeverity.CRITICAL,
+    ),
+    # Atlassian / Jira / Confluence
+    SecretPattern(
+        id="atlassian-api-token",
+        description="Atlassian API Token",
+        pattern=re.compile(r"(?i)(?:atlassian|jira|confluence)[_-]?(?:api[_-]?)?token\s*[=:]\s*['\"]?([a-zA-Z0-9]{24})['\"]?"),
+        severity=FindingSeverity.HIGH,
+    ),
+    # Sentry DSN (contains secret key)
+    SecretPattern(
+        id="sentry-dsn",
+        description="Sentry DSN",
+        pattern=re.compile(r"https://[a-f0-9]{32}@[a-z0-9.-]+\.ingest\.sentry\.io/[0-9]+"),
+        severity=FindingSeverity.HIGH,
+    ),
+    # Linear API Key
+    SecretPattern(
+        id="linear-api-key",
+        description="Linear API Key",
+        pattern=re.compile(r"(lin_api_[a-zA-Z0-9]{40})"),
+        severity=FindingSeverity.CRITICAL,
+    ),
+    # Vercel Token
+    SecretPattern(
+        id="vercel-token",
+        description="Vercel Token",
+        pattern=re.compile(r"(?i)vercel[_-]?token\s*[=:]\s*['\"]?([a-zA-Z0-9]{24})['\"]?"),
+        severity=FindingSeverity.HIGH,
+    ),
+    # Netlify Token
+    SecretPattern(
+        id="netlify-token",
+        description="Netlify Token",
+        pattern=re.compile(r"(?i)netlify[_-]?(?:auth[_-]?)?token\s*[=:]\s*['\"]?([a-zA-Z0-9_-]{40,})['\"]?"),
+        severity=FindingSeverity.HIGH,
+    ),
+    # Cloudflare API Token
+    SecretPattern(
+        id="cloudflare-api-token",
+        description="Cloudflare API Token",
+        pattern=re.compile(r"(?i)cloudflare[_-]?(?:api[_-]?)?token\s*[=:]\s*['\"]?([a-zA-Z0-9_-]{40})['\"]?"),
+        severity=FindingSeverity.HIGH,
+    ),
+    # DigitalOcean
+    SecretPattern(
+        id="digitalocean-token",
+        description="DigitalOcean Token",
+        pattern=re.compile(r"(dop_v1_[a-f0-9]{64})"),
+        severity=FindingSeverity.CRITICAL,
+    ),
+    SecretPattern(
+        id="digitalocean-oauth",
+        description="DigitalOcean OAuth Token",
+        pattern=re.compile(r"(doo_v1_[a-f0-9]{64})"),
+        severity=FindingSeverity.CRITICAL,
+    ),
+    SecretPattern(
+        id="digitalocean-refresh",
+        description="DigitalOcean Refresh Token",
+        pattern=re.compile(r"(dor_v1_[a-f0-9]{64})"),
+        severity=FindingSeverity.CRITICAL,
+    ),
+    # Doppler
+    SecretPattern(
+        id="doppler-token",
+        description="Doppler Token",
+        pattern=re.compile(r"(dp\.(?:ct|st|sa|scim)\.[a-zA-Z0-9]{40,44})"),
+        severity=FindingSeverity.CRITICAL,
+    ),
+    # Supabase
+    SecretPattern(
+        id="supabase-key",
+        description="Supabase API Key",
+        pattern=re.compile(r"(sbp_[a-f0-9]{40})"),
+        severity=FindingSeverity.CRITICAL,
+    ),
+    # Postman API Key
+    SecretPattern(
+        id="postman-api-key",
+        description="Postman API Key",
+        pattern=re.compile(r"(PMAK-[a-f0-9]{24}-[a-f0-9]{34})"),
+        severity=FindingSeverity.CRITICAL,
+    ),
+    # New Relic
+    SecretPattern(
+        id="newrelic-license-key",
+        description="New Relic License Key",
+        pattern=re.compile(r"(?i)new[_-]?relic[_-]?license[_-]?key\s*[=:]\s*['\"]?([a-f0-9]{40})['\"]?"),
+        severity=FindingSeverity.HIGH,
+    ),
+    # Algolia
+    SecretPattern(
+        id="algolia-api-key",
+        description="Algolia API Key",
+        pattern=re.compile(r"(?i)algolia[_-]?(?:api[_-]?)?key\s*[=:]\s*['\"]?([a-f0-9]{32})['\"]?"),
         severity=FindingSeverity.HIGH,
     ),
 ]

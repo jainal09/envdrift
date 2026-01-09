@@ -94,6 +94,19 @@ Enable entropy-based detection in the native scanner.
 envdrift guard --entropy
 ```
 
+### `--skip-clear` / `--no-skip-clear`
+
+Control whether `.clear` files are scanned. By default, `.clear` files ARE scanned.
+Use `--skip-clear` to exclude them entirely.
+
+```bash
+# Skip .clear files from scanning
+envdrift guard --skip-clear
+
+# Explicitly scan .clear files (default behavior)
+envdrift guard --no-skip-clear
+```
+
 ### `--auto-install` / `--no-auto-install`
 
 Control auto-installation of external scanners.
@@ -252,11 +265,83 @@ include_history = false
 check_entropy = true
 entropy_threshold = 4.5
 fail_on_severity = "high"
+skip_clear_files = false  # Set to true to skip .clear files entirely
 ignore_paths = ["tests/**", "*.test.py"]
+
+# Rule-specific path ignores (see Handling False Positives below)
+[guard.ignore_rules]
+"ftp-password" = ["**/locales/**", "**/*.json"]
+"connection-string-password" = ["**/helm/**"]
 ```
 
 Notes:
 
 - `scanners` controls which external scanners are enabled by default.
-- `ignore_paths` applies to the native scanner's file walk.
+- `skip_clear_files` skips `.clear` files entirely (disabled by default - they ARE scanned).
+- `ignore_paths` applies globally to all scanners.
+- `ignore_rules` allows ignoring specific rules in specific path patterns.
 - CLI flags override config values.
+
+## Handling False Positives
+
+Envdrift provides a **centralized ignore system** that works across ALL scanners
+(native, gitleaks, trufflehog, detect-secrets, kingfisher).
+
+### Inline Ignore Comments
+
+Add comments directly in your source files:
+
+```python
+# Ignore all rules on this line
+password = ref(false)  # envdrift:ignore
+
+# Ignore a specific rule only
+SECRET_KEY = "test-key"  # envdrift:ignore:django-secret-key
+
+# Ignore with a reason (recommended for maintainability)
+API_KEY = "xxx"  # envdrift:ignore reason="test fixture"
+```
+
+Supported comment formats:
+
+- `# envdrift:ignore` - Python, Shell, YAML
+- `// envdrift:ignore` - JavaScript, Go, C, TypeScript
+- `/* envdrift:ignore */` - CSS, C-style block comments
+
+### TOML Configuration
+
+For bulk ignores across many files:
+
+```toml
+[guard]
+# Skip entire directories
+ignore_paths = [
+    "**/tests/**",
+    "**/fixtures/**",
+    "**/locales/**",
+]
+
+# Ignore specific rules in specific paths
+[guard.ignore_rules]
+"ftp-password" = ["**/*.json"]  # Matches translation "Mot de passe"
+"django-secret-key" = ["**/test_settings.py"]
+```
+
+### Common Rule IDs
+
+| Rule ID | What It Detects |
+| :-- | :-- |
+| `aws-access-key-id` | AWS access key (AKIA...) |
+| `aws-secret-access-key` | AWS secret key |
+| `github-token` | GitHub PAT (ghp_, gho_, ghs_) |
+| `django-secret-key` | Django SECRET_KEY |
+| `laravel-app-key` | Laravel APP_KEY |
+| `connection-string-password` | DB connection string password |
+| `ftp-password` | Password in JSON config |
+| `high-entropy-string` | High entropy value |
+| `unencrypted-env-file` | .env without encryption |
+
+Use `--verbose` or `--json` to see rule IDs for your findings.
+
+See the [Guard Scanning Guide](../guides/guard.md#handling-false-positives) for
+more details and examples.

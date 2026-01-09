@@ -25,6 +25,9 @@ class TestGuardConfig:
         assert config.check_entropy is False
         assert config.entropy_threshold == 4.5
         assert config.ignore_paths == []
+        assert config.ignore_rules == {}
+        assert config.skip_clear_files is False
+        assert config.allowed_clear_files == []
         assert config.fail_on_severity == FindingSeverity.HIGH
 
     def test_config_from_dict_empty(self):
@@ -84,6 +87,34 @@ class TestGuardConfig:
 
         assert config.use_native is False
         assert config.use_gitleaks is True
+
+    def test_config_with_ignore_rules(self):
+        """Test config with ignore_rules from dict."""
+        config = GuardConfig.from_dict(
+            {
+                "guard": {
+                    "ignore_rules": {
+                        "ftp-password": ["**/*.json"],
+                        "django-secret-key": ["**/test_settings.py"],
+                    }
+                }
+            }
+        )
+
+        assert config.ignore_rules == {
+            "ftp-password": ["**/*.json"],
+            "django-secret-key": ["**/test_settings.py"],
+        }
+
+    def test_config_with_skip_clear_files(self):
+        """Test config with skip_clear_files."""
+        config = GuardConfig(skip_clear_files=True)
+        assert config.skip_clear_files is True
+
+    def test_config_with_allowed_clear_files(self):
+        """Test config with allowed_clear_files."""
+        config = GuardConfig(allowed_clear_files=[".env.production.clear"])
+        assert config.allowed_clear_files == [".env.production.clear"]
 
 
 class TestScanEngine:
@@ -557,3 +588,100 @@ class TestIntegration:
 
         entropy_findings = [f for f in result.unique_findings if f.rule_id == "high-entropy-string"]
         assert len(entropy_findings) >= 1
+
+    def test_scan_with_skip_clear_files(self, tmp_path: Path):
+        """Test scan with skip_clear_files enabled."""
+        config = GuardConfig(
+            use_native=True,
+            use_gitleaks=False,
+            skip_clear_files=True,
+        )
+        engine = ScanEngine(config)
+
+        # Create .clear file with secret - should be skipped
+        (tmp_path / ".env.production.clear").write_text('AWS_KEY = "AKIAIOSFODNN7EXAMPLE"\n')
+
+        result = engine.scan([tmp_path])
+
+        # No findings because .clear file is skipped
+        assert result.total_findings == 0
+
+    def test_scan_without_skip_clear_files(self, tmp_path: Path):
+        """Test scan without skip_clear_files (default behavior)."""
+        config = GuardConfig(
+            use_native=True,
+            use_gitleaks=False,
+            skip_clear_files=False,
+        )
+        engine = ScanEngine(config)
+
+        # Create .clear file with secret - should be scanned
+        (tmp_path / ".env.production.clear").write_text('AWS_KEY = "AKIAIOSFODNN7EXAMPLE"\n')
+
+        result = engine.scan([tmp_path])
+
+        # Should have findings from .clear file
+        assert result.total_findings >= 1
+
+    def test_scan_with_ignore_rules(self, tmp_path: Path):
+        """Test scan with ignore_rules filters findings."""
+        config = GuardConfig(
+            use_native=True,
+            use_gitleaks=False,
+            ignore_rules={"aws-access-key-id": ["**/ignored/**"]},
+        )
+        engine = ScanEngine(config)
+
+        # Create file in ignored path
+        ignored_dir = tmp_path / "ignored"
+        ignored_dir.mkdir()
+        (ignored_dir / "config.py").write_text('AWS_KEY = "AKIAIOSFODNN7EXAMPLE"\n')
+
+        # Create file in non-ignored path
+        (tmp_path / "config.py").write_text('AWS_KEY = "AKIAIOSFODNN7EXAMPLE"\n')
+
+        result = engine.scan([tmp_path])
+
+        # Should only have finding from non-ignored path
+        aws_findings = [f for f in result.unique_findings if "aws" in f.rule_id.lower()]
+        # Only the one in the root should be found
+        ignored_findings = [f for f in aws_findings if "ignored" in str(f.file_path)]
+        assert len(ignored_findings) == 0
+
+    def test_scan_with_inline_ignore_comments(self, tmp_path: Path):
+        """Test scan respects inline ignore comments."""
+        config = GuardConfig(
+            use_native=True,
+            use_gitleaks=False,
+        )
+        engine = ScanEngine(config)
+
+        # Create file with secret that has inline ignore
+        (tmp_path / "config.py").write_text(
+            'AWS_KEY = "AKIAIOSFODNN7EXAMPLE"  # envdrift:ignore\n'
+        )
+
+        result = engine.scan([tmp_path])
+
+        # Finding should be filtered by inline ignore
+        aws_findings = [f for f in result.unique_findings if "aws" in f.rule_id.lower()]
+        assert len(aws_findings) == 0
+
+    def test_scan_with_inline_ignore_specific_rule(self, tmp_path: Path):
+        """Test scan respects inline ignore with specific rule."""
+        config = GuardConfig(
+            use_native=True,
+            use_gitleaks=False,
+        )
+        engine = ScanEngine(config)
+
+        # Create file with secret that has rule-specific inline ignore
+        (tmp_path / "config.py").write_text(
+            'AWS_KEY = "AKIAIOSFODNN7EXAMPLE"  # envdrift:ignore:aws-access-key-id\n'
+        )
+
+        result = engine.scan([tmp_path])
+
+        # AWS finding should be filtered
+        aws_findings = [f for f in result.unique_findings if f.rule_id == "aws-access-key-id"]
+        assert len(aws_findings) == 0

@@ -22,6 +22,7 @@ from envdrift.scanner.base import (
     ScannerBackend,
     ScanResult,
 )
+from envdrift.scanner.ignores import IgnoreConfig, IgnoreFilter
 from envdrift.scanner.native import NativeScanner
 
 if TYPE_CHECKING:
@@ -42,7 +43,9 @@ class GuardConfig:
         include_git_history: Scan git history for secrets.
         check_entropy: Enable entropy-based secret detection.
         entropy_threshold: Minimum entropy to flag as potential secret.
+        skip_clear_files: Skip .clear files from scanning entirely.
         ignore_paths: Glob patterns for paths to ignore.
+        ignore_rules: Rule ID -> list of path patterns where that rule is ignored.
         fail_on_severity: Minimum severity to cause non-zero exit.
         allowed_clear_files: Files that are intentionally unencrypted (from partial_encryption config).
     """
@@ -56,7 +59,9 @@ class GuardConfig:
     include_git_history: bool = False
     check_entropy: bool = False
     entropy_threshold: float = 4.5
+    skip_clear_files: bool = False
     ignore_paths: list[str] = field(default_factory=list)
+    ignore_rules: dict[str, list[str]] = field(default_factory=dict)
     fail_on_severity: FindingSeverity = FindingSeverity.HIGH
     allowed_clear_files: list[str] = field(default_factory=list)
 
@@ -95,6 +100,7 @@ class GuardConfig:
             check_entropy=guard_config.get("check_entropy", False),
             entropy_threshold=guard_config.get("entropy_threshold", 4.5),
             ignore_paths=guard_config.get("ignore_paths", []),
+            ignore_rules=guard_config.get("ignore_rules", {}),
             fail_on_severity=fail_severity,
         )
 
@@ -120,6 +126,13 @@ class ScanEngine:
         """
         self.config = config or GuardConfig()
         self.scanners: list[ScannerBackend] = []
+
+        # Initialize centralized ignore filter for post-scan filtering
+        ignore_config = IgnoreConfig(
+            ignore_paths=self.config.ignore_paths,
+            ignore_rules=self.config.ignore_rules,
+        )
+        self._ignore_filter = IgnoreFilter(ignore_config)
 
         self._initialize_scanners()
 
@@ -157,6 +170,7 @@ class ScanEngine:
                     entropy_threshold=self.config.entropy_threshold,
                     additional_ignore_patterns=self.config.ignore_paths,
                     allowed_clear_files=self.config.allowed_clear_files,
+                    skip_clear_files=self.config.skip_clear_files,
                 )
             )
 
@@ -271,12 +285,16 @@ class ScanEngine:
         # Deduplicate findings
         unique_findings = self._deduplicate(all_findings)
 
+        # Apply centralized ignore filter (inline comments + TOML config rules)
+        # This works across ALL scanners (native, gitleaks, trufflehog, etc.)
+        filtered_findings = self._ignore_filter.filter(unique_findings)
+
         total_duration = int((time.time() - start_time) * 1000)
 
         return AggregatedScanResult(
             results=results,
             total_findings=len(all_findings),
-            unique_findings=unique_findings,
+            unique_findings=filtered_findings,
             scanners_used=[s.name for s in self.scanners],
             total_duration_ms=total_duration,
         )

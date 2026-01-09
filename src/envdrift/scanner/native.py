@@ -233,6 +233,7 @@ class NativeScanner(ScannerBackend):
         ignore_patterns: list[str] | None = None,
         additional_ignore_patterns: list[str] | None = None,
         allowed_clear_files: list[str] | None = None,
+        skip_clear_files: bool = False,
     ) -> None:
         """Initialize the native scanner.
 
@@ -242,10 +243,12 @@ class NativeScanner(ScannerBackend):
             ignore_patterns: Patterns to ignore (replaces defaults if provided).
             additional_ignore_patterns: Additional patterns to ignore (added to defaults).
             allowed_clear_files: Files that are intentionally unencrypted (from partial_encryption config).
+            skip_clear_files: Skip .clear files from scanning entirely.
         """
         self._check_entropy = check_entropy
         self._entropy_threshold = entropy_threshold
         self._allowed_clear_files = set(allowed_clear_files or [])
+        self._skip_clear_files = skip_clear_files
 
         if ignore_patterns is not None:
             self._ignore_patterns = tuple(ignore_patterns)
@@ -469,6 +472,11 @@ class NativeScanner(ScannerBackend):
         """
         findings: list[ScanFinding] = []
 
+        # Skip .clear files entirely if skip_clear_files is enabled
+        is_clear_file = self._is_clear_file(file_path)
+        if is_clear_file and self._skip_clear_files:
+            return findings
+
         # Try to read file content
         try:
             content = file_path.read_text(encoding="utf-8", errors="ignore")
@@ -511,8 +519,7 @@ class NativeScanner(ScannerBackend):
             findings.extend(self._scan_patterns(file_path, content))
 
         # Check 3: High-entropy strings
-        # Always run for env files (they're the primary place for secrets)
-        # For other files, only run if check_entropy is enabled
+        # Run for env files or if check_entropy is enabled globally
         if is_env_file or self._check_entropy:
             findings.extend(self._scan_entropy(file_path, content))
 
@@ -529,6 +536,21 @@ class NativeScanner(ScannerBackend):
         """
         name = path.name
         return name == ".env" or name.startswith(".env.")
+
+    def _is_clear_file(self, path: Path) -> bool:
+        """Check if a file is a .clear file (partial encryption non-sensitive file).
+
+        .clear files contain non-sensitive configuration values that don't need
+        encryption. They should be exempt from entropy scanning.
+
+        Args:
+            path: Path to check.
+
+        Returns:
+            True if this is a .clear file.
+        """
+        name = path.name
+        return name.endswith(".clear")
 
     def _is_allowed_clear_file(self, path: Path) -> bool:
         """Check if a file is an allowed clear file from partial_encryption config.
@@ -576,6 +598,45 @@ class NativeScanner(ScannerBackend):
         for marker in SOPS_MARKERS:
             if marker in content:
                 return True
+
+        return False
+
+    def _has_ignore_comment(self, line: str, rule_id: str | None = None) -> bool:
+        """Check if a line has an envdrift:ignore comment.
+
+        Supports multiple formats:
+        - `# envdrift:ignore` - ignore all rules on this line
+        - `// envdrift:ignore` - same, for C-style comments
+        - `# envdrift:ignore:rule-id` - ignore specific rule
+        - `# envdrift:ignore reason="explanation"` - with reason (recommended)
+
+        Args:
+            line: The line of code to check.
+            rule_id: If provided, check if this specific rule is ignored.
+
+        Returns:
+            True if the line should be ignored.
+        """
+        import re
+
+        # Look for ignore comments in various formats
+        # Matches: # envdrift:ignore, // envdrift:ignore, /* envdrift:ignore */
+        ignore_pattern = re.compile(
+            r'(?:#|//|/\*)\s*envdrift:ignore(?::([a-zA-Z0-9_-]+))?'
+        )
+
+        match = ignore_pattern.search(line)
+        if not match:
+            return False
+
+        # If no specific rule in comment, ignore all rules
+        ignored_rule = match.group(1)
+        if ignored_rule is None:
+            return True
+
+        # If specific rule in comment, only ignore that rule
+        if rule_id is not None and ignored_rule == rule_id:
+            return True
 
         return False
 
@@ -680,6 +741,11 @@ class NativeScanner(ScannerBackend):
                 if value.isalpha() and (value.islower() or value.isupper()):
                     continue
 
+                # Skip template/format strings (high entropy but not secrets)
+                # e.g., "{Timestamp:G}|{Message}|{AT_DataSource}|..."
+                if self._is_template_string(value):
+                    continue
+
                 entropy = calculate_entropy(value)
 
                 if entropy >= self._entropy_threshold:
@@ -701,3 +767,47 @@ class NativeScanner(ScannerBackend):
                     )
 
         return findings
+
+    def _is_template_string(self, value: str) -> bool:
+        """Check if a value looks like a template/format string.
+
+        Template strings have high entropy due to varied characters but aren't secrets.
+        Examples:
+        - "{Timestamp:G}|{Message}|{AT_DataSource}"
+        - "{{user.name}} - {{user.email}}"
+        - "%Y-%m-%d %H:%M:%S"
+
+        Args:
+            value: The string value to check.
+
+        Returns:
+            True if this looks like a template string.
+        """
+        # Count template-like patterns
+        template_indicators = 0
+
+        # Check for common template delimiters
+        if "{" in value and "}" in value:
+            # Count pairs of braces - templates have multiple
+            open_braces = value.count("{")
+            close_braces = value.count("}")
+            if open_braces >= 2 and close_braces >= 2:
+                template_indicators += 2
+
+        # Check for format specifiers like :G, :d, :s, :1
+        if ":" in value and any(c in value for c in "GgDdSsFfXxNn"):
+            template_indicators += 1
+
+        # Check for pipe-separated format strings (common in logging)
+        if value.count("|") >= 3:
+            template_indicators += 1
+
+        # Check for common template variable names
+        template_keywords = [
+            "Timestamp", "Message", "Exception", "NewLine", "Level",
+            "Logger", "Thread", "Source", "Event", "Date", "Time",
+        ]
+        if any(kw in value for kw in template_keywords):
+            template_indicators += 1
+
+        return template_indicators >= 2
