@@ -95,9 +95,7 @@ def format_rich(result: AggregatedScanResult, console: Console | None = None) ->
     table.add_column("Description", overflow="fold")
     table.add_column("Preview", style="dim", max_width=20)
 
-    for finding in sorted(
-        result.unique_findings, key=lambda f: f.severity, reverse=True
-    ):
+    for finding in sorted(result.unique_findings, key=lambda f: f.severity, reverse=True):
         severity_icon = SEVERITY_ICONS[finding.severity]
         severity_color = SEVERITY_COLORS[finding.severity]
         severity_text = Text(f"[{severity_icon}] {finding.severity.value[:4].upper()}")
@@ -150,9 +148,7 @@ def format_json(result: AggregatedScanResult) -> str:
             "total": result.total_findings,
             "unique": len(result.unique_findings),
             "by_severity": {
-                severity.value: sum(
-                    1 for f in result.unique_findings if f.severity == severity
-                )
+                severity.value: sum(1 for f in result.unique_findings if f.severity == severity)
                 for severity in FindingSeverity
             },
         },
@@ -188,14 +184,10 @@ def format_sarif(result: AggregatedScanResult) -> str:
                     "name": finding.rule_description,
                     "shortDescription": {"text": finding.rule_description},
                     "fullDescription": {"text": finding.description},
-                    "defaultConfiguration": {
-                        "level": _severity_to_sarif_level(finding.severity)
-                    },
+                    "defaultConfiguration": {"level": _severity_to_sarif_level(finding.severity)},
                     "properties": {
                         "tags": ["security", "secrets"],
-                        "security-severity": _severity_to_security_severity(
-                            finding.severity
-                        ),
+                        "security-severity": _severity_to_security_severity(finding.severity),
                     },
                 }
             )
@@ -225,9 +217,9 @@ def format_sarif(result: AggregatedScanResult) -> str:
 
         # Add column if available
         if finding.column_number:
-            sarif_result["locations"][0]["physicalLocation"]["region"][
-                "startColumn"
-            ] = finding.column_number
+            sarif_result["locations"][0]["physicalLocation"]["region"]["startColumn"] = (
+                finding.column_number
+            )
 
         # Add fingerprint for deduplication
         sarif_result["fingerprints"] = {
@@ -236,9 +228,7 @@ def format_sarif(result: AggregatedScanResult) -> str:
 
         # Add partial fingerprint for secret preview
         if finding.secret_preview:
-            sarif_result["partialFingerprints"] = {
-                "secretPreview": finding.secret_preview
-            }
+            sarif_result["partialFingerprints"] = {"secretPreview": finding.secret_preview}
 
         sarif_results.append(sarif_result)
 

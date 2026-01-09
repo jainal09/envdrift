@@ -40,9 +40,7 @@ CRITICAL_PATTERNS: list[SecretPattern] = [
     SecretPattern(
         id="aws-access-key-id",
         description="AWS Access Key ID",
-        pattern=re.compile(
-            r"(?:^|[^A-Z0-9])((AKIA|ABIA|ACCA|ASIA)[A-Z0-9]{16})(?:[^A-Z0-9]|$)"
-        ),
+        pattern=re.compile(r"(?:^|[^A-Z0-9])((AKIA|ABIA|ACCA|ASIA)[A-Z0-9]{16})(?:[^A-Z0-9]|$)"),
         severity=FindingSeverity.CRITICAL,
         keywords=("aws", "amazon", "access_key", "access-key"),
     ),
@@ -188,9 +186,7 @@ CRITICAL_PATTERNS: list[SecretPattern] = [
     SecretPattern(
         id="gcp-service-account",
         description="GCP Service Account Key",
-        pattern=re.compile(
-            r'"type"\s*:\s*"service_account".*"private_key"\s*:\s*"-----BEGIN'
-        ),
+        pattern=re.compile(r'"type"\s*:\s*"service_account".*"private_key"\s*:\s*"-----BEGIN'),
         severity=FindingSeverity.CRITICAL,
     ),
     # Azure
@@ -294,9 +290,7 @@ CRITICAL_PATTERNS: list[SecretPattern] = [
     SecretPattern(
         id="discord-webhook",
         description="Discord Webhook URL",
-        pattern=re.compile(
-            r"(https://discord(?:app)?\.com/api/webhooks/[0-9]+/[a-zA-Z0-9_-]+)"
-        ),
+        pattern=re.compile(r"(https://discord(?:app)?\.com/api/webhooks/[0-9]+/[a-zA-Z0-9_-]+)"),
         severity=FindingSeverity.CRITICAL,
     ),
     # Telegram
@@ -342,9 +336,7 @@ HIGH_PATTERNS: list[SecretPattern] = [
     SecretPattern(
         id="generic-api-key",
         description="Generic API Key",
-        pattern=re.compile(
-            r"(?i)(?:api[_-]?key|apikey)\s*[=:]\s*['\"]?([a-zA-Z0-9_-]{20,})['\"]?"
-        ),
+        pattern=re.compile(r"(?i)(?:api[_-]?key|apikey)\s*[=:]\s*['\"]?([a-zA-Z0-9_-]{20,})['\"]?"),
         severity=FindingSeverity.HIGH,
     ),
     SecretPattern(
@@ -359,49 +351,37 @@ HIGH_PATTERNS: list[SecretPattern] = [
     SecretPattern(
         id="basic-auth-header",
         description="Basic Auth Header",
-        pattern=re.compile(
-            r"(?i)authorization\s*[=:]\s*['\"]?basic\s+([a-zA-Z0-9+/=]+)['\"]?"
-        ),
+        pattern=re.compile(r"(?i)authorization\s*[=:]\s*['\"]?basic\s+([a-zA-Z0-9+/=]+)['\"]?"),
         severity=FindingSeverity.HIGH,
     ),
     SecretPattern(
         id="bearer-token-header",
         description="Bearer Token",
-        pattern=re.compile(
-            r"(?i)authorization\s*[=:]\s*['\"]?bearer\s+([a-zA-Z0-9._-]+)['\"]?"
-        ),
+        pattern=re.compile(r"(?i)authorization\s*[=:]\s*['\"]?bearer\s+([a-zA-Z0-9._-]+)['\"]?"),
         severity=FindingSeverity.HIGH,
     ),
     SecretPattern(
         id="database-url-postgres",
         description="PostgreSQL Connection String",
-        pattern=re.compile(
-            r"(?i)postgres(?:ql)?://[^:]+:([^@]+)@[^\s]+"
-        ),
+        pattern=re.compile(r"(?i)postgres(?:ql)?://[^:]+:([^@]+)@[^\s]+"),
         severity=FindingSeverity.HIGH,
     ),
     SecretPattern(
         id="database-url-mysql",
         description="MySQL Connection String",
-        pattern=re.compile(
-            r"(?i)mysql://[^:]+:([^@]+)@[^\s]+"
-        ),
+        pattern=re.compile(r"(?i)mysql://[^:]+:([^@]+)@[^\s]+"),
         severity=FindingSeverity.HIGH,
     ),
     SecretPattern(
         id="database-url-mongodb",
         description="MongoDB Connection String",
-        pattern=re.compile(
-            r"(?i)mongodb(?:\+srv)?://[^:]+:([^@]+)@[^\s]+"
-        ),
+        pattern=re.compile(r"(?i)mongodb(?:\+srv)?://[^:]+:([^@]+)@[^\s]+"),
         severity=FindingSeverity.HIGH,
     ),
     SecretPattern(
         id="redis-url",
         description="Redis Connection String",
-        pattern=re.compile(
-            r"(?i)redis://(?:[^:]+:)?([^@]+)@[^\s]+"
-        ),
+        pattern=re.compile(r"(?i)redis://(?:[^:]+:)?([^@]+)@[^\s]+"),
         severity=FindingSeverity.HIGH,
     ),
 ]

@@ -28,9 +28,6 @@ if TYPE_CHECKING:
 pytestmark = [pytest.mark.integration]
 
 
-
-
-
 class TestNetworkTimeoutVault:
     """Test that vault operations handle network timeouts gracefully."""
 
@@ -232,7 +229,6 @@ environment = "production"
         finally:
             # Cleanup
 
-
             with contextlib.suppress(Exception):
                 aws_secrets_client.delete_secret(
                     SecretId=valid_secret_name, ForceDeleteWithoutRecovery=True
@@ -250,7 +246,7 @@ class TestCorruptEnvFile:
     ) -> None:
         """
         Verify that running `lock --check` does not produce an unhandled exception when the project contains a malformed `.env` file.
-        
+
         This test writes a malformed `.env` and a minimal `envdrift.toml`, runs the CLI command `lock --check`, and asserts that the command's stderr does not contain a Python traceback.
         """
         # Create various malformed .env files
@@ -332,7 +328,7 @@ backend = "dotenvx"
     ) -> None:
         """
         Verify that running `envdrift lock --check` on an empty `.env` file completes without unhandled exceptions.
-        
+
         Writes an empty `.env` and a minimal `envdrift.toml`, runs the CLI under the provided PYTHONPATH, and asserts there is no traceback in stderr.
         """
         (work_dir / ".env").write_text("")
@@ -382,9 +378,7 @@ API_KEY="encrypted:YWJjZGVm"
         (work_dir / ".env.production").write_text(corrupted_content)
 
         # Create .env.keys with a key
-        (work_dir / ".env.keys").write_text(
-            "DOTENV_PRIVATE_KEY_PRODUCTION=test-key-12345\n"
-        )
+        (work_dir / ".env.keys").write_text("DOTENV_PRIVATE_KEY_PRODUCTION=test-key-12345\n")
 
         config_content = """\
 [encryption]
@@ -422,9 +416,7 @@ API_KEY="encrypted"
 SECRET=""
 """
         (work_dir / ".env.production").write_text(incomplete_content)
-        (work_dir / ".env.keys").write_text(
-            "DOTENV_PRIVATE_KEY_PRODUCTION=test-key\n"
-        )
+        (work_dir / ".env.keys").write_text("DOTENV_PRIVATE_KEY_PRODUCTION=test-key\n")
 
         config_content = """\
 [encryption]
@@ -492,9 +484,7 @@ class TestVaultClientErrorHandling:
         with pytest.raises((AuthenticationError, VaultError)):
             client.authenticate()
 
-    def test_hashicorp_client_secret_not_found(
-        self, vault_endpoint: str, vault_client
-    ) -> None:
+    def test_hashicorp_client_secret_not_found(self, vault_endpoint: str, vault_client) -> None:
         """Test HashiCorp client handles missing secrets gracefully."""
         from envdrift.vault.base import SecretNotFoundError
         from envdrift.vault.hashicorp import HashiCorpVaultClient
@@ -582,7 +572,7 @@ class TestMockVaultTimeouts:
             def authenticate(self) -> None:
                 """
                 Authenticate the client so it can perform subsequent vault operations.
-                
+
                 This method establishes or refreshes the client's authentication state; implementations may perform network requests or credential exchanges as needed.
                 """
                 pass
@@ -590,7 +580,7 @@ class TestMockVaultTimeouts:
             def is_authenticated(self) -> bool:
                 """
                 Indicates whether the client is currently authenticated.
-                
+
                 Returns:
                     `True` if the client is authenticated, `False` otherwise.
                 """
@@ -599,10 +589,10 @@ class TestMockVaultTimeouts:
             def get_secret(self, name: str):
                 """
                 Attempt to retrieve a secret by name but always raise a connection timeout error.
-                
+
                 Parameters:
                     name (str): Identifier of the secret to retrieve.
-                
+
                 Raises:
                     VaultError: Always raised with the message "Connection timed out".
                 """
@@ -611,22 +601,22 @@ class TestMockVaultTimeouts:
             def list_secrets(self, prefix: str = "") -> list[str]:
                 """
                 Return the names of secrets stored under the given prefix.
-                
+
                 Parameters:
-                	prefix (str): Path prefix or namespace to filter secrets; empty string lists all top-level secrets.
-                
+                        prefix (str): Path prefix or namespace to filter secrets; empty string lists all top-level secrets.
+
                 Returns:
-                	list[str]: A list of secret names found under the specified prefix.
-                
+                        list[str]: A list of secret names found under the specified prefix.
+
                 Raises:
-                	VaultError: If the vault operation fails (e.g., connection timeout or authentication failure).
+                        VaultError: If the vault operation fails (e.g., connection timeout or authentication failure).
                 """
                 raise VaultError("Connection timed out")
 
             def set_secret(self, name: str, value: str):
                 """
                 Simulates a secret write operation that always fails with a connection timeout.
-                
+
                 Raises:
                     VaultError: always raised with the message "Connection timed out".
                 """

@@ -62,9 +62,7 @@ class TestPlatformDetection:
 
     @patch("platform.system", return_value="Darwin")
     @patch("platform.machine", return_value="arm64")
-    def test_get_platform_info_darwin_arm64(
-        self, mock_machine: MagicMock, mock_system: MagicMock
-    ):
+    def test_get_platform_info_darwin_arm64(self, mock_machine: MagicMock, mock_system: MagicMock):
         """Test platform detection for macOS ARM."""
         system, machine = get_platform_info()
         assert system == "Darwin"
@@ -72,9 +70,7 @@ class TestPlatformDetection:
 
     @patch("platform.system", return_value="Linux")
     @patch("platform.machine", return_value="x86_64")
-    def test_get_platform_info_linux_amd64(
-        self, mock_machine: MagicMock, mock_system: MagicMock
-    ):
+    def test_get_platform_info_linux_amd64(self, mock_machine: MagicMock, mock_system: MagicMock):
         """Test platform detection for Linux AMD64."""
         system, machine = get_platform_info()
         assert system == "Linux"
@@ -159,9 +155,7 @@ class TestGetGitleaksPath:
 
     @patch("envdrift.scanner.gitleaks.get_venv_bin_dir")
     @patch("platform.system", return_value="Linux")
-    def test_returns_gitleaks_path_linux(
-        self, mock_system: MagicMock, mock_bin_dir: MagicMock
-    ):
+    def test_returns_gitleaks_path_linux(self, mock_system: MagicMock, mock_bin_dir: MagicMock):
         """Test gitleaks path on Linux."""
         mock_bin_dir.return_value = Path("/venv/bin")
         path = get_gitleaks_path()
@@ -169,9 +163,7 @@ class TestGetGitleaksPath:
 
     @patch("envdrift.scanner.gitleaks.get_venv_bin_dir")
     @patch("platform.system", return_value="Windows")
-    def test_returns_gitleaks_exe_on_windows(
-        self, mock_system: MagicMock, mock_bin_dir: MagicMock
-    ):
+    def test_returns_gitleaks_exe_on_windows(self, mock_system: MagicMock, mock_bin_dir: MagicMock):
         """Test gitleaks path on Windows includes .exe extension."""
         mock_bin_dir.return_value = Path("/venv/Scripts")
         path = get_gitleaks_path()
@@ -250,7 +242,9 @@ class TestGitleaksInstaller:
         archive_path = _create_tar_gz(tmp_path, "gitleaks")
 
         installer = GitleaksInstaller(version="8.30.0")
-        monkeypatch.setattr(installer, "get_download_url", lambda: "https://example.com/gitleaks.tar.gz")
+        monkeypatch.setattr(
+            installer, "get_download_url", lambda: "https://example.com/gitleaks.tar.gz"
+        )
         monkeypatch.setattr(platform, "system", lambda: "Linux")
 
         def fake_urlretrieve(_url: str, filename: str):
@@ -271,7 +265,9 @@ class TestGitleaksInstaller:
         archive_path = _create_zip(tmp_path, "gitleaks.exe")
 
         installer = GitleaksInstaller(version="8.30.0")
-        monkeypatch.setattr(installer, "get_download_url", lambda: "https://example.com/gitleaks.zip")
+        monkeypatch.setattr(
+            installer, "get_download_url", lambda: "https://example.com/gitleaks.zip"
+        )
         monkeypatch.setattr(platform, "system", lambda: "Windows")
 
         def fake_urlretrieve(_url: str, filename: str):
@@ -346,9 +342,7 @@ class TestGitleaksScanner:
         scanner._binary_path = Path("/fake/gitleaks")
         with patch.object(scanner, "_find_binary", return_value=Path("/fake/gitleaks")):
             with patch("subprocess.run") as mock_run:
-                mock_run.return_value = MagicMock(
-                    stdout="[]", stderr="", returncode=0
-                )
+                mock_run.return_value = MagicMock(stdout="[]", stderr="", returncode=0)
                 result = scanner.scan([tmp_path / "nonexistent"])
                 assert result.success is True
                 assert len(result.findings) == 0
@@ -383,9 +377,7 @@ class TestFindingParsing:
         assert finding.scanner == "gitleaks"
         assert "****" in finding.secret_preview  # Redacted
 
-    def test_parse_finding_with_commit_info(
-        self, scanner: GitleaksScanner, tmp_path: Path
-    ):
+    def test_parse_finding_with_commit_info(self, scanner: GitleaksScanner, tmp_path: Path):
         """Test parsing a finding with git commit information."""
         item: dict[str, Any] = {
             "Description": "GitHub Token",
@@ -406,9 +398,7 @@ class TestFindingParsing:
         assert finding.commit_date == "2024-01-15"
         assert finding.entropy == 4.5
 
-    def test_parse_finding_with_relative_path(
-        self, scanner: GitleaksScanner, tmp_path: Path
-    ):
+    def test_parse_finding_with_relative_path(self, scanner: GitleaksScanner, tmp_path: Path):
         """Test parsing finding with relative file path."""
         item: dict[str, Any] = {
             "Description": "Generic Secret",
@@ -421,9 +411,7 @@ class TestFindingParsing:
         assert finding is not None
         assert finding.file_path == tmp_path / "src/config/secrets.py"
 
-    def test_parse_finding_with_empty_file(
-        self, scanner: GitleaksScanner, tmp_path: Path
-    ):
+    def test_parse_finding_with_empty_file(self, scanner: GitleaksScanner, tmp_path: Path):
         """Test parsing finding with empty file field."""
         item: dict[str, Any] = {
             "Description": "Secret",
@@ -436,9 +424,7 @@ class TestFindingParsing:
         assert finding is not None
         assert finding.file_path == tmp_path
 
-    def test_parse_finding_handles_empty_data(
-        self, scanner: GitleaksScanner, tmp_path: Path
-    ):
+    def test_parse_finding_handles_empty_data(self, scanner: GitleaksScanner, tmp_path: Path):
         """Test that empty data creates a finding with defaults instead of raising."""
         # Missing required fields
         item: dict[str, Any] = {}
@@ -463,15 +449,17 @@ class TestGitleaksScanExecution:
 
     def test_scan_parses_json_output(self, mock_scanner: GitleaksScanner, tmp_path: Path):
         """Test that scan correctly parses JSON output from report file."""
-        findings_json = json.dumps([
-            {
-                "Description": "AWS Key",
-                "StartLine": 1,
-                "File": "test.py",
-                "Secret": "AKIAIOSFODNN7EXAMPLE",
-                "RuleID": "aws-key",
-            }
-        ])
+        findings_json = json.dumps(
+            [
+                {
+                    "Description": "AWS Key",
+                    "StartLine": 1,
+                    "File": "test.py",
+                    "Secret": "AKIAIOSFODNN7EXAMPLE",
+                    "RuleID": "aws-key",
+                }
+            ]
+        )
 
         def write_report_file(*args, **kwargs):
             """Mock subprocess that writes JSON to the report file."""
@@ -507,6 +495,7 @@ class TestGitleaksScanExecution:
 
     def test_scan_handles_invalid_json(self, mock_scanner: GitleaksScanner, tmp_path: Path):
         """Test that scan handles invalid JSON in report file gracefully."""
+
         def write_invalid_json(*args, **kwargs):
             """Mock subprocess that writes invalid JSON to report file."""
             cmd_args = args[0]
@@ -686,10 +675,7 @@ class TestGitleaksIntegration:
         """Test scanning a file with a fake secret pattern."""
         # Create a file with a fake AWS key (test pattern)
         secret_file = tmp_path / "secrets.py"
-        secret_file.write_text(
-            '# Test file\n'
-            'AWS_KEY = "AKIAIOSFODNN7EXAMPLE"\n'
-        )
+        secret_file.write_text('# Test file\nAWS_KEY = "AKIAIOSFODNN7EXAMPLE"\n')
 
         scanner = GitleaksScanner(auto_install=False)
         result = scanner.scan([tmp_path])

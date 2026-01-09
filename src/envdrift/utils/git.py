@@ -197,9 +197,7 @@ def is_file_tracked(file_path: Path) -> bool:
         return False
 
 
-def ensure_gitignore_entries(
-    paths: Iterable[Path], *, git_root: Path | None = None
-) -> list[str]:
+def ensure_gitignore_entries(paths: Iterable[Path], *, git_root: Path | None = None) -> list[str]:
     """
     Ensure the provided paths are listed in the repo's .gitignore.
 

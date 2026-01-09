@@ -316,9 +316,7 @@ class TestDetectSecretsScan:
         scanner = DetectSecretsScanner(auto_install=False)
         with patch.object(scanner, "_ensure_installed", return_value=True):
             with patch("subprocess.run") as mock_run:
-                mock_run.return_value = SimpleNamespace(
-                    returncode=0, stdout="not-json", stderr=""
-                )
+                mock_run.return_value = SimpleNamespace(returncode=0, stdout="not-json", stderr="")
                 result = scanner.scan([tmp_path])
 
         assert result.error is None

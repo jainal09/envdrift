@@ -633,4 +633,3 @@ folder_path = "."
         config = SyncConfig.from_toml_file(config_file)
 
         assert config.ephemeral_keys is True
-

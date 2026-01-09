@@ -506,6 +506,7 @@ def test_full_lock_pull_merge_cycle(integration_env):
     The encryption/decryption happens locally using .env.keys files.
     """
     pytest.importorskip("azure.identity", reason="Azure SDK not installed")
+    pytest.importorskip("azure.keyvault.secrets", reason="Azure Key Vault SDK not installed")
     work_dir = integration_env["base_dir"] / "lock-pull-merge-cycle"
     work_dir.mkdir()
     env = integration_env["env"].copy()

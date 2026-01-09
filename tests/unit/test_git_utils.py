@@ -247,7 +247,7 @@ class TestGitUtilsExceptions:
         """Should return False on subprocess exceptions."""
         with patch("subprocess.run", side_effect=subprocess.TimeoutExpired(cmd="git", timeout=10)):
             assert is_git_repo(tmp_path) is False
-        
+
         with patch("subprocess.run", side_effect=FileNotFoundError):
             assert is_git_repo(tmp_path) is False
 
@@ -278,5 +278,7 @@ class TestGitUtilsExceptions:
     def test_is_file_tracked_handles_exceptions(self, tmp_path: Path):
         """Should return False on exceptions."""
         with patch("envdrift.utils.git.get_git_root", return_value=tmp_path):
-            with patch("subprocess.run", side_effect=subprocess.TimeoutExpired(cmd="git", timeout=10)):
+            with patch(
+                "subprocess.run", side_effect=subprocess.TimeoutExpired(cmd="git", timeout=10)
+            ):
                 assert is_file_tracked(tmp_path / "test.txt") is False

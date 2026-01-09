@@ -48,25 +48,21 @@ DEFAULT_IGNORE_PATTERNS = (
     ".env.template",
     ".env.test",
     ".env.local",
-    
     # Documentation and text files
     "*.md",
     "*.txt",
     "*.rst",
     "*.adoc",
-    
     # Lock and checksum files
     "*.lock",
     "*.sum",
     "*-lock.json",
     "*.lock.json",
-
     # Minified files (high entropy but not secrets)
     "*.min.js",
     "*.min.css",
     "*.bundle.js",
     "*.chunk.js",
-    
     # Python
     "__pycache__/**",
     "*.pyc",
@@ -91,7 +87,6 @@ DEFAULT_IGNORE_PATTERNS = (
     ".coverage",
     "htmlcov/**",
     ".cache/**",
-    
     # Node.js / JavaScript / TypeScript
     "node_modules/**",
     ".npm/**",
@@ -113,7 +108,6 @@ DEFAULT_IGNORE_PATTERNS = (
     "build/**",
     "coverage/**",
     ".turbo/**",
-    
     # Java / Maven / Gradle
     "target/**",
     "*.class",
@@ -123,7 +117,6 @@ DEFAULT_IGNORE_PATTERNS = (
     ".gradle/**",
     "build/**",
     ".mvn/**",
-    
     # .NET / C#
     "bin/**",
     "obj/**",
@@ -134,32 +127,26 @@ DEFAULT_IGNORE_PATTERNS = (
     ".vs/**",
     "*.user",
     "*.suo",
-    
     # Go
     "vendor/**",
     "*.exe",
     "*.test",
     "*.out",
-    
     # Rust
     "target/**",
     "Cargo.lock",
-    
     # Ruby
     ".bundle/**",
     "vendor/bundle/**",
     "*.gem",
-    
     # PHP
     "vendor/**",
     "composer.lock",
-    
     # Version control
     ".git/**",
     ".svn/**",
     ".hg/**",
     ".bzr/**",
-    
     # IDEs and editors
     ".idea/**",
     ".vscode/**",
@@ -171,20 +158,16 @@ DEFAULT_IGNORE_PATTERNS = (
     ".classpath",
     ".settings/**",
     "*.sublime-*",
-    
     # OS files
     ".DS_Store",
     "Thumbs.db",
     "desktop.ini",
-    
     # Docker
     ".docker/**",
-    
     # Terraform
     ".terraform/**",
     "*.tfstate",
     "*.tfstate.*",
-    
     # Large binary and media files
     "*.zip",
     "*.tar",
@@ -210,11 +193,9 @@ DEFAULT_IGNORE_PATTERNS = (
     "*.woff2",
     "*.ttf",
     "*.eot",
-    
     # Logs
     "*.log",
     "logs/**",
-    
     # Temporary files
     "tmp/**",
     "temp/**",
@@ -405,11 +386,32 @@ class NativeScanner(ScannerBackend):
 
         files = []
         skip_dirs = {
-            "node_modules", ".git", ".venv", "venv", "__pycache__",
-            ".next", "dist", "build", ".tox", ".nox", "coverage",
-            ".gradle", "target", "vendor", ".idea", ".vscode",
-            ".terraform", "bin", "obj", ".cache", ".pytest_cache",
-            ".mypy_cache", ".ruff_cache", "htmlcov", ".svn", ".hg",
+            "node_modules",
+            ".git",
+            ".venv",
+            "venv",
+            "__pycache__",
+            ".next",
+            "dist",
+            "build",
+            ".tox",
+            ".nox",
+            "coverage",
+            ".gradle",
+            "target",
+            "vendor",
+            ".idea",
+            ".vscode",
+            ".terraform",
+            "bin",
+            "obj",
+            ".cache",
+            ".pytest_cache",
+            ".mypy_cache",
+            ".ruff_cache",
+            "htmlcov",
+            ".svn",
+            ".hg",
         }
 
         try:
@@ -545,7 +547,7 @@ class NativeScanner(ScannerBackend):
         # Check against filename and path with strict matching
         name = path.name
         path_str = str(path)
-        
+
         for allowed in self._allowed_clear_files:
             allowed_path = Path(allowed)
             # If allowed is just a filename, match by filename only

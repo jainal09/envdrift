@@ -204,7 +204,9 @@ class TestShouldSkipReencryption:
         mock_backend.decrypt = mock_decrypt
 
         # Mock restore failure
-        with patch("envdrift.cli_commands.encryption_helpers.restore_file_from_git", return_value=False):
+        with patch(
+            "envdrift.cli_commands.encryption_helpers.restore_file_from_git", return_value=False
+        ):
             should_skip, reason = should_skip_reencryption(env_file, mock_backend)
 
         assert should_skip is False
@@ -220,9 +222,13 @@ class TestShouldSkipReencryption:
         mock_backend.name = "dotenvx"
 
         # Mock early checks to pass
-        with patch("envdrift.cli_commands.encryption_helpers.is_file_tracked", return_value=True), \
-             patch("envdrift.cli_commands.encryption_helpers.get_file_from_git", return_value="encrypted:content"):
-
+        with (
+            patch("envdrift.cli_commands.encryption_helpers.is_file_tracked", return_value=True),
+            patch(
+                "envdrift.cli_commands.encryption_helpers.get_file_from_git",
+                return_value="encrypted:content",
+            ),
+        ):
             # Mock backend.decrypt to raise exception
             mock_backend.decrypt.side_effect = Exception("Unexpected error")
 

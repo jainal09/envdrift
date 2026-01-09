@@ -227,9 +227,7 @@ class AggregatedScanResult:
             Dictionary mapping severity name to count.
         """
         return {
-            severity.value: sum(
-                1 for f in self.unique_findings if f.severity == severity
-            )
+            severity.value: sum(1 for f in self.unique_findings if f.severity == severity)
             for severity in FindingSeverity
         }
 

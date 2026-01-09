@@ -24,12 +24,9 @@ if TYPE_CHECKING:
     from collections.abc import Generator
 
 # Check if boto3 is available
-try:
-    import boto3  # noqa: F401
+import importlib.util
 
-    BOTO3_AVAILABLE = True
-except ImportError:
-    BOTO3_AVAILABLE = False
+BOTO3_AVAILABLE = importlib.util.find_spec("boto3") is not None
 
 # Mark all tests in this module as requiring AWS (LocalStack)
 pytestmark = [

@@ -10,6 +10,7 @@ from envdrift.cli import app
 
 runner = CliRunner()
 
+
 @patch("envdrift.cli_commands.encryption_helpers.should_skip_reencryption")
 @patch("envdrift.cli_commands.encryption.get_encryption_backend")
 def test_encrypt_command_skips_when_smart_encryption_says_so(

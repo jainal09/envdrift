@@ -237,7 +237,9 @@ def guard(
                 if not paths:
                     console.print("[green]No changed files to scan in this PR.[/green]")
                     raise typer.Exit(code=0)
-                console.print(f"[bold]Scanning {len(paths)} file(s) changed since {pr_base}...[/bold]")
+                console.print(
+                    f"[bold]Scanning {len(paths)} file(s) changed since {pr_base}...[/bold]"
+                )
             else:
                 console.print("[green]No changed files to scan in this PR.[/green]")
                 raise typer.Exit(code=0)
@@ -277,16 +279,12 @@ def guard(
 
     # Determine which scanners to use
     # CLI flags override config file settings when provided
-    use_gitleaks_final = (
-        gitleaks if gitleaks is not None else "gitleaks" in guard_cfg.scanners
-    )
+    use_gitleaks_final = gitleaks if gitleaks is not None else "gitleaks" in guard_cfg.scanners
     use_trufflehog_final = (
         trufflehog if trufflehog is not None else "trufflehog" in guard_cfg.scanners
     )
     use_detect_secrets_final = (
-        detect_secrets
-        if detect_secrets is not None
-        else "detect-secrets" in guard_cfg.scanners
+        detect_secrets if detect_secrets is not None else "detect-secrets" in guard_cfg.scanners
     )
     use_kingfisher_final = (
         kingfisher if kingfisher is not None else "kingfisher" in guard_cfg.scanners
@@ -337,11 +335,15 @@ def guard(
             output_console.print(f"[bold]Running scanners:[/bold] {', '.join(scanner_names)}")
             output_console.print("[dim]Scanners run in parallel for better performance...[/dim]")
             output_console.print()
-        
+
         if verbose:
             output_console.print("[bold]Scanner details:[/bold]")
             for info in engine.get_scanner_info():
-                status = "[green]installed[/green]" if info["installed"] else "[yellow]not installed[/yellow]"
+                status = (
+                    "[green]installed[/green]"
+                    if info["installed"]
+                    else "[yellow]not installed[/yellow]"
+                )
                 version = f" (v{info['version']})" if info["version"] else ""
                 output_console.print(f"  - {info['name']}: {status}{version}")
             output_console.print()
@@ -384,9 +386,7 @@ def guard(
             {FindingSeverity.CRITICAL, FindingSeverity.HIGH},
         )
 
-        has_blocking = any(
-            f.severity in blocking_severities for f in result.unique_findings
-        )
+        has_blocking = any(f.severity in blocking_severities for f in result.unique_findings)
 
         if not has_blocking:
             exit_code = 0

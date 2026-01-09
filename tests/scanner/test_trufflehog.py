@@ -62,9 +62,7 @@ class TestPlatformDetection:
 
     @patch("platform.system", return_value="Darwin")
     @patch("platform.machine", return_value="arm64")
-    def test_get_platform_info_darwin_arm64(
-        self, mock_machine: MagicMock, mock_system: MagicMock
-    ):
+    def test_get_platform_info_darwin_arm64(self, mock_machine: MagicMock, mock_system: MagicMock):
         """Test platform detection for macOS ARM."""
         system, machine = get_platform_info()
         assert system == "Darwin"
@@ -72,9 +70,7 @@ class TestPlatformDetection:
 
     @patch("platform.system", return_value="Linux")
     @patch("platform.machine", return_value="x86_64")
-    def test_get_platform_info_linux_amd64(
-        self, mock_machine: MagicMock, mock_system: MagicMock
-    ):
+    def test_get_platform_info_linux_amd64(self, mock_machine: MagicMock, mock_system: MagicMock):
         """Test platform detection for Linux AMD64."""
         system, machine = get_platform_info()
         assert system == "Linux"
@@ -159,9 +155,7 @@ class TestGetTrufflehogPath:
 
     @patch("envdrift.scanner.trufflehog.get_venv_bin_dir")
     @patch("platform.system", return_value="Linux")
-    def test_returns_trufflehog_path_linux(
-        self, mock_system: MagicMock, mock_bin_dir: MagicMock
-    ):
+    def test_returns_trufflehog_path_linux(self, mock_system: MagicMock, mock_bin_dir: MagicMock):
         """Test trufflehog path on Linux."""
         mock_bin_dir.return_value = Path("/venv/bin")
         path = get_trufflehog_path()
@@ -327,9 +321,7 @@ class TestTrufflehogScanner:
         assert scanner.is_installed() is True
 
     @patch("envdrift.scanner.trufflehog.get_trufflehog_path")
-    def test_is_installed_returns_true_when_in_venv(
-        self, mock_path: MagicMock, tmp_path: Path
-    ):
+    def test_is_installed_returns_true_when_in_venv(self, mock_path: MagicMock, tmp_path: Path):
         """Test is_installed returns True when in venv."""
         binary = tmp_path / "trufflehog"
         binary.touch()
@@ -443,9 +435,7 @@ class TestFindingParsing:
         assert finding.commit_author == "dev@example.com"
         assert finding.commit_date == "2024-01-15T10:00:00Z"
 
-    def test_parse_finding_with_relative_path(
-        self, scanner: TrufflehogScanner, tmp_path: Path
-    ):
+    def test_parse_finding_with_relative_path(self, scanner: TrufflehogScanner, tmp_path: Path):
         """Test parsing finding with relative file path."""
         item: dict[str, Any] = {
             "SourceMetadata": {
@@ -464,9 +454,7 @@ class TestFindingParsing:
         assert finding is not None
         assert finding.file_path == tmp_path / "src/config/secrets.py"
 
-    def test_parse_finding_with_empty_source_data(
-        self, scanner: TrufflehogScanner, tmp_path: Path
-    ):
+    def test_parse_finding_with_empty_source_data(self, scanner: TrufflehogScanner, tmp_path: Path):
         """Test parsing finding with minimal source data."""
         item: dict[str, Any] = {
             "SourceMetadata": {"Data": {}},
@@ -479,9 +467,7 @@ class TestFindingParsing:
         assert finding is not None
         assert finding.file_path == tmp_path
 
-    def test_parse_finding_handles_empty_data(
-        self, scanner: TrufflehogScanner, tmp_path: Path
-    ):
+    def test_parse_finding_handles_empty_data(self, scanner: TrufflehogScanner, tmp_path: Path):
         """Test that empty data creates a finding with defaults instead of raising."""
         # Missing all fields
         item: dict[str, Any] = {}
@@ -504,9 +490,7 @@ class TestTrufflehogScanExecution:
         scanner._binary_path = binary_path
         return scanner
 
-    def test_scan_parses_json_lines_output(
-        self, mock_scanner: TrufflehogScanner, tmp_path: Path
-    ):
+    def test_scan_parses_json_lines_output(self, mock_scanner: TrufflehogScanner, tmp_path: Path):
         """Test that scan correctly parses JSON lines output."""
         # Trufflehog outputs one JSON per line
         findings_output = (
@@ -516,9 +500,7 @@ class TestTrufflehogScanExecution:
             '"Raw":"secret2","DetectorName":"GitHub","Verified":false}\n'
         )
 
-        with patch.object(
-            mock_scanner, "_find_binary", return_value=mock_scanner._binary_path
-        ):
+        with patch.object(mock_scanner, "_find_binary", return_value=mock_scanner._binary_path):
             with patch("subprocess.run") as mock_run:
                 mock_run.return_value = MagicMock(
                     stdout=findings_output,
@@ -530,13 +512,9 @@ class TestTrufflehogScanExecution:
         assert result.success is True
         assert len(result.findings) == 2
 
-    def test_scan_handles_empty_output(
-        self, mock_scanner: TrufflehogScanner, tmp_path: Path
-    ):
+    def test_scan_handles_empty_output(self, mock_scanner: TrufflehogScanner, tmp_path: Path):
         """Test that scan handles empty output."""
-        with patch.object(
-            mock_scanner, "_find_binary", return_value=mock_scanner._binary_path
-        ):
+        with patch.object(mock_scanner, "_find_binary", return_value=mock_scanner._binary_path):
             with patch("subprocess.run") as mock_run:
                 mock_run.return_value = MagicMock(stdout="", stderr="", returncode=0)
                 result = mock_scanner.scan([tmp_path])
@@ -544,15 +522,11 @@ class TestTrufflehogScanExecution:
         assert result.success is True
         assert len(result.findings) == 0
 
-    def test_scan_handles_invalid_json_lines(
-        self, mock_scanner: TrufflehogScanner, tmp_path: Path
-    ):
+    def test_scan_handles_invalid_json_lines(self, mock_scanner: TrufflehogScanner, tmp_path: Path):
         """Test that scan handles invalid JSON lines gracefully."""
         mixed_output = 'not json\n{"SourceMetadata":{"Data":{"Filesystem":{"file":"test.py"}}},"Raw":"secret","DetectorName":"Test","Verified":false}\nalso not json\n'
 
-        with patch.object(
-            mock_scanner, "_find_binary", return_value=mock_scanner._binary_path
-        ):
+        with patch.object(mock_scanner, "_find_binary", return_value=mock_scanner._binary_path):
             with patch("subprocess.run") as mock_run:
                 mock_run.return_value = MagicMock(
                     stdout=mixed_output,
@@ -565,29 +539,19 @@ class TestTrufflehogScanExecution:
         # Should have parsed the one valid JSON line
         assert len(result.findings) == 1
 
-    def test_scan_handles_timeout(
-        self, mock_scanner: TrufflehogScanner, tmp_path: Path
-    ):
+    def test_scan_handles_timeout(self, mock_scanner: TrufflehogScanner, tmp_path: Path):
         """Test that scan handles subprocess timeout."""
-        with patch.object(
-            mock_scanner, "_find_binary", return_value=mock_scanner._binary_path
-        ):
+        with patch.object(mock_scanner, "_find_binary", return_value=mock_scanner._binary_path):
             with patch("subprocess.run") as mock_run:
-                mock_run.side_effect = subprocess.TimeoutExpired(
-                    cmd="trufflehog", timeout=600
-                )
+                mock_run.side_effect = subprocess.TimeoutExpired(cmd="trufflehog", timeout=600)
                 result = mock_scanner.scan([tmp_path])
 
         assert "timed out" in result.error.lower()
         assert result.success is False
 
-    def test_scan_uses_filesystem_mode(
-        self, mock_scanner: TrufflehogScanner, tmp_path: Path
-    ):
+    def test_scan_uses_filesystem_mode(self, mock_scanner: TrufflehogScanner, tmp_path: Path):
         """Test that scan uses filesystem mode by default."""
-        with patch.object(
-            mock_scanner, "_find_binary", return_value=mock_scanner._binary_path
-        ):
+        with patch.object(mock_scanner, "_find_binary", return_value=mock_scanner._binary_path):
             with patch("subprocess.run") as mock_run:
                 mock_run.return_value = MagicMock(stdout="", stderr="", returncode=0)
                 mock_scanner.scan([tmp_path], include_git_history=False)
@@ -595,16 +559,12 @@ class TestTrufflehogScanExecution:
         call_args = mock_run.call_args[0][0]
         assert "filesystem" in call_args
 
-    def test_scan_uses_git_mode_for_history(
-        self, mock_scanner: TrufflehogScanner, tmp_path: Path
-    ):
+    def test_scan_uses_git_mode_for_history(self, mock_scanner: TrufflehogScanner, tmp_path: Path):
         """Test that scan uses git mode when scanning history."""
         # Create a fake .git directory
         (tmp_path / ".git").mkdir()
 
-        with patch.object(
-            mock_scanner, "_find_binary", return_value=mock_scanner._binary_path
-        ):
+        with patch.object(mock_scanner, "_find_binary", return_value=mock_scanner._binary_path):
             with patch("subprocess.run") as mock_run:
                 mock_run.return_value = MagicMock(stdout="", stderr="", returncode=0)
                 mock_scanner.scan([tmp_path], include_git_history=True)
@@ -612,13 +572,9 @@ class TestTrufflehogScanExecution:
         call_args = mock_run.call_args[0][0]
         assert "git" in call_args
 
-    def test_scan_with_verification_disabled(
-        self, mock_scanner: TrufflehogScanner, tmp_path: Path
-    ):
+    def test_scan_with_verification_disabled(self, mock_scanner: TrufflehogScanner, tmp_path: Path):
         """Test that scan passes --no-verification flag."""
-        with patch.object(
-            mock_scanner, "_find_binary", return_value=mock_scanner._binary_path
-        ):
+        with patch.object(mock_scanner, "_find_binary", return_value=mock_scanner._binary_path):
             with patch("subprocess.run") as mock_run:
                 mock_run.return_value = MagicMock(stdout="", stderr="", returncode=0)
                 mock_scanner.scan([tmp_path])
@@ -640,18 +596,14 @@ class TestTrufflehogScanExecution:
         call_args = mock_run.call_args[0][0]
         assert "--no-verification" not in call_args
 
-    def test_scan_multiple_paths(
-        self, mock_scanner: TrufflehogScanner, tmp_path: Path
-    ):
+    def test_scan_multiple_paths(self, mock_scanner: TrufflehogScanner, tmp_path: Path):
         """Test scanning multiple paths."""
         path1 = tmp_path / "dir1"
         path2 = tmp_path / "dir2"
         path1.mkdir()
         path2.mkdir()
 
-        with patch.object(
-            mock_scanner, "_find_binary", return_value=mock_scanner._binary_path
-        ):
+        with patch.object(mock_scanner, "_find_binary", return_value=mock_scanner._binary_path):
             with patch("subprocess.run") as mock_run:
                 mock_run.return_value = MagicMock(stdout="", stderr="", returncode=0)
                 result = mock_scanner.scan([path1, path2])
@@ -742,24 +694,18 @@ class TestGitRepoDetection:
         (tmp_path / ".git").mkdir()
         assert scanner._is_git_repo(tmp_path) is True
 
-    def test_is_git_repo_without_git_dir(
-        self, scanner: TrufflehogScanner, tmp_path: Path
-    ):
+    def test_is_git_repo_without_git_dir(self, scanner: TrufflehogScanner, tmp_path: Path):
         """Test detection when no .git directory."""
         assert scanner._is_git_repo(tmp_path) is False
 
-    def test_is_git_repo_with_parent_git_dir(
-        self, scanner: TrufflehogScanner, tmp_path: Path
-    ):
+    def test_is_git_repo_with_parent_git_dir(self, scanner: TrufflehogScanner, tmp_path: Path):
         """Test detection when .git exists in parent directory."""
         (tmp_path / ".git").mkdir()
         subdir = tmp_path / "subdir"
         subdir.mkdir()
         assert scanner._is_git_repo(subdir) is True
 
-    def test_is_git_repo_with_file_path(
-        self, scanner: TrufflehogScanner, tmp_path: Path
-    ):
+    def test_is_git_repo_with_file_path(self, scanner: TrufflehogScanner, tmp_path: Path):
         """Test detection when given a file path."""
         (tmp_path / ".git").mkdir()
         file_path = tmp_path / "test.py"
@@ -811,9 +757,7 @@ class TestTrufflehogIntegration:
         """Test scanning a file with a fake secret pattern."""
         # Create a file with a fake AWS key
         secret_file = tmp_path / "secrets.py"
-        secret_file.write_text(
-            '# Test file\n' 'AWS_KEY = "AKIAIOSFODNN7EXAMPLE"\n'
-        )
+        secret_file.write_text('# Test file\nAWS_KEY = "AKIAIOSFODNN7EXAMPLE"\n')
 
         scanner = TrufflehogScanner(auto_install=False)
         result = scanner.scan([tmp_path])

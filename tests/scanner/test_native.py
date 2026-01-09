@@ -62,9 +62,7 @@ class TestNativeScannerInternals:
     def test_should_ignore_handles_outside_base(self):
         """Relative path failures fall back to full path matching."""
         scanner = NativeScanner(ignore_patterns=["secret.txt"])
-        assert scanner._should_ignore(
-            Path("/outside/secret.txt"), Path("/base")
-        ) is True
+        assert scanner._should_ignore(Path("/outside/secret.txt"), Path("/base")) is True
 
     def test_should_ignore_matches_path_parts(self, tmp_path: Path):
         """Ignore patterns match individual path parts."""
@@ -111,29 +109,21 @@ class TestUnencryptedEnvDetection:
         result = scanner.scan([tmp_path])
 
         assert len(result.findings) >= 1
-        unencrypted_findings = [
-            f for f in result.findings if f.rule_id == "unencrypted-env-file"
-        ]
+        unencrypted_findings = [f for f in result.findings if f.rule_id == "unencrypted-env-file"]
         assert len(unencrypted_findings) == 1
         assert unencrypted_findings[0].severity == FindingSeverity.HIGH
 
-    def test_detects_unencrypted_env_production(
-        self, scanner: NativeScanner, tmp_path: Path
-    ):
+    def test_detects_unencrypted_env_production(self, scanner: NativeScanner, tmp_path: Path):
         """Test detection of unencrypted .env.production file."""
         env_file = tmp_path / ".env.production"
         env_file.write_text("SECRET_KEY=mysecret\n")
 
         result = scanner.scan([tmp_path])
 
-        unencrypted_findings = [
-            f for f in result.findings if f.rule_id == "unencrypted-env-file"
-        ]
+        unencrypted_findings = [f for f in result.findings if f.rule_id == "unencrypted-env-file"]
         assert len(unencrypted_findings) == 1
 
-    def test_ignores_encrypted_dotenvx_file(
-        self, scanner: NativeScanner, tmp_path: Path
-    ):
+    def test_ignores_encrypted_dotenvx_file(self, scanner: NativeScanner, tmp_path: Path):
         """Test that encrypted dotenvx files are not flagged."""
         env_file = tmp_path / ".env"
         env_file.write_text(
@@ -145,14 +135,10 @@ DATABASE_URL="encrypted:xyz789"
 
         result = scanner.scan([tmp_path])
 
-        unencrypted_findings = [
-            f for f in result.findings if f.rule_id == "unencrypted-env-file"
-        ]
+        unencrypted_findings = [f for f in result.findings if f.rule_id == "unencrypted-env-file"]
         assert len(unencrypted_findings) == 0
 
-    def test_ignores_encrypted_sops_file(
-        self, scanner: NativeScanner, tmp_path: Path
-    ):
+    def test_ignores_encrypted_sops_file(self, scanner: NativeScanner, tmp_path: Path):
         """Test that encrypted SOPS files are not flagged."""
         env_file = tmp_path / ".env"
         env_file.write_text(
@@ -164,9 +150,7 @@ sops:
 
         result = scanner.scan([tmp_path])
 
-        unencrypted_findings = [
-            f for f in result.findings if f.rule_id == "unencrypted-env-file"
-        ]
+        unencrypted_findings = [f for f in result.findings if f.rule_id == "unencrypted-env-file"]
         assert len(unencrypted_findings) == 0
 
     def test_ignores_env_example(self, scanner: NativeScanner, tmp_path: Path):
@@ -201,9 +185,7 @@ class TestSecretPatternDetection:
     def test_detects_github_token(self, scanner: NativeScanner, tmp_path: Path):
         """Test detection of GitHub personal access token."""
         config_file = tmp_path / "config.py"
-        config_file.write_text(
-            'GITHUB_TOKEN = "ghp_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"\n'
-        )
+        config_file.write_text('GITHUB_TOKEN = "ghp_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"\n')
 
         result = scanner.scan([tmp_path])
 
@@ -263,9 +245,7 @@ AWS_KEY = "AKIAIOSFODNN7EXAMPLE"
         assert len(aws_findings) >= 1
         assert aws_findings[0].line_number == 4
 
-    def test_finding_has_redacted_preview(
-        self, scanner: NativeScanner, tmp_path: Path
-    ):
+    def test_finding_has_redacted_preview(self, scanner: NativeScanner, tmp_path: Path):
         """Test that findings have redacted secret preview."""
         config_file = tmp_path / "config.py"
         config_file.write_text('AWS_KEY = "AKIAIOSFODNN7EXAMPLE"\n')
@@ -287,9 +267,7 @@ class TestEntropyDetection:
         """Create a scanner with entropy checking enabled."""
         return NativeScanner(check_entropy=True, entropy_threshold=4.0)
 
-    def test_detects_high_entropy_string(
-        self, scanner: NativeScanner, tmp_path: Path
-    ):
+    def test_detects_high_entropy_string(self, scanner: NativeScanner, tmp_path: Path):
         """Test detection of high-entropy strings."""
         config_file = tmp_path / "config.py"
         # High entropy random string
@@ -297,26 +275,20 @@ class TestEntropyDetection:
 
         result = scanner.scan([tmp_path])
 
-        entropy_findings = [
-            f for f in result.findings if f.rule_id == "high-entropy-string"
-        ]
+        entropy_findings = [f for f in result.findings if f.rule_id == "high-entropy-string"]
         assert len(entropy_findings) >= 1
         assert entropy_findings[0].severity == FindingSeverity.MEDIUM
         assert entropy_findings[0].entropy is not None
         assert entropy_findings[0].entropy >= 4.0
 
-    def test_ignores_low_entropy_string(
-        self, scanner: NativeScanner, tmp_path: Path
-    ):
+    def test_ignores_low_entropy_string(self, scanner: NativeScanner, tmp_path: Path):
         """Test that low-entropy strings are not flagged."""
         config_file = tmp_path / "config.py"
         config_file.write_text('VALUE = "aaaaaaaaaaaaaaaa"\n')
 
         result = scanner.scan([tmp_path])
 
-        entropy_findings = [
-            f for f in result.findings if f.rule_id == "high-entropy-string"
-        ]
+        entropy_findings = [f for f in result.findings if f.rule_id == "high-entropy-string"]
         assert len(entropy_findings) == 0
 
     def test_ignores_urls(self, scanner: NativeScanner, tmp_path: Path):
@@ -326,9 +298,7 @@ class TestEntropyDetection:
 
         result = scanner.scan([tmp_path])
 
-        entropy_findings = [
-            f for f in result.findings if f.rule_id == "high-entropy-string"
-        ]
+        entropy_findings = [f for f in result.findings if f.rule_id == "high-entropy-string"]
         assert len(entropy_findings) == 0
 
     def test_skips_comments_and_paths(self, scanner: NativeScanner, tmp_path: Path):
@@ -343,10 +313,7 @@ class TestEntropyDetection:
 
     def test_skips_alpha_only_values(self, scanner: NativeScanner, tmp_path: Path):
         """Alpha-only uppercase or lowercase values are skipped."""
-        content = (
-            "LOWER = abcdefghijklmnop\n"
-            "UPPER = ABCDEFGHIJKLMNOP\n"
-        )
+        content = "LOWER = abcdefghijklmnop\nUPPER = ABCDEFGHIJKLMNOP\n"
         findings = scanner._scan_entropy(tmp_path / "config.py", content)
         assert findings == []
 
@@ -358,9 +325,7 @@ class TestEntropyDetection:
 
         result = scanner.scan([tmp_path])
 
-        entropy_findings = [
-            f for f in result.findings if f.rule_id == "high-entropy-string"
-        ]
+        entropy_findings = [f for f in result.findings if f.rule_id == "high-entropy-string"]
         assert len(entropy_findings) == 0
 
 

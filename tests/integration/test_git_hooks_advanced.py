@@ -306,9 +306,9 @@ def test_hook_pre_push_lock_check(git_hook_env):
     )
 
     assert result.returncode != 0, "Push should be blocked by pre-push hook"
-    assert (
-        "lock --check failed" in result.stderr or "lock --check failed" in result.stdout
-    ), "Error message should mention lock check failure"
+    assert "lock --check failed" in result.stderr or "lock --check failed" in result.stdout, (
+        "Error message should mention lock check failure"
+    )
 
 
 @pytest.mark.integration
@@ -352,9 +352,9 @@ def test_smart_encrypt_dirty_workdir(git_hook_env):
     result = _run_envdrift(["encrypt", env_file.name], cwd=work_dir, env=env)
 
     # Smart encryption should skip re-encryption
-    assert (
-        "Skipped re-encryption" in result.stdout or "Skipped re-encryption" in result.stderr
-    ), "Smart encryption should skip re-encryption when content unchanged"
+    assert "Skipped re-encryption" in result.stdout or "Skipped re-encryption" in result.stderr, (
+        "Smart encryption should skip re-encryption when content unchanged"
+    )
 
 
 @pytest.mark.integration

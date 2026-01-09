@@ -124,10 +124,7 @@ class ScanEngine:
         self._initialize_scanners()
 
     def _run_scanner(
-        self,
-        scanner: ScannerBackend,
-        paths: list[Path],
-        include_git_history: bool
+        self, scanner: ScannerBackend, paths: list[Path], include_git_history: bool
     ) -> ScanResult:
         """Run a single scanner (for parallel execution).
 
@@ -241,19 +238,16 @@ class ScanEngine:
         # Run scanners in parallel using ThreadPoolExecutor
         # Use at most 4 workers to avoid overwhelming the system
         max_workers = min(len(self.scanners), 4)
-        
+
         with ThreadPoolExecutor(max_workers=max_workers) as executor:
             # Submit all scanner tasks
             future_to_scanner = {
                 executor.submit(
-                    self._run_scanner,
-                    scanner,
-                    paths,
-                    self.config.include_git_history
+                    self._run_scanner, scanner, paths, self.config.include_git_history
                 ): scanner
                 for scanner in self.scanners
             }
-            
+
             # Collect results as they complete
             for future in as_completed(future_to_scanner):
                 scanner = future_to_scanner[future]
@@ -311,7 +305,9 @@ class ScanEngine:
             else:
                 existing = seen[key]
                 # Keep higher severity
-                if finding.severity > existing.severity or (finding.verified and not existing.verified):
+                if finding.severity > existing.severity or (
+                    finding.verified and not existing.verified
+                ):
                     seen[key] = finding
 
         # Sort by severity (highest first), then by file path

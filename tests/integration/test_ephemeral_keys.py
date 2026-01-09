@@ -23,19 +23,17 @@ class TestEphemeralKeysIntegration:
         client.is_authenticated.return_value = True
         return client
 
-    def test_ephemeral_pull_workflow(
-        self, mock_vault_client: MagicMock, tmp_path: Path
-    ) -> None:
+    def test_ephemeral_pull_workflow(self, mock_vault_client: MagicMock, tmp_path: Path) -> None:
         """Test full ephemeral pull workflow - no .env.keys created."""
         # Setup: Create encrypted env file
         service_dir = tmp_path / "myapp"
         service_dir.mkdir()
         env_file = service_dir / ".env.production"
         env_file.write_text(
-            '#/-------------------[DOTENV][Load][Setup]-----------------------/#\n'
-            '#/------------------!DOTENV_PUBLIC_KEY!---------------------------/#\n'
+            "#/-------------------[DOTENV][Load][Setup]-----------------------/#\n"
+            "#/------------------!DOTENV_PUBLIC_KEY!---------------------------/#\n"
             'DOTENV_PUBLIC_KEY="034a..."\n'
-            '#/-------------------[DOTENV][Encryption]-----------------------/#\n'
+            "#/-------------------[DOTENV][Encryption]-----------------------/#\n"
             'SECRET="encrypted:abc123xyz..."\n'
         )
 
@@ -84,9 +82,7 @@ class TestEphemeralKeysIntegration:
         (normal_dir / ".env.production").write_text("SECRET=encrypted:xyz\n")
 
         # Mock vault
-        mock_vault_client.get_secret.return_value = SecretValue(
-            name="key", value="secret123"
-        )
+        mock_vault_client.get_secret.return_value = SecretValue(name="key", value="secret123")
 
         # Config: one ephemeral, one normal
         config = SyncConfig(

@@ -39,9 +39,7 @@ class TestEnvKeysFile:
         """Test reading existing key from file."""
         env_keys = tmp_path / ".env.keys"
         env_keys.write_text(
-            "# Comment\n"
-            "DOTENV_PRIVATE_KEY_PRODUCTION=abc123\n"
-            "DOTENV_PRIVATE_KEY_STAGING=def456\n"
+            "# Comment\nDOTENV_PRIVATE_KEY_PRODUCTION=abc123\nDOTENV_PRIVATE_KEY_STAGING=def456\n"
         )
 
         file = EnvKeysFile(env_keys)

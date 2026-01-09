@@ -56,9 +56,7 @@ class TestGuardConfig:
 
     def test_config_from_dict_native_only(self):
         """Test config with only native scanner."""
-        config = GuardConfig.from_dict(
-            {"guard": {"scanners": ["native"]}}
-        )
+        config = GuardConfig.from_dict({"guard": {"scanners": ["native"]}})
 
         assert config.use_native is True
         assert config.use_gitleaks is False
@@ -76,9 +74,7 @@ class TestGuardConfig:
 
     def test_config_from_dict_invalid_severity(self):
         """Test config with invalid severity falls back to HIGH."""
-        config = GuardConfig.from_dict(
-            {"guard": {"fail_on_severity": "invalid"}}
-        )
+        config = GuardConfig.from_dict({"guard": {"fail_on_severity": "invalid"}})
 
         assert config.fail_on_severity == FindingSeverity.HIGH
 
@@ -159,13 +155,9 @@ class TestScanEngine:
             )
 
         gitleaks_mod = types.ModuleType("envdrift.scanner.gitleaks")
-        gitleaks_mod.GitleaksScanner = make_scanner(
-            "GitleaksScanner", "gitleaks", True
-        )
+        gitleaks_mod.GitleaksScanner = make_scanner("GitleaksScanner", "gitleaks", True)
         truffle_mod = types.ModuleType("envdrift.scanner.trufflehog")
-        truffle_mod.TrufflehogScanner = make_scanner(
-            "TrufflehogScanner", "trufflehog", True
-        )
+        truffle_mod.TrufflehogScanner = make_scanner("TrufflehogScanner", "trufflehog", True)
         detect_mod = types.ModuleType("envdrift.scanner.detect_secrets")
         detect_mod.DetectSecretsScanner = make_scanner(
             "DetectSecretsScanner", "detect-secrets", True
@@ -223,9 +215,7 @@ class TestScanEngine:
             )
 
         gitleaks_mod = types.ModuleType("envdrift.scanner.gitleaks")
-        gitleaks_mod.GitleaksScanner = make_scanner(
-            "GitleaksScanner", "gitleaks"
-        )
+        gitleaks_mod.GitleaksScanner = make_scanner("GitleaksScanner", "gitleaks")
         monkeypatch.setitem(sys.modules, "envdrift.scanner.gitleaks", gitleaks_mod)
 
         config = GuardConfig(
@@ -276,9 +266,7 @@ class TestScanEngine:
             )
 
         gitleaks_mod = types.ModuleType("envdrift.scanner.gitleaks")
-        gitleaks_mod.GitleaksScanner = make_scanner(
-            "GitleaksScanner", "gitleaks"
-        )
+        gitleaks_mod.GitleaksScanner = make_scanner("GitleaksScanner", "gitleaks")
         monkeypatch.setitem(sys.modules, "envdrift.scanner.gitleaks", gitleaks_mod)
 
         config = GuardConfig(
@@ -563,13 +551,9 @@ class TestIntegration:
         engine = ScanEngine(config)
 
         # Create file with high-entropy string
-        (tmp_path / "config.py").write_text(
-            'SECRET = "aB3xK9mN2pQ5vR8tY1wZ4cF7hJ0kL6"\n'
-        )
+        (tmp_path / "config.py").write_text('SECRET = "aB3xK9mN2pQ5vR8tY1wZ4cF7hJ0kL6"\n')
 
         result = engine.scan([tmp_path])
 
-        entropy_findings = [
-            f for f in result.unique_findings if f.rule_id == "high-entropy-string"
-        ]
+        entropy_findings = [f for f in result.unique_findings if f.rule_id == "high-entropy-string"]
         assert len(entropy_findings) >= 1

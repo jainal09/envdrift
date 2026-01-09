@@ -35,7 +35,10 @@ class TestSecretPatterns:
             # Google - AIza followed by exactly 35 alphanumeric and dash/underscore chars (39 total)
             ("AIzaSyCaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "google-api-key"),
             # SendGrid
-            ("SG.xxxxxxxxxxxxxxxxxxxxxx.xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx", "sendgrid-api-key"),
+            (
+                "SG.xxxxxxxxxxxxxxxxxxxxxx.xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+                "sendgrid-api-key",
+            ),
             # NPM
             ("npm_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx", "npm-token"),
             # Private keys

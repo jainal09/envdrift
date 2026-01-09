@@ -260,9 +260,7 @@ class GitleaksInstaller:
                 raise GitleaksInstallError(f"Unknown archive format: {archive_name}")
 
             # Find the binary
-            binary_name = (
-                "gitleaks.exe" if platform.system() == "Windows" else "gitleaks"
-            )
+            binary_name = "gitleaks.exe" if platform.system() == "Windows" else "gitleaks"
             extracted_binary = None
 
             for f in tmp_path.rglob(binary_name):
@@ -436,8 +434,7 @@ class GitleaksScanner(ScannerBackend):
                 ) from e
 
         raise GitleaksNotFoundError(
-            "gitleaks not found. Install with: brew install gitleaks "
-            "or enable auto_install=True"
+            "gitleaks not found. Install with: brew install gitleaks or enable auto_install=True"
         )
 
     def install(
@@ -492,9 +489,7 @@ class GitleaksScanner(ScannerBackend):
                 continue
 
             # Create temp file for JSON output (gitleaks requires --report-path for JSON)
-            with tempfile.NamedTemporaryFile(
-                mode="w", suffix=".json", delete=False
-            ) as report_file:
+            with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as report_file:
                 report_path = Path(report_file.name)
 
             try:

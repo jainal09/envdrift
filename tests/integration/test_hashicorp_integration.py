@@ -24,15 +24,12 @@ if TYPE_CHECKING:
     from collections.abc import Generator
 
 # Import test constants from conftest
+# Check if hvac is available
+import importlib.util
+
 from tests.integration.conftest import VAULT_ROOT_TOKEN
 
-# Check if hvac is available
-try:
-    import hvac  # noqa: F401
-
-    HVAC_AVAILABLE = True
-except ImportError:
-    HVAC_AVAILABLE = False
+HVAC_AVAILABLE = importlib.util.find_spec("hvac") is not None
 
 # Mark all tests in this module - skip if hvac not installed
 pytestmark = [

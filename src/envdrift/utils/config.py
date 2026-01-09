@@ -5,9 +5,7 @@ from __future__ import annotations
 from typing import Any, Callable
 
 
-def normalize_max_workers(
-    value: Any, *, warn: Callable[[str], None] | None = None
-) -> int | None:
+def normalize_max_workers(value: Any, *, warn: Callable[[str], None] | None = None) -> int | None:
     """Normalize max_workers values, optionally emitting warnings."""
     if value is None:
         return None

@@ -38,4 +38,3 @@ __all__ = [
     "ScanResult",
     "TrufflehogScanner",
 ]
-

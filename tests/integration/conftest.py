@@ -107,7 +107,9 @@ def localstack_endpoint(localstack_available: bool) -> Generator[str, None, None
     Skips test if LocalStack is not available.
     """
     if not localstack_available:
-        pytest.skip("LocalStack not available (run: docker-compose -f tests/docker-compose.test.yml up -d)")
+        pytest.skip(
+            "LocalStack not available (run: docker-compose -f tests/docker-compose.test.yml up -d)"
+        )
 
     endpoint = f"http://localhost:{LOCALSTACK_PORT}"
 
@@ -166,7 +168,9 @@ def vault_endpoint(vault_available: bool) -> Generator[str, None, None]:
     Skips test if Vault is not available.
     """
     if not vault_available:
-        pytest.skip("Vault not available (run: docker-compose -f tests/docker-compose.test.yml up -d)")
+        pytest.skip(
+            "Vault not available (run: docker-compose -f tests/docker-compose.test.yml up -d)"
+        )
 
     endpoint = f"http://localhost:{VAULT_PORT}"
 
@@ -225,7 +229,9 @@ def lowkey_vault_endpoint(lowkey_vault_available: bool) -> Generator[str, None, 
     Skips test if Lowkey Vault is not available.
     """
     if not lowkey_vault_available:
-        pytest.skip("Lowkey Vault not available (run: docker-compose -f tests/docker-compose.test.yml up -d)")
+        pytest.skip(
+            "Lowkey Vault not available (run: docker-compose -f tests/docker-compose.test.yml up -d)"
+        )
 
     endpoint = f"https://localhost:{LOWKEY_VAULT_PORT}"
 

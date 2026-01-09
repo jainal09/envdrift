@@ -8,7 +8,7 @@ Kingfisher is a high-performance secret scanner by MongoDB that features:
 - Entropy-based detection
 
 This module provides:
-- Automatic Homebrew installation on macOS
+- Automatic Homebrew installation on macOS and Linux
 - JSON output parsing into ScanFinding objects
 - Secret validation status tracking
 """
@@ -251,8 +251,9 @@ class KingfisherScanner(ScannerBackend):
             )
 
             if result.returncode != 0:
-                # Check if already installed
-                if "already installed" in result.stderr.lower():
+                # Check if already installed (may be in stdout or stderr)
+                combined_output = (result.stdout + result.stderr).lower()
+                if "already installed" in combined_output:
                     pass  # Continue to find the binary
                 else:
                     raise KingfisherInstallError(f"Homebrew install failed: {result.stderr}")
@@ -470,9 +471,14 @@ class KingfisherScanner(ScannerBackend):
             rule = item.get("rule", {})
             finding = item.get("finding", {})
 
-            # Get file path
+            # Get file path and resolve relative paths
             file_path_str = finding.get("path", "")
-            file_path = Path(file_path_str) if file_path_str else base_path
+            if file_path_str:
+                file_path = Path(file_path_str)
+                if not file_path.is_absolute():
+                    file_path = (base_path / file_path_str).resolve()
+            else:
+                file_path = base_path
 
             # Get the secret snippet and redact it
             snippet = finding.get("snippet", "")
@@ -485,14 +491,15 @@ class KingfisherScanner(ScannerBackend):
             # Map severity based on rule type
             severity = _map_severity(rule_id, rule_name)
 
-            # Get validation status
+            # Get validation status - use allowlist for verified status
             validation = finding.get("validation", {})
-            validation_status = validation.get("status", "unknown")
-            is_verified = validation_status.lower() not in (
-                "inactive credential",
-                "not attempted",
-                "unknown",
-                "skipped",
+            validation_status = validation.get("status", "unknown").lower()
+            is_verified = validation_status in (
+                "valid",
+                "verified",
+                "active",
+                "successful",
+                "passed",
             )
 
             # Get confidence and entropy

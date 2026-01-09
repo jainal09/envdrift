@@ -6,6 +6,7 @@ Requires Kingfisher to be installed (via Homebrew: brew install kingfisher).
 
 from __future__ import annotations
 
+import shutil
 import subprocess
 
 import pytest
@@ -14,7 +15,7 @@ from envdrift.scanner.kingfisher import KingfisherScanner
 
 # Skip all tests if Kingfisher is not installed
 pytestmark = pytest.mark.skipif(
-    subprocess.run(["which", "kingfisher"], capture_output=True).returncode != 0,
+    shutil.which("kingfisher") is None,
     reason="Kingfisher not installed (install with: brew install kingfisher)",
 )
 
@@ -126,13 +127,8 @@ password ghp_abcdefghijklmnopqrstuvwxyz1234567890
         result = scanner.scan([tmp_path])
 
         assert result.error is None
-        # netrc credentials should be detected
-        netrc_findings = [
-            f
-            for f in result.findings
-            if "netrc" in f.rule_description.lower() or "credential" in f.rule_description.lower()
-        ]
-        assert len(netrc_findings) >= 0  # May or may not detect depending on patterns
+        # netrc credentials may or may not be detected depending on patterns
+        # The key thing is the scan runs without error
 
     def test_scan_with_git_history_disabled(self, tmp_path):
         """Scan runs correctly with git history disabled."""

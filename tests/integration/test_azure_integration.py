@@ -28,18 +28,12 @@ if TYPE_CHECKING:
     from collections.abc import Generator
 
 # Check if azure SDK and requests are available
+import importlib.util
+
+REQUESTS_AVAILABLE = importlib.util.find_spec("requests") is not None
 try:
-    import requests  # noqa: F401
-
-    REQUESTS_AVAILABLE = True
-except ImportError:
-    REQUESTS_AVAILABLE = False
-
-try:
-    import azure.identity  # noqa: F401
-
-    AZURE_AVAILABLE = True
-except ImportError:
+    AZURE_AVAILABLE = importlib.util.find_spec("azure.identity") is not None
+except ModuleNotFoundError:
     AZURE_AVAILABLE = False
 
 # Mark all tests in this module - skip if dependencies not installed
