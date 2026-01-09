@@ -8,8 +8,6 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from envdrift.scanner.git_hound import (
-    GitHoundInstallError,
-    GitHoundNotFoundError,
     GitHoundScanner,
     get_platform_info,
 )
