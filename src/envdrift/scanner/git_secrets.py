@@ -321,9 +321,11 @@ class GitSecretsScanner(ScannerBackend):
                 text=True,
                 timeout=5,
             )
-            if result.returncode == 0 or "secrets.patterns" in result.stdout:
-                # git-secrets is available as git subcommand
-                self._binary_path = Path("git-secrets")
+            # Only check returncode - a successful command means git-secrets is installed
+            if result.returncode == 0:
+                # Mark as available via git subcommand
+                # _run_git_secrets will detect the proper invocation method at runtime
+                self._binary_path = Path("git-secrets-subcommand")
                 return self._binary_path
         except Exception as exc:
             logger.debug(
@@ -471,11 +473,14 @@ class GitSecretsScanner(ScannerBackend):
                     list_result = self._run_git_secrets(["--list"], cwd)
 
                     # Register AWS patterns if enabled
-                    # Check for specific AWS pattern markers, not just 'aws' substring
+                    # Check for AWS-specific pattern entries in secrets.patterns
                     if self._register_aws:
+                        # Look for AWS access key pattern (A3T[A-Z0-9]|AKIA|AGPA|AIDA|AROA|AIPA|ANPA|ANVA|ASIA)
+                        # or aws_secret_access_key provider which is registered by --register-aws
                         aws_patterns_installed = (
-                            "AKIA" in list_result.stdout
-                            or "secrets.providers" in list_result.stdout
+                            "A3T[A-Z0-9]" in list_result.stdout
+                            or "aws_secret_access_key" in list_result.stdout
+                            or "git secrets --aws-provider" in list_result.stdout
                         )
                         if not aws_patterns_installed:
                             logger.debug(
