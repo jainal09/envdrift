@@ -496,6 +496,7 @@ class KingfisherScanner(ScannerBackend):
             validation_status = validation.get("status", "unknown").lower()
             is_verified = validation_status in (
                 "valid",
+                "validated",
                 "verified",
                 "active",
                 "successful",
