@@ -7,10 +7,10 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 from envdrift.scanner.git_secrets import (
-    GitSecretsScanner,
-    GitSecretsNotFoundError,
-    GitSecretsInstallError,
     GitSecretsInstaller,
+    GitSecretsInstallError,
+    GitSecretsNotFoundError,
+    GitSecretsScanner,
     get_venv_bin_dir,
 )
 
@@ -44,6 +44,7 @@ class TestGetVenvBinDir:
     def test_raises_on_windows_without_venv(self) -> None:
         """Test raises RuntimeError on Windows without venv."""
         import pytest
+
         with patch.dict("os.environ", {}, clear=True):
             with patch("platform.system", return_value="Windows"):
                 with pytest.raises(RuntimeError, match="Cannot find suitable bin directory"):
@@ -63,8 +64,10 @@ class TestGitSecretsInstaller:
     def test_install_homebrew_on_darwin(self) -> None:
         """Test install uses homebrew on macOS."""
         with patch("shutil.which") as mock_which:
-            mock_which.side_effect = lambda x: "/usr/local/bin/brew" if x == "brew" else (
-                "/usr/local/bin/git-secrets" if x == "git-secrets" else None
+            mock_which.side_effect = (
+                lambda x: "/usr/local/bin/brew"
+                if x == "brew"
+                else ("/usr/local/bin/git-secrets" if x == "git-secrets" else None)
             )
             with patch("platform.system", return_value="Darwin"):
                 with patch("subprocess.run") as mock_run:
@@ -188,7 +191,9 @@ class TestGitSecretsScanner:
 
     def test_install_method_returns_path(self) -> None:
         """Test install method returns installed path."""
-        with patch.object(GitSecretsInstaller, "install", return_value=Path("/installed/git-secrets")):
+        with patch.object(
+            GitSecretsInstaller, "install", return_value=Path("/installed/git-secrets")
+        ):
             scanner = GitSecretsScanner(auto_install=False)
             result = scanner.install()
             assert result == Path("/installed/git-secrets")
