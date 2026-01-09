@@ -15,12 +15,13 @@ slip past other guardrails (hooks, CI, reviews). It detects:
 
 - Unencrypted `.env` files missing dotenvx or SOPS markers
 - Common secret patterns (tokens, API keys, credentials)
+- Password hashes (bcrypt, sha512crypt) with Kingfisher
 - High-entropy strings (optional, native scanner only)
 - Secrets in git history (optional)
 
 The native scanner always runs. By default, gitleaks runs too. You can enable
-trufflehog or detect-secrets with flags or `envdrift.toml`. If no paths are
-provided, the current directory is scanned.
+trufflehog, detect-secrets, or kingfisher with flags or `envdrift.toml`. If no
+paths are provided, the current directory is scanned.
 
 ## Arguments
 
@@ -60,6 +61,21 @@ Enable or disable detect-secrets. Disabled by default.
 
 ```bash
 envdrift guard --detect-secrets
+```
+
+### `--kingfisher` / `--no-kingfisher`
+
+Enable or disable Kingfisher scanner. Disabled by default.
+
+Kingfisher provides:
+
+- 700+ built-in detection rules
+- Password hash detection (bcrypt, sha512crypt)
+- Active secret validation (checks if secrets are still valid)
+- Archive extraction and binary file scanning
+
+```bash
+envdrift guard --kingfisher
 ```
 
 ### `--history`, `-H`
@@ -196,6 +212,20 @@ envdrift guard --pr-base origin/main --ci --fail-on high
 envdrift guard --history --trufflehog
 ```
 
+### Maximum detection with Kingfisher
+
+```bash
+# Kingfisher excels at finding password hashes and validating secrets
+envdrift guard --kingfisher --gitleaks
+```
+
+### Find password hashes in database dumps
+
+```bash
+# Kingfisher detects bcrypt, sha512crypt, and other password hashes
+envdrift guard ./db --kingfisher --native-only
+```
+
 ## Exit Codes
 
 `envdrift guard` uses severity-based exit codes:
@@ -216,7 +246,7 @@ Guard settings live under `[guard]` in `envdrift.toml` or
 
 ```toml
 [guard]
-scanners = ["native", "gitleaks", "trufflehog", "detect-secrets"]
+scanners = ["native", "gitleaks", "trufflehog", "detect-secrets", "kingfisher"]
 auto_install = true
 include_history = false
 check_entropy = true

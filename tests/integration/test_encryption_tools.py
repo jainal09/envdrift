@@ -495,8 +495,7 @@ def test_pull_skips_partial_combined_files(integration_env):
 
 @pytest.mark.integration
 def test_full_lock_pull_merge_cycle(integration_env):
-    """
-    Integration test for the complete lock -> pull --merge -> lock cycle.
+    """Integration test for the complete lock -> pull --merge -> lock cycle.
 
     This tests:
     1. lock --all encrypts .secret files
@@ -506,6 +505,7 @@ def test_full_lock_pull_merge_cycle(integration_env):
     Note: Uses --skip-sync to avoid needing actual vault connectivity.
     The encryption/decryption happens locally using .env.keys files.
     """
+    pytest.importorskip("azure.identity", reason="Azure SDK not installed")
     work_dir = integration_env["base_dir"] / "lock-pull-merge-cycle"
     work_dir.mkdir()
     env = integration_env["env"].copy()

@@ -38,12 +38,28 @@ scanners with CLI flags:
 envdrift guard --trufflehog --detect-secrets
 ```
 
+For maximum detection including password hashes:
+
+```bash
+envdrift guard --kingfisher
+```
+
 You can also enable scanners in `envdrift.toml`:
 
 ```toml
 [guard]
-scanners = ["native", "gitleaks", "trufflehog", "detect-secrets"]
+scanners = ["native", "gitleaks", "trufflehog", "detect-secrets", "kingfisher"]
 ```
+
+### Scanner comparison
+
+| Scanner | Strengths |
+| :-- | :-- |
+| native | Fast, zero dependencies, unencrypted .env detection |
+| gitleaks | Great pattern coverage, fast |
+| trufflehog | Service-specific tokens (GitHub, Slack, AWS) |
+| detect-secrets | 27+ plugin detectors, keyword scanning |
+| kingfisher | 700+ rules, password hashes, secret validation |
 
 ## Reporting and CI
 

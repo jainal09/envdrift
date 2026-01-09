@@ -14,7 +14,6 @@ Tests cover:
 from __future__ import annotations
 
 import contextlib
-import shutil
 import subprocess
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -24,12 +23,22 @@ import pytest
 if TYPE_CHECKING:
     from collections.abc import Generator
 
+# Check if boto3 is available
+try:
+    import boto3  # noqa: F401
+
+    BOTO3_AVAILABLE = True
+except ImportError:
+    BOTO3_AVAILABLE = False
 
 # Mark all tests in this module as requiring AWS (LocalStack)
-pytestmark = [pytest.mark.integration, pytest.mark.aws]
-
-
-
+pytestmark = [
+    pytest.mark.integration,
+    pytest.mark.aws,
+    pytest.mark.skipif(
+        not BOTO3_AVAILABLE, reason="boto3 not installed - install with: pip install envdrift[aws]"
+    ),
+]
 
 
 # --- Fixtures for AWS Tests ---
@@ -59,9 +68,7 @@ def populated_secrets(aws_secrets_client) -> Generator[dict[str, str], None, Non
     # Cleanup: force delete secrets
     for name in secrets:
         with contextlib.suppress(Exception):
-            aws_secrets_client.delete_secret(
-                SecretId=name, ForceDeleteWithoutRecovery=True
-            )
+            aws_secrets_client.delete_secret(SecretId=name, ForceDeleteWithoutRecovery=True)
 
 
 @pytest.fixture
@@ -144,9 +151,7 @@ class TestAWSClientDirect:
         retrieved = aws_client_configured.get_secret(secret_name)
         assert retrieved.value == new_value
 
-    def test_list_secrets(
-        self, aws_client_configured, populated_secrets: dict[str, str]
-    ) -> None:
+    def test_list_secrets(self, aws_client_configured, populated_secrets: dict[str, str]) -> None:
         """Test listing secrets with prefix filter."""
         all_secrets = aws_client_configured.list_secrets(prefix="envdrift-test/")
 
@@ -397,10 +402,15 @@ environment = "staging"
         try:
             result = subprocess.run(
                 [
-                    *envdrift_cmd, "vault-push",
-                    "--direct", secret_name, secret_value,
-                    "--provider", "aws",
-                    "--region", "us-east-1",
+                    *envdrift_cmd,
+                    "vault-push",
+                    "--direct",
+                    secret_name,
+                    secret_value,
+                    "--provider",
+                    "aws",
+                    "--region",
+                    "us-east-1",
                 ],
                 cwd=work_dir,
                 env=env,
@@ -468,7 +478,9 @@ environment = "production"
         # 1. Exit with non-zero and include a meaningful error message, OR
         # 2. Log the missing secret error but continue gracefully
         combined_output = (result.stdout + result.stderr).lower()
-        has_not_found_message = "not found" in combined_output or "does not exist" in combined_output
+        has_not_found_message = (
+            "not found" in combined_output or "does not exist" in combined_output
+        )
 
         # Verify the error was reported (not silently swallowed)
         assert has_not_found_message or result.returncode != 0, (

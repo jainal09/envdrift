@@ -5,10 +5,11 @@ The guard command provides defense-in-depth by detecting:
 - Common secret patterns (API keys, tokens, passwords)
 - High-entropy strings (potential secrets)
 - Previously committed secrets (in git history, with --history)
+- Password hashes (bcrypt, sha512crypt, etc.) with Kingfisher
 
 Configuration can be set in envdrift.toml:
     [guard]
-    scanners = ["native", "gitleaks"]  # or add "trufflehog", "detect-secrets"
+    scanners = ["native", "gitleaks"]  # or add "trufflehog", "detect-secrets", "kingfisher"
     auto_install = true
     include_history = false
     check_entropy = false
@@ -59,6 +60,13 @@ def guard(
         typer.Option(
             "--detect-secrets/--no-detect-secrets",
             help="Use detect-secrets scanner - the 'final boss' with 27+ detectors",
+        ),
+    ] = None,
+    kingfisher: Annotated[
+        bool | None,
+        typer.Option(
+            "--kingfisher/--no-kingfisher",
+            help="Use Kingfisher scanner - 700+ rules, password hashes, secret validation",
         ),
     ] = None,
     native_only: Annotated[
@@ -280,11 +288,15 @@ def guard(
         if detect_secrets is not None
         else "detect-secrets" in guard_cfg.scanners
     )
+    use_kingfisher_final = (
+        kingfisher if kingfisher is not None else "kingfisher" in guard_cfg.scanners
+    )
 
     if native_only:
         use_gitleaks_final = False
         use_trufflehog_final = False
         use_detect_secrets_final = False
+        use_kingfisher_final = False
 
     # Extract allowed clear files from partial_encryption config
     # These files are intentionally unencrypted and should not be flagged
@@ -300,6 +312,7 @@ def guard(
         use_gitleaks=use_gitleaks_final,
         use_trufflehog=use_trufflehog_final,
         use_detect_secrets=use_detect_secrets_final,
+        use_kingfisher=use_kingfisher_final,
         auto_install=auto_install,
         include_git_history=history or guard_cfg.include_history,
         check_entropy=entropy or guard_cfg.check_entropy,

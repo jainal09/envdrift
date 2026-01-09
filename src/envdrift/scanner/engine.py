@@ -37,6 +37,7 @@ class GuardConfig:
         use_gitleaks: Enable gitleaks scanner (if available).
         use_trufflehog: Enable trufflehog scanner (if available).
         use_detect_secrets: Enable detect-secrets scanner - the "final boss".
+        use_kingfisher: Enable Kingfisher scanner (700+ rules, password hashes).
         auto_install: Auto-install missing external scanners.
         include_git_history: Scan git history for secrets.
         check_entropy: Enable entropy-based secret detection.
@@ -50,6 +51,7 @@ class GuardConfig:
     use_gitleaks: bool = True
     use_trufflehog: bool = False
     use_detect_secrets: bool = False
+    use_kingfisher: bool = False
     auto_install: bool = True
     include_git_history: bool = False
     check_entropy: bool = False
@@ -87,6 +89,7 @@ class GuardConfig:
             use_gitleaks="gitleaks" in scanners,
             use_trufflehog="trufflehog" in scanners,
             use_detect_secrets="detect-secrets" in scanners,
+            use_kingfisher="kingfisher" in scanners,
             auto_install=guard_config.get("auto_install", True),
             include_git_history=guard_config.get("include_history", False),
             check_entropy=guard_config.get("check_entropy", False),
@@ -192,6 +195,23 @@ class ScanEngine:
                     self.scanners.append(scanner)
             except ImportError:
                 pass  # detect-secrets not yet implemented
+
+        # Kingfisher scanner - 700+ rules, password hashes, validation
+        if self.config.use_kingfisher:
+            try:
+                from envdrift.scanner.kingfisher import KingfisherScanner
+
+                scanner = KingfisherScanner(
+                    auto_install=self.config.auto_install,
+                    validate_secrets=True,
+                    confidence="low",  # Maximum detection
+                    scan_binary_files=True,
+                    extract_archives=True,
+                )
+                if scanner.is_installed() or self.config.auto_install:
+                    self.scanners.append(scanner)
+            except ImportError:
+                pass  # Kingfisher not available
 
     def scan(self, paths: list[Path]) -> AggregatedScanResult:
         """Run all configured scanners on the given paths in parallel.
