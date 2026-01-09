@@ -183,7 +183,7 @@ Common rule IDs:
 By default, `.clear` files ARE scanned. This ensures all configuration files
 are checked for accidentally included secrets. To skip them:
 
-**Option 1: Skip all .clear files globally**
+#### Option 1: Skip all .clear files globally
 
 ```toml
 [guard]
@@ -192,16 +192,17 @@ skip_clear_files = true
 
 Or via CLI: `envdrift guard --skip-clear`
 
-**Option 2: Skip specific .clear files using ignore rules**
+#### Option 2: Skip specific .clear files using ignore rules
 
 ```toml
 [guard.ignore_rules]
 "high-entropy-string" = ["**/config/.env.local.clear"]
 ```
 
-**Option 3: Use inline ignore comments**
+#### Option 3: Use inline ignore comments
 
 In your `.clear` file:
+
 ```bash
 TEMPLATE_STRING="{Timestamp:G}|{Message}"  # envdrift:ignore
 ```
