@@ -21,7 +21,6 @@ See: https://github.com/awslabs/git-secrets
 
 from __future__ import annotations
 
-import contextlib
 import logging
 import os
 import platform
@@ -450,7 +449,16 @@ class GitSecretsScanner(ScannerBackend):
                         git_root = current
                         # Update scan_paths to be relative to git root
                         if path.is_file():
-                            scan_paths = [str(original_path.relative_to(git_root))]
+                            try:
+                                scan_paths = [str(original_path.relative_to(git_root))]
+                            except ValueError:
+                                # File is outside the git repository, skip it
+                                logger.debug(
+                                    "File %s is outside git repository %s, skipping",
+                                    original_path,
+                                    git_root,
+                                )
+                                continue
                         break
                     current = current.parent
             # Use git_root as cwd for git-secrets commands
@@ -474,8 +482,14 @@ class GitSecretsScanner(ScannerBackend):
                                 "Registering AWS patterns in git-secrets for repo: %s",
                                 cwd,
                             )
-                            with contextlib.suppress(Exception):
+                            try:
                                 self._run_git_secrets(["--register-aws"], cwd)
+                            except Exception as e:
+                                logger.debug(
+                                    "Failed to register AWS patterns in %s: %s",
+                                    cwd,
+                                    e,
+                                )
 
                 # Run the scan
                 if include_git_history:
