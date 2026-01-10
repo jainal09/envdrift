@@ -441,7 +441,7 @@ Makefile                           (modify - new target)
 **Deliverables:**
 
 - [ ] `.github/workflows/integration-tests.yml`
-- [ ] Matrix for Python 3.11, 3.12, 3.13
+- [ ] Matrix for Python 3.11, 3.12, 3.13, 3.14
 - [ ] Docker service containers for LocalStack + Vault
 - [ ] Optional GCP/Azure tests with repository secrets
 
