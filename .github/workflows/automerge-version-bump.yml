@@ -70,6 +70,10 @@ jobs:
             // Poll for PR to become mergeable with retries
             // This handles the case where other checks (CodeQL, Integration Tests, etc.)
             // are still running when CI completes
+            //
+            // Timing: With exponential backoff (1.5x), delays are approximately:
+            // 30s, 45s, 67s, 101s, 120s(cap), 120s, 120s, 120s, 120s, 120s
+            // Total maximum wait time: ~15-16 minutes before fallback to auto-merge
             const maxAttempts = 10;
             const initialDelayMs = 30000; // 30 seconds
             const maxDelayMs = 120000; // 2 minutes
@@ -81,7 +85,19 @@ jobs:
                 pull_number: prNumber
               });
 
-              console.log(`Attempt ${attempt}/${maxAttempts}: PR #${prNumber} mergeable_state = ${pr.mergeable_state}`);
+              console.log(`Attempt ${attempt}/${maxAttempts}: PR #${prNumber} mergeable_state = ${pr.mergeable_state}, state = ${pr.state}, draft = ${pr.draft}`);
+
+              // Check PR state first - if closed/merged, no point checking mergeable_state
+              if (pr.state !== 'open') {
+                console.log(`PR #${prNumber} is no longer open (state: ${pr.state})`);
+                return;
+              }
+
+              // Skip draft PRs - they cannot be merged
+              if (pr.draft) {
+                console.log(`PR #${prNumber} is a draft - cannot auto-merge`);
+                return;
+              }
 
               // Check if PR is ready to merge
               if (pr.mergeable_state === 'clean') {
@@ -96,17 +112,22 @@ jobs:
                 return;
               }
 
-              // If PR is blocked or has conflicts, don't retry
-              if (pr.mergeable_state === 'blocked' || pr.mergeable_state === 'dirty') {
-                console.log(`PR #${prNumber} is ${pr.mergeable_state} - cannot auto-merge`);
+              // Handle terminal states that won't resolve with waiting
+              // 'dirty' = merge conflicts that need manual resolution
+              // 'behind' = branch needs rebase/update, won't resolve by waiting
+              if (pr.mergeable_state === 'dirty') {
+                console.log(`PR #${prNumber} has merge conflicts (dirty) - cannot auto-merge`);
                 return;
               }
 
-              // If PR was already merged or closed, exit
-              if (pr.state !== 'open') {
-                console.log(`PR #${prNumber} is no longer open (state: ${pr.state})`);
+              if (pr.mergeable_state === 'behind') {
+                console.log(`PR #${prNumber} is behind the base branch - needs rebase, cannot auto-merge by waiting`);
                 return;
               }
+
+              // Note: 'blocked' state means waiting for reviews/required checks
+              // This is transient and may resolve, so we continue retrying
+              // 'unstable' and 'unknown' are also transient states worth retrying
 
               // If this is the last attempt, try enabling auto-merge as fallback
               if (attempt === maxAttempts) {
@@ -131,7 +152,28 @@ jobs:
                   console.log(`Auto-merge enabled for PR #${prNumber}`);
                 } catch (error) {
                   console.log(`Failed to enable auto-merge: ${error.message}`);
-                  throw error;
+                  // Check if PR became clean while we were trying to enable auto-merge (race condition)
+                  if (error.message.includes('clean') || error.message.includes('mergeable')) {
+                    console.log(`PR may have become clean, attempting direct merge...`);
+                    const { data: freshPr } = await github.rest.pulls.get({
+                      owner: context.repo.owner,
+                      repo: context.repo.repo,
+                      pull_number: prNumber
+                    });
+                    if (freshPr.mergeable_state === 'clean' && freshPr.state === 'open') {
+                      await github.rest.pulls.merge({
+                        owner: context.repo.owner,
+                        repo: context.repo.repo,
+                        pull_number: prNumber,
+                        merge_method: 'squash'
+                      });
+                      console.log(`Successfully merged PR #${prNumber} after state change`);
+                      return;
+                    }
+                  }
+                  // Log warning but don't throw - PR may eventually become mergeable
+                  // or will be picked up on next CI run
+                  console.log(`Warning: PR #${prNumber} may need manual intervention or will be picked up on next CI run`);
                 }
                 return;
               }
