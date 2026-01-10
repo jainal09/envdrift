@@ -33,7 +33,7 @@ jobs:
               const prNumberRaw = context.payload.inputs?.pr_number;
               const prNumber = Number(prNumberRaw);
               if (!Number.isInteger(prNumber) || prNumber <= 0) {
-                throw new Error(`Invalid pr_number input: ${prNumberRaw}`);
+                throw new Error(`Invalid pr_number input (must be a positive integer): ${prNumberRaw}`);
               }
 
               const { data: pr } = await github.rest.pulls.get({
@@ -154,7 +154,11 @@ jobs:
                   return;
                 } catch (error) {
                   const message = error?.message || '';
-                  const isBaseBranchModified = message.includes('Base branch was modified');
+                  const apiMessage = error?.response?.data?.message || error?.response?.body?.message || '';
+                  const fullMessage = [message, apiMessage].filter(Boolean).join(' | ');
+                  const status = error?.status;
+                  const isBaseBranchModified =
+                    status === 405 && fullMessage.includes('Base branch was modified');
                   if (isBaseBranchModified) {
                     const delayMs = getDelayMs(attempt);
                     console.log(`Base branch changed during merge attempt, waiting ${delayMs / 1000}s before retry...`);
