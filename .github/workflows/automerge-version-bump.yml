@@ -9,7 +9,7 @@ on:
       pr_number:
         description: "PR number to auto-merge (manual trigger)"
         required: true
-        type: string
+        type: number
 
 permissions:
   contents: write
@@ -32,7 +32,7 @@ jobs:
             if (context.eventName === 'workflow_dispatch') {
               const prNumberRaw = context.payload.inputs?.pr_number;
               const prNumber = Number(prNumberRaw);
-              if (!Number.isInteger(prNumber)) {
+              if (!Number.isInteger(prNumber) || prNumber <= 0) {
                 throw new Error(`Invalid pr_number input: ${prNumberRaw}`);
               }
 
@@ -115,8 +115,11 @@ jobs:
             const maxAttempts = 10;
             const initialDelayMs = 30000; // 30 seconds
             const maxDelayMs = 120000; // 2 minutes
+            const getDelayMs = (attempt) =>
+              Math.min(initialDelayMs * Math.pow(1.5, attempt - 1), maxDelayMs);
 
-            for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+            let attempt = 1;
+            while (attempt <= maxAttempts) {
               const { data: pr } = await github.rest.pulls.get({
                 owner: context.repo.owner,
                 repo: context.repo.repo,
@@ -151,9 +154,12 @@ jobs:
                   return;
                 } catch (error) {
                   const message = error?.message || '';
-                  const status = error?.status || error?.response?.status;
-                  if (status === 405 && message.includes('Base branch was modified')) {
-                    console.log(`Base branch changed during merge attempt, will retry after backoff`);
+                  const isBaseBranchModified = message.includes('Base branch was modified');
+                  if (isBaseBranchModified) {
+                    const delayMs = getDelayMs(attempt);
+                    console.log(`Base branch changed during merge attempt, waiting ${delayMs / 1000}s before retry...`);
+                    await sleep(delayMs);
+                    continue;
                   } else {
                     throw error;
                   }
@@ -227,9 +233,10 @@ jobs:
               }
 
               // Wait before next attempt with exponential backoff (capped)
-              const delayMs = Math.min(initialDelayMs * Math.pow(1.5, attempt - 1), maxDelayMs);
+              const delayMs = getDelayMs(attempt);
               console.log(`PR not ready yet, waiting ${delayMs / 1000}s before retry...`);
               await sleep(delayMs);
+              attempt += 1;
             }
 
       - name: Comment on major version bump
