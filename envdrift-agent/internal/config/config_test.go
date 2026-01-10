@@ -96,14 +96,26 @@ func TestLoadMissingConfig(t *testing.T) {
 func TestSaveAndLoad(t *testing.T) {
 	tempDir := t.TempDir()
 	originalHome := os.Getenv("HOME")
-	os.Setenv("HOME", tempDir)
-	defer os.Setenv("HOME", originalHome)
+	if err := os.Setenv("HOME", tempDir); err != nil {
+		t.Fatalf("Failed to set HOME: %v", err)
+	}
+	defer func() {
+		if err := os.Setenv("HOME", originalHome); err != nil {
+			t.Fatalf("Failed to restore HOME: %v", err)
+		}
+	}()
 
 	// Windows uses USERPROFILE
 	if runtime.GOOS == "windows" {
 		originalProfile := os.Getenv("USERPROFILE")
-		os.Setenv("USERPROFILE", tempDir)
-		defer os.Setenv("USERPROFILE", originalProfile)
+		if err := os.Setenv("USERPROFILE", tempDir); err != nil {
+			t.Fatalf("Failed to set USERPROFILE: %v", err)
+		}
+		defer func() {
+			if err := os.Setenv("USERPROFILE", originalProfile); err != nil {
+				t.Fatalf("Failed to restore USERPROFILE: %v", err)
+			}
+		}()
 	}
 
 	// Create and save config
