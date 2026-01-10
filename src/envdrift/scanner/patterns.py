@@ -326,13 +326,13 @@ CRITICAL_PATTERNS: list[SecretPattern] = [
     SecretPattern(
         id="slack-oauth-access-token",
         description="Slack OAuth Access Token",
-        pattern=re.compile(r"(xoxa-[0-9]+-[0-9]+-[0-9]+-[a-f0-9]+)"),
+        pattern=re.compile(r"(xoxa-[0-9]+-[0-9]+-[0-9]+-[a-z0-9]+)"),
         severity=FindingSeverity.CRITICAL,
     ),
     SecretPattern(
         id="slack-refresh-token",
         description="Slack Refresh Token",
-        pattern=re.compile(r"(xoxr-[0-9]+-[a-zA-Z0-9]+)"),
+        pattern=re.compile(r"(xoxr-[0-9]+-[a-z0-9]+)"),
         severity=FindingSeverity.CRITICAL,
     ),
     # Mailgun
@@ -368,7 +368,7 @@ CRITICAL_PATTERNS: list[SecretPattern] = [
     SecretPattern(
         id="braintree-access-token",
         description="Braintree Access Token",
-        pattern=re.compile(r"(access_token\$production\$[a-z0-9]+\$[a-f0-9]{32})"),
+        pattern=re.compile(r"(access_token\$(?:production|sandbox)\$[a-z0-9]+\$[a-f0-9]{32})"),
         severity=FindingSeverity.CRITICAL,
     ),
     # Facebook
@@ -601,7 +601,7 @@ HIGH_PATTERNS: list[SecretPattern] = [
     SecretPattern(
         id="sentry-dsn",
         description="Sentry DSN",
-        pattern=re.compile(r"https://[a-f0-9]{32}@[a-z0-9.-]+\.ingest\.sentry\.io/[0-9]+"),
+        pattern=re.compile(r"(https://[a-f0-9]{32}@[a-z0-9.-]+\.ingest\.sentry\.io/[0-9]+)"),
         severity=FindingSeverity.HIGH,
     ),
     # Linear API Key
