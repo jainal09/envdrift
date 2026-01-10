@@ -527,3 +527,103 @@ def test_guard_with_partial_encryption_config(tmp_path: Path, monkeypatch):
     assert created_configs
     # Verify clear_file was passed to guard config
     assert created_configs[0].allowed_clear_files == [".env.production.clear"]
+
+
+def test_guard_skip_clear_flag(tmp_path: Path, monkeypatch):
+    """--skip-clear flag enables skipping .clear files."""
+    config = EnvdriftConfig()
+    created_configs, _info_calls = _patch_guard_dependencies(monkeypatch, config, _build_result([]))
+
+    result = runner.invoke(app, ["guard", str(tmp_path), "--skip-clear"])
+    assert result.exit_code == 0
+    assert created_configs
+    assert created_configs[0].skip_clear_files is True
+
+
+def test_guard_no_skip_clear_flag(tmp_path: Path, monkeypatch):
+    """--no-skip-clear flag explicitly disables skipping .clear files."""
+    config = EnvdriftConfig(guard=FileGuardConfig(skip_clear_files=True))
+    created_configs, _info_calls = _patch_guard_dependencies(monkeypatch, config, _build_result([]))
+
+    result = runner.invoke(app, ["guard", str(tmp_path), "--no-skip-clear"])
+    assert result.exit_code == 0
+    assert created_configs
+    assert created_configs[0].skip_clear_files is False
+
+
+def test_guard_skip_clear_from_config(tmp_path: Path, monkeypatch):
+    """skip_clear_files from config is passed to guard."""
+    config = EnvdriftConfig(guard=FileGuardConfig(skip_clear_files=True))
+    created_configs, _info_calls = _patch_guard_dependencies(monkeypatch, config, _build_result([]))
+
+    result = runner.invoke(app, ["guard", str(tmp_path)])
+    assert result.exit_code == 0
+    assert created_configs
+    assert created_configs[0].skip_clear_files is True
+
+
+def test_guard_skip_clear_cli_overrides_config(tmp_path: Path, monkeypatch):
+    """CLI --skip-clear overrides config setting."""
+    # Config has skip_clear_files=False
+    config = EnvdriftConfig(guard=FileGuardConfig(skip_clear_files=False))
+    created_configs, _info_calls = _patch_guard_dependencies(monkeypatch, config, _build_result([]))
+
+    # CLI sets --skip-clear
+    result = runner.invoke(app, ["guard", str(tmp_path), "--skip-clear"])
+    assert result.exit_code == 0
+    assert created_configs
+    assert created_configs[0].skip_clear_files is True
+
+
+def test_guard_skip_clear_default_is_false(tmp_path: Path, monkeypatch):
+    """By default, skip_clear_files is False (scan .clear files)."""
+    config = EnvdriftConfig()
+    created_configs, _info_calls = _patch_guard_dependencies(monkeypatch, config, _build_result([]))
+
+    result = runner.invoke(app, ["guard", str(tmp_path)])
+    assert result.exit_code == 0
+    assert created_configs
+    assert created_configs[0].skip_clear_files is False
+
+
+def test_guard_ignore_rules_from_config(tmp_path: Path, monkeypatch):
+    """ignore_rules from config is passed to guard."""
+    config = EnvdriftConfig(
+        guard=FileGuardConfig(
+            ignore_rules={
+                "ftp-password": ["**/*.json"],
+                "django-secret-key": ["**/test_settings.py"],
+            }
+        )
+    )
+    created_configs, _info_calls = _patch_guard_dependencies(monkeypatch, config, _build_result([]))
+
+    result = runner.invoke(app, ["guard", str(tmp_path)])
+    assert result.exit_code == 0
+    assert created_configs
+    assert created_configs[0].ignore_rules == {
+        "ftp-password": ["**/*.json"],
+        "django-secret-key": ["**/test_settings.py"],
+    }
+
+
+def test_guard_kingfisher_flag(tmp_path: Path, monkeypatch):
+    """--kingfisher flag enables kingfisher scanner."""
+    config = EnvdriftConfig()
+    created_configs, _info_calls = _patch_guard_dependencies(monkeypatch, config, _build_result([]))
+
+    result = runner.invoke(app, ["guard", str(tmp_path), "--kingfisher"])
+    assert result.exit_code == 0
+    assert created_configs
+    assert created_configs[0].use_kingfisher is True
+
+
+def test_guard_no_kingfisher_flag(tmp_path: Path, monkeypatch):
+    """--no-kingfisher flag disables kingfisher scanner."""
+    config = EnvdriftConfig(guard=FileGuardConfig(scanners=["native", "kingfisher"]))
+    created_configs, _info_calls = _patch_guard_dependencies(monkeypatch, config, _build_result([]))
+
+    result = runner.invoke(app, ["guard", str(tmp_path), "--no-kingfisher"])
+    assert result.exit_code == 0
+    assert created_configs
+    assert created_configs[0].use_kingfisher is False

@@ -104,7 +104,11 @@ class GuardConfig:
         check_entropy = false
         entropy_threshold = 4.5
         fail_on_severity = "high"
+        skip_clear_files = false  # Set to true to skip .clear files
         ignore_paths = ["*.test.py", "tests/**"]
+
+        [guard.ignore_rules]
+        "high-entropy-string" = ["**/*.clear"]
     """
 
     scanners: list[str] = field(default_factory=lambda: ["native", "gitleaks"])
@@ -113,7 +117,9 @@ class GuardConfig:
     check_entropy: bool = False
     entropy_threshold: float = 4.5
     fail_on_severity: str = "high"
+    skip_clear_files: bool = False  # Skip .clear files from scanning
     ignore_paths: list[str] = field(default_factory=list)
+    ignore_rules: dict[str, list[str]] = field(default_factory=dict)
     verify_secrets: bool = False  # For trufflehog verification
 
 
@@ -273,7 +279,9 @@ class EnvdriftConfig:
             check_entropy=guard_section.get("check_entropy", False),
             entropy_threshold=guard_section.get("entropy_threshold", 4.5),
             fail_on_severity=guard_section.get("fail_on_severity", "high"),
+            skip_clear_files=guard_section.get("skip_clear_files", False),
             ignore_paths=guard_section.get("ignore_paths", []),
+            ignore_rules=guard_section.get("ignore_rules", {}),
             verify_secrets=guard_section.get("verify_secrets", False),
         )
 
