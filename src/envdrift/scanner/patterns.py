@@ -322,26 +322,7 @@ CRITICAL_PATTERNS: list[SecretPattern] = [
         severity=FindingSeverity.HIGH,
         keywords=("datadog",),
     ),
-    # Modern Slack tokens (xoxb=bot, xoxp=user, xapp=app-level)
-    # Note: xoxa/xoxe are deprecated/legacy formats
-    SecretPattern(
-        id="slack-bot-token",
-        description="Slack Bot Token",
-        pattern=re.compile(r"(xoxb-[0-9]+-[0-9]+-[a-zA-Z0-9]+)"),
-        severity=FindingSeverity.CRITICAL,
-    ),
-    SecretPattern(
-        id="slack-user-token",
-        description="Slack User Token",
-        pattern=re.compile(r"(xoxp-[0-9]+-[0-9]+-[0-9]+-[a-zA-Z0-9]+)"),
-        severity=FindingSeverity.CRITICAL,
-    ),
-    SecretPattern(
-        id="slack-app-token",
-        description="Slack App-Level Token",
-        pattern=re.compile(r"(xapp-[0-9]+-[A-Z0-9]+-[0-9]+-[a-zA-Z0-9]+)"),
-        severity=FindingSeverity.CRITICAL,
-    ),
+    # Slack Configuration Token (for App Manifest APIs)
     SecretPattern(
         id="slack-config-token",
         description="Slack Configuration Token",
