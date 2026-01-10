@@ -133,7 +133,7 @@ Runs on every PR:
 
 Runs on every PR with full Docker support:
 
-- Python 3.11, 3.12, 3.13 matrix
+- Python 3.11, 3.12, 3.13, 3.14 matrix
 - Service containers: LocalStack, HashiCorp Vault, Lowkey Vault
 - Full integration test suite
 - Coverage reporting to Codecov
