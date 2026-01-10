@@ -85,7 +85,9 @@ func (w *Watcher) Start() {
 // Stop stops the watcher
 func (w *Watcher) Stop() {
 	close(w.done)
-	w.fsWatcher.Close()
+	if err := w.fsWatcher.Close(); err != nil {
+		log.Printf("Watcher close error: %v", err)
+	}
 }
 
 func (w *Watcher) run() {

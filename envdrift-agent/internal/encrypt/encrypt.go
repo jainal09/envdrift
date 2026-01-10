@@ -15,12 +15,16 @@ import (
 var ErrEnvdriftNotFound = errors.New("envdrift not found. Install it: pip install envdrift")
 
 // IsEncrypted checks if a .env file is already encrypted.
-func IsEncrypted(path string) (bool, error) {
+func IsEncrypted(path string) (encrypted bool, err error) {
 	file, err := os.Open(path)
 	if err != nil {
 		return false, err
 	}
-	defer file.Close()
+	defer func() {
+		if cerr := file.Close(); cerr != nil && err == nil {
+			err = cerr
+		}
+	}()
 
 	scanner := bufio.NewScanner(file)
 	for scanner.Scan() {
