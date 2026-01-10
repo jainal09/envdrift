@@ -210,13 +210,18 @@ class IgnoreFilter:
         path_str = str(file_path)
 
         for pattern in path_patterns:
+            # Try full path match first
             if fnmatch.fnmatch(path_str, pattern):
                 return True
-            # Also try matching just the relative path parts
+            # Try matching suffix paths (optimization: break on first match)
             for i in range(len(file_path.parts)):
                 partial = "/".join(file_path.parts[i:])
                 if fnmatch.fnmatch(partial, pattern):
                     return True
+                # Early break: if pattern doesn't contain wildcards and partial is longer,
+                # no point checking shorter suffixes
+                if "*" not in pattern and "?" not in pattern and len(partial) < len(pattern):
+                    break
 
         return False
 

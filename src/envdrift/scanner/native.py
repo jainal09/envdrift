@@ -494,7 +494,7 @@ class NativeScanner(ScannerBackend):
         # Check 1: Is this an unencrypted .env file?
         is_env_file = self._is_env_file(file_path)
         is_encrypted = self._is_encrypted(content)
-        is_clear_file = self._is_clear_file(file_path)
+        # Note: is_clear_file already calculated at line 476 for early return
 
         # Check if file is an allowed clear file (from partial_encryption config)
         is_allowed_clear = self._is_allowed_clear_file(file_path)
@@ -542,8 +542,10 @@ class NativeScanner(ScannerBackend):
     def _is_clear_file(self, path: Path) -> bool:
         """Check if a file is a .clear file (partial encryption non-sensitive file).
 
-        .clear files contain non-sensitive configuration values that don't need
-        encryption. They should be exempt from entropy scanning.
+        .clear files typically contain non-sensitive configuration values that may be
+        intentionally left unencrypted. They are exempt from the "unencrypted-env-file"
+        check but are still subject to entropy and pattern scanning unless clear files
+        are explicitly skipped elsewhere (for example via a skip_clear_files setting).
 
         Args:
             path: Path to check.
