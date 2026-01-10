@@ -326,13 +326,13 @@ CRITICAL_PATTERNS: list[SecretPattern] = [
     SecretPattern(
         id="slack-oauth-access-token",
         description="Slack OAuth Access Token",
-        pattern=re.compile(r"(xoxa-[0-9]+-[0-9]+-[0-9]+-[a-z0-9]+)"),
+        pattern=re.compile(r"(xoxa-[0-9]+-[0-9]+-[0-9]+-[a-zA-Z0-9]+)"),
         severity=FindingSeverity.CRITICAL,
     ),
     SecretPattern(
         id="slack-refresh-token",
         description="Slack Refresh Token",
-        pattern=re.compile(r"(xoxr-[0-9]+-[a-z0-9]+)"),
+        pattern=re.compile(r"(xoxe-[0-9]+-[a-zA-Z0-9]+)"),
         severity=FindingSeverity.CRITICAL,
     ),
     # Mailgun
