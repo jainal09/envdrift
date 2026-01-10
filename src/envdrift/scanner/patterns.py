@@ -322,24 +322,37 @@ CRITICAL_PATTERNS: list[SecretPattern] = [
         severity=FindingSeverity.HIGH,
         keywords=("datadog",),
     ),
-    # Additional Slack tokens
+    # Modern Slack tokens (xoxb=bot, xoxp=user, xapp=app-level)
+    # Note: xoxa/xoxe are deprecated/legacy formats
     SecretPattern(
-        id="slack-oauth-access-token",
-        description="Slack OAuth Access Token",
-        pattern=re.compile(r"(xoxa-[0-9]+-[0-9]+-[0-9]+-[a-zA-Z0-9]+)"),
+        id="slack-bot-token",
+        description="Slack Bot Token",
+        pattern=re.compile(r"(xoxb-[0-9]+-[0-9]+-[a-zA-Z0-9]+)"),
         severity=FindingSeverity.CRITICAL,
     ),
     SecretPattern(
-        id="slack-refresh-token",
-        description="Slack Refresh Token",
-        pattern=re.compile(r"(xoxe-[0-9]+-[a-zA-Z0-9]+)"),
+        id="slack-user-token",
+        description="Slack User Token",
+        pattern=re.compile(r"(xoxp-[0-9]+-[0-9]+-[0-9]+-[a-zA-Z0-9]+)"),
         severity=FindingSeverity.CRITICAL,
     ),
-    # Mailgun
+    SecretPattern(
+        id="slack-app-token",
+        description="Slack App-Level Token",
+        pattern=re.compile(r"(xapp-[0-9]+-[A-Z0-9]+-[0-9]+-[a-zA-Z0-9]+)"),
+        severity=FindingSeverity.CRITICAL,
+    ),
+    SecretPattern(
+        id="slack-config-token",
+        description="Slack Configuration Token",
+        pattern=re.compile(r"(xoxe\.xox[bp]-[0-9]+-[a-zA-Z0-9]+)"),
+        severity=FindingSeverity.CRITICAL,
+    ),
+    # Mailgun - format is not officially documented, require keyword context
     SecretPattern(
         id="mailgun-api-key",
         description="Mailgun API Key",
-        pattern=re.compile(r"(key-[a-zA-Z0-9]{32})"),
+        pattern=re.compile(r"(?i)mailgun[_-]?(?:api[_-]?)?key\s*[=:]\s*['\"]?([a-zA-Z0-9-]{32,})['\"]?"),
         severity=FindingSeverity.CRITICAL,
         keywords=("mailgun",),
     ),
@@ -351,18 +364,21 @@ CRITICAL_PATTERNS: list[SecretPattern] = [
         severity=FindingSeverity.HIGH,
         keywords=("twilio",),
     ),
-    # Square
+    # Square (legacy format - modern tokens are opaque bearer strings)
+    # These patterns detect older sq0atp/sq0csp prefixed tokens
     SecretPattern(
         id="square-access-token",
-        description="Square Access Token",
+        description="Square Access Token (Legacy Format)",
         pattern=re.compile(r"(sq0atp-[a-zA-Z0-9_-]{22,})"),
         severity=FindingSeverity.CRITICAL,
+        keywords=("square",),
     ),
     SecretPattern(
         id="square-oauth-secret",
-        description="Square OAuth Secret",
+        description="Square OAuth Secret (Legacy Format)",
         pattern=re.compile(r"(sq0csp-[a-zA-Z0-9_-]{40,})"),
         severity=FindingSeverity.CRITICAL,
+        keywords=("square",),
     ),
     # Braintree/PayPal
     SecretPattern(
@@ -371,12 +387,13 @@ CRITICAL_PATTERNS: list[SecretPattern] = [
         pattern=re.compile(r"(access_token\$(?:production|sandbox)\$[a-z0-9]+\$[a-f0-9]{32})"),
         severity=FindingSeverity.CRITICAL,
     ),
-    # Facebook
+    # Facebook - tokens are opaque strings, commonly start with EAA but can vary
     SecretPattern(
         id="facebook-access-token",
         description="Facebook Access Token",
-        pattern=re.compile(r"(EAACEdEose0cBA[a-zA-Z0-9]+)"),
+        pattern=re.compile(r"(EAA[a-zA-Z0-9]{50,})"),
         severity=FindingSeverity.CRITICAL,
+        keywords=("facebook", "fb", "graph"),
     ),
     # PuTTY private key
     SecretPattern(
