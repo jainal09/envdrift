@@ -32,7 +32,9 @@ func TestIsFileOpenClosedFile(t *testing.T) {
 		t.Fatalf("Failed to create test file: %v", err)
 	}
 	_, _ = f.WriteString("TEST=value\n")
-	f.Close() // Close immediately
+	if err := f.Close(); err != nil {
+		t.Fatalf("Failed to close test file: %v", err)
+	}
 
 	// File should not be open
 	result := IsFileOpen(filePath)
@@ -54,7 +56,11 @@ func TestIsFileOpenOpenFile(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to create test file: %v", err)
 	}
-	defer f.Close()
+	defer func() {
+		if err := f.Close(); err != nil {
+			t.Fatalf("Failed to close test file: %v", err)
+		}
+	}()
 
 	_, _ = f.WriteString("TEST=value\n")
 
@@ -89,7 +95,9 @@ func TestGetOpenProcessesClosedFile(t *testing.T) {
 		t.Fatalf("Failed to create test file: %v", err)
 	}
 	_, _ = f.WriteString("TEST=value\n")
-	f.Close()
+	if err := f.Close(); err != nil {
+		t.Fatalf("Failed to close test file: %v", err)
+	}
 
 	processes := GetOpenProcesses(filePath)
 	if len(processes) != 0 {
