@@ -355,7 +355,7 @@ CRITICAL_PATTERNS: list[SecretPattern] = [
     SecretPattern(
         id="square-access-token",
         description="Square Access Token",
-        pattern=re.compile(r"(sqOatp-[a-zA-Z0-9_-]{22,})"),
+        pattern=re.compile(r"(sq0atp-[a-zA-Z0-9_-]{22,})"),
         severity=FindingSeverity.CRITICAL,
     ),
     SecretPattern(
