@@ -58,6 +58,7 @@ jobs:
 
       - name: Auto-merge minor version bump
         if: steps.get-pr.outputs.result != 'null' && fromJSON(steps.get-pr.outputs.result).shouldAutoMerge
+        timeout-minutes: 20
         uses: actions/github-script@v8
         with:
           script: |
