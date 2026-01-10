@@ -202,14 +202,14 @@ CRITICAL_PATTERNS: list[SecretPattern] = [
     SecretPattern(
         id="twilio-api-key",
         description="Twilio API Key",
-        pattern=re.compile(r"(SK[a-f0-9]{32})"),
+        pattern=re.compile(r"(SK[a-fA-F0-9]{32})"),
         severity=FindingSeverity.HIGH,
         keywords=("twilio",),
     ),
     SecretPattern(
         id="twilio-account-sid",
         description="Twilio Account SID",
-        pattern=re.compile(r"(AC[a-f0-9]{32})"),
+        pattern=re.compile(r"(AC[a-fA-F0-9]{32})"),
         severity=FindingSeverity.HIGH,
         keywords=("twilio",),
     ),
@@ -347,7 +347,7 @@ CRITICAL_PATTERNS: list[SecretPattern] = [
     SecretPattern(
         id="twilio-app-sid",
         description="Twilio Application SID",
-        pattern=re.compile(r"(AP[a-f0-9]{32})"),
+        pattern=re.compile(r"(AP[a-fA-F0-9]{32})"),
         severity=FindingSeverity.HIGH,
         keywords=("twilio",),
     ),
@@ -403,7 +403,7 @@ CRITICAL_PATTERNS: list[SecretPattern] = [
     ),
 ]
 
-# Medium-confidence patterns - generic patterns that may indicate secrets
+# Mixed-confidence patterns - patterns with varying severity levels
 HIGH_PATTERNS: list[SecretPattern] = [
     # JWT - medium severity because JWTs are often meant to be shared
     SecretPattern(
