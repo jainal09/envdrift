@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import subprocess
 from pathlib import Path
+from types import SimpleNamespace
 
 from typer.testing import CliRunner
 
@@ -135,6 +137,27 @@ def test_guard_uses_config_scanners(tmp_path: Path, monkeypatch):
     assert guard_config.include_git_history is True
     assert guard_config.check_entropy is True
     assert guard_config.ignore_paths == ["vendor/**"]
+
+
+def test_guard_pr_base_fetch_warns_on_failure(tmp_path: Path, monkeypatch):
+    """Fetch failures in PR mode should emit a warning when verbose."""
+    config = EnvdriftConfig()
+    dummy_result = _build_result([])
+    _patch_guard_dependencies(monkeypatch, config, dummy_result)
+
+    fetch_result = SimpleNamespace(returncode=1, stdout="", stderr="fetch failed")
+    diff_result = SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    def fake_run(args, **_kwargs):
+        if args[:2] == ["git", "fetch"]:
+            return fetch_result
+        return diff_result
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+
+    result = runner.invoke(app, ["guard", "--pr-base", "origin/", "--verbose"])
+    assert result.exit_code == 0
+    assert "warning" in result.output.lower()
 
 
 def test_guard_config_can_disable_gitleaks(tmp_path: Path, monkeypatch):
