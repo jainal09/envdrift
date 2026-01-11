@@ -817,3 +817,21 @@ class TestSyncEngineSchemaValidation:
         )
 
         assert engine._validate_schema(mapping) is True
+
+    def test_validate_schema_returns_true_without_env_file(
+        self, mock_vault_client: MagicMock, tmp_path: Path
+    ) -> None:
+        """Validation should skip when no env file exists."""
+        service_dir = tmp_path / "service"
+        service_dir.mkdir()
+
+        mapping = ServiceMapping(secret_name="test-key", folder_path=service_dir)
+        config = SyncConfig(mappings=[mapping])
+
+        engine = SyncEngine(
+            config=config,
+            vault_client=mock_vault_client,
+            mode=SyncMode(schema_path="service_settings:Settings"),
+        )
+
+        assert engine._validate_schema(mapping) is True
