@@ -152,7 +152,7 @@ class AWSSecretsManagerClient(VaultClient):
                         )
                     return SecretValue(
                         name=name,
-                        value=str(parsed),
+                        value=json.dumps(parsed),
                         version=version_id,
                         metadata=metadata,
                     )
@@ -283,7 +283,7 @@ class AWSSecretsManagerClient(VaultClient):
             # Secret exists, or create denied but update may be allowed
             if error_code in ("ResourceExistsException", "AccessDeniedException"):
                 return self._put_secret_value(name, value)
-            if error_code in ("AccessDeniedException", "UnauthorizedException"):
+            if error_code == "UnauthorizedException":
                 raise AuthenticationError(f"Access denied for secret: {name}") from e
             if error_code:
                 raise VaultError(f"Failed to set secret {name}: {e}") from e

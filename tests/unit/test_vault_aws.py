@@ -255,6 +255,8 @@ class TestAWSSecretsManagerClient:
             def __init__(self, code):
                 self.response = {"Error": {"Code": code}}
 
+        mock_boto3._ClientError = FakeClientError
+
         mock_sm_client, _ = patched_boto_clients
         mock_sm_client.create_secret.side_effect = FakeClientError("UnauthorizedException")
 
@@ -278,6 +280,8 @@ class TestAWSSecretsManagerClient:
             def __init__(self, code):
                 self.response = {"Error": {"Code": code}}
 
+        mock_boto3._ClientError = FakeClientError
+
         mock_sm_client, _ = patched_boto_clients
         mock_sm_client.put_secret_value.side_effect = FakeClientError("AccessDeniedException")
 
@@ -293,6 +297,8 @@ class TestAWSSecretsManagerClient:
         class FakeClientError(Exception):
             def __init__(self, code="Boom"):
                 self.response = {"Error": {"Code": code}}
+
+        mock_boto3._ClientError = FakeClientError
 
         mock_sm_client, _ = patched_boto_clients
         mock_sm_client.put_secret_value.side_effect = FakeClientError()
@@ -334,7 +340,7 @@ class TestAWSSecretsManagerClient:
         client.authenticate()
 
         secret = client.get_secret("json-secret")
-        assert secret.value == str(json_data)
+        assert secret.value == json.dumps(json_data)
 
     def test_get_secret_requires_authentication(self, mock_boto3):
         """get_secret should require authentication."""

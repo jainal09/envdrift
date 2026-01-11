@@ -234,11 +234,18 @@ def guard(
     elif pr_base:
         try:
             # Fetch the base branch first to ensure it's up to date
-            subprocess.run(  # nosec B603, B607
-                ["git", "fetch", "origin", pr_base.replace("origin/", "")],
+            base_ref = pr_base.replace("origin/", "")
+            if not base_ref:
+                base_ref = pr_base
+            fetch_result = subprocess.run(  # nosec B603, B607
+                ["git", "fetch", "origin", base_ref],
                 capture_output=True,
                 timeout=30,
             )
+            if fetch_result.returncode != 0 and verbose:
+                console.print(
+                    f"[yellow]Warning:[/yellow] Could not fetch {pr_base}, using local refs"
+                )
             # Get all files changed between base and HEAD
             result = subprocess.run(  # nosec B603, B607
                 ["git", "diff", "--name-only", "--diff-filter=ACMR", f"{pr_base}...HEAD"],
