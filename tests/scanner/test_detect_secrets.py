@@ -41,7 +41,7 @@ class TestDetectSecretsInstaller:
         installer.progress("hello")
         assert messages == ["hello"]
 
-    @patch.object(DetectSecretsInstaller, "_is_installed", return_value=None)
+    @patch.object(DetectSecretsInstaller, "_is_installed", return_value=True)
     @patch("subprocess.run")
     def test_install_short_circuits_when_installed(
         self,
@@ -226,7 +226,8 @@ class TestDetectSecretsScanner:
         """install updates cached installed state."""
         scanner = DetectSecretsScanner(auto_install=True)
         with patch.object(DetectSecretsInstaller, "install", return_value=None):
-            # install() returns None for pip packages (no binary path)
+            # scanner.install() returns None for pip packages (no binary path)
+            # installer.install() returning without exception still marks installed
             assert scanner.install() is None
             assert scanner._installed is True
 

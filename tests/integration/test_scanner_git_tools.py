@@ -72,7 +72,9 @@ class TestGitSecretsCLI:
         ansi_escape = re.compile(r"\x1B\[[0-9;]*[A-Za-z]|\x1B[@-Z\\-_]")
         clean_output = ansi_escape.sub("", result.stdout)
 
-        assert "--git-secrets" in clean_output, f"--git-secrets not found in help output: {clean_output[:500]}"
+        assert "--git-secrets" in clean_output, (
+            f"--git-secrets not found in help output: {clean_output[:500]}"
+        )
         assert "--no-git-secrets" in clean_output
 
     def test_git_secrets_flag_enables_scanner(self, scanner_test_env):

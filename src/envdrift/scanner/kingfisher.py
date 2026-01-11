@@ -18,7 +18,7 @@ from __future__ import annotations
 import json
 import platform
 import shutil
-import subprocess
+import subprocess  # nosec B404
 import tempfile
 import time
 from pathlib import Path
@@ -176,7 +176,7 @@ class KingfisherScanner(ScannerBackend):
         """Get installed Kingfisher version."""
         try:
             binary = self._find_binary()
-            result = subprocess.run(
+            result = subprocess.run(  # nosec B603
                 [str(binary), "--version"],
                 capture_output=True,
                 text=True,
@@ -239,7 +239,7 @@ class KingfisherScanner(ScannerBackend):
 
         try:
             # Run brew install
-            result = subprocess.run(
+            result = subprocess.run(  # nosec B603
                 [brew_path, "install", "kingfisher"],
                 capture_output=True,
                 text=True,
@@ -414,7 +414,7 @@ class KingfisherScanner(ScannerBackend):
 
                 # Run scan
                 # Note: Kingfisher uses exit code 200 for "findings detected"
-                result = subprocess.run(
+                result = subprocess.run(  # nosec B603
                     args,
                     capture_output=True,
                     text=True,

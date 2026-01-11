@@ -202,12 +202,12 @@ def guard(
       envdrift guard --json              # JSON output for automation
       envdrift guard ./src ./config      # Scan specific directories
     """
-    import subprocess
+    import subprocess  # nosec B404
 
     # Handle --staged flag (pre-commit mode)
     if staged:
         try:
-            result = subprocess.run(
+            result = subprocess.run(  # nosec B603, B607
                 ["git", "diff", "--cached", "--name-only", "--diff-filter=ACMR"],
                 capture_output=True,
                 text=True,
@@ -234,13 +234,13 @@ def guard(
     elif pr_base:
         try:
             # Fetch the base branch first to ensure it's up to date
-            subprocess.run(
+            subprocess.run(  # nosec B603, B607
                 ["git", "fetch", "origin", pr_base.replace("origin/", "")],
                 capture_output=True,
                 timeout=30,
             )
             # Get all files changed between base and HEAD
-            result = subprocess.run(
+            result = subprocess.run(  # nosec B603, B607
                 ["git", "diff", "--name-only", "--diff-filter=ACMR", f"{pr_base}...HEAD"],
                 capture_output=True,
                 text=True,

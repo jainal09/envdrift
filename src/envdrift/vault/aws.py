@@ -224,6 +224,30 @@ class AWSSecretsManagerClient(VaultClient):
                 raise VaultError(f"Failed to list secrets: {e}") from e
             raise
 
+    def _put_secret_value(self, name: str, value: str) -> SecretValue:
+        """Update an existing secret value."""
+        if self._client is None:
+            raise VaultError("Not authenticated. Call authenticate() first.")
+
+        try:
+            response = self._client.put_secret_value(
+                SecretId=name,
+                SecretString=value,
+            )
+            return SecretValue(
+                name=name,
+                value=value,
+                version=response.get("VersionId"),
+                metadata={"arn": response.get("ARN")},
+            )
+        except Exception as e:
+            error_code = _get_error_code(e)
+            if error_code in ("AccessDeniedException", "UnauthorizedException"):
+                raise AuthenticationError(f"Access denied for secret: {name}") from e
+            if error_code:
+                raise VaultError(f"Failed to set secret {name}: {e}") from e
+            raise
+
     def set_secret(self, name: str, value: str) -> SecretValue:
         """
         Create or update a secret in AWS Secrets Manager.
@@ -244,34 +268,21 @@ class AWSSecretsManagerClient(VaultClient):
 
         try:
             # Try to create first
-            try:
-                response = self._client.create_secret(
-                    Name=name,
-                    SecretString=value,
-                )
-                return SecretValue(
-                    name=name,
-                    value=value,
-                    version=response.get("VersionId"),
-                    metadata={"arn": response.get("ARN")},
-                )
-            except Exception as inner_e:
-                error_code = _get_error_code(inner_e)
-                # Secret exists, or create denied but update may be allowed
-                if error_code in ("ResourceExistsException", "AccessDeniedException"):
-                    response = self._client.put_secret_value(
-                        SecretId=name,
-                        SecretString=value,
-                    )
-                    return SecretValue(
-                        name=name,
-                        value=value,
-                        version=response.get("VersionId"),
-                        metadata={"arn": response.get("ARN")},
-                    )
-                raise
+            response = self._client.create_secret(
+                Name=name,
+                SecretString=value,
+            )
+            return SecretValue(
+                name=name,
+                value=value,
+                version=response.get("VersionId"),
+                metadata={"arn": response.get("ARN")},
+            )
         except Exception as e:
             error_code = _get_error_code(e)
+            # Secret exists, or create denied but update may be allowed
+            if error_code in ("ResourceExistsException", "AccessDeniedException"):
+                return self._put_secret_value(name, value)
             if error_code in ("AccessDeniedException", "UnauthorizedException"):
                 raise AuthenticationError(f"Access denied for secret: {name}") from e
             if error_code:
