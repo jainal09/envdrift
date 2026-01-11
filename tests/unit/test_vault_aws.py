@@ -248,6 +248,61 @@ class TestAWSSecretsManagerClient:
         assert secret.value == "new-value"
         assert secret.version == "v2"
 
+    def test_set_secret_unauthorized_raises_auth_error(self, mock_boto3, patched_boto_clients):
+        """Unauthorized errors should raise AuthenticationError."""
+
+        class FakeClientError(Exception):
+            def __init__(self, code):
+                self.response = {"Error": {"Code": code}}
+
+        mock_sm_client, _ = patched_boto_clients
+        mock_sm_client.create_secret.side_effect = FakeClientError("UnauthorizedException")
+
+        client = mock_boto3.AWSSecretsManagerClient()
+        client.authenticate()
+
+        with pytest.raises(AuthenticationError):
+            client.set_secret("name", "value")
+
+    def test_put_secret_value_requires_authentication(self, mock_boto3):
+        """_put_secret_value should require authentication."""
+        client = mock_boto3.AWSSecretsManagerClient()
+
+        with pytest.raises(VaultError):
+            client._put_secret_value("name", "value")
+
+    def test_put_secret_value_access_denied(self, mock_boto3, patched_boto_clients):
+        """_put_secret_value should raise AuthenticationError on access denied."""
+
+        class FakeClientError(Exception):
+            def __init__(self, code):
+                self.response = {"Error": {"Code": code}}
+
+        mock_sm_client, _ = patched_boto_clients
+        mock_sm_client.put_secret_value.side_effect = FakeClientError("AccessDeniedException")
+
+        client = mock_boto3.AWSSecretsManagerClient()
+        client.authenticate()
+
+        with pytest.raises(AuthenticationError):
+            client._put_secret_value("name", "value")
+
+    def test_put_secret_value_error_wraps(self, mock_boto3, patched_boto_clients):
+        """_put_secret_value should raise VaultError on other failures."""
+
+        class FakeClientError(Exception):
+            def __init__(self, code="Boom"):
+                self.response = {"Error": {"Code": code}}
+
+        mock_sm_client, _ = patched_boto_clients
+        mock_sm_client.put_secret_value.side_effect = FakeClientError()
+
+        client = mock_boto3.AWSSecretsManagerClient()
+        client.authenticate()
+
+        with pytest.raises(VaultError):
+            client._put_secret_value("name", "value")
+
     def test_get_secret_json_returns_string(self, mock_boto3, patched_boto_clients):
         """Test getting secret with JSON content returns JSON string."""
         mock_sm_client, _ = patched_boto_clients

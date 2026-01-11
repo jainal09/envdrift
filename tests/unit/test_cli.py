@@ -3907,6 +3907,56 @@ class TestVaultPushCommand:
         assert captured["provider"] == EncryptionProvider.DOTENVX
         assert dummy_backend.encrypt_calls == [env_file]
 
+    def test_vault_push_all_auth_failure(self, monkeypatch, tmp_path: Path):
+        """vault-push --all should surface authentication failures."""
+        from envdrift.sync.config import ServiceMapping, SyncConfig
+        from envdrift.vault import VaultError
+
+        service_dir = tmp_path / "service"
+        service_dir.mkdir()
+        (service_dir / ".env.production").write_text("API_KEY=plaintext")
+        (service_dir / ".env.keys").write_text("DOTENV_PRIVATE_KEY_PRODUCTION=abc123\n")
+
+        mapping = ServiceMapping(secret_name="my-secret", folder_path=service_dir)
+        sync_config = SyncConfig(mappings=[mapping], env_keys_filename=".env.keys")
+
+        class DummyClient:
+            def authenticate(self):
+                raise VaultError("Auth failed")
+
+        monkeypatch.setattr(
+            "envdrift.cli_commands.sync.load_sync_config_and_client",
+            lambda **_kwargs: (sync_config, DummyClient(), "azure", None, None, None),
+        )
+
+        config_file = tmp_path / "envdrift.toml"
+        config_file.write_text(
+            dedent(
+                """
+                [encryption.dotenvx]
+                auto_install = true
+                """
+            ).strip()
+            + "\n"
+        )
+
+        result = runner.invoke(
+            app,
+            [
+                "vault-push",
+                "--all",
+                "-c",
+                str(config_file),
+                "-p",
+                "azure",
+                "--vault-url",
+                "https://example.vault.azure.net/",
+            ],
+        )
+
+        assert result.exit_code == 1
+        assert "auth failed" in result.output.lower()
+
     def test_vault_push_auth_failure(self, monkeypatch, tmp_path: Path):
         """vault-push should handle authentication errors gracefully."""
         env_keys = tmp_path / ".env.keys"
