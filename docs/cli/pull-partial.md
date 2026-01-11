@@ -10,7 +10,8 @@ envdrift pull-partial [OPTIONS]
 
 ## Description
 
-The `pull-partial` command is part of the [partial encryption](../guides/partial-encryption.md) workflow. It decrypts `.secret` files in-place so you can edit sensitive variables.
+The `pull-partial` command is part of the [partial encryption](../guides/partial-encryption.md)
+workflow. It decrypts `.secret` files in-place so you can edit sensitive variables.
 
 After editing, use `envdrift push` to re-encrypt and regenerate the combined file.
 
