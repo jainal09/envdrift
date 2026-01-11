@@ -446,9 +446,7 @@ class TestSkipClearFiles:
         aws_findings = [f for f in result.findings if "aws" in f.rule_id.lower()]
         assert len(aws_findings) >= 1
         # .clear files should not be flagged as unencrypted even if not in allowed list
-        unencrypted_findings = [
-            f for f in result.findings if f.rule_id == "unencrypted-env-file"
-        ]
+        unencrypted_findings = [f for f in result.findings if f.rule_id == "unencrypted-env-file"]
         assert len(unencrypted_findings) == 0
 
     def test_clear_files_skipped_when_enabled(self, tmp_path: Path):
@@ -466,7 +464,7 @@ class TestSkipClearFiles:
         """Test that skip_clear_files doesn't affect regular .env files."""
         scanner = NativeScanner(skip_clear_files=True)
         env_file = tmp_path / ".env"
-        env_file.write_text('DATABASE_URL=postgres://localhost/db\n')
+        env_file.write_text("DATABASE_URL=postgres://localhost/db\n")
 
         result = scanner.scan([tmp_path])
 

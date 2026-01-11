@@ -657,9 +657,7 @@ class TestIntegration:
         engine = ScanEngine(config)
 
         # Create file with secret that has inline ignore
-        (tmp_path / "config.py").write_text(
-            'AWS_KEY = "AKIAIOSFODNN7EXAMPLE"  # envdrift:ignore\n'
-        )
+        (tmp_path / "config.py").write_text('AWS_KEY = "AKIAIOSFODNN7EXAMPLE"  # envdrift:ignore\n')
 
         result = engine.scan([tmp_path])
 

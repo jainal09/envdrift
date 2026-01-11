@@ -333,7 +333,9 @@ CRITICAL_PATTERNS: list[SecretPattern] = [
     SecretPattern(
         id="mailgun-api-key",
         description="Mailgun API Key",
-        pattern=re.compile(r"(?i)mailgun[_-]?(?:api[_-]?)?key\s*[=:]\s*['\"]?([a-zA-Z0-9-]{32,})['\"]?"),
+        pattern=re.compile(
+            r"(?i)mailgun[_-]?(?:api[_-]?)?key\s*[=:]\s*['\"]?([a-zA-Z0-9-]{32,})['\"]?"
+        ),
         severity=FindingSeverity.CRITICAL,
         keywords=("mailgun",),
     ),
@@ -559,7 +561,9 @@ HIGH_PATTERNS: list[SecretPattern] = [
     SecretPattern(
         id="base64-auth-token",
         description="Base64 Encoded Auth",
-        pattern=re.compile(r"(?i)(?:_auth|auth|authorization)\s*[=:]\s*['\"]?([A-Za-z0-9+/]{40,}={0,2})['\"]?"),
+        pattern=re.compile(
+            r"(?i)(?:_auth|auth|authorization)\s*[=:]\s*['\"]?([A-Za-z0-9+/]{40,}={0,2})['\"]?"
+        ),
         severity=FindingSeverity.MEDIUM,
     ),
     # Hashicorp Vault Token
@@ -592,7 +596,9 @@ HIGH_PATTERNS: list[SecretPattern] = [
     SecretPattern(
         id="atlassian-api-token",
         description="Atlassian API Token",
-        pattern=re.compile(r"(?i)(?:atlassian|jira|confluence)[_-]?(?:api[_-]?)?token\s*[=:]\s*['\"]?([a-zA-Z0-9]{24})['\"]?"),
+        pattern=re.compile(
+            r"(?i)(?:atlassian|jira|confluence)[_-]?(?:api[_-]?)?token\s*[=:]\s*['\"]?([a-zA-Z0-9]{24})['\"]?"
+        ),
         severity=FindingSeverity.HIGH,
     ),
     # Sentry DSN (contains secret key)
@@ -620,14 +626,18 @@ HIGH_PATTERNS: list[SecretPattern] = [
     SecretPattern(
         id="netlify-token",
         description="Netlify Token",
-        pattern=re.compile(r"(?i)netlify[_-]?(?:auth[_-]?)?token\s*[=:]\s*['\"]?([a-zA-Z0-9_-]{40,})['\"]?"),
+        pattern=re.compile(
+            r"(?i)netlify[_-]?(?:auth[_-]?)?token\s*[=:]\s*['\"]?([a-zA-Z0-9_-]{40,})['\"]?"
+        ),
         severity=FindingSeverity.HIGH,
     ),
     # Cloudflare API Token
     SecretPattern(
         id="cloudflare-api-token",
         description="Cloudflare API Token",
-        pattern=re.compile(r"(?i)cloudflare[_-]?(?:api[_-]?)?token\s*[=:]\s*['\"]?([a-zA-Z0-9_-]{40})['\"]?"),
+        pattern=re.compile(
+            r"(?i)cloudflare[_-]?(?:api[_-]?)?token\s*[=:]\s*['\"]?([a-zA-Z0-9_-]{40})['\"]?"
+        ),
         severity=FindingSeverity.HIGH,
     ),
     # DigitalOcean
@@ -674,7 +684,9 @@ HIGH_PATTERNS: list[SecretPattern] = [
     SecretPattern(
         id="newrelic-license-key",
         description="New Relic License Key",
-        pattern=re.compile(r"(?i)new[_-]?relic[_-]?license[_-]?key\s*[=:]\s*['\"]?([a-f0-9]{40})['\"]?"),
+        pattern=re.compile(
+            r"(?i)new[_-]?relic[_-]?license[_-]?key\s*[=:]\s*['\"]?([a-f0-9]{40})['\"]?"
+        ),
         severity=FindingSeverity.HIGH,
     ),
     # Algolia

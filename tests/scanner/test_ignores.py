@@ -178,9 +178,7 @@ class TestIgnoreFilterInlineComments:
     def test_basic_ignore_filters_finding(self, tmp_path: Path):
         """Test that # envdrift:ignore filters a finding."""
         config_file = tmp_path / "config.py"
-        config_file.write_text(
-            'SECRET_KEY = "AKIAIOSFODNN7EXAMPLE"  # envdrift:ignore\n'
-        )
+        config_file.write_text('SECRET_KEY = "AKIAIOSFODNN7EXAMPLE"  # envdrift:ignore\n')
 
         finding = ScanFinding(
             rule_id="aws-access-key-id",
@@ -222,9 +220,7 @@ class TestIgnoreFilterInlineComments:
     def test_ignore_with_different_rule_does_not_match(self, tmp_path: Path):
         """Test that ignore with different rule ID doesn't filter finding."""
         config_file = tmp_path / "config.py"
-        config_file.write_text(
-            'KEY = "AKIAIOSFODNN7EXAMPLE"  # envdrift:ignore:github-token\n'
-        )
+        config_file.write_text('KEY = "AKIAIOSFODNN7EXAMPLE"  # envdrift:ignore:github-token\n')
 
         finding = ScanFinding(
             rule_id="aws-access-key-id",
@@ -244,9 +240,7 @@ class TestIgnoreFilterInlineComments:
     def test_ignore_on_different_line_does_not_filter(self, tmp_path: Path):
         """Test that ignore comment on different line doesn't filter."""
         config_file = tmp_path / "config.py"
-        config_file.write_text(
-            '# envdrift:ignore\nKEY = "AKIAIOSFODNN7EXAMPLE"\n'
-        )
+        config_file.write_text('# envdrift:ignore\nKEY = "AKIAIOSFODNN7EXAMPLE"\n')
 
         finding = ScanFinding(
             rule_id="aws-access-key-id",
@@ -267,9 +261,7 @@ class TestIgnoreFilterInlineComments:
     def test_javascript_style_ignore(self, tmp_path: Path):
         """Test // style ignore comment."""
         config_file = tmp_path / "config.js"
-        config_file.write_text(
-            'const KEY = "AKIAIOSFODNN7EXAMPLE";  // envdrift:ignore\n'
-        )
+        config_file.write_text('const KEY = "AKIAIOSFODNN7EXAMPLE";  // envdrift:ignore\n')
 
         finding = ScanFinding(
             rule_id="aws-access-key-id",
@@ -289,9 +281,7 @@ class TestIgnoreFilterInlineComments:
     def test_block_comment_style_ignore(self, tmp_path: Path):
         """Test /* */ style ignore comment."""
         config_file = tmp_path / "config.c"
-        config_file.write_text(
-            'const char* KEY = "AKIAIOSFODNN7EXAMPLE"; /* envdrift:ignore */\n'
-        )
+        config_file.write_text('const char* KEY = "AKIAIOSFODNN7EXAMPLE"; /* envdrift:ignore */\n')
 
         finding = ScanFinding(
             rule_id="aws-access-key-id",
@@ -328,9 +318,7 @@ class TestIgnoreFilterRulePathIgnores:
             scanner="native",
         )
 
-        config = IgnoreConfig(
-            ignore_rules={"ftp-password": ["**/locales/**"]}
-        )
+        config = IgnoreConfig(ignore_rules={"ftp-password": ["**/locales/**"]})
         filter_ = IgnoreFilter(config)
         result = filter_.filter([finding])
 
@@ -351,9 +339,7 @@ class TestIgnoreFilterRulePathIgnores:
             scanner="native",
         )
 
-        config = IgnoreConfig(
-            ignore_rules={"ftp-password": ["**/*.json"]}
-        )
+        config = IgnoreConfig(ignore_rules={"ftp-password": ["**/*.json"]})
         filter_ = IgnoreFilter(config)
         result = filter_.filter([finding])
 
@@ -375,9 +361,7 @@ class TestIgnoreFilterRulePathIgnores:
         )
 
         # Only ignore ftp-password in JSON files, not aws-access-key-id
-        config = IgnoreConfig(
-            ignore_rules={"ftp-password": ["**/*.json"]}
-        )
+        config = IgnoreConfig(ignore_rules={"ftp-password": ["**/*.json"]})
         filter_ = IgnoreFilter(config)
         result = filter_.filter([finding])
 
@@ -400,9 +384,7 @@ class TestIgnoreFilterRulePathIgnores:
         )
 
         # Only ignore ftp-password in locales, not src
-        config = IgnoreConfig(
-            ignore_rules={"ftp-password": ["**/locales/**"]}
-        )
+        config = IgnoreConfig(ignore_rules={"ftp-password": ["**/locales/**"]})
         filter_ = IgnoreFilter(config)
         result = filter_.filter([finding])
 
@@ -464,9 +446,7 @@ class TestIgnoreFilterPriority:
         """Test that inline comment is checked before config ignores."""
         config_file = tmp_path / "src" / "config.py"
         config_file.parent.mkdir(parents=True)
-        config_file.write_text(
-            'KEY = "AKIAIOSFODNN7EXAMPLE"  # envdrift:ignore\n'
-        )
+        config_file.write_text('KEY = "AKIAIOSFODNN7EXAMPLE"  # envdrift:ignore\n')
 
         finding = ScanFinding(
             rule_id="aws-access-key-id",

@@ -135,10 +135,7 @@ class IgnoreFilter:
             return True
 
         # Check 3: Global path ignores (already handled by scanner, but double-check)
-        if self._matches_global_ignore(file_path):
-            return True
-
-        return False
+        return bool(self._matches_global_ignore(file_path))
 
     def _has_inline_ignore(self, file_path: Path, line_number: int, rule_id: str) -> bool:
         """Check if a specific line has an ignore comment.

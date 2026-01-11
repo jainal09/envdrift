@@ -769,8 +769,17 @@ class NativeScanner(ScannerBackend):
 
         # Check for common template variable names
         template_keywords = [
-            "Timestamp", "Message", "Exception", "NewLine", "Level",
-            "Logger", "Thread", "Source", "Event", "Date", "Time",
+            "Timestamp",
+            "Message",
+            "Exception",
+            "NewLine",
+            "Level",
+            "Logger",
+            "Thread",
+            "Source",
+            "Event",
+            "Date",
+            "Time",
         ]
         if any(kw in value for kw in template_keywords):
             template_indicators += 1
