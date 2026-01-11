@@ -320,6 +320,68 @@ class TestAWSSecretsManagerClient:
         # JSON content is returned as JSON string
         assert json.loads(secret.value) == json_data
 
+    def test_get_secret_json_list_returns_string(self, mock_boto3, patched_boto_clients):
+        """JSON values that aren't dicts should return str(parsed)."""
+        mock_sm_client, _ = patched_boto_clients
+        json_data = ["a", "b"]
+        mock_sm_client.get_secret_value.return_value = {
+            "Name": "json-secret",
+            "SecretString": json.dumps(json_data),
+            "VersionId": "v1",
+        }
+
+        client = mock_boto3.AWSSecretsManagerClient()
+        client.authenticate()
+
+        secret = client.get_secret("json-secret")
+        assert secret.value == str(json_data)
+
+    def test_get_secret_requires_authentication(self, mock_boto3):
+        """get_secret should require authentication."""
+        client = mock_boto3.AWSSecretsManagerClient()
+
+        with pytest.raises(VaultError):
+            client.get_secret("secret")
+
+    def test_get_secret_access_denied(self, mock_boto3, patched_boto_clients):
+        """Access denied should raise AuthenticationError."""
+
+        class FakeClientError(Exception):
+            def __init__(self, code):
+                self.response = {"Error": {"Code": code}}
+
+        mock_sm_client, _ = patched_boto_clients
+        mock_sm_client.get_secret_value.side_effect = FakeClientError("AccessDeniedException")
+
+        client = mock_boto3.AWSSecretsManagerClient()
+        client.authenticate()
+
+        with pytest.raises(AuthenticationError):
+            client.get_secret("secret")
+
+    def test_list_secrets_requires_authentication(self, mock_boto3):
+        """list_secrets should require authentication."""
+        client = mock_boto3.AWSSecretsManagerClient()
+
+        with pytest.raises(VaultError):
+            client.list_secrets()
+
+    def test_list_secrets_access_denied(self, mock_boto3, patched_boto_clients):
+        """Access denied should raise AuthenticationError for list_secrets."""
+
+        class FakeClientError(Exception):
+            def __init__(self, code):
+                self.response = {"Error": {"Code": code}}
+
+        mock_sm_client, _ = patched_boto_clients
+        mock_sm_client.get_paginator.side_effect = FakeClientError("AccessDeniedException")
+
+        client = mock_boto3.AWSSecretsManagerClient()
+        client.authenticate()
+
+        with pytest.raises(AuthenticationError):
+            client.list_secrets()
+
     def test_authenticate_access_denied(self, mock_boto3):
         """AccessDenied should raise AuthenticationError."""
 
