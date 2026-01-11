@@ -41,7 +41,7 @@ class TestDetectSecretsInstaller:
         installer.progress("hello")
         assert messages == ["hello"]
 
-    @patch.object(DetectSecretsInstaller, "_is_installed", return_value=True)
+    @patch.object(DetectSecretsInstaller, "_is_installed", return_value=None)
     @patch("subprocess.run")
     def test_install_short_circuits_when_installed(
         self,
@@ -204,7 +204,7 @@ class TestDetectSecretsScanner:
         """_ensure_installed returns True after successful install."""
         scanner = DetectSecretsScanner(auto_install=True)
         with patch.object(scanner, "is_installed", return_value=False):
-            with patch.object(DetectSecretsInstaller, "install", return_value=True):
+            with patch.object(DetectSecretsInstaller, "install", return_value=None):
                 assert scanner._ensure_installed() is True
                 assert scanner._installed is True
 
@@ -225,7 +225,7 @@ class TestDetectSecretsScanner:
     def test_install_updates_installed_flag(self):
         """install updates cached installed state."""
         scanner = DetectSecretsScanner(auto_install=True)
-        with patch.object(DetectSecretsInstaller, "install", return_value=True):
+        with patch.object(DetectSecretsInstaller, "install", return_value=None):
             # install() returns None for pip packages (no binary path)
             assert scanner.install() is None
             assert scanner._installed is True
@@ -302,7 +302,7 @@ class TestDetectSecretsScan:
                 ],
             }
         }
-        with patch.object(scanner, "_ensure_installed", return_value=True):
+        with patch.object(scanner, "_ensure_installed", return_value=None):
             with patch("subprocess.run") as mock_run:
                 mock_run.return_value = SimpleNamespace(
                     returncode=0, stdout=json.dumps(baseline), stderr=""
@@ -317,7 +317,7 @@ class TestDetectSecretsScan:
     def test_scan_handles_invalid_json(self, tmp_path: Path):
         """Scan ignores invalid JSON output."""
         scanner = DetectSecretsScanner(auto_install=False)
-        with patch.object(scanner, "_ensure_installed", return_value=True):
+        with patch.object(scanner, "_ensure_installed", return_value=None):
             with patch("subprocess.run") as mock_run:
                 mock_run.return_value = SimpleNamespace(returncode=0, stdout="not-json", stderr="")
                 result = scanner.scan([tmp_path])
@@ -329,7 +329,7 @@ class TestDetectSecretsScan:
         """Timeouts return a ScanResult with error."""
         scanner = DetectSecretsScanner(auto_install=False)
         with (
-            patch.object(scanner, "_ensure_installed", return_value=True),
+            patch.object(scanner, "_ensure_installed", return_value=None),
             patch(
                 "subprocess.run",
                 side_effect=subprocess.TimeoutExpired(cmd="detect_secrets", timeout=1),

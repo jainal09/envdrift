@@ -183,7 +183,9 @@ class TestAWSSyncCommand:
         config_content = """\
 [encryption]
 backend = "dotenvx"
-dotenvx_auto_install = true
+
+[encryption.dotenvx]
+auto_install = true
 
 [vault]
 provider = "aws"
@@ -257,7 +259,9 @@ DATABASE_URL="encrypted:abc123..."
         config_content = """\
 [encryption]
 backend = "dotenvx"
-dotenvx_auto_install = true
+
+[encryption.dotenvx]
+auto_install = true
 
 [vault]
 provider = "aws"
@@ -333,7 +337,9 @@ class TestAWSVaultPushCommand:
         config_content = f"""\
 [encryption]
 backend = "dotenvx"
-dotenvx_auto_install = true
+
+[encryption.dotenvx]
+auto_install = true
 
 [vault]
 provider = "aws"
@@ -449,7 +455,9 @@ class TestAWSErrorHandling:
         config_content = """\
 [encryption]
 backend = "dotenvx"
-dotenvx_auto_install = true
+
+[encryption.dotenvx]
+auto_install = true
 
 [vault]
 provider = "aws"

@@ -368,12 +368,14 @@ class SyncEngine:
             from envdrift.core.schema import SchemaLoader
             from envdrift.core.validator import Validator
 
-            # Find env file
+            # Find env file (mirror _sync_service's detection behavior)
             env_file_path = mapping.folder_path / f".env.{mapping.effective_environment}"
             if not env_file_path.exists():
-                env_file_path = mapping.folder_path / ".env"
-            if not env_file_path.exists():
-                return True  # No file to validate
+                detected = self._detect_env_file(mapping.folder_path)
+                if detected:
+                    env_file_path, _effective_environment = detected
+                else:
+                    return True  # No file to validate
 
             # Load schema
             service_dir = self.mode.service_dir or mapping.folder_path

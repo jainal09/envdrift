@@ -15,19 +15,12 @@ from envdrift.vault.base import (
 
 try:
     import boto3 as _boto3
-    from botocore.exceptions import (
-        ClientError as _ClientError,
-    )
-    from botocore.exceptions import (
-        NoCredentialsError,
-        PartialCredentialsError,
-    )
+    from botocore.exceptions import NoCredentialsError, PartialCredentialsError
 
     AWS_AVAILABLE = True
 except ImportError:
     AWS_AVAILABLE = False
     _boto3 = None
-    _ClientError = None
     NoCredentialsError = Exception  # type: ignore[misc, assignment]
     PartialCredentialsError = Exception  # type: ignore[misc, assignment]
 
@@ -171,12 +164,12 @@ class AWSSecretsManagerClient(VaultClient):
                         metadata=metadata,
                     )
             else:
-            else:
                 # Binary secret - decode and return
                 try:
                     value = response["SecretBinary"].decode("utf-8")
                 except UnicodeDecodeError:
                     import base64
+
                     value = base64.b64encode(response["SecretBinary"]).decode("ascii")
                 return SecretValue(
                     name=name,
@@ -264,8 +257,8 @@ class AWSSecretsManagerClient(VaultClient):
                 )
             except Exception as inner_e:
                 error_code = _get_error_code(inner_e)
-                if error_code == "ResourceExistsException":
-                    # Secret exists, update it
+                # Secret exists, or create denied but update may be allowed
+                if error_code in ("ResourceExistsException", "AccessDeniedException"):
                     response = self._client.put_secret_value(
                         SecretId=name,
                         SecretString=value,

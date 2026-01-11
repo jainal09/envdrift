@@ -47,7 +47,9 @@ class TestNetworkTimeoutVault:
         config_content = f"""\
 [encryption]
 backend = "dotenvx"
-dotenvx_auto_install = true
+
+[encryption.dotenvx]
+auto_install = true
 
 [vault]
 provider = "hashicorp"
@@ -101,7 +103,9 @@ environment = "production"
         config_content = """\
 [encryption]
 backend = "dotenvx"
-dotenvx_auto_install = true
+
+[encryption.dotenvx]
+auto_install = true
 
 [vault]
 provider = "aws"
@@ -174,7 +178,9 @@ class TestPartialSyncFailure:
         config_content = f"""\
 [encryption]
 backend = "dotenvx"
-dotenvx_auto_install = true
+
+[encryption.dotenvx]
+auto_install = true
 
 [vault]
 provider = "aws"
@@ -523,7 +529,9 @@ class TestFilePermissionErrors:
             config_content = """\
 [encryption]
 backend = "dotenvx"
-dotenvx_auto_install = true
+
+[encryption.dotenvx]
+auto_install = true
 
 [vault]
 provider = "hashicorp"

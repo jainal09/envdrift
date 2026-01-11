@@ -338,7 +338,7 @@ class TestAWSSecretsManagerClient:
             client.get_secret("missing-secret")
 
     def test_get_secret_binary_decode_error(self, mock_boto3, patched_boto_clients):
-        """Binary secrets should fail to decode when not valid UTF-8."""
+        """Binary secrets that can't decode as UTF-8 should be base64-encoded."""
 
         mock_sm_client, _ = patched_boto_clients
         mock_sm_client.get_secret_value.return_value = {
@@ -350,9 +350,11 @@ class TestAWSSecretsManagerClient:
         client = mock_boto3.AWSSecretsManagerClient()
         client.authenticate()
 
-        # This will raise UnicodeDecodeError which propagates up
-        with pytest.raises(UnicodeDecodeError):
-            client.get_secret("binary-secret")
+        # Non-UTF-8 binary secrets are base64-encoded for safe handling
+        result = client.get_secret("binary-secret")
+        assert result.name == "binary-secret"
+        assert result.value == "//4="  # base64 encoding of b"\xff\xfe"
+        assert result.version == "v1"
 
     def test_list_secrets_error_wraps(self, mock_boto3, patched_boto_clients):
         """Paginator errors should raise VaultError."""

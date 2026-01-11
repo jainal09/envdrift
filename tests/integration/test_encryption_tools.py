@@ -75,7 +75,6 @@ def test_dotenvx_encrypt_decrypt_roundtrip(integration_env):
         """\
         [encryption]
         backend = "dotenvx"
-dotenvx_auto_install = true
 
         [encryption.dotenvx]
         auto_install = true
@@ -213,7 +212,6 @@ def test_dotenvx_smart_encryption_skips_unchanged(integration_env):
         """\
         [encryption]
         backend = "dotenvx"
-dotenvx_auto_install = true
 
         [encryption.dotenvx]
         auto_install = true
@@ -478,7 +476,6 @@ def test_pull_skips_partial_combined_files(integration_env):
 
         [encryption]
         backend = "dotenvx"
-dotenvx_auto_install = true
 
         [encryption.dotenvx]
         auto_install = true
@@ -547,7 +544,6 @@ def test_full_lock_pull_merge_cycle(integration_env):
         f"""\
         [encryption]
         backend = "dotenvx"
-dotenvx_auto_install = true
 
         [encryption.dotenvx]
         auto_install = true
