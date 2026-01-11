@@ -171,10 +171,16 @@ class AWSSecretsManagerClient(VaultClient):
                         metadata=metadata,
                     )
             else:
+            else:
                 # Binary secret - decode and return
+                try:
+                    value = response["SecretBinary"].decode("utf-8")
+                except UnicodeDecodeError:
+                    import base64
+                    value = base64.b64encode(response["SecretBinary"]).decode("ascii")
                 return SecretValue(
                     name=name,
-                    value=response["SecretBinary"].decode("utf-8"),
+                    value=value,
                     version=version_id,
                     metadata=metadata,
                 )
