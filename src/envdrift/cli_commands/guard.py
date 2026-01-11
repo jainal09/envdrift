@@ -116,6 +116,13 @@ def guard(
             help="Enable entropy-based detection for random secrets",
         ),
     ] = False,
+    skip_clear: Annotated[
+        bool | None,
+        typer.Option(
+            "--skip-clear/--no-skip-clear",
+            help="Skip .clear files from scanning (default: scan them)",
+        ),
+    ] = None,
     # Installation options
     auto_install: Annotated[
         bool,
@@ -316,6 +323,9 @@ def guard(
             if env.clear_file:
                 allowed_clear_files.append(env.clear_file)
 
+    # Determine skip_clear_files (CLI overrides config)
+    skip_clear_final = skip_clear if skip_clear is not None else guard_cfg.skip_clear_files
+
     # Build configuration merging file config with CLI overrides
     config = GuardConfig(
         use_native=True,
@@ -328,7 +338,9 @@ def guard(
         include_git_history=history or guard_cfg.include_history,
         check_entropy=entropy or guard_cfg.check_entropy,
         entropy_threshold=guard_cfg.entropy_threshold,
+        skip_clear_files=skip_clear_final,
         ignore_paths=guard_cfg.ignore_paths,
+        ignore_rules=guard_cfg.ignore_rules,
         fail_on_severity=fail_severity,
         allowed_clear_files=allowed_clear_files,
     )

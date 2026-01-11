@@ -4,6 +4,12 @@ on:
   workflow_run:
     workflows: ["CI"]
     types: [completed]
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: "PR number to auto-merge (manual trigger)"
+        required: true
+        type: number
 
 permissions:
   contents: write
@@ -14,14 +20,46 @@ jobs:
     name: Auto-merge Minor Version Bumps
     runs-on: ubuntu-latest
     if: |
-      github.event_name == 'workflow_run' &&
-      github.event.workflow_run.conclusion == 'success'
+      (github.event_name == 'workflow_run' &&
+      github.event.workflow_run.conclusion == 'success') ||
+      github.event_name == 'workflow_dispatch'
     steps:
       - name: Get PR from workflow run
         id: get-pr
         uses: actions/github-script@v8
         with:
           script: |
+            if (context.eventName === 'workflow_dispatch') {
+              const prNumberRaw = context.payload.inputs?.pr_number;
+              const prNumber = Number(prNumberRaw);
+              if (!Number.isInteger(prNumber) || prNumber <= 0) {
+                throw new Error(`Invalid pr_number input (must be a positive integer): ${prNumberRaw}`);
+              }
+
+              const { data: pr } = await github.rest.pulls.get({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                pull_number: prNumber
+              });
+
+              console.log(`Manual run for PR #${pr.number}: ${pr.title}`);
+
+              const labels = pr.labels.map(l => l.name);
+              console.log(`Labels: ${labels.join(', ')}`);
+
+              const isVersionBumpAuto = labels.includes('version-bump-auto');
+              const isMinorBump = labels.includes('minor-version-bump');
+              const isMajorBump = labels.includes('major-version-bump');
+
+              return {
+                number: pr.number,
+                isVersionBumpAuto,
+                isMinorBump,
+                isMajorBump,
+                shouldAutoMerge: isVersionBumpAuto && isMinorBump && !isMajorBump
+              };
+            }
+
             const headBranch = context.payload.workflow_run.head_branch;
             console.log(`Workflow run branch: ${headBranch}`);
 
@@ -64,60 +102,145 @@ jobs:
             const prData = ${{ steps.get-pr.outputs.result }};
             const prNumber = prData.number;
 
-            // Get the PR details
-            const { data: pr } = await github.rest.pulls.get({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              pull_number: prNumber
-            });
+            // Helper function to wait
+            const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
-            // Check if PR is already mergeable (all checks passed)
-            if (pr.mergeable_state === 'clean') {
-              console.log(`PR #${prNumber} is ready - merging directly`);
-              await github.rest.pulls.merge({
+            // Poll for PR to become mergeable with retries
+            // This handles the case where other checks (CodeQL, Integration Tests, etc.)
+            // are still running when CI completes
+            //
+            // Timing: With exponential backoff (1.5x), delays are approximately:
+            // 30s, 45s, 67s, 101s, 120s(cap), 120s, 120s, 120s, 120s, 120s
+            // Total maximum wait time: ~15-16 minutes before fallback to auto-merge
+            const maxAttempts = 10;
+            const initialDelayMs = 30000; // 30 seconds
+            const maxDelayMs = 120000; // 2 minutes
+            const getDelayMs = (attempt) =>
+              Math.min(initialDelayMs * Math.pow(1.5, attempt - 1), maxDelayMs);
+
+            let attempt = 1;
+            while (attempt <= maxAttempts) {
+              const { data: pr } = await github.rest.pulls.get({
                 owner: context.repo.owner,
                 repo: context.repo.repo,
-                pull_number: prNumber,
-                merge_method: 'squash'
+                pull_number: prNumber
               });
-              console.log(`Successfully merged PR #${prNumber}`);
-              return;
-            }
 
-            // Otherwise, enable auto-merge to queue it
-            console.log(`PR #${prNumber} has pending checks - enabling auto-merge`);
-            try {
-              await github.graphql(`
-                mutation($pullRequestId: ID!) {
-                  enablePullRequestAutoMerge(input: {
-                    pullRequestId: $pullRequestId,
-                    mergeMethod: SQUASH
-                  }) {
-                    pullRequest {
-                      autoMergeRequest {
-                        enabledAt
-                      }
-                    }
+              console.log(`Attempt ${attempt}/${maxAttempts}: PR #${prNumber} mergeable_state = ${pr.mergeable_state}, state = ${pr.state}, draft = ${pr.draft}`);
+
+              // Check PR state first - if closed/merged, no point checking mergeable_state
+              if (pr.state !== 'open') {
+                console.log(`PR #${prNumber} is no longer open (state: ${pr.state})`);
+                return;
+              }
+
+              // Skip draft PRs - they cannot be merged
+              if (pr.draft) {
+                console.log(`PR #${prNumber} is a draft - cannot auto-merge`);
+                return;
+              }
+
+              // Check if PR is ready to merge
+              if (pr.mergeable_state === 'clean') {
+                console.log(`PR #${prNumber} is ready - merging directly`);
+                try {
+                  await github.rest.pulls.merge({
+                    owner: context.repo.owner,
+                    repo: context.repo.repo,
+                    pull_number: prNumber,
+                    merge_method: 'squash'
+                  });
+                  console.log(`Successfully merged PR #${prNumber}`);
+                  return;
+                } catch (error) {
+                  const message = error?.message || '';
+                  const apiMessage = error?.response?.data?.message || error?.response?.body?.message || '';
+                  const fullMessage = [message, apiMessage].filter(Boolean).join(' | ');
+                  const status = error?.status;
+                  const isBaseBranchModified =
+                    status === 405 && fullMessage.includes('Base branch was modified');
+                  if (isBaseBranchModified) {
+                    const delayMs = getDelayMs(attempt);
+                    console.log(`Base branch changed during merge attempt, waiting ${delayMs / 1000}s before retry...`);
+                    await sleep(delayMs);
+                    continue;
+                  } else {
+                    throw error;
                   }
                 }
-              `, {
-                pullRequestId: pr.node_id
-              });
-              console.log(`Auto-merge enabled for PR #${prNumber}`);
-            } catch (error) {
-              // If auto-merge fails due to clean status, try direct merge
-              if (error.message.includes('clean status')) {
-                console.log(`Auto-merge not needed, merging directly`);
-                await github.rest.pulls.merge({
-                  owner: context.repo.owner,
-                  repo: context.repo.repo,
-                  pull_number: prNumber,
-                  merge_method: 'squash'
-                });
-                console.log(`Successfully merged PR #${prNumber}`);
-              } else {
-                throw error;
               }
+
+              // Handle terminal states that won't resolve with waiting
+              // 'dirty' = merge conflicts that need manual resolution
+              // 'behind' = branch needs rebase/update, won't resolve by waiting
+              if (pr.mergeable_state === 'dirty') {
+                console.log(`PR #${prNumber} has merge conflicts (dirty) - cannot auto-merge`);
+                return;
+              }
+
+              if (pr.mergeable_state === 'behind') {
+                console.log(`PR #${prNumber} is behind the base branch - needs rebase, cannot auto-merge by waiting`);
+                return;
+              }
+
+              // Note: 'blocked' state means waiting for reviews/required checks
+              // This is transient and may resolve, so we continue retrying
+              // 'unstable' and 'unknown' are also transient states worth retrying
+
+              // If this is the last attempt, try enabling auto-merge as fallback
+              if (attempt === maxAttempts) {
+                console.log(`Max attempts reached. Enabling auto-merge as fallback...`);
+                try {
+                  await github.graphql(`
+                    mutation($pullRequestId: ID!) {
+                      enablePullRequestAutoMerge(input: {
+                        pullRequestId: $pullRequestId,
+                        mergeMethod: SQUASH
+                      }) {
+                        pullRequest {
+                          autoMergeRequest {
+                            enabledAt
+                          }
+                        }
+                      }
+                    }
+                  `, {
+                    pullRequestId: pr.node_id
+                  });
+                  console.log(`Auto-merge enabled for PR #${prNumber}`);
+                } catch (error) {
+                  console.log(`Failed to enable auto-merge: ${error.message}`);
+                  // Check if PR became clean while we were trying to enable auto-merge (race condition)
+                  if (error.message.includes('clean') || error.message.includes('mergeable')) {
+                    console.log(`PR may have become clean, attempting direct merge...`);
+                    const { data: freshPr } = await github.rest.pulls.get({
+                      owner: context.repo.owner,
+                      repo: context.repo.repo,
+                      pull_number: prNumber
+                    });
+                    if (freshPr.mergeable_state === 'clean' && freshPr.state === 'open') {
+                      await github.rest.pulls.merge({
+                        owner: context.repo.owner,
+                        repo: context.repo.repo,
+                        pull_number: prNumber,
+                        merge_method: 'squash'
+                      });
+                      console.log(`Successfully merged PR #${prNumber} after state change`);
+                      return;
+                    }
+                  }
+                  // Log warning but don't throw - PR may eventually become mergeable
+                  // or will be picked up on next CI run
+                  console.log(`Warning: PR #${prNumber} may need manual intervention or will be picked up on next CI run`);
+                }
+                return;
+              }
+
+              // Wait before next attempt with exponential backoff (capped)
+              const delayMs = getDelayMs(attempt);
+              console.log(`PR not ready yet, waiting ${delayMs / 1000}s before retry...`);
+              await sleep(delayMs);
+              attempt += 1;
             }
 
       - name: Comment on major version bump
