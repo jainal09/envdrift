@@ -204,7 +204,7 @@ class TestDetectSecretsScanner:
         """_ensure_installed returns True after successful install."""
         scanner = DetectSecretsScanner(auto_install=True)
         with patch.object(scanner, "is_installed", return_value=False):
-            with patch.object(DetectSecretsInstaller, "install", return_value=True):
+            with patch.object(DetectSecretsInstaller, "install", return_value=None):
                 assert scanner._ensure_installed() is True
                 assert scanner._installed is True
 
@@ -225,7 +225,7 @@ class TestDetectSecretsScanner:
     def test_install_updates_installed_flag(self):
         """install updates cached installed state."""
         scanner = DetectSecretsScanner(auto_install=True)
-        with patch.object(DetectSecretsInstaller, "install", return_value=True):
+        with patch.object(DetectSecretsInstaller, "install", return_value=None):
             # install() returns None for pip packages (no binary path)
             assert scanner.install() is None
             assert scanner._installed is True

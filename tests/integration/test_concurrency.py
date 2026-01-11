@@ -85,7 +85,9 @@ environment = "production"
             config_content = f"""\
 [encryption]
 backend = "dotenvx"
-dotenvx_auto_install = true
+
+[encryption.dotenvx]
+auto_install = true
 
 [vault]
 provider = "aws"
@@ -182,7 +184,9 @@ environment = "production"
             config_content = f"""\
 [encryption]
 backend = "dotenvx"
-dotenvx_auto_install = true
+
+[encryption.dotenvx]
+auto_install = true
 
 [vault]
 provider = "hashicorp"

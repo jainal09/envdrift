@@ -86,7 +86,6 @@ def test_hook_setup_precommit_auto_installs(hook_integration_env):
 
         [encryption]
         backend = "dotenvx"
-dotenvx_auto_install = true
 
         [encryption.dotenvx]
         auto_install = true
@@ -121,7 +120,6 @@ def test_hook_setup_direct_auto_installs(hook_integration_env):
 
         [encryption]
         backend = "dotenvx"
-dotenvx_auto_install = true
 
         [encryption.dotenvx]
         auto_install = true

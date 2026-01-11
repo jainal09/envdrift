@@ -145,7 +145,7 @@ def vault_push(
         try:
             client.authenticate()
         except VaultError as e:
-            print_error(f"Vault authentication failed: {e}")
+            print_error(str(e))
             raise typer.Exit(code=1) from None
 
         try:
