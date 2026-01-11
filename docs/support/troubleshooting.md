@@ -106,8 +106,8 @@ npm install -g @dotenvx/dotenvx
 
 ```toml
 # envdrift.toml
-[encryption]
-dotenvx_auto_install = true
+[encryption.dotenvx]
+auto_install = true
 ```
 
 ### "sops not found"

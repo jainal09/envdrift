@@ -2,14 +2,11 @@
 
 from __future__ import annotations
 
-import subprocess
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 from envdrift.scanner.git_secrets import (
     GitSecretsInstaller,
-    GitSecretsInstallError,
-    GitSecretsNotFoundError,
     GitSecretsScanner,
     get_venv_bin_dir,
 )
@@ -92,11 +89,10 @@ class TestGitSecretsScanner:
 
     def test_is_installed_returns_false_when_not_found(self) -> None:
         """Test is_installed returns False when binary not found."""
-        with patch("shutil.which", return_value=None):
-            with patch("subprocess.run") as mock_run:
-                mock_run.side_effect = FileNotFoundError()
-                scanner = GitSecretsScanner(auto_install=False)
-                assert scanner.is_installed() is False
+        with patch("shutil.which", return_value=None), patch("subprocess.run") as mock_run:
+            mock_run.side_effect = FileNotFoundError()
+            scanner = GitSecretsScanner(auto_install=False)
+            assert scanner.is_installed() is False
 
     def test_is_installed_returns_true_when_found(self) -> None:
         """Test is_installed returns True when binary is in PATH."""
@@ -106,14 +102,13 @@ class TestGitSecretsScanner:
 
     def test_scan_returns_error_when_not_installed(self) -> None:
         """Test scan returns error result when scanner not installed."""
-        with patch("shutil.which", return_value=None):
-            with patch("subprocess.run") as mock_run:
-                mock_run.return_value.returncode = 1
-                mock_run.return_value.stdout = ""
-                scanner = GitSecretsScanner(auto_install=False)
-                result = scanner.scan([Path(".")])
-                assert result.error is not None
-                assert "not found" in result.error.lower()
+        with patch("shutil.which", return_value=None), patch("subprocess.run") as mock_run:
+            mock_run.return_value.returncode = 1
+            mock_run.return_value.stdout = ""
+            scanner = GitSecretsScanner(auto_install=False)
+            result = scanner.scan([Path()])
+            assert result.error is not None
+            assert "not found" in result.error.lower()
 
     def test_get_version_returns_none(self) -> None:
         """Test get_version returns None (git-secrets has no version flag)."""
@@ -210,14 +205,13 @@ class TestGitSecretsScanner:
 
     def test_run_git_secrets_falls_back_to_git_subcommand(self) -> None:
         """Test _run_git_secrets falls back to git subcommand."""
-        with patch("shutil.which", return_value=None):
-            with patch("subprocess.run") as mock_run:
-                mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
-                scanner = GitSecretsScanner(auto_install=False)
-                scanner._run_git_secrets(["--list"], Path("/tmp"))
-                mock_run.assert_called_once()
-                assert mock_run.call_args[0][0][0] == "git"
-                assert mock_run.call_args[0][0][1] == "secrets"
+        with patch("shutil.which", return_value=None), patch("subprocess.run") as mock_run:
+            mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
+            scanner = GitSecretsScanner(auto_install=False)
+            scanner._run_git_secrets(["--list"], Path("/tmp"))
+            mock_run.assert_called_once()
+            assert mock_run.call_args[0][0][0] == "git"
+            assert mock_run.call_args[0][0][1] == "secrets"
 
 
 class TestGitSecretsParseOutput:

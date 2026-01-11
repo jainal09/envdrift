@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import importlib
+import json
 import sys
 from unittest.mock import MagicMock, patch
 
@@ -10,7 +11,7 @@ import pytest
 
 from envdrift.vault.base import (
     AuthenticationError,
-    SecretValue,
+    SecretNotFoundError,
     VaultError,
 )
 
@@ -205,8 +206,8 @@ class TestAWSSecretsManagerClient:
         secrets = client.list_secrets(prefix="app/")
         assert secrets == ["app/secret1", "app/secret2"]
 
-    def test_create_secret(self, mock_boto3, patched_boto_clients):
-        """Test creating a secret."""
+    def test_set_secret_creates_new(self, mock_boto3, patched_boto_clients):
+        """Test set_secret creates a new secret."""
         mock_sm_client, _ = patched_boto_clients
         mock_sm_client.create_secret.return_value = {
             "Name": "new-secret",
@@ -217,13 +218,22 @@ class TestAWSSecretsManagerClient:
         client = mock_boto3.AWSSecretsManagerClient()
         client.authenticate()
 
-        secret = client.create_secret("new-secret", "value", "description")
+        secret = client.set_secret("new-secret", "value")
         assert secret.name == "new-secret"
         assert secret.value == "value"
+        assert secret.version == "v1"
 
-    def test_update_secret(self, mock_boto3, patched_boto_clients):
-        """Test updating a secret."""
+    def test_set_secret_updates_existing(self, mock_boto3, patched_boto_clients):
+        """Test set_secret updates existing secret when create fails with ResourceExistsException."""
+
+        class FakeClientError(Exception):
+            def __init__(self, code):
+                self.response = {"Error": {"Code": code}}
+
+        mock_boto3._ClientError = FakeClientError
+
         mock_sm_client, _ = patched_boto_clients
+        mock_sm_client.create_secret.side_effect = FakeClientError("ResourceExistsException")
         mock_sm_client.put_secret_value.return_value = {
             "Name": "existing-secret",
             "VersionId": "v2",
@@ -233,40 +243,36 @@ class TestAWSSecretsManagerClient:
         client = mock_boto3.AWSSecretsManagerClient()
         client.authenticate()
 
-        secret = client.update_secret("existing-secret", "new-value")
+        secret = client.set_secret("existing-secret", "new-value")
         assert secret.name == "existing-secret"
         assert secret.value == "new-value"
         assert secret.version == "v2"
 
-    def test_get_secret_json(self, mock_boto3, patched_boto_clients):
-        """Test getting secret as JSON."""
+    def test_get_secret_json_returns_string(self, mock_boto3, patched_boto_clients):
+        """Test getting secret with JSON content returns JSON string."""
         mock_sm_client, _ = patched_boto_clients
+        json_data = {"key": "value", "number": 42}
         mock_sm_client.get_secret_value.return_value = {
             "Name": "json-secret",
-            "SecretString": '{"key": "value", "number": 42}',
+            "SecretString": json.dumps(json_data),
             "VersionId": "v1",
         }
 
         client = mock_boto3.AWSSecretsManagerClient()
         client.authenticate()
 
-        data = client.get_secret_json("json-secret")
-        assert data == {"key": "value", "number": 42}
+        secret = client.get_secret("json-secret")
+        # JSON content is returned as JSON string
+        assert json.loads(secret.value) == json_data
 
     def test_authenticate_access_denied(self, mock_boto3):
         """AccessDenied should raise AuthenticationError."""
 
         class FakeClientError(Exception):
             def __init__(self, code):
-                """
-                Initialize the object with a response dictionary containing an AWS-style error code.
-
-                Parameters:
-                    code (str | int): Error code to store under "Error" -> "Code" in the response.
-                """
                 self.response = {"Error": {"Code": code}}
 
-        mock_boto3.ClientError = FakeClientError
+        mock_boto3._ClientError = FakeClientError
         mock_boto3.NoCredentialsError = Exception
         mock_boto3.PartialCredentialsError = Exception
 
@@ -285,7 +291,7 @@ class TestAWSSecretsManagerClient:
 
         mock_boto3.NoCredentialsError = FakeCredentialsError
         mock_boto3.PartialCredentialsError = FakeCredentialsError
-        mock_boto3.ClientError = FakeCredentialsError
+        mock_boto3._ClientError = FakeCredentialsError
 
         good_sm = MagicMock()
         good_sts = MagicMock()
@@ -293,16 +299,6 @@ class TestAWSSecretsManagerClient:
         with patch("boto3.client") as mock_client:
 
             def factory(service, **kwargs):
-                """
-                Selects a mocked AWS client implementation based on the requested service name.
-
-                Parameters:
-                    service (str): The AWS service name to select (e.g., "secretsmanager").
-                    kwargs: Additional keyword arguments are accepted for compatibility and ignored.
-
-                Returns:
-                    The mocked Secrets Manager client when `service` is "secretsmanager", otherwise the mocked STS client.
-                """
                 return good_sm if service == "secretsmanager" else good_sts
 
             mock_client.side_effect = factory
@@ -314,19 +310,6 @@ class TestAWSSecretsManagerClient:
         with patch("boto3.client") as mock_client:
 
             def factory_fail(service, **kwargs):
-                """
-                Produce a mock AWS client for tests, simulating expired STS credentials when requested.
-
-                Parameters:
-                        service (str): The AWS service name to create. If "sts", the factory simulates expired credentials.
-                        **kwargs: Ignored extra arguments accepted for compatibility with boto3.client signature.
-
-                Returns:
-                        The mock Secrets Manager client when `service` is not "sts".
-
-                Raises:
-                        FakeCredentialsError: If `service` is "sts", raised to simulate expired/stale credentials.
-                """
                 if service == "sts":
                     raise FakeCredentialsError("expired")
                 return good_sm
@@ -339,19 +322,11 @@ class TestAWSSecretsManagerClient:
     def test_get_secret_not_found_raises(self, mock_boto3, patched_boto_clients):
         """ResourceNotFound should raise SecretNotFoundError."""
 
-        from envdrift.vault.base import SecretNotFoundError
-
         class FakeClientError(Exception):
             def __init__(self, code):
-                """
-                Initialize the object with a response dictionary containing an AWS-style error code.
-
-                Parameters:
-                    code (str | int): Error code to store under "Error" -> "Code" in the response.
-                """
                 self.response = {"Error": {"Code": code}}
 
-        mock_boto3.ClientError = FakeClientError
+        mock_boto3._ClientError = FakeClientError
 
         mock_sm_client, _ = patched_boto_clients
         mock_sm_client.get_secret_value.side_effect = FakeClientError("ResourceNotFoundException")
@@ -362,8 +337,8 @@ class TestAWSSecretsManagerClient:
         with pytest.raises(SecretNotFoundError):
             client.get_secret("missing-secret")
 
-    def test_get_secret_binary_base64_fallback(self, mock_boto3, patched_boto_clients):
-        """Binary secrets should be base64-encoded when utf-8 decode fails."""
+    def test_get_secret_binary_decode_error(self, mock_boto3, patched_boto_clients):
+        """Binary secrets should fail to decode when not valid UTF-8."""
 
         mock_sm_client, _ = patched_boto_clients
         mock_sm_client.get_secret_value.return_value = {
@@ -375,25 +350,18 @@ class TestAWSSecretsManagerClient:
         client = mock_boto3.AWSSecretsManagerClient()
         client.authenticate()
 
-        secret = client.get_secret("binary-secret")
-        # Should be base64 encoded ascii string
-        assert isinstance(secret.value, str)
-        assert secret.value.strip() != ""
+        # This will raise UnicodeDecodeError which propagates up
+        with pytest.raises(UnicodeDecodeError):
+            client.get_secret("binary-secret")
 
     def test_list_secrets_error_wraps(self, mock_boto3, patched_boto_clients):
         """Paginator errors should raise VaultError."""
 
         class FakeClientError(Exception):
             def __init__(self, code="Boom"):
-                """
-                Initialize the object with an error response dictionary containing an error code.
-
-                Parameters:
-                    code (str): Error code to set in self.response["Error"]["Code"]. Defaults to "Boom".
-                """
                 self.response = {"Error": {"Code": code}}
 
-        mock_boto3.ClientError = FakeClientError
+        mock_boto3._ClientError = FakeClientError
 
         mock_sm_client, _ = patched_boto_clients
         mock_paginator = MagicMock()
@@ -406,8 +374,8 @@ class TestAWSSecretsManagerClient:
         with pytest.raises(VaultError):
             client.list_secrets()
 
-    def test_get_secret_json_invalid(self, mock_boto3, patched_boto_clients):
-        """Invalid JSON should raise VaultError."""
+    def test_get_secret_invalid_json_returns_string(self, mock_boto3, patched_boto_clients):
+        """Invalid JSON is returned as plain string."""
 
         mock_sm_client, _ = patched_boto_clients
         mock_sm_client.get_secret_value.return_value = {
@@ -419,23 +387,17 @@ class TestAWSSecretsManagerClient:
         client = mock_boto3.AWSSecretsManagerClient()
         client.authenticate()
 
-        with pytest.raises(VaultError):
-            client.get_secret_json("json-secret")
+        secret = client.get_secret("json-secret")
+        assert secret.value == "not-json"
 
-    def test_create_secret_error_wraps(self, mock_boto3, patched_boto_clients):
-        """Create secret errors should raise VaultError."""
+    def test_set_secret_error_wraps(self, mock_boto3, patched_boto_clients):
+        """set_secret errors should raise VaultError."""
 
         class FakeClientError(Exception):
             def __init__(self, code="Boom"):
-                """
-                Initialize the object with an error response dictionary containing an error code.
-
-                Parameters:
-                    code (str): Error code to set in self.response["Error"]["Code"]. Defaults to "Boom".
-                """
                 self.response = {"Error": {"Code": code}}
 
-        mock_boto3.ClientError = FakeClientError
+        mock_boto3._ClientError = FakeClientError
 
         mock_sm_client, _ = patched_boto_clients
         mock_sm_client.create_secret.side_effect = FakeClientError()
@@ -444,61 +406,21 @@ class TestAWSSecretsManagerClient:
         client.authenticate()
 
         with pytest.raises(VaultError):
-            client.create_secret("name", "value")
+            client.set_secret("name", "value")
 
-    def test_update_secret_error_wraps(self, mock_boto3, patched_boto_clients):
-        """Update secret errors should raise VaultError."""
-
-        class FakeClientError(Exception):
-            def __init__(self, code="Boom"):
-                """
-                Initialize the object with an error response dictionary containing an error code.
-
-                Parameters:
-                    code (str): Error code to set in self.response["Error"]["Code"]. Defaults to "Boom".
-                """
-                self.response = {"Error": {"Code": code}}
-
-        mock_boto3.ClientError = FakeClientError
-
+    def test_set_secret_dict(self, mock_boto3, patched_boto_clients):
+        """Test set_secret_dict creates secret with JSON-encoded dict."""
         mock_sm_client, _ = patched_boto_clients
-        mock_sm_client.put_secret_value.side_effect = FakeClientError()
+        mock_sm_client.create_secret.return_value = {
+            "Name": "dict-secret",
+            "VersionId": "v1",
+            "ARN": "arn:aws:...",
+        }
 
         client = mock_boto3.AWSSecretsManagerClient()
         client.authenticate()
 
-        with pytest.raises(VaultError):
-            client.update_secret("name", "value")
-
-    def test_set_secret_prefers_update(self, mock_boto3):
-        """set_secret should use update_secret when it succeeds."""
-        client = mock_boto3.AWSSecretsManagerClient()
-        client.is_authenticated = lambda: True
-
-        update_result = SecretValue(name="my-secret", value="value")
-        client.update_secret = MagicMock(return_value=update_result)
-        client.create_secret = MagicMock()
-
-        result = client.set_secret("my-secret", "value")
-
-        assert result.name == "my-secret"
-        client.update_secret.assert_called_once()
-        client.create_secret.assert_not_called()
-
-    def test_set_secret_creates_on_missing(self, mock_boto3):
-        """set_secret should create when update reports missing secret."""
-        client = mock_boto3.AWSSecretsManagerClient()
-        client.is_authenticated = lambda: True
-
-        missing_error = Exception("missing")
-        missing_error.response = {"Error": {"Code": "ResourceNotFoundException"}}
-        update_error = VaultError("update failed")
-        update_error.__cause__ = missing_error
-
-        client.update_secret = MagicMock(side_effect=update_error)
-        client.create_secret = MagicMock(return_value=SecretValue(name="my-secret", value="value"))
-
-        result = client.set_secret("my-secret", "value")
-
-        assert result.name == "my-secret"
-        client.create_secret.assert_called_once()
+        data = {"key": "value", "number": 42}
+        secret = client.set_secret_dict("dict-secret", data)
+        assert secret.name == "dict-secret"
+        assert json.loads(secret.value) == data

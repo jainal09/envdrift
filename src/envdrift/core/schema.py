@@ -7,7 +7,7 @@ import os
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 from pydantic_settings import BaseSettings
 
@@ -232,7 +232,8 @@ class SchemaLoader:
 
         func = getattr(module, "get_schema_metadata", None)
         if callable(func):
-            return func()
+            result = func()
+            return cast(dict[str, Any] | None, result)
 
         return None
 

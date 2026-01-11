@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from typing import Any
 
 from envdrift.vault.base import (
     AuthenticationError,
@@ -13,9 +14,11 @@ from envdrift.vault.base import (
 )
 
 try:
-    import boto3
+    import boto3 as _boto3
     from botocore.exceptions import (
-        ClientError,
+        ClientError as _ClientError,
+    )
+    from botocore.exceptions import (
         NoCredentialsError,
         PartialCredentialsError,
     )
@@ -23,10 +26,26 @@ try:
     AWS_AVAILABLE = True
 except ImportError:
     AWS_AVAILABLE = False
-    boto3 = None
-    ClientError = Exception
-    NoCredentialsError = Exception
-    PartialCredentialsError = Exception
+    _boto3 = None
+    _ClientError = None
+    NoCredentialsError = Exception  # type: ignore[misc, assignment]
+    PartialCredentialsError = Exception  # type: ignore[misc, assignment]
+
+
+def _get_boto3() -> Any:
+    """Get boto3 module, raising ImportError if not available."""
+    if not AWS_AVAILABLE or _boto3 is None:
+        raise ImportError("boto3 not installed. Install with: pip install envdrift[aws]")
+    return _boto3
+
+
+def _get_error_code(e: Exception) -> str:
+    """Extract error code from AWS ClientError safely."""
+    response = getattr(e, "response", None)
+    if response is None:
+        return ""
+    error = response.get("Error", {}) if isinstance(response, dict) else {}
+    return str(error.get("Code", ""))
 
 
 class AWSSecretsManagerClient(VaultClient):
@@ -45,11 +64,9 @@ class AWSSecretsManagerClient(VaultClient):
         Args:
             region: AWS region name
         """
-        if not AWS_AVAILABLE:
-            raise ImportError("boto3 not installed. Install with: pip install envdrift[aws]")
-
+        _get_boto3()  # Verify boto3 is available
         self.region = region
-        self._client = None
+        self._client: Any = None
 
     def authenticate(self) -> None:
         """
@@ -59,6 +76,7 @@ class AWSSecretsManagerClient(VaultClient):
             AuthenticationError: if AWS credentials are missing or incomplete.
             VaultError: if the Secrets Manager service returns an error.
         """
+        boto3 = _get_boto3()
         try:
             self._client = boto3.client(
                 "secretsmanager",
@@ -70,11 +88,13 @@ class AWSSecretsManagerClient(VaultClient):
             sts.get_caller_identity()
         except (NoCredentialsError, PartialCredentialsError) as e:
             raise AuthenticationError(f"AWS authentication failed: {e}") from e
-        except ClientError as e:
-            error_code = e.response.get("Error", {}).get("Code", "")
+        except Exception as e:
+            error_code = _get_error_code(e)
             if error_code in ("AccessDenied", "InvalidClientTokenId"):
                 raise AuthenticationError(f"AWS authentication failed: {e}") from e
-            raise VaultError(f"AWS Secrets Manager error: {e}") from e
+            if error_code:
+                raise VaultError(f"AWS Secrets Manager error: {e}") from e
+            raise
 
     def is_authenticated(self) -> bool:
         """
@@ -90,11 +110,12 @@ class AWSSecretsManagerClient(VaultClient):
             return False
 
         # Validate credentials are still valid by calling STS
+        boto3 = _get_boto3()
         try:
             sts = boto3.client("sts", region_name=self.region)
             sts.get_caller_identity()
             return True
-        except (NoCredentialsError, PartialCredentialsError, ClientError):
+        except Exception:
             # Credentials are invalid/expired, reset client state
             self._client = None
             return False
@@ -107,176 +128,170 @@ class AWSSecretsManagerClient(VaultClient):
             name (str): Secret name or ARN.
 
         Returns:
-            SecretValue: Contains the secret's name, value, version, and metadata (`arn`, `created_date`, `version_stages`).
+            SecretValue: The secret value.
 
         Raises:
             SecretNotFoundError: If the secret does not exist.
-            VaultError: For other AWS Secrets Manager errors.
+            AuthenticationError: If credentials are invalid.
+            VaultError: On other AWS errors.
         """
-        self.ensure_authenticated()
+        if self._client is None:
+            raise VaultError("Not authenticated. Call authenticate() first.")
 
         try:
             response = self._client.get_secret_value(SecretId=name)
+            version_id = response.get("VersionId")
+            metadata = {"arn": response.get("ARN")}
 
-            # Secret can be string or binary
+            # SecretString contains the value, SecretBinary for binary secrets
             if "SecretString" in response:
-                value = response["SecretString"]
-            else:
-                # Binary secrets - try UTF-8, fall back to base64
+                secret_string = response["SecretString"]
+                # Try to parse as JSON, fall back to raw string
                 try:
-                    value = response["SecretBinary"].decode("utf-8")
-                except UnicodeDecodeError:
-                    import base64
-
-                    value = base64.b64encode(response["SecretBinary"]).decode("ascii")
-
-            created = response.get("CreatedDate")
-            created_str = str(created) if created else None
-            return SecretValue(
-                name=response.get("Name", name),
-                value=value,
-                version=response.get("VersionId"),
-                metadata={
-                    "arn": response.get("ARN"),
-                    "created_date": created_str,
-                    "version_stages": response.get("VersionStages", []),
-                },
-            )
-        except ClientError as e:
-            error_code = e.response.get("Error", {}).get("Code", "")
+                    parsed = json.loads(secret_string)
+                    # Convert dict to JSON string for storage
+                    if isinstance(parsed, dict):
+                        return SecretValue(
+                            name=name,
+                            value=json.dumps(parsed),
+                            version=version_id,
+                            metadata=metadata,
+                        )
+                    return SecretValue(
+                        name=name,
+                        value=str(parsed),
+                        version=version_id,
+                        metadata=metadata,
+                    )
+                except json.JSONDecodeError:
+                    return SecretValue(
+                        name=name,
+                        value=secret_string,
+                        version=version_id,
+                        metadata=metadata,
+                    )
+            else:
+                # Binary secret - decode and return
+                return SecretValue(
+                    name=name,
+                    value=response["SecretBinary"].decode("utf-8"),
+                    version=version_id,
+                    metadata=metadata,
+                )
+        except Exception as e:
+            error_code = _get_error_code(e)
             if error_code == "ResourceNotFoundException":
-                raise SecretNotFoundError(f"Secret '{name}' not found") from e
-            raise VaultError(f"AWS Secrets Manager error: {e}") from e
+                raise SecretNotFoundError(f"Secret not found: {name}") from e
+            if error_code in ("AccessDeniedException", "UnauthorizedException"):
+                raise AuthenticationError(f"Access denied for secret: {name}") from e
+            # Check if it's a ClientError (with safe isinstance check)
+            if error_code:
+                raise VaultError(f"Failed to get secret {name}: {e}") from e
+            raise
 
     def list_secrets(self, prefix: str = "") -> list[str]:
         """
-        List secret names stored in AWS Secrets Manager.
+        List all secret names available in the current AWS region.
 
         Parameters:
-            prefix (str): Optional name prefix to filter results; only secrets whose names start with this prefix are returned.
+            prefix (str): Optional prefix to filter secrets by name.
 
         Returns:
             List of secret names.
+
+        Raises:
+            AuthenticationError: If credentials are invalid.
+            VaultError: On other AWS errors.
         """
-        self.ensure_authenticated()
+        if self._client is None:
+            raise VaultError("Not authenticated. Call authenticate() first.")
 
         try:
-            secrets = []
             paginator = self._client.get_paginator("list_secrets")
+            secret_names: list[str] = []
 
-            # Note: AWS ListSecrets filter with Key="name" performs exact match,
-            # so we fetch all secrets and filter client-side for prefix matching
             for page in paginator.paginate():
                 for secret in page.get("SecretList", []):
-                    name = secret.get("Name")
-                    if name:
-                        # Apply client-side prefix filtering
-                        if not prefix or name.startswith(prefix):
-                            secrets.append(name)
+                    name = secret["Name"]
+                    if not prefix or name.startswith(prefix):
+                        secret_names.append(name)
 
-            return sorted(secrets)
-        except ClientError as e:
-            raise VaultError(f"AWS Secrets Manager error: {e}") from e
-
-    def get_secret_json(self, name: str) -> dict:
-        """
-        Retrieve the secret identified by `name` and parse its value as a JSON object.
-
-        Returns:
-            dict: Parsed JSON from the secret value.
-
-        Raises:
-            VaultError: If the secret value is not valid JSON.
-        """
-        secret = self.get_secret(name)
-        try:
-            return json.loads(secret.value)
-        except json.JSONDecodeError as e:
-            raise VaultError(f"Secret '{name}' is not valid JSON: {e}") from e
-
-    def create_secret(self, name: str, value: str, description: str = "") -> SecretValue:
-        """
-        Create a new secret in AWS Secrets Manager.
-
-        Parameters:
-            name (str): The name to assign to the secret.
-            value (str): The secret value to store.
-            description (str): Optional human-readable description for the secret.
-
-        Returns:
-            SecretValue: The created secret's representation, including the stored value, version identifier, and metadata (ARN).
-
-        Raises:
-            VaultError: If AWS Secrets Manager returns an error while creating the secret.
-        """
-        self.ensure_authenticated()
-
-        try:
-            response = self._client.create_secret(
-                Name=name,
-                SecretString=value,
-                Description=description,
-            )
-            return SecretValue(
-                name=response.get("Name", name),
-                value=value,
-                version=response.get("VersionId"),
-                metadata={"arn": response.get("ARN")},
-            )
-        except ClientError as e:
-            raise VaultError(f"AWS Secrets Manager error: {e}") from e
-
-    def update_secret(self, name: str, value: str) -> SecretValue:
-        """
-        Update an existing secret in AWS Secrets Manager.
-
-        Returns:
-            SecretValue: Contains the updated secret's name, value, version, and ARN metadata.
-
-        Raises:
-            VaultError: If AWS Secrets Manager returns an error.
-        """
-        self.ensure_authenticated()
-
-        try:
-            response = self._client.put_secret_value(
-                SecretId=name,
-                SecretString=value,
-            )
-            return SecretValue(
-                name=response.get("Name", name),
-                value=value,
-                version=response.get("VersionId"),
-                metadata={"arn": response.get("ARN")},
-            )
-        except ClientError as e:
-            raise VaultError(f"AWS Secrets Manager error: {e}") from e
+            return sorted(secret_names)
+        except Exception as e:
+            error_code = _get_error_code(e)
+            if error_code in ("AccessDeniedException", "UnauthorizedException"):
+                raise AuthenticationError("Access denied when listing secrets") from e
+            if error_code:
+                raise VaultError(f"Failed to list secrets: {e}") from e
+            raise
 
     def set_secret(self, name: str, value: str) -> SecretValue:
         """
         Create or update a secret in AWS Secrets Manager.
 
-        Attempts to update the secret first; if it doesn't exist, creates it.
-
         Parameters:
-            name (str): The name of the secret.
-            value (str): The secret value to store.
+            name (str): Secret name.
+            value (str): Secret value.
 
         Returns:
-            SecretValue: The created or updated secret's representation.
+            SecretValue: The stored secret.
 
         Raises:
-            VaultError: If AWS Secrets Manager returns an error.
+            AuthenticationError: If credentials are invalid.
+            VaultError: On other AWS errors.
         """
-        self.ensure_authenticated()
+        if self._client is None:
+            raise VaultError("Not authenticated. Call authenticate() first.")
 
         try:
-            # Try to update first (most common case)
-            return self.update_secret(name, value)
-        except VaultError as e:
-            # Extract original ClientError if available
-            if e.__cause__ and hasattr(e.__cause__, "response"):
-                error_code = e.__cause__.response.get("Error", {}).get("Code", "")
-                if error_code == "ResourceNotFoundException":
-                    return self.create_secret(name, value)
+            # Try to create first
+            try:
+                response = self._client.create_secret(
+                    Name=name,
+                    SecretString=value,
+                )
+                return SecretValue(
+                    name=name,
+                    value=value,
+                    version=response.get("VersionId"),
+                    metadata={"arn": response.get("ARN")},
+                )
+            except Exception as inner_e:
+                error_code = _get_error_code(inner_e)
+                if error_code == "ResourceExistsException":
+                    # Secret exists, update it
+                    response = self._client.put_secret_value(
+                        SecretId=name,
+                        SecretString=value,
+                    )
+                    return SecretValue(
+                        name=name,
+                        value=value,
+                        version=response.get("VersionId"),
+                        metadata={"arn": response.get("ARN")},
+                    )
+                raise
+        except Exception as e:
+            error_code = _get_error_code(e)
+            if error_code in ("AccessDeniedException", "UnauthorizedException"):
+                raise AuthenticationError(f"Access denied for secret: {name}") from e
+            if error_code:
+                raise VaultError(f"Failed to set secret {name}: {e}") from e
             raise
+
+    def set_secret_dict(self, name: str, value: dict[str, Any]) -> SecretValue:
+        """
+        Create or update a secret in AWS Secrets Manager with a dict value.
+
+        Parameters:
+            name (str): Secret name.
+            value (dict): Secret value as a dictionary (stored as JSON).
+
+        Returns:
+            SecretValue: The stored secret.
+
+        Raises:
+            AuthenticationError: If credentials are invalid.
+            VaultError: On other AWS errors.
+        """
+        return self.set_secret(name, json.dumps(value))

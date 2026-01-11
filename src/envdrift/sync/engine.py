@@ -364,14 +364,15 @@ class SyncEngine:
             return True
 
         try:
+            from envdrift.core.parser import EnvParser
             from envdrift.core.schema import SchemaLoader
-            from envdrift.core.validator import EnvValidator
+            from envdrift.core.validator import Validator
 
             # Find env file
-            env_file = mapping.folder_path / f".env.{mapping.effective_environment}"
-            if not env_file.exists():
-                env_file = mapping.folder_path / ".env"
-            if not env_file.exists():
+            env_file_path = mapping.folder_path / f".env.{mapping.effective_environment}"
+            if not env_file_path.exists():
+                env_file_path = mapping.folder_path / ".env"
+            if not env_file_path.exists():
                 return True  # No file to validate
 
             # Load schema
@@ -380,9 +381,11 @@ class SyncEngine:
             settings_cls = loader.load(self.mode.schema_path, service_dir=service_dir)
             schema = loader.extract_metadata(settings_cls)
 
-            # Validate
-            validator = EnvValidator(schema)
-            result = validator.validate(env_file)
+            # Parse env file and validate
+            parser = EnvParser()
+            env_file = parser.parse(env_file_path)
+            validator = Validator()
+            result = validator.validate(env_file, schema)
 
             return result.valid
 

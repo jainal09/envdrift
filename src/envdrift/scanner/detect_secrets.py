@@ -326,14 +326,15 @@ class DetectSecretsScanner(ScannerBackend):
     def install(
         self,
         progress_callback: Callable[[str], None] | None = None,
-    ) -> bool:
+    ) -> Path | None:
         """Install detect-secrets package.
 
         Args:
             progress_callback: Optional callback for progress updates.
 
         Returns:
-            True if installation succeeded.
+            None on success (detect-secrets is a pip package, not a binary).
+            Raises exception on failure.
         """
         installer = DetectSecretsInstaller(
             version=self._version,
@@ -342,12 +343,13 @@ class DetectSecretsScanner(ScannerBackend):
         result = installer.install()
         if result:
             self._installed = True
-        return result
+            return None  # No binary path for pip packages
+        return None
 
     def scan(
         self,
         paths: list[Path],
-        include_git_history: bool = False,  # noqa: ARG002 - intentionally unused for interface compatibility
+        include_git_history: bool = False,
     ) -> ScanResult:
         """Scan paths for secrets using detect-secrets.
 

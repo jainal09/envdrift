@@ -22,7 +22,6 @@ from pathlib import Path
 
 import pytest
 
-
 # Mark all tests in this module
 pytestmark = [pytest.mark.integration]
 

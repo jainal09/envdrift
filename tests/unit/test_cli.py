@@ -3848,6 +3848,9 @@ class TestVaultPushCommand:
         sync_config = SyncConfig(mappings=[mapping], env_keys_filename=".env.keys")
 
         class DummyClient:
+            def authenticate(self):
+                pass
+
             def get_secret(self, _name):
                 raise SecretNotFoundError("missing")
 

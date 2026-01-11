@@ -156,7 +156,7 @@ class TestKingfisherScanner:
 
         # Mock temp file
         mock_temp_file = MagicMock()
-        mock_temp_file.name = "/tmp/test_report.json"  # noqa: S108
+        mock_temp_file.name = "/tmp/test_report.json"
         mock_temp.return_value.__enter__ = MagicMock(return_value=mock_temp_file)
         mock_temp.return_value.__exit__ = MagicMock(return_value=False)
 

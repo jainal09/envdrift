@@ -373,26 +373,19 @@ def load_config(path: Path | str | None = None) -> EnvdriftConfig:
             envdrift_section = dict(tool_config)
             data = {"envdrift": envdrift_section}
             if "validation" in envdrift_section:
-                data["validation"] = envdrift_section.get("validation")
-                del envdrift_section["validation"]
+                data["validation"] = envdrift_section.pop("validation")
             if "vault" in envdrift_section:
-                data["vault"] = envdrift_section.get("vault")
-                del envdrift_section["vault"]
+                data["vault"] = envdrift_section.pop("vault")
             if "encryption" in envdrift_section:
-                data["encryption"] = envdrift_section.get("encryption")
-                del envdrift_section["encryption"]
+                data["encryption"] = envdrift_section.pop("encryption")
             if "precommit" in envdrift_section:
-                data["precommit"] = envdrift_section.get("precommit")
-                del envdrift_section["precommit"]
+                data["precommit"] = envdrift_section.pop("precommit")
             if "git_hook_check" in envdrift_section:
-                data["git_hook_check"] = envdrift_section.get("git_hook_check")
-                del envdrift_section["git_hook_check"]
+                data["git_hook_check"] = envdrift_section.pop("git_hook_check")
             if "partial_encryption" in envdrift_section:
-                data["partial_encryption"] = envdrift_section.get("partial_encryption")
-                del envdrift_section["partial_encryption"]
+                data["partial_encryption"] = envdrift_section.pop("partial_encryption")
             if "guard" in envdrift_section:
-                data["guard"] = envdrift_section.get("guard")
-                del envdrift_section["guard"]
+                data["guard"] = envdrift_section.pop("guard")
 
     return EnvdriftConfig.from_dict(data)
 

@@ -1,5 +1,6 @@
 """Utility modules for envdrift."""
 
+from envdrift.utils.config import normalize_max_workers
 from envdrift.utils.git import (
     GitError,
     ensure_gitignore_entries,
@@ -10,7 +11,6 @@ from envdrift.utils.git import (
     is_git_repo,
     restore_file_from_git,
 )
-from envdrift.utils.config import normalize_max_workers
 
 __all__ = [
     "GitError",

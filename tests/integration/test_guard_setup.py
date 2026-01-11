@@ -138,6 +138,7 @@ class TestHookMethodConfiguration:
 
             [encryption]
             backend = "dotenvx"
+dotenvx_auto_install = true
 
             [encryption.dotenvx]
             auto_install = true
@@ -171,6 +172,7 @@ class TestHookMethodConfiguration:
 
             [encryption]
             backend = "dotenvx"
+dotenvx_auto_install = true
 
             [encryption.dotenvx]
             auto_install = true
@@ -202,6 +204,7 @@ class TestHookMethodConfiguration:
 
             [encryption]
             backend = "dotenvx"
+dotenvx_auto_install = true
 
             [encryption.dotenvx]
             auto_install = true
@@ -235,6 +238,7 @@ class TestHookDetection:
 
             [encryption]
             backend = "dotenvx"
+dotenvx_auto_install = true
 
             [encryption.dotenvx]
             auto_install = true
@@ -277,6 +281,7 @@ class TestHookDetection:
 
             [encryption]
             backend = "dotenvx"
+dotenvx_auto_install = true
 
             [encryption.dotenvx]
             auto_install = true
@@ -352,6 +357,7 @@ class TestGitWorktreeSupport:
 
             [encryption]
             backend = "dotenvx"
+dotenvx_auto_install = true
 
             [encryption.dotenvx]
             auto_install = true
@@ -394,6 +400,7 @@ class TestHookConfigEdgeCases:
 
             [encryption]
             backend = "dotenvx"
+dotenvx_auto_install = true
 
             [encryption.dotenvx]
             auto_install = true
@@ -420,6 +427,7 @@ class TestHookConfigEdgeCases:
             """\
             [encryption]
             backend = "dotenvx"
+dotenvx_auto_install = true
 
             [encryption.dotenvx]
             auto_install = true
@@ -453,6 +461,7 @@ class TestHookConfigEdgeCases:
 
             [encryption]
             backend = "dotenvx"
+dotenvx_auto_install = true
 
             [encryption.dotenvx]
             auto_install = true
@@ -487,6 +496,7 @@ class TestHookAutoFixVsCheckOnly:
 
             [encryption]
             backend = "dotenvx"
+dotenvx_auto_install = true
 
             [encryption.dotenvx]
             auto_install = true
@@ -512,6 +522,7 @@ class TestHookAutoFixVsCheckOnly:
             """\
             [encryption]
             backend = "dotenvx"
+dotenvx_auto_install = true
 
             [encryption.dotenvx]
             auto_install = true
@@ -554,6 +565,7 @@ class TestHookScriptContent:
 
             [encryption]
             backend = "dotenvx"
+dotenvx_auto_install = true
 
             [encryption.dotenvx]
             auto_install = true
@@ -584,6 +596,7 @@ class TestHookScriptContent:
 
             [encryption]
             backend = "dotenvx"
+dotenvx_auto_install = true
 
             [encryption.dotenvx]
             auto_install = true
@@ -614,6 +627,7 @@ class TestHookScriptContent:
 
             [encryption]
             backend = "dotenvx"
+dotenvx_auto_install = true
 
             [encryption.dotenvx]
             auto_install = true
@@ -643,6 +657,7 @@ class TestHookScriptContent:
 
             [encryption]
             backend = "dotenvx"
+dotenvx_auto_install = true
 
             [encryption.dotenvx]
             auto_install = true

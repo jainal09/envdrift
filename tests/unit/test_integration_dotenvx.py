@@ -1,8 +1,7 @@
 """Tests for DotenvxWrapper integration."""
 
 from unittest.mock import MagicMock, patch
-from pathlib import Path
-import pytest
+
 from envdrift.integrations.dotenvx import DotenvxWrapper
 
 

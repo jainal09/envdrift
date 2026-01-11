@@ -14,7 +14,6 @@ from __future__ import annotations
 
 import contextlib
 import os
-import shutil
 import subprocess
 import threading
 import time
@@ -86,6 +85,7 @@ environment = "production"
             config_content = f"""\
 [encryption]
 backend = "dotenvx"
+dotenvx_auto_install = true
 
 [vault]
 provider = "aws"
@@ -182,6 +182,7 @@ environment = "production"
             config_content = f"""\
 [encryption]
 backend = "dotenvx"
+dotenvx_auto_install = true
 
 [vault]
 provider = "hashicorp"

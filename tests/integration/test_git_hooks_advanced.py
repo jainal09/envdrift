@@ -141,6 +141,7 @@ def test_hook_blocks_unencrypted_commit(git_hook_env):
 
         [encryption]
         backend = "dotenvx"
+dotenvx_auto_install = true
 
         [encryption.dotenvx]
         auto_install = true
@@ -194,6 +195,7 @@ def test_hook_allows_encrypted_commit(git_hook_env):
 
         [encryption]
         backend = "dotenvx"
+dotenvx_auto_install = true
 
         [encryption.dotenvx]
         auto_install = true
@@ -250,6 +252,7 @@ def test_hook_pre_push_lock_check(git_hook_env):
 
         [encryption]
         backend = "dotenvx"
+dotenvx_auto_install = true
 
         [encryption.dotenvx]
         auto_install = true
@@ -326,6 +329,7 @@ def test_smart_encrypt_dirty_workdir(git_hook_env):
         """\
         [encryption]
         backend = "dotenvx"
+dotenvx_auto_install = true
 
         [encryption.dotenvx]
         auto_install = true
@@ -375,6 +379,7 @@ def test_smart_encrypt_no_git_repo(tmp_path):
         """\
         [encryption]
         backend = "dotenvx"
+dotenvx_auto_install = true
 
         [encryption.dotenvx]
         auto_install = true
@@ -425,6 +430,7 @@ def test_hook_blocks_env_keys_commit(git_hook_env):
 
         [encryption]
         backend = "dotenvx"
+dotenvx_auto_install = true
 
         [encryption.dotenvx]
         auto_install = true

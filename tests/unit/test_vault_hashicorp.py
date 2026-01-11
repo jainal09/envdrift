@@ -115,7 +115,7 @@ class TestHashiCorpVaultClientWithMock:
 
         assert "token" in str(exc_info.value).lower()
 
-    @patch("envdrift.vault.hashicorp.hvac")
+    @patch("envdrift.vault.hashicorp._hvac")
     def test_authenticate_success(self, mock_hvac_module):
         """Test successful authentication."""
         mock_client = MagicMock()
@@ -130,7 +130,7 @@ class TestHashiCorpVaultClientWithMock:
         assert client._client is mock_client
         assert client.is_authenticated() is True
 
-    @patch("envdrift.vault.hashicorp.hvac")
+    @patch("envdrift.vault.hashicorp._hvac")
     def test_authenticate_invalid_token_raises(self, mock_hvac_module):
         """Test authentication with invalid token raises."""
         mock_client = MagicMock()
@@ -144,7 +144,7 @@ class TestHashiCorpVaultClientWithMock:
         with pytest.raises((AuthenticationError, VaultError)):
             client.authenticate()
 
-    @patch("envdrift.vault.hashicorp.hvac")
+    @patch("envdrift.vault.hashicorp._hvac")
     def test_get_secret_with_single_value(self, mock_hvac_module):
         """Test get_secret returns single value correctly."""
         mock_client = MagicMock()
@@ -164,7 +164,7 @@ class TestHashiCorpVaultClientWithMock:
         assert secret.name == "my-secret"
         assert secret.value == "my-secret-value"
 
-    @patch("envdrift.vault.hashicorp.hvac")
+    @patch("envdrift.vault.hashicorp._hvac")
     def test_get_secret_with_multiple_values(self, mock_hvac_module):
         """Test get_secret returns JSON for multiple values."""
         mock_client = MagicMock()
@@ -185,7 +185,7 @@ class TestHashiCorpVaultClientWithMock:
         assert "key1" in secret.value
         assert "value1" in secret.value
 
-    @patch("envdrift.vault.hashicorp.hvac")
+    @patch("envdrift.vault.hashicorp._hvac")
     def test_get_secret_not_found_raises(self, mock_hvac_module):
         """Test get_secret raises SecretNotFoundError for missing secret.
 
@@ -209,7 +209,7 @@ class TestHashiCorpVaultClientWithMock:
         with pytest.raises(SecretNotFoundError):
             client.get_secret("nonexistent")
 
-    @patch("envdrift.vault.hashicorp.hvac")
+    @patch("envdrift.vault.hashicorp._hvac")
     def test_list_secrets(self, mock_hvac_module):
         """Test list_secrets returns list of secret names."""
         mock_client = MagicMock()
@@ -231,7 +231,7 @@ class TestHashiCorpVaultClientWithMock:
         assert "secret2" in secrets
         assert "folder/" in secrets
 
-    @patch("envdrift.vault.hashicorp.hvac")
+    @patch("envdrift.vault.hashicorp._hvac")
     def test_list_secrets_with_prefix(self, mock_hvac_module):
         """Test list_secrets with prefix parameter."""
         mock_client = MagicMock()
@@ -251,7 +251,7 @@ class TestHashiCorpVaultClientWithMock:
         mock_client.secrets.kv.v2.list_secrets.assert_called_once()
         assert "db-pass" in secrets
 
-    @patch("envdrift.vault.hashicorp.hvac")
+    @patch("envdrift.vault.hashicorp._hvac")
     def test_list_secrets_invalid_path_returns_empty(self, mock_hvac_module):
         """
         Verify that list_secrets() returns an empty list when the KV backend raises InvalidPath for the requested prefix.
@@ -270,7 +270,7 @@ class TestHashiCorpVaultClientWithMock:
 
         assert client.list_secrets(prefix="missing/") == []
 
-    @patch("envdrift.vault.hashicorp.hvac")
+    @patch("envdrift.vault.hashicorp._hvac")
     def test_get_secret_unauthorized_raises(self, mock_hvac_module):
         """Unauthorized errors should raise AuthenticationError."""
         from envdrift.vault.hashicorp import HashiCorpVaultClient, Unauthorized
@@ -286,7 +286,7 @@ class TestHashiCorpVaultClientWithMock:
         with pytest.raises(AuthenticationError):
             client.get_secret("restricted")
 
-    @patch("envdrift.vault.hashicorp.hvac")
+    @patch("envdrift.vault.hashicorp._hvac")
     def test_create_or_update_secret_forbidden_raises(self, mock_hvac_module):
         """Forbidden errors should raise AuthenticationError."""
         from envdrift.vault.hashicorp import Forbidden, HashiCorpVaultClient
@@ -302,7 +302,7 @@ class TestHashiCorpVaultClientWithMock:
         with pytest.raises(AuthenticationError):
             client.create_or_update_secret("secret", {"value": "x"})
 
-    @patch("envdrift.vault.hashicorp.hvac")
+    @patch("envdrift.vault.hashicorp._hvac")
     def test_create_or_update_secret(self, mock_hvac_module):
         """Test create_or_update_secret calls hvac client."""
         mock_client = MagicMock()
@@ -318,7 +318,7 @@ class TestHashiCorpVaultClientWithMock:
 
         mock_client.secrets.kv.v2.create_or_update_secret.assert_called_once()
 
-    @patch("envdrift.vault.hashicorp.hvac")
+    @patch("envdrift.vault.hashicorp._hvac")
     def test_create_or_update_secret_with_dict(self, mock_hvac_module):
         """Test create_or_update_secret accepts dict value."""
         mock_client = MagicMock()
@@ -335,7 +335,7 @@ class TestHashiCorpVaultClientWithMock:
         call_args = mock_client.secrets.kv.v2.create_or_update_secret.call_args
         assert call_args[1]["secret"] == {"key": "value"}
 
-    @patch("envdrift.vault.hashicorp.hvac")
+    @patch("envdrift.vault.hashicorp._hvac")
     def test_set_secret_delegates_to_create_or_update(self, mock_hvac_module):
         """Test set_secret is an alias."""
         mock_client = MagicMock()
@@ -355,7 +355,7 @@ class TestHashiCorpVaultClientWithMock:
 class TestEnsureAuthenticated:
     """Test ensure_authenticated behavior."""
 
-    @patch("envdrift.vault.hashicorp.hvac")
+    @patch("envdrift.vault.hashicorp._hvac")
     def test_ensure_authenticated_raises_when_not_authenticated(self, mock_hvac_module):
         """Test ensure_authenticated raises AuthenticationError."""
         mock_client = MagicMock()

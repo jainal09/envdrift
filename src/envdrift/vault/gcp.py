@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import contextlib
+from typing import Any
 
 from envdrift.vault.base import (
     AuthenticationError,
@@ -13,16 +14,26 @@ from envdrift.vault.base import (
 )
 
 try:
-    from google.api_core import exceptions as google_exceptions
+    from google.api_core import exceptions as _google_exceptions
     from google.auth.exceptions import DefaultCredentialsError
-    from google.cloud import secretmanager
+    from google.cloud import secretmanager as _secretmanager
 
     GCP_AVAILABLE = True
 except ImportError:
     GCP_AVAILABLE = False
-    secretmanager = None
-    google_exceptions = None
-    DefaultCredentialsError = Exception
+    _secretmanager = None
+    _google_exceptions = None
+    DefaultCredentialsError = Exception  # type: ignore[misc, assignment]
+
+
+def _get_gcp_modules() -> tuple[Any, Any]:
+    """Get GCP modules, raising ImportError if not available."""
+    if not GCP_AVAILABLE or _secretmanager is None or _google_exceptions is None:
+        raise ImportError(
+            "GCP Secret Manager support requires additional dependencies. "
+            "Install with: pip install envdrift[gcp]"
+        )
+    return _secretmanager, _google_exceptions
 
 
 class GCPSecretManagerClient(VaultClient):
@@ -44,14 +55,9 @@ class GCPSecretManagerClient(VaultClient):
         Raises:
             ImportError: If the GCP SDK is not installed (install with `pip install envdrift[gcp]`).
         """
-        if not GCP_AVAILABLE:
-            raise ImportError(
-                "GCP Secret Manager support requires additional dependencies. "
-                "Install with: pip install envdrift[gcp]"
-            )
-
+        _get_gcp_modules()  # Verify GCP SDK is available
         self.project_id = project_id
-        self._client: secretmanager.SecretManagerServiceClient | None = None
+        self._client: Any = None
 
     def _project_path(self) -> str:
         return f"projects/{self.project_id}"
@@ -81,6 +87,7 @@ class GCPSecretManagerClient(VaultClient):
 
         Raises AuthenticationError for credential issues and VaultError for API failures.
         """
+        secretmanager, google_exceptions = _get_gcp_modules()
         try:
             self._client = secretmanager.SecretManagerServiceClient()
             secrets_iter = self._client.list_secrets(
@@ -114,6 +121,7 @@ class GCPSecretManagerClient(VaultClient):
             SecretValue: Contains the secret's name, value, version, and metadata.
         """
         self.ensure_authenticated()
+        _, google_exceptions = _get_gcp_modules()
 
         try:
             version_path = self._version_path(name)
@@ -150,6 +158,7 @@ class GCPSecretManagerClient(VaultClient):
             prefix (str): Optional prefix to filter secret names.
         """
         self.ensure_authenticated()
+        _, google_exceptions = _get_gcp_modules()
 
         try:
             secrets = []
@@ -174,6 +183,7 @@ class GCPSecretManagerClient(VaultClient):
             SecretValue containing the stored secret's name, value, version, and metadata.
         """
         self.ensure_authenticated()
+        _, google_exceptions = _get_gcp_modules()
 
         secret_id = self._secret_id(name)
         secret_path = self._secret_path(name)

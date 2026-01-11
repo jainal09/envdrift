@@ -9,9 +9,11 @@ from typer.testing import CliRunner
 from envdrift.cli import app
 from envdrift.config import (
     EnvdriftConfig,
-    GuardConfig as FileGuardConfig,
     PartialEncryptionConfig,
     PartialEncryptionEnvironmentConfig,
+)
+from envdrift.config import (
+    GuardConfig as FileGuardConfig,
 )
 from envdrift.scanner.base import AggregatedScanResult, FindingSeverity, ScanFinding
 

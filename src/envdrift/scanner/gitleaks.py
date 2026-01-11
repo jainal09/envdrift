@@ -588,8 +588,8 @@ class GitleaksScanner(ScannerBackend):
             redacted = redact_secret(secret) if secret else ""
 
             # Map rule ID
-            rule_id = item.get("RuleID", "unknown")
-            rule_description = item.get("Description", rule_id)
+            rule_id: str = str(item.get("RuleID", "unknown"))
+            rule_description: str = str(item.get("Description") or rule_id)
 
             # Gitleaks doesn't provide severity, default based on rule
             severity = FindingSeverity.HIGH
