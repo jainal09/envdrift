@@ -359,6 +359,22 @@ class TestAWSSecretsManagerClient:
         with pytest.raises(AuthenticationError):
             client.get_secret("secret")
 
+    def test_get_secret_error_wraps(self, mock_boto3, patched_boto_clients):
+        """Unknown errors should raise VaultError."""
+
+        class FakeClientError(Exception):
+            def __init__(self, code):
+                self.response = {"Error": {"Code": code}}
+
+        mock_sm_client, _ = patched_boto_clients
+        mock_sm_client.get_secret_value.side_effect = FakeClientError("Boom")
+
+        client = mock_boto3.AWSSecretsManagerClient()
+        client.authenticate()
+
+        with pytest.raises(VaultError):
+            client.get_secret("secret")
+
     def test_list_secrets_requires_authentication(self, mock_boto3):
         """list_secrets should require authentication."""
         client = mock_boto3.AWSSecretsManagerClient()
