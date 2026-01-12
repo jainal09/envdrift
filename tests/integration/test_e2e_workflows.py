@@ -15,7 +15,6 @@ from __future__ import annotations
 
 import contextlib
 import os
-import shutil
 import subprocess
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -73,6 +72,9 @@ provider = "aws"
 
 [tool.envdrift.encryption]
 backend = "dotenvx"
+
+[tool.envdrift.encryption.dotenvx]
+auto_install = true
 
 [[tool.envdrift.vault.sync.mappings]]
 secret_name = "{secret_name}"
@@ -145,6 +147,9 @@ provider = "aws"
 
 [tool.envdrift.encryption]
 backend = "dotenvx"
+
+[tool.envdrift.encryption.dotenvx]
+auto_install = true
 
 [[tool.envdrift.vault.sync.mappings]]
 secret_name = "{secret_name}"
@@ -237,6 +242,9 @@ provider = "aws"
 [tool.envdrift.encryption]
 backend = "dotenvx"
 
+[tool.envdrift.encryption.dotenvx]
+auto_install = true
+
 {services_config}
 """)
 
@@ -298,6 +306,9 @@ provider = "aws"
 [tool.envdrift.encryption]
 backend = "dotenvx"
 
+[tool.envdrift.encryption.dotenvx]
+auto_install = true
+
 [[tool.envdrift.vault.sync.mappings]]
 secret_name = "nonexistent/secret"
 folder_path = "."
@@ -337,6 +348,9 @@ folder_path = "."
         pyproject.write_text("""
 [tool.envdrift.encryption]
 backend = "dotenvx"
+
+[tool.envdrift.encryption.dotenvx]
+auto_install = true
 
 [[tool.envdrift.vault.sync.mappings]]
 secret_name = "dummy"
@@ -387,6 +401,9 @@ class TestProfileActivation:
         pyproject.write_text("""
 [tool.envdrift.encryption]
 backend = "dotenvx"
+
+[tool.envdrift.encryption.dotenvx]
+auto_install = true
 
 [[tool.envdrift.vault.sync.mappings]]
 secret_name = "main"
@@ -442,6 +459,9 @@ activate_to = ".env.production"
         pyproject.write_text("""
 [tool.envdrift.encryption]
 backend = "dotenvx"
+
+[tool.envdrift.encryption.dotenvx]
+auto_install = true
 
 [[tool.envdrift.vault.sync.mappings]]
 secret_name = "main"

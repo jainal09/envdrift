@@ -394,8 +394,4 @@ class ScanEngine:
         Returns:
             Filtered list excluding .clear file findings.
         """
-        return [
-            finding
-            for finding in findings
-            if not finding.file_path.name.endswith(".clear")
-        ]
+        return [finding for finding in findings if not finding.file_path.name.endswith(".clear")]

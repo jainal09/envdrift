@@ -14,9 +14,9 @@ import pytest
 from envdrift.scanner.base import FindingSeverity
 from envdrift.scanner.detect_secrets import (
     DETECTOR_SEVERITY,
+    DetectSecretsInstaller,
     DetectSecretsInstallError,
     DetectSecretsNotFoundError,
-    DetectSecretsInstaller,
     DetectSecretsScanner,
 )
 
@@ -204,27 +204,31 @@ class TestDetectSecretsScanner:
         """_ensure_installed returns True after successful install."""
         scanner = DetectSecretsScanner(auto_install=True)
         with patch.object(scanner, "is_installed", return_value=False):
-            with patch.object(DetectSecretsInstaller, "install", return_value=True):
+            with patch.object(DetectSecretsInstaller, "install", return_value=None):
                 assert scanner._ensure_installed() is True
                 assert scanner._installed is True
 
     def test_ensure_installed_when_auto_install_fails(self):
         """_ensure_installed raises when install fails."""
         scanner = DetectSecretsScanner(auto_install=True)
-        with patch.object(scanner, "is_installed", return_value=False):
-            with patch.object(
+        with (
+            patch.object(scanner, "is_installed", return_value=False),
+            patch.object(
                 DetectSecretsInstaller,
                 "install",
                 side_effect=DetectSecretsInstallError("nope"),
-            ):
-                with pytest.raises(DetectSecretsNotFoundError, match="auto-install failed"):
-                    scanner._ensure_installed()
+            ),
+            pytest.raises(DetectSecretsNotFoundError, match="auto-install failed"),
+        ):
+            scanner._ensure_installed()
 
     def test_install_updates_installed_flag(self):
         """install updates cached installed state."""
         scanner = DetectSecretsScanner(auto_install=True)
-        with patch.object(DetectSecretsInstaller, "install", return_value=True):
-            assert scanner.install() is True
+        with patch.object(DetectSecretsInstaller, "install", return_value=None):
+            # scanner.install() returns None for pip packages (no binary path)
+            # installer.install() returning without exception still marks installed
+            assert scanner.install() is None
             assert scanner._installed is True
 
     def test_parse_secret_sets_severity_and_preview(self):
@@ -299,7 +303,7 @@ class TestDetectSecretsScan:
                 ],
             }
         }
-        with patch.object(scanner, "_ensure_installed", return_value=True):
+        with patch.object(scanner, "_ensure_installed", return_value=None):
             with patch("subprocess.run") as mock_run:
                 mock_run.return_value = SimpleNamespace(
                     returncode=0, stdout=json.dumps(baseline), stderr=""
@@ -314,7 +318,7 @@ class TestDetectSecretsScan:
     def test_scan_handles_invalid_json(self, tmp_path: Path):
         """Scan ignores invalid JSON output."""
         scanner = DetectSecretsScanner(auto_install=False)
-        with patch.object(scanner, "_ensure_installed", return_value=True):
+        with patch.object(scanner, "_ensure_installed", return_value=None):
             with patch("subprocess.run") as mock_run:
                 mock_run.return_value = SimpleNamespace(returncode=0, stdout="not-json", stderr="")
                 result = scanner.scan([tmp_path])
@@ -325,12 +329,14 @@ class TestDetectSecretsScan:
     def test_scan_timeout_returns_error(self, tmp_path: Path):
         """Timeouts return a ScanResult with error."""
         scanner = DetectSecretsScanner(auto_install=False)
-        with patch.object(scanner, "_ensure_installed", return_value=True):
-            with patch(
+        with (
+            patch.object(scanner, "_ensure_installed", return_value=None),
+            patch(
                 "subprocess.run",
                 side_effect=subprocess.TimeoutExpired(cmd="detect_secrets", timeout=1),
-            ):
-                result = scanner.scan([tmp_path])
+            ),
+        ):
+            result = scanner.scan([tmp_path])
 
         assert result.error == f"Scan timed out for {tmp_path}"
 

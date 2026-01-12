@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import subprocess
 from pathlib import Path
+from textwrap import dedent
 from unittest.mock import MagicMock
 
 import pytest
@@ -781,3 +782,56 @@ class TestSyncEngineEphemeralKeys:
         # Should be ephemeral action with no decryption result (skipped)
         assert result.services[0].action == SyncAction.EPHEMERAL
         assert result.services[0].decryption_result is None
+
+
+class TestSyncEngineSchemaValidation:
+    """Schema validation behavior tests."""
+
+    def test_validate_schema_uses_detected_env_file(
+        self, mock_vault_client: MagicMock, tmp_path: Path
+    ) -> None:
+        """Validation should use detected .env.* files when expected env is missing."""
+        service_dir = tmp_path / "service"
+        service_dir.mkdir()
+        (service_dir / ".env.staging").write_text("NAME=envdrift\n")
+
+        module_path = service_dir / "service_settings.py"
+        module_path.write_text(
+            dedent(
+                """
+                from pydantic_settings import BaseSettings
+
+                class Settings(BaseSettings):
+                    NAME: str
+                """
+            ).lstrip()
+        )
+
+        mapping = ServiceMapping(secret_name="test-key", folder_path=service_dir)
+        config = SyncConfig(mappings=[mapping])
+
+        engine = SyncEngine(
+            config=config,
+            vault_client=mock_vault_client,
+            mode=SyncMode(schema_path="service_settings:Settings", service_dir=service_dir),
+        )
+
+        assert engine._validate_schema(mapping) is True
+
+    def test_validate_schema_returns_true_without_env_file(
+        self, mock_vault_client: MagicMock, tmp_path: Path
+    ) -> None:
+        """Validation should skip when no env file exists."""
+        service_dir = tmp_path / "service"
+        service_dir.mkdir()
+
+        mapping = ServiceMapping(secret_name="test-key", folder_path=service_dir)
+        config = SyncConfig(mappings=[mapping])
+
+        engine = SyncEngine(
+            config=config,
+            vault_client=mock_vault_client,
+            mode=SyncMode(schema_path="service_settings:Settings"),
+        )
+
+        assert engine._validate_schema(mapping) is True

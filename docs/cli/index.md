@@ -14,19 +14,21 @@ uv add envdrift
 
 ## Commands
 
-| Command                      | Description                                            |
-| ---------------------------- | ------------------------------------------------------ |
-| [validate](validate.md)      | Validate .env files against Pydantic schemas           |
-| [diff](diff.md)              | Compare two .env files and show differences            |
-| [encrypt](encrypt.md)        | Check or perform encryption using dotenvx or SOPS      |
-| [decrypt](decrypt.md)        | Decrypt encrypted .env files (dotenvx or SOPS)         |
-| [guard](guard.md)            | Scan for unencrypted .env files and exposed secrets    |
-| [pull](pull.md)              | Pull keys from vault and decrypt all env files         |
-| [sync](sync.md)              | Sync encryption keys from cloud vaults to local files  |
-| [vault-push](vault-push.md)  | Push encryption keys from local files to cloud vaults  |
-| [init](init.md)              | Generate Pydantic Settings from .env files             |
-| [hook](hook.md)              | Manage pre-commit hook integration                     |
-| [version](version.md)        | Show envdrift version                                  |
+| Command                          | Description                                            |
+| -------------------------------- | ------------------------------------------------------ |
+| [validate](validate.md)          | Validate .env files against Pydantic schemas           |
+| [diff](diff.md)                  | Compare two .env files and show differences            |
+| [encrypt](encrypt.md)            | Check or perform encryption using dotenvx or SOPS      |
+| [decrypt](decrypt.md)            | Decrypt encrypted .env files (dotenvx or SOPS)         |
+| [push](push.md)                  | Encrypt and combine files (partial encryption)         |
+| [pull-partial](pull-partial.md)  | Decrypt secret files for editing (partial encryption)  |
+| [guard](guard.md)                | Scan for unencrypted .env files and exposed secrets    |
+| [pull](pull.md)                  | Pull keys from vault and decrypt all env files         |
+| [sync](sync.md)                  | Sync encryption keys from cloud vaults to local files  |
+| [vault-push](vault-push.md)      | Push encryption keys from local files to cloud vaults  |
+| [init](init.md)                  | Generate Pydantic Settings from .env files             |
+| [hook](hook.md)                  | Manage pre-commit hook integration                     |
+| [version](version.md)            | Show envdrift version                                  |
 
 ## Global Options
 

@@ -589,6 +589,9 @@ def pull(
     console.print()
 
     # === STEP 1: SYNC KEYS FROM VAULT (unless --skip-sync) ===
+    # Build ephemeral keys map for decryption (folder_path -> (key_name, key_value))
+    ephemeral_keys_map: dict[Path, tuple[str, str]] = {}
+
     if skip_sync:
         console.print("[dim]Step 1: Skipped (--skip-sync)[/dim]")
     else:
@@ -610,9 +613,7 @@ def pull(
             print_error("Setup incomplete due to sync errors")
             raise typer.Exit(code=1)
 
-    # Build ephemeral keys map for decryption (folder_path -> (key_name, key_value))
-    ephemeral_keys_map: dict[Path, tuple[str, str]] = {}
-    if not skip_sync:
+        # Build ephemeral keys map from sync results
         from envdrift.sync.result import SyncAction
 
         for service_result in sync_result.services:
@@ -824,12 +825,10 @@ def pull(
     config_path = _find_config_path(config_file)
     partial_config = None
     if config_path:
-        try:
-            from envdrift.config import (
-                ConfigNotFoundError,
-                load_config as load_envdrift_config,
-            )
+        from envdrift.config import ConfigNotFoundError
+        from envdrift.config import load_config as load_envdrift_config
 
+        try:
             partial_config = load_envdrift_config(config_path)
         except ConfigNotFoundError:
             partial_config = None

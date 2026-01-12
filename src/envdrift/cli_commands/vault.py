@@ -141,6 +141,13 @@ def vault_push(
             project_id=project_id,
         )
 
+        # Authenticate the vault client
+        try:
+            client.authenticate()
+        except VaultError as e:
+            print_error(str(e))
+            raise typer.Exit(code=1) from None
+
         try:
             encryption_backend, backend_provider, encryption_config = resolve_encryption_backend(
                 config

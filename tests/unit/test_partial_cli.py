@@ -9,7 +9,6 @@ from typer.testing import CliRunner
 
 from envdrift.cli import app
 
-
 runner = CliRunner()
 
 

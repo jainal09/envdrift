@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+from typing import Any
 
 from envdrift.vault.base import (
     AuthenticationError,
@@ -13,16 +14,23 @@ from envdrift.vault.base import (
 )
 
 try:
-    import hvac
+    import hvac as _hvac
     from hvac.exceptions import Forbidden, InvalidPath, Unauthorized
 
     HVAC_AVAILABLE = True
 except ImportError:
     HVAC_AVAILABLE = False
-    hvac = None
-    InvalidPath = Exception
-    Forbidden = Exception
-    Unauthorized = Exception
+    _hvac = None
+    InvalidPath = Exception  # type: ignore[misc, assignment]
+    Forbidden = Exception  # type: ignore[misc, assignment]
+    Unauthorized = Exception  # type: ignore[misc, assignment]
+
+
+def _get_hvac() -> Any:
+    """Get hvac module, raising ImportError if not available."""
+    if not HVAC_AVAILABLE or _hvac is None:
+        raise ImportError("hvac not installed. Install with: pip install envdrift[hashicorp]")
+    return _hvac
 
 
 class HashiCorpVaultClient(VaultClient):
@@ -48,13 +56,11 @@ class HashiCorpVaultClient(VaultClient):
             token (str | None): Authentication token; if omitted, the VAULT_TOKEN environment variable is used.
             mount_point (str): KV secrets engine mount point (default "secret").
         """
-        if not HVAC_AVAILABLE:
-            raise ImportError("hvac not installed. Install with: pip install envdrift[hashicorp]")
-
+        _get_hvac()  # Verify hvac is available
         self.url = url
         self.token = token or os.environ.get("VAULT_TOKEN")
         self.mount_point = mount_point
-        self._client: hvac.Client | None = None
+        self._client: Any = None
 
     def authenticate(self) -> None:
         """
@@ -73,6 +79,7 @@ class HashiCorpVaultClient(VaultClient):
                 "No Vault token provided. Set VAULT_TOKEN or pass token parameter."
             )
 
+        hvac = _get_hvac()
         try:
             self._client = hvac.Client(url=self.url, token=self.token)
 

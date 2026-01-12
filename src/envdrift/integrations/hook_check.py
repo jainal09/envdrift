@@ -300,7 +300,7 @@ def check_precommit_hooks(
     """Check for envdrift hooks in a pre-commit config."""
     if required_hooks is None:
         required_hooks = ("envdrift-encryption",)
-    required = {hook_id: False for hook_id in required_hooks}
+    required = dict.fromkeys(required_hooks, False)
 
     if not precommit_path:
         return required

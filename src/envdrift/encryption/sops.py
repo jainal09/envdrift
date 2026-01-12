@@ -13,8 +13,8 @@ from __future__ import annotations
 import re
 import shutil
 import subprocess  # nosec B404
-from threading import Lock
 from pathlib import Path
+from threading import Lock
 
 from envdrift.encryption.base import (
     EncryptionBackend,

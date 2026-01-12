@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import json
 import shutil
-import subprocess
+import subprocess  # nosec B404
 import sys
 import time
 from pathlib import Path
@@ -156,7 +156,7 @@ class DetectSecretsInstaller:
                     f"detect-secrets=={self.version}",
                 ]
 
-            result = subprocess.run(
+            result = subprocess.run(  # nosec B603
                 cmd,
                 capture_output=True,
                 text=True,
@@ -177,7 +177,7 @@ class DetectSecretsInstaller:
     def _is_installed(self) -> bool:
         """Check if detect-secrets is installed."""
         try:
-            result = subprocess.run(
+            result = subprocess.run(  # nosec B603
                 [sys.executable, "-m", "detect_secrets", "--version"],
                 capture_output=True,
                 text=True,
@@ -267,7 +267,7 @@ class DetectSecretsScanner(ScannerBackend):
             return self._installed
 
         try:
-            result = subprocess.run(
+            result = subprocess.run(  # nosec B603
                 [sys.executable, "-m", "detect_secrets", "--version"],
                 capture_output=True,
                 text=True,
@@ -282,7 +282,7 @@ class DetectSecretsScanner(ScannerBackend):
     def get_version(self) -> str | None:
         """Get installed detect-secrets version."""
         try:
-            result = subprocess.run(
+            result = subprocess.run(  # nosec B603
                 [sys.executable, "-m", "detect_secrets", "--version"],
                 capture_output=True,
                 text=True,
@@ -326,28 +326,28 @@ class DetectSecretsScanner(ScannerBackend):
     def install(
         self,
         progress_callback: Callable[[str], None] | None = None,
-    ) -> bool:
+    ) -> Path | None:
         """Install detect-secrets package.
 
         Args:
             progress_callback: Optional callback for progress updates.
 
         Returns:
-            True if installation succeeded.
+            None on success (detect-secrets is a pip package, not a binary).
+            Raises exception on failure.
         """
         installer = DetectSecretsInstaller(
             version=self._version,
             progress_callback=progress_callback,
         )
-        result = installer.install()
-        if result:
-            self._installed = True
-        return result
+        installer.install()
+        self._installed = True
+        return None  # No binary path for pip packages
 
     def scan(
         self,
         paths: list[Path],
-        include_git_history: bool = False,  # noqa: ARG002 - intentionally unused for interface compatibility
+        include_git_history: bool = False,
     ) -> ScanResult:
         """Scan paths for secrets using detect-secrets.
 
@@ -401,7 +401,7 @@ class DetectSecretsScanner(ScannerBackend):
                     scan_path,
                 ]
 
-                result = subprocess.run(
+                result = subprocess.run(  # nosec B603
                     args,
                     capture_output=True,
                     text=True,

@@ -15,11 +15,11 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from envdrift.scanner.base import FindingSeverity, ScanFinding
+from envdrift.scanner.base import FindingSeverity
 from envdrift.scanner.gitleaks import (
     GitleaksError,
-    GitleaksInstallError,
     GitleaksInstaller,
+    GitleaksInstallError,
     GitleaksNotFoundError,
     GitleaksScanner,
     get_gitleaks_path,

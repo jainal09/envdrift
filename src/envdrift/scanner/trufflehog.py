@@ -19,7 +19,7 @@ import json
 import platform
 import shutil
 import stat
-import subprocess
+import subprocess  # nosec B404
 import tarfile
 import tempfile
 import time
@@ -313,7 +313,7 @@ class TrufflehogInstaller:
         if target_path.exists() and not force:
             # Verify version
             try:
-                result = subprocess.run(
+                result = subprocess.run(  # nosec B603
                     [str(target_path), "--version"],
                     capture_output=True,
                     text=True,
@@ -389,7 +389,7 @@ class TrufflehogScanner(ScannerBackend):
         """Get installed trufflehog version."""
         try:
             binary = self._find_binary()
-            result = subprocess.run(
+            result = subprocess.run(  # nosec B603
                 [str(binary), "--version"],
                 capture_output=True,
                 text=True,
@@ -516,7 +516,7 @@ class TrufflehogScanner(ScannerBackend):
                 args.append("--no-verification")
 
             try:
-                result = subprocess.run(
+                result = subprocess.run(  # nosec B603
                     args,
                     capture_output=True,
                     text=True,

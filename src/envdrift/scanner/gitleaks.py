@@ -14,7 +14,7 @@ import json
 import platform
 import shutil
 import stat
-import subprocess
+import subprocess  # nosec B404
 import tarfile
 import tempfile
 import time
@@ -319,7 +319,7 @@ class GitleaksInstaller:
         if target_path.exists() and not force:
             # Verify version
             try:
-                result = subprocess.run(
+                result = subprocess.run(  # nosec B603
                     [str(target_path), "version"],
                     capture_output=True,
                     text=True,
@@ -387,7 +387,7 @@ class GitleaksScanner(ScannerBackend):
         """Get installed gitleaks version."""
         try:
             binary = self._find_binary()
-            result = subprocess.run(
+            result = subprocess.run(  # nosec B603
                 [str(binary), "version"],
                 capture_output=True,
                 text=True,
@@ -511,7 +511,7 @@ class GitleaksScanner(ScannerBackend):
                 if not include_git_history:
                     args.append("--no-git")
 
-                subprocess.run(
+                subprocess.run(  # nosec B603
                     args,
                     capture_output=True,
                     text=True,
@@ -588,8 +588,8 @@ class GitleaksScanner(ScannerBackend):
             redacted = redact_secret(secret) if secret else ""
 
             # Map rule ID
-            rule_id = item.get("RuleID", "unknown")
-            rule_description = item.get("Description", rule_id)
+            rule_id: str = str(item.get("RuleID", "unknown"))
+            rule_description: str = str(item.get("Description") or rule_id)
 
             # Gitleaks doesn't provide severity, default based on rule
             severity = FindingSeverity.HIGH

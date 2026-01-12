@@ -584,7 +584,7 @@ class TestSyncConfigEphemeralKeys:
         config = SyncConfig(ephemeral_keys=True)
         mapping = ServiceMapping(
             secret_name="key",
-            folder_path=Path("."),
+            folder_path=Path(),
             ephemeral_keys=None,  # Inherit
         )
 
@@ -597,7 +597,7 @@ class TestSyncConfigEphemeralKeys:
         config = SyncConfig(ephemeral_keys=False)
         mapping = ServiceMapping(
             secret_name="key",
-            folder_path=Path("."),
+            folder_path=Path(),
             ephemeral_keys=True,  # Override
         )
 
@@ -610,7 +610,7 @@ class TestSyncConfigEphemeralKeys:
         config = SyncConfig(ephemeral_keys=True)
         mapping = ServiceMapping(
             secret_name="key",
-            folder_path=Path("."),
+            folder_path=Path(),
             ephemeral_keys=False,  # Explicit disable
         )
 

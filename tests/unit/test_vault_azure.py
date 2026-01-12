@@ -50,8 +50,8 @@ class TestAzureKeyVaultClient:
         mock_secret_client.list_properties_of_secrets.return_value = iter([])
 
         with (
-            patch.object(mock_azure, "DefaultAzureCredential", return_value=mock_credential),
-            patch.object(mock_azure, "SecretClient", return_value=mock_secret_client),
+            patch.object(mock_azure, "_DefaultAzureCredential", return_value=mock_credential),
+            patch.object(mock_azure, "_SecretClient", return_value=mock_secret_client),
         ):
             client = mock_azure.AzureKeyVaultClient(vault_url="https://test.vault.azure.net")
             client.authenticate()
@@ -79,8 +79,8 @@ class TestAzureKeyVaultClient:
         mock_secret_client.get_secret.return_value = mock_secret
 
         with (
-            patch.object(mock_azure, "DefaultAzureCredential", return_value=mock_credential),
-            patch.object(mock_azure, "SecretClient", return_value=mock_secret_client),
+            patch.object(mock_azure, "_DefaultAzureCredential", return_value=mock_credential),
+            patch.object(mock_azure, "_SecretClient", return_value=mock_secret_client),
         ):
             client = mock_azure.AzureKeyVaultClient(vault_url="https://test.vault.azure.net")
             client.authenticate()
@@ -105,8 +105,8 @@ class TestAzureKeyVaultClient:
         mock_secret_client.list_properties_of_secrets.return_value = iter([mock_prop1, mock_prop2])
 
         with (
-            patch.object(mock_azure, "DefaultAzureCredential", return_value=mock_credential),
-            patch.object(mock_azure, "SecretClient", return_value=mock_secret_client),
+            patch.object(mock_azure, "_DefaultAzureCredential", return_value=mock_credential),
+            patch.object(mock_azure, "_SecretClient", return_value=mock_secret_client),
         ):
             client = mock_azure.AzureKeyVaultClient(vault_url="https://test.vault.azure.net")
             client.authenticate()
@@ -137,8 +137,8 @@ class TestAzureKeyVaultClient:
         )
 
         with (
-            patch.object(mock_azure, "DefaultAzureCredential", return_value=mock_credential),
-            patch.object(mock_azure, "SecretClient", return_value=mock_secret_client),
+            patch.object(mock_azure, "_DefaultAzureCredential", return_value=mock_credential),
+            patch.object(mock_azure, "_SecretClient", return_value=mock_secret_client),
         ):
             client = mock_azure.AzureKeyVaultClient(vault_url="https://test.vault.azure.net")
             client.authenticate()
@@ -168,8 +168,8 @@ class TestAzureKeyVaultClient:
         mock_secret_client.set_secret.return_value = mock_secret
 
         with (
-            patch.object(mock_azure, "DefaultAzureCredential", return_value=mock_credential),
-            patch.object(mock_azure, "SecretClient", return_value=mock_secret_client),
+            patch.object(mock_azure, "_DefaultAzureCredential", return_value=mock_credential),
+            patch.object(mock_azure, "_SecretClient", return_value=mock_secret_client),
         ):
             client = mock_azure.AzureKeyVaultClient(vault_url="https://test.vault.azure.net")
             client.authenticate()
@@ -198,8 +198,8 @@ class TestAzureKeyVaultClient:
         mock_secret_client.list_properties_of_secrets.side_effect = ClientAuthError("bad creds")
 
         with (
-            patch.object(mock_azure, "DefaultAzureCredential", return_value=MagicMock()),
-            patch.object(mock_azure, "SecretClient", return_value=mock_secret_client),
+            patch.object(mock_azure, "_DefaultAzureCredential", return_value=MagicMock()),
+            patch.object(mock_azure, "_SecretClient", return_value=mock_secret_client),
         ):
             client = mock_azure.AzureKeyVaultClient(vault_url="https://test.vault.azure.net")
             with pytest.raises(AuthenticationError):
@@ -221,8 +221,8 @@ class TestAzureKeyVaultClient:
         mock_secret_client.list_properties_of_secrets.side_effect = HttpResponseError("boom")
 
         with (
-            patch.object(mock_azure, "DefaultAzureCredential", return_value=MagicMock()),
-            patch.object(mock_azure, "SecretClient", return_value=mock_secret_client),
+            patch.object(mock_azure, "_DefaultAzureCredential", return_value=MagicMock()),
+            patch.object(mock_azure, "_SecretClient", return_value=mock_secret_client),
         ):
             client = mock_azure.AzureKeyVaultClient(vault_url="https://test.vault.azure.net")
             with pytest.raises(VaultError):
@@ -242,8 +242,8 @@ class TestAzureKeyVaultClient:
         mock_secret_client.get_secret.side_effect = ResourceNotFoundError("missing")
 
         with (
-            patch.object(mock_azure, "DefaultAzureCredential", return_value=mock_credential),
-            patch.object(mock_azure, "SecretClient", return_value=mock_secret_client),
+            patch.object(mock_azure, "_DefaultAzureCredential", return_value=mock_credential),
+            patch.object(mock_azure, "_SecretClient", return_value=mock_secret_client),
         ):
             client = mock_azure.AzureKeyVaultClient(vault_url="https://test.vault.azure.net")
             client.authenticate()
@@ -264,8 +264,8 @@ class TestAzureKeyVaultClient:
         mock_secret_client.list_properties_of_secrets.return_value = iter([])
 
         with (
-            patch.object(mock_azure, "DefaultAzureCredential", return_value=mock_credential),
-            patch.object(mock_azure, "SecretClient", return_value=mock_secret_client),
+            patch.object(mock_azure, "_DefaultAzureCredential", return_value=mock_credential),
+            patch.object(mock_azure, "_SecretClient", return_value=mock_secret_client),
         ):
             client = mock_azure.AzureKeyVaultClient(vault_url="https://test.vault.azure.net")
             client.authenticate()

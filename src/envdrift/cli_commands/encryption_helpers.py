@@ -96,9 +96,7 @@ def is_encrypted_content(
     if provider == EncryptionProvider.DOTENVX:
         return bool(re.search(r"=\s*encrypted:", content, re.IGNORECASE))
     # For other providers (like SOPS), the header is sufficient
-    if backend.has_encrypted_header(content):
-        return True
-    return False
+    return bool(backend.has_encrypted_header(content))
 
 
 def should_skip_reencryption(

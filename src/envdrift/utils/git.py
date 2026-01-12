@@ -8,8 +8,8 @@ is unchanged.
 from __future__ import annotations
 
 import subprocess  # nosec B404
+from collections.abc import Iterable
 from pathlib import Path
-from typing import Iterable
 
 
 class GitError(Exception):

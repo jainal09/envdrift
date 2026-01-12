@@ -22,7 +22,6 @@ from pathlib import Path
 
 import pytest
 
-
 # Mark all tests in this module
 pytestmark = [pytest.mark.integration]
 
@@ -46,19 +45,19 @@ class TestNestedPydanticModel:
             textwrap.dedent('''
             from pydantic_settings import BaseSettings
             from pydantic import BaseModel
-            
+
             class DatabaseConfig(BaseModel):
                 """Nested database configuration."""
                 host: str = "localhost"
                 port: int = 5432
                 name: str
-            
+
             class Settings(BaseSettings):
                 """Application settings with nested model."""
                 app_name: str
                 debug: bool = False
                 database: DatabaseConfig
-                
+
                 model_config = {"env_prefix": "", "env_nested_delimiter": "__"}
         ''')
         )
@@ -120,21 +119,21 @@ class TestCustomValidators:
             textwrap.dedent('''
             from pydantic_settings import BaseSettings
             from pydantic import field_validator
-            
+
             class Settings(BaseSettings):
                 """Settings with custom validators."""
                 email: str
                 port: int
-                
+
                 @field_validator("email")
                 @classmethod
                 def validate_email(cls, v: str) -> str:
                     if "@" not in v:
                         raise ValueError("Invalid email format")
                     return v
-                
+
                 @field_validator("port")
-                @classmethod  
+                @classmethod
                 def validate_port(cls, v: int) -> int:
                     if not (1 <= v <= 65535):
                         raise ValueError("Port must be 1-65535")
@@ -187,7 +186,7 @@ class TestOptionalVsRequired:
             textwrap.dedent('''
             from pydantic_settings import BaseSettings
             from typing import Optional
-            
+
             class Settings(BaseSettings):
                 """Settings with optional and required fields."""
                 required_field: str  # Required, no default
@@ -236,7 +235,7 @@ class TestOptionalVsRequired:
         settings_module.write_text(
             textwrap.dedent('''
             from pydantic_settings import BaseSettings
-            
+
             class Settings(BaseSettings):
                 """Settings with required fields."""
                 api_key: str
@@ -289,12 +288,12 @@ class TestExtraForbid:
         settings_module.write_text(
             textwrap.dedent('''
             from pydantic_settings import BaseSettings
-            
+
             class Settings(BaseSettings):
                 """Settings that reject extra fields."""
                 app_name: str
                 debug: bool = False
-                
+
                 model_config = {"extra": "forbid"}
         ''')
         )
@@ -352,7 +351,7 @@ class TestSensitivePatterns:
         settings_module.write_text(
             textwrap.dedent('''
             from pydantic_settings import BaseSettings
-            
+
             class Settings(BaseSettings):
                 """Settings with sensitive fields."""
                 api_key: str
@@ -423,7 +422,7 @@ class TestTypeCoercion:
         settings_module.write_text(
             textwrap.dedent('''
             from pydantic_settings import BaseSettings
-            
+
             class Settings(BaseSettings):
                 """Settings with bool field."""
                 debug_mode: bool
@@ -469,7 +468,7 @@ class TestTypeCoercion:
         settings_module.write_text(
             textwrap.dedent('''
             from pydantic_settings import BaseSettings
-            
+
             class Settings(BaseSettings):
                 """Settings with int field."""
                 port: int
@@ -514,7 +513,7 @@ class TestTypeCoercion:
         settings_module.write_text(
             textwrap.dedent('''
             from pydantic_settings import BaseSettings
-            
+
             class Settings(BaseSettings):
                 """Settings with int field."""
                 port: int
@@ -592,7 +591,7 @@ class TestValidateCommand:
         settings_module.write_text(
             textwrap.dedent('''
             from pydantic_settings import BaseSettings
-            
+
             class Settings(BaseSettings):
                 """Settings with required fields."""
                 api_key: str
@@ -645,7 +644,7 @@ class TestValidateCommand:
         settings_module.write_text(
             textwrap.dedent('''
             from pydantic_settings import BaseSettings
-            
+
             class Settings(BaseSettings):
                 """Settings with required field."""
                 required_field: str
@@ -691,7 +690,7 @@ class TestValidateCommand:
         settings_module.write_text(
             textwrap.dedent("""
             from pydantic_settings import BaseSettings
-            
+
             class Settings(BaseSettings):
                 app_name: str
         """)

@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from typing import Any, Callable
+from collections.abc import Callable
+from typing import Any
 
 
 def normalize_max_workers(value: Any, *, warn: Callable[[str], None] | None = None) -> int | None:

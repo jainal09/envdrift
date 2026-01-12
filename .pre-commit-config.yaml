@@ -7,3 +7,25 @@ repos:
         language: system
         files: ^\.env\.
         pass_filenames: true
+
+      - id: ruff-check
+        name: Lint with ruff
+        entry: uv run ruff check --fix
+        language: system
+        types: [python]
+        pass_filenames: true
+
+      - id: ruff-format
+        name: Format with ruff
+        entry: uv run ruff format
+        language: system
+        types: [python]
+        pass_filenames: true
+
+      - id: pyrefly-check
+        name: Type check with pyrefly
+        entry: uv run pyrefly check
+        language: system
+        types: [python]
+        pass_filenames: false
+        args: [src]

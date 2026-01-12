@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
-from pathlib import Path
 import sys
 import types
+from pathlib import Path
 
-from envdrift.scanner.base import FindingSeverity, ScanFinding, ScanResult, ScannerBackend
+from envdrift.scanner.base import FindingSeverity, ScanFinding, ScannerBackend, ScanResult
 from envdrift.scanner.engine import GuardConfig, ScanEngine
 
 
@@ -366,7 +366,7 @@ class TestScanEngine:
         engine = ScanEngine(config)
         engine.scanners = [FailingScanner()]
 
-        result = engine.scan([Path(".")])
+        result = engine.scan([Path()])
 
         assert result.results[0].error == "boom"
 
@@ -657,9 +657,7 @@ class TestIntegration:
         engine = ScanEngine(config)
 
         # Create file with secret that has inline ignore
-        (tmp_path / "config.py").write_text(
-            'AWS_KEY = "AKIAIOSFODNN7EXAMPLE"  # envdrift:ignore\n'
-        )
+        (tmp_path / "config.py").write_text('AWS_KEY = "AKIAIOSFODNN7EXAMPLE"  # envdrift:ignore\n')
 
         result = engine.scan([tmp_path])
 

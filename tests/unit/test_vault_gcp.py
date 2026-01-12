@@ -107,7 +107,7 @@ class TestGCPSecretManagerClient:
         """Test successful authentication."""
         mock_client = MagicMock()
         mock_client.list_secrets.return_value = iter([])
-        mock_gcp.secretmanager.SecretManagerServiceClient.return_value = mock_client
+        mock_gcp._secretmanager.SecretManagerServiceClient.return_value = mock_client
 
         client = mock_gcp.GCPSecretManagerClient(project_id="my-project")
         client.authenticate()
@@ -123,7 +123,7 @@ class TestGCPSecretManagerClient:
             name="projects/my-project/secrets/my-secret/versions/3",
             payload=SimpleNamespace(data=b"secret-value"),
         )
-        mock_gcp.secretmanager.SecretManagerServiceClient.return_value = mock_client
+        mock_gcp._secretmanager.SecretManagerServiceClient.return_value = mock_client
 
         client = mock_gcp.GCPSecretManagerClient(project_id="my-project")
         client.authenticate()
@@ -146,7 +146,7 @@ class TestGCPSecretManagerClient:
                 ]
             ),
         ]
-        mock_gcp.secretmanager.SecretManagerServiceClient.return_value = mock_client
+        mock_gcp._secretmanager.SecretManagerServiceClient.return_value = mock_client
 
         client = mock_gcp.GCPSecretManagerClient(project_id="my-project")
         client.authenticate()
@@ -163,7 +163,7 @@ class TestGCPSecretManagerClient:
         mock_client.add_secret_version.return_value = SimpleNamespace(
             name="projects/my-project/secrets/my-secret/versions/5"
         )
-        mock_gcp.secretmanager.SecretManagerServiceClient.return_value = mock_client
+        mock_gcp._secretmanager.SecretManagerServiceClient.return_value = mock_client
 
         client = mock_gcp.GCPSecretManagerClient(project_id="my-project")
         client.authenticate()
@@ -194,7 +194,7 @@ class TestGCPSecretManagerClient:
 
     def test_authenticate_default_credentials_error(self, mock_gcp):
         """DefaultCredentialsError should map to AuthenticationError."""
-        mock_gcp.secretmanager.SecretManagerServiceClient.side_effect = (
+        mock_gcp._secretmanager.SecretManagerServiceClient.side_effect = (
             mock_gcp.DefaultCredentialsError("no creds")
         )
 
@@ -207,8 +207,10 @@ class TestGCPSecretManagerClient:
     def test_authenticate_permission_denied(self, mock_gcp):
         """PermissionDenied should map to AuthenticationError."""
         mock_client = MagicMock()
-        mock_client.list_secrets.side_effect = mock_gcp.google_exceptions.PermissionDenied("denied")
-        mock_gcp.secretmanager.SecretManagerServiceClient.return_value = mock_client
+        mock_client.list_secrets.side_effect = mock_gcp._google_exceptions.PermissionDenied(
+            "denied"
+        )
+        mock_gcp._secretmanager.SecretManagerServiceClient.return_value = mock_client
 
         client = mock_gcp.GCPSecretManagerClient(project_id="my-project")
         with pytest.raises(AuthenticationError):
@@ -219,8 +221,10 @@ class TestGCPSecretManagerClient:
     def test_authenticate_google_api_error(self, mock_gcp):
         """GoogleAPICallError should map to VaultError."""
         mock_client = MagicMock()
-        mock_client.list_secrets.side_effect = mock_gcp.google_exceptions.GoogleAPICallError("boom")
-        mock_gcp.secretmanager.SecretManagerServiceClient.return_value = mock_client
+        mock_client.list_secrets.side_effect = mock_gcp._google_exceptions.GoogleAPICallError(
+            "boom"
+        )
+        mock_gcp._secretmanager.SecretManagerServiceClient.return_value = mock_client
 
         client = mock_gcp.GCPSecretManagerClient(project_id="my-project")
         with pytest.raises(VaultError):
@@ -237,7 +241,7 @@ class TestGCPSecretManagerClient:
             name="projects/my-project/secrets/bin/versions/1",
             payload=SimpleNamespace(data=payload),
         )
-        mock_gcp.secretmanager.SecretManagerServiceClient.return_value = mock_client
+        mock_gcp._secretmanager.SecretManagerServiceClient.return_value = mock_client
 
         client = mock_gcp.GCPSecretManagerClient(project_id="my-project")
         client.authenticate()
@@ -250,10 +254,10 @@ class TestGCPSecretManagerClient:
         """NotFound should map to SecretNotFoundError."""
         mock_client = MagicMock()
         mock_client.list_secrets.return_value = iter([])
-        mock_client.access_secret_version.side_effect = mock_gcp.google_exceptions.NotFound(
+        mock_client.access_secret_version.side_effect = mock_gcp._google_exceptions.NotFound(
             "missing"
         )
-        mock_gcp.secretmanager.SecretManagerServiceClient.return_value = mock_client
+        mock_gcp._secretmanager.SecretManagerServiceClient.return_value = mock_client
 
         client = mock_gcp.GCPSecretManagerClient(project_id="my-project")
         client.authenticate()
@@ -265,10 +269,10 @@ class TestGCPSecretManagerClient:
         """PermissionDenied should map to AuthenticationError."""
         mock_client = MagicMock()
         mock_client.list_secrets.return_value = iter([])
-        mock_client.access_secret_version.side_effect = mock_gcp.google_exceptions.PermissionDenied(
-            "denied"
+        mock_client.access_secret_version.side_effect = (
+            mock_gcp._google_exceptions.PermissionDenied("denied")
         )
-        mock_gcp.secretmanager.SecretManagerServiceClient.return_value = mock_client
+        mock_gcp._secretmanager.SecretManagerServiceClient.return_value = mock_client
 
         client = mock_gcp.GCPSecretManagerClient(project_id="my-project")
         client.authenticate()
@@ -281,9 +285,9 @@ class TestGCPSecretManagerClient:
         mock_client = MagicMock()
         mock_client.list_secrets.return_value = iter([])
         mock_client.access_secret_version.side_effect = (
-            mock_gcp.google_exceptions.GoogleAPICallError("boom")
+            mock_gcp._google_exceptions.GoogleAPICallError("boom")
         )
-        mock_gcp.secretmanager.SecretManagerServiceClient.return_value = mock_client
+        mock_gcp._secretmanager.SecretManagerServiceClient.return_value = mock_client
 
         client = mock_gcp.GCPSecretManagerClient(project_id="my-project")
         client.authenticate()
@@ -296,9 +300,9 @@ class TestGCPSecretManagerClient:
         mock_client = MagicMock()
         mock_client.list_secrets.side_effect = [
             iter([]),
-            mock_gcp.google_exceptions.PermissionDenied("denied"),
+            mock_gcp._google_exceptions.PermissionDenied("denied"),
         ]
-        mock_gcp.secretmanager.SecretManagerServiceClient.return_value = mock_client
+        mock_gcp._secretmanager.SecretManagerServiceClient.return_value = mock_client
 
         client = mock_gcp.GCPSecretManagerClient(project_id="my-project")
         client.authenticate()
@@ -311,9 +315,9 @@ class TestGCPSecretManagerClient:
         mock_client = MagicMock()
         mock_client.list_secrets.side_effect = [
             iter([]),
-            mock_gcp.google_exceptions.GoogleAPICallError("boom"),
+            mock_gcp._google_exceptions.GoogleAPICallError("boom"),
         ]
-        mock_gcp.secretmanager.SecretManagerServiceClient.return_value = mock_client
+        mock_gcp._secretmanager.SecretManagerServiceClient.return_value = mock_client
 
         client = mock_gcp.GCPSecretManagerClient(project_id="my-project")
         client.authenticate()
@@ -325,10 +329,10 @@ class TestGCPSecretManagerClient:
         """PermissionDenied should map to AuthenticationError."""
         mock_client = MagicMock()
         mock_client.list_secrets.return_value = iter([])
-        mock_client.add_secret_version.side_effect = mock_gcp.google_exceptions.PermissionDenied(
+        mock_client.add_secret_version.side_effect = mock_gcp._google_exceptions.PermissionDenied(
             "denied"
         )
-        mock_gcp.secretmanager.SecretManagerServiceClient.return_value = mock_client
+        mock_gcp._secretmanager.SecretManagerServiceClient.return_value = mock_client
 
         client = mock_gcp.GCPSecretManagerClient(project_id="my-project")
         client.authenticate()
@@ -340,10 +344,10 @@ class TestGCPSecretManagerClient:
         """GoogleAPICallError should map to VaultError."""
         mock_client = MagicMock()
         mock_client.list_secrets.return_value = iter([])
-        mock_client.add_secret_version.side_effect = mock_gcp.google_exceptions.GoogleAPICallError(
+        mock_client.add_secret_version.side_effect = mock_gcp._google_exceptions.GoogleAPICallError(
             "boom"
         )
-        mock_gcp.secretmanager.SecretManagerServiceClient.return_value = mock_client
+        mock_gcp._secretmanager.SecretManagerServiceClient.return_value = mock_client
 
         client = mock_gcp.GCPSecretManagerClient(project_id="my-project")
         client.authenticate()
@@ -355,11 +359,11 @@ class TestGCPSecretManagerClient:
         """AlreadyExists should be suppressed when creating secrets."""
         mock_client = MagicMock()
         mock_client.list_secrets.return_value = iter([])
-        mock_client.create_secret.side_effect = mock_gcp.google_exceptions.AlreadyExists("exists")
+        mock_client.create_secret.side_effect = mock_gcp._google_exceptions.AlreadyExists("exists")
         mock_client.add_secret_version.return_value = SimpleNamespace(
             name="projects/my-project/secrets/my-secret/versions/9"
         )
-        mock_gcp.secretmanager.SecretManagerServiceClient.return_value = mock_client
+        mock_gcp._secretmanager.SecretManagerServiceClient.return_value = mock_client
 
         client = mock_gcp.GCPSecretManagerClient(project_id="my-project")
         client.authenticate()

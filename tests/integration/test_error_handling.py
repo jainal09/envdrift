@@ -14,7 +14,6 @@ Requires: docker-compose -f tests/docker-compose.test.yml up -d
 from __future__ import annotations
 
 import contextlib
-import shutil
 import subprocess
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -48,6 +47,9 @@ class TestNetworkTimeoutVault:
         config_content = f"""\
 [encryption]
 backend = "dotenvx"
+
+[encryption.dotenvx]
+auto_install = true
 
 [vault]
 provider = "hashicorp"
@@ -101,6 +103,9 @@ environment = "production"
         config_content = """\
 [encryption]
 backend = "dotenvx"
+
+[encryption.dotenvx]
+auto_install = true
 
 [vault]
 provider = "aws"
@@ -173,6 +178,9 @@ class TestPartialSyncFailure:
         config_content = f"""\
 [encryption]
 backend = "dotenvx"
+
+[encryption.dotenvx]
+auto_install = true
 
 [vault]
 provider = "aws"
@@ -521,6 +529,9 @@ class TestFilePermissionErrors:
             config_content = """\
 [encryption]
 backend = "dotenvx"
+
+[encryption.dotenvx]
+auto_install = true
 
 [vault]
 provider = "hashicorp"

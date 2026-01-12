@@ -118,8 +118,10 @@ def print_validation_result(
         console.print("[dim]MISSING OPTIONAL VARIABLES (have defaults):[/dim]")
         for var in sorted(result.missing_optional):
             field_meta = schema.fields.get(var)
-            has_default = field_meta and field_meta.default is not None
-            default = f" (default: {field_meta.default})" if has_default else ""
+            if field_meta is not None and field_meta.default is not None:
+                default = f" (default: {field_meta.default})"
+            else:
+                default = ""
             console.print(f"  [dim]*[/dim] {var}{default}")
         console.print()
 

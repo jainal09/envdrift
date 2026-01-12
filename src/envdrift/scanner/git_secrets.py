@@ -26,7 +26,7 @@ import os
 import platform
 import re
 import shutil
-import subprocess
+import subprocess  # nosec B404
 import tempfile
 import time
 from pathlib import Path
@@ -151,7 +151,7 @@ class GitSecretsInstaller:
             )
 
         try:
-            result = subprocess.run(
+            result = subprocess.run(  # nosec B603, B607
                 ["brew", "install", "git-secrets"],
                 capture_output=True,
                 text=True,
@@ -198,7 +198,7 @@ class GitSecretsInstaller:
             try:
                 # Clone the repository
                 self.progress("Cloning git-secrets repository...")
-                subprocess.run(
+                subprocess.run(  # nosec B603, B607
                     ["git", "clone", "--depth", "1", self.REPO_URL, str(repo_path)],
                     capture_output=True,
                     text=True,
@@ -211,7 +211,7 @@ class GitSecretsInstaller:
                 self.progress(f"Installing to {target_dir}...")
 
                 # Run make install with custom PREFIX
-                subprocess.run(
+                subprocess.run(  # nosec B603, B607
                     ["make", "install", f"PREFIX={target_dir.parent}"],
                     capture_output=True,
                     text=True,
@@ -315,7 +315,7 @@ class GitSecretsScanner(ScannerBackend):
 
         # Check git subcommand (git secrets)
         try:
-            result = subprocess.run(
+            result = subprocess.run(  # nosec B603, B607
                 ["git", "secrets", "--list"],
                 capture_output=True,
                 text=True,
@@ -377,7 +377,7 @@ class GitSecretsScanner(ScannerBackend):
         # Try as standalone command first
         git_secrets_path = shutil.which("git-secrets")
         if git_secrets_path:
-            return subprocess.run(
+            return subprocess.run(  # nosec B603
                 [git_secrets_path, *args],
                 capture_output=True,
                 text=True,
@@ -386,7 +386,7 @@ class GitSecretsScanner(ScannerBackend):
             )
 
         # Fall back to git subcommand
-        return subprocess.run(
+        return subprocess.run(  # nosec B603, B607
             ["git", "secrets", *args],
             capture_output=True,
             text=True,

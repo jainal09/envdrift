@@ -8,7 +8,7 @@ from unittest.mock import MagicMock
 import pytest
 
 from envdrift.sync.config import ServiceMapping, SyncConfig
-from envdrift.sync.engine import SyncEngine, SyncMode
+from envdrift.sync.engine import SyncEngine
 from envdrift.sync.result import SyncAction
 from envdrift.vault.base import SecretValue, VaultClient
 

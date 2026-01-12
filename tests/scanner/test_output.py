@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 
 import pytest
+from rich.console import Console
 
 from envdrift.scanner.base import (
     AggregatedScanResult,
@@ -14,7 +15,6 @@ from envdrift.scanner.base import (
     ScanResult,
 )
 from envdrift.scanner.output import format_json, format_rich, format_sarif
-from rich.console import Console
 
 
 class TestJsonOutput:

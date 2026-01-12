@@ -326,14 +326,14 @@ class NativeScanner(ScannerBackend):
         Returns:
             List of file paths.
         """
-        import subprocess
+        import subprocess  # nosec B404
 
         files: set[Path] = set()
         directory = directory.resolve()
 
         # Method 1: Get tracked files from git (fast - reads index)
         try:
-            result = subprocess.run(
+            result = subprocess.run(  # nosec B603, B607
                 ["git", "ls-files"],
                 capture_output=True,
                 text=True,
@@ -355,7 +355,7 @@ class NativeScanner(ScannerBackend):
         # Method 2: Get untracked .env* files (respects .gitignore)
         # These are files developers might forget to encrypt before committing
         try:
-            result = subprocess.run(
+            result = subprocess.run(  # nosec B603, B607
                 ["git", "ls-files", "--others", "--exclude-standard"],
                 capture_output=True,
                 text=True,
@@ -769,8 +769,17 @@ class NativeScanner(ScannerBackend):
 
         # Check for common template variable names
         template_keywords = [
-            "Timestamp", "Message", "Exception", "NewLine", "Level",
-            "Logger", "Thread", "Source", "Event", "Date", "Time",
+            "Timestamp",
+            "Message",
+            "Exception",
+            "NewLine",
+            "Level",
+            "Logger",
+            "Thread",
+            "Source",
+            "Event",
+            "Date",
+            "Time",
         ]
         if any(kw in value for kw in template_keywords):
             template_indicators += 1

@@ -1,8 +1,8 @@
 """Tests for SOPS encryption backend."""
 
-from unittest.mock import MagicMock, patch
 from pathlib import Path
-import pytest
+from unittest.mock import MagicMock, patch
+
 from envdrift.encryption.sops import SOPSEncryptionBackend
 
 

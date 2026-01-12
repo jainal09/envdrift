@@ -54,6 +54,8 @@ nav:
       - vault-push: cli/vault-push.md
       - encrypt: cli/encrypt.md
       - decrypt: cli/decrypt.md
+      - push: cli/push.md
+      - pull-partial: cli/pull-partial.md
       - guard: cli/guard.md
       - validate: cli/validate.md
       - diff: cli/diff.md
@@ -61,7 +63,6 @@ nav:
       - hook: cli/hook.md
       - version: cli/version.md
   - Guides:
-      - Quick Start: getting-started/quickstart.md
       - Agent Setup: guides/agent-setup.md
       - VS Code Extension: guides/vscode-extension.md
       - Vault Sync: guides/vault-sync.md
@@ -73,6 +74,7 @@ nav:
       - Monorepo Setup: guides/monorepo-setup.md
       - Migrating: guides/migrating.md
       - Upgrading: guides/upgrading.md
+      - Releasing: guides/releasing.md
   - Reference:
       - Configuration: reference/configuration.md
       - Python API: reference/api.md

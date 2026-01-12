@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 import platform
 import shutil
 import subprocess
@@ -15,11 +14,11 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from envdrift.scanner.base import FindingSeverity, ScanFinding
+from envdrift.scanner.base import FindingSeverity
 from envdrift.scanner.trufflehog import (
     TrufflehogError,
-    TrufflehogInstallError,
     TrufflehogInstaller,
+    TrufflehogInstallError,
     TrufflehogNotFoundError,
     TrufflehogScanner,
     get_platform_info,

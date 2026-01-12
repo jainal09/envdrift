@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 from envdrift.vault.base import (
     AuthenticationError,
     SecretNotFoundError,
@@ -16,17 +18,24 @@ try:
         HttpResponseError,
         ResourceNotFoundError,
     )
-    from azure.identity import DefaultAzureCredential
-    from azure.keyvault.secrets import SecretClient
+    from azure.identity import DefaultAzureCredential as _DefaultAzureCredential
+    from azure.keyvault.secrets import SecretClient as _SecretClient
 
     AZURE_AVAILABLE = True
 except ImportError:
     AZURE_AVAILABLE = False
-    DefaultAzureCredential = None
-    SecretClient = None
-    ResourceNotFoundError = Exception
-    ClientAuthenticationError = Exception
-    HttpResponseError = Exception
+    _DefaultAzureCredential = None
+    _SecretClient = None
+    ResourceNotFoundError = Exception  # type: ignore[misc, assignment]
+    ClientAuthenticationError = Exception  # type: ignore[misc, assignment]
+    HttpResponseError = Exception  # type: ignore[misc, assignment]
+
+
+def _get_azure_classes() -> tuple[Any, Any]:
+    """Get Azure classes, raising ImportError if not available."""
+    if not AZURE_AVAILABLE or _DefaultAzureCredential is None or _SecretClient is None:
+        raise ImportError("Azure SDK not installed. Install with: pip install envdrift[azure]")
+    return _DefaultAzureCredential, _SecretClient
 
 
 class AzureKeyVaultClient(VaultClient):
@@ -50,12 +59,10 @@ class AzureKeyVaultClient(VaultClient):
         Raises:
             ImportError: If the Azure SDK is not installed (install with `pip install envdrift[azure]`).
         """
-        if not AZURE_AVAILABLE:
-            raise ImportError("Azure SDK not installed. Install with: pip install envdrift[azure]")
-
+        _get_azure_classes()  # Verify Azure SDK is available
         self.vault_url = vault_url
-        self._client: SecretClient | None = None
-        self._credential = None
+        self._client: Any = None
+        self._credential: Any = None
 
     def authenticate(self) -> None:
         """
@@ -64,9 +71,10 @@ class AzureKeyVaultClient(VaultClient):
         On success sets self._credential to the created credential and self._client to a ready SecretClient.
         Raises AuthenticationError if credential acquisition fails and VaultError for HTTP-related Key Vault errors.
         """
+        credential_cls, client_cls = _get_azure_classes()
         try:
-            self._credential = DefaultAzureCredential()
-            self._client = SecretClient(
+            self._credential = credential_cls()
+            self._client = client_cls(
                 vault_url=self.vault_url,
                 credential=self._credential,
             )

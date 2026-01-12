@@ -3,8 +3,8 @@
 from __future__ import annotations
 
 import re
-from threading import Lock
 from pathlib import Path
+from threading import Lock
 from typing import ClassVar
 
 from envdrift.encryption.base import (
@@ -116,9 +116,9 @@ class DotenvxEncryptionBackend(EncryptionBackend):
                 f"dotenvx is not installed.\n{self.install_instructions()}"
             )
 
-        try:
-            from envdrift.integrations.dotenvx import DotenvxError
+        from envdrift.integrations.dotenvx import DotenvxError
 
+        try:
             wrapper = self._get_wrapper()
             wrapper.encrypt(
                 env_file=env_file,
@@ -167,9 +167,9 @@ class DotenvxEncryptionBackend(EncryptionBackend):
                 f"dotenvx is not installed.\n{self.install_instructions()}"
             )
 
-        try:
-            from envdrift.integrations.dotenvx import DotenvxError
+        from envdrift.integrations.dotenvx import DotenvxError
 
+        try:
             wrapper = self._get_wrapper()
             wrapper.decrypt(
                 env_file=env_file,
