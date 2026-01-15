@@ -39,6 +39,9 @@ jobs:
     name: Publish to PyPI
     runs-on: ubuntu-latest
     needs: test
+    permissions:
+      contents: write
+      id-token: write
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -61,3 +64,52 @@ jobs:
 
       - name: Publish to PyPI
         run: uv publish
+
+      - name: Extract release notes
+        run: |
+          python - <<'PY'
+          import os
+          import re
+          from pathlib import Path
+
+          tag = os.environ.get("GITHUB_REF_NAME", "").strip()
+          version = tag[1:] if tag.startswith("v") else tag
+          changelog = Path("CHANGELOG.md")
+          if not tag or not changelog.exists():
+            print("Skipping release notes extraction.")
+            raise SystemExit(0)
+
+          text = changelog.read_text()
+          pattern = re.compile(
+            rf"^##\\s+.*\\bv?{re.escape(version)}\\b.*$\\n(?P<body>.*?)(?=^##\\s+|\\Z)",
+            re.M | re.S,
+          )
+          match = pattern.search(text)
+          if not match:
+            print(f"No changelog section found for {version}.")
+            raise SystemExit(0)
+
+          body = match.group("body").strip()
+          if not body:
+            print(f"Changelog section for {version} is empty.")
+            raise SystemExit(0)
+
+          Path("release-notes.md").write_text(body + "\n")
+          print("Wrote release-notes.md")
+          PY
+
+      - name: Create GitHub release (if missing)
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          tag="${GITHUB_REF_NAME}"
+          if gh release view "$tag" >/dev/null 2>&1; then
+            echo "Release $tag already exists."
+            exit 0
+          fi
+
+          if [ -f release-notes.md ]; then
+            gh release create "$tag" --title "$tag" --notes-file release-notes.md
+          else
+            gh release create "$tag" --title "$tag" --generate-notes
+          fi
