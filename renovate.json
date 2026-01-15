@@ -56,7 +56,7 @@
       "automerge": false
     }
   ],
-  "prBodyTemplate": "{{{table}}}\n\n---\n\n🤖 **Auto-generated version bump PR**\n\nThis PR was automatically created by Renovate to update dependency versions.\n\n- **Minor/Patch updates**: Will be auto-merged after CI passes\n- **Major updates**: Requires manual review and approval",
+  "prBodyTemplate": "{{{table}}}\n\n---\n\n🤖 **Auto-generated version bump PR**\n\nThis PR was automatically created by Renovate to update dependency versions.\n\n- **Minor/Patch updates**: Requires review and approval\n- **Major updates**: Requires manual review and approval",
   "schedule": [
     "every weekend"
   ]

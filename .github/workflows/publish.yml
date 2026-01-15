@@ -81,7 +81,7 @@ jobs:
 
           text = changelog.read_text()
           pattern = re.compile(
-            rf"^##\\s+.*\\bv?{re.escape(version)}\\b.*$\\n(?P<body>.*?)(?=^##\\s+|\\Z)",
+            rf"^##\s+.*\bv?{re.escape(version)}\b.*$\n(?P<body>.*?)(?=^##\s+|\Z)",
             re.M | re.S,
           )
           match = pattern.search(text)
