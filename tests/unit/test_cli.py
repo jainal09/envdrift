@@ -1973,11 +1973,16 @@ class TestPullCommand:
         decrypted: list[Path] = []
         _mock_encryption_backend(monkeypatch, decrypted_paths=decrypted)
 
+        printed: list[str] = []
+        monkeypatch.setattr(
+            "envdrift.output.rich.console.print", lambda msg="", *a, **k: printed.append(str(msg))
+        )
+
         result = runner.invoke(app, ["pull", "-c", str(config_file), "--skip-sync"])
 
         assert result.exit_code == 0
         assert env_file not in decrypted
-        assert "partial encryption combined file" in result.output.lower()
+        assert "partial encryption combined file" in " ".join(printed).lower()
 
     def test_pull_reports_service_status(self, monkeypatch, tmp_path: Path):
         """Pull should report service sync status when sync results include services."""
@@ -2893,12 +2898,18 @@ class TestLockCommand:
         encrypted: list[Path] = []
         _mock_encryption_backend(monkeypatch, encrypted_paths=encrypted)
 
+        printed: list[str] = []
+        monkeypatch.setattr(
+            "envdrift.output.rich.console.print", lambda msg="", *a, **k: printed.append(str(msg))
+        )
+
         result = runner.invoke(app, ["lock", "-c", str(config_file), "--force"])
 
         assert result.exit_code == 0
         assert env_file not in encrypted
-        assert "partial encryption combined file" in result.output.lower()
-        assert "use --all" in result.output.lower()
+        printed_output = " ".join(printed).lower()
+        assert "partial encryption combined file" in printed_output
+        assert "use --all" in printed_output
 
     def test_lock_all_processes_partial_encryption_files(self, monkeypatch, tmp_path: Path):
         """Lock --all should encrypt .secret files and delete combined files."""

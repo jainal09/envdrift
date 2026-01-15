@@ -4,6 +4,7 @@
     "config:recommended"
   ],
   "dependencyDashboardApproval": false,
+  "semanticCommits": "enabled",
   "labels": [
     "dependencies",
     "version-bump-auto"
@@ -43,7 +44,6 @@
       "addLabels": [
         "minor-version-bump"
       ],
-      "commitMessagePrefix": "[auto-minor]",
       "automerge": false
     },
     {
@@ -53,11 +53,10 @@
       "addLabels": [
         "major-version-bump"
       ],
-      "commitMessagePrefix": "[auto-major]",
       "automerge": false
     }
   ],
-  "prBodyTemplate": "{{{table}}}\n\n---\n\n🤖 **Auto-generated version bump PR**\n\nThis PR was automatically created by Renovate to update dependency versions.\n\n- **Minor/Patch updates**: Will be auto-merged after CI passes\n- **Major updates**: Requires manual review and approval",
+  "prBodyTemplate": "{{{table}}}\n\n---\n\n🤖 **Auto-generated version bump PR**\n\nThis PR was automatically created by Renovate to update dependency versions.\n\n- **Minor/Patch updates**: Requires review and approval\n- **Major updates**: Requires manual review and approval",
   "schedule": [
     "every weekend"
   ]

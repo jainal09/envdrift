@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## v9.0.0
 
 ### Breaking Changes
 
