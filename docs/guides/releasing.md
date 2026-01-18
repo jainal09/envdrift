@@ -57,6 +57,8 @@ After the tag is created by release-please:
 4. Package is published to PyPI
 5. Release notes from `CHANGELOG.md` are extracted and attached to the GitHub
    release (if missing)
+6. Release assets (wheel and sdist) are uploaded to the GitHub Release
+7. A PyPI link is appended to the release notes
 
 ### 5. Monitor the workflows
 
