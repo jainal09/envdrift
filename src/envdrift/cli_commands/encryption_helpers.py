@@ -102,6 +102,8 @@ def is_encrypted_content(
 def should_skip_reencryption(
     env_file: Path,
     backend: EncryptionBackend,
+    *,
+    enabled: bool = False,
 ) -> tuple[bool, str]:
     """
     Determine if re-encryption should be skipped because content is unchanged.
@@ -120,12 +122,18 @@ def should_skip_reencryption(
     Parameters:
         env_file: Path to the currently decrypted .env file.
         backend: The encryption backend (must support decrypt).
+        enabled: Whether smart encryption is enabled (opt-in feature).
+                 When False, always returns (False, "smart encryption disabled").
 
     Returns:
         A tuple of (should_skip, reason):
         - should_skip: True if re-encryption should be skipped
         - reason: Human-readable explanation of the decision
     """
+    # Check if feature is enabled (opt-in)
+    if not enabled:
+        return False, "smart encryption disabled"
+
     # Only supported for dotenvx and sops backends currently
     if backend.name.lower() not in ("dotenvx", "sops"):
         return False, "smart encryption not supported for this backend"
