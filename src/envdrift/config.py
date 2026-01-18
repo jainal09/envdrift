@@ -2,12 +2,27 @@
 
 from __future__ import annotations
 
+import re
 import tomllib
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
 from envdrift.utils import normalize_max_workers
+
+_GUARDIAN_IDLE_TIMEOUT_PATTERN = re.compile(r"^\d+(s|m|h|d)$")
+
+
+def _validate_guardian_idle_timeout(value: Any) -> str:
+    """Validate guardian idle_timeout format (e.g., 5m, 1h, 30s)."""
+    if not isinstance(value, str):
+        raise ValueError("guardian.idle_timeout must be a string like '5m'")
+
+    normalized = value.strip().lower()
+    if not _GUARDIAN_IDLE_TIMEOUT_PATTERN.match(normalized):
+        raise ValueError("guardian.idle_timeout must match '<number><s|m|h|d>', e.g. '5m' or '30s'")
+
+    return normalized
 
 
 @dataclass
@@ -313,7 +328,9 @@ class EnvdriftConfig:
         guardian_section = data.get("guardian", {})
         guardian = GuardianWatchConfig(
             enabled=guardian_section.get("enabled", False),
-            idle_timeout=guardian_section.get("idle_timeout", "5m"),
+            idle_timeout=_validate_guardian_idle_timeout(
+                guardian_section.get("idle_timeout", "5m")
+            ),
             patterns=guardian_section.get("patterns", [".env*"]),
             exclude=guardian_section.get("exclude", [".env.example", ".env.sample", ".env.keys"]),
             notify=guardian_section.get("notify", True),
@@ -394,6 +411,7 @@ def load_config(path: Path | str | None = None) -> EnvdriftConfig:
 
     Raises:
         ConfigNotFoundError: If config file not found and path was specified
+        ValueError: If configuration values are invalid
     """
     if path is not None:
         path = Path(path)
