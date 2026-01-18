@@ -71,10 +71,10 @@ class ProjectRegistry:
 
     @property
     def projects(self) -> list[ProjectEntry]:
-        """Return the list of registered projects."""
+        """Return the list of registered projects (copy to prevent mutation)."""
         if not self._loaded:
             self.load()
-        return self._projects
+        return list(self._projects)
 
     def load(self) -> None:
         """Load the registry from disk."""
