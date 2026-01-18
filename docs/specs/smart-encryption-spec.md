@@ -2,18 +2,22 @@
 
 ## Overview
 
-This specification describes the "Smart Encryption" feature for envdrift, which addresses the issue of non-deterministic encryption causing unnecessary git noise when using dotenvx or SOPS encryption backends.
+This specification describes the "Smart Encryption" feature for envdrift, which addresses
+the issue of non-deterministic encryption causing unnecessary git noise when using dotenvx
+or SOPS encryption backends.
 
 ## Problem Statement
 
 ### The Issue
 
-Both dotenvx and SOPS use encryption algorithms that produce different ciphertext each time, even when encrypting identical plaintext:
+Both dotenvx and SOPS use encryption algorithms that produce different ciphertext each
+time, even when encrypting identical plaintext:
 
 - **dotenvx**: Uses ECIES (Elliptic Curve Integrated Encryption Scheme) with ephemeral keys
 - **SOPS**: Uses different initialization vectors (IVs) and produces different MAC values
 
-This means that running `envdrift lock` or `envdrift encrypt` on an already-encrypted file (that was decrypted but not modified) will produce different encrypted output. This creates:
+This means that running `envdrift lock` or `envdrift encrypt` on an already-encrypted file
+(that was decrypted but not modified) will produce different encrypted output. This creates:
 
 1. **Git noise**: Meaningless changes in version control
 2. **Confusing diffs**: Obscures actual content changes in code reviews
@@ -21,7 +25,7 @@ This means that running `envdrift lock` or `envdrift encrypt` on an already-encr
 
 ### Example Scenario
 
-```
+```text
 1. Developer decrypts .env.production for local development
 2. Makes no changes to the content
 3. Runs `envdrift lock` before committing
@@ -83,6 +87,7 @@ envdrift encrypt --smart     # Enable for this invocation
 ## Implementation Progress
 
 ### Phase 1: Core Implementation [COMPLETED]
+
 - [x] Rebase branch onto main (resolved 7 merge conflicts)
 - [x] Git utility functions (`src/envdrift/utils/git.py`)
   - [x] `is_git_repo()` - Check if path is in git repo
@@ -95,6 +100,7 @@ envdrift encrypt --smart     # Enable for this invocation
 - [x] Integration with `lock` command
 
 ### Phase 2: Configuration & Opt-in [COMPLETED]
+
 - [x] Add `smart_encryption` config option to `EncryptionConfig` dataclass
 - [x] Parse config in `from_dict()` method
 - [x] Change default to `enabled=False` (opt-in)
@@ -102,6 +108,7 @@ envdrift encrypt --smart     # Enable for this invocation
 - [x] Add to example config with documentation
 
 ### Phase 3: Unit Tests [COMPLETED]
+
 - [x] Tests for `is_git_repo()`
 - [x] Tests for `get_git_root()`
 - [x] Tests for `is_file_tracked()`
@@ -122,31 +129,36 @@ envdrift encrypt --smart     # Enable for this invocation
   - [x] Test: SOPS backend support
 
 ### Phase 4: Integration Tests [COMPLETED]
+
 - [x] Smart encryption with dotenvx (decrypt + re-encrypt same content)
 - [x] Smart encryption with SOPS
 
 ### Phase 5: Documentation [COMPLETED]
+
 - [x] Update `docs/cli/lock.md` - Add smart encryption section
 - [x] Created `docs/specs/smart-encryption-spec.md` - Full specification
 
 ### Phase 6: Final Verification [COMPLETED]
-- [x] Run unit tests (`pytest tests/unit/test_git_utils.py tests/unit/test_smart_encryption.py`) - 34 passed
+
+- [x] Run unit tests - 34 passed
 - [ ] Run full test suite (optional)
 - [ ] Run linting (optional)
 
 ## Files Modified
 
 ### Source Files
+
 | File | Status | Description |
 |------|--------|-------------|
 | `src/envdrift/utils/__init__.py` | Modified | Export git utilities |
 | `src/envdrift/utils/git.py` | Modified | Git helper functions |
 | `src/envdrift/cli_commands/encryption_helpers.py` | Modified | Added `should_skip_reencryption()` |
 | `src/envdrift/cli_commands/sync.py` | Modified | Integrated smart encryption in `lock` |
-| `src/envdrift/cli_commands/encryption.py` | To Update | Add CLI flag |
-| `src/envdrift/config/__init__.py` | To Update | Add config option |
+| `src/envdrift/cli_commands/encryption.py` | Modified | Wire up config in encrypt command |
+| `src/envdrift/config/__init__.py` | Modified | Add config option |
 
 ### Test Files
+
 | File | Status | Description |
 |------|--------|-------------|
 | `tests/unit/test_git_utils.py` | Modified | Unit tests for git utilities |
@@ -154,12 +166,11 @@ envdrift encrypt --smart     # Enable for this invocation
 | `tests/integration/test_encryption_tools.py` | Modified | Integration tests |
 
 ### Documentation Files
+
 | File | Status | Description |
 |------|--------|-------------|
 | `docs/specs/smart-encryption-spec.md` | Created | This specification |
-| `docs/cli/lock.md` | To Update | CLI documentation |
-| `docs/cli/encrypt.md` | To Update | CLI documentation |
-| `docs/concepts/encryption.md` | To Update | Concept documentation |
+| `docs/cli/lock.md` | Updated | CLI documentation |
 
 ## API Reference
 
@@ -210,6 +221,7 @@ def should_skip_reencryption(
 ## Edge Cases & Considerations
 
 ### Handled Cases
+
 1. **File not in git repo** - Skip smart encryption, proceed normally
 2. **File not tracked** - Skip smart encryption, proceed normally
 3. **Git version not encrypted** - Skip smart encryption, proceed normally
@@ -218,15 +230,19 @@ def should_skip_reencryption(
 6. **Trailing whitespace** - Stripped before comparison
 
 ### Not Handled (Documented Limitations)
+
 1. **Binary files** - Smart encryption only works with text-based .env files
 2. **Submodules** - File tracking may not work correctly in submodules
 3. **Shallow clones** - May not have full git history
 
 ## Security Considerations
 
-1. **Temp file cleanup** - Decrypted content is written to temp file and cleaned up immediately after comparison
-2. **No secrets in git history** - The encrypted version is restored, never the decrypted content
-3. **Subprocess security** - All git commands use `subprocess` with proper timeouts and error handling
+1. **Temp file cleanup** - Decrypted content is written to temp file and cleaned up
+   immediately after comparison
+2. **No secrets in git history** - The encrypted version is restored, never the
+   decrypted content
+3. **Subprocess security** - All git commands use `subprocess` with proper timeouts
+   and error handling
 
 ## Backward Compatibility
 
