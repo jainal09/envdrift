@@ -12,7 +12,7 @@ Commands:
 from __future__ import annotations
 
 import shutil
-import subprocess
+import subprocess  # nosec B404 - subprocess needed for agent binary communication
 from datetime import datetime
 from pathlib import Path
 from typing import Annotated
@@ -70,7 +70,7 @@ def _get_agent_status() -> tuple[str, str | None]:
         return "not_installed", None
 
     try:
-        result = subprocess.run(
+        result = subprocess.run(  # nosec B603 - trusted binary path
             [str(agent_binary), "status"],
             capture_output=True,
             text=True,
@@ -81,7 +81,7 @@ def _get_agent_status() -> tuple[str, str | None]:
             output = result.stdout.lower()
             if "running" in output:
                 # Try to get version
-                version_result = subprocess.run(
+                version_result = subprocess.run(  # nosec B603
                     [str(agent_binary), "--version"],
                     capture_output=True,
                     text=True,
