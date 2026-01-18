@@ -134,6 +134,29 @@ class PartialEncryptionEnvironmentConfig:
 
 
 @dataclass
+class GuardianWatchConfig:
+    """Guardian background agent watch configuration.
+
+    This is the per-project configuration that tells the agent how to watch
+    and auto-encrypt .env files in this project.
+
+    Example envdrift.toml:
+        [guardian]
+        enabled = true
+        idle_timeout = "5m"
+        patterns = [".env*"]
+        exclude = [".env.example", ".env.sample", ".env.keys"]
+        notify = true
+    """
+
+    enabled: bool = False  # When True, register this project with the agent
+    idle_timeout: str = "5m"  # Encrypt after idle for this duration
+    patterns: list[str] = field(default_factory=lambda: [".env*"])
+    exclude: list[str] = field(default_factory=lambda: [".env.example", ".env.sample", ".env.keys"])
+    notify: bool = True  # Desktop notifications when encrypting
+
+
+@dataclass
 class PartialEncryptionConfig:
     """Partial encryption settings."""
 
@@ -160,6 +183,7 @@ class EnvdriftConfig:
     git_hook_check: GitHookCheckConfig = field(default_factory=GitHookCheckConfig)
     partial_encryption: PartialEncryptionConfig = field(default_factory=PartialEncryptionConfig)
     guard: GuardConfig = field(default_factory=GuardConfig)
+    guardian: GuardianWatchConfig = field(default_factory=GuardianWatchConfig)
 
     # Raw config for access to custom fields
     raw: dict[str, Any] = field(default_factory=dict)
@@ -285,6 +309,16 @@ class EnvdriftConfig:
             verify_secrets=guard_section.get("verify_secrets", False),
         )
 
+        # Build guardian config (for background agent)
+        guardian_section = data.get("guardian", {})
+        guardian = GuardianWatchConfig(
+            enabled=guardian_section.get("enabled", False),
+            idle_timeout=guardian_section.get("idle_timeout", "5m"),
+            patterns=guardian_section.get("patterns", [".env*"]),
+            exclude=guardian_section.get("exclude", [".env.example", ".env.sample", ".env.keys"]),
+            notify=guardian_section.get("notify", True),
+        )
+
         return cls(
             schema=envdrift_section.get("schema"),
             environments=envdrift_section.get(
@@ -298,6 +332,7 @@ class EnvdriftConfig:
             git_hook_check=git_hook_check,
             partial_encryption=partial_encryption,
             guard=guard,
+            guardian=guardian,
             raw=data,
         )
 
@@ -394,6 +429,8 @@ def load_config(path: Path | str | None = None) -> EnvdriftConfig:
                 data["partial_encryption"] = envdrift_section.pop("partial_encryption")
             if "guard" in envdrift_section:
                 data["guard"] = envdrift_section.pop("guard")
+            if "guardian" in envdrift_section:
+                data["guardian"] = envdrift_section.pop("guardian")
 
     return EnvdriftConfig.from_dict(data)
 
@@ -544,6 +581,15 @@ enabled = false
 # clear_file = ".env.production.clear"
 # secret_file = ".env.production.secret"
 # combined_file = ".env.production"
+
+# Background agent configuration (optional)
+# When enabled, registers this project with the envdrift-agent daemon
+[guardian]
+enabled = false              # Set to true to register with agent
+idle_timeout = "5m"          # Encrypt after 5 minutes idle
+patterns = [".env*"]         # File patterns to watch
+exclude = [".env.example", ".env.sample", ".env.keys"]  # Files to skip
+notify = true                # Desktop notifications when encrypting
 """
 
 

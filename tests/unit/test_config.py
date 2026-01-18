@@ -10,6 +10,7 @@ from envdrift.config import (
     ConfigNotFoundError,
     EnvdriftConfig,
     GitHookCheckConfig,
+    GuardianWatchConfig,
     PrecommitConfig,
     ValidationConfig,
     VaultConfig,
@@ -510,3 +511,117 @@ environment = "staging"
         assert len(config.vault.sync.mappings) == 2
         assert config.vault.sync.mappings[0].secret_name == "myapp-key"
         assert config.vault.sync.mappings[1].vault_name == "backend-vault"
+
+
+class TestGuardianWatchConfig:
+    """Tests for GuardianWatchConfig dataclass (background agent settings)."""
+
+    def test_default_values(self):
+        """Test default GuardianWatchConfig values."""
+        config = GuardianWatchConfig()
+        assert config.enabled is False
+        assert config.idle_timeout == "5m"
+        assert config.patterns == [".env*"]
+        assert config.exclude == [".env.example", ".env.sample", ".env.keys"]
+        assert config.notify is True
+
+    def test_custom_values(self):
+        """Test GuardianWatchConfig with custom values."""
+        config = GuardianWatchConfig(
+            enabled=True,
+            idle_timeout="10m",
+            patterns=[".env", ".env.*"],
+            exclude=[".env.template"],
+            notify=False,
+        )
+        assert config.enabled is True
+        assert config.idle_timeout == "10m"
+        assert config.patterns == [".env", ".env.*"]
+        assert config.exclude == [".env.template"]
+        assert config.notify is False
+
+    def test_envdrift_config_has_guardian(self):
+        """Test EnvdriftConfig includes GuardianWatchConfig."""
+        config = EnvdriftConfig()
+        assert hasattr(config, "guardian")
+        assert isinstance(config.guardian, GuardianWatchConfig)
+        assert config.guardian.enabled is False
+
+    def test_from_dict_with_guardian(self):
+        """Test from_dict parses guardian section."""
+        data = {
+            "guardian": {
+                "enabled": True,
+                "idle_timeout": "3m",
+                "patterns": [".env.*"],
+                "exclude": [".env.test"],
+                "notify": False,
+            }
+        }
+        config = EnvdriftConfig.from_dict(data)
+
+        assert config.guardian.enabled is True
+        assert config.guardian.idle_timeout == "3m"
+        assert config.guardian.patterns == [".env.*"]
+        assert config.guardian.exclude == [".env.test"]
+        assert config.guardian.notify is False
+
+    def test_from_dict_guardian_defaults(self):
+        """Test from_dict uses defaults when guardian section is empty."""
+        data = {"guardian": {}}
+        config = EnvdriftConfig.from_dict(data)
+
+        assert config.guardian.enabled is False
+        assert config.guardian.idle_timeout == "5m"
+        assert config.guardian.patterns == [".env*"]
+        assert config.guardian.exclude == [".env.example", ".env.sample", ".env.keys"]
+        assert config.guardian.notify is True
+
+    def test_from_dict_no_guardian_section(self):
+        """Test from_dict provides defaults when guardian section is missing."""
+        data = {}
+        config = EnvdriftConfig.from_dict(data)
+
+        assert config.guardian.enabled is False
+        assert config.guardian.idle_timeout == "5m"
+
+    def test_load_config_with_guardian_from_toml(self, tmp_path: Path):
+        """Test load_config parses guardian section from TOML file."""
+        config_file = tmp_path / "envdrift.toml"
+        config_file.write_text("""
+[envdrift]
+schema = "app:Settings"
+
+[guardian]
+enabled = true
+idle_timeout = "10m"
+patterns = [".env", ".env.*"]
+exclude = [".env.example", ".env.template"]
+notify = true
+""")
+
+        config = load_config(config_file)
+        assert config.schema == "app:Settings"
+        assert config.guardian.enabled is True
+        assert config.guardian.idle_timeout == "10m"
+        assert config.guardian.patterns == [".env", ".env.*"]
+        assert config.guardian.exclude == [".env.example", ".env.template"]
+        assert config.guardian.notify is True
+
+    def test_load_config_pyproject_with_guardian(self, tmp_path: Path):
+        """Test load_config parses guardian from pyproject.toml."""
+        pyproject = tmp_path / "pyproject.toml"
+        pyproject.write_text("""
+[tool.envdrift]
+schema = "myapp:Settings"
+
+[tool.envdrift.guardian]
+enabled = true
+idle_timeout = "2m"
+notify = false
+""")
+
+        config = load_config(pyproject)
+        assert config.guardian.enabled is True
+        assert config.guardian.idle_timeout == "2m"
+        assert config.guardian.notify is False
