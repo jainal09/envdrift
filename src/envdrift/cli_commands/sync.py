@@ -1465,13 +1465,12 @@ def lock(
         # produces different ciphertext each time, even for identical plaintext.
         # We compare the current file with the decrypted version from git;
         # if unchanged, restore the original encrypted file to avoid git noise.
+        smart_enabled = encryption_config.smart_encryption if encryption_config else False
         should_skip, skip_reason = encryption_helpers.should_skip_reencryption(
-            env_file, encryption_backend
+            env_file, encryption_backend, enabled=smart_enabled
         )
         if should_skip:
-            console.print(f"  [dim]=[/dim] {env_file} [dim]- skipped[/dim]")
-            if skip_reason:
-                console.print(f"    [dim]{skip_reason}[/dim]")
+            console.print(f"  [dim]=[/dim] {env_file} [dim]- skipped ({skip_reason})[/dim]")
             already_encrypted_count += 1
             continue
 

@@ -69,6 +69,9 @@ class EncryptionConfig:
     # Encryption backend: dotenvx (default) or sops
     backend: str = "dotenvx"
 
+    # Smart encryption: skip re-encryption if content unchanged (opt-in)
+    smart_encryption: bool = False
+
     # dotenvx-specific settings
     dotenvx_auto_install: bool = False
 
@@ -296,6 +299,7 @@ class EnvdriftConfig:
         dotenvx_section = encryption_section.get("dotenvx", {})
         encryption = EncryptionConfig(
             backend=encryption_section.get("backend", "dotenvx"),
+            smart_encryption=encryption_section.get("smart_encryption", False),
             dotenvx_auto_install=dotenvx_section.get("auto_install", False),
             sops_auto_install=sops_section.get("auto_install", False),
             sops_config_file=sops_section.get("config_file"),
@@ -515,6 +519,9 @@ secret_patterns = [
 [encryption]
 # Encryption backend: dotenvx (default) or sops
 backend = "dotenvx"
+
+# Smart encryption: skip re-encryption if content unchanged (reduces git noise)
+# smart_encryption = true
 
 # dotenvx-specific settings
 [encryption.dotenvx]
