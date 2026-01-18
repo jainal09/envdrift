@@ -12,8 +12,8 @@ automate versioning, changelogs, GitHub releases, and PyPI publishing.
 
 ## Requirements for merging
 
-- **PR titles must be conventional commits** (enforced by semantic-pr).
-- **Commit messages in the PR must be conventional** (enforced by commitlint).
+- **PR titles must be conventional commits** (enforced by semantic-pr, a PR title check).
+- **Commit messages in the PR must be conventional** (enforced by commitlint, a commit message linter).
 - **Squash merges are enforced**, and the squash commit message uses the PR title.
 
 Example PR titles:
@@ -32,22 +32,24 @@ or a `BREAKING CHANGE` to trigger a release.
 
 ### 2. Review the release PR
 
-release-please runs on `main` and opens/updates a "Release please" PR that bumps
+release-please runs on `main` and opens/updates a "release-please" PR that bumps
 the version and updates `CHANGELOG.md`. Review it like any other PR.
 
 ### 3. Merge the release PR
 
-Merge the release PR (squash). This creates a tag and GitHub release.
+Merge the release PR (squash). release-please will automatically create a git
+tag and GitHub release.
 
 ### 4. Automated publishing
 
-When the tag is created:
+After the tag is created by release-please:
 
 1. GitHub Actions triggers the publish workflow
 2. Tests run for the release tag
 3. Package is built with the tag-derived version
 4. Package is published to PyPI
-5. Release notes are attached to the GitHub release (from `CHANGELOG.md`)
+5. Release notes from `CHANGELOG.md` are extracted and attached to the GitHub
+   release (if missing)
 
 ### 5. Monitor the workflows
 
