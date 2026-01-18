@@ -10,6 +10,7 @@ from envdrift.cli_commands.encryption import decrypt_cmd, encrypt_cmd
 from envdrift.cli_commands.guard import guard
 from envdrift.cli_commands.hook import hook
 from envdrift.cli_commands.init_cmd import init as init_cmd
+from envdrift.cli_commands.install import install_app
 from envdrift.cli_commands.partial import pull_cmd as pull_partial_cmd
 from envdrift.cli_commands.partial import push as push_cmd
 from envdrift.cli_commands.sync import lock, pull, sync
@@ -42,6 +43,9 @@ app.command("pull-partial")(pull_partial_cmd)
 
 # Agent commands
 app.add_typer(agent_app, name="agent")
+
+# Install commands
+app.add_typer(install_app, name="install")
 
 
 if __name__ == "__main__":
