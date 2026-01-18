@@ -152,10 +152,7 @@ def should_skip_reencryption(
         if "encrypted:" not in git_content.lower():
             return False, "git version is not encrypted"
     elif not backend.has_encrypted_header(git_content):
-        # Fallback check for SOPS if has_encrypted_header misses it
-        # (though sops backend usually implements this correctly)
-        if "sops_mac=" not in git_content and "ENC[" not in git_content:
-            return False, "git version is not encrypted"
+        return False, "git version is not encrypted"
 
     # Decrypt the git version to compare
     temp_path = env_file.with_name(f".{env_file.name}.envdrift-tmp")

@@ -55,18 +55,25 @@ class TestShouldSkipReencryption:
     def test_returns_false_when_git_version_not_encrypted(self, tmp_path: Path):
         """Should return False when the git version is not encrypted."""
         # Setup git repo
-        subprocess.run(["git", "init"], cwd=tmp_path, capture_output=True)
+        subprocess.run(["git", "init"], cwd=tmp_path, capture_output=True, check=True)
         subprocess.run(
             ["git", "config", "user.email", "test@test.com"],
             cwd=tmp_path,
             capture_output=True,
+            check=True,
         )
-        subprocess.run(["git", "config", "user.name", "Test"], cwd=tmp_path, capture_output=True)
+        subprocess.run(
+            ["git", "config", "user.name", "Test"], cwd=tmp_path, capture_output=True, check=True
+        )
 
         env_file = tmp_path / ".env.production"
         env_file.write_text("SECRET=plaintext_value")  # Not encrypted
-        subprocess.run(["git", "add", ".env.production"], cwd=tmp_path, capture_output=True)
-        subprocess.run(["git", "commit", "-m", "initial"], cwd=tmp_path, capture_output=True)
+        subprocess.run(
+            ["git", "add", ".env.production"], cwd=tmp_path, capture_output=True, check=True
+        )
+        subprocess.run(
+            ["git", "commit", "-m", "initial"], cwd=tmp_path, capture_output=True, check=True
+        )
 
         mock_backend = MagicMock()
         mock_backend.name = "dotenvx"
@@ -79,20 +86,27 @@ class TestShouldSkipReencryption:
     def test_returns_true_when_content_unchanged(self, tmp_path: Path):
         """Should return True and restore from git when content is unchanged."""
         # Setup git repo
-        subprocess.run(["git", "init"], cwd=tmp_path, capture_output=True)
+        subprocess.run(["git", "init"], cwd=tmp_path, capture_output=True, check=True)
         subprocess.run(
             ["git", "config", "user.email", "test@test.com"],
             cwd=tmp_path,
             capture_output=True,
+            check=True,
         )
-        subprocess.run(["git", "config", "user.name", "Test"], cwd=tmp_path, capture_output=True)
+        subprocess.run(
+            ["git", "config", "user.name", "Test"], cwd=tmp_path, capture_output=True, check=True
+        )
 
         # Commit encrypted version
         env_file = tmp_path / ".env.production"
         encrypted_content = 'SECRET="encrypted:abc123xyz"'
         env_file.write_text(encrypted_content)
-        subprocess.run(["git", "add", ".env.production"], cwd=tmp_path, capture_output=True)
-        subprocess.run(["git", "commit", "-m", "initial"], cwd=tmp_path, capture_output=True)
+        subprocess.run(
+            ["git", "add", ".env.production"], cwd=tmp_path, capture_output=True, check=True
+        )
+        subprocess.run(
+            ["git", "commit", "-m", "initial"], cwd=tmp_path, capture_output=True, check=True
+        )
 
         # Simulate decrypted file (same as what would be decrypted from git)
         decrypted_content = "SECRET=actual_secret_value"
@@ -119,20 +133,27 @@ class TestShouldSkipReencryption:
     def test_returns_false_when_content_changed(self, tmp_path: Path):
         """Should return False when content has changed."""
         # Setup git repo
-        subprocess.run(["git", "init"], cwd=tmp_path, capture_output=True)
+        subprocess.run(["git", "init"], cwd=tmp_path, capture_output=True, check=True)
         subprocess.run(
             ["git", "config", "user.email", "test@test.com"],
             cwd=tmp_path,
             capture_output=True,
+            check=True,
         )
-        subprocess.run(["git", "config", "user.name", "Test"], cwd=tmp_path, capture_output=True)
+        subprocess.run(
+            ["git", "config", "user.name", "Test"], cwd=tmp_path, capture_output=True, check=True
+        )
 
         # Commit encrypted version
         env_file = tmp_path / ".env.production"
         encrypted_content = 'SECRET="encrypted:abc123xyz"'
         env_file.write_text(encrypted_content)
-        subprocess.run(["git", "add", ".env.production"], cwd=tmp_path, capture_output=True)
-        subprocess.run(["git", "commit", "-m", "initial"], cwd=tmp_path, capture_output=True)
+        subprocess.run(
+            ["git", "add", ".env.production"], cwd=tmp_path, capture_output=True, check=True
+        )
+        subprocess.run(
+            ["git", "commit", "-m", "initial"], cwd=tmp_path, capture_output=True, check=True
+        )
 
         # Simulate decrypted file with DIFFERENT content
         current_content = "SECRET=new_secret_value\nNEW_VAR=added"
@@ -157,20 +178,27 @@ class TestShouldSkipReencryption:
     def test_returns_false_when_decrypt_fails(self, tmp_path: Path):
         """Should return False when decryption of git version fails."""
         # Setup git repo
-        subprocess.run(["git", "init"], cwd=tmp_path, capture_output=True)
+        subprocess.run(["git", "init"], cwd=tmp_path, capture_output=True, check=True)
         subprocess.run(
             ["git", "config", "user.email", "test@test.com"],
             cwd=tmp_path,
             capture_output=True,
+            check=True,
         )
-        subprocess.run(["git", "config", "user.name", "Test"], cwd=tmp_path, capture_output=True)
+        subprocess.run(
+            ["git", "config", "user.name", "Test"], cwd=tmp_path, capture_output=True, check=True
+        )
 
         # Commit encrypted version
         env_file = tmp_path / ".env.production"
         encrypted_content = 'SECRET="encrypted:abc123xyz"'
         env_file.write_text(encrypted_content)
-        subprocess.run(["git", "add", ".env.production"], cwd=tmp_path, capture_output=True)
-        subprocess.run(["git", "commit", "-m", "initial"], cwd=tmp_path, capture_output=True)
+        subprocess.run(
+            ["git", "add", ".env.production"], cwd=tmp_path, capture_output=True, check=True
+        )
+        subprocess.run(
+            ["git", "commit", "-m", "initial"], cwd=tmp_path, capture_output=True, check=True
+        )
 
         # Simulate decrypted file
         env_file.write_text("SECRET=value")
@@ -190,19 +218,26 @@ class TestShouldSkipReencryption:
     def test_returns_false_when_restore_fails(self, tmp_path: Path):
         """Should return False if restoring fails despite content match."""
         # Setup git repo
-        subprocess.run(["git", "init"], cwd=tmp_path, capture_output=True)
+        subprocess.run(["git", "init"], cwd=tmp_path, capture_output=True, check=True)
         subprocess.run(
             ["git", "config", "user.email", "test@test.com"],
             cwd=tmp_path,
             capture_output=True,
+            check=True,
         )
-        subprocess.run(["git", "config", "user.name", "Test"], cwd=tmp_path, capture_output=True)
+        subprocess.run(
+            ["git", "config", "user.name", "Test"], cwd=tmp_path, capture_output=True, check=True
+        )
 
         env_file = tmp_path / ".env.production"
         encrypted_content = 'SECRET="encrypted:abc123xyz"'
         env_file.write_text(encrypted_content)
-        subprocess.run(["git", "add", ".env.production"], cwd=tmp_path, capture_output=True)
-        subprocess.run(["git", "commit", "-m", "initial"], cwd=tmp_path, capture_output=True)
+        subprocess.run(
+            ["git", "add", ".env.production"], cwd=tmp_path, capture_output=True, check=True
+        )
+        subprocess.run(
+            ["git", "commit", "-m", "initial"], cwd=tmp_path, capture_output=True, check=True
+        )
 
         decrypted_content = "SECRET=actual_secret_value"
         env_file.write_text(decrypted_content)

@@ -55,7 +55,7 @@ def should_skip_reencryption(
     env_file: Path,
     backend: EncryptionBackend,
     *,
-    enabled: bool = True,  # Opt-in parameter
+    enabled: bool = False,  # Opt-in parameter
 ) -> tuple[bool, str]:
     """
     Determine if re-encryption should be skipped because content is unchanged.
@@ -77,12 +77,7 @@ backend = "dotenvx"
 smart_encryption = true  # Enable smart encryption (default: false)
 ```
 
-Or via CLI flag:
-
-```bash
-envdrift lock --smart        # Enable for this invocation
-envdrift encrypt --smart     # Enable for this invocation
-```
+This feature is configured via `smart_encryption` and does not have a CLI flag.
 
 ## Implementation Progress
 
@@ -203,7 +198,7 @@ def should_skip_reencryption(
     env_file: Path,
     backend: EncryptionBackend,
     *,
-    enabled: bool = True,
+    enabled: bool = False,
 ) -> tuple[bool, str]:
     """
     Determine if re-encryption should be skipped.
