@@ -20,15 +20,22 @@ Example PR titles:
 
 - `feat(cli): add --json output`
 - `fix(sync): handle missing vault token`
-- `perf(scanner): speed up pattern matching`
+- `docs(release): update release process guide`
+- `deps: bump requests to 2.32.0`
 - `feat!: remove deprecated flag`
 
 ## Creating a New Release
 
 ### 1. Merge user-facing changes to main
 
-Merge changes to `main` with a conventional PR title. Use `feat`, `fix`, `perf`,
-or a `BREAKING CHANGE` to trigger a release.
+Merge changes to `main` with a conventional PR title. Release-please uses the
+commit type to decide version bumps:
+
+- `feat` -> minor release
+- `fix` -> patch release
+- `docs` -> patch release (Python default)
+- `deps` -> patch release (Python default)
+- `BREAKING CHANGE` -> major release (overrides the above)
 
 ### 2. Review the release PR
 
@@ -58,10 +65,15 @@ Check the [Actions tab](https://github.com/jainal09/envdrift/actions) and the
 
 ## When a Release PR is Created
 
-release-please only creates a release PR when it finds user-facing conventional
-commits. If changes are only `chore`, `docs`, or `ci`, it will skip the release.
+release-please only creates a release PR when it finds releasable conventional
+commits. Types like `chore`, `ci`, `test`, and `refactor` typically do not
+trigger a release.
 
-Use `feat!:` or a `BREAKING CHANGE:` footer to trigger a major release.
+Because squash commit messages use the PR title, the most reliable way to
+trigger a major release is to include a bang in the PR title (for example,
+`feat!: remove deprecated flag`). Alternatively, add a `BREAKING CHANGE: ...`
+footer to the squash commit body in the GitHub merge dialog (paste it in the
+commit message body field).
 
 ## Version Numbering Guide
 
@@ -123,7 +135,7 @@ Ensure:
 
 If release-please did not open a release PR:
 
-1. Check that merged commits are conventional and user-facing (`feat`, `fix`, `perf`).
+1. Check that merged commits are conventional and releasable (`feat`, `fix`, `docs`, `deps`).
 2. Verify the release-please workflow ran and succeeded.
 3. Confirm `RELEASE_PLEASE_TOKEN` is set in repository secrets.
 
