@@ -103,7 +103,9 @@ def test_lock_command_skips_when_smart_encryption_says_so(
     )
 
     assert result.exit_code == 0
-    assert "mock reason for lock" in result.stdout
+    # Normalize output to handle line wrapping from Rich console
+    normalized_output = result.stdout.replace("\n", " ")
+    assert "mock reason for lock" in normalized_output
 
     # Verify backend.encrypt was NOT called
     mock_backend.encrypt.assert_not_called()

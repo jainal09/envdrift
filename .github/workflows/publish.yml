@@ -113,3 +113,39 @@ jobs:
           else
             gh release create "$tag" --title "$tag" --generate-notes
           fi
+
+      - name: Add PyPI link to release notes
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          tag="${GITHUB_REF_NAME}"
+          version="${tag#v}"
+          pypi_url="https://pypi.org/project/envdrift/${version}/"
+          body="$(gh release view "$tag" --json body -q .body || true)"
+          if [ -z "$body" ] || [ "$body" = "null" ]; then
+            echo "No release body found; creating notes with PyPI link."
+            printf "PyPI: %s\n" "$pypi_url" > release-body.md
+            gh release edit "$tag" --notes-file release-body.md
+            exit 0
+          fi
+          case "$body" in
+            *"$pypi_url"*)
+              echo "PyPI link already present."
+              exit 0
+              ;;
+          esac
+          printf "%s\n\nPyPI: %s\n" "$body" "$pypi_url" > release-body.md
+          gh release edit "$tag" --notes-file release-body.md
+
+      - name: Upload release artifacts
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          tag="${GITHUB_REF_NAME}"
+          shopt -s nullglob
+          files=(dist/*)
+          if [ ${#files[@]} -eq 0 ]; then
+            echo "No dist files to upload."
+            exit 0
+          fi
+          gh release upload "$tag" "${files[@]}" --clobber

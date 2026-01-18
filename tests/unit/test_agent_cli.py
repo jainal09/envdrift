@@ -9,7 +9,7 @@ from unittest.mock import patch
 import pytest
 from typer.testing import CliRunner
 
-from envdrift.agent.registry import ProjectRegistry
+import envdrift.agent.registry as registry_module
 from envdrift.cli import app
 
 runner = CliRunner()
@@ -21,7 +21,6 @@ class TestAgentRegisterCommand:
     @pytest.fixture(autouse=True)
     def reset_registry(self):
         """Reset the global registry singleton before each test."""
-        import envdrift.agent.registry as registry_module
 
         registry_module._registry = None
         yield
@@ -29,11 +28,10 @@ class TestAgentRegisterCommand:
 
     def test_register_current_directory(self, tmp_path: Path, monkeypatch):
         """Test registering the current directory."""
-        import envdrift.agent.registry as registry_module
 
         # Set up a temp registry
         registry_path = tmp_path / ".envdrift" / "projects.json"
-        registry_module._registry = ProjectRegistry(registry_path)
+        registry_module._registry = registry_module.ProjectRegistry(registry_path)
 
         # Create a project with envdrift.toml
         project_dir = tmp_path / "myproject"
@@ -49,10 +47,9 @@ class TestAgentRegisterCommand:
 
     def test_register_specific_path(self, tmp_path: Path):
         """Test registering a specific path."""
-        import envdrift.agent.registry as registry_module
 
         registry_path = tmp_path / ".envdrift" / "projects.json"
-        registry_module._registry = ProjectRegistry(registry_path)
+        registry_module._registry = registry_module.ProjectRegistry(registry_path)
 
         project_dir = tmp_path / "myproject"
         project_dir.mkdir()
@@ -64,10 +61,9 @@ class TestAgentRegisterCommand:
 
     def test_register_already_registered(self, tmp_path: Path):
         """Test registering a project that's already registered."""
-        import envdrift.agent.registry as registry_module
 
         registry_path = tmp_path / ".envdrift" / "projects.json"
-        registry_module._registry = ProjectRegistry(registry_path)
+        registry_module._registry = registry_module.ProjectRegistry(registry_path)
 
         project_dir = tmp_path / "myproject"
         project_dir.mkdir()
@@ -83,15 +79,32 @@ class TestAgentRegisterCommand:
 
     def test_register_nonexistent_path(self, tmp_path: Path):
         """Test registering a path that doesn't exist."""
-        import envdrift.agent.registry as registry_module
 
         registry_path = tmp_path / ".envdrift" / "projects.json"
-        registry_module._registry = ProjectRegistry(registry_path)
+        registry_module._registry = registry_module.ProjectRegistry(registry_path)
 
         result = runner.invoke(app, ["agent", "register", str(tmp_path / "nonexistent")])
 
         assert result.exit_code == 1
         assert "does not exist" in result.stdout
+
+    def test_register_invalid_config_shows_warning(self, tmp_path: Path):
+        """Test register handles invalid config gracefully."""
+
+        registry_path = tmp_path / ".envdrift" / "projects.json"
+        registry_module._registry = registry_module.ProjectRegistry(registry_path)
+
+        project_dir = tmp_path / "myproject"
+        project_dir.mkdir()
+        (project_dir / "envdrift.toml").write_text("""
+[guardian]
+idle_timeout = "invalid"
+""")
+
+        result = runner.invoke(app, ["agent", "register", str(project_dir)])
+
+        assert result.exit_code == 0
+        assert "Failed to load envdrift config" in result.stdout
 
 
 class TestAgentUnregisterCommand:
@@ -100,7 +113,6 @@ class TestAgentUnregisterCommand:
     @pytest.fixture(autouse=True)
     def reset_registry(self):
         """Reset the global registry singleton before each test."""
-        import envdrift.agent.registry as registry_module
 
         registry_module._registry = None
         yield
@@ -108,10 +120,9 @@ class TestAgentUnregisterCommand:
 
     def test_unregister_registered_project(self, tmp_path: Path):
         """Test unregistering a registered project."""
-        import envdrift.agent.registry as registry_module
 
         registry_path = tmp_path / ".envdrift" / "projects.json"
-        registry_module._registry = ProjectRegistry(registry_path)
+        registry_module._registry = registry_module.ProjectRegistry(registry_path)
 
         project_dir = tmp_path / "myproject"
         project_dir.mkdir()
@@ -127,10 +138,9 @@ class TestAgentUnregisterCommand:
 
     def test_unregister_not_registered(self, tmp_path: Path):
         """Test unregistering a project that's not registered."""
-        import envdrift.agent.registry as registry_module
 
         registry_path = tmp_path / ".envdrift" / "projects.json"
-        registry_module._registry = ProjectRegistry(registry_path)
+        registry_module._registry = registry_module.ProjectRegistry(registry_path)
 
         project_dir = tmp_path / "myproject"
         project_dir.mkdir()
@@ -147,7 +157,6 @@ class TestAgentListCommand:
     @pytest.fixture(autouse=True)
     def reset_registry(self):
         """Reset the global registry singleton before each test."""
-        import envdrift.agent.registry as registry_module
 
         registry_module._registry = None
         yield
@@ -155,10 +164,9 @@ class TestAgentListCommand:
 
     def test_list_empty(self, tmp_path: Path):
         """Test listing when no projects are registered."""
-        import envdrift.agent.registry as registry_module
 
         registry_path = tmp_path / ".envdrift" / "projects.json"
-        registry_module._registry = ProjectRegistry(registry_path)
+        registry_module._registry = registry_module.ProjectRegistry(registry_path)
 
         result = runner.invoke(app, ["agent", "list"])
 
@@ -167,10 +175,9 @@ class TestAgentListCommand:
 
     def test_list_with_projects(self, tmp_path: Path):
         """Test listing registered projects."""
-        import envdrift.agent.registry as registry_module
 
         registry_path = tmp_path / ".envdrift" / "projects.json"
-        registry_module._registry = ProjectRegistry(registry_path)
+        registry_module._registry = registry_module.ProjectRegistry(registry_path)
 
         project1 = tmp_path / "project1"
         project2 = tmp_path / "project2"
@@ -200,7 +207,6 @@ class TestAgentStatusCommand:
     @pytest.fixture(autouse=True)
     def reset_registry(self):
         """Reset the global registry singleton before each test."""
-        import envdrift.agent.registry as registry_module
 
         registry_module._registry = None
         yield
@@ -208,10 +214,9 @@ class TestAgentStatusCommand:
 
     def test_status_agent_not_installed(self, tmp_path: Path):
         """Test status when agent is not installed."""
-        import envdrift.agent.registry as registry_module
 
         registry_path = tmp_path / ".envdrift" / "projects.json"
-        registry_module._registry = ProjectRegistry(registry_path)
+        registry_module._registry = registry_module.ProjectRegistry(registry_path)
 
         with patch("envdrift.cli_commands.agent._find_agent_binary", return_value=None):
             result = runner.invoke(app, ["agent", "status"])
@@ -221,10 +226,9 @@ class TestAgentStatusCommand:
 
     def test_status_shows_registered_projects(self, tmp_path: Path):
         """Test status shows count of registered projects."""
-        import envdrift.agent.registry as registry_module
 
         registry_path = tmp_path / ".envdrift" / "projects.json"
-        registry_module._registry = ProjectRegistry(registry_path)
+        registry_module._registry = registry_module.ProjectRegistry(registry_path)
 
         project = tmp_path / "myproject"
         project.mkdir()
@@ -236,6 +240,99 @@ class TestAgentStatusCommand:
         assert result.exit_code == 0
         assert "Registered Projects" in result.stdout
         assert "1" in result.stdout
+
+    def test_status_missing_running_line(self, tmp_path: Path):
+        """Test status handles missing Running line as error."""
+        import subprocess
+
+        registry_path = tmp_path / ".envdrift" / "projects.json"
+        registry_module._registry = registry_module.ProjectRegistry(registry_path)
+
+        def fake_run(args, **_kwargs):
+            if args[1] == "status":
+                stdout = "Installed: true\nConfig:    /tmp/envdrift.toml\nenvdrift:  true\n"
+                return subprocess.CompletedProcess(args, 0, stdout=stdout, stderr="")
+            if args[1] == "--version":
+                return subprocess.CompletedProcess(
+                    args, 0, stdout="envdrift-agent v1.2.3\n", stderr=""
+                )
+            return subprocess.CompletedProcess(args, 1, stdout="", stderr="")
+
+        with patch(
+            "envdrift.cli_commands.agent._find_agent_binary",
+            return_value=Path("/usr/local/bin/envdrift-agent"),
+        ):
+            with patch("envdrift.cli_commands.agent.subprocess.run", side_effect=fake_run):
+                result = runner.invoke(app, ["agent", "status"])
+
+        assert result.exit_code == 0
+        assert "Agent status check failed" in result.stdout
+
+    def test_status_running_parses_running_line(self, tmp_path: Path):
+        """Test status parses running state from the Running line."""
+        import subprocess
+
+        registry_path = tmp_path / ".envdrift" / "projects.json"
+        registry_module._registry = registry_module.ProjectRegistry(registry_path)
+
+        def fake_run(args, **_kwargs):
+            if args[1] == "status":
+                stdout = (
+                    "Installed: true\n"
+                    "Running:   true\n"
+                    "Config:    /tmp/envdrift.toml\n"
+                    "envdrift:  true\n"
+                )
+                return subprocess.CompletedProcess(args, 0, stdout=stdout, stderr="")
+            if args[1] == "--version":
+                return subprocess.CompletedProcess(
+                    args, 0, stdout="envdrift-agent v1.2.3\n", stderr=""
+                )
+            return subprocess.CompletedProcess(args, 1, stdout="", stderr="")
+
+        with patch(
+            "envdrift.cli_commands.agent._find_agent_binary",
+            return_value=Path("/usr/local/bin/envdrift-agent"),
+        ):
+            with patch("envdrift.cli_commands.agent.subprocess.run", side_effect=fake_run):
+                result = runner.invoke(app, ["agent", "status"])
+
+        assert result.exit_code == 0
+        assert "Agent is running" in result.stdout
+        assert "Version: envdrift-agent v1.2.3" in result.stdout
+
+    def test_status_stopped_parses_running_false(self, tmp_path: Path):
+        """Test status treats 'Running: false' as stopped."""
+        import subprocess
+
+        registry_path = tmp_path / ".envdrift" / "projects.json"
+        registry_module._registry = registry_module.ProjectRegistry(registry_path)
+
+        def fake_run(args, **_kwargs):
+            if args[1] == "status":
+                stdout = (
+                    "Installed: true\n"
+                    "Running:   false\n"
+                    "Config:    /tmp/envdrift.toml\n"
+                    "envdrift:  true\n"
+                )
+                return subprocess.CompletedProcess(args, 0, stdout=stdout, stderr="")
+            if args[1] == "--version":
+                return subprocess.CompletedProcess(
+                    args, 0, stdout="envdrift-agent v1.2.3\n", stderr=""
+                )
+            return subprocess.CompletedProcess(args, 1, stdout="", stderr="")
+
+        with patch(
+            "envdrift.cli_commands.agent._find_agent_binary",
+            return_value=Path("/usr/local/bin/envdrift-agent"),
+        ):
+            with patch("envdrift.cli_commands.agent.subprocess.run", side_effect=fake_run):
+                result = runner.invoke(app, ["agent", "status"])
+
+        assert result.exit_code == 0
+        assert "Agent is stopped" in result.stdout
+        assert "Version:" not in result.stdout
 
 
 class TestAgentHelpCommand:

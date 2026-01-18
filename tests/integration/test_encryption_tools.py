@@ -207,11 +207,12 @@ def test_dotenvx_smart_encryption_skips_unchanged(integration_env):
         )
     )
 
-    # Create config
+    # Create config with smart_encryption enabled
     config = textwrap.dedent(
         """\
         [encryption]
         backend = "dotenvx"
+        smart_encryption = true
 
         [encryption.dotenvx]
         auto_install = true
@@ -319,11 +320,12 @@ def test_sops_smart_encryption_skips_unchanged(integration_env):
     env_file = work_dir / ".env.sops"
     env_file.write_text("TEST_VAR=original_value")
 
-    # Create config
+    # Create config with smart_encryption enabled
     config = textwrap.dedent(
         f"""\
         [encryption]
         backend = "sops"
+        smart_encryption = true
 
         [encryption.sops]
         auto_install = true

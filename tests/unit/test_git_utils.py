@@ -199,6 +199,13 @@ class TestIsFileModified:
 
         assert is_file_modified(test_file) is True
 
+    def test_returns_true_for_non_git_repo(self, tmp_path: Path):
+        """Should return True (treat as modified) when not in a git repo."""
+        test_file = tmp_path / "test.txt"
+        test_file.write_text("content")
+
+        assert is_file_modified(test_file) is True
+
 
 class TestEnsureGitignoreEntries:
     """Tests for ensure_gitignore_entries function."""
