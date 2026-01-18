@@ -6,7 +6,7 @@ This document outlines future improvements for the envdrift-agent and VS Code ex
 
 | Phase | Description | Status |
 |-------|-------------|--------|
-| Phase 2A | Configuration Improvements (CLI commands, projects.json, [guardian] section) | ✅ Partially Complete |
+| Phase 2A | Configuration Improvements (CLI commands, projects.json, [guardian] section) | ✅ Completed |
 | Phase 2B | CLI Install Command (`envdrift install agent`) | ❌ Not Started |
 | Phase 2C | Build Pipelines (agent + vscode release workflows) | ❌ Not Started |
 | Phase 2D | Agent Improvements (per-project watching) | ❌ Not Started |
@@ -391,8 +391,6 @@ Extension can read agent status from:
 
 These features are deferred to a future branch:
 
-- ❌ Config merge (guardian → envdrift.toml)
-- ❌ Project registration commands
 - ❌ `envdrift install agent` command
 - ❌ Release workflows
 - ❌ Per-project watching
@@ -400,6 +398,8 @@ These features are deferred to a future branch:
 
 Current branch focuses on:
 
+- ✅ Config merge (guardian → envdrift.toml)
+- ✅ Project registration commands
 - ✅ Basic agent functionality
 - ✅ VS Code extension
 - ✅ Documentation

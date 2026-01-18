@@ -76,7 +76,8 @@ def _get_agent_status() -> tuple[str, str | None]:
     """Get the agent status.
 
     Returns:
-        Tuple of (status, version) where status is 'running', 'stopped', or 'not_installed'
+        Tuple of (status, version) where status is 'running', 'stopped', 'not_installed',
+        or 'error'
     """
     agent_binary = _find_agent_binary()
     if not agent_binary:
