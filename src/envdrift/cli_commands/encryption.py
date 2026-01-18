@@ -274,7 +274,10 @@ def encrypt_cmd(
             # produces different ciphertext each time, causing unnecessary git noise.
             from envdrift.cli_commands.encryption_helpers import should_skip_reencryption
 
-            should_skip, skip_reason = should_skip_reencryption(env_file, encryption_backend)
+            smart_enabled = encryption_config.smart_encryption if encryption_config else False
+            should_skip, skip_reason = should_skip_reencryption(
+                env_file, encryption_backend, enabled=smart_enabled
+            )
             if should_skip:
                 print_success(f"Skipped re-encryption of {env_file} ({skip_reason})")
                 return
