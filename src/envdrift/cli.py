@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import typer
 
+from envdrift.cli_commands.agent import agent_app
 from envdrift.cli_commands.diff import diff
 from envdrift.cli_commands.encryption import decrypt_cmd, encrypt_cmd
 from envdrift.cli_commands.guard import guard
@@ -38,6 +39,9 @@ app.command()(version)
 # Partial encryption commands
 app.command("push")(push_cmd)
 app.command("pull-partial")(pull_partial_cmd)
+
+# Agent commands
+app.add_typer(agent_app, name="agent")
 
 
 if __name__ == "__main__":

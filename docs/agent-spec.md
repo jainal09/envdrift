@@ -2,6 +2,18 @@
 
 This document outlines future improvements for the envdrift-agent and VS Code extension.
 
+## Implementation Status
+
+| Phase | Description | Status |
+|-------|-------------|--------|
+| Phase 2A | Configuration Improvements (CLI commands, projects.json, [guardian] section) | ✅ Completed |
+| Phase 2B | CLI Install Command (`envdrift install agent`) | ❌ Not Started |
+| Phase 2C | Build Pipelines (agent + vscode release workflows) | ❌ Not Started |
+| Phase 2D | Agent Improvements (per-project watching) | ❌ Not Started |
+| Phase 2E | VS Code Agent Status Indicator | ❌ Not Started |
+
+---
+
 ## Current Issues
 
 ### 1. Aggressive Default Watching
@@ -12,12 +24,12 @@ This document outlines future improvements for the envdrift-agent and VS Code ex
 ### 2. Separate Config Files
 
 - **Problem**: `guardian.toml` is separate from `envdrift.toml`
-- **Solution**: Add `[guardian]` section to `envdrift.toml`
+- **Solution**: Add `[guardian]` section to `envdrift.toml` ✅ **DONE**
 
 ### 3. Config Discovery
 
 - **Problem**: Agent doesn't know where `envdrift.toml` files are located
-- **Solution**: User registers projects with the agent
+- **Solution**: User registers projects with the agent ✅ **DONE** (via `envdrift agent register`)
 
 ---
 
@@ -379,8 +391,6 @@ Extension can read agent status from:
 
 These features are deferred to a future branch:
 
-- ❌ Config merge (guardian → envdrift.toml)
-- ❌ Project registration commands
 - ❌ `envdrift install agent` command
 - ❌ Release workflows
 - ❌ Per-project watching
@@ -388,6 +398,8 @@ These features are deferred to a future branch:
 
 Current branch focuses on:
 
+- ✅ Config merge (guardian → envdrift.toml)
+- ✅ Project registration commands
 - ✅ Basic agent functionality
 - ✅ VS Code extension
 - ✅ Documentation
