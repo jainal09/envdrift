@@ -321,11 +321,12 @@ def test_smart_encrypt_dirty_workdir(git_hook_env):
     work_dir = git_hook_env["work_dir"]
     env = git_hook_env["env"]
 
-    # Create envdrift config
+    # Create envdrift config with smart_encryption enabled
     config = textwrap.dedent(
         """\
         [encryption]
         backend = "dotenvx"
+        smart_encryption = true
 
         [encryption.dotenvx]
         auto_install = true
@@ -370,11 +371,12 @@ def test_smart_encrypt_no_git_repo(tmp_path):
     env = os.environ.copy()
     env["PYTHONPATH"] = f"{PYTHONPATH}{os.pathsep}{env.get('PYTHONPATH', '')}"
 
-    # Create envdrift config (no git repo)
+    # Create envdrift config with smart_encryption enabled (no git repo)
     config = textwrap.dedent(
         """\
         [encryption]
         backend = "dotenvx"
+        smart_encryption = true
 
         [encryption.dotenvx]
         auto_install = true
