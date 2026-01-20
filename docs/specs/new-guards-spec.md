@@ -16,12 +16,14 @@ This document specifies the integration of new secret scanning tools into envdri
 ## 1. Talisman Integration
 
 ### Overview
-- **Source**: https://github.com/thoughtworks/talisman
+
+- **Source**: <https://github.com/thoughtworks/talisman>
 - **Maintainer**: ThoughtWorks
 - **License**: MIT
 - **Purpose**: Pre-commit/pre-push secret scanner
 
 ### Detection Capabilities
+
 - Encoded values (Base64, hex)
 - File content patterns (passwords, tokens)
 - File size anomalies (large binary files)
@@ -30,11 +32,13 @@ This document specifies the integration of new secret scanning tools into envdri
 - Suspicious file names (.pem, .key, .pfx)
 
 ### Installation Methods
+
 1. **Homebrew** (macOS/Linux): `brew install talisman`
 2. **Direct download**: Binary releases from GitHub
-3. **Install script**: `bash -c "$(curl --silent https://raw.githubusercontent.com/thoughtworks/talisman/main/install.sh)"`
+3. **Install script**: See Talisman documentation
 
 ### CLI Usage
+
 ```bash
 # Scan current directory
 talisman --scan
@@ -50,11 +54,14 @@ talisman --scan --ignoreHistory
 ```
 
 ### Output Format
+
 Talisman outputs a text table by default. For structured output:
+
 - Use `--scanWithHtml` for HTML reports
 - Parse JSON from report directory
 
 ### Severity Mapping
+
 | Talisman Level | envdrift Severity |
 |----------------|-------------------|
 | high | CRITICAL |
@@ -62,7 +69,9 @@ Talisman outputs a text table by default. For structured output:
 | low | MEDIUM |
 
 ### Configuration File
+
 `.talismanrc` in repository root:
+
 ```yaml
 fileignoreconfig:
   - filename: test.pem
@@ -73,6 +82,7 @@ threshold: medium
 ```
 
 ### Integration Approach
+
 1. Check for binary in PATH or venv
 2. Auto-download binary from GitHub releases
 3. Run `talisman --scan --reportdirectory=<temp>`
@@ -84,12 +94,14 @@ threshold: medium
 ## 2. Trivy Integration
 
 ### Overview
-- **Source**: https://github.com/aquasecurity/trivy
+
+- **Source**: <https://github.com/aquasecurity/trivy>
 - **Maintainer**: Aqua Security
 - **License**: Apache 2.0
 - **Purpose**: Comprehensive security scanner (vulnerabilities, secrets, misconfigs)
 
 ### Detection Capabilities
+
 - AWS access keys and secrets
 - GCP service account keys
 - GitHub/GitLab tokens
@@ -99,12 +111,14 @@ threshold: medium
 - Custom regex patterns
 
 ### Installation Methods
+
 1. **Homebrew**: `brew install trivy`
 2. **Direct download**: Binary releases from GitHub
 3. **Docker**: `docker pull aquasec/trivy`
 4. **apt/yum**: Package manager installation
 
 ### CLI Usage
+
 ```bash
 # Scan filesystem for secrets only
 trivy fs --scanners secret /path/to/project
@@ -120,6 +134,7 @@ trivy fs --scanners secret --severity HIGH,CRITICAL /path
 ```
 
 ### Output Format (JSON)
+
 ```json
 {
   "Results": [
@@ -142,6 +157,7 @@ trivy fs --scanners secret --severity HIGH,CRITICAL /path
 ```
 
 ### Severity Mapping
+
 | Trivy Severity | envdrift Severity |
 |----------------|-------------------|
 | CRITICAL | CRITICAL |
@@ -150,7 +166,9 @@ trivy fs --scanners secret --severity HIGH,CRITICAL /path
 | LOW | LOW |
 
 ### Configuration File
+
 `trivy-secret.yaml`:
+
 ```yaml
 rules:
   - id: custom-api-key
@@ -168,6 +186,7 @@ disable-rules:
 ```
 
 ### Integration Approach
+
 1. Check for `trivy` binary in PATH or venv
 2. Auto-download from GitHub releases
 3. Run `trivy fs --scanners secret --format json <path>`
@@ -179,12 +198,14 @@ disable-rules:
 ## 3. Infisical Integration
 
 ### Overview
-- **Source**: https://github.com/Infisical/infisical
+
+- **Source**: <https://github.com/Infisical/infisical>
 - **Maintainer**: Infisical Inc.
 - **License**: MIT
 - **Purpose**: Secret management platform with scanning capabilities
 
 ### Detection Capabilities
+
 - 140+ secret types
 - Git history scanning
 - Staged changes scanning
@@ -192,12 +213,14 @@ disable-rules:
 - Entropy-based detection
 
 ### Installation Methods
+
 1. **Homebrew**: `brew install infisical/get-cli/infisical`
 2. **npm**: `npm install -g @infisical/cli`
 3. **Direct download**: Binary releases from GitHub
 4. **Scoop** (Windows): `scoop install infisical`
 
 ### CLI Usage
+
 ```bash
 # Scan git repository history
 infisical scan
@@ -216,6 +239,7 @@ infisical scan --report-path leaks-report.json
 ```
 
 ### Output Format (JSON)
+
 ```json
 [
   {
@@ -242,7 +266,9 @@ infisical scan --report-path leaks-report.json
 ```
 
 ### Configuration File
+
 `infisical-scan.toml`:
+
 ```toml
 [allowlist]
 paths = ["test/**", "docs/**"]
@@ -256,6 +282,7 @@ tags = ["custom"]
 ```
 
 ### Integration Approach
+
 1. Check for `infisical` binary in PATH or venv
 2. Auto-download from GitHub releases
 3. Run `infisical scan --report-path <temp.json> --no-git` or with git
@@ -267,13 +294,16 @@ tags = ["custom"]
 ## 4. SEDATED - Not Suitable
 
 ### Overview
-- **Source**: https://github.com/OWASP/SEDATED
+
+- **Source**: <https://github.com/OWASP/SEDATED>
 - **Maintainer**: OWASP
 - **License**: BSD-3-Clause
 - **Purpose**: Git server pre-receive hook
 
 ### Why Not Suitable
-SEDATED is designed to run on Git servers (GitHub Enterprise, GitLab, vanilla Git servers) as a **pre-receive hook**, not as a standalone CLI tool. Key limitations:
+
+SEDATED is designed to run on Git servers (GitHub Enterprise, GitLab, vanilla Git servers) as a
+**pre-receive hook**, not as a standalone CLI tool. Key limitations:
 
 1. **Server-side only**: Runs as a Git hook on the server, not client-side
 2. **No CLI interface**: No command to run scans locally
@@ -281,7 +311,9 @@ SEDATED is designed to run on Git servers (GitHub Enterprise, GitLab, vanilla Gi
 4. **Shell script-based**: Not a binary that can be easily distributed
 
 ### Alternative
+
 For similar functionality, use:
+
 - Gitleaks (already integrated)
 - Trufflehog (already integrated)
 - Talisman (proposed in this spec)
@@ -291,6 +323,7 @@ For similar functionality, use:
 ## Implementation Plan
 
 ### Phase 1: Talisman Scanner
+
 1. Create `src/envdrift/scanner/talisman.py`
 2. Implement `TalismanScanner(ScannerBackend)`
 3. Add auto-install support
@@ -298,6 +331,7 @@ For similar functionality, use:
 5. Add CLI option `--talisman/--no-talisman`
 
 ### Phase 2: Trivy Scanner
+
 1. Create `src/envdrift/scanner/trivy.py`
 2. Implement `TrivyScanner(ScannerBackend)`
 3. Add auto-install support
@@ -305,13 +339,15 @@ For similar functionality, use:
 5. Add CLI option `--trivy/--no-trivy`
 
 ### Phase 3: Infisical Scanner
+
 1. Create `src/envdrift/scanner/infisical.py`
 2. Implement `InfisicalScanner(ScannerBackend)`
 3. Add auto-install support
 4. Add unit tests
 5. Add CLI option `--infisical/--no-infisical`
 
-### Phase 4: Integration & Documentation
+### Phase 4: Integration and Documentation
+
 1. Update `engine.py` with new scanner initialization
 2. Update `guard.py` CLI with new options
 3. Update `constants.json` with versions and download URLs
@@ -323,7 +359,8 @@ For similar functionality, use:
 ## Download URLs
 
 ### Talisman
-```
+
+```text
 darwin_amd64: https://github.com/thoughtworks/talisman/releases/download/v{version}/talisman_darwin_amd64
 darwin_arm64: https://github.com/thoughtworks/talisman/releases/download/v{version}/talisman_darwin_arm64
 linux_amd64: https://github.com/thoughtworks/talisman/releases/download/v{version}/talisman_linux_amd64
@@ -332,7 +369,8 @@ windows_amd64: https://github.com/thoughtworks/talisman/releases/download/v{vers
 ```
 
 ### Trivy
-```
+
+```text
 darwin_amd64: https://github.com/aquasecurity/trivy/releases/download/v{version}/trivy_{version}_macOS-64bit.tar.gz
 darwin_arm64: https://github.com/aquasecurity/trivy/releases/download/v{version}/trivy_{version}_macOS-ARM64.tar.gz
 linux_amd64: https://github.com/aquasecurity/trivy/releases/download/v{version}/trivy_{version}_Linux-64bit.tar.gz
@@ -341,7 +379,8 @@ windows_amd64: https://github.com/aquasecurity/trivy/releases/download/v{version
 ```
 
 ### Infisical
-```
+
+```text
 darwin_amd64: https://github.com/Infisical/infisical/releases/download/infisical-cli/v{version}/infisical_{version}_darwin_amd64.tar.gz
 darwin_arm64: https://github.com/Infisical/infisical/releases/download/infisical-cli/v{version}/infisical_{version}_darwin_arm64.tar.gz
 linux_amd64: https://github.com/Infisical/infisical/releases/download/infisical-cli/v{version}/infisical_{version}_linux_amd64.tar.gz

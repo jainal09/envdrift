@@ -718,7 +718,7 @@ class GitSecretsScanner(ScannerBackend):
         Returns:
             Human-readable description.
         """
-        descriptions = {
+        descriptions = {  # nosec B105 - rule ID descriptions, not actual secrets
             "aws-access-key": "AWS Access Key ID",
             "aws-secret-key": "AWS Secret Access Key",
             "password": "Password or Credential",
