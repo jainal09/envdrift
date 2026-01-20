@@ -44,6 +44,9 @@ class GuardConfig:
         use_detect_secrets: Enable detect-secrets scanner - the "final boss".
         use_kingfisher: Enable Kingfisher scanner (700+ rules, password hashes).
         use_git_secrets: Enable git-secrets scanner (AWS credential detection).
+        use_talisman: Enable Talisman scanner (ThoughtWorks secret scanner).
+        use_trivy: Enable Trivy scanner (Aqua Security comprehensive scanner).
+        use_infisical: Enable Infisical scanner (140+ secret types).
         auto_install: Auto-install missing external scanners.
         include_git_history: Scan git history for secrets.
         check_entropy: Enable entropy-based secret detection.
@@ -61,6 +64,9 @@ class GuardConfig:
     use_detect_secrets: bool = False
     use_kingfisher: bool = False
     use_git_secrets: bool = False
+    use_talisman: bool = False
+    use_trivy: bool = False
+    use_infisical: bool = False
     auto_install: bool = True
     include_git_history: bool = False
     check_entropy: bool = False
@@ -102,6 +108,9 @@ class GuardConfig:
             use_detect_secrets="detect-secrets" in scanners,
             use_kingfisher="kingfisher" in scanners,
             use_git_secrets="git-secrets" in scanners,
+            use_talisman="talisman" in scanners,
+            use_trivy="trivy" in scanners,
+            use_infisical="infisical" in scanners,
             auto_install=guard_config.get("auto_install", True),
             include_git_history=guard_config.get("include_history", False),
             check_entropy=guard_config.get("check_entropy", False),
@@ -245,6 +254,39 @@ class ScanEngine:
                     self.scanners.append(scanner)
             except ImportError:
                 logger.debug("git-secrets scanner not available - module not found")
+
+        # Talisman scanner - ThoughtWorks secret scanner
+        if self.config.use_talisman:
+            try:
+                from envdrift.scanner.talisman import TalismanScanner
+
+                scanner = TalismanScanner(auto_install=self.config.auto_install)
+                if scanner.is_installed() or self.config.auto_install:
+                    self.scanners.append(scanner)
+            except ImportError:
+                logger.debug("Talisman scanner not available - module not found")
+
+        # Trivy scanner - Aqua Security comprehensive scanner
+        if self.config.use_trivy:
+            try:
+                from envdrift.scanner.trivy import TrivyScanner
+
+                scanner = TrivyScanner(auto_install=self.config.auto_install)
+                if scanner.is_installed() or self.config.auto_install:
+                    self.scanners.append(scanner)
+            except ImportError:
+                logger.debug("Trivy scanner not available - module not found")
+
+        # Infisical scanner - 140+ secret types
+        if self.config.use_infisical:
+            try:
+                from envdrift.scanner.infisical import InfisicalScanner
+
+                scanner = InfisicalScanner(auto_install=self.config.auto_install)
+                if scanner.is_installed() or self.config.auto_install:
+                    self.scanners.append(scanner)
+            except ImportError:
+                logger.debug("Infisical scanner not available - module not found")
 
     def scan(self, paths: list[Path]) -> AggregatedScanResult:
         """Run all configured scanners on the given paths in parallel.
