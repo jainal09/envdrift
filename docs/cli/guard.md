@@ -93,6 +93,52 @@ git-secrets provides:
 envdrift guard --git-secrets
 ```
 
+### `--talisman` / `--no-talisman`
+
+Enable or disable Talisman scanner. Disabled by default.
+
+Talisman (from ThoughtWorks) provides:
+
+- Entropy-based secret detection
+- File content pattern analysis
+- Encoded content detection (base64, hex)
+- Credit card number detection
+- Suspicious file name detection (.pem, .key)
+
+```bash
+envdrift guard --talisman
+```
+
+### `--trivy` / `--no-trivy`
+
+Enable or disable Trivy scanner. Disabled by default.
+
+Trivy (from Aqua Security) provides:
+
+- Comprehensive multi-target security scanning
+- Built-in rules for AWS, GCP, GitHub, GitLab, Slack, etc.
+- Custom regex pattern support
+- Severity-based filtering
+
+```bash
+envdrift guard --trivy
+```
+
+### `--infisical` / `--no-infisical`
+
+Enable or disable Infisical scanner. Disabled by default.
+
+Infisical provides:
+
+- 140+ secret type detection
+- Git history scanning
+- Staged changes scanning
+- Custom regex patterns and entropy detection
+
+```bash
+envdrift guard --infisical
+```
+
 ### `--history`, `-H`
 
 Include git history in the scan. Requires a git repository.
@@ -274,7 +320,7 @@ Guard settings live under `[guard]` in `envdrift.toml` or
 
 ```toml
 [guard]
-scanners = ["native", "gitleaks", "trufflehog", "detect-secrets", "kingfisher", "git-secrets"]
+scanners = ["native", "gitleaks", "trufflehog", "detect-secrets", "kingfisher", "git-secrets", "talisman", "trivy", "infisical"]
 auto_install = true
 include_history = false
 check_entropy = true
@@ -297,6 +343,9 @@ Notes:
 - `ignore_rules` allows ignoring specific rules in specific path patterns.
 - CLI flags override config values.
 - `git-secrets` is ideal for AWS-heavy environments.
+- `talisman` excels at entropy and encoded content detection.
+- `trivy` provides comprehensive multi-target scanning.
+- `infisical` supports 140+ secret types with git history scanning.
 
 ## Handling False Positives
 
