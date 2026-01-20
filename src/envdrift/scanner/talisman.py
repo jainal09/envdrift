@@ -34,19 +34,34 @@ if TYPE_CHECKING:
 
 
 def _load_constants() -> dict:
-    """Load constants from the package's constants.json."""
+    """
+    Load package constants from the package's constants.json file.
+    
+    Returns:
+        dict: Dictionary of constants parsed from the package's constants.json.
+    """
     constants_path = Path(__file__).parent.parent / "constants.json"
     with open(constants_path) as f:
         return json.load(f)
 
 
 def _get_talisman_version() -> str:
-    """Get the pinned talisman version from constants."""
+    """
+    Retrieve the pinned Talisman version defined in the package constants.
+    
+    Returns:
+        version (str): The configured `talisman_version` value from constants, or "1.32.0" if not set.
+    """
     return _load_constants().get("talisman_version", "1.32.0")
 
 
 def _get_talisman_download_urls() -> dict[str, str]:
-    """Get download URL templates from constants."""
+    """
+    Retrieve custom Talisman download URL templates from package constants.
+    
+    Returns:
+        dict[str, str]: Mapping of platform keys to URL template strings; empty dict if no custom URLs are configured.
+    """
     return _load_constants().get("talisman_download_urls", {})
 
 
@@ -77,10 +92,15 @@ class TalismanError(Exception):
 
 
 def get_platform_info() -> tuple[str, str]:
-    """Get current platform and architecture.
-
+    """
+    Return the current OS name and a normalized CPU architecture suitable for download URL selection.
+    
+    The architecture is normalized as follows: "AMD64" or "amd64" -> "x86_64"; "arm64" or "aarch64" -> "arm64". Other values are returned unchanged.
+    
     Returns:
-        Tuple of (system, machine) normalized for download URLs.
+        tuple(system, machine): 
+            system (str): OS name as returned by platform.system().
+            machine (str): Normalized CPU architecture string.
     """
     system = platform.system()
     machine = platform.machine()
@@ -97,10 +117,22 @@ def get_platform_info() -> tuple[str, str]:
 
 
 def get_venv_bin_dir() -> Path:
-    """Get the virtual environment's bin directory.
-
+    """
+    Determine the filesystem path where binaries should be installed for the active or default virtual environment.
+    
+    Selection order:
+    1. Active virtual environment from `VIRTUAL_ENV`.
+    2. A `.venv` or `venv` directory discovered on `sys.path`.
+    3. A `.venv` directory in the current working directory.
+    4. A user-level bin directory (`~/.local/bin` on non-Windows, or `%APPDATA%\Python\Scripts` on Windows).
+    
+    The function will create the user-level bin directory if it is selected and does not exist.
+    
     Returns:
-        Path to the bin directory where binaries should be installed.
+        Path: The resolved bin directory to use for installing binaries.
+    
+    Raises:
+        RuntimeError: If no suitable bin directory can be determined.
     """
     import os
     import sys
@@ -147,10 +179,13 @@ def get_venv_bin_dir() -> Path:
 
 
 def get_talisman_path() -> Path:
-    """Get the expected path to the talisman binary.
-
+    """
+    Compute the expected filesystem path for the talisman executable within the resolved bin directory.
+    
+    The returned path points to the platform-specific talisman filename (e.g., "talisman" or "talisman.exe") located inside the bin directory determined by get_venv_bin_dir().
+    
     Returns:
-        Path where talisman should be installed.
+        Path: Path to the expected talisman binary.
     """
     bin_dir = get_venv_bin_dir()
     binary_name = "talisman.exe" if platform.system() == "Windows" else "talisman"
@@ -179,23 +214,27 @@ class TalismanInstaller:
         version: str | None = None,
         progress_callback: Callable[[str], None] | None = None,
     ) -> None:
-        """Initialize installer.
-
-        Args:
-            version: Talisman version to install. Uses pinned version if None.
-            progress_callback: Optional callback for progress updates.
+        """
+        Create a TalismanInstaller configured with the target version and an optional progress callback.
+        
+        Parameters:
+            version (str | None): Specific talisman version to install; if None the pinned version from package constants is used.
+            progress_callback (Callable[[str], None] | None): Optional callable invoked with status messages during installation; if None no progress is reported.
         """
         self.version = version or _get_talisman_version()
         self.progress = progress_callback or (lambda x: None)
 
     def get_download_url(self) -> str:
-        """Get the platform-specific download URL.
-
+        """
+        Determine the platform-specific download URL for the configured Talisman version.
+        
+        If a custom download URL template exists for the detected OS/architecture it will be used; otherwise the default download template is formatted for the detected platform.
+        
         Returns:
-            URL to download talisman for the current platform.
-
+            str: The download URL for the talisman binary for the detected platform and configured version.
+        
         Raises:
-            TalismanInstallError: If platform is not supported.
+            TalismanInstallError: If the current system/architecture is not supported.
         """
         system, machine = get_platform_info()
         key = (system, machine)
@@ -253,13 +292,16 @@ class TalismanInstaller:
         self.progress(f"Installed to {target_path}")
 
     def install(self, force: bool = False) -> Path:
-        """Install talisman binary.
-
-        Args:
-            force: Reinstall even if already installed.
-
+        """
+        Ensure the talisman binary is installed at the configured location.
+        
+        If a binary exists and `force` is False, verifies the installed version and returns the existing path when it matches; otherwise downloads and installs the requested version.
+        
+        Parameters:
+            force (bool): If True, reinstall even when a matching binary is already present.
+        
         Returns:
-            Path to the installed binary.
+            Path: Path to the installed talisman binary.
         """
         target_path = get_talisman_path()
 
@@ -304,11 +346,12 @@ class TalismanScanner(ScannerBackend):
         auto_install: bool = True,
         version: str | None = None,
     ) -> None:
-        """Initialize the talisman scanner.
-
-        Args:
-            auto_install: Automatically install talisman if not found.
-            version: Specific version to use. Uses pinned version if None.
+        """
+        Initialize the TalismanScanner with installation behavior and version selection.
+        
+        Parameters:
+            auto_install (bool): If True, attempt to auto-install the talisman binary when not found.
+            version (str | None): Specific talisman version to use; when None, the pinned version from package constants is used.
         """
         self._auto_install = auto_install
         self._version = version or _get_talisman_version()
@@ -316,16 +359,31 @@ class TalismanScanner(ScannerBackend):
 
     @property
     def name(self) -> str:
-        """Return scanner identifier."""
+        """
+        Provide the scanner identifier for Talisman.
+        
+        Returns:
+            identifier (str): The literal string 'talisman'.
+        """
         return "talisman"
 
     @property
     def description(self) -> str:
-        """Return scanner description."""
+        """
+        Human-readable description of the Talisman scanner.
+        
+        Returns:
+            description (str): A string identifying the scanner and its analysis methods: "Talisman secret scanner (patterns + entropy + file analysis)".
+        """
         return "Talisman secret scanner (patterns + entropy + file analysis)"
 
     def is_installed(self) -> bool:
-        """Check if talisman is available."""
+        """
+        Determine whether the talisman binary can be located (or installed when auto-install is enabled).
+        
+        Returns:
+            `true` if the talisman binary is available, `false` otherwise.
+        """
         try:
             self._find_binary()
             return True
@@ -333,7 +391,12 @@ class TalismanScanner(ScannerBackend):
             return False
 
     def get_version(self) -> str | None:
-        """Get installed talisman version."""
+        """
+        Determine the installed talisman CLI version.
+        
+        Returns:
+            str: The first version-like token extracted from the talisman CLI output, or `None` if the binary is not available or no version token can be determined.
+        """
         try:
             binary = self._find_binary()
             result = subprocess.run(  # nosec B603
@@ -396,13 +459,14 @@ class TalismanScanner(ScannerBackend):
         self,
         progress_callback: Callable[[str], None] | None = None,
     ) -> Path | None:
-        """Install talisman binary.
-
-        Args:
-            progress_callback: Optional callback for progress updates.
-
+        """
+        Install the talisman binary and cache its path.
+        
+        Parameters:
+            progress_callback (Callable[[str], None] | None): Optional callback invoked with progress messages during installation.
+        
         Returns:
-            Path to the installed binary.
+            installed_path (Path | None): Path to the installed binary, or `None` if installation did not complete.
         """
         installer = TalismanInstaller(
             version=self._version,
@@ -416,14 +480,17 @@ class TalismanScanner(ScannerBackend):
         paths: list[Path],
         include_git_history: bool = False,
     ) -> ScanResult:
-        """Scan paths for secrets using talisman.
-
-        Args:
-            paths: List of files or directories to scan.
-            include_git_history: If True, scan git history as well.
-
+        """
+        Scan the given files or directories for secrets using the talisman binary.
+        
+        Scans each existing path and aggregates findings from talisman's JSON report files into a single ScanResult. Non-existent paths are skipped. Each individual scan has a 5-minute timeout; on timeout or other errors the function returns a ScanResult with the collected findings so far and the error message set.
+        
+        Parameters:
+            paths (list[Path]): Files or directories to scan.
+            include_git_history (bool): If True, include repository history in the scan; otherwise history is ignored.
+        
         Returns:
-            ScanResult containing all findings.
+            ScanResult: Contains aggregated `findings`, `files_scanned`, and `duration_ms`; on error the `error` field is populated and partial findings may be returned.
         """
         start_time = time.time()
 
@@ -515,14 +582,15 @@ class TalismanScanner(ScannerBackend):
     def _parse_report(
         self, report_data: dict[str, Any], base_path: Path
     ) -> tuple[list[ScanFinding], int]:
-        """Parse talisman JSON report into findings.
-
-        Args:
-            report_data: Parsed JSON report from talisman.
-            base_path: Base path for resolving relative paths.
-
+        """
+        Convert a Talisman JSON report into ScanFinding objects and count files referenced by the report.
+        
+        Parameters:
+            report_data (dict[str, Any]): Parsed JSON report produced by Talisman. May be a mapping with a "results" key or a top-level list of result objects.
+            base_path (Path): Base directory used to resolve relative filenames found in the report entries.
+        
         Returns:
-            Tuple of (findings list, files scanned count).
+            tuple[list[ScanFinding], int]: A tuple where the first element is the list of parsed ScanFinding objects and the second element is the number of files referenced (entries that include a filename).
         """
         findings: list[ScanFinding] = []
         files_scanned = 0
@@ -565,15 +633,16 @@ class TalismanScanner(ScannerBackend):
         file_path: Path,
         is_warning: bool = False,
     ) -> ScanFinding | None:
-        """Parse a single talisman failure into a ScanFinding.
-
-        Args:
-            failure: Failure data from talisman report.
-            file_path: Path to the file with the finding.
-            is_warning: If True, this is a warning not a failure.
-
+        """
+        Convert a single talisman failure entry into a ScanFinding.
+        
+        Parameters:
+            failure (dict[str, Any]): A single failure object from a talisman JSON report.
+            file_path (Path): Path to the file associated with the finding.
+            is_warning (bool): When True, treat the entry as a warning (lower severity).
+        
         Returns:
-            ScanFinding or None if parsing fails.
+            ScanFinding: A populated ScanFinding for the provided failure, or None if the failure cannot be parsed.
         """
         try:
             # Get the type of detection

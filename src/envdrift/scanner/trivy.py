@@ -43,12 +43,23 @@ def _load_constants() -> dict:
 
 
 def _get_trivy_version() -> str:
-    """Get the pinned trivy version from constants."""
+    """
+    Return the pinned Trivy version from the bundled constants, defaulting to "0.58.0" if missing.
+    
+    Returns:
+        version (str): Trivy version string from constants.json, or "0.58.0" when not specified.
+    """
     return _load_constants().get("trivy_version", "0.58.0")
 
 
 def _get_trivy_download_urls() -> dict[str, str]:
-    """Get download URL templates from constants."""
+    """
+    Retrieve custom Trivy download URL templates from the package constants.
+    
+    Returns:
+        A dict mapping string keys to URL template strings for Trivy downloads.
+        Returns an empty dict if no custom download URLs are configured.
+    """
     return _load_constants().get("trivy_download_urls", {})
 
 
@@ -81,10 +92,11 @@ class TrivyError(Exception):
 
 
 def get_platform_info() -> tuple[str, str]:
-    """Get current platform and architecture.
-
+    """
+    Return the current OS and normalized architecture for download URL selection.
+    
     Returns:
-        Tuple of (system, machine) normalized for download URLs.
+        tuple: (system, machine) where `system` is the OS name from platform.system() and `machine` is the architecture normalized to a value suitable for download URLs (e.g., "x86_64", "arm64", or the original machine string).
     """
     system = platform.system()
     machine = platform.machine()
@@ -101,10 +113,20 @@ def get_platform_info() -> tuple[str, str]:
 
 
 def get_venv_bin_dir() -> Path:
-    """Get the virtual environment's bin directory.
-
+    """
+    Determine the appropriate bin (or Scripts on Windows) directory to install user-local binaries for the current environment.
+    
+    Search order:
+    - If VIRTUAL_ENV is set, return its "bin" (or "Scripts" on Windows).
+    - Search sys.path for a parent ".venv" or "venv" and return its "bin"/"Scripts".
+    - If a ".venv" exists in the current working directory, return its "bin"/"Scripts".
+    - Fall back to a user-level directory (Windows: %APPDATA%/Python/Scripts, non-Windows: ~/.local/bin) and create it if missing.
+    
     Returns:
-        Path to the bin directory where binaries should be installed.
+        Path: Path to the directory where binaries should be installed.
+    
+    Raises:
+        RuntimeError: If no suitable directory can be determined.
     """
     import os
     import sys
@@ -151,10 +173,11 @@ def get_venv_bin_dir() -> Path:
 
 
 def get_trivy_path() -> Path:
-    """Get the expected path to the trivy binary.
-
+    """
+    Return the expected filesystem path to the Trivy executable based on the current environment.
+    
     Returns:
-        Path where trivy should be installed.
+        Path: Path to the trivy executable inside the determined virtualenv or user bin directory (for example, '.../trivy' or '.../trivy.exe').
     """
     bin_dir = get_venv_bin_dir()
     binary_name = "trivy.exe" if platform.system() == "Windows" else "trivy"
@@ -183,23 +206,25 @@ class TrivyInstaller:
         version: str | None = None,
         progress_callback: Callable[[str], None] | None = None,
     ) -> None:
-        """Initialize installer.
-
-        Args:
-            version: Trivy version to install. Uses pinned version if None.
-            progress_callback: Optional callback for progress updates.
+        """
+        Initialize a TrivyInstaller.
+        
+        Parameters:
+            version: Trivy version to install; defaults to the pinned version from constants if None.
+            progress_callback: Optional callable that receives progress messages as strings.
         """
         self.version = version or _get_trivy_version()
         self.progress = progress_callback or (lambda x: None)
 
     def get_download_url(self) -> str:
-        """Get the platform-specific download URL.
-
+        """
+        Determine the platform-specific Trivy download URL.
+        
         Returns:
-            URL to download trivy for the current platform.
-
+            The download URL for the Trivy archive for the current platform with `{version}` substituted.
+        
         Raises:
-            TrivyInstallError: If platform is not supported.
+            TrivyInstallError: If the current platform/architecture is not supported.
         """
         system, machine = get_platform_info()
         key = (system, machine)
@@ -285,7 +310,16 @@ class TrivyInstaller:
             self.progress(f"Installed to {target_path}")
 
     def _extract_tar_gz(self, archive_path: Path, target_dir: Path) -> None:
-        """Extract a tar.gz archive."""
+        """
+        Extracts a .tar.gz archive into the given target directory while preventing path traversal.
+        
+        Parameters:
+            archive_path (Path): Path to the .tar.gz archive to extract.
+            target_dir (Path): Directory where archive members will be extracted.
+        
+        Raises:
+            TrivyInstallError: If the archive contains any member whose resolved path would be outside `target_dir`.
+        """
         with tarfile.open(archive_path, "r:gz") as tar:
             # Security: check for path traversal
             for member in tar.getmembers():
@@ -295,7 +329,14 @@ class TrivyInstaller:
             tar.extractall(target_dir, filter="data")  # nosec B202
 
     def _extract_zip(self, archive_path: Path, target_dir: Path) -> None:
-        """Extract a zip archive."""
+        """
+        Extract a zip archive into the target directory while preventing path traversal.
+        
+        Performs a safety check on each archive member to ensure its resolved path is inside `target_dir`; raises an error if any member would extract outside the target directory.
+        
+        Raises:
+            TrivyInstallError: If the archive contains a member with an unsafe path that would escape `target_dir`.
+        """
         with zipfile.ZipFile(archive_path, "r") as zip_ref:
             # Security: check for path traversal
             for name in zip_ref.namelist():
@@ -305,13 +346,16 @@ class TrivyInstaller:
             zip_ref.extractall(target_dir)  # nosec B202
 
     def install(self, force: bool = False) -> Path:
-        """Install trivy binary.
-
-        Args:
-            force: Reinstall even if already installed.
-
+        """
+        Install the Trivy CLI binary to the configured installation path.
+        
+        If a binary matching the configured version already exists and `force` is False, the existing binary is left in place; otherwise the appropriate archive for the current platform is downloaded, extracted, and the Trivy binary is installed to the target path.
+        
+        Parameters:
+            force (bool): If True, reinstall even when a matching version is already installed.
+        
         Returns:
-            Path to the installed binary.
+            Path: Path to the installed Trivy binary.
         """
         target_path = get_trivy_path()
 
@@ -354,11 +398,12 @@ class TrivyScanner(ScannerBackend):
         auto_install: bool = True,
         version: str | None = None,
     ) -> None:
-        """Initialize the trivy scanner.
-
-        Args:
-            auto_install: Automatically install trivy if not found.
-            version: Specific version to use. Uses pinned version if None.
+        """
+        Create a TrivyScanner configured to optionally auto-install the Trivy binary.
+        
+        Parameters:
+        	auto_install (bool): If True, attempt to install Trivy automatically when not found.
+        	version (str | None): Specific Trivy version to use; when None the pinned default is used.
         """
         self._auto_install = auto_install
         self._version = version or _get_trivy_version()
@@ -371,11 +416,21 @@ class TrivyScanner(ScannerBackend):
 
     @property
     def description(self) -> str:
-        """Return scanner description."""
+        """
+        Human-readable description of the Trivy scanner.
+        
+        Returns:
+            description (str): The scanner description string, e.g. "Trivy secret scanner (comprehensive multi-target security scanner)"
+        """
         return "Trivy secret scanner (comprehensive multi-target security scanner)"
 
     def is_installed(self) -> bool:
-        """Check if trivy is available."""
+        """
+        Determine whether the Trivy binary can be located for use.
+        
+        Returns:
+            bool: `True` if the Trivy binary is available and discoverable, `False` otherwise.
+        """
         try:
             self._find_binary()
             return True
@@ -383,7 +438,12 @@ class TrivyScanner(ScannerBackend):
             return False
 
     def get_version(self) -> str | None:
-        """Get installed trivy version."""
+        """
+        Retrieve the installed Trivy CLI version.
+        
+        Returns:
+            version (str | None): The version string (for example, "0.58.0") if determinable, `None` otherwise.
+        """
         try:
             binary = self._find_binary()
             result = subprocess.run(  # nosec B603
@@ -443,13 +503,14 @@ class TrivyScanner(ScannerBackend):
         self,
         progress_callback: Callable[[str], None] | None = None,
     ) -> Path | None:
-        """Install trivy binary.
-
-        Args:
-            progress_callback: Optional callback for progress updates.
-
+        """
+        Install the Trivy binary into the environment and cache its path.
+        
+        Parameters:
+            progress_callback (Callable[[str], None] | None): Optional callback invoked with status messages during installation.
+        
         Returns:
-            Path to the installed binary.
+            Path | None: Path to the installed Trivy binary, or `None` if installation did not complete.
         """
         installer = TrivyInstaller(
             version=self._version,
@@ -463,15 +524,17 @@ class TrivyScanner(ScannerBackend):
         paths: list[Path],
         include_git_history: bool = False,
     ) -> ScanResult:
-        """Scan paths for secrets using trivy.
-
-        Args:
-            paths: List of files or directories to scan.
-            include_git_history: If True, scan git repository. Note: trivy fs
-                                 doesn't scan git history by default.
-
+        """
+        Scan the provided filesystem paths for secrets using the Trivy filesystem scanner.
+        
+        Paths that do not exist are skipped. The `include_git_history` flag is accepted for API compatibility but is not used because `trivy fs` does not scan Git history. Results from all paths are aggregated into a single ScanResult.
+        
+        Parameters:
+            paths (list[Path]): Files or directories to scan.
+            include_git_history (bool): Ignored for filesystem scans; kept for compatibility.
+        
         Returns:
-            ScanResult containing all findings.
+            ScanResult: Aggregated scan results including `findings`, `files_scanned`, `duration_ms`, and an `error` message if the scan or binary lookup failed.
         """
         start_time = time.time()
 
@@ -579,15 +642,16 @@ class TrivyScanner(ScannerBackend):
     def _parse_secret(
         self, secret: dict[str, Any], target: str, base_path: Path
     ) -> ScanFinding | None:
-        """Parse a single trivy secret into a ScanFinding.
-
-        Args:
-            secret: Secret data from trivy output.
-            target: Target file path.
-            base_path: Base path for resolving relative paths.
-
+        """
+        Convert a single Trivy secret entry into a ScanFinding.
+        
+        Parameters:
+            secret (dict[str, Any]): A single secret entry from Trivy JSON output.
+            target (str): The target path reported by Trivy; relative paths are resolved against base_path.
+            base_path (Path): Base directory used to resolve relative target paths.
+        
         Returns:
-            ScanFinding or None if parsing fails.
+            ScanFinding | None: A ScanFinding populated from the secret entry, or `None` if parsing fails.
         """
         try:
             # Get file path

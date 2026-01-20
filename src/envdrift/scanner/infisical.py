@@ -36,19 +36,34 @@ if TYPE_CHECKING:
 
 
 def _load_constants() -> dict:
-    """Load constants from the package's constants.json."""
+    """
+    Load constant values from the package's constants.json.
+    
+    Returns:
+        dict: Parsed JSON object containing package constants.
+    """
     constants_path = Path(__file__).parent.parent / "constants.json"
     with open(constants_path) as f:
         return json.load(f)
 
 
 def _get_infisical_version() -> str:
-    """Get the pinned infisical version from constants."""
+    """
+    Return the pinned Infisical CLI version configured in package constants.
+    
+    Returns:
+        str: Version string from constants, or "0.31.1" if not present.
+    """
     return _load_constants().get("infisical_version", "0.31.1")
 
 
 def _get_infisical_download_urls() -> dict[str, str]:
-    """Get download URL templates from constants."""
+    """
+    Retrieve custom download URL templates for Infisical from package constants.
+    
+    Returns:
+        download_urls (dict[str, str]): Mapping of template keys to download URL templates (e.g. custom URL formats keyed by platform or name). Returns an empty dict if no custom templates are defined.
+    """
     return _load_constants().get("infisical_download_urls", {})
 
 
@@ -86,10 +101,11 @@ class InfisicalError(Exception):
 
 
 def get_platform_info() -> tuple[str, str]:
-    """Get current platform and architecture.
-
+    """
+    Return the current OS and normalized CPU architecture for forming download URLs.
+    
     Returns:
-        Tuple of (system, machine) normalized for download URLs.
+        (system, machine): `system` is the value from platform.system(); `machine` is a normalized architecture string (for example, "x86_64" or "arm64").
     """
     system = platform.system()
     machine = platform.machine()
@@ -106,10 +122,22 @@ def get_platform_info() -> tuple[str, str]:
 
 
 def get_venv_bin_dir() -> Path:
-    """Get the virtual environment's bin directory.
-
+    """
+    Determine an appropriate directory to install executables for the current environment.
+    
+    Checks, in order:
+    - The active virtual environment referenced by the `VIRTUAL_ENV` environment variable.
+    - Any `venv` or `.venv` directories referenced in `sys.path`.
+    - A `.venv` directory in the current working directory.
+    - A user-level bin directory (POSIX: `~/.local/bin`, Windows: `%APPDATA%/Python/Scripts`).
+    
+    On Windows this returns the `Scripts` folder; on other platforms it returns the `bin` folder. The returned path is created if necessary for the user-level fallback.
+    
     Returns:
-        Path to the bin directory where binaries should be installed.
+        Path: Directory where binaries should be installed.
+    
+    Raises:
+        RuntimeError: If no suitable installation directory can be determined.
     """
     import os
     import sys
@@ -156,10 +184,11 @@ def get_venv_bin_dir() -> Path:
 
 
 def get_infisical_path() -> Path:
-    """Get the expected path to the infisical binary.
-
+    """
+    Compute the expected filesystem path for the Infisical executable within the active virtual environment or the selected user bin directory.
+    
     Returns:
-        Path where infisical should be installed.
+        Path to the expected Infisical executable location (the file may not exist).
     """
     bin_dir = get_venv_bin_dir()
     binary_name = "infisical.exe" if platform.system() == "Windows" else "infisical"
@@ -188,23 +217,27 @@ class InfisicalInstaller:
         version: str | None = None,
         progress_callback: Callable[[str], None] | None = None,
     ) -> None:
-        """Initialize installer.
-
-        Args:
-            version: Infisical version to install. Uses pinned version if None.
-            progress_callback: Optional callback for progress updates.
+        """
+        Create an InfisicalInstaller configured with an optional version and progress callback.
+        
+        Parameters:
+            version (str | None): Infisical version to install; when None the pinned package version is used.
+            progress_callback (Callable[[str], None] | None): Optional callable invoked with progress messages.
         """
         self.version = version or _get_infisical_version()
         self.progress = progress_callback or (lambda x: None)
 
     def get_download_url(self) -> str:
-        """Get the platform-specific download URL.
-
+        """
+        Return the download URL for the Infisical binary for the current platform.
+        
+        If a custom download URL template exists in package constants for the detected OS/architecture, that template is formatted with the selected version and returned; otherwise the default download URL template is used.
+        
         Returns:
-            URL to download infisical for the current platform.
-
+            str: The URL to download the Infisical archive for the current platform.
+        
         Raises:
-            InfisicalInstallError: If platform is not supported.
+            InfisicalInstallError: If the current platform/architecture is not supported.
         """
         system, machine = get_platform_info()
         key = (system, machine)
@@ -231,13 +264,15 @@ class InfisicalInstaller:
         )
 
     def download_and_extract(self, target_path: Path) -> None:
-        """Download and extract infisical to the target path.
-
-        Args:
-            target_path: Where to install the infisical binary.
-
+        """
+        Download the Infisical archive for the configured version and install its binary at the given path.
+        
+        Parameters:
+            target_path (Path): Destination path for the installed Infisical binary.
+        
         Raises:
-            InfisicalInstallError: If download or extraction fails.
+            InfisicalInstallError: If the download fails, the archive format is unsupported,
+                extraction fails, or the expected binary is not found in the archive.
         """
         url = self.get_download_url()
         self.progress(f"Downloading infisical v{self.version}...")
@@ -290,7 +325,16 @@ class InfisicalInstaller:
             self.progress(f"Installed to {target_path}")
 
     def _extract_tar_gz(self, archive_path: Path, target_dir: Path) -> None:
-        """Extract a tar.gz archive."""
+        """
+        Extracts a tar.gz archive into the given target directory.
+        
+        Validates each archive member to prevent path traversal attacks and raises
+        InfisicalInstallError if any entry would extract outside the target directory.
+        
+        Parameters:
+            archive_path (Path): Path to the tar.gz archive to extract.
+            target_dir (Path): Destination directory where archive contents will be extracted.
+        """
         with tarfile.open(archive_path, "r:gz") as tar:
             # Security: check for path traversal
             for member in tar.getmembers():
@@ -300,7 +344,14 @@ class InfisicalInstaller:
             tar.extractall(target_dir, filter="data")  # nosec B202
 
     def _extract_zip(self, archive_path: Path, target_dir: Path) -> None:
-        """Extract a zip archive."""
+        """
+        Extracts a zip archive into the given target directory while preventing path traversal.
+        
+        Performs a safety check for each archive member to ensure no extracted path would escape the target directory; if a path traversal attempt is detected, raises InfisicalInstallError. On success, extracts all archive contents into target_dir.
+         
+        Raises:
+            InfisicalInstallError: If the archive contains a member whose extraction path would be outside target_dir.
+        """
         with zipfile.ZipFile(archive_path, "r") as zip_ref:
             # Security: check for path traversal
             for name in zip_ref.namelist():
@@ -310,13 +361,14 @@ class InfisicalInstaller:
             zip_ref.extractall(target_dir)  # nosec B202
 
     def install(self, force: bool = False) -> Path:
-        """Install infisical binary.
-
-        Args:
-            force: Reinstall even if already installed.
-
+        """
+        Install the Infisical CLI binary into the environment's bin directory, optionally forcing a reinstall.
+        
+        Parameters:
+        	force (bool): If True, reinstall even when a binary is already present.
+        
         Returns:
-            Path to the installed binary.
+        	installed_path (Path): Filesystem path to the installed Infisical binary.
         """
         target_path = get_infisical_path()
 
@@ -371,16 +423,31 @@ class InfisicalScanner(ScannerBackend):
 
     @property
     def name(self) -> str:
-        """Return scanner identifier."""
+        """
+        Scanner identifier for this scanner backend.
+        
+        Returns:
+            str: The scanner identifier "infisical".
+        """
         return "infisical"
 
     @property
     def description(self) -> str:
-        """Return scanner description."""
+        """
+        Human-readable description of the Infisical scanner.
+        
+        Returns:
+            str: Short description stating supported secret types and git history scanning.
+        """
         return "Infisical secret scanner (140+ secret types, git history)"
 
     def is_installed(self) -> bool:
-        """Check if infisical is available."""
+        """
+        Determine whether the Infisical CLI binary can be located.
+        
+        Returns:
+            bool: `True` if the Infisical binary is found, `False` otherwise.
+        """
         try:
             self._find_binary()
             return True
@@ -388,7 +455,12 @@ class InfisicalScanner(ScannerBackend):
             return False
 
     def get_version(self) -> str | None:
-        """Get installed infisical version."""
+        """
+        Return the installed Infisical CLI version string if available.
+        
+        Returns:
+            version (str | None): The version token extracted from `infisical --version` (e.g., "0.31.1"), or `None` when the binary is not found or the version cannot be determined.
+        """
         try:
             binary = self._find_binary()
             result = subprocess.run(  # nosec B603
@@ -452,13 +524,14 @@ class InfisicalScanner(ScannerBackend):
         self,
         progress_callback: Callable[[str], None] | None = None,
     ) -> Path | None:
-        """Install infisical binary.
-
-        Args:
-            progress_callback: Optional callback for progress updates.
-
+        """
+        Install the Infisical CLI binary and return its installed path.
+        
+        Parameters:
+            progress_callback (Callable[[str], None] | None): Optional callback invoked with human-readable progress messages during download and installation.
+        
         Returns:
-            Path to the installed binary.
+            Path | None: Filesystem path to the installed Infisical binary, or `None` if installation did not produce a path.
         """
         installer = InfisicalInstaller(
             version=self._version,
@@ -472,14 +545,17 @@ class InfisicalScanner(ScannerBackend):
         paths: list[Path],
         include_git_history: bool = False,
     ) -> ScanResult:
-        """Scan paths for secrets using infisical.
-
-        Args:
-            paths: List of files or directories to scan.
-            include_git_history: If True, scan git history as well.
-
+        """
+        Scan the given files or directories for secrets using the Infisical CLI.
+        
+        Scans each provided path, optionally including Git history, aggregates findings into ScanFinding objects, and returns a ScanResult containing findings, number of files with findings, and elapsed duration. If the Infisical binary is not available or a scan fails (including timeouts), the returned ScanResult will include an error message and any findings gathered up to that point.
+        
+        Parameters:
+            paths (list[Path]): Files or directories to scan.
+            include_git_history (bool): If True, include Git history in the scan; if False, skip Git history.
+        
         Returns:
-            ScanResult containing all findings.
+            ScanResult: Result object containing `findings` (list of ScanFinding), `files_scanned` (count of unique files with findings), `duration_ms` (elapsed time in milliseconds), and `error` when applicable.
         """
         start_time = time.time()
 
@@ -570,14 +646,15 @@ class InfisicalScanner(ScannerBackend):
         )
 
     def _parse_finding(self, item: dict[str, Any], base_path: Path) -> ScanFinding | None:
-        """Parse an infisical finding into our format.
-
-        Args:
-            item: Raw finding from infisical JSON output.
-            base_path: Base path for resolving relative paths.
-
+        """
+        Convert a single raw Infisical JSON finding into a ScanFinding.
+        
+        Parameters:
+            item (dict[str, Any]): Raw finding object from Infisical scan output.
+            base_path (Path): Base directory used to resolve relative file paths in the finding.
+        
         Returns:
-            ScanFinding or None if parsing fails.
+            ScanFinding or None: A populated ScanFinding representing the finding, or `None` if the item cannot be parsed.
         """
         try:
             # Get file path

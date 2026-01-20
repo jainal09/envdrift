@@ -213,7 +213,12 @@ class TestFindingParsing:
 
     @pytest.fixture
     def scanner(self) -> TalismanScanner:
-        """Create a scanner instance for testing."""
+        """
+        Create a TalismanScanner configured for tests.
+        
+        Returns:
+            TalismanScanner: Scanner instance with `auto_install` set to False.
+        """
         return TalismanScanner(auto_install=False)
 
     def test_parse_failure_basic(self, scanner: TalismanScanner, tmp_path: Path):
@@ -298,7 +303,15 @@ class TestTalismanScanExecution:
 
     @pytest.fixture
     def mock_scanner(self, tmp_path: Path) -> TalismanScanner:
-        """Create a scanner with mocked binary."""
+        """
+        Create a TalismanScanner configured to use a mocked local binary.
+        
+        Parameters:
+            tmp_path (Path): Temporary directory in which a fake `talisman` binary file will be created.
+        
+        Returns:
+            TalismanScanner: Scanner instance with `auto_install=False` and `_binary_path` set to the created fake binary.
+        """
         scanner = TalismanScanner(auto_install=False)
         binary_path = tmp_path / "talisman"
         binary_path.touch()
