@@ -31,6 +31,30 @@
         "linux_arm64": "https://github.com/trufflesecurity/trufflehog/releases/download/v{version}/trufflehog_{version}_linux_arm64.tar.gz",
         "windows_amd64": "https://github.com/trufflesecurity/trufflehog/releases/download/v{version}/trufflehog_{version}_windows_amd64.tar.gz"
     },
-    "detect_secrets_version": "1.5.0"
+    "detect_secrets_version": "1.5.0",
+    "talisman_version": "1.32.0",
+    "talisman_download_urls": {
+        "darwin_amd64": "https://github.com/thoughtworks/talisman/releases/download/v{version}/talisman_darwin_amd64",
+        "darwin_arm64": "https://github.com/thoughtworks/talisman/releases/download/v{version}/talisman_darwin_arm64",
+        "linux_amd64": "https://github.com/thoughtworks/talisman/releases/download/v{version}/talisman_linux_amd64",
+        "linux_arm64": "https://github.com/thoughtworks/talisman/releases/download/v{version}/talisman_linux_arm64",
+        "windows_amd64": "https://github.com/thoughtworks/talisman/releases/download/v{version}/talisman_windows_amd64.exe"
+    },
+    "trivy_version": "0.58.0",
+    "trivy_download_urls": {
+        "darwin_amd64": "https://github.com/aquasecurity/trivy/releases/download/v{version}/trivy_{version}_macOS-64bit.tar.gz",
+        "darwin_arm64": "https://github.com/aquasecurity/trivy/releases/download/v{version}/trivy_{version}_macOS-ARM64.tar.gz",
+        "linux_amd64": "https://github.com/aquasecurity/trivy/releases/download/v{version}/trivy_{version}_Linux-64bit.tar.gz",
+        "linux_arm64": "https://github.com/aquasecurity/trivy/releases/download/v{version}/trivy_{version}_Linux-ARM64.tar.gz",
+        "windows_amd64": "https://github.com/aquasecurity/trivy/releases/download/v{version}/trivy_{version}_windows-64bit.zip"
+    },
+    "infisical_version": "0.31.1",
+    "infisical_download_urls": {
+        "darwin_amd64": "https://github.com/Infisical/infisical/releases/download/infisical-cli/v{version}/infisical_{version}_darwin_amd64.tar.gz",
+        "darwin_arm64": "https://github.com/Infisical/infisical/releases/download/infisical-cli/v{version}/infisical_{version}_darwin_arm64.tar.gz",
+        "linux_amd64": "https://github.com/Infisical/infisical/releases/download/infisical-cli/v{version}/infisical_{version}_linux_amd64.tar.gz",
+        "linux_arm64": "https://github.com/Infisical/infisical/releases/download/infisical-cli/v{version}/infisical_{version}_linux_arm64.tar.gz",
+        "windows_amd64": "https://github.com/Infisical/infisical/releases/download/infisical-cli/v{version}/infisical_{version}_windows_amd64.zip"
+    }
 }
 

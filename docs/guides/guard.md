@@ -44,11 +44,29 @@ For maximum detection including password hashes:
 envdrift guard --kingfisher
 ```
 
+For entropy-based and encoded content detection:
+
+```bash
+envdrift guard --talisman
+```
+
+For comprehensive multi-target security scanning:
+
+```bash
+envdrift guard --trivy
+```
+
+For 140+ secret types with git history support:
+
+```bash
+envdrift guard --infisical
+```
+
 You can also enable scanners in `envdrift.toml`:
 
 ```toml
 [guard]
-scanners = ["native", "gitleaks", "trufflehog", "detect-secrets", "kingfisher"]
+scanners = ["native", "gitleaks", "trufflehog", "detect-secrets", "kingfisher", "talisman", "trivy", "infisical"]
 ```
 
 ### Scanner comparison
@@ -60,6 +78,9 @@ scanners = ["native", "gitleaks", "trufflehog", "detect-secrets", "kingfisher"]
 | trufflehog | Service-specific tokens (GitHub, Slack, AWS) |
 | detect-secrets | 27+ plugin detectors, keyword scanning |
 | kingfisher | 700+ rules, password hashes, secret validation |
+| talisman | Entropy detection, encoded content, file analysis |
+| trivy | Comprehensive multi-target scanning, severity filtering |
+| infisical | 140+ secret types, git history, staged changes |
 
 ## Reporting and CI
 
@@ -89,7 +110,8 @@ ignore_paths = ["tests/**", "*.test.py"]
 
 No secret scanner is 100% accurate. Envdrift provides a **centralized ignore system**
 that works uniformly across ALL scanners (native, gitleaks, trufflehog, detect-secrets,
-and kingfisher). This ensures you configure ignores once and they apply everywhere.
+kingfisher, git-secrets, talisman, trivy, and infisical). This ensures you configure
+ignores once and they apply everywhere.
 
 ### Inline Ignore Comments (Recommended)
 
