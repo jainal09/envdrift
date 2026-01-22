@@ -577,6 +577,20 @@ class TestGuardianWatchConfig:
         assert config.guardian.exclude == [".env.example", ".env.sample", ".env.keys"]
         assert config.guardian.notify is True
 
+    def test_from_dict_guardian_idle_timeout_normalized(self):
+        """Test guardian idle_timeout normalization."""
+        data = {"guardian": {"idle_timeout": "10M"}}
+        config = EnvdriftConfig.from_dict(data)
+
+        assert config.guardian.idle_timeout == "10m"
+
+    def test_from_dict_guardian_invalid_idle_timeout(self):
+        """Test guardian idle_timeout validation."""
+        data = {"guardian": {"idle_timeout": "five minutes"}}
+
+        with pytest.raises(ValueError, match=r"guardian\.idle_timeout"):
+            EnvdriftConfig.from_dict(data)
+
     def test_from_dict_no_guardian_section(self):
         """Test from_dict provides defaults when guardian section is missing."""
         data = {}
@@ -607,6 +621,17 @@ notify = true
         assert config.guardian.patterns == [".env", ".env.*"]
         assert config.guardian.exclude == [".env.example", ".env.template"]
         assert config.guardian.notify is True
+
+    def test_load_config_with_invalid_guardian_idle_timeout(self, tmp_path: Path):
+        """Test load_config raises on invalid guardian idle_timeout."""
+        config_file = tmp_path / "envdrift.toml"
+        config_file.write_text("""
+[guardian]
+idle_timeout = "invalid"
+""")
+
+        with pytest.raises(ValueError, match=r"guardian\.idle_timeout"):
+            load_config(config_file)
 
     def test_load_config_pyproject_with_guardian(self, tmp_path: Path):
         """Test load_config parses guardian from pyproject.toml."""

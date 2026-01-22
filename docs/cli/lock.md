@@ -132,6 +132,48 @@ envdrift lock -f --all
 envdrift lock --check --all
 ```
 
+## Smart Encryption
+
+When `smart_encryption` is enabled in your configuration, the `lock` command will skip
+re-encryption if the file content hasn't changed. This reduces unnecessary git noise
+caused by non-deterministic encryption algorithms used by dotenvx and SOPS.
+
+### The Problem
+
+Both dotenvx (ECIES) and SOPS use encryption that produces different ciphertext each time,
+even for identical plaintext. This means:
+
+- Decrypting and re-encrypting an unchanged file creates a "modified" file in git
+- Git history becomes cluttered with meaningless changes
+- Code reviews show confusing diffs
+
+### The Solution
+
+With smart encryption enabled:
+
+1. Before re-encrypting, the command compares current content with the decrypted git version
+2. If content is unchanged, it restores the original encrypted file from git
+3. No new ciphertext is generated, so git shows no changes
+
+### Configuration
+
+Enable in your `envdrift.toml`:
+
+```toml
+[encryption]
+backend = "dotenvx"
+smart_encryption = true
+```
+
+### Example Output
+
+```text
+Step 1: Encrypting environment files...
+
+  = .env.production - skipped (content unchanged, restored encrypted version from git)
+  + .env.staging - encrypted
+```
+
 ## Examples
 
 ### Basic Lock

@@ -47,6 +47,5 @@ app.add_typer(agent_app, name="agent")
 # Install commands
 app.add_typer(install_app, name="install")
 
-
 if __name__ == "__main__":
     app()

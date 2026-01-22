@@ -13,6 +13,8 @@ from __future__ import annotations
 
 import shutil
 import subprocess  # nosec B404 - subprocess needed for agent binary communication
+import tomllib
+from contextlib import nullcontext
 from datetime import datetime
 from pathlib import Path
 from typing import Annotated
@@ -59,11 +61,23 @@ def _find_agent_binary() -> Path | None:
     return None
 
 
+def _normalize_project_path(path: str | None) -> Path:
+    """Normalize a project path for CLI operations."""
+    project_path = Path(path) if path else Path.cwd()
+
+    # Expand ~ to home directory
+    if str(project_path).startswith("~"):
+        project_path = project_path.expanduser()
+
+    return project_path.resolve()
+
+
 def _get_agent_status() -> tuple[str, str | None]:
     """Get the agent status.
 
     Returns:
-        Tuple of (status, version) where status is 'running', 'stopped', or 'not_installed'
+        Tuple of (status, version) where status is 'running', 'stopped', 'not_installed',
+        or 'error'
     """
     agent_binary = _find_agent_binary()
     if not agent_binary:
@@ -75,24 +89,35 @@ def _get_agent_status() -> tuple[str, str | None]:
             capture_output=True,
             text=True,
             timeout=5,
+            check=False,
         )
         if result.returncode == 0:
-            # Parse output to check if running
-            output = result.stdout.lower()
-            if "running" in output:
+            running_state = None
+            for line in result.stdout.splitlines():
+                if line.strip().lower().startswith("running:"):
+                    value = line.split(":", 1)[1].strip().lower()
+                    if value in {"true", "false"}:
+                        running_state = value == "true"
+                    break
+
+            if running_state is None:
+                return "error", None
+
+            if running_state:
                 # Try to get version
                 version_result = subprocess.run(  # nosec B603
                     [str(agent_binary), "--version"],
                     capture_output=True,
                     text=True,
                     timeout=5,
+                    check=False,
                 )
                 version = version_result.stdout.strip() if version_result.returncode == 0 else None
                 return "running", version
-            else:
-                return "stopped", None
-        else:
+
             return "stopped", None
+
+        return "error", None
     except (subprocess.TimeoutExpired, OSError):
         return "error", None
 
@@ -127,13 +152,7 @@ def register(
     The project will be added to ~/.envdrift/projects.json and the agent
     will start watching it for .env file changes.
     """
-    project_path = Path(path) if path else Path.cwd()
-
-    # Expand ~ to home directory
-    if str(project_path).startswith("~"):
-        project_path = project_path.expanduser()
-
-    project_path = project_path.resolve()
+    project_path = _normalize_project_path(path)
 
     # Check if project has envdrift.toml
     config_path = find_config(project_path)
@@ -150,12 +169,17 @@ def register(
             console.print("  Run [bold]envdrift init[/bold] to create one.")
         elif auto_enable:
             # Check if guardian is enabled in the config
-            config = load_config(config_path)
-            if not config.guardian.enabled:
-                console.print("\n[yellow]⚠[/yellow] Guardian is not enabled in envdrift.toml")
-                console.print("  Add this to your envdrift.toml to enable auto-encryption:\n")
-                console.print("  [dim][guardian][/dim]")
-                console.print("  [dim]enabled = true[/dim]")
+            try:
+                config = load_config(config_path)
+            except (OSError, ValueError, tomllib.TOMLDecodeError) as exc:
+                console.print(f"\n[red]✗[/red] Failed to load envdrift config: {config_path}")
+                console.print(f"  {exc}")
+            else:
+                if not config.guardian.enabled:
+                    console.print("\n[yellow]⚠[/yellow] Guardian is not enabled in envdrift.toml")
+                    console.print("  Add this to your envdrift.toml to enable auto-encryption:\n")
+                    console.print("  [dim][guardian][/dim]")
+                    console.print("  [dim]enabled = true[/dim]")
     else:
         if "already registered" in message.lower():
             console.print(f"[yellow]⚠[/yellow] {message}")
@@ -178,12 +202,7 @@ def unregister(
     The project will be removed from ~/.envdrift/projects.json and the
     agent will stop watching it.
     """
-    project_path = Path(path) if path else Path.cwd()
-
-    # Expand ~ to home directory
-    if str(project_path).startswith("~"):
-        project_path = project_path.expanduser()
-
+    project_path = _normalize_project_path(path)
     success, message = unregister_project(project_path)
 
     if success:
@@ -208,21 +227,31 @@ def list_registered() -> None:
     table.add_column("Registered", style="dim")
     table.add_column("Has Config", style="green")
 
-    for project in projects:
-        # Check if project still exists and has config
-        project_path = Path(project.path)
-        exists = project_path.exists()
-        has_config = find_config(project_path) is not None if exists else False
+    config_cache: dict[Path, bool] = {}
+    status_context = (
+        console.status("Checking project configs...") if len(projects) > 25 else nullcontext()
+    )
+    with status_context:
+        for project in projects:
+            # Check if project still exists and has config
+            project_path = Path(project.path)
+            exists = project_path.exists()
+            if exists:
+                if project_path not in config_cache:
+                    config_cache[project_path] = find_config(project_path) is not None
+                has_config = config_cache[project_path]
+            else:
+                has_config = False
 
-        status = "✓" if has_config else "[yellow]✗[/yellow]"
-        if not exists:
-            status = "[red]✗ (missing)[/red]"
+            status = "✓" if has_config else "[yellow]✗[/yellow]"
+            if not exists:
+                status = "[red]✗ (missing)[/red]"
 
-        table.add_row(
-            project.path,
-            _format_timestamp(project.added),
-            status,
-        )
+            table.add_row(
+                project.path,
+                _format_timestamp(project.added),
+                status,
+            )
 
     console.print(table)
     console.print(f"\n[dim]Registry: {get_registry().path}[/dim]")
@@ -244,6 +273,9 @@ def status() -> None:
     elif agent_status == "not_installed":
         console.print("[yellow]⚠ Agent is not installed[/yellow]")
         console.print("   Run [bold]envdrift install agent[/bold] to install it")
+    elif agent_status == "error":
+        console.print("[yellow]⚠ Agent status check failed[/yellow]")
+        console.print("   Run [bold]envdrift-agent status[/bold] for details")
     else:
         console.print("[yellow]⚠ Unable to determine agent status[/yellow]")
 

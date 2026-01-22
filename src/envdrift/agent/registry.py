@@ -16,6 +16,9 @@ File format:
 from __future__ import annotations
 
 import json
+import os
+import tempfile
+from contextlib import suppress
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -93,15 +96,45 @@ class ProjectRegistry:
 
         self._loaded = True
 
+    def _normalize_path(self, project_path: Path) -> Path:
+        """Return a normalized absolute path.
+
+        Note: resolve() follows symlinks, so symlinked paths are treated as their targets.
+        """
+        return project_path.resolve()
+
+    def _write_atomic(self, data: dict[str, Any]) -> None:
+        """Write registry data to disk atomically."""
+        fd, tmp_path = tempfile.mkstemp(
+            dir=self._path.parent,
+            prefix=".projects_",
+            suffix=".json",
+        )
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
+                json.dump(data, f, indent=2)
+                f.write("\n")
+                f.flush()
+                os.fsync(f.fileno())
+            Path(tmp_path).replace(self._path)
+        except Exception:
+            with suppress(OSError):
+                Path(tmp_path).unlink()
+            raise
+
+    def _apply_permissions(self) -> None:
+        """Apply restrictive permissions to the registry file."""
+        with suppress(OSError):
+            self._path.chmod(0o600)
+
     def save(self) -> None:
         """Save the registry to disk."""
         # Ensure parent directory exists
         self._path.parent.mkdir(parents=True, exist_ok=True)
 
         data = {"projects": [p.to_dict() for p in self._projects]}
-        with open(self._path, "w", encoding="utf-8") as f:
-            json.dump(data, f, indent=2)
-            f.write("\n")  # Trailing newline
+        self._write_atomic(data)
+        self._apply_permissions()
 
     def register(self, project_path: Path) -> bool:
         """Register a project with the agent.
@@ -109,6 +142,7 @@ class ProjectRegistry:
         Args:
             project_path: Path to the project directory (must contain envdrift.toml
                          or have pyproject.toml with [tool.envdrift])
+                         Paths are resolved before comparison (symlinks normalized).
 
         Returns:
             True if newly registered, False if already registered
@@ -117,7 +151,7 @@ class ProjectRegistry:
             self.load()
 
         # Resolve to absolute path
-        abs_path = project_path.resolve()
+        abs_path = self._normalize_path(project_path)
         path_str = str(abs_path)
 
         # Check if already registered
@@ -146,7 +180,7 @@ class ProjectRegistry:
         if not self._loaded:
             self.load()
 
-        abs_path = project_path.resolve()
+        abs_path = self._normalize_path(project_path)
         path_str = str(abs_path)
 
         # Find and remove
@@ -170,7 +204,7 @@ class ProjectRegistry:
         if not self._loaded:
             self.load()
 
-        abs_path = project_path.resolve()
+        abs_path = self._normalize_path(project_path)
         path_str = str(abs_path)
 
         for project in self._projects:
@@ -190,7 +224,7 @@ class ProjectRegistry:
         if not self._loaded:
             self.load()
 
-        abs_path = project_path.resolve()
+        abs_path = self._normalize_path(project_path)
         path_str = str(abs_path)
 
         for project in self._projects:
@@ -216,24 +250,32 @@ def get_registry() -> ProjectRegistry:
     return _registry
 
 
+def _normalize_project_path(project_path: Path | str | None) -> Path:
+    """Normalize a project path for registry operations."""
+    if project_path is None:
+        normalized = Path.cwd()
+    elif isinstance(project_path, str):
+        normalized = Path(project_path)
+    else:
+        normalized = project_path
+
+    if str(normalized).startswith("~"):
+        normalized = normalized.expanduser()
+
+    return normalized.resolve()
+
+
 def register_project(project_path: Path | str | None = None) -> tuple[bool, str]:
     """Register a project with the agent.
 
     Args:
         project_path: Path to the project. If None, uses current directory.
+                      Paths are resolved before comparison (symlinks normalized).
 
     Returns:
         Tuple of (success, message)
     """
-    if project_path is None:
-        project_path = Path.cwd()
-    elif isinstance(project_path, str):
-        project_path = Path(project_path)
-        # Expand ~ to home directory
-        if str(project_path).startswith("~"):
-            project_path = project_path.expanduser()
-
-    project_path = project_path.resolve()
+    project_path = _normalize_project_path(project_path)
 
     if not project_path.exists():
         return False, f"Directory does not exist: {project_path}"
@@ -257,15 +299,7 @@ def unregister_project(project_path: Path | str | None = None) -> tuple[bool, st
     Returns:
         Tuple of (success, message)
     """
-    if project_path is None:
-        project_path = Path.cwd()
-    elif isinstance(project_path, str):
-        project_path = Path(project_path)
-        # Expand ~ to home directory
-        if str(project_path).startswith("~"):
-            project_path = project_path.expanduser()
-
-    project_path = project_path.resolve()
+    project_path = _normalize_project_path(project_path)
 
     registry = get_registry()
     if registry.unregister(project_path):
