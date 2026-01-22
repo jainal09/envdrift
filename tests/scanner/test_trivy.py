@@ -477,6 +477,232 @@ class TestExceptionClasses:
         assert isinstance(error, Exception)
 
 
+class TestTrivyInstallerDownload:
+    """Tests for TrivyInstaller download functionality."""
+
+    @patch("envdrift.scanner.platform_utils.platform.system", return_value="Darwin")
+    @patch("envdrift.scanner.platform_utils.platform.machine", return_value="arm64")
+    def test_get_download_url_darwin_arm64(self, mock_machine: MagicMock, mock_system: MagicMock):
+        """Test download URL generation for macOS ARM64."""
+        installer = TrivyInstaller()
+        url = installer.get_download_url()
+        assert "macOS" in url or "darwin" in url.lower()
+        assert "ARM64" in url or "arm64" in url.lower()
+        assert installer.version in url
+
+    @patch("envdrift.scanner.platform_utils.platform.system", return_value="Linux")
+    @patch("envdrift.scanner.platform_utils.platform.machine", return_value="x86_64")
+    def test_get_download_url_linux_x64(self, mock_machine: MagicMock, mock_system: MagicMock):
+        """Test download URL generation for Linux x86_64."""
+        installer = TrivyInstaller()
+        url = installer.get_download_url()
+        assert "Linux" in url or "linux" in url.lower()
+        assert "64bit" in url or "x86_64" in url.lower() or "amd64" in url.lower()
+
+    @patch("envdrift.scanner.platform_utils.platform.system", return_value="Windows")
+    @patch("envdrift.scanner.platform_utils.platform.machine", return_value="AMD64")
+    def test_get_download_url_windows(self, mock_machine: MagicMock, mock_system: MagicMock):
+        """Test download URL generation for Windows."""
+        installer = TrivyInstaller()
+        url = installer.get_download_url()
+        assert "windows" in url.lower()
+        assert url.endswith(".zip")
+
+    @patch("envdrift.scanner.platform_utils.platform.system", return_value="FreeBSD")
+    @patch("envdrift.scanner.platform_utils.platform.machine", return_value="x86_64")
+    def test_get_download_url_unsupported_platform(
+        self, mock_machine: MagicMock, mock_system: MagicMock
+    ):
+        """Test download URL raises error for unsupported platform."""
+        installer = TrivyInstaller()
+        with pytest.raises(TrivyInstallError, match="Unsupported platform"):
+            installer.get_download_url()
+
+    def test_installer_with_custom_version(self):
+        """Test installer with custom version."""
+        installer = TrivyInstaller(version="0.50.0")
+        assert installer.version == "0.50.0"
+
+    def test_installer_with_progress_callback(self):
+        """Test installer with progress callback."""
+        messages: list[str] = []
+        installer = TrivyInstaller(progress_callback=messages.append)
+        installer.progress("Test message")
+        assert "Test message" in messages
+
+
+class TestTrivyInstallerExtraction:
+    """Tests for TrivyInstaller extraction methods."""
+
+    def test_extract_tar_gz(self, tmp_path: Path):
+        """Test tar.gz extraction."""
+        import tarfile
+
+        # Create a test tar.gz archive
+        archive_path = tmp_path / "test.tar.gz"
+        extract_dir = tmp_path / "extracted"
+        extract_dir.mkdir()
+
+        # Create archive with a test file
+        test_file_content = b"test content"
+        with tarfile.open(archive_path, "w:gz") as tar:
+            import io
+
+            info = tarfile.TarInfo(name="testfile.txt")
+            info.size = len(test_file_content)
+            tar.addfile(info, io.BytesIO(test_file_content))
+
+        installer = TrivyInstaller()
+        installer._extract_tar_gz(archive_path, extract_dir)
+
+        assert (extract_dir / "testfile.txt").exists()
+        assert (extract_dir / "testfile.txt").read_bytes() == test_file_content
+
+    def test_extract_zip(self, tmp_path: Path):
+        """Test zip extraction."""
+        import zipfile
+
+        # Create a test zip archive
+        archive_path = tmp_path / "test.zip"
+        extract_dir = tmp_path / "extracted"
+        extract_dir.mkdir()
+
+        # Create archive with a test file
+        with zipfile.ZipFile(archive_path, "w") as zf:
+            zf.writestr("testfile.txt", "test content")
+
+        installer = TrivyInstaller()
+        installer._extract_zip(archive_path, extract_dir)
+
+        assert (extract_dir / "testfile.txt").exists()
+        assert (extract_dir / "testfile.txt").read_text() == "test content"
+
+    def test_extract_tar_gz_path_traversal_blocked(self, tmp_path: Path):
+        """Test that path traversal attacks are blocked in tar.gz."""
+        import io
+        import tarfile
+
+        archive_path = tmp_path / "malicious.tar.gz"
+        extract_dir = tmp_path / "extracted"
+        extract_dir.mkdir()
+
+        # Create archive with path traversal attempt
+        with tarfile.open(archive_path, "w:gz") as tar:
+            info = tarfile.TarInfo(name="../../../etc/passwd")
+            info.size = 4
+            tar.addfile(info, io.BytesIO(b"test"))
+
+        installer = TrivyInstaller()
+        with pytest.raises(TrivyInstallError, match="Unsafe path"):
+            installer._extract_tar_gz(archive_path, extract_dir)
+
+    def test_extract_zip_path_traversal_blocked(self, tmp_path: Path):
+        """Test that path traversal attacks are blocked in zip."""
+        import zipfile
+
+        archive_path = tmp_path / "malicious.zip"
+        extract_dir = tmp_path / "extracted"
+        extract_dir.mkdir()
+
+        # Create archive with path traversal attempt
+        with zipfile.ZipFile(archive_path, "w") as zf:
+            zf.writestr("../../../etc/passwd", "test")
+
+        installer = TrivyInstaller()
+        with pytest.raises(TrivyInstallError, match="Unsafe path"):
+            installer._extract_zip(archive_path, extract_dir)
+
+
+class TestTrivyInstallerInstall:
+    """Tests for TrivyInstaller.install method."""
+
+    @patch("envdrift.scanner.trivy.get_trivy_path")
+    @patch("urllib.request.urlretrieve")
+    @patch("envdrift.scanner.platform_utils.platform.system", return_value="Linux")
+    @patch("envdrift.scanner.platform_utils.platform.machine", return_value="x86_64")
+    def test_install_success(
+        self,
+        mock_machine: MagicMock,
+        mock_system: MagicMock,
+        mock_urlretrieve: MagicMock,
+        mock_get_path: MagicMock,
+        tmp_path: Path,
+    ):
+        """Test successful installation."""
+        import io
+        import tarfile
+
+        target_path = tmp_path / "bin" / "trivy"
+        target_path.parent.mkdir(parents=True, exist_ok=True)
+        mock_get_path.return_value = target_path
+
+        def fake_download(url: str, dest: str) -> None:
+            # Create a fake tar.gz with trivy binary
+            with tarfile.open(dest, "w:gz") as tar:
+                info = tarfile.TarInfo(name="trivy")
+                info.size = 4
+                tar.addfile(info, io.BytesIO(b"fake"))
+
+        mock_urlretrieve.side_effect = fake_download
+
+        installer = TrivyInstaller()
+        result = installer.install()
+
+        assert result == target_path
+        assert target_path.exists()
+
+    @patch("envdrift.scanner.trivy.get_trivy_path")
+    @patch("urllib.request.urlretrieve")
+    @patch("envdrift.scanner.platform_utils.platform.system", return_value="Linux")
+    @patch("envdrift.scanner.platform_utils.platform.machine", return_value="x86_64")
+    def test_install_download_failure(
+        self,
+        mock_machine: MagicMock,
+        mock_system: MagicMock,
+        mock_urlretrieve: MagicMock,
+        mock_get_path: MagicMock,
+        tmp_path: Path,
+    ):
+        """Test installation failure on download error."""
+        mock_get_path.return_value = tmp_path / "trivy"
+        mock_urlretrieve.side_effect = Exception("Network error")
+
+        installer = TrivyInstaller()
+        with pytest.raises(TrivyInstallError, match="Download failed"):
+            installer.install()
+
+    @patch("envdrift.scanner.trivy.get_trivy_path")
+    @patch("urllib.request.urlretrieve")
+    @patch("envdrift.scanner.platform_utils.platform.system", return_value="Linux")
+    @patch("envdrift.scanner.platform_utils.platform.machine", return_value="x86_64")
+    def test_install_binary_not_found_in_archive(
+        self,
+        mock_machine: MagicMock,
+        mock_system: MagicMock,
+        mock_urlretrieve: MagicMock,
+        mock_get_path: MagicMock,
+        tmp_path: Path,
+    ):
+        """Test installation failure when binary not found in archive."""
+        import io
+        import tarfile
+
+        mock_get_path.return_value = tmp_path / "trivy"
+
+        def fake_download(url: str, dest: str) -> None:
+            # Create a tar.gz without trivy binary
+            with tarfile.open(dest, "w:gz") as tar:
+                info = tarfile.TarInfo(name="other_file.txt")
+                info.size = 4
+                tar.addfile(info, io.BytesIO(b"test"))
+
+        mock_urlretrieve.side_effect = fake_download
+
+        installer = TrivyInstaller()
+        with pytest.raises(TrivyInstallError, match="not found in archive"):
+            installer.install()
+
+
 # Mark integration tests that require actual trivy installation
 @pytest.mark.skipif(
     not TrivyScanner(auto_install=False).is_installed(),

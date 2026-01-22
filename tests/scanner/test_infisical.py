@@ -533,6 +533,222 @@ class TestExceptionClasses:
         assert isinstance(error, Exception)
 
 
+class TestInfisicalInstallerDownload:
+    """Tests for InfisicalInstaller download functionality."""
+
+    @patch("envdrift.scanner.platform_utils.platform.system", return_value="Darwin")
+    @patch("envdrift.scanner.platform_utils.platform.machine", return_value="arm64")
+    def test_get_download_url_darwin_arm64(self, mock_machine: MagicMock, mock_system: MagicMock):
+        """Test download URL generation for macOS ARM64."""
+        installer = InfisicalInstaller()
+        url = installer.get_download_url()
+        assert "darwin" in url.lower()
+        assert "arm64" in url.lower()
+        assert installer.version in url
+
+    @patch("envdrift.scanner.platform_utils.platform.system", return_value="Linux")
+    @patch("envdrift.scanner.platform_utils.platform.machine", return_value="x86_64")
+    def test_get_download_url_linux_x64(self, mock_machine: MagicMock, mock_system: MagicMock):
+        """Test download URL generation for Linux x86_64."""
+        installer = InfisicalInstaller()
+        url = installer.get_download_url()
+        assert "linux" in url.lower()
+
+    @patch("envdrift.scanner.platform_utils.platform.system", return_value="Windows")
+    @patch("envdrift.scanner.platform_utils.platform.machine", return_value="AMD64")
+    def test_get_download_url_windows(self, mock_machine: MagicMock, mock_system: MagicMock):
+        """Test download URL generation for Windows."""
+        installer = InfisicalInstaller()
+        url = installer.get_download_url()
+        assert "windows" in url.lower()
+        assert url.endswith(".zip")
+
+    @patch("envdrift.scanner.platform_utils.platform.system", return_value="FreeBSD")
+    @patch("envdrift.scanner.platform_utils.platform.machine", return_value="x86_64")
+    def test_get_download_url_unsupported_platform(
+        self, mock_machine: MagicMock, mock_system: MagicMock
+    ):
+        """Test download URL raises error for unsupported platform."""
+        installer = InfisicalInstaller()
+        with pytest.raises(InfisicalInstallError, match="Unsupported platform"):
+            installer.get_download_url()
+
+    def test_installer_with_custom_version(self):
+        """Test installer with custom version."""
+        installer = InfisicalInstaller(version="0.30.0")
+        assert installer.version == "0.30.0"
+
+    def test_installer_with_progress_callback(self):
+        """Test installer with progress callback."""
+        messages: list[str] = []
+        installer = InfisicalInstaller(progress_callback=messages.append)
+        installer.progress("Test message")
+        assert "Test message" in messages
+
+
+class TestInfisicalInstallerExtraction:
+    """Tests for InfisicalInstaller extraction methods."""
+
+    def test_extract_tar_gz(self, tmp_path: Path):
+        """Test tar.gz extraction."""
+        import io
+        import tarfile
+
+        archive_path = tmp_path / "test.tar.gz"
+        extract_dir = tmp_path / "extracted"
+        extract_dir.mkdir()
+
+        test_file_content = b"test content"
+        with tarfile.open(archive_path, "w:gz") as tar:
+            info = tarfile.TarInfo(name="testfile.txt")
+            info.size = len(test_file_content)
+            tar.addfile(info, io.BytesIO(test_file_content))
+
+        installer = InfisicalInstaller()
+        installer._extract_tar_gz(archive_path, extract_dir)
+
+        assert (extract_dir / "testfile.txt").exists()
+        assert (extract_dir / "testfile.txt").read_bytes() == test_file_content
+
+    def test_extract_zip(self, tmp_path: Path):
+        """Test zip extraction."""
+        import zipfile
+
+        archive_path = tmp_path / "test.zip"
+        extract_dir = tmp_path / "extracted"
+        extract_dir.mkdir()
+
+        with zipfile.ZipFile(archive_path, "w") as zf:
+            zf.writestr("testfile.txt", "test content")
+
+        installer = InfisicalInstaller()
+        installer._extract_zip(archive_path, extract_dir)
+
+        assert (extract_dir / "testfile.txt").exists()
+        assert (extract_dir / "testfile.txt").read_text() == "test content"
+
+    def test_extract_tar_gz_path_traversal_blocked(self, tmp_path: Path):
+        """Test that path traversal attacks are blocked in tar.gz."""
+        import io
+        import tarfile
+
+        archive_path = tmp_path / "malicious.tar.gz"
+        extract_dir = tmp_path / "extracted"
+        extract_dir.mkdir()
+
+        with tarfile.open(archive_path, "w:gz") as tar:
+            info = tarfile.TarInfo(name="../../../etc/passwd")
+            info.size = 4
+            tar.addfile(info, io.BytesIO(b"test"))
+
+        installer = InfisicalInstaller()
+        with pytest.raises(InfisicalInstallError, match="Unsafe path"):
+            installer._extract_tar_gz(archive_path, extract_dir)
+
+    def test_extract_zip_path_traversal_blocked(self, tmp_path: Path):
+        """Test that path traversal attacks are blocked in zip."""
+        import zipfile
+
+        archive_path = tmp_path / "malicious.zip"
+        extract_dir = tmp_path / "extracted"
+        extract_dir.mkdir()
+
+        with zipfile.ZipFile(archive_path, "w") as zf:
+            zf.writestr("../../../etc/passwd", "test")
+
+        installer = InfisicalInstaller()
+        with pytest.raises(InfisicalInstallError, match="Unsafe path"):
+            installer._extract_zip(archive_path, extract_dir)
+
+
+class TestInfisicalInstallerInstall:
+    """Tests for InfisicalInstaller.install method."""
+
+    @patch("envdrift.scanner.infisical.get_infisical_path")
+    @patch("urllib.request.urlretrieve")
+    @patch("envdrift.scanner.platform_utils.platform.system", return_value="Linux")
+    @patch("envdrift.scanner.platform_utils.platform.machine", return_value="x86_64")
+    def test_install_success(
+        self,
+        mock_machine: MagicMock,
+        mock_system: MagicMock,
+        mock_urlretrieve: MagicMock,
+        mock_get_path: MagicMock,
+        tmp_path: Path,
+    ):
+        """Test successful installation."""
+        import io
+        import tarfile
+
+        target_path = tmp_path / "bin" / "infisical"
+        target_path.parent.mkdir(parents=True, exist_ok=True)
+        mock_get_path.return_value = target_path
+
+        def fake_download(url: str, dest: str) -> None:
+            with tarfile.open(dest, "w:gz") as tar:
+                info = tarfile.TarInfo(name="infisical")
+                info.size = 4
+                tar.addfile(info, io.BytesIO(b"fake"))
+
+        mock_urlretrieve.side_effect = fake_download
+
+        installer = InfisicalInstaller()
+        result = installer.install()
+
+        assert result == target_path
+        assert target_path.exists()
+
+    @patch("envdrift.scanner.infisical.get_infisical_path")
+    @patch("urllib.request.urlretrieve")
+    @patch("envdrift.scanner.platform_utils.platform.system", return_value="Linux")
+    @patch("envdrift.scanner.platform_utils.platform.machine", return_value="x86_64")
+    def test_install_download_failure(
+        self,
+        mock_machine: MagicMock,
+        mock_system: MagicMock,
+        mock_urlretrieve: MagicMock,
+        mock_get_path: MagicMock,
+        tmp_path: Path,
+    ):
+        """Test installation failure on download error."""
+        mock_get_path.return_value = tmp_path / "infisical"
+        mock_urlretrieve.side_effect = Exception("Network error")
+
+        installer = InfisicalInstaller()
+        with pytest.raises(InfisicalInstallError, match="Download failed"):
+            installer.install()
+
+    @patch("envdrift.scanner.infisical.get_infisical_path")
+    @patch("urllib.request.urlretrieve")
+    @patch("envdrift.scanner.platform_utils.platform.system", return_value="Linux")
+    @patch("envdrift.scanner.platform_utils.platform.machine", return_value="x86_64")
+    def test_install_binary_not_found_in_archive(
+        self,
+        mock_machine: MagicMock,
+        mock_system: MagicMock,
+        mock_urlretrieve: MagicMock,
+        mock_get_path: MagicMock,
+        tmp_path: Path,
+    ):
+        """Test installation failure when binary not found in archive."""
+        import io
+        import tarfile
+
+        mock_get_path.return_value = tmp_path / "infisical"
+
+        def fake_download(url: str, dest: str) -> None:
+            with tarfile.open(dest, "w:gz") as tar:
+                info = tarfile.TarInfo(name="other_file.txt")
+                info.size = 4
+                tar.addfile(info, io.BytesIO(b"test"))
+
+        mock_urlretrieve.side_effect = fake_download
+
+        installer = InfisicalInstaller()
+        with pytest.raises(InfisicalInstallError, match="not found in archive"):
+            installer.install()
+
+
 # Mark integration tests that require actual infisical installation
 @pytest.mark.skipif(
     not InfisicalScanner(auto_install=False).is_installed(),

@@ -297,6 +297,62 @@ class TestFindingParsing:
         assert len(findings) == 1
         assert findings[0].rule_id == "talisman-filecontent"
 
+    def test_parse_report_with_warnings(self, scanner: TalismanScanner, tmp_path: Path):
+        """Test parsing a report with warnings."""
+        report_data: dict[str, Any] = {
+            "results": [
+                {
+                    "filename": "data.json",
+                    "failures": [],
+                    "warnings": [
+                        {
+                            "type": "filesize",
+                            "message": "Large file detected",
+                        }
+                    ],
+                }
+            ]
+        }
+        findings, files_scanned = scanner._parse_report(report_data, tmp_path)
+
+        assert files_scanned == 1
+        assert len(findings) == 1
+        assert findings[0].severity == FindingSeverity.MEDIUM
+
+    def test_parse_failure_with_commit_info(self, scanner: TalismanScanner, tmp_path: Path):
+        """Test parsing a failure with git commit information."""
+        failure: dict[str, Any] = {
+            "type": "secret-pattern",
+            "message": "API key detected",
+            "severity": "high",
+            "match": "sk_live_xxxxxxx",
+            "line_number": 42,
+            "commit": "abc123",
+            "author": "dev@example.com",
+            "date": "2024-01-15",
+            "entropy": 4.8,
+        }
+        finding = scanner._parse_failure(failure, tmp_path / "api.py")
+
+        assert finding is not None
+        assert finding.line_number == 42
+        assert finding.commit_sha == "abc123"
+        assert finding.commit_author == "dev@example.com"
+        assert finding.commit_date == "2024-01-15"
+        assert finding.entropy == 4.8
+
+    def test_parse_failure_with_unknown_severity(self, scanner: TalismanScanner, tmp_path: Path):
+        """Test parsing a failure with unknown severity defaults to HIGH."""
+        failure: dict[str, Any] = {
+            "type": "custom-check",
+            "message": "Custom issue detected",
+            "severity": "unknown",
+        }
+        finding = scanner._parse_failure(failure, tmp_path / "test.py")
+
+        assert finding is not None
+        assert finding.severity == FindingSeverity.HIGH
+
 
 class TestTalismanScanExecution:
     """Tests for talisman scan execution with mocked subprocess."""
@@ -416,6 +472,136 @@ class TestExceptionClasses:
         error = TalismanInstallError("Download failed")
         assert str(error) == "Download failed"
         assert isinstance(error, Exception)
+
+
+class TestTalismanInstallerDownload:
+    """Tests for TalismanInstaller download functionality."""
+
+    @patch("envdrift.scanner.platform_utils.platform.system", return_value="Darwin")
+    @patch("envdrift.scanner.platform_utils.platform.machine", return_value="arm64")
+    def test_get_download_url_darwin_arm64(self, mock_machine: MagicMock, mock_system: MagicMock):
+        """Test download URL generation for macOS ARM64."""
+        installer = TalismanInstaller()
+        url = installer.get_download_url()
+        assert "darwin" in url.lower()
+        assert "arm64" in url.lower()
+        assert installer.version in url
+
+    @patch("envdrift.scanner.platform_utils.platform.system", return_value="Linux")
+    @patch("envdrift.scanner.platform_utils.platform.machine", return_value="x86_64")
+    def test_get_download_url_linux_x64(self, mock_machine: MagicMock, mock_system: MagicMock):
+        """Test download URL generation for Linux x86_64."""
+        installer = TalismanInstaller()
+        url = installer.get_download_url()
+        assert "linux" in url.lower()
+
+    @patch("envdrift.scanner.platform_utils.platform.system", return_value="Windows")
+    @patch("envdrift.scanner.platform_utils.platform.machine", return_value="AMD64")
+    def test_get_download_url_windows(self, mock_machine: MagicMock, mock_system: MagicMock):
+        """Test download URL generation for Windows."""
+        installer = TalismanInstaller()
+        url = installer.get_download_url()
+        assert "windows" in url.lower()
+        assert url.endswith(".exe")
+
+    @patch("envdrift.scanner.platform_utils.platform.system", return_value="FreeBSD")
+    @patch("envdrift.scanner.platform_utils.platform.machine", return_value="x86_64")
+    def test_get_download_url_unsupported_platform(
+        self, mock_machine: MagicMock, mock_system: MagicMock
+    ):
+        """Test download URL raises error for unsupported platform."""
+        installer = TalismanInstaller()
+        with pytest.raises(TalismanInstallError, match="Unsupported platform"):
+            installer.get_download_url()
+
+    def test_installer_with_custom_version(self):
+        """Test installer with custom version."""
+        installer = TalismanInstaller(version="1.30.0")
+        assert installer.version == "1.30.0"
+
+    def test_installer_with_progress_callback(self):
+        """Test installer with progress callback."""
+        messages: list[str] = []
+        installer = TalismanInstaller(progress_callback=messages.append)
+        installer.progress("Test message")
+        assert "Test message" in messages
+
+
+class TestTalismanInstallerInstall:
+    """Tests for TalismanInstaller.install method."""
+
+    @patch("urllib.request.urlretrieve")
+    @patch("envdrift.scanner.platform_utils.platform.system", return_value="Linux")
+    @patch("envdrift.scanner.platform_utils.platform.machine", return_value="x86_64")
+    def test_install_success(
+        self,
+        mock_machine: MagicMock,
+        mock_system: MagicMock,
+        mock_urlretrieve: MagicMock,
+        tmp_path: Path,
+    ):
+        """Test successful installation."""
+
+        def fake_download(url: str, dest: str) -> None:
+            # Create a fake binary file
+            Path(dest).write_bytes(b"fake binary content")
+
+        mock_urlretrieve.side_effect = fake_download
+
+        with patch(
+            "envdrift.scanner.talisman.get_talisman_path",
+            return_value=tmp_path / "talisman",
+        ):
+            installer = TalismanInstaller()
+            result = installer.install()
+
+            assert result == tmp_path / "talisman"
+            assert (tmp_path / "talisman").exists()
+
+    @patch("urllib.request.urlretrieve")
+    @patch("envdrift.scanner.platform_utils.platform.system", return_value="Linux")
+    @patch("envdrift.scanner.platform_utils.platform.machine", return_value="x86_64")
+    def test_install_download_failure(
+        self,
+        mock_machine: MagicMock,
+        mock_system: MagicMock,
+        mock_urlretrieve: MagicMock,
+        tmp_path: Path,
+    ):
+        """Test installation failure on download error."""
+        mock_urlretrieve.side_effect = Exception("Network error")
+
+        with patch(
+            "envdrift.scanner.talisman.get_talisman_path",
+            return_value=tmp_path / "talisman",
+        ):
+            installer = TalismanInstaller()
+            with pytest.raises(TalismanInstallError, match="Download failed"):
+                installer.install()
+
+    @patch("subprocess.run")
+    @patch("envdrift.scanner.platform_utils.platform.system", return_value="Linux")
+    @patch("envdrift.scanner.platform_utils.platform.machine", return_value="x86_64")
+    def test_install_skips_if_version_matches(
+        self,
+        mock_machine: MagicMock,
+        mock_system: MagicMock,
+        mock_run: MagicMock,
+        tmp_path: Path,
+    ):
+        """Test installation skips if correct version already installed."""
+        target_path = tmp_path / "talisman"
+        target_path.write_bytes(b"existing binary")
+
+        mock_run.return_value = MagicMock(stdout="talisman version 1.32.0", stderr="")
+
+        with patch("envdrift.scanner.talisman.get_talisman_path", return_value=target_path):
+            installer = TalismanInstaller(version="1.32.0")
+            result = installer.install()
+
+            assert result == target_path
+            # No download should have occurred
+            mock_run.assert_called_once()
 
 
 # Mark integration tests that require actual talisman installation
