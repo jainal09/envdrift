@@ -426,11 +426,10 @@ class TalismanScanner(ScannerBackend):
 
                     # Check for execution errors: non-zero exit code without valid report
                     if result.returncode != 0 and not report_found:
-                        error_msg = (
-                            result.stderr.strip()
-                            or result.stdout.strip()
-                            or f"talisman scan failed for {path}"
-                        )
+                        # Prefer stderr over stdout for error messages
+                        stderr_msg = result.stderr.strip()
+                        stdout_msg = result.stdout.strip()
+                        error_msg = stderr_msg or stdout_msg or f"talisman scan failed for {path}"
                         return ScanResult(
                             scanner_name=self.name,
                             findings=all_findings,
