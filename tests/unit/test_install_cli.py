@@ -119,12 +119,16 @@ class TestInstallAgentCommand:
 
     def test_install_help(self):
         """Test that install agent --help works."""
+        import re
+
         result = runner.invoke(app, ["install", "agent", "--help"])
+        ansi_escape = re.compile(r"\x1B\[[0-9;]*[A-Za-z]|\x1B[@-Z\\-_]")
+        clean_output = ansi_escape.sub("", result.stdout)
         assert result.exit_code == 0
-        assert "Install the envdrift background agent" in result.stdout
-        assert "--force" in result.stdout
-        assert "--skip-autostart" in result.stdout
-        assert "--skip-register" in result.stdout
+        assert "Install the envdrift background agent" in clean_output
+        assert "--force" in clean_output
+        assert "--skip-autostart" in clean_output
+        assert "--skip-register" in clean_output
 
     def test_already_installed(self):
         """Test that it warns if agent is already installed."""
