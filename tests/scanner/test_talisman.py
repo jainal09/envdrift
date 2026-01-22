@@ -398,6 +398,67 @@ class TestTalismanScanExecution:
         assert "timed out" in result.error.lower()
         assert result.success is False
 
+    def test_scan_handles_execution_failure(self, mock_scanner: TalismanScanner, tmp_path: Path):
+        """Test that scan handles subprocess execution failure without report."""
+        with patch.object(mock_scanner, "_find_binary", return_value=mock_scanner._binary_path):
+            with patch("subprocess.run") as mock_run:
+                mock_run.return_value = MagicMock(
+                    stdout="",
+                    stderr="talisman: command not found or invalid flag",
+                    returncode=1,
+                )
+                result = mock_scanner.scan([tmp_path])
+
+        assert result.error is not None
+        assert "talisman: command not found or invalid flag" in result.error
+        assert result.success is False
+
+    def test_scan_ignores_nonzero_exit_with_valid_report(
+        self, mock_scanner: TalismanScanner, tmp_path: Path
+    ):
+        """Test that scan succeeds if report is valid even with non-zero exit code."""
+        # Create a valid report in the temp directory
+        test_report = {
+            "results": [
+                {
+                    "filename": "test.py",
+                    "failures": [
+                        {
+                            "type": "filecontent",
+                            "message": "Secret detected",
+                            "severity": "high",
+                        }
+                    ],
+                }
+            ]
+        }
+
+        with patch.object(mock_scanner, "_find_binary", return_value=mock_scanner._binary_path):
+            with patch("subprocess.run") as mock_run:
+                with patch("tempfile.TemporaryDirectory") as mock_temp:
+                    # Set up temp directory with report
+                    report_dir = tmp_path / "report"
+                    report_dir.mkdir()
+                    report_file = report_dir / "talisman_reports" / "data"
+                    report_file.mkdir(parents=True)
+                    (report_file / "report.json").write_text(
+                        __import__("json").dumps(test_report)
+                    )
+
+                    mock_temp.return_value.__enter__.return_value = str(report_dir)
+                    mock_run.return_value = MagicMock(
+                        stdout="",
+                        stderr="",
+                        returncode=1,  # Non-zero exit
+                    )
+
+                    result = mock_scanner.scan([tmp_path])
+
+        # Should succeed because report was found and parsed
+        assert result.error is None
+        assert result.success is True
+        assert len(result.findings) == 1
+
     def test_scan_multiple_paths(self, mock_scanner: TalismanScanner, tmp_path: Path):
         """Test scanning multiple paths."""
         path1 = tmp_path / "dir1"
