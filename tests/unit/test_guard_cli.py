@@ -119,7 +119,7 @@ def test_guard_uses_config_scanners(tmp_path: Path, monkeypatch):
     """Config scanners enable trufflehog and detect-secrets by default."""
     config = EnvdriftConfig(
         guard=FileGuardConfig(
-            scanners=["native", "gitleaks", "trufflehog", "detect-secrets"],
+            scanners=["native", "gitleaks", "trufflehog", "detect-secrets", "talisman", "trivy", "infisical"],
             include_history=True,
             check_entropy=True,
             ignore_paths=["vendor/**"],
@@ -134,6 +134,9 @@ def test_guard_uses_config_scanners(tmp_path: Path, monkeypatch):
     assert guard_config.use_gitleaks is True
     assert guard_config.use_trufflehog is True
     assert guard_config.use_detect_secrets is True
+    assert guard_config.use_talisman is True
+    assert guard_config.use_trivy is True
+    assert guard_config.use_infisical is True
     assert guard_config.include_git_history is True
     assert guard_config.check_entropy is True
     assert guard_config.ignore_paths == ["vendor/**"]
@@ -175,7 +178,7 @@ def test_guard_config_can_disable_gitleaks(tmp_path: Path, monkeypatch):
 def test_guard_cli_overrides_config_scanners(tmp_path: Path, monkeypatch):
     """CLI flags override config scanner selection."""
     config = EnvdriftConfig(
-        guard=FileGuardConfig(scanners=["native", "gitleaks", "trufflehog", "detect-secrets"])
+        guard=FileGuardConfig(scanners=["native", "gitleaks", "trufflehog", "detect-secrets", "talisman", "trivy", "infisical"])
     )
     created_configs, _info_calls = _patch_guard_dependencies(monkeypatch, config, _build_result([]))
 
@@ -187,6 +190,9 @@ def test_guard_cli_overrides_config_scanners(tmp_path: Path, monkeypatch):
             "--no-gitleaks",
             "--no-trufflehog",
             "--no-detect-secrets",
+            "--no-talisman",
+            "--no-trivy",
+            "--no-infisical",
         ],
     )
     assert result.exit_code == 0
@@ -195,6 +201,9 @@ def test_guard_cli_overrides_config_scanners(tmp_path: Path, monkeypatch):
     assert guard_config.use_gitleaks is False
     assert guard_config.use_trufflehog is False
     assert guard_config.use_detect_secrets is False
+    assert guard_config.use_talisman is False
+    assert guard_config.use_trivy is False
+    assert guard_config.use_infisical is False
 
 
 def test_guard_cli_enables_gitleaks_when_config_disables(tmp_path: Path, monkeypatch):
@@ -212,7 +221,7 @@ def test_guard_cli_enables_gitleaks_when_config_disables(tmp_path: Path, monkeyp
 def test_guard_native_only_disables_external_scanners(tmp_path: Path, monkeypatch):
     """--native-only disables external scanners."""
     config = EnvdriftConfig(
-        guard=FileGuardConfig(scanners=["native", "gitleaks", "trufflehog", "detect-secrets"])
+        guard=FileGuardConfig(scanners=["native", "gitleaks", "trufflehog", "detect-secrets", "talisman", "trivy", "infisical"])
     )
     created_configs, _info_calls = _patch_guard_dependencies(monkeypatch, config, _build_result([]))
 
@@ -223,6 +232,9 @@ def test_guard_native_only_disables_external_scanners(tmp_path: Path, monkeypatc
     assert guard_config.use_gitleaks is False
     assert guard_config.use_trufflehog is False
     assert guard_config.use_detect_secrets is False
+    assert guard_config.use_talisman is False
+    assert guard_config.use_trivy is False
+    assert guard_config.use_infisical is False
 
 
 def test_guard_history_and_entropy_flags_override_config(tmp_path: Path, monkeypatch):
@@ -652,3 +664,141 @@ def test_guard_no_kingfisher_flag(tmp_path: Path, monkeypatch):
     assert result.exit_code == 0
     assert created_configs
     assert created_configs[0].use_kingfisher is False
+
+
+def test_guard_talisman_flag(tmp_path: Path, monkeypatch):
+    """--talisman flag enables talisman scanner."""
+    config = EnvdriftConfig()
+    created_configs, _info_calls = _patch_guard_dependencies(monkeypatch, config, _build_result([]))
+
+    result = runner.invoke(app, ["guard", str(tmp_path), "--talisman"])
+    assert result.exit_code == 0
+    assert created_configs
+    assert created_configs[0].use_talisman is True
+
+
+def test_guard_no_talisman_flag(tmp_path: Path, monkeypatch):
+    """--no-talisman flag disables talisman scanner."""
+    config = EnvdriftConfig(guard=FileGuardConfig(scanners=["native", "talisman"]))
+    created_configs, _info_calls = _patch_guard_dependencies(monkeypatch, config, _build_result([]))
+
+    result = runner.invoke(app, ["guard", str(tmp_path), "--no-talisman"])
+    assert result.exit_code == 0
+    assert created_configs
+    assert created_configs[0].use_talisman is False
+
+
+def test_guard_trivy_flag(tmp_path: Path, monkeypatch):
+    """--trivy flag enables trivy scanner."""
+    config = EnvdriftConfig()
+    created_configs, _info_calls = _patch_guard_dependencies(monkeypatch, config, _build_result([]))
+
+    result = runner.invoke(app, ["guard", str(tmp_path), "--trivy"])
+    assert result.exit_code == 0
+    assert created_configs
+    assert created_configs[0].use_trivy is True
+
+
+def test_guard_no_trivy_flag(tmp_path: Path, monkeypatch):
+    """--no-trivy flag disables trivy scanner."""
+    config = EnvdriftConfig(guard=FileGuardConfig(scanners=["native", "trivy"]))
+    created_configs, _info_calls = _patch_guard_dependencies(monkeypatch, config, _build_result([]))
+
+    result = runner.invoke(app, ["guard", str(tmp_path), "--no-trivy"])
+    assert result.exit_code == 0
+    assert created_configs
+    assert created_configs[0].use_trivy is False
+
+
+def test_guard_infisical_flag(tmp_path: Path, monkeypatch):
+    """--infisical flag enables infisical scanner."""
+    config = EnvdriftConfig()
+    created_configs, _info_calls = _patch_guard_dependencies(monkeypatch, config, _build_result([]))
+
+    result = runner.invoke(app, ["guard", str(tmp_path), "--infisical"])
+    assert result.exit_code == 0
+    assert created_configs
+    assert created_configs[0].use_infisical is True
+
+
+def test_guard_no_infisical_flag(tmp_path: Path, monkeypatch):
+    """--no-infisical flag disables infisical scanner."""
+    config = EnvdriftConfig(guard=FileGuardConfig(scanners=["native", "infisical"]))
+    created_configs, _info_calls = _patch_guard_dependencies(monkeypatch, config, _build_result([]))
+
+    result = runner.invoke(app, ["guard", str(tmp_path), "--no-infisical"])
+    assert result.exit_code == 0
+    assert created_configs
+    assert created_configs[0].use_infisical is False
+
+
+def test_guard_cli_enables_talisman_when_config_disables(tmp_path: Path, monkeypatch):
+    """CLI --talisman enables talisman even when config disables it."""
+    config = EnvdriftConfig(guard=FileGuardConfig(scanners=["native"]))
+    created_configs, _info_calls = _patch_guard_dependencies(monkeypatch, config, _build_result([]))
+
+    result = runner.invoke(app, ["guard", str(tmp_path), "--talisman"])
+    assert result.exit_code == 0
+
+    guard_config = created_configs[0]
+    assert guard_config.use_talisman is True
+
+
+def test_guard_cli_enables_trivy_when_config_disables(tmp_path: Path, monkeypatch):
+    """CLI --trivy enables trivy even when config disables it."""
+    config = EnvdriftConfig(guard=FileGuardConfig(scanners=["native"]))
+    created_configs, _info_calls = _patch_guard_dependencies(monkeypatch, config, _build_result([]))
+
+    result = runner.invoke(app, ["guard", str(tmp_path), "--trivy"])
+    assert result.exit_code == 0
+
+    guard_config = created_configs[0]
+    assert guard_config.use_trivy is True
+
+
+def test_guard_cli_enables_infisical_when_config_disables(tmp_path: Path, monkeypatch):
+    """CLI --infisical enables infisical even when config disables it."""
+    config = EnvdriftConfig(guard=FileGuardConfig(scanners=["native"]))
+    created_configs, _info_calls = _patch_guard_dependencies(monkeypatch, config, _build_result([]))
+
+    result = runner.invoke(app, ["guard", str(tmp_path), "--infisical"])
+    assert result.exit_code == 0
+
+    guard_config = created_configs[0]
+    assert guard_config.use_infisical is True
+
+
+def test_guard_config_can_disable_talisman(tmp_path: Path, monkeypatch):
+    """Config scanners can disable talisman when not listed."""
+    config = EnvdriftConfig(guard=FileGuardConfig(scanners=["native"]))
+    created_configs, _info_calls = _patch_guard_dependencies(monkeypatch, config, _build_result([]))
+
+    result = runner.invoke(app, ["guard", str(tmp_path)])
+    assert result.exit_code == 0
+
+    guard_config = created_configs[0]
+    assert guard_config.use_talisman is False
+
+
+def test_guard_config_can_disable_trivy(tmp_path: Path, monkeypatch):
+    """Config scanners can disable trivy when not listed."""
+    config = EnvdriftConfig(guard=FileGuardConfig(scanners=["native"]))
+    created_configs, _info_calls = _patch_guard_dependencies(monkeypatch, config, _build_result([]))
+
+    result = runner.invoke(app, ["guard", str(tmp_path)])
+    assert result.exit_code == 0
+
+    guard_config = created_configs[0]
+    assert guard_config.use_trivy is False
+
+
+def test_guard_config_can_disable_infisical(tmp_path: Path, monkeypatch):
+    """Config scanners can disable infisical when not listed."""
+    config = EnvdriftConfig(guard=FileGuardConfig(scanners=["native"]))
+    created_configs, _info_calls = _patch_guard_dependencies(monkeypatch, config, _build_result([]))
+
+    result = runner.invoke(app, ["guard", str(tmp_path)])
+    assert result.exit_code == 0
+
+    guard_config = created_configs[0]
+    assert guard_config.use_infisical is False
