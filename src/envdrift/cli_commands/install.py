@@ -34,10 +34,11 @@ install_app = typer.Typer(
 )
 
 
-# GitHub release URL template
+# GitHub release URL templates
 GITHUB_RELEASE_URL = (
     "https://github.com/jainal09/envdrift/releases/latest/download/envdrift-agent-{platform}"
 )
+GITHUB_CHECKSUM_URL = "https://github.com/jainal09/envdrift/releases/latest/download/checksums.txt"
 
 
 def _detect_platform() -> str:
@@ -65,7 +66,11 @@ def _detect_platform() -> str:
     elif machine in ("arm64", "aarch64"):
         arch = "arm64"
     elif machine in ("i386", "i686", "x86"):
-        arch = "386"
+        # 32-bit x86 is not supported by envdrift-agent
+        raise typer.BadParameter(
+            f"Unsupported 32-bit x86 architecture: {machine}. "
+            "envdrift-agent is only available for 64-bit platforms (amd64, arm64)."
+        )
     else:
         raise typer.BadParameter(f"Unsupported architecture: {machine}")
 
@@ -98,6 +103,7 @@ def _get_install_path() -> Path:
         ]
 
         for path in preferred_paths:
+            # Only check write access on paths that actually exist
             if path.exists() and os.access(path, os.W_OK):
                 return path / "envdrift-agent"
 
@@ -126,8 +132,8 @@ def _download_binary(url: str, dest: Path, progress: Progress) -> bool:
         with tempfile.NamedTemporaryFile(delete=False) as tmp_file:
             tmp_path = Path(tmp_file.name)
 
-            # Download with urllib
-            with urllib.request.urlopen(url, timeout=60) as response:  # nosec B310
+            # Download with urllib (increased timeout for slow connections)
+            with urllib.request.urlopen(url, timeout=120) as response:  # nosec B310
                 # Read in chunks
                 chunk_size = 8192
                 while True:
@@ -150,12 +156,15 @@ def _download_binary(url: str, dest: Path, progress: Progress) -> bool:
 
     except urllib.error.HTTPError as e:
         progress.update(task, description=f"[red]Download failed: HTTP {e.code}[/red]")
+        console.print(f"[red]HTTP Error {e.code}: {e.msg}[/red]")
         return False
     except urllib.error.URLError as e:
         progress.update(task, description=f"[red]Download failed: {e.reason}[/red]")
+        console.print(f"[red]Network Error: {e.reason}[/red]")
         return False
     except OSError as e:
         progress.update(task, description=f"[red]Installation failed: {e}[/red]")
+        console.print(f"[red]File System Error: {e}[/red]")
         return False
     finally:
         # Clean up temp file if it exists
@@ -183,7 +192,13 @@ def _run_agent_install(binary_path: Path) -> bool:
             timeout=30,
         )
         return result.returncode == 0
-    except (subprocess.TimeoutExpired, OSError):
+    except subprocess.TimeoutExpired:
+        console.print("[yellow]Agent installation command timed out after 30 seconds.[/yellow]")
+        return False
+    except OSError as e:
+        console.print(f"[yellow]Failed to execute agent install command: {e}[/yellow]")
+        if not binary_path.exists():
+            console.print(f"[red]Agent binary not found at: {binary_path}[/red]")
         return False
 
 
@@ -224,6 +239,25 @@ def install_agent(
         console.print("  Use [bold]--force[/bold] to reinstall")
         return
 
+    # If force reinstall, warn if agent is running
+    if existing and force:
+        try:
+            result = subprocess.run(  # nosec B603 - checking installed binary
+                [existing, "status"],
+                capture_output=True,
+                text=True,
+                timeout=5,
+            )
+            if result.returncode == 0 and "running" in result.stdout.lower():
+                console.print(
+                    "[yellow]⚠ Warning:[/yellow] Agent is currently running. "
+                    "Consider stopping it before reinstalling."
+                )
+                console.print(f"  To stop: [bold]{existing} stop[/bold]")
+        except (subprocess.TimeoutExpired, OSError):
+            # Unable to check status; proceed anyway
+            pass
+
     # Detect platform
     try:
         plat = _detect_platform()
@@ -237,8 +271,10 @@ def install_agent(
     install_path = _get_install_path()
     console.print(f"[dim]Install path: {install_path}[/dim]")
 
-    # Build download URL
+    # Build download URL (add .exe for Windows)
     download_url = GITHUB_RELEASE_URL.format(platform=plat)
+    if plat.startswith("windows"):
+        download_url += ".exe"
 
     # Download and install
     with Progress(
@@ -269,6 +305,8 @@ def install_agent(
             version = result.stdout.strip()
             console.print(f"  Version: {version}")
     except (subprocess.TimeoutExpired, OSError):
+        # The agent was installed successfully; failure to get the version is non-critical,
+        # so we intentionally ignore errors from this optional check.
         pass
 
     # Set up auto-start
@@ -294,6 +332,16 @@ def install_agent(
                 console.print(f"[green]✓[/green] {message}")
             else:
                 console.print(f"[yellow]⚠[/yellow] {message}")
+
+    # Warn if install path is not in PATH
+    install_dir = install_path.parent
+    path_env = os.environ.get("PATH", "")
+    if str(install_dir) not in path_env and install_dir == Path.home() / ".local" / "bin":
+        console.print(
+            "\n[yellow]⚠ Note:[/yellow] ~/.local/bin is not in your PATH environment variable."
+        )
+        console.print("  Add it to your shell configuration (~/.bashrc, ~/.zshrc, etc.):")
+        console.print('  [bold]export PATH="$HOME/.local/bin:$PATH"[/bold]')
 
     # Final instructions
     console.print("\n[bold green]✓ Installation complete![/bold green]")
