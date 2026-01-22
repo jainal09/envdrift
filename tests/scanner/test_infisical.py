@@ -388,6 +388,33 @@ class TestInfisicalScanExecution:
         assert "timed out" in result.error.lower()
         assert result.success is False
 
+    def test_scan_handles_nonzero_exit_code(self, mock_scanner: InfisicalScanner, tmp_path: Path):
+        """Test that scan handles non-zero exit code with error."""
+        with patch.object(mock_scanner, "_find_binary", return_value=mock_scanner._binary_path):
+            with patch("subprocess.run") as mock_run:
+                mock_run.return_value = MagicMock(
+                    stdout="",
+                    stderr="infisical: command failed",
+                    returncode=1,
+                )
+                result = mock_scanner.scan([tmp_path])
+
+        assert result.success is False
+        assert "command failed" in result.error.lower()
+
+    def test_scan_uses_source_flag(self, mock_scanner: InfisicalScanner, tmp_path: Path):
+        """Test that scan passes --source flag with correct path."""
+        with patch.object(mock_scanner, "_find_binary", return_value=mock_scanner._binary_path):
+            with patch("subprocess.run") as mock_run:
+                mock_run.return_value = MagicMock(stdout="[]", stderr="", returncode=0)
+                mock_scanner.scan([tmp_path])
+
+        # Check that --source was passed with the correct path
+        call_args = mock_run.call_args[0][0]
+        assert "--source" in call_args
+        source_idx = call_args.index("--source")
+        assert call_args[source_idx + 1] == str(tmp_path)
+
     def test_scan_with_git_history_flag(self, mock_scanner: InfisicalScanner, tmp_path: Path):
         """Test that scan passes correct args for git history scan."""
         with patch.object(mock_scanner, "_find_binary", return_value=mock_scanner._binary_path):

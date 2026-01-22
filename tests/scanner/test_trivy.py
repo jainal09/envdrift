@@ -357,6 +357,37 @@ class TestTrivyScanExecution:
         assert "timed out" in result.error.lower()
         assert result.success is False
 
+    def test_scan_handles_nonzero_exit_code(self, mock_scanner: TrivyScanner, tmp_path: Path):
+        """Test that scan handles non-zero exit code with error."""
+        with patch.object(mock_scanner, "_find_binary", return_value=mock_scanner._binary_path):
+            with patch("subprocess.run") as mock_run:
+                mock_run.return_value = MagicMock(
+                    stdout="",
+                    stderr="trivy: command failed",
+                    returncode=1,
+                )
+                result = mock_scanner.scan([tmp_path])
+
+        assert result.success is False
+        assert "command failed" in result.error.lower()
+
+    def test_scan_handles_nonzero_exit_with_output(
+        self, mock_scanner: TrivyScanner, tmp_path: Path
+    ):
+        """Test that scan processes output even with non-zero exit code if JSON is present."""
+        output_json = json.dumps({"Results": []})
+        with patch.object(mock_scanner, "_find_binary", return_value=mock_scanner._binary_path):
+            with patch("subprocess.run") as mock_run:
+                mock_run.return_value = MagicMock(
+                    stdout=output_json,
+                    stderr="",
+                    returncode=1,  # Non-zero but has valid output
+                )
+                result = mock_scanner.scan([tmp_path])
+
+        # Should succeed because JSON output is present
+        assert result.success is True
+
     def test_scan_multiple_paths(self, mock_scanner: TrivyScanner, tmp_path: Path):
         """Test scanning multiple paths."""
         path1 = tmp_path / "dir1"

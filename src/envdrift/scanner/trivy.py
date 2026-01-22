@@ -30,6 +30,12 @@ from envdrift.scanner.base import (
     ScanResult,
 )
 from envdrift.scanner.patterns import redact_secret
+from envdrift.scanner.platform_utils import (
+    get_platform_info,
+    get_venv_bin_dir,
+    safe_extract_tar,
+    safe_extract_zip,
+)
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -78,76 +84,6 @@ class TrivyError(Exception):
     """Trivy command failed."""
 
     pass
-
-
-def get_platform_info() -> tuple[str, str]:
-    """Get current platform and architecture.
-
-    Returns:
-        Tuple of (system, machine) normalized for download URLs.
-    """
-    system = platform.system()
-    machine = platform.machine()
-
-    # Normalize architecture names
-    if machine in ("AMD64", "amd64"):
-        machine = "x86_64"
-    elif machine in ("arm64", "aarch64"):
-        machine = "arm64"
-    elif machine == "x86_64":
-        pass  # Keep as is
-
-    return system, machine
-
-
-def get_venv_bin_dir() -> Path:
-    """Get the virtual environment's bin directory.
-
-    Returns:
-        Path to the bin directory where binaries should be installed.
-    """
-    import os
-    import sys
-
-    # Check for virtual environment
-    venv_path = os.environ.get("VIRTUAL_ENV")
-    if venv_path:
-        venv = Path(venv_path)
-        if platform.system() == "Windows":
-            return venv / "Scripts"
-        return venv / "bin"
-
-    # Try to find venv relative to the package
-    for path in sys.path:
-        p = Path(path)
-        if ".venv" in p.parts or "venv" in p.parts:
-            while p.name not in (".venv", "venv") and p.parent != p:
-                p = p.parent
-            if p.name in (".venv", "venv"):
-                if platform.system() == "Windows":
-                    return p / "Scripts"
-                return p / "bin"
-
-    # Default to .venv in current directory
-    cwd_venv = Path.cwd() / ".venv"
-    if cwd_venv.exists():
-        if platform.system() == "Windows":
-            return cwd_venv / "Scripts"
-        return cwd_venv / "bin"
-
-    # Fallback to user bin directory
-    if platform.system() == "Windows":
-        appdata = os.environ.get("APPDATA")
-        if appdata:
-            user_scripts = Path(appdata) / "Python" / "Scripts"
-            user_scripts.mkdir(parents=True, exist_ok=True)
-            return user_scripts
-    else:
-        user_bin = Path.home() / ".local" / "bin"
-        user_bin.mkdir(parents=True, exist_ok=True)
-        return user_bin
-
-    raise RuntimeError("Cannot find suitable bin directory for installation")
 
 
 def get_trivy_path() -> Path:
@@ -285,24 +221,14 @@ class TrivyInstaller:
             self.progress(f"Installed to {target_path}")
 
     def _extract_tar_gz(self, archive_path: Path, target_dir: Path) -> None:
-        """Extract a tar.gz archive."""
+        """Extract a tar.gz archive with path traversal protection."""
         with tarfile.open(archive_path, "r:gz") as tar:
-            # Security: check for path traversal
-            for member in tar.getmembers():
-                member_path = target_dir / member.name
-                if not member_path.resolve().is_relative_to(target_dir.resolve()):
-                    raise TrivyInstallError(f"Unsafe path in archive: {member.name}")
-            tar.extractall(target_dir, filter="data")  # nosec B202
+            safe_extract_tar(tar, target_dir, TrivyInstallError)
 
     def _extract_zip(self, archive_path: Path, target_dir: Path) -> None:
-        """Extract a zip archive."""
+        """Extract a zip archive with path traversal protection."""
         with zipfile.ZipFile(archive_path, "r") as zip_ref:
-            # Security: check for path traversal
-            for name in zip_ref.namelist():
-                member_path = target_dir / name
-                if not member_path.resolve().is_relative_to(target_dir.resolve()):
-                    raise TrivyInstallError(f"Unsafe path in archive: {name}")
-            zip_ref.extractall(target_dir)  # nosec B202
+            safe_extract_zip(zip_ref, target_dir, TrivyInstallError)
 
     def install(self, force: bool = False) -> Path:
         """Install trivy binary.
@@ -328,7 +254,8 @@ class TrivyInstaller:
                     self.progress(f"trivy v{self.version} already installed")
                     return target_path
             except Exception:
-                pass  # Version check failed, will reinstall
+                # Version check failed (binary corrupt or incompatible), will reinstall
+                pass
 
         self.download_and_extract(target_path)
         return target_path
@@ -510,6 +437,21 @@ class TrivyScanner(ScannerBackend):
                     text=True,
                     timeout=300,  # 5 minute timeout
                 )
+
+                # Check for non-zero exit code indicating an error
+                # Note: trivy returns non-zero only for actual errors (not for found secrets)
+                if result.returncode != 0 and not result.stdout.strip():
+                    error_msg = (
+                        result.stderr.strip()
+                        or result.stdout.strip()
+                        or f"trivy scan failed for {path}"
+                    )
+                    return ScanResult(
+                        scanner_name=self.name,
+                        findings=all_findings,
+                        error=error_msg,
+                        duration_ms=int((time.time() - start_time) * 1000),
+                    )
 
                 # Parse JSON output
                 if result.stdout.strip():

@@ -28,6 +28,7 @@ from envdrift.scanner.base import (
     ScanResult,
 )
 from envdrift.scanner.patterns import redact_secret
+from envdrift.scanner.platform_utils import get_platform_info, get_venv_bin_dir
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -74,76 +75,6 @@ class TalismanError(Exception):
     """Talisman command failed."""
 
     pass
-
-
-def get_platform_info() -> tuple[str, str]:
-    """Get current platform and architecture.
-
-    Returns:
-        Tuple of (system, machine) normalized for download URLs.
-    """
-    system = platform.system()
-    machine = platform.machine()
-
-    # Normalize architecture names
-    if machine in ("AMD64", "amd64"):
-        machine = "x86_64"
-    elif machine in ("arm64", "aarch64"):
-        machine = "arm64"
-    elif machine == "x86_64":
-        pass  # Keep as is
-
-    return system, machine
-
-
-def get_venv_bin_dir() -> Path:
-    """Get the virtual environment's bin directory.
-
-    Returns:
-        Path to the bin directory where binaries should be installed.
-    """
-    import os
-    import sys
-
-    # Check for virtual environment
-    venv_path = os.environ.get("VIRTUAL_ENV")
-    if venv_path:
-        venv = Path(venv_path)
-        if platform.system() == "Windows":
-            return venv / "Scripts"
-        return venv / "bin"
-
-    # Try to find venv relative to the package
-    for path in sys.path:
-        p = Path(path)
-        if ".venv" in p.parts or "venv" in p.parts:
-            while p.name not in (".venv", "venv") and p.parent != p:
-                p = p.parent
-            if p.name in (".venv", "venv"):
-                if platform.system() == "Windows":
-                    return p / "Scripts"
-                return p / "bin"
-
-    # Default to .venv in current directory
-    cwd_venv = Path.cwd() / ".venv"
-    if cwd_venv.exists():
-        if platform.system() == "Windows":
-            return cwd_venv / "Scripts"
-        return cwd_venv / "bin"
-
-    # Fallback to user bin directory
-    if platform.system() == "Windows":
-        appdata = os.environ.get("APPDATA")
-        if appdata:
-            user_scripts = Path(appdata) / "Python" / "Scripts"
-            user_scripts.mkdir(parents=True, exist_ok=True)
-            return user_scripts
-    else:
-        user_bin = Path.home() / ".local" / "bin"
-        user_bin.mkdir(parents=True, exist_ok=True)
-        return user_bin
-
-    raise RuntimeError("Cannot find suitable bin directory for installation")
 
 
 def get_talisman_path() -> Path:
@@ -488,7 +419,8 @@ class TalismanScanner(ScannerBackend):
                                 total_files += files
                                 break
                             except json.JSONDecodeError:
-                                pass
+                                # Invalid JSON in report file, try next possible location
+                                continue
 
                 except subprocess.TimeoutExpired:
                     return ScanResult(

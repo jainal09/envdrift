@@ -30,6 +30,12 @@ from envdrift.scanner.base import (
     ScanResult,
 )
 from envdrift.scanner.patterns import redact_secret
+from envdrift.scanner.platform_utils import (
+    get_platform_info,
+    get_venv_bin_dir,
+    safe_extract_tar,
+    safe_extract_zip,
+)
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -83,76 +89,6 @@ class InfisicalError(Exception):
     """Infisical command failed."""
 
     pass
-
-
-def get_platform_info() -> tuple[str, str]:
-    """Get current platform and architecture.
-
-    Returns:
-        Tuple of (system, machine) normalized for download URLs.
-    """
-    system = platform.system()
-    machine = platform.machine()
-
-    # Normalize architecture names
-    if machine in ("AMD64", "amd64"):
-        machine = "x86_64"
-    elif machine in ("arm64", "aarch64"):
-        machine = "arm64"
-    elif machine == "x86_64":
-        pass  # Keep as is
-
-    return system, machine
-
-
-def get_venv_bin_dir() -> Path:
-    """Get the virtual environment's bin directory.
-
-    Returns:
-        Path to the bin directory where binaries should be installed.
-    """
-    import os
-    import sys
-
-    # Check for virtual environment
-    venv_path = os.environ.get("VIRTUAL_ENV")
-    if venv_path:
-        venv = Path(venv_path)
-        if platform.system() == "Windows":
-            return venv / "Scripts"
-        return venv / "bin"
-
-    # Try to find venv relative to the package
-    for path in sys.path:
-        p = Path(path)
-        if ".venv" in p.parts or "venv" in p.parts:
-            while p.name not in (".venv", "venv") and p.parent != p:
-                p = p.parent
-            if p.name in (".venv", "venv"):
-                if platform.system() == "Windows":
-                    return p / "Scripts"
-                return p / "bin"
-
-    # Default to .venv in current directory
-    cwd_venv = Path.cwd() / ".venv"
-    if cwd_venv.exists():
-        if platform.system() == "Windows":
-            return cwd_venv / "Scripts"
-        return cwd_venv / "bin"
-
-    # Fallback to user bin directory
-    if platform.system() == "Windows":
-        appdata = os.environ.get("APPDATA")
-        if appdata:
-            user_scripts = Path(appdata) / "Python" / "Scripts"
-            user_scripts.mkdir(parents=True, exist_ok=True)
-            return user_scripts
-    else:
-        user_bin = Path.home() / ".local" / "bin"
-        user_bin.mkdir(parents=True, exist_ok=True)
-        return user_bin
-
-    raise RuntimeError("Cannot find suitable bin directory for installation")
 
 
 def get_infisical_path() -> Path:
@@ -290,24 +226,14 @@ class InfisicalInstaller:
             self.progress(f"Installed to {target_path}")
 
     def _extract_tar_gz(self, archive_path: Path, target_dir: Path) -> None:
-        """Extract a tar.gz archive."""
+        """Extract a tar.gz archive with path traversal protection."""
         with tarfile.open(archive_path, "r:gz") as tar:
-            # Security: check for path traversal
-            for member in tar.getmembers():
-                member_path = target_dir / member.name
-                if not member_path.resolve().is_relative_to(target_dir.resolve()):
-                    raise InfisicalInstallError(f"Unsafe path in archive: {member.name}")
-            tar.extractall(target_dir, filter="data")  # nosec B202
+            safe_extract_tar(tar, target_dir, InfisicalInstallError)
 
     def _extract_zip(self, archive_path: Path, target_dir: Path) -> None:
-        """Extract a zip archive."""
+        """Extract a zip archive with path traversal protection."""
         with zipfile.ZipFile(archive_path, "r") as zip_ref:
-            # Security: check for path traversal
-            for name in zip_ref.namelist():
-                member_path = target_dir / name
-                if not member_path.resolve().is_relative_to(target_dir.resolve()):
-                    raise InfisicalInstallError(f"Unsafe path in archive: {name}")
-            zip_ref.extractall(target_dir)  # nosec B202
+            safe_extract_zip(zip_ref, target_dir, InfisicalInstallError)
 
     def install(self, force: bool = False) -> Path:
         """Install infisical binary.
@@ -333,7 +259,8 @@ class InfisicalInstaller:
                     self.progress(f"infisical v{self.version} already installed")
                     return target_path
             except Exception:
-                pass  # Version check failed, will reinstall
+                # Version check failed (binary corrupt or incompatible), will reinstall
+                pass
 
         self.download_and_extract(target_path)
         return target_path
@@ -500,31 +427,51 @@ class InfisicalScanner(ScannerBackend):
                 continue
 
             # Create temp file for JSON report
-            with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as report_file:
-                report_path = Path(report_file.name)
-
+            report_path: Path | None = None
             try:
-                # Build command
+                with tempfile.NamedTemporaryFile(
+                    mode="w", suffix=".json", delete=False
+                ) as report_file:
+                    report_path = Path(report_file.name)
+                # Build command with explicit source path
+                work_dir = path if path.is_dir() else path.parent
                 args = [
                     str(binary),
                     "scan",
                     "--report-path",
                     str(report_path),
+                    "--source",
+                    str(work_dir),
                 ]
 
                 # If not scanning git history, use --no-git
                 if not include_git_history:
                     args.append("--no-git")
 
-                # Run infisical from the target directory
-                work_dir = path if path.is_dir() else path.parent
-                subprocess.run(  # nosec B603
+                # Run infisical scan
+                result = subprocess.run(  # nosec B603
                     args,
                     capture_output=True,
                     text=True,
                     timeout=300,  # 5 minute timeout
                     cwd=str(work_dir),
                 )
+
+                # Check for scan failures (non-zero exit code without report)
+                if result.returncode != 0 and (
+                    not report_path.exists() or report_path.stat().st_size == 0
+                ):
+                    error_msg = (
+                        result.stderr.strip()
+                        or result.stdout.strip()
+                        or f"infisical scan failed for {path}"
+                    )
+                    return ScanResult(
+                        scanner_name=self.name,
+                        findings=all_findings,
+                        error=error_msg,
+                        duration_ms=int((time.time() - start_time) * 1000),
+                    )
 
                 # Parse JSON report
                 if report_path.exists() and report_path.stat().st_size > 0:
@@ -536,12 +483,15 @@ class InfisicalScanner(ScannerBackend):
                                 item.get("File") for item in report_data if item.get("File")
                             }
                             total_files += len(files_with_findings)
+                            # Use work_dir as base for relative path resolution
+                            base_dir = work_dir
                             for item in report_data:
-                                finding = self._parse_finding(item, path)
+                                finding = self._parse_finding(item, base_dir)
                                 if finding:
                                     all_findings.append(finding)
                     except json.JSONDecodeError:
-                        pass
+                        # Invalid JSON in report, skip findings for this path
+                        continue
 
             except subprocess.TimeoutExpired:
                 return ScanResult(
@@ -559,7 +509,7 @@ class InfisicalScanner(ScannerBackend):
                 )
             finally:
                 # Clean up temp report file
-                if report_path.exists():
+                if report_path is not None and report_path.exists():
                     report_path.unlink()
 
         return ScanResult(

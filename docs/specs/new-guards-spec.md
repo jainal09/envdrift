@@ -306,7 +306,7 @@ SEDATED is designed to run on Git servers (GitHub Enterprise, GitLab, vanilla Gi
 **pre-receive hook**, not as a standalone CLI tool. Key limitations:
 
 1. **Server-side only**: Runs as a Git hook on the server, not client-side
-2. **No CLI interface**: No command to run scans locally
+2. **No CLI**: No command to run scans locally
 3. **Requires deployment**: Must be installed on Git server infrastructure
 4. **Shell script-based**: Not a binary that can be easily distributed
 
