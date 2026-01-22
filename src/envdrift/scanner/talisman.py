@@ -394,7 +394,7 @@ class TalismanScanner(ScannerBackend):
 
                     # Run talisman from the target directory
                     work_dir = path if path.is_dir() else path.parent
-                    subprocess.run(  # nosec B603
+                    result = subprocess.run(  # nosec B603
                         args,
                         capture_output=True,
                         text=True,
@@ -410,6 +410,7 @@ class TalismanScanner(ScannerBackend):
                         report_path / "talisman_report.json",
                     ]
 
+                    report_found = False
                     for report_file in possible_report_files:
                         if report_file.exists():
                             try:
@@ -417,10 +418,25 @@ class TalismanScanner(ScannerBackend):
                                 findings, files = self._parse_report(report_data, path)
                                 all_findings.extend(findings)
                                 total_files += files
+                                report_found = True
                                 break
                             except json.JSONDecodeError:
                                 # Invalid JSON in report file, try next possible location
                                 continue
+
+                    # Check for execution errors: non-zero exit code without valid report
+                    if result.returncode != 0 and not report_found:
+                        error_msg = (
+                            result.stderr.strip()
+                            or result.stdout.strip()
+                            or f"talisman scan failed for {path}"
+                        )
+                        return ScanResult(
+                            scanner_name=self.name,
+                            findings=all_findings,
+                            error=error_msg,
+                            duration_ms=int((time.time() - start_time) * 1000),
+                        )
 
                 except subprocess.TimeoutExpired:
                     return ScanResult(
