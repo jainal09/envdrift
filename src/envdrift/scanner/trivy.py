@@ -535,7 +535,11 @@ class TrivyScanner(ScannerBackend):
             # Get file path
             file_path = Path(target)
             if not file_path.is_absolute():
-                file_path = base_path / file_path
+                # If base_path is a file, paths are relative to its parent directory
+                if base_path.is_file():
+                    file_path = base_path.parent / file_path
+                else:
+                    file_path = base_path / file_path
 
             # Get the secret match and redact it
             matched = secret.get("Match", "")

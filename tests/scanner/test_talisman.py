@@ -677,6 +677,23 @@ class TestTalismanIntegration:
         # Create a clean file
         (tmp_path / "clean.py").write_text("# No secrets here\nx = 1 + 1\n")
 
+        # Initialize git repo - talisman requires a git repository
+        import subprocess
+
+        subprocess.run(["git", "init"], cwd=tmp_path, capture_output=True)
+        subprocess.run(
+            ["git", "config", "user.email", "test@test.com"],
+            cwd=tmp_path,
+            capture_output=True,
+        )
+        subprocess.run(
+            ["git", "config", "user.name", "Test"],
+            cwd=tmp_path,
+            capture_output=True,
+        )
+        subprocess.run(["git", "add", "."], cwd=tmp_path, capture_output=True)
+        subprocess.run(["git", "commit", "-m", "init"], cwd=tmp_path, capture_output=True)
+
         scanner = TalismanScanner(auto_install=False)
         result = scanner.scan([tmp_path])
 

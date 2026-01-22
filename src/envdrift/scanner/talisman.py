@@ -384,7 +384,7 @@ class TalismanScanner(ScannerBackend):
                     args = [
                         str(binary),
                         "--scan",
-                        "--reportdirectory",
+                        "--reportDirectory",
                         str(report_path),
                     ]
 
@@ -486,7 +486,11 @@ class TalismanScanner(ScannerBackend):
 
             file_path = Path(filename)
             if not file_path.is_absolute():
-                file_path = base_path / file_path
+                # If base_path is a file, paths are relative to its parent directory
+                if base_path.is_file():
+                    file_path = base_path.parent / file_path
+                else:
+                    file_path = base_path / file_path
 
             # Parse failures/warnings in result
             for failure in result.get("failures", []):
