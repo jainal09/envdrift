@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import subprocess
 from pathlib import Path
 from typing import Any
@@ -441,9 +442,7 @@ class TestTalismanScanExecution:
                     report_dir.mkdir()
                     report_file = report_dir / "talisman_reports" / "data"
                     report_file.mkdir(parents=True)
-                    (report_file / "report.json").write_text(
-                        __import__("json").dumps(test_report)
-                    )
+                    (report_file / "report.json").write_text(json.dumps(test_report))
 
                     mock_temp.return_value.__enter__.return_value = str(report_dir)
                     mock_run.return_value = MagicMock(
