@@ -79,13 +79,16 @@ class GuardConfig:
 
     @classmethod
     def from_dict(cls, config: dict) -> GuardConfig:
-        """Create config from a dictionary (e.g., from envdrift.toml).
+        """
+        Construct a GuardConfig from a parsed configuration dictionary (for example, from envdrift.toml).
 
-        Args:
-            config: Dictionary with guard configuration.
+        Parses the "guard" section to enable scanner flags, normalization of the "scanners" entry (accepts a string or list; defaults to ["native", "gitleaks"]), and reads other guard settings such as auto_install, include_history, entropy checks, ignore paths/rules, and skip_clear_files. Interprets "fail_on_severity" case-insensitively and falls back to FindingSeverity.HIGH on invalid values.
+
+        Parameters:
+            config (dict): Configuration dictionary that may contain a "guard" mapping.
 
         Returns:
-            GuardConfig instance.
+            GuardConfig: A GuardConfig populated from the provided dictionary.
         """
         guard_config = config.get("guard", {})
 
@@ -289,16 +292,19 @@ class ScanEngine:
                 logger.debug("Infisical scanner not available - module not found")
 
     def scan(self, paths: list[Path]) -> AggregatedScanResult:
-        """Run all configured scanners on the given paths in parallel.
+        """
+        Run all configured scanners against the given file system paths, aggregate their findings, and apply deduplication and centralized filtering.
 
-        Scanners run concurrently to improve performance on large repositories.
-        Each scanner has its own timeout and error handling.
-
-        Args:
-            paths: List of files or directories to scan.
+        Parameters:
+            paths (list[Path]): Files or directories to scan.
 
         Returns:
-            AggregatedScanResult with deduplicated findings.
+            AggregatedScanResult: Aggregated scan outcome containing:
+                - results: list of per-scanner ScanResult objects (including errors).
+                - total_findings: total number of findings collected before deduplication/filtering.
+                - unique_findings: deduplicated and filtered list of ScanFinding objects.
+                - scanners_used: list of scanner names that were executed.
+                - total_duration_ms: total scan duration in milliseconds.
         """
         start_time = time.time()
         results: list[ScanResult] = []

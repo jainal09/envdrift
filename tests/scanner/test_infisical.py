@@ -207,7 +207,12 @@ class TestFindingParsing:
 
     @pytest.fixture
     def scanner(self) -> InfisicalScanner:
-        """Create a scanner instance for testing."""
+        """
+        Create an InfisicalScanner configured to not auto-install for use in tests.
+
+        Returns:
+            scanner (InfisicalScanner): An InfisicalScanner instance with auto_install set to False.
+        """
         return InfisicalScanner(auto_install=False)
 
     def test_parse_basic_finding(self, scanner: InfisicalScanner, tmp_path: Path):
@@ -309,7 +314,15 @@ class TestInfisicalScanExecution:
 
     @pytest.fixture
     def mock_scanner(self, tmp_path: Path) -> InfisicalScanner:
-        """Create a scanner with mocked binary."""
+        """
+        Create an InfisicalScanner instance whose binary path points to a temporary file.
+
+        Parameters:
+            tmp_path (Path): Temporary directory in which the mock infisical binary will be created.
+
+        Returns:
+            scanner (InfisicalScanner): Scanner with its `_binary_path` set to the created mock binary file.
+        """
         scanner = InfisicalScanner(auto_install=False)
         binary_path = tmp_path / "infisical"
         binary_path.touch()
@@ -331,7 +344,14 @@ class TestInfisicalScanExecution:
         )
 
         def write_report_file(*args, **kwargs):
-            """Mock subprocess that writes JSON to the report file."""
+            """
+            Mock subprocess replacement that writes predefined JSON to the report file specified in the command arguments.
+
+            Searches the provided command arguments for the "--report-path" flag, writes the module-level `findings_json` content to that path, and returns a process-like mock.
+
+            Returns:
+                process (unittest.mock.MagicMock): Mock process with `stdout` set to an empty string, `stderr` set to an empty string, and `returncode` set to 0.
+            """
             cmd_args = args[0]
             report_idx = cmd_args.index("--report-path")
             report_path = Path(cmd_args[report_idx + 1])

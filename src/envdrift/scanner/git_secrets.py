@@ -710,13 +710,14 @@ class GitSecretsScanner(ScannerBackend):
         return "generic-secret"
 
     def _get_rule_description(self, rule_id: str) -> str:
-        """Get human-readable description for a rule.
+        """
+        Return a human-readable description for the specified rule identifier.
 
-        Args:
-            rule_id: Rule identifier.
+        Parameters:
+            rule_id (str): Rule identifier to describe.
 
         Returns:
-            Human-readable description.
+            description (str): Human-readable rule description, or "Secret Pattern Match" if the identifier is unknown.
         """
         descriptions = {  # nosec B105 - rule ID descriptions, not actual secrets
             "aws-access-key": "AWS Access Key ID",

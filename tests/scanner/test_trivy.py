@@ -204,7 +204,12 @@ class TestFindingParsing:
 
     @pytest.fixture
     def scanner(self) -> TrivyScanner:
-        """Create a scanner instance for testing."""
+        """
+        Creates a TrivyScanner configured for tests with auto-install disabled.
+
+        Returns:
+            TrivyScanner: Scanner instance with auto_install=False suitable for unit tests.
+        """
         return TrivyScanner(auto_install=False)
 
     def test_parse_secret_basic(self, scanner: TrivyScanner, tmp_path: Path):
@@ -285,7 +290,15 @@ class TestTrivyScanExecution:
 
     @pytest.fixture
     def mock_scanner(self, tmp_path: Path) -> TrivyScanner:
-        """Create a scanner with mocked binary."""
+        """
+        Create a TrivyScanner with a mocked trivy binary placed in the given temporary directory.
+
+        Parameters:
+            tmp_path (Path): Temporary directory in which a fake `trivy` binary file will be created.
+
+        Returns:
+            TrivyScanner: Scanner instance with its `_binary_path` set to the created fake binary.
+        """
         scanner = TrivyScanner(auto_install=False)
         binary_path = tmp_path / "trivy"
         binary_path.touch()
