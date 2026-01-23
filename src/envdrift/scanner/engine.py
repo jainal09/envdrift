@@ -10,6 +10,7 @@ The ScanEngine is responsible for:
 from __future__ import annotations
 
 import time
+from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -265,6 +266,7 @@ class ScanEngine:
                     confidence="low",  # Maximum detection
                     scan_binary_files=True,
                     extract_archives=True,
+                    jobs=1,  # deterministic results over speed
                 )
                 if scanner.is_installed() or self.config.auto_install:
                     self.scanners.append(scanner)
@@ -318,12 +320,18 @@ class ScanEngine:
             except ImportError:
                 logger.debug("Infisical scanner not available - module not found")
 
-    def scan(self, paths: list[Path]) -> AggregatedScanResult:
+    def scan(
+        self,
+        paths: list[Path],
+        on_scanner_complete: Callable[[str, int, int, ScanResult | None], None] | None = None,
+    ) -> AggregatedScanResult:
         """
         Run all configured scanners against the given file system paths, aggregate their findings, and apply deduplication and centralized filtering.
 
         Parameters:
             paths (list[Path]): Files or directories to scan.
+            on_scanner_complete: Optional callback called when each scanner completes.
+                                 Signature: (scanner_name: str, completed: int, total: int) -> None
 
         Returns:
             AggregatedScanResult: Aggregated scan outcome containing:
@@ -349,6 +357,8 @@ class ScanEngine:
         # Run scanners in parallel using ThreadPoolExecutor
         # Use at most 4 workers to avoid overwhelming the system
         max_workers = min(len(self.scanners), 4)
+        total_scanners = len(self.scanners)
+        completed_count = 0
 
         with ThreadPoolExecutor(max_workers=max_workers) as executor:
             # Submit all scanner tasks
@@ -363,54 +373,70 @@ class ScanEngine:
             for future in as_completed(future_to_scanner):
                 scanner = future_to_scanner[future]
                 try:
-                    result = future.result(timeout=600)  # 10 minute per-scanner timeout
-                    results.append(result)
+                    scan_result = future.result()
                 except Exception as e:
                     # Record scanner failure but continue with others
-                    results.append(
-                        ScanResult(
-                            scanner_name=scanner.name,
-                            error=f"Scanner failed: {e!s}",
-                        )
+                    scan_result = ScanResult(
+                        scanner_name=scanner.name,
+                        error=f"Scanner failed: {e!s}",
+                    )
+                results.append(scan_result)
+
+                # Notify progress callback
+                completed_count += 1
+                if on_scanner_complete:
+                    on_scanner_complete(
+                        scanner.name,
+                        completed_count,
+                        total_scanners,
+                        scan_result,
                     )
 
-        # Collect all findings
+        # Collect all findings (sort results by scanner name for deterministic order)
+        results.sort(key=lambda r: r.scanner_name)
         all_findings: list[ScanFinding] = []
         for result in results:
             all_findings.extend(result.findings)
+            logger.debug(
+                f"Scanner {result.scanner_name}: {len(result.findings)} findings"
+            )
 
-        # Deduplicate findings
-        unique_findings = self._deduplicate(all_findings)
+        # Apply centralized filtering BEFORE deduplication so ignored/filtered findings
+        # do not suppress valid findings from other locations.
+        filtered_findings: list[ScanFinding] = list(all_findings)
 
         # Filter out .clear file findings if skip_clear_files is enabled
         # This applies centrally to ALL scanners (gitleaks, trufflehog, git-secrets, etc.)
         if self.config.skip_clear_files:
-            unique_findings = self._filter_clear_files(unique_findings)
+            filtered_findings = self._filter_clear_files(filtered_findings)
 
         # Filter out findings from encrypted files (dotenvx/SOPS markers)
         # Encrypted files contain ciphertext that triggers false positives
         if self.config.skip_encrypted_files:
-            unique_findings = self._filter_encrypted_files(unique_findings)
+            filtered_findings = self._filter_encrypted_files(filtered_findings)
 
         # Filter out dotenvx public keys (EC keys starting with 02/03)
         # These are meant to be public and should not be flagged as secrets
-        unique_findings = self._filter_public_keys(unique_findings)
+        filtered_findings = self._filter_public_keys(filtered_findings)
 
         # Filter out findings from gitignored files if enabled
         # Uses git check-ignore for reliable detection
         if self.config.skip_gitignored:
-            unique_findings = self._filter_gitignored_files(unique_findings)
+            filtered_findings = self._filter_gitignored_files(filtered_findings)
 
         # Apply centralized ignore filter (inline comments + TOML config rules)
         # This works across ALL scanners (native, gitleaks, trufflehog, etc.)
-        filtered_findings = self._ignore_filter.filter(unique_findings)
+        filtered_findings = self._ignore_filter.filter(filtered_findings)
+
+        # Deduplicate findings (after filtering for deterministic, correct results)
+        unique_findings = self._deduplicate(filtered_findings)
 
         total_duration = int((time.time() - start_time) * 1000)
 
         return AggregatedScanResult(
             results=results,
             total_findings=len(all_findings),
-            unique_findings=filtered_findings,
+            unique_findings=unique_findings,
             scanners_used=[s.name for s in self.scanners],
             total_duration_ms=total_duration,
         )
@@ -434,11 +460,26 @@ class ScanEngine:
         """
         seen: dict[tuple, ScanFinding] = {}
 
+        def _tie_key(finding: ScanFinding) -> tuple:
+            """Deterministic tie-breaker for duplicate findings."""
+            return (
+                str(finding.file_path),
+                finding.line_number or 0,
+                finding.rule_id,
+                finding.scanner,
+            )
+
         for finding in findings:
             if self.config.skip_duplicate:
-                # Deduplicate by secret value only - same secret = one finding
-                # Prefer secret_hash (accurate) over secret_preview (may have collisions)
-                key = (finding.secret_hash,) if finding.secret_hash else (finding.secret_preview,)
+                # Deduplicate by secret value only - same secret = one finding.
+                # Prefer secret_hash (accurate) over secret_preview (may have collisions).
+                # If neither is present (policy findings), fall back to location-based key.
+                if finding.secret_hash:
+                    key = (finding.secret_hash,)
+                elif finding.secret_preview:
+                    key = (finding.secret_preview,)
+                else:
+                    key = (finding.file_path, finding.line_number, finding.rule_id)
             else:
                 # Default: deduplicate by file, line, and rule
                 key = (finding.file_path, finding.line_number, finding.rule_id)
@@ -448,10 +489,20 @@ class ScanEngine:
             else:
                 existing = seen[key]
                 # Keep higher severity
-                if finding.severity > existing.severity or (
-                    finding.verified and not existing.verified
-                ):
+                if finding.severity > existing.severity:
                     seen[key] = finding
+                elif finding.severity == existing.severity:
+                    # Prefer verified over unverified
+                    if finding.verified and not existing.verified:
+                        seen[key] = finding
+                    elif finding.verified == existing.verified:
+                        # Prefer findings with a real secret_hash for accuracy
+                        if bool(finding.secret_hash) and not bool(existing.secret_hash):
+                            seen[key] = finding
+                        elif bool(finding.secret_hash) == bool(existing.secret_hash):
+                            # Deterministic tie-breaker to avoid run-to-run drift
+                            if _tie_key(finding) < _tie_key(existing):
+                                seen[key] = finding
 
         # Sort by severity (highest first), then by file path
         return sorted(
@@ -596,29 +647,65 @@ class ScanEngine:
         if not findings:
             return findings
 
-        # Get unique file paths
-        file_paths = list({str(f.file_path) for f in findings})
+        # Group file paths by git root for accurate check-ignore behavior
+        file_paths = {Path(f.file_path).resolve() for f in findings}
+        if not file_paths:
+            return findings
 
-        # Use git check-ignore to check all files at once
-        # This is more efficient than checking one by one
-        gitignored_files: set[str] = set()
+        def find_git_root(path: Path) -> Path | None:
+            current = path if path.is_dir() else path.parent
+            for parent in [current, *current.parents]:
+                if (parent / ".git").exists():
+                    return parent
+            return None
 
-        try:
-            # git check-ignore returns 0 if file is ignored, 1 if not, 128 if error
-            # Using -n to show non-matching files too, makes parsing easier
-            result = subprocess.run(  # nosec B603, B607
-                ["git", "check-ignore", "--stdin"],
-                input="\n".join(file_paths),
-                capture_output=True,
-                text=True,
-                timeout=30,
-            )
-            # Each line in stdout is a gitignored file
-            if result.stdout.strip():
-                gitignored_files = set(result.stdout.strip().split("\n"))
-        except (subprocess.TimeoutExpired, FileNotFoundError, subprocess.SubprocessError) as e:
-            logger.warning(f"Could not check gitignore status: {e}")
-            return findings  # Don't filter if we can't check
+        paths_by_root: dict[Path, list[Path]] = {}
+        for path in file_paths:
+            root = find_git_root(path)
+            if root is None:
+                continue
+            paths_by_root.setdefault(root, []).append(path)
+
+        gitignored_files: set[Path] = set()
+
+        for root, paths in paths_by_root.items():
+            # Use git check-ignore to check all files at once (relative to repo root)
+            rel_paths: list[str] = []
+            for p in paths:
+                try:
+                    rel_paths.append(str(p.relative_to(root)))
+                except ValueError:
+                    # Path is outside this repo root
+                    continue
+
+            if not rel_paths:
+                continue
+
+            try:
+                result = subprocess.run(  # nosec B603, B607
+                    ["git", "check-ignore", "--stdin", "-z"],
+                    input="\0".join(rel_paths) + "\0",
+                    capture_output=True,
+                    text=True,
+                    timeout=30,
+                    cwd=str(root),
+                )
+                if result.returncode not in (0, 1):
+                    logger.warning(
+                        "git check-ignore failed in %s (code %s): %s",
+                        root,
+                        result.returncode,
+                        result.stderr.strip()[:200],
+                    )
+                    continue
+
+                if result.stdout:
+                    ignored = [p for p in result.stdout.split("\0") if p]
+                    for rel in ignored:
+                        gitignored_files.add((root / rel).resolve())
+            except (subprocess.TimeoutExpired, FileNotFoundError, subprocess.SubprocessError) as e:
+                logger.warning(f"Could not check gitignore status: {e}")
+                continue
 
         if not gitignored_files:
             return findings
@@ -626,7 +713,7 @@ class ScanEngine:
         before_count = len(findings)
         filtered = [
             finding for finding in findings
-            if str(finding.file_path) not in gitignored_files
+            if Path(finding.file_path).resolve() not in gitignored_files
         ]
         after_count = len(filtered)
 

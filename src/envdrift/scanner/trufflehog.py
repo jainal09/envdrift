@@ -34,7 +34,7 @@ from envdrift.scanner.base import (
     ScannerBackend,
     ScanResult,
 )
-from envdrift.scanner.patterns import redact_secret
+from envdrift.scanner.patterns import hash_secret, redact_secret
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -547,6 +547,19 @@ class TrufflehogScanner(ScannerBackend):
                             continue
                     total_files += len(files_with_findings)
 
+                if result.returncode != 0:
+                    error_msg = (
+                        result.stderr.strip()
+                        or result.stdout.strip()
+                        or f"trufflehog scan failed for {path} (exit code {result.returncode})"
+                    )
+                    return ScanResult(
+                        scanner_name=self.name,
+                        findings=all_findings,
+                        error=error_msg,
+                        duration_ms=int((time.time() - start_time) * 1000),
+                    )
+
             except subprocess.TimeoutExpired:
                 return ScanResult(
                     scanner_name=self.name,
@@ -622,6 +635,7 @@ class TrufflehogScanner(ScannerBackend):
             # Get the secret and redact it
             raw_secret = item.get("Raw", "")
             redacted = redact_secret(raw_secret) if raw_secret else ""
+            secret_hash = hash_secret(raw_secret) if raw_secret else ""
 
             # Get detector info
             detector_name = item.get("DetectorName", "unknown")
@@ -650,6 +664,7 @@ class TrufflehogScanner(ScannerBackend):
                 description=f"{'Verified ' if verified else ''}Secret detected: {detector_name}",
                 severity=severity,
                 secret_preview=redacted,
+                secret_hash=secret_hash,
                 commit_sha=commit_sha,
                 commit_author=commit_author,
                 commit_date=commit_date,

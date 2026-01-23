@@ -54,6 +54,24 @@ def format_rich(result: AggregatedScanResult, console: Console | None = None) ->
     if console is None:
         console = Console()
 
+    # Surface scanner errors prominently
+    errors = [r for r in result.results if r.error]
+    if errors:
+        error_lines = []
+        for r in errors:
+            msg = (r.error or "").strip()
+            if len(msg) > 200:
+                msg = f"{msg[:200]}…"
+            error_lines.append(f"[red]{r.scanner_name}[/red]: {msg}")
+        console.print(
+            Panel(
+                "\n".join(error_lines),
+                title="Scanner Errors",
+                border_style="red",
+            )
+        )
+        console.print()
+
     if not result.unique_findings:
         console.print(
             Panel(
@@ -125,10 +143,12 @@ def format_rich(result: AggregatedScanResult, console: Console | None = None) ->
 
 def _print_scan_info(result: AggregatedScanResult, console: Console) -> None:
     """Print scan metadata."""
-    total_files = sum(r.files_scanned for r in result.results)
+    total_files_reported = sum(r.files_scanned for r in result.results)
+    files_with_findings = len({str(f.file_path) for f in result.unique_findings})
     console.print(
         f"\n[dim]Scanners: {', '.join(result.scanners_used)} | "
-        f"Files: {total_files} | "
+        f"Files with findings: {files_with_findings} | "
+        f"Files reported: {total_files_reported} | "
         f"Duration: {result.total_duration_ms}ms[/dim]"
     )
 
@@ -153,6 +173,15 @@ def format_json(result: AggregatedScanResult) -> str:
             },
         },
         "scanners": result.scanners_used,
+        "scanner_results": [
+            {
+                "name": r.scanner_name,
+                "files_scanned": r.files_scanned,
+                "duration_ms": r.duration_ms,
+                "error": r.error,
+            }
+            for r in result.results
+        ],
         "duration_ms": result.total_duration_ms,
         "exit_code": result.exit_code,
         "has_blocking_findings": result.has_blocking_findings,

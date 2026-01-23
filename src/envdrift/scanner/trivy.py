@@ -29,7 +29,7 @@ from envdrift.scanner.base import (
     ScannerBackend,
     ScanResult,
 )
-from envdrift.scanner.patterns import redact_secret
+from envdrift.scanner.patterns import hash_secret, redact_secret
 from envdrift.scanner.platform_utils import (
     get_platform_info,
     get_venv_bin_dir,
@@ -544,6 +544,7 @@ class TrivyScanner(ScannerBackend):
             # Get the secret match and redact it
             matched = secret.get("Match", "")
             redacted = redact_secret(matched) if matched else ""
+            secret_hash = hash_secret(matched) if matched else ""
 
             # Map rule ID
             rule_id: str = secret.get("RuleID", "unknown")
@@ -563,6 +564,7 @@ class TrivyScanner(ScannerBackend):
                 description=f"{category}: {title}",
                 severity=severity,
                 secret_preview=redacted,
+                secret_hash=secret_hash,
                 commit_sha=None,
                 commit_author=None,
                 commit_date=None,

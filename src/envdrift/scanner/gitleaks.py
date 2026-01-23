@@ -29,7 +29,7 @@ from envdrift.scanner.base import (
     ScannerBackend,
     ScanResult,
 )
-from envdrift.scanner.patterns import redact_secret
+from envdrift.scanner.patterns import hash_secret, redact_secret
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -511,13 +511,26 @@ class GitleaksScanner(ScannerBackend):
                 if not include_git_history:
                     args.append("--no-git")
 
-                subprocess.run(  # nosec B603
+                result = subprocess.run(  # nosec B603
                     args,
                     capture_output=True,
                     text=True,
                     timeout=300,  # 5 minute timeout
                     cwd=str(path) if path.is_dir() else str(path.parent),
                 )
+
+                if result.returncode != 0:
+                    error_msg = (
+                        result.stderr.strip()
+                        or result.stdout.strip()
+                        or f"gitleaks scan failed for {path} (exit code {result.returncode})"
+                    )
+                    return ScanResult(
+                        scanner_name=self.name,
+                        findings=all_findings,
+                        error=error_msg,
+                        duration_ms=int((time.time() - start_time) * 1000),
+                    )
 
                 # Parse JSON output from report file
                 if report_path.exists() and report_path.stat().st_size > 0:
@@ -586,6 +599,7 @@ class GitleaksScanner(ScannerBackend):
             # Get the secret match and redact it
             secret = item.get("Secret", item.get("Match", ""))
             redacted = redact_secret(secret) if secret else ""
+            secret_hash = hash_secret(secret) if secret else ""
 
             # Map rule ID
             rule_id: str = str(item.get("RuleID", "unknown"))
@@ -603,6 +617,7 @@ class GitleaksScanner(ScannerBackend):
                 description=f"Secret detected: {rule_description}",
                 severity=severity,
                 secret_preview=redacted,
+                secret_hash=secret_hash,
                 commit_sha=item.get("Commit"),
                 commit_author=item.get("Author"),
                 commit_date=item.get("Date"),

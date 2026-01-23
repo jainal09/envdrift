@@ -27,7 +27,7 @@ from envdrift.scanner.base import (
     ScannerBackend,
     ScanResult,
 )
-from envdrift.scanner.patterns import redact_secret
+from envdrift.scanner.patterns import hash_secret, redact_secret
 from envdrift.scanner.platform_utils import get_platform_info, get_venv_bin_dir
 
 if TYPE_CHECKING:
@@ -392,6 +392,10 @@ class TalismanScanner(ScannerBackend):
                     if not include_git_history:
                         args.append("--ignoreHistory")
 
+                    # Limit scan scope when a specific file is provided
+                    if path.is_file():
+                        args.extend(["--pattern", path.name])
+
                     # Run talisman from the target directory
                     work_dir = path if path.is_dir() else path.parent
                     result = subprocess.run(  # nosec B603
@@ -540,6 +544,7 @@ class TalismanScanner(ScannerBackend):
             # Get the matched content if available
             matched = failure.get("match", "")
             redacted = redact_secret(matched) if matched else ""
+            secret_hash = hash_secret(matched) if matched else ""
 
             # Build rule ID from type
             rule_id = f"talisman-{failure_type.lower().replace(' ', '-')}"
@@ -553,6 +558,7 @@ class TalismanScanner(ScannerBackend):
                 description=message,
                 severity=severity,
                 secret_preview=redacted,
+                secret_hash=secret_hash,
                 commit_sha=failure.get("commit"),
                 commit_author=failure.get("author"),
                 commit_date=failure.get("date"),

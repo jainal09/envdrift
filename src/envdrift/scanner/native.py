@@ -378,7 +378,8 @@ class NativeScanner(ScannerBackend):
         except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
             pass
 
-        return list(files)
+        # Return deterministically ordered list for stable scan results
+        return sorted(files, key=lambda p: str(p))
 
     def _collect_files_fallback(self, directory: Path) -> list[Path]:
         """Fallback file collection using os.walk with early directory pruning.
@@ -427,6 +428,9 @@ class NativeScanner(ScannerBackend):
             for root, dirs, filenames in os.walk(directory):
                 # Prune directories in-place to skip them entirely
                 dirs[:] = [d for d in dirs if d not in skip_dirs]
+                # Stable traversal order
+                dirs.sort()
+                filenames.sort()
 
                 for filename in filenames:
                     files.append(Path(root) / filename)

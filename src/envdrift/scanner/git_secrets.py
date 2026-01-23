@@ -38,7 +38,7 @@ from envdrift.scanner.base import (
     ScannerBackend,
     ScanResult,
 )
-from envdrift.scanner.patterns import redact_secret
+from envdrift.scanner.patterns import hash_secret, redact_secret
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -634,6 +634,7 @@ class GitSecretsScanner(ScannerBackend):
         # Try to extract the secret value
         secret = self._extract_secret(content)
         redacted = redact_secret(secret) if secret else ""
+        secret_hash = hash_secret(secret) if secret else ""
 
         # Determine rule type based on content
         rule_id = self._detect_rule_type(content)
@@ -650,6 +651,7 @@ class GitSecretsScanner(ScannerBackend):
             description=f"Secret detected by git-secrets: {rule_description}",
             severity=severity,
             secret_preview=redacted,
+            secret_hash=secret_hash,
             commit_sha=commit_sha,
             scanner=self.name,
         )

@@ -29,7 +29,7 @@ from envdrift.scanner.base import (
     ScannerBackend,
     ScanResult,
 )
-from envdrift.scanner.patterns import redact_secret
+from envdrift.scanner.patterns import hash_secret, redact_secret
 from envdrift.scanner.platform_utils import (
     get_platform_info,
     get_venv_bin_dir,
@@ -441,7 +441,7 @@ class InfisicalScanner(ScannerBackend):
                     "--report-path",
                     str(report_path),
                     "--source",
-                    str(work_dir),
+                    str(path),
                 ]
 
                 # If not scanning git history, use --no-git
@@ -457,14 +457,15 @@ class InfisicalScanner(ScannerBackend):
                     cwd=str(work_dir),
                 )
 
-                # Check for scan failures (non-zero exit code without report)
+                # Infisical returns non-zero when leaks are found, so only treat as
+                # error if no report was generated.
                 if result.returncode != 0 and (
                     not report_path.exists() or report_path.stat().st_size == 0
                 ):
                     error_msg = (
                         result.stderr.strip()
                         or result.stdout.strip()
-                        or f"infisical scan failed for {path}"
+                        or f"infisical scan failed for {path} (exit code {result.returncode})"
                     )
                     return ScanResult(
                         scanner_name=self.name,
@@ -492,6 +493,7 @@ class InfisicalScanner(ScannerBackend):
                     except json.JSONDecodeError:
                         # Invalid JSON in report, skip findings for this path
                         continue
+
 
             except subprocess.TimeoutExpired:
                 return ScanResult(
@@ -542,6 +544,7 @@ class InfisicalScanner(ScannerBackend):
             # Get the secret match and redact it
             secret = item.get("Secret", item.get("Match", ""))
             redacted = redact_secret(secret) if secret else ""
+            secret_hash = hash_secret(secret) if secret else ""
 
             # Map rule ID
             rule_id: str = str(item.get("RuleID", "unknown"))
@@ -559,6 +562,7 @@ class InfisicalScanner(ScannerBackend):
                 description=f"Secret detected: {description}",
                 severity=severity,
                 secret_preview=redacted,
+                secret_hash=secret_hash,
                 commit_sha=item.get("Commit"),
                 commit_author=item.get("Author") or item.get("Email"),
                 commit_date=item.get("Date"),

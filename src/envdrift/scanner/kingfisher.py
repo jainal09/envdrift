@@ -30,7 +30,7 @@ from envdrift.scanner.base import (
     ScannerBackend,
     ScanResult,
 )
-from envdrift.scanner.patterns import redact_secret
+from envdrift.scanner.patterns import hash_secret, redact_secret
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -132,6 +132,7 @@ class KingfisherScanner(ScannerBackend):
         extract_archives: bool = True,
         min_entropy: float | None = None,
         max_file_size_mb: int = 256,
+        jobs: int | None = None,
     ) -> None:
         """Initialize the Kingfisher scanner with maximum detection options.
 
@@ -144,6 +145,7 @@ class KingfisherScanner(ScannerBackend):
             extract_archives: Extract and scan archive files (zip, tar, etc.).
             min_entropy: Override minimum entropy threshold. Lower = more findings.
             max_file_size_mb: Maximum file size to scan in MB.
+            jobs: Limit parallel scanning threads (lower = more deterministic).
         """
         self._auto_install = auto_install
         self._validate_secrets = validate_secrets
@@ -152,6 +154,7 @@ class KingfisherScanner(ScannerBackend):
         self._extract_archives = extract_archives
         self._min_entropy = min_entropy
         self._max_file_size_mb = max_file_size_mb
+        self._jobs = jobs
         self._binary_path: Path | None = None
 
     @property
@@ -349,6 +352,8 @@ class KingfisherScanner(ScannerBackend):
                     # Use ALL rules for maximum detection
                     "--rule",
                     "all",
+                    # Let envdrift handle dedup deterministically
+                    "--no-dedup",
                     # Set confidence level (default: low for max detection)
                     "--confidence",
                     self._confidence,
@@ -359,6 +364,12 @@ class KingfisherScanner(ScannerBackend):
                     "--quiet",
                     # Disable update checks for performance
                     "--no-update-check",
+                ]
+
+                if self._jobs:
+                    args.extend(["--jobs", str(self._jobs)])
+
+                args += [
                     # Exclude common non-secret directories for performance
                     "--exclude",
                     ".venv",
@@ -508,6 +519,14 @@ class KingfisherScanner(ScannerBackend):
             # Get the secret snippet and redact it
             snippet = finding.get("snippet", "")
             redacted = redact_secret(snippet) if snippet else ""
+            # Prefer raw secret fields if present for accurate deduplication
+            raw_secret = (
+                finding.get("secret")
+                or finding.get("match")
+                or finding.get("value")
+                or ""
+            )
+            secret_hash = hash_secret(raw_secret) if raw_secret else ""
 
             # Get rule info
             rule_id = rule.get("id", "unknown")
@@ -542,6 +561,7 @@ class KingfisherScanner(ScannerBackend):
                 description=f"Secret detected: {rule_name} (confidence: {confidence})",
                 severity=severity,
                 secret_preview=redacted,
+                secret_hash=secret_hash,
                 entropy=entropy,
                 verified=is_verified,
                 scanner=self.name,
