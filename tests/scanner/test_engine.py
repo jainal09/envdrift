@@ -786,6 +786,189 @@ class TestIntegration:
         assert len(aws_findings) == 0
 
 
+class TestFilterEncryptedFiles:
+    """Tests for _filter_encrypted_files method."""
+
+    def test_filter_encrypted_files_empty_list(self):
+        """Test filter with empty findings list."""
+        config = GuardConfig(use_native=True, use_gitleaks=False)
+        engine = ScanEngine(config)
+
+        result = engine._filter_encrypted_files([])
+        assert result == []
+
+    def test_filter_encrypted_files_no_encrypted_markers(self, tmp_path):
+        """Test that findings from regular files are not filtered."""
+        config = GuardConfig(use_native=True, use_gitleaks=False)
+        engine = ScanEngine(config)
+
+        findings = [
+            ScanFinding(
+                file_path=tmp_path / "config.py",
+                rule_id="test-rule",
+                rule_description="Test",
+                description="Test finding",
+                severity=FindingSeverity.HIGH,
+                scanner="native",
+            ),
+        ]
+
+        result = engine._filter_encrypted_files(findings)
+        assert len(result) == 1
+
+    def test_filter_encrypted_files_with_sops_file(self, tmp_path):
+        """Test that findings from SOPS encrypted files are filtered."""
+        config = GuardConfig(use_native=True, use_gitleaks=False)
+        engine = ScanEngine(config)
+
+        # Create a SOPS encrypted file
+        sops_file = tmp_path / "secrets.sops.yaml"
+        sops_file.write_text("sops:\n  kms: []\n  encrypted_regex: .*\n")
+
+        findings = [
+            ScanFinding(
+                file_path=sops_file,
+                rule_id="test-rule",
+                rule_description="Test",
+                description="Test finding",
+                severity=FindingSeverity.HIGH,
+                scanner="native",
+            ),
+        ]
+
+        result = engine._filter_encrypted_files(findings)
+        # Should be filtered due to SOPS encryption markers
+        assert len(result) == 0
+
+    def test_filter_encrypted_files_with_dotenvx_file(self, tmp_path):
+        """Test that findings from dotenvx encrypted files are filtered."""
+        config = GuardConfig(use_native=True, use_gitleaks=False)
+        engine = ScanEngine(config)
+
+        # Create a dotenvx encrypted file with encryption marker
+        # Must contain 'encrypted:' to be detected as encrypted
+        dotenvx_file = tmp_path / ".env.encrypted"
+        dotenvx_file.write_text("#/-------------------[DOTENV_PUBLIC_KEY]--------------------/\nSECRET=\"encrypted:abc123\"\n")
+
+        findings = [
+            ScanFinding(
+                file_path=dotenvx_file,
+                rule_id="test-rule",
+                rule_description="Test",
+                description="Test finding",
+                severity=FindingSeverity.HIGH,
+                scanner="native",
+            ),
+        ]
+
+        result = engine._filter_encrypted_files(findings)
+        # Should be filtered due to dotenvx encryption markers
+        assert len(result) == 0
+
+
+class TestFilterPublicKeys:
+    """Tests for _filter_public_keys method."""
+
+    def test_filter_public_keys_empty_list(self):
+        """Test filter with empty findings list."""
+        config = GuardConfig(use_native=True, use_gitleaks=False)
+        engine = ScanEngine(config)
+
+        result = engine._filter_public_keys([])
+        assert result == []
+
+    def test_filter_public_keys_ec_compressed_key(self):
+        """Test that EC compressed public keys are filtered."""
+        config = GuardConfig(use_native=True, use_gitleaks=False)
+        engine = ScanEngine(config)
+
+        # EC secp256k1 compressed public key - exactly 66 hex chars starting with 02 or 03
+        ec_pubkey = "02" + "a" * 64  # 66 chars total
+
+        findings = [
+            ScanFinding(
+                file_path=Path("test.py"),
+                rule_id="test-rule",
+                rule_description="Test",
+                description="Test finding",
+                severity=FindingSeverity.HIGH,
+                scanner="native",
+                secret_preview=ec_pubkey,
+            ),
+        ]
+
+        result = engine._filter_public_keys(findings)
+        assert len(result) == 0
+
+    def test_filter_public_keys_short_hex_not_filtered(self):
+        """Test that short hex strings starting with 02/03 are NOT filtered."""
+        config = GuardConfig(use_native=True, use_gitleaks=False)
+        engine = ScanEngine(config)
+
+        # Short hex that starts with 02 but is not a full EC public key
+        short_secret = "0200abcd"
+
+        findings = [
+            ScanFinding(
+                file_path=Path("test.py"),
+                rule_id="test-rule",
+                rule_description="Test",
+                description="Test finding",
+                severity=FindingSeverity.HIGH,
+                scanner="native",
+                secret_preview=short_secret,
+            ),
+        ]
+
+        result = engine._filter_public_keys(findings)
+        # Should NOT be filtered - too short to be an EC public key
+        assert len(result) == 1
+
+    def test_filter_public_keys_non_hex_not_filtered(self):
+        """Test that non-hex strings are not filtered."""
+        config = GuardConfig(use_native=True, use_gitleaks=False)
+        engine = ScanEngine(config)
+
+        # Starts with 02 but contains non-hex characters
+        non_hex = "02" + "g" * 64  # 'g' is not hex
+
+        findings = [
+            ScanFinding(
+                file_path=Path("test.py"),
+                rule_id="test-rule",
+                rule_description="Test",
+                description="Test finding",
+                severity=FindingSeverity.HIGH,
+                scanner="native",
+                secret_preview=non_hex,
+            ),
+        ]
+
+        result = engine._filter_public_keys(findings)
+        # Should NOT be filtered - not valid hex
+        assert len(result) == 1
+
+    def test_filter_public_keys_preserves_normal_findings(self):
+        """Test that normal findings are not filtered."""
+        config = GuardConfig(use_native=True, use_gitleaks=False)
+        engine = ScanEngine(config)
+
+        findings = [
+            ScanFinding(
+                file_path=Path("test.py"),
+                rule_id="test-rule",
+                rule_description="Test",
+                description="Test finding",
+                severity=FindingSeverity.HIGH,
+                scanner="native",
+                secret_preview="AKIA****WXYZ",  # AWS key preview
+            ),
+        ]
+
+        result = engine._filter_public_keys(findings)
+        assert len(result) == 1
+
+
 class TestGitignoreFilter:
     """Tests for gitignore-based filtering."""
 
@@ -895,9 +1078,9 @@ class TestCombinedFilesSecurity:
         )
         engine = ScanEngine(config)
 
-        # Mock subprocess.run to return 0 (file is ignored)
+        # Mock subprocess.run to return the file as gitignored (batched stdin approach)
         def mock_run(cmd, **kwargs):
-            return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+            return subprocess.CompletedProcess(cmd, 0, stdout=".env.production\n", stderr="")
 
         monkeypatch.setattr(subprocess, "run", mock_run)
 
@@ -915,9 +1098,9 @@ class TestCombinedFilesSecurity:
         )
         engine = ScanEngine(config)
 
-        # Mock subprocess.run to return 1 (file is NOT ignored)
+        # Mock subprocess.run to return empty (file is NOT ignored - batched approach)
         def mock_run(cmd, **kwargs):
-            return subprocess.CompletedProcess(cmd, 1, stdout="", stderr="")
+            return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
 
         monkeypatch.setattr(subprocess, "run", mock_run)
 
@@ -947,3 +1130,26 @@ class TestCombinedFilesSecurity:
         warnings = engine.check_combined_files_security()
         assert warnings == []
 
+    def test_combined_files_multiple_files(self, monkeypatch):
+        """Test with multiple combined files, some in gitignore, some not."""
+        import subprocess
+
+        config = GuardConfig(
+            use_native=True,
+            use_gitleaks=False,
+            combined_files=[".env.production", ".env.staging", ".env.dev"],
+        )
+        engine = ScanEngine(config)
+
+        # Mock subprocess.run - only .env.production is gitignored
+        def mock_run(cmd, **kwargs):
+            return subprocess.CompletedProcess(cmd, 0, stdout=".env.production\n", stderr="")
+
+        monkeypatch.setattr(subprocess, "run", mock_run)
+
+        warnings = engine.check_combined_files_security()
+        # Should have 2 warnings for .env.staging and .env.dev
+        assert len(warnings) == 2
+        assert any(".env.staging" in w for w in warnings)
+        assert any(".env.dev" in w for w in warnings)
+        assert not any(".env.production" in w for w in warnings)

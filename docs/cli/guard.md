@@ -181,6 +181,20 @@ envdrift guard --skip-duplicate
 envdrift guard --no-skip-duplicate
 ```
 
+### `--skip-encrypted` / `--no-skip-encrypted`
+
+Skip findings from files that contain dotenvx or SOPS encryption markers. Enabled by
+default. Encrypted files contain ciphertext that can trigger false positives from
+scanners detecting high-entropy strings.
+
+```bash
+# Skip findings from encrypted files (default behavior)
+envdrift guard --skip-encrypted
+
+# Scan encrypted files too (may produce false positives)
+envdrift guard --no-skip-encrypted
+```
+
 ### `--skip-gitignored` / `--no-skip-gitignored`
 
 Skip findings from files that are in `.gitignore`. This uses `git check-ignore` for
@@ -358,6 +372,7 @@ entropy_threshold = 4.5
 fail_on_severity = "high"
 skip_clear_files = false  # Set to true to skip .clear files entirely
 skip_duplicate = false  # Set to true to show only unique secrets by value
+skip_encrypted_files = true  # Set to false to scan encrypted files (default: skip)
 skip_gitignored = false  # Set to true to skip findings from gitignored files
 ignore_paths = ["tests/**", "*.test.py"]
 
@@ -372,6 +387,7 @@ Notes:
 - `scanners` controls which external scanners are enabled by default.
 - `skip_clear_files` skips `.clear` files entirely (disabled by default - they ARE scanned).
 - `skip_duplicate` shows only unique secrets by value, ignoring scanner source and location.
+- `skip_encrypted_files` skips findings from encrypted files with dotenvx/SOPS markers (enabled by default).
 - `skip_gitignored` skips findings from gitignored files using `git check-ignore`.
 - `ignore_paths` applies globally to all scanners.
 - `ignore_rules` allows ignoring specific rules in specific path patterns.

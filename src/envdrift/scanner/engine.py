@@ -434,8 +434,8 @@ class ScanEngine:
         for finding in findings:
             if self.config.skip_duplicate:
                 # Deduplicate by secret value only - same secret = one finding
-                # Use secret_preview as the key (ignoring file, line, scanner)
-                key = (finding.secret_preview,)
+                # Prefer secret_hash (accurate) over secret_preview (may have collisions)
+                key = (finding.secret_hash,) if finding.secret_hash else (finding.secret_preview,)
             else:
                 # Default: deduplicate by file, line, and rule
                 key = (finding.file_path, finding.line_number, finding.rule_id)
@@ -556,14 +556,13 @@ class ScanEngine:
             if not preview:
                 return False
             # Remove redaction markers (****) and check the full pattern
-            # The preview might be truncated, so check if it starts with 02/03
-            # and contains only hex chars
+            # EC secp256k1 compressed public keys are exactly 66 hex chars (33 bytes)
             clean = preview.replace('*', '')
-            if clean.startswith(('02', '03')) and len(clean) >= 4:
+            if clean.startswith(('02', '03')) and len(clean) == 66:
                 # Check if remaining chars are hex
                 try:
                     int(clean, 16)
-                    logger.debug(f"Filtering public key: {preview} (clean={clean})")
+                    logger.debug("Filtering dotenvx public key finding")
                     return True
                 except ValueError:
                     pass
@@ -649,22 +648,26 @@ class ScanEngine:
         if not self.config.combined_files:
             return warnings
 
-        for combined_file in self.config.combined_files:
-            try:
-                # git check-ignore returns 0 if ignored, 1 if not ignored
-                result = subprocess.run(  # nosec B603, B607
-                    ["git", "check-ignore", "-q", combined_file],
-                    capture_output=True,
-                    timeout=5,
-                )
-                if result.returncode != 0:
+        try:
+            # Use batched stdin approach for consistency with _filter_gitignored_files
+            result = subprocess.run(  # nosec B603, B607
+                ["git", "check-ignore", "--stdin"],
+                input="\n".join(self.config.combined_files),
+                capture_output=True,
+                text=True,
+                timeout=30,
+            )
+            gitignored = set(result.stdout.strip().split("\n")) if result.stdout.strip() else set()
+
+            for combined_file in self.config.combined_files:
+                if combined_file not in gitignored:
                     # File is NOT in gitignore - this is a security risk!
                     warnings.append(
                         f"⚠️  SECURITY WARNING: Combined file '{combined_file}' is NOT in .gitignore! "
                         f"This file contains sensitive secrets and may be accidentally committed. "
                         f"Add '{combined_file}' to .gitignore immediately."
                     )
-            except (subprocess.TimeoutExpired, FileNotFoundError, subprocess.SubprocessError) as e:
-                logger.warning(f"Could not check gitignore for {combined_file}: {e}")
+        except (subprocess.TimeoutExpired, FileNotFoundError, subprocess.SubprocessError) as e:
+            logger.warning(f"Could not check gitignore for combined files: {e}")
 
         return warnings

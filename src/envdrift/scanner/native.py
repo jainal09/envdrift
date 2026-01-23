@@ -23,6 +23,7 @@ from envdrift.scanner.base import (
 from envdrift.scanner.patterns import (
     ALL_PATTERNS,
     calculate_entropy,
+    hash_secret,
     redact_secret,
 )
 
@@ -670,6 +671,7 @@ class NativeScanner(ScannerBackend):
                             description=f"Potential {pattern.description} detected",
                             severity=pattern.severity,
                             secret_preview=redact_secret(secret),
+                            secret_hash=hash_secret(secret),
                             scanner=self.name,
                         )
                     )
@@ -731,6 +733,7 @@ class NativeScanner(ScannerBackend):
                             ),
                             severity=FindingSeverity.MEDIUM,
                             secret_preview=redact_secret(value),
+                            secret_hash=hash_secret(value),
                             entropy=entropy,
                             scanner=self.name,
                         )
