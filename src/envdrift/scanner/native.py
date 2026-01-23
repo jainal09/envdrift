@@ -23,13 +23,14 @@ from envdrift.scanner.base import (
 from envdrift.scanner.patterns import (
     ALL_PATTERNS,
     calculate_entropy,
+    hash_secret,
     redact_secret,
 )
 
 # Encryption markers for dotenvx
 DOTENVX_MARKERS = (
-    # Only check for actual encrypted values, not just the public key header
-    # DOTENV_PUBLIC_KEY header means file CAN be encrypted, not that it IS encrypted
+    # Check for actual encrypted values, not just the public key header
+    # DOTENV_PUBLIC_KEY header means file CAN be encrypted, not that values ARE encrypted
     "encrypted:",
 )
 
@@ -203,6 +204,11 @@ DEFAULT_IGNORE_PATTERNS = (
     "*.temp",
     "*.bak",
     "*.backup",
+    # Configuration files (contain "secret" keyword but no real secrets)
+    "envdrift.toml",
+    "pyproject.toml",
+    "mkdocs.yml",
+    "mkdocs.yaml",
 )
 
 
@@ -665,6 +671,7 @@ class NativeScanner(ScannerBackend):
                             description=f"Potential {pattern.description} detected",
                             severity=pattern.severity,
                             secret_preview=redact_secret(secret),
+                            secret_hash=hash_secret(secret),
                             scanner=self.name,
                         )
                     )
@@ -726,6 +733,7 @@ class NativeScanner(ScannerBackend):
                             ),
                             severity=FindingSeverity.MEDIUM,
                             secret_preview=redact_secret(value),
+                            secret_hash=hash_secret(value),
                             entropy=entropy,
                             scanner=self.name,
                         )

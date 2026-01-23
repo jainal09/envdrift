@@ -123,6 +123,7 @@ class GuardConfig:
         entropy_threshold = 4.5
         fail_on_severity = "high"
         skip_clear_files = false  # Set to true to skip .clear files
+        skip_duplicate = false  # Set to true to show only unique secrets
         ignore_paths = ["*.test.py", "tests/**"]
 
         [guard.ignore_rules]
@@ -136,6 +137,9 @@ class GuardConfig:
     entropy_threshold: float = 4.5
     fail_on_severity: str = "high"
     skip_clear_files: bool = False  # Skip .clear files from scanning
+    skip_encrypted_files: bool = True  # Skip findings from encrypted files (dotenvx/SOPS)
+    skip_duplicate: bool = False  # Show only unique findings by secret value
+    skip_gitignored: bool = False  # Skip findings from gitignored files
     ignore_paths: list[str] = field(default_factory=list)
     ignore_rules: dict[str, list[str]] = field(default_factory=dict)
     verify_secrets: bool = False  # For trufflehog verification
@@ -323,6 +327,9 @@ class EnvdriftConfig:
             entropy_threshold=guard_section.get("entropy_threshold", 4.5),
             fail_on_severity=guard_section.get("fail_on_severity", "high"),
             skip_clear_files=guard_section.get("skip_clear_files", False),
+            skip_encrypted_files=guard_section.get("skip_encrypted_files", True),
+            skip_duplicate=guard_section.get("skip_duplicate", False),
+            skip_gitignored=guard_section.get("skip_gitignored", False),
             ignore_paths=guard_section.get("ignore_paths", []),
             ignore_rules=guard_section.get("ignore_rules", {}),
             verify_secrets=guard_section.get("verify_secrets", False),

@@ -64,6 +64,9 @@ def _patch_guard_dependencies(monkeypatch, config: EnvdriftConfig, result: Aggre
         def scan(self, _paths):
             return result
 
+        def check_combined_files_security(self):
+            return []  # No warnings in tests
+
     monkeypatch.setattr("envdrift.cli_commands.guard.load_config", lambda _p=None: config)
     monkeypatch.setattr("envdrift.cli_commands.guard.ScanEngine", DummyEngine)
     return created_configs, info_calls
@@ -532,7 +535,7 @@ def test_guard_staged_files_not_exist(monkeypatch):
 
 
 def test_guard_with_partial_encryption_config(tmp_path: Path, monkeypatch):
-    """Guard passes allowed_clear_files from partial_encryption config."""
+    """Guard passes allowed_clear_files and combined_files from partial_encryption config."""
     partial_encryption = PartialEncryptionConfig(
         enabled=True,
         environments=[
@@ -552,6 +555,8 @@ def test_guard_with_partial_encryption_config(tmp_path: Path, monkeypatch):
     assert created_configs
     # Verify clear_file was passed to guard config
     assert created_configs[0].allowed_clear_files == [".env.production.clear"]
+    # Verify combined_file was passed to guard config
+    assert created_configs[0].combined_files == [".env.production"]
 
 
 def test_guard_skip_clear_flag(tmp_path: Path, monkeypatch):
@@ -652,3 +657,80 @@ def test_guard_no_kingfisher_flag(tmp_path: Path, monkeypatch):
     assert result.exit_code == 0
     assert created_configs
     assert created_configs[0].use_kingfisher is False
+
+
+def test_guard_skip_duplicate_flag(tmp_path: Path, monkeypatch):
+    """--skip-duplicate flag enables deduplication by secret value."""
+    config = EnvdriftConfig()
+    created_configs, _info_calls = _patch_guard_dependencies(monkeypatch, config, _build_result([]))
+
+    result = runner.invoke(app, ["guard", str(tmp_path), "--skip-duplicate"])
+    assert result.exit_code == 0
+    assert created_configs
+    assert created_configs[0].skip_duplicate is True
+
+
+def test_guard_no_skip_duplicate_flag(tmp_path: Path, monkeypatch):
+    """--no-skip-duplicate flag disables deduplication by secret value."""
+    config = EnvdriftConfig(guard=FileGuardConfig(skip_duplicate=True))
+    created_configs, _info_calls = _patch_guard_dependencies(monkeypatch, config, _build_result([]))
+
+    result = runner.invoke(app, ["guard", str(tmp_path), "--no-skip-duplicate"])
+    assert result.exit_code == 0
+    assert created_configs
+    assert created_configs[0].skip_duplicate is False
+
+
+def test_guard_skip_duplicate_from_config(tmp_path: Path, monkeypatch):
+    """skip_duplicate from config is used when CLI flag not provided."""
+    config = EnvdriftConfig(guard=FileGuardConfig(skip_duplicate=True))
+    created_configs, _info_calls = _patch_guard_dependencies(monkeypatch, config, _build_result([]))
+
+    result = runner.invoke(app, ["guard", str(tmp_path)])
+    assert result.exit_code == 0
+    assert created_configs
+    assert created_configs[0].skip_duplicate is True
+
+
+def test_guard_skip_gitignored_flag(tmp_path: Path, monkeypatch):
+    """--skip-gitignored flag enables skipping gitignored files."""
+    config = EnvdriftConfig()
+    created_configs, _info_calls = _patch_guard_dependencies(monkeypatch, config, _build_result([]))
+
+    result = runner.invoke(app, ["guard", str(tmp_path), "--skip-gitignored"])
+    assert result.exit_code == 0
+    assert created_configs
+    assert created_configs[0].skip_gitignored is True
+
+
+def test_guard_no_skip_gitignored_flag(tmp_path: Path, monkeypatch):
+    """--no-skip-gitignored flag disables skipping gitignored files."""
+    config = EnvdriftConfig(guard=FileGuardConfig(skip_gitignored=True))
+    created_configs, _info_calls = _patch_guard_dependencies(monkeypatch, config, _build_result([]))
+
+    result = runner.invoke(app, ["guard", str(tmp_path), "--no-skip-gitignored"])
+    assert result.exit_code == 0
+    assert created_configs
+    assert created_configs[0].skip_gitignored is False
+
+
+def test_guard_skip_gitignored_from_config(tmp_path: Path, monkeypatch):
+    """skip_gitignored from config is used when CLI flag not provided."""
+    config = EnvdriftConfig(guard=FileGuardConfig(skip_gitignored=True))
+    created_configs, _info_calls = _patch_guard_dependencies(monkeypatch, config, _build_result([]))
+
+    result = runner.invoke(app, ["guard", str(tmp_path)])
+    assert result.exit_code == 0
+    assert created_configs
+    assert created_configs[0].skip_gitignored is True
+
+
+def test_guard_skip_gitignored_default_is_false(tmp_path: Path, monkeypatch):
+    """By default, skip_gitignored is False (scan gitignored files)."""
+    config = EnvdriftConfig()
+    created_configs, _info_calls = _patch_guard_dependencies(monkeypatch, config, _build_result([]))
+
+    result = runner.invoke(app, ["guard", str(tmp_path)])
+    assert result.exit_code == 0
+    assert created_configs
+    assert created_configs[0].skip_gitignored is False
