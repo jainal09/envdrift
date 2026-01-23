@@ -1,5 +1,12 @@
 # Changelog
 
+## [10.6.0](https://github.com/jainal09/envdrift/compare/v10.5.0...v10.6.0) (2026-01-23)
+
+
+### Features
+
+* **guard:** improve determinism, deduplication accuracy, and UX ([#120](https://github.com/jainal09/envdrift/issues/120)) ([dc3893c](https://github.com/jainal09/envdrift/commit/dc3893cb10ac9b0e5071fa56d6130de86150cd0c))
+
 ## [10.5.0](https://github.com/jainal09/envdrift/compare/v10.4.0...v10.5.0) (2026-01-23)
 
 
