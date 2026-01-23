@@ -73,6 +73,7 @@ class ScanFinding:
         line_number: Line number where the finding was detected (1-indexed).
         column_number: Column number where the finding starts (1-indexed).
         secret_preview: Redacted preview of the secret (e.g., "AKIA****XXXX").
+        secret_hash: SHA-256 hash of the full secret value for accurate deduplication.
         commit_sha: Git commit SHA if found in history.
         commit_author: Git commit author if found in history.
         commit_date: Git commit date if found in history.
@@ -89,6 +90,7 @@ class ScanFinding:
     line_number: int | None = None
     column_number: int | None = None
     secret_preview: str = ""
+    secret_hash: str = ""  # SHA-256 hash of full secret for deduplication
     commit_sha: str | None = None
     commit_author: str | None = None
     commit_date: str | None = None

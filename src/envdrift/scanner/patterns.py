@@ -717,6 +717,23 @@ def redact_secret(secret: str, visible_chars: int = 4) -> str:
     return f"{secret[:visible_chars]}{'*' * (len(secret) - visible_chars * 2)}{secret[-visible_chars:]}"
 
 
+def hash_secret(secret: str) -> str:
+    """Compute a SHA-256 hash of a secret for deduplication.
+
+    This allows accurate deduplication by secret value without storing
+    the plaintext secret. Two identical secrets will produce the same hash.
+
+    Args:
+        secret: The secret string to hash.
+
+    Returns:
+        Hex-encoded SHA-256 hash of the secret.
+    """
+    import hashlib
+
+    return hashlib.sha256(secret.encode()).hexdigest()
+
+
 def calculate_entropy(text: str) -> float:
     """Calculate Shannon entropy of a string.
 

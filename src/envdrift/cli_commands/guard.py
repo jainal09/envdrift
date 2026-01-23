@@ -7,10 +7,14 @@ The guard command provides defense-in-depth by detecting:
 - Previously committed secrets (in git history, with --history)
 - Password hashes (bcrypt, sha512crypt, etc.) with Kingfisher
 - AWS credentials (with git-secrets)
+- Encoded content and file analysis (with Talisman)
+- Comprehensive multi-target scanning (with Trivy)
+- 140+ secret types detection (with Infisical)
 
 Configuration can be set in envdrift.toml:
     [guard]
-    scanners = ["native", "gitleaks"]  # or add "trufflehog", "detect-secrets", "kingfisher", "git-secrets"
+    scanners = ["native", "gitleaks"]  # or add "trufflehog", "detect-secrets", "kingfisher",
+                                       # "git-secrets", "talisman", "trivy", "infisical"
     auto_install = true
     include_history = false
     check_entropy = false
@@ -77,6 +81,27 @@ def guard(
             help="Use git-secrets scanner - AWS credential detection, pre-commit hooks",
         ),
     ] = None,
+    talisman: Annotated[
+        bool | None,
+        typer.Option(
+            "--talisman/--no-talisman",
+            help="Use Talisman scanner - ThoughtWorks secret scanner with entropy detection",
+        ),
+    ] = None,
+    trivy: Annotated[
+        bool | None,
+        typer.Option(
+            "--trivy/--no-trivy",
+            help="Use Trivy scanner - Aqua Security comprehensive security scanner",
+        ),
+    ] = None,
+    infisical: Annotated[
+        bool | None,
+        typer.Option(
+            "--infisical/--no-infisical",
+            help="Use Infisical scanner - 140+ secret types with git history support",
+        ),
+    ] = None,
     native_only: Annotated[
         bool,
         typer.Option(
@@ -121,6 +146,27 @@ def guard(
         typer.Option(
             "--skip-clear/--no-skip-clear",
             help="Skip .clear files from scanning (default: scan them)",
+        ),
+    ] = None,
+    skip_duplicate: Annotated[
+        bool | None,
+        typer.Option(
+            "--skip-duplicate/--no-skip-duplicate",
+            help="Show only unique secrets by value (ignore scanner source and location)",
+        ),
+    ] = None,
+    skip_encrypted: Annotated[
+        bool | None,
+        typer.Option(
+            "--skip-encrypted/--no-skip-encrypted",
+            help="Skip findings from encrypted files (dotenvx/SOPS markers detected)",
+        ),
+    ] = None,
+    skip_gitignored: Annotated[
+        bool | None,
+        typer.Option(
+            "--skip-gitignored/--no-skip-gitignored",
+            help="Skip findings from files in .gitignore (uses git check-ignore)",
         ),
     ] = None,
     # Installation options
@@ -314,6 +360,9 @@ def guard(
     use_git_secrets_final = (
         git_secrets if git_secrets is not None else "git-secrets" in guard_cfg.scanners
     )
+    use_talisman_final = talisman if talisman is not None else "talisman" in guard_cfg.scanners
+    use_trivy_final = trivy if trivy is not None else "trivy" in guard_cfg.scanners
+    use_infisical_final = infisical if infisical is not None else "infisical" in guard_cfg.scanners
 
     if native_only:
         use_gitleaks_final = False
@@ -321,17 +370,38 @@ def guard(
         use_detect_secrets_final = False
         use_kingfisher_final = False
         use_git_secrets_final = False
+        use_talisman_final = False
+        use_trivy_final = False
+        use_infisical_final = False
 
     # Extract allowed clear files from partial_encryption config
     # These files are intentionally unencrypted and should not be flagged
     allowed_clear_files = []
+    combined_files = []
     if file_config.partial_encryption.enabled:
         for env in file_config.partial_encryption.environments:
             if env.clear_file:
                 allowed_clear_files.append(env.clear_file)
+            if env.combined_file:
+                combined_files.append(env.combined_file)
 
     # Determine skip_clear_files (CLI overrides config)
     skip_clear_final = skip_clear if skip_clear is not None else guard_cfg.skip_clear_files
+
+    # Determine skip_duplicate (CLI overrides config)
+    skip_duplicate_final = (
+        skip_duplicate if skip_duplicate is not None else guard_cfg.skip_duplicate
+    )
+
+    # Determine skip_encrypted_files (CLI overrides config)
+    skip_encrypted_final = (
+        skip_encrypted if skip_encrypted is not None else guard_cfg.skip_encrypted_files
+    )
+
+    # Determine skip_gitignored (CLI overrides config)
+    skip_gitignored_final = (
+        skip_gitignored if skip_gitignored is not None else guard_cfg.skip_gitignored
+    )
 
     # Build configuration merging file config with CLI overrides
     config = GuardConfig(
@@ -341,15 +411,22 @@ def guard(
         use_detect_secrets=use_detect_secrets_final,
         use_kingfisher=use_kingfisher_final,
         use_git_secrets=use_git_secrets_final,
+        use_talisman=use_talisman_final,
+        use_trivy=use_trivy_final,
+        use_infisical=use_infisical_final,
         auto_install=auto_install,
         include_git_history=history or guard_cfg.include_history,
         check_entropy=entropy or guard_cfg.check_entropy,
         entropy_threshold=guard_cfg.entropy_threshold,
         skip_clear_files=skip_clear_final,
+        skip_encrypted_files=skip_encrypted_final,
+        skip_duplicate=skip_duplicate_final,
+        skip_gitignored=skip_gitignored_final,
         ignore_paths=guard_cfg.ignore_paths,
         ignore_rules=guard_cfg.ignore_rules,
         fail_on_severity=fail_severity,
         allowed_clear_files=allowed_clear_files,
+        combined_files=combined_files,
     )
 
     # Create output console (suppress colors in CI mode or JSON/SARIF output)
@@ -359,6 +436,15 @@ def guard(
 
     # Create scan engine
     engine = ScanEngine(config)
+
+    # Check combined files security (should be in .gitignore)
+    # Only check if partial_encryption is enabled and not in JSON/SARIF mode
+    if combined_files and not json_output and not sarif:
+        security_warnings = engine.check_combined_files_security()
+        for warning in security_warnings:
+            output_console.print(f"[bold red]{warning}[/bold red]")
+        if security_warnings:
+            output_console.print()
 
     # Show scanner info in verbose mode or when running interactively
     if not json_output and not sarif:

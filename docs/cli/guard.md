@@ -93,6 +93,52 @@ git-secrets provides:
 envdrift guard --git-secrets
 ```
 
+### `--talisman` / `--no-talisman`
+
+Enable or disable Talisman scanner. Disabled by default.
+
+Talisman (from ThoughtWorks) provides:
+
+- Entropy-based secret detection
+- File content pattern analysis
+- Encoded content detection (base64, hex)
+- Credit card number detection
+- Suspicious file name detection (.pem, .key)
+
+```bash
+envdrift guard --talisman
+```
+
+### `--trivy` / `--no-trivy`
+
+Enable or disable Trivy scanner. Disabled by default.
+
+Trivy (from Aqua Security) provides:
+
+- Comprehensive multi-target security scanning
+- Built-in rules for AWS, GCP, GitHub, GitLab, Slack, etc.
+- Custom regex pattern support
+- Severity-based filtering
+
+```bash
+envdrift guard --trivy
+```
+
+### `--infisical` / `--no-infisical`
+
+Enable or disable Infisical scanner. Disabled by default.
+
+Infisical provides:
+
+- 140+ secret type detection
+- Git history scanning
+- Staged changes scanning
+- Custom regex patterns and entropy detection
+
+```bash
+envdrift guard --infisical
+```
+
 ### `--history`, `-H`
 
 Include git history in the scan. Requires a git repository.
@@ -121,6 +167,52 @@ envdrift guard --skip-clear
 # Explicitly scan .clear files (default behavior)
 envdrift guard --no-skip-clear
 ```
+
+### `--skip-duplicate` / `--no-skip-duplicate`
+
+Show only unique secrets by value, ignoring which scanner found them or where they
+appear. Useful when multiple scanners detect the same secret across multiple files.
+
+```bash
+# Show each unique secret only once
+envdrift guard --skip-duplicate
+
+# Show all findings including duplicates (default behavior)
+envdrift guard --no-skip-duplicate
+```
+
+### `--skip-encrypted` / `--no-skip-encrypted`
+
+Skip findings from files that contain dotenvx or SOPS encryption markers. Enabled by
+default. Encrypted files contain ciphertext that can trigger false positives from
+scanners detecting high-entropy strings.
+
+```bash
+# Skip findings from encrypted files (default behavior)
+envdrift guard --skip-encrypted
+
+# Scan encrypted files too (may produce false positives)
+envdrift guard --no-skip-encrypted
+```
+
+### `--skip-gitignored` / `--no-skip-gitignored`
+
+Skip findings from files that are in `.gitignore`. This uses `git check-ignore` for
+reliable detection of ignored files. Useful for filtering out findings from build
+artifacts, dependencies, or other generated files.
+
+```bash
+# Skip findings from gitignored files
+envdrift guard --skip-gitignored
+
+# Scan all files including gitignored ones (default behavior)
+envdrift guard --no-skip-gitignored
+```
+
+**Note:** This feature uses `git check-ignore` when git is available and the scan is
+run inside a git repository. If git is not installed or the repository check fails,
+the tool will log a warning and continue by returning the original findings (no
+git-based filtering will be applied).
 
 ### `--auto-install` / `--no-auto-install`
 
@@ -274,13 +366,16 @@ Guard settings live under `[guard]` in `envdrift.toml` or
 
 ```toml
 [guard]
-scanners = ["native", "gitleaks", "trufflehog", "detect-secrets", "kingfisher", "git-secrets"]
+scanners = ["native", "gitleaks", "trufflehog", "detect-secrets", "kingfisher", "git-secrets", "talisman", "trivy", "infisical"]
 auto_install = true
 include_history = false
 check_entropy = true
 entropy_threshold = 4.5
 fail_on_severity = "high"
 skip_clear_files = false  # Set to true to skip .clear files entirely
+skip_duplicate = false  # Set to true to show only unique secrets by value
+skip_encrypted_files = true  # Set to false to scan encrypted files (default: skip)
+skip_gitignored = false  # Set to true to skip findings from gitignored files
 ignore_paths = ["tests/**", "*.test.py"]
 
 # Rule-specific path ignores (see Handling False Positives below)
@@ -293,10 +388,16 @@ Notes:
 
 - `scanners` controls which external scanners are enabled by default.
 - `skip_clear_files` skips `.clear` files entirely (disabled by default - they ARE scanned).
+- `skip_duplicate` shows only unique secrets by value, ignoring scanner source and location.
+- `skip_encrypted_files` skips findings from encrypted files with dotenvx/SOPS markers (enabled by default).
+- `skip_gitignored` skips findings from gitignored files using `git check-ignore`.
 - `ignore_paths` applies globally to all scanners.
 - `ignore_rules` allows ignoring specific rules in specific path patterns.
 - CLI flags override config values.
 - `git-secrets` is ideal for AWS-heavy environments.
+- `talisman` excels at entropy and encoded content detection.
+- `trivy` provides comprehensive multi-target scanning.
+- `infisical` supports 140+ secret types with git history scanning.
 
 ## Handling False Positives
 
