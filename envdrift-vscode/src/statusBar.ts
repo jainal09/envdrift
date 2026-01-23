@@ -60,8 +60,6 @@ export async function toggleEnabled(): Promise<void> {
  * Show temporary status message
  */
 export function showStatus(message: string, duration: number = 3000): void {
-    const originalText = statusBarItem?.text;
-
     if (statusBarItem) {
         statusBarItem.text = message;
         setTimeout(() => {

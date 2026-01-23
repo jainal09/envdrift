@@ -1,4 +1,6 @@
 import * as vscode from 'vscode';
+// Re-export pure utilities for backwards compatibility
+export { matchesPatterns, isExcluded } from './utils';
 
 /**
  * Extension configuration interface
@@ -21,27 +23,6 @@ export function getConfig(): EnvDriftConfig {
         exclude: config.get<string[]>('exclude', ['.env.example', '.env.sample', '.env.keys']),
         showNotifications: config.get<boolean>('showNotifications', true),
     };
-}
-
-/**
- * Check if a file matches our watched patterns
- */
-export function matchesPatterns(fileName: string, patterns: string[]): boolean {
-    const baseName = fileName.split('/').pop() || fileName;
-    return patterns.some(pattern => {
-        // Escape regex special chars except *, then convert * to .*
-        const escaped = pattern.replace(/[.+?^${}()|[\]\\]/g, '\\$&');
-        const regex = new RegExp('^' + escaped.replace(/\*/g, '.*') + '$');
-        return regex.test(baseName);
-    });
-}
-
-/**
- * Check if a file should be excluded
- */
-export function isExcluded(fileName: string, exclude: string[]): boolean {
-    const baseName = fileName.split('/').pop() || fileName;
-    return exclude.includes(baseName);
 }
 
 /**

@@ -6,11 +6,12 @@ This document outlines future improvements for the envdrift-agent and VS Code ex
 
 | Phase | Description | Status |
 |-------|-------------|--------|
-| Phase 2A | Configuration Improvements (CLI commands, projects.json, [guardian] section) | ✅ Completed |
-| Phase 2B | CLI Install Command (`envdrift install agent`) | ✅ In Progress |
-| Phase 2C | Build Pipelines (agent + vscode release workflows) | ❌ Not Started |
-| Phase 2D | Agent Improvements (per-project watching) | ❌ Not Started |
-| Phase 2E | VS Code Agent Status Indicator | ❌ Not Started |
+| Phase 2A | Configuration Improvements (CLI commands, projects.json, [guardian] section) | ✅ Done |
+| Phase 2B | CLI Install Command (`envdrift install agent`) | ✅ Done |
+| Phase 2C | Build Pipelines (agent + vscode release workflows) | ✅ Done |
+| Phase 2D | Agent Improvements (per-project watching) | ✅ Done |
+| Phase 2E | VS Code Agent Status Indicator | ✅ Done |
+| Phase 2F | CI/Testing (VS Code lint/tests, Go E2E integration tests) | ✅ Done |
 
 ---
 
@@ -377,6 +378,56 @@ Extension can read agent status from:
 
 ---
 
+## Phase 2F: CI/Testing
+
+### VS Code Extension CI
+
+New workflow `.github/workflows/vscode-ci.yml`:
+
+```yaml
+jobs:
+  lint:
+    # ESLint with TypeScript support
+    - npm run lint
+
+  build:
+    # TypeScript compilation
+    - npm run compile
+
+  test:
+    # Unit tests (mocha)
+    - npm run test:unit
+    # Extension tests (VS Code test framework)
+    - npm test
+
+  package:
+    # Package VSIX artifact
+    - vsce package
+```
+
+**New files:**
+- `eslint.config.mjs` - ESLint flat config with TypeScript
+- `src/utils.ts` - Pure utility functions (testable outside VS Code)
+- `src/test/unit/config.test.ts` - Unit tests for utilities
+- `src/test/suite/extension.test.ts` - VS Code extension tests
+
+**Test coverage:**
+- Pattern matching (`matchesPatterns`)
+- Exclusion logic (`isExcluded`)
+- Encryption detection (`isContentEncrypted`)
+- Extension activation and command registration
+
+### Go Agent CI
+
+Existing workflow `.github/workflows/agent-ci.yml` already includes:
+
+- golangci-lint for code quality
+- Unit tests with coverage (`go test -race -coverprofile`)
+- Integration tests on Linux, macOS, Windows
+- Multi-platform builds
+
+---
+
 ## Implementation Order
 
 1. **Phase 2A** - Config improvements (merge configs, project registration)
@@ -384,22 +435,17 @@ Extension can read agent status from:
 3. **Phase 2C** - Build pipelines (auto-release on tag)
 4. **Phase 2D** - Agent improvements (per-project watching)
 5. **Phase 2E** - VS Code agent status indicator
+6. **Phase 2F** - CI/Testing (VS Code lint/tests)
 
 ---
 
-## Not Implementing Now
+## All Phases Complete
 
-These features are deferred to a future branch:
+All Phase 2 features have been implemented:
 
-- ❌ Release workflows
-- ❌ Per-project watching
-- ❌ VS Code agent status indicator
-
-Current branch focuses on:
-
-- ✅ CLI install command (in progress)
-- ✅ Config merge (guardian → envdrift.toml)
-- ✅ Project registration commands
-- ✅ Basic agent functionality
-- ✅ VS Code extension
-- ✅ Documentation
+- ✅ Configuration improvements with project registration
+- ✅ CLI install command for agent binary
+- ✅ Release workflows for agent and VS Code extension
+- ✅ Per-project watching with individual configs
+- ✅ VS Code agent status indicator
+- ✅ CI/Testing for VS Code extension and Go agent
