@@ -233,35 +233,29 @@ class TestInstallAgentCommand:
         """Test successful installation flow."""
         binary_path = tmp_path / "envdrift-agent"
 
-        mock_response = MagicMock()
-        mock_response.read.side_effect = [b"fake binary content", b""]
-        mock_response.__enter__ = MagicMock(return_value=mock_response)
-        mock_response.__exit__ = MagicMock(return_value=False)
+        # Mock subprocess to return success for version check and install
+        version_result = MagicMock()
+        version_result.returncode = 0
+        version_result.stdout = "v1.0.0"
 
         with (
             patch("shutil.which", return_value=None),
-            patch("envdrift.cli_commands.install._detect_platform", return_value="linux-amd64"),
-            patch("envdrift.cli_commands.install._get_install_path", return_value=binary_path),
-            patch("urllib.request.urlopen", return_value=mock_response),
-            patch("tempfile.NamedTemporaryFile") as mock_temp,
-            patch("shutil.move"),
-            patch("platform.system", return_value="Linux"),
-            patch("subprocess.run") as mock_subprocess,
+            patch(
+                "envdrift.cli_commands.install._detect_platform",
+                return_value="linux-amd64",
+            ),
+            patch(
+                "envdrift.cli_commands.install._get_install_path",
+                return_value=binary_path,
+            ),
+            patch(
+                "envdrift.cli_commands.install._download_binary",
+                return_value=True,
+            ),
+            patch("subprocess.run", return_value=version_result),
             patch("envdrift.config.find_config", return_value=None),
+            patch("os.environ.get", return_value="/usr/bin:/usr/local/bin"),
         ):
-            # Setup temp file mock
-            mock_file = MagicMock()
-            mock_file.name = str(tmp_path / "temp")
-            mock_file.__enter__ = MagicMock(return_value=mock_file)
-            mock_file.__exit__ = MagicMock(return_value=False)
-            mock_temp.return_value = mock_file
-
-            # Mock subprocess calls
-            version_result = MagicMock()
-            version_result.returncode = 0
-            version_result.stdout = "v1.0.0"
-            mock_subprocess.return_value = version_result
-
             result = runner.invoke(app, ["install", "agent"])
             assert result.exit_code == 0
             assert "Installation complete" in result.stdout
