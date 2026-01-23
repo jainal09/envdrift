@@ -209,8 +209,10 @@ envdrift guard --skip-gitignored
 envdrift guard --no-skip-gitignored
 ```
 
-**Note:** This feature requires git to be installed and the scan to be run inside a
-git repository.
+**Note:** This feature uses `git check-ignore` when git is available and the scan is
+run inside a git repository. If git is not installed or the repository check fails,
+the tool will log a warning and continue by returning the original findings (no
+git-based filtering will be applied).
 
 ### `--auto-install` / `--no-auto-install`
 
