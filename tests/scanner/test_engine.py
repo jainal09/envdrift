@@ -848,7 +848,9 @@ class TestFilterEncryptedFiles:
         # Create a dotenvx encrypted file with encryption marker
         # Must contain 'encrypted:' to be detected as encrypted
         dotenvx_file = tmp_path / ".env.encrypted"
-        dotenvx_file.write_text("#/-------------------[DOTENV_PUBLIC_KEY]--------------------/\nSECRET=\"encrypted:abc123\"\n")
+        dotenvx_file.write_text(
+            '#/-------------------[DOTENV_PUBLIC_KEY]--------------------/\nSECRET="encrypted:abc123"\n'
+        )
 
         findings = [
             ScanFinding(

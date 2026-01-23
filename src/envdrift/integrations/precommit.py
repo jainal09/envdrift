@@ -38,7 +38,7 @@ HOOK_ENTRY = {
             "entry": "envdrift validate --ci",
             "language": "system",
             "files": r"^\.env\.(production|staging|development)$",
-            "pass_filenames": True,  # nosec B105 - pre-commit config key, not a password
+            "pass_filenames": True,  # nosec B105 - not a password
         },
         {
             "id": "envdrift-encryption",
@@ -46,7 +46,7 @@ HOOK_ENTRY = {
             "entry": "envdrift encrypt --check",
             "language": "system",
             "files": r"^\.env\.(production|staging)$",
-            "pass_filenames": True,  # nosec B105 - pre-commit config key, not a password
+            "pass_filenames": True,  # nosec B105 - not a password
         },
     ],
 }

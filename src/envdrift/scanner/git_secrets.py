@@ -724,8 +724,8 @@ class GitSecretsScanner(ScannerBackend):
         descriptions = {  # nosec B105 - rule ID descriptions, not actual secrets
             "aws-access-key": "AWS Access Key ID",
             "aws-secret-key": "AWS Secret Access Key",
-            "password": "Password or Credential",
-            "token": "Authentication Token",
+            "password": "Password or Credential",  # nosec B105 - not a real password
+            "token": "Authentication Token",  # nosec B105 - not a real token
             "api-key": "API Key",
             "private-key": "Private Key",
             "generic-secret": "Potential Secret",

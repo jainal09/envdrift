@@ -391,13 +391,13 @@ Extension can read agent status from:
 
 These features are deferred to a future branch:
 
-- ❌ `envdrift install agent` command
 - ❌ Release workflows
 - ❌ Per-project watching
 - ❌ VS Code agent status indicator
 
 Current branch focuses on:
 
+- ✅ CLI install command (in progress)
 - ✅ Config merge (guardian → envdrift.toml)
 - ✅ Project registration commands
 - ✅ Basic agent functionality
