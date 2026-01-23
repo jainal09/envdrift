@@ -11,6 +11,7 @@ This document outlines future improvements for the envdrift-agent and VS Code ex
 | Phase 2C | Build Pipelines (agent + vscode release workflows) | ✅ Done |
 | Phase 2D | Agent Improvements (per-project watching) | ✅ Done |
 | Phase 2E | VS Code Agent Status Indicator | ❌ Not Started |
+| Phase 2F | CI/Testing (VS Code lint/tests, Go E2E integration tests) | ❌ Not Started |
 
 ---
 
@@ -440,6 +441,153 @@ Extension can read agent status from:
 
 ---
 
+## Phase 2F: CI/Testing Improvements
+
+### Overview
+
+Add comprehensive CI workflows and testing for all components.
+
+### VS Code Extension CI (`.github/workflows/vscode-ci.yml`)
+
+**Trigger:** PRs touching `envdrift-vscode/**`
+
+| Stage | Description |
+|-------|-------------|
+| **Lint** | ESLint with TypeScript rules |
+| **Unit Tests** | Jest/Mocha tests for extension logic |
+| **E2E Tests** | VS Code extension test runner |
+
+**Implementation:**
+
+```yaml
+name: VS Code Extension CI
+
+on:
+  pull_request:
+    paths:
+      - 'envdrift-vscode/**'
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+      - run: npm ci
+        working-directory: envdrift-vscode
+      - run: npm run lint
+        working-directory: envdrift-vscode
+
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+      - run: npm ci
+        working-directory: envdrift-vscode
+      - run: npm run test
+        working-directory: envdrift-vscode
+
+  e2e:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+      - run: npm ci
+        working-directory: envdrift-vscode
+      - run: xvfb-run -a npm run test:e2e
+        working-directory: envdrift-vscode
+```
+
+### Go Agent E2E Integration Tests
+
+**Add to:** `.github/workflows/agent-ci.yml`
+
+| Stage | Description |
+|-------|-------------|
+| **Real E2E Tests** | Full integration with actual file system operations |
+| **Registry Integration** | Test projects.json loading and watching |
+| **Encryption Integration** | Test actual encryption with envdrift CLI |
+
+**Test Scenarios:**
+
+```go
+// internal/guardian/guardian_e2e_test.go
+
+func TestGuardian_E2E_RegisterAndWatch(t *testing.T) {
+    // 1. Create temp project directory
+    // 2. Add envdrift.toml with [guardian] enabled
+    // 3. Register project to projects.json
+    // 4. Start guardian
+    // 5. Create .env file
+    // 6. Wait for idle timeout
+    // 7. Verify file is encrypted
+}
+
+func TestGuardian_E2E_DynamicProjectAdd(t *testing.T) {
+    // 1. Start guardian with no projects
+    // 2. Add project to projects.json
+    // 3. Verify guardian picks up new project
+    // 4. Create .env in new project
+    // 5. Verify encryption works
+}
+
+func TestGuardian_E2E_ProjectRemove(t *testing.T) {
+    // 1. Start guardian with project
+    // 2. Remove project from projects.json
+    // 3. Verify watcher is stopped
+}
+```
+
+**CI Workflow Addition:**
+
+```yaml
+  e2e-tests:
+    name: E2E Integration Tests
+    runs-on: ubuntu-latest
+    needs: build
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.22'
+
+      - name: Set up Python (for envdrift CLI)
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install envdrift CLI
+        run: pip install envdrift
+
+      - name: Download agent binary
+        uses: actions/download-artifact@v4
+        with:
+          name: envdrift-agent-linux-amd64
+          path: ./bin
+
+      - name: Make executable
+        run: chmod +x ./bin/envdrift-agent-linux-amd64
+
+      - name: Run E2E tests
+        run: go test -v -tags=e2e ./...
+        working-directory: envdrift-agent
+        env:
+          ENVDRIFT_AGENT_PATH: ${{ github.workspace }}/bin/envdrift-agent-linux-amd64
+```
+
+### Test Coverage Requirements
+
+| Component | Unit Tests | Integration Tests | E2E Tests |
+|-----------|------------|-------------------|-----------|
+| Python CLI | ✅ Existing | ✅ Existing | - |
+| Go Agent | ✅ Existing | ✅ Basic | ❌ **Add** |
+| VS Code Extension | ❌ **Add** | - | ❌ **Add** |
+
+---
+
 ## Implementation Order
 
 1. **Phase 2A** - Config improvements (merge configs, project registration)
@@ -447,6 +595,7 @@ Extension can read agent status from:
 3. **Phase 2C** - Build pipelines (auto-release on tag)
 4. **Phase 2D** - Agent improvements (per-project watching)
 5. **Phase 2E** - VS Code agent status indicator
+6. **Phase 2F** - CI/Testing improvements (VS Code lint/tests, Go E2E tests)
 
 ---
 
@@ -467,3 +616,5 @@ The following features have been implemented:
 These features are deferred to future phases:
 
 - ❌ VS Code agent status indicator (Phase 2E)
+- ❌ VS Code extension CI (lint, unit tests, E2E tests) (Phase 2F)
+- ❌ Go agent E2E integration tests with real encryption (Phase 2F)
