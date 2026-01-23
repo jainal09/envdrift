@@ -730,6 +730,7 @@ def hash_secret(secret: str) -> str:
         Hex-encoded SHA-256 hash of the secret.
     """
     import hashlib
+
     return hashlib.sha256(secret.encode()).hexdigest()
 
 

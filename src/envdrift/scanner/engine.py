@@ -83,7 +83,9 @@ class GuardConfig:
     ignore_rules: dict[str, list[str]] = field(default_factory=dict)
     fail_on_severity: FindingSeverity = FindingSeverity.HIGH
     allowed_clear_files: list[str] = field(default_factory=list)
-    combined_files: list[str] = field(default_factory=list)  # Combined files from partial_encryption
+    combined_files: list[str] = field(
+        default_factory=list
+    )  # Combined files from partial_encryption
 
     @classmethod
     def from_dict(cls, config: dict) -> GuardConfig:
@@ -533,10 +535,7 @@ class ScanEngine:
                 pass
             return False
 
-        return [
-            finding for finding in findings
-            if not is_file_encrypted(str(finding.file_path))
-        ]
+        return [finding for finding in findings if not is_file_encrypted(str(finding.file_path))]
 
     def _filter_public_keys(self, findings: list[ScanFinding]) -> list[ScanFinding]:
         """Filter out findings that are dotenvx public keys.
@@ -560,8 +559,8 @@ class ScanEngine:
                 return False
             # Remove redaction markers (****) and check the full pattern
             # EC secp256k1 compressed public keys are exactly 66 hex chars (33 bytes)
-            clean = preview.replace('*', '')
-            if clean.startswith(('02', '03')) and len(clean) == 66:
+            clean = preview.replace("*", "")
+            if clean.startswith(("02", "03")) and len(clean) == 66:
                 # Check if remaining chars are hex
                 try:
                     int(clean, 16)
@@ -625,8 +624,7 @@ class ScanEngine:
 
         before_count = len(findings)
         filtered = [
-            finding for finding in findings
-            if str(finding.file_path) not in gitignored_files
+            finding for finding in findings if str(finding.file_path) not in gitignored_files
         ]
         after_count = len(filtered)
 
