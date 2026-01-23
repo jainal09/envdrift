@@ -1014,12 +1014,20 @@ class TestGitignoreFilter:
         """Test that gitignored files are filtered."""
         import subprocess
 
+        # Create a fake git repo structure
+        git_dir = tmp_path / ".git"
+        git_dir.mkdir()
+        ignored_file = tmp_path / "ignored.py"
+        tracked_file = tmp_path / "tracked.py"
+        ignored_file.touch()
+        tracked_file.touch()
+
         config = GuardConfig(use_native=True, use_gitleaks=False, skip_gitignored=True)
         engine = ScanEngine(config)
 
         findings = [
             ScanFinding(
-                file_path=Path("ignored.py"),
+                file_path=ignored_file,
                 rule_id="test-rule",
                 rule_description="Test",
                 description="Test finding",
@@ -1027,7 +1035,7 @@ class TestGitignoreFilter:
                 scanner="native",
             ),
             ScanFinding(
-                file_path=Path("tracked.py"),
+                file_path=tracked_file,
                 rule_id="test-rule",
                 rule_description="Test",
                 description="Test finding",
@@ -1036,16 +1044,17 @@ class TestGitignoreFilter:
             ),
         ]
 
-        # Mock subprocess.run to return "ignored.py" as gitignored
+        # Mock subprocess.run to return "ignored.py" as gitignored (null-separated)
         def mock_run(cmd, **kwargs):
-            return subprocess.CompletedProcess(cmd, 0, stdout="ignored.py\n", stderr="")
+            # git check-ignore with -z returns null-separated output
+            return subprocess.CompletedProcess(cmd, 0, stdout="ignored.py\0", stderr="")
 
         monkeypatch.setattr(subprocess, "run", mock_run)
 
         result = engine._filter_gitignored_files(findings)
         # Should only have "tracked.py"
         assert len(result) == 1
-        assert result[0].file_path == Path("tracked.py")
+        assert result[0].file_path == tracked_file
 
     def test_config_skip_gitignored_default_false(self):
         """Test that skip_gitignored defaults to False."""
