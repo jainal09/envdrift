@@ -28,8 +28,8 @@ from envdrift.scanner.patterns import (
 
 # Encryption markers for dotenvx
 DOTENVX_MARKERS = (
-    # Only check for actual encrypted values, not just the public key header
-    # DOTENV_PUBLIC_KEY header means file CAN be encrypted, not that it IS encrypted
+    # Check for actual encrypted values, not just the public key header
+    # DOTENV_PUBLIC_KEY header means file CAN be encrypted, not that values ARE encrypted
     "encrypted:",
 )
 
@@ -203,6 +203,11 @@ DEFAULT_IGNORE_PATTERNS = (
     "*.temp",
     "*.bak",
     "*.backup",
+    # Configuration files (contain "secret" keyword but no real secrets)
+    "envdrift.toml",
+    "pyproject.toml",
+    "mkdocs.yml",
+    "mkdocs.yaml",
 )
 
 

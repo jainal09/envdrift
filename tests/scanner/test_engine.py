@@ -548,6 +548,107 @@ class TestDeduplication:
         assert unique[1].severity == FindingSeverity.MEDIUM
         assert unique[2].severity == FindingSeverity.LOW
 
+    def test_deduplicate_skip_duplicate_by_secret_value(self):
+        """Test skip_duplicate deduplicates by secret value only."""
+        config = GuardConfig(use_native=True, use_gitleaks=False, skip_duplicate=True)
+        engine = ScanEngine(config)
+
+        # Same secret appearing in different files
+        findings = [
+            ScanFinding(
+                file_path=Path("config1.py"),
+                line_number=10,
+                rule_id="aws-key",
+                rule_description="AWS Key",
+                description="AWS Key found",
+                severity=FindingSeverity.HIGH,
+                scanner="native",
+                secret_preview="AKIA****XXXX",
+            ),
+            ScanFinding(
+                file_path=Path("config2.py"),
+                line_number=20,
+                rule_id="aws-key",
+                rule_description="AWS Key",
+                description="AWS Key found",
+                severity=FindingSeverity.HIGH,
+                scanner="gitleaks",
+                secret_preview="AKIA****XXXX",  # Same secret value
+            ),
+        ]
+
+        unique = engine._deduplicate(findings)
+
+        # Should be deduplicated to 1 since same secret_preview
+        assert len(unique) == 1
+
+    def test_deduplicate_skip_duplicate_keeps_different_secrets(self):
+        """Test skip_duplicate keeps findings with different secret values."""
+        config = GuardConfig(use_native=True, use_gitleaks=False, skip_duplicate=True)
+        engine = ScanEngine(config)
+
+        findings = [
+            ScanFinding(
+                file_path=Path("config.py"),
+                line_number=10,
+                rule_id="aws-key",
+                rule_description="AWS Key",
+                description="AWS Key found",
+                severity=FindingSeverity.HIGH,
+                scanner="native",
+                secret_preview="AKIA****XXXX",
+            ),
+            ScanFinding(
+                file_path=Path("config.py"),
+                line_number=20,
+                rule_id="aws-key",
+                rule_description="AWS Key",
+                description="AWS Key found",
+                severity=FindingSeverity.HIGH,
+                scanner="native",
+                secret_preview="AKIA****YYYY",  # Different secret value
+            ),
+        ]
+
+        unique = engine._deduplicate(findings)
+
+        # Should keep both since different secret values
+        assert len(unique) == 2
+
+    def test_deduplicate_skip_duplicate_disabled_keeps_all_locations(self):
+        """Test that with skip_duplicate=False, same secret in different locations is kept."""
+        config = GuardConfig(use_native=True, use_gitleaks=False, skip_duplicate=False)
+        engine = ScanEngine(config)
+
+        # Same secret appearing in different files
+        findings = [
+            ScanFinding(
+                file_path=Path("config1.py"),
+                line_number=10,
+                rule_id="aws-key",
+                rule_description="AWS Key",
+                description="AWS Key found",
+                severity=FindingSeverity.HIGH,
+                scanner="native",
+                secret_preview="AKIA****XXXX",
+            ),
+            ScanFinding(
+                file_path=Path("config2.py"),
+                line_number=20,
+                rule_id="aws-key",
+                rule_description="AWS Key",
+                description="AWS Key found",
+                severity=FindingSeverity.HIGH,
+                scanner="native",
+                secret_preview="AKIA****XXXX",  # Same secret value
+            ),
+        ]
+
+        unique = engine._deduplicate(findings)
+
+        # Should keep both since they're in different files
+        assert len(unique) == 2
+
 
 class TestIntegration:
     """Integration tests for the scan engine."""
@@ -683,3 +784,166 @@ class TestIntegration:
         # AWS finding should be filtered
         aws_findings = [f for f in result.unique_findings if f.rule_id == "aws-access-key-id"]
         assert len(aws_findings) == 0
+
+
+class TestGitignoreFilter:
+    """Tests for gitignore-based filtering."""
+
+    def test_filter_gitignored_files_empty_list(self):
+        """Test filter with empty findings list."""
+        config = GuardConfig(use_native=True, use_gitleaks=False, skip_gitignored=True)
+        engine = ScanEngine(config)
+
+        result = engine._filter_gitignored_files([])
+        assert result == []
+
+    def test_filter_gitignored_files_no_git(self, tmp_path, monkeypatch):
+        """Test filter when git is not available."""
+        import subprocess
+
+        config = GuardConfig(use_native=True, use_gitleaks=False, skip_gitignored=True)
+        engine = ScanEngine(config)
+
+        findings = [
+            ScanFinding(
+                file_path=Path("test.py"),
+                rule_id="test-rule",
+                rule_description="Test",
+                description="Test finding",
+                severity=FindingSeverity.HIGH,
+                scanner="native",
+            ),
+        ]
+
+        # Mock subprocess.run to raise FileNotFoundError (git not found)
+        def mock_run(*args, **kwargs):
+            raise FileNotFoundError("git not found")
+
+        monkeypatch.setattr(subprocess, "run", mock_run)
+
+        result = engine._filter_gitignored_files(findings)
+        # Should return original findings when git is not available
+        assert len(result) == 1
+
+    def test_filter_gitignored_files_filters_ignored(self, tmp_path, monkeypatch):
+        """Test that gitignored files are filtered."""
+        import subprocess
+
+        config = GuardConfig(use_native=True, use_gitleaks=False, skip_gitignored=True)
+        engine = ScanEngine(config)
+
+        findings = [
+            ScanFinding(
+                file_path=Path("ignored.py"),
+                rule_id="test-rule",
+                rule_description="Test",
+                description="Test finding",
+                severity=FindingSeverity.HIGH,
+                scanner="native",
+            ),
+            ScanFinding(
+                file_path=Path("tracked.py"),
+                rule_id="test-rule",
+                rule_description="Test",
+                description="Test finding",
+                severity=FindingSeverity.HIGH,
+                scanner="native",
+            ),
+        ]
+
+        # Mock subprocess.run to return "ignored.py" as gitignored
+        def mock_run(cmd, **kwargs):
+            return subprocess.CompletedProcess(cmd, 0, stdout="ignored.py\n", stderr="")
+
+        monkeypatch.setattr(subprocess, "run", mock_run)
+
+        result = engine._filter_gitignored_files(findings)
+        # Should only have "tracked.py"
+        assert len(result) == 1
+        assert result[0].file_path == Path("tracked.py")
+
+    def test_config_skip_gitignored_default_false(self):
+        """Test that skip_gitignored defaults to False."""
+        config = GuardConfig()
+        assert config.skip_gitignored is False
+
+    def test_config_skip_gitignored_can_be_enabled(self):
+        """Test that skip_gitignored can be enabled."""
+        config = GuardConfig(skip_gitignored=True)
+        assert config.skip_gitignored is True
+
+
+class TestCombinedFilesSecurity:
+    """Tests for combined files security check."""
+
+    def test_no_combined_files(self):
+        """Test check with no combined files."""
+        config = GuardConfig(use_native=True, use_gitleaks=False, combined_files=[])
+        engine = ScanEngine(config)
+
+        warnings = engine.check_combined_files_security()
+        assert warnings == []
+
+    def test_combined_file_in_gitignore(self, monkeypatch):
+        """Test that combined file in gitignore produces no warning."""
+        import subprocess
+
+        config = GuardConfig(
+            use_native=True,
+            use_gitleaks=False,
+            combined_files=[".env.production"],
+        )
+        engine = ScanEngine(config)
+
+        # Mock subprocess.run to return 0 (file is ignored)
+        def mock_run(cmd, **kwargs):
+            return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+
+        monkeypatch.setattr(subprocess, "run", mock_run)
+
+        warnings = engine.check_combined_files_security()
+        assert warnings == []
+
+    def test_combined_file_not_in_gitignore(self, monkeypatch):
+        """Test that combined file NOT in gitignore produces warning."""
+        import subprocess
+
+        config = GuardConfig(
+            use_native=True,
+            use_gitleaks=False,
+            combined_files=[".env.production"],
+        )
+        engine = ScanEngine(config)
+
+        # Mock subprocess.run to return 1 (file is NOT ignored)
+        def mock_run(cmd, **kwargs):
+            return subprocess.CompletedProcess(cmd, 1, stdout="", stderr="")
+
+        monkeypatch.setattr(subprocess, "run", mock_run)
+
+        warnings = engine.check_combined_files_security()
+        assert len(warnings) == 1
+        assert "SECURITY WARNING" in warnings[0]
+        assert ".env.production" in warnings[0]
+
+    def test_combined_files_git_not_available(self, monkeypatch):
+        """Test graceful handling when git is not available."""
+        import subprocess
+
+        config = GuardConfig(
+            use_native=True,
+            use_gitleaks=False,
+            combined_files=[".env.production"],
+        )
+        engine = ScanEngine(config)
+
+        # Mock subprocess.run to raise FileNotFoundError
+        def mock_run(*args, **kwargs):
+            raise FileNotFoundError("git not found")
+
+        monkeypatch.setattr(subprocess, "run", mock_run)
+
+        # Should not raise, just return empty warnings
+        warnings = engine.check_combined_files_security()
+        assert warnings == []
+

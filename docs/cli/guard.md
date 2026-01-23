@@ -168,6 +168,36 @@ envdrift guard --skip-clear
 envdrift guard --no-skip-clear
 ```
 
+### `--skip-duplicate` / `--no-skip-duplicate`
+
+Show only unique secrets by value, ignoring which scanner found them or where they
+appear. Useful when multiple scanners detect the same secret across multiple files.
+
+```bash
+# Show each unique secret only once
+envdrift guard --skip-duplicate
+
+# Show all findings including duplicates (default behavior)
+envdrift guard --no-skip-duplicate
+```
+
+### `--skip-gitignored` / `--no-skip-gitignored`
+
+Skip findings from files that are in `.gitignore`. This uses `git check-ignore` for
+reliable detection of ignored files. Useful for filtering out findings from build
+artifacts, dependencies, or other generated files.
+
+```bash
+# Skip findings from gitignored files
+envdrift guard --skip-gitignored
+
+# Scan all files including gitignored ones (default behavior)
+envdrift guard --no-skip-gitignored
+```
+
+**Note:** This feature requires git to be installed and the scan to be run inside a
+git repository.
+
 ### `--auto-install` / `--no-auto-install`
 
 Control auto-installation of external scanners.
@@ -327,6 +357,8 @@ check_entropy = true
 entropy_threshold = 4.5
 fail_on_severity = "high"
 skip_clear_files = false  # Set to true to skip .clear files entirely
+skip_duplicate = false  # Set to true to show only unique secrets by value
+skip_gitignored = false  # Set to true to skip findings from gitignored files
 ignore_paths = ["tests/**", "*.test.py"]
 
 # Rule-specific path ignores (see Handling False Positives below)
@@ -339,6 +371,8 @@ Notes:
 
 - `scanners` controls which external scanners are enabled by default.
 - `skip_clear_files` skips `.clear` files entirely (disabled by default - they ARE scanned).
+- `skip_duplicate` shows only unique secrets by value, ignoring scanner source and location.
+- `skip_gitignored` skips findings from gitignored files using `git check-ignore`.
 - `ignore_paths` applies globally to all scanners.
 - `ignore_rules` allows ignoring specific rules in specific path patterns.
 - CLI flags override config values.
