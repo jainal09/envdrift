@@ -254,7 +254,6 @@ class TestInstallAgentCommand:
             ),
             patch("subprocess.run", return_value=version_result),
             patch("envdrift.config.find_config", return_value=None),
-            patch("os.environ.get", return_value="/usr/bin:/usr/local/bin"),
         ):
             result = runner.invoke(app, ["install", "agent"])
             assert result.exit_code == 0
