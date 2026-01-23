@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import time
 from collections.abc import Callable
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -333,7 +333,7 @@ class ScanEngine:
         Parameters:
             paths (list[Path]): Files or directories to scan.
             on_scanner_complete: Optional callback called when each scanner completes.
-                                 Signature: (scanner_name: str, completed: int, total: int) -> None
+                                 Signature: (scanner_name: str, completed: int, total: int, result: ScanResult) -> None
 
         Returns:
             AggregatedScanResult: Aggregated scan outcome containing:
@@ -361,6 +361,7 @@ class ScanEngine:
         max_workers = min(len(self.scanners), 4)
         total_scanners = len(self.scanners)
         completed_count = 0
+        per_scanner_timeout_s = 600
 
         with ThreadPoolExecutor(max_workers=max_workers) as executor:
             # Submit all scanner tasks
@@ -371,28 +372,59 @@ class ScanEngine:
                 for scanner in self.scanners
             }
 
-            # Collect results as they complete
-            for future in as_completed(future_to_scanner):
-                scanner = future_to_scanner[future]
-                try:
-                    scan_result = future.result()
-                except Exception as e:
-                    # Record scanner failure but continue with others
+            start_times = {future: time.time() for future in future_to_scanner}
+            pending = set(future_to_scanner)
+
+            # Collect results as they complete, while enforcing per-scanner timeouts
+            while pending:
+                done, pending = wait(pending, timeout=1, return_when=FIRST_COMPLETED)
+
+                for future in done:
+                    scanner = future_to_scanner[future]
+                    try:
+                        scan_result = future.result()
+                    except Exception as e:
+                        # Record scanner failure but continue with others
+                        scan_result = ScanResult(
+                            scanner_name=scanner.name,
+                            error=f"Scanner failed: {e!s}",
+                        )
+                    results.append(scan_result)
+
+                    # Notify progress callback
+                    completed_count += 1
+                    if on_scanner_complete:
+                        on_scanner_complete(
+                            scanner.name,
+                            completed_count,
+                            total_scanners,
+                            scan_result,
+                        )
+
+                # Mark long-running scanners as timed out
+                now = time.time()
+                timed_out = [
+                    future
+                    for future in pending
+                    if now - start_times[future] > per_scanner_timeout_s
+                ]
+                for future in timed_out:
+                    scanner = future_to_scanner[future]
+                    future.cancel()
                     scan_result = ScanResult(
                         scanner_name=scanner.name,
-                        error=f"Scanner failed: {e!s}",
+                        error=f"Scanner timed out after {per_scanner_timeout_s}s",
                     )
-                results.append(scan_result)
-
-                # Notify progress callback
-                completed_count += 1
-                if on_scanner_complete:
-                    on_scanner_complete(
-                        scanner.name,
-                        completed_count,
-                        total_scanners,
-                        scan_result,
-                    )
+                    results.append(scan_result)
+                    completed_count += 1
+                    if on_scanner_complete:
+                        on_scanner_complete(
+                            scanner.name,
+                            completed_count,
+                            total_scanners,
+                            scan_result,
+                        )
+                    pending.remove(future)
 
         # Collect all findings (sort results by scanner name for deterministic order)
         results.sort(key=lambda r: r.scanner_name)

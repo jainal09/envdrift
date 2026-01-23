@@ -425,7 +425,8 @@ class DetectSecretsScanner(ScannerBackend):
                                 error=f"detect-secrets output error: {result.stderr[:200]}",
                                 duration_ms=int((time.time() - start_time) * 1000),
                             )
-                elif result.returncode != 0:
+
+                if result.returncode != 0:
                     error_msg = (
                         result.stderr.strip()
                         or result.stdout.strip()
