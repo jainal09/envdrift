@@ -207,7 +207,7 @@ class TestInstallAgentCommand:
             assert "already installed" in result.stdout
 
     def test_download_failure(self, tmp_path: Path):
-        """Test handling of download failure."""
+        """Test handling of download failure (HTTPError)."""
         with (
             patch("shutil.which", return_value=None),
             patch(
@@ -223,6 +223,27 @@ class TestInstallAgentCommand:
                 side_effect=urllib.error.HTTPError(
                     url="", code=404, msg="Not Found", hdrs={}, fp=None
                 ),
+            ),
+        ):
+            result = runner.invoke(app, ["install", "agent"])
+            assert result.exit_code == 1
+            assert "Failed to download" in result.stdout
+
+    def test_download_failure_url_error(self, tmp_path: Path):
+        """Test handling of download failure (URLError - network error)."""
+        with (
+            patch("shutil.which", return_value=None),
+            patch(
+                "envdrift.cli_commands.install._detect_platform",
+                return_value="darwin-arm64",
+            ),
+            patch(
+                "envdrift.cli_commands.install._get_install_path",
+                return_value=tmp_path / "envdrift-agent",
+            ),
+            patch(
+                "urllib.request.urlopen",
+                side_effect=urllib.error.URLError("Connection refused"),
             ),
         ):
             result = runner.invoke(app, ["install", "agent"])

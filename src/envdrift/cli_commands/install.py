@@ -8,6 +8,7 @@ Commands:
 
 from __future__ import annotations
 
+import contextlib
 import os
 import platform
 import shutil
@@ -148,9 +149,9 @@ def _download_binary(url: str, dest: Path, progress: Progress) -> bool:
         shutil.move(str(tmp_path), str(dest))
         tmp_path = None  # Successfully moved, don't delete
 
-        # Make executable on Unix
+        # Make executable on Unix (owner-only for security)
         if platform.system().lower() != "windows":
-            dest.chmod(dest.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
+            dest.chmod(dest.stat().st_mode | stat.S_IXUSR)
 
         return True
 
@@ -169,8 +170,6 @@ def _download_binary(url: str, dest: Path, progress: Progress) -> bool:
     finally:
         # Clean up temp file if it exists
         if tmp_path is not None and tmp_path.exists():
-            import contextlib
-
             with contextlib.suppress(OSError):
                 tmp_path.unlink()
 
@@ -248,7 +247,18 @@ def install_agent(
                 text=True,
                 timeout=5,
             )
-            if result.returncode == 0 and "running" in result.stdout.lower():
+            # Check for explicit running status patterns (avoid matching "Running: false")
+            output_lower = result.stdout.lower()
+            is_running = result.returncode == 0 and (
+                "status: running" in output_lower
+                or "is running" in output_lower
+                or (
+                    "running" in output_lower
+                    and "not running" not in output_lower
+                    and "running: false" not in output_lower
+                )
+            )
+            if is_running:
                 console.print(
                     "[yellow]⚠ Warning:[/yellow] Agent is currently running. "
                     "Consider stopping it before reinstalling."
