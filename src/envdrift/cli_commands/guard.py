@@ -24,11 +24,15 @@ Configuration can be set in envdrift.toml:
 
 from __future__ import annotations
 
+import time as time_module
 from pathlib import Path
 from typing import Annotated
 
 import typer
 from rich.console import Console
+from rich.live import Live
+from rich.spinner import Spinner
+from rich.text import Text
 
 from envdrift.config import load_config
 from envdrift.scanner.base import FindingSeverity
@@ -202,12 +206,12 @@ def guard(
     ] = False,
     # Severity threshold
     fail_on: Annotated[
-        str,
+        str | None,
         typer.Option(
             "--fail-on",
             help="Minimum severity to cause non-zero exit (critical|high|medium|low)",
         ),
-    ] = "high",
+    ] = None,
     # Verbosity
     verbose: Annotated[
         bool,
@@ -334,13 +338,12 @@ def guard(
     guard_cfg = file_config.guard
 
     # Determine fail_on severity (CLI overrides config)
-    # Note: typer doesn't distinguish between explicit arg and default,
-    # so we always use CLI value (which defaults to "high")
+    fail_on_value = fail_on or guard_cfg.fail_on_severity or "high"
     try:
-        fail_severity = FindingSeverity(fail_on.lower())
+        fail_severity = FindingSeverity(fail_on_value.lower())
     except ValueError as e:
         console.print(
-            f"[red]Error:[/red] Invalid severity '{fail_on}'. "
+            f"[red]Error:[/red] Invalid severity '{fail_on_value}'. "
             f"Valid options: critical, high, medium, low"
         )
         raise typer.Exit(code=1) from e
@@ -447,14 +450,15 @@ def guard(
             output_console.print()
 
     # Show scanner info in verbose mode or when running interactively
-    if not json_output and not sarif:
-        scanner_names = [s.name for s in engine.scanners]
-        if scanner_names:
-            output_console.print(f"[bold]Running scanners:[/bold] {', '.join(scanner_names)}")
-            output_console.print("[dim]Scanners run in parallel for better performance...[/dim]")
-            output_console.print()
+    scanner_names = [s.name for s in engine.scanners]
+    show_progress = not json_output and not sarif and scanner_names
+
+    if show_progress:
+        output_console.print(f"[bold]Running scanners:[/bold] {', '.join(scanner_names)}")
+        output_console.print("[dim]Scanners run in parallel for better performance...[/dim]")
 
         if verbose:
+            output_console.print()
             output_console.print("[bold]Scanner details:[/bold]")
             for info in engine.get_scanner_info():
                 status = (
@@ -464,10 +468,74 @@ def guard(
                 )
                 version = f" (v{info['version']})" if info["version"] else ""
                 output_console.print(f"  - {info['name']}: {status}{version}")
-            output_console.print()
 
-    # Run scan
-    result = engine.scan(paths)
+    # Track completed scanners for progress display
+    completed_scanners: dict[str, float] = {}  # name -> duration in seconds
+    total_scanners = len(scanner_names)
+    scan_start_time = time_module.time()
+
+    def format_duration(seconds: float) -> str:
+        """Format duration as human readable string."""
+        if seconds < 60:
+            return f"{seconds:.1f}s"
+        minutes = int(seconds // 60)
+        secs = seconds % 60
+        return f"{minutes}m {secs:.0f}s"
+
+    def make_progress_text() -> Text:
+        """Build progress display text."""
+        text = Text()
+        done_count = len(completed_scanners)
+        elapsed = time_module.time() - scan_start_time
+        text.append(f"Scanning {done_count}/{total_scanners} complete ", style="bold")
+        text.append(f"({format_duration(elapsed)})\n\n", style="dim")
+        for name in scanner_names:
+            if name in completed_scanners:
+                duration = completed_scanners[name]
+                text.append("  [*] ", style="green bold")
+                text.append(f"{name:<15}", style="green")
+                text.append(f" done in {format_duration(duration)}\n", style="green")
+            else:
+                text.append("  [ ] ", style="yellow")
+                text.append(f"{name:<15}", style="yellow")
+                text.append(" running...\n", style="yellow dim")
+        return text
+
+    def on_scanner_complete(
+        name: str,
+        completed: int,
+        total: int,
+        result: object | None = None,
+    ) -> None:
+        """Callback when a scanner completes."""
+        elapsed = time_module.time() - scan_start_time
+        duration = elapsed
+        # Prefer scanner-reported duration if available
+        if result is not None and hasattr(result, "duration_ms"):
+            try:
+                duration_ms = float(getattr(result, "duration_ms", 0))
+                if duration_ms > 0:
+                    duration = duration_ms / 1000.0
+            except (TypeError, ValueError):
+                pass
+        completed_scanners[name] = duration
+        if show_progress and live:
+            live.update(Spinner("dots", text=make_progress_text()))
+
+    # Run scan with progress indicator
+    if show_progress:
+        output_console.print()
+        live = Live(
+            Spinner("dots", text=make_progress_text()),
+            console=output_console,
+            refresh_per_second=10,
+        )
+        with live:
+            result = engine.scan(paths, on_scanner_complete=on_scanner_complete)
+        output_console.print()
+    else:
+        live = None
+        result = engine.scan(paths)
 
     # Output results
     if sarif:

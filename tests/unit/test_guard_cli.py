@@ -61,7 +61,7 @@ def _patch_guard_dependencies(monkeypatch, config: EnvdriftConfig, result: Aggre
             info_calls.append(True)
             return [{"name": "native", "installed": True, "version": "1.0.0"}]
 
-        def scan(self, _paths):
+        def scan(self, _paths, on_scanner_complete=None):
             return result
 
         def check_combined_files_security(self):
@@ -104,7 +104,7 @@ def test_guard_defaults_to_cwd(monkeypatch):
         def get_scanner_info(self):
             return []
 
-        def scan(self, paths):
+        def scan(self, paths, on_scanner_complete=None):
             scan_paths.append(paths)
             return dummy_result
 
@@ -338,7 +338,7 @@ def test_guard_staged_scans_only_staged_files(monkeypatch):
         def get_scanner_info(self):
             return []
 
-        def scan(self, paths):
+        def scan(self, paths, on_scanner_complete=None):
             scan_paths.append(paths)
             return dummy_result
 
@@ -423,7 +423,7 @@ def test_guard_pr_base_scans_diff_files(monkeypatch):
         def get_scanner_info(self):
             return []
 
-        def scan(self, paths):
+        def scan(self, paths, on_scanner_complete=None):
             scan_paths.append(paths)
             return dummy_result
 

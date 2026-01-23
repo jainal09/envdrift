@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+from typing import Annotated
+
 import typer
 
+from envdrift import __version__
 from envdrift.cli_commands.agent import agent_app
 from envdrift.cli_commands.diff import diff
 from envdrift.cli_commands.encryption import decrypt_cmd, encrypt_cmd
@@ -16,13 +19,39 @@ from envdrift.cli_commands.partial import push as push_cmd
 from envdrift.cli_commands.sync import lock, pull, sync
 from envdrift.cli_commands.validate import validate
 from envdrift.cli_commands.vault import vault_push
-from envdrift.cli_commands.version import version
+from envdrift.cli_commands.version import version as version_cmd
+
+
+def _version_callback(value: bool) -> None:
+    """Print version and exit when --version is passed."""
+    if value:
+        typer.echo(f"envdrift {__version__}")
+        raise typer.Exit()
+
 
 app = typer.Typer(
     name="envdrift",
     help="Prevent environment variable drift with Pydantic schema validation.",
     no_args_is_help=True,
 )
+
+
+@app.callback()
+def main(
+    _version: Annotated[
+        bool | None,
+        typer.Option(
+            "--version",
+            "-V",
+            help="Show version and exit.",
+            callback=_version_callback,
+            is_eager=True,
+        ),
+    ] = None,
+) -> None:
+    """Envdrift - Environment variable management and secret scanning."""
+    pass
+
 
 app.command()(validate)
 app.command()(diff)
@@ -35,7 +64,7 @@ app.command()(sync)
 app.command()(pull)
 app.command()(lock)
 app.command("vault-push")(vault_push)
-app.command()(version)
+app.command()(version_cmd)
 
 # Partial encryption commands
 app.command("push")(push_cmd)

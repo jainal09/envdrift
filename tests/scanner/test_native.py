@@ -59,6 +59,48 @@ class TestNativeScannerInternals:
         monkeypatch.setattr(Path, "rglob", raise_permission)
         assert scanner._collect_files(tmp_path) == []
 
+    def test_collect_files_sorts_git_results(self, tmp_path: Path, monkeypatch):
+        """Git-based collection returns deterministically sorted results."""
+        import subprocess
+
+        scanner = NativeScanner()
+
+        (tmp_path / "a.txt").touch()
+        (tmp_path / "b.txt").touch()
+        (tmp_path / ".env.a").touch()
+        (tmp_path / ".env.z").touch()
+
+        def mock_run(cmd, **kwargs):
+            if cmd[:2] == ["git", "ls-files"] and "--others" not in cmd:
+                return subprocess.CompletedProcess(cmd, 0, stdout="b.txt\na.txt\n", stderr="")
+            if cmd[:2] == ["git", "ls-files"] and "--others" in cmd:
+                return subprocess.CompletedProcess(cmd, 0, stdout=".env.z\n.env.a\n", stderr="")
+            return subprocess.CompletedProcess(cmd, 1, stdout="", stderr="")
+
+        monkeypatch.setattr(subprocess, "run", mock_run)
+
+        files = scanner._collect_files(tmp_path)
+        expected = sorted(
+            {tmp_path / "a.txt", tmp_path / "b.txt", tmp_path / ".env.a", tmp_path / ".env.z"},
+            key=lambda p: str(p),
+        )
+
+        assert files == expected
+
+    def test_collect_files_fallback_sorts_results(self, tmp_path: Path):
+        """Fallback file collection returns deterministically ordered results."""
+        scanner = NativeScanner()
+
+        (tmp_path / "z").mkdir()
+        (tmp_path / "a").mkdir()
+        (tmp_path / "z" / "b.txt").write_text("x")
+        (tmp_path / "a" / "c.txt").write_text("x")
+
+        files = scanner._collect_files_fallback(tmp_path)
+        expected = sorted(files, key=lambda p: str(p))
+
+        assert files == expected
+
     def test_should_ignore_handles_outside_base(self):
         """Relative path failures fall back to full path matching."""
         scanner = NativeScanner(ignore_patterns=["secret.txt"])

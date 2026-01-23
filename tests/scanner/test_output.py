@@ -125,6 +125,35 @@ class TestJsonOutput:
         assert data["exit_code"] == 0
         assert data["has_blocking_findings"] is False
 
+    def test_json_includes_scanner_results(self):
+        """JSON output includes per-scanner results and errors."""
+        result = AggregatedScanResult(
+            results=[
+                ScanResult(
+                    scanner_name="native",
+                    findings=[],
+                    files_scanned=3,
+                    duration_ms=10,
+                ),
+                ScanResult(
+                    scanner_name="gitleaks",
+                    findings=[],
+                    files_scanned=0,
+                    duration_ms=5,
+                    error="boom",
+                ),
+            ],
+            total_findings=0,
+            unique_findings=[],
+            scanners_used=["native", "gitleaks"],
+            total_duration_ms=15,
+        )
+        data = json.loads(format_json(result))
+
+        assert "scanner_results" in data
+        assert len(data["scanner_results"]) == 2
+        assert data["scanner_results"][1]["error"] == "boom"
+
 
 class TestSarifOutput:
     """Tests for SARIF output formatter."""
@@ -329,3 +358,23 @@ class TestRichOutput:
 
         assert "Findings Summary" in output
         assert "Remediation" in output
+
+    def test_format_rich_shows_scanner_errors(self):
+        """Scanner errors render a dedicated panel."""
+        result = AggregatedScanResult(
+            results=[
+                ScanResult(scanner_name="native", findings=[], files_scanned=0, duration_ms=5, error="boom")
+            ],
+            total_findings=0,
+            unique_findings=[],
+            scanners_used=["native"],
+            total_duration_ms=5,
+        )
+        console = Console(record=True, force_terminal=True, width=120)
+        format_rich(result, console)
+        output = console.export_text()
+
+        assert "Scanner Errors" in output
+        assert "native" in output
+        assert "boom" in output
+        assert "Files with findings" in output

@@ -426,6 +426,19 @@ class DetectSecretsScanner(ScannerBackend):
                                 duration_ms=int((time.time() - start_time) * 1000),
                             )
 
+                if result.returncode != 0:
+                    error_msg = (
+                        result.stderr.strip()
+                        or result.stdout.strip()
+                        or f"detect-secrets scan failed for {path} (exit code {result.returncode})"
+                    )
+                    return ScanResult(
+                        scanner_name=self.name,
+                        findings=all_findings,
+                        error=error_msg,
+                        duration_ms=int((time.time() - start_time) * 1000),
+                    )
+
             except subprocess.TimeoutExpired:
                 return ScanResult(
                     scanner_name=self.name,
@@ -511,6 +524,7 @@ class DetectSecretsScanner(ScannerBackend):
                 description=f"Secret detected by {detector_type}",
                 severity=severity if not is_false_positive else FindingSeverity.INFO,
                 secret_preview=preview,
+                secret_hash=hashed_secret,
                 scanner=self.name,
             )
         except Exception:
