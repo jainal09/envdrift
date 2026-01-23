@@ -6,10 +6,10 @@ This document outlines future improvements for the envdrift-agent and VS Code ex
 
 | Phase | Description | Status |
 |-------|-------------|--------|
-| Phase 2A | Configuration Improvements (CLI commands, projects.json, [guardian] section) | ✅ Completed |
-| Phase 2B | CLI Install Command (`envdrift install agent`) | ✅ In Progress |
-| Phase 2C | Build Pipelines (agent + vscode release workflows) | ❌ Not Started |
-| Phase 2D | Agent Improvements (per-project watching) | ❌ Not Started |
+| Phase 2A | Configuration Improvements (CLI commands, projects.json, [guardian] section) | ✅ Done |
+| Phase 2B | CLI Install Command (`envdrift install agent`) | ✅ Done |
+| Phase 2C | Build Pipelines (agent + vscode release workflows) | ✅ Done |
+| Phase 2D | Agent Improvements (per-project watching) | ✅ Done |
 | Phase 2E | VS Code Agent Status Indicator | ❌ Not Started |
 
 ---
@@ -291,22 +291,59 @@ jobs:
 
 ---
 
-## Phase 2D: Agent Improvements
+## Phase 2D: Agent Improvements ✅
 
 ### Watch Strategy
 
 Instead of watching entire directories, the agent:
 
-1. Only watches registered project roots
-2. Uses `envdrift.toml` from each project for patterns/excludes
-3. Respects project-specific settings
+1. Only watches registered project roots (from `~/.envdrift/projects.json`)
+2. Uses each project's `envdrift.toml` for patterns/excludes
+3. Respects project-specific idle timeouts and notification settings
+
+### Implementation
+
+**New Go Packages:**
+
+| Package | File | Purpose |
+|---------|------|---------|
+| `registry` | `internal/registry/registry.go` | Loads and watches `~/.envdrift/projects.json` |
+| `project` | `internal/project/config.go` | Loads per-project `[guardian]` settings from `envdrift.toml` |
+
+**Refactored Guardian:**
+
+The guardian now creates a `ProjectWatcher` for each enabled project:
+
+```go
+// internal/guardian/guardian.go
+
+type ProjectWatcher struct {
+    projectPath string
+    config      *project.GuardianConfig  // Per-project settings
+    watcher     *watcher.Watcher
+    lastMod     map[string]time.Time
+}
+
+type Guardian struct {
+    projects        map[string]*ProjectWatcher  // path -> watcher
+    registryWatcher *registry.RegistryWatcher   // Watches projects.json
+}
+```
+
+**Key Features:**
+
+- **Per-project patterns**: Each project uses its own `.env*` patterns and excludes
+- **Per-project idle timeout**: Projects can have different encryption delays
+- **Per-project notifications**: Enable/disable desktop notifications per project
+- **Dynamic registry watching**: Agent auto-reloads when projects are added/removed
+- **Only enabled projects**: Projects with `guardian.enabled = false` are skipped
 
 ### Architecture
 
 ```text
 ┌─────────────────────────────────────────┐
-│           ~/.envdrift/agent.toml        │
-│  registered_projects = [A, B, C]        │
+│      ~/.envdrift/projects.json          │
+│  (registry watcher monitors changes)    │
 └─────────────────┬───────────────────────┘
                   │
     ┌─────────────┼─────────────┐
@@ -316,13 +353,39 @@ Instead of watching entire directories, the agent:
 │ toml  │    │ toml  │    │ toml  │
 └───┬───┘    └───┬───┘    └───┬───┘
     │            │            │
+    ▼            ▼            ▼
+┌────────┐  ┌────────┐  ┌────────┐
+│Project │  │Project │  │Project │
+│Watcher │  │Watcher │  │Watcher │
+│(5m,    │  │(1m,    │  │(10m,   │
+│notify) │  │quiet)  │  │notify) │
+└────────┘  └────────┘  └────────┘
+    │            │            │
     └────────────┼────────────┘
                  ▼
          ┌─────────────┐
-         │ Guardian    │
-         │ (per-proj   │
-         │  settings)  │
+         │  Guardian   │
+         │ (aggregates │
+         │   events)   │
          └─────────────┘
+```
+
+### Configuration Example
+
+```toml
+# Project A: envdrift.toml - quick encryption with notifications
+[guardian]
+enabled = true
+idle_timeout = "1m"
+patterns = [".env*", ".secret*"]
+exclude = [".env.example"]
+notify = true
+
+# Project B: envdrift.toml - slow encryption, no notifications
+[guardian]
+enabled = true
+idle_timeout = "10m"
+notify = false
 ```
 
 ---
@@ -387,19 +450,20 @@ Extension can read agent status from:
 
 ---
 
+## Completed Features
+
+The following features have been implemented:
+
+- ✅ Config merge (guardian → envdrift.toml) - Phase 2A
+- ✅ Project registration commands (`envdrift agent register/unregister/list/status`) - Phase 2A
+- ✅ `envdrift install agent` command with `check` subcommand - Phase 2B
+- ✅ Agent release workflow (5 platforms) - Phase 2C
+- ✅ VS Code extension release workflow with marketplace publishing - Phase 2C
+- ✅ Per-project watching with individual configs - Phase 2D
+- ✅ Dynamic registry watching (hot reload on project add/remove) - Phase 2D
+
 ## Not Implementing Now
 
-These features are deferred to a future branch:
+These features are deferred to future phases:
 
-- ❌ Release workflows
-- ❌ Per-project watching
-- ❌ VS Code agent status indicator
-
-Current branch focuses on:
-
-- ✅ CLI install command (in progress)
-- ✅ Config merge (guardian → envdrift.toml)
-- ✅ Project registration commands
-- ✅ Basic agent functionality
-- ✅ VS Code extension
-- ✅ Documentation
+- ❌ VS Code agent status indicator (Phase 2E)
