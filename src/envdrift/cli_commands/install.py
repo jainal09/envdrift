@@ -139,7 +139,8 @@ def _verify_checksum(file_path: Path, platform_name: str) -> bool:
 
         for line in checksums_content.strip().split("\n"):
             parts = line.split()
-            if len(parts) >= 2 and binary_name in parts[-1]:
+            # Use exact filename match (not substring) to prevent false positives
+            if len(parts) >= 2 and parts[-1].strip() == binary_name:
                 expected_checksum = parts[0].lower()
                 break
 
