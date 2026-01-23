@@ -6,7 +6,13 @@ import sys
 import types
 from pathlib import Path
 
-from envdrift.scanner.base import FindingSeverity, ScanFinding, ScannerBackend, ScanResult
+from envdrift.scanner.base import (
+    AggregatedScanResult,
+    FindingSeverity,
+    ScanFinding,
+    ScannerBackend,
+    ScanResult,
+)
 from envdrift.scanner.engine import GuardConfig, ScanEngine
 
 
@@ -479,6 +485,75 @@ class TestDeduplication:
         assert len(unique) == 1
         assert unique[0].verified is True
 
+    def test_deduplicate_prefers_secret_hash(self):
+        """Test that deduplication prefers findings with secret_hash when tied."""
+        config = GuardConfig(use_native=True, use_gitleaks=False)
+        engine = ScanEngine(config)
+
+        findings = [
+            ScanFinding(
+                file_path=Path("config.py"),
+                line_number=10,
+                rule_id="secret",
+                rule_description="Secret",
+                description="Secret",
+                severity=FindingSeverity.HIGH,
+                scanner="scanner1",
+                verified=False,
+            ),
+            ScanFinding(
+                file_path=Path("config.py"),
+                line_number=10,
+                rule_id="secret",
+                rule_description="Secret",
+                description="Secret",
+                severity=FindingSeverity.HIGH,
+                scanner="scanner2",
+                verified=False,
+                secret_hash="hash-123",
+            ),
+        ]
+
+        unique = engine._deduplicate(findings)
+
+        assert len(unique) == 1
+        assert unique[0].secret_hash == "hash-123"
+
+    def test_deduplicate_deterministic_tie_breaker(self):
+        """Test deterministic tie-breaker for equal findings."""
+        config = GuardConfig(use_native=True, use_gitleaks=False)
+        engine = ScanEngine(config)
+
+        finding_a = ScanFinding(
+            file_path=Path("config.py"),
+            line_number=10,
+            rule_id="secret",
+            rule_description="Secret",
+            description="Secret",
+            severity=FindingSeverity.HIGH,
+            scanner="a-scanner",
+            verified=False,
+            secret_hash="hash-123",
+        )
+        finding_b = ScanFinding(
+            file_path=Path("config.py"),
+            line_number=10,
+            rule_id="secret",
+            rule_description="Secret",
+            description="Secret",
+            severity=FindingSeverity.HIGH,
+            scanner="b-scanner",
+            verified=False,
+            secret_hash="hash-123",
+        )
+
+        unique_first = engine._deduplicate([finding_b, finding_a])
+        unique_second = engine._deduplicate([finding_a, finding_b])
+
+        assert len(unique_first) == 1
+        assert len(unique_second) == 1
+        assert unique_first[0].scanner == unique_second[0].scanner == "a-scanner"
+
     def test_deduplicate_different_locations(self):
         """Test that findings at different locations are kept."""
         config = GuardConfig(use_native=True, use_gitleaks=False)
@@ -580,6 +655,72 @@ class TestDeduplication:
         unique = engine._deduplicate(findings)
 
         # Should be deduplicated to 1 since same secret_preview
+        assert len(unique) == 1
+
+    def test_deduplicate_skip_duplicate_prefers_secret_hash_key(self):
+        """Test skip_duplicate uses secret_hash as key when available."""
+        config = GuardConfig(use_native=True, use_gitleaks=False, skip_duplicate=True)
+        engine = ScanEngine(config)
+
+        findings = [
+            ScanFinding(
+                file_path=Path("config1.py"),
+                line_number=10,
+                rule_id="secret",
+                rule_description="Secret",
+                description="Secret",
+                severity=FindingSeverity.HIGH,
+                scanner="native",
+                secret_preview="PREVIEW-1",
+                secret_hash="hash-xyz",
+            ),
+            ScanFinding(
+                file_path=Path("config2.py"),
+                line_number=20,
+                rule_id="secret",
+                rule_description="Secret",
+                description="Secret",
+                severity=FindingSeverity.HIGH,
+                scanner="gitleaks",
+                secret_preview="PREVIEW-2",
+                secret_hash="hash-xyz",
+            ),
+        ]
+
+        unique = engine._deduplicate(findings)
+
+        # Should deduplicate to 1 since secret_hash matches
+        assert len(unique) == 1
+
+    def test_deduplicate_skip_duplicate_fallback_location(self):
+        """Test skip_duplicate falls back to location when no secret value is present."""
+        config = GuardConfig(use_native=True, use_gitleaks=False, skip_duplicate=True)
+        engine = ScanEngine(config)
+
+        findings = [
+            ScanFinding(
+                file_path=Path("policy.json"),
+                line_number=5,
+                rule_id="policy-violation",
+                rule_description="Policy",
+                description="Policy finding",
+                severity=FindingSeverity.MEDIUM,
+                scanner="scanner1",
+            ),
+            ScanFinding(
+                file_path=Path("policy.json"),
+                line_number=5,
+                rule_id="policy-violation",
+                rule_description="Policy",
+                description="Policy finding",
+                severity=FindingSeverity.MEDIUM,
+                scanner="scanner2",
+            ),
+        ]
+
+        unique = engine._deduplicate(findings)
+
+        # Should be deduplicated by location since no secret_hash/preview
         assert len(unique) == 1
 
     def test_deduplicate_skip_duplicate_keeps_different_secrets(self):
@@ -784,6 +925,57 @@ class TestIntegration:
         # AWS finding should be filtered
         aws_findings = [f for f in result.unique_findings if f.rule_id == "aws-access-key-id"]
         assert len(aws_findings) == 0
+
+    def test_scan_results_are_deterministic(self, tmp_path: Path):
+        """Repeated scans return stable ordering and counts."""
+        config = GuardConfig(use_native=True, use_gitleaks=False)
+        engine = ScanEngine(config)
+
+        # Create files in a nested structure to exercise os.walk ordering
+        (tmp_path / "b").mkdir()
+        (tmp_path / "a").mkdir()
+        (tmp_path / "b" / "config.py").write_text('AWS_KEY="AKIAIOSFODNN7EXAMPLE"\n')
+        (tmp_path / "a" / ".env").write_text("DATABASE_URL=postgres://localhost/db\n")
+        (tmp_path / "root.env").write_text("TOKEN=ghp_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\n")
+
+        def snapshot(result: AggregatedScanResult) -> list[tuple]:
+            return [
+                (
+                    f.rule_id,
+                    str(f.file_path),
+                    f.line_number or 0,
+                    f.severity.value,
+                    f.scanner,
+                )
+                for f in result.unique_findings
+            ]
+
+        first = snapshot(engine.scan([tmp_path]))
+        second = snapshot(engine.scan([tmp_path]))
+        third = snapshot(engine.scan([tmp_path]))
+
+        assert first == second == third
+
+    def test_scan_skip_duplicate_deduplicates_stably(self, tmp_path: Path):
+        """skip_duplicate yields stable, deterministic deduplication across runs."""
+        config = GuardConfig(use_native=True, use_gitleaks=False, skip_duplicate=True)
+        engine = ScanEngine(config)
+
+        secret_line = 'AWS_KEY="AKIAIOSFODNN7EXAMPLE"\n'
+        (tmp_path / "a.py").write_text(secret_line)
+        (tmp_path / "b.py").write_text(secret_line)
+
+        result = engine.scan([tmp_path])
+        aws_findings = [f for f in result.unique_findings if f.rule_id == "aws-access-key-id"]
+        assert len(aws_findings) == 1
+        assert aws_findings[0].file_path.name == "a.py"
+
+        repeat = engine.scan([tmp_path])
+        repeat_findings = [
+            f for f in repeat.unique_findings if f.rule_id == "aws-access-key-id"
+        ]
+        assert len(repeat_findings) == 1
+        assert repeat_findings[0].file_path.name == "a.py"
 
 
 class TestFilterEncryptedFiles:
@@ -1055,6 +1247,91 @@ class TestGitignoreFilter:
         # Should only have "tracked.py"
         assert len(result) == 1
         assert result[0].file_path == tracked_file
+
+    def test_filter_gitignored_files_multiple_roots(self, tmp_path, monkeypatch):
+        """Test gitignore filtering across multiple repo roots."""
+        import subprocess
+
+        repo1 = tmp_path / "repo1"
+        repo2 = tmp_path / "repo2"
+        repo1.mkdir()
+        repo2.mkdir()
+        (repo1 / ".git").mkdir()
+        (repo2 / ".git").mkdir()
+
+        ignored_file = repo1 / "ignored.txt"
+        kept_file = repo2 / "kept.txt"
+        ignored_file.touch()
+        kept_file.touch()
+
+        config = GuardConfig(use_native=True, use_gitleaks=False, skip_gitignored=True)
+        engine = ScanEngine(config)
+
+        findings = [
+            ScanFinding(
+                file_path=ignored_file,
+                rule_id="test-rule",
+                rule_description="Test",
+                description="Test finding",
+                severity=FindingSeverity.HIGH,
+                scanner="native",
+            ),
+            ScanFinding(
+                file_path=kept_file,
+                rule_id="test-rule",
+                rule_description="Test",
+                description="Test finding",
+                severity=FindingSeverity.HIGH,
+                scanner="native",
+            ),
+        ]
+
+        calls: list[tuple[Path, str]] = []
+
+        def mock_run(cmd, **kwargs):
+            cwd = Path(kwargs.get("cwd") or ".")
+            calls.append((cwd, kwargs.get("input") or ""))
+            if cwd.name == "repo1":
+                return subprocess.CompletedProcess(cmd, 0, stdout="ignored.txt\0", stderr="")
+            if cwd.name == "repo2":
+                return subprocess.CompletedProcess(cmd, 1, stdout="", stderr="")
+            return subprocess.CompletedProcess(cmd, 1, stdout="", stderr="")
+
+        monkeypatch.setattr(subprocess, "run", mock_run)
+
+        result = engine._filter_gitignored_files(findings)
+        assert len(result) == 1
+        assert result[0].file_path == kept_file
+        assert any("ignored.txt" in call_input for _cwd, call_input in calls)
+
+    def test_filter_gitignored_files_outside_repo(self, tmp_path, monkeypatch):
+        """Files outside any git repo are not filtered."""
+        import subprocess
+
+        file_outside = tmp_path / "outside.txt"
+        file_outside.touch()
+
+        config = GuardConfig(use_native=True, use_gitleaks=False, skip_gitignored=True)
+        engine = ScanEngine(config)
+
+        findings = [
+            ScanFinding(
+                file_path=file_outside,
+                rule_id="test-rule",
+                rule_description="Test",
+                description="Test finding",
+                severity=FindingSeverity.HIGH,
+                scanner="native",
+            ),
+        ]
+
+        def mock_run(cmd, **kwargs):
+            return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+
+        monkeypatch.setattr(subprocess, "run", mock_run)
+
+        result = engine._filter_gitignored_files(findings)
+        assert len(result) == 1
 
     def test_config_skip_gitignored_default_false(self):
         """Test that skip_gitignored defaults to False."""
