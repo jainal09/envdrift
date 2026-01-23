@@ -114,6 +114,62 @@ def _get_install_path() -> Path:
         return local_bin / "envdrift-agent"
 
 
+def _verify_checksum(file_path: Path, platform_name: str) -> bool:
+    """Verify the SHA256 checksum of a downloaded binary.
+
+    Args:
+        file_path: Path to the downloaded file
+        platform_name: Platform identifier (e.g., 'darwin-arm64')
+
+    Returns:
+        True if checksum matches or verification not available, False if mismatch
+    """
+    import hashlib
+
+    try:
+        # Download checksums file
+        with urllib.request.urlopen(GITHUB_CHECKSUM_URL, timeout=30) as response:  # nosec B310
+            checksums_content = response.read().decode("utf-8")
+
+        # Parse checksums (format: "sha256  filename")
+        expected_checksum = None
+        binary_name = f"envdrift-agent-{platform_name}"
+        if platform_name.startswith("windows"):
+            binary_name += ".exe"
+
+        for line in checksums_content.strip().split("\n"):
+            parts = line.split()
+            if len(parts) >= 2 and binary_name in parts[-1]:
+                expected_checksum = parts[0].lower()
+                break
+
+        if not expected_checksum:
+            # Checksums file doesn't contain this platform - skip verification
+            console.print("[dim]Checksum verification: not available for this release[/dim]")
+            return True
+
+        # Calculate actual checksum
+        sha256 = hashlib.sha256()
+        with open(file_path, "rb") as f:
+            for chunk in iter(lambda: f.read(8192), b""):
+                sha256.update(chunk)
+        actual_checksum = sha256.hexdigest().lower()
+
+        if actual_checksum != expected_checksum:
+            console.print("[red]Checksum mismatch![/red]")
+            console.print(f"  Expected: {expected_checksum}")
+            console.print(f"  Actual:   {actual_checksum}")
+            return False
+
+        console.print("[dim]Checksum verified ✓[/dim]")
+        return True
+
+    except (urllib.error.URLError, OSError) as e:
+        # Can't verify checksum - proceed with warning
+        console.print(f"[yellow]Warning: Could not verify checksum: {e}[/yellow]")
+        return True
+
+
 def _download_binary(url: str, dest: Path, progress: Progress) -> bool:
     """Download the agent binary from GitHub releases.
 
@@ -299,6 +355,13 @@ def install_agent(
         console.print(f"  URL: {download_url}")
         console.print("\n  You can download manually from:")
         console.print("  https://github.com/jainal09/envdrift/releases")
+        raise typer.Exit(1)
+
+    # Verify checksum
+    if not _verify_checksum(install_path, plat):
+        console.print("\n[red]✗[/red] Checksum verification failed - binary may be corrupted")
+        console.print("  Removing downloaded file for security")
+        install_path.unlink(missing_ok=True)
         raise typer.Exit(1)
 
     console.print(f"[green]✓[/green] Installed agent to: {install_path}")
