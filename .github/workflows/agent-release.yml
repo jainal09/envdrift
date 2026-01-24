@@ -62,6 +62,7 @@ jobs:
           GOARCH: ${{ matrix.goarch }}
           CGO_ENABLED: 0
         run: |
+          mkdir -p dist
           go build -ldflags "-s -w -X github.com/jainal09/envdrift-agent/internal/cmd.Version=${{ steps.version.outputs.VERSION }}" \
             -o dist/${{ matrix.artifact }} ./cmd/envdrift-agent
 

@@ -269,7 +269,7 @@ Reports installation status of all components:
 1. Setup Node.js 20 with npm caching
 2. `npm ci` - Install dependencies
 3. `npm run compile` - TypeScript compilation
-4. `npm test` - Run tests (continue-on-error: true)
+4. `npm test` - Run tests (non-blocking; failures are logged and release continues)
 5. `npx vsce package` - Package as VSIX
 
 **Release Job:**
@@ -283,7 +283,7 @@ Reports installation status of all components:
 
 **Publish Job (stable releases only):**
 
-- Only runs when version doesn't contain `-`
+- Only runs for tags without `-rc`, `-beta`, or `-alpha` suffixes
 - Publishes to VS Code Marketplace via `npx vsce publish`
 - Uses `VSCE_PAT` secret (Personal Access Token)
 - Continue-on-error (allows manual PAT setup)
