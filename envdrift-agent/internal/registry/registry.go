@@ -87,7 +87,7 @@ func NewRegistryWatcher(onChange func(*Registry)) (*RegistryWatcher, error) {
 
 	reg, err := Load()
 	if err != nil {
-		fsw.Close()
+		_ = fsw.Close()
 		return nil, err
 	}
 
@@ -123,7 +123,7 @@ func (rw *RegistryWatcher) Start() error {
 // Stop stops watching the registry file.
 func (rw *RegistryWatcher) Stop() {
 	close(rw.done)
-	rw.fsWatcher.Close()
+	_ = rw.fsWatcher.Close()
 }
 
 // GetRegistry returns the current registry.

@@ -153,17 +153,21 @@ func TestLoadAllProjectConfigs(t *testing.T) {
 	proj3 := t.TempDir() // No config
 
 	// proj1: enabled
-	os.WriteFile(filepath.Join(proj1, "envdrift.toml"), []byte(`
+	if err := os.WriteFile(filepath.Join(proj1, "envdrift.toml"), []byte(`
 [guardian]
 enabled = true
 idle_timeout = "5m"
-`), 0644)
+`), 0644); err != nil {
+		t.Fatal(err)
+	}
 
 	// proj2: disabled
-	os.WriteFile(filepath.Join(proj2, "envdrift.toml"), []byte(`
+	if err := os.WriteFile(filepath.Join(proj2, "envdrift.toml"), []byte(`
 [guardian]
 enabled = false
-`), 0644)
+`), 0644); err != nil {
+		t.Fatal(err)
+	}
 
 	// proj3: no envdrift.toml (defaults to disabled)
 

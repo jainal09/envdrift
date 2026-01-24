@@ -10,9 +10,9 @@ import (
 func TestLoad_NoFile(t *testing.T) {
 	// Create a temp directory and set HOME to it
 	tmpDir := t.TempDir()
-	originalHome := os.Getenv("HOME")
-	os.Setenv("HOME", tmpDir)
-	defer os.Setenv("HOME", originalHome)
+	// Set both HOME (Unix) and USERPROFILE (Windows) for cross-platform support
+	t.Setenv("HOME", tmpDir)
+	t.Setenv("USERPROFILE", tmpDir)
 
 	reg, err := Load()
 	if err != nil {
@@ -30,9 +30,9 @@ func TestLoad_NoFile(t *testing.T) {
 
 func TestLoad_ValidFile(t *testing.T) {
 	tmpDir := t.TempDir()
-	originalHome := os.Getenv("HOME")
-	os.Setenv("HOME", tmpDir)
-	defer os.Setenv("HOME", originalHome)
+	// Set both HOME (Unix) and USERPROFILE (Windows) for cross-platform support
+	t.Setenv("HOME", tmpDir)
+	t.Setenv("USERPROFILE", tmpDir)
 
 	// Create .envdrift directory and projects.json
 	envdriftDir := filepath.Join(tmpDir, ".envdrift")
@@ -58,7 +58,7 @@ func TestLoad_ValidFile(t *testing.T) {
 	}
 
 	if len(reg.Projects) != 2 {
-		t.Errorf("Expected 2 projects, got %d", len(reg.Projects))
+		t.Fatalf("Expected 2 projects, got %d", len(reg.Projects))
 	}
 
 	if reg.Projects[0].Path != "/home/user/project1" {

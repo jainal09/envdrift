@@ -101,6 +101,9 @@ type Guardian struct {
 	registryWatcher *registry.RegistryWatcher
 	checkTick       time.Duration
 	mu              sync.RWMutex
+	// These are set during Start() for use by onRegistryChange
+	ctx    context.Context
+	events chan projectEvent
 }
 
 // New creates a Guardian configured with cfg.
@@ -142,8 +145,10 @@ func (g *Guardian) Start(ctx context.Context) error {
 	ticker := time.NewTicker(g.checkTick)
 	defer ticker.Stop()
 
-	// Create an aggregated events channel
+	// Create an aggregated events channel and store for use by onRegistryChange
 	events := make(chan projectEvent, 100)
+	g.ctx = ctx
+	g.events = events
 
 	// Start event forwarding for existing projects
 	g.mu.RLock()
@@ -292,6 +297,11 @@ func (g *Guardian) onRegistryChange(reg *registry.Registry) {
 
 		g.projects[path] = pw
 		log.Printf("Added project: %s (idle_timeout: %v)", path, cfg.IdleTimeout)
+
+		// Start event forwarding for the new project
+		if g.events != nil && g.ctx != nil {
+			go g.forwardEvents(g.ctx, path, pw, g.events)
+		}
 	}
 }
 
