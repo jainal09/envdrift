@@ -1,5 +1,5 @@
 {
-    "dotenvx_version": "1.51.4",
+    "dotenvx_version": "1.52.0",
     "download_urls": {
         "darwin_amd64": "https://github.com/dotenvx/dotenvx/releases/download/v{version}/dotenvx-{version}-darwin-amd64.tar.gz",
         "darwin_arm64": "https://github.com/dotenvx/dotenvx/releases/download/v{version}/dotenvx-{version}-darwin-arm64.tar.gz",
