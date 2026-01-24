@@ -6,9 +6,9 @@ This document outlines future improvements for the envdrift-agent and VS Code ex
 
 | Phase | Description | Status |
 |-------|-------------|--------|
-| Phase 2A | Configuration Improvements (CLI commands, projects.json, [guardian] section) | ✅ Completed |
-| Phase 2B | CLI Install Command (`envdrift install agent`) | ✅ In Progress |
-| Phase 2C | Build Pipelines (agent + vscode release workflows) | ❌ Not Started |
+| Phase 2A | Configuration Improvements (CLI commands, projects.json, [guardian] section) | ✅ Done |
+| Phase 2B | CLI Install Command (`envdrift install agent`) | ✅ Done |
+| Phase 2C | Build Pipelines (agent + VS Code release workflows) | ✅ Done |
 | Phase 2D | Agent Improvements (per-project watching) | ❌ Not Started |
 | Phase 2E | VS Code Agent Status Indicator | ❌ Not Started |
 
@@ -171,7 +171,7 @@ Machine (your laptop)
 
 ---
 
-## Phase 2B: CLI Install Command
+## Phase 2B: CLI Install Command ✅
 
 ### `envdrift install agent`
 
@@ -181,112 +181,127 @@ New command in Python CLI to install the Go background agent:
 envdrift install agent
 ```
 
+**Command Options:**
+
+```bash
+envdrift install agent              # Install with defaults
+envdrift install agent --force      # Force reinstall
+envdrift install agent --skip-autostart  # Skip auto-start setup
+envdrift install agent --skip-register   # Skip project registration
+envdrift install check              # Check installation status
+```
+
 **Behavior:**
 
-1. Detect platform (macOS/Linux/Windows + arch)
+1. Detect platform (macOS/Linux/Windows + arch: amd64, arm64)
 2. Download latest binary from GitHub releases
-3. Install to standard location (`/usr/local/bin`, etc.)
-4. Run `envdrift-agent install` to set up auto-start
-5. Register current directory if has `envdrift.toml`
+3. Install to standard location:
+   - **Unix**: `/usr/local/bin` → `/opt/homebrew/bin` → `~/.local/bin`
+   - **Windows**: `%LOCALAPPDATA%\Programs\envdrift\envdrift-agent.exe`
+4. Run `envdrift-agent install` to set up auto-start (unless `--skip-autostart`)
+5. Register current directory if has `envdrift.toml` (unless `--skip-register`)
 
 ### Implementation
 
-```python
-# src/envdrift/cli_commands/install.py
+**File:** `src/envdrift/cli_commands/install.py`
 
-@cli.command()
-def install_agent():
-    """Install the envdrift background agent."""
-    platform = detect_platform()  # darwin-arm64, linux-amd64, etc.
-    
-    # Download from GitHub releases
-    url = f"https://github.com/jainal09/envdrift/releases/latest/download/envdrift-agent-{platform}"
-    
-    # Install binary
-    install_path = get_install_path()  # /usr/local/bin or equivalent
-    download_and_install(url, install_path)
-    
-    # Run agent install
-    subprocess.run([install_path, "install"])
-    
-    # Register current project
-    if Path("envdrift.toml").exists():
-        subprocess.run([install_path, "register", "."])
-```
+Key functions:
+
+- `_detect_platform()` - Returns platform string like `darwin-arm64`, `linux-amd64`
+- `_get_install_path()` - Returns appropriate install path for the OS
+- `_download_binary()` - Downloads from GitHub with progress indication
+- `_run_agent_install()` - Runs `envdrift-agent install` for auto-start
+
+### `envdrift install check`
+
+Reports installation status of all components:
+
+- Python CLI location and version
+- Agent installation path and version
+- Agent running status (⚡ Running / ⭕ Not running)
+- Project registry info
 
 ---
 
-## Phase 2C: Build Pipelines
+## Phase 2C: Build Pipelines ✅
 
 ### Agent Release Workflow
 
-```yaml
-# .github/workflows/agent-release.yml
-name: Release Agent
+**File:** `.github/workflows/agent-release.yml`
 
-on:
-  push:
-    tags:
-      - 'agent-v*'
-    paths:
-      - 'envdrift-agent/**'
+**Trigger:** Push tags matching `agent-v*` (e.g., `agent-v1.0.0`)
 
-jobs:
-  build:
-    strategy:
-      matrix:
-        include:
-          - os: macos-latest
-            goos: darwin
-            goarch: arm64
-          - os: macos-latest
-            goos: darwin
-            goarch: amd64
-          - os: ubuntu-latest
-            goos: linux
-            goarch: amd64
-          - os: windows-latest
-            goos: windows
-            goarch: amd64
-    
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
-      - run: |
-          cd envdrift-agent
-          GOOS=${{ matrix.goos }} GOARCH=${{ matrix.goarch }} go build -o bin/envdrift-agent-${{ matrix.goos }}-${{ matrix.goarch }}
-      - uses: softprops/action-gh-release@v1
-        with:
-          files: envdrift-agent/bin/*
-```
+**Build Matrix (5 platforms):**
+
+| Runner | GOOS | GOARCH | Artifact |
+|--------|------|--------|----------|
+| ubuntu-latest | linux | amd64 | `envdrift-agent-linux-amd64` |
+| ubuntu-latest | linux | arm64 | `envdrift-agent-linux-arm64` |
+| macos-latest | darwin | amd64 | `envdrift-agent-darwin-amd64` |
+| macos-latest | darwin | arm64 | `envdrift-agent-darwin-arm64` |
+| windows-latest | windows | amd64 | `envdrift-agent-windows-amd64.exe` |
+
+**Build Features:**
+
+- Go 1.22 with dependency caching
+- `CGO_ENABLED=0` for fully static binaries
+- Version injection via ldflags: `-X github.com/jainal09/envdrift-agent/internal/cmd.Version=$VERSION`
+- Stripped binaries (`-s -w` flags)
+
+**Release Job:**
+
+- Waits for all builds to complete
+- Collects all artifacts into `release/` folder
+- Creates GitHub Release with:
+  - Installation instructions (CLI and manual)
+  - Platform-specific binary list
+  - Usage examples
+  - Pre-release detection (if version contains `-`)
 
 ### VS Code Extension Release Workflow
 
-```yaml
-# .github/workflows/vscode-release.yml
-name: Release VS Code Extension
+**File:** `.github/workflows/vscode-release.yml`
 
-on:
-  push:
-    tags:
-      - 'vscode-v*'
-    paths:
-      - 'envdrift-vscode/**'
+**Trigger:** Push tags matching `vscode-v*` (e.g., `vscode-v1.0.0`)
 
-jobs:
-  build:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-      - run: |
-          cd envdrift-vscode
-          npm install
-          npm run compile
-          npx vsce package
-      - uses: softprops/action-gh-release@v1
-        with:
-          files: envdrift-vscode/*.vsix
+**Build Job:**
+
+1. Setup Node.js 20 with npm caching
+2. `npm ci` - Install dependencies
+3. `npm run compile` - TypeScript compilation
+4. `npm test` - Run tests (non-blocking; failures are logged and release continues)
+5. `npx vsce package` - Package as VSIX
+
+**Release Job:**
+
+- Creates GitHub Release with:
+  - Marketplace installation instructions
+  - Manual VSIX installation steps
+  - Features list
+  - Requirements (VS Code 1.80.0+, envdrift Python package)
+  - Pre-release detection
+
+**Publish Job (stable releases only):**
+
+- Only runs for tags without `-rc`, `-beta`, or `-alpha` suffixes
+- Publishes to VS Code Marketplace via `npx vsce publish`
+- Uses `VSCE_PAT` secret (Personal Access Token)
+- Continue-on-error (allows manual PAT setup)
+
+### Release Tag Examples
+
+```bash
+# Agent releases
+git tag agent-v1.0.0     # Stable release
+git tag agent-v1.1.0-rc1 # Pre-release
+
+# VS Code extension releases
+git tag vscode-v1.0.0    # Stable (published to marketplace)
+git tag vscode-v1.1.0-beta # Pre-release (GitHub only)
+
+# Push tags
+git push origin agent-v1.0.0
+git push origin vscode-v1.0.0
 ```
 
 ---
@@ -387,19 +402,19 @@ Extension can read agent status from:
 
 ---
 
+## Completed Features
+
+The following features have been implemented:
+
+- ✅ Config merge (guardian → envdrift.toml) - Phase 2A
+- ✅ Project registration commands (`envdrift agent register/unregister/list/status`) - Phase 2A
+- ✅ `envdrift install agent` command with `check` subcommand - Phase 2B
+- ✅ Agent release workflow (5 platforms) - Phase 2C
+- ✅ VS Code extension release workflow with marketplace publishing - Phase 2C
+
 ## Not Implementing Now
 
-These features are deferred to a future branch:
+These features are deferred to future phases:
 
-- ❌ Release workflows
-- ❌ Per-project watching
-- ❌ VS Code agent status indicator
-
-Current branch focuses on:
-
-- ✅ CLI install command (in progress)
-- ✅ Config merge (guardian → envdrift.toml)
-- ✅ Project registration commands
-- ✅ Basic agent functionality
-- ✅ VS Code extension
-- ✅ Documentation
+- ❌ Per-project watching (Phase 2D)
+- ❌ VS Code agent status indicator (Phase 2E)
