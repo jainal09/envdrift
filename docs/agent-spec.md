@@ -206,6 +206,7 @@ envdrift install check              # Check installation status
 **File:** `src/envdrift/cli_commands/install.py`
 
 Key functions:
+
 - `_detect_platform()` - Returns platform string like `darwin-arm64`, `linux-amd64`
 - `_get_install_path()` - Returns appropriate install path for the OS
 - `_download_binary()` - Downloads from GitHub with progress indication
@@ -214,6 +215,7 @@ Key functions:
 ### `envdrift install check`
 
 Reports installation status of all components:
+
 - Python CLI location and version
 - Agent installation path and version
 - Agent running status (⚡ Running / ⭕ Not running)
@@ -240,12 +242,14 @@ Reports installation status of all components:
 | windows-latest | windows | amd64 | `envdrift-agent-windows-amd64.exe` |
 
 **Build Features:**
+
 - Go 1.22 with dependency caching
 - `CGO_ENABLED=0` for fully static binaries
 - Version injection via ldflags: `-X github.com/jainal09/envdrift-agent/internal/cmd.Version=$VERSION`
 - Stripped binaries (`-s -w` flags)
 
 **Release Job:**
+
 - Waits for all builds to complete
 - Collects all artifacts into `release/` folder
 - Creates GitHub Release with:
@@ -261,6 +265,7 @@ Reports installation status of all components:
 **Trigger:** Push tags matching `vscode-v*` (e.g., `vscode-v1.0.0`)
 
 **Build Job:**
+
 1. Setup Node.js 20 with npm caching
 2. `npm ci` - Install dependencies
 3. `npm run compile` - TypeScript compilation
@@ -268,6 +273,7 @@ Reports installation status of all components:
 5. `npx vsce package` - Package as VSIX
 
 **Release Job:**
+
 - Creates GitHub Release with:
   - Marketplace installation instructions
   - Manual VSIX installation steps
@@ -276,6 +282,7 @@ Reports installation status of all components:
   - Pre-release detection
 
 **Publish Job (stable releases only):**
+
 - Only runs when version doesn't contain `-`
 - Publishes to VS Code Marketplace via `npx vsce publish`
 - Uses `VSCE_PAT` secret (Personal Access Token)
