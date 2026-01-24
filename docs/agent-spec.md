@@ -193,7 +193,7 @@ envdrift install check              # Check installation status
 
 **Behavior:**
 
-1. Detect platform (macOS/Linux/Windows + arch: amd64, arm64, 386)
+1. Detect platform (macOS/Linux/Windows + arch: amd64, arm64)
 2. Download latest binary from GitHub releases
 3. Install to standard location:
    - **Unix**: `/usr/local/bin` → `/opt/homebrew/bin` → `~/.local/bin`
