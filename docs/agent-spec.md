@@ -9,8 +9,9 @@ This document outlines future improvements for the envdrift-agent and VS Code ex
 | Phase 2A | Configuration Improvements (CLI commands, projects.json, [guardian] section) | ✅ Done |
 | Phase 2B | CLI Install Command (`envdrift install agent`) | ✅ Done |
 | Phase 2C | Build Pipelines (agent + VS Code release workflows) | ✅ Done |
-| Phase 2D | Agent Improvements (per-project watching) | ❌ Not Started |
+| Phase 2D | Agent Improvements (per-project watching) | ✅ Done |
 | Phase 2E | VS Code Agent Status Indicator | ❌ Not Started |
+| Phase 2F | CI/Testing (VS Code lint/tests, Go E2E integration tests) | ❌ Not Started |
 
 ---
 
@@ -306,22 +307,59 @@ git push origin vscode-v1.0.0
 
 ---
 
-## Phase 2D: Agent Improvements
+## Phase 2D: Agent Improvements ✅
 
 ### Watch Strategy
 
 Instead of watching entire directories, the agent:
 
-1. Only watches registered project roots
-2. Uses `envdrift.toml` from each project for patterns/excludes
-3. Respects project-specific settings
+1. Only watches registered project roots (from `~/.envdrift/projects.json`)
+2. Uses each project's `envdrift.toml` for patterns/excludes
+3. Respects project-specific idle timeouts and notification settings
+
+### Implementation
+
+**New Go Packages:**
+
+| Package | File | Purpose |
+|---------|------|---------|
+| `registry` | `internal/registry/registry.go` | Loads and watches `~/.envdrift/projects.json` |
+| `project` | `internal/project/config.go` | Loads per-project `[guardian]` settings from `envdrift.toml` |
+
+**Refactored Guardian:**
+
+The guardian now creates a `ProjectWatcher` for each enabled project:
+
+```go
+// internal/guardian/guardian.go
+
+type ProjectWatcher struct {
+    projectPath string
+    config      *project.GuardianConfig  // Per-project settings
+    watcher     *watcher.Watcher
+    lastMod     map[string]time.Time
+}
+
+type Guardian struct {
+    projects        map[string]*ProjectWatcher  // path -> watcher
+    registryWatcher *registry.RegistryWatcher   // Watches projects.json
+}
+```
+
+**Key Features:**
+
+- **Per-project patterns**: Each project uses its own `.env*` patterns and excludes
+- **Per-project idle timeout**: Projects can have different encryption delays
+- **Per-project notifications**: Enable/disable desktop notifications per project
+- **Dynamic registry watching**: Agent auto-reloads when projects are added/removed
+- **Only enabled projects**: Projects with `guardian.enabled = false` are skipped
 
 ### Architecture
 
 ```text
 ┌─────────────────────────────────────────┐
-│           ~/.envdrift/agent.toml        │
-│  registered_projects = [A, B, C]        │
+│      ~/.envdrift/projects.json          │
+│  (registry watcher monitors changes)    │
 └─────────────────┬───────────────────────┘
                   │
     ┌─────────────┼─────────────┐
@@ -331,13 +369,39 @@ Instead of watching entire directories, the agent:
 │ toml  │    │ toml  │    │ toml  │
 └───┬───┘    └───┬───┘    └───┬───┘
     │            │            │
+    ▼            ▼            ▼
+┌────────┐  ┌────────┐  ┌────────┐
+│Project │  │Project │  │Project │
+│Watcher │  │Watcher │  │Watcher │
+│(5m,    │  │(1m,    │  │(10m,   │
+│notify) │  │quiet)  │  │notify) │
+└────────┘  └────────┘  └────────┘
+    │            │            │
     └────────────┼────────────┘
                  ▼
          ┌─────────────┐
-         │ Guardian    │
-         │ (per-proj   │
-         │  settings)  │
+         │  Guardian   │
+         │ (aggregates │
+         │   events)   │
          └─────────────┘
+```
+
+### Configuration Example
+
+```toml
+# Project A: envdrift.toml - quick encryption with notifications
+[guardian]
+enabled = true
+idle_timeout = "1m"
+patterns = [".env*", ".secret*"]
+exclude = [".env.example"]
+notify = true
+
+# Project B: envdrift.toml - slow encryption, no notifications
+[guardian]
+enabled = true
+idle_timeout = "10m"
+notify = false
 ```
 
 ---
@@ -392,6 +456,153 @@ Extension can read agent status from:
 
 ---
 
+## Phase 2F: CI/Testing Improvements
+
+### Overview
+
+Add comprehensive CI workflows and testing for all components.
+
+### VS Code Extension CI (`.github/workflows/vscode-ci.yml`)
+
+**Trigger:** PRs touching `envdrift-vscode/**`
+
+| Stage | Description |
+|-------|-------------|
+| **Lint** | ESLint with TypeScript rules |
+| **Unit Tests** | Jest/Mocha tests for extension logic |
+| **E2E Tests** | VS Code extension test runner |
+
+**Implementation:**
+
+```yaml
+name: VS Code Extension CI
+
+on:
+  pull_request:
+    paths:
+      - 'envdrift-vscode/**'
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+      - run: npm ci
+        working-directory: envdrift-vscode
+      - run: npm run lint
+        working-directory: envdrift-vscode
+
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+      - run: npm ci
+        working-directory: envdrift-vscode
+      - run: npm run test
+        working-directory: envdrift-vscode
+
+  e2e:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+      - run: npm ci
+        working-directory: envdrift-vscode
+      - run: xvfb-run -a npm run test:e2e
+        working-directory: envdrift-vscode
+```
+
+### Go Agent E2E Integration Tests
+
+**Add to:** `.github/workflows/agent-ci.yml`
+
+| Stage | Description |
+|-------|-------------|
+| **Real E2E Tests** | Full integration with actual file system operations |
+| **Registry Integration** | Test projects.json loading and watching |
+| **Encryption Integration** | Test actual encryption with envdrift CLI |
+
+**Test Scenarios:**
+
+```go
+// internal/guardian/guardian_e2e_test.go
+
+func TestGuardian_E2E_RegisterAndWatch(t *testing.T) {
+    // 1. Create temp project directory
+    // 2. Add envdrift.toml with [guardian] enabled
+    // 3. Register project to projects.json
+    // 4. Start guardian
+    // 5. Create .env file
+    // 6. Wait for idle timeout
+    // 7. Verify file is encrypted
+}
+
+func TestGuardian_E2E_DynamicProjectAdd(t *testing.T) {
+    // 1. Start guardian with no projects
+    // 2. Add project to projects.json
+    // 3. Verify guardian picks up new project
+    // 4. Create .env in new project
+    // 5. Verify encryption works
+}
+
+func TestGuardian_E2E_ProjectRemove(t *testing.T) {
+    // 1. Start guardian with project
+    // 2. Remove project from projects.json
+    // 3. Verify watcher is stopped
+}
+```
+
+**CI Workflow Addition:**
+
+```yaml
+  e2e-tests:
+    name: E2E Integration Tests
+    runs-on: ubuntu-latest
+    needs: build
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.22'
+
+      - name: Set up Python (for envdrift CLI)
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install envdrift CLI
+        run: pip install envdrift
+
+      - name: Download agent binary
+        uses: actions/download-artifact@v4
+        with:
+          name: envdrift-agent-linux-amd64
+          path: ./bin
+
+      - name: Make executable
+        run: chmod +x ./bin/envdrift-agent-linux-amd64
+
+      - name: Run E2E tests
+        run: go test -v -tags=e2e ./...
+        working-directory: envdrift-agent
+        env:
+          ENVDRIFT_AGENT_PATH: ${{ github.workspace }}/bin/envdrift-agent-linux-amd64
+```
+
+### Test Coverage Requirements
+
+| Component | Unit Tests | Integration Tests | E2E Tests |
+|-----------|------------|-------------------|-----------|
+| Python CLI | ✅ Existing | ✅ Existing | - |
+| Go Agent | ✅ Existing | ✅ Basic | ❌ **Add** |
+| VS Code Extension | ❌ **Add** | - | ❌ **Add** |
+
+---
+
 ## Implementation Order
 
 1. **Phase 2A** - Config improvements (merge configs, project registration)
@@ -399,6 +610,7 @@ Extension can read agent status from:
 3. **Phase 2C** - Build pipelines (auto-release on tag)
 4. **Phase 2D** - Agent improvements (per-project watching)
 5. **Phase 2E** - VS Code agent status indicator
+6. **Phase 2F** - CI/Testing improvements (VS Code lint/tests, Go E2E tests)
 
 ---
 
@@ -411,10 +623,13 @@ The following features have been implemented:
 - ✅ `envdrift install agent` command with `check` subcommand - Phase 2B
 - ✅ Agent release workflow (5 platforms) - Phase 2C
 - ✅ VS Code extension release workflow with marketplace publishing - Phase 2C
+- ✅ Per-project watching with individual configs - Phase 2D
+- ✅ Dynamic registry watching (hot reload on project add/remove) - Phase 2D
 
 ## Not Implementing Now
 
 These features are deferred to future phases:
 
-- ❌ Per-project watching (Phase 2D)
 - ❌ VS Code agent status indicator (Phase 2E)
+- ❌ VS Code extension CI (lint, unit tests, E2E tests) (Phase 2F)
+- ❌ Go agent E2E integration tests with real encryption (Phase 2F)
