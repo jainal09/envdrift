@@ -57,6 +57,7 @@ jobs:
         run: echo "VERSION=${GITHUB_REF#refs/tags/agent-v}" >> $GITHUB_OUTPUT
 
       - name: Build binary
+        shell: bash
         env:
           GOOS: ${{ matrix.goos }}
           GOARCH: ${{ matrix.goarch }}

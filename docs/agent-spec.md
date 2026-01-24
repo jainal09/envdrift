@@ -8,7 +8,7 @@ This document outlines future improvements for the envdrift-agent and VS Code ex
 |-------|-------------|--------|
 | Phase 2A | Configuration Improvements (CLI commands, projects.json, [guardian] section) | ✅ Done |
 | Phase 2B | CLI Install Command (`envdrift install agent`) | ✅ Done |
-| Phase 2C | Build Pipelines (agent + vscode release workflows) | ✅ Done |
+| Phase 2C | Build Pipelines (agent + VS Code release workflows) | ✅ Done |
 | Phase 2D | Agent Improvements (per-project watching) | ❌ Not Started |
 | Phase 2E | VS Code Agent Status Indicator | ❌ Not Started |
 
