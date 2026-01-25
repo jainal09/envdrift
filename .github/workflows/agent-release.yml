@@ -1,9 +1,17 @@
 name: Release Agent
 
 on:
+  # Manual trigger via tag push
   push:
     tags:
       - 'agent-v*'
+  # Called by release-please
+  workflow_call:
+    inputs:
+      tag_name:
+        description: 'Tag name from release-please'
+        required: true
+        type: string
 
 permissions:
   contents: write
@@ -54,7 +62,16 @@ jobs:
       - name: Get version from tag
         id: version
         shell: bash
-        run: echo "VERSION=${GITHUB_REF#refs/tags/agent-v}" >> $GITHUB_OUTPUT
+        run: |
+          # Handle both tag push and workflow_call
+          if [ -n "${{ inputs.tag_name }}" ]; then
+            TAG="${{ inputs.tag_name }}"
+          else
+            TAG="${GITHUB_REF#refs/tags/}"
+          fi
+          VERSION="${TAG#agent-v}"
+          echo "VERSION=$VERSION" >> $GITHUB_OUTPUT
+          echo "TAG=$TAG" >> $GITHUB_OUTPUT
 
       - name: Build binary
         shell: bash
@@ -96,11 +113,21 @@ jobs:
 
       - name: Get version from tag
         id: version
-        run: echo "VERSION=${GITHUB_REF#refs/tags/agent-v}" >> $GITHUB_OUTPUT
+        run: |
+          # Handle both tag push and workflow_call
+          if [ -n "${{ inputs.tag_name }}" ]; then
+            TAG="${{ inputs.tag_name }}"
+          else
+            TAG="${GITHUB_REF#refs/tags/}"
+          fi
+          VERSION="${TAG#agent-v}"
+          echo "VERSION=$VERSION" >> $GITHUB_OUTPUT
+          echo "TAG=$TAG" >> $GITHUB_OUTPUT
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
+          tag_name: ${{ steps.version.outputs.TAG }}
           name: Agent v${{ steps.version.outputs.VERSION }}
           body: |
             ## EnvDrift Agent v${{ steps.version.outputs.VERSION }}

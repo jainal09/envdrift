@@ -1,9 +1,17 @@
 name: Release VS Code Extension
 
 on:
+  # Manual trigger via tag push
   push:
     tags:
       - 'vscode-v*'
+  # Called by release-please
+  workflow_call:
+    inputs:
+      tag_name:
+        description: 'Tag name from release-please'
+        required: true
+        type: string
 
 permissions:
   contents: write
@@ -29,7 +37,16 @@ jobs:
 
       - name: Get version from tag
         id: version
-        run: echo "VERSION=${GITHUB_REF#refs/tags/vscode-v}" >> $GITHUB_OUTPUT
+        run: |
+          # Handle both tag push and workflow_call
+          if [ -n "${{ inputs.tag_name }}" ]; then
+            TAG="${{ inputs.tag_name }}"
+          else
+            TAG="${GITHUB_REF#refs/tags/}"
+          fi
+          VERSION="${TAG#vscode-v}"
+          echo "VERSION=$VERSION" >> $GITHUB_OUTPUT
+          echo "TAG=$TAG" >> $GITHUB_OUTPUT
 
       - name: Install dependencies
         run: npm ci
@@ -59,7 +76,16 @@ jobs:
 
       - name: Get version from tag
         id: version
-        run: echo "VERSION=${GITHUB_REF#refs/tags/vscode-v}" >> $GITHUB_OUTPUT
+        run: |
+          # Handle both tag push and workflow_call
+          if [ -n "${{ inputs.tag_name }}" ]; then
+            TAG="${{ inputs.tag_name }}"
+          else
+            TAG="${GITHUB_REF#refs/tags/}"
+          fi
+          VERSION="${TAG#vscode-v}"
+          echo "VERSION=$VERSION" >> $GITHUB_OUTPUT
+          echo "TAG=$TAG" >> $GITHUB_OUTPUT
 
       - name: Download artifact
         uses: actions/download-artifact@v7
@@ -70,6 +96,7 @@ jobs:
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
+          tag_name: ${{ steps.version.outputs.TAG }}
           name: VS Code Extension v${{ steps.version.outputs.VERSION }}
           body: |
             ## EnvDrift VS Code Extension v${{ steps.version.outputs.VERSION }}
@@ -89,13 +116,14 @@ jobs:
             4. Select the downloaded file
 
             ### Features
-            - 🔐 Auto-encryption of .env files on save
-            - 📊 Status bar showing encryption status
-            - 🔔 Notifications for encryption events
-            - ⚙️ Configurable settings
+            - Auto-encryption of .env files on save
+            - Status bar showing encryption status
+            - Agent status indicator
+            - Notifications for encryption events
+            - Configurable settings
 
             ### Requirements
-            - VS Code 1.80.0 or higher
+            - VS Code 1.85.0 or higher
             - `envdrift` Python package installed (`pip install envdrift`)
           files: |
             release/*.vsix
@@ -123,7 +151,15 @@ jobs:
 
       - name: Get version from tag
         id: version
-        run: echo "VERSION=${GITHUB_REF#refs/tags/vscode-v}" >> $GITHUB_OUTPUT
+        run: |
+          # Handle both tag push and workflow_call
+          if [ -n "${{ inputs.tag_name }}" ]; then
+            TAG="${{ inputs.tag_name }}"
+          else
+            TAG="${GITHUB_REF#refs/tags/}"
+          fi
+          VERSION="${TAG#vscode-v}"
+          echo "VERSION=$VERSION" >> $GITHUB_OUTPUT
 
       - name: Download artifact
         uses: actions/download-artifact@v7

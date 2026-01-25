@@ -13,11 +13,38 @@ permissions:
 jobs:
   release-please:
     runs-on: ubuntu-latest
+    outputs:
+      # Python package outputs
+      release_created: ${{ steps.release.outputs.release_created }}
+      tag_name: ${{ steps.release.outputs.tag_name }}
+      # Agent outputs
+      agent--release_created: ${{ steps.release.outputs['envdrift-agent--release_created'] }}
+      agent--tag_name: ${{ steps.release.outputs['envdrift-agent--tag_name'] }}
+      # VS Code outputs
+      vscode--release_created: ${{ steps.release.outputs['envdrift-vscode--release_created'] }}
+      vscode--tag_name: ${{ steps.release.outputs['envdrift-vscode--tag_name'] }}
     steps:
       - uses: googleapis/release-please-action@v4
+        id: release
         with:
           token: ${{ secrets.RELEASE_PLEASE_TOKEN }}
-          release-type: python
-          package-name: envdrift
-          changelog-path: CHANGELOG.md
-          include-component-in-tag: false
+          config-file: release-please-config.json
+          manifest-file: .release-please-manifest.json
+
+  # Trigger agent release workflow when agent is released
+  release-agent:
+    needs: release-please
+    if: ${{ needs.release-please.outputs['agent--release_created'] == 'true' }}
+    uses: ./.github/workflows/agent-release.yml
+    with:
+      tag_name: ${{ needs.release-please.outputs['agent--tag_name'] }}
+    secrets: inherit
+
+  # Trigger VS Code release workflow when vscode is released
+  release-vscode:
+    needs: release-please
+    if: ${{ needs.release-please.outputs['vscode--release_created'] == 'true' }}
+    uses: ./.github/workflows/vscode-release.yml
+    with:
+      tag_name: ${{ needs.release-please.outputs['vscode--tag_name'] }}
+    secrets: inherit
