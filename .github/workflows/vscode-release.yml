@@ -23,7 +23,7 @@ jobs:
       - name: Set up Node.js
         uses: actions/setup-node@v6
         with:
-          node-version: '20'
+          node-version: '24'
           cache: 'npm'
           cache-dependency-path: envdrift-vscode/package-lock.json
 
@@ -44,7 +44,7 @@ jobs:
         run: npx vsce package --out envdrift-${{ steps.version.outputs.VERSION }}.vsix
 
       - name: Upload artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: envdrift-vscode-${{ steps.version.outputs.VERSION }}.vsix
           path: envdrift-vscode/envdrift-${{ steps.version.outputs.VERSION }}.vsix
@@ -62,7 +62,7 @@ jobs:
         run: echo "VERSION=${GITHUB_REF#refs/tags/vscode-v}" >> $GITHUB_OUTPUT
 
       - name: Download artifact
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v7
         with:
           name: envdrift-vscode-${{ steps.version.outputs.VERSION }}.vsix
           path: release
@@ -117,7 +117,7 @@ jobs:
       - name: Set up Node.js
         uses: actions/setup-node@v6
         with:
-          node-version: '20'
+          node-version: '24'
           cache: 'npm'
           cache-dependency-path: envdrift-vscode/package-lock.json
 
@@ -126,7 +126,7 @@ jobs:
         run: echo "VERSION=${GITHUB_REF#refs/tags/vscode-v}" >> $GITHUB_OUTPUT
 
       - name: Download artifact
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v7
         with:
           name: envdrift-vscode-${{ steps.version.outputs.VERSION }}.vsix
           path: release

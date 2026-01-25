@@ -106,7 +106,7 @@
   },
   "devDependencies": {
     "@eslint/js": "^9.0.0",
-    "@types/glob": "^8.1.0",
+    "@types/glob": "^9.0.0",
     "@types/mocha": "^10.0.0",
     "@types/node": "^24.0.0",
     "@types/sinon": "^17.0.0",
@@ -114,7 +114,7 @@
     "@vscode/test-electron": "^2.4.0",
     "eslint": "^9.0.0",
     "glob": "^13.0.0",
-    "mocha": "^10.0.0",
+    "mocha": "^11.0.0",
     "sinon": "^18.0.0",
     "typescript": "^5.3.0",
     "typescript-eslint": "^8.0.0"
