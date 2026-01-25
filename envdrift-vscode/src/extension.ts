@@ -78,7 +78,7 @@ export function activate(context: vscode.ExtensionContext) {
             const status = getCurrentStatus();
 
             switch (status.status) {
-                case 'running':
+                case 'running': {
                     // Show options menu for running agent
                     const runningChoice = await vscode.window.showQuickPick(
                         [
@@ -96,13 +96,14 @@ export function activate(context: vscode.ExtensionContext) {
                                     `EnvDrift Agent is running${status.version ? ` (version: ${status.version})` : ''}`
                                 );
                                 break;
-                            case 'stop':
+                            case 'stop': {
                                 const stopped = await stopAgent();
                                 if (stopped) {
                                     vscode.window.showInformationMessage('EnvDrift Agent stopped');
                                 }
                                 updateAgentStatusBar();
                                 break;
+                            }
                             case 'refresh':
                                 await refreshStatus();
                                 updateAgentStatusBar();
@@ -110,8 +111,9 @@ export function activate(context: vscode.ExtensionContext) {
                         }
                     }
                     break;
+                }
 
-                case 'stopped':
+                case 'stopped': {
                     // Offer to start the agent
                     const startChoice = await vscode.window.showQuickPick(
                         [
@@ -123,13 +125,14 @@ export function activate(context: vscode.ExtensionContext) {
 
                     if (startChoice) {
                         switch (startChoice.action) {
-                            case 'start':
+                            case 'start': {
                                 const started = await startAgent();
                                 if (started) {
                                     vscode.window.showInformationMessage('EnvDrift Agent started');
                                 }
                                 updateAgentStatusBar();
                                 break;
+                            }
                             case 'refresh':
                                 await refreshStatus();
                                 updateAgentStatusBar();
@@ -137,13 +140,15 @@ export function activate(context: vscode.ExtensionContext) {
                         }
                     }
                     break;
+                }
 
-                case 'not_installed':
+                case 'not_installed': {
                     // Show installation instructions
                     showInstallInstructions();
                     break;
+                }
 
-                case 'error':
+                case 'error': {
                     // Show error and offer to refresh
                     const errorChoice = await vscode.window.showQuickPick(
                         [
@@ -167,6 +172,7 @@ export function activate(context: vscode.ExtensionContext) {
                         }
                     }
                     break;
+                }
             }
         })
     );

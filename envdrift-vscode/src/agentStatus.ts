@@ -67,12 +67,14 @@ export async function checkAgentStatus(): Promise<AgentStatusInfo> {
         const { stdout } = await execAsync('envdrift-agent status');
         const output = stdout.toLowerCase();
 
-        if (output.includes('running')) {
-            const version = await getAgentVersion();
-            return { status: 'running', version };
-        } else if (output.includes('stopped') || output.includes('not running')) {
+        // Check for stopped/not running first to avoid false positives
+        // (e.g., "not running" contains "running" as substring)
+        if (output.includes('stopped') || output.includes('not running')) {
             const version = await getAgentVersion();
             return { status: 'stopped', version };
+        } else if (/\brunning\b/.test(output)) {
+            const version = await getAgentVersion();
+            return { status: 'running', version };
         } else {
             return { status: 'stopped' };
         }
@@ -124,7 +126,11 @@ async function updateStatus(): Promise<void> {
     if (newStatus.status !== currentStatus.status) {
         currentStatus = newStatus;
         if (onStatusChangeCallback) {
-            onStatusChangeCallback(newStatus);
+            try {
+                onStatusChangeCallback(newStatus);
+            } catch {
+                // Prevent unhandled exceptions from breaking the status check interval
+            }
         }
     } else {
         currentStatus = newStatus;
@@ -151,7 +157,8 @@ export async function refreshStatus(): Promise<AgentStatusInfo> {
  */
 export async function startAgent(): Promise<boolean> {
     try {
-        await execAsync('envdrift-agent start');
+        // Add timeout to prevent hanging if agent doesn't respond
+        await execAsync('envdrift-agent start', { timeout: 10000 });
         await refreshStatus();
         return currentStatus.status === 'running';
     } catch (error) {
@@ -166,7 +173,8 @@ export async function startAgent(): Promise<boolean> {
  */
 export async function stopAgent(): Promise<boolean> {
     try {
-        await execAsync('envdrift-agent stop');
+        // Add timeout to prevent hanging if agent doesn't respond
+        await execAsync('envdrift-agent stop', { timeout: 10000 });
         await refreshStatus();
         return currentStatus.status === 'stopped';
     } catch (error) {
