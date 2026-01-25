@@ -116,6 +116,9 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      - name: Compile TypeScript
+        run: npm run compile
+
       - name: Install vsce
         run: npm install -g @vscode/vsce
 
