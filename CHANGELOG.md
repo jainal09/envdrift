@@ -1,5 +1,13 @@
 # Changelog
 
+## [10.7.0](https://github.com/jainal09/envdrift/compare/v10.6.0...v10.7.0) (2026-01-25)
+
+
+### Features
+
+* **agent:** add Phase 2D - per-project watching with individual configs ([#124](https://github.com/jainal09/envdrift/issues/124)) ([f7150b9](https://github.com/jainal09/envdrift/commit/f7150b91c9dd7fb2e8c22c1551b6a743de2ba148))
+* **vscode:** add Phase 2E - agent status indicator ([#125](https://github.com/jainal09/envdrift/issues/125)) ([532edf1](https://github.com/jainal09/envdrift/commit/532edf133390c0c43825d17bdbdc2843674dd3bc))
+
 ## [10.6.0](https://github.com/jainal09/envdrift/compare/v10.5.0...v10.6.0) (2026-01-23)
 
 
