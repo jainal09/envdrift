@@ -10,7 +10,7 @@ This document outlines future improvements for the envdrift-agent and VS Code ex
 | Phase 2B | CLI Install Command (`envdrift install agent`) | ✅ Done |
 | Phase 2C | Build Pipelines (agent + VS Code release workflows) | ✅ Done |
 | Phase 2D | Agent Improvements (per-project watching) | ✅ Done |
-| Phase 2E | VS Code Agent Status Indicator | ❌ Not Started |
+| Phase 2E | VS Code Agent Status Indicator | ✅ Done |
 | Phase 2F | CI/Testing (VS Code lint/tests, Go E2E integration tests) | ❌ Not Started |
 
 ---
@@ -416,43 +416,79 @@ Add a status indicator in VS Code that shows whether the background agent is run
 
 | Status | Icon | Color | Meaning |
 |--------|------|-------|---------|
-| Running | ⚡ | 🟢 Green | Agent is running and healthy |
-| Stopped | ⭕ | 🔴 Red | Agent is not running |
-| Error | ⚠️ | 🟡 Yellow | Agent has issues |
+| Running | $(zap) Agent | Green text | Agent is running and healthy |
+| Stopped | $(circle-slash) Agent | Warning background | Agent is not running |
+| Not Installed | $(alert) Agent | Error background | Agent binary not found |
+| Error | $(warning) Agent | Error background | Agent has issues |
 
 ### Implementation
 
-```typescript
-// src/agentStatus.ts
+**New file: `src/agentStatus.ts`**
 
-async function checkAgentStatus(): Promise<'running' | 'stopped' | 'error'> {
-    try {
-        // Check if agent process is running
-        const result = await execCommand('envdrift-agent status');
-        if (result.includes('running')) return 'running';
-        return 'stopped';
-    } catch {
-        return 'error';
-    }
+```typescript
+export type AgentStatus = 'running' | 'stopped' | 'not_installed' | 'error';
+
+export interface AgentStatusInfo {
+    status: AgentStatus;
+    version?: string;
+    error?: string;
 }
 
-// Update status bar every 30 seconds
-setInterval(updateAgentStatusBar, 30000);
+// Check agent status via CLI command
+export async function checkAgentStatus(): Promise<AgentStatusInfo> {
+    const installed = await isAgentInstalled();
+    if (!installed) return { status: 'not_installed' };
+
+    const { stdout } = await execAsync('envdrift-agent status');
+    if (stdout.includes('running')) {
+        const version = await getAgentVersion();
+        return { status: 'running', version };
+    }
+    return { status: 'stopped' };
+}
+
+// Periodic status checking every 30 seconds
+export function startStatusChecking(onChange?: StatusChangeCallback): void;
+export function stopStatusChecking(): void;
+
+// Agent control
+export async function startAgent(): Promise<boolean>;
+export async function stopAgent(): Promise<boolean>;
 ```
+
+**Updated: `src/statusBar.ts`**
+
+- Added second status bar item for agent status
+- `updateAgentStatusBar()` function updates icon/color based on status
+
+**Updated: `src/extension.ts`**
+
+- Integrated agent status checking on activation
+- Added click handler with QuickPick menu for agent actions
+
+### New Commands
+
+| Command | Title | Description |
+|---------|-------|-------------|
+| `envdrift.startAgent` | Start Background Agent | Start the envdrift-agent |
+| `envdrift.stopAgent` | Stop Background Agent | Stop the envdrift-agent |
+| `envdrift.refreshAgentStatus` | Refresh Agent Status | Force refresh status check |
 
 ### Status Bar Click Actions
 
-- **If running**: Show info message with agent version
-- **If stopped**: Offer to start agent or install it
-- **If error**: Show error details and troubleshooting link
+- **If running**: QuickPick with Show Info, Stop Agent, Refresh options
+- **If stopped**: QuickPick with Start Agent, Refresh options
+- **If not installed**: Show installation instructions with copy command
+- **If error**: QuickPick with Refresh, Get Help (opens GitHub issues)
 
 ### Communication with Agent
 
-Extension can read agent status from:
+Extension communicates via CLI commands:
 
-1. **Process check**: `envdrift-agent status` command
-2. **Status file**: `~/.envdrift/agent.status` (JSON)
-3. **Health endpoint**: Future HTTP API (optional)
+1. **Status check**: `envdrift-agent status`
+2. **Version**: `envdrift-agent --version`
+3. **Start**: `envdrift-agent start`
+4. **Stop**: `envdrift-agent stop`
 
 ---
 
@@ -625,11 +661,11 @@ The following features have been implemented:
 - ✅ VS Code extension release workflow with marketplace publishing - Phase 2C
 - ✅ Per-project watching with individual configs - Phase 2D
 - ✅ Dynamic registry watching (hot reload on project add/remove) - Phase 2D
+- ✅ VS Code agent status indicator - Phase 2E
 
 ## Not Implementing Now
 
 These features are deferred to future phases:
 
-- ❌ VS Code agent status indicator (Phase 2E)
 - ❌ VS Code extension CI (lint, unit tests, E2E tests) (Phase 2F)
 - ❌ Go agent E2E integration tests with real encryption (Phase 2F)
