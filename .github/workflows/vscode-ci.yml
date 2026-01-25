@@ -11,6 +11,7 @@ on:
     paths:
       - 'envdrift-vscode/**'
       - '.github/workflows/vscode-ci.yml'
+  workflow_dispatch:
 
 permissions:
   contents: read
