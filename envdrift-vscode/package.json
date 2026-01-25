@@ -44,6 +44,18 @@
       {
         "command": "envdrift.showStatus",
         "title": "EnvDrift: Show Status"
+      },
+      {
+        "command": "envdrift.startAgent",
+        "title": "EnvDrift: Start Background Agent"
+      },
+      {
+        "command": "envdrift.stopAgent",
+        "title": "EnvDrift: Stop Background Agent"
+      },
+      {
+        "command": "envdrift.refreshAgentStatus",
+        "title": "EnvDrift: Refresh Agent Status"
       }
     ],
     "configuration": {
