@@ -10,10 +10,9 @@ suite('Extension Test Suite', () => {
 
     test('Extension should activate', async () => {
         const ext = vscode.extensions.getExtension('envdrift.envdrift-vscode');
-        if (ext) {
-            await ext.activate();
-            assert.strictEqual(ext.isActive, true);
-        }
+        assert.ok(ext, 'Extension should be present');
+        await ext.activate();
+        assert.strictEqual(ext.isActive, true);
     });
 
     test('Commands should be registered', async () => {

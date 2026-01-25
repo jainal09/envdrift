@@ -7,7 +7,8 @@
  * Check if a file matches the given patterns
  */
 export function matchesPatterns(fileName: string, patterns: string[]): boolean {
-    const baseName = fileName.split('/').pop() || fileName;
+    // Handle both forward slashes and backslashes for cross-platform support
+    const baseName = fileName.split(/[/\\]/).pop() || fileName;
     return patterns.some(pattern => {
         // Escape regex special chars except *, then convert * to .*
         const escaped = pattern.replace(/[.+?^${}()|[\]\\]/g, '\\$&');
@@ -20,7 +21,8 @@ export function matchesPatterns(fileName: string, patterns: string[]): boolean {
  * Check if a file should be excluded
  */
 export function isExcluded(fileName: string, exclude: string[]): boolean {
-    const baseName = fileName.split('/').pop() || fileName;
+    // Handle both forward slashes and backslashes for cross-platform support
+    const baseName = fileName.split(/[/\\]/).pop() || fileName;
     return exclude.includes(baseName);
 }
 
