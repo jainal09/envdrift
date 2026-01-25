@@ -418,12 +418,14 @@ jobs:
 ```
 
 **New files:**
+
 - `eslint.config.mjs` - ESLint flat config with TypeScript
 - `src/utils.ts` - Pure utility functions (testable outside VS Code)
 - `src/test/unit/config.test.ts` - Unit tests for utilities
 - `src/test/suite/extension.test.ts` - VS Code extension tests
 
 **Test coverage:**
+
 - Pattern matching (`matchesPatterns`)
 - Exclusion logic (`isExcluded`)
 - Encryption detection (`isContentEncrypted`)
@@ -464,11 +466,11 @@ All Phase 2 features have been implemented:
 
 ---
 
-# Phase 3: Publishing, Security & Team Features
+## Phase 3: Publishing, Security & Team Features
 
 ---
 
-## Phase 3A: Publishing & Distribution
+### Phase 3A: Publishing & Distribution
 
 ### VS Code Marketplace Publishing
 
@@ -484,7 +486,8 @@ Auto-publish to VS Code Marketplace when a `vscode-v*` tag is pushed.
 ```
 
 **Setup required:**
-1. Create publisher account at https://marketplace.visualstudio.com
+
+1. Create publisher account at <https://marketplace.visualstudio.com>
 2. Generate Personal Access Token (PAT)
 3. Add `VSCE_PAT` secret to GitHub repository
 
@@ -934,12 +937,14 @@ curl http://localhost:9847/metrics  # Prometheus format
 Context-aware error messages with troubleshooting hints.
 
 **Before:**
-```
+
+```text
 Error: encryption failed
 ```
 
 **After:**
-```
+
+```text
 Error: Failed to encrypt .env.production
 
 Cause: Private key not found in .env.keys
@@ -968,13 +973,14 @@ Securely share encryption keys with team members.
 #### The Problem
 
 When multiple developers work on a project:
+
 - Each developer needs the private key to decrypt `.env` files
 - `.env.keys` contains the private key and should NOT be committed
 - How do team members get the key securely?
 
 #### Solution: Key Distribution Strategies
 
-**Strategy 1: Secure Channel (Manual)**
+##### Strategy 1: Secure Channel (Manual)
 
 ```bash
 # Developer A (has the keys)
@@ -987,7 +993,7 @@ envdrift keys export --format base64
 envdrift keys import eyJwcml2YXRlIjoiLi4uIiwicHVibGljIjoiLi4uIn0=
 ```
 
-**Strategy 2: Cloud Secret Manager**
+##### Strategy 2: Cloud Secret Manager
 
 ```bash
 # Team lead stores keys in cloud
@@ -999,7 +1005,7 @@ envdrift keys push --to azure --vault-name mycompany-vault
 envdrift keys pull --from aws --secret-name mycompany/myproject/envdrift-keys
 ```
 
-**Strategy 3: Encrypted Key File in Repo**
+##### Strategy 3: Encrypted Key File in Repo
 
 Store an encrypted version of the keys in the repository:
 
@@ -1090,7 +1096,7 @@ myproject/
 
 #### Key Organization Options
 
-**Option A: Single .env.keys with multiple keys**
+##### Option A: Single .env.keys with multiple keys
 
 ```bash
 # .env.keys
@@ -1104,7 +1110,7 @@ DOTENV_PRIVATE_KEY_STAGING="def456..."
 DOTENV_PRIVATE_KEY_PRODUCTION="ghi789..."
 ```
 
-**Option B: Separate key files per environment**
+##### Option B: Separate key files per environment
 
 ```text
 myproject/
