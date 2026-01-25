@@ -100,14 +100,23 @@
     "vscode:prepublish": "npm run compile",
     "compile": "tsc -p ./",
     "watch": "tsc -watch -p ./",
-    "lint": "eslint src --ext ts"
+    "lint": "eslint src/",
+    "test": "node ./out/test/runTest.js",
+    "test:unit": "mocha --ui tdd ./out/test/unit/**/*.test.js"
   },
   "devDependencies": {
+    "@eslint/js": "^9.0.0",
+    "@types/glob": "^8.1.0",
+    "@types/mocha": "^10.0.0",
     "@types/node": "^24.0.0",
+    "@types/sinon": "^17.0.0",
     "@types/vscode": "^1.85.0",
-    "@typescript-eslint/eslint-plugin": "^8.0.0",
-    "@typescript-eslint/parser": "^8.0.0",
+    "@vscode/test-electron": "^2.4.0",
     "eslint": "^9.0.0",
-    "typescript": "^5.3.0"
+    "glob": "^10.0.0",
+    "mocha": "^10.0.0",
+    "sinon": "^18.0.0",
+    "typescript": "^5.3.0",
+    "typescript-eslint": "^8.0.0"
   }
 }
