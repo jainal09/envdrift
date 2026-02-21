@@ -176,7 +176,8 @@ class SchemaLoader:
             extra_schema = field_info.json_schema_extra
             is_sensitive = False
             if isinstance(extra_schema, dict):
-                is_sensitive = extra_schema.get("sensitive", False)
+                raw_sensitive = extra_schema.get("sensitive", False)
+                is_sensitive = raw_sensitive if isinstance(raw_sensitive, bool) else False
 
             # Get default value
             default_value = None if is_required else field_info.default
