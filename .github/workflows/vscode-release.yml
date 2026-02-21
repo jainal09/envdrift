@@ -70,6 +70,8 @@ jobs:
     name: Create Release
     runs-on: ubuntu-latest
     needs: build
+    outputs:
+      tag: ${{ steps.version.outputs.TAG }}
     steps:
       - name: Checkout code
         uses: actions/checkout@v6
@@ -137,7 +139,8 @@ jobs:
     runs-on: ubuntu-latest
     needs: release
     # Only publish stable releases to marketplace (no -rc, -beta, -alpha suffixes)
-    if: ${{ !contains(github.ref_name, '-rc') && !contains(github.ref_name, '-beta') && !contains(github.ref_name, '-alpha') }}
+    # Use tag from release job instead of github.ref_name, which is 'main' in workflow_call runs
+    if: ${{ !contains(needs.release.outputs.tag, '-rc') && !contains(needs.release.outputs.tag, '-beta') && !contains(needs.release.outputs.tag, '-alpha') }}
     steps:
       - name: Checkout code
         uses: actions/checkout@v6
