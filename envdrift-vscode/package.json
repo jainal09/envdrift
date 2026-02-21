@@ -2,7 +2,7 @@
   "name": "envdrift-vscode",
   "displayName": "EnvDrift - Auto Encrypt .env Files",
   "description": "Automatically encrypt .env files when closed using envdrift",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "publisher": "envdrift",
   "license": "MIT",
   "repository": {
