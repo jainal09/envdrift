@@ -44,7 +44,7 @@ jobs:
     # Service containers for integration tests
     services:
       localstack:
-        image: localstack/localstack:4.12
+        image: localstack/localstack:4.13
         ports:
           - 4566:4566
         env:
@@ -75,7 +75,7 @@ jobs:
           --health-start-period=5s
 
       lowkey-vault:
-        image: nagyesta/lowkey-vault:7.0.9
+        image: nagyesta/lowkey-vault:7.1.0
         ports:
           - 8443:8443
         env:
