@@ -104,8 +104,8 @@ jobs:
           path: dist
 
       - name: Prepare release assets
+        working-directory: .
         run: |
-          cd ..
           mkdir -p release
           # Move all binaries to release folder
           find dist -type f -exec mv {} release/ \;
