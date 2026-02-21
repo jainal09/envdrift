@@ -57,7 +57,7 @@ def format_rich(result: AggregatedScanResult, console: Console | None = None) ->
     # Surface scanner errors prominently
     errors = [r for r in result.results if r.error]
     if errors:
-        error_lines = []
+        error_lines: list[str] = []
         for r in errors:
             msg = (r.error or "").strip()
             if len(msg) > 200:
