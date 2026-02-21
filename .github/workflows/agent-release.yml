@@ -1,9 +1,17 @@
 name: Release Agent
 
 on:
+  # Manual trigger via tag push
   push:
     tags:
       - 'agent-v*'
+  # Called by release-please
+  workflow_call:
+    inputs:
+      tag_name:
+        description: 'Tag name from release-please'
+        required: true
+        type: string
 
 permissions:
   contents: write
@@ -48,13 +56,24 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v6
         with:
-          go-version: '1.25'
+          go-version: '1.26'
           cache-dependency-path: envdrift-agent/go.sum
 
       - name: Get version from tag
         id: version
         shell: bash
-        run: echo "VERSION=${GITHUB_REF#refs/tags/agent-v}" >> $GITHUB_OUTPUT
+        env:
+          TAG_INPUT: ${{ inputs.tag_name }}
+        run: |
+          # Handle both tag push and workflow_call
+          if [ -n "$TAG_INPUT" ]; then
+            TAG="$TAG_INPUT"
+          else
+            TAG="${GITHUB_REF#refs/tags/}"
+          fi
+          VERSION="${TAG#agent-v}"
+          echo "VERSION=$VERSION" >> $GITHUB_OUTPUT
+          echo "TAG=$TAG" >> $GITHUB_OUTPUT
 
       - name: Build binary
         shell: bash
@@ -87,8 +106,8 @@ jobs:
           path: dist
 
       - name: Prepare release assets
+        working-directory: .
         run: |
-          cd ..
           mkdir -p release
           # Move all binaries to release folder
           find dist -type f -exec mv {} release/ \;
@@ -96,11 +115,23 @@ jobs:
 
       - name: Get version from tag
         id: version
-        run: echo "VERSION=${GITHUB_REF#refs/tags/agent-v}" >> $GITHUB_OUTPUT
+        env:
+          TAG_INPUT: ${{ inputs.tag_name }}
+        run: |
+          # Handle both tag push and workflow_call
+          if [ -n "$TAG_INPUT" ]; then
+            TAG="$TAG_INPUT"
+          else
+            TAG="${GITHUB_REF#refs/tags/}"
+          fi
+          VERSION="${TAG#agent-v}"
+          echo "VERSION=$VERSION" >> $GITHUB_OUTPUT
+          echo "TAG=$TAG" >> $GITHUB_OUTPUT
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
+          tag_name: ${{ steps.version.outputs.TAG }}
           name: Agent v${{ steps.version.outputs.VERSION }}
           body: |
             ## EnvDrift Agent v${{ steps.version.outputs.VERSION }}
