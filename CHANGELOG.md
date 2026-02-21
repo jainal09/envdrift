@@ -1,5 +1,12 @@
 # Changelog
 
+## [10.8.0](https://github.com/jainal09/envdrift/compare/v10.7.0...v10.8.0) (2026-02-21)
+
+
+### Features
+
+* **release:** add multi-package release-please configuration ([#140](https://github.com/jainal09/envdrift/issues/140)) ([338ba6a](https://github.com/jainal09/envdrift/commit/338ba6a88364ffd057d848bdf15c6c5d49b4dc92))
+
 ## [10.7.0](https://github.com/jainal09/envdrift/compare/v10.6.0...v10.7.0) (2026-01-25)
 
 
