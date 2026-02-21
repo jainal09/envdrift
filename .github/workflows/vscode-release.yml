@@ -1,9 +1,17 @@
 name: Release VS Code Extension
 
 on:
+  # Manual trigger via tag push
   push:
     tags:
       - 'vscode-v*'
+  # Called by release-please
+  workflow_call:
+    inputs:
+      tag_name:
+        description: 'Tag name from release-please'
+        required: true
+        type: string
 
 permissions:
   contents: write
@@ -29,7 +37,18 @@ jobs:
 
       - name: Get version from tag
         id: version
-        run: echo "VERSION=${GITHUB_REF#refs/tags/vscode-v}" >> $GITHUB_OUTPUT
+        env:
+          TAG_INPUT: ${{ inputs.tag_name }}
+        run: |
+          # Handle both tag push and workflow_call
+          if [ -n "$TAG_INPUT" ]; then
+            TAG="$TAG_INPUT"
+          else
+            TAG="${GITHUB_REF#refs/tags/}"
+          fi
+          VERSION="${TAG#vscode-v}"
+          echo "VERSION=$VERSION" >> $GITHUB_OUTPUT
+          echo "TAG=$TAG" >> $GITHUB_OUTPUT
 
       - name: Install dependencies
         run: npm ci
@@ -53,13 +72,26 @@ jobs:
     name: Create Release
     runs-on: ubuntu-latest
     needs: build
+    outputs:
+      tag: ${{ steps.version.outputs.TAG }}
     steps:
       - name: Checkout code
         uses: actions/checkout@v6
 
       - name: Get version from tag
         id: version
-        run: echo "VERSION=${GITHUB_REF#refs/tags/vscode-v}" >> $GITHUB_OUTPUT
+        env:
+          TAG_INPUT: ${{ inputs.tag_name }}
+        run: |
+          # Handle both tag push and workflow_call
+          if [ -n "$TAG_INPUT" ]; then
+            TAG="$TAG_INPUT"
+          else
+            TAG="${GITHUB_REF#refs/tags/}"
+          fi
+          VERSION="${TAG#vscode-v}"
+          echo "VERSION=$VERSION" >> $GITHUB_OUTPUT
+          echo "TAG=$TAG" >> $GITHUB_OUTPUT
 
       - name: Download artifact
         uses: actions/download-artifact@v7
@@ -70,6 +102,7 @@ jobs:
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
+          tag_name: ${{ steps.version.outputs.TAG }}
           name: VS Code Extension v${{ steps.version.outputs.VERSION }}
           body: |
             ## EnvDrift VS Code Extension v${{ steps.version.outputs.VERSION }}
@@ -89,13 +122,14 @@ jobs:
             4. Select the downloaded file
 
             ### Features
-            - 🔐 Auto-encryption of .env files on save
-            - 📊 Status bar showing encryption status
-            - 🔔 Notifications for encryption events
-            - ⚙️ Configurable settings
+            - Auto-encryption of .env files on save
+            - Status bar showing encryption status
+            - Agent status indicator
+            - Notifications for encryption events
+            - Configurable settings
 
             ### Requirements
-            - VS Code 1.80.0 or higher
+            - VS Code 1.85.0 or higher
             - `envdrift` Python package installed (`pip install envdrift`)
           files: |
             release/*.vsix
@@ -109,7 +143,8 @@ jobs:
     runs-on: ubuntu-latest
     needs: release
     # Only publish stable releases to marketplace (no -rc, -beta, -alpha suffixes)
-    if: ${{ !contains(github.ref_name, '-rc') && !contains(github.ref_name, '-beta') && !contains(github.ref_name, '-alpha') }}
+    # Use tag from release job instead of github.ref_name, which is 'main' in workflow_call runs
+    if: ${{ !contains(needs.release.outputs.tag, '-rc') && !contains(needs.release.outputs.tag, '-beta') && !contains(needs.release.outputs.tag, '-alpha') }}
     steps:
       - name: Checkout code
         uses: actions/checkout@v6
@@ -123,7 +158,17 @@ jobs:
 
       - name: Get version from tag
         id: version
-        run: echo "VERSION=${GITHUB_REF#refs/tags/vscode-v}" >> $GITHUB_OUTPUT
+        env:
+          TAG_INPUT: ${{ inputs.tag_name }}
+        run: |
+          # Handle both tag push and workflow_call
+          if [ -n "$TAG_INPUT" ]; then
+            TAG="$TAG_INPUT"
+          else
+            TAG="${GITHUB_REF#refs/tags/}"
+          fi
+          VERSION="${TAG#vscode-v}"
+          echo "VERSION=$VERSION" >> $GITHUB_OUTPUT
 
       - name: Download artifact
         uses: actions/download-artifact@v7
