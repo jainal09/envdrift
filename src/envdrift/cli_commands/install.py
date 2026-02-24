@@ -415,7 +415,8 @@ def install_agent(
         Path.home() / ".local" / "bin",
         Path.home() / ".envdrift" / "bin",
     }
-    if str(install_dir) not in path_env and install_dir in user_local_dirs:
+    path_dirs = {Path(p).resolve() for p in path_env.split(os.pathsep) if p}
+    if install_dir.resolve() not in path_dirs and install_dir in user_local_dirs:
         console.print(
             f"\n[yellow]⚠ Note:[/yellow] {install_dir} is not in your PATH environment variable."
         )

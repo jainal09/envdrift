@@ -48,9 +48,9 @@ $MinPythonMinor = 11
 # Helpers
 # -------------------------------------------------------------------
 function Write-Info  { param([string]$Msg) Write-Host "  > $Msg" -ForegroundColor Blue }
-function Write-Ok    { param([string]$Msg) Write-Host "  ✓ $Msg" -ForegroundColor Green }
-function Write-Warn  { param([string]$Msg) Write-Host "  ⚠ $Msg" -ForegroundColor Yellow }
-function Write-Err   { param([string]$Msg) Write-Host "  ✗ $Msg" -ForegroundColor Red }
+function Write-Ok    { param([string]$Msg) Write-Host "  [OK] $Msg" -ForegroundColor Green }
+function Write-Warn  { param([string]$Msg) Write-Host "  [WARN] $Msg" -ForegroundColor Yellow }
+function Write-Err   { param([string]$Msg) Write-Host "  [ERROR] $Msg" -ForegroundColor Red }
 
 function Stop-WithError {
     param([string]$Msg)
@@ -428,5 +428,5 @@ Install-Agent
 Show-PathInstructions
 
 Write-Host ""
-Write-Host "  ✓ envdrift installation complete!" -ForegroundColor Green
+Write-Host "  [OK] envdrift installation complete!" -ForegroundColor Green
 Write-Host ""

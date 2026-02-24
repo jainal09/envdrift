@@ -196,7 +196,7 @@ find_python() {
         fi
     done
 
-    # Try version-specific names (3.14 down to 3.11)
+    # Try version-specific names (3.19 down to 3.11)
     minor=19
     while [ ${minor} -ge ${MIN_PYTHON_MINOR} ]; do
         cmd="python3.${minor}"
