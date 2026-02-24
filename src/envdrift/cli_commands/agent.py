@@ -11,6 +11,7 @@ Commands:
 
 from __future__ import annotations
 
+import platform
 import shutil
 import subprocess  # nosec B404 - subprocess needed for agent binary communication
 import tomllib
@@ -49,8 +50,10 @@ def _find_agent_binary() -> Path | None:
         return Path(agent_path)
 
     # Check common install locations
+    binary_name = "envdrift-agent.exe" if platform.system().lower() == "windows" else "envdrift-agent"
     common_paths = [
-        Path.home() / ".local" / "bin" / "envdrift-agent",
+        Path.home() / ".envdrift" / "bin" / binary_name,
+        Path.home() / ".local" / "bin" / binary_name,
         Path("/usr/local/bin/envdrift-agent"),
         Path("/opt/homebrew/bin/envdrift-agent"),
     ]

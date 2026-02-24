@@ -118,17 +118,17 @@ class TestGetInstallPath:
     """Tests for _get_install_path function."""
 
     def test_unix_local_bin(self, tmp_path: Path):
-        """Test Unix installation to ~/.local/bin."""
-        local_bin = tmp_path / ".local" / "bin"
+        """Test Unix installation to ~/.envdrift/bin when no system path is writable."""
+        envdrift_bin = tmp_path / ".envdrift" / "bin"
 
         with (
             patch("platform.system", return_value="Linux"),
             patch.object(Path, "home", return_value=tmp_path),
-            patch("os.access", return_value=False),  # No write access to /usr/local/bin
+            patch("os.access", return_value=False),  # No write access to system paths
         ):
             result = _get_install_path()
-            assert result == local_bin / "envdrift-agent"
-            assert local_bin.exists()
+            assert result == envdrift_bin / "envdrift-agent"
+            assert envdrift_bin.exists()
 
     def test_unix_usr_local_bin(self, tmp_path: Path):
         """Test Unix installation to /usr/local/bin when writable."""
