@@ -96,8 +96,9 @@ def _get_install_path() -> Path:
         install_dir.mkdir(parents=True, exist_ok=True)
         return install_dir / "envdrift-agent.exe"
     else:
-        # Unix: Prefer /usr/local/bin, fall back to ~/.local/bin
+        # Unix: Prefer ~/.envdrift/bin, fall back to /usr/local/bin or ~/.local/bin
         preferred_paths = [
+            Path.home() / ".envdrift" / "bin",
             Path("/usr/local/bin"),
             Path("/opt/homebrew/bin"),
             Path.home() / ".local" / "bin",
@@ -108,10 +109,10 @@ def _get_install_path() -> Path:
             if path.exists() and os.access(path, os.W_OK):
                 return path / "envdrift-agent"
 
-        # Create ~/.local/bin if nothing else works
-        local_bin = Path.home() / ".local" / "bin"
-        local_bin.mkdir(parents=True, exist_ok=True)
-        return local_bin / "envdrift-agent"
+        # Create ~/.envdrift/bin if nothing else works
+        envdrift_bin = Path.home() / ".envdrift" / "bin"
+        envdrift_bin.mkdir(parents=True, exist_ok=True)
+        return envdrift_bin / "envdrift-agent"
 
 
 def _verify_checksum(file_path: Path, platform_name: str) -> bool:
@@ -410,12 +411,16 @@ def install_agent(
     # Warn if install path is not in PATH
     install_dir = install_path.parent
     path_env = os.environ.get("PATH", "")
-    if str(install_dir) not in path_env and install_dir == Path.home() / ".local" / "bin":
+    user_local_dirs = {
+        Path.home() / ".local" / "bin",
+        Path.home() / ".envdrift" / "bin",
+    }
+    if str(install_dir) not in path_env and install_dir in user_local_dirs:
         console.print(
-            "\n[yellow]⚠ Note:[/yellow] ~/.local/bin is not in your PATH environment variable."
+            f"\n[yellow]⚠ Note:[/yellow] {install_dir} is not in your PATH environment variable."
         )
         console.print("  Add it to your shell configuration (~/.bashrc, ~/.zshrc, etc.):")
-        console.print('  [bold]export PATH="$HOME/.local/bin:$PATH"[/bold]')
+        console.print(f'  [bold]export PATH="{install_dir}:$PATH"[/bold]')
 
     # Final instructions
     console.print("\n[bold green]✓ Installation complete![/bold green]")
