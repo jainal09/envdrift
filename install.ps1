@@ -294,10 +294,10 @@ function Install-Agent {
     else {
         # /releases/latest may point to a non-agent release (e.g. vscode extension).
         # Query GitHub API for the latest agent-v* tag instead.
-        $apiUrl = "https://api.github.com/repos/$GitHubRepo/releases"
+        $apiUrl = "https://api.github.com/repos/$GitHubRepo/releases?per_page=100"
         try {
             $releases = Invoke-RestMethod -Uri $apiUrl -UseBasicParsing -ErrorAction Stop
-            $agentRelease = $releases | Where-Object { $_.tag_name -match '^agent-v' } | Select-Object -First 1
+            $agentRelease = $releases | Where-Object { $_.tag_name -match '^agent-v\d' -and -not $_.prerelease -and -not $_.draft } | Select-Object -First 1
             if ($agentRelease) {
                 $baseUrl = "https://github.com/$GitHubRepo/releases/download/$($agentRelease.tag_name)"
             }

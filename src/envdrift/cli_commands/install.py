@@ -37,7 +37,7 @@ install_app = typer.Typer(
 
 # GitHub repo for API queries
 GITHUB_REPO = "jainal09/envdrift"
-GITHUB_API_RELEASES_URL = f"https://api.github.com/repos/{GITHUB_REPO}/releases"
+GITHUB_API_RELEASES_URL = f"https://api.github.com/repos/{GITHUB_REPO}/releases?per_page=100"
 
 
 def _resolve_agent_release_url() -> tuple[str, str]:
@@ -53,10 +53,12 @@ def _resolve_agent_release_url() -> tuple[str, str]:
         GITHUB_API_RELEASES_URL,
         headers={"Accept": "application/vnd.github+json"},
     )
-    with urllib.request.urlopen(req, timeout=30) as resp:  # noqa: S310
+    with urllib.request.urlopen(req, timeout=30) as resp:
         releases = json.loads(resp.read())
 
     for release in releases:
+        if release.get("prerelease") or release.get("draft"):
+            continue
         tag = release.get("tag_name", "")
         if tag.startswith("agent-v"):
             base = f"https://github.com/{GITHUB_REPO}/releases/download/{tag}"

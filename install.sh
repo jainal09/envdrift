@@ -302,11 +302,27 @@ install_agent() {
     else
         # /releases/latest may point to a non-agent release (e.g. vscode extension).
         # Query GitHub API for the latest agent-v* tag instead.
-        api_url="https://api.github.com/repos/${GITHUB_REPO}/releases"
+        api_url="https://api.github.com/repos/${GITHUB_REPO}/releases?per_page=100"
         tmp_releases="$(mktemp)"
         add_tmp "${tmp_releases}"
         if download "${api_url}" "${tmp_releases}" 2>/dev/null; then
-            tag="$(grep -o '"tag_name"[[:space:]]*:[[:space:]]*"agent-v[^"]*"' "${tmp_releases}" | head -1 | sed 's/.*"agent-v\([^"]*\)".*/\1/')"
+            # Filter out prereleases/drafts: find agent-v* tags that are NOT preceded by "prerelease":true
+            # Use Python if available for reliable JSON parsing, otherwise fall back to grep
+            if command -v python3 >/dev/null 2>&1; then
+                tag="$(python3 -c "
+import json, sys
+releases = json.load(open(sys.argv[1]))
+for r in releases:
+    if r.get('prerelease') or r.get('draft'):
+        continue
+    t = r.get('tag_name', '')
+    if t.startswith('agent-v'):
+        print(t.removeprefix('agent-v'))
+        break
+" "${tmp_releases}" 2>/dev/null)"
+            else
+                tag="$(grep -o '"tag_name"[[:space:]]*:[[:space:]]*"agent-v[0-9][^"]*"' "${tmp_releases}" | head -1 | sed 's/.*"agent-v\([^"]*\)".*/\1/')"
+            fi
         fi
         if [ -n "${tag:-}" ]; then
             base_url="https://github.com/${GITHUB_REPO}/releases/download/agent-v${tag}"
