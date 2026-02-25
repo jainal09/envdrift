@@ -1,0 +1,161 @@
+name: Installer E2E Tests
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "install.sh"
+      - "install.ps1"
+      - ".github/workflows/installer-e2e.yml"
+  pull_request:
+    branches: [main]
+    paths:
+      - "install.sh"
+      - "install.ps1"
+      - ".github/workflows/installer-e2e.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test-unix:
+    name: Unix – ${{ matrix.os }} / Python ${{ matrix.python-version }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+        python-version: ["3.11", "3.13"]
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Fresh install
+        run: sh install.sh --no-agent
+
+      - name: Verify version command
+        run: |
+          output=$(~/.envdrift/bin/envdrift version)
+          echo "$output"
+          echo "$output" | grep -qi "envdrift"
+
+      - name: Verify help command
+        run: ~/.envdrift/bin/envdrift --help
+
+      - name: Verify installation layout
+        run: |
+          test -x ~/.envdrift/bin/envdrift
+          test -f ~/.envdrift/venv/bin/python
+
+      - name: Idempotency – re-run installer
+        run: sh install.sh --no-agent
+
+      - name: Uninstall
+        run: sh install.sh --uninstall
+
+      - name: Verify cleanup
+        run: |
+          test ! -d ~/.envdrift/venv
+          test ! -d ~/.envdrift/bin
+
+  test-windows:
+    name: Windows / Python ${{ matrix.python-version }}
+    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.13"]
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Fresh install
+        run: |
+          $env:ENVDRIFT_NO_AGENT = "1"
+          & .\install.ps1
+
+      - name: Verify wrappers exist
+        run: |
+          if (-not (Test-Path "$HOME\.envdrift\bin\envdrift.cmd")) {
+            throw "envdrift.cmd wrapper not found"
+          }
+          if (-not (Test-Path "$HOME\.envdrift\bin\envdrift.ps1")) {
+            throw "envdrift.ps1 wrapper not found"
+          }
+
+      - name: Verify version command
+        run: |
+          $output = & "$HOME\.envdrift\bin\envdrift.ps1" version
+          Write-Host $output
+          if ($output -notmatch "envdrift") {
+            throw "version output does not contain 'envdrift'"
+          }
+
+      - name: Verify help command
+        run: & "$HOME\.envdrift\bin\envdrift.ps1" --help
+
+      - name: Idempotency – re-run installer
+        run: |
+          $env:ENVDRIFT_NO_AGENT = "1"
+          & .\install.ps1
+
+      - name: Uninstall
+        run: & .\install.ps1 -Uninstall
+
+      - name: Verify cleanup
+        run: |
+          if (Test-Path "$HOME\.envdrift\venv") {
+            throw "venv directory still exists after uninstall"
+          }
+          if (Test-Path "$HOME\.envdrift\bin") {
+            throw "bin directory still exists after uninstall"
+          }
+
+  test-unix-venv-fallback:
+    name: Unix venv fallback – ubuntu-latest / Python 3.13
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+
+      - name: Remove venv module
+        run: |
+          sudo apt-get remove -y python3-venv python3.13-venv || true
+          # Also remove the venv module from the setup-python installation
+          VENV_DIR=$(python3 -c "import os, venv; print(os.path.dirname(venv.__file__))" 2>/dev/null) && sudo mv "$VENV_DIR" "${VENV_DIR}.bak" || true
+          # Confirm venv is unavailable
+          if python3 -c "import venv" 2>/dev/null; then
+            echo "ERROR: venv module is still available"
+            exit 1
+          fi
+          echo "Confirmed: venv module is unavailable"
+
+      - name: Install with venv fallback
+        run: sh install.sh --no-agent
+
+      - name: Verify version command
+        run: |
+          output=$(~/.envdrift/bin/envdrift version)
+          echo "$output"
+          echo "$output" | grep -qi "envdrift"
+
+      - name: Uninstall
+        run: sh install.sh --uninstall
+
+      - name: Verify cleanup
+        run: |
+          test ! -d ~/.envdrift/venv
+          test ! -d ~/.envdrift/bin
