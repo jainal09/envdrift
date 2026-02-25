@@ -35,11 +35,37 @@ install_app = typer.Typer(
 )
 
 
-# GitHub release URL templates
-GITHUB_RELEASE_URL = (
-    "https://github.com/jainal09/envdrift/releases/latest/download/envdrift-agent-{platform}"
-)
-GITHUB_CHECKSUM_URL = "https://github.com/jainal09/envdrift/releases/latest/download/checksums.txt"
+# GitHub repo for API queries
+GITHUB_REPO = "jainal09/envdrift"
+GITHUB_API_RELEASES_URL = f"https://api.github.com/repos/{GITHUB_REPO}/releases?per_page=100"
+
+
+def _resolve_agent_release_url() -> tuple[str, str]:
+    """Find the latest agent-v* release via the GitHub API.
+
+    Returns (binary_base_url, checksum_url) or raises if unavailable.
+    /releases/latest may point to a non-agent release (e.g. vscode extension),
+    so we filter for tags matching ``agent-v*``.
+    """
+    import json
+
+    req = urllib.request.Request(
+        GITHUB_API_RELEASES_URL,
+        headers={"Accept": "application/vnd.github+json"},
+    )
+    with urllib.request.urlopen(req, timeout=30) as resp:  # nosec B310
+        releases = json.loads(resp.read())
+
+    for release in releases:
+        if release.get("prerelease") or release.get("draft"):
+            continue
+        tag = release.get("tag_name", "")
+        if tag.startswith("agent-v"):
+            base = f"https://github.com/{GITHUB_REPO}/releases/download/{tag}"
+            return base, f"{base}/checksums.txt"
+
+    msg = "No agent release found on GitHub"
+    raise RuntimeError(msg)
 
 
 def _detect_platform() -> str:
@@ -115,7 +141,7 @@ def _get_install_path() -> Path:
         return envdrift_bin / "envdrift-agent"
 
 
-def _verify_checksum(file_path: Path, platform_name: str) -> bool:
+def _verify_checksum(file_path: Path, platform_name: str, checksum_url: str) -> bool:
     """Verify the SHA256 checksum of a downloaded binary.
 
     Args:
@@ -129,7 +155,7 @@ def _verify_checksum(file_path: Path, platform_name: str) -> bool:
 
     try:
         # Download checksums file
-        with urllib.request.urlopen(GITHUB_CHECKSUM_URL, timeout=30) as response:  # nosec B310
+        with urllib.request.urlopen(checksum_url, timeout=30) as response:  # nosec B310
             checksums_content = response.read().decode("utf-8")
 
         # Parse checksums (format: "sha256  filename")
@@ -339,8 +365,17 @@ def install_agent(
     install_path = _get_install_path()
     console.print(f"[dim]Install path: {install_path}[/dim]")
 
+    # Resolve latest agent release from GitHub API
+    try:
+        base_url, _checksum_url = _resolve_agent_release_url()
+    except Exception as exc:
+        console.print(f"\n[red]✗[/red] {exc}")
+        console.print("\n  You can download manually from:")
+        console.print(f"  https://github.com/{GITHUB_REPO}/releases")
+        raise typer.Exit(code=1) from exc
+
     # Build download URL (add .exe for Windows)
-    download_url = GITHUB_RELEASE_URL.format(platform=plat)
+    download_url = f"{base_url}/envdrift-agent-{plat}"
     if plat.startswith("windows"):
         download_url += ".exe"
 
@@ -360,7 +395,7 @@ def install_agent(
         raise typer.Exit(1)
 
     # Verify checksum
-    if not _verify_checksum(install_path, plat):
+    if not _verify_checksum(install_path, plat, _checksum_url):
         console.print("\n[red]✗[/red] Checksum verification failed - binary may be corrupted")
         console.print("  Removing downloaded file for security")
         install_path.unlink(missing_ok=True)

@@ -292,7 +292,26 @@ function Install-Agent {
         $baseUrl = "https://github.com/$GitHubRepo/releases/download/agent-v$AgentVersion"
     }
     else {
-        $baseUrl = "https://github.com/$GitHubRepo/releases/latest/download"
+        # /releases/latest may point to a non-agent release (e.g. vscode extension).
+        # Query GitHub API for the latest agent-v* tag instead.
+        $apiUrl = "https://api.github.com/repos/$GitHubRepo/releases?per_page=100"
+        try {
+            $releases = Invoke-RestMethod -Uri $apiUrl -UseBasicParsing -ErrorAction Stop
+            $agentRelease = $releases | Where-Object { $_.tag_name -match '^agent-v\d' -and -not $_.prerelease -and -not $_.draft } | Select-Object -First 1
+            if ($agentRelease) {
+                $baseUrl = "https://github.com/$GitHubRepo/releases/download/$($agentRelease.tag_name)"
+            }
+            else {
+                Write-Warn "No agent release found on GitHub"
+                Write-Warn "The agent can be installed later with: envdrift install agent"
+                return
+            }
+        }
+        catch {
+            Write-Warn "Could not determine latest agent version from GitHub API"
+            Write-Warn "The agent can be installed later with: envdrift install agent"
+            return
+        }
     }
 
     $binaryName = "envdrift-agent-${script:Platform}.exe"
