@@ -62,12 +62,10 @@ need_cmd() {
 
 # Portable download helper (curl preferred, wget fallback)
 download() {
-    url="$1"
-    dest="$2"
     if command -v curl >/dev/null 2>&1; then
-        curl -fsSL --retry 3 --retry-delay 2 -o "${dest}" "${url}"
+        curl -fsSL --retry 3 --retry-delay 2 -o "$2" "$1"
     elif command -v wget >/dev/null 2>&1; then
-        wget -q -O "${dest}" "${url}"
+        wget -q -O "$2" "$1"
     else
         die "Neither curl nor wget found. Please install one of them."
     fi
