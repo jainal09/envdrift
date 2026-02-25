@@ -266,7 +266,7 @@ function New-Wrappers {
     @"
 @echo off
 "$venvEnvdrift" %*
-"@ | Set-Content -Path $cmdWrapper -Encoding UTF8
+"@ | Set-Content -Path $cmdWrapper -Encoding ASCII
     Write-Ok "Created CMD wrapper at $cmdWrapper"
 
     # PowerShell wrapper

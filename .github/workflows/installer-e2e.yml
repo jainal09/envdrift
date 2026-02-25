@@ -102,7 +102,8 @@ jobs:
           }
 
       - name: Verify help command
-        run: & "$HOME\.envdrift\bin\envdrift.ps1" --help
+        run: |
+          & "$HOME\.envdrift\bin\envdrift.ps1" --help
 
       - name: Idempotency – re-run installer
         run: |
@@ -110,7 +111,8 @@ jobs:
           & .\install.ps1
 
       - name: Uninstall
-        run: & .\install.ps1 -Uninstall
+        run: |
+          & .\install.ps1 -Uninstall
 
       - name: Verify cleanup
         run: |
