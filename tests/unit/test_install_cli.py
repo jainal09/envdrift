@@ -219,6 +219,13 @@ class TestInstallAgentCommand:
                 return_value=tmp_path / "envdrift-agent",
             ),
             patch(
+                "envdrift.cli_commands.install._resolve_agent_release_url",
+                return_value=(
+                    "https://github.com/jainal09/envdrift/releases/download/agent-v1.0.0",
+                    "https://github.com/jainal09/envdrift/releases/download/agent-v1.0.0/checksums.txt",
+                ),
+            ),
+            patch(
                 "urllib.request.urlopen",
                 side_effect=urllib.error.HTTPError(
                     url="", code=404, msg="Not Found", hdrs={}, fp=None
@@ -240,6 +247,13 @@ class TestInstallAgentCommand:
             patch(
                 "envdrift.cli_commands.install._get_install_path",
                 return_value=tmp_path / "envdrift-agent",
+            ),
+            patch(
+                "envdrift.cli_commands.install._resolve_agent_release_url",
+                return_value=(
+                    "https://github.com/jainal09/envdrift/releases/download/agent-v1.0.0",
+                    "https://github.com/jainal09/envdrift/releases/download/agent-v1.0.0/checksums.txt",
+                ),
             ),
             patch(
                 "urllib.request.urlopen",
