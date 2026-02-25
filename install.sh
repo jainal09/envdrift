@@ -300,7 +300,21 @@ install_agent() {
     if [ -n "${AGENT_VERSION}" ]; then
         base_url="https://github.com/${GITHUB_REPO}/releases/download/agent-v${AGENT_VERSION}"
     else
-        base_url="https://github.com/${GITHUB_REPO}/releases/latest/download"
+        # /releases/latest may point to a non-agent release (e.g. vscode extension).
+        # Query GitHub API for the latest agent-v* tag instead.
+        api_url="https://api.github.com/repos/${GITHUB_REPO}/releases"
+        tmp_releases="$(mktemp)"
+        add_tmp "${tmp_releases}"
+        if download "${api_url}" "${tmp_releases}" 2>/dev/null; then
+            tag="$(grep -o '"tag_name"[[:space:]]*:[[:space:]]*"agent-v[^"]*"' "${tmp_releases}" | head -1 | sed 's/.*"agent-v\([^"]*\)".*/\1/')"
+        fi
+        if [ -n "${tag:-}" ]; then
+            base_url="https://github.com/${GITHUB_REPO}/releases/download/agent-v${tag}"
+        else
+            warn "Could not determine latest agent version from GitHub API"
+            warn "The agent can be installed later with: envdrift install agent"
+            return
+        fi
     fi
 
     binary_name="envdrift-agent-${PLATFORM}"
