@@ -123,7 +123,9 @@ export async function encryptFile(filePath: string): Promise<{ success: boolean;
     if (!envdriftInfo) {
         return {
             success: false,
-            message: 'envdrift not found. Install it: pip install envdrift',
+            message: process.platform === 'win32'
+                ? 'envdrift not found. Install it: irm https://raw.githubusercontent.com/jainal09/envdrift/main/install.ps1 | iex'
+                : 'envdrift not found. Install it: curl -sSL https://raw.githubusercontent.com/jainal09/envdrift/main/install.sh | sh',
         };
     }
 

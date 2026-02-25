@@ -188,12 +188,15 @@ export async function stopAgent(): Promise<boolean> {
  * Open installation instructions
  */
 export function showInstallInstructions(): void {
-    const message = 'EnvDrift Agent is not installed. Install it with: pip install envdrift && envdrift install agent';
+    const installCmd = process.platform === 'win32'
+        ? 'irm https://raw.githubusercontent.com/jainal09/envdrift/main/install.ps1 | iex'
+        : 'curl -sSL https://raw.githubusercontent.com/jainal09/envdrift/main/install.sh | sh';
+    const message = `EnvDrift Agent is not installed. Install it with: ${installCmd}`;
 
     vscode.window.showInformationMessage(message, 'Copy Command', 'Learn More')
         .then(selection => {
             if (selection === 'Copy Command') {
-                vscode.env.clipboard.writeText('pip install envdrift && envdrift install agent');
+                vscode.env.clipboard.writeText(installCmd);
                 vscode.window.showInformationMessage('Command copied to clipboard');
             } else if (selection === 'Learn More') {
                 vscode.env.openExternal(vscode.Uri.parse('https://github.com/jainal09/envdrift#installation'));
