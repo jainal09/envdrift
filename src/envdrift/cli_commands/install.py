@@ -53,7 +53,7 @@ def _resolve_agent_release_url() -> tuple[str, str]:
         GITHUB_API_RELEASES_URL,
         headers={"Accept": "application/vnd.github+json"},
     )
-    with urllib.request.urlopen(req, timeout=30) as resp:
+    with urllib.request.urlopen(req, timeout=30) as resp:  # nosec B310
         releases = json.loads(resp.read())
 
     for release in releases:
