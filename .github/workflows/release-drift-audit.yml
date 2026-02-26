@@ -1,0 +1,186 @@
+name: Release Drift Audit
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  audit-drift:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 2
+
+      - name: Audit for release drift
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const RELEASE_TYPES = ['feat', 'fix', 'perf', 'docs'];
+            const DRIFT_LABEL = 'release-drift';
+
+            // Component source patterns
+            const COMPONENTS = [
+              {
+                name: 'envdrift (Python)',
+                patterns: [/^src\/envdrift\/.*\.py$/],
+                excludes: [/test/, /__pycache__/],
+              },
+              {
+                name: 'envdrift-vscode',
+                patterns: [/^envdrift-vscode\/src\/.+/],
+                excludes: [/^envdrift-vscode\/src\/test\//],
+              },
+              {
+                name: 'envdrift-agent',
+                patterns: [
+                  /^envdrift-agent\/cmd\/.*\.go$/,
+                  /^envdrift-agent\/internal\/.*\.go$/,
+                ],
+                excludes: [/_test\.go$/],
+              },
+            ];
+
+            const commitMsg = context.payload.head_commit?.message || '';
+            const firstLine = commitMsg.split('\n')[0];
+            const sha = context.sha;
+            const shortSha = sha.substring(0, 7);
+
+            // Skip release-please's own commits
+            if (firstLine.startsWith('chore(main): release')) {
+              core.info('Skipping release-please commit');
+              return;
+            }
+
+            // Parse commit type
+            const typeMatch = firstLine.match(/^(\w+)(?:\(.+?\))?!?:/);
+            if (!typeMatch) {
+              core.info('Commit does not follow conventional commit format, skipping');
+              return;
+            }
+
+            const commitType = typeMatch[1].toLowerCase();
+
+            if (RELEASE_TYPES.includes(commitType)) {
+              core.info(`Commit type "${commitType}" triggers releases, no drift`);
+              return;
+            }
+
+            // Get changed files via git diff-tree
+            const { execSync } = require('child_process');
+            const diffOutput = execSync(
+              `git diff-tree --no-commit-id --name-only -r ${sha}`,
+              { encoding: 'utf-8' }
+            ).trim();
+
+            if (!diffOutput) {
+              core.info('No files changed');
+              return;
+            }
+
+            const files = diffOutput.split('\n');
+
+            // Check each component
+            const affected = [];
+            for (const component of COMPONENTS) {
+              const matched = files.filter(file => {
+                const matchesPattern = component.patterns.some(p => p.test(file));
+                const isExcluded = component.excludes.some(p => p.test(file));
+                return matchesPattern && !isExcluded;
+              });
+              if (matched.length > 0) {
+                affected.push({ name: component.name, files: matched });
+              }
+            }
+
+            if (affected.length === 0) {
+              core.info('No release-worthy source files in this commit');
+              return;
+            }
+
+            // Check for existing open issue with same commit SHA to avoid duplicates
+            const { data: existingIssues } = await github.rest.issues.listForRepo({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              labels: DRIFT_LABEL,
+              state: 'open',
+            });
+
+            const duplicate = existingIssues.find(i => i.body?.includes(sha));
+            if (duplicate) {
+              core.info(`Issue #${duplicate.number} already tracks this commit`);
+              return;
+            }
+
+            // Ensure label exists
+            try {
+              await github.rest.issues.getLabel({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                name: DRIFT_LABEL,
+              });
+            } catch {
+              await github.rest.issues.createLabel({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                name: DRIFT_LABEL,
+                color: 'e11d48',
+                description: 'Source files changed without triggering a release',
+              });
+            }
+
+            // Build issue body
+            const fileList = affected
+              .map(a => `**${a.name}**:\n${a.files.map(f => `- \`${f}\``).join('\n')}`)
+              .join('\n\n');
+
+            const componentNames = affected.map(a => a.name).join(', ');
+
+            const issueBody = `## Release Drift Detected
+
+A commit merged to \`main\` modifies source files in release-please components but uses \`${commitType}:\` which does not trigger a release.
+
+### Commit details
+
+- **SHA**: [\`${shortSha}\`](${context.payload.repository.html_url}/commit/${sha})
+- **Message**: ${firstLine}
+- **Author**: ${context.payload.head_commit?.author?.username || 'unknown'}
+- **Affected components**: ${componentNames}
+
+### Changed source files
+
+${fileList}
+
+### Resolution
+
+Choose one:
+
+1. **Cherry-pick with correct type** (recommended if changes should ship now):
+   \`\`\`bash
+   git cherry-pick ${shortSha}
+   # Amend the commit message to use fix: or feat:
+   git commit --amend -m "fix: <description>"
+   git push
+   \`\`\`
+
+2. **Create a follow-up PR** with a \`fix:\` or \`feat:\` title touching the same component to trigger release-please.
+
+3. **Close this issue** if the changes are intentional and do not need a release (e.g., test-only, comments, logging).
+
+---
+*Created by the release-drift-audit workflow.*`;
+
+            const issue = await github.rest.issues.create({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              title: `Release drift: \`${commitType}:\` commit modified ${componentNames} source files`,
+              body: issueBody,
+              labels: [DRIFT_LABEL],
+            });
+
+            core.warning(`Release drift detected! Created issue #${issue.data.number}`);
