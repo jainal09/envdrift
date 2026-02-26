@@ -15,7 +15,15 @@ Automatically encrypt `.env` files when you close them in VS Code.
 [envdrift](https://github.com/jainal09/envdrift) must be installed:
 
 ```bash
-pip install envdrift
+# macOS / Linux
+curl -sSL https://raw.githubusercontent.com/jainal09/envdrift/main/install.sh | sh
+
+# Windows (PowerShell)
+irm https://raw.githubusercontent.com/jainal09/envdrift/main/install.ps1 | iex
+
+# Or download and inspect first:
+# curl -sSL https://raw.githubusercontent.com/jainal09/envdrift/main/install.sh -o install.sh
+# less install.sh && sh install.sh
 ```
 
 ## Quick Start
