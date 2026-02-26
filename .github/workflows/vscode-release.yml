@@ -130,7 +130,7 @@ jobs:
 
             ### Requirements
             - VS Code 1.85.0 or higher
-            - `envdrift` Python package installed (`pip install envdrift`)
+            - `envdrift` installed via the [universal installer](https://github.com/jainal09/envdrift#installation)
           files: |
             release/*.vsix
           draft: false
