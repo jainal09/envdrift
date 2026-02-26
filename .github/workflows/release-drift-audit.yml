@@ -18,7 +18,7 @@ jobs:
           fetch-depth: 2
 
       - name: Audit for release drift
-        uses: actions/github-script@v7
+        uses: actions/github-script@v8
         with:
           script: |
             const RELEASE_TYPES = ['feat', 'fix', 'perf', 'docs'];
@@ -71,10 +71,10 @@ jobs:
               return;
             }
 
-            // Get changed files via git diff-tree
+            // Get changed files via git diff-tree (--cc handles merge commits)
             const { execSync } = require('child_process');
             const diffOutput = execSync(
-              `git diff-tree --no-commit-id --name-only -r ${sha}`,
+              `git diff-tree --no-commit-id --name-only -r --cc ${sha}`,
               { encoding: 'utf-8' }
             ).trim();
 
@@ -141,39 +141,42 @@ jobs:
 
             const componentNames = affected.map(a => a.name).join(', ');
 
-            const issueBody = `## Release Drift Detected
-
-A commit merged to \`main\` modifies source files in release-please components but uses \`${commitType}:\` which does not trigger a release.
-
-### Commit details
-
-- **SHA**: [\`${shortSha}\`](${context.payload.repository.html_url}/commit/${sha})
-- **Message**: ${firstLine}
-- **Author**: ${context.payload.head_commit?.author?.username || 'unknown'}
-- **Affected components**: ${componentNames}
-
-### Changed source files
-
-${fileList}
-
-### Resolution
-
-Choose one:
-
-1. **Cherry-pick with correct type** (recommended if changes should ship now):
-   \`\`\`bash
-   git cherry-pick ${shortSha}
-   # Amend the commit message to use fix: or feat:
-   git commit --amend -m "fix: <description>"
-   git push
-   \`\`\`
-
-2. **Create a follow-up PR** with a \`fix:\` or \`feat:\` title touching the same component to trigger release-please.
-
-3. **Close this issue** if the changes are intentional and do not need a release (e.g., test-only, comments, logging).
-
----
-*Created by the release-drift-audit workflow.*`;
+            const repoUrl = context.payload.repository.html_url;
+            const author = context.payload.head_commit?.author?.username || 'unknown';
+            const issueBody = [
+              '## Release Drift Detected',
+              '',
+              `A commit merged to \`main\` modifies source files in release-please components but uses \`${commitType}:\` which does not trigger a release.`,
+              '',
+              '### Commit details',
+              '',
+              `- **SHA**: [\`${shortSha}\`](${repoUrl}/commit/${sha})`,
+              `- **Message**: ${firstLine}`,
+              `- **Author**: ${author}`,
+              `- **Affected components**: ${componentNames}`,
+              '',
+              '### Changed source files',
+              '',
+              fileList,
+              '',
+              '### Resolution',
+              '',
+              'Choose one:',
+              '',
+              '1. **Create a release-triggering commit** (recommended if changes should ship now):',
+              '   ```bash',
+              '   # Empty commit that triggers release-please for the affected component',
+              '   git commit --allow-empty -m "fix: trigger release for missed source changes"',
+              '   git push',
+              '   ```',
+              '',
+              '2. **Create a follow-up PR** with a `fix:` or `feat:` title touching the same component to trigger release-please.',
+              '',
+              '3. **Close this issue** if the changes are intentional and do not need a release (e.g., test-only, comments, logging).',
+              '',
+              '---',
+              '*Created by the release-drift-audit workflow.*',
+            ].join('\n');
 
             const issue = await github.rest.issues.create({
               owner: context.repo.owner,

@@ -19,7 +19,7 @@ jobs:
       github.actor != 'dependabot[bot]'
     steps:
       - name: Check for release drift
-        uses: actions/github-script@v7
+        uses: actions/github-script@v8
         with:
           script: |
             const COMMENT_MARKER = '<!-- release-drift-check -->';
@@ -130,7 +130,13 @@ jobs:
               .map(a => `**${a.name}**:\n${a.files.map(f => `- \`${f}\``).join('\n')}`)
               .join('\n\n');
 
-            const suggestedTitle = title.replace(/^(\w+)/, 'fix');
+            // Build context-aware suggested title with scope if single component affected
+            const scope = affected.length === 1
+              ? affected[0].name.replace(/\s*\(.+\)/, '').toLowerCase()
+              : null;
+            const suggestedTitle = scope && !title.match(/^\w+\(.+?\)/)
+              ? title.replace(/^(\w+)/, `fix(${scope})`)
+              : title.replace(/^(\w+)/, 'fix');
 
             const body = `${COMMENT_MARKER}
             ## :warning: Release Drift Detected
