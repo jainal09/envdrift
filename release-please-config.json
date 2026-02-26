@@ -1,13 +1,7 @@
 {
   "$schema": "https://raw.githubusercontent.com/googleapis/release-please/main/schemas/config.json",
   "separate-pull-requests": true,
-  "plugins": [
-    {
-      "type": "linked-versions",
-      "groupName": "envdrift",
-      "components": ["envdrift"]
-    }
-  ],
+  "group-pull-request-title-pattern": "chore${scope}: release ${component} libraries",
   "packages": {
     ".": {
       "release-type": "python",
