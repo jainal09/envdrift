@@ -47,24 +47,27 @@ jobs:
             ];
 
             const commitMsg = context.payload.head_commit?.message || '';
-            const firstLine = commitMsg.split('\n')[0];
+            const commitLines = commitMsg.split('\n');
             const sha = context.sha;
             const shortSha = sha.substring(0, 7);
 
             // Skip release-please's own commits
-            if (firstLine.startsWith('chore(main): release')) {
+            if (commitLines[0].startsWith('chore(main): release')) {
               core.info('Skipping release-please commit');
               return;
             }
 
-            // Parse commit type
-            const typeMatch = firstLine.match(/^(\w+)(?:\(.+?\))?!?:/);
-            if (!typeMatch) {
+            // Parse commit type — scan all lines to handle merge commits
+            // whose first line is "Merge pull request #N from ..."
+            const conventionalRe = /^(\w+)(?:\(.+?\))?!?:/;
+            const conventionalLine = commitLines.find(l => conventionalRe.test(l));
+            if (!conventionalLine) {
               core.info('Commit does not follow conventional commit format, skipping');
               return;
             }
+            const firstLine = conventionalLine;
 
-            const commitType = typeMatch[1].toLowerCase();
+            const commitType = firstLine.match(conventionalRe)[1].toLowerCase();
 
             if (RELEASE_TYPES.includes(commitType)) {
               core.info(`Commit type "${commitType}" triggers releases, no drift`);
@@ -104,12 +107,16 @@ jobs:
             }
 
             // Check for existing open issue with same commit SHA to avoid duplicates
-            const { data: existingIssues } = await github.rest.issues.listForRepo({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              labels: DRIFT_LABEL,
-              state: 'open',
-            });
+            const existingIssues = await github.paginate(
+              github.rest.issues.listForRepo,
+              {
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                labels: DRIFT_LABEL,
+                state: 'open',
+                per_page: 100,
+              }
+            );
 
             const duplicate = existingIssues.find(i => i.body?.includes(sha));
             if (duplicate) {

@@ -47,6 +47,16 @@ jobs:
               },
             ];
 
+            // Helper: paginate all PR comments to handle PRs with 30+ comments
+            async function listAllComments() {
+              return github.paginate(github.rest.issues.listComments, {
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.issue.number,
+                per_page: 100,
+              });
+            }
+
             // Parse commit type from PR title
             const title = context.payload.pull_request.title;
             const typeMatch = title.match(/^(\w+)(?:\(.+?\))?!?:/);
@@ -60,11 +70,7 @@ jobs:
             // If the commit type already triggers a release, clean up any stale comment and exit
             if (RELEASE_TYPES.includes(commitType)) {
               core.info(`Commit type "${commitType}" triggers releases, checking for stale comments`);
-              const { data: comments } = await github.rest.issues.listComments({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                issue_number: context.issue.number,
-              });
+              const comments = await listAllComments();
               const stale = comments.find(c => c.body.includes(COMMENT_MARKER));
               if (stale) {
                 await github.rest.issues.deleteComment({
@@ -109,11 +115,7 @@ jobs:
             if (affected.length === 0) {
               core.info('No release-worthy source files changed, skipping');
               // Clean up stale comment if files were removed
-              const { data: comments } = await github.rest.issues.listComments({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                issue_number: context.issue.number,
-              });
+              const comments = await listAllComments();
               const stale = comments.find(c => c.body.includes(COMMENT_MARKER));
               if (stale) {
                 await github.rest.issues.deleteComment({
@@ -166,11 +168,7 @@ jobs:
             *This comment is automatically managed by the release-drift-check workflow.*`.replace(/^            /gm, '');
 
             // Find existing comment or create new one
-            const { data: comments } = await github.rest.issues.listComments({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              issue_number: context.issue.number,
-            });
+            const comments = await listAllComments();
             const existing = comments.find(c => c.body.includes(COMMENT_MARKER));
 
             if (existing) {
