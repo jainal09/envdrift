@@ -1,0 +1,192 @@
+name: Release Drift Check
+
+on:
+  pull_request:
+    types: [opened, edited, synchronize, reopened, ready_for_review]
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  check-drift:
+    runs-on: ubuntu-latest
+    # Skip draft PRs, release-please PRs, and bot PRs
+    if: |
+      !github.event.pull_request.draft &&
+      !startsWith(github.head_ref, 'release-please--') &&
+      github.actor != 'renovate[bot]' &&
+      github.actor != 'dependabot[bot]'
+    steps:
+      - name: Check for release drift
+        uses: actions/github-script@v8
+        with:
+          script: |
+            const COMMENT_MARKER = '<!-- release-drift-check -->';
+            const RELEASE_TYPES = ['feat', 'fix', 'perf', 'docs'];
+
+            // Component source patterns (files that should trigger releases)
+            const COMPONENTS = [
+              {
+                name: 'envdrift (Python)',
+                patterns: [/^src\/envdrift\/.*\.py$/],
+                excludes: [/test/, /__pycache__/],
+              },
+              {
+                name: 'envdrift-vscode',
+                patterns: [/^envdrift-vscode\/src\/.+/],
+                excludes: [/^envdrift-vscode\/src\/test\//],
+              },
+              {
+                name: 'envdrift-agent',
+                patterns: [
+                  /^envdrift-agent\/cmd\/.*\.go$/,
+                  /^envdrift-agent\/internal\/.*\.go$/,
+                ],
+                excludes: [/_test\.go$/],
+              },
+            ];
+
+            // Helper: paginate all PR comments to handle PRs with 30+ comments
+            async function listAllComments() {
+              return github.paginate(github.rest.issues.listComments, {
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.issue.number,
+                per_page: 100,
+              });
+            }
+
+            // Parse commit type from PR title
+            const title = context.payload.pull_request.title;
+            const typeMatch = title.match(/^(\w+)(?:\(.+?\))?!?:/);
+            if (!typeMatch) {
+              core.info('PR title does not follow conventional commit format, skipping');
+              return;
+            }
+
+            const commitType = typeMatch[1].toLowerCase();
+
+            // If the commit type already triggers a release, clean up any stale comment and exit
+            if (RELEASE_TYPES.includes(commitType)) {
+              core.info(`Commit type "${commitType}" triggers releases, checking for stale comments`);
+              const comments = await listAllComments();
+              const stale = comments.find(c => c.body.includes(COMMENT_MARKER));
+              if (stale) {
+                await github.rest.issues.deleteComment({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  comment_id: stale.id,
+                });
+                core.info('Deleted stale release-drift comment');
+              }
+              return;
+            }
+
+            // Fetch changed files
+            const files = [];
+            let page = 1;
+            while (true) {
+              const { data } = await github.rest.pulls.listFiles({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                pull_number: context.issue.number,
+                per_page: 100,
+                page,
+              });
+              files.push(...data.map(f => f.filename));
+              if (data.length < 100) break;
+              page++;
+            }
+
+            // Check each component for source changes
+            const affected = [];
+            for (const component of COMPONENTS) {
+              const matched = files.filter(file => {
+                const matchesPattern = component.patterns.some(p => p.test(file));
+                const isExcluded = component.excludes.some(p => p.test(file));
+                return matchesPattern && !isExcluded;
+              });
+              if (matched.length > 0) {
+                affected.push({ name: component.name, files: matched });
+              }
+            }
+
+            if (affected.length === 0) {
+              core.info('No release-worthy source files changed, skipping');
+              // Clean up stale comment if files were removed
+              const comments = await listAllComments();
+              const stale = comments.find(c => c.body.includes(COMMENT_MARKER));
+              if (stale) {
+                await github.rest.issues.deleteComment({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  comment_id: stale.id,
+                });
+              }
+              return;
+            }
+
+            // Build warning message
+            const fileList = affected
+              .map(a => `**${a.name}**:\n${a.files.map(f => `- \`${f}\``).join('\n')}`)
+              .join('\n\n');
+
+            // Build context-aware suggested title with scope if single component affected
+            const scope = affected.length === 1
+              ? affected[0].name.replace(/\s*\(.+\)/, '').toLowerCase()
+              : null;
+            const suggestedTitle = scope && !title.match(/^\w+\(.+?\)/)
+              ? title.replace(/^(\w+)/, `fix(${scope})`)
+              : title.replace(/^(\w+)/, 'fix');
+
+            const body = `${COMMENT_MARKER}
+            ## :warning: Release Drift Detected
+
+            This PR modifies source files in release-please components, but the PR title uses \`${commitType}:\` which **will not trigger a release**.
+
+            ### Affected components and files
+
+            ${fileList}
+
+            ### How to fix
+
+            If these changes should be released, rename the PR with a release-triggering type:
+
+            | Type | When to use |
+            |------|-------------|
+            | \`fix:\` | Bug fixes |
+            | \`feat:\` | New features |
+            | \`perf:\` | Performance improvements |
+            | \`docs:\` | Documentation changes |
+
+            **Suggested title**: \`${suggestedTitle}\`
+
+            If this is intentional (e.g., test-only changes, CI config in source dirs), you can ignore this warning.
+
+            ---
+            *This comment is automatically managed by the release-drift-check workflow.*`.replace(/^            /gm, '');
+
+            // Find existing comment or create new one
+            const comments = await listAllComments();
+            const existing = comments.find(c => c.body.includes(COMMENT_MARKER));
+
+            if (existing) {
+              await github.rest.issues.updateComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                comment_id: existing.id,
+                body,
+              });
+              core.info('Updated existing release-drift comment');
+            } else {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.issue.number,
+                body,
+              });
+              core.info('Created release-drift warning comment');
+            }
+
+            core.warning('Release drift detected: source files changed with non-release commit type');
