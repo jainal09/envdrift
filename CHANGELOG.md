@@ -1,5 +1,20 @@
 # Changelog
 
+## [10.9.0](https://github.com/jainal09/envdrift/compare/v10.8.0...v10.9.0) (2026-02-28)
+
+
+### Features
+
+* add universal installer for macOS, Linux, and Windows ([#156](https://github.com/jainal09/envdrift/issues/156)) ([3b70431](https://github.com/jainal09/envdrift/commit/3b704319959c8e289063b096d30011aee6bc9a1e))
+
+
+### Bug Fixes
+
+* prevent download() from clobbering caller variables in install.sh ([#159](https://github.com/jainal09/envdrift/issues/159)) ([bb76c56](https://github.com/jainal09/envdrift/commit/bb76c56281a30ded51ae1dd33ad47945069162cd))
+* **release:** unblock release-please from legacy grouped PR title ([#162](https://github.com/jainal09/envdrift/issues/162)) ([8c0fb2d](https://github.com/jainal09/envdrift/commit/8c0fb2d73f0800a06a94104871609638142bcd97))
+* resolve agent download URL from GitHub API instead of /releases/latest ([#158](https://github.com/jainal09/envdrift/issues/158)) ([47f862b](https://github.com/jainal09/envdrift/commit/47f862be7d0a9ef2e8c645b511b6dce5a520d614))
+* **vscode:** update stale pip install references to universal installer ([#161](https://github.com/jainal09/envdrift/issues/161)) ([078eb5f](https://github.com/jainal09/envdrift/commit/078eb5f72c5aac05c7566a62d6947cb9203d2567))
+
 ## [10.8.0](https://github.com/jainal09/envdrift/compare/v10.7.0...v10.8.0) (2026-02-21)
 
 
