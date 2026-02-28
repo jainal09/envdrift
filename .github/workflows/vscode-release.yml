@@ -63,7 +63,7 @@ jobs:
         run: npx vsce package --out envdrift-${{ steps.version.outputs.VERSION }}.vsix
 
       - name: Upload artifact
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: envdrift-vscode-${{ steps.version.outputs.VERSION }}.vsix
           path: envdrift-vscode/envdrift-${{ steps.version.outputs.VERSION }}.vsix
@@ -94,7 +94,7 @@ jobs:
           echo "TAG=$TAG" >> $GITHUB_OUTPUT
 
       - name: Download artifact
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@v8
         with:
           name: envdrift-vscode-${{ steps.version.outputs.VERSION }}.vsix
           path: release
@@ -171,7 +171,7 @@ jobs:
           echo "VERSION=$VERSION" >> $GITHUB_OUTPUT
 
       - name: Download artifact
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@v8
         with:
           name: envdrift-vscode-${{ steps.version.outputs.VERSION }}.vsix
           path: release
