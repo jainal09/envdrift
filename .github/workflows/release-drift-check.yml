@@ -19,7 +19,7 @@ jobs:
       github.actor != 'dependabot[bot]'
     steps:
       - name: Check for release drift
-        uses: actions/github-script@v8
+        uses: actions/github-script@v9
         with:
           script: |
             const COMMENT_MARKER = '<!-- release-drift-check -->';

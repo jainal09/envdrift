@@ -26,7 +26,7 @@ jobs:
     steps:
       - name: Get PR from workflow run
         id: get-pr
-        uses: actions/github-script@v8
+        uses: actions/github-script@v9
         with:
           script: |
             if (context.eventName === 'workflow_dispatch') {
@@ -96,7 +96,7 @@ jobs:
 
       - name: Auto-merge minor version bump
         if: steps.get-pr.outputs.result != 'null' && fromJSON(steps.get-pr.outputs.result).shouldAutoMerge
-        uses: actions/github-script@v8
+        uses: actions/github-script@v9
         with:
           script: |
             const prData = ${{ steps.get-pr.outputs.result }};
@@ -245,7 +245,7 @@ jobs:
 
       - name: Comment on major version bump
         if: steps.get-pr.outputs.result != 'null' && fromJSON(steps.get-pr.outputs.result).isMajorBump
-        uses: actions/github-script@v8
+        uses: actions/github-script@v9
         with:
           script: |
             const prData = ${{ steps.get-pr.outputs.result }};

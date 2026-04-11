@@ -18,7 +18,7 @@ jobs:
           fetch-depth: 2
 
       - name: Audit for release drift
-        uses: actions/github-script@v8
+        uses: actions/github-script@v9
         with:
           script: |
             const RELEASE_TYPES = ['feat', 'fix', 'perf', 'docs'];
