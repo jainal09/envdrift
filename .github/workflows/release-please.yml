@@ -24,7 +24,7 @@ jobs:
       vscode--release_created: ${{ steps.release.outputs['envdrift-vscode--release_created'] }}
       vscode--tag_name: ${{ steps.release.outputs['envdrift-vscode--tag_name'] }}
     steps:
-      - uses: googleapis/release-please-action@v4
+      - uses: googleapis/release-please-action@v5
         id: release
         with:
           token: ${{ secrets.RELEASE_PLEASE_TOKEN }}
