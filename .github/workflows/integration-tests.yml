@@ -59,7 +59,7 @@ jobs:
           --health-start-period=10s
 
       vault:
-        image: hashicorp/vault:1.21
+        image: hashicorp/vault:2.0
         ports:
           - 8200:8200
         env:
