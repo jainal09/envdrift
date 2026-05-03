@@ -1,5 +1,12 @@
 # Changelog
 
+## [10.9.2](https://github.com/jainal09/envdrift/compare/v10.9.1...v10.9.2) (2026-05-03)
+
+
+### Bug Fixes
+
+* **deps:** update module github.com/pelletier/go-toml/v2 to v2.3.1 ([#222](https://github.com/jainal09/envdrift/issues/222)) ([13e19db](https://github.com/jainal09/envdrift/commit/13e19dbb25075bc8e8afa0215d22a19a529fffe0))
+
 ## [10.9.1](https://github.com/jainal09/envdrift/compare/v10.9.0...v10.9.1) (2026-04-05)
 
 
