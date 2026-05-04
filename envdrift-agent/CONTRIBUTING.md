@@ -6,7 +6,7 @@ Thank you for your interest in contributing to EnvDrift Agent!
 
 ### Prerequisites
 
-- Go 1.22+
+- Go 1.23+
 - Make
 - (Optional) golangci-lint for linting
 
