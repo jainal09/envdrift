@@ -1,5 +1,12 @@
 # Changelog
 
+## [10.9.3](https://github.com/jainal09/envdrift/compare/v10.9.2...v10.9.3) (2026-05-05)
+
+
+### Bug Fixes
+
+* **deps:** update module github.com/fsnotify/fsnotify to v1.10.0 ([#227](https://github.com/jainal09/envdrift/issues/227)) ([a25e627](https://github.com/jainal09/envdrift/commit/a25e627914c60cd8efd9dcd3041a337281cdf6ab))
+
 ## [10.9.2](https://github.com/jainal09/envdrift/compare/v10.9.1...v10.9.2) (2026-05-03)
 
 
