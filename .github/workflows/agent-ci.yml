@@ -11,6 +11,7 @@ on:
     paths:
       - 'envdrift-agent/**'
       - '.github/workflows/agent-ci.yml'
+  workflow_dispatch:
 
 permissions:
   contents: read
