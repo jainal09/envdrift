@@ -8,6 +8,10 @@
       "package-name": "envdrift",
       "component": "envdrift",
       "changelog-path": "CHANGELOG.md",
+      "exclude-paths": [
+        "envdrift-agent",
+        "envdrift-vscode"
+      ],
       "include-component-in-tag": false,
       "bump-minor-pre-major": true,
       "bump-patch-for-minor-pre-major": true,
