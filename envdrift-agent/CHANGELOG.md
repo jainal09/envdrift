@@ -5,6 +5,13 @@ All notable changes to the EnvDrift Agent will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.4](https://github.com/jainal09/envdrift/compare/agent-v1.0.3...agent-v1.0.4) (2026-05-09)
+
+
+### Bug Fixes
+
+* **deps:** update module github.com/fsnotify/fsnotify to v1.10.1 ([#237](https://github.com/jainal09/envdrift/issues/237)) ([13017d1](https://github.com/jainal09/envdrift/commit/13017d109a4181745e9eaf8df690853d114367da))
+
 ## [1.0.3](https://github.com/jainal09/envdrift/compare/agent-v1.0.2...agent-v1.0.3) (2026-05-05)
 
 
