@@ -287,6 +287,14 @@ class TestInstallAgentCommand:
                 "envdrift.cli_commands.install._download_binary",
                 return_value=True,
             ),
+            patch(
+                "envdrift.cli_commands.install._resolve_agent_release_url",
+                return_value=(
+                    "https://github.com/jainal09/envdrift/releases/download/agent-v1.0.0",
+                    "https://github.com/jainal09/envdrift/releases/download/agent-v1.0.0/checksums.txt",
+                ),
+            ),
+            patch("envdrift.cli_commands.install._verify_checksum", return_value=True),
             patch("subprocess.run", return_value=version_result),
             patch("envdrift.config.find_config", return_value=None),
         ):
