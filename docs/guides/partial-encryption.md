@@ -2,6 +2,17 @@
 
 ## Overview
 
+Partial encryption has two modes depending on how your project is structured:
+
+| Mode | Use when… |
+|------|-----------|
+| **Combine mode** (default) | You want a single merged `.env` file for apps. envdrift merges a plaintext `.clear` file and an encrypted `.secret` file into one output file. |
+| **Secrets-only mode** | Your project already separates configs and secrets into distinct directories. envdrift encrypts/decrypts the secrets directory in place — it has zero awareness of your configs directory and produces no combined output. |
+
+---
+
+## Combine Mode
+
 Partial encryption allows you to separate cleartext (non-sensitive) variables from
 encrypted (sensitive) variables while maintaining a single combined file for apps.
 
@@ -198,6 +209,94 @@ git commit -m "Migrate to partial encryption"
 - ✅ **Run `push` before committing** to ensure combined file is up-to-date
 - ✅ **Run `pull-partial` after pulling** to decrypt secret files
 - ✅ **Use version control** to track changes to cleartext vars
+
+---
+
+## Secrets-Only Mode
+
+Use this mode when your application already keeps plaintext config and secrets in
+**separate directories** and you simply want envdrift to encrypt/decrypt the secrets
+directory in place. There is no combine step and no merged output file — envdrift
+never reads or touches your configs directory at all.
+
+### File Structure
+
+```text
+project/
+├── configs/                  ← plain text, never touched by envdrift
+│   ├── .env.app
+│   └── .env.logging
+└── secrets/
+    └── production/           ← envdrift only operates here
+        ├── .env.api          ← encrypted in place on push
+        └── .env.db           ← encrypted in place on push
+```
+
+### Configuration
+
+```toml
+[partial_encryption]
+enabled = true
+
+[[partial_encryption.environments]]
+name = "production"
+secrets_only = true
+secrets_dir = "secrets/production/"
+pattern = ".env*"          # optional glob, default ".env*"
+```
+
+`pattern` is a standard glob applied inside `secrets_dir`. Only files matching it
+are encrypted/decrypted; everything else in the directory is left untouched.
+
+### Workflow
+
+#### Setup (first time)
+
+```bash
+# Encrypt all secret files in place
+envdrift push --env production
+
+# Commit the encrypted files
+git add secrets/production/
+git commit -m "Encrypt production secrets"
+```
+
+#### Daily development
+
+```bash
+# 1. Decrypt for editing
+envdrift pull-partial --env production
+
+# 2. Edit secret files directly
+vim secrets/production/.env.api
+vim secrets/production/.env.db
+
+# 3. Re-encrypt before committing
+envdrift push --env production
+
+# 4. Commit
+git add secrets/production/
+git commit -m "Update production secrets"
+```
+
+### Git Setup
+
+Only the secrets directory needs gitignore consideration.
+The configs directory is committed as-is since it is never modified by envdrift.
+
+```gitignore
+# Optionally ignore decrypted backups if your editor creates them
+secrets/**/*.bak
+```
+
+### Benefits
+
+1. ✅ **Zero impact on configs** — envdrift never reads or writes your configs directory
+2. ✅ **No merge step** — no generated combined file to manage
+3. ✅ **Directory-level operation** — one config entry handles all files in `secrets_dir`
+4. ✅ **Idempotent** — already-encrypted files are skipped on push; already-decrypted files are skipped on pull
+
+---
 
 ## Alternative: Using `lock --all`
 
