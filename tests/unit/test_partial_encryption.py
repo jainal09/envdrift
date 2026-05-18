@@ -347,6 +347,44 @@ def test_pull_secrets_only_raises_on_decrypt_failure(secrets_only_config, secret
             pull_secrets_only(secrets_only_config)
 
 
+def test_push_secrets_only_raises_when_dir_empty():
+    """Empty secrets_dir must error — never fall back to the working directory."""
+    config = PartialEncryptionEnvironmentConfig(
+        name="prod",
+        secrets_only=True,
+        secrets_dir="",
+        pattern=".env*",
+    )
+    with pytest.raises(PartialEncryptionError, match="secrets_dir must be set"):
+        push_secrets_only(config)
+
+
+def test_pull_secrets_only_raises_when_dir_empty():
+    """Empty secrets_dir must error — never fall back to the working directory."""
+    config = PartialEncryptionEnvironmentConfig(
+        name="prod",
+        secrets_only=True,
+        secrets_dir="   ",
+        pattern=".env*",
+    )
+    with pytest.raises(PartialEncryptionError, match="secrets_dir must be set"):
+        pull_secrets_only(config)
+
+
+def test_push_secrets_only_raises_when_path_is_file(tmp_path: Path):
+    """secrets_dir that points at a file (not a directory) must error."""
+    not_a_dir = tmp_path / "not-a-dir"
+    not_a_dir.write_text("oops")
+    config = PartialEncryptionEnvironmentConfig(
+        name="prod",
+        secrets_only=True,
+        secrets_dir=str(not_a_dir),
+        pattern=".env*",
+    )
+    with pytest.raises(PartialEncryptionError, match="not a directory"):
+        push_secrets_only(config)
+
+
 def test_secrets_only_respects_pattern(tmp_path: Path):
     """push_secrets_only only processes files matching the configured glob pattern."""
     sdir = tmp_path / "secrets"

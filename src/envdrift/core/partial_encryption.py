@@ -210,6 +210,20 @@ def push_partial_encryption(env_config: PartialEncryptionEnvironmentConfig) -> d
     return stats
 
 
+def _resolve_secrets_dir(env_config: PartialEncryptionEnvironmentConfig) -> Path:
+    # Guard against an empty secrets_dir, which Path() would normalise to the
+    # current working directory and silently process unrelated .env* files.
+    raw = env_config.secrets_dir.strip()
+    if not raw:
+        raise PartialEncryptionError(
+            f"secrets_dir must be set for secrets_only environment '{env_config.name}'"
+        )
+    secrets_dir = Path(raw)
+    if not secrets_dir.exists() or not secrets_dir.is_dir():
+        raise PartialEncryptionError(f"secrets_dir not found or not a directory: {secrets_dir}")
+    return secrets_dir
+
+
 def push_secrets_only(env_config: PartialEncryptionEnvironmentConfig) -> dict[str, int]:
     """
     Secrets-only push: encrypt all matching files in secrets_dir in place.
@@ -225,13 +239,12 @@ def push_secrets_only(env_config: PartialEncryptionEnvironmentConfig) -> dict[st
     Raises:
         PartialEncryptionError: If the secrets_dir does not exist or encryption fails
     """
-    secrets_dir = Path(env_config.secrets_dir)
-    if not secrets_dir.exists():
-        raise PartialEncryptionError(f"secrets_dir not found: {secrets_dir}")
+    secrets_dir = _resolve_secrets_dir(env_config)
 
     files = sorted(secrets_dir.glob(env_config.pattern))
     encrypted = 0
     already_encrypted = 0
+    dotenvx = DotenvxWrapper()
 
     for file in files:
         if not file.is_file():
@@ -239,7 +252,6 @@ def push_secrets_only(env_config: PartialEncryptionEnvironmentConfig) -> dict[st
         if is_file_encrypted(file):
             already_encrypted += 1
             continue
-        dotenvx = DotenvxWrapper()
         try:
             dotenvx.encrypt(file)
             encrypted += 1
@@ -264,13 +276,12 @@ def pull_secrets_only(env_config: PartialEncryptionEnvironmentConfig) -> dict[st
     Raises:
         PartialEncryptionError: If the secrets_dir does not exist or decryption fails
     """
-    secrets_dir = Path(env_config.secrets_dir)
-    if not secrets_dir.exists():
-        raise PartialEncryptionError(f"secrets_dir not found: {secrets_dir}")
+    secrets_dir = _resolve_secrets_dir(env_config)
 
     files = sorted(secrets_dir.glob(env_config.pattern))
     decrypted = 0
     already_decrypted = 0
+    dotenvx = DotenvxWrapper()
 
     for file in files:
         if not file.is_file():
@@ -278,7 +289,6 @@ def pull_secrets_only(env_config: PartialEncryptionEnvironmentConfig) -> dict[st
         if not is_file_encrypted(file):
             already_decrypted += 1
             continue
-        dotenvx = DotenvxWrapper()
         try:
             dotenvx.decrypt(file)
             decrypted += 1

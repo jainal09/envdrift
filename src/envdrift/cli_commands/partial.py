@@ -86,8 +86,10 @@ def push(
     console.print(f"[dim]Environments: {len(envs_to_process)}[/dim]")
     console.print()
 
-    total_encrypted = 0
-    total_combined = 0
+    processed = 0
+    combined_files = 0
+    total_encrypted_vars = 0
+    total_encrypted_files = 0
     errors = []
 
     for env_config in envs_to_process:
@@ -101,16 +103,17 @@ def push(
                     f"{env_config.secrets_dir} "
                     f"[dim]({stats['already_encrypted']} already encrypted)[/dim]"
                 )
-                total_combined += 1
-                total_encrypted += stats["encrypted"]
+                processed += 1
+                total_encrypted_files += stats["encrypted"]
             else:
                 stats = push_partial_encryption(env_config)
                 console.print(
                     f"  [green]✓[/green] Generated {env_config.combined_file} "
                     f"[dim]({stats['clear_lines']} clear + {stats['secret_vars']} encrypted)[/dim]"
                 )
-                total_combined += 1
-                total_encrypted += stats["secret_vars"]
+                processed += 1
+                combined_files += 1
+                total_encrypted_vars += stats["secret_vars"]
 
         except PartialEncryptionError as e:
             console.print(f"  [red]✗[/red] {e}")
@@ -121,10 +124,12 @@ def push(
 
     # Summary
     console.print()
-    summary_lines = [
-        f"Combined: {total_combined}/{len(envs_to_process)}",
-        f"Total encrypted vars: {total_encrypted}",
-    ]
+    summary_lines = [f"Processed: {processed}/{len(envs_to_process)}"]
+    if combined_files:
+        summary_lines.append(f"Combined files: {combined_files}")
+        summary_lines.append(f"Encrypted vars: {total_encrypted_vars}")
+    if total_encrypted_files:
+        summary_lines.append(f"Encrypted files (secrets-only): {total_encrypted_files}")
     if errors:
         summary_lines.append(f"Errors: {len(errors)}")
 
@@ -207,6 +212,7 @@ def pull_cmd(
         try:
             if env_config.secrets_only:
                 result = pull_secrets_only(env_config)
+                skipped_count += result["already_decrypted"]
                 if result["decrypted"]:
                     console.print(
                         f"  [green]✓[/green] Decrypted {result['decrypted']} file(s) in "
@@ -219,7 +225,6 @@ def pull_cmd(
                         f"  [dim]=[/dim] {env_config.secrets_dir} "
                         f"[dim](all {result['already_decrypted']} file(s) already decrypted)[/dim]"
                     )
-                    skipped_count += result["already_decrypted"]
             else:
                 was_decrypted = pull_partial_encryption(env_config)
                 if was_decrypted:

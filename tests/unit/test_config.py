@@ -650,3 +650,49 @@ notify = false
         assert config.guardian.enabled is True
         assert config.guardian.idle_timeout == "2m"
         assert config.guardian.notify is False
+
+
+class TestPartialEncryptionConfig:
+    """Tests for partial_encryption config validation in from_dict."""
+
+    def test_secrets_only_requires_secrets_dir(self):
+        """secrets_only=True without secrets_dir is rejected at config load."""
+        data = {
+            "partial_encryption": {
+                "enabled": True,
+                "environments": [{"name": "prod", "secrets_only": True}],
+            }
+        }
+        with pytest.raises(ValueError, match=r"secrets_dir is required"):
+            EnvdriftConfig.from_dict(data)
+
+    def test_combine_mode_requires_all_paths(self):
+        """Combine mode without clear_file/secret_file/combined_file is rejected."""
+        data = {
+            "partial_encryption": {
+                "enabled": True,
+                "environments": [{"name": "prod", "clear_file": ".env.prod.clear"}],
+            }
+        }
+        with pytest.raises(ValueError, match=r"missing required field"):
+            EnvdriftConfig.from_dict(data)
+
+    def test_secrets_only_loads_with_secrets_dir(self):
+        """Valid secrets_only environment loads cleanly."""
+        data = {
+            "partial_encryption": {
+                "enabled": True,
+                "environments": [
+                    {
+                        "name": "prod",
+                        "secrets_only": True,
+                        "secrets_dir": "secrets/prod/",
+                    }
+                ],
+            }
+        }
+        config = EnvdriftConfig.from_dict(data)
+        env = config.partial_encryption.environments[0]
+        assert env.secrets_only is True
+        assert env.secrets_dir == "secrets/prod/"
+        assert env.pattern == ".env*"
