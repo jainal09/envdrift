@@ -94,7 +94,7 @@ class TestSyncHelpers:
         warnings: list[str] = []
         monkeypatch.setattr(sync_module, "print_warning", lambda msg: warnings.append(msg))
 
-        assert sync_module._normalize_max_workers(cast(int, "bad")) is None
+        assert sync_module._normalize_max_workers(cast(Any, "bad")) is None
         assert sync_module._normalize_max_workers(True) is None
 
         assert any("Invalid max_workers value" in msg for msg in warnings)
