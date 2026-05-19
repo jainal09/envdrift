@@ -298,10 +298,27 @@ class TestDiffSchemaAwareNormalization:
         result = self._diff(
             tmp_path,
             'CORS_ORIGINS=["http://x", "http://y"]\n',
+            'CORS_ORIGINS=["http://x", "http://y"]\n',
+            self._schema(Schema),
+        )
+        # validate_strings parses both JSON strings into list[str] → equal.
+        assert result.changed_count == 0
+
+    def test_list_field_order_difference_still_reports_drift(self, tmp_path):
+        from pydantic_settings import BaseSettings, SettingsConfigDict
+
+        class Schema(BaseSettings):
+            model_config = SettingsConfigDict(extra="ignore")
+            CORS_ORIGINS: list[str]
+
+        result = self._diff(
+            tmp_path,
+            'CORS_ORIGINS=["http://x", "http://y"]\n',
             'CORS_ORIGINS=["http://y", "http://x"]\n',
             self._schema(Schema),
         )
-        # Same elements but Pydantic preserves order for list[str] → still drift.
+        # Pydantic preserves list order; universal-layer JSON fallback also
+        # sees ordered lists. Different order → still drift.
         assert result.changed_count == 1
 
     def test_schema_coercion_falls_back_when_validation_fails(self, tmp_path):
@@ -315,3 +332,46 @@ class TestDiffSchemaAwareNormalization:
         # and ultimately raw string compare. Different strings → CHANGED.
         result = self._diff(tmp_path, "PORT=abc\n", "PORT=def\n", self._schema(Schema))
         assert result.changed_count == 1
+
+    def test_str_field_still_runs_universal_normalization(self, tmp_path):
+        """A `str` field would round-trip through validate_strings unchanged,
+        but the universal layer must still collapse `foo ` vs `foo`."""
+        from pydantic_settings import BaseSettings, SettingsConfigDict
+
+        class Schema(BaseSettings):
+            model_config = SettingsConfigDict(extra="ignore")
+            DATABASE_URL: str
+
+        result = self._diff(
+            tmp_path,
+            'DATABASE_URL="foo "\n',
+            "DATABASE_URL=foo\n",
+            self._schema(Schema),
+        )
+        assert result.changed_count == 0
+
+    def test_str_field_bool_casing_still_normalized(self, tmp_path):
+        """A `str`-typed bool-looking value should still normalize under the
+        universal layer — schema coercion must not short-circuit it."""
+        from pydantic_settings import BaseSettings, SettingsConfigDict
+
+        class Schema(BaseSettings):
+            model_config = SettingsConfigDict(extra="ignore")
+            FLAG: str
+
+        result = self._diff(tmp_path, "FLAG=true\n", "FLAG=True\n", self._schema(Schema))
+        assert result.changed_count == 0
+
+    def test_any_field_skips_schema_coercion(self, tmp_path):
+        """`Any`-typed fields must skip schema coercion entirely (TypeAdapter(Any)
+        is an identity check) so the universal layer can normalize them."""
+        from typing import Any as AnyType
+
+        from pydantic_settings import BaseSettings, SettingsConfigDict
+
+        class Schema(BaseSettings):
+            model_config = SettingsConfigDict(extra="ignore")
+            DEBUG: AnyType = None
+
+        result = self._diff(tmp_path, "DEBUG=true\n", "DEBUG=True\n", self._schema(Schema))
+        assert result.changed_count == 0

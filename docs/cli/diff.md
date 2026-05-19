@@ -152,31 +152,30 @@ Output:
 
 ```json
 {
-  "env1_path": ".env.development",
-  "env2_path": ".env.production",
-  "has_drift": true,
-  "differences": [
-    {
-      "name": "DEBUG",
-      "diff_type": "changed",
-      "value1": "true",
-      "value2": "false",
-      "is_sensitive": false
-    },
-    {
-      "name": "SENTRY_DSN",
-      "diff_type": "added",
-      "value1": null,
-      "value2": "https://...",
-      "is_sensitive": true
-    }
-  ],
+  "env1": ".env.development",
+  "env2": ".env.production",
   "summary": {
     "added": 1,
     "removed": 1,
     "changed": 2,
-    "unchanged": 5
-  }
+    "has_drift": true
+  },
+  "differences": [
+    {
+      "name": "DEBUG",
+      "type": "changed",
+      "value_env1": "true",
+      "value_env2": "false",
+      "sensitive": false
+    },
+    {
+      "name": "SENTRY_DSN",
+      "type": "added",
+      "value_env1": null,
+      "value_env2": "https://...",
+      "sensitive": true
+    }
+  ]
 }
 ```
 

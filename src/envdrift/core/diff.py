@@ -226,21 +226,36 @@ class DiffEngine:
         if value1 is None or value2 is None:
             return value1 == value2
 
-        # Layer 2: schema-aware coercion via Pydantic.
-        if field_meta is not None and field_meta.field_type is not None:
+        # Schema-aware coercion via Pydantic, when the field's type carries
+        # meaningful semantics (skip `Any` / `None` — those just round-trip the
+        # raw string and would defeat the universal layer below). We use
+        # `validate_strings` rather than `validate_python` because env values
+        # arrive as raw strings: that's the Pydantic v2 API for env-source
+        # inputs and it parses JSON for list/dict/etc. types correctly.
+        # On success-and-equal we short-circuit; otherwise we fall through to
+        # the universal layer so `str` fields still benefit from whitespace
+        # and bool normalization.
+        if (
+            field_meta is not None
+            and field_meta.field_type is not None
+            and field_meta.field_type is not Any
+        ):
             try:
                 adapter = adapter_cache.get(field_meta.field_type)
                 if adapter is None:
                     adapter = TypeAdapter(field_meta.field_type)
                     adapter_cache[field_meta.field_type] = adapter
-                coerced1 = adapter.validate_python(value1)
-                coerced2 = adapter.validate_python(value2)
+                coerced1 = adapter.validate_strings(value1)
+                coerced2 = adapter.validate_strings(value2)
             except (ValidationError, TypeError, ValueError):
                 pass
             else:
-                return coerced1 == coerced2
+                if coerced1 == coerced2:
+                    return True
 
-        # Layer 1: universal normalization.
+        # Universal normalization fallback (also runs for `str` / `Any` /
+        # unknown-field cases): strip, then bool-alias truthiness, then
+        # JSON-or-Python-literal structural equality for list/dict values.
         stripped1 = value1.strip()
         stripped2 = value2.strip()
         if stripped1 == stripped2:
@@ -266,14 +281,19 @@ class DiffEngine:
 
     @staticmethod
     def _loose_parse(value: str) -> Any:
-        """Parse JSON-ish values, accepting both JSON and Python-literal quote styles."""
+        """Parse JSON-ish values, accepting both JSON and Python-literal quote styles.
+
+        Returns ``None`` for anything we can't safely parse — including
+        adversarial inputs that trip the recursion limit or run out of memory,
+        so a malformed `.env` value can never crash the diff.
+        """
         try:
             return json.loads(value)
-        except ValueError:
+        except (ValueError, RecursionError, MemoryError):
             pass
         try:
             return ast.literal_eval(value)
-        except (ValueError, SyntaxError):
+        except (ValueError, SyntaxError, RecursionError, MemoryError):
             return None
 
     def to_dict(self, result: DiffResult) -> dict:
