@@ -15,3 +15,7 @@ site/
 .pytest_cache/
 .ruff_cache/
 .git/
+
+# Ignore generated changelog (release-please emits single-line entries that
+# routinely exceed MD013's line-length limit; the file is bot-managed).
+CHANGELOG.md
