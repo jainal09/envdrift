@@ -230,6 +230,10 @@ def push_secrets_only(env_config: PartialEncryptionEnvironmentConfig) -> dict[st
 
     Does not touch any configs directory and does not produce a combined file.
 
+    Note:
+        ``pattern`` is applied via ``Path.glob`` and is non-recursive by default.
+        To include nested subdirectories, use a recursive glob like ``**/.env*``.
+
     Args:
         env_config: Environment configuration with secrets_only=True
 
@@ -266,6 +270,10 @@ def pull_secrets_only(env_config: PartialEncryptionEnvironmentConfig) -> dict[st
     Secrets-only pull: decrypt all matching files in secrets_dir in place.
 
     Does not touch any configs directory.
+
+    Note:
+        ``pattern`` is applied via ``Path.glob`` and is non-recursive by default.
+        To include nested subdirectories, use a recursive glob like ``**/.env*``.
 
     Args:
         env_config: Environment configuration with secrets_only=True

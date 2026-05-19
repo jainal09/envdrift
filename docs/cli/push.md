@@ -25,6 +25,14 @@ Its exact behaviour depends on the mode configured for each environment:
 2. Does not read or write any configs directory
 3. Produces no combined output file
 
+The `pattern` glob is non-recursive by default; use `**/.env*` for nested
+subdirectories. `secrets_dir` is required — pushing with `secrets_only = true`
+but no `secrets_dir` is rejected at config-load time.
+
+The summary panel labels secrets-only counts as **"Total encrypted files"** and
+combine-mode counts as **"Total encrypted vars"** (and shows both when an
+envdrift run mixes the two modes).
+
 This command requires partial encryption to be configured in `envdrift.toml`.
 
 ## Options

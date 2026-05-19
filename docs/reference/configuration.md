@@ -345,8 +345,13 @@ secrets-only mode; omit it (or set `false`) for the default combine mode.
 |:-------|:-----|:--------|:------------|
 | `name` | `string` | **required** | Environment name |
 | `secrets_only` | `bool` | `false` | Enable secrets-only mode |
-| `secrets_dir` | `string` | **required** | Directory containing secret env files to encrypt/decrypt |
-| `pattern` | `string` | `".env*"` | Glob pattern applied inside `secrets_dir` to select files |
+| `secrets_dir` | `string` | **required** | Directory containing secret env files to encrypt/decrypt. Must be set and resolve to a directory; configs with `secrets_only = true` but no `secrets_dir` are rejected at load time. |
+| `pattern` | `string` | `".env*"` | Glob pattern applied inside `secrets_dir`. Non-recursive by default — use `**/.env*` for nested subdirectories. |
+
+Envdrift validates each environment entry at config-load time and raises a
+`ValueError` if required fields for the selected mode are missing (e.g.
+combine-mode entries without `clear_file`/`secret_file`/`combined_file`, or
+secrets-only entries without `secrets_dir`).
 
 ```toml
 # Combine mode — merges .clear + encrypted .secret into a single output file

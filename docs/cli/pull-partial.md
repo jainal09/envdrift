@@ -17,7 +17,14 @@ workflow. Its exact behaviour depends on the mode configured for each environmen
 variables. After editing, run `envdrift push` to re-encrypt and regenerate the combined file.
 
 **Secrets-only mode** (`secrets_only = true`): decrypts every file matching `pattern`
-inside `secrets_dir` in place. No combined file is involved.
+inside `secrets_dir` in place. No combined file is involved. The `pattern` glob is
+non-recursive by default; use `**/.env*` if your secrets are in nested
+subdirectories. `secrets_dir` is required — pulling with `secrets_only = true`
+but no `secrets_dir` is rejected at config-load time.
+
+The summary panel reports `Decrypted: N` (files actually decrypted on this run)
+and `Skipped: M` (files that were already decrypted, including those skipped in
+environments where some other files were decrypted).
 
 This command requires partial encryption to be configured in `envdrift.toml`.
 
