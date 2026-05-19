@@ -90,6 +90,52 @@ def test_diff_json_format(tmp_path) -> None:
     assert "differences" in result.stdout
 
 
+def test_diff_env1_missing(tmp_path) -> None:
+    """Diff reports the first file when only env2 exists."""
+    env2 = tmp_path / ".env2"
+    env2.write_text("FOO=bar")
+
+    result = runner.invoke(app, ["diff", str(tmp_path / "missing.env"), str(env2)])
+    assert result.exit_code == 1
+    assert "not found" in result.stdout.lower()
+
+
+def test_diff_normalize_default_collapses_bool_casing(tmp_path) -> None:
+    """Default --normalize hides trivial bool-casing drift."""
+    env1 = tmp_path / ".env1"
+    env1.write_text("DEBUG=true")
+    env2 = tmp_path / ".env2"
+    env2.write_text("DEBUG=True")
+
+    result = runner.invoke(app, ["diff", str(env1), str(env2), "--format", "json"])
+    assert result.exit_code == 0
+    assert '"has_drift": false' in result.stdout
+
+
+def test_diff_strict_flag_disables_normalization(tmp_path) -> None:
+    """`--strict` restores raw string compare so bool casing reads as drift."""
+    env1 = tmp_path / ".env1"
+    env1.write_text("DEBUG=true")
+    env2 = tmp_path / ".env2"
+    env2.write_text("DEBUG=True")
+
+    result = runner.invoke(app, ["diff", str(env1), str(env2), "--strict", "--format", "json"])
+    assert result.exit_code == 0
+    assert '"has_drift": true' in result.stdout
+
+
+def test_diff_schema_load_error_warns_and_continues(tmp_path) -> None:
+    """An unloadable --schema warns but still runs the comparison."""
+    env1 = tmp_path / ".env1"
+    env1.write_text("FOO=bar")
+    env2 = tmp_path / ".env2"
+    env2.write_text("FOO=bar")
+
+    result = runner.invoke(app, ["diff", str(env1), str(env2), "--schema", "does.not.exist:Nope"])
+    assert result.exit_code == 0
+    assert "could not load schema" in result.stdout.lower()
+
+
 def test_encrypt_check_file_not_found(tmp_path) -> None:
     """Test encrypt --check with missing file."""
     result = runner.invoke(app, ["encrypt", str(tmp_path / "nonexistent.env"), "--check"])
