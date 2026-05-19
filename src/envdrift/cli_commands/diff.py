@@ -34,6 +34,17 @@ def diff(
     include_unchanged: Annotated[
         bool, typer.Option("--include-unchanged", help="Include unchanged variables")
     ] = False,
+    normalize: Annotated[
+        bool,
+        typer.Option(
+            "--normalize/--strict",
+            help=(
+                "Normalize values (whitespace, bool casing, JSON quote style) and "
+                "use --schema types for comparison. Disable with --strict for "
+                "raw string compare."
+            ),
+        ),
+    ] = True,
 ) -> None:
     """
     Compare two .env files and display their differences.
@@ -46,6 +57,7 @@ def diff(
         show_values (bool): If True, do not mask sensitive values in the output.
         format_ (str): Output format, either "table" (default) for human-readable output or "json" for machine-readable output.
         include_unchanged (bool): If True, include variables that are unchanged between the two files in the output.
+        normalize (bool): If True (default), normalize values before comparing — strips leading/trailing whitespace, treats `true/True/TRUE` (and similar bool aliases) as equal, and parses JSON-style lists/dicts so quote-style differences don't read as drift. When a `--schema` is provided, values are also coerced through the corresponding Pydantic type before comparison. Pass `--strict` to disable and fall back to raw string compare.
     """
     # Check files exist
     if not env1.exists():
@@ -82,6 +94,7 @@ def diff(
         schema=schema_meta,
         mask_values=not show_values,
         include_unchanged=include_unchanged,
+        normalize=normalize,
     )
 
     # Output

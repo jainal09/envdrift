@@ -78,6 +78,41 @@ Include variables that are identical in both files.
 envdrift diff .env.dev .env.prod --include-unchanged
 ```
 
+### `--normalize`, `--strict`
+
+Normalize values before comparing so trivially-equivalent strings don't show up
+as drift. Enabled by default; pass `--strict` to fall back to raw string compare.
+
+When `--normalize` is in effect, two values are considered equal if:
+
+- they match after stripping leading/trailing whitespace
+  (`DATABASE_URL="foo "` vs `DATABASE_URL=foo`),
+- both look like booleans (`true|false|yes|no|on|off|1|0`, any case) and share
+  the same truthiness (`DEBUG=true` vs `DEBUG=True`), or
+- both look like JSON lists/objects and parse to the same structure, regardless
+  of single- vs double-quote style
+  (`CORS_ORIGINS=["http://x"]` vs `CORS_ORIGINS=['http://x']`).
+
+When `--schema` is also passed, each value is additionally coerced through the
+matching Pydantic field type (`bool`, `int`, `list[str]`, `Literal[...]`, etc.)
+before comparison. Variables not in the schema, or values that fail Pydantic
+validation, fall back to the universal rules above.
+
+```bash
+# Default — normalization on
+envdrift diff .env.dev .env.prod
+
+# Disable normalization for strict raw-string compare
+envdrift diff .env.dev .env.prod --strict
+
+# Schema-aware coercion plus normalization
+envdrift diff .env.dev .env.prod --schema config.settings:Settings
+```
+
+Displayed values are always the original ones from the file — normalization
+only affects the `changed` / `unchanged` classification, never what you see in
+the table or JSON output.
+
 ## Examples
 
 ### Basic Comparison
@@ -117,31 +152,30 @@ Output:
 
 ```json
 {
-  "env1_path": ".env.development",
-  "env2_path": ".env.production",
-  "has_drift": true,
-  "differences": [
-    {
-      "name": "DEBUG",
-      "diff_type": "changed",
-      "value1": "true",
-      "value2": "false",
-      "is_sensitive": false
-    },
-    {
-      "name": "SENTRY_DSN",
-      "diff_type": "added",
-      "value1": null,
-      "value2": "https://...",
-      "is_sensitive": true
-    }
-  ],
+  "env1": ".env.development",
+  "env2": ".env.production",
   "summary": {
     "added": 1,
     "removed": 1,
     "changed": 2,
-    "unchanged": 5
-  }
+    "has_drift": true
+  },
+  "differences": [
+    {
+      "name": "DEBUG",
+      "type": "changed",
+      "value_env1": "true",
+      "value_env2": "false",
+      "sensitive": false
+    },
+    {
+      "name": "SENTRY_DSN",
+      "type": "added",
+      "value_env1": null,
+      "value_env2": "https://...",
+      "sensitive": true
+    }
+  ]
 }
 ```
 
