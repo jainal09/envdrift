@@ -1,5 +1,12 @@
 # Changelog
 
+## [10.10.0](https://github.com/jainal09/envdrift/compare/v10.9.3...v10.10.0) (2026-05-19)
+
+
+### Features
+
+* **partial-encryption:** add secrets-only mode ([#249](https://github.com/jainal09/envdrift/issues/249)) ([142703c](https://github.com/jainal09/envdrift/commit/142703c8771c45f31279c5b2b5cbb118bca981dc))
+
 ## [10.9.3](https://github.com/jainal09/envdrift/compare/v10.9.2...v10.9.3) (2026-05-05)
 
 
