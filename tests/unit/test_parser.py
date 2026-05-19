@@ -209,6 +209,7 @@ BAR=plaintext
         result = parser.parse(env_file)
 
         assert result.get("FOO") is not None
+        # pyrefly: ignore [missing-attribute]
         assert result.get("FOO").value == "bar"
         assert result.get("NONEXISTENT") is None
 

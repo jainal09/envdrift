@@ -46,30 +46,43 @@ class DummyDefaultCredentialsError(Exception):
 def mock_gcp():
     """Mock GCP SDK modules."""
     exceptions_mod = types.ModuleType("google.api_core.exceptions")
+    # pyrefly: ignore [missing-attribute]
     exceptions_mod.GoogleAPICallError = DummyGoogleAPICallError
+    # pyrefly: ignore [missing-attribute]
     exceptions_mod.PermissionDenied = DummyPermissionDeniedError
+    # pyrefly: ignore [missing-attribute]
     exceptions_mod.Unauthenticated = DummyUnauthenticatedError
+    # pyrefly: ignore [missing-attribute]
     exceptions_mod.NotFound = DummyNotFoundError
+    # pyrefly: ignore [missing-attribute]
     exceptions_mod.AlreadyExists = DummyAlreadyExistsError
 
     api_core_mod = types.ModuleType("google.api_core")
+    # pyrefly: ignore [missing-attribute]
     api_core_mod.exceptions = exceptions_mod
 
     auth_exceptions_mod = types.ModuleType("google.auth.exceptions")
+    # pyrefly: ignore [missing-attribute]
     auth_exceptions_mod.DefaultCredentialsError = DummyDefaultCredentialsError
 
     auth_mod = types.ModuleType("google.auth")
+    # pyrefly: ignore [missing-attribute]
     auth_mod.exceptions = auth_exceptions_mod
 
     secretmanager_mod = types.ModuleType("google.cloud.secretmanager")
+    # pyrefly: ignore [missing-attribute]
     secretmanager_mod.SecretManagerServiceClient = MagicMock()
 
     cloud_mod = types.ModuleType("google.cloud")
+    # pyrefly: ignore [missing-attribute]
     cloud_mod.secretmanager = secretmanager_mod
 
     google_mod = types.ModuleType("google")
+    # pyrefly: ignore [missing-attribute]
     google_mod.api_core = api_core_mod
+    # pyrefly: ignore [missing-attribute]
     google_mod.auth = auth_mod
+    # pyrefly: ignore [missing-attribute]
     google_mod.cloud = cloud_mod
 
     with patch.dict(

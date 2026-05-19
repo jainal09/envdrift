@@ -192,10 +192,13 @@ class TestScanEngine:
             )
 
         gitleaks_mod = types.ModuleType("envdrift.scanner.gitleaks")
+        # pyrefly: ignore [missing-attribute]
         gitleaks_mod.GitleaksScanner = make_scanner("GitleaksScanner", "gitleaks", True)
         truffle_mod = types.ModuleType("envdrift.scanner.trufflehog")
+        # pyrefly: ignore [missing-attribute]
         truffle_mod.TrufflehogScanner = make_scanner("TrufflehogScanner", "trufflehog", True)
         detect_mod = types.ModuleType("envdrift.scanner.detect_secrets")
+        # pyrefly: ignore [missing-attribute]
         detect_mod.DetectSecretsScanner = make_scanner(
             "DetectSecretsScanner", "detect-secrets", True
         )
@@ -252,6 +255,7 @@ class TestScanEngine:
             )
 
         gitleaks_mod = types.ModuleType("envdrift.scanner.gitleaks")
+        # pyrefly: ignore [missing-attribute]
         gitleaks_mod.GitleaksScanner = make_scanner("GitleaksScanner", "gitleaks")
         monkeypatch.setitem(sys.modules, "envdrift.scanner.gitleaks", gitleaks_mod)
 
@@ -303,6 +307,7 @@ class TestScanEngine:
             )
 
         gitleaks_mod = types.ModuleType("envdrift.scanner.gitleaks")
+        # pyrefly: ignore [missing-attribute]
         gitleaks_mod.GitleaksScanner = make_scanner("GitleaksScanner", "gitleaks")
         monkeypatch.setitem(sys.modules, "envdrift.scanner.gitleaks", gitleaks_mod)
 
@@ -971,9 +976,7 @@ class TestIntegration:
         assert aws_findings[0].file_path.name == "a.py"
 
         repeat = engine.scan([tmp_path])
-        repeat_findings = [
-            f for f in repeat.unique_findings if f.rule_id == "aws-access-key-id"
-        ]
+        repeat_findings = [f for f in repeat.unique_findings if f.rule_id == "aws-access-key-id"]
         assert len(repeat_findings) == 1
         assert repeat_findings[0].file_path.name == "a.py"
 

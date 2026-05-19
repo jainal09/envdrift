@@ -231,6 +231,7 @@ class TestSyncOutput:
             schema_valid=False,
         )
         with patch.object(console, "print") as mock_print:
+            # pyrefly: ignore [bad-argument-type]
             print_service_sync_status(result)
         joined = " ".join(str(c.args[0]) for c in mock_print.call_args_list)
         assert "updated" in joined or "~" in joined
@@ -252,6 +253,7 @@ class TestSyncOutput:
             decryption_failed=1,
         )
         with patch.object(console, "print") as mock_print:
+            # pyrefly: ignore [bad-argument-type]
             print_sync_result(sync_result)
         joined = " ".join(" ".join(map(str, c.args)) for c in mock_print.call_args_list)
         assert "errors" in joined.lower()

@@ -657,4 +657,5 @@ class TestMockVaultTimeouts:
 
         assert len(result.services) == 1
         assert result.services[0].action == SyncAction.ERROR
+        # pyrefly: ignore [missing-attribute]
         assert "timed out" in result.services[0].error.lower()

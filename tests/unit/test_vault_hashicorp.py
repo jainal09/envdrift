@@ -20,10 +20,15 @@ def mock_hvac_module():
     hvac_module = ModuleType("hvac")
     hvac_exceptions = ModuleType("hvac.exceptions")
 
+    # pyrefly: ignore [missing-attribute]
     hvac_exceptions.Forbidden = type("Forbidden", (Exception,), {})
+    # pyrefly: ignore [missing-attribute]
     hvac_exceptions.InvalidPath = type("InvalidPath", (Exception,), {})
+    # pyrefly: ignore [missing-attribute]
     hvac_exceptions.Unauthorized = type("Unauthorized", (Exception,), {})
+    # pyrefly: ignore [missing-attribute]
     hvac_module.exceptions = hvac_exceptions
+    # pyrefly: ignore [missing-attribute]
     hvac_module.Client = MagicMock()
 
     with patch.dict(
@@ -314,7 +319,7 @@ class TestHashiCorpVaultClientWithMock:
         client = HashiCorpVaultClient(url="http://localhost:8200", token="valid-token")
         client.authenticate()
 
-        client.create_or_update_secret("new-secret", "new-value")
+        client.create_or_update_secret("new-secret", {"value": "new-value"})
 
         mock_client.secrets.kv.v2.create_or_update_secret.assert_called_once()
 

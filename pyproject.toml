@@ -193,11 +193,10 @@ exclude_dirs = ["tests", ".venv"]
 skips = ["B101", "B110"]  # assert usage and try-except-pass are controlled
 
 [tool.pyrefly]
-# Scope reflects what CI / Makefile / pre-commit actually check today
-# (they pass `src` as a positional argument, which overrides this block,
-# but having it makes pyrefly stop emitting the "No pyrefly.toml found"
-# notice on every run). Broadening to also check `tests/` is tracked in #256.
-project-includes = ["src/**/*.py"]
+project-includes = ["src/**/*.py", "tests/**/*.py"]
+# Lets `from tests.helpers import ...` and `from tests.integration.conftest ...` resolve.
+search-path = ["."]
+# TODO(#257): clean up pre-existing `# pyrefly: ignore` suppressions in tests/.
 
 [dependency-groups]
 dev = [

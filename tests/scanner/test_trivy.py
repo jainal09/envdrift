@@ -367,6 +367,7 @@ class TestTrivyScanExecution:
                 mock_run.side_effect = subprocess.TimeoutExpired(cmd="trivy", timeout=300)
                 result = mock_scanner.scan([tmp_path])
 
+        # pyrefly: ignore [missing-attribute]
         assert "timed out" in result.error.lower()
         assert result.success is False
 
@@ -382,6 +383,7 @@ class TestTrivyScanExecution:
                 result = mock_scanner.scan([tmp_path])
 
         assert result.success is False
+        # pyrefly: ignore [missing-attribute]
         assert "command failed" in result.error.lower()
 
     def test_scan_handles_nonzero_exit_with_output(

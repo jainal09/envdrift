@@ -49,12 +49,14 @@ class TestHookEntry:
         """Test envdrift-validate hook entry."""
         validate_hook = next(h for h in HOOK_ENTRY["hooks"] if h["id"] == "envdrift-validate")
         assert validate_hook["language"] == "system"
+        # pyrefly: ignore [not-iterable]
         assert "validate" in validate_hook["entry"]
 
     def test_encryption_hook_entry(self):
         """Test envdrift-encryption hook entry."""
         encrypt_hook = next(h for h in HOOK_ENTRY["hooks"] if h["id"] == "envdrift-encryption")
         assert encrypt_hook["language"] == "system"
+        # pyrefly: ignore [not-iterable]
         assert "encrypt" in encrypt_hook["entry"]
 
 

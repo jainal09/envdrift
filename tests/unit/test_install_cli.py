@@ -228,7 +228,12 @@ class TestInstallAgentCommand:
             patch(
                 "urllib.request.urlopen",
                 side_effect=urllib.error.HTTPError(
-                    url="", code=404, msg="Not Found", hdrs={}, fp=None
+                    url="",
+                    code=404,
+                    msg="Not Found",
+                    # pyrefly: ignore [bad-argument-type]
+                    hdrs={},
+                    fp=None,
                 ),
             ),
         ):
