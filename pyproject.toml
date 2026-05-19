@@ -71,7 +71,7 @@ docs = ["mkdocs-material>=9.5"]
 # Development dependencies
 dev = [
     "ruff>=0.8.0",
-    "pyrefly>=0.2.0",
+    "pyrefly>=1.0,<2",
     "bandit>=1.7.0",
     "pytest>=8.0",
     "pytest-cov>=4.0",
@@ -191,6 +191,12 @@ exclude_lines = [
 [tool.bandit]
 exclude_dirs = ["tests", ".venv"]
 skips = ["B101", "B110"]  # assert usage and try-except-pass are controlled
+
+[tool.pyrefly]
+project-includes = [
+    "**/*.py*",
+    "**/*.ipynb",
+]
 
 [dependency-groups]
 dev = [
