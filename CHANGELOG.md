@@ -1,5 +1,12 @@
 # Changelog
 
+## [10.10.1](https://github.com/jainal09/envdrift/compare/v10.10.0...v10.10.1) (2026-05-19)
+
+
+### Bug Fixes
+
+* **diff:** normalize trivially-equivalent values before comparing ([#251](https://github.com/jainal09/envdrift/issues/251)) ([#252](https://github.com/jainal09/envdrift/issues/252)) ([5707cbe](https://github.com/jainal09/envdrift/commit/5707cbef0c23a8a06f85685e95e238a786b54021))
+
 ## [10.10.0](https://github.com/jainal09/envdrift/compare/v10.9.3...v10.10.0) (2026-05-19)
 
 
