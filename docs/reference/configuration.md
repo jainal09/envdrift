@@ -313,7 +313,8 @@ files = [
 
 ### [partial_encryption] — Partial Encryption Settings
 
-Configuration for the partial encryption feature (separate clear and secret files).
+Configuration for the partial encryption feature. Two modes are supported — see the
+[Partial Encryption Guide](../guides/partial-encryption.md) for full details.
 
 | Option | Type | Default | Description |
 |:-------|:-----|:--------|:------------|
@@ -326,27 +327,46 @@ enabled = true
 
 #### [[partial_encryption.environments]] — Environment Configuration
 
-Each environment defines the file structure for partial encryption.
+Each entry in the array configures one environment. Set `secrets_only = true` to use
+secrets-only mode; omit it (or set `false`) for the default combine mode.
+
+**Combine mode fields** (used when `secrets_only = false`, the default):
 
 | Option | Type | Default | Description |
 |:-------|:-----|:--------|:------------|
 | `name` | `string` | **required** | Environment name |
-| `clear_file` | `string` | **required** | Path to cleartext (non-sensitive) variables |
-| `secret_file` | `string` | **required** | Path to secret (encrypted) variables |
-| `combined_file` | `string` | **required** | Path to combined output file |
+| `clear_file` | `string` | **required** | Path to plaintext (non-sensitive) variables file |
+| `secret_file` | `string` | **required** | Path to secret variables file (encrypted in place) |
+| `combined_file` | `string` | **required** | Path to the merged output file written by `push` |
+
+**Secrets-only mode fields** (used when `secrets_only = true`):
+
+| Option | Type | Default | Description |
+|:-------|:-----|:--------|:------------|
+| `name` | `string` | **required** | Environment name |
+| `secrets_only` | `bool` | `false` | Enable secrets-only mode |
+| `secrets_dir` | `string` | **required** | Directory containing secret env files to encrypt/decrypt. Must be set and resolve to a directory; configs with `secrets_only = true` but no `secrets_dir` are rejected at load time. |
+| `pattern` | `string` | `".env*"` | Glob pattern applied inside `secrets_dir`. Non-recursive by default — use `**/.env*` for nested subdirectories. |
+
+Envdrift validates each environment entry at config-load time and raises a
+`ValueError` if required fields for the selected mode are missing (e.g.
+combine-mode entries without `clear_file`/`secret_file`/`combined_file`, or
+secrets-only entries without `secrets_dir`).
 
 ```toml
-[[partial_encryption.environments]]
-name = "production"
-clear_file = ".env.production.clear"
-secret_file = ".env.production.secret"
-combined_file = ".env.production"
-
+# Combine mode — merges .clear + encrypted .secret into a single output file
 [[partial_encryption.environments]]
 name = "staging"
 clear_file = ".env.staging.clear"
 secret_file = ".env.staging.secret"
 combined_file = ".env.staging"
+
+# Secrets-only mode — encrypts/decrypts secrets_dir in place, configs are never touched
+[[partial_encryption.environments]]
+name = "production"
+secrets_only = true
+secrets_dir = "secrets/production/"
+pattern = ".env*"
 ```
 
 ## Complete Example

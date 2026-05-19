@@ -3,13 +3,17 @@
 from __future__ import annotations
 
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 
 from envdrift.config import PartialEncryptionEnvironmentConfig
 from envdrift.core.partial_encryption import (
+    PartialEncryptionError,
     combine_files,
     is_file_encrypted,
+    pull_secrets_only,
+    push_secrets_only,
 )
 
 
@@ -218,3 +222,358 @@ def test_warning_header_format(temp_env_files):
     # Check commands mentioned
     assert any("envdrift pull-partial" in line for line in lines[:15])
     assert any("envdrift push" in line for line in lines[:15])
+
+
+# ---------------------------------------------------------------------------
+# secrets_only mode
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def secrets_dir(tmp_path: Path):
+    """Create a temporary secrets directory with two plaintext env files."""
+    sdir = tmp_path / "secrets" / "production"
+    sdir.mkdir(parents=True)
+    (sdir / ".env.api").write_text("STRIPE_KEY=sk_fake\nSENDGRID_KEY=SG.fake\n")
+    (sdir / ".env.db").write_text("DATABASE_URL=postgresql://fake\n")
+    return sdir
+
+
+@pytest.fixture
+def secrets_only_config(secrets_dir: Path):
+    return PartialEncryptionEnvironmentConfig(
+        name="production",
+        secrets_only=True,
+        secrets_dir=str(secrets_dir),
+        pattern=".env*",
+    )
+
+
+def test_push_secrets_only_encrypts_plaintext_files(secrets_only_config, secrets_dir):
+    """push_secrets_only encrypts every plaintext file in secrets_dir."""
+    with patch("envdrift.core.partial_encryption.DotenvxWrapper") as mock_dotenvx_cls:
+        instance = mock_dotenvx_cls.return_value
+        result = push_secrets_only(secrets_only_config)
+
+    assert result["encrypted"] == 2
+    assert result["already_encrypted"] == 0
+    assert instance.encrypt.call_count == 2
+
+
+def test_push_secrets_only_skips_already_encrypted(secrets_only_config, secrets_dir):
+    """push_secrets_only skips files that are already encrypted."""
+    # Pre-encrypt both files in place so is_file_encrypted returns True
+    for f in secrets_dir.iterdir():
+        f.write_text(f.read_text() + 'KEY="encrypted:abc123"\n')
+
+    with patch("envdrift.core.partial_encryption.DotenvxWrapper") as mock_dotenvx_cls:
+        instance = mock_dotenvx_cls.return_value
+        result = push_secrets_only(secrets_only_config)
+
+    assert result["encrypted"] == 0
+    assert result["already_encrypted"] == 2
+    instance.encrypt.assert_not_called()
+
+
+def test_push_secrets_only_raises_when_dir_missing(tmp_path: Path):
+    """push_secrets_only raises PartialEncryptionError when secrets_dir is absent."""
+    config = PartialEncryptionEnvironmentConfig(
+        name="prod",
+        secrets_only=True,
+        secrets_dir=str(tmp_path / "nonexistent"),
+        pattern=".env*",
+    )
+    with pytest.raises(PartialEncryptionError, match="secrets_dir not found"):
+        push_secrets_only(config)
+
+
+def test_push_secrets_only_raises_on_encrypt_failure(secrets_only_config, secrets_dir):
+    """push_secrets_only wraps DotenvxError as PartialEncryptionError."""
+    from envdrift.integrations.dotenvx import DotenvxError
+
+    with patch("envdrift.core.partial_encryption.DotenvxWrapper") as mock_dotenvx_cls:
+        mock_dotenvx_cls.return_value.encrypt.side_effect = DotenvxError("boom")
+        with pytest.raises(PartialEncryptionError, match="Failed to encrypt"):
+            push_secrets_only(secrets_only_config)
+
+
+def test_pull_secrets_only_decrypts_encrypted_files(secrets_only_config, secrets_dir):
+    """pull_secrets_only decrypts every encrypted file in secrets_dir."""
+    for f in secrets_dir.iterdir():
+        f.write_text(f.read_text() + 'KEY="encrypted:abc123"\n')
+
+    with patch("envdrift.core.partial_encryption.DotenvxWrapper") as mock_dotenvx_cls:
+        instance = mock_dotenvx_cls.return_value
+        result = pull_secrets_only(secrets_only_config)
+
+    assert result["decrypted"] == 2
+    assert result["already_decrypted"] == 0
+    assert instance.decrypt.call_count == 2
+
+
+def test_pull_secrets_only_skips_plaintext_files(secrets_only_config):
+    """pull_secrets_only skips files that are already plaintext."""
+    with patch("envdrift.core.partial_encryption.DotenvxWrapper") as mock_dotenvx_cls:
+        instance = mock_dotenvx_cls.return_value
+        result = pull_secrets_only(secrets_only_config)
+
+    assert result["decrypted"] == 0
+    assert result["already_decrypted"] == 2
+    instance.decrypt.assert_not_called()
+
+
+def test_pull_secrets_only_raises_when_dir_missing(tmp_path: Path):
+    """pull_secrets_only raises PartialEncryptionError when secrets_dir is absent."""
+    config = PartialEncryptionEnvironmentConfig(
+        name="prod",
+        secrets_only=True,
+        secrets_dir=str(tmp_path / "nonexistent"),
+        pattern=".env*",
+    )
+    with pytest.raises(PartialEncryptionError, match="secrets_dir not found"):
+        pull_secrets_only(config)
+
+
+def test_pull_secrets_only_raises_on_decrypt_failure(secrets_only_config, secrets_dir):
+    """pull_secrets_only wraps DotenvxError as PartialEncryptionError."""
+    from envdrift.integrations.dotenvx import DotenvxError
+
+    for f in secrets_dir.iterdir():
+        f.write_text(f.read_text() + 'KEY="encrypted:abc123"\n')
+
+    with patch("envdrift.core.partial_encryption.DotenvxWrapper") as mock_dotenvx_cls:
+        mock_dotenvx_cls.return_value.decrypt.side_effect = DotenvxError("boom")
+        with pytest.raises(PartialEncryptionError, match="Failed to decrypt"):
+            pull_secrets_only(secrets_only_config)
+
+
+def test_push_secrets_only_raises_when_dir_empty():
+    """Empty secrets_dir must error — never fall back to the working directory."""
+    config = PartialEncryptionEnvironmentConfig(
+        name="prod",
+        secrets_only=True,
+        secrets_dir="",
+        pattern=".env*",
+    )
+    with pytest.raises(PartialEncryptionError, match="secrets_dir must be set"):
+        push_secrets_only(config)
+
+
+def test_pull_secrets_only_raises_when_dir_empty():
+    """Empty secrets_dir must error — never fall back to the working directory."""
+    config = PartialEncryptionEnvironmentConfig(
+        name="prod",
+        secrets_only=True,
+        secrets_dir="   ",
+        pattern=".env*",
+    )
+    with pytest.raises(PartialEncryptionError, match="secrets_dir must be set"):
+        pull_secrets_only(config)
+
+
+def test_push_secrets_only_raises_when_path_is_file(tmp_path: Path):
+    """secrets_dir that points at a file (not a directory) must error."""
+    not_a_dir = tmp_path / "not-a-dir"
+    not_a_dir.write_text("oops")
+    config = PartialEncryptionEnvironmentConfig(
+        name="prod",
+        secrets_only=True,
+        secrets_dir=str(not_a_dir),
+        pattern=".env*",
+    )
+    with pytest.raises(PartialEncryptionError, match="not a directory"):
+        push_secrets_only(config)
+
+
+def test_secrets_only_respects_pattern(tmp_path: Path):
+    """push_secrets_only only processes files matching the configured glob pattern."""
+    sdir = tmp_path / "secrets"
+    sdir.mkdir()
+    (sdir / ".env.api").write_text("KEY=value\n")
+    (sdir / "config.yaml").write_text("key: value\n")  # should not be touched
+    (sdir / ".env.db").write_text("DB=postgres\n")
+
+    config = PartialEncryptionEnvironmentConfig(
+        name="prod",
+        secrets_only=True,
+        secrets_dir=str(sdir),
+        pattern=".env*",
+    )
+
+    with patch("envdrift.core.partial_encryption.DotenvxWrapper") as mock_dotenvx_cls:
+        instance = mock_dotenvx_cls.return_value
+        result = push_secrets_only(config)
+
+    # Only .env.api and .env.db should be processed, not config.yaml
+    assert result["encrypted"] == 2
+    assert instance.encrypt.call_count == 2
+
+
+# ---------------------------------------------------------------------------
+# Coverage for combine-mode helpers, error paths, and helper hoisting
+# ---------------------------------------------------------------------------
+
+
+def test_push_secrets_only_reuses_single_wrapper(secrets_only_config, secrets_dir):
+    """DotenvxWrapper is instantiated once per call, not per file in the loop."""
+    from envdrift.core.partial_encryption import push_secrets_only as _push
+
+    with patch("envdrift.core.partial_encryption.DotenvxWrapper") as mock_cls:
+        _push(secrets_only_config)
+    assert mock_cls.call_count == 1
+
+
+def test_is_file_encrypted_returns_false_for_missing_file(tmp_path: Path):
+    """is_file_encrypted returns False for paths that don't exist."""
+    assert is_file_encrypted(tmp_path / "does-not-exist") is False
+
+
+def test_encrypt_secret_file_skips_when_missing(tmp_path: Path):
+    """encrypt_secret_file returns silently when secret_file does not exist."""
+    from envdrift.core.partial_encryption import encrypt_secret_file
+
+    config = PartialEncryptionEnvironmentConfig(
+        name="test",
+        clear_file=str(tmp_path / ".env.clear"),
+        secret_file=str(tmp_path / ".env.missing.secret"),
+        combined_file=str(tmp_path / ".env"),
+    )
+    with patch("envdrift.core.partial_encryption.DotenvxWrapper") as mock_cls:
+        encrypt_secret_file(config)
+    mock_cls.return_value.encrypt.assert_not_called()
+
+
+def test_encrypt_secret_file_skips_already_encrypted(tmp_path: Path):
+    """encrypt_secret_file skips files already marked encrypted."""
+    from envdrift.core.partial_encryption import encrypt_secret_file
+
+    secret_file = tmp_path / ".env.secret"
+    secret_file.write_text('KEY="encrypted:abc"\n')
+    config = PartialEncryptionEnvironmentConfig(
+        name="test", clear_file="", secret_file=str(secret_file), combined_file=""
+    )
+    with patch("envdrift.core.partial_encryption.DotenvxWrapper") as mock_cls:
+        encrypt_secret_file(config)
+    mock_cls.return_value.encrypt.assert_not_called()
+
+
+def test_encrypt_secret_file_wraps_dotenvx_error(tmp_path: Path):
+    """encrypt_secret_file wraps DotenvxError as PartialEncryptionError."""
+    from envdrift.core.partial_encryption import encrypt_secret_file
+    from envdrift.integrations.dotenvx import DotenvxError
+
+    secret_file = tmp_path / ".env.secret"
+    secret_file.write_text("DB=plain\n")
+    config = PartialEncryptionEnvironmentConfig(
+        name="test", clear_file="", secret_file=str(secret_file), combined_file=""
+    )
+    with patch("envdrift.core.partial_encryption.DotenvxWrapper") as mock_cls:
+        mock_cls.return_value.encrypt.side_effect = DotenvxError("boom")
+        with pytest.raises(PartialEncryptionError, match="Failed to encrypt"):
+            encrypt_secret_file(config)
+
+
+def test_decrypt_secret_file_raises_when_missing(tmp_path: Path):
+    """decrypt_secret_file raises when secret_file does not exist."""
+    from envdrift.core.partial_encryption import decrypt_secret_file
+
+    config = PartialEncryptionEnvironmentConfig(
+        name="test",
+        clear_file="",
+        secret_file=str(tmp_path / ".env.missing.secret"),
+        combined_file="",
+    )
+    with pytest.raises(PartialEncryptionError, match="Secret file not found"):
+        decrypt_secret_file(config)
+
+
+def test_decrypt_secret_file_skips_already_decrypted(tmp_path: Path):
+    """decrypt_secret_file returns silently when file is plaintext."""
+    from envdrift.core.partial_encryption import decrypt_secret_file
+
+    secret_file = tmp_path / ".env.secret"
+    secret_file.write_text("DB=plain\n")
+    config = PartialEncryptionEnvironmentConfig(
+        name="test", clear_file="", secret_file=str(secret_file), combined_file=""
+    )
+    with patch("envdrift.core.partial_encryption.DotenvxWrapper") as mock_cls:
+        decrypt_secret_file(config)
+    mock_cls.return_value.decrypt.assert_not_called()
+
+
+def test_decrypt_secret_file_wraps_dotenvx_error(tmp_path: Path):
+    """decrypt_secret_file wraps DotenvxError as PartialEncryptionError."""
+    from envdrift.core.partial_encryption import decrypt_secret_file
+    from envdrift.integrations.dotenvx import DotenvxError
+
+    secret_file = tmp_path / ".env.secret"
+    secret_file.write_text('KEY="encrypted:abc"\n')
+    config = PartialEncryptionEnvironmentConfig(
+        name="test", clear_file="", secret_file=str(secret_file), combined_file=""
+    )
+    with patch("envdrift.core.partial_encryption.DotenvxWrapper") as mock_cls:
+        mock_cls.return_value.decrypt.side_effect = DotenvxError("boom")
+        with pytest.raises(PartialEncryptionError, match="Failed to decrypt"):
+            decrypt_secret_file(config)
+
+
+def test_push_partial_encryption_encrypts_and_combines(tmp_path: Path):
+    """push_partial_encryption encrypts the secret file and writes the combined output."""
+    from envdrift.core.partial_encryption import push_partial_encryption
+
+    clear_file = tmp_path / ".env.clear"
+    secret_file = tmp_path / ".env.secret"
+    combined_file = tmp_path / ".env"
+    clear_file.write_text("DEBUG=true\n")
+    secret_file.write_text("DB=secret\n")
+    config = PartialEncryptionEnvironmentConfig(
+        name="test",
+        clear_file=str(clear_file),
+        secret_file=str(secret_file),
+        combined_file=str(combined_file),
+    )
+    with patch("envdrift.core.partial_encryption.DotenvxWrapper"):
+        stats = push_partial_encryption(config)
+    assert combined_file.exists()
+    assert stats["clear_lines"] == 1
+    assert stats["secret_vars"] == 1
+
+
+def test_pull_partial_encryption_returns_true_when_was_encrypted(tmp_path: Path):
+    """pull_partial_encryption returns True when the file was encrypted before decryption."""
+    from envdrift.core.partial_encryption import pull_partial_encryption
+
+    secret_file = tmp_path / ".env.secret"
+    secret_file.write_text('KEY="encrypted:abc"\n')
+    config = PartialEncryptionEnvironmentConfig(
+        name="test", clear_file="", secret_file=str(secret_file), combined_file=""
+    )
+    with patch("envdrift.core.partial_encryption.DotenvxWrapper"):
+        assert pull_partial_encryption(config) is True
+
+
+def test_pull_partial_encryption_returns_false_when_already_plain(tmp_path: Path):
+    """pull_partial_encryption returns False when file was already plaintext."""
+    from envdrift.core.partial_encryption import pull_partial_encryption
+
+    secret_file = tmp_path / ".env.secret"
+    secret_file.write_text("DB=plain\n")
+    config = PartialEncryptionEnvironmentConfig(
+        name="test", clear_file="", secret_file=str(secret_file), combined_file=""
+    )
+    with patch("envdrift.core.partial_encryption.DotenvxWrapper"):
+        assert pull_partial_encryption(config) is False
+
+
+def test_pull_partial_encryption_raises_when_secret_missing(tmp_path: Path):
+    """pull_partial_encryption raises when secret_file does not exist."""
+    from envdrift.core.partial_encryption import pull_partial_encryption
+
+    config = PartialEncryptionEnvironmentConfig(
+        name="test",
+        clear_file="",
+        secret_file=str(tmp_path / ".env.missing.secret"),
+        combined_file="",
+    )
+    with pytest.raises(PartialEncryptionError, match="Secret file not found"):
+        pull_partial_encryption(config)

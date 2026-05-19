@@ -210,6 +210,102 @@ def push_partial_encryption(env_config: PartialEncryptionEnvironmentConfig) -> d
     return stats
 
 
+def _resolve_secrets_dir(env_config: PartialEncryptionEnvironmentConfig) -> Path:
+    # Guard against an empty secrets_dir, which Path() would normalise to the
+    # current working directory and silently process unrelated .env* files.
+    raw = env_config.secrets_dir.strip()
+    if not raw:
+        raise PartialEncryptionError(
+            f"secrets_dir must be set for secrets_only environment '{env_config.name}'"
+        )
+    secrets_dir = Path(raw)
+    if not secrets_dir.exists() or not secrets_dir.is_dir():
+        raise PartialEncryptionError(f"secrets_dir not found or not a directory: {secrets_dir}")
+    return secrets_dir
+
+
+def push_secrets_only(env_config: PartialEncryptionEnvironmentConfig) -> dict[str, int]:
+    """
+    Secrets-only push: encrypt all matching files in secrets_dir in place.
+
+    Does not touch any configs directory and does not produce a combined file.
+
+    Note:
+        ``pattern`` is applied via ``Path.glob`` and is non-recursive by default.
+        To include nested subdirectories, use a recursive glob like ``**/.env*``.
+
+    Args:
+        env_config: Environment configuration with secrets_only=True
+
+    Returns:
+        Dict with counts: {"encrypted": N, "already_encrypted": M}
+
+    Raises:
+        PartialEncryptionError: If the secrets_dir does not exist or encryption fails
+    """
+    secrets_dir = _resolve_secrets_dir(env_config)
+
+    files = sorted(secrets_dir.glob(env_config.pattern))
+    encrypted = 0
+    already_encrypted = 0
+    dotenvx = DotenvxWrapper()
+
+    for file in files:
+        if not file.is_file():
+            continue
+        if is_file_encrypted(file):
+            already_encrypted += 1
+            continue
+        try:
+            dotenvx.encrypt(file)
+            encrypted += 1
+        except DotenvxError as e:
+            raise PartialEncryptionError.encrypt_failed(file, e) from e
+
+    return {"encrypted": encrypted, "already_encrypted": already_encrypted}
+
+
+def pull_secrets_only(env_config: PartialEncryptionEnvironmentConfig) -> dict[str, int]:
+    """
+    Secrets-only pull: decrypt all matching files in secrets_dir in place.
+
+    Does not touch any configs directory.
+
+    Note:
+        ``pattern`` is applied via ``Path.glob`` and is non-recursive by default.
+        To include nested subdirectories, use a recursive glob like ``**/.env*``.
+
+    Args:
+        env_config: Environment configuration with secrets_only=True
+
+    Returns:
+        Dict with counts: {"decrypted": N, "already_decrypted": M}
+
+    Raises:
+        PartialEncryptionError: If the secrets_dir does not exist or decryption fails
+    """
+    secrets_dir = _resolve_secrets_dir(env_config)
+
+    files = sorted(secrets_dir.glob(env_config.pattern))
+    decrypted = 0
+    already_decrypted = 0
+    dotenvx = DotenvxWrapper()
+
+    for file in files:
+        if not file.is_file():
+            continue
+        if not is_file_encrypted(file):
+            already_decrypted += 1
+            continue
+        try:
+            dotenvx.decrypt(file)
+            decrypted += 1
+        except DotenvxError as e:
+            raise PartialEncryptionError.decrypt_failed(file, e) from e
+
+    return {"decrypted": decrypted, "already_decrypted": already_decrypted}
+
+
 def pull_partial_encryption(env_config: PartialEncryptionEnvironmentConfig) -> bool:
     """
     Pull operation: Decrypt secret file for editing.

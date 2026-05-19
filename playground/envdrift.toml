@@ -1,0 +1,26 @@
+# envdrift playground config
+
+[guard]
+scanners = ["native"]
+auto_install = false
+include_history = false
+check_entropy = true
+fail_on_severity = "high"
+ignore_paths = []
+
+[partial_encryption]
+enabled = true
+
+# Existing combine mode
+[[partial_encryption.environments]]
+name = "staging"
+clear_file = ".env.staging.clear"
+secret_file = ".env.staging.secret"
+combined_file = ".env.staging.combined"
+
+# Secrets-only mode: encrypt/decrypt the secrets dir in place, configs untouched
+[[partial_encryption.environments]]
+name = "production-secrets"
+secrets_only = true
+secrets_dir = "secrets/production/"
+pattern = ".env*"

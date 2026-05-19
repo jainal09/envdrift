@@ -1,6 +1,6 @@
 # envdrift push
 
-Encrypt secret files and combine with clear files for partial encryption workflows.
+Encrypt secret files for partial encryption workflows.
 
 ## Synopsis
 
@@ -10,11 +10,28 @@ envdrift push [OPTIONS]
 
 ## Description
 
-The `push` command is part of the [partial encryption](../guides/partial-encryption.md) workflow. It:
+The `push` command is part of the [partial encryption](../guides/partial-encryption.md) workflow.
+Its exact behaviour depends on the mode configured for each environment:
+
+**Combine mode** (default):
 
 1. Encrypts `.secret` files using the configured encryption backend
 2. Combines `.clear` and encrypted `.secret` files into a single output file
 3. Adds a warning header to the generated file
+
+**Secrets-only mode** (`secrets_only = true`):
+
+1. Encrypts every file matching `pattern` inside `secrets_dir` in place
+2. Does not read or write any configs directory
+3. Produces no combined output file
+
+The `pattern` glob is non-recursive by default; use `**/.env*` for nested
+subdirectories. `secrets_dir` is required — pushing with `secrets_only = true`
+but no `secrets_dir` is rejected at config-load time.
+
+The summary panel labels secrets-only counts as **"Total encrypted files"** and
+combine-mode counts as **"Total encrypted vars"** (and shows both when an
+envdrift run mixes the two modes).
 
 This command requires partial encryption to be configured in `envdrift.toml`.
 
@@ -44,17 +61,19 @@ Partial encryption must be enabled in `envdrift.toml`:
 [partial_encryption]
 enabled = true
 
-[[partial_encryption.environments]]
-name = "production"
-clear_file = ".env.production.clear"
-secret_file = ".env.production.secret"
-combined_file = ".env.production"
-
+# Combine mode
 [[partial_encryption.environments]]
 name = "staging"
 clear_file = ".env.staging.clear"
 secret_file = ".env.staging.secret"
 combined_file = ".env.staging"
+
+# Secrets-only mode
+[[partial_encryption.environments]]
+name = "production"
+secrets_only = true
+secrets_dir = "secrets/production/"
+pattern = ".env*"
 ```
 
 ## Examples

@@ -150,9 +150,15 @@ class PartialEncryptionEnvironmentConfig:
     """Partial encryption configuration for a single environment."""
 
     name: str
-    clear_file: str
-    secret_file: str
-    combined_file: str
+    # Combine mode fields (required when secrets_only=False)
+    clear_file: str = ""
+    secret_file: str = ""
+    combined_file: str = ""
+    # Secrets-only mode: encrypt/decrypt secrets_dir in place, no combine step,
+    # no awareness of any configs directory
+    secrets_only: bool = False
+    secrets_dir: str = ""
+    pattern: str = ".env*"
 
 
 @dataclass
@@ -284,15 +290,36 @@ class EnvdriftConfig:
 
         # Build partial_encryption config
         partial_encryption_section = data.get("partial_encryption", {})
-        partial_encryption_envs = [
-            PartialEncryptionEnvironmentConfig(
-                name=env["name"],
-                clear_file=env["clear_file"],
-                secret_file=env["secret_file"],
-                combined_file=env["combined_file"],
+        partial_encryption_envs = []
+        for env in partial_encryption_section.get("environments", []):
+            name = env["name"]
+            secrets_only = env.get("secrets_only", False)
+            if secrets_only:
+                if not env.get("secrets_dir"):
+                    raise ValueError(
+                        f"partial_encryption environment '{name}': secrets_dir is required "
+                        "when secrets_only=true"
+                    )
+            else:
+                missing = [
+                    k for k in ("clear_file", "secret_file", "combined_file") if not env.get(k)
+                ]
+                if missing:
+                    raise ValueError(
+                        f"partial_encryption environment '{name}': "
+                        f"missing required field(s) for combine mode: {', '.join(missing)}"
+                    )
+            partial_encryption_envs.append(
+                PartialEncryptionEnvironmentConfig(
+                    name=name,
+                    clear_file=env.get("clear_file", ""),
+                    secret_file=env.get("secret_file", ""),
+                    combined_file=env.get("combined_file", ""),
+                    secrets_only=secrets_only,
+                    secrets_dir=env.get("secrets_dir", ""),
+                    pattern=env.get("pattern", ".env*"),
+                )
             )
-            for env in partial_encryption_section.get("environments", [])
-        ]
         partial_encryption = PartialEncryptionConfig(
             enabled=partial_encryption_section.get("enabled", False),
             environments=partial_encryption_envs,
@@ -607,12 +634,20 @@ staging = "config.settings:StagingSettings"
 [partial_encryption]
 enabled = false
 
-# Configure environments for partial encryption
+# Combine mode: clear + secret files are merged into a combined committed file
 # [[partial_encryption.environments]]
 # name = "production"
 # clear_file = ".env.production.clear"
 # secret_file = ".env.production.secret"
 # combined_file = ".env.production"
+
+# Secrets-only mode: encrypt/decrypt a secrets directory in place.
+# envdrift has zero awareness of any configs directory — it only touches secrets_dir.
+# [[partial_encryption.environments]]
+# name = "production"
+# secrets_only = true
+# secrets_dir = "secrets/production/"
+# pattern = ".env*"   # optional glob, default ".env*"
 
 # Background agent configuration (optional)
 # When enabled, registers this project with the envdrift-agent daemon
