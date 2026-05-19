@@ -34,4 +34,4 @@ jobs:
         uses: CodSpeedHQ/action@v4
         with:
           mode: simulation
-          run: uv run pytest tests/benchmarks/ --codspeed
+          run: uv run pytest tests/benchmarks/ --codspeed --no-cov
