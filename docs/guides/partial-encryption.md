@@ -251,7 +251,7 @@ are encrypted/decrypted; everything else in the directory is left untouched.
 > **Note — non-recursive by default.** `pattern` is matched with `Path.glob`, which
 > does **not** descend into subdirectories unless the pattern itself contains `**`.
 > Use `**/.env*` if your secrets live in nested folders.
-
+>
 > **`secrets_dir` is required.** envdrift refuses to load a config where
 > `secrets_only = true` but `secrets_dir` is missing or empty. This prevents the
 > path from defaulting to the working directory and silently encrypting files
