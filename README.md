@@ -9,6 +9,7 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Docs](https://img.shields.io/badge/docs-mkdocs-blue)](https://jainal09.github.io/envdrift)
 [![codecov](https://codecov.io/gh/jainal09/envdrift/graph/badge.svg)](https://codecov.io/gh/jainal09/envdrift)
+[![CodSpeed](https://img.shields.io/endpoint?url=https://codspeed.io/badge.json)](https://codspeed.io/jainal09/envdrift?utm_source=badge)
 
 Sync environment variables across your team. No more "it works on my machine."
 

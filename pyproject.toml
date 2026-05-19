@@ -199,5 +199,6 @@ search-path = ["."]
 
 [dependency-groups]
 dev = [
+    "pytest-codspeed>=5.0.2",
     "pyyaml>=6.0.3",
 ]
