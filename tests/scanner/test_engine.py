@@ -3,8 +3,8 @@
 from __future__ import annotations
 
 import sys
-import types
 from pathlib import Path
+from types import SimpleNamespace
 
 from envdrift.scanner.base import (
     AggregatedScanResult,
@@ -191,16 +191,14 @@ class TestScanEngine:
                 },
             )
 
-        gitleaks_mod = types.ModuleType("envdrift.scanner.gitleaks")
-        # pyrefly: ignore [missing-attribute]
-        gitleaks_mod.GitleaksScanner = make_scanner("GitleaksScanner", "gitleaks", True)
-        truffle_mod = types.ModuleType("envdrift.scanner.trufflehog")
-        # pyrefly: ignore [missing-attribute]
-        truffle_mod.TrufflehogScanner = make_scanner("TrufflehogScanner", "trufflehog", True)
-        detect_mod = types.ModuleType("envdrift.scanner.detect_secrets")
-        # pyrefly: ignore [missing-attribute]
-        detect_mod.DetectSecretsScanner = make_scanner(
-            "DetectSecretsScanner", "detect-secrets", True
+        gitleaks_mod = SimpleNamespace(
+            GitleaksScanner=make_scanner("GitleaksScanner", "gitleaks", True),
+        )
+        truffle_mod = SimpleNamespace(
+            TrufflehogScanner=make_scanner("TrufflehogScanner", "trufflehog", True),
+        )
+        detect_mod = SimpleNamespace(
+            DetectSecretsScanner=make_scanner("DetectSecretsScanner", "detect-secrets", True),
         )
 
         monkeypatch.setitem(sys.modules, "envdrift.scanner.gitleaks", gitleaks_mod)
@@ -254,9 +252,9 @@ class TestScanEngine:
                 },
             )
 
-        gitleaks_mod = types.ModuleType("envdrift.scanner.gitleaks")
-        # pyrefly: ignore [missing-attribute]
-        gitleaks_mod.GitleaksScanner = make_scanner("GitleaksScanner", "gitleaks")
+        gitleaks_mod = SimpleNamespace(
+            GitleaksScanner=make_scanner("GitleaksScanner", "gitleaks"),
+        )
         monkeypatch.setitem(sys.modules, "envdrift.scanner.gitleaks", gitleaks_mod)
 
         config = GuardConfig(
@@ -306,9 +304,9 @@ class TestScanEngine:
                 },
             )
 
-        gitleaks_mod = types.ModuleType("envdrift.scanner.gitleaks")
-        # pyrefly: ignore [missing-attribute]
-        gitleaks_mod.GitleaksScanner = make_scanner("GitleaksScanner", "gitleaks")
+        gitleaks_mod = SimpleNamespace(
+            GitleaksScanner=make_scanner("GitleaksScanner", "gitleaks"),
+        )
         monkeypatch.setitem(sys.modules, "envdrift.scanner.gitleaks", gitleaks_mod)
 
         config = GuardConfig(

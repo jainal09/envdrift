@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any, cast
 
 import pytest
 import yaml
@@ -47,16 +48,16 @@ class TestHookEntry:
 
     def test_validate_hook_entry(self):
         """Test envdrift-validate hook entry."""
-        validate_hook = next(h for h in HOOK_ENTRY["hooks"] if h["id"] == "envdrift-validate")
+        hooks = cast(list[dict[str, Any]], HOOK_ENTRY["hooks"])
+        validate_hook = next(h for h in hooks if h["id"] == "envdrift-validate")
         assert validate_hook["language"] == "system"
-        # pyrefly: ignore [not-iterable]
         assert "validate" in validate_hook["entry"]
 
     def test_encryption_hook_entry(self):
         """Test envdrift-encryption hook entry."""
-        encrypt_hook = next(h for h in HOOK_ENTRY["hooks"] if h["id"] == "envdrift-encryption")
+        hooks = cast(list[dict[str, Any]], HOOK_ENTRY["hooks"])
+        encrypt_hook = next(h for h in hooks if h["id"] == "envdrift-encryption")
         assert encrypt_hook["language"] == "system"
-        # pyrefly: ignore [not-iterable]
         assert "encrypt" in encrypt_hook["entry"]
 
 

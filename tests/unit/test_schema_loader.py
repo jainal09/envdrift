@@ -4,9 +4,10 @@ from __future__ import annotations
 
 from textwrap import dedent
 from types import SimpleNamespace
+from typing import cast
 
 import pytest
-from pydantic_settings import BaseSettings
+from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from envdrift.core.schema import FieldMetadata, SchemaLoader, SchemaLoadError, SchemaMetadata
 
@@ -112,8 +113,9 @@ def test_extract_metadata_with_config_object_and_typing():
         items: list[str] = []
 
     loader = SchemaLoader()
-    # pyrefly: ignore [bad-assignment]
-    Settings.model_config = SimpleNamespace(extra="forbid")
+    # Deliberately attach a non-ConfigDict value to exercise the loader's fallback path
+    # when model_config doesn't conform to the standard mapping shape.
+    Settings.model_config = cast(SettingsConfigDict, SimpleNamespace(extra="forbid"))
     schema = loader.extract_metadata(Settings)
 
     assert schema.extra_policy == "forbid"

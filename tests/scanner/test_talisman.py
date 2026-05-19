@@ -396,9 +396,9 @@ class TestTalismanScanExecution:
                 mock_run.side_effect = subprocess.TimeoutExpired(cmd="talisman", timeout=300)
                 result = mock_scanner.scan([tmp_path])
 
-        # pyrefly: ignore [missing-attribute]
-        assert "timed out" in result.error.lower()
         assert result.success is False
+        assert result.error is not None
+        assert "timed out" in result.error.lower()
 
     def test_scan_handles_execution_failure(self, mock_scanner: TalismanScanner, tmp_path: Path):
         """Test that scan handles subprocess execution failure without report."""

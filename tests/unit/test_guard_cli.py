@@ -18,6 +18,7 @@ from envdrift.config import (
     GuardConfig as FileGuardConfig,
 )
 from envdrift.scanner.base import AggregatedScanResult, FindingSeverity, ScanFinding
+from envdrift.scanner.engine import GuardConfig as EngineGuardConfig
 
 runner = CliRunner()
 
@@ -45,7 +46,7 @@ def _make_finding(severity: FindingSeverity) -> ScanFinding:
 
 
 def _patch_guard_dependencies(monkeypatch, config: EnvdriftConfig, result: AggregatedScanResult):
-    created_configs: list[object] = []
+    created_configs: list[EngineGuardConfig] = []
     info_calls: list[bool] = []
 
     class DummyScanner:
@@ -53,7 +54,7 @@ def _patch_guard_dependencies(monkeypatch, config: EnvdriftConfig, result: Aggre
             self.name = name
 
     class DummyEngine:
-        def __init__(self, guard_config):
+        def __init__(self, guard_config: EngineGuardConfig):
             created_configs.append(guard_config)
             self.scanners = [DummyScanner("native")]
 
@@ -134,17 +135,11 @@ def test_guard_uses_config_scanners(tmp_path: Path, monkeypatch):
     assert result.exit_code == 0
 
     guard_config = created_configs[0]
-    # pyrefly: ignore [missing-attribute]
     assert guard_config.use_gitleaks is True
-    # pyrefly: ignore [missing-attribute]
     assert guard_config.use_trufflehog is True
-    # pyrefly: ignore [missing-attribute]
     assert guard_config.use_detect_secrets is True
-    # pyrefly: ignore [missing-attribute]
     assert guard_config.include_git_history is True
-    # pyrefly: ignore [missing-attribute]
     assert guard_config.check_entropy is True
-    # pyrefly: ignore [missing-attribute]
     assert guard_config.ignore_paths == ["vendor/**"]
 
 
@@ -178,7 +173,6 @@ def test_guard_config_can_disable_gitleaks(tmp_path: Path, monkeypatch):
     assert result.exit_code == 0
 
     guard_config = created_configs[0]
-    # pyrefly: ignore [missing-attribute]
     assert guard_config.use_gitleaks is False
 
 
@@ -202,11 +196,8 @@ def test_guard_cli_overrides_config_scanners(tmp_path: Path, monkeypatch):
     assert result.exit_code == 0
 
     guard_config = created_configs[0]
-    # pyrefly: ignore [missing-attribute]
     assert guard_config.use_gitleaks is False
-    # pyrefly: ignore [missing-attribute]
     assert guard_config.use_trufflehog is False
-    # pyrefly: ignore [missing-attribute]
     assert guard_config.use_detect_secrets is False
 
 
@@ -219,7 +210,6 @@ def test_guard_cli_enables_gitleaks_when_config_disables(tmp_path: Path, monkeyp
     assert result.exit_code == 0
 
     guard_config = created_configs[0]
-    # pyrefly: ignore [missing-attribute]
     assert guard_config.use_gitleaks is True
 
 
@@ -234,11 +224,8 @@ def test_guard_native_only_disables_external_scanners(tmp_path: Path, monkeypatc
     assert result.exit_code == 0
 
     guard_config = created_configs[0]
-    # pyrefly: ignore [missing-attribute]
     assert guard_config.use_gitleaks is False
-    # pyrefly: ignore [missing-attribute]
     assert guard_config.use_trufflehog is False
-    # pyrefly: ignore [missing-attribute]
     assert guard_config.use_detect_secrets is False
 
 
@@ -251,9 +238,7 @@ def test_guard_history_and_entropy_flags_override_config(tmp_path: Path, monkeyp
     assert result.exit_code == 0
 
     guard_config = created_configs[0]
-    # pyrefly: ignore [missing-attribute]
     assert guard_config.include_git_history is True
-    # pyrefly: ignore [missing-attribute]
     assert guard_config.check_entropy is True
 
 
@@ -489,7 +474,6 @@ def test_guard_history_flag(tmp_path: Path, monkeypatch):
     result = runner.invoke(app, ["guard", str(tmp_path), "--history"])
     assert result.exit_code == 0
     assert created_configs
-    # pyrefly: ignore [missing-attribute]
     assert created_configs[0].include_git_history is True
 
 
@@ -571,10 +555,8 @@ def test_guard_with_partial_encryption_config(tmp_path: Path, monkeypatch):
     assert result.exit_code == 0
     assert created_configs
     # Verify clear_file was passed to guard config
-    # pyrefly: ignore [missing-attribute]
     assert created_configs[0].allowed_clear_files == [".env.production.clear"]
     # Verify combined_file was passed to guard config
-    # pyrefly: ignore [missing-attribute]
     assert created_configs[0].combined_files == [".env.production"]
 
 
@@ -586,7 +568,6 @@ def test_guard_skip_clear_flag(tmp_path: Path, monkeypatch):
     result = runner.invoke(app, ["guard", str(tmp_path), "--skip-clear"])
     assert result.exit_code == 0
     assert created_configs
-    # pyrefly: ignore [missing-attribute]
     assert created_configs[0].skip_clear_files is True
 
 
@@ -598,7 +579,6 @@ def test_guard_no_skip_clear_flag(tmp_path: Path, monkeypatch):
     result = runner.invoke(app, ["guard", str(tmp_path), "--no-skip-clear"])
     assert result.exit_code == 0
     assert created_configs
-    # pyrefly: ignore [missing-attribute]
     assert created_configs[0].skip_clear_files is False
 
 
@@ -610,7 +590,6 @@ def test_guard_skip_clear_from_config(tmp_path: Path, monkeypatch):
     result = runner.invoke(app, ["guard", str(tmp_path)])
     assert result.exit_code == 0
     assert created_configs
-    # pyrefly: ignore [missing-attribute]
     assert created_configs[0].skip_clear_files is True
 
 
@@ -624,7 +603,6 @@ def test_guard_skip_clear_cli_overrides_config(tmp_path: Path, monkeypatch):
     result = runner.invoke(app, ["guard", str(tmp_path), "--skip-clear"])
     assert result.exit_code == 0
     assert created_configs
-    # pyrefly: ignore [missing-attribute]
     assert created_configs[0].skip_clear_files is True
 
 
@@ -636,7 +614,6 @@ def test_guard_skip_clear_default_is_false(tmp_path: Path, monkeypatch):
     result = runner.invoke(app, ["guard", str(tmp_path)])
     assert result.exit_code == 0
     assert created_configs
-    # pyrefly: ignore [missing-attribute]
     assert created_configs[0].skip_clear_files is False
 
 
@@ -655,7 +632,6 @@ def test_guard_ignore_rules_from_config(tmp_path: Path, monkeypatch):
     result = runner.invoke(app, ["guard", str(tmp_path)])
     assert result.exit_code == 0
     assert created_configs
-    # pyrefly: ignore [missing-attribute]
     assert created_configs[0].ignore_rules == {
         "ftp-password": ["**/*.json"],
         "django-secret-key": ["**/test_settings.py"],
@@ -670,7 +646,6 @@ def test_guard_kingfisher_flag(tmp_path: Path, monkeypatch):
     result = runner.invoke(app, ["guard", str(tmp_path), "--kingfisher"])
     assert result.exit_code == 0
     assert created_configs
-    # pyrefly: ignore [missing-attribute]
     assert created_configs[0].use_kingfisher is True
 
 
@@ -682,7 +657,6 @@ def test_guard_no_kingfisher_flag(tmp_path: Path, monkeypatch):
     result = runner.invoke(app, ["guard", str(tmp_path), "--no-kingfisher"])
     assert result.exit_code == 0
     assert created_configs
-    # pyrefly: ignore [missing-attribute]
     assert created_configs[0].use_kingfisher is False
 
 
@@ -694,7 +668,6 @@ def test_guard_skip_duplicate_flag(tmp_path: Path, monkeypatch):
     result = runner.invoke(app, ["guard", str(tmp_path), "--skip-duplicate"])
     assert result.exit_code == 0
     assert created_configs
-    # pyrefly: ignore [missing-attribute]
     assert created_configs[0].skip_duplicate is True
 
 
@@ -706,7 +679,6 @@ def test_guard_no_skip_duplicate_flag(tmp_path: Path, monkeypatch):
     result = runner.invoke(app, ["guard", str(tmp_path), "--no-skip-duplicate"])
     assert result.exit_code == 0
     assert created_configs
-    # pyrefly: ignore [missing-attribute]
     assert created_configs[0].skip_duplicate is False
 
 
@@ -718,7 +690,6 @@ def test_guard_skip_duplicate_from_config(tmp_path: Path, monkeypatch):
     result = runner.invoke(app, ["guard", str(tmp_path)])
     assert result.exit_code == 0
     assert created_configs
-    # pyrefly: ignore [missing-attribute]
     assert created_configs[0].skip_duplicate is True
 
 
@@ -730,7 +701,6 @@ def test_guard_skip_gitignored_flag(tmp_path: Path, monkeypatch):
     result = runner.invoke(app, ["guard", str(tmp_path), "--skip-gitignored"])
     assert result.exit_code == 0
     assert created_configs
-    # pyrefly: ignore [missing-attribute]
     assert created_configs[0].skip_gitignored is True
 
 
@@ -742,7 +712,6 @@ def test_guard_no_skip_gitignored_flag(tmp_path: Path, monkeypatch):
     result = runner.invoke(app, ["guard", str(tmp_path), "--no-skip-gitignored"])
     assert result.exit_code == 0
     assert created_configs
-    # pyrefly: ignore [missing-attribute]
     assert created_configs[0].skip_gitignored is False
 
 
@@ -754,7 +723,6 @@ def test_guard_skip_gitignored_from_config(tmp_path: Path, monkeypatch):
     result = runner.invoke(app, ["guard", str(tmp_path)])
     assert result.exit_code == 0
     assert created_configs
-    # pyrefly: ignore [missing-attribute]
     assert created_configs[0].skip_gitignored is True
 
 
@@ -766,5 +734,4 @@ def test_guard_skip_gitignored_default_is_false(tmp_path: Path, monkeypatch):
     result = runner.invoke(app, ["guard", str(tmp_path)])
     assert result.exit_code == 0
     assert created_configs
-    # pyrefly: ignore [missing-attribute]
     assert created_configs[0].skip_gitignored is False

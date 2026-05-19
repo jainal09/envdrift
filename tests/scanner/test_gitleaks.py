@@ -518,9 +518,9 @@ class TestGitleaksScanExecution:
                 mock_run.side_effect = subprocess.TimeoutExpired(cmd="gitleaks", timeout=300)
                 result = mock_scanner.scan([tmp_path])
 
-        # pyrefly: ignore [missing-attribute]
-        assert "timed out" in result.error.lower()
         assert result.success is False
+        assert result.error is not None
+        assert "timed out" in result.error.lower()
 
     def test_scan_with_git_history_flag(self, mock_scanner: GitleaksScanner, tmp_path: Path):
         """Test that scan passes correct args for git history scan."""

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 from textwrap import dedent
+from typing import Any, cast
 
 from envdrift.cli_commands.encryption_helpers import (
     build_sops_encrypt_kwargs,
@@ -12,6 +13,7 @@ from envdrift.cli_commands.encryption_helpers import (
 )
 from envdrift.config import EncryptionConfig
 from envdrift.encryption import EncryptionProvider
+from envdrift.encryption.base import EncryptionBackend
 from tests.helpers import DummyEncryptionBackend
 
 
@@ -30,7 +32,7 @@ def test_resolve_encryption_backend_dotenvx_auto_install(tmp_path, monkeypatch):
         ).lstrip()
     )
 
-    captured: dict[str, object] = {}
+    captured: dict[str, Any] = {}
 
     def fake_get_backend(provider, **config):
         captured["provider"] = provider
@@ -47,7 +49,6 @@ def test_resolve_encryption_backend_dotenvx_auto_install(tmp_path, monkeypatch):
     assert backend.name == "dotenvx"
     assert provider == EncryptionProvider.DOTENVX
     assert encryption_config is not None
-    # pyrefly: ignore [bad-index]
     assert captured["config"]["auto_install"] is True
 
 
@@ -68,7 +69,7 @@ def test_resolve_encryption_backend_sops_config(tmp_path, monkeypatch):
         ).lstrip()
     )
 
-    captured: dict[str, object] = {}
+    captured: dict[str, Any] = {}
 
     def fake_get_backend(provider, **config):
         captured["provider"] = provider
@@ -83,11 +84,8 @@ def test_resolve_encryption_backend_sops_config(tmp_path, monkeypatch):
     resolve_encryption_backend(config_file)
 
     assert captured["provider"] == EncryptionProvider.SOPS
-    # pyrefly: ignore [bad-index]
     assert captured["config"]["auto_install"] is True
-    # pyrefly: ignore [bad-index]
     assert captured["config"]["config_file"] == ".sops.yaml"
-    # pyrefly: ignore [bad-index]
     assert captured["config"]["age_key_file"] == ".agekey"
 
 
@@ -122,10 +120,12 @@ def test_build_sops_encrypt_kwargs():
 
 def test_is_encrypted_content_checks_dotenvx_marker():
     """is_encrypted_content should catch dotenvx value markers."""
-    backend = DummyEncryptionBackend(name="dotenvx", has_encrypted_header=lambda _c: False)
+    backend = cast(
+        EncryptionBackend,
+        DummyEncryptionBackend(name="dotenvx", has_encrypted_header=lambda _c: False),
+    )
     content = "API_KEY=encrypted:abc123"
 
-    # pyrefly: ignore [bad-argument-type]
     assert is_encrypted_content(EncryptionProvider.DOTENVX, backend, content) is True
 
 
@@ -136,9 +136,12 @@ def test_is_encrypted_content_dotenvx_header_but_plaintext_values():
     (from a previous partial merge) but the actual values are still plaintext.
     The function should NOT treat this as "already encrypted".
     """
-    backend = DummyEncryptionBackend(
-        name="dotenvx",
-        has_encrypted_header=lambda _c: True,  # Header IS present
+    backend = cast(
+        EncryptionBackend,
+        DummyEncryptionBackend(
+            name="dotenvx",
+            has_encrypted_header=lambda _c: True,  # Header IS present
+        ),
     )
     # Content has header but values are plaintext (no "encrypted:" prefix)
     content = """\
@@ -153,15 +156,17 @@ API_KEY=plaintext_secret_value
 DATABASE_PASSWORD=another_plaintext_value
 """
     # Should return False because there are no "encrypted:" values
-    # pyrefly: ignore [bad-argument-type]
     assert is_encrypted_content(EncryptionProvider.DOTENVX, backend, content) is False
 
 
 def test_is_encrypted_content_dotenvx_header_with_encrypted_values():
     """is_encrypted_content should return True when DOTENVX has header AND encrypted values."""
-    backend = DummyEncryptionBackend(
-        name="dotenvx",
-        has_encrypted_header=lambda _c: True,
+    backend = cast(
+        EncryptionBackend,
+        DummyEncryptionBackend(
+            name="dotenvx",
+            has_encrypted_header=lambda _c: True,
+        ),
     )
     content = """\
 #/-------------------[DOTENV_PUBLIC_KEY]--------------------/
@@ -170,24 +175,27 @@ DOTENV_PUBLIC_KEY_SECRET="034c65f520ec607225d1344fdbace9c31b06c1c8095f413c9cc50a
 API_KEY=encrypted:BJxUJmUB/UdA5MEUSduzwIrW20EM9mQegxI0t5/Urj83ZEKcbPok4ntuCgE6o6aXmRNdbn
 DATABASE_PASSWORD=encrypted:BDMo6jyFdvRLdd2nkCk6l/7yPmULsTQtXuIIP4j7vrZewJ4bMVXIiEHHGWKBHHS0Mz5a
 """
-    # pyrefly: ignore [bad-argument-type]
     assert is_encrypted_content(EncryptionProvider.DOTENVX, backend, content) is True
 
 
 def test_is_encrypted_content_sops_uses_header():
     """For SOPS provider, is_encrypted_content should use has_encrypted_header."""
     # SOPS with header = encrypted
-    backend_with_header = DummyEncryptionBackend(
-        name="sops",
-        has_encrypted_header=lambda _c: True,
+    backend_with_header = cast(
+        EncryptionBackend,
+        DummyEncryptionBackend(
+            name="sops",
+            has_encrypted_header=lambda _c: True,
+        ),
     )
-    # pyrefly: ignore [bad-argument-type]
     assert is_encrypted_content(EncryptionProvider.SOPS, backend_with_header, "any") is True
 
     # SOPS without header = not encrypted
-    backend_no_header = DummyEncryptionBackend(
-        name="sops",
-        has_encrypted_header=lambda _c: False,
+    backend_no_header = cast(
+        EncryptionBackend,
+        DummyEncryptionBackend(
+            name="sops",
+            has_encrypted_header=lambda _c: False,
+        ),
     )
-    # pyrefly: ignore [bad-argument-type]
     assert is_encrypted_content(EncryptionProvider.SOPS, backend_no_header, "any") is False

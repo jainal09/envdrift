@@ -6,7 +6,7 @@ by testing the code paths and exception handling.
 
 from __future__ import annotations
 
-from types import ModuleType
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -17,19 +17,15 @@ from envdrift.vault.base import AuthenticationError, SecretNotFoundError, VaultE
 @pytest.fixture(autouse=True, scope="module")
 def mock_hvac_module():
     """Provide a stub hvac module so tests don't require the real dependency."""
-    hvac_module = ModuleType("hvac")
-    hvac_exceptions = ModuleType("hvac.exceptions")
-
-    # pyrefly: ignore [missing-attribute]
-    hvac_exceptions.Forbidden = type("Forbidden", (Exception,), {})
-    # pyrefly: ignore [missing-attribute]
-    hvac_exceptions.InvalidPath = type("InvalidPath", (Exception,), {})
-    # pyrefly: ignore [missing-attribute]
-    hvac_exceptions.Unauthorized = type("Unauthorized", (Exception,), {})
-    # pyrefly: ignore [missing-attribute]
-    hvac_module.exceptions = hvac_exceptions
-    # pyrefly: ignore [missing-attribute]
-    hvac_module.Client = MagicMock()
+    hvac_exceptions = SimpleNamespace(
+        Forbidden=type("Forbidden", (Exception,), {}),
+        InvalidPath=type("InvalidPath", (Exception,), {}),
+        Unauthorized=type("Unauthorized", (Exception,), {}),
+    )
+    hvac_module = SimpleNamespace(
+        exceptions=hvac_exceptions,
+        Client=MagicMock(),
+    )
 
     with patch.dict(
         "sys.modules",

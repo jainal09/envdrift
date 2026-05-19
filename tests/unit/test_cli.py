@@ -6,6 +6,7 @@ import tomllib
 from pathlib import Path
 from textwrap import dedent
 from types import SimpleNamespace
+from typing import Any, cast
 
 from typer.testing import CliRunner
 
@@ -93,8 +94,7 @@ class TestSyncHelpers:
         warnings: list[str] = []
         monkeypatch.setattr(sync_module, "print_warning", lambda msg: warnings.append(msg))
 
-        # pyrefly: ignore [bad-argument-type]
-        assert sync_module._normalize_max_workers("bad") is None
+        assert sync_module._normalize_max_workers(cast(Any, "bad")) is None
         assert sync_module._normalize_max_workers(True) is None
 
         assert any("Invalid max_workers value" in msg for msg in warnings)
@@ -1146,7 +1146,7 @@ class TestVaultVerification:
         env_file.write_text("SECRET=encrypted")
 
         secret_value = SimpleNamespace(value="DOTENV_PRIVATE_KEY_PRODUCTION=vault-key")
-        captured: dict[str, object] = {}
+        captured: dict[str, Any] = {}
 
         class DummyVault:
             def ensure_authenticated(self) -> None:
@@ -1181,7 +1181,6 @@ class TestVaultVerification:
 
         assert result is True
         assert captured["provider"] == "gcp"
-        # pyrefly: ignore [bad-index]
         assert captured["kwargs"]["project_id"] == "my-gcp-project"
 
     def test_verify_vault_gcp_failure_includes_project_id(self, monkeypatch, tmp_path: Path):
@@ -1271,7 +1270,13 @@ class TestVaultVerification:
                 """
                 return True
 
-            def decrypt(self, env_path, env_keys_file=None, env=None, cwd=None):
+            def decrypt(
+                self,
+                env_path: Path,
+                env_keys_file: object = None,
+                env: dict[str, str] | None = None,
+                cwd: object = None,
+            ) -> None:
                 """
                 Test stub that simulates a decrypt call by recording the production private key and working directory and asserting the env file exists.
 
@@ -1284,7 +1289,7 @@ class TestVaultVerification:
                 Raises:
                     AssertionError: If `env_path` does not exist.
                 """
-                # pyrefly: ignore [missing-attribute]
+                assert env is not None
                 captured["env_var"] = env.get("DOTENV_PRIVATE_KEY_PRODUCTION")
                 captured["cwd"] = cwd
                 assert env_path.exists()
@@ -1518,7 +1523,7 @@ class TestSyncCommand:
         )
 
         monkeypatch.chdir(tmp_path)
-        captured: dict[str, object] = {}
+        captured: dict[str, Any] = {}
 
         monkeypatch.setattr(
             "envdrift.vault.get_vault_client",
@@ -1540,13 +1545,9 @@ class TestSyncCommand:
 
         assert result.exit_code == 0
         sync_config = captured["config"]
-        # pyrefly: ignore [missing-attribute]
         assert sync_config.default_vault_name == "main"
-        # pyrefly: ignore [missing-attribute]
         assert sync_config.env_keys_filename == ".env.keys"
-        # pyrefly: ignore [missing-attribute]
         assert sync_config.mappings[0].secret_name == "dotenv-key"
-        # pyrefly: ignore [missing-attribute]
         assert sync_config.mappings[0].folder_path == Path("services/api")
 
     def test_sync_config_file_toml_supplies_defaults(self, monkeypatch, tmp_path: Path):
@@ -1574,7 +1575,7 @@ class TestSyncCommand:
             )
         )
 
-        captured: dict[str, object] = {}
+        captured: dict[str, Any] = {}
 
         def fake_get_vault_client(provider, **kwargs):
             captured["provider"] = provider
@@ -1598,14 +1599,10 @@ class TestSyncCommand:
 
         assert result.exit_code == 0
         assert captured["provider"] == "aws"
-        # pyrefly: ignore [bad-index]
         assert captured["kwargs"]["region"] == "eu-west-2"
         sync_config = captured["config"]
-        # pyrefly: ignore [missing-attribute]
         assert sync_config.env_keys_filename == "keys.env"
-        # pyrefly: ignore [missing-attribute]
         assert sync_config.default_vault_name == "aws-vault"
-        # pyrefly: ignore [missing-attribute]
         assert sync_config.mappings[0].vault_name == "aws-vault"
 
     def test_sync_falls_back_to_sync_config_when_load_config_fails(
@@ -1639,7 +1636,7 @@ class TestSyncCommand:
         monkeypatch.setattr("envdrift.output.rich.print_service_sync_status", lambda *_, **__: None)
         monkeypatch.setattr("envdrift.output.rich.print_sync_result", lambda *_, **__: None)
 
-        captured: dict[str, object] = {}
+        captured: dict[str, Any] = {}
 
         class DummyEngine:
             def __init__(self, config, vault_client, mode, prompt_callback, progress_callback):
@@ -1662,7 +1659,6 @@ class TestSyncCommand:
         )
 
         assert result.exit_code == 0
-        # pyrefly: ignore [missing-attribute]
         assert captured["config"].default_vault_name == "fallback"
 
     def test_sync_missing_config_file_errors(self, tmp_path: Path):
@@ -1721,7 +1717,7 @@ class TestSyncCommand:
         )
 
         monkeypatch.chdir(tmp_path)
-        captured: dict[str, object] = {}
+        captured: dict[str, Any] = {}
 
         def fake_get_vault_client(provider, **kwargs):
             captured["provider"] = provider
@@ -1745,9 +1741,7 @@ class TestSyncCommand:
 
         assert result.exit_code == 0
         assert captured["provider"] == "hashicorp"
-        # pyrefly: ignore [bad-index]
         assert captured["kwargs"]["url"] == "http://localhost:8200"
-        # pyrefly: ignore [missing-attribute]
         assert captured["config"].default_vault_name == "hc"
 
     def test_sync_autodiscovery_gcp_defaults(self, monkeypatch, tmp_path: Path):
@@ -1773,7 +1767,7 @@ class TestSyncCommand:
         )
 
         monkeypatch.chdir(tmp_path)
-        captured: dict[str, object] = {}
+        captured: dict[str, Any] = {}
 
         def fake_get_vault_client(provider, **kwargs):
             captured["provider"] = provider
@@ -1797,9 +1791,7 @@ class TestSyncCommand:
 
         assert result.exit_code == 0
         assert captured["provider"] == "gcp"
-        # pyrefly: ignore [bad-index]
         assert captured["kwargs"]["project_id"] == "my-gcp-project"
-        # pyrefly: ignore [missing-attribute]
         assert captured["config"].default_vault_name == "gcp"
 
     def test_sync_invalid_toml_config_errors(self, monkeypatch, tmp_path: Path):
@@ -3035,8 +3027,8 @@ class TestLockCommand:
 
         # Mark content as already encrypted
         dummy = _mock_encryption_backend(monkeypatch)
-        # pyrefly: ignore [missing-attribute]
-        dummy.is_encrypted = lambda content: "encrypted:" in content
+        # has_encrypted_header is the API method called by production code (is_encrypted was a typo).
+        dummy.has_encrypted_header = lambda content: "encrypted:" in content  # type: ignore[method-assign]
 
         result = runner.invoke(app, ["lock", "-c", str(config_file), "--force", "--all"])
 
@@ -3830,7 +3822,7 @@ class TestVaultPushCommand:
         )
 
         monkeypatch.chdir(tmp_path)
-        captured: dict[str, object] = {}
+        captured: dict[str, Any] = {}
 
         class MockVaultClient:
             def authenticate(self):
@@ -3859,7 +3851,6 @@ class TestVaultPushCommand:
 
         assert result.exit_code == 0
         assert captured["provider"] == "gcp"
-        # pyrefly: ignore [bad-index]
         assert captured["kwargs"]["project_id"] == "my-gcp-project"
 
     def test_vault_push_all_uses_auto_install(self, monkeypatch, tmp_path: Path):
@@ -3903,7 +3894,7 @@ class TestVaultPushCommand:
             + "\n"
         )
 
-        captured: dict[str, object] = {}
+        captured: dict[str, Any] = {}
 
         dummy_backend = DummyEncryptionBackend()
 
