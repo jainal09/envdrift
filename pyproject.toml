@@ -196,7 +196,6 @@ skips = ["B101", "B110"]  # assert usage and try-except-pass are controlled
 project-includes = ["src/**/*.py", "tests/**/*.py"]
 # Lets `from tests.helpers import ...` and `from tests.integration.conftest ...` resolve.
 search-path = ["."]
-# TODO(#257): clean up pre-existing `# pyrefly: ignore` suppressions in tests/.
 
 [dependency-groups]
 dev = [
