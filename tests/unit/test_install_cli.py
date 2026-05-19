@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import urllib.error
+from email.message import Message
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -231,8 +232,7 @@ class TestInstallAgentCommand:
                     url="",
                     code=404,
                     msg="Not Found",
-                    # pyrefly: ignore [bad-argument-type]
-                    hdrs={},
+                    hdrs=Message(),
                     fp=None,
                 ),
             ),

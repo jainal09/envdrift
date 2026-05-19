@@ -545,9 +545,9 @@ class TestTrufflehogScanExecution:
                 mock_run.side_effect = subprocess.TimeoutExpired(cmd="trufflehog", timeout=600)
                 result = mock_scanner.scan([tmp_path])
 
-        # pyrefly: ignore [missing-attribute]
-        assert "timed out" in result.error.lower()
         assert result.success is False
+        assert result.error is not None
+        assert "timed out" in result.error.lower()
 
     def test_scan_uses_filesystem_mode(self, mock_scanner: TrufflehogScanner, tmp_path: Path):
         """Test that scan uses filesystem mode by default."""

@@ -5,7 +5,6 @@ from __future__ import annotations
 import base64
 import importlib
 import sys
-import types
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
@@ -45,45 +44,28 @@ class DummyDefaultCredentialsError(Exception):
 @pytest.fixture
 def mock_gcp():
     """Mock GCP SDK modules."""
-    exceptions_mod = types.ModuleType("google.api_core.exceptions")
-    # pyrefly: ignore [missing-attribute]
-    exceptions_mod.GoogleAPICallError = DummyGoogleAPICallError
-    # pyrefly: ignore [missing-attribute]
-    exceptions_mod.PermissionDenied = DummyPermissionDeniedError
-    # pyrefly: ignore [missing-attribute]
-    exceptions_mod.Unauthenticated = DummyUnauthenticatedError
-    # pyrefly: ignore [missing-attribute]
-    exceptions_mod.NotFound = DummyNotFoundError
-    # pyrefly: ignore [missing-attribute]
-    exceptions_mod.AlreadyExists = DummyAlreadyExistsError
+    exceptions_mod = SimpleNamespace(
+        GoogleAPICallError=DummyGoogleAPICallError,
+        PermissionDenied=DummyPermissionDeniedError,
+        Unauthenticated=DummyUnauthenticatedError,
+        NotFound=DummyNotFoundError,
+        AlreadyExists=DummyAlreadyExistsError,
+    )
+    api_core_mod = SimpleNamespace(exceptions=exceptions_mod)
 
-    api_core_mod = types.ModuleType("google.api_core")
-    # pyrefly: ignore [missing-attribute]
-    api_core_mod.exceptions = exceptions_mod
+    auth_exceptions_mod = SimpleNamespace(
+        DefaultCredentialsError=DummyDefaultCredentialsError,
+    )
+    auth_mod = SimpleNamespace(exceptions=auth_exceptions_mod)
 
-    auth_exceptions_mod = types.ModuleType("google.auth.exceptions")
-    # pyrefly: ignore [missing-attribute]
-    auth_exceptions_mod.DefaultCredentialsError = DummyDefaultCredentialsError
+    secretmanager_mod = SimpleNamespace(SecretManagerServiceClient=MagicMock())
+    cloud_mod = SimpleNamespace(secretmanager=secretmanager_mod)
 
-    auth_mod = types.ModuleType("google.auth")
-    # pyrefly: ignore [missing-attribute]
-    auth_mod.exceptions = auth_exceptions_mod
-
-    secretmanager_mod = types.ModuleType("google.cloud.secretmanager")
-    # pyrefly: ignore [missing-attribute]
-    secretmanager_mod.SecretManagerServiceClient = MagicMock()
-
-    cloud_mod = types.ModuleType("google.cloud")
-    # pyrefly: ignore [missing-attribute]
-    cloud_mod.secretmanager = secretmanager_mod
-
-    google_mod = types.ModuleType("google")
-    # pyrefly: ignore [missing-attribute]
-    google_mod.api_core = api_core_mod
-    # pyrefly: ignore [missing-attribute]
-    google_mod.auth = auth_mod
-    # pyrefly: ignore [missing-attribute]
-    google_mod.cloud = cloud_mod
+    google_mod = SimpleNamespace(
+        api_core=api_core_mod,
+        auth=auth_mod,
+        cloud=cloud_mod,
+    )
 
     with patch.dict(
         sys.modules,

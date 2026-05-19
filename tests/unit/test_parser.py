@@ -208,9 +208,9 @@ BAR=plaintext
         parser = EnvParser()
         result = parser.parse(env_file)
 
-        assert result.get("FOO") is not None
-        # pyrefly: ignore [missing-attribute]
-        assert result.get("FOO").value == "bar"
+        foo_var = result.get("FOO")
+        assert foo_var is not None
+        assert foo_var.value == "bar"
         assert result.get("NONEXISTENT") is None
 
     def test_env_file_contains(self, tmp_path):
