@@ -44,7 +44,7 @@ format:
 
 # Run type checking with pyrefly
 typecheck:
-	uv run pyrefly check src
+	uv run pyrefly check
 
 # Run security checks with bandit
 security:

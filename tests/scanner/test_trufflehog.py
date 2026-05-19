@@ -545,6 +545,7 @@ class TestTrufflehogScanExecution:
                 mock_run.side_effect = subprocess.TimeoutExpired(cmd="trufflehog", timeout=600)
                 result = mock_scanner.scan([tmp_path])
 
+        # pyrefly: ignore [missing-attribute]
         assert "timed out" in result.error.lower()
         assert result.success is False
 

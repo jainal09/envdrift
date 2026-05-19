@@ -518,6 +518,7 @@ class TestGitleaksScanExecution:
                 mock_run.side_effect = subprocess.TimeoutExpired(cmd="gitleaks", timeout=300)
                 result = mock_scanner.scan([tmp_path])
 
+        # pyrefly: ignore [missing-attribute]
         assert "timed out" in result.error.lower()
         assert result.success is False
 

@@ -112,6 +112,7 @@ def test_extract_metadata_with_config_object_and_typing():
         items: list[str] = []
 
     loader = SchemaLoader()
+    # pyrefly: ignore [bad-assignment]
     Settings.model_config = SimpleNamespace(extra="forbid")
     schema = loader.extract_metadata(Settings)
 

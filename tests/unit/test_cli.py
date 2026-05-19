@@ -93,6 +93,7 @@ class TestSyncHelpers:
         warnings: list[str] = []
         monkeypatch.setattr(sync_module, "print_warning", lambda msg: warnings.append(msg))
 
+        # pyrefly: ignore [bad-argument-type]
         assert sync_module._normalize_max_workers("bad") is None
         assert sync_module._normalize_max_workers(True) is None
 
@@ -1180,6 +1181,7 @@ class TestVaultVerification:
 
         assert result is True
         assert captured["provider"] == "gcp"
+        # pyrefly: ignore [bad-index]
         assert captured["kwargs"]["project_id"] == "my-gcp-project"
 
     def test_verify_vault_gcp_failure_includes_project_id(self, monkeypatch, tmp_path: Path):
@@ -1282,6 +1284,7 @@ class TestVaultVerification:
                 Raises:
                     AssertionError: If `env_path` does not exist.
                 """
+                # pyrefly: ignore [missing-attribute]
                 captured["env_var"] = env.get("DOTENV_PRIVATE_KEY_PRODUCTION")
                 captured["cwd"] = cwd
                 assert env_path.exists()
@@ -1537,9 +1540,13 @@ class TestSyncCommand:
 
         assert result.exit_code == 0
         sync_config = captured["config"]
+        # pyrefly: ignore [missing-attribute]
         assert sync_config.default_vault_name == "main"
+        # pyrefly: ignore [missing-attribute]
         assert sync_config.env_keys_filename == ".env.keys"
+        # pyrefly: ignore [missing-attribute]
         assert sync_config.mappings[0].secret_name == "dotenv-key"
+        # pyrefly: ignore [missing-attribute]
         assert sync_config.mappings[0].folder_path == Path("services/api")
 
     def test_sync_config_file_toml_supplies_defaults(self, monkeypatch, tmp_path: Path):
@@ -1591,10 +1598,14 @@ class TestSyncCommand:
 
         assert result.exit_code == 0
         assert captured["provider"] == "aws"
+        # pyrefly: ignore [bad-index]
         assert captured["kwargs"]["region"] == "eu-west-2"
         sync_config = captured["config"]
+        # pyrefly: ignore [missing-attribute]
         assert sync_config.env_keys_filename == "keys.env"
+        # pyrefly: ignore [missing-attribute]
         assert sync_config.default_vault_name == "aws-vault"
+        # pyrefly: ignore [missing-attribute]
         assert sync_config.mappings[0].vault_name == "aws-vault"
 
     def test_sync_falls_back_to_sync_config_when_load_config_fails(
@@ -1651,6 +1662,7 @@ class TestSyncCommand:
         )
 
         assert result.exit_code == 0
+        # pyrefly: ignore [missing-attribute]
         assert captured["config"].default_vault_name == "fallback"
 
     def test_sync_missing_config_file_errors(self, tmp_path: Path):
@@ -1733,7 +1745,9 @@ class TestSyncCommand:
 
         assert result.exit_code == 0
         assert captured["provider"] == "hashicorp"
+        # pyrefly: ignore [bad-index]
         assert captured["kwargs"]["url"] == "http://localhost:8200"
+        # pyrefly: ignore [missing-attribute]
         assert captured["config"].default_vault_name == "hc"
 
     def test_sync_autodiscovery_gcp_defaults(self, monkeypatch, tmp_path: Path):
@@ -1783,7 +1797,9 @@ class TestSyncCommand:
 
         assert result.exit_code == 0
         assert captured["provider"] == "gcp"
+        # pyrefly: ignore [bad-index]
         assert captured["kwargs"]["project_id"] == "my-gcp-project"
+        # pyrefly: ignore [missing-attribute]
         assert captured["config"].default_vault_name == "gcp"
 
     def test_sync_invalid_toml_config_errors(self, monkeypatch, tmp_path: Path):
@@ -3019,6 +3035,7 @@ class TestLockCommand:
 
         # Mark content as already encrypted
         dummy = _mock_encryption_backend(monkeypatch)
+        # pyrefly: ignore [missing-attribute]
         dummy.is_encrypted = lambda content: "encrypted:" in content
 
         result = runner.invoke(app, ["lock", "-c", str(config_file), "--force", "--all"])
@@ -3842,6 +3859,7 @@ class TestVaultPushCommand:
 
         assert result.exit_code == 0
         assert captured["provider"] == "gcp"
+        # pyrefly: ignore [bad-index]
         assert captured["kwargs"]["project_id"] == "my-gcp-project"
 
     def test_vault_push_all_uses_auto_install(self, monkeypatch, tmp_path: Path):

@@ -33,7 +33,7 @@ jobs:
         run: uv run ruff check src tests
 
       - name: Type check with pyrefly
-        run: uv run pyrefly check src
+        run: uv run pyrefly check
 
       - name: Security check with bandit
         run: uv run bandit -r src -c pyproject.toml

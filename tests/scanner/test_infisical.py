@@ -405,6 +405,7 @@ class TestInfisicalScanExecution:
                 mock_run.side_effect = subprocess.TimeoutExpired(cmd="infisical", timeout=300)
                 result = mock_scanner.scan([tmp_path])
 
+        # pyrefly: ignore [missing-attribute]
         assert "timed out" in result.error.lower()
         assert result.success is False
 
@@ -420,6 +421,7 @@ class TestInfisicalScanExecution:
                 result = mock_scanner.scan([tmp_path])
 
         assert result.success is False
+        # pyrefly: ignore [missing-attribute]
         assert "command failed" in result.error.lower()
 
     def test_scan_uses_source_flag(self, mock_scanner: InfisicalScanner, tmp_path: Path):
