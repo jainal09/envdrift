@@ -527,6 +527,10 @@ def _patch_sync_command_seams(monkeypatch, tmp_path: Path, partial_config):
     from envdrift.encryption import EncryptionProvider
     from envdrift.sync.config import ServiceMapping, SyncConfig
 
+    # Force a wide console so long tmp_path values do not soft-wrap rendered output
+    # (CliRunner has no tty, so Rich would otherwise fall back to an 80-col width).
+    monkeypatch.setenv("COLUMNS", "200")
+
     service_dir = tmp_path / "svc"
     service_dir.mkdir()
     sync_config = SyncConfig(
