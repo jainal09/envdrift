@@ -1,5 +1,12 @@
 # Changelog
 
+## [10.11.3](https://github.com/jainal09/envdrift/compare/v10.11.2...v10.11.3) (2026-05-29)
+
+
+### Bug Fixes
+
+* **partial-encryption:** close remaining review items (S4, S2 hard block, committed-private-key, docs) ([#276](https://github.com/jainal09/envdrift/issues/276)) ([cd35710](https://github.com/jainal09/envdrift/commit/cd35710b2363ebd7d6e46101b96a097c8264351a))
+
 ## [10.11.2](https://github.com/jainal09/envdrift/compare/v10.11.1...v10.11.2) (2026-05-29)
 
 
