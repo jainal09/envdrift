@@ -556,9 +556,12 @@ class TestPrivateKeyFileScanResult:
         key_findings = [f for f in result.findings if f.rule_id == "committed-private-key"]
         assert len(key_findings) == 1
         assert key_findings[0].severity == FindingSeverity.CRITICAL
-        # Remediation must NOT tell the user to encrypt the key file.
-        assert "encrypt" not in key_findings[0].description.lower().replace("do not encrypt", "")
-        assert "rotate" in key_findings[0].description.lower()
+        # Remediation must NOT tell the user to encrypt the key file: "encrypt"
+        # may appear only inside the explicit "do not encrypt" negation, nowhere else.
+        description = key_findings[0].description.lower()
+        assert "do not encrypt" in description
+        assert description.count("encrypt") == 1
+        assert "rotate" in description
         # The key file must not also be flagged with the wrong rule.
         assert not [f for f in result.findings if f.rule_id == "unencrypted-env-file"]
 
