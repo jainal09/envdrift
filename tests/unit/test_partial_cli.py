@@ -422,9 +422,9 @@ def test_pull_no_security_notice_when_already_decrypted(monkeypatch, tmp_path: P
     assert "Security Notice" not in result.output
 
 
-def test_pull_no_security_notice_when_skip_worktree_failed(monkeypatch, tmp_path: Path):
-    """If files were decrypted but skip-worktree never succeeded, the notice must not
-    claim protection — so it is suppressed entirely."""
+def test_pull_danger_warning_when_skip_worktree_failed(monkeypatch, tmp_path: Path):
+    """If files were decrypted but skip-worktree never succeeded, a DANGER warning must
+    be shown — not the yellow Security Notice — so the user knows they have no git protection."""
     env_config = SimpleNamespace(
         name="production",
         secrets_only=False,
@@ -446,10 +446,12 @@ def test_pull_no_security_notice_when_skip_worktree_failed(monkeypatch, tmp_path
 
     assert result.exit_code == 0
     assert "Security Notice" not in result.output
+    assert "DANGER" in result.output
+    assert "No Git Protection Applied" in result.output
 
 
-def test_pull_secrets_only_notice_suppressed_when_unprotected(monkeypatch, tmp_path: Path):
-    """secrets-only: notice suppressed when no file was successfully skip-worktree'd."""
+def test_pull_secrets_only_danger_warning_when_unprotected(monkeypatch, tmp_path: Path):
+    """secrets-only: DANGER warning shown when files were decrypted but no skip-worktree succeeded."""
     env_config = SimpleNamespace(
         name="production",
         secrets_only=True,
@@ -472,6 +474,8 @@ def test_pull_secrets_only_notice_suppressed_when_unprotected(monkeypatch, tmp_p
 
     assert result.exit_code == 0
     assert "Security Notice" not in result.output
+    assert "DANGER" in result.output
+    assert "No Git Protection Applied" in result.output
 
 
 def test_push_message_combine_mode_mentions_combined_files(monkeypatch, tmp_path: Path):
