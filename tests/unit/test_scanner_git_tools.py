@@ -411,7 +411,7 @@ class TestGitSecretsInstallerPaths:
             mock_which.side_effect = lambda x: ("/usr/local/bin/brew" if x == "brew" else None)
             mock_run.side_effect = subprocess.SubprocessError("pipe broken")
             installer = GitSecretsInstaller()
-            with pytest.raises(GitSecretsInstallError):
+            with pytest.raises(GitSecretsInstallError, match="Homebrew installation failed"):
                 installer._install_homebrew()
 
     def test_install_from_source_no_git_raises(self) -> None:
@@ -674,6 +674,7 @@ class TestGitSecretsScan:
             scanner = GitSecretsScanner(auto_install=False)
             result = scanner.scan([path1, path2])
         assert result.error is None
+        assert mock_run.call_count == 6  # confirms path2 was actually scanned
 
     def test_scan_finds_parent_git_root(self, tmp_path: Path) -> None:
         """Test scan walks parent directories to locate the git root."""
@@ -690,12 +691,16 @@ class TestGitSecretsScan:
             scanner = GitSecretsScanner(auto_install=False, register_aws=False)
             result = scanner.scan([secret_file])
         assert result.error is None
-        # The last subprocess call (--scan) should include the subdir-relative path
-        scan_call_str = str(mock_run.call_args_list[-1])
-        assert "subdir" in scan_call_str
+        # The scan command must include the subdir-relative path (e.g. "subdir/secrets.env")
+        scan_cmd = mock_run.call_args_list[-1][0][0]
+        assert any("subdir" in str(arg) for arg in scan_cmd)
 
     def test_scan_no_git_repo_still_scans(self, tmp_path: Path) -> None:
-        """Test scan proceeds with --scan even when no .git directory is found."""
+        """Test scan proceeds with --scan even when no .git directory is found.
+
+        tmp_path lives under /private/var/... (pytest's temp root), which is
+        outside the project tree, so the parent-walk never finds a .git.
+        """
         secret_file = tmp_path / "secrets.env"
         secret_file.write_text("password=topsecret")
         with (
@@ -888,10 +893,10 @@ class TestAddPattern:
             mock_run.return_value = MagicMock(returncode=0)
             scanner = GitSecretsScanner(auto_install=False)
             assert scanner.add_pattern("my-secret-regex", tmp_path, allowed=False) is True
-        call_args = mock_run.call_args[0][0]
-        assert "--add" in call_args
-        assert "my-secret-regex" in call_args
-        assert "--allowed" not in call_args
+            call_args = mock_run.call_args[0][0]
+            assert "--add" in call_args
+            assert "my-secret-regex" in call_args
+            assert "--allowed" not in call_args
 
     def test_add_allowed_pattern_includes_allowed_flag(self, tmp_path: Path) -> None:
         """Test add_pattern includes --allowed flag for false-positive patterns."""
@@ -902,10 +907,10 @@ class TestAddPattern:
             mock_run.return_value = MagicMock(returncode=0)
             scanner = GitSecretsScanner(auto_install=False)
             assert scanner.add_pattern("safe-regex", tmp_path, allowed=True) is True
-        call_args = mock_run.call_args[0][0]
-        assert "--allowed" in call_args
+            call_args = mock_run.call_args[0][0]
+            assert "--allowed" in call_args
 
-    def test_add_pattern_nonzero_returncode_returns_false(self, tmp_path: Path) -> None:
+    def test_add_pattern_nonzero_returncode_returns_false(self) -> None:
         """Test add_pattern returns False when the command exits non-zero."""
         with (
             patch("shutil.which", return_value="/usr/bin/git-secrets"),
@@ -913,16 +918,16 @@ class TestAddPattern:
         ):
             mock_run.return_value = MagicMock(returncode=1)
             scanner = GitSecretsScanner(auto_install=False)
-            assert scanner.add_pattern("pattern", tmp_path) is False
+            assert scanner.add_pattern("pattern", Path()) is False
 
-    def test_add_pattern_exception_returns_false(self, tmp_path: Path) -> None:
+    def test_add_pattern_exception_returns_false(self) -> None:
         """Test add_pattern returns False when an exception is raised."""
         with (
             patch("shutil.which", return_value="/usr/bin/git-secrets"),
             patch("subprocess.run", side_effect=RuntimeError("boom")),
         ):
             scanner = GitSecretsScanner(auto_install=False)
-            assert scanner.add_pattern("pattern", tmp_path) is False
+            assert scanner.add_pattern("pattern", Path()) is False
 
 
 # ---------------------------------------------------------------------------
@@ -951,7 +956,7 @@ class TestListPatterns:
         assert "test_.*" in result["allowed"]
         assert "git secrets --aws-provider" in result["providers"]
 
-    def test_list_patterns_empty_output_returns_empty_lists(self, tmp_path: Path) -> None:
+    def test_list_patterns_empty_output_returns_empty_lists(self) -> None:
         """Test list_patterns returns empty lists when command output is blank."""
         with (
             patch("shutil.which", return_value="/usr/bin/git-secrets"),
@@ -959,10 +964,10 @@ class TestListPatterns:
         ):
             mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
             scanner = GitSecretsScanner(auto_install=False)
-            result = scanner.list_patterns(tmp_path)
+            result = scanner.list_patterns(Path())
         assert result == {"patterns": [], "allowed": [], "providers": []}
 
-    def test_list_patterns_nonzero_returncode_returns_empty(self, tmp_path: Path) -> None:
+    def test_list_patterns_nonzero_returncode_returns_empty(self) -> None:
         """Test list_patterns returns empty lists when command exits non-zero."""
         with (
             patch("shutil.which", return_value="/usr/bin/git-secrets"),
@@ -970,20 +975,20 @@ class TestListPatterns:
         ):
             mock_run.return_value = MagicMock(returncode=1, stdout="", stderr="error")
             scanner = GitSecretsScanner(auto_install=False)
-            result = scanner.list_patterns(tmp_path)
+            result = scanner.list_patterns(Path())
         assert result == {"patterns": [], "allowed": [], "providers": []}
 
-    def test_list_patterns_exception_returns_empty(self, tmp_path: Path) -> None:
+    def test_list_patterns_exception_returns_empty(self) -> None:
         """Test list_patterns returns empty lists when an exception is raised."""
         with (
             patch("shutil.which", return_value="/usr/bin/git-secrets"),
             patch("subprocess.run", side_effect=RuntimeError("fail")),
         ):
             scanner = GitSecretsScanner(auto_install=False)
-            result = scanner.list_patterns(tmp_path)
+            result = scanner.list_patterns(Path())
         assert result == {"patterns": [], "allowed": [], "providers": []}
 
-    def test_list_patterns_lines_without_value_are_skipped(self, tmp_path: Path) -> None:
+    def test_list_patterns_lines_without_value_are_skipped(self) -> None:
         """Test list_patterns skips lines that have no '=' (len(parts) <= 1)."""
         # Each git-config key with no value — split("=", 1) yields a single-element list
         list_output = "secrets.patterns\nsecrets.allowed\nsecrets.providers\n"
@@ -993,7 +998,7 @@ class TestListPatterns:
         ):
             mock_run.return_value = MagicMock(returncode=0, stdout=list_output, stderr="")
             scanner = GitSecretsScanner(auto_install=False)
-            result = scanner.list_patterns(tmp_path)
+            result = scanner.list_patterns(Path())
         assert result == {"patterns": [], "allowed": [], "providers": []}
 
 
@@ -1019,6 +1024,7 @@ class TestGitSecretsScanExtra:
             # Scanning a sub-directory — not a file, so path.is_file() is False
             result = scanner.scan([subdir])
         assert result.error is None
+        assert mock_run.call_count == 2  # --list + --scan (git root in parent)
 
     def test_scan_unique_stderr_finding_is_appended(self, tmp_path: Path) -> None:
         """Test scan appends a stderr finding that is not already in all_findings."""
