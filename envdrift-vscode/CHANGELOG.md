@@ -5,6 +5,13 @@ All notable changes to the EnvDrift VS Code Extension will be documented in this
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.3](https://github.com/jainal09/envdrift/compare/vscode-v0.1.2...vscode-v0.1.3) (2026-05-29)
+
+
+### Bug Fixes
+
+* **deps:** resolve serialize-javascript security advisories ([#11](https://github.com/jainal09/envdrift/issues/11), [#20](https://github.com/jainal09/envdrift/issues/20)) ([#272](https://github.com/jainal09/envdrift/issues/272)) ([257e3d3](https://github.com/jainal09/envdrift/commit/257e3d3b35029df7144f3d1ed3eb8b9a30d57380))
+
 ## [0.1.2](https://github.com/jainal09/envdrift/compare/vscode-v0.1.1...vscode-v0.1.2) (2026-02-28)
 
 
