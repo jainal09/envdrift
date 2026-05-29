@@ -1,5 +1,12 @@
 # Changelog
 
+## [10.11.1](https://github.com/jainal09/envdrift/compare/v10.11.0...v10.11.1) (2026-05-29)
+
+
+### Bug Fixes
+
+* **deps:** resolve serialize-javascript security advisories ([#11](https://github.com/jainal09/envdrift/issues/11), [#20](https://github.com/jainal09/envdrift/issues/20)) ([#272](https://github.com/jainal09/envdrift/issues/272)) ([257e3d3](https://github.com/jainal09/envdrift/commit/257e3d3b35029df7144f3d1ed3eb8b9a30d57380))
+
 ## [10.11.0](https://github.com/jainal09/envdrift/compare/v10.10.1...v10.11.0) (2026-05-29)
 
 
