@@ -520,12 +520,7 @@ class KingfisherScanner(ScannerBackend):
             snippet = finding.get("snippet", "")
             redacted = redact_secret(snippet) if snippet else ""
             # Prefer raw secret fields if present for accurate deduplication
-            raw_secret = (
-                finding.get("secret")
-                or finding.get("match")
-                or finding.get("value")
-                or ""
-            )
+            raw_secret = finding.get("secret") or finding.get("match") or finding.get("value") or ""
             secret_hash = hash_secret(raw_secret) if raw_secret else ""
 
             # Get rule info

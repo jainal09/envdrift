@@ -270,8 +270,11 @@ def pull_cmd(
         console.print(
             Panel(
                 "[bold yellow]⚠  SECRET FILES ARE NOW PLAINTEXT[/bold yellow]\n\n"
-                "These files are [bold]git-protected[/bold] (skip-worktree) until you re-encrypt.\n"
-                "[bold]git add .[/bold] will NOT stage them in their decrypted state.\n\n"
+                "They are marked [bold]skip-worktree[/bold] in this clone, so a plain "
+                "[bold]git add .[/bold] won't stage them while decrypted.\n"
+                "[dim]This is a local guardrail only — it is not shared with teammates and "
+                "can be bypassed with [bold]git add -f[/bold]. Never force-add a plaintext "
+                "secret file.[/dim]\n\n"
                 "Edit your secret files, then run:\n"
                 "  [bold cyan]envdrift push[/bold cyan]   ← re-encrypts and lifts the git protection",
                 title="[bold yellow]Security Notice[/bold yellow]",

@@ -494,7 +494,6 @@ class InfisicalScanner(ScannerBackend):
                         # Invalid JSON in report, skip findings for this path
                         continue
 
-
             except subprocess.TimeoutExpired:
                 return ScanResult(
                     scanner_name=self.name,

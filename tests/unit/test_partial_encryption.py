@@ -646,3 +646,93 @@ def test_unskip_worktree_silent_on_subprocess_error(tmp_path: Path):
         side_effect=_subprocess.TimeoutExpired(["git"], 10),
     ):
         _git_unskip_worktree(tmp_path / ".env.secret")  # must not raise
+
+
+def test_decrypt_secret_file_protects_already_plaintext(tmp_path: Path):
+    """decrypt_secret_file still marks skip-worktree when the file is already plaintext."""
+    from envdrift.core.partial_encryption import decrypt_secret_file
+
+    secret_file = tmp_path / ".env.secret"
+    secret_file.write_text("KEY=plain\n")  # not encrypted
+    config = PartialEncryptionEnvironmentConfig(
+        name="test", clear_file="", secret_file=str(secret_file), combined_file=""
+    )
+    with (
+        patch("envdrift.core.partial_encryption.DotenvxWrapper") as mock_dotenvx_cls,
+        patch("envdrift.core.partial_encryption.subprocess.run") as mock_run,
+    ):
+        decrypt_secret_file(config)
+
+    mock_dotenvx_cls.return_value.decrypt.assert_not_called()  # early return, no decrypt
+    args = mock_run.call_args[0][0]
+    assert "--skip-worktree" in args
+    assert str(secret_file) in args
+
+
+def test_encrypt_secret_file_unskips_when_already_encrypted(tmp_path: Path):
+    """encrypt_secret_file lifts stale skip-worktree even when already encrypted."""
+    from envdrift.core.partial_encryption import encrypt_secret_file
+
+    secret_file = tmp_path / ".env.secret"
+    secret_file.write_text('KEY="encrypted:abc"\n')  # already encrypted
+    config = PartialEncryptionEnvironmentConfig(
+        name="test", clear_file="", secret_file=str(secret_file), combined_file=""
+    )
+    with (
+        patch("envdrift.core.partial_encryption.DotenvxWrapper") as mock_dotenvx_cls,
+        patch("envdrift.core.partial_encryption.subprocess.run") as mock_run,
+    ):
+        encrypt_secret_file(config)
+
+    mock_dotenvx_cls.return_value.encrypt.assert_not_called()  # early return, no encrypt
+    args = mock_run.call_args[0][0]
+    assert "--no-skip-worktree" in args
+    assert str(secret_file) in args
+
+
+# ---------------------------------------------------------------------------
+# skip-worktree protection in secrets_only mode
+# ---------------------------------------------------------------------------
+
+
+def test_pull_secrets_only_skip_worktrees_decrypted_files(secrets_only_config, secrets_dir):
+    """pull_secrets_only marks every decrypted file skip-worktree."""
+    for f in secrets_dir.iterdir():
+        f.write_text(f.read_text() + 'KEY="encrypted:abc123"\n')
+
+    with (
+        patch("envdrift.core.partial_encryption.DotenvxWrapper"),
+        patch("envdrift.core.partial_encryption.subprocess.run") as mock_run,
+    ):
+        pull_secrets_only(secrets_only_config)
+
+    calls = [call.args[0] for call in mock_run.call_args_list]
+    assert len(calls) == 2  # one per file in secrets_dir
+    assert all("--skip-worktree" in argv for argv in calls)
+
+
+def test_pull_secrets_only_protects_already_plaintext_files(secrets_only_config, secrets_dir):
+    """pull_secrets_only marks skip-worktree even for files that were already plaintext."""
+    with (
+        patch("envdrift.core.partial_encryption.DotenvxWrapper") as mock_dotenvx_cls,
+        patch("envdrift.core.partial_encryption.subprocess.run") as mock_run,
+    ):
+        pull_secrets_only(secrets_only_config)
+
+    mock_dotenvx_cls.return_value.decrypt.assert_not_called()
+    calls = [call.args[0] for call in mock_run.call_args_list]
+    assert len(calls) == 2
+    assert all("--skip-worktree" in argv for argv in calls)
+
+
+def test_push_secrets_only_unskips_encrypted_files(secrets_only_config, secrets_dir):
+    """push_secrets_only lifts skip-worktree on every file it encrypts."""
+    with (
+        patch("envdrift.core.partial_encryption.DotenvxWrapper"),
+        patch("envdrift.core.partial_encryption.subprocess.run") as mock_run,
+    ):
+        push_secrets_only(secrets_only_config)
+
+    calls = [call.args[0] for call in mock_run.call_args_list]
+    assert len(calls) == 2
+    assert all("--no-skip-worktree" in argv for argv in calls)

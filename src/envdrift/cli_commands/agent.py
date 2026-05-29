@@ -50,7 +50,9 @@ def _find_agent_binary() -> Path | None:
         return Path(agent_path)
 
     # Check common install locations
-    binary_name = "envdrift-agent.exe" if platform.system().lower() == "windows" else "envdrift-agent"
+    binary_name = (
+        "envdrift-agent.exe" if platform.system().lower() == "windows" else "envdrift-agent"
+    )
     common_paths = [
         Path.home() / ".envdrift" / "bin" / binary_name,
         Path.home() / ".local" / "bin" / binary_name,
