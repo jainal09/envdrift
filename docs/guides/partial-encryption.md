@@ -262,6 +262,8 @@ pattern = ".env*"          # optional glob, default ".env*"
 
 `pattern` is a standard glob applied inside `secrets_dir`. Only files matching it
 are encrypted/decrypted; everything else in the directory is left untouched.
+The dotenvx key file `.env.keys` is **always excluded**, even if it matches the
+pattern — encrypting it would lock away the private keys needed to decrypt everything else.
 
 > **Note — non-recursive by default.** `pattern` is matched with `Path.glob`, which
 > does **not** descend into subdirectories unless the pattern itself contains `**`.

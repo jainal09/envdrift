@@ -212,6 +212,9 @@ def pull_cmd(
 
     decrypted_count = 0
     skipped_count = 0
+    # Tracks whether skip-worktree protection was actually applied to at least one
+    # file, so the Security Notice doesn't claim protection that silently failed.
+    protected_any = False
     errors = []
 
     for env_config in envs_to_process:
@@ -221,6 +224,7 @@ def pull_cmd(
             if env_config.secrets_only:
                 result = pull_secrets_only(env_config)
                 skipped_count += result["already_decrypted"]
+                protected_any = protected_any or result.get("protected", 0) > 0
                 if result["decrypted"]:
                     console.print(
                         f"  [green]✓[/green] Decrypted {result['decrypted']} file(s) in "
@@ -234,7 +238,8 @@ def pull_cmd(
                         f"[dim](all {result['already_decrypted']} file(s) already decrypted)[/dim]"
                     )
             else:
-                was_decrypted = pull_partial_encryption(env_config)
+                was_decrypted, protected = pull_partial_encryption(env_config)
+                protected_any = protected_any or protected
                 if was_decrypted:
                     console.print(f"  [green]✓[/green] Decrypted {env_config.secret_file}")
                     decrypted_count += 1
@@ -272,7 +277,7 @@ def pull_cmd(
     console.print()
     print_success("Pull complete! Secret files are now decrypted for editing.")
 
-    if decrypted_count > 0:
+    if decrypted_count > 0 and protected_any:
         console.print()
         console.print(
             Panel(

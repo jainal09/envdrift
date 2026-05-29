@@ -2670,7 +2670,7 @@ class TestPullCommand:
             # Simulate decryption
             secret_path = Path(env_config.secret_file)
             secret_path.write_text("API_KEY=decrypted_key\nDB_PASS=decrypted_pass\n")
-            return True
+            return (True, True)  # (was_decrypted, protected)
 
         monkeypatch.setattr(
             "envdrift.core.partial_encryption.pull_partial_encryption",
@@ -2763,7 +2763,7 @@ class TestPullCommand:
         # Mock partial encryption pull (already decrypted)
         monkeypatch.setattr(
             "envdrift.core.partial_encryption.pull_partial_encryption",
-            lambda _: False,  # Already decrypted
+            lambda _: (False, True),  # (was_decrypted, protected)
         )
 
         from envdrift.sync.config import ServiceMapping, SyncConfig

@@ -10,11 +10,16 @@ from __future__ import annotations
 import logging
 import subprocess  # nosec B404
 from pathlib import Path
+from typing import NamedTuple
 
 from envdrift.config import PartialEncryptionEnvironmentConfig
 from envdrift.integrations.dotenvx import DotenvxError, DotenvxWrapper
 
 logger = logging.getLogger(__name__)
+
+# dotenvx stores private keys in this file. It must never be encrypted/decrypted
+# as a secret — doing so would lock away the keys needed to decrypt everything else.
+_KEYS_FILENAME = ".env.keys"
 
 WARNING_HEADER = """#/---------------------------------------------------/
 #/ WARNING: AUTO-GENERATED FILE                      /
@@ -134,36 +139,54 @@ def combine_files(env_config: PartialEncryptionEnvironmentConfig) -> dict[str, i
     }
 
 
-def _git_skip_worktree(path: Path) -> None:
+def _run_git_update_index(flag: str, path: Path) -> bool:
+    """Run ``git update-index <flag> <path>`` and report whether it succeeded.
+
+    Returns True only when git exits 0. A non-zero exit (e.g. the file is not
+    tracked) is logged as a warning rather than failing silently; git being
+    unavailable is logged at debug level. Either way the caller gets False so it
+    can avoid claiming protection that was never applied.
+    """
+    try:
+        result = subprocess.run(  # nosec B603, B607
+            ["git", "update-index", flag, str(path)],
+            capture_output=True,
+            timeout=10,
+        )
+    except (subprocess.TimeoutExpired, FileNotFoundError, OSError) as exc:
+        logger.debug("git update-index %s not applied to %s: %s", flag, path, exc)
+        return False
+    if result.returncode != 0:
+        stderr = result.stderr
+        if isinstance(stderr, (bytes, bytearray)):
+            stderr = stderr.decode(errors="replace")
+        logger.warning(
+            "git update-index %s failed for %s (exit %s): %s",
+            flag,
+            path,
+            result.returncode,
+            (stderr or "").strip(),
+        )
+        return False
+    return True
+
+
+def _git_skip_worktree(path: Path) -> bool:
     """Mark path as skip-worktree so git ignores local changes while the file is decrypted.
 
     This prevents `git add .` from staging a plaintext .secret file after pull-partial.
-    Best-effort: silently no-ops if git is unavailable or the file is not tracked.
+    Best-effort: returns False (and logs) if git is unavailable or the file is not tracked.
     """
-    try:
-        subprocess.run(  # nosec B603, B607
-            ["git", "update-index", "--skip-worktree", str(path)],
-            capture_output=True,
-            timeout=10,
-        )
-    except (subprocess.TimeoutExpired, FileNotFoundError, OSError) as exc:
-        logger.debug("skip-worktree not applied to %s: %s", path, exc)
+    return _run_git_update_index("--skip-worktree", path)
 
 
-def _git_unskip_worktree(path: Path) -> None:
+def _git_unskip_worktree(path: Path) -> bool:
     """Unmark path from skip-worktree so git can track the re-encrypted version.
 
     Called after encrypt_secret_file so the encrypted diff is visible to git.
-    Best-effort: silently no-ops if git is unavailable or the file is not tracked.
+    Best-effort: returns False (and logs) if git is unavailable or the file is not tracked.
     """
-    try:
-        subprocess.run(  # nosec B603, B607
-            ["git", "update-index", "--no-skip-worktree", str(path)],
-            capture_output=True,
-            timeout=10,
-        )
-    except (subprocess.TimeoutExpired, FileNotFoundError, OSError) as exc:
-        logger.debug("no-skip-worktree not applied to %s: %s", path, exc)
+    return _run_git_update_index("--no-skip-worktree", path)
 
 
 def encrypt_secret_file(env_config: PartialEncryptionEnvironmentConfig) -> None:
@@ -199,12 +222,15 @@ def encrypt_secret_file(env_config: PartialEncryptionEnvironmentConfig) -> None:
     _git_unskip_worktree(secret_file)
 
 
-def decrypt_secret_file(env_config: PartialEncryptionEnvironmentConfig) -> None:
+def decrypt_secret_file(env_config: PartialEncryptionEnvironmentConfig) -> bool:
     """
     Decrypt the secret file in-place using dotenvx.
 
     Args:
         env_config: Environment configuration
+
+    Returns:
+        True if the file was successfully marked skip-worktree, False otherwise.
 
     Raises:
         PartialEncryptionError: If decryption fails
@@ -217,8 +243,7 @@ def decrypt_secret_file(env_config: PartialEncryptionEnvironmentConfig) -> None:
     # Check if already decrypted
     if not is_file_encrypted(secret_file):
         # Already plaintext on disk — still protect it from accidental commit.
-        _git_skip_worktree(secret_file)
-        return
+        return _git_skip_worktree(secret_file)
 
     # Decrypt using dotenvx
     dotenvx = DotenvxWrapper()
@@ -230,7 +255,7 @@ def decrypt_secret_file(env_config: PartialEncryptionEnvironmentConfig) -> None:
     # Prevent accidental commit of the now-plaintext secret file.
     # git update-index --skip-worktree hides local changes from git add / git status
     # until encrypt_secret_file calls --no-skip-worktree after re-encryption.
-    _git_skip_worktree(secret_file)
+    return _git_skip_worktree(secret_file)
 
 
 def push_partial_encryption(env_config: PartialEncryptionEnvironmentConfig) -> dict[str, int]:
@@ -302,6 +327,9 @@ def push_secrets_only(env_config: PartialEncryptionEnvironmentConfig) -> dict[st
     for file in files:
         if not file.is_file():
             continue
+        if file.name == _KEYS_FILENAME:
+            # Never encrypt the dotenvx key file, even if it matches the pattern.
+            continue
         if is_file_encrypted(file):
             # Already encrypted — lift any stale skip-worktree protection so
             # the encrypted diff is visible to git.
@@ -333,7 +361,8 @@ def pull_secrets_only(env_config: PartialEncryptionEnvironmentConfig) -> dict[st
         env_config: Environment configuration with secrets_only=True
 
     Returns:
-        Dict with counts: {"decrypted": N, "already_decrypted": M}
+        Dict with counts: {"decrypted": N, "already_decrypted": M, "protected": P}
+        where ``protected`` is the number of files successfully marked skip-worktree.
 
     Raises:
         PartialEncryptionError: If the secrets_dir does not exist or decryption fails
@@ -343,14 +372,19 @@ def pull_secrets_only(env_config: PartialEncryptionEnvironmentConfig) -> dict[st
     files = sorted(secrets_dir.glob(env_config.pattern))
     decrypted = 0
     already_decrypted = 0
+    protected = 0
     dotenvx = DotenvxWrapper()
 
     for file in files:
         if not file.is_file():
             continue
+        if file.name == _KEYS_FILENAME:
+            # Never decrypt the dotenvx key file, even if it matches the pattern.
+            continue
         if not is_file_encrypted(file):
             # Already plaintext on disk — still protect it from accidental commit.
-            _git_skip_worktree(file)
+            if _git_skip_worktree(file):
+                protected += 1
             already_decrypted += 1
             continue
         try:
@@ -360,12 +394,20 @@ def pull_secrets_only(env_config: PartialEncryptionEnvironmentConfig) -> dict[st
             raise PartialEncryptionError.decrypt_failed(file, e) from e
         # Prevent accidental commit of the now-plaintext secret file until
         # push_secrets_only re-encrypts it and lifts the protection.
-        _git_skip_worktree(file)
+        if _git_skip_worktree(file):
+            protected += 1
 
-    return {"decrypted": decrypted, "already_decrypted": already_decrypted}
+    return {"decrypted": decrypted, "already_decrypted": already_decrypted, "protected": protected}
 
 
-def pull_partial_encryption(env_config: PartialEncryptionEnvironmentConfig) -> bool:
+class PullPartialResult(NamedTuple):
+    """Outcome of a combine-mode pull for a single environment."""
+
+    was_decrypted: bool  # True if the file was encrypted before this pull (i.e. got decrypted)
+    protected: bool  # True if the file is now marked skip-worktree
+
+
+def pull_partial_encryption(env_config: PartialEncryptionEnvironmentConfig) -> PullPartialResult:
     """
     Pull operation: Decrypt secret file for editing.
 
@@ -376,7 +418,8 @@ def pull_partial_encryption(env_config: PartialEncryptionEnvironmentConfig) -> b
         env_config: Environment configuration
 
     Returns:
-        True if file was decrypted, False if already decrypted
+        PullPartialResult(was_decrypted, protected): whether the file was decrypted
+        by this call, and whether it is now marked skip-worktree.
 
     Raises:
         PartialEncryptionError: If pull operation fails
@@ -389,6 +432,6 @@ def pull_partial_encryption(env_config: PartialEncryptionEnvironmentConfig) -> b
     was_encrypted = is_file_encrypted(secret_file)
 
     # Decrypt secret file
-    decrypt_secret_file(env_config)
+    protected = decrypt_secret_file(env_config)
 
-    return was_encrypted
+    return PullPartialResult(was_decrypted=was_encrypted, protected=protected)

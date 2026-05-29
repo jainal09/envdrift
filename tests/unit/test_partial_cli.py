@@ -387,7 +387,7 @@ def test_pull_shows_security_notice_when_secrets_decrypted(monkeypatch, tmp_path
     monkeypatch.setattr("envdrift.cli_commands.partial.load_config", lambda: config)
     monkeypatch.setattr(
         "envdrift.cli_commands.partial.pull_partial_encryption",
-        lambda _: True,  # was_decrypted=True
+        lambda _: (True, True),  # (was_decrypted, protected)
     )
     monkeypatch.setattr("envdrift.cli_commands.partial.ensure_gitignore_entries", lambda _: [])
 
@@ -412,7 +412,59 @@ def test_pull_no_security_notice_when_already_decrypted(monkeypatch, tmp_path: P
     monkeypatch.setattr("envdrift.cli_commands.partial.load_config", lambda: config)
     monkeypatch.setattr(
         "envdrift.cli_commands.partial.pull_partial_encryption",
-        lambda _: False,  # was_decrypted=False — already plaintext
+        lambda _: (False, True),  # (was_decrypted=False — already plaintext, protected)
+    )
+    monkeypatch.setattr("envdrift.cli_commands.partial.ensure_gitignore_entries", lambda _: [])
+
+    result = runner.invoke(app, ["pull-partial"])
+
+    assert result.exit_code == 0
+    assert "Security Notice" not in result.output
+
+
+def test_pull_no_security_notice_when_skip_worktree_failed(monkeypatch, tmp_path: Path):
+    """If files were decrypted but skip-worktree never succeeded, the notice must not
+    claim protection — so it is suppressed entirely."""
+    env_config = SimpleNamespace(
+        name="production",
+        secrets_only=False,
+        secret_file=str(tmp_path / ".env.secret"),
+        combined_file=str(tmp_path / ".env"),
+    )
+    config = SimpleNamespace(
+        partial_encryption=SimpleNamespace(enabled=True, environments=[env_config])
+    )
+
+    monkeypatch.setattr("envdrift.cli_commands.partial.load_config", lambda: config)
+    monkeypatch.setattr(
+        "envdrift.cli_commands.partial.pull_partial_encryption",
+        lambda _: (True, False),  # decrypted, but skip-worktree failed
+    )
+    monkeypatch.setattr("envdrift.cli_commands.partial.ensure_gitignore_entries", lambda _: [])
+
+    result = runner.invoke(app, ["pull-partial"])
+
+    assert result.exit_code == 0
+    assert "Security Notice" not in result.output
+
+
+def test_pull_secrets_only_notice_suppressed_when_unprotected(monkeypatch, tmp_path: Path):
+    """secrets-only: notice suppressed when no file was successfully skip-worktree'd."""
+    env_config = SimpleNamespace(
+        name="production",
+        secrets_only=True,
+        secrets_dir=str(tmp_path / "secrets"),
+        pattern=".env*",
+        combined_file="",
+    )
+    config = SimpleNamespace(
+        partial_encryption=SimpleNamespace(enabled=True, environments=[env_config])
+    )
+
+    monkeypatch.setattr("envdrift.cli_commands.partial.load_config", lambda: config)
+    monkeypatch.setattr(
+        "envdrift.cli_commands.partial.pull_secrets_only",
+        lambda _: {"decrypted": 2, "already_decrypted": 0, "protected": 0},
     )
     monkeypatch.setattr("envdrift.cli_commands.partial.ensure_gitignore_entries", lambda _: [])
 

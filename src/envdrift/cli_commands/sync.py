@@ -885,7 +885,7 @@ def pull(
                 continue
 
             try:
-                was_decrypted = pull_partial_encryption(env_config)
+                was_decrypted, _ = pull_partial_encryption(env_config)
 
                 if was_decrypted:
                     console.print(f"  [green]+[/green] {secret_file} [dim]- decrypted[/dim]")
