@@ -8,7 +8,7 @@ This module implements a simple build pattern for partial encryption:
 from __future__ import annotations
 
 import logging
-import subprocess
+import subprocess  # nosec B404
 from pathlib import Path
 
 from envdrift.config import PartialEncryptionEnvironmentConfig
@@ -183,6 +183,9 @@ def encrypt_secret_file(env_config: PartialEncryptionEnvironmentConfig) -> None:
 
     # Check if already encrypted
     if is_file_encrypted(secret_file):
+        # Already encrypted (e.g. push run twice) — still lift any stale
+        # skip-worktree protection so the encrypted diff is visible to git.
+        _git_unskip_worktree(secret_file)
         return
 
     # Encrypt using dotenvx
@@ -213,7 +216,9 @@ def decrypt_secret_file(env_config: PartialEncryptionEnvironmentConfig) -> None:
 
     # Check if already decrypted
     if not is_file_encrypted(secret_file):
-        return  # Already decrypted
+        # Already plaintext on disk — still protect it from accidental commit.
+        _git_skip_worktree(secret_file)
+        return
 
     # Decrypt using dotenvx
     dotenvx = DotenvxWrapper()
@@ -298,6 +303,9 @@ def push_secrets_only(env_config: PartialEncryptionEnvironmentConfig) -> dict[st
         if not file.is_file():
             continue
         if is_file_encrypted(file):
+            # Already encrypted — lift any stale skip-worktree protection so
+            # the encrypted diff is visible to git.
+            _git_unskip_worktree(file)
             already_encrypted += 1
             continue
         try:
@@ -305,6 +313,8 @@ def push_secrets_only(env_config: PartialEncryptionEnvironmentConfig) -> dict[st
             encrypted += 1
         except DotenvxError as e:
             raise PartialEncryptionError.encrypt_failed(file, e) from e
+        # Re-enable git tracking now the file is encrypted again.
+        _git_unskip_worktree(file)
 
     return {"encrypted": encrypted, "already_encrypted": already_encrypted}
 
@@ -339,6 +349,8 @@ def pull_secrets_only(env_config: PartialEncryptionEnvironmentConfig) -> dict[st
         if not file.is_file():
             continue
         if not is_file_encrypted(file):
+            # Already plaintext on disk — still protect it from accidental commit.
+            _git_skip_worktree(file)
             already_decrypted += 1
             continue
         try:
@@ -346,6 +358,9 @@ def pull_secrets_only(env_config: PartialEncryptionEnvironmentConfig) -> dict[st
             decrypted += 1
         except DotenvxError as e:
             raise PartialEncryptionError.decrypt_failed(file, e) from e
+        # Prevent accidental commit of the now-plaintext secret file until
+        # push_secrets_only re-encrypts it and lifts the protection.
+        _git_skip_worktree(file)
 
     return {"decrypted": decrypted, "already_decrypted": already_decrypted}
 

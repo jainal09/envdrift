@@ -28,3 +28,10 @@ repos:
         language: system
         types: [python]
         pass_filenames: false
+
+      - id: bandit
+        name: Security check with bandit
+        entry: uv run bandit -r src -c pyproject.toml
+        language: system
+        types: [python]
+        pass_filenames: false
