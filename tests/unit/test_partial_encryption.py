@@ -577,3 +577,72 @@ def test_pull_partial_encryption_raises_when_secret_missing(tmp_path: Path):
     )
     with pytest.raises(PartialEncryptionError, match="Secret file not found"):
         pull_partial_encryption(config)
+
+
+# ---------------------------------------------------------------------------
+# skip-worktree protection (Severity 2 fix)
+# ---------------------------------------------------------------------------
+
+
+def test_decrypt_secret_file_calls_skip_worktree(tmp_path: Path):
+    """decrypt_secret_file marks the file skip-worktree after decryption."""
+    from envdrift.core.partial_encryption import decrypt_secret_file
+
+    secret_file = tmp_path / ".env.secret"
+    secret_file.write_text('KEY="encrypted:abc"\n')
+    config = PartialEncryptionEnvironmentConfig(
+        name="test", clear_file="", secret_file=str(secret_file), combined_file=""
+    )
+    with (
+        patch("envdrift.core.partial_encryption.DotenvxWrapper"),
+        patch("envdrift.core.partial_encryption.subprocess.run") as mock_run,
+    ):
+        decrypt_secret_file(config)
+
+    args = mock_run.call_args[0][0]
+    assert "--skip-worktree" in args
+    assert str(secret_file) in args
+
+
+def test_encrypt_secret_file_calls_unskip_worktree(tmp_path: Path):
+    """encrypt_secret_file un-marks skip-worktree after re-encryption."""
+    from envdrift.core.partial_encryption import encrypt_secret_file
+
+    secret_file = tmp_path / ".env.secret"
+    secret_file.write_text("KEY=plain\n")
+    config = PartialEncryptionEnvironmentConfig(
+        name="test", clear_file="", secret_file=str(secret_file), combined_file=""
+    )
+    with (
+        patch("envdrift.core.partial_encryption.DotenvxWrapper"),
+        patch("envdrift.core.partial_encryption.subprocess.run") as mock_run,
+    ):
+        encrypt_secret_file(config)
+
+    args = mock_run.call_args[0][0]
+    assert "--no-skip-worktree" in args
+    assert str(secret_file) in args
+
+
+def test_skip_worktree_silent_on_git_unavailable(tmp_path: Path):
+    """_git_skip_worktree does not raise when git is unavailable."""
+    from envdrift.core.partial_encryption import _git_skip_worktree
+
+    with patch(
+        "envdrift.core.partial_encryption.subprocess.run",
+        side_effect=FileNotFoundError("git not found"),
+    ):
+        _git_skip_worktree(tmp_path / ".env.secret")  # must not raise
+
+
+def test_unskip_worktree_silent_on_subprocess_error(tmp_path: Path):
+    """_git_unskip_worktree does not raise on subprocess errors."""
+    import subprocess as _subprocess
+
+    from envdrift.core.partial_encryption import _git_unskip_worktree
+
+    with patch(
+        "envdrift.core.partial_encryption.subprocess.run",
+        side_effect=_subprocess.TimeoutExpired(["git"], 10),
+    ):
+        _git_unskip_worktree(tmp_path / ".env.secret")  # must not raise

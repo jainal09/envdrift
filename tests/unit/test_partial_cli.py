@@ -370,3 +370,53 @@ def test_push_secrets_only_does_not_add_combined_to_gitignore(monkeypatch, tmp_p
     assert captured_paths == [], (
         "secrets_only mode must not register any combined_file in .gitignore"
     )
+
+
+def test_pull_shows_security_notice_when_secrets_decrypted(monkeypatch, tmp_path: Path):
+    """pull-partial shows the yellow warning panel when at least one file is decrypted."""
+    env_config = SimpleNamespace(
+        name="production",
+        secrets_only=False,
+        secret_file=str(tmp_path / ".env.secret"),
+        combined_file=str(tmp_path / ".env"),
+    )
+    config = SimpleNamespace(
+        partial_encryption=SimpleNamespace(enabled=True, environments=[env_config])
+    )
+
+    monkeypatch.setattr("envdrift.cli_commands.partial.load_config", lambda: config)
+    monkeypatch.setattr(
+        "envdrift.cli_commands.partial.pull_partial_encryption",
+        lambda _: True,  # was_decrypted=True
+    )
+    monkeypatch.setattr("envdrift.cli_commands.partial.ensure_gitignore_entries", lambda _: [])
+
+    result = runner.invoke(app, ["pull-partial"])
+
+    assert result.exit_code == 0
+    assert "Security Notice" in result.output
+
+
+def test_pull_no_security_notice_when_already_decrypted(monkeypatch, tmp_path: Path):
+    """pull-partial omits the warning panel when all files were already plaintext."""
+    env_config = SimpleNamespace(
+        name="production",
+        secrets_only=False,
+        secret_file=str(tmp_path / ".env.secret"),
+        combined_file=str(tmp_path / ".env"),
+    )
+    config = SimpleNamespace(
+        partial_encryption=SimpleNamespace(enabled=True, environments=[env_config])
+    )
+
+    monkeypatch.setattr("envdrift.cli_commands.partial.load_config", lambda: config)
+    monkeypatch.setattr(
+        "envdrift.cli_commands.partial.pull_partial_encryption",
+        lambda _: False,  # was_decrypted=False — already plaintext
+    )
+    monkeypatch.setattr("envdrift.cli_commands.partial.ensure_gitignore_entries", lambda _: [])
+
+    result = runner.invoke(app, ["pull-partial"])
+
+    assert result.exit_code == 0
+    assert "Security Notice" not in result.output
