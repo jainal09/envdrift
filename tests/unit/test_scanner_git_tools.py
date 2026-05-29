@@ -675,6 +675,7 @@ class TestGitSecretsScan:
             result = scanner.scan([path1, path2])
         assert result.error is None
         assert mock_run.call_count == 6  # confirms path2 was actually scanned
+        assert result.files_scanned == 2  # both files counted; proves the loop continued past path1
 
     def test_scan_finds_parent_git_root(self, tmp_path: Path) -> None:
         """Test scan walks parent directories to locate the git root."""
