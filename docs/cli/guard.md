@@ -457,6 +457,8 @@ ignore_paths = [
 | `ftp-password` | Password in JSON config |
 | `high-entropy-string` | High entropy value |
 | `unencrypted-env-file` | .env without encryption |
+| `unencrypted-secret-file` | partial-encryption `.secret` file left plaintext |
+| `committed-private-key` | dotenvx `.env.keys` tracked/staged in git |
 
 Use `--verbose` or `--json` to see rule IDs for your findings.
 

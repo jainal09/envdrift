@@ -18,6 +18,24 @@ from envdrift.core.schema import SchemaMetadata
 if TYPE_CHECKING:
     pass
 
+# dotenvx writes its public key as ``DOTENV_PUBLIC_KEY`` (default env) or
+# ``DOTENV_PUBLIC_KEY_<ENV>``. The public key is, by definition, public — never a
+# secret to encrypt or flag. Shared so the scanner and encryption analysis agree
+# on what the artifact looks like (single source of truth).
+DOTENVX_PUBLIC_KEY_PREFIX = "DOTENV_PUBLIC_KEY"
+
+
+def is_dotenvx_public_key_var(var_name: str) -> bool:
+    """Return True if ``var_name`` is dotenvx's public-key artifact.
+
+    Matches the exact ``DOTENV_PUBLIC_KEY`` default and the ``DOTENV_PUBLIC_KEY_<ENV>``
+    per-environment form, but not an unrelated variable that merely shares the
+    prefix (e.g. ``DOTENV_PUBLIC_KEYSTORE``).
+    """
+    return var_name == DOTENVX_PUBLIC_KEY_PREFIX or var_name.startswith(
+        f"{DOTENVX_PUBLIC_KEY_PREFIX}_"
+    )
+
 
 @dataclass
 class EncryptionReport:
@@ -144,6 +162,15 @@ class EncryptionDetector:
         schema_sensitive = set(schema.sensitive_fields) if schema else set()
 
         for var_name, env_var in env_file.variables.items():
+            # dotenvx's DOTENV_PUBLIC_KEY* artifact is a public key: always
+            # plaintext, safe to commit, and never a value to encrypt. Skip it so it
+            # neither counts as a plaintext var (which would keep is_fully_encrypted
+            # False for a correctly-encrypted file) nor trips the sensitive-name
+            # heuristic — a partial-encryption ``.secret`` file's key is named
+            # ``DOTENV_PUBLIC_KEY_<ENV>_SECRET``, which matches the ``*_SECRET``
+            # pattern and would otherwise be reported as a plaintext secret.
+            if is_dotenvx_public_key_var(var_name):
+                continue
             if env_var.encryption_status == EncryptionStatus.ENCRYPTED:
                 report.encrypted_vars.add(var_name)
             elif env_var.encryption_status == EncryptionStatus.EMPTY:

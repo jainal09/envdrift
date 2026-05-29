@@ -24,7 +24,12 @@ from envdrift.scanner.base import (
     ScanResult,
 )
 from envdrift.scanner.ignores import IgnoreConfig, IgnoreFilter
-from envdrift.scanner.native import DOTENVX_MARKERS, SOPS_MARKERS, NativeScanner
+from envdrift.scanner.native import (
+    DOTENVX_MARKERS,
+    SOPS_MARKERS,
+    NativeScanner,
+    _is_encrypted_value_line,
+)
 
 if TYPE_CHECKING:
     pass
@@ -578,11 +583,18 @@ class ScanEngine:
         return [finding for finding in findings if not finding.file_path.name.endswith(".clear")]
 
     def _filter_encrypted_files(self, findings: list[ScanFinding]) -> list[ScanFinding]:
-        """Filter out findings from files with encryption markers (dotenvx/SOPS).
+        """Filter out findings from the *encrypted portions* of files.
 
         Encrypted files contain ciphertext which can trigger false positives
         from external scanners (detect-secrets, infisical, etc.) that detect
         high-entropy strings or hex patterns in the encrypted values.
+
+        The filter is line-aware so it does not discard real findings on the
+        cleartext portion of a *combined* partial-encryption file (which
+        interleaves dotenvx-encrypted secret lines with plaintext config). A
+        finding survives when it points at a specific line that is NOT itself an
+        encrypted value; a finding on a ciphertext line, or one with no line
+        information (e.g. a blob flagged by an external scanner), is dropped.
 
         This applies centrally to ALL scanners.
 
@@ -590,11 +602,12 @@ class ScanEngine:
             findings: List of findings to filter.
 
         Returns:
-            Filtered list excluding findings from encrypted files.
+            Filtered list excluding findings on encrypted content.
         """
-        # Cache file encryption status
+        # Cache per-file encryption status and (lazily) split lines.
         encrypted_files: set[str] = set()
         checked_files: set[str] = set()
+        lines_cache: dict[str, list[str]] = {}
 
         def is_file_encrypted(file_path: str) -> bool:
             if file_path in encrypted_files:
@@ -616,7 +629,29 @@ class ScanEngine:
                 pass
             return False
 
-        return [finding for finding in findings if not is_file_encrypted(str(finding.file_path))]
+        def line_at(file_path: str, line_number: int) -> str:
+            if file_path not in lines_cache:
+                try:
+                    with open(file_path, encoding="utf-8", errors="ignore") as f:
+                        lines_cache[file_path] = f.read().splitlines()
+                except OSError:
+                    lines_cache[file_path] = []
+            lines = lines_cache[file_path]
+            if 1 <= line_number <= len(lines):
+                return lines[line_number - 1]
+            return ""
+
+        def keep(finding: ScanFinding) -> bool:
+            file_path = str(finding.file_path)
+            if not is_file_encrypted(file_path):
+                return True
+            # File has encryption markers. Keep findings on a specific cleartext
+            # line; drop findings on a ciphertext line or with no line info.
+            if finding.line_number is None:
+                return False
+            return not _is_encrypted_value_line(line_at(file_path, finding.line_number))
+
+        return [finding for finding in findings if keep(finding)]
 
     def _filter_public_keys(self, findings: list[ScanFinding]) -> list[ScanFinding]:
         """Filter out findings that are dotenvx public keys.
