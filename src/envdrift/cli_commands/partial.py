@@ -362,3 +362,19 @@ def pull_cmd(
                 expand=False,
             )
         )
+    elif decrypted_count > 0:
+        console.print()
+        console.print(
+            Panel(
+                "[bold red]🚨  SECRET FILES ARE PLAINTEXT WITH NO GIT PROTECTION[/bold red]\n\n"
+                "Decryption succeeded but [bold]git skip-worktree[/bold] could not be applied "
+                "(e.g. detached HEAD, untracked file, or git unavailable).\n\n"
+                "[bold]A plain [bold cyan]git add .[/bold cyan] WILL stage your plaintext "
+                "secrets.[/bold] Do not run git add until you have re-encrypted.\n\n"
+                "Re-encrypt immediately with:\n"
+                "  [bold cyan]envdrift push[/bold cyan]   ← re-encrypts your secret files",
+                title="[bold red]⚠  DANGER: No Git Protection Applied[/bold red]",
+                border_style="red",
+                expand=False,
+            )
+        )
