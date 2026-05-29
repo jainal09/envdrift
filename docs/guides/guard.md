@@ -199,6 +199,15 @@ Common rule IDs:
 | `ftp-password` | FTP/SFTP password in JSON/config |
 | `high-entropy-string` | High entropy value (entropy scan) |
 | `unencrypted-env-file` | .env file without encryption markers |
+| `committed-private-key` | dotenvx `.env.keys` private-key file tracked or staged in git |
+
+> **`committed-private-key` (CRITICAL).** dotenvx writes decryption keys to
+> `.env.keys`. A local, gitignored/untracked `.env.keys` is the expected state and
+> is **not** flagged. Once git tracks or stages it, guard flags it as
+> `committed-private-key` — anyone with repo access could decrypt every secret it
+> protects. The fix is **not** to encrypt the key file; remove it from git
+> (`git rm --cached .env.keys`), rotate the exposed key(s), and add `.env.keys` to
+> `.gitignore` (`envdrift push` / `pull-partial` do this automatically).
 
 ### Skipping Clear Files
 

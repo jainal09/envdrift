@@ -328,6 +328,156 @@ sops:
         assert len(result.findings) == 0
 
 
+class TestMixedContentScanning:
+    """Tests for partial-encryption combined files (Severity 4).
+
+    Combined files interleave dotenvx-encrypted secret lines with cleartext
+    config lines. A whole-file skip (triggered by a single ``encrypted:`` marker)
+    used to leave the cleartext portion unscanned, hiding plaintext secrets that
+    were pasted into the clear half. Pattern scanning now runs per-line.
+    """
+
+    @pytest.fixture
+    def scanner(self) -> NativeScanner:
+        """Create a native scanner instance."""
+        return NativeScanner()
+
+    def test_scans_cleartext_secret_in_combined_file(self, scanner: NativeScanner, tmp_path: Path):
+        """A plaintext secret in the cleartext half of a combined file is flagged."""
+        env_file = tmp_path / ".env.production"
+        env_file.write_text(
+            """#/---[DOTENV_PUBLIC_KEY]---/
+DOTENV_PUBLIC_KEY="abc123"
+# clear (non-sensitive) config
+LOG_LEVEL=info
+AWS_KEY="AKIAIOSFODNN7EXAMPLE"
+# secrets (encrypted)
+DATABASE_URL="encrypted:xyz789"
+"""
+        )
+
+        result = scanner.scan([tmp_path])
+
+        aws_findings = [f for f in result.findings if "aws" in f.rule_id.lower()]
+        assert len(aws_findings) >= 1, (
+            "plaintext secret in the cleartext half of a combined file must be scanned"
+        )
+
+    def test_combined_file_ignores_encrypted_and_public_key(
+        self, scanner: NativeScanner, tmp_path: Path
+    ):
+        """Encrypted values and the dotenvx public key produce no pattern findings."""
+        env_file = tmp_path / ".env.production"
+        env_file.write_text(
+            """#/---[DOTENV_PUBLIC_KEY]---/
+DOTENV_PUBLIC_KEY_PRODUCTION="0339d2eef5d3a3a4f8c1d2b3a4958e6f7a8b9c0d1e2f3a4b5c6d7e8f9a0b1c2d3e4"
+LOG_LEVEL=info
+DATABASE_URL="encrypted:vault1AbCdEfGhIjKlMnOpQrStUvWxYz0123456789"
+API_KEY="encrypted:vault2ZyXwVuTsRqPoNmLkJiHgFeDcBa9876543210"
+"""
+        )
+
+        result = scanner.scan([tmp_path])
+
+        assert result.findings == [], (
+            f"encrypted values / public key should not be flagged, got: "
+            f"{[f.rule_id for f in result.findings]}"
+        )
+
+
+class TestPrivateKeyFileScanResult:
+    """Tests for the dedicated .env.keys (committed-private-key) rule.
+
+    Collection of .env.keys is covered in TestNativeScannerInternals; these tests
+    cover the *finding* produced. A tracked/staged key file is flagged
+    committed-private-key (CRITICAL) with accurate remediation — never the awkward
+    unencrypted-env-file rule, whose "encrypt it" advice is wrong for a key file.
+    A local/untracked key file is left alone.
+    """
+
+    @pytest.fixture
+    def scanner(self) -> NativeScanner:
+        """Create a native scanner instance."""
+        return NativeScanner()
+
+    @staticmethod
+    def _git_repo(tmp_path: Path):
+        """Initialise a git repo in tmp_path, returning a git() runner."""
+        import shutil
+        import subprocess
+
+        if shutil.which("git") is None:
+            pytest.skip("git not available")
+
+        def git(*args: str) -> None:
+            subprocess.run(["git", *args], cwd=tmp_path, check=True, capture_output=True)
+
+        git("init")
+        git("config", "user.email", "test@example.com")
+        git("config", "user.name", "Test")
+        return git
+
+    _KEY_CONTENT = (
+        'DOTENV_PRIVATE_KEY_PRODUCTION="a1b2c3d4e5f6a7b8c9d0e1f2'
+        'a3b4c5d6e7f8a9b0c1d2e3f4a5b6c7d8e9f0a1b2"\n'
+    )
+
+    def test_local_untracked_key_file_is_not_flagged(self, scanner: NativeScanner, tmp_path: Path):
+        """A local, untracked .env.keys (the expected state) produces no findings."""
+        self._git_repo(tmp_path)
+        (tmp_path / ".env.keys").write_text(self._KEY_CONTENT)
+
+        result = scanner.scan([tmp_path])
+
+        assert result.findings == [], (
+            f"local key file should not be flagged, got: {[f.rule_id for f in result.findings]}"
+        )
+
+    def test_gitignored_key_file_is_not_flagged(self, scanner: NativeScanner, tmp_path: Path):
+        """A gitignored .env.keys (normal safe state) produces no findings."""
+        self._git_repo(tmp_path)
+        (tmp_path / ".gitignore").write_text(".env.keys\n")
+        (tmp_path / ".env.keys").write_text(self._KEY_CONTENT)
+
+        result = scanner.scan([tmp_path])
+
+        assert result.findings == []
+
+    def test_staged_key_file_flagged_as_committed_private_key(
+        self, scanner: NativeScanner, tmp_path: Path
+    ):
+        """A staged .env.keys is flagged as committed-private-key (CRITICAL)."""
+        git = self._git_repo(tmp_path)
+        (tmp_path / ".env.keys").write_text(self._KEY_CONTENT)
+        git("add", "-f", ".env.keys")
+
+        result = scanner.scan([tmp_path])
+
+        key_findings = [f for f in result.findings if f.rule_id == "committed-private-key"]
+        assert len(key_findings) == 1
+        assert key_findings[0].severity == FindingSeverity.CRITICAL
+        # Remediation must NOT tell the user to encrypt the key file.
+        assert "encrypt" not in key_findings[0].description.lower().replace("do not encrypt", "")
+        assert "rotate" in key_findings[0].description.lower()
+        # The key file must not also be flagged with the wrong rule.
+        assert not [f for f in result.findings if f.rule_id == "unencrypted-env-file"]
+
+    def test_committed_key_file_flagged_as_committed_private_key(
+        self, scanner: NativeScanner, tmp_path: Path
+    ):
+        """A committed .env.keys is flagged as committed-private-key (CRITICAL)."""
+        git = self._git_repo(tmp_path)
+        (tmp_path / ".env.keys").write_text(self._KEY_CONTENT)
+        git("add", "-f", ".env.keys")
+        git("commit", "-m", "oops")
+
+        result = scanner.scan([tmp_path])
+
+        key_findings = [f for f in result.findings if f.rule_id == "committed-private-key"]
+        assert len(key_findings) == 1
+        assert key_findings[0].severity == FindingSeverity.CRITICAL
+
+
 class TestSecretPatternDetection:
     """Tests for secret pattern detection."""
 

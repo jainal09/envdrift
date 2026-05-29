@@ -553,6 +553,32 @@ class NativeScanner(ScannerBackend):
         if "\x00" in content[:8192]:
             return findings
 
+        # Private-key file (.env.keys) handling.
+        # A dotenvx private key must never be committed; "encrypt it" (the
+        # unencrypted-env-file remediation) is nonsensical advice for a key file.
+        # A purely local, untracked key file is the expected state (a gitignored one
+        # is already dropped during collection), so only flag it once git tracks or
+        # stages it. Either way it bypasses the env-file/pattern checks below.
+        if self._is_private_key_file(file_path):
+            if self._is_tracked_or_staged(file_path):
+                findings.append(
+                    ScanFinding(
+                        file_path=file_path,
+                        rule_id="committed-private-key",
+                        rule_description="Committed Private Key",
+                        description=(
+                            f"Private key file '{file_path.name}' is tracked or staged "
+                            "in git. Anyone with repository access can decrypt every "
+                            "secret it protects. Do NOT encrypt it — remove it from git "
+                            f"('git rm --cached {file_path.name}'), rotate the exposed "
+                            "key(s), and add '.env.keys' to .gitignore."
+                        ),
+                        severity=FindingSeverity.CRITICAL,
+                        scanner=self.name,
+                    )
+                )
+            return findings
+
         # Check 1: Is this an unencrypted .env file?
         is_env_file = self._is_env_file(file_path)
         is_encrypted = self._is_encrypted(content)
@@ -577,10 +603,14 @@ class NativeScanner(ScannerBackend):
                 )
             )
 
-        # Check 2: Scan for secret patterns
-        # Skip pattern scanning for encrypted files to avoid false positives
-        if not is_encrypted:
-            findings.extend(self._scan_patterns(file_path, content))
+        # Check 2: Scan for secret patterns.
+        # Run unconditionally and let _scan_patterns skip encrypted values per-line.
+        # Combined partial-encryption files interleave dotenvx-encrypted secret lines
+        # with cleartext config lines, so a whole-file skip (triggered by any single
+        # "encrypted:" marker) would leave the cleartext portion completely unscanned.
+        # Per-line skipping keeps the cleartext lines covered while still ignoring the
+        # already-encrypted values.
+        findings.extend(self._scan_patterns(file_path, content))
 
         # Check 3: High-entropy strings
         # Run for env files or if check_entropy is enabled globally
@@ -600,6 +630,46 @@ class NativeScanner(ScannerBackend):
         """
         name = path.name
         return name == ".env" or name.startswith(".env.")
+
+    def _is_private_key_file(self, path: Path) -> bool:
+        """Check if a file is dotenvx's private-key file (``.env.keys``).
+
+        Args:
+            path: Path to check.
+
+        Returns:
+            True if this is a ``.env.keys`` private-key file.
+        """
+        return path.name == DOTENVX_KEYS_FILENAME
+
+    def _is_tracked_or_staged(self, path: Path) -> bool:
+        """Return True if the file is tracked or staged in git.
+
+        A private key is only a leak risk once git knows about it (committed, or
+        staged via ``git add``). ``git ls-files`` reads the index, which contains
+        both committed and staged paths, so ``--error-unmatch`` exits 0 for either.
+        A purely local, gitignored/untracked key file returns False and is left
+        alone. Outside a git repo (or if git is unavailable) this returns False.
+
+        Args:
+            path: Path to check.
+
+        Returns:
+            True if git tracks or stages the file.
+        """
+        import subprocess  # nosec B404
+
+        try:
+            result = subprocess.run(  # nosec B603, B607
+                ["git", "ls-files", "--error-unmatch", "--", path.name],
+                capture_output=True,
+                text=True,
+                cwd=path.parent,
+                timeout=10,
+            )
+            return result.returncode == 0
+        except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
+            return False
 
     def _is_clear_file(self, path: Path) -> bool:
         """Check if a file is a .clear file (partial encryption non-sensitive file).
@@ -691,6 +761,13 @@ class NativeScanner(ScannerBackend):
             if "encrypted:" in line or "ENC[" in line:
                 continue
 
+            # Skip dotenvx's public-key artifact. The public key is public by
+            # definition (not a secret) but looks like a high-entropy assignment;
+            # this mirrors how the partial-encryption combine step excludes it from
+            # secret-var counts (see partial_encryption._is_secret_var_line).
+            if stripped.startswith("DOTENV_PUBLIC_KEY"):
+                continue
+
             for pattern in ALL_PATTERNS:
                 match = pattern.pattern.search(line)
                 if match:
@@ -756,6 +833,14 @@ class NativeScanner(ScannerBackend):
             # Skip comments
             stripped = line.strip()
             if stripped.startswith("#") or stripped.startswith("//"):
+                continue
+
+            # Skip already-encrypted values and the public-key artifact. Encrypted
+            # blobs are high-entropy by nature but not leaked secrets, so flagging
+            # them would flood combined partial-encryption files with noise.
+            if "encrypted:" in line or "ENC[" in line:
+                continue
+            if stripped.startswith("DOTENV_PUBLIC_KEY"):
                 continue
 
             for match in assignment_pattern.finditer(line):
