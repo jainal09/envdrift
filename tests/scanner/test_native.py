@@ -441,6 +441,49 @@ API_KEY="encrypted:vault2ZyXwVuTsRqPoNmLkJiHgFeDcBa9876543210"
             f"{[f.rule_id for f in result.findings]}"
         )
 
+    def test_sops_file_metadata_not_pattern_scanned(self, scanner: NativeScanner, tmp_path: Path):
+        """SOPS files are skipped by the pattern scan (no metadata false positives).
+
+        Unlike dotenvx combined files, SOPS files are wholly encrypted with no
+        cleartext/partial model, so their plaintext metadata lines must not be
+        pattern-scanned (they would only yield false positives).
+        """
+        env_file = tmp_path / ".env"
+        env_file.write_text(
+            "DATABASE_URL=ENC[AES256_GCM,data:xyz789,type:str]\n"
+            "sops_version=3.7.1\n"
+            "sops_lastmodified=2021-01-01T00:00:00Z\n"
+            'sops_pgp__fp="85D77543B3D624B63CEA9E6DBC17301B491B3F21"\n'
+        )
+
+        result = scanner.scan([tmp_path])
+
+        assert result.findings == [], (
+            f"SOPS metadata must not be pattern-scanned, got: "
+            f"{[f.rule_id for f in result.findings]}"
+        )
+
+    def test_user_var_sharing_public_key_prefix_is_still_scanned(
+        self, scanner: NativeScanner, tmp_path: Path
+    ):
+        """A var that only shares the DOTENV_PUBLIC_KEY prefix is NOT skipped.
+
+        The skip must match dotenvx's artifact (DOTENV_PUBLIC_KEY[_<ENV>]) exactly,
+        not any variable starting with that string, or a real secret could hide
+        behind the prefix.
+        """
+        env_file = tmp_path / ".env.production"
+        # No underscore after the prefix -> not the dotenvx artifact -> must scan.
+        env_file.write_text(
+            'DOTENV_PUBLIC_KEYSTORE_TOKEN="ghp_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"\n'
+        )
+
+        result = scanner.scan([tmp_path])
+
+        assert [f for f in result.findings if "github" in f.rule_id.lower()], (
+            "a secret behind a DOTENV_PUBLIC_KEY-like prefix must still be detected"
+        )
+
 
 class TestPrivateKeyFileScanResult:
     """Tests for the dedicated .env.keys (committed-private-key) rule.
