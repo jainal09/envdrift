@@ -92,7 +92,7 @@ def test_guard_invalid_fail_on_exits(tmp_path: Path, monkeypatch):
     assert "invalid severity" in result.output.lower()
 
 
-def test_guard_defaults_to_cwd(monkeypatch):
+def test_guard_defaults_to_cwd(tmp_path: Path, monkeypatch):
     """No path arguments default to the current directory."""
     config = EnvdriftConfig()
     dummy_result = _build_result([])
@@ -112,11 +112,11 @@ def test_guard_defaults_to_cwd(monkeypatch):
     monkeypatch.setattr("envdrift.cli_commands.guard.load_config", lambda _p=None: config)
     monkeypatch.setattr("envdrift.cli_commands.guard.ScanEngine", DummyEngine)
 
-    with runner.isolated_filesystem():
-        result = runner.invoke(app, ["guard"])
-        assert result.exit_code == 0
-        assert scan_paths
-        assert scan_paths[0] == [Path.cwd()]
+    monkeypatch.chdir(tmp_path)
+    result = runner.invoke(app, ["guard"])
+    assert result.exit_code == 0
+    assert scan_paths
+    assert scan_paths[0] == [Path.cwd()]
 
 
 def test_guard_uses_config_scanners(tmp_path: Path, monkeypatch):
@@ -300,7 +300,7 @@ def test_guard_sarif_output(tmp_path: Path, monkeypatch):
     assert created_configs
 
 
-def test_guard_staged_with_no_staged_files(monkeypatch):
+def test_guard_staged_with_no_staged_files(tmp_path: Path, monkeypatch):
     """--staged with no staged files exits cleanly."""
     import subprocess
 
@@ -314,13 +314,13 @@ def test_guard_staged_with_no_staged_files(monkeypatch):
 
     monkeypatch.setattr("subprocess.run", mock_run)
 
-    with runner.isolated_filesystem():
-        result = runner.invoke(app, ["guard", "--staged"])
-        assert result.exit_code == 0
-        assert "no staged files" in result.output.lower()
+    monkeypatch.chdir(tmp_path)
+    result = runner.invoke(app, ["guard", "--staged"])
+    assert result.exit_code == 0
+    assert "no staged files" in result.output.lower()
 
 
-def test_guard_staged_scans_only_staged_files(monkeypatch):
+def test_guard_staged_scans_only_staged_files(tmp_path: Path, monkeypatch):
     """--staged only scans git staged files."""
     import subprocess
 
@@ -354,18 +354,18 @@ def test_guard_staged_scans_only_staged_files(monkeypatch):
 
     monkeypatch.setattr("subprocess.run", mock_run)
 
-    with runner.isolated_filesystem():
-        # Create the staged files
-        Path("file1.py").write_text("# test")
-        Path("file2.env").write_text("SECRET=value")
+    monkeypatch.chdir(tmp_path)
+    # Create the staged files
+    Path("file1.py").write_text("# test")
+    Path("file2.env").write_text("SECRET=value")
 
-        result = runner.invoke(app, ["guard", "--staged"])
-        assert result.exit_code == 0
-        assert scan_paths  # Verify scan was called
-        assert len(scan_paths[0]) == 2  # Two staged files
+    result = runner.invoke(app, ["guard", "--staged"])
+    assert result.exit_code == 0
+    assert scan_paths  # Verify scan was called
+    assert len(scan_paths[0]) == 2  # Two staged files
 
 
-def test_guard_staged_without_git_fails(monkeypatch):
+def test_guard_staged_without_git_fails(tmp_path: Path, monkeypatch):
     """--staged fails gracefully without git."""
     config = EnvdriftConfig()
     _patch_guard_dependencies(monkeypatch, config, _build_result([]))
@@ -376,13 +376,13 @@ def test_guard_staged_without_git_fails(monkeypatch):
 
     monkeypatch.setattr("subprocess.run", mock_run)
 
-    with runner.isolated_filesystem():
-        result = runner.invoke(app, ["guard", "--staged"])
-        assert result.exit_code == 1
-        assert "git not found" in result.output.lower()
+    monkeypatch.chdir(tmp_path)
+    result = runner.invoke(app, ["guard", "--staged"])
+    assert result.exit_code == 1
+    assert "git not found" in result.output.lower()
 
 
-def test_guard_pr_base_with_no_changed_files(monkeypatch):
+def test_guard_pr_base_with_no_changed_files(tmp_path: Path, monkeypatch):
     """--pr-base with no changed files exits cleanly."""
     import subprocess
 
@@ -399,13 +399,13 @@ def test_guard_pr_base_with_no_changed_files(monkeypatch):
 
     monkeypatch.setattr("subprocess.run", mock_run)
 
-    with runner.isolated_filesystem():
-        result = runner.invoke(app, ["guard", "--pr-base", "origin/main"])
-        assert result.exit_code == 0
-        assert "no changed files" in result.output.lower()
+    monkeypatch.chdir(tmp_path)
+    result = runner.invoke(app, ["guard", "--pr-base", "origin/main"])
+    assert result.exit_code == 0
+    assert "no changed files" in result.output.lower()
 
 
-def test_guard_pr_base_scans_diff_files(monkeypatch):
+def test_guard_pr_base_scans_diff_files(tmp_path: Path, monkeypatch):
     """--pr-base scans files changed since base."""
     import subprocess
 
@@ -441,16 +441,16 @@ def test_guard_pr_base_scans_diff_files(monkeypatch):
 
     monkeypatch.setattr("subprocess.run", mock_run)
 
-    with runner.isolated_filesystem():
-        Path("changed.py").write_text("# changed file")
+    monkeypatch.chdir(tmp_path)
+    Path("changed.py").write_text("# changed file")
 
-        result = runner.invoke(app, ["guard", "--pr-base", "origin/main"])
-        assert result.exit_code == 0
-        assert scan_paths
-        assert len(scan_paths[0]) == 1
+    result = runner.invoke(app, ["guard", "--pr-base", "origin/main"])
+    assert result.exit_code == 0
+    assert scan_paths
+    assert len(scan_paths[0]) == 1
 
 
-def test_guard_pr_base_without_git_fails(monkeypatch):
+def test_guard_pr_base_without_git_fails(tmp_path: Path, monkeypatch):
     """--pr-base fails gracefully without git."""
     config = EnvdriftConfig()
     _patch_guard_dependencies(monkeypatch, config, _build_result([]))
@@ -460,10 +460,10 @@ def test_guard_pr_base_without_git_fails(monkeypatch):
 
     monkeypatch.setattr("subprocess.run", mock_run)
 
-    with runner.isolated_filesystem():
-        result = runner.invoke(app, ["guard", "--pr-base", "origin/main"])
-        assert result.exit_code == 1
-        assert "git not found" in result.output.lower()
+    monkeypatch.chdir(tmp_path)
+    result = runner.invoke(app, ["guard", "--pr-base", "origin/main"])
+    assert result.exit_code == 1
+    assert "git not found" in result.output.lower()
 
 
 def test_guard_history_flag(tmp_path: Path, monkeypatch):
@@ -477,7 +477,7 @@ def test_guard_history_flag(tmp_path: Path, monkeypatch):
     assert created_configs[0].include_git_history is True
 
 
-def test_guard_staged_timeout(monkeypatch):
+def test_guard_staged_timeout(tmp_path: Path, monkeypatch):
     """--staged handles git timeout gracefully."""
     import subprocess
 
@@ -489,13 +489,13 @@ def test_guard_staged_timeout(monkeypatch):
 
     monkeypatch.setattr("subprocess.run", mock_run)
 
-    with runner.isolated_filesystem():
-        result = runner.invoke(app, ["guard", "--staged"])
-        assert result.exit_code == 1
-        assert "timed out" in result.output.lower()
+    monkeypatch.chdir(tmp_path)
+    result = runner.invoke(app, ["guard", "--staged"])
+    assert result.exit_code == 1
+    assert "timed out" in result.output.lower()
 
 
-def test_guard_pr_base_timeout(monkeypatch):
+def test_guard_pr_base_timeout(tmp_path: Path, monkeypatch):
     """--pr-base handles git timeout gracefully."""
     import subprocess
 
@@ -507,13 +507,13 @@ def test_guard_pr_base_timeout(monkeypatch):
 
     monkeypatch.setattr("subprocess.run", mock_run)
 
-    with runner.isolated_filesystem():
-        result = runner.invoke(app, ["guard", "--pr-base", "origin/main"])
-        assert result.exit_code == 1
-        assert "timed out" in result.output.lower()
+    monkeypatch.chdir(tmp_path)
+    result = runner.invoke(app, ["guard", "--pr-base", "origin/main"])
+    assert result.exit_code == 1
+    assert "timed out" in result.output.lower()
 
 
-def test_guard_staged_files_not_exist(monkeypatch):
+def test_guard_staged_files_not_exist(tmp_path: Path, monkeypatch):
     """--staged handles staged files that no longer exist on disk."""
     import subprocess
 
@@ -528,11 +528,11 @@ def test_guard_staged_files_not_exist(monkeypatch):
 
     monkeypatch.setattr("subprocess.run", mock_run)
 
-    with runner.isolated_filesystem():
-        # Don't create the file - it should show "no staged files"
-        result = runner.invoke(app, ["guard", "--staged"])
-        assert result.exit_code == 0
-        assert "no staged files" in result.output.lower()
+    monkeypatch.chdir(tmp_path)
+    # Don't create the file - it should show "no staged files"
+    result = runner.invoke(app, ["guard", "--staged"])
+    assert result.exit_code == 0
+    assert "no staged files" in result.output.lower()
 
 
 def test_guard_with_partial_encryption_config(tmp_path: Path, monkeypatch):
