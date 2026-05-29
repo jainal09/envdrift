@@ -42,8 +42,9 @@ def push(
     1. Encrypts .env.{env}.secret files using dotenvx
     2. Combines .env.{env}.clear + encrypted .secret → .env.{env}
     3. Adds warning header to generated file
+    4. Adds the combined file to .gitignore (it is a runtime artifact, not committed)
 
-    The generated .env.{env} file should be committed to git.
+    Commit only .env.{env}.clear and .env.{env}.secret — not the combined file.
 
     Examples:
         # Push all environments
@@ -263,5 +264,18 @@ def pull_cmd(
 
     console.print()
     print_success("Pull complete! Secret files are now decrypted for editing.")
-    console.print()
-    console.print("[dim]Remember to run 'envdrift push' before committing.[/dim]")
+
+    if decrypted_count > 0:
+        console.print()
+        console.print(
+            Panel(
+                "[bold yellow]⚠  SECRET FILES ARE NOW PLAINTEXT[/bold yellow]\n\n"
+                "These files are [bold]git-protected[/bold] (skip-worktree) until you re-encrypt.\n"
+                "[bold]git add .[/bold] will NOT stage them in their decrypted state.\n\n"
+                "Edit your secret files, then run:\n"
+                "  [bold cyan]envdrift push[/bold cyan]   ← re-encrypts and lifts the git protection",
+                title="[bold yellow]Security Notice[/bold yellow]",
+                border_style="yellow",
+                expand=False,
+            )
+        )

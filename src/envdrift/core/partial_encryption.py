@@ -7,10 +7,14 @@ This module implements a simple build pattern for partial encryption:
 
 from __future__ import annotations
 
+import logging
+import subprocess
 from pathlib import Path
 
 from envdrift.config import PartialEncryptionEnvironmentConfig
 from envdrift.integrations.dotenvx import DotenvxError, DotenvxWrapper
+
+logger = logging.getLogger(__name__)
 
 WARNING_HEADER = """#/---------------------------------------------------/
 #/ WARNING: AUTO-GENERATED FILE                      /
@@ -130,6 +134,38 @@ def combine_files(env_config: PartialEncryptionEnvironmentConfig) -> dict[str, i
     }
 
 
+def _git_skip_worktree(path: Path) -> None:
+    """Mark path as skip-worktree so git ignores local changes while the file is decrypted.
+
+    This prevents `git add .` from staging a plaintext .secret file after pull-partial.
+    Best-effort: silently no-ops if git is unavailable or the file is not tracked.
+    """
+    try:
+        subprocess.run(  # nosec B603, B607
+            ["git", "update-index", "--skip-worktree", str(path)],
+            capture_output=True,
+            timeout=10,
+        )
+    except (subprocess.TimeoutExpired, FileNotFoundError, OSError) as exc:
+        logger.debug("skip-worktree not applied to %s: %s", path, exc)
+
+
+def _git_unskip_worktree(path: Path) -> None:
+    """Unmark path from skip-worktree so git can track the re-encrypted version.
+
+    Called after encrypt_secret_file so the encrypted diff is visible to git.
+    Best-effort: silently no-ops if git is unavailable or the file is not tracked.
+    """
+    try:
+        subprocess.run(  # nosec B603, B607
+            ["git", "update-index", "--no-skip-worktree", str(path)],
+            capture_output=True,
+            timeout=10,
+        )
+    except (subprocess.TimeoutExpired, FileNotFoundError, OSError) as exc:
+        logger.debug("no-skip-worktree not applied to %s: %s", path, exc)
+
+
 def encrypt_secret_file(env_config: PartialEncryptionEnvironmentConfig) -> None:
     """
     Encrypt the secret file in-place using dotenvx.
@@ -155,6 +191,9 @@ def encrypt_secret_file(env_config: PartialEncryptionEnvironmentConfig) -> None:
         dotenvx.encrypt(secret_file)
     except DotenvxError as e:
         raise PartialEncryptionError.encrypt_failed(secret_file, e) from e
+
+    # Re-enable git tracking now the file is encrypted again
+    _git_unskip_worktree(secret_file)
 
 
 def decrypt_secret_file(env_config: PartialEncryptionEnvironmentConfig) -> None:
@@ -182,6 +221,11 @@ def decrypt_secret_file(env_config: PartialEncryptionEnvironmentConfig) -> None:
         dotenvx.decrypt(secret_file)
     except DotenvxError as e:
         raise PartialEncryptionError.decrypt_failed(secret_file, e) from e
+
+    # Prevent accidental commit of the now-plaintext secret file.
+    # git update-index --skip-worktree hides local changes from git add / git status
+    # until encrypt_secret_file calls --no-skip-worktree after re-encryption.
+    _git_skip_worktree(secret_file)
 
 
 def push_partial_encryption(env_config: PartialEncryptionEnvironmentConfig) -> dict[str, int]:
