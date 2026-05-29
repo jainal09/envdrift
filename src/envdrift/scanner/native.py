@@ -216,6 +216,13 @@ DEFAULT_IGNORE_PATTERNS = (
 # gitignored; it must not be treated as an "unencrypted env file" to encrypt.
 DOTENVX_KEYS_FILENAME = ".env.keys"
 
+# git pathspec that matches .env / .env.* at any depth. Passed to `git ls-files`
+# so git itself filters to env files instead of enumerating every untracked or
+# ignored path (e.g. a large node_modules) and letting Python discard them. It is
+# a superset of _is_env_file (it also matches e.g. ".envrc"), which still does the
+# precise filtering, so correctness is unchanged.
+_ENV_FILE_PATHSPEC = ":(glob)**/.env*"
+
 
 def _is_env_file(rel_path: str) -> bool:
     """Return True if a path's filename is a ``.env`` / ``.env.*`` file."""
@@ -373,7 +380,7 @@ class NativeScanner(ScannerBackend):
         # These are files developers might forget to encrypt before committing
         try:
             result = subprocess.run(  # nosec B603, B607
-                ["git", "ls-files", "--others", "--exclude-standard"],
+                ["git", "ls-files", "--others", "--exclude-standard", "--", _ENV_FILE_PATHSPEC],
                 capture_output=True,
                 text=True,
                 cwd=directory,
@@ -398,7 +405,15 @@ class NativeScanner(ScannerBackend):
         # "unencrypted env file". A *tracked* .env.keys is still caught by Method 1.
         try:
             result = subprocess.run(  # nosec B603, B607
-                ["git", "ls-files", "--others", "--ignored", "--exclude-standard"],
+                [
+                    "git",
+                    "ls-files",
+                    "--others",
+                    "--ignored",
+                    "--exclude-standard",
+                    "--",
+                    _ENV_FILE_PATHSPEC,
+                ],
                 capture_output=True,
                 text=True,
                 cwd=directory,

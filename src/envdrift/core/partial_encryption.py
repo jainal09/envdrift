@@ -108,7 +108,7 @@ def is_file_encrypted(file_path: Path) -> bool:
 
 def combine_files(
     env_config: PartialEncryptionEnvironmentConfig, *, write: bool = True
-) -> dict[str, int]:
+) -> dict[str, int | bool]:
     """
     Combine clear and encrypted secret files into a single combined file.
 
@@ -304,7 +304,7 @@ def decrypt_secret_file(env_config: PartialEncryptionEnvironmentConfig) -> bool:
 
 def push_partial_encryption(
     env_config: PartialEncryptionEnvironmentConfig, *, check: bool = False
-) -> dict[str, int]:
+) -> dict[str, int | bool]:
     """
     Push operation: Encrypt secret file + combine with clear file.
 
@@ -362,7 +362,7 @@ def _resolve_secrets_dir(env_config: PartialEncryptionEnvironmentConfig) -> Path
 
 def push_secrets_only(
     env_config: PartialEncryptionEnvironmentConfig, *, check: bool = False
-) -> dict[str, int]:
+) -> dict[str, int | bool]:
     """
     Secrets-only push: encrypt all matching files in secrets_dir in place.
 
