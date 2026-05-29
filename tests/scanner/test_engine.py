@@ -6,6 +6,8 @@ import sys
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
+
 from envdrift.scanner.base import (
     AggregatedScanResult,
     FindingSeverity,
@@ -1418,6 +1420,39 @@ class TestCombinedFilesSecurity:
         # Should not raise, just return empty warnings
         warnings = engine.check_combined_files_security()
         assert warnings == []
+
+    def test_push_gitignore_satisfies_security_check(self, tmp_path, monkeypatch):
+        """The .gitignore entry push writes must satisfy guard's security check.
+
+        push (`_ensure_combined_gitignore` → `ensure_gitignore_entries`) and guard
+        (`check_combined_files_security`) must agree on the combined-file path so
+        they don't contradict each other: push says "I ignored it", guard must see
+        it as ignored. This uses real git to catch path-format mismatches.
+        """
+        import shutil
+        import subprocess
+
+        from envdrift.utils.git import ensure_gitignore_entries
+
+        if shutil.which("git") is None:
+            pytest.skip("git not available")
+
+        subprocess.run(["git", "init"], cwd=tmp_path, check=True, capture_output=True)
+        monkeypatch.chdir(tmp_path)
+
+        combined = ".env.production"
+        config = GuardConfig(use_native=True, use_gitleaks=False, combined_files=[combined])
+        engine = ScanEngine(config)
+
+        # Before push protects it, guard must warn.
+        assert any("SECURITY WARNING" in w for w in engine.check_combined_files_security())
+
+        # push writes the .gitignore entry...
+        added = ensure_gitignore_entries([Path(combined)])
+        assert added == [combined]
+
+        # ...and guard must now agree the file is protected (no contradiction).
+        assert engine.check_combined_files_security() == []
 
     def test_combined_files_multiple_files(self, monkeypatch):
         """Test with multiple combined files, some in gitignore, some not."""

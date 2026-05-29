@@ -133,7 +133,8 @@ envdrift pull-partial --env production
 
 ## Git Setup
 
-`envdrift push` automatically adds the combined file to `.gitignore`. You only need:
+`envdrift push` automatically adds the combined file **and** the dotenvx
+private-key file (`.env.keys`) to `.gitignore`. You only need:
 
 ```gitignore
 *.bak
@@ -147,6 +148,17 @@ envdrift pull-partial --env production
 | `.env.production.clear` | ✅ Yes | Plain text, safe in history |
 | `.env.production.secret` | ✅ Yes | Always encrypted when committed |
 | `.env.production` | ❌ No | Runtime artifact, auto-gitignored |
+| `.env.keys` | ❌ No | dotenvx **private** decryption key, auto-gitignored |
+
+### Verify in CI
+
+To guard against committing a stale combined file (e.g. someone edited a
+`.clear` file but forgot to re-run `push`), run a dry-run check that writes
+nothing and exits non-zero when a `push` is needed:
+
+```bash
+envdrift push --check
+```
 
 ## After `git pull`
 

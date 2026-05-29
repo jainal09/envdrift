@@ -212,6 +212,24 @@ DEFAULT_IGNORE_PATTERNS = (
 )
 
 
+# dotenvx's private-key file. Always plaintext by design and meant to be
+# gitignored; it must not be treated as an "unencrypted env file" to encrypt.
+DOTENVX_KEYS_FILENAME = ".env.keys"
+
+# git pathspec that matches .env / .env.* at any depth. Passed to `git ls-files`
+# so git itself filters to env files instead of enumerating every untracked or
+# ignored path (e.g. a large node_modules) and letting Python discard them. It is
+# a superset of _is_env_file (it also matches e.g. ".envrc"), which still does the
+# precise filtering, so correctness is unchanged.
+_ENV_FILE_PATHSPEC = ":(glob)**/.env*"
+
+
+def _is_env_file(rel_path: str) -> bool:
+    """Return True if a path's filename is a ``.env`` / ``.env.*`` file."""
+    file_name = Path(rel_path).name
+    return file_name == ".env" or file_name.startswith(".env.")
+
+
 class NativeScanner(ScannerBackend):
     """Built-in scanner with zero external dependencies.
 
@@ -362,7 +380,7 @@ class NativeScanner(ScannerBackend):
         # These are files developers might forget to encrypt before committing
         try:
             result = subprocess.run(  # nosec B603, B607
-                ["git", "ls-files", "--others", "--exclude-standard"],
+                ["git", "ls-files", "--others", "--exclude-standard", "--", _ENV_FILE_PATHSPEC],
                 capture_output=True,
                 text=True,
                 cwd=directory,
@@ -370,11 +388,45 @@ class NativeScanner(ScannerBackend):
             )
             if result.returncode == 0:
                 for rel_path in result.stdout.splitlines():
-                    if rel_path:
-                        file_name = Path(rel_path).name
-                        # Only include .env* files from untracked
-                        if file_name == ".env" or file_name.startswith(".env."):
-                            files.add(directory / rel_path)
+                    if rel_path and _is_env_file(rel_path):
+                        files.add(directory / rel_path)
+        except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
+            pass
+
+        # Method 3: Get untracked .env* files that ARE gitignored.
+        # Partial-encryption secret/combined files are typically gitignored, and a
+        # `pull-partial` leaves them as PLAINTEXT on disk. Methods 1-2 miss an
+        # untracked + gitignored secret file, so it would slip through the scan and
+        # leak. Secret files must always be scanned regardless of git status.
+        #
+        # Exception: a gitignored .env.keys is the CORRECT state — it is dotenvx's
+        # private key file, always plaintext, and meant to stay local-only. Scanning
+        # it here would wrongly flag a properly-configured project as having an
+        # "unencrypted env file". A *tracked* .env.keys is still caught by Method 1.
+        try:
+            result = subprocess.run(  # nosec B603, B607
+                [
+                    "git",
+                    "ls-files",
+                    "--others",
+                    "--ignored",
+                    "--exclude-standard",
+                    "--",
+                    _ENV_FILE_PATHSPEC,
+                ],
+                capture_output=True,
+                text=True,
+                cwd=directory,
+                timeout=30,
+            )
+            if result.returncode == 0:
+                for rel_path in result.stdout.splitlines():
+                    if (
+                        rel_path
+                        and _is_env_file(rel_path)
+                        and Path(rel_path).name != DOTENVX_KEYS_FILENAME
+                    ):
+                        files.add(directory / rel_path)
         except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
             pass
 

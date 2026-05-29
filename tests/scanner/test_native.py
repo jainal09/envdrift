@@ -87,6 +87,129 @@ class TestNativeScannerInternals:
 
         assert files == expected
 
+    def test_collect_files_includes_gitignored_env_secret(self, tmp_path: Path):
+        """A gitignored, untracked, plaintext .env secret must still be collected.
+
+        Partial-encryption secret files are typically gitignored and left as
+        plaintext on disk after `pull-partial`. They must never slip through the
+        secret scan just because git is told to ignore them.
+        """
+        import shutil
+        import subprocess
+
+        if shutil.which("git") is None:
+            pytest.skip("git not available")
+
+        def git(*args: str) -> None:
+            subprocess.run(["git", *args], cwd=tmp_path, check=True, capture_output=True)
+
+        git("init")
+        git("config", "user.email", "test@example.com")
+        git("config", "user.name", "Test")
+
+        # .env.production.secret is gitignored and never committed; on disk it is
+        # plaintext (as it would be right after `envdrift pull-partial`).
+        (tmp_path / ".gitignore").write_text(".env.production.secret\n")
+        (tmp_path / ".env.production.secret").write_text("API_KEY=plaintext-leak\n")
+        (tmp_path / "tracked.txt").write_text("hello\n")
+        git("add", ".gitignore", "tracked.txt")
+        git("commit", "-m", "init")
+
+        scanner = NativeScanner()
+        collected = scanner._collect_files(tmp_path)
+
+        assert (tmp_path / ".env.production.secret").resolve() in {p.resolve() for p in collected}
+
+    def test_collect_files_excludes_gitignored_env_keys(self, tmp_path: Path):
+        """A gitignored .env.keys must NOT be collected — that is its correct state.
+
+        .env.keys is dotenvx's private-key file: always plaintext, meant to stay
+        local-only. Now that `push` gitignores it, scanning it would wrongly flag a
+        properly-configured project. A gitignored secret file is still collected.
+        """
+        import shutil
+        import subprocess
+
+        if shutil.which("git") is None:
+            pytest.skip("git not available")
+
+        def git(*args: str) -> None:
+            subprocess.run(["git", *args], cwd=tmp_path, check=True, capture_output=True)
+
+        git("init")
+        git("config", "user.email", "test@example.com")
+        git("config", "user.name", "Test")
+
+        (tmp_path / ".gitignore").write_text(".env.keys\n.env.production.secret\n")
+        (tmp_path / ".env.keys").write_text("DOTENV_PRIVATE_KEY_PRODUCTION=abc123\n")
+        (tmp_path / ".env.production.secret").write_text("API_KEY=plaintext-leak\n")
+        (tmp_path / "tracked.txt").write_text("hello\n")
+        git("add", ".gitignore", "tracked.txt")
+        git("commit", "-m", "init")
+
+        scanner = NativeScanner()
+        collected = {p.resolve() for p in scanner._collect_files(tmp_path)}
+
+        # Gitignored private-key file is excluded...
+        assert (tmp_path / ".env.keys").resolve() not in collected
+        # ...but a gitignored secret file is still scanned.
+        assert (tmp_path / ".env.production.secret").resolve() in collected
+
+    def test_collect_files_includes_tracked_env_keys(self, tmp_path: Path):
+        """A *tracked* (committed) .env.keys IS still collected — it is a real leak."""
+        import shutil
+        import subprocess
+
+        if shutil.which("git") is None:
+            pytest.skip("git not available")
+
+        def git(*args: str) -> None:
+            subprocess.run(["git", *args], cwd=tmp_path, check=True, capture_output=True)
+
+        git("init")
+        git("config", "user.email", "test@example.com")
+        git("config", "user.name", "Test")
+
+        # .env.keys committed to the repo — a private key leak that must be scanned.
+        (tmp_path / ".env.keys").write_text("DOTENV_PRIVATE_KEY_PRODUCTION=abc123\n")
+        git("add", ".env.keys")
+        git("commit", "-m", "oops committed keys")
+
+        scanner = NativeScanner()
+        collected = {p.resolve() for p in scanner._collect_files(tmp_path)}
+
+        assert (tmp_path / ".env.keys").resolve() in collected
+
+    def test_collect_files_includes_staged_env_keys(self, tmp_path: Path):
+        """A staged (git add'd, not yet committed) .env.keys IS collected — still a leak.
+
+        The ignored-pass exclusion must not hide a key that is on its way into a
+        commit. `git ls-files` reports the index, so a staged .env.keys — even one
+        force-added past .gitignore — is picked up via Method 1.
+        """
+        import shutil
+        import subprocess
+
+        if shutil.which("git") is None:
+            pytest.skip("git not available")
+
+        def git(*args: str) -> None:
+            subprocess.run(["git", *args], cwd=tmp_path, check=True, capture_output=True)
+
+        git("init")
+        git("config", "user.email", "test@example.com")
+        git("config", "user.name", "Test")
+
+        # .env.keys is gitignored but force-staged — about to be committed.
+        (tmp_path / ".gitignore").write_text(".env.keys\n")
+        (tmp_path / ".env.keys").write_text("DOTENV_PRIVATE_KEY_PRODUCTION=abc123\n")
+        git("add", "-f", ".env.keys")
+
+        scanner = NativeScanner()
+        collected = {p.resolve() for p in scanner._collect_files(tmp_path)}
+
+        assert (tmp_path / ".env.keys").resolve() in collected
+
     def test_collect_files_fallback_sorts_results(self, tmp_path: Path):
         """Fallback file collection returns deterministically ordered results."""
         scanner = NativeScanner()

@@ -13,6 +13,7 @@ from envdrift.core.partial_encryption import (
     combine_files,
     is_file_encrypted,
     pull_secrets_only,
+    push_partial_encryption,
     push_secrets_only,
 )
 
@@ -202,6 +203,132 @@ DATABASE_URL="encrypted:BDaLMxznvYWcHP..."
     assert "encrypted:BDaLMxznvYWcHP..." in content
 
 
+def test_combine_files_excludes_dotenvx_public_key_from_count(temp_env_files):
+    """DOTENV_PUBLIC_KEY is not a secret and must not inflate secret_vars."""
+    config = temp_env_files["config"]
+    secret_file = temp_env_files["secret_file"]
+    combined_file = temp_env_files["combined_file"]
+
+    # A real dotenvx-encrypted file: one public-key line + two encrypted secrets.
+    secret_file.write_text(
+        'DOTENV_PUBLIC_KEY_TEST="03abc123..."\n'
+        'DATABASE_URL="encrypted:BDaLMxznvYWcHP..."\n'
+        'JWT_SECRET="encrypted:BD9XKwmZvYWcHP..."\n'
+    )
+
+    stats = combine_files(config)
+
+    # Only the two real secrets count — the public key is excluded.
+    assert stats["secret_vars"] == 2
+    # The public key still passes through into the combined file (it is public).
+    assert "DOTENV_PUBLIC_KEY_TEST" in combined_file.read_text()
+
+
+def test_combine_files_count_ignores_comments(temp_env_files):
+    """Commented-out secret lines must not be counted as secret vars."""
+    config = temp_env_files["config"]
+    secret_file = temp_env_files["secret_file"]
+
+    secret_file.write_text('# DISABLED_TOKEN=old-value\nAPI_KEY="encrypted:abc..."\n')
+
+    stats = combine_files(config)
+
+    assert stats["secret_vars"] == 1
+
+
+def test_combine_files_check_does_not_write(temp_env_files):
+    """combine_files(write=False) is a dry run and never touches disk."""
+    config = temp_env_files["config"]
+    combined_file = temp_env_files["combined_file"]
+
+    assert not combined_file.exists()
+
+    stats = combine_files(config, write=False)
+
+    # Nothing written; combined file would differ from (missing) on-disk content.
+    assert not combined_file.exists()
+    assert stats["in_sync"] is False
+
+
+def test_combine_files_check_reports_in_sync(temp_env_files):
+    """After a real combine, a check run reports the combined file is in sync."""
+    config = temp_env_files["config"]
+
+    combine_files(config)  # real write
+    stats = combine_files(config, write=False)
+
+    assert stats["in_sync"] is True
+
+
+def test_combine_files_check_detects_manual_edit(temp_env_files):
+    """A user edit to the generated combined file is reported as out of sync."""
+    config = temp_env_files["config"]
+    combined_file = temp_env_files["combined_file"]
+
+    combine_files(config)  # real write
+    combined_file.write_text(combined_file.read_text() + "\nINJECTED=oops\n")
+
+    stats = combine_files(config, write=False)
+
+    assert stats["in_sync"] is False
+    # Dry run must not have reverted the manual edit.
+    assert "INJECTED=oops" in combined_file.read_text()
+
+
+def test_push_partial_check_does_not_encrypt(tmp_path: Path):
+    """push_partial_encryption(check=True) must not mutate the secret file."""
+    clear_file = tmp_path / ".env.test.clear"
+    secret_file = tmp_path / ".env.test.secret"
+    combined_file = tmp_path / ".env.test"
+    clear_file.write_text("DEBUG=false\n")
+    secret_file.write_text("API_KEY=plaintext-value\n")
+
+    config = PartialEncryptionEnvironmentConfig(
+        name="test",
+        clear_file=str(clear_file),
+        secret_file=str(secret_file),
+        combined_file=str(combined_file),
+    )
+
+    stats = push_partial_encryption(config, check=True)
+
+    # Secret file untouched (still plaintext), no combined file written.
+    assert secret_file.read_text() == "API_KEY=plaintext-value\n"
+    assert not combined_file.exists()
+    assert stats["in_sync"] is False
+
+
+def test_push_partial_check_out_of_sync_when_secret_plaintext(tmp_path: Path):
+    """--check must report out-of-sync if .secret is plaintext, even if combined matches.
+
+    Regression: a plaintext secret + an up-to-date combined file previously
+    returned in_sync=True, hiding the fact that a real push would encrypt the
+    secret. --check must require the secret file to be encrypted too.
+    """
+    clear_file = tmp_path / ".env.test.clear"
+    secret_file = tmp_path / ".env.test.secret"
+    combined_file = tmp_path / ".env.test"
+    clear_file.write_text("DEBUG=false\n")
+    secret_file.write_text("API_KEY=plaintext-value\n")
+
+    config = PartialEncryptionEnvironmentConfig(
+        name="test",
+        clear_file=str(clear_file),
+        secret_file=str(secret_file),
+        combined_file=str(combined_file),
+    )
+
+    # Build the combined file straight from the plaintext secret, so the combined
+    # text is byte-for-byte in sync — yet the secret on disk is still plaintext.
+    combine_files(config)
+    assert not is_file_encrypted(secret_file)
+
+    stats = push_partial_encryption(config, check=True)
+
+    # Combined text matches, but the plaintext secret forces out-of-sync.
+    assert stats["in_sync"] is False
+
+
 def test_warning_header_format(temp_env_files):
     """Test that warning header has correct format."""
     config = temp_env_files["config"]
@@ -212,8 +339,9 @@ def test_warning_header_format(temp_env_files):
     content = combined_file.read_text()
     lines = content.splitlines()
 
-    # Check first line
-    assert lines[0] == "#/---------------------------------------------------/"
+    # First line is an all-dashes border box.
+    assert lines[0].startswith("#/") and lines[0].endswith("/")
+    assert set(lines[0][2:-1]) == {"-"}
 
     # Check it mentions both source files
     assert any(".env.test.clear" in line for line in lines[:15])
@@ -222,6 +350,36 @@ def test_warning_header_format(temp_env_files):
     # Check commands mentioned
     assert any("envdrift pull-partial" in line for line in lines[:15])
     assert any("envdrift push" in line for line in lines[:15])
+
+
+def test_warning_header_alignment_with_long_paths(tmp_path: Path):
+    """The box border stays aligned even when source paths are very long."""
+    long_clear = tmp_path / ("nested/" * 6) / ".env.production.clear"
+    long_secret = tmp_path / ("nested/" * 6) / ".env.production.secret"
+    long_clear.parent.mkdir(parents=True, exist_ok=True)
+    long_clear.write_text("DEBUG=false\n")
+    long_secret.write_text("TOKEN=abc\n")
+
+    config = PartialEncryptionEnvironmentConfig(
+        name="production",
+        clear_file=str(long_clear),
+        secret_file=str(long_secret),
+        combined_file=str(tmp_path / ".env.production"),
+    )
+
+    combine_files(config)
+    header_lines = [
+        line
+        for line in (tmp_path / ".env.production").read_text().splitlines()
+        if line.startswith("#/")
+    ]
+
+    # Every box line (borders + content) must be exactly the same width, so the
+    # right-hand "/" border lines up no matter how long the paths are.
+    widths = {len(line) for line in header_lines}
+    assert len(widths) == 1, f"warning box lines are not aligned: {widths}"
+    # The long path must be present and fully contained inside the box.
+    assert any(str(long_clear) in line for line in header_lines)
 
 
 # ---------------------------------------------------------------------------
