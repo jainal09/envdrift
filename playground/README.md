@@ -237,11 +237,16 @@ Expected: `.env.staging.combined` created with clear vars + encrypted secrets.
 cat .env.staging.combined
 ```
 
-### 6c. Pull-partial (decrypt + split back)
+### 6c. Pull-partial (decrypt the secret file in place)
 
 ```bash
 envdrift pull-partial --env staging
 ```
+
+Expected: `.env.staging.secret` is decrypted **in place** so you can edit secrets.
+It does **not** split or regenerate the combined file — `.env.staging.combined`
+is left untouched (run `push` again to rebuild it). The decrypted `.secret` is
+flagged `skip-worktree` so a plain `git add .` can't stage the plaintext.
 
 ---
 

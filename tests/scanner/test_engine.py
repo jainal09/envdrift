@@ -1062,6 +1062,74 @@ class TestFilterEncryptedFiles:
         # Should be filtered due to dotenvx encryption markers
         assert len(result) == 0
 
+    def test_filter_keeps_cleartext_line_finding_in_combined_file(self, tmp_path):
+        """A finding on the cleartext line of a combined file must survive the filter.
+
+        Regression: the filter used to drop every finding from any file containing
+        an ``encrypted:`` marker, which discarded real secrets pasted into the
+        cleartext half of a partial-encryption combined file (the whole point of
+        the line-level S4 scan). The cleartext finding must reach guard.
+        """
+        config = GuardConfig(use_native=True, use_gitleaks=False)
+        engine = ScanEngine(config)
+
+        combined = tmp_path / ".env.production"
+        combined.write_text(
+            "#/---[DOTENV_PUBLIC_KEY]---/\n"  # line 1
+            "LOG_LEVEL=info\n"  # line 2
+            'AWS_KEY="AKIAIOSFODNN7EXAMPLE"\n'  # line 3 (cleartext secret)
+            'SECRET="encrypted:vault1xyz"\n'  # line 4 (ciphertext)
+        )
+
+        cleartext_finding = ScanFinding(
+            file_path=combined,
+            line_number=3,
+            rule_id="aws-access-key-id",
+            rule_description="AWS key",
+            description="cleartext secret",
+            severity=FindingSeverity.CRITICAL,
+            scanner="native",
+        )
+        ciphertext_finding = ScanFinding(
+            file_path=combined,
+            line_number=4,
+            rule_id="high-entropy-string",
+            rule_description="entropy",
+            description="ciphertext blob",
+            severity=FindingSeverity.MEDIUM,
+            scanner="detect-secrets",
+        )
+
+        result = engine._filter_encrypted_files([cleartext_finding, ciphertext_finding])
+
+        kept = {(f.rule_id, f.line_number) for f in result}
+        assert ("aws-access-key-id", 3) in kept, "cleartext-line finding must survive"
+        assert ("high-entropy-string", 4) not in kept, "ciphertext-line finding must be dropped"
+
+    def test_filter_drops_lineless_finding_in_encrypted_file(self, tmp_path):
+        """A finding with no line info on an encrypted file is still dropped.
+
+        External scanners that flag a high-entropy ciphertext blob without a line
+        number must keep being suppressed (the original false-positive guard).
+        """
+        config = GuardConfig(use_native=True, use_gitleaks=False)
+        engine = ScanEngine(config)
+
+        enc = tmp_path / ".env.encrypted"
+        enc.write_text('SECRET="encrypted:abc123"\n')
+
+        finding = ScanFinding(
+            file_path=enc,
+            line_number=None,
+            rule_id="high-entropy-string",
+            rule_description="entropy",
+            description="blob",
+            severity=FindingSeverity.MEDIUM,
+            scanner="detect-secrets",
+        )
+
+        assert engine._filter_encrypted_files([finding]) == []
+
 
 class TestFilterPublicKeys:
     """Tests for _filter_public_keys method."""

@@ -82,6 +82,37 @@ DEBUG=true
 
         assert detector.should_block_commit(report) is False
 
+    def test_public_key_artifact_not_treated_as_plaintext_secret(self, tmp_path):
+        """A fully-encrypted .secret file must not be blocked by its public key.
+
+        dotenvx names the public key of `.env.production.secret` as
+        `DOTENV_PUBLIC_KEY_PRODUCTION_SECRET`, which matches the `*_SECRET`
+        sensitive-name heuristic. It is a public key (plaintext-safe), so it must
+        not count as a plaintext secret nor keep the file from reporting as fully
+        encrypted — otherwise the pre-commit hook blocks a correctly-encrypted
+        `.secret`.
+        """
+        content = (
+            "#/---[DOTENV_PUBLIC_KEY]---/\n"
+            'DOTENV_PUBLIC_KEY_PRODUCTION_SECRET="034c65f520ec607225d1344fdb'
+            'ace9c31b06c1c8095f413c9cc50abb105f7124e3"\n'
+            'API_KEY="encrypted:BDQE123..."\n'
+            'DB_PASSWORD="encrypted:BDQE456..."\n'
+        )
+        env_file = tmp_path / ".env.production.secret"
+        env_file.write_text(content)
+
+        parser = EnvParser()
+        env = parser.parse(env_file)
+
+        detector = EncryptionDetector()
+        report = detector.analyze(env)
+
+        assert "DOTENV_PUBLIC_KEY_PRODUCTION_SECRET" not in report.plaintext_secrets
+        assert "DOTENV_PUBLIC_KEY_PRODUCTION_SECRET" not in report.plaintext_vars
+        assert detector.should_block_commit(report) is False
+        assert report.is_fully_encrypted is True
+
     def test_has_encrypted_header(self):
         """Check for dotenvx encryption header."""
         detector = EncryptionDetector()

@@ -236,6 +236,11 @@ git commit -m "Migrate to partial encryption"
 - ✅ **Run `pull-partial` + `push` after `git pull`** to regenerate the combined file from updated sources
 - ✅ **Never commit the combined file** — it is a runtime artifact, auto-gitignored by `push`
 - ✅ **The `.secret` file is git-protected while decrypted** — `git add .` won't stage it until `push` re-encrypts it
+- ✅ **The pre-commit hook is a hard block** — if a plaintext `.secret` (or
+  `.env.keys`) is staged, the commit is refused. The plaintext `.clear` half
+  commits normally, and an encrypted `.secret` passes. Install it with
+  `envdrift hook --install` (or set `[git_hook_check] method = "direct git hook"`).
+  `guard --staged` enforces the same rule (`unencrypted-secret-file`, CRITICAL) in CI.
 
 ---
 

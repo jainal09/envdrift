@@ -14,6 +14,7 @@ import fnmatch
 import time
 from pathlib import Path
 
+from envdrift.core.encryption import is_dotenvx_public_key_var
 from envdrift.scanner.base import (
     FindingSeverity,
     ScanFinding,
@@ -26,6 +27,17 @@ from envdrift.scanner.patterns import (
     hash_secret,
     redact_secret,
 )
+from envdrift.utils.git import is_file_tracked
+
+
+def _is_encrypted_value_line(line: str) -> bool:
+    """Return True if a line holds an already-encrypted value (dotenvx or SOPS).
+
+    Used to skip such lines during pattern and entropy scanning so encrypted
+    values are never re-flagged. Shared by both scans so they stay in sync.
+    """
+    return "encrypted:" in line or "ENC[" in line
+
 
 # Encryption markers for dotenvx
 DOTENVX_MARKERS = (
@@ -553,6 +565,33 @@ class NativeScanner(ScannerBackend):
         if "\x00" in content[:8192]:
             return findings
 
+        # Private-key file (.env.keys) handling.
+        # A dotenvx private key must never be committed; "encrypt it" (the
+        # unencrypted-env-file remediation) is nonsensical advice for a key file.
+        # A purely local, untracked key file is the expected state (a gitignored one
+        # is already dropped during collection), so only flag it once git tracks or
+        # stages it (is_file_tracked reads the index, which covers both). Either way
+        # it bypasses the env-file/pattern checks below.
+        if self._is_private_key_file(file_path):
+            if is_file_tracked(file_path):
+                findings.append(
+                    ScanFinding(
+                        file_path=file_path,
+                        rule_id="committed-private-key",
+                        rule_description="Committed Private Key",
+                        description=(
+                            f"Private key file '{file_path.name}' is tracked or staged "
+                            "in git. Anyone with repository access can decrypt every "
+                            "secret it protects. Do NOT encrypt it — remove it from git "
+                            f"('git rm --cached {file_path.name}'), rotate the exposed "
+                            "key(s), and add '.env.keys' to .gitignore."
+                        ),
+                        severity=FindingSeverity.CRITICAL,
+                        scanner=self.name,
+                    )
+                )
+            return findings
+
         # Check 1: Is this an unencrypted .env file?
         is_env_file = self._is_env_file(file_path)
         is_encrypted = self._is_encrypted(content)
@@ -563,23 +602,47 @@ class NativeScanner(ScannerBackend):
 
         # .clear files are semantically meant to be unencrypted, so don't flag them
         if is_env_file and not is_encrypted and not is_allowed_clear and not is_clear_file:
+            # A partial-encryption ".secret" file is sensitive by definition — a
+            # plaintext one is a leak, not a generic "unencrypted env file". Flag it
+            # with a dedicated CRITICAL rule whose remediation points at
+            # `envdrift push` (the partial flow that encrypts it), not `envdrift encrypt`.
+            if self._is_secret_file(file_path):
+                rule_id = "unencrypted-secret-file"
+                rule_description = "Unencrypted Secret File"
+                description = (
+                    f"Partial-encryption secret file '{file_path.name}' is plaintext. "
+                    "Committing it leaks every secret it holds. Run 'envdrift push' to "
+                    "encrypt it before committing."
+                )
+                severity = FindingSeverity.CRITICAL
+            else:
+                rule_id = "unencrypted-env-file"
+                rule_description = "Unencrypted Environment File"
+                description = (
+                    f"Environment file '{file_path.name}' is not encrypted. "
+                    f"Run 'envdrift encrypt {file_path}' before committing."
+                )
+                severity = FindingSeverity.HIGH
             findings.append(
                 ScanFinding(
                     file_path=file_path,
-                    rule_id="unencrypted-env-file",
-                    rule_description="Unencrypted Environment File",
-                    description=(
-                        f"Environment file '{file_path.name}' is not encrypted. "
-                        f"Run 'envdrift encrypt {file_path}' before committing."
-                    ),
-                    severity=FindingSeverity.HIGH,
+                    rule_id=rule_id,
+                    rule_description=rule_description,
+                    description=description,
+                    severity=severity,
                     scanner=self.name,
                 )
             )
 
-        # Check 2: Scan for secret patterns
-        # Skip pattern scanning for encrypted files to avoid false positives
-        if not is_encrypted:
+        # Check 2: Scan for secret patterns.
+        # Run per-line so combined partial-encryption files (dotenvx-encrypted secret
+        # lines interleaved with cleartext config) still get their cleartext portion
+        # scanned — a whole-file skip on any "encrypted:" marker would hide it; the
+        # per-line skip in _scan_patterns ignores the encrypted values.
+        # SOPS files are the exception: they are wholly encrypted with no cleartext
+        # partial model, and their metadata lines (sops_*, macs, fingerprints) yield
+        # only false positives, so keep skipping them entirely.
+        if not self._has_sops_markers(content):
             findings.extend(self._scan_patterns(file_path, content))
 
         # Check 3: High-entropy strings
@@ -601,6 +664,17 @@ class NativeScanner(ScannerBackend):
         name = path.name
         return name == ".env" or name.startswith(".env.")
 
+    def _is_private_key_file(self, path: Path) -> bool:
+        """Check if a file is dotenvx's private-key file (``.env.keys``).
+
+        Args:
+            path: Path to check.
+
+        Returns:
+            True if this is a ``.env.keys`` private-key file.
+        """
+        return path.name == DOTENVX_KEYS_FILENAME
+
     def _is_clear_file(self, path: Path) -> bool:
         """Check if a file is a .clear file (partial encryption non-sensitive file).
 
@@ -617,6 +691,22 @@ class NativeScanner(ScannerBackend):
         """
         name = path.name
         return name.endswith(".clear")
+
+    def _is_secret_file(self, path: Path) -> bool:
+        """Check if a file is a partial-encryption ``.secret`` file.
+
+        These hold the sensitive half of a partial-encryption environment and are
+        meant to be dotenvx-encrypted before commit. A plaintext one is a leak, so
+        it gets the dedicated CRITICAL ``unencrypted-secret-file`` rule rather than
+        the generic ``unencrypted-env-file``.
+
+        Args:
+            path: Path to check.
+
+        Returns:
+            True if this is a ``.secret`` file.
+        """
+        return path.name.endswith(".secret")
 
     def _is_allowed_clear_file(self, path: Path) -> bool:
         """Check if a file is an allowed clear file from partial_encryption config.
@@ -667,6 +757,16 @@ class NativeScanner(ScannerBackend):
 
         return False
 
+    def _has_sops_markers(self, content: str) -> bool:
+        """Return True if content has SOPS encryption markers.
+
+        SOPS files are wholly encrypted with no cleartext/partial model, so pattern
+        scanning their metadata (sops_*, macs, fingerprints) only yields false
+        positives. Used to skip pattern scanning for them while still scanning
+        dotenvx combined files line-by-line.
+        """
+        return any(marker in content for marker in SOPS_MARKERS)
+
     def _scan_patterns(self, file_path: Path, content: str) -> list[ScanFinding]:
         """Scan content for secret patterns.
 
@@ -686,9 +786,16 @@ class NativeScanner(ScannerBackend):
             if not stripped or stripped.startswith("#"):
                 continue
 
-            # Skip lines with encrypted values (dotenvx or SOPS)
-            # This handles partially encrypted files or mixed content
-            if "encrypted:" in line or "ENC[" in line:
+            # Skip already-encrypted values (dotenvx or SOPS) — handles combined /
+            # mixed-content files.
+            if _is_encrypted_value_line(line):
+                continue
+
+            # Skip dotenvx's public-key artifact. The public key is public by
+            # definition (not a secret) but looks like a high-entropy assignment;
+            # this mirrors how the partial-encryption combine step excludes it from
+            # secret-var counts (see partial_encryption._is_secret_var_line).
+            if is_dotenvx_public_key_var(stripped.split("=", 1)[0].strip()):
                 continue
 
             for pattern in ALL_PATTERNS:
@@ -756,6 +863,14 @@ class NativeScanner(ScannerBackend):
             # Skip comments
             stripped = line.strip()
             if stripped.startswith("#") or stripped.startswith("//"):
+                continue
+
+            # Skip already-encrypted values and the public-key artifact. Encrypted
+            # blobs are high-entropy by nature but not leaked secrets, so flagging
+            # them would flood combined partial-encryption files with noise.
+            if _is_encrypted_value_line(line):
+                continue
+            if is_dotenvx_public_key_var(stripped.split("=", 1)[0].strip()):
                 continue
 
             for match in assignment_pattern.finditer(line):
