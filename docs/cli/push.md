@@ -33,6 +33,10 @@ The summary panel labels secrets-only counts as **"Total encrypted files"** and
 combine-mode counts as **"Total encrypted vars"** (and shows both when an
 envdrift run mixes the two modes).
 
+In both modes, `push` ensures the dotenvx private-key file (`.env.keys`) is listed
+in `.gitignore` so the decryption key is never committed. In combine mode it also
+adds each `combined_file` to `.gitignore`.
+
 This command requires partial encryption to be configured in `envdrift.toml`.
 
 ## Options
@@ -44,6 +48,21 @@ Process only a specific environment instead of all configured environments.
 ```bash
 envdrift push --env production
 ```
+
+### `--check`
+
+Dry run: verify that combined files are up to date with their source files
+**without** encrypting, writing, or modifying `.gitignore`. Exits non-zero if any
+combined file is missing or out of date (for example, after editing a `.clear`
+file but forgetting to re-run `push`, or after manually editing the generated
+combined file). Ideal for CI or a pre-commit hook.
+
+```bash
+envdrift push --check
+```
+
+In secrets-only mode, `--check` reports how many files would be encrypted and
+exits non-zero if any plaintext files remain.
 
 ### `--backend`, `-b`
 
@@ -109,9 +128,19 @@ git add .env.production.clear .env.production.secret
 git commit -m "Update configuration"
 ```
 
+### Verify Combined Files Are Up to Date (CI / pre-commit)
+
+```bash
+envdrift push --check
+```
+
+Reports whether each combined file matches its source files and exits non-zero
+if a `push` is needed. Nothing is written.
+
 ## Output
 
-The combined file includes a warning header:
+The combined file includes a warning header. The box auto-sizes to fit the file
+paths, so the right-hand border stays aligned even with long paths:
 
 ```bash
 #/---------------------------------------------------/
@@ -133,12 +162,15 @@ LOG_LEVEL=info
 DATABASE_URL="encrypted:BD7HQzbvYWcHPy8jGI..."
 ```
 
+The reported "encrypted vars" count reflects only real secret variables; dotenvx's
+`DOTENV_PUBLIC_KEY_*` line is not counted (public keys are not secrets).
+
 ## Exit Codes
 
 | Code | Meaning                              |
 | :--- | :----------------------------------- |
-| 0    | Push completed successfully          |
-| 1    | Error (missing config, file not found, encryption failed) |
+| 0    | Push completed successfully (or, with `--check`, everything is up to date) |
+| 1    | Error (missing config, file not found, encryption failed), or `--check` found an out-of-date combined file |
 
 ## See Also
 

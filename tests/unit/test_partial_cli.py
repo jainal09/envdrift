@@ -29,7 +29,7 @@ def test_push_adds_combined_file_to_gitignore(monkeypatch, tmp_path: Path):
     monkeypatch.setattr("envdrift.cli_commands.partial.load_config", lambda: config)
     monkeypatch.setattr(
         "envdrift.cli_commands.partial.push_partial_encryption",
-        lambda _env: {"clear_lines": 1, "secret_vars": 1},
+        lambda _env, check=False: {"clear_lines": 1, "secret_vars": 1, "in_sync": True},
     )
 
     captured_paths: list[Path] = []
@@ -46,7 +46,8 @@ def test_push_adds_combined_file_to_gitignore(monkeypatch, tmp_path: Path):
     result = runner.invoke(app, ["push"])
 
     assert result.exit_code == 0
-    assert captured_paths == [combined_path]
+    # The combined file plus the dotenvx private-key file are both protected.
+    assert captured_paths == [combined_path, Path(".env.keys")]
     assert "updated .gitignore" in result.output.lower()
 
 
@@ -68,11 +69,11 @@ def test_push_secrets_only_mode(monkeypatch, tmp_path: Path):
     push_partial_called = []
     monkeypatch.setattr(
         "envdrift.cli_commands.partial.push_partial_encryption",
-        lambda _: push_partial_called.append(True) or {},
+        lambda _env, check=False: push_partial_called.append(True) or {},
     )
     monkeypatch.setattr(
         "envdrift.cli_commands.partial.push_secrets_only",
-        lambda _: {"encrypted": 3, "already_encrypted": 1},
+        lambda _env, check=False: {"encrypted": 3, "already_encrypted": 1, "in_sync": False},
     )
     monkeypatch.setattr(
         "envdrift.cli_commands.partial.ensure_gitignore_entries",
@@ -138,7 +139,7 @@ def test_push_summary_uses_files_label_in_secrets_only_mode(monkeypatch, tmp_pat
     monkeypatch.setattr("envdrift.cli_commands.partial.load_config", lambda: config)
     monkeypatch.setattr(
         "envdrift.cli_commands.partial.push_secrets_only",
-        lambda _: {"encrypted": 4, "already_encrypted": 0},
+        lambda _env, check=False: {"encrypted": 4, "already_encrypted": 0, "in_sync": False},
     )
     monkeypatch.setattr(
         "envdrift.cli_commands.partial.ensure_gitignore_entries",
@@ -258,7 +259,7 @@ def test_push_reports_partial_encryption_error_and_exits_nonzero(monkeypatch, tm
         partial_encryption=SimpleNamespace(enabled=True, environments=[env_config])
     )
 
-    def _raise(_env):
+    def _raise(_env, check=False):
         raise PartialEncryptionError("boom")
 
     monkeypatch.setattr("envdrift.cli_commands.partial.load_config", lambda: config)
@@ -326,7 +327,7 @@ def test_push_summary_shows_processed_when_nothing_encrypted(monkeypatch, tmp_pa
     monkeypatch.setattr("envdrift.cli_commands.partial.load_config", lambda: config)
     monkeypatch.setattr(
         "envdrift.cli_commands.partial.push_secrets_only",
-        lambda _: {"encrypted": 0, "already_encrypted": 3},
+        lambda _env, check=False: {"encrypted": 0, "already_encrypted": 3, "in_sync": True},
     )
     monkeypatch.setattr("envdrift.cli_commands.partial.ensure_gitignore_entries", lambda _paths: [])
 
@@ -338,7 +339,7 @@ def test_push_summary_shows_processed_when_nothing_encrypted(monkeypatch, tmp_pa
 
 
 def test_push_secrets_only_does_not_add_combined_to_gitignore(monkeypatch, tmp_path: Path):
-    """push with secrets_only=True must not add anything to .gitignore (no combined file)."""
+    """secrets_only mode adds no combined_file to .gitignore, but still protects .env.keys."""
     env_config = SimpleNamespace(
         name="production",
         secrets_only=True,
@@ -353,7 +354,7 @@ def test_push_secrets_only_does_not_add_combined_to_gitignore(monkeypatch, tmp_p
     monkeypatch.setattr("envdrift.cli_commands.partial.load_config", lambda: config)
     monkeypatch.setattr(
         "envdrift.cli_commands.partial.push_secrets_only",
-        lambda _: {"encrypted": 1, "already_encrypted": 0},
+        lambda _env, check=False: {"encrypted": 1, "already_encrypted": 0, "in_sync": False},
     )
 
     captured_paths: list = []
@@ -367,9 +368,133 @@ def test_push_secrets_only_does_not_add_combined_to_gitignore(monkeypatch, tmp_p
     result = runner.invoke(app, ["push"])
 
     assert result.exit_code == 0
-    assert captured_paths == [], (
-        "secrets_only mode must not register any combined_file in .gitignore"
+    # No combined_file (secrets_only has none) — only the dotenvx private key file.
+    assert captured_paths == [Path(".env.keys")], (
+        "secrets_only mode must protect .env.keys but register no combined_file"
     )
+
+
+def test_push_protects_env_keys_in_gitignore(monkeypatch, tmp_path: Path):
+    """push must always add the dotenvx private-key file (.env.keys) to .gitignore."""
+    env_config = SimpleNamespace(
+        name="production",
+        clear_file=str(tmp_path / ".env.production.clear"),
+        secret_file=str(tmp_path / ".env.production.secret"),
+        combined_file=str(tmp_path / ".env.production"),
+        secrets_only=False,
+    )
+    config = SimpleNamespace(
+        partial_encryption=SimpleNamespace(enabled=True, environments=[env_config])
+    )
+
+    monkeypatch.setattr("envdrift.cli_commands.partial.load_config", lambda: config)
+    monkeypatch.setattr(
+        "envdrift.cli_commands.partial.push_partial_encryption",
+        lambda _env, check=False: {"clear_lines": 1, "secret_vars": 1, "in_sync": True},
+    )
+
+    captured_paths: list = []
+
+    def _fake_ensure(paths):
+        captured_paths.extend(paths)
+        return []
+
+    monkeypatch.setattr("envdrift.cli_commands.partial.ensure_gitignore_entries", _fake_ensure)
+
+    result = runner.invoke(app, ["push"])
+
+    assert result.exit_code == 0
+    assert Path(".env.keys") in captured_paths
+
+
+def test_push_check_passes_when_combined_in_sync(monkeypatch, tmp_path: Path):
+    """push --check exits 0 and writes nothing when the combined file is up to date."""
+    env_config = SimpleNamespace(
+        name="production",
+        clear_file=str(tmp_path / ".env.production.clear"),
+        secret_file=str(tmp_path / ".env.production.secret"),
+        combined_file=str(tmp_path / ".env.production"),
+        secrets_only=False,
+    )
+    config = SimpleNamespace(
+        partial_encryption=SimpleNamespace(enabled=True, environments=[env_config])
+    )
+
+    monkeypatch.setattr("envdrift.cli_commands.partial.load_config", lambda: config)
+
+    received_check = []
+    monkeypatch.setattr(
+        "envdrift.cli_commands.partial.push_partial_encryption",
+        lambda _env, check=False: received_check.append(check)
+        or {"clear_lines": 1, "secret_vars": 1, "in_sync": True},
+    )
+
+    gitignore_called = []
+    monkeypatch.setattr(
+        "envdrift.cli_commands.partial.ensure_gitignore_entries",
+        lambda paths: gitignore_called.append(paths) or [],
+    )
+
+    result = runner.invoke(app, ["push", "--check"])
+
+    assert result.exit_code == 0
+    assert received_check == [True], "push must forward check=True to the helper"
+    assert gitignore_called == [], "--check must not modify .gitignore"
+    assert "up to date" in result.output.lower()
+
+
+def test_push_check_fails_when_combined_out_of_sync(monkeypatch, tmp_path: Path):
+    """push --check exits non-zero when a combined file is stale."""
+    env_config = SimpleNamespace(
+        name="production",
+        clear_file=str(tmp_path / ".env.production.clear"),
+        secret_file=str(tmp_path / ".env.production.secret"),
+        combined_file=str(tmp_path / ".env.production"),
+        secrets_only=False,
+    )
+    config = SimpleNamespace(
+        partial_encryption=SimpleNamespace(enabled=True, environments=[env_config])
+    )
+
+    monkeypatch.setattr("envdrift.cli_commands.partial.load_config", lambda: config)
+    monkeypatch.setattr(
+        "envdrift.cli_commands.partial.push_partial_encryption",
+        lambda _env, check=False: {"clear_lines": 1, "secret_vars": 1, "in_sync": False},
+    )
+    monkeypatch.setattr("envdrift.cli_commands.partial.ensure_gitignore_entries", lambda _p: [])
+
+    result = runner.invoke(app, ["push", "--check"])
+
+    assert result.exit_code == 1
+    assert "out of date" in result.output.lower()
+
+
+def test_push_check_secrets_only_message_is_mode_agnostic(monkeypatch, tmp_path: Path):
+    """--check failure for secrets-only mode must not talk about 'combined file(s)'."""
+    env_config = SimpleNamespace(
+        name="production",
+        secrets_only=True,
+        secrets_dir=str(tmp_path / "secrets"),
+        pattern=".env*",
+        combined_file="",
+    )
+    config = SimpleNamespace(
+        partial_encryption=SimpleNamespace(enabled=True, environments=[env_config])
+    )
+
+    monkeypatch.setattr("envdrift.cli_commands.partial.load_config", lambda: config)
+    monkeypatch.setattr(
+        "envdrift.cli_commands.partial.push_secrets_only",
+        lambda _env, check=False: {"encrypted": 2, "already_encrypted": 0, "in_sync": False},
+    )
+    monkeypatch.setattr("envdrift.cli_commands.partial.ensure_gitignore_entries", lambda _p: [])
+
+    result = runner.invoke(app, ["push", "--check"])
+
+    assert result.exit_code == 1
+    # Secrets-only mode has no combined files; the summary must not claim it does.
+    assert "combined file" not in result.output.lower()
+    assert "out of date" in result.output.lower()
 
 
 def test_pull_shows_security_notice_when_secrets_decrypted(monkeypatch, tmp_path: Path):
@@ -490,7 +615,7 @@ def test_push_message_combine_mode_mentions_combined_files(monkeypatch, tmp_path
     monkeypatch.setattr("envdrift.cli_commands.partial.load_config", lambda: config)
     monkeypatch.setattr(
         "envdrift.cli_commands.partial.push_partial_encryption",
-        lambda _env: {"clear_lines": 1, "secret_vars": 1},
+        lambda _env, check=False: {"clear_lines": 1, "secret_vars": 1, "in_sync": True},
     )
     monkeypatch.setattr("envdrift.cli_commands.partial.ensure_gitignore_entries", lambda _paths: [])
 
@@ -519,7 +644,7 @@ def test_push_message_secrets_only_omits_combined_wording(monkeypatch, tmp_path:
     monkeypatch.setattr("envdrift.cli_commands.partial.load_config", lambda: config)
     monkeypatch.setattr(
         "envdrift.cli_commands.partial.push_secrets_only",
-        lambda _: {"encrypted": 2, "already_encrypted": 0},
+        lambda _env, check=False: {"encrypted": 2, "already_encrypted": 0, "in_sync": False},
     )
     monkeypatch.setattr("envdrift.cli_commands.partial.ensure_gitignore_entries", lambda _paths: [])
 

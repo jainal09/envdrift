@@ -19,12 +19,18 @@ from envdrift.core.partial_encryption import (
 from envdrift.output.rich import console, print_error, print_success, print_warning
 from envdrift.utils import ensure_gitignore_entries
 
+# dotenvx writes the PRIVATE decryption key here during encryption. It must never
+# be committed, in either combine or secrets-only mode.
+_DOTENVX_KEYS_FILE = ".env.keys"
+
 
 def _ensure_combined_gitignore(envs_to_process) -> None:
-    combined_paths = [
+    paths = [
         Path(e.combined_file) for e in envs_to_process if not e.secrets_only and e.combined_file
     ]
-    added_entries = ensure_gitignore_entries(combined_paths)
+    # Always protect the dotenvx private-key file regardless of mode.
+    paths.append(Path(_DOTENVX_KEYS_FILE))
+    added_entries = ensure_gitignore_entries(paths)
     if added_entries:
         console.print(f"[dim]Updated .gitignore: {', '.join(added_entries)}[/dim]")
 
@@ -34,6 +40,14 @@ def push(
         str | None,
         typer.Option("--env", "-e", help="Environment name (e.g., production, staging)"),
     ] = None,
+    check: Annotated[
+        bool,
+        typer.Option(
+            "--check",
+            help="Dry run: report whether env files are up to date without "
+            "encrypting or overwriting anything. Exits non-zero if a push is needed.",
+        ),
+    ] = False,
 ) -> None:
     """
     Encrypt secret files and combine with clear files (prepare for commit).
@@ -46,12 +60,19 @@ def push(
 
     Commit only .env.{env}.clear and .env.{env}.secret — not the combined file.
 
+    Use --check in CI or a pre-commit hook to verify everything is up to date without
+    modifying anything (it never silently overwrites manual edits, and reports a
+    plaintext secret file as out of date).
+
     Examples:
         # Push all environments
         envdrift push
 
         # Push specific environment
         envdrift push --env production
+
+        # Verify env files are up to date (no changes written)
+        envdrift push --check
     """
     # Load config
     try:
@@ -80,10 +101,15 @@ def push(
             print_error(f"No partial encryption configuration found for environment '{env}'")
             raise typer.Exit(code=1)
 
-    _ensure_combined_gitignore(envs_to_process)
+    # In --check mode we never mutate anything, including .gitignore.
+    if not check:
+        _ensure_combined_gitignore(envs_to_process)
 
     console.print()
-    console.print("[bold]Push[/bold] - Encrypting and combining env files")
+    if check:
+        console.print("[bold]Push --check[/bold] - Verifying env files are up to date")
+    else:
+        console.print("[bold]Push[/bold] - Encrypting and combining env files")
     console.print(f"[dim]Environments: {len(envs_to_process)}[/dim]")
     console.print()
 
@@ -91,6 +117,7 @@ def push(
     combined_files = 0
     total_encrypted_vars = 0
     total_encrypted_files = 0
+    out_of_sync = 0
     errors = []
 
     for env_config in envs_to_process:
@@ -98,23 +125,50 @@ def push(
 
         try:
             if env_config.secrets_only:
-                stats = push_secrets_only(env_config)
-                console.print(
-                    f"  [green]✓[/green] Encrypted {stats['encrypted']} file(s) in "
-                    f"{env_config.secrets_dir} "
-                    f"[dim]({stats['already_encrypted']} already encrypted)[/dim]"
-                )
+                stats = push_secrets_only(env_config, check=check)
+                if check:
+                    if stats["in_sync"]:
+                        console.print(
+                            f"  [green]✓[/green] {env_config.secrets_dir} "
+                            f"[dim](all {stats['already_encrypted']} file(s) encrypted)[/dim]"
+                        )
+                    else:
+                        out_of_sync += 1
+                        console.print(
+                            f"  [yellow]![/yellow] {env_config.secrets_dir} "
+                            f"[dim]({stats['encrypted']} file(s) not encrypted — run "
+                            f"'envdrift push')[/dim]"
+                        )
+                else:
+                    console.print(
+                        f"  [green]✓[/green] Encrypted {stats['encrypted']} file(s) in "
+                        f"{env_config.secrets_dir} "
+                        f"[dim]({stats['already_encrypted']} already encrypted)[/dim]"
+                    )
+                    total_encrypted_files += stats["encrypted"]
                 processed += 1
-                total_encrypted_files += stats["encrypted"]
             else:
-                stats = push_partial_encryption(env_config)
-                console.print(
-                    f"  [green]✓[/green] Generated {env_config.combined_file} "
-                    f"[dim]({stats['clear_lines']} clear + {stats['secret_vars']} encrypted)[/dim]"
-                )
+                stats = push_partial_encryption(env_config, check=check)
+                if check:
+                    if stats["in_sync"]:
+                        console.print(
+                            f"  [green]✓[/green] {env_config.combined_file} [dim]is up to date[/dim]"
+                        )
+                    else:
+                        out_of_sync += 1
+                        console.print(
+                            f"  [yellow]![/yellow] {env_config.combined_file} "
+                            f"[dim]is out of date — run 'envdrift push'[/dim]"
+                        )
+                else:
+                    console.print(
+                        f"  [green]✓[/green] Generated {env_config.combined_file} "
+                        f"[dim]({stats['clear_lines']} clear + {stats['secret_vars']} "
+                        f"encrypted)[/dim]"
+                    )
+                    combined_files += 1
+                    total_encrypted_vars += stats["secret_vars"]
                 processed += 1
-                combined_files += 1
-                total_encrypted_vars += stats["secret_vars"]
 
         except PartialEncryptionError as e:
             console.print(f"  [red]✗[/red] {e}")
@@ -126,6 +180,8 @@ def push(
     # Summary
     console.print()
     summary_lines = [f"Processed: {processed}/{len(envs_to_process)}"]
+    if check:
+        summary_lines.append(f"Out of date: {out_of_sync}")
     if combined_files:
         summary_lines.append(f"Combined files: {combined_files}")
         summary_lines.append(f"Encrypted vars: {total_encrypted_vars}")
@@ -134,7 +190,8 @@ def push(
     if errors:
         summary_lines.append(f"Errors: {len(errors)}")
 
-    console.print(Panel("\n".join(summary_lines), title="Push Summary", expand=False))
+    title = "Push --check Summary" if check else "Push Summary"
+    console.print(Panel("\n".join(summary_lines), title=title, expand=False))
 
     if errors:
         console.print()
@@ -142,6 +199,17 @@ def push(
         for error in errors:
             console.print(f"  • {error}")
         raise typer.Exit(code=1)
+
+    if check:
+        console.print()
+        if out_of_sync:
+            print_warning(
+                f"{out_of_sync} environment(s) are out of date. "
+                "Run 'envdrift push' to bring them up to date."
+            )
+            raise typer.Exit(code=1)
+        print_success("All environments are up to date.")
+        return
 
     console.print()
     print_success("Push complete! Source files are encrypted and ready to commit.")
