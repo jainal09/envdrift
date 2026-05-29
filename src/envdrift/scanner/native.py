@@ -589,19 +589,40 @@ class NativeScanner(ScannerBackend):
 
         # .clear files are semantically meant to be unencrypted, so don't flag them
         if is_env_file and not is_encrypted and not is_allowed_clear and not is_clear_file:
-            findings.append(
-                ScanFinding(
-                    file_path=file_path,
-                    rule_id="unencrypted-env-file",
-                    rule_description="Unencrypted Environment File",
-                    description=(
-                        f"Environment file '{file_path.name}' is not encrypted. "
-                        f"Run 'envdrift encrypt {file_path}' before committing."
-                    ),
-                    severity=FindingSeverity.HIGH,
-                    scanner=self.name,
+            # A partial-encryption ".secret" file is sensitive by definition — a
+            # plaintext one is a leak waiting to be committed, not a generic
+            # "unencrypted env file". Flag it with a dedicated CRITICAL rule whose
+            # remediation points at `envdrift push` (the partial flow that encrypts
+            # it), not the generic `envdrift encrypt`.
+            if self._is_secret_file(file_path):
+                findings.append(
+                    ScanFinding(
+                        file_path=file_path,
+                        rule_id="unencrypted-secret-file",
+                        rule_description="Unencrypted Secret File",
+                        description=(
+                            f"Partial-encryption secret file '{file_path.name}' is "
+                            "plaintext. Committing it leaks every secret it holds. Run "
+                            "'envdrift push' to encrypt it before committing."
+                        ),
+                        severity=FindingSeverity.CRITICAL,
+                        scanner=self.name,
+                    )
                 )
-            )
+            else:
+                findings.append(
+                    ScanFinding(
+                        file_path=file_path,
+                        rule_id="unencrypted-env-file",
+                        rule_description="Unencrypted Environment File",
+                        description=(
+                            f"Environment file '{file_path.name}' is not encrypted. "
+                            f"Run 'envdrift encrypt {file_path}' before committing."
+                        ),
+                        severity=FindingSeverity.HIGH,
+                        scanner=self.name,
+                    )
+                )
 
         # Check 2: Scan for secret patterns.
         # Run unconditionally and let _scan_patterns skip encrypted values per-line.
@@ -687,6 +708,22 @@ class NativeScanner(ScannerBackend):
         """
         name = path.name
         return name.endswith(".clear")
+
+    def _is_secret_file(self, path: Path) -> bool:
+        """Check if a file is a partial-encryption ``.secret`` file.
+
+        These hold the sensitive half of a partial-encryption environment and are
+        meant to be dotenvx-encrypted before commit. A plaintext one is a leak, so
+        it gets the dedicated CRITICAL ``unencrypted-secret-file`` rule rather than
+        the generic ``unencrypted-env-file``.
+
+        Args:
+            path: Path to check.
+
+        Returns:
+            True if this is a ``.secret`` file.
+        """
+        return path.name.endswith(".secret")
 
     def _is_allowed_clear_file(self, path: Path) -> bool:
         """Check if a file is an allowed clear file from partial_encryption config.

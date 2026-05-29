@@ -144,6 +144,15 @@ class EncryptionDetector:
         schema_sensitive = set(schema.sensitive_fields) if schema else set()
 
         for var_name, env_var in env_file.variables.items():
+            # dotenvx's DOTENV_PUBLIC_KEY* artifact is a public key: always
+            # plaintext, safe to commit, and never a value to encrypt. Skip it so it
+            # neither counts as a plaintext var (which would keep is_fully_encrypted
+            # False for a correctly-encrypted file) nor trips the sensitive-name
+            # heuristic — a partial-encryption ``.secret`` file's key is named
+            # ``DOTENV_PUBLIC_KEY_<ENV>_SECRET``, which matches the ``*_SECRET``
+            # pattern and would otherwise be reported as a plaintext secret.
+            if var_name.startswith("DOTENV_PUBLIC_KEY"):
+                continue
             if env_var.encryption_status == EncryptionStatus.ENCRYPTED:
                 report.encrypted_vars.add(var_name)
             elif env_var.encryption_status == EncryptionStatus.EMPTY:

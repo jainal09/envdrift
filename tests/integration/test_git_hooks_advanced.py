@@ -232,6 +232,149 @@ def test_hook_allows_encrypted_commit(git_hook_env):
     assert result.returncode == 0, f"Commit should succeed. stderr: {result.stderr}"
 
 
+# --- Partial-encryption pre-commit scenarios -------------------------------
+#
+# These cover the Severity 2 hard block end-to-end: the pre-commit hook must
+# refuse a plaintext .secret (and .env.keys) but must NOT block a plaintext
+# .clear file, which is committed as plaintext by design. The .clear over-block
+# was a real bug that slipped through because earlier tests only checked hook
+# *content*, never an actual commit of each partial-encryption file type.
+
+_PARTIAL_CONFIG = textwrap.dedent(
+    """\
+    [git_hook_check]
+    method = "direct git hook"
+
+    [encryption]
+    backend = "dotenvx"
+
+    [encryption.dotenvx]
+    auto_install = true
+
+    [partial_encryption]
+    enabled = true
+
+    [[partial_encryption.environments]]
+    name = "production"
+    clear_file = ".env.production.clear"
+    secret_file = ".env.production.secret"
+    combined_file = ".env.production"
+    """
+)
+
+
+def _install_partial_hooks(work_dir: Path, env: dict[str, str]) -> Path:
+    """Write the partial-encryption config and install the direct git hooks.
+
+    Hooks auto-install as a side effect of running an envdrift command while
+    ``[git_hook_check] method = "direct git hook"`` is set. Returns the
+    pre-commit hook path (asserted to exist).
+    """
+    (work_dir / "envdrift.toml").write_text(_PARTIAL_CONFIG)
+    # Touch a file so the install-triggering command has something to look at;
+    # its own exit code is irrelevant (check=False) — we only want the hook.
+    (work_dir / ".env.production.clear").write_text("LOG_LEVEL=info\n")
+    _run_envdrift(
+        ["encrypt", "--check", ".env.production.clear"], cwd=work_dir, env=env, check=False
+    )
+    pre_commit = work_dir / ".git" / "hooks" / "pre-commit"
+    assert pre_commit.exists(), "pre-commit hook should be installed"
+    return pre_commit
+
+
+@pytest.mark.integration
+def test_hook_allows_plaintext_clear_file(git_hook_env):
+    """A plaintext .clear file must commit fine — it is plaintext by design.
+
+    Regression test for the bug where the hook ran ``encrypt --check`` on every
+    staged ``.env*`` file, including ``.clear`` files, and wrongly blocked them.
+    """
+    work_dir = git_hook_env["work_dir"]
+    env = git_hook_env["env"]
+
+    _install_partial_hooks(work_dir, env)
+
+    # .clear holds non-sensitive config and is committed as plaintext.
+    (work_dir / ".env.production.clear").write_text("LOG_LEVEL=info\nFEATURE_X=true\n")
+    _run_git(["add", ".env.production.clear", "envdrift.toml"], cwd=work_dir)
+
+    result = _run_git(["commit", "-m", "Add clear config"], cwd=work_dir, check=False)
+
+    assert result.returncode == 0, (
+        f"Committing a plaintext .clear file must NOT be blocked. "
+        f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+    )
+
+
+@pytest.mark.integration
+def test_hook_blocks_plaintext_secret_file(git_hook_env):
+    """A plaintext .secret file must be blocked — committing it leaks secrets."""
+    work_dir = git_hook_env["work_dir"]
+    env = git_hook_env["env"]
+
+    _install_partial_hooks(work_dir, env)
+
+    (work_dir / ".env.production.secret").write_text("API_KEY=plaintext-leak\n")
+    _run_git(["add", "-f", ".env.production.secret"], cwd=work_dir)
+
+    result = _run_git(["commit", "-m", "Oops plaintext secret"], cwd=work_dir, check=False)
+
+    assert result.returncode != 0, "Committing a plaintext .secret file must be blocked"
+    assert (
+        "encryption check failed" in result.stderr or "encryption check failed" in result.stdout
+    ), f"Expected an encryption-check failure message. stderr:\n{result.stderr}"
+
+
+@pytest.mark.integration
+def test_hook_refuses_env_keys_file(git_hook_env):
+    """A staged .env.keys (private key) must be refused outright."""
+    work_dir = git_hook_env["work_dir"]
+    env = git_hook_env["env"]
+
+    _install_partial_hooks(work_dir, env)
+
+    (work_dir / ".env.keys").write_text("DOTENV_PRIVATE_KEY_PRODUCTION=abc123\n")
+    _run_git(["add", "-f", ".env.keys"], cwd=work_dir)
+
+    result = _run_git(["commit", "-m", "Oops keys"], cwd=work_dir, check=False)
+
+    assert result.returncode != 0, "Committing .env.keys must be refused"
+    assert ".env.keys" in (result.stderr + result.stdout)
+
+
+@pytest.mark.integration
+def test_hook_allows_encrypted_secret_with_plaintext_clear(git_hook_env):
+    """The real partial-encryption commit: encrypted .secret + plaintext .clear.
+
+    Both staged together must commit cleanly — the .clear stays plaintext and the
+    encrypted .secret passes the check.
+    """
+    work_dir = git_hook_env["work_dir"]
+    env = git_hook_env["env"]
+
+    _install_partial_hooks(work_dir, env)
+
+    # Plaintext clear half.
+    (work_dir / ".env.production.clear").write_text("LOG_LEVEL=info\n")
+    # Encrypt the secret half via dotenvx (creates .env.keys, which we don't stage).
+    secret = work_dir / ".env.production.secret"
+    secret.write_text("API_KEY=supersecret123\n")
+    _run_envdrift(["encrypt", ".env.production.secret"], cwd=work_dir, env=env)
+    assert "encrypted:" in secret.read_text().lower(), "secret half should be encrypted"
+
+    _run_git(
+        ["add", ".env.production.clear", ".env.production.secret", "envdrift.toml"],
+        cwd=work_dir,
+    )
+
+    result = _run_git(["commit", "-m", "Add partial-encryption env"], cwd=work_dir, check=False)
+
+    assert result.returncode == 0, (
+        f"Encrypted .secret + plaintext .clear must commit. "
+        f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+    )
+
+
 @pytest.mark.integration
 def test_hook_pre_push_lock_check(git_hook_env):
     """Test that pre-push hook verifies lock --check passes.

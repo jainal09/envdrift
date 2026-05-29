@@ -328,6 +328,63 @@ sops:
         assert len(result.findings) == 0
 
 
+class TestUnencryptedSecretFile:
+    """Tests for the dedicated plaintext .secret rule (Severity 2 hard block).
+
+    A partial-encryption ``.secret`` file is sensitive by definition. A plaintext
+    one is flagged with a dedicated CRITICAL ``unencrypted-secret-file`` rule (not
+    the generic HIGH ``unencrypted-env-file``) so ``guard --staged`` blocks the
+    commit and the remediation points at ``envdrift push``.
+    """
+
+    @pytest.fixture
+    def scanner(self) -> NativeScanner:
+        """Create a native scanner instance."""
+        return NativeScanner()
+
+    def test_plaintext_secret_file_flagged_critical(self, scanner: NativeScanner, tmp_path: Path):
+        """A plaintext .secret is flagged unencrypted-secret-file (CRITICAL)."""
+        secret = tmp_path / ".env.production.secret"
+        secret.write_text("API_KEY=plaintext-leak\nDB_PASSWORD=hunter2\n")
+
+        result = scanner.scan([tmp_path])
+
+        secret_findings = [f for f in result.findings if f.rule_id == "unencrypted-secret-file"]
+        assert len(secret_findings) == 1
+        assert secret_findings[0].severity == FindingSeverity.CRITICAL
+        assert "push" in secret_findings[0].description.lower()
+        # Must NOT also be flagged with the generic env-file rule.
+        assert not [f for f in result.findings if f.rule_id == "unencrypted-env-file"]
+
+    def test_encrypted_secret_file_not_flagged(self, scanner: NativeScanner, tmp_path: Path):
+        """An already-encrypted .secret produces no unencrypted finding."""
+        secret = tmp_path / ".env.production.secret"
+        secret.write_text(
+            '#/---[DOTENV_PUBLIC_KEY]---/\nDOTENV_PUBLIC_KEY="abc"\n'
+            'API_KEY="encrypted:vault1AbCdEfGhIjKlMnOpQrStUvWxYz0123456789"\n'
+        )
+
+        result = scanner.scan([tmp_path])
+
+        assert not [
+            f
+            for f in result.findings
+            if f.rule_id in ("unencrypted-secret-file", "unencrypted-env-file")
+        ]
+
+    def test_regular_env_file_still_flagged_high(self, scanner: NativeScanner, tmp_path: Path):
+        """A plaintext non-secret .env file keeps the HIGH unencrypted-env-file rule."""
+        env = tmp_path / ".env.production"
+        env.write_text("SECRET_KEY=mysecret\n")
+
+        result = scanner.scan([tmp_path])
+
+        env_findings = [f for f in result.findings if f.rule_id == "unencrypted-env-file"]
+        assert len(env_findings) == 1
+        assert env_findings[0].severity == FindingSeverity.HIGH
+        assert not [f for f in result.findings if f.rule_id == "unencrypted-secret-file"]
+
+
 class TestMixedContentScanning:
     """Tests for partial-encryption combined files (Severity 4).
 

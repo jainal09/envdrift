@@ -199,8 +199,18 @@ Common rule IDs:
 | `ftp-password` | FTP/SFTP password in JSON/config |
 | `high-entropy-string` | High entropy value (entropy scan) |
 | `unencrypted-env-file` | .env file without encryption markers |
+| `unencrypted-secret-file` | partial-encryption `.secret` file left plaintext |
 | `committed-private-key` | dotenvx `.env.keys` private-key file tracked or staged in git |
 
+> **`unencrypted-secret-file` (CRITICAL).** A partial-encryption `.secret` file
+> holds the sensitive half of an environment and must be dotenvx-encrypted before
+> commit. A plaintext one is flagged CRITICAL (not the generic HIGH
+> `unencrypted-env-file`), so `guard --staged` blocks the commit. Fix it with
+> `envdrift push`, which encrypts the `.secret`. The installed pre-commit hook
+> enforces the same rule — it refuses a plaintext `.secret` but leaves the
+> plaintext `.clear` half (committed by design) and encrypted `.secret` files
+> alone.
+>
 > **`committed-private-key` (CRITICAL).** dotenvx writes decryption keys to
 > `.env.keys`. A local, gitignored/untracked `.env.keys` is the expected state and
 > is **not** flagged. Once git tracks or stages it, guard flags it as
