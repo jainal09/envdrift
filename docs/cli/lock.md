@@ -121,6 +121,11 @@ Include partial encryption files in the locking process. When set:
 
 This is useful when you want to lock everything and clean up generated files before committing.
 
+> **Secrets-only environments are skipped.** Combine-mode handling does not apply to
+> environments configured with `secrets_only = true` — they have no combined file and
+> are encrypted in place with `envdrift push`. `lock --all` reports them as skipped and
+> leaves them untouched.
+
 ```bash
 # Lock everything including partial encryption files
 envdrift lock --all

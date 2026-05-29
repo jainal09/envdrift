@@ -144,11 +144,18 @@ def push(
         raise typer.Exit(code=1)
 
     console.print()
-    print_success("Push complete! Combined files are ready to commit.")
+    print_success("Push complete! Source files are encrypted and ready to commit.")
     console.print()
-    console.print(
-        "[dim]Remember to edit source files (.clear and .secret), not the combined file.[/dim]"
-    )
+    if combined_files:
+        console.print(
+            "[dim]Combined files are runtime artifacts (auto-gitignored). "
+            "Edit source files (.clear and .secret), not the combined file.[/dim]"
+        )
+    if total_encrypted_files:
+        console.print(
+            "[dim]Secrets-only files are encrypted in place; "
+            "run 'envdrift pull' to edit them.[/dim]"
+        )
 
 
 def pull_cmd(
