@@ -1,5 +1,12 @@
 # Changelog
 
+## [10.11.0](https://github.com/jainal09/envdrift/compare/v10.10.1...v10.11.0) (2026-05-29)
+
+
+### Features
+
+* **partial-encryption:** add secrets-only mode + fix combined-file contract ([#267](https://github.com/jainal09/envdrift/issues/267)) ([f77801b](https://github.com/jainal09/envdrift/commit/f77801b9efd67ffd9ead958f4df341ababd5e6b5))
+
 ## [10.10.1](https://github.com/jainal09/envdrift/compare/v10.10.0...v10.10.1) (2026-05-19)
 
 
