@@ -18,12 +18,12 @@ encrypted (sensitive) variables while maintaining a single combined file for app
 
 ## File Structure
 
-- **Source files (you edit)**:
-  - `.env.production.clear` - Cleartext variables (committed)
-  - `.env.production.secret` - Sensitive variables (committed, encrypted)
+- **Source files (you edit and commit)**:
+  - `.env.production.clear` — Cleartext variables (committed to git)
+  - `.env.production.secret` — Sensitive variables (committed to git, always encrypted)
 
-- **Generated file (for apps)**:
-  - `.env.production` - Combined output with warning header (committed)
+- **Generated runtime file (NOT committed)**:
+  - `.env.production` — Combined output for the application; auto-added to `.gitignore` by `envdrift push`
 
 ## Configuration
 
@@ -68,11 +68,11 @@ JWT_SECRET=super-secret-key
 STRIPE_API_KEY=sk_live_abc123
 EOF
 
-# Push (encrypt + combine)
+# Push (encrypt + combine). Also auto-adds .env.production to .gitignore.
 envdrift push
 
-# Commit all three files
-git add .env.production.clear .env.production.secret .env.production
+# Commit only the source files — the combined file is gitignored
+git add .env.production.clear .env.production.secret
 git commit -m "Add environment configuration"
 ```
 
@@ -86,11 +86,11 @@ envdrift pull-partial
 vim .env.production.clear    # Non-sensitive changes
 vim .env.production.secret   # Sensitive changes (now decrypted)
 
-# Push (re-encrypt + regenerate combined)
+# Push (re-encrypt + regenerate combined, lifts git-protection on .secret)
 envdrift push
 
-# Commit
-git add .env.production.clear .env.production.secret .env.production
+# Commit source files only — combined file is gitignored
+git add .env.production.clear .env.production.secret
 git commit -m "Update configuration"
 ```
 
@@ -133,19 +133,33 @@ envdrift pull-partial --env production
 
 ## Git Setup
 
-Add to `.gitignore`:
+`envdrift push` automatically adds the combined file to `.gitignore`. You only need:
 
 ```gitignore
-# Ignore backup files, but commit all env files
 *.bak
 *.tmp
 ```
 
-**Note:** With partial encryption, you commit all three files:
+**What to commit:**
 
-- `.env.production.clear` (cleartext)
-- `.env.production.secret` (encrypted)
-- `.env.production` (generated, mixed)
+| File | Commit? | Why |
+|------|---------|-----|
+| `.env.production.clear` | ✅ Yes | Plain text, safe in history |
+| `.env.production.secret` | ✅ Yes | Always encrypted when committed |
+| `.env.production` | ❌ No | Runtime artifact, auto-gitignored |
+
+## After `git pull`
+
+If a teammate updated `.env.production.clear` or `.env.production.secret`, the combined
+runtime file is stale. Regenerate it:
+
+```bash
+git pull
+envdrift pull-partial   # decrypt .secret so push can re-encrypt with any key changes
+envdrift push           # regenerates .env.production from the updated source files
+```
+
+The combined file is never committed, so there are no merge conflicts on it.
 
 ## Benefits
 
@@ -198,17 +212,18 @@ envdrift decrypt .env.production
 # 4. Generate combined file
 envdrift push
 
-# 5. Commit new structure
-git add .env.production.clear .env.production.secret .env.production
+# 5. Commit source files only (.env.production is now gitignored)
+git add .env.production.clear .env.production.secret
 git commit -m "Migrate to partial encryption"
 ```
 
 ## Tips
 
 - ✅ **Always edit source files** (`.clear` and `.secret`), never the combined file
-- ✅ **Run `push` before committing** to ensure combined file is up-to-date
-- ✅ **Run `pull-partial` after pulling** to decrypt secret files
-- ✅ **Use version control** to track changes to cleartext vars
+- ✅ **Run `push` before committing** to re-encrypt `.secret` and regenerate the combined file
+- ✅ **Run `pull-partial` + `push` after `git pull`** to regenerate the combined file from updated sources
+- ✅ **Never commit the combined file** — it is a runtime artifact, auto-gitignored by `push`
+- ✅ **The `.secret` file is git-protected while decrypted** — `git add .` won't stage it until `push` re-encrypts it
 
 ---
 
@@ -247,6 +262,8 @@ pattern = ".env*"          # optional glob, default ".env*"
 
 `pattern` is a standard glob applied inside `secrets_dir`. Only files matching it
 are encrypted/decrypted; everything else in the directory is left untouched.
+The dotenvx key file `.env.keys` is **always excluded**, even if it matches the
+pattern — encrypting it would lock away the private keys needed to decrypt everything else.
 
 > **Note — non-recursive by default.** `pattern` is matched with `Path.glob`, which
 > does **not** descend into subdirectories unless the pattern itself contains `**`.

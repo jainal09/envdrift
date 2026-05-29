@@ -549,7 +549,7 @@ def test_pull_partial_encryption_returns_true_when_was_encrypted(tmp_path: Path)
         name="test", clear_file="", secret_file=str(secret_file), combined_file=""
     )
     with patch("envdrift.core.partial_encryption.DotenvxWrapper"):
-        assert pull_partial_encryption(config) is True
+        assert pull_partial_encryption(config).was_decrypted is True
 
 
 def test_pull_partial_encryption_returns_false_when_already_plain(tmp_path: Path):
@@ -562,7 +562,7 @@ def test_pull_partial_encryption_returns_false_when_already_plain(tmp_path: Path
         name="test", clear_file="", secret_file=str(secret_file), combined_file=""
     )
     with patch("envdrift.core.partial_encryption.DotenvxWrapper"):
-        assert pull_partial_encryption(config) is False
+        assert pull_partial_encryption(config).was_decrypted is False
 
 
 def test_pull_partial_encryption_raises_when_secret_missing(tmp_path: Path):
@@ -577,3 +577,247 @@ def test_pull_partial_encryption_raises_when_secret_missing(tmp_path: Path):
     )
     with pytest.raises(PartialEncryptionError, match="Secret file not found"):
         pull_partial_encryption(config)
+
+
+# ---------------------------------------------------------------------------
+# skip-worktree protection (Severity 2 fix)
+# ---------------------------------------------------------------------------
+
+
+def test_decrypt_secret_file_calls_skip_worktree(tmp_path: Path):
+    """decrypt_secret_file marks the file skip-worktree after decryption."""
+    from envdrift.core.partial_encryption import decrypt_secret_file
+
+    secret_file = tmp_path / ".env.secret"
+    secret_file.write_text('KEY="encrypted:abc"\n')
+    config = PartialEncryptionEnvironmentConfig(
+        name="test", clear_file="", secret_file=str(secret_file), combined_file=""
+    )
+    with (
+        patch("envdrift.core.partial_encryption.DotenvxWrapper"),
+        patch("envdrift.core.partial_encryption.subprocess.run") as mock_run,
+    ):
+        decrypt_secret_file(config)
+
+    args = mock_run.call_args[0][0]
+    assert "--skip-worktree" in args
+    assert str(secret_file) in args
+
+
+def test_encrypt_secret_file_calls_unskip_worktree(tmp_path: Path):
+    """encrypt_secret_file un-marks skip-worktree after re-encryption."""
+    from envdrift.core.partial_encryption import encrypt_secret_file
+
+    secret_file = tmp_path / ".env.secret"
+    secret_file.write_text("KEY=plain\n")
+    config = PartialEncryptionEnvironmentConfig(
+        name="test", clear_file="", secret_file=str(secret_file), combined_file=""
+    )
+    with (
+        patch("envdrift.core.partial_encryption.DotenvxWrapper"),
+        patch("envdrift.core.partial_encryption.subprocess.run") as mock_run,
+    ):
+        encrypt_secret_file(config)
+
+    args = mock_run.call_args[0][0]
+    assert "--no-skip-worktree" in args
+    assert str(secret_file) in args
+
+
+def test_skip_worktree_silent_on_git_unavailable(tmp_path: Path):
+    """_git_skip_worktree does not raise when git is unavailable."""
+    from envdrift.core.partial_encryption import _git_skip_worktree
+
+    with patch(
+        "envdrift.core.partial_encryption.subprocess.run",
+        side_effect=FileNotFoundError("git not found"),
+    ):
+        _git_skip_worktree(tmp_path / ".env.secret")  # must not raise
+
+
+def test_unskip_worktree_silent_on_subprocess_error(tmp_path: Path):
+    """_git_unskip_worktree does not raise on subprocess errors."""
+    import subprocess as _subprocess
+
+    from envdrift.core.partial_encryption import _git_unskip_worktree
+
+    with patch(
+        "envdrift.core.partial_encryption.subprocess.run",
+        side_effect=_subprocess.TimeoutExpired(["git"], 10),
+    ):
+        _git_unskip_worktree(tmp_path / ".env.secret")  # must not raise
+
+
+def test_decrypt_secret_file_protects_already_plaintext(tmp_path: Path):
+    """decrypt_secret_file still marks skip-worktree when the file is already plaintext."""
+    from envdrift.core.partial_encryption import decrypt_secret_file
+
+    secret_file = tmp_path / ".env.secret"
+    secret_file.write_text("KEY=plain\n")  # not encrypted
+    config = PartialEncryptionEnvironmentConfig(
+        name="test", clear_file="", secret_file=str(secret_file), combined_file=""
+    )
+    with (
+        patch("envdrift.core.partial_encryption.DotenvxWrapper") as mock_dotenvx_cls,
+        patch("envdrift.core.partial_encryption.subprocess.run") as mock_run,
+    ):
+        decrypt_secret_file(config)
+
+    mock_dotenvx_cls.return_value.decrypt.assert_not_called()  # early return, no decrypt
+    args = mock_run.call_args[0][0]
+    assert "--skip-worktree" in args
+    assert str(secret_file) in args
+
+
+def test_encrypt_secret_file_unskips_when_already_encrypted(tmp_path: Path):
+    """encrypt_secret_file lifts stale skip-worktree even when already encrypted."""
+    from envdrift.core.partial_encryption import encrypt_secret_file
+
+    secret_file = tmp_path / ".env.secret"
+    secret_file.write_text('KEY="encrypted:abc"\n')  # already encrypted
+    config = PartialEncryptionEnvironmentConfig(
+        name="test", clear_file="", secret_file=str(secret_file), combined_file=""
+    )
+    with (
+        patch("envdrift.core.partial_encryption.DotenvxWrapper") as mock_dotenvx_cls,
+        patch("envdrift.core.partial_encryption.subprocess.run") as mock_run,
+    ):
+        encrypt_secret_file(config)
+
+    mock_dotenvx_cls.return_value.encrypt.assert_not_called()  # early return, no encrypt
+    args = mock_run.call_args[0][0]
+    assert "--no-skip-worktree" in args
+    assert str(secret_file) in args
+
+
+# ---------------------------------------------------------------------------
+# skip-worktree protection in secrets_only mode
+# ---------------------------------------------------------------------------
+
+
+def test_pull_secrets_only_skip_worktrees_decrypted_files(secrets_only_config, secrets_dir):
+    """pull_secrets_only marks every decrypted file skip-worktree."""
+    for f in secrets_dir.iterdir():
+        f.write_text(f.read_text() + 'KEY="encrypted:abc123"\n')
+
+    with (
+        patch("envdrift.core.partial_encryption.DotenvxWrapper"),
+        patch("envdrift.core.partial_encryption.subprocess.run") as mock_run,
+    ):
+        pull_secrets_only(secrets_only_config)
+
+    calls = [call.args[0] for call in mock_run.call_args_list]
+    assert len(calls) == 2  # one per file in secrets_dir
+    assert all("--skip-worktree" in argv for argv in calls)
+
+
+def test_pull_secrets_only_protects_already_plaintext_files(secrets_only_config, secrets_dir):
+    """pull_secrets_only marks skip-worktree even for files that were already plaintext."""
+    with (
+        patch("envdrift.core.partial_encryption.DotenvxWrapper") as mock_dotenvx_cls,
+        patch("envdrift.core.partial_encryption.subprocess.run") as mock_run,
+    ):
+        pull_secrets_only(secrets_only_config)
+
+    mock_dotenvx_cls.return_value.decrypt.assert_not_called()
+    calls = [call.args[0] for call in mock_run.call_args_list]
+    assert len(calls) == 2
+    assert all("--skip-worktree" in argv for argv in calls)
+
+
+def test_push_secrets_only_unskips_encrypted_files(secrets_only_config, secrets_dir):
+    """push_secrets_only lifts skip-worktree on every file it encrypts."""
+    with (
+        patch("envdrift.core.partial_encryption.DotenvxWrapper"),
+        patch("envdrift.core.partial_encryption.subprocess.run") as mock_run,
+    ):
+        push_secrets_only(secrets_only_config)
+
+    calls = [call.args[0] for call in mock_run.call_args_list]
+    assert len(calls) == 2
+    assert all("--no-skip-worktree" in argv for argv in calls)
+
+
+# ---------------------------------------------------------------------------
+# .env.keys must never be encrypted/decrypted as a secret
+# ---------------------------------------------------------------------------
+
+
+def test_push_secrets_only_never_encrypts_keys_file(secrets_only_config, secrets_dir):
+    """push_secrets_only must skip .env.keys even though it matches the .env* pattern."""
+    # dotenvx-style private key file living alongside the secrets.
+    (secrets_dir / ".env.keys").write_text('DOTENV_PRIVATE_KEY_PRODUCTION="abc123"\n')
+
+    with patch("envdrift.core.partial_encryption.DotenvxWrapper") as mock_dotenvx_cls:
+        instance = mock_dotenvx_cls.return_value
+        result = push_secrets_only(secrets_only_config)
+
+    encrypted_paths = [call.args[0].name for call in instance.encrypt.call_args_list]
+    assert ".env.keys" not in encrypted_paths
+    # The two real secret files are still encrypted; the keys file is not counted.
+    assert result["encrypted"] == 2
+
+
+def test_pull_secrets_only_never_decrypts_keys_file(secrets_only_config, secrets_dir):
+    """pull_secrets_only must skip .env.keys even though it matches the .env* pattern."""
+    # Encrypt the two real secret files; leave .env.keys as a plaintext key file.
+    for name in (".env.api", ".env.db"):
+        (secrets_dir / name).write_text('KEY="encrypted:abc123"\n')
+    (secrets_dir / ".env.keys").write_text('DOTENV_PRIVATE_KEY_PRODUCTION="abc123"\n')
+
+    with patch("envdrift.core.partial_encryption.DotenvxWrapper") as mock_dotenvx_cls:
+        instance = mock_dotenvx_cls.return_value
+        result = pull_secrets_only(secrets_only_config)
+
+    decrypted_paths = [call.args[0].name for call in instance.decrypt.call_args_list]
+    assert ".env.keys" not in decrypted_paths
+    assert result["decrypted"] == 2
+
+
+# ---------------------------------------------------------------------------
+# git update-index helpers report success/failure
+# ---------------------------------------------------------------------------
+
+
+def test_git_skip_worktree_returns_true_on_success(tmp_path: Path):
+    """_git_skip_worktree returns True when git exits 0."""
+    from subprocess import CompletedProcess
+
+    from envdrift.core.partial_encryption import _git_skip_worktree
+
+    with patch(
+        "envdrift.core.partial_encryption.subprocess.run",
+        return_value=CompletedProcess(args=[], returncode=0, stdout=b"", stderr=b""),
+    ):
+        assert _git_skip_worktree(tmp_path / ".env.secret") is True
+
+
+def test_git_skip_worktree_returns_false_on_nonzero(tmp_path: Path, caplog):
+    """_git_skip_worktree returns False and logs a warning when git exits non-zero."""
+    import logging
+    from subprocess import CompletedProcess
+
+    from envdrift.core.partial_encryption import _git_skip_worktree
+
+    with (
+        patch(
+            "envdrift.core.partial_encryption.subprocess.run",
+            return_value=CompletedProcess(
+                args=[], returncode=128, stdout=b"", stderr=b"fatal: not in the index"
+            ),
+        ),
+        caplog.at_level(logging.WARNING),
+    ):
+        assert _git_skip_worktree(tmp_path / ".env.secret") is False
+    assert "not in the index" in caplog.text
+
+
+def test_git_unskip_worktree_returns_false_on_git_missing(tmp_path: Path):
+    """_git_unskip_worktree returns False (not raising) when git is unavailable."""
+    from envdrift.core.partial_encryption import _git_unskip_worktree
+
+    with patch(
+        "envdrift.core.partial_encryption.subprocess.run",
+        side_effect=FileNotFoundError("git not found"),
+    ):
+        assert _git_unskip_worktree(tmp_path / ".env.secret") is False

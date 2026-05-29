@@ -363,7 +363,9 @@ class TestRichOutput:
         """Scanner errors render a dedicated panel."""
         result = AggregatedScanResult(
             results=[
-                ScanResult(scanner_name="native", findings=[], files_scanned=0, duration_ms=5, error="boom")
+                ScanResult(
+                    scanner_name="native", findings=[], files_scanned=0, duration_ms=5, error="boom"
+                )
             ],
             total_findings=0,
             unique_findings=[],

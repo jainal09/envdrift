@@ -431,9 +431,7 @@ class ScanEngine:
         all_findings: list[ScanFinding] = []
         for result in results:
             all_findings.extend(result.findings)
-            logger.debug(
-                f"Scanner {result.scanner_name}: {len(result.findings)} findings"
-            )
+            logger.debug(f"Scanner {result.scanner_name}: {len(result.findings)} findings")
 
         # Apply centralized filtering BEFORE deduplication so ignored/filtered findings
         # do not suppress valid findings from other locations.
@@ -743,7 +741,8 @@ class ScanEngine:
 
         before_count = len(findings)
         filtered = [
-            finding for finding in findings
+            finding
+            for finding in findings
             if Path(finding.file_path).resolve() not in gitignored_files
         ]
         after_count = len(filtered)

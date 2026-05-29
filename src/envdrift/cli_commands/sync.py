@@ -271,6 +271,12 @@ def _load_partial_encryption_paths(
     secret_files: set[Path] = set()
     combined_files: set[Path] = set()
     for env_config in config.partial_encryption.environments:
+        if env_config.secrets_only:
+            # Secrets-only environments encrypt files in place within secrets_dir
+            # and have no clear/secret/combined files. Their clear_file/secret_file/
+            # combined_file are empty strings, and Path("") resolves to the current
+            # directory, so they must be skipped to avoid polluting these sets.
+            continue
         clear_files.add(Path(env_config.clear_file).resolve())
         secret_files.add(Path(env_config.secret_file).resolve())
         combined_files.add(Path(env_config.combined_file).resolve())
@@ -844,9 +850,33 @@ def pull(
         from envdrift.core.partial_encryption import (
             PartialEncryptionError,
             pull_partial_encryption,
+            pull_secrets_only,
         )
 
         for env_config in partial_config.partial_encryption.environments:
+            if env_config.secrets_only:
+                try:
+                    result = pull_secrets_only(env_config)
+                except PartialEncryptionError as e:
+                    console.print(
+                        f"  [red]![/red] {env_config.secrets_dir} [red]- error: {e}[/red]"
+                    )
+                    partial_errors.append(f"{env_config.name}: {e}")
+                    continue
+                if result["decrypted"]:
+                    console.print(
+                        f"  [green]+[/green] {env_config.secrets_dir} "
+                        f"[dim]- {result['decrypted']} file(s) decrypted[/dim]"
+                    )
+                    partial_decrypted += result["decrypted"]
+                else:
+                    console.print(
+                        f"  [dim]=[/dim] {env_config.secrets_dir} "
+                        f"[dim]- skipped (already decrypted)[/dim]"
+                    )
+                partial_skipped += result["already_decrypted"]
+                continue
+
             secret_file = Path(env_config.secret_file)
 
             if not secret_file.exists():
@@ -855,7 +885,7 @@ def pull(
                 continue
 
             try:
-                was_decrypted = pull_partial_encryption(env_config)
+                was_decrypted, _ = pull_partial_encryption(env_config)
 
                 if was_decrypted:
                     console.print(f"  [green]+[/green] {secret_file} [dim]- decrypted[/dim]")
@@ -1570,6 +1600,16 @@ def lock(
                 envdrift_cfg = load_envdrift_config(config_path)
                 if envdrift_cfg.partial_encryption.enabled:
                     for env_config in envdrift_cfg.partial_encryption.environments:
+                        if env_config.secrets_only:
+                            # Secrets-only environments are encrypted in place with
+                            # dotenvx via `envdrift push` and have no combined file.
+                            # Skip them here so Path("") does not collapse to the
+                            # current directory and get encrypted/deleted.
+                            console.print(
+                                f"  [dim]=[/dim] {env_config.secrets_dir} "
+                                "[dim]- skipped (secrets-only, managed by 'envdrift push')[/dim]"
+                            )
+                            continue
                         secret_file = Path(env_config.secret_file)
                         combined_file = Path(env_config.combined_file)
 

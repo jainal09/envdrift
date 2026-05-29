@@ -104,8 +104,8 @@ vim .env.production.secret   # Sensitive changes (decrypted)
 # 2. Encrypt and combine
 envdrift push
 
-# 3. Commit all three files
-git add .env.production.clear .env.production.secret .env.production
+# 3. Commit source files only — the combined file is gitignored
+git add .env.production.clear .env.production.secret
 git commit -m "Update configuration"
 ```
 

@@ -103,10 +103,19 @@ vim .env.production.secret   # Sensitive changes (now decrypted)
 # 4. Re-encrypt and combine
 envdrift push
 
-# 5. Commit
-git add .env.production.clear .env.production.secret .env.production
+# 5. Commit source files only — the combined file is gitignored
+git add .env.production.clear .env.production.secret
 git commit -m "Update configuration"
 ```
+
+## Plaintext protection
+
+While a secret file is decrypted, `pull-partial` marks it `skip-worktree` in your
+local clone so a plain `git add .` will not stage it. `envdrift push` lifts the
+protection once the file is re-encrypted. This is a local guardrail only — it is not
+shared with teammates and can be bypassed with `git add -f`, so never force-add a
+decrypted secret file. The same protection applies to every file decrypted in
+secrets-only mode.
 
 ## Exit Codes
 

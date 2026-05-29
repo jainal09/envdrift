@@ -42,8 +42,9 @@ def push(
     1. Encrypts .env.{env}.secret files using dotenvx
     2. Combines .env.{env}.clear + encrypted .secret → .env.{env}
     3. Adds warning header to generated file
+    4. Adds the combined file to .gitignore (it is a runtime artifact, not committed)
 
-    The generated .env.{env} file should be committed to git.
+    Commit only .env.{env}.clear and .env.{env}.secret — not the combined file.
 
     Examples:
         # Push all environments
@@ -143,11 +144,18 @@ def push(
         raise typer.Exit(code=1)
 
     console.print()
-    print_success("Push complete! Combined files are ready to commit.")
+    print_success("Push complete! Source files are encrypted and ready to commit.")
     console.print()
-    console.print(
-        "[dim]Remember to edit source files (.clear and .secret), not the combined file.[/dim]"
-    )
+    if combined_files:
+        console.print(
+            "[dim]Combined files are runtime artifacts (auto-gitignored). "
+            "Edit source files (.clear and .secret), not the combined file.[/dim]"
+        )
+    if total_encrypted_files:
+        console.print(
+            "[dim]Secrets-only files are encrypted in place; "
+            "run 'envdrift pull' to edit them.[/dim]"
+        )
 
 
 def pull_cmd(
@@ -204,6 +212,9 @@ def pull_cmd(
 
     decrypted_count = 0
     skipped_count = 0
+    # Tracks whether skip-worktree protection was actually applied to at least one
+    # file, so the Security Notice doesn't claim protection that silently failed.
+    protected_any = False
     errors = []
 
     for env_config in envs_to_process:
@@ -213,6 +224,7 @@ def pull_cmd(
             if env_config.secrets_only:
                 result = pull_secrets_only(env_config)
                 skipped_count += result["already_decrypted"]
+                protected_any = protected_any or result.get("protected", 0) > 0
                 if result["decrypted"]:
                     console.print(
                         f"  [green]✓[/green] Decrypted {result['decrypted']} file(s) in "
@@ -226,7 +238,8 @@ def pull_cmd(
                         f"[dim](all {result['already_decrypted']} file(s) already decrypted)[/dim]"
                     )
             else:
-                was_decrypted = pull_partial_encryption(env_config)
+                was_decrypted, protected = pull_partial_encryption(env_config)
+                protected_any = protected_any or protected
                 if was_decrypted:
                     console.print(f"  [green]✓[/green] Decrypted {env_config.secret_file}")
                     decrypted_count += 1
@@ -263,5 +276,21 @@ def pull_cmd(
 
     console.print()
     print_success("Pull complete! Secret files are now decrypted for editing.")
-    console.print()
-    console.print("[dim]Remember to run 'envdrift push' before committing.[/dim]")
+
+    if decrypted_count > 0 and protected_any:
+        console.print()
+        console.print(
+            Panel(
+                "[bold yellow]⚠  SECRET FILES ARE NOW PLAINTEXT[/bold yellow]\n\n"
+                "They are marked [bold]skip-worktree[/bold] in this clone, so a plain "
+                "[bold]git add .[/bold] won't stage them while decrypted.\n"
+                "[dim]This is a local guardrail only — it is not shared with teammates and "
+                "can be bypassed with [bold]git add -f[/bold]. Never force-add a plaintext "
+                "secret file.[/dim]\n\n"
+                "Edit your secret files, then run:\n"
+                "  [bold cyan]envdrift push[/bold cyan]   ← re-encrypts and lifts the git protection",
+                title="[bold yellow]Security Notice[/bold yellow]",
+                border_style="yellow",
+                expand=False,
+            )
+        )
