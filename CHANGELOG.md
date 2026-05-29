@@ -1,5 +1,12 @@
 # Changelog
 
+## [10.11.2](https://github.com/jainal09/envdrift/compare/v10.11.1...v10.11.2) (2026-05-29)
+
+
+### Bug Fixes
+
+* **partial-encryption:** address sev5-9 — counts, alignment, --check, scanner, .env.keys ([#270](https://github.com/jainal09/envdrift/issues/270)) ([0f5f916](https://github.com/jainal09/envdrift/commit/0f5f916be96302f1b71d1bea91000411a9e4065f))
+
 ## [10.11.1](https://github.com/jainal09/envdrift/compare/v10.11.0...v10.11.1) (2026-05-29)
 
 
