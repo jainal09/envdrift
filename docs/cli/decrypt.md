@@ -170,6 +170,12 @@ Failure shows WRONG_PRIVATE_KEY and prints repair steps:
 - `envdrift sync --force ...` to restore .env.keys from vault
 - `envdrift encrypt <file>` to re-encrypt with the vault key
 
+!!! note "`--verify-vault` only verifies — it does not fetch the key"
+    This is a **read-only CI check**: it fetches the vault key, tests decryption in
+    a throwaway temp dir, and discards everything (the original file is *not*
+    decrypted and no `.env.keys` is written). To actually fetch a key onto a
+    machine and decrypt for use, see [`vault-pull`](vault-pull.md).
+
 ## Error Handling
 
 ### Missing Private Key

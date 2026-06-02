@@ -185,9 +185,25 @@ Error: Secret 'myapp-key' not found in azure vault
 - **HashiCorp Vault**: `VAULT_TOKEN` environment variable
 - **GCP Secret Manager**: Application Default Credentials
 
+## `vault-pull` vs `decrypt --verify-vault`
+
+Both commands fetch a key from your vault, but they do very different things — don't confuse them:
+
+| | `vault-pull` | `decrypt --verify-vault` |
+| :--- | :--- | :--- |
+| **Purpose** | Onboarding — get the key and use it | CI health-check — does the shared key still work? |
+| **Writes `.env.keys`?** | **Yes** | No |
+| **Decrypts the real file?** | **Yes** (unless `--no-decrypt`) | No — tests in a throwaway temp dir, then discards |
+| **Persists anything?** | Yes | No (prints *"Original file was not decrypted"*) |
+
+Use `vault-pull` to actually fetch a key onto a machine and decrypt. Use
+[`decrypt --verify-vault`](decrypt.md) only to verify, in CI, that the vault's
+shared key can still decrypt an encrypted file — it never writes the key or
+touches the file.
+
 ## See Also
 
 - [vault-push](vault-push.md) - Push a single key to a vault (opposite of vault-pull)
 - [pull](pull.md) - Config-based, multi-service pull + decrypt
-- [decrypt](decrypt.md) - Decrypt an env file using a local key
+- [decrypt](decrypt.md) - Decrypt an env file using a local key (and `--verify-vault` CI check)
 - [Vault Sync Guide](../guides/vault-sync.md) - Detailed vault setup guide

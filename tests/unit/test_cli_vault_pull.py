@@ -673,3 +673,96 @@ class TestVaultPushPullRoundTrip:
 
         recovered = (dst / ".env.keys").read_text()
         assert "DOTENV_PRIVATE_KEY_PRODUCTION=roundtripsecret" in recovered
+
+
+class TestVaultPullReviewFixes:
+    """Regression tests for issues raised in PR review."""
+
+    @patch("envdrift.vault.get_vault_client")
+    def test_pull_fails_fast_on_env_prefix_mismatch(self, mock_get_client, tmp_path):
+        """Pulling --env production a secret pushed --env staging fails fast, writes nothing."""
+        mock_get_client.return_value = _make_client("DOTENV_PRIVATE_KEY_STAGING=abc123")
+
+        result = runner.invoke(
+            app,
+            [
+                "vault-pull",
+                str(tmp_path),
+                "my-secret",
+                "--env",
+                "production",
+                "--no-decrypt",
+                "-p",
+                "azure",
+                "--vault-url",
+                "https://myvault.vault.azure.net/",
+            ],
+        )
+
+        assert result.exit_code == 1, result.output
+        # The error names both the stored prefix and the requested env.
+        assert "DOTENV_PRIVATE_KEY_STAGING" in result.output
+        assert "production" in result.output.lower()
+        # No mismatched key is written.
+        assert not (tmp_path / ".env.keys").exists()
+
+    @patch("envdrift.cli_commands.encryption_helpers.resolve_encryption_backend")
+    @patch("envdrift.vault.get_vault_client")
+    def test_pull_passes_keys_file_to_decrypt(
+        self,
+        mock_get_client,
+        mock_resolve_backend,
+        tmp_path,
+    ):
+        """Decrypt is pointed at the .env.keys we just wrote (monorepo / folder != cwd)."""
+        mock_get_client.return_value = _make_client("DOTENV_PRIVATE_KEY_PRODUCTION=abc123")
+        backend = DummyEncryptionBackend()
+        mock_resolve_backend.return_value = (backend, EncryptionProvider.DOTENVX, None)
+
+        folder = tmp_path / "services" / "myapp"
+        folder.mkdir(parents=True)
+        (folder / ".env.production").write_text("SECRET=encrypted:xyz")
+
+        result = runner.invoke(
+            app,
+            [
+                "vault-pull",
+                str(folder),
+                "my-secret",
+                "--env",
+                "production",
+                "-p",
+                "azure",
+                "--vault-url",
+                "https://myvault.vault.azure.net/",
+            ],
+        )
+
+        assert result.exit_code == 0, result.output
+        assert backend.decrypt_kwargs, "decrypt was not called"
+        assert backend.decrypt_kwargs[0]["keys_file"] == (folder / ".env.keys").resolve()
+
+    @patch("envdrift.vault.get_vault_client")
+    def test_pull_invalid_provider_exits_cleanly(self, mock_get_client, tmp_path):
+        """An unsupported provider (ValueError from get_vault_client) exits cleanly, no traceback."""
+        mock_get_client.side_effect = ValueError("unsupported provider 'nope'")
+
+        result = runner.invoke(
+            app,
+            [
+                "vault-pull",
+                str(tmp_path),
+                "my-secret",
+                "--env",
+                "production",
+                "-p",
+                "azure",
+                "--vault-url",
+                "https://myvault.vault.azure.net/",
+            ],
+        )
+
+        assert result.exit_code == 1
+        assert "Invalid vault configuration" in result.output
+        # No unhandled exception leaked through.
+        assert result.exception is None or isinstance(result.exception, SystemExit)

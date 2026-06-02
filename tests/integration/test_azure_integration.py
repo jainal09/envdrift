@@ -328,3 +328,72 @@ vault_key_path = "test-pushed-secret"
                 f"{endpoint}/secrets/test-pushed-secret",
                 params={"api-version": "7.4"},
             )
+
+
+class TestAzureVaultPull:
+    """Test CLI vault-pull commands with Azure Key Vault."""
+
+    def test_azure_vault_pull_round_trip(
+        self,
+        lowkey_vault_endpoint: str,
+        azure_test_env: dict,
+        lowkey_vault_client,
+        work_dir: Path,
+        integration_pythonpath: str,
+    ):
+        """Seed a secret directly, then fetch it back via `envdrift vault-pull`."""
+        session, endpoint = lowkey_vault_client
+        secret_name = "test-pull-secret"
+        stored_value = "DOTENV_PRIVATE_KEY_PRODUCTION=pulledkey123"
+
+        # Seed the secret directly via the vault REST API
+        put = session.put(
+            f"{endpoint}/secrets/{secret_name}",
+            json={"value": stored_value},
+            headers={"Content-Type": "application/json"},
+            params={"api-version": "7.4"},
+        )
+        if put.status_code not in (200, 201):
+            pytest.skip(f"Lowkey Vault returned {put.status_code} on seed")
+
+        try:
+            env = azure_test_env.copy()
+            env["PYTHONPATH"] = integration_pythonpath
+            env["CURL_CA_BUNDLE"] = ""
+            env["REQUESTS_CA_BUNDLE"] = ""
+
+            # --no-decrypt: we only want to assert the key was written back
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    "-m",
+                    "envdrift",
+                    "vault-pull",
+                    str(work_dir),
+                    secret_name,
+                    "--env",
+                    "production",
+                    "--no-decrypt",
+                    "-p",
+                    "azure",
+                    "--vault-url",
+                    lowkey_vault_endpoint,
+                ],
+                cwd=work_dir,
+                env=env,
+                capture_output=True,
+                text=True,
+                timeout=30,
+            )
+
+            # May fail on auth in the emulator, but must not crash
+            assert result.returncode in (0, 1), result.stderr
+            if result.returncode == 0:
+                keys_content = (work_dir / ".env.keys").read_text()
+                assert "DOTENV_PRIVATE_KEY_PRODUCTION=pulledkey123" in keys_content
+        finally:
+            with contextlib.suppress(Exception):
+                session.delete(
+                    f"{endpoint}/secrets/{secret_name}",
+                    params={"api-version": "7.4"},
+                )

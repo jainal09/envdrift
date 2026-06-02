@@ -886,8 +886,15 @@ class TestVaultPushSingleService:
         assert result.exit_code == 1
         assert "failed to push secret" in result.output.lower()
 
-    def test_force_without_all_warns(self, tmp_path):
-        """--force without --all shows a warning."""
+    @patch("envdrift.vault.get_vault_client")
+    def test_force_without_all_warns_but_continues(self, mock_get_client, tmp_path):
+        """--force without --all is informational: it warns but the push still succeeds."""
+        client = MagicMock()
+        client.set_secret.return_value = SecretValue(name="secret-name", value="x", version="1")
+        mock_get_client.return_value = client
+
+        (tmp_path / ".env.keys").write_text("DOTENV_PRIVATE_KEY_PROD=prodvalue123\n")
+
         result = runner.invoke(
             app,
             [
@@ -903,7 +910,14 @@ class TestVaultPushSingleService:
                 "https://vault.vault.azure.net",
             ],
         )
+        # Warning is shown...
         assert "--force is only applicable with --all mode" in result.output
+        # ...but execution continues and the secret is pushed successfully.
+        assert result.exit_code == 0, result.output
+        client.set_secret.assert_called_once_with(
+            "secret-name", "DOTENV_PRIVATE_KEY_PROD=prodvalue123"
+        )
+        assert "Pushed secret" in result.output
 
 
 class TestVaultPushSkipEncrypt:
