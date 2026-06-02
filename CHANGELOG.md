@@ -1,5 +1,12 @@
 # Changelog
 
+## [10.12.0](https://github.com/jainal09/envdrift/compare/v10.11.3...v10.12.0) (2026-06-02)
+
+
+### Features
+
+* **vault:** add config-free vault-pull command (symmetric to vault-push) ([#283](https://github.com/jainal09/envdrift/issues/283)) ([8c62fee](https://github.com/jainal09/envdrift/commit/8c62fee44fb543e1dccb1d7b80761344b319afb2))
+
 ## [10.11.3](https://github.com/jainal09/envdrift/compare/v10.11.2...v10.11.3) (2026-05-29)
 
 
