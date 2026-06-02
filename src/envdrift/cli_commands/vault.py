@@ -23,7 +23,13 @@ def vault_push(
     env: Annotated[
         str | None,
         typer.Option(
-            "--env", "-e", help="Environment suffix (e.g., 'soak' for DOTENV_PRIVATE_KEY_SOAK)"
+            "--env",
+            "-e",
+            help=(
+                "Required (single-service mode): environment suffix that selects which "
+                "DOTENV_PRIVATE_KEY_<ENV> key is read from .env.keys "
+                "(e.g., 'soak' -> DOTENV_PRIVATE_KEY_SOAK)"
+            ),
         ),
     ] = None,
     direct: Annotated[
@@ -399,3 +405,220 @@ def vault_push(
     except VaultError as e:
         print_error(f"Failed to push secret: {e}")
         raise typer.Exit(code=1) from None
+
+
+def vault_pull(
+    folder: Annotated[
+        Path,
+        typer.Argument(help="Service folder to write the fetched .env.keys file into"),
+    ],
+    secret_name: Annotated[
+        str,
+        typer.Argument(help="Name of the secret in the vault"),
+    ],
+    env: Annotated[
+        str,
+        typer.Option(
+            "--env",
+            "-e",
+            help=(
+                "Required: environment suffix that names the key written to .env.keys "
+                "(e.g., 'soak' -> DOTENV_PRIVATE_KEY_SOAK). Also selects which "
+                ".env.<env> file is decrypted unless --no-decrypt is used."
+            ),
+        ),
+    ],
+    config: Annotated[
+        Path | None,
+        typer.Option("--config", "-c", help="Path to envdrift.toml config file"),
+    ] = None,
+    provider: Annotated[
+        str | None,
+        typer.Option("--provider", "-p", help="Vault provider: azure, aws, hashicorp, gcp"),
+    ] = None,
+    vault_url: Annotated[
+        str | None,
+        typer.Option("--vault-url", help="Vault URL (Azure Key Vault or HashiCorp Vault)"),
+    ] = None,
+    region: Annotated[
+        str | None,
+        typer.Option("--region", help="AWS region (default: us-east-1)"),
+    ] = None,
+    project_id: Annotated[
+        str | None,
+        typer.Option("--project-id", help="GCP project ID (Secret Manager)"),
+    ] = None,
+    no_decrypt: Annotated[
+        bool,
+        typer.Option(
+            "--no-decrypt",
+            help="Only write the key to .env.keys; do not decrypt the .env.<env> file",
+        ),
+    ] = False,
+) -> None:
+    """
+    Pull a single encryption key from a cloud vault into a local .env.keys file.
+
+    This is the config-free inverse of `envdrift vault-push` (single-service mode):
+    it fetches one secret, writes the DOTENV_PRIVATE_KEY_<ENV> key into
+    `<folder>/.env.keys`, and (by default) decrypts the matching `.env.<env>` file
+    so a single command onboards a developer with no TOML required.
+
+    Modes:
+
+    1. Pull key and decrypt (default):
+       envdrift vault-pull ./services/soak soak-machine --env soak -p azure --vault-url https://myvault.vault.azure.net/
+
+    2. Pull key only (skip decryption):
+       envdrift vault-pull ./services/soak soak-machine --env soak --no-decrypt -p azure --vault-url https://myvault.vault.azure.net/
+
+    Provider/URL/region/project-id may be omitted when they are configured in the
+    `[vault]` section of an envdrift.toml/pyproject.toml.
+
+    Examples:
+        # Azure
+        envdrift vault-pull . my-app-key --env production -p azure --vault-url https://myvault.vault.azure.net/
+
+        # AWS
+        envdrift vault-pull . my-app-key --env production -p aws --region us-east-1
+
+        # GCP
+        envdrift vault-pull . my-app-key --env production -p gcp --project-id my-gcp-project
+
+        # HashiCorp
+        envdrift vault-pull . my-app-key --env production -p hashicorp --vault-url https://vault.example.com:8200
+    """
+    import contextlib
+    import tomllib
+
+    from envdrift.config import ConfigNotFoundError, find_config, load_config
+    from envdrift.sync.operations import EnvKeysFile
+    from envdrift.vault import VaultError, get_vault_client
+    from envdrift.vault.base import SecretNotFoundError
+
+    # Load config defaults (same fallback as vault-push single-service mode)
+    envdrift_config = None
+    if config:
+        with contextlib.suppress(ConfigNotFoundError, tomllib.TOMLDecodeError):
+            envdrift_config = load_config(config)
+    else:
+        config_path = find_config()
+        if config_path:
+            with contextlib.suppress(ConfigNotFoundError, tomllib.TOMLDecodeError):
+                envdrift_config = load_config(config_path)
+
+    vault_config = getattr(envdrift_config, "vault", None)
+
+    # Determine effective provider
+    effective_provider = provider or getattr(vault_config, "provider", None)
+    if not effective_provider:
+        print_error("Vault provider required. Use --provider or configure in envdrift.toml")
+        raise typer.Exit(code=1)
+
+    # Determine effective vault URL
+    effective_vault_url = vault_url
+    if effective_vault_url is None and vault_config:
+        if effective_provider == "azure":
+            effective_vault_url = getattr(vault_config, "azure_vault_url", None)
+        elif effective_provider == "hashicorp":
+            effective_vault_url = getattr(vault_config, "hashicorp_url", None)
+
+    # Determine effective region
+    effective_region = region
+    if effective_region is None and vault_config:
+        effective_region = getattr(vault_config, "aws_region", None)
+
+    effective_project_id = project_id
+    if effective_project_id is None and vault_config:
+        effective_project_id = getattr(vault_config, "gcp_project_id", None)
+
+    # Validate provider-specific requirements
+    if effective_provider in ("azure", "hashicorp") and not effective_vault_url:
+        print_error(f"--vault-url required for {effective_provider}")
+        raise typer.Exit(code=1)
+    if effective_provider == "gcp" and not effective_project_id:
+        print_error("--project-id required for gcp")
+        raise typer.Exit(code=1)
+
+    # Create vault client
+    try:
+        vault_client_config = {}
+        if effective_provider == "azure":
+            vault_client_config["vault_url"] = effective_vault_url
+        elif effective_provider == "aws":
+            vault_client_config["region"] = effective_region or "us-east-1"
+        elif effective_provider == "hashicorp":
+            vault_client_config["url"] = effective_vault_url
+        elif effective_provider == "gcp":
+            vault_client_config["project_id"] = effective_project_id
+
+        client = get_vault_client(effective_provider, **vault_client_config)
+        client.authenticate()
+    except ImportError as e:
+        print_error(str(e))
+        raise typer.Exit(code=1) from None
+    except VaultError as e:
+        print_error(f"Vault authentication failed: {e}")
+        raise typer.Exit(code=1) from None
+
+    # Fetch the secret
+    try:
+        secret = client.get_secret(secret_name)
+    except SecretNotFoundError:
+        print_error(f"Secret '{secret_name}' not found in {effective_provider} vault")
+        raise typer.Exit(code=1) from None
+    except VaultError as e:
+        print_error(f"Failed to fetch secret: {e}")
+        raise typer.Exit(code=1) from None
+
+    key_name = f"DOTENV_PRIVATE_KEY_{env.upper()}"
+
+    # Parse the stored value. vault-push stores it as "DOTENV_PRIVATE_KEY_<ENV>=<value>",
+    # but accept a bare value too (no KEY_NAME= prefix).
+    raw_value = secret.value
+    if "=" in raw_value and raw_value.startswith("DOTENV_PRIVATE_KEY_"):
+        key_value = raw_value.split("=", 1)[1]
+    else:
+        key_value = raw_value
+
+    # Write the key into <folder>/.env.keys
+    env_keys_path = folder / ".env.keys"
+    env_keys = EnvKeysFile(env_keys_path)
+    env_keys.write_key(key_name, key_value, environment=env)
+
+    print_success(f"Pulled '{secret_name}' -> {key_name} written to {env_keys_path}")
+
+    # Optionally decrypt the matching .env.<env> file (true one-command onboarding)
+    if no_decrypt:
+        return
+
+    env_file = folder / f".env.{env}"
+    if not env_file.exists():
+        console.print(f"[dim]No {env_file} to decrypt (use --no-decrypt to silence)[/dim]")
+        return
+
+    from envdrift.cli_commands.encryption_helpers import resolve_encryption_backend
+    from envdrift.encryption import EncryptionBackendError, EncryptionNotFoundError
+
+    try:
+        encryption_backend, _, _ = resolve_encryption_backend(config)
+    except ValueError as e:
+        print_error(f"Unsupported encryption backend: {e}")
+        raise typer.Exit(code=1) from None
+
+    if not encryption_backend.is_installed():
+        print_error(f"{encryption_backend.name} is not installed")
+        console.print(encryption_backend.install_instructions())
+        raise typer.Exit(code=1)
+
+    try:
+        result = encryption_backend.decrypt(env_file.resolve())
+    except (EncryptionNotFoundError, EncryptionBackendError) as e:
+        print_error(f"Failed to decrypt {env_file}: {e}")
+        raise typer.Exit(code=1) from None
+
+    if not result.success:
+        print_error(f"Failed to decrypt {env_file}: {result.message}")
+        raise typer.Exit(code=1)
+
+    print_success(f"Decrypted {env_file}")

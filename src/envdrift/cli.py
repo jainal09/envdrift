@@ -18,7 +18,7 @@ from envdrift.cli_commands.partial import pull_cmd as pull_partial_cmd
 from envdrift.cli_commands.partial import push as push_cmd
 from envdrift.cli_commands.sync import lock, pull, sync
 from envdrift.cli_commands.validate import validate
-from envdrift.cli_commands.vault import vault_push
+from envdrift.cli_commands.vault import vault_pull, vault_push
 from envdrift.cli_commands.version import version as version_cmd
 
 
@@ -64,6 +64,7 @@ app.command()(sync)
 app.command()(pull)
 app.command()(lock)
 app.command("vault-push")(vault_push)
+app.command("vault-pull")(vault_pull)
 app.command()(version_cmd)
 
 # Partial encryption commands

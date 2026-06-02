@@ -442,3 +442,4 @@ repos:
 - [encrypt](encrypt.md) - Encrypt a single .env file
 - [decrypt](decrypt.md) - Decrypt a single .env file
 - [vault-push](vault-push.md) - Push keys to vault
+- [vault-pull](vault-pull.md) - Config-free single-secret pull + decrypt

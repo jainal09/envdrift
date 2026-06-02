@@ -260,7 +260,8 @@ Error: Secret 'myapp-key' not found in vault
 
 1. Check the secret name matches exactly (case-sensitive)
 2. Verify the secret exists: check vault UI or CLI
-3. Push the secret first: `envdrift vault-push . myapp-key`
+3. Push the secret first: `envdrift vault-push . myapp-key --env production`
+4. To pull a single secret back without a sync config, use `envdrift vault-pull . myapp-key --env production`
 
 ## Pre-commit Hook Issues
 

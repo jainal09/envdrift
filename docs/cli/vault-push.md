@@ -249,6 +249,8 @@ Uses boto3's credential chain:
 
 ## See Also
 
+- [vault-pull](vault-pull.md) - Config-free single-secret pull (opposite of vault-push)
 - [sync](sync.md) - Pull encryption keys from vaults to local files
+- [pull](pull.md) - Config-based, multi-service pull + decrypt
 - [encrypt](encrypt.md) - Check/perform encryption
 - [Vault Sync Guide](../guides/vault-sync.md) - Detailed vault setup guide

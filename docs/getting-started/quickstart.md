@@ -149,11 +149,14 @@ Share encryption keys with your team via a cloud vault:
 
 ```bash
 # Push your key to Azure Key Vault
-envdrift vault-push . my-app-key --provider azure --vault-url https://myvault.vault.azure.net/
+envdrift vault-push . my-app-key --env production --provider azure --vault-url https://myvault.vault.azure.net/
 
-# Team members pull the key
-envdrift pull --provider azure --vault-url https://myvault.vault.azure.net/
+# Team members pull the key (no config needed) - writes .env.keys and decrypts .env.production
+envdrift vault-pull . my-app-key --env production --provider azure --vault-url https://myvault.vault.azure.net/
 ```
+
+> `vault-pull` is the config-free, single-secret counterpart of `vault-push`. For
+> multi-service flows driven by a `[vault.sync]` config, use `envdrift pull`.
 
 ## Pre-commit Hook (Optional)
 
