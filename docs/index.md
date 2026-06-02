@@ -60,19 +60,23 @@ envdrift pull
 envdrift encrypt .env.production
 
 # Push the encryption key to your team's vault
-envdrift vault-push . my-app-key --provider azure --vault-url https://myvault.vault.azure.net/
+envdrift vault-push . my-app-key --env production --provider azure --vault-url https://myvault.vault.azure.net/
 ```
 
-### 2. Team members onboard instantly
+### 2. Team members onboard instantly (no config needed)
 
 ```bash
-# New developer runs one command
-envdrift pull --provider azure --vault-url https://myvault.vault.azure.net/
+# New developer runs one command - fetches the key, writes .env.keys, and decrypts
+envdrift vault-pull . my-app-key --env production --provider azure --vault-url https://myvault.vault.azure.net/
 
 # Done! .env.production is decrypted and ready
 ```
 
-### 3. Keep environments in sync
+### 3. Keep environments in sync (config-based)
+
+`pull` and `lock` operate on the services defined in your `[vault.sync]` config
+(`envdrift.toml`/`pyproject.toml`). For a single secret without any TOML config,
+use `vault-pull`/`vault-push` instead.
 
 ```bash
 # Before committing changes

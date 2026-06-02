@@ -63,10 +63,15 @@ See [Encryption Backends](../concepts/encryption-backends.md) for a detailed com
 
 Use vault sync:
 
-1. Push your keys to a cloud vault: `envdrift vault-push`
-2. Team members pull keys: `envdrift sync` or `envdrift pull`
+1. Push your keys to a cloud vault: `envdrift vault-push . my-key --env production`
+2. Team members pull keys:
+   - For a single secret with no config: `envdrift vault-pull . my-key --env production`
+   - For multi-service flows driven by a `[vault.sync]` config: `envdrift sync` or `envdrift pull`
 
 This way, keys are stored securely in the cloud and synced on demand.
+
+> `sync` and `pull` require a `[vault.sync]` configuration in `envdrift.toml`/`pyproject.toml`.
+> `vault-pull` is config-free and handles a single secret.
 
 ### Can I encrypt only some variables?
 

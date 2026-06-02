@@ -689,6 +689,238 @@ class TestVaultPushAll:
             "my-secret", "DOTENV_PRIVATE_KEY_STAGING=stagingkey"
         )
 
+
+class TestVaultPushSingleService:
+    """Tests for vault-push single-service and direct (config-free) modes."""
+
+    @patch("envdrift.vault.get_vault_client")
+    def test_push_single_service_success(self, mock_get_client, tmp_path):
+        """Single-service mode reads DOTENV_PRIVATE_KEY_<ENV> and pushes KEY=value."""
+        client = MagicMock()
+        client.set_secret.return_value = SecretValue(name="my-secret", value="x", version="1")
+        mock_get_client.return_value = client
+
+        (tmp_path / ".env.keys").write_text("DOTENV_PRIVATE_KEY_SOAK=soakvalue123\n")
+
+        result = runner.invoke(
+            app,
+            [
+                "vault-push",
+                str(tmp_path),
+                "my-secret",
+                "--env",
+                "soak",
+                "-p",
+                "azure",
+                "--vault-url",
+                "https://myvault.vault.azure.net/",
+            ],
+        )
+
+        assert result.exit_code == 0, result.output
+        client.set_secret.assert_called_once_with(
+            "my-secret", "DOTENV_PRIVATE_KEY_SOAK=soakvalue123"
+        )
+        assert "Pushed secret" in result.output
+        assert "Version: 1" in result.output
+
+    @patch("envdrift.vault.get_vault_client")
+    def test_push_direct_mode(self, mock_get_client, tmp_path):
+        """Direct mode pushes a literal value under the given secret name."""
+        client = MagicMock()
+        client.set_secret.return_value = SecretValue(name="s", value="x", version=None)
+        mock_get_client.return_value = client
+
+        result = runner.invoke(
+            app,
+            [
+                "vault-push",
+                "--direct",
+                "soak-machine",
+                "DOTENV_PRIVATE_KEY_SOAK=abc",
+                "-p",
+                "azure",
+                "--vault-url",
+                "https://myvault.vault.azure.net/",
+            ],
+        )
+
+        assert result.exit_code == 0, result.output
+        client.set_secret.assert_called_once_with("soak-machine", "DOTENV_PRIVATE_KEY_SOAK=abc")
+
+    def test_push_single_missing_env(self, tmp_path):
+        """Single-service mode requires --env."""
+        (tmp_path / ".env.keys").write_text("DOTENV_PRIVATE_KEY_SOAK=v\n")
+        result = runner.invoke(
+            app,
+            [
+                "vault-push",
+                str(tmp_path),
+                "my-secret",
+                "-p",
+                "azure",
+                "--vault-url",
+                "https://myvault.vault.azure.net/",
+            ],
+        )
+        assert result.exit_code == 1
+        assert "Required" in result.output
+
+    def test_push_single_missing_keys_file(self, tmp_path):
+        """Missing .env.keys file fails."""
+        result = runner.invoke(
+            app,
+            [
+                "vault-push",
+                str(tmp_path),
+                "my-secret",
+                "--env",
+                "soak",
+                "-p",
+                "azure",
+                "--vault-url",
+                "https://myvault.vault.azure.net/",
+            ],
+        )
+        assert result.exit_code == 1
+        assert "not found" in result.output.lower()
+
+    def test_push_single_key_not_in_file(self, tmp_path):
+        """Key missing from .env.keys fails."""
+        (tmp_path / ".env.keys").write_text("DOTENV_PRIVATE_KEY_OTHER=v\n")
+        result = runner.invoke(
+            app,
+            [
+                "vault-push",
+                str(tmp_path),
+                "my-secret",
+                "--env",
+                "soak",
+                "-p",
+                "azure",
+                "--vault-url",
+                "https://myvault.vault.azure.net/",
+            ],
+        )
+        assert result.exit_code == 1
+        assert "not found" in result.output.lower()
+
+    def test_push_single_azure_requires_vault_url(self, tmp_path):
+        """Azure provider without --vault-url fails."""
+        (tmp_path / ".env.keys").write_text("DOTENV_PRIVATE_KEY_SOAK=v\n")
+        result = runner.invoke(
+            app,
+            ["vault-push", str(tmp_path), "my-secret", "--env", "soak", "-p", "azure"],
+        )
+        assert result.exit_code == 1
+        assert "vault-url required" in result.output.lower()
+
+    def test_push_single_gcp_requires_project_id(self, tmp_path):
+        """GCP provider without --project-id fails."""
+        (tmp_path / ".env.keys").write_text("DOTENV_PRIVATE_KEY_SOAK=v\n")
+        result = runner.invoke(
+            app,
+            ["vault-push", str(tmp_path), "my-secret", "--env", "soak", "-p", "gcp"],
+        )
+        assert result.exit_code == 1
+        assert "project-id required" in result.output.lower()
+
+    def test_push_single_missing_provider(self, tmp_path):
+        """No provider and no config fails."""
+        (tmp_path / ".env.keys").write_text("DOTENV_PRIVATE_KEY_SOAK=v\n")
+        with patch("envdrift.config.find_config", return_value=None):
+            result = runner.invoke(
+                app,
+                ["vault-push", str(tmp_path), "my-secret", "--env", "soak"],
+            )
+        assert result.exit_code == 1
+        assert "provider required" in result.output.lower()
+
+    @patch("envdrift.vault.get_vault_client")
+    def test_push_single_auth_failure(self, mock_get_client, tmp_path):
+        """Auth failure exits with code 1."""
+        client = MagicMock()
+        client.authenticate.side_effect = VaultError("auth failed")
+        mock_get_client.return_value = client
+        (tmp_path / ".env.keys").write_text("DOTENV_PRIVATE_KEY_SOAK=v\n")
+
+        result = runner.invoke(
+            app,
+            [
+                "vault-push",
+                str(tmp_path),
+                "my-secret",
+                "--env",
+                "soak",
+                "-p",
+                "azure",
+                "--vault-url",
+                "https://myvault.vault.azure.net/",
+            ],
+        )
+        assert result.exit_code == 1
+        assert "authentication failed" in result.output.lower()
+
+    @patch("envdrift.vault.get_vault_client")
+    def test_push_single_set_secret_error(self, mock_get_client, tmp_path):
+        """A VaultError on set_secret exits with code 1."""
+        client = MagicMock()
+        client.set_secret.side_effect = VaultError("write denied")
+        mock_get_client.return_value = client
+        (tmp_path / ".env.keys").write_text("DOTENV_PRIVATE_KEY_SOAK=v\n")
+
+        result = runner.invoke(
+            app,
+            [
+                "vault-push",
+                str(tmp_path),
+                "my-secret",
+                "--env",
+                "soak",
+                "-p",
+                "azure",
+                "--vault-url",
+                "https://myvault.vault.azure.net/",
+            ],
+        )
+        assert result.exit_code == 1
+        assert "failed to push secret" in result.output.lower()
+
+    @patch("envdrift.vault.get_vault_client")
+    def test_force_without_all_warns_but_continues(self, mock_get_client, tmp_path):
+        """--force without --all is informational: it warns but the push still succeeds."""
+        client = MagicMock()
+        client.set_secret.return_value = SecretValue(name="secret-name", value="x", version="1")
+        mock_get_client.return_value = client
+
+        (tmp_path / ".env.keys").write_text("DOTENV_PRIVATE_KEY_PROD=prodvalue123\n")
+
+        result = runner.invoke(
+            app,
+            [
+                "vault-push",
+                "--force",
+                str(tmp_path),
+                "secret-name",
+                "--env",
+                "prod",
+                "-p",
+                "azure",
+                "--vault-url",
+                "https://vault.vault.azure.net",
+            ],
+        )
+        # Warning is shown...
+        assert "--force is only applicable with --all mode" in result.output
+        # ...but execution continues and the secret is pushed successfully.
+        assert result.exit_code == 0, result.output
+        client.set_secret.assert_called_once_with(
+            "secret-name", "DOTENV_PRIVATE_KEY_PROD=prodvalue123"
+        )
+        assert "Pushed secret" in result.output
+
+
+class TestVaultPushSkipEncrypt:
     def test_skip_encrypt_without_all_warns(self, tmp_path):
         """Test --skip-encrypt without --all shows warning."""
         result = runner.invoke(

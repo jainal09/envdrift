@@ -129,7 +129,8 @@ The `pull` and `lock` commands form a complete workflow:
 | `pull` | Vault → Local | Sync keys, decrypt files for development |
 | `lock` | Local → Repo | Verify keys, encrypt files for commit |
 | `sync` | Vault → Local | Sync keys only (no decrypt) |
-| `vault-push` | Local → Vault | Push new keys to vault |
+| `vault-push` | Local → Vault | Push a single key to vault (config-free) |
+| `vault-pull` | Vault → Local | Pull a single key + decrypt (config-free) |
 
 ## Encryption Detection
 

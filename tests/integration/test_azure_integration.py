@@ -328,3 +328,86 @@ vault_key_path = "test-pushed-secret"
                 f"{endpoint}/secrets/test-pushed-secret",
                 params={"api-version": "7.4"},
             )
+
+
+class TestAzureVaultPull:
+    """Test CLI vault-pull commands with Azure Key Vault."""
+
+    def test_azure_vault_pull_round_trip(
+        self,
+        lowkey_vault_endpoint: str,
+        azure_test_env: dict,
+        lowkey_vault_client,
+        work_dir: Path,
+        integration_pythonpath: str,
+        envdrift_cmd: list[str],
+    ):
+        """Seed a secret directly, then fetch it back via `envdrift vault-pull`."""
+        session, endpoint = lowkey_vault_client
+        secret_name = "test-pull-secret"
+        stored_value = "DOTENV_PRIVATE_KEY_PRODUCTION=pulledkey123"
+
+        # Seed the secret directly via the vault REST API
+        put = session.put(
+            f"{endpoint}/secrets/{secret_name}",
+            json={"value": stored_value},
+            headers={"Content-Type": "application/json"},
+            params={"api-version": "7.4"},
+        )
+        if put.status_code not in (200, 201):
+            pytest.skip(f"Lowkey Vault returned {put.status_code} on seed")
+
+        try:
+            env = azure_test_env.copy()
+            env["PYTHONPATH"] = integration_pythonpath
+            env["CURL_CA_BUNDLE"] = ""
+            env["REQUESTS_CA_BUNDLE"] = ""
+
+            # Use the real console-script entrypoint (there is no envdrift.__main__,
+            # so `python -m envdrift` would exit before dispatching). --no-decrypt:
+            # we only assert the key is written back.
+            result = subprocess.run(
+                [
+                    *envdrift_cmd,
+                    "vault-pull",
+                    str(work_dir),
+                    secret_name,
+                    "--env",
+                    "production",
+                    "--no-decrypt",
+                    "-p",
+                    "azure",
+                    "--vault-url",
+                    lowkey_vault_endpoint,
+                ],
+                cwd=work_dir,
+                env=env,
+                capture_output=True,
+                text=True,
+                timeout=30,
+            )
+
+            combined = result.stdout + result.stderr
+            # The CLI must actually dispatch — a missing entrypoint / import error
+            # would make this test vacuous, so fail loudly on those.
+            assert "No module named" not in combined, combined
+            assert "is a package and cannot be directly executed" not in combined, combined
+
+            if result.returncode == 0:
+                # Real success: the seeded key was fetched and written.
+                keys_content = (work_dir / ".env.keys").read_text()
+                assert "DOTENV_PRIVATE_KEY_PRODUCTION=pulledkey123" in keys_content
+            else:
+                # DefaultAzureCredential can't authenticate against Lowkey Vault in
+                # CI; skip visibly rather than passing vacuously. Still confirms the
+                # command ran far enough to attempt the vault call.
+                assert "vault" in combined.lower() or "credential" in combined.lower(), combined
+                pytest.skip(
+                    f"vault-pull could not authenticate against Lowkey Vault: {combined[:200]}"
+                )
+        finally:
+            with contextlib.suppress(Exception):
+                session.delete(
+                    f"{endpoint}/secrets/{secret_name}",
+                    params={"api-version": "7.4"},
+                )

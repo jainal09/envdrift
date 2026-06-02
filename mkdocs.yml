@@ -52,6 +52,7 @@ nav:
       - lock: cli/lock.md
       - sync: cli/sync.md
       - vault-push: cli/vault-push.md
+      - vault-pull: cli/vault-pull.md
       - encrypt: cli/encrypt.md
       - decrypt: cli/decrypt.md
       - push: cli/push.md

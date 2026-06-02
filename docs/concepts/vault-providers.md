@@ -58,7 +58,10 @@ folder_path = "."
 envdrift sync --provider azure --vault-url https://my-keyvault.vault.azure.net/
 
 # Push keys to Azure Key Vault
-envdrift vault-push . my-secret-name --provider azure --vault-url https://my-keyvault.vault.azure.net/
+envdrift vault-push . my-secret-name --env production --provider azure --vault-url https://my-keyvault.vault.azure.net/
+
+# Pull a single key back (config-free) and decrypt .env.production
+envdrift vault-pull . my-secret-name --env production --provider azure --vault-url https://my-keyvault.vault.azure.net/
 ```
 
 ### Pros
@@ -120,7 +123,10 @@ folder_path = "."
 envdrift sync --provider aws --region us-east-1
 
 # Push keys
-envdrift vault-push . my-secret-name --provider aws --region us-east-1
+envdrift vault-push . my-secret-name --env production --provider aws --region us-east-1
+
+# Pull a single key back (config-free) and decrypt .env.production
+envdrift vault-pull . my-secret-name --env production --provider aws --region us-east-1
 ```
 
 ### Pros
@@ -182,7 +188,10 @@ export VAULT_TOKEN="hvs.xxx"
 envdrift sync --provider hashicorp --vault-url https://vault.example.com
 
 # Push keys
-envdrift vault-push . myapp/dotenvx-key --provider hashicorp --vault-url https://vault.example.com
+envdrift vault-push . myapp/dotenvx-key --env production --provider hashicorp --vault-url https://vault.example.com
+
+# Pull a single key back (config-free) and decrypt .env.production
+envdrift vault-pull . myapp/dotenvx-key --env production --provider hashicorp --vault-url https://vault.example.com
 ```
 
 ### Pros
@@ -240,7 +249,10 @@ folder_path = "."
 envdrift sync --provider gcp --project-id my-gcp-project
 
 # Push keys
-envdrift vault-push . my-secret-name --provider gcp --project-id my-gcp-project
+envdrift vault-push . my-secret-name --env production --provider gcp --project-id my-gcp-project
+
+# Pull a single key back (config-free) and decrypt .env.production
+envdrift vault-pull . my-secret-name --env production --provider gcp --project-id my-gcp-project
 ```
 
 ### Pros

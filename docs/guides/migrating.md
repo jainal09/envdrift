@@ -330,7 +330,10 @@ envdrift validate .env --schema config:Settings
 
 # Phase 2: Encryption (later)
 envdrift encrypt .env.production
-envdrift vault-push . my-key
+envdrift vault-push . my-key --env production
+
+# Team members pull it back (config-free) and decrypt
+envdrift vault-pull . my-key --env production
 ```
 
 ### Keep Existing Loaders

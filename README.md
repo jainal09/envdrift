@@ -62,21 +62,26 @@ pip install "envdrift[vault]"  # All vault providers
 
 ```bash
 envdrift encrypt .env.production
-envdrift vault-push . my-app-key --provider azure --vault-url https://myvault.vault.azure.net/
+envdrift vault-push . my-app-key --env production --provider azure --vault-url https://myvault.vault.azure.net/
 ```
 
-**2. Team members pull instantly:**
+**2. Team members pull instantly (no config needed):**
 
 ```bash
-envdrift pull --provider azure --vault-url https://myvault.vault.azure.net/
+envdrift vault-pull . my-app-key --env production --provider azure --vault-url https://myvault.vault.azure.net/
 ```
 
-**3. Daily workflow:**
+`vault-pull` fetches the key, writes `.env.keys`, and decrypts `.env.production` in one step.
+
+**3. Daily workflow (config-based, needs `[vault.sync]` in `envdrift.toml`):**
 
 ```bash
 envdrift pull   # After git pull - sync keys, decrypt
 envdrift lock   # Before commit - encrypt, verify keys
 ```
+
+> Note: `pull`/`lock` operate on all services defined in your sync config. For a
+> single secret without any TOML config, use `vault-pull`/`vault-push`.
 
 ## Beyond Sync
 
