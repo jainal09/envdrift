@@ -340,6 +340,7 @@ class TestAzureVaultPull:
         lowkey_vault_client,
         work_dir: Path,
         integration_pythonpath: str,
+        envdrift_cmd: list[str],
     ):
         """Seed a secret directly, then fetch it back via `envdrift vault-pull`."""
         session, endpoint = lowkey_vault_client
@@ -362,12 +363,12 @@ class TestAzureVaultPull:
             env["CURL_CA_BUNDLE"] = ""
             env["REQUESTS_CA_BUNDLE"] = ""
 
-            # --no-decrypt: we only want to assert the key was written back
+            # Use the real console-script entrypoint (there is no envdrift.__main__,
+            # so `python -m envdrift` would exit before dispatching). --no-decrypt:
+            # we only assert the key is written back.
             result = subprocess.run(
                 [
-                    sys.executable,
-                    "-m",
-                    "envdrift",
+                    *envdrift_cmd,
                     "vault-pull",
                     str(work_dir),
                     secret_name,
@@ -386,11 +387,24 @@ class TestAzureVaultPull:
                 timeout=30,
             )
 
-            # May fail on auth in the emulator, but must not crash
-            assert result.returncode in (0, 1), result.stderr
+            combined = result.stdout + result.stderr
+            # The CLI must actually dispatch — a missing entrypoint / import error
+            # would make this test vacuous, so fail loudly on those.
+            assert "No module named" not in combined, combined
+            assert "is a package and cannot be directly executed" not in combined, combined
+
             if result.returncode == 0:
+                # Real success: the seeded key was fetched and written.
                 keys_content = (work_dir / ".env.keys").read_text()
                 assert "DOTENV_PRIVATE_KEY_PRODUCTION=pulledkey123" in keys_content
+            else:
+                # DefaultAzureCredential can't authenticate against Lowkey Vault in
+                # CI; skip visibly rather than passing vacuously. Still confirms the
+                # command ran far enough to attempt the vault call.
+                assert "vault" in combined.lower() or "credential" in combined.lower(), combined
+                pytest.skip(
+                    f"vault-pull could not authenticate against Lowkey Vault: {combined[:200]}"
+                )
         finally:
             with contextlib.suppress(Exception):
                 session.delete(

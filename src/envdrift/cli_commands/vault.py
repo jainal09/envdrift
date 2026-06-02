@@ -506,7 +506,7 @@ def vault_pull(
         ),
     ] = False,
 ) -> None:
-    """
+    r"""
     Pull a single encryption key from a cloud vault into a local .env.keys file.
 
     This is the config-free inverse of `envdrift vault-push` (single-service mode):
@@ -523,7 +523,7 @@ def vault_pull(
        envdrift vault-pull ./services/soak soak-machine --env soak --no-decrypt -p azure --vault-url https://myvault.vault.azure.net/
 
     Provider/URL/region/project-id may be omitted when they are configured in the
-    `[vault]` section of an envdrift.toml/pyproject.toml.
+    `\[vault]` section of an envdrift.toml/pyproject.toml.
 
     Examples:
         # Azure
@@ -597,16 +597,22 @@ def vault_pull(
 
     env_file = folder / f".env.{env}"
     if not env_file.exists():
-        console.print(f"[dim]No {env_file} to decrypt (use --no-decrypt to silence)[/dim]")
+        console.print(f"[dim]Key written; no {env_file} found to decrypt.[/dim]")
         return
 
     from envdrift.cli_commands.encryption_helpers import resolve_encryption_backend
     from envdrift.encryption import EncryptionBackendError, EncryptionNotFoundError
 
-    # NOTE: resolve_encryption_backend only honours `config` when it has a
-    # `.toml` suffix; a config path without that suffix is silently ignored here
-    # (falls back to auto-discovery), even though the vault settings above did
-    # load it. Pass an envdrift.toml/pyproject.toml so both stay consistent.
+    # resolve_encryption_backend only honours `config` when it has a `.toml`
+    # suffix; a config path without that suffix is silently ignored here (falls
+    # back to auto-discovery) even though the vault settings above did load it.
+    # Warn so the inconsistency isn't silent.
+    if config is not None and config.suffix.lower() != ".toml":
+        print_warning(
+            f"--config {config} has no .toml suffix; it is used for vault settings "
+            f"but ignored when selecting the encryption backend (auto-detected instead)."
+        )
+
     try:
         encryption_backend, _, _ = resolve_encryption_backend(config)
     except ValueError as e:

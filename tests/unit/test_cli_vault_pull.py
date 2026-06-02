@@ -152,7 +152,7 @@ class TestVaultPullSingleSecret:
         )
 
         assert result.exit_code == 0, result.output
-        assert "No" in result.output and "to decrypt" in result.output
+        assert "found to decrypt" in result.output
         assert "DOTENV_PRIVATE_KEY_PRODUCTION=abc123" in (tmp_path / ".env.keys").read_text()
 
     def test_pull_missing_env_flag(self, tmp_path):
@@ -742,11 +742,10 @@ class TestVaultPullReviewFixes:
         assert backend.decrypt_kwargs, "decrypt was not called"
         assert backend.decrypt_kwargs[0]["keys_file"] == (folder / ".env.keys").resolve()
 
-    @patch("envdrift.vault.get_vault_client")
-    def test_pull_invalid_provider_exits_cleanly(self, mock_get_client, tmp_path):
-        """An unsupported provider (ValueError from get_vault_client) exits cleanly, no traceback."""
-        mock_get_client.side_effect = ValueError("unsupported provider 'nope'")
-
+    def test_pull_invalid_provider_exits_cleanly(self, tmp_path):
+        """An unsupported provider raises ValueError in get_vault_client; the CLI exits cleanly."""
+        # `bogus` is not azure/hashicorp/gcp, so it reaches get_vault_client, where
+        # VaultProvider("bogus") raises a real ValueError — no mock needed.
         result = runner.invoke(
             app,
             [
@@ -756,9 +755,7 @@ class TestVaultPullReviewFixes:
                 "--env",
                 "production",
                 "-p",
-                "azure",
-                "--vault-url",
-                "https://myvault.vault.azure.net/",
+                "bogus",
             ],
         )
 
