@@ -121,7 +121,8 @@ Install envdrift with your provider's vault extra (e.g. `envdrift[azure]`, or
 ### 2. Create `envdrift.toml`
 
 One config file, one provider. Pick the provider you actually use — you don't stack
-multiple providers in the same config.
+multiple providers in the same config. For every available option, see the
+[Configuration reference](../reference/configuration.md#vaultsync-vault-sync-settings).
 
 ```toml
 [vault]
