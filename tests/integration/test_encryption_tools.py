@@ -191,6 +191,31 @@ def _write_sops_age_setup(work_dir: Path, *, path_regex: str) -> None:
     )
 
 
+def _scrub_cloud_credentials(env: dict[str, str]) -> None:
+    """Remove cloud credential/identity hints so provider auth fails fast.
+
+    Without this, DefaultAzureCredential (and similar chains) may probe managed
+    identity / workload identity endpoints and make these tests environment-sensitive
+    in CI runners that have such identities configured.
+    """
+    for var in (
+        # Azure DefaultAzureCredential chain
+        "AZURE_CLIENT_ID",
+        "AZURE_TENANT_ID",
+        "AZURE_CLIENT_SECRET",
+        "AZURE_CLIENT_CERTIFICATE_PATH",
+        "AZURE_FEDERATED_TOKEN_FILE",
+        "IDENTITY_ENDPOINT",
+        "MSI_ENDPOINT",
+        "IMDS_ENDPOINT",
+        "AZURE_POD_IDENTITY_AUTHORITY_HOST",
+        # HashiCorp Vault
+        "VAULT_TOKEN",
+        "VAULT_ADDR",
+    ):
+        env.pop(var, None)
+
+
 @pytest.mark.integration
 def test_sops_lock_and_pull_roundtrip(integration_env):
     """The playground flow: `lock` encrypts and `pull --skip-sync` decrypts SOPS files.
@@ -203,14 +228,8 @@ def test_sops_lock_and_pull_roundtrip(integration_env):
     work_dir = integration_env["base_dir"] / "sops-lock-pull"
     work_dir.mkdir()
     env = integration_env["env"].copy()
-    # Simulate CI: no Azure credentials available to the vault client.
-    for var in (
-        "AZURE_CLIENT_ID",
-        "AZURE_TENANT_ID",
-        "AZURE_CLIENT_SECRET",
-        "AZURE_CLIENT_CERTIFICATE_PATH",
-    ):
-        env.pop(var, None)
+    # Simulate CI: no cloud credentials available to the vault client.
+    _scrub_cloud_credentials(env)
 
     env_file = work_dir / ".env.production"
     env_file.write_text(
@@ -303,6 +322,62 @@ def test_sops_lock_pull_require_vault_sync_config(integration_env):
     pull_result = _run_envdrift(["pull", "--skip-sync"], cwd=work_dir, env=env, check=False)
     assert pull_result.returncode != 0
     assert "No sync configuration found" in (pull_result.stdout + pull_result.stderr)
+
+
+@pytest.mark.integration
+def test_sops_plain_pull_runs_dotenvx_key_sync_step(integration_env):
+    """Plain `pull` (no --skip-sync) runs the dotenvx-only key-sync step and fails
+    for a SOPS project, even with a valid `[vault.sync]` section.
+
+    This guards the documented behavior that SOPS users must use `pull --skip-sync`
+    (or plain `encrypt`/`decrypt`). A HashiCorp provider with no `VAULT_TOKEN` makes
+    the key-sync step fail fast and deterministically, with no network probing.
+    """
+    work_dir = integration_env["base_dir"] / "sops-plain-pull"
+    work_dir.mkdir()
+    env = integration_env["env"].copy()
+    _scrub_cloud_credentials(env)
+
+    env_file = work_dir / ".env.production"
+    env_file.write_text("API_KEY=topsecret\n")
+    _write_sops_age_setup(work_dir, path_regex=r"\.env\.production$")
+
+    config = textwrap.dedent(
+        f"""\
+        [encryption]
+        backend = "sops"
+
+        [encryption.sops]
+        auto_install = true
+        config_file = ".sops.yaml"
+        age_key_file = "age.key"
+        age_recipients = "{AGE_PUBLIC_KEY}"
+
+        [vault]
+        provider = "hashicorp"
+
+        [vault.hashicorp]
+        url = "http://127.0.0.1:1"
+
+        [vault.sync]
+        default_vault_name = "dummy"
+
+        [[vault.sync.mappings]]
+        secret_name = "unused-for-sops"
+        folder_path = "."
+        environment = "production"
+        """
+    )
+    (work_dir / "envdrift.toml").write_text(config)
+
+    result = _run_envdrift(["pull"], cwd=work_dir, env=env, check=False)
+    assert result.returncode != 0
+    combined = result.stdout + result.stderr
+    # It reaches the dotenvx key-sync step (which SOPS does not use) and fails there.
+    assert "Syncing keys from vault" in combined
+    assert "Sync failed" in combined
+    # The file was never touched (still plaintext, never decrypted).
+    assert env_file.read_text() == "API_KEY=topsecret\n"
 
 
 @pytest.mark.integration
