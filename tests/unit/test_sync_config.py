@@ -219,6 +219,24 @@ class TestSyncConfigFromToml:
 
         assert config.mappings[0].environment == "staging"
 
+    def test_from_toml_with_env_file(self) -> None:
+        """Test TOML config with custom env filename."""
+        data = {
+            "mappings": [
+                {
+                    "secret_name": "myapp-key",
+                    "folder_path": "services/myapp",
+                    "environment": "sqa",
+                    "env_file": "dotnet-service-template.env.sqa",
+                },
+            ]
+        }
+
+        config = SyncConfig.from_toml(data)
+
+        assert config.mappings[0].environment == "sqa"
+        assert config.mappings[0].env_file == Path("dotnet-service-template.env.sqa")
+
     def test_from_toml_with_vault_name(self) -> None:
         """Test TOML config with vault name override."""
         data = {

@@ -42,25 +42,15 @@ _PRE_COMMIT_HOOK_LINES = [
     "fi",
     "staged_files=$(git diff --cached --name-only --diff-filter=ACM)",
     'key_files=$(printf "%s\\n" "$staged_files" | grep -E "(^|/)\\.env\\.keys(\\.|$)" || true)',
-    "# Enforce encryption on staged .env* files, but skip .clear files: in a"
-    " partial-encryption setup the .clear half is meant to be committed as"
-    " plaintext, so encrypt --check would wrongly block it. A plaintext .secret"
-    " (or any other .env*) still fails the check and blocks the commit.",
-    'env_files=$(printf "%s\\n" "$staged_files" | grep -E "(^|/)\\.env(\\.|$)" |'
-    ' grep -vE "\\.clear$" || true)',
     'if [ -n "$key_files" ]; then',
     '  echo "envdrift: refusing to commit .env.keys files" >&2',
     "  exit 1",
     "fi",
-    'if [ -n "$env_files" ]; then',
-    "  failed=0",
-    "  for f in $env_files; do",
-    '    envdrift encrypt --check "$f" || failed=1',
-    "  done",
-    "  if [ $failed -ne 0 ]; then",
-    '    echo "envdrift: encryption check failed" >&2',
-    "    exit 1",
-    "  fi",
+    "# Run the config-aware guard over staged files so vault.sync env_file",
+    "# mappings are enforced even when filenames do not match .env*.",
+    "if ! envdrift guard --staged --native-only --ci; then",
+    '  echo "envdrift: guard scan failed" >&2',
+    "  exit 1",
     "fi",
     "# <<< envdrift hook: pre-commit",
 ]
@@ -304,7 +294,7 @@ def check_precommit_hooks(
 ) -> dict[str, bool]:
     """Check for envdrift hooks in a pre-commit config."""
     if required_hooks is None:
-        required_hooks = ("envdrift-encryption",)
+        required_hooks = ("envdrift-encryption", "envdrift-guard")
     required = dict.fromkeys(required_hooks, False)
 
     if not precommit_path:

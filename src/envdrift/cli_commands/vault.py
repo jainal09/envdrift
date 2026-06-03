@@ -7,7 +7,7 @@ from typing import Annotated
 
 import typer
 
-from envdrift.env_files import detect_env_file
+from envdrift.env_files import resolve_custom_env_file, resolve_mapping_env_file
 from envdrift.output.rich import console, print_error, print_success, print_warning
 
 
@@ -288,22 +288,22 @@ def vault_push(
 
         for mapping in sync_config.mappings:
             try:
-                # Check/Detect .env file (unless --skip-encrypt, where we only need .env.keys)
-                env_file = mapping.folder_path / f".env.{mapping.effective_environment}"
-                effective_environment = mapping.effective_environment
+                detection = resolve_mapping_env_file(mapping)
+                env_file = (
+                    detection.path
+                    if detection.path is not None
+                    else mapping.folder_path / f".env.{mapping.effective_environment}"
+                )
+                effective_environment = detection.environment or mapping.effective_environment
 
                 if not skip_encrypt:
-                    if not env_file.exists():
-                        # Auto-detect logic similar to sync
-                        detected = detect_env_file(mapping.folder_path)
-                        if detected.status == "found" and detected.path:
-                            env_file = detected.path
-                            if detected.environment:
-                                effective_environment = detected.environment
-
-                    if not env_file.exists():
+                    if detection.status != "found" or detection.path is None:
+                        missing_description = (
+                            f"{env_file.name} file" if mapping.env_file is not None else ".env file"
+                        )
                         console.print(
-                            f"[dim]Skipped[/dim] {mapping.folder_path}: No .env file found"
+                            f"[dim]Skipped[/dim] {mapping.folder_path}: "
+                            f"No {missing_description} found"
                         )
                         skipped_count += 1
                         continue
@@ -344,6 +344,22 @@ def vault_push(
                             print_error(f"Failed to encrypt {env_file}: {e}")
                             error_count += 1
                             continue
+
+                    # Normalize dotenvx metadata for custom filenames so the vault
+                    # key name stays canonical (DOTENV_*_<environment>). This runs
+                    # whether we just encrypted the file or it was already encrypted
+                    # by a prior run, so the canonical key always exists below.
+                    if (
+                        backend_provider == EncryptionProvider.DOTENVX
+                        and mapping.env_file is not None
+                    ):
+                        from envdrift.integrations.dotenvx import normalize_dotenvx_metadata
+
+                        normalize_dotenvx_metadata(
+                            env_file,
+                            mapping.folder_path / sync_config.env_keys_filename,
+                            effective_environment,
+                        )
 
                 # Check if secret exists in vault
                 if not force:
@@ -505,6 +521,13 @@ def vault_pull(
             help="Only write the key to .env.keys; do not decrypt the .env.<env> file",
         ),
     ] = False,
+    env_file: Annotated[
+        Path | None,
+        typer.Option(
+            "--env-file",
+            help="Custom env filename to decrypt, relative to FOLDER",
+        ),
+    ] = None,
 ) -> None:
     r"""
     Pull a single encryption key from a cloud vault into a local .env.keys file.
@@ -595,13 +618,25 @@ def vault_pull(
     if no_decrypt:
         return
 
-    env_file = folder / f".env.{env}"
-    if not env_file.exists():
-        console.print(f"[dim]Key written; no {env_file} found to decrypt.[/dim]")
+    try:
+        target_env_file = (
+            resolve_custom_env_file(folder, env_file)
+            if env_file is not None
+            else folder / f".env.{env}"
+        )
+    except ValueError as e:
+        print_error(f"Invalid --env-file: {e}")
+        raise typer.Exit(code=1) from None
+    if not target_env_file.exists():
+        console.print(f"[dim]Key written; no {target_env_file} found to decrypt.[/dim]")
         return
 
     from envdrift.cli_commands.encryption_helpers import resolve_encryption_backend
-    from envdrift.encryption import EncryptionBackendError, EncryptionNotFoundError
+    from envdrift.encryption import (
+        EncryptionBackendError,
+        EncryptionNotFoundError,
+        EncryptionProvider,
+    )
 
     # resolve_encryption_backend only honours `config` when it has a `.toml`
     # suffix; a config path without that suffix is silently ignored here (falls
@@ -614,7 +649,7 @@ def vault_pull(
         )
 
     try:
-        encryption_backend, _, _ = resolve_encryption_backend(config)
+        encryption_backend, backend_provider, _ = resolve_encryption_backend(config)
     except ValueError as e:
         print_error(f"Unsupported encryption backend: {e}")
         raise typer.Exit(code=1) from None
@@ -624,16 +659,24 @@ def vault_pull(
         console.print(encryption_backend.install_instructions())
         raise typer.Exit(code=1)
 
+    if backend_provider == EncryptionProvider.DOTENVX and env_file is not None:
+        from envdrift.integrations.dotenvx import normalize_dotenvx_metadata
+
+        normalize_dotenvx_metadata(target_env_file, env_keys_path, env)
+
     try:
         # Point the backend at the .env.keys we just wrote so decryption works
         # even when FOLDER is not the current working directory (monorepo usage).
-        result = encryption_backend.decrypt(env_file.resolve(), keys_file=env_keys_path.resolve())
+        result = encryption_backend.decrypt(
+            target_env_file.resolve(),
+            keys_file=env_keys_path.resolve(),
+        )
     except (EncryptionNotFoundError, EncryptionBackendError) as e:
-        print_error(f"Failed to decrypt {env_file}: {e}")
+        print_error(f"Failed to decrypt {target_env_file}: {e}")
         raise typer.Exit(code=1) from None
 
     if not result.success:
-        print_error(f"Failed to decrypt {env_file}: {result.message}")
+        print_error(f"Failed to decrypt {target_env_file}: {result.message}")
         raise typer.Exit(code=1)
 
-    print_success(f"Decrypted {env_file}")
+    print_success(f"Decrypted {target_env_file}")

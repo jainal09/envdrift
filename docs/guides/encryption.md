@@ -183,7 +183,17 @@ repos:
         language: system
         files: ^\.env\.(production|staging)$
         pass_filenames: true
+
+      - id: envdrift-guard
+        name: Guard staged env files
+        entry: envdrift guard --staged --native-only --ci
+        language: system
+        always_run: true
+        pass_filenames: false
 ```
+
+Use the guard hook when you rely on `[vault.sync].mappings.env_file`; it reads
+the TOML mapping and blocks custom dotenv filenames such as `postgresql.env`.
 
 ## Dotenvx Key Management
 

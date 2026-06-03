@@ -10,7 +10,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from envdrift.env_files import detect_env_file
+from envdrift.env_files import detect_env_file, resolve_mapping_env_file
 from envdrift.sync.config import ServiceMapping, SyncConfig
 from envdrift.sync.operations import EnvKeysFile, ensure_directory, preview_value
 from envdrift.sync.result import (
@@ -84,22 +84,25 @@ class SyncEngine:
     def _sync_service(self, mapping: ServiceMapping) -> ServiceSyncResult:
         """Sync a single service."""
         try:
-            # Check if corresponding .env.<environment> file exists
-            env_file = mapping.folder_path / f".env.{mapping.effective_environment}"
-            effective_environment = mapping.effective_environment
+            detection = resolve_mapping_env_file(mapping)
+            if (
+                detection.status != "found"
+                or detection.path is None
+                or detection.environment is None
+            ):
+                expected = (
+                    detection.path
+                    if detection.path is not None
+                    else mapping.folder_path / f".env.{mapping.effective_environment}"
+                )
+                return ServiceSyncResult(
+                    secret_name=mapping.secret_name,
+                    folder_path=mapping.folder_path,
+                    action=SyncAction.SKIPPED,
+                    message=f"No {expected.name} file found - skipping",
+                )
 
-            if not env_file.exists():
-                # Try to auto-detect: find any .env.* file or plain .env in the folder
-                detected = self._detect_env_file(mapping.folder_path)
-                if detected:
-                    env_file, effective_environment = detected
-                else:
-                    return ServiceSyncResult(
-                        secret_name=mapping.secret_name,
-                        folder_path=mapping.folder_path,
-                        action=SyncAction.SKIPPED,
-                        message=f"No .env.{mapping.effective_environment} file found - skipping",
-                    )
+            effective_environment = detection.environment
 
             # Use effective environment for key name
             effective_key_name = f"DOTENV_PRIVATE_KEY_{effective_environment.upper()}"
@@ -290,17 +293,10 @@ class SyncEngine:
             DecryptionTestResult.FAILED if decryption or re-encryption fails (the original file is restored).
             DecryptionTestResult.SKIPPED if no suitable env file exists, the file does not appear encrypted, or the `dotenvx` utility is not available.
         """
-        # Find .env file to test (prefer .env.<effective_environment>)
-        env_files = [
-            mapping.folder_path / f".env.{mapping.effective_environment}",
-            mapping.folder_path / ".env.production",
-            mapping.folder_path / ".env.staging",
-            mapping.folder_path / ".env.development",
-        ]
-
-        target_file = next((f for f in env_files if f.exists()), None)
-        if not target_file:
+        detection = resolve_mapping_env_file(mapping)
+        if detection.status != "found" or detection.path is None:
             return DecryptionTestResult.SKIPPED
+        target_file = detection.path
 
         # Check if file is encrypted (contains dotenvx markers)
         content = target_file.read_text()
@@ -368,14 +364,10 @@ class SyncEngine:
             from envdrift.core.schema import SchemaLoader
             from envdrift.core.validator import Validator
 
-            # Find env file (mirror _sync_service's detection behavior)
-            env_file_path = mapping.folder_path / f".env.{mapping.effective_environment}"
-            if not env_file_path.exists():
-                detected = self._detect_env_file(mapping.folder_path)
-                if detected:
-                    env_file_path, _effective_environment = detected
-                else:
-                    return True  # No file to validate
+            detection = resolve_mapping_env_file(mapping)
+            if detection.status != "found" or detection.path is None:
+                return True  # No file to validate
+            env_file_path = detection.path
 
             # Load schema
             service_dir = self.mode.service_dir or mapping.folder_path

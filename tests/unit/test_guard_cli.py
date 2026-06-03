@@ -13,6 +13,9 @@ from envdrift.config import (
     EnvdriftConfig,
     PartialEncryptionConfig,
     PartialEncryptionEnvironmentConfig,
+    SyncConfig,
+    SyncMappingConfig,
+    VaultConfig,
 )
 from envdrift.config import (
     GuardConfig as FileGuardConfig,
@@ -141,6 +144,57 @@ def test_guard_uses_config_scanners(tmp_path: Path, monkeypatch):
     assert guard_config.include_git_history is True
     assert guard_config.check_entropy is True
     assert guard_config.ignore_paths == ["vendor/**"]
+
+
+def test_guard_passes_custom_env_files_to_engine(tmp_path: Path, monkeypatch):
+    """vault.sync env_file mappings should be treated as guard env files."""
+    service_dir = tmp_path / "secrets" / "postgresql"
+    service_dir.mkdir(parents=True)
+    config = EnvdriftConfig(
+        vault=VaultConfig(
+            sync=SyncConfig(
+                mappings=[
+                    SyncMappingConfig(
+                        secret_name="postgres-key",
+                        folder_path="secrets/postgresql",
+                        environment="production",
+                        env_file="postgresql.env",
+                    )
+                ]
+            )
+        )
+    )
+    created_configs, _info_calls = _patch_guard_dependencies(monkeypatch, config, _build_result([]))
+
+    monkeypatch.chdir(tmp_path)
+    result = runner.invoke(app, ["guard", "."])
+
+    assert result.exit_code == 0, result.output
+    assert created_configs[0].mapped_env_files == ["secrets/postgresql/postgresql.env"]
+
+
+def test_guard_rejects_custom_env_files_outside_folder(tmp_path: Path, monkeypatch):
+    """guard should fail fast when a configured env_file escapes folder_path."""
+    config = EnvdriftConfig(
+        vault=VaultConfig(
+            sync=SyncConfig(
+                mappings=[
+                    SyncMappingConfig(
+                        secret_name="postgres-key",
+                        folder_path="secrets/postgresql",
+                        environment="production",
+                        env_file="../outside.env",
+                    )
+                ]
+            )
+        )
+    )
+    _patch_guard_dependencies(monkeypatch, config, _build_result([]))
+
+    result = runner.invoke(app, ["guard", str(tmp_path)])
+
+    assert result.exit_code == 1
+    assert "invalid env_file" in result.output.lower()
 
 
 def test_guard_pr_base_fetch_warns_on_failure(tmp_path: Path, monkeypatch):

@@ -75,7 +75,7 @@ Access settings via `Code > Preferences > Settings > Extensions > EnvDrift`
 ```json
 {
   "envdrift.enabled": true,
-  "envdrift.patterns": [".env*", "*.env"],
+  "envdrift.patterns": [".env*", "*.env", "postgresql.env"],
   "envdrift.exclude": [
     ".env.example",
     ".env.sample", 
@@ -123,7 +123,7 @@ Access via Command Palette (`Cmd+Shift+P` / `Ctrl+Shift+P`):
 └─────────────────────────────────────────────────────┘
 ```
 
-1. **File Close Listener** - Detects when `.env*` files are closed
+1. **File Close Listener** - Detects when configured env file patterns are closed
 2. **Pattern Matching** - Checks if file matches configured patterns
 3. **Encryption Check** - Verifies file isn't already encrypted
 4. **envdrift lock** - Calls CLI to encrypt (respects `envdrift.toml`)
@@ -171,6 +171,11 @@ When the extension encrypts a file:
 - **Vault sync** happens if configured
 - **Ephemeral keys**: only active when triggered via the terminal commands
   noted above; the extension's encrypt action does not honor this flag
+
+For custom `[vault.sync].mappings.env_file` names, add the filename to
+`envdrift.patterns` in VS Code settings. The extension calls `envdrift lock`
+after a matching file closes, but pattern matching itself is controlled by the
+extension settings.
 
 ## Workflow Examples
 

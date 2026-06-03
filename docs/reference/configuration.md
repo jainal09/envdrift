@@ -284,6 +284,7 @@ Each mapping defines how a vault secret maps to a local service directory.
 | `folder_path` | `string` | **required** | Local folder containing `.env.keys` |
 | `vault_name` | `string` | `null` | Parsed but informational only — every mapping is fetched from the single vault you configured via `--vault-url` / `[vault.<provider>]`. See the note in [env-file-sync.md](../guides/env-file-sync.md#mappings). |
 | `environment` | `string` | `null` (resolves to profile name, else `"production"`) | **Identity** — which `.env.<environment>` file this mapping targets and which `DOTENV_PRIVATE_KEY_<ENVIRONMENT>` key it reads/writes. Always runs (unless filtered out by `profile`). |
+| `env_file` | `string` | `null` | Custom dotenv filename relative to `folder_path` (e.g. `postgresql.env`). When set, this exact file is used instead of the `.env.<environment>` lookup; `environment` still controls the `DOTENV_PRIVATE_KEY_<ENVIRONMENT>` key name. |
 | `profile` | `string` | `null` | **Selector** — tags this mapping as profile-only. Untagged mappings always run. Profile-tagged mappings only run when you pass a matching `--profile <name>` on the CLI. |
 | `activate_to` | `string` | `null` | After decrypt, copy the decrypted file to this path. Typical use: `activate_to = ".env"` on a profile mapping so apps that read a plain `.env` get the right one for the active profile. |
 | `ephemeral_keys` | `bool` | `null` | Per-mapping override for ephemeral mode (no `.env.keys` written to disk). |
@@ -323,6 +324,13 @@ environment = "production"
 secret_name = "service2-key"
 folder_path = "services/service2"
 environment = "staging"
+
+# Mapping with a custom dotenv filename
+[[vault.sync.mappings]]
+secret_name = "postgres-key"
+folder_path = "secrets/postgresql"
+environment = "production"  # key stays DOTENV_PRIVATE_KEY_PRODUCTION
+env_file = "postgresql.env" # file path is secrets/postgresql/postgresql.env
 
 # Profile mapping — only runs with `envdrift pull --profile local`.
 # `environment` defaults to the profile name, so this targets .env.local
@@ -369,6 +377,29 @@ files = [
 ".env.production" = "config.settings:ProductionSettings"
 ".env.staging" = "config.settings:StagingSettings"
 ```
+
+### [git_hook_check] — Git Hook Enforcement
+
+Configuration for automatic git hook setup checks. When enabled, envdrift
+commands install or verify either direct git hooks or a `.pre-commit-config.yaml`
+entry.
+
+| Option | Type | Default | Description |
+|:-------|:-----|:--------|:------------|
+| `method` | `string` | `null` | Hook setup method. Use `"direct git hook"` or `"precommit.yaml"` |
+| `precommit_config` | `string` | `null` | Pre-commit config path, required when `method = "precommit.yaml"` |
+
+```toml
+[git_hook_check]
+method = "direct git hook"
+
+# Or:
+# method = "precommit.yaml"
+# precommit_config = ".pre-commit-config.yaml"
+```
+
+The installed pre-commit enforcement runs `envdrift guard --staged --native-only --ci`,
+so custom `[vault.sync].mappings.env_file` names are checked before commit.
 
 ### [partial_encryption] — Partial Encryption Settings
 

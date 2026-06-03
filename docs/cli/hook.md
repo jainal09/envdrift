@@ -70,6 +70,13 @@ repos:
         files: ^\.env\.(production|staging)$
         pass_filenames: true
 
+      - id: envdrift-guard
+        name: Guard staged env files
+        entry: envdrift guard --staged --native-only --ci
+        language: system
+        always_run: true
+        pass_filenames: false
+
       # Optional: Verify encryption keys match vault (prevents key drift)
       # - id: envdrift-vault-verify
       #   name: Verify vault key can decrypt
@@ -156,7 +163,23 @@ If you prefer manual setup:
   pass_filenames: true
 ```
 
-This blocks commits with unencrypted secrets in production/staging files.
+This blocks commits with unencrypted secrets in production/staging files that
+match the hook regex.
+
+### Guard Hook
+
+```yaml
+- id: envdrift-guard
+  name: Guard staged env files
+  entry: envdrift guard --staged --native-only --ci
+  language: system
+  always_run: true
+  pass_filenames: false
+```
+
+This runs the config-aware staged scanner. It covers normal `.env*` files,
+partial-encryption `.secret` files, `.env.keys`, and custom
+`[vault.sync].mappings.env_file` names such as `postgresql.env`.
 
 ## Customization
 

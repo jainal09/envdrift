@@ -26,6 +26,14 @@ repos:
         files: ^\\.env\\.(production|staging)$
         pass_filenames: true
         description: Ensures sensitive .env files are encrypted
+
+      - id: envdrift-guard
+        name: Guard staged env files
+        entry: envdrift guard --staged --native-only --ci
+        language: system
+        always_run: true
+        pass_filenames: false
+        description: Scans staged files, including vault.sync env_file mappings
 """
 
 # Minimal hook entry for injection
@@ -47,6 +55,15 @@ HOOK_ENTRY = {
             "language": "system",
             "files": r"^\.env\.(production|staging)$",
             "pass_filenames": True,  # nosec B105 - not a password
+        },
+        {
+            "id": "envdrift-guard",
+            "name": "Guard staged env files",
+            "entry": "envdrift guard --staged --native-only --ci",
+            "language": "system",
+            "always_run": True,
+            "pass_filenames": False,  # nosec B105 - not a password
+            "description": "Scans staged files, including vault.sync env_file mappings",
         },
     ],
 }
@@ -242,23 +259,27 @@ def verify_hooks_installed(config_path: Path | None = None) -> dict[str, bool]:
         config_path (Path | None): Path to a .pre-commit-config.yaml file. If None, the file is searched for by walking up from the current working directory.
 
     Returns:
-        dict[str, bool]: Mapping of hook id to installation status: `{"envdrift-validate": bool, "envdrift-encryption": bool}`. Returns both `False` if the config file is missing or unreadable, or if the PyYAML package is not available.
+        dict[str, bool]: Mapping of hook id to installation status. Returns all
+        hooks as `False` if the config file is missing or unreadable, or if the
+        PyYAML package is not available.
     """
+    hook_ids = [str(hook["id"]) for hook in HOOK_ENTRY["hooks"]]
+    empty_result: dict[str, bool] = dict.fromkeys(hook_ids, False)
     try:
         import yaml
     except ImportError:
-        return {"envdrift-validate": False, "envdrift-encryption": False}
+        return empty_result
 
     if config_path is None:
         config_path = find_precommit_config()
 
     if config_path is None or not config_path.exists():
-        return {"envdrift-validate": False, "envdrift-encryption": False}
+        return empty_result
 
     content = config_path.read_text()
     config = yaml.safe_load(content) or {}
 
-    result = {"envdrift-validate": False, "envdrift-encryption": False}
+    result = empty_result.copy()
 
     for repo in config.get("repos", []):
         if repo.get("repo") == "local":

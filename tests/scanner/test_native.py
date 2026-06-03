@@ -120,6 +120,33 @@ class TestNativeScannerInternals:
 
         assert (tmp_path / ".env.production.secret").resolve() in {p.resolve() for p in collected}
 
+    def test_collect_files_includes_gitignored_mapped_env_file(self, tmp_path: Path):
+        """A gitignored custom env filename from vault.sync must still be collected."""
+        import shutil
+        import subprocess
+
+        if shutil.which("git") is None:
+            pytest.skip("git not available")
+
+        def git(*args: str) -> None:
+            subprocess.run(["git", *args], cwd=tmp_path, check=True, capture_output=True)
+
+        git("init")
+        git("config", "user.email", "test@example.com")
+        git("config", "user.name", "Test")
+
+        mapped_env = tmp_path / "postgresql.env"
+        (tmp_path / ".gitignore").write_text("postgresql.env\n")
+        mapped_env.write_text("POSTGRES_PASSWORD=plaintext-leak\n")
+        (tmp_path / "tracked.txt").write_text("hello\n")
+        git("add", ".gitignore", "tracked.txt")
+        git("commit", "-m", "init")
+
+        scanner = NativeScanner(mapped_env_files=[str(mapped_env)])
+        collected = {p.resolve() for p in scanner._collect_files(tmp_path)}
+
+        assert mapped_env.resolve() in collected
+
     def test_collect_files_excludes_gitignored_env_keys(self, tmp_path: Path):
         """A gitignored .env.keys must NOT be collected — that is its correct state.
 
@@ -326,6 +353,28 @@ sops:
         result = scanner.scan([tmp_path])
 
         assert len(result.findings) == 0
+
+    def test_detects_unencrypted_mapped_env_file(self, tmp_path: Path):
+        """Custom mapped dotenv files are subject to the unencrypted env rule."""
+        env_file = tmp_path / "postgresql.env"
+        env_file.write_text("POSTGRES_PASSWORD=plaintext-leak\n")
+
+        scanner = NativeScanner(mapped_env_files=[str(env_file)])
+        result = scanner.scan([tmp_path])
+
+        unencrypted_findings = [f for f in result.findings if f.rule_id == "unencrypted-env-file"]
+        assert len(unencrypted_findings) == 1
+        assert unencrypted_findings[0].file_path == env_file
+
+    def test_ignores_encrypted_mapped_env_file(self, tmp_path: Path):
+        """Encrypted custom mapped dotenv files are not flagged as plaintext."""
+        env_file = tmp_path / "postgresql.env"
+        env_file.write_text('POSTGRES_PASSWORD="encrypted:xyz789"\n')
+
+        scanner = NativeScanner(mapped_env_files=[str(env_file)])
+        result = scanner.scan([tmp_path])
+
+        assert not [f for f in result.findings if f.rule_id == "unencrypted-env-file"]
 
 
 class TestUnencryptedSecretFile:

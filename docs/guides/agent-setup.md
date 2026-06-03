@@ -105,6 +105,11 @@ recursive = true                   # Watch subdirectories
 | `directories.watch` | string[] | `["~/projects"]` | Directories to monitor (display only — not used to select watched directories; see [Selecting which projects to watch](#selecting-which-projects-to-watch)) |
 | `directories.recursive` | bool | `true` | Watch subdirectories |
 
+When a project has `[guardian] enabled = true`, custom
+`[vault.sync].mappings.env_file` names are added to the effective watch patterns
+automatically. This lets the agent react to files such as `postgresql.env` even
+though the global default is `.env*`.
+
 ### Duration Format
 
 The `idle_timeout` accepts Go duration strings:
@@ -234,6 +239,8 @@ The agent calls `envdrift lock`, which means it respects all settings in your pr
 - **Partial encryption** - Only secrets are encrypted
 - **Vault integration** - Keys are pushed to vault if configured
 - **Ephemeral keys** - Keys never touch disk if enabled
+- **Custom env filenames** - `vault.sync.mappings.env_file` names are watched
+  automatically when project guardian config is enabled
 
 ## Troubleshooting
 

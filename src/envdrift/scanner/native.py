@@ -270,6 +270,7 @@ class NativeScanner(ScannerBackend):
         additional_ignore_patterns: list[str] | None = None,
         allowed_clear_files: list[str] | None = None,
         skip_clear_files: bool = False,
+        mapped_env_files: list[str] | None = None,
     ) -> None:
         """Initialize the native scanner.
 
@@ -280,11 +281,13 @@ class NativeScanner(ScannerBackend):
             additional_ignore_patterns: Additional patterns to ignore (added to defaults).
             allowed_clear_files: Files that are intentionally unencrypted (from partial_encryption config).
             skip_clear_files: Skip .clear files from scanning entirely.
+            mapped_env_files: Custom env files from vault.sync mappings that must be treated as env files.
         """
         self._check_entropy = check_entropy
         self._entropy_threshold = entropy_threshold
         self._allowed_clear_files = set(allowed_clear_files or [])
         self._skip_clear_files = skip_clear_files
+        self._mapped_env_files = {Path(p) for p in mapped_env_files or []}
 
         if ignore_patterns is not None:
             self._ignore_patterns = tuple(ignore_patterns)
@@ -441,6 +444,13 @@ class NativeScanner(ScannerBackend):
                         files.add(directory / rel_path)
         except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
             pass
+
+        # Method 4: Add explicitly configured custom env files from vault.sync.
+        # These may not match ".env*" and can otherwise be missed when untracked.
+        for configured in self._mapped_env_files:
+            candidate = configured if configured.is_absolute() else directory / configured
+            if candidate.exists() and candidate.is_file():
+                files.add(candidate)
 
         # Return deterministically ordered list for stable scan results
         return sorted(files, key=lambda p: str(p))
@@ -662,7 +672,26 @@ class NativeScanner(ScannerBackend):
             True if this is a .env file.
         """
         name = path.name
-        return name == ".env" or name.startswith(".env.")
+        return name == ".env" or name.startswith(".env.") or self._is_mapped_env_file(path)
+
+    def _is_mapped_env_file(self, path: Path) -> bool:
+        if not self._mapped_env_files:
+            return False
+
+        path_str = path.as_posix()
+        with_cwd = (Path.cwd() / path).resolve() if not path.is_absolute() else path.resolve()
+        for configured in self._mapped_env_files:
+            configured_str = configured.as_posix()
+            configured_abs = (
+                configured.resolve()
+                if configured.is_absolute()
+                else (Path.cwd() / configured).resolve()
+            )
+            if with_cwd == configured_abs:
+                return True
+            if path_str == configured_str or path_str.endswith(f"/{configured_str}"):
+                return True
+        return False
 
     def _is_private_key_file(self, path: Path) -> bool:
         """Check if a file is dotenvx's private-key file (``.env.keys``).

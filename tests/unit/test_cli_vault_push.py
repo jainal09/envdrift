@@ -83,6 +83,51 @@ class TestVaultPushAll:
 
     @patch("envdrift.cli_commands.encryption_helpers.resolve_encryption_backend")
     @patch("envdrift.cli_commands.sync.load_sync_config_and_client")
+    def test_push_all_uses_custom_env_file(
+        self,
+        mock_loader,
+        mock_resolve_backend,
+        tmp_path,
+    ):
+        """vault-push --all should use a mapping's custom env_file."""
+        mock_client = MagicMock()
+        service_dir = tmp_path / "postgresql"
+        service_dir.mkdir()
+        env_file = service_dir / "postgresql.env"
+        env_file.write_text("POSTGRES_PASSWORD=secret\n")
+        (service_dir / ".env.keys").write_text("DOTENV_PRIVATE_KEY_PRODUCTION=secret123\n")
+
+        mock_sync_config = SyncConfig(
+            mappings=[
+                ServiceMapping(
+                    secret_name="postgres-key",
+                    folder_path=service_dir,
+                    environment="production",
+                    env_file=env_file.name,
+                )
+            ]
+        )
+        mock_loader.return_value = (mock_sync_config, mock_client, "azure", None, None, None)
+
+        dummy_backend = DummyEncryptionBackend()
+        mock_resolve_backend.return_value = (
+            dummy_backend,
+            EncryptionProvider.DOTENVX,
+            None,
+        )
+        mock_client.get_secret.side_effect = SecretNotFoundError("missing")
+
+        result = runner.invoke(app, ["vault-push", "--all"])
+
+        assert result.exit_code == 0, result.output
+        assert dummy_backend.encrypt_calls == [env_file]
+        mock_client.set_secret.assert_called_once_with(
+            "postgres-key",
+            "DOTENV_PRIVATE_KEY_PRODUCTION=secret123",
+        )
+
+    @patch("envdrift.cli_commands.encryption_helpers.resolve_encryption_backend")
+    @patch("envdrift.cli_commands.sync.load_sync_config_and_client")
     def test_push_all_skips_existing(
         self,
         mock_loader,
