@@ -23,7 +23,7 @@ Sync environment variables across your team. No more "it works on my machine."
 
 ## The Solution
 
-envdrift is an **open-source** CLI that encrypts `env` files and syncs them using **your existing cloud vault** and git.
+envdrift is an **open-source** CLI that encrypts `.env` files and syncs them using **your existing cloud vault** and git.
 No hosted service, no additional servers, no third-party trust.
 
 - **Your infrastructure** — Works with all major cloud providers: Azure Key Vault, AWS Secrets Manager, HashiCorp Vault, GCP Secret Manager

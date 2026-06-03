@@ -177,7 +177,7 @@ Using a different provider? Replace the `provider` value and the provider block:
     provider = "hashicorp"
 
     [vault.hashicorp]
-    vault_addr = "https://vault.example.com:8200"
+    url = "https://vault.example.com:8200"
     ```
 
 === "GCP"
@@ -253,13 +253,19 @@ envdrift sync -c envdrift.toml   # explicit config path
 envdrift doesn't reinvent cloud authentication — it uses each provider's **standard
 credential chain**. If your CLI is already logged in, envdrift is already
 authenticated. The table below is the entire envdrift-specific contract: which
-credentials it resolves, and the *minimum* permissions it needs. For installing
-CLIs, creating vaults, and logging in, follow the provider's own docs (linked).
+credentials it resolves, and the *minimum read* permissions `sync`/`pull` need. For
+installing CLIs, creating vaults, and logging in, follow the provider's own docs
+(linked).
+
+> **Read vs write:** the permissions below are the **read** access that `sync`/`pull`/
+> `decrypt --verify-vault` require. `vault-push` additionally needs **write** (Azure
+> `Set`, AWS `secretsmanager:PutSecretValue`/`CreateSecret`, Vault `create`/`update`,
+> GCP `secretmanager.versions.add`).
 
 | Provider | envdrift authenticates via | Minimum permissions | Provider auth docs |
 |:--|:--|:--|:--|
 | **Azure Key Vault** | `DefaultAzureCredential` — env vars (`AZURE_CLIENT_ID`/`TENANT_ID`/`CLIENT_SECRET`) → `az login` → managed identity | Secrets: **Get**, **List** | [Azure auth](https://learn.microsoft.com/azure/key-vault/general/authentication) |
-| **AWS Secrets Manager** | boto3 default chain — env vars → `~/.aws/credentials` → IAM role (EC2/ECS/Lambda) | `secretsmanager:GetSecretValue`, `secretsmanager:ListSecrets` | [AWS credentials](https://docs.aws.amazon.com/cli/latest/userguide/cli-configure-files.html) |
+| **AWS Secrets Manager** | boto3 default chain — env vars → `~/.aws/credentials` → IAM role (EC2/ECS/Lambda) | `secretsmanager:GetSecretValue` (auth via STS — no `ListSecrets` needed) | [AWS credentials](https://docs.aws.amazon.com/cli/latest/userguide/cli-configure-files.html) |
 | **HashiCorp Vault** | `VAULT_ADDR` + `VAULT_TOKEN` (or `~/.vault-token`) | `read`, `list` on the secret path | [Vault auth](https://developer.hashicorp.com/vault/docs/auth) |
 | **GCP Secret Manager** | Application Default Credentials — `gcloud auth application-default login` or `GOOGLE_APPLICATION_CREDENTIALS` | `roles/secretmanager.secretAccessor` (+ list) | [GCP ADC](https://cloud.google.com/docs/authentication/application-default-credentials) |
 
@@ -280,7 +286,7 @@ document:
       "Version": "2012-10-17",
       "Statement": [{
         "Effect": "Allow",
-        "Action": ["secretsmanager:GetSecretValue", "secretsmanager:ListSecrets"],
+        "Action": ["secretsmanager:GetSecretValue"],
         "Resource": "arn:aws:secretsmanager:us-east-1:123456789:secret:*-dotenvx-key*"
       }]
     }
@@ -496,8 +502,12 @@ That's the whole promise: one command, no Slacked secrets.
 
 ### Key rotation
 
+Rotation is a **dotenvx-native** operation — envdrift has no `--rotate`, so this one
+step calls the [`dotenvx`](https://dotenvx.com) binary directly (envdrift wraps
+dotenvx for everything else). After rotating, re-push the new key and teammates resync:
+
 ```bash
-dotenvx encrypt .env.production --rotate     # new key in .env.keys
+dotenvx encrypt .env.production --rotate     # dotenvx CLI: new key in .env.keys
 envdrift vault-push . myapp-dotenvx-key --env production \
   -p azure --vault-url https://my-keyvault.vault.azure.net/
 # teammates pick it up with:
