@@ -238,5 +238,5 @@ rm -rf ~/.envdrift/
 
 - [VS Code Extension Guide](./vscode-extension.md)
 - [Encryption Guide](./encryption.md)
-- [Vault Sync Guide](./vault-sync.md)
+- [Env File Sync Guide](./env-file-sync.md)
 - [Configuration Reference](../reference/configuration.md)

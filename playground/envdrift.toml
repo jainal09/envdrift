@@ -1,26 +1,15 @@
-# envdrift playground config
+[vault]
+provider = "azure"  # or aws/hashicorp/gcp
 
-[guard]
-scanners = ["native"]
-auto_install = false
-include_history = false
-check_entropy = true
-fail_on_severity = "high"
-ignore_paths = []
+[vault.azure]
+vault_url = "https://env-drift.vault.azure.net/"
 
-[partial_encryption]
-enabled = true
+[vault.sync]
+default_vault_name = "my-keyvault"
+env_keys_filename = ".env.keys"
+max_workers = 4  # Optional: parallelize pull/lock env file operations
 
-# Existing combine mode
-[[partial_encryption.environments]]
-name = "staging"
-clear_file = ".env.staging.clear"
-secret_file = ".env.staging.secret"
-combined_file = ".env.staging.combined"
-
-# Secrets-only mode: encrypt/decrypt the secrets dir in place, configs untouched
-[[partial_encryption.environments]]
-name = "production-secrets"
-secrets_only = true
-secrets_dir = "secrets/production/"
-pattern = ".env*"
+[[vault.sync.mappings]]
+secret_name = "playground-key-prod"
+folder_path = "."
+environment = "prod"

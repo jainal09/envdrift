@@ -66,7 +66,7 @@ vault = ["envdrift[azure,aws,hashicorp,gcp]"]
 precommit = ["pyyaml>=6.0"]
 
 # Documentation
-docs = ["mkdocs-material>=9.5"]
+docs = ["mkdocs-material>=9.5", "mkdocs-redirects>=1.2"]
 
 # Development dependencies
 dev = [
@@ -80,6 +80,7 @@ dev = [
     "pre-commit>=3.0",
     "pyyaml>=6.0",
     "mkdocs-material>=9.5",
+    "mkdocs-redirects>=1.2",
 ]
 
 # Integration test dependencies (requires Docker)

@@ -358,4 +358,4 @@ lock-all:
 
 - [CI/CD Integration](cicd.md) — Pipeline setup
 - [Schema Best Practices](schema.md) — Schema design patterns
-- [Vault Sync](vault-sync.md) — Team key sharing
+- [Env File Sync](env-file-sync.md) — Team key sharing

@@ -186,5 +186,5 @@ repos:
 - [CLI Reference](../cli/index.md) — All available commands
 - [Schema Best Practices](../guides/schema.md) — Design better schemas
 - [Encryption Guide](../guides/encryption.md) — dotenvx vs SOPS
-- [Vault Sync](../guides/vault-sync.md) — Team key sharing
+- [Env File Sync](../guides/env-file-sync.md) — Team key sharing
 - [CI/CD Integration](../guides/cicd.md) — Pipeline setup

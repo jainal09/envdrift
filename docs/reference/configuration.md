@@ -451,4 +451,4 @@ Some settings can be overridden with environment variables:
 
 - [Encryption Backends](../concepts/encryption-backends.md) — Compare dotenvx vs SOPS
 - [Vault Providers](../concepts/vault-providers.md) — Compare cloud vault providers
-- [Vault Sync Guide](../guides/vault-sync.md) — Detailed vault sync setup
+- [Env File Sync Guide](../guides/env-file-sync.md) — Detailed vault sync setup

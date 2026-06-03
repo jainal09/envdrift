@@ -364,4 +364,4 @@ Uses boto3's credential chain:
 
 - [encrypt](encrypt.md) - Check/perform encryption
 - [decrypt](decrypt.md) - Decrypt .env files
-- [Vault Sync Guide](../guides/vault-sync.md) - Detailed setup guide
+- [Env File Sync Guide](../guides/env-file-sync.md) - Detailed setup guide
