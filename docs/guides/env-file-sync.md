@@ -308,7 +308,11 @@ document:
     }
     ```
 
-## Configuration reference
+## Configuration options
+
+The options you'll reach for most often, explained in context. For the exhaustive
+field-by-field list, see the
+[Configuration reference](../reference/configuration.md#vaultsync-vault-sync-settings).
 
 ### Mappings
 
