@@ -60,6 +60,10 @@ config-driven path for a whole team. Start with the first, graduate to the secon
 Push a key to your vault, then pull it back somewhere else — no config file at all.
 
 ```bash
+# Positional args:  <folder>  <secret-name>
+#   <folder>       directory holding .env.keys (here ".", the current dir)
+#   <secret-name>  name to store/read the key under in the vault
+
 # You: encrypt and push the key to the vault (once)
 envdrift encrypt .env.production
 envdrift vault-push . myapp-dotenvx-key --env production \
@@ -115,18 +119,15 @@ infrastructure.
 
 ### 1. Install with vault support
 
-```bash
-pip install "envdrift[azure]"       # Azure Key Vault
-pip install "envdrift[aws]"         # AWS Secrets Manager
-pip install "envdrift[hashicorp]"   # HashiCorp Vault
-pip install "envdrift[gcp]"         # GCP Secret Manager
-pip install "envdrift[vault]"       # all providers
-```
+Install envdrift with your provider's vault extra (e.g. `envdrift[azure]`, or
+`envdrift[vault]` for all providers) — see the
+[Installation guide](../getting-started/installation.md#vault-backends).
 
 ### 2. Create `envdrift.toml`
 
 One config file, one provider. Pick the provider you actually use — you don't stack
-multiple providers in the same config.
+multiple providers in the same config. For every available option, see the
+[Configuration reference](../reference/configuration.md#vaultsync-vault-sync-settings).
 
 ```toml
 [vault]
@@ -197,16 +198,23 @@ Using a different provider? Replace the `provider` value and the provider block:
 
 ### 3. Store your key in the vault
 
-Read the dotenvx private key out of `.env.keys` and store it as a vault secret. Use
-`envdrift vault-push` (works for any provider without leaving envdrift), or your
-provider's own CLI for the one-time upload:
+Your `envdrift.toml` is only the *map* — it says which secret belongs to which
+folder, but the vault is still empty. The private key currently lives only in your
+local `.env.keys`. This one-time step actually uploads it so teammates can pull.
 
-=== "envdrift (any provider)"
+Because you already wrote the config, use **`--all`**: it reads the provider, vault
+URL, and every `[[vault.sync.mappings]]` from the toml and pushes them all — no need
+to repeat any of it.
+
+=== "envdrift (reads your toml)"
 
     ```bash
-    envdrift vault-push services/myapp myapp-dotenvx-key --env production \
-      -p azure --vault-url https://my-keyvault.vault.azure.net/
+    # Pushes every mapping in [vault.sync] using the provider/URL from envdrift.toml
+    envdrift vault-push --all
     ```
+
+    (Without a config — the Tier 1 path — pass them explicitly instead:
+    `envdrift vault-push <folder> <secret-name> --env <env> -p azure --vault-url <url>`.)
 
 === "Azure CLI"
 
@@ -301,7 +309,11 @@ document:
     }
     ```
 
-## Configuration reference
+## Configuration options
+
+The options you'll reach for most often, explained in context. For the exhaustive
+field-by-field list, see the
+[Configuration reference](../reference/configuration.md#vaultsync-vault-sync-settings).
 
 ### Mappings
 
@@ -481,7 +493,7 @@ See [`decrypt`](../cli/decrypt.md) for the full verify-vault behavior.
 # 1. Encrypt locally (creates .env.keys with DOTENV_PRIVATE_KEY_PRODUCTION)
 envdrift encrypt .env.production
 
-# 2. Store the key in the vault
+# 2. Store the key in the vault — vault-push <folder> <secret-name> --env <env>
 envdrift vault-push . myapp-dotenvx-key --env production \
   -p azure --vault-url https://my-keyvault.vault.azure.net/
 
@@ -509,6 +521,7 @@ dotenvx for everything else). After rotating, re-push the new key and teammates 
 
 ```bash
 dotenvx encrypt .env.production --rotate     # dotenvx CLI: new key in .env.keys
+# re-push the rotated key — vault-push <folder> <secret-name> --env <env>
 envdrift vault-push . myapp-dotenvx-key --env production \
   -p azure --vault-url https://my-keyvault.vault.azure.net/
 # teammates pick it up with:
