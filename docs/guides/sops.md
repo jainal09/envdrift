@@ -106,9 +106,16 @@ API_KEY=ENC[AES256_GCM,data:...,iv:...,tag:...,type:str]
 sops_version=3.11.0
 ```
 
-`encrypt`/`decrypt` accept these SOPS flags (overriding config):
-`--backend`, `--sops-config`, `--age`, `--age-key-file`, `--kms`, `--gcp-kms`,
-`--azure-kv`. See [`encrypt`](../cli/encrypt.md) and [`decrypt`](../cli/decrypt.md).
+Flags differ by direction (both override config):
+
+- **`encrypt`** — `--backend`, `--sops-config`, `--age`, `--age-key-file`, `--kms`,
+  `--gcp-kms`, `--azure-kv`. The key-recipient flags (`--age`/`--kms`/`--gcp-kms`/
+  `--azure-kv`) choose *who can decrypt* and are encryption-only.
+- **`decrypt`** — `--backend`, `--sops-config`, `--age-key-file`. Decryption needs no
+  key-recipient flags: SOPS reads the recipients from the file's metadata and unwraps
+  the data key using your credentials (`az login`, KMS access, or the age key).
+
+See [`encrypt`](../cli/encrypt.md) and [`decrypt`](../cli/decrypt.md).
 
 ## Azure Key Vault walkthrough (verified end-to-end)
 
@@ -191,19 +198,22 @@ Partly — and this trips people up, so here is the precise behavior.
 `pull` and `lock` are part of the **Vault Sync family**. They do two things:
 
 1. A **key-sync step** (fetch/verify the dotenvx `.env.keys` private key from a
-   vault) — this is **dotenvx-only**.
+   vault) — this is **dotenvx-only**. `pull` runs it by default; `lock` runs it only
+   with `--verify-vault` or `--sync-keys`.
 2. An **encrypt/decrypt step** that uses whichever backend your config resolves to —
    this **does** support SOPS.
 
 Consequences for SOPS:
 
 - `lock` and `pull` **refuse to start without a `[vault.sync]` section** (and a
-  `[vault]` provider block with a `vault_url`) — they derive their file work-list
-  and build a vault client up front, regardless of backend. A pure-SOPS project
-  has none of that.
-- Plain `envdrift pull` runs the key-sync step, which looks for a dotenvx secret and
-  **fails** for SOPS. You must use `envdrift pull --skip-sync` to skip straight to
-  decryption.
+  `[vault]` provider block) — they derive their file work-list and build a vault
+  client up front, regardless of backend. The provider block needs that provider's
+  own required field: `vault_url` for Azure/HashiCorp, `region` for AWS (defaulted),
+  `project_id` for GCP. A pure-SOPS project has none of this.
+- `lock` does **not** hit Vault Sync by default (it only encrypts), so `lock --force`
+  works for SOPS once the config above exists. Plain `envdrift pull`, however, runs
+  the key-sync step, looks for a dotenvx secret, and **fails** for SOPS — use
+  `envdrift pull --skip-sync` to go straight to decryption.
 
 **Recommendation:** for SOPS, use `envdrift encrypt` / `envdrift decrypt`. They need
 no vault scaffolding and are the intended SOPS workflow. Only reach for `lock`/`pull`
