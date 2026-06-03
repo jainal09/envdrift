@@ -153,7 +153,9 @@ envdrift decrypt .env.production
 
 ## Configuration
 
-Set a default backend in `envdrift.toml`:
+Set a default backend in `envdrift.toml`. Backend-specific options live in the
+`[encryption.dotenvx]` and `[encryption.sops]` subsections (flat `sops_*` keys
+under `[encryption]` are ignored by the parser):
 
 ```toml
 [encryption]
@@ -161,14 +163,20 @@ Set a default backend in `envdrift.toml`:
 backend = "dotenvx"
 
 # dotenvx settings
-dotenvx_auto_install = true
+[encryption.dotenvx]
+auto_install = true
 
 # SOPS settings
-sops_auto_install = true
-sops_config_file = ".sops.yaml"
-sops_age_key_file = "~/.config/sops/age/keys.txt"
-sops_age_recipients = "age1abc..."
+[encryption.sops]
+auto_install = true
+config_file = ".sops.yaml"
+age_key_file = "~/.config/sops/age/keys.txt"
+age_recipients = "age1abc..."
+# azure_kv = "https://my-vault.vault.azure.net/keys/my-key/<version>"
 ```
+
+For a full SOPS setup (including the Azure Key Vault walkthrough and how `lock`/`pull`
+behave with SOPS), see the [SOPS Backend Guide](../guides/sops.md).
 
 ## Migration Between Backends
 

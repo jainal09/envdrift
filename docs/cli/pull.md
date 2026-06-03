@@ -1,7 +1,11 @@
 # envdrift pull
 
 Pull keys from vault and decrypt all env files (one-command developer setup).
-This workflow is specific to dotenvx and does not apply to SOPS.
+
+The **key-sync** part of this workflow is dotenvx-only. The decrypt step uses your
+configured backend, so `pull --skip-sync` *can* decrypt SOPS files when a
+`[vault.sync]` section is present — but the recommended SOPS path is plain
+`envdrift decrypt`. See the [SOPS Backend Guide](../guides/sops.md#using-pull-and-lock-with-sops).
 
 ## Synopsis
 

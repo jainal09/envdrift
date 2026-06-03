@@ -20,10 +20,11 @@ secret.
     **SOPS users don't use Vault Sync** — and don't need to. SOPS has no portable
     `.env.keys` private key; it delegates decryption to your KMS/age/PGP, which is
     *already* a key-distribution system that controls who can decrypt. You still get
-    the rest of envdrift with SOPS — `envdrift encrypt`/`decrypt --backend sops`, and
-    the `pull`/`lock` workflow encrypt and decrypt SOPS files — you just grant
-    decryption access through SOPS's own key management instead of pushing a key to a
-    vault.
+    the rest of envdrift with SOPS — `envdrift encrypt`/`decrypt --backend sops` are
+    the recommended path, and `lock`/`pull` can drive SOPS too (they need a
+    `[vault.sync]` section, and `pull` needs `--skip-sync`). You just grant decryption
+    access through SOPS's own key management instead of pushing a key to a vault. See
+    the [SOPS Backend Guide](sops.md) for the full setup.
 
 ## Overview
 
