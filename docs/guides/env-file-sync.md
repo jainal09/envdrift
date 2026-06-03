@@ -59,6 +59,10 @@ config-driven path for a whole team. Start with the first, graduate to the secon
 Push a key to your vault, then pull it back somewhere else — no config file at all.
 
 ```bash
+# Positional args:  <folder>  <secret-name>
+#   <folder>       directory holding .env.keys (here ".", the current dir)
+#   <secret-name>  name to store/read the key under in the vault
+
 # You: encrypt and push the key to the vault (once)
 envdrift encrypt .env.production
 envdrift vault-push . myapp-dotenvx-key --env production \
@@ -200,6 +204,7 @@ provider's own CLI for the one-time upload:
 === "envdrift (any provider)"
 
     ```bash
+    # vault-push <folder with .env.keys> <vault secret name> --env <environment>
     envdrift vault-push services/myapp myapp-dotenvx-key --env production \
       -p azure --vault-url https://my-keyvault.vault.azure.net/
     ```
@@ -477,7 +482,7 @@ See [`decrypt`](../cli/decrypt.md) for the full verify-vault behavior.
 # 1. Encrypt locally (creates .env.keys with DOTENV_PRIVATE_KEY_PRODUCTION)
 envdrift encrypt .env.production
 
-# 2. Store the key in the vault
+# 2. Store the key in the vault — vault-push <folder> <secret-name> --env <env>
 envdrift vault-push . myapp-dotenvx-key --env production \
   -p azure --vault-url https://my-keyvault.vault.azure.net/
 
@@ -505,6 +510,7 @@ dotenvx for everything else). After rotating, re-push the new key and teammates 
 
 ```bash
 dotenvx encrypt .env.production --rotate     # dotenvx CLI: new key in .env.keys
+# re-push the rotated key — vault-push <folder> <secret-name> --env <env>
 envdrift vault-push . myapp-dotenvx-key --env production \
   -p azure --vault-url https://my-keyvault.vault.azure.net/
 # teammates pick it up with:
