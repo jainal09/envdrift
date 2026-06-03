@@ -1,5 +1,12 @@
 # Changelog
 
+## [10.12.2](https://github.com/jainal09/envdrift/compare/v10.12.1...v10.12.2) (2026-06-03)
+
+
+### Documentation
+
+* **sops:** add dedicated SOPS backend guide + fix backend docs ([#288](https://github.com/jainal09/envdrift/issues/288)) ([8eb0e7e](https://github.com/jainal09/envdrift/commit/8eb0e7e999c04ae455185724a2060b4b2553f341))
+
 ## [10.12.1](https://github.com/jainal09/envdrift/compare/v10.12.0...v10.12.1) (2026-06-03)
 
 
