@@ -1,5 +1,12 @@
 # Changelog
 
+## [10.12.4](https://github.com/jainal09/envdrift/compare/v10.12.3...v10.12.4) (2026-06-03)
+
+
+### Documentation
+
+* fix 141 stale/incorrect claims across the docs (audit + lint-gated) ([#291](https://github.com/jainal09/envdrift/issues/291)) ([8952dc3](https://github.com/jainal09/envdrift/commit/8952dc327aefb29e49fb5dc4ddfeba5ad1d811fc))
+
 ## [10.12.3](https://github.com/jainal09/envdrift/compare/v10.12.2...v10.12.3) (2026-06-03)
 
 
