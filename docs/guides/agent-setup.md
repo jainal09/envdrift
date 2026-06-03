@@ -82,9 +82,16 @@ exclude = [".env.example", ".env.sample", ".env.keys"]
 notify = true           # Show desktop notifications
 
 [directories]
-watch = ["~/projects", "~/code"]  # Directories to monitor
+watch = ["~/projects", "~/code"]  # Display only — see note below
 recursive = true                   # Watch subdirectories
 ```
+
+!!! note "`[directories].watch` does not select what the agent watches"
+    The `[directories].watch` value is loaded into the config but is only echoed
+    back by `envdrift-agent config` — the agent never uses it to add watched
+    directories. To choose what gets watched, register projects with
+    `envdrift agent register` (see
+    [Selecting which projects to watch](#selecting-which-projects-to-watch)).
 
 ### Configuration Options
 
@@ -95,7 +102,7 @@ recursive = true                   # Watch subdirectories
 | `guardian.patterns` | string[] | `[".env*"]` | Glob patterns for files to watch |
 | `guardian.exclude` | string[] | `[".env.example", ...]` | Patterns to exclude |
 | `guardian.notify` | bool | `true` | Show desktop notifications |
-| `directories.watch` | string[] | `["~"]` | Directories to monitor |
+| `directories.watch` | string[] | `["~/projects"]` | Directories to monitor (display only — not used to select watched directories; see [Selecting which projects to watch](#selecting-which-projects-to-watch)) |
 | `directories.recursive` | bool | `true` | Watch subdirectories |
 
 ### Duration Format
@@ -106,6 +113,54 @@ The `idle_timeout` accepts Go duration strings:
 - `"5m"` - 5 minutes
 - `"1h"` - 1 hour
 - `"1h30m"` - 1 hour 30 minutes
+
+## Selecting which projects to watch
+
+The agent does **not** scan the `[directories].watch` paths from `guardian.toml`.
+Instead, it watches the projects listed in the registry at
+`~/.envdrift/projects.json`, which you populate with `envdrift agent register`.
+
+Register the project you want the agent to watch (defaults to the current
+directory):
+
+```bash
+envdrift agent register
+```
+
+```text
+✓ Registered project: /Users/you/projects/my-app
+
+⚠ Guardian is not enabled in envdrift.toml
+  Add this to your envdrift.toml to enable auto-encryption:
+
+  [guardian]
+  enabled = true
+```
+
+Registration alone is not enough: the agent only watches a project whose own
+`envdrift.toml` has the guardian turned on. The per-project default is
+`enabled = false`, so add the `[guardian]` section shown above to each project
+you want auto-encrypted.
+
+List the registered projects at any time:
+
+```bash
+envdrift agent list
+```
+
+```text
+                      Registered Projects
+┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┳━━━━━━━━━━━━━━━━━━┳━━━━━━━━━━━━┓
+┃ Path                        ┃ Registered       ┃ Has Config ┃
+┡━━━━━━━━━━━━━━━━━━━━━━━━━━━━━╇━━━━━━━━━━━━━━━━━━╇━━━━━━━━━━━━┩
+│ /Users/you/projects/my-app  │ 2026-06-03 16:05 │ ✓          │
+└─────────────────────────────┴──────────────────┴────────────┘
+
+Registry: /Users/you/.envdrift/projects.json
+```
+
+Use `envdrift agent unregister [PATH]` to stop watching a project and
+`envdrift agent status` to see the agent state and registered project count.
 
 ## How It Works
 
@@ -158,19 +213,19 @@ The `idle_timeout` accepts Go duration strings:
 
 - **Auto-start**: LaunchAgent (`~/Library/LaunchAgents/com.envdrift.guardian.plist`)
 - **Lock detection**: `lsof`
-- **Logs**: `~/Library/Logs/envdrift-agent.log`
+- **Logs**: `/tmp/envdrift-agent.log` (stdout) and `/tmp/envdrift-agent.err` (stderr)
 
 ### Linux
 
-- **Auto-start**: systemd user service (`~/.config/systemd/user/envdrift-agent.service`)
+- **Auto-start**: systemd user service (`~/.config/systemd/user/envdrift-guardian.service`)
 - **Lock detection**: `lsof`
-- **Logs**: `journalctl --user -u envdrift-agent`
+- **Logs**: `journalctl --user -u envdrift-guardian`
 
 ### Windows
 
-- **Auto-start**: Task Scheduler
+- **Auto-start**: Task Scheduler (scheduled task `EnvDriftGuardian`)
 - **Lock detection**: `handle.exe` (Sysinternals) or PowerShell fallback
-- **Logs**: `%USERPROFILE%\AppData\Local\envdrift\agent.log`
+- **Logs**: not captured to a file — the scheduled task runs without stdout/stderr redirection
 
 ## Integration with envdrift.toml
 

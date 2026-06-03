@@ -91,17 +91,18 @@ Variables:
   Encrypted:  3
   Plaintext:  5
   Empty:      0
-  Encryption ratio: 37%
+  Encryption ratio: 38%
 
 PLAINTEXT SECRETS DETECTED:
   * API_KEY_BACKEND
   * JWT_SECRET
 
 WARNINGS:
-  * DATABASE_URL contains credentials but is not encrypted
+  * 'API_KEY_BACKEND' has a value that looks like a secret
+  * 'JWT_SECRET' has a name suggesting sensitive data
 
 Recommendation:
-  Run: envdrift encrypt <env_file>
+  Run: envdrift encrypt .env.production
 ```
 
 ### Check with Schema
@@ -128,8 +129,10 @@ envdrift encrypt .env.production
 This will:
 
 1. Install dotenvx if `encryption.dotenvx.auto_install` is enabled
-2. Encrypt the file using AES-256-GCM
-3. Create `.env.keys` with the private key (never commit this!)
+2. Generate an ECIES (secp256k1) keypair, encrypt each sensitive value with the
+   public key (ECIES envelope around an AES-256-GCM payload), and rewrite the
+   file in place
+3. Create `.env.keys` with the matching private key (never commit this!)
 
 ### Encrypt with SOPS
 
@@ -168,19 +171,24 @@ The `--check` option provides a detailed report:
 
 envdrift integrates with [dotenvx](https://dotenvx.com/) for encryption:
 
-1. **Encrypted format**: Values prefixed with `encrypted:` are AES-256-GCM encrypted
-2. **Key storage**: Private keys stored in `.env.keys` (add to `.gitignore`)
+1. **Encrypted format**: dotenvx uses ECIES (secp256k1 public-key encryption)
+   wrapping an AES-256-GCM payload. Each sensitive value is encrypted to the
+   project's public key and prefixed with `encrypted:`
+2. **Key storage**: The matching private key lives in `.env.keys` (add to
+   `.gitignore`); the public key is written into the encrypted file as
+   `DOTENV_PUBLIC_KEY_<ENV>` so anyone can encrypt new values without the
+   private key
 3. **Safe to commit**: Encrypted `.env` files can be committed to git
 
 Example encrypted file:
 
 ```bash
-#/---BEGIN DOTENV ENCRYPTED---/
+#/-------------------[DOTENV_PUBLIC_KEY]--------------------/
 DOTENV_PUBLIC_KEY_PRODUCTION="03abc123..."
 DATABASE_URL="encrypted:BDQE1234567890abcdef..."
 API_KEY="encrypted:BDQEsecretkey123456..."
 DEBUG=false
-#/---END DOTENV ENCRYPTED---/
+#/----------------------------------------------------------/
 ```
 
 ## How SOPS Encryption Works
@@ -210,7 +218,7 @@ Variable names matching patterns:
 - `*_KEY`, `*_SECRET`, `*_TOKEN`
 - `*_PASSWORD`, `*_PASS`
 - `*_CREDENTIAL*`, `*_API_KEY`
-- `JWT_*`, `AUTH_*`, `*_DSN`
+- `JWT_*`, `AUTH_*`, `PRIVATE_*`, `*_DSN`
 
 ### Value-based Detection
 

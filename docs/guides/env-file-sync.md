@@ -336,8 +336,15 @@ environment = "staging"          # uses DOTENV_PRIVATE_KEY_STAGING
 [[vault.sync.mappings]]
 secret_name = "prod-key"
 folder_path = "services/prod"
-vault_name = "production-vault"  # override default_vault_name per mapping
+vault_name = "production-vault"  # informational only — see note below
 ```
+
+!!! note "`vault_name` / `default_vault_name` do not switch the vault"
+    These fields are parsed and accepted, but the sync/pull engine fetches every
+    secret from the single vault you configured via `--vault-url` /
+    `[vault.azure].vault_url` (or `--region` / `--project-id`). A per-mapping
+    `vault_name` does **not** route that secret to a different vault. To use a
+    separate vault, run a separate config.
 
 ### Ephemeral keys mode
 
@@ -364,39 +371,89 @@ decrypts in place, and writes no key file.
 
 ### Profiles
 
-Profiles let one project hold multiple environment configurations (local, staging,
-prod). A mapping tagged with `profile` is only processed when you pass that
-`--profile`; untagged mappings always run.
+`environment` and `profile` solve different problems — this section is the
+disambiguation. They are often used together.
+
+| Field | What it answers | When the mapping runs |
+|:--|:--|:--|
+| `environment` | **Identity** — which file (`.env.<environment>`) and which dotenvx key (`DOTENV_PRIVATE_KEY_<ENVIRONMENT>`) | Always (unless filtered out by `profile`) |
+| `profile` | **Selector** — a CLI-driven filter tag | Only when you pass a matching `--profile <name>`; untagged mappings always run |
+
+Resolution rule for the effective environment: **explicit `environment` >
+`profile` > `"production"`**. So `profile = "local"` with no `environment`
+resolves to `.env.local` / `DOTENV_PRIVATE_KEY_LOCAL`.
+
+#### Use case A — `environment` only (monorepo, no profiles)
+
+Different services, each pinned to its own env file. Every mapping always runs;
+a single `envdrift pull` brings everything down.
 
 ```toml
+[[vault.sync.mappings]]
+secret_name = "myapp-key"
+folder_path = "services/myapp"
+environment = "production"        # → services/myapp/.env.production
+
+[[vault.sync.mappings]]
+secret_name = "auth-key"
+folder_path = "services/auth"
+environment = "staging"           # → services/auth/.env.staging
+```
+
+```bash
+envdrift pull   # decrypts BOTH, no flags needed
+```
+
+#### Use case B — `profile` (one project, multiple modes, pick one at a time)
+
+Same project, mutually exclusive env configs (local dev vs prod-debug). Pick the
+active one with `--profile`; `activate_to` swaps the chosen file into `.env` so
+your app — which only knows how to read `.env` — picks up the right values.
+
+```toml
+# Untagged: always runs (e.g. shared dotenvx key used across profiles)
 [[vault.sync.mappings]]
 secret_name = "shared-key"
 folder_path = "."
 
+# Profile-tagged: only runs with --profile local. environment defaults to
+# the profile name, so this maps to .env.local + DOTENV_PRIVATE_KEY_LOCAL.
 [[vault.sync.mappings]]
 secret_name = "local-key"
 folder_path = "."
-profile = "local"          # only with --profile local
-activate_to = ".env"       # copy decrypted .env.local → .env
+profile = "local"
+activate_to = ".env"              # copy decrypted .env.local → .env
 
 [[vault.sync.mappings]]
-secret_name = "prod-key"
+secret_name = "prod-debug-key"
 folder_path = "."
 profile = "prod"
 activate_to = ".env"
 ```
 
 ```bash
-envdrift pull --profile local
-envdrift pull --profile prod
+envdrift pull --profile local   # runs shared-key + local-key; prod-debug-key skipped
+envdrift pull --profile prod    # runs shared-key + prod-debug-key; local-key skipped
+envdrift pull                   # runs shared-key only (no --profile, tagged mappings skipped)
 ```
 
-- **`profile`** — tags a mapping for filtering. Without `--profile`, only untagged
-  mappings run.
-- **`activate_to`** — path to copy the decrypted file to (e.g. `.env`) for apps that
-  expect a plain `.env`.
-- **`environment`** — if omitted, defaults to the `profile` value (profile `local` →
-  `.env.local`).
+#### Use case C — `profile` + `environment` together (decouple selector from file name)
+
+When the CLI selector name shouldn't match the env file name (e.g. several
+laptops point at the same `.env.staging` but you want a friendlier flag):
+
+```toml
+[[vault.sync.mappings]]
+secret_name = "qa-key"
+folder_path = "."
+profile = "qa-laptop"             # CLI selector: --profile qa-laptop
+environment = "staging"           # but the file is .env.staging
+activate_to = ".env"
+```
+
+```bash
+envdrift pull --profile qa-laptop   # decrypts .env.staging, copies to .env
+```
 
 ### Legacy `pair.txt`
 
@@ -407,7 +464,7 @@ provider defaults and mappings together).
 # secret-name=folder-path
 myapp-dotenvx-key=services/myapp
 auth-service-key=services/auth
-production-vault/prod-key=services/prod   # explicit vault name (Azure)
+production-vault/prod-key=services/prod   # vault-name/ prefix parsed but ignored
 ```
 
 ## Drift detection
@@ -425,8 +482,8 @@ envdrift decrypt .env.production --verify-vault --ci \
 Exit `0` if the vault key can decrypt the file, `1` if it can't — with repair steps:
 
 1. `git restore .env.production`
-2. `envdrift sync --force` (auto-discovers `envdrift.toml`; add `-c` / provider flags
-   only to override)
+2. `envdrift sync --force -c pair.txt -p <provider>` (the printed command also
+   appends `--vault-url` / `--region` / `--project-id` when you passed them)
 3. `envdrift encrypt .env.production`
 
 See [`decrypt`](../cli/decrypt.md) for the full verify-vault behavior.

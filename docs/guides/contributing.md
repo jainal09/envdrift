@@ -16,8 +16,8 @@ Thanks for helping improve envdrift! This guide summarizes local setup, style ru
 
 ## Editor setup
 
-- VS Code: install the “Ruff” extension (ms-python.vscode-pylance + charliermarsh.ruff). '
-Enable “Format on Save” with Ruff to match CI formatting (`ruff format` + `ruff check --fix`).
+- VS Code: install the Ruff extension (`charliermarsh.ruff`). Enable “Format on Save” with Ruff to match CI formatting
+  (`ruff format` + `ruff check --fix`).
 - VS Code: install the ["markdownlint" extension](https://marketplace.visualstudio.com/items?itemName=DavidAnson.vscode-markdownlint) for docs linting.
 - Optional: add a pre-commit task to run `uv run pre-commit run --files $FilePath`.
 

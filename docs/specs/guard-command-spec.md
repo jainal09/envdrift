@@ -1019,8 +1019,8 @@ from .base import (
 )
 
 
-# Version pinned for reproducibility
-GITLEAKS_VERSION = "8.18.4"
+# Version pinned for reproducibility (sourced from constants.json)
+GITLEAKS_VERSION = "8.30.0"
 
 DOWNLOAD_URLS = {
     ("Darwin", "arm64"): f"https://github.com/gitleaks/gitleaks/releases/download/v{GITLEAKS_VERSION}/gitleaks_{GITLEAKS_VERSION}_darwin_arm64.tar.gz",
@@ -1274,7 +1274,7 @@ from .base import (
 )
 
 
-TRUFFLEHOG_VERSION = "3.82.13"
+TRUFFLEHOG_VERSION = "3.92.4"  # sourced from constants.json
 
 DOWNLOAD_URLS = {
     ("Darwin", "arm64"): f"https://github.com/trufflesecurity/trufflehog/releases/download/v{TRUFFLEHOG_VERSION}/trufflehog_{TRUFFLEHOG_VERSION}_darwin_arm64.tar.gz",
@@ -1673,10 +1673,12 @@ def guard(
 
     Examples:
 
-        envdrift guard                    # Basic scan
-        envdrift guard --gitleaks         # With gitleaks
-        envdrift guard --history          # Include git history
-        envdrift guard --ci --json        # CI mode with JSON output
+        envdrift guard                     # Basic scan with native + gitleaks
+        envdrift guard --native-only       # No external dependencies
+        envdrift guard --history           # Include git history
+        envdrift guard --ci --fail-on high # CI mode, fail on high+ severity
+        envdrift guard --json              # JSON output for automation
+        envdrift guard ./src ./config      # Scan specific directories
     """
     # Default to current directory
     if not paths:
@@ -1753,16 +1755,30 @@ envdrift guard [OPTIONS] [PATHS]...
 
 | Option | Short | Default | Description |
 |--------|-------|---------|-------------|
-| `--gitleaks/--no-gitleaks` | | `--gitleaks` | Use gitleaks scanner |
-| `--trufflehog/--no-trufflehog` | | `--no-trufflehog` | Use trufflehog scanner |
+| `--gitleaks/--no-gitleaks` | | `--gitleaks` | Use gitleaks scanner (auto-installs if missing) |
+| `--trufflehog/--no-trufflehog` | | `--no-trufflehog` | Use trufflehog scanner (auto-installs if missing) |
+| `--detect-secrets/--no-detect-secrets` | | `--no-detect-secrets` | Use detect-secrets scanner (27+ detectors) |
+| `--kingfisher/--no-kingfisher` | | `--no-kingfisher` | Use Kingfisher scanner (700+ rules, secret validation) |
+| `--git-secrets/--no-git-secrets` | | `--no-git-secrets` | Use git-secrets scanner (AWS credential detection) |
+| `--talisman/--no-talisman` | | `--no-talisman` | Use Talisman scanner (entropy detection) |
+| `--trivy/--no-trivy` | | `--no-trivy` | Use Trivy scanner (comprehensive security scanner) |
+| `--infisical/--no-infisical` | | `--no-infisical` | Use Infisical scanner (140+ secret types) |
 | `--native-only` | | `false` | Only use native scanner |
+| `--staged` | `-s` | `false` | Only scan staged files (for pre-commit hooks) |
+| `--pr-base` | | | Scan files changed since this base branch/commit (e.g. `origin/main`) |
 | `--history` | `-H` | `false` | Scan git history |
 | `--entropy` | `-e` | `false` | Enable entropy detection |
+| `--skip-clear/--no-skip-clear` | | `--no-skip-clear` | Skip `.clear` files from scanning |
+| `--skip-duplicate/--no-skip-duplicate` | | `--no-skip-duplicate` | Show only unique secrets by value |
+| `--skip-encrypted/--no-skip-encrypted` | | `--skip-encrypted` | Skip findings from encrypted files (dotenvx/SOPS) |
+| `--skip-gitignored/--no-skip-gitignored` | | `--no-skip-gitignored` | Skip findings from files in `.gitignore` |
 | `--auto-install/--no-auto-install` | | `--auto-install` | Auto-install missing scanners |
 | `--json` | `-j` | `false` | JSON output |
 | `--sarif` | | `false` | SARIF output |
 | `--ci` | | `false` | CI mode |
 | `--fail-on` | | `high` | Minimum severity to fail |
+| `--verbose` | `-v` | `false` | Show detailed output including scanner info |
+| `--config` | `-c` | | Path to `envdrift.toml` config file (auto-detected if not specified) |
 
 ### Exit Codes
 
@@ -1807,7 +1823,8 @@ envdrift guard ./apps ./services --no-gitleaks
 ```toml
 [guard]
 # Which scanners to enable
-# Options: "native", "gitleaks", "trufflehog"
+# Options: "native", "gitleaks", "trufflehog", "detect-secrets",
+#          "kingfisher", "git-secrets", "talisman", "trivy", "infisical"
 scanners = ["native", "gitleaks"]
 
 # Auto-install missing scanner binaries
@@ -1827,6 +1844,18 @@ fail_on_severity = "high"
 # Enable trufflehog secret verification (checks if secrets are valid)
 verify_secrets = false
 
+# Skip .clear files from scanning (default: scan them)
+skip_clear_files = false
+
+# Skip findings from encrypted files (dotenvx/SOPS markers detected)
+skip_encrypted_files = true
+
+# Show only unique secrets by value (ignore scanner source and location)
+skip_duplicate = false
+
+# Skip findings from files in .gitignore (uses git check-ignore)
+skip_gitignored = false
+
 # Paths to ignore (glob patterns)
 ignore_paths = [
     ".env.example",
@@ -1836,19 +1865,15 @@ ignore_paths = [
     "docs/**",
 ]
 
-# Custom secret patterns
-[[guard.patterns]]
-id = "internal-api-key"
-description = "Internal API Key"
-pattern = "MYCOMPANY_[A-Z0-9]{32}"
-severity = "critical"
-
-[[guard.patterns]]
-id = "internal-token"
-description = "Internal Service Token"
-pattern = "svc_[a-z0-9]{24}"
-severity = "high"
+# Suppress specific rules for matching path globs.
+# Maps a rule id to a list of glob patterns where it should be ignored.
+[guard.ignore_rules]
+"high-entropy-string" = ["**/*.clear"]
 ```
+
+> **Note:** Custom secret patterns via `[[guard.patterns]]` are not yet
+> implemented (see the "Custom patterns in config" entry in the Implementation
+> Status Board). Such blocks are currently ignored by the config loader.
 
 ---
 

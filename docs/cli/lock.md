@@ -22,7 +22,7 @@ This command ensures your environment files are properly encrypted before commit
 
 1. **Verify key consistency** - Check that local `.env.keys` match vault secrets (prevents key drift)
 2. **Sync keys from vault** - Optionally fetch keys from vault to ensure consistency
-3. **Encrypt env files** - Encrypt all decrypted `.env.<environment>` files using dotenvx
+3. **Encrypt env files** - Encrypt all decrypted `.env.<environment>` files using the configured backend (dotenvx or SOPS)
 
 This is the recommended command before committing changes to ensure:
 
@@ -80,10 +80,10 @@ envdrift lock --force
 
 ### `--profile`
 
-Filter mappings by profile and process only the specified environment.
+Process all regular (non-profile) mappings plus the mapping tagged with this profile.
 
 ```bash
-# Lock only the 'local' profile
+# Lock regular mappings plus the 'local' profile
 envdrift lock --profile local
 ```
 
@@ -329,7 +329,7 @@ Step 2: Processing partial encryption files...
 
 ╭──────────── Lock Summary ────────────╮
 │ Encrypted: 2                         │
-│ Already encrypted: 1                 │
+│ Already encrypted: 2                 │
 │ Skipped: 0                           │
 │ Errors: 0                            │
 │ Partial secrets encrypted: 0         │
@@ -354,7 +354,7 @@ The `lock` command catches many edge cases and provides helpful warnings and err
 | `multiple .env files found`                | Multiple `.env.*` files exist; specify the environment explicitly      |
 | `file not found`                           | The expected `.env.<environment>` file doesn't exist                   |
 | `partially encrypted (N%)`                 | The file is only partially encrypted; will re-encrypt                 |
-| `partial encryption combined file`         | File is a generated combined file; use `--all` to include             |
+| `partial encryption combined file, use --all to include` | File is a generated combined file; use `--all` to include |
 
 ### Errors
 
@@ -362,7 +362,7 @@ The `lock` command catches many edge cases and provides helpful warnings and err
 |:--------------------|:-------------------------------------------------------|
 | `KEY MISMATCH`      | Local key differs from vault key - potential key drift |
 | `vault error`       | Failed to access or authenticate with the vault        |
-| `encryption failed` | dotenvx failed to encrypt the file                      |
+| `encryption failed` | The configured backend (dotenvx or SOPS) failed to encrypt the file |
 | `Key sync failed`   | Could not sync keys from vault                         |
 
 ## Exit Codes
@@ -437,7 +437,7 @@ repos:
 ## Prerequisites
 
 - Cloud vault credentials configured (Azure CLI, AWS credentials, etc.)
-- `dotenvx` installed for encryption
+- The configured encryption backend installed (`dotenvx` or SOPS)
 
 ## See Also
 

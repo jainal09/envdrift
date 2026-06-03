@@ -171,10 +171,11 @@ provider = "hashicorp"
 
 [vault.hashicorp]
 url = "https://vault.example.com"
-# token = "hvs.xxx"  # Or use VAULT_TOKEN env var
+# The token is read from the VAULT_TOKEN env var (no TOML key)
 
 [[vault.sync.mappings]]
-secret_name = "secret/data/myapp/dotenvx-key"
+# Path relative to the KV v2 mount (default "secret"); no "secret/data/" prefix
+secret_name = "myapp/dotenvx-key"
 folder_path = "."
 ```
 
@@ -304,27 +305,41 @@ activate_to = ".env.production"
 
 ## Multiple Providers
 
-You can use different providers for different environments:
+The provider is global per command: each `sync` invocation resolves exactly one
+provider (the `--provider` flag, falling back to `[vault] provider` in config) and
+uses it for every mapping in that run. Mappings have no per-mapping `provider` field,
+so you cannot mix providers within a single command.
+
+To use different providers for different environments, run the command separately for
+each one with a different `--provider` (and the matching `--vault-url`/`--project-id`):
 
 ```toml
-# Production uses Azure
-[[vault.sync.mappings]]
-secret_name = "prod-key"
-folder_path = "."
-environment = "production"
-# Uses default provider (azure)
+# Default provider is azure
+[vault]
+provider = "azure"
 
-# Local dev uses HashiCorp
 [[vault.sync.mappings]]
-secret_name = "local-key"
-folder_path = "."
-profile = "local"
-# Override with --provider hashicorp when syncing
+secret_name = "myapp-key"
+folder_path = "services/myapp"
+environment = "production"
+```
+
+```bash
+# Fetch every mapping from the default provider (azure)
+envdrift sync --vault-url https://my-keyvault.vault.azure.net/
+
+# Re-run against HashiCorp instead by switching --provider
+envdrift sync --provider hashicorp --vault-url https://vault.example.com
 ```
 
 ## CI/CD Integration
 
 See the [CI/CD Guide](../guides/cicd.md) for provider-specific authentication in pipelines.
+
+These snippets assume an `envdrift.toml` is committed in the repo with the provider's
+`vault_url`/`project_id` and `[[vault.sync.mappings]]`. Without a `vault_url` (Azure) or
+mappings, `envdrift sync` exits with an error; pass the missing values on the command line
+instead (for example `--vault-url ...`).
 
 Quick examples:
 

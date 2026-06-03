@@ -38,13 +38,8 @@ Decrypt only a specific environment instead of all configured environments.
 envdrift pull-partial --env production
 ```
 
-### `--backend`, `-b`
-
-Select the encryption backend (`dotenvx` or `sops`). Defaults to config or dotenvx.
-
-```bash
-envdrift pull-partial --backend sops
-```
+Partial encryption always uses dotenvx for decryption; there is no backend option
+to select.
 
 ## Configuration
 

@@ -108,9 +108,9 @@ The `pull` and `lock` commands form a complete workflow:
 │                                                                 │
 │    ┌──────────┐                           ┌──────────┐          │
 │    │          │                           │          │          │
-│    │  Vault   │ ◄───── envdrift sync ──── │  Local   │          │
+│    │  Vault   │ ──── envdrift sync ─────► │  Local   │          │
 │    │  (keys)  │                           │ .env.keys│          │
-│    │          │ ────── envdrift push ───► │          │          │
+│    │          │ ◄─ envdrift vault-push ── │          │          │
 │    └──────────┘                           └──────────┘          │
 │                                                 │               │
 │                                                 │               │
@@ -129,7 +129,7 @@ The `pull` and `lock` commands form a complete workflow:
 | `pull` | Vault → Local | Sync keys, decrypt files for development |
 | `lock` | Local → Repo | Verify keys, encrypt files for commit |
 | `sync` | Vault → Local | Sync keys only (no decrypt) |
-| `vault-push` | Local → Vault | Push a single key to vault (config-free) |
+| `vault-push` | Local → Vault | Push keys to vault: a single service key (config-free), a `--direct` value, or `--all` keys from config |
 | `vault-pull` | Vault → Local | Pull a single key + decrypt (config-free) |
 
 ## Encryption Detection
@@ -146,7 +146,8 @@ envdrift automatically detects which encryption backend was used:
 Fields are marked as sensitive if:
 
 1. **Explicit annotation** — `Field(json_schema_extra={"sensitive": True})`
-2. **Name pattern** — Contains `password`, `secret`, `key`, `token`, `credential`
+2. **Name pattern** — Matches sensitive-name patterns: names ending in `_KEY`, `_SECRET`, `_TOKEN`, `_PASSWORD`, `_PASS`,
+   `_DSN`; starting with `JWT_`, `AUTH_`, `PRIVATE_`; or containing `_CREDENTIAL` (anchored regex, not substring)
 3. **Value pattern** — Looks like an API key (`sk_`, `ghp_`, etc.)
 
 ## Configuration Discovery
@@ -154,18 +155,20 @@ Fields are marked as sensitive if:
 envdrift looks for configuration in this order:
 
 1. Explicit `--config` flag
-2. `envdrift.toml` in current directory
-3. `envdrift.toml` in parent directories
-4. `pyproject.toml` with `[tool.envdrift]` section
+2. Walking up from the current directory (current, then each parent), in **each** directory `envdrift.toml` is preferred
+   over a `pyproject.toml` with a `[tool.envdrift]` section; the first match found while walking up wins
 
 ## Exit Codes
 
-All commands follow consistent exit code conventions:
+Most commands follow consistent exit code conventions:
 
 | Code | Meaning |
 |:-----|:--------|
 | 0 | Success |
 | 1 | Validation failure, encryption error, or configuration issue |
 | 2 | Missing required arguments or invalid options |
+
+`guard` is the exception: it uses a severity-based scheme where `0` = no blocking findings, `1` = critical,
+`2` = high, and `3` = medium severity findings detected.
 
 For CI/CD pipelines, use the `--ci` flag to ensure proper exit codes on validation failures.

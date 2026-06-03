@@ -21,7 +21,7 @@ envdrift version
 Output:
 
 ```text
-envdrift 0.1.0
+envdrift 10.12.3
 ```
 
 ## Use Cases

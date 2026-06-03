@@ -180,13 +180,13 @@ Output:
 
 ```text
 Processing: services/api
-  + services/api/.env.keys - created
+  + services/api - created
 
 Processing: services/web
-  + services/web/.env.keys - created
+  + services/web - created
 
 Processing: services/worker
-  + services/worker/.env.keys - created
+  + services/worker - created
 
 ╭──────────── Sync Summary ────────────╮
 │ Services processed: 3                │

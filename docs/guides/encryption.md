@@ -25,22 +25,26 @@ envdrift encrypt .env.production --check
 Output:
 
 ```text
-Encryption Report for .env.production
+╭────────────────────────── envdrift encrypt --check ──────────────────────────╮
+│ Encryption Status: .env.production                                           │
+╰──────────────────────────────────────────────────────────────────────────────╯
 
-ENCRYPTED VARIABLES:
-  - DATABASE_URL
-  - API_KEY
-  - JWT_SECRET
+File is partially encrypted
 
-PLAINTEXT VARIABLES:
-  - DEBUG
-  - LOG_LEVEL
-  - PORT
+Variables:
+  Encrypted:  3
+  Plaintext:  3
+  Empty:      0
+  Encryption ratio: 50%
 
 PLAINTEXT SECRETS DETECTED:
-  - AWS_ACCESS_KEY_ID (looks like a secret but not encrypted)
+  * AWS_ACCESS_KEY_ID
 
-Encryption ratio: 50% (3/6 variables encrypted)
+WARNINGS:
+  * 'AWS_ACCESS_KEY_ID' has a value that looks like a secret
+
+Recommendation:
+  Run: envdrift encrypt .env.production
 ```
 
 ### Encrypt a File
@@ -73,7 +77,7 @@ envdrift decrypt .env.production --backend sops
 ## How dotenvx Works
 
 1. **dotenvx binary** - envdrift can auto-install the dotenvx binary to `.venv/bin/` when enabled
-2. **Encryption** - Uses AES-256-GCM encryption
+2. **Encryption** - Uses public-key (ECIES) encryption so encrypted `.env` files can be committed; only the private key in `.env.keys` can decrypt
 3. **Key management** - Keys stored in `.env.keys` (never commit this!)
 
 ## Dotenvx File Structure
@@ -94,12 +98,14 @@ Your `.gitignore` should include:
 ## Dotenvx Encrypted File Format
 
 ```bash
-#/---BEGIN DOTENV ENCRYPTED---/
+#/-------------------[DOTENV_PUBLIC_KEY]--------------------/
 DOTENV_PUBLIC_KEY_PRODUCTION="03abc123..."
+
+# .env.production
 DATABASE_URL="encrypted:BDQE1234567890abcdef..."
 API_KEY="encrypted:BDQEsecretkey123456..."
 DEBUG=false
-#/---END DOTENV ENCRYPTED---/
+#/----------------------------------------------------------/
 ```
 
 Note: Non-sensitive values like `DEBUG` remain plaintext.
@@ -205,9 +211,11 @@ env:
 Use a secrets manager (Azure Key Vault, AWS Secrets Manager, etc.) to store the private key:
 
 ```python
-from envdrift.vault import AzureKeyVault
+import os
 
-vault = AzureKeyVault(vault_url="https://myvault.vault.azure.net")
+from envdrift.vault import get_vault_client
+
+vault = get_vault_client("azure", vault_url="https://myvault.vault.azure.net/")
 key = vault.get_secret("dotenv-private-key-production")
 
 # Set as environment variable before running app
@@ -257,15 +265,27 @@ to ensure files encrypted on Windows can be decrypted on Linux/macOS and vice ve
 
 ### "dotenvx not found"
 
-The binary is downloaded automatically, but if it fails:
+If auto-install is enabled, the binary is downloaded automatically; if that fails:
 
 ```bash
 # Check if binary exists
 ls .venv/bin/dotenvx
-
-# Manual download
-envdrift encrypt .env --check  # Triggers download
 ```
+
+To let envdrift download the binary, enable auto-install in `envdrift.toml` and run
+a real (non-`--check`) encrypt:
+
+```toml
+[encryption.dotenvx]
+auto_install = true
+```
+
+```bash
+envdrift encrypt .env.production
+```
+
+Otherwise, install dotenvx manually following the install instructions envdrift
+prints when the binary is missing.
 
 ### "Decryption failed"
 

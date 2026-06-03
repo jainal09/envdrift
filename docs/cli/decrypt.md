@@ -7,7 +7,8 @@ decrypt a file (dotenvx drift detection).
 
 ```bash
 envdrift decrypt [ENV_FILE]
-envdrift decrypt [ENV_FILE] --verify-vault [--provider ...]
+envdrift decrypt [ENV_FILE] --verify-vault --provider <p> --secret <name> \
+  [--vault-url ... | --project-id ... | --region ...]
 ```
 
 ## Description
@@ -58,18 +59,18 @@ envdrift decrypt .env.production --backend sops
 
 ### Verify vault key (drift detection, no decryption performed)
 
-Vault verification is only supported with the dotenvx backend.
+Vault verification is only supported with the dotenvx backend. `--provider` and
+`--secret` are always required with `--verify-vault` (they are not read from
+`envdrift.toml`); `--vault-url` is also required for azure/hashicorp and
+`--project-id` for gcp.
 
 ```bash
-# Auto-discovered provider/vault/secret via envdrift.toml or pyproject
-envdrift decrypt .env.production --verify-vault --ci
-
-# Override vault settings explicitly (bypass auto-discovery)
+# Azure Key Vault (or HashiCorp): --vault-url is required
 envdrift decrypt .env.production --verify-vault --ci \
   -p azure --vault-url https://myvault.vault.azure.net \
   --secret myapp-dotenvx-key
 
-# GCP Secret Manager
+# GCP Secret Manager: --project-id is required
 envdrift decrypt .env.production --verify-vault --ci \
   -p gcp --project-id my-gcp-project \
   --secret myapp-dotenvx-key
@@ -164,10 +165,12 @@ envdrift decrypt .env.production --verify-vault --ci \
   --secret myapp-dotenvx-key
 ```
 
-Failure shows WRONG_PRIVATE_KEY and prints repair steps:
+On failure it prints `✗ Vault key CANNOT decrypt this file!` followed by repair
+steps:
 
 - `git restore <file>`
-- `envdrift sync --force ...` to restore .env.keys from vault
+- `envdrift sync --force -c pair.txt -p <provider>` (with `--vault-url`/`--region`/`--project-id`
+  appended when those flags were passed) to restore the vault key locally
 - `envdrift encrypt <file>` to re-encrypt with the vault key
 
 !!! note "`--verify-vault` only verifies — it does not fetch the key"
@@ -178,19 +181,17 @@ Failure shows WRONG_PRIVATE_KEY and prints repair steps:
 
 ## Error Handling
 
-### Missing Private Key
+### Missing or Wrong Private Key
+
+When the private key is missing or does not match the encrypted file, decryption
+fails with a single line carrying the underlying dotenvx error:
 
 ```text
-[ERROR] Decryption failed
-Check that .env.keys exists or DOTENV_PRIVATE_KEY_* is set
+[ERROR] Decryption failed: dotenvx decryption failed: <dotenvx error>
 ```
 
-### Wrong Private Key
-
-```text
-[ERROR] Decryption failed
-The private key does not match the encrypted file
-```
+Check that `.env.keys` exists or `DOTENV_PRIVATE_KEY_*` is set, and that the key
+matches the one used to encrypt the file.
 
 When using `--verify-vault`, a wrong key returns exit 1 with a message like:
 
@@ -199,7 +200,7 @@ When using `--verify-vault`, a wrong key returns exit 1 with a message like:
 ...
 To fix:
   1. Restore the encrypted file: git restore .env.production
-  2. Restore vault key locally: envdrift sync --force (add -c envdrift.toml if auto-discovery doesn't find the config)
+  2. Restore vault key locally: envdrift sync --force -c pair.txt -p azure
   3. Re-encrypt with the vault key: envdrift encrypt .env.production
 ```
 
@@ -207,7 +208,20 @@ To fix:
 
 ```text
 [ERROR] dotenvx is not installed
-Install: curl -sfS https://dotenvx.sh | sh
+
+dotenvx is not installed.
+
+Option 1 - Install to ~/.local/bin (recommended):
+  curl -sfS "https://dotenvx.sh?directory=$HOME/.local/bin" | sh -s -- --version=1.70.0
+  (Make sure ~/.local/bin is in your PATH)
+
+Option 2 - Install to current directory:
+  curl -sfS "https://dotenvx.sh?directory=." | sh -s -- --version=1.70.0
+
+Option 3 - System-wide install (requires sudo):
+  curl -sfS https://dotenvx.sh | sudo sh -s -- --version=1.70.0
+
+After installing, run your envdrift command again.
 ```
 
 ### SOPS Decryption Failed

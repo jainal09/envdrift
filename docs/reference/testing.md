@@ -117,6 +117,7 @@ Available markers:
 | `aws` | Requires LocalStack container |
 | `vault` | Requires HashiCorp Vault container |
 | `azure` | Requires Lowkey Vault container |
+| `gcp` | Requires GCP credentials (skipped by default) |
 | `slow` | Tests that take >10 seconds |
 
 ## CI Pipelines
@@ -125,7 +126,7 @@ Available markers:
 
 Runs on every PR:
 
-- Python 3.12
+- Python 3.14
 - Unit tests + integration tests (containers skipped if unavailable)
 - Linting and coverage upload
 
