@@ -259,7 +259,6 @@ SAMPLE_CONFIG_DICT: dict[str, Any] = {
     "envdrift": {
         "schema": "config:Settings",
         "environments": ["development", "staging", "production"],
-        "env_file_pattern": ".env.{environment}",
     },
     "validation": {
         "check_encryption": True,

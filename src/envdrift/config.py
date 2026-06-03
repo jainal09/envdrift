@@ -201,7 +201,6 @@ class EnvdriftConfig:
     environments: list[str] = field(
         default_factory=lambda: ["development", "staging", "production"]
     )
-    env_file_pattern: str = ".env.{environment}"
 
     # Sub-configs
     validation: ValidationConfig = field(default_factory=ValidationConfig)
@@ -379,7 +378,6 @@ class EnvdriftConfig:
             environments=envdrift_section.get(
                 "environments", ["development", "staging", "production"]
             ),
-            env_file_pattern=envdrift_section.get("env_file_pattern", ".env.{environment}"),
             validation=validation,
             vault=vault,
             encryption=encryption,
@@ -491,21 +489,6 @@ def load_config(path: Path | str | None = None) -> EnvdriftConfig:
     return EnvdriftConfig.from_dict(data)
 
 
-def get_env_file_path(config: EnvdriftConfig, environment: str) -> Path:
-    """
-    Build the Path to the .env file for the given environment using the configuration's env_file_pattern.
-
-    Parameters:
-        config (EnvdriftConfig): Configuration whose env_file_pattern will be formatted.
-        environment (str): Environment name inserted into the pattern (replaces `{environment}`).
-
-    Returns:
-        Path: Path to the computed .env file.
-    """
-    filename = config.env_file_pattern.format(environment=environment)
-    return Path(filename)
-
-
 def get_schema_for_environment(config: EnvdriftConfig, environment: str) -> str | None:
     """
     Resolve the schema path to use for a given environment.
@@ -533,9 +516,6 @@ schema = "config.settings:ProductionSettings"
 
 # Environments to manage
 environments = ["development", "staging", "production"]
-
-# Path pattern for env files
-env_file_pattern = ".env.{environment}"
 
 [validation]
 # Check encryption by default
