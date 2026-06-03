@@ -61,13 +61,11 @@ Core configuration options for envdrift.
 |:-------|:-----|:--------|:------------|
 | `schema` | `string` | `null` | Default schema path for validation (e.g., `config:Settings`) |
 | `environments` | `list[string]` | `["development", "staging", "production"]` | List of environment names |
-| `env_file_pattern` | `string` | `".env.{environment}"` | Pattern for .env file names (`{environment}` is replaced) |
 
 ```toml
 [envdrift]
 schema = "config.settings:ProductionSettings"
 environments = ["development", "staging", "production"]
-env_file_pattern = ".env.{environment}"
 ```
 
 ### [validation] — Validation Settings
@@ -377,7 +375,6 @@ pattern = ".env*"
 [envdrift]
 schema = "config.settings:Settings"
 environments = ["development", "staging", "production"]
-env_file_pattern = ".env.{environment}"
 
 [validation]
 check_encryption = true
@@ -451,4 +448,4 @@ Some settings can be overridden with environment variables:
 
 - [Encryption Backends](../concepts/encryption-backends.md) — Compare dotenvx vs SOPS
 - [Vault Providers](../concepts/vault-providers.md) — Compare cloud vault providers
-- [Vault Sync Guide](../guides/vault-sync.md) — Detailed vault sync setup
+- [Env File Sync Guide](../guides/env-file-sync.md) — Detailed vault sync setup

@@ -252,5 +252,5 @@ If a file is already encrypted, the extension skips it. Look for:
 
 - [Agent Setup Guide](./agent-setup.md)
 - [Encryption Guide](./encryption.md)
-- [Vault Sync Guide](./vault-sync.md)
+- [Env File Sync Guide](./env-file-sync.md)
 - [Configuration Reference](../reference/configuration.md)

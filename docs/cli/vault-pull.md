@@ -206,4 +206,4 @@ touches the file.
 - [vault-push](vault-push.md) - Push a single key to a vault (opposite of vault-pull)
 - [pull](pull.md) - Config-based, multi-service pull + decrypt
 - [decrypt](decrypt.md) - Decrypt an env file using a local key (and `--verify-vault` CI check)
-- [Vault Sync Guide](../guides/vault-sync.md) - Detailed vault setup guide
+- [Env File Sync Guide](../guides/env-file-sync.md) - Detailed vault setup guide

@@ -41,6 +41,7 @@ nav:
   - Getting Started:
       - Installation: getting-started/installation.md
       - Quick Start: getting-started/quickstart.md
+  - Env File Sync: guides/env-file-sync.md
   - Concepts:
       - concepts/index.md
       - How It Works: concepts/how-it-works.md
@@ -66,7 +67,6 @@ nav:
   - Guides:
       - Agent Setup: guides/agent-setup.md
       - VS Code Extension: guides/vscode-extension.md
-      - Vault Sync: guides/vault-sync.md
       - Encryption: guides/encryption.md
       - Guard Scanning: guides/guard.md
       - Schema Best Practices: guides/schema.md
@@ -110,6 +110,10 @@ markdown_extensions:
 
 plugins:
   - search
+  - redirects:
+      redirect_maps:
+        # Crown-jewel guide renamed Vault Sync -> Env File Sync; preserve the old URL.
+        guides/vault-sync.md: guides/env-file-sync.md
 
 extra:
   social:

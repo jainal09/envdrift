@@ -633,3 +633,54 @@ folder_path = "."
         config = SyncConfig.from_toml_file(config_file)
 
         assert config.ephemeral_keys is True
+
+
+class TestLoadSyncConfigEphemeralPropagation:
+    """Regression: central [vault.sync] ephemeral_keys must survive the
+    auto-discovered EnvdriftConfig path in load_sync_config_and_client().
+
+    Previously that path rebuilt SyncConfig/ServiceMapping by hand and dropped
+    both the central flag and per-mapping overrides, so `envdrift pull`/`sync`
+    (auto-discovered) could still write .env.keys despite ephemeral_keys = true.
+    """
+
+    def test_central_and_per_mapping_ephemeral_keys_propagate(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from unittest.mock import MagicMock, patch
+
+        (tmp_path / "envdrift.toml").write_text("""
+[vault]
+provider = "azure"
+
+[vault.azure]
+vault_url = "https://v.vault.azure.net/"
+
+[vault.sync]
+ephemeral_keys = true
+
+[[vault.sync.mappings]]
+secret_name = "inherits"
+folder_path = "."
+environment = "prod"
+
+[[vault.sync.mappings]]
+secret_name = "override"
+folder_path = "svc"
+environment = "dev"
+ephemeral_keys = false
+""")
+        monkeypatch.chdir(tmp_path)
+
+        from envdrift.cli_commands.sync import load_sync_config_and_client
+
+        with patch("envdrift.vault.get_vault_client", return_value=MagicMock()):
+            sync_config, *_ = load_sync_config_and_client(None, None, None, None, None)
+
+        # Central flag carried through the manual rebuild.
+        assert sync_config.ephemeral_keys is True
+        # Per-mapping: first inherits (None) -> effective True; second overrides.
+        assert sync_config.mappings[0].ephemeral_keys is None
+        assert sync_config.mappings[1].ephemeral_keys is False
+        assert sync_config.get_effective_ephemeral(sync_config.mappings[0]) is True
+        assert sync_config.get_effective_ephemeral(sync_config.mappings[1]) is False

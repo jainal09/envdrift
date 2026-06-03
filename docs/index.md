@@ -129,7 +129,7 @@ pip install "envdrift[vault]"     # All providers
 
     Set up team-wide environment sync with your cloud vault.
 
-    [:octicons-arrow-right-24: Get Started](guides/vault-sync.md)
+    [:octicons-arrow-right-24: Get Started](guides/env-file-sync.md)
 
 - :material-rocket-launch: **Quick Start**
 

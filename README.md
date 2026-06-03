@@ -23,10 +23,10 @@ Sync environment variables across your team. No more "it works on my machine."
 
 ## The Solution
 
-envdrift is an **open-source** CLI that syncs encrypted `.env` files using **your existing cloud vault**.
+envdrift is an **open-source** CLI that encrypts `.env` files and syncs them using **your existing cloud vault** and git.
 No hosted service, no additional servers, no third-party trust.
 
-- **Your infrastructure** — Works with Azure Key Vault, AWS Secrets Manager, HashiCorp Vault, GCP Secret Manager
+- **Your infrastructure** — Works with all major cloud providers: Azure Key Vault, AWS Secrets Manager, HashiCorp Vault, GCP Secret Manager
 - **Zero trust required** — Secrets never leave your cloud
 - **No new servers** — Just a CLI tool, no client-server architecture
 - **Free forever** — MIT licensed, no per-seat pricing
@@ -37,6 +37,10 @@ envdrift pull
 
 # That's it. Keys synced from vault, .env files decrypted, ready to code.
 ```
+
+> **📘 This is the heart of envdrift.** The end-to-end walkthrough — encrypt, push your
+> key to your cloud vault, and have teammates pull and decrypt in one command — lives in
+> the **[Env File Sync Guide](https://jainal09.github.io/envdrift/guides/env-file-sync/)**. Start there.
 
 ## Installation
 

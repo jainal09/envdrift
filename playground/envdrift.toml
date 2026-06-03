@@ -24,3 +24,20 @@ name = "production-secrets"
 secrets_only = true
 secrets_dir = "secrets/production/"
 pattern = ".env*"
+
+# Vault sync (single provider — see the Env File Sync guide)
+[vault]
+provider = "azure"  # or aws/hashicorp/gcp
+
+[vault.azure]
+vault_url = "https://env-drift.vault.azure.net/"
+
+[vault.sync]
+default_vault_name = "env-drift"  # matches the vault host in vault_url above
+env_keys_filename = ".env.keys"
+max_workers = 4  # Optional: parallelize pull/lock env file operations
+
+[[vault.sync.mappings]]
+secret_name = "playground-key-prod"
+folder_path = "."
+environment = "prod"

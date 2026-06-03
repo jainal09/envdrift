@@ -99,7 +99,6 @@ class TestEnvdriftConfig:
         config = EnvdriftConfig()
         assert config.schema is None
         assert config.environments == ["development", "staging", "production"]
-        assert config.env_file_pattern == ".env.{environment}"
         assert isinstance(config.validation, ValidationConfig)
         assert isinstance(config.vault, VaultConfig)
         assert isinstance(config.precommit, PrecommitConfig)
@@ -118,7 +117,6 @@ class TestEnvdriftConfig:
             "envdrift": {
                 "schema": "app.config:Settings",
                 "environments": ["dev", "prod"],
-                "env_file_pattern": ".env.{env}",
             },
             "validation": {
                 "check_encryption": False,
@@ -146,7 +144,6 @@ class TestEnvdriftConfig:
 
         assert config.schema == "app.config:Settings"
         assert config.environments == ["dev", "prod"]
-        assert config.env_file_pattern == ".env.{env}"
 
         assert config.validation.check_encryption is False
         assert config.validation.strict_extra is False

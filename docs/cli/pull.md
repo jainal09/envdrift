@@ -255,4 +255,4 @@ When `environment` is not set, it defaults from:
 - [decrypt](decrypt.md) - Decrypt a single .env file
 - [vault-pull](vault-pull.md) - Config-free single-secret pull + decrypt (no sync config required)
 - [vault-push](vault-push.md) - Push keys to vault (opposite of pull)
-- [Vault Sync Guide](../guides/vault-sync.md) - Detailed setup guide
+- [Env File Sync Guide](../guides/env-file-sync.md) - Detailed setup guide
