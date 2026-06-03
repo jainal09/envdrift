@@ -33,7 +33,7 @@ provider = "azure"  # or aws/hashicorp/gcp
 vault_url = "https://env-drift.vault.azure.net/"
 
 [vault.sync]
-default_vault_name = "my-keyvault"
+default_vault_name = "env-drift"  # matches the vault host in vault_url above
 env_keys_filename = ".env.keys"
 max_workers = 4  # Optional: parallelize pull/lock env file operations
 
