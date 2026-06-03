@@ -114,13 +114,9 @@ infrastructure.
 
 ### 1. Install with vault support
 
-```bash
-pip install "envdrift[azure]"       # Azure Key Vault
-pip install "envdrift[aws]"         # AWS Secrets Manager
-pip install "envdrift[hashicorp]"   # HashiCorp Vault
-pip install "envdrift[gcp]"         # GCP Secret Manager
-pip install "envdrift[vault]"       # all providers
-```
+Install envdrift with your provider's vault extra (e.g. `envdrift[azure]`, or
+`envdrift[vault]` for all providers) — see the
+[Installation guide](../getting-started/installation.md#vault-backends).
 
 ### 2. Create `envdrift.toml`
 
