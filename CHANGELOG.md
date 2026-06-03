@@ -1,5 +1,12 @@
 # Changelog
 
+## [10.12.1](https://github.com/jainal09/envdrift/compare/v10.12.0...v10.12.1) (2026-06-03)
+
+
+### Documentation
+
+* Env File Sync guide (crown-jewel rewrite/rename + top-level) + remove dead env_file_pattern ([#285](https://github.com/jainal09/envdrift/issues/285)) ([6e45c2a](https://github.com/jainal09/envdrift/commit/6e45c2a709dd777d1470a1ddae9e7132e419c442))
+
 ## [10.12.0](https://github.com/jainal09/envdrift/compare/v10.11.3...v10.12.0) (2026-06-02)
 
 
