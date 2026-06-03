@@ -1,5 +1,12 @@
 # Changelog
 
+## [10.12.3](https://github.com/jainal09/envdrift/compare/v10.12.2...v10.12.3) (2026-06-03)
+
+
+### Documentation
+
+* Env File Sync guide follow-ups ([#285](https://github.com/jainal09/envdrift/issues/285)) — card title, de-dup install, config link ([#287](https://github.com/jainal09/envdrift/issues/287)) ([916974e](https://github.com/jainal09/envdrift/commit/916974eac1cefe9354af478f3de19cadd1a1ffe5))
+
 ## [10.12.2](https://github.com/jainal09/envdrift/compare/v10.12.1...v10.12.2) (2026-06-03)
 
 
