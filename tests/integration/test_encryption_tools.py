@@ -169,6 +169,142 @@ def test_sops_encrypt_decrypt_roundtrip(integration_env):
     assert "ENC[" not in decrypted
 
 
+def _write_sops_age_setup(work_dir: Path, *, path_regex: str) -> None:
+    """Write age.key and .sops.yaml for a SOPS+age workspace."""
+    (work_dir / "age.key").write_text(
+        textwrap.dedent(
+            f"""\
+            # created: 2026-01-01T23:59:46-05:00
+            # public key: {AGE_PUBLIC_KEY}
+            {AGE_PRIVATE_KEY}
+            """
+        )
+    )
+    (work_dir / ".sops.yaml").write_text(
+        textwrap.dedent(
+            f"""\
+            creation_rules:
+              - path_regex: {path_regex}
+                age: {AGE_PUBLIC_KEY}
+            """
+        )
+    )
+
+
+@pytest.mark.integration
+def test_sops_lock_and_pull_roundtrip(integration_env):
+    """The playground flow: `lock` encrypts and `pull --skip-sync` decrypts SOPS files.
+
+    `lock`/`pull` are the Vault Sync family, so they require a `[vault.sync]` section
+    even for SOPS. `lock --force` never contacts the vault, and `pull --skip-sync`
+    skips the (dotenvx-only) key-sync step, so this runs with a dummy vault URL and
+    no cloud credentials.
+    """
+    work_dir = integration_env["base_dir"] / "sops-lock-pull"
+    work_dir.mkdir()
+    env = integration_env["env"].copy()
+    # Simulate CI: no Azure credentials available to the vault client.
+    for var in (
+        "AZURE_CLIENT_ID",
+        "AZURE_TENANT_ID",
+        "AZURE_CLIENT_SECRET",
+        "AZURE_CLIENT_CERTIFICATE_PATH",
+    ):
+        env.pop(var, None)
+
+    env_file = work_dir / ".env.production"
+    env_file.write_text(
+        textwrap.dedent(
+            """\
+            API_KEY=topsecret
+            DEBUG=true
+            """
+        )
+    )
+
+    _write_sops_age_setup(work_dir, path_regex=r"\.env\.production$")
+
+    config = textwrap.dedent(
+        f"""\
+        [encryption]
+        backend = "sops"
+
+        [encryption.sops]
+        auto_install = true
+        config_file = ".sops.yaml"
+        age_key_file = "age.key"
+        age_recipients = "{AGE_PUBLIC_KEY}"
+
+        [vault]
+        provider = "azure"
+
+        [vault.azure]
+        vault_url = "https://dummy.vault.azure.net/"
+
+        [vault.sync]
+        default_vault_name = "dummy"
+
+        [[vault.sync.mappings]]
+        secret_name = "unused-for-sops"
+        folder_path = "."
+        environment = "production"
+        """
+    )
+    (work_dir / "envdrift.toml").write_text(config)
+
+    # lock encrypts the SOPS file in place (no vault contact).
+    _run_envdrift(["lock", "--force"], cwd=work_dir, env=env)
+    locked = env_file.read_text()
+    assert "ENC[" in locked
+    assert "API_KEY=topsecret" not in locked
+
+    # pull --skip-sync decrypts via the SOPS backend (no secrets API call).
+    _run_envdrift(["pull", "--skip-sync"], cwd=work_dir, env=env)
+    pulled = env_file.read_text()
+    assert "API_KEY=topsecret" in pulled
+    assert "ENC[" not in pulled
+
+
+@pytest.mark.integration
+def test_sops_lock_pull_require_vault_sync_config(integration_env):
+    """`lock`/`pull` are the Vault Sync family and fail fast without `[vault.sync]`.
+
+    This guards the documented behavior that the SOPS path for these commands needs
+    a `[vault.sync]` section (whereas plain `encrypt`/`decrypt` do not).
+    """
+    work_dir = integration_env["base_dir"] / "sops-no-sync"
+    work_dir.mkdir()
+    env = integration_env["env"].copy()
+
+    env_file = work_dir / ".env.production"
+    env_file.write_text("API_KEY=topsecret\n")
+    _write_sops_age_setup(work_dir, path_regex=r"\.env\.production$")
+
+    # No [vault] / [vault.sync] sections.
+    (work_dir / "envdrift.toml").write_text(
+        textwrap.dedent(
+            f"""\
+            [encryption]
+            backend = "sops"
+
+            [encryption.sops]
+            auto_install = true
+            config_file = ".sops.yaml"
+            age_key_file = "age.key"
+            age_recipients = "{AGE_PUBLIC_KEY}"
+            """
+        )
+    )
+
+    lock_result = _run_envdrift(["lock", "--force"], cwd=work_dir, env=env, check=False)
+    assert lock_result.returncode != 0
+    assert "No sync configuration found" in (lock_result.stdout + lock_result.stderr)
+
+    pull_result = _run_envdrift(["pull", "--skip-sync"], cwd=work_dir, env=env, check=False)
+    assert pull_result.returncode != 0
+    assert "No sync configuration found" in (pull_result.stdout + pull_result.stderr)
+
+
 @pytest.mark.integration
 def test_dotenvx_smart_encryption_skips_unchanged(integration_env):
     """Smart encryption should restore from git when content is unchanged.
