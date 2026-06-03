@@ -197,17 +197,23 @@ Using a different provider? Replace the `provider` value and the provider block:
 
 ### 3. Store your key in the vault
 
-Read the dotenvx private key out of `.env.keys` and store it as a vault secret. Use
-`envdrift vault-push` (works for any provider without leaving envdrift), or your
-provider's own CLI for the one-time upload:
+Your `envdrift.toml` is only the *map* — it says which secret belongs to which
+folder, but the vault is still empty. The private key currently lives only in your
+local `.env.keys`. This one-time step actually uploads it so teammates can pull.
 
-=== "envdrift (any provider)"
+Because you already wrote the config, use **`--all`**: it reads the provider, vault
+URL, and every `[[vault.sync.mappings]]` from the toml and pushes them all — no need
+to repeat any of it.
+
+=== "envdrift (reads your toml)"
 
     ```bash
-    # vault-push <folder with .env.keys> <vault secret name> --env <environment>
-    envdrift vault-push services/myapp myapp-dotenvx-key --env production \
-      -p azure --vault-url https://my-keyvault.vault.azure.net/
+    # Pushes every mapping in [vault.sync] using the provider/URL from envdrift.toml
+    envdrift vault-push --all
     ```
+
+    (Without a config — the Tier 1 path — pass them explicitly instead:
+    `envdrift vault-push <folder> <secret-name> --env <env> -p azure --vault-url <url>`.)
 
 === "Azure CLI"
 
