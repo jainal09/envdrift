@@ -369,7 +369,7 @@ Guard settings live under `[guard]` in `envdrift.toml` or
 scanners = ["native", "gitleaks", "trufflehog", "detect-secrets", "kingfisher", "git-secrets", "talisman", "trivy", "infisical"]
 auto_install = true
 include_history = false
-check_entropy = true
+check_entropy = false  # Set to true to enable entropy-based detection (default: off)
 entropy_threshold = 4.5
 fail_on_severity = "high"
 skip_clear_files = false  # Set to true to skip .clear files entirely
@@ -450,7 +450,9 @@ ignore_paths = [
 | :-- | :-- |
 | `aws-access-key-id` | AWS access key (AKIA...) |
 | `aws-secret-access-key` | AWS secret key |
-| `github-token` | GitHub PAT (ghp_, gho_, ghs_) |
+| `github-pat` | GitHub PAT (ghp_) |
+| `github-oauth` | GitHub OAuth token (gho_) |
+| `github-app-token` | GitHub App token (ghu_/ghs_) |
 | `django-secret-key` | Django SECRET_KEY |
 | `laravel-app-key` | Laravel APP_KEY |
 | `connection-string-password` | DB connection string password |

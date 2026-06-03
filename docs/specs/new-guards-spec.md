@@ -44,7 +44,7 @@ This document specifies the integration of new secret scanning tools into envdri
 talisman --scan
 
 # Scan with HTML report
-talisman --scanWithHtml --reportdirectory=/path/to/reports
+talisman --scanWithHtml --reportDirectory=/path/to/reports
 
 # Scan specific files
 talisman --pattern="*.py *.js"
@@ -85,7 +85,7 @@ threshold: medium
 
 1. Check for binary in PATH or venv
 2. Auto-download binary from GitHub releases
-3. Run `talisman --scan --reportdirectory=<temp>`
+3. Run `talisman --scan --reportDirectory <temp>`
 4. Parse JSON report file
 5. Map findings to ScanFinding objects
 
@@ -164,6 +164,7 @@ trivy fs --scanners secret --severity HIGH,CRITICAL /path
 | HIGH | HIGH |
 | MEDIUM | MEDIUM |
 | LOW | LOW |
+| UNKNOWN | INFO |
 
 ### Configuration File
 
@@ -189,7 +190,7 @@ disable-rules:
 
 1. Check for `trivy` binary in PATH or venv
 2. Auto-download from GitHub releases
-3. Run `trivy fs --scanners secret --format json <path>`
+3. Run `trivy fs --scanners secret --format json --quiet <path>`
 4. Parse JSON output
 5. Map findings to ScanFinding objects
 
@@ -285,7 +286,7 @@ tags = ["custom"]
 
 1. Check for `infisical` binary in PATH or venv
 2. Auto-download from GitHub releases
-3. Run `infisical scan --report-path <temp.json> --no-git` or with git
+3. Run `infisical scan --report-path <temp.json> --source <path> [--no-git]`
 4. Parse JSON report
 5. Map findings to ScanFinding objects
 

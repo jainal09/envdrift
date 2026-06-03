@@ -25,6 +25,7 @@ Supported vault providers:
 - **Azure Key Vault** - Microsoft Azure's secret management service
 - **AWS Secrets Manager** - Amazon Web Services secret storage
 - **HashiCorp Vault** - Open-source secrets management
+- **Google Secret Manager (GCP)** - Google Cloud's secret management service
 
 ## Modes
 
@@ -62,6 +63,12 @@ To overwrite existing secrets instead of skipping them, add `--force`:
 envdrift vault-push --all --force
 ```
 
+When the local files are already encrypted, add `--skip-encrypt` to bypass the encryption step and only push keys:
+
+```bash
+envdrift vault-push --all --skip-encrypt
+```
+
 ## Options
 
 ### `FOLDER`
@@ -93,6 +100,11 @@ Push all secrets defined in sync config (skipping existing unless `--force` is s
 ### `--force`, `-f`
 
 Push all secrets in `--all` mode even if they already exist.
+
+### `--skip-encrypt`
+
+Skip the encryption step in `--all` mode and only push keys to the vault (use when files are already encrypted).
+Using it without `--all` prints a warning and is ignored.
 
 ### `--config`, `-c`
 
@@ -202,14 +214,14 @@ jobs:
 On success:
 
 ```text
-Pushed secret 'myapp-key' to azure vault
+[OK] Pushed secret 'myapp-key' to azure vault
   Version: abc123def456
 ```
 
 On error:
 
 ```text
-Error: Key 'DOTENV_PRIVATE_KEY_STAGING' not found in ./services/myapp/.env.keys
+[ERROR] Key 'DOTENV_PRIVATE_KEY_STAGING' not found in ./services/myapp/.env.keys
 ```
 
 ## Exit Codes

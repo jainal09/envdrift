@@ -132,8 +132,12 @@ Both backends use the same envdrift commands:
 # Encrypt with dotenvx (default)
 envdrift encrypt .env.production
 
-# Encrypt with SOPS
+# Encrypt with SOPS (age recipients)
 envdrift encrypt .env.production --backend sops --age "age1..."
+
+# Encrypt with SOPS using a cloud KMS key
+# (use --kms for AWS, --gcp-kms for GCP, --azure-kv for Azure)
+envdrift encrypt .env.production --backend sops --kms "arn:aws:kms:us-east-1:123456789:key/abc-123"
 
 # Check encryption status
 envdrift encrypt .env.production --check
@@ -141,6 +145,11 @@ envdrift encrypt .env.production --check
 # Decrypt
 envdrift decrypt .env.production
 ```
+
+`encrypt`/`decrypt` operate on a single env file. To encrypt or decrypt every env
+file in a project at once, use the higher-level `envdrift lock` (verify keys and
+encrypt all env files) and `envdrift pull` (pull keys from the vault and decrypt all
+env files) commands. See the [Env File Sync guide](../guides/env-file-sync.md).
 
 ### Backend Auto-Detection
 
@@ -172,6 +181,9 @@ auto_install = true
 config_file = ".sops.yaml"
 age_key_file = "~/.config/sops/age/keys.txt"
 age_recipients = "age1abc..."
+# Cloud KMS alternatives to age (set the one you use)
+# kms_arn = "arn:aws:kms:us-east-1:123456789:key/abc-123"
+# gcp_kms = "projects/my-project/locations/global/keyRings/my-ring/cryptoKeys/my-key"
 # azure_kv = "https://my-vault.vault.azure.net/keys/my-key/<version>"
 ```
 

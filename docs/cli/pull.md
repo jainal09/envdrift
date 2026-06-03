@@ -235,7 +235,7 @@ activate_to = ".env"
 - **`environment`**: Specifies which `.env.<environment>` file to look for (e.g., `production` → `.env.production`)
 - **`profile`**: Tags a mapping for filtering with `--profile`
 
-When `environment` is not set, it defaults from:
+The effective environment is resolved in this priority order:
 
 1. The explicit `environment` field (if set)
 2. The `profile` field (if set)
@@ -251,7 +251,8 @@ When `environment` is not set, it defaults from:
 ## Prerequisites
 
 - Cloud vault credentials configured (Azure CLI, AWS credentials, etc.)
-- `dotenvx` installed for decryption
+- The decryption tool matching your configured backend installed: `dotenvx` (default)
+  or SOPS — whichever your `[encryption]` backend is
 
 ## See Also
 

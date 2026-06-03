@@ -103,12 +103,28 @@ pre-commit install
 
 ## Exit Codes
 
-envdrift uses standard exit codes for CI:
+Exit codes differ by command, so handle them per command in CI.
+
+For `validate` and `encrypt --check`:
 
 | Exit Code | Meaning                                             |
 |-----------|-----------------------------------------------------|
 | 0         | Validation passed                                   |
 | 1         | Validation failed (missing vars, type errors, etc.) |
+
+`guard` uses graduated exit codes based on the highest-severity finding (at or
+above the `--fail-on` threshold in CI mode):
+
+| Exit Code | Meaning                                                   |
+|-----------|-----------------------------------------------------------|
+| 0         | No blocking findings (none at/above `--fail-on`)          |
+| 1         | Critical severity findings detected                       |
+| 2         | High severity findings detected                           |
+| 3         | Medium severity findings detected                         |
+
+Because `guard` does not collapse failures to a flat `1`, CI scripts that key
+off its result should test for any non-zero exit (`$? -ne 0`) rather than
+`$? -eq 1`.
 
 ## Multi-Environment Validation
 

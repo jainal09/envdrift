@@ -79,6 +79,8 @@ When enabled, unencrypted sensitive fields are reported as **warnings** (not err
 
 Output a template for missing variables. Useful for quickly adding required fields.
 
+Note: `--fix` only prints a template when validation fails; it is a no-op when validation passes.
+
 ```bash
 envdrift validate .env.production -s config.settings:ProductionSettings --fix
 ```
@@ -86,6 +88,7 @@ envdrift validate .env.production -s config.settings:ProductionSettings --fix
 Example output:
 
 ```text
+Fix template:
 # Missing required variables:
 # API key for external service
 NEW_API_KEY="encrypted:YOUR_VALUE_HERE"

@@ -69,7 +69,17 @@ repos:
         language: system
         files: ^\.env\.(production|staging)$
         pass_filenames: true
+
+      # Optional: Verify encryption keys match vault (prevents key drift)
+      # - id: envdrift-vault-verify
+      #   name: Verify vault key can decrypt
+      #   entry: envdrift decrypt --verify-vault -p azure --vault-url https://myvault.vault.azure.net --secret myapp-dotenvx-key --ci
+      #   language: system
+      #   files: ^\.env\.production$
+      #   pass_filenames: true
 ```
+
+Use `envdrift hook --install` to add these hooks to `.pre-commit-config.yaml`.
 
 ### Show Config Snippet Only
 
@@ -212,7 +222,9 @@ Validate env schema.....................................................Failed
 - hook id: envdrift-validate
 - exit code: 1
 
-Validation FAILED for .env.production
+Validating: .env.production
+
+Validation FAILED
 
 MISSING REQUIRED VARIABLES:
   * NEW_API_KEY - API key for external service

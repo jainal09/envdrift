@@ -150,7 +150,7 @@ This feature is configured via `smart_encryption` and does not have a CLI flag.
 | `src/envdrift/cli_commands/encryption_helpers.py` | Modified | Added `should_skip_reencryption()` |
 | `src/envdrift/cli_commands/sync.py` | Modified | Integrated smart encryption in `lock` |
 | `src/envdrift/cli_commands/encryption.py` | Modified | Wire up config in encrypt command |
-| `src/envdrift/config/__init__.py` | Modified | Add config option |
+| `src/envdrift/config.py` | Modified | Add config option |
 
 ### Test Files
 
@@ -222,7 +222,8 @@ def should_skip_reencryption(
 3. **Git version not encrypted** - Skip smart encryption, proceed normally
 4. **Decryption fails** - Skip smart encryption, proceed normally
 5. **Line ending differences** - Normalized before comparison (CRLF → LF)
-6. **Trailing whitespace** - Stripped before comparison
+6. **Leading/trailing whitespace** - The whole file's leading/trailing whitespace is
+   stripped before comparison
 
 ### Not Handled (Documented Limitations)
 

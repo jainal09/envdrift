@@ -193,7 +193,7 @@ Common rule IDs:
 | :-- | :-- |
 | `aws-access-key-id` | AWS access key pattern (AKIA...) |
 | `aws-secret-access-key` | AWS secret key |
-| `github-token` | GitHub personal access token |
+| `github-pat` | GitHub Personal Access Token (gitleaks findings are prefixed, e.g. `gitleaks-github-pat`) |
 | `django-secret-key` | Django SECRET_KEY setting |
 | `connection-string-password` | Database connection string passwords |
 | `ftp-password` | FTP/SFTP password in JSON/config |

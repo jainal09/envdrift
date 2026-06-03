@@ -103,7 +103,7 @@ SOPS encrypts values while keeping keys readable and appends its own metadata:
 ```bash
 DATABASE_URL=ENC[AES256_GCM,data:...,iv:...,tag:...,type:str]
 API_KEY=ENC[AES256_GCM,data:...,iv:...,tag:...,type:str]
-sops_version=3.11.0
+sops_version=3.13.1
 ```
 
 Flags differ by direction (both override config):

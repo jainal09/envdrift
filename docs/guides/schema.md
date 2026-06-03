@@ -37,8 +37,12 @@ class ProductionSettings(BaseSettings):
 This catches errors like:
 
 ```bash
-$ envdrift validate .env.prod --schema config:ProductionSettings
-ERROR: Extra variables not in schema: DATABSE_URL  # Typo caught!
+envdrift validate .env.prod --schema config:ProductionSettings
+```
+
+```text
+EXTRA VARIABLES (not in schema):
+  * DATABSE_URL  # Typo caught!
 ```
 
 ## Split Settings by Environment
@@ -124,7 +128,7 @@ If `.env` contains `PORT=not_a_number`, validation fails:
 
 ```text
 TYPE ERRORS:
-  - PORT: expected int, got 'not_a_number'
+  * PORT: Expected integer, got 'not_a_number'
 ```
 
 ## Nested Settings
