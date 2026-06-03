@@ -12,7 +12,11 @@ envdrift lock [OPTIONS]
 
 The `lock` command is the opposite of `pull`. While `pull` syncs keys and decrypts files for
 development, `lock` verifies keys and encrypts files before committing.
-This workflow is specific to dotenvx and does not apply to SOPS.
+
+The **key-sync/verify** part of this workflow is dotenvx-only. The encrypt step
+itself uses your configured backend, so `lock` *can* drive SOPS encryption when a
+`[vault.sync]` section is present — but the recommended SOPS path is plain
+`envdrift encrypt`. See the [SOPS Backend Guide](../guides/sops.md#using-pull-and-lock-with-sops).
 
 This command ensures your environment files are properly encrypted before committing. It can:
 
