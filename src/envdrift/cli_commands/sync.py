@@ -157,12 +157,14 @@ def load_sync_config_and_client(
                     environment=m.environment,
                     profile=m.profile,
                     activate_to=Path(m.activate_to) if m.activate_to else None,
+                    ephemeral_keys=m.ephemeral_keys,
                 )
                 for m in vault_sync.mappings
             ],
             default_vault_name=vault_sync.default_vault_name,
             env_keys_filename=vault_sync.env_keys_filename,
             max_workers=vault_sync.max_workers,
+            ephemeral_keys=vault_sync.ephemeral_keys,
         )
     elif config_path and config_path.suffix.lower() == ".toml":
         # Try to load sync config from discovered TOML
@@ -565,6 +567,7 @@ def pull(
         default_vault_name=sync_config.default_vault_name,
         env_keys_filename=sync_config.env_keys_filename,
         max_workers=sync_config.max_workers,
+        ephemeral_keys=sync_config.ephemeral_keys,
     )
 
     # === STEP 1: SYNC KEYS FROM VAULT ===
@@ -1103,6 +1106,7 @@ def lock(
         default_vault_name=sync_config.default_vault_name,
         env_keys_filename=sync_config.env_keys_filename,
         max_workers=sync_config.max_workers,
+        ephemeral_keys=sync_config.ephemeral_keys,
     )
 
     console.print()

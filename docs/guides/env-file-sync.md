@@ -266,7 +266,7 @@ installing CLIs, creating vaults, and logging in, follow the provider's own docs
 |:--|:--|:--|:--|
 | **Azure Key Vault** | `DefaultAzureCredential` — env vars (`AZURE_CLIENT_ID`/`TENANT_ID`/`CLIENT_SECRET`) → `az login` → managed identity | Secrets: **Get**, **List** | [Azure auth](https://learn.microsoft.com/azure/key-vault/general/authentication) |
 | **AWS Secrets Manager** | boto3 default chain — env vars → `~/.aws/credentials` → IAM role (EC2/ECS/Lambda) | `secretsmanager:GetSecretValue` (auth via STS — no `ListSecrets` needed) | [AWS credentials](https://docs.aws.amazon.com/cli/latest/userguide/cli-configure-files.html) |
-| **HashiCorp Vault** | `VAULT_ADDR` + `VAULT_TOKEN` (or `~/.vault-token`) | `read`, `list` on the secret path | [Vault auth](https://developer.hashicorp.com/vault/docs/auth) |
+| **HashiCorp Vault** | URL from `--vault-url` or `[vault.hashicorp].url`; token from the `VAULT_TOKEN` env var | `read`, `list` on the secret path | [Vault auth](https://developer.hashicorp.com/vault/docs/auth) |
 | **GCP Secret Manager** | Application Default Credentials — `gcloud auth application-default login` or `GOOGLE_APPLICATION_CREDENTIALS` | `roles/secretmanager.secretAccessor` (+ list) | [GCP ADC](https://cloud.google.com/docs/authentication/application-default-credentials) |
 
 Least-privilege policy snippets for the providers that need an explicit policy
