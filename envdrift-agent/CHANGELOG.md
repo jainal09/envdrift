@@ -5,6 +5,13 @@ All notable changes to the EnvDrift Agent will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.0](https://github.com/jainal09/envdrift/compare/agent-v1.0.4...agent-v1.1.0) (2026-06-04)
+
+
+### Features
+
+* **vault-sync:** support custom dotenv filenames via env_file ([#296](https://github.com/jainal09/envdrift/issues/296)) ([d102597](https://github.com/jainal09/envdrift/commit/d1025973a8796e67fe5fd5f69a90f08f7823c24f))
+
 ## [1.0.4](https://github.com/jainal09/envdrift/compare/agent-v1.0.3...agent-v1.0.4) (2026-05-09)
 
 
