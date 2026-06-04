@@ -32,7 +32,8 @@ See the full guide: [Guides ➜ Contributing](guides/contributing.md).
 
 ### Dotenvx
 
-An open-source tool for encrypting `.env` files using AES-256-GCM encryption. envdrift supports dotenvx for encryption/decryption operations.
+An open-source tool for encrypting `.env` files using public-key encryption (ECIES, with AES-256-GCM as the symmetric layer). envdrift supports
+dotenvx for encryption/decryption operations.
 See [dotenvx.com](https://dotenvx.com).
 
 ### DOTENV_PRIVATE_KEY

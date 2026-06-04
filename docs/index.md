@@ -123,7 +123,7 @@ pip install "envdrift[vault]"     # All providers
 
 <div class="grid cards" markdown>
 
-- :material-cloud-sync: **Vault Sync Guide**
+- :material-cloud-sync: **Env File Sync Guide**
 
     ---
 

@@ -49,6 +49,13 @@ repos:
         files: ^\\.env\\.(production|staging)$
         pass_filenames: true
 
+      - id: envdrift-guard
+        name: Guard staged env files
+        entry: envdrift guard --staged --native-only --ci
+        language: system
+        always_run: true
+        pass_filenames: false
+
       # Optional: Verify encryption keys match vault (prevents key drift)
       # - id: envdrift-vault-verify
       #   name: Verify vault key can decrypt

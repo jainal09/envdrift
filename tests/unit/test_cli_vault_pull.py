@@ -65,6 +65,51 @@ class TestVaultPullSingleSecret:
 
     @patch("envdrift.cli_commands.encryption_helpers.resolve_encryption_backend")
     @patch("envdrift.vault.get_vault_client")
+    def test_pull_decrypts_custom_env_file(
+        self,
+        mock_get_client,
+        mock_resolve_backend,
+        tmp_path,
+    ):
+        """--env-file decrypts the specified dotenv file with canonical key names."""
+        mock_get_client.return_value = _make_client("DOTENV_PRIVATE_KEY_PRODUCTION=abc123secret")
+        backend = DummyEncryptionBackend()
+        mock_resolve_backend.return_value = (backend, EncryptionProvider.DOTENVX, None)
+
+        env_file = tmp_path / "postgresql.env"
+        env_file.write_text(
+            "# postgresql.env\n"
+            'DOTENV_PUBLIC_KEY_POSTGRESQLDEVELOPMENT="public"\n'
+            "SECRET=encrypted:xyz\n"
+        )
+
+        result = runner.invoke(
+            app,
+            [
+                "vault-pull",
+                str(tmp_path),
+                "my-secret",
+                "--env",
+                "production",
+                "--env-file",
+                env_file.name,
+                "-p",
+                "azure",
+                "--vault-url",
+                "https://myvault.vault.azure.net/",
+            ],
+        )
+
+        assert result.exit_code == 0, result.output
+        assert backend.decrypt_calls == [env_file.resolve()]
+        assert "DOTENV_PRIVATE_KEY_PRODUCTION=abc123secret" in (tmp_path / ".env.keys").read_text()
+        custom_content = env_file.read_text()
+        assert "# .env.production" in custom_content
+        assert "DOTENV_PUBLIC_KEY_PRODUCTION" in custom_content
+        assert "POSTGRESQLDEVELOPMENT" not in custom_content
+
+    @patch("envdrift.cli_commands.encryption_helpers.resolve_encryption_backend")
+    @patch("envdrift.vault.get_vault_client")
     def test_pull_value_without_prefix(
         self,
         mock_get_client,
@@ -154,6 +199,35 @@ class TestVaultPullSingleSecret:
         assert result.exit_code == 0, result.output
         assert "found to decrypt" in result.output
         assert "DOTENV_PRIVATE_KEY_PRODUCTION=abc123" in (tmp_path / ".env.keys").read_text()
+
+    @patch("envdrift.vault.get_vault_client")
+    def test_pull_rejects_custom_env_file_outside_folder(
+        self,
+        mock_get_client,
+        tmp_path,
+    ):
+        """--env-file must stay inside FOLDER."""
+        mock_get_client.return_value = _make_client("DOTENV_PRIVATE_KEY_PRODUCTION=abc123")
+
+        result = runner.invoke(
+            app,
+            [
+                "vault-pull",
+                str(tmp_path),
+                "my-secret",
+                "--env",
+                "production",
+                "--env-file",
+                "../outside.env",
+                "-p",
+                "azure",
+                "--vault-url",
+                "https://myvault.vault.azure.net/",
+            ],
+        )
+
+        assert result.exit_code == 1
+        assert "invalid --env-file" in result.output.lower()
 
     def test_pull_missing_env_flag(self, tmp_path):
         """--env is required; omitting it fails."""

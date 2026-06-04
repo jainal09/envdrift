@@ -66,6 +66,7 @@ class GuardConfig:
         fail_on_severity: Minimum severity to cause non-zero exit.
         allowed_clear_files: Files that are intentionally unencrypted (from partial_encryption config).
         combined_files: Combined files from partial_encryption config (secret + clear merged).
+        mapped_env_files: Custom env files from vault.sync mappings.
     """
 
     use_native: bool = True
@@ -92,6 +93,7 @@ class GuardConfig:
     combined_files: list[str] = field(
         default_factory=list
     )  # Combined files from partial_encryption
+    mapped_env_files: list[str] = field(default_factory=list)
 
     @classmethod
     def from_dict(cls, config: dict) -> GuardConfig:
@@ -226,6 +228,7 @@ class ScanEngine:
                     additional_ignore_patterns=self.config.ignore_paths,
                     allowed_clear_files=self.config.allowed_clear_files,
                     skip_clear_files=self.config.skip_clear_files,
+                    mapped_env_files=self.config.mapped_env_files,
                 )
             )
 

@@ -42,6 +42,14 @@ envdrift vault-pull ./services/myapp my-secret-name --env production \
 This fetches `my-secret-name`, writes `DOTENV_PRIVATE_KEY_PRODUCTION` to
 `./services/myapp/.env.keys`, and decrypts `./services/myapp/.env.production`.
 
+For a custom dotenv filename, pass `--env-file` while keeping `--env` as the key
+suffix:
+
+```bash
+envdrift vault-pull ./secrets/postgresql postgres-key --env production \
+  --env-file postgresql.env -p azure --vault-url https://myvault.vault.azure.net/
+```
+
 ### Pull key only (skip decryption)
 
 Use `--no-decrypt` to only write the key without touching the `.env.<env>` file.
@@ -74,6 +82,12 @@ The secret value may be stored as either `DOTENV_PRIVATE_KEY_<ENV>=<value>`
 ### `--no-decrypt`
 
 Only write the key to `.env.keys`; do not decrypt the `.env.<env>` file.
+
+### `--env-file`
+
+Custom dotenv filename to decrypt, relative to `FOLDER`. This is useful for files
+like `postgresql.env` or `dotnet-service-template.env.sqa`. The key name still
+comes from `--env`.
 
 ### `--config`, `-c`
 

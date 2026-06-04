@@ -12,7 +12,7 @@ from typing import TYPE_CHECKING, Annotated, Any
 import typer
 from rich.panel import Panel
 
-from envdrift.env_files import detect_env_file
+from envdrift.env_files import resolve_mapping_env_file
 from envdrift.output.rich import console, print_error, print_success, print_warning
 from envdrift.utils import normalize_max_workers
 from envdrift.vault.base import SecretNotFoundError, VaultError
@@ -34,6 +34,7 @@ class _EncryptTask:
     mapping: ServiceMapping
     env_file: Path
     env_keys_file: Path
+    effective_environment: str
 
 
 def load_sync_config_and_client(
@@ -155,6 +156,7 @@ def load_sync_config_and_client(
                     folder_path=Path(m.folder_path),
                     vault_name=m.vault_name,
                     environment=m.environment,
+                    env_file=Path(m.env_file) if m.env_file else None,
                     profile=m.profile,
                     activate_to=Path(m.activate_to) if m.activate_to else None,
                     ephemeral_keys=m.ephemeral_keys,
@@ -235,6 +237,23 @@ def load_sync_config_and_client(
 
 def _normalize_max_workers(max_workers: int | None) -> int | None:
     return normalize_max_workers(max_workers, warn=print_warning)
+
+
+def _normalize_mapped_dotenvx_metadata(
+    mapping: ServiceMapping,
+    env_file: Path,
+    env_keys_file: Path,
+    effective_environment: str,
+    backend_provider: Any,
+) -> None:
+    from envdrift.encryption import EncryptionProvider
+
+    if backend_provider != EncryptionProvider.DOTENVX or mapping.env_file is None:
+        return
+
+    from envdrift.integrations.dotenvx import normalize_dotenvx_metadata
+
+    normalize_dotenvx_metadata(env_file, env_keys_file, effective_environment)
 
 
 def _find_config_path(config_file: Path | None) -> Path | None:
@@ -673,25 +692,31 @@ def pull(
     partial_clear, _, partial_combined = _load_partial_encryption_paths(config_file)
 
     for mapping in filtered_mappings:
-        effective_env = mapping.effective_environment
-        env_file = mapping.folder_path / f".env.{effective_env}"
+        try:
+            detection = resolve_mapping_env_file(mapping)
+        except ValueError as e:
+            console.print(
+                f"  [red]![/red] {mapping.folder_path} [red]- invalid env_file: {e}[/red]"
+            )
+            error_count += 1
+            continue
+        effective_env = detection.environment or mapping.effective_environment
+        env_file = (
+            detection.path
+            if detection.path is not None
+            else mapping.folder_path / f".env.{effective_env}"
+        )
 
-        if not env_file.exists():
-            # Try to auto-detect .env.* file
-            detection = detect_env_file(mapping.folder_path)
-            if detection.status == "found" and detection.path is not None:
-                env_file = detection.path
-            elif detection.status == "multiple_found":
+        if detection.status != "found" or detection.path is None:
+            if detection.status == "multiple_found":
                 console.print(
                     f"  [yellow]?[/yellow] {mapping.folder_path} "
                     f"[yellow]- skipped (multiple .env.* files, specify environment)[/yellow]"
                 )
-                skipped_count += 1
-                continue
             else:
                 console.print(f"  [dim]=[/dim] {env_file} [dim]- skipped (not found)[/dim]")
-                skipped_count += 1
-                continue
+            skipped_count += 1
+            continue
 
         resolved_env_file = env_file.resolve()
         if resolved_env_file in partial_combined:
@@ -706,6 +731,14 @@ def pull(
             )
             skipped_count += 1
             continue
+
+        _normalize_mapped_dotenvx_metadata(
+            mapping,
+            env_file,
+            mapping.folder_path / (sync_config.env_keys_filename or ".env.keys"),
+            effective_env,
+            backend_provider,
+        )
 
         # Check if file is encrypted
         content = env_file.read_text()
@@ -1294,28 +1327,35 @@ def lock(
     dotenvx_locks: dict[Path, Lock] = {}
 
     for mapping in filtered_mappings:
-        effective_env = mapping.effective_environment
-        env_file = mapping.folder_path / f".env.{effective_env}"
+        try:
+            detection = resolve_mapping_env_file(mapping)
+        except ValueError as e:
+            console.print(
+                f"  [red]![/red] {mapping.folder_path} [red]- invalid env_file: {e}[/red]"
+            )
+            errors.append(f"{mapping.folder_path}: invalid env_file - {e}")
+            error_count += 1
+            continue
+        effective_env = detection.environment or mapping.effective_environment
+        env_file = (
+            detection.path
+            if detection.path is not None
+            else mapping.folder_path / f".env.{effective_env}"
+        )
 
         # Check if env file exists
-        if not env_file.exists():
-            # Try to auto-detect .env.* file
-            detection = detect_env_file(mapping.folder_path)
-            if detection.status == "found" and detection.path is not None:
-                env_file = detection.path
-            elif detection.status == "multiple_found":
+        if detection.status != "found" or detection.path is None:
+            if detection.status == "multiple_found":
                 console.print(
                     f"  [yellow]?[/yellow] {mapping.folder_path} "
                     f"[yellow]- skipped (multiple .env.* files, specify environment)[/yellow]"
                 )
                 warnings.append(f"{mapping.folder_path}: multiple .env files found")
-                skipped_count += 1
-                continue
             else:
                 console.print(f"  [dim]=[/dim] {env_file} [dim]- skipped (not found)[/dim]")
                 warnings.append(f"{env_file}: file not found")
-                skipped_count += 1
-                continue
+            skipped_count += 1
+            continue
 
         resolved_env_file = env_file.resolve()
         if resolved_env_file in partial_combined and not all_files:
@@ -1346,6 +1386,14 @@ def lock(
                 f"[yellow]- warning: no .env.keys file, will generate new key[/yellow]"
             )
             warnings.append(f"{env_file}: no .env.keys file found, new key will be generated")
+
+        _normalize_mapped_dotenvx_metadata(
+            mapping,
+            env_file,
+            env_keys_file,
+            effective_env,
+            backend_provider,
+        )
 
         # Check if file is already encrypted
         content = env_file.read_text()
@@ -1451,6 +1499,13 @@ def lock(
                                     errors.append(f"{env_file}: re-encryption for rekey failed")
                                     error_count += 1
                                     continue
+                                _normalize_mapped_dotenvx_metadata(
+                                    mapping,
+                                    env_file,
+                                    env_keys_file,
+                                    effective_env,
+                                    backend_provider,
+                                )
                                 console.print(
                                     f"  [green]+[/green] {env_file} [dim]- re-encrypted with new key[/dim]"
                                 )
@@ -1518,7 +1573,12 @@ def lock(
 
         if force:
             encrypt_tasks.append(
-                _EncryptTask(mapping=mapping, env_file=env_file, env_keys_file=env_keys_file)
+                _EncryptTask(
+                    mapping=mapping,
+                    env_file=env_file,
+                    env_keys_file=env_keys_file,
+                    effective_environment=effective_env,
+                )
             )
             if backend_provider == EncryptionProvider.DOTENVX:
                 lock_key = env_keys_file.resolve()
@@ -1534,6 +1594,13 @@ def lock(
                 errors.append(f"{env_file}: encryption failed - {result.message}")
                 error_count += 1
                 continue
+            _normalize_mapped_dotenvx_metadata(
+                mapping,
+                env_file,
+                env_keys_file,
+                effective_env,
+                backend_provider,
+            )
             console.print(f"  [green]+[/green] {env_file} [dim]- encrypted[/dim]")
             encrypted_count += 1
 
@@ -1580,6 +1647,13 @@ def lock(
                 errors.append(f"{env_file}: encryption failed - {message}")
                 error_count += 1
                 continue
+            _normalize_mapped_dotenvx_metadata(
+                task.mapping,
+                task.env_file,
+                task.env_keys_file,
+                task.effective_environment,
+                backend_provider,
+            )
             console.print(f"  [green]+[/green] {env_file} [dim]- encrypted[/dim]")
             encrypted_count += 1
 

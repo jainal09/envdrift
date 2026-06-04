@@ -69,10 +69,11 @@ if result.has_drift:
 
 | Parameter     | Type          | Description                        | Default  |
 |---------------|---------------|------------------------------------|----------|
-| `env1`        | `Path \| str` | Path to first .env file            | Required |
-| `env2`        | `Path \| str` | Path to second .env file           | Required |
-| `schema`      | `str \| None` | Schema for sensitive field masking | `None`   |
-| `mask_values` | `bool`        | Mask sensitive values              | `True`   |
+| `env1`        | `Path \| str`         | Path to first .env file              | Required |
+| `env2`        | `Path \| str`         | Path to second .env file             | Required |
+| `schema`      | `str \| None`         | Schema for sensitive field masking   | `None`   |
+| `service_dir` | `Path \| str \| None` | Directory to add to imports for schema | `None` |
+| `mask_values` | `bool`                | Mask sensitive values                | `True`   |
 
 **Returns:** `DiffResult`
 
@@ -178,9 +179,9 @@ print(f"Plaintext secrets: {report.plaintext_secrets}")
 ### Azure Key Vault
 
 ```python
-from envdrift.vault import AzureKeyVault
+from envdrift.vault.azure import AzureKeyVaultClient
 
-vault = AzureKeyVault(vault_url="https://myvault.vault.azure.net")
+vault = AzureKeyVaultClient(vault_url="https://myvault.vault.azure.net")
 secret = vault.get_secret("database-url")
 print(secret.value)
 ```
@@ -188,9 +189,10 @@ print(secret.value)
 ### AWS Secrets Manager
 
 ```python
-from envdrift.vault import AWSSecretsManager
+from envdrift.vault.aws import AWSSecretsManagerClient
 
-vault = AWSSecretsManager(region_name="us-east-1")
+vault = AWSSecretsManagerClient(region="us-east-1")
+vault.authenticate()   # required before get_secret() on AWS
 secret = vault.get_secret("prod/database-url")
 print(secret.value)
 ```
@@ -198,12 +200,12 @@ print(secret.value)
 ### HashiCorp Vault
 
 ```python
-from envdrift.vault import HashiCorpVault
+from envdrift.vault.hashicorp import HashiCorpVaultClient
 
-vault = HashiCorpVault(
+vault = HashiCorpVaultClient(
     url="https://vault.example.com",
     token="hvs.xxx",
 )
-secret = vault.get_secret("secret/data/myapp", key="database_url")
+secret = vault.get_secret("myapp")
 print(secret.value)
 ```

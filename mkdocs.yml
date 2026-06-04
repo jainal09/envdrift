@@ -68,6 +68,7 @@ nav:
       - Agent Setup: guides/agent-setup.md
       - VS Code Extension: guides/vscode-extension.md
       - Encryption: guides/encryption.md
+      - SOPS Backend: guides/sops.md
       - Guard Scanning: guides/guard.md
       - Schema Best Practices: guides/schema.md
       - CI/CD Integration: guides/cicd.md

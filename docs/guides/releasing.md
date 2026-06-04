@@ -21,7 +21,7 @@ Example PR titles:
 - `feat(cli): add --json output`
 - `fix(sync): handle missing vault token`
 - `docs(release): update release process guide`
-- `deps: bump requests to 2.32.0`
+- `chore(deps): bump requests to 2.32.0`
 - `feat!: remove deprecated flag`
 
 ## Creating a New Release
@@ -33,9 +33,11 @@ commit type to decide version bumps:
 
 - `feat` -> minor release
 - `fix` -> patch release
-- `docs` -> patch release (Python default)
-- `deps` -> patch release (Python default)
+- `docs` -> patch release (via this repo's release-please `changelog-sections`)
 - `BREAKING CHANGE` -> major release (overrides the above)
+
+Dependency PRs use `chore(deps):` (no release) or `fix(deps):` (patch release via
+the `fix` type).
 
 ### 2. Review the release PR
 
@@ -89,7 +91,7 @@ Follow [Semantic Versioning](https://semver.org/):
 
 When not on an exact tag, `hatch-vcs` will generate a version like:
 
-- `0.1.1.dev5+g1234567` - 5 commits after tag v0.1.0, commit hash 1234567
+- `10.12.3.dev5+g1234567` - 5 commits after tag v10.12.2, commit hash 1234567
 
 This ensures every commit has a unique, ordered version number.
 
@@ -100,7 +102,7 @@ letting release-please create the release PR. If you must publish manually:
 
 ```bash
 # Ensure you're on the tagged commit (use tags/ prefix to avoid branch/tag ambiguity)
-git checkout tags/v0.1.1
+git checkout tags/v10.12.2
 
 # Install dependencies
 uv sync --all-extras
@@ -131,13 +133,13 @@ Ensure:
 
 1. You have git history: `git fetch --tags --unshallow` (if needed)
 2. You're on or after a tagged commit
-3. Tags follow the `v*` pattern (e.g., `v0.1.0`, not `0.1.0`)
+3. Tags follow the `v*` pattern (e.g., `v10.12.2`, not `10.12.2`)
 
 ### Release PR not created
 
 If release-please did not open a release PR:
 
-1. Check that merged commits are conventional and releasable (`feat`, `fix`, `docs`, `deps`).
+1. Check that merged commits are conventional and releasable (`feat`, `fix`, `docs`, `perf`).
 2. Verify the release-please workflow ran and succeeded.
 3. Confirm `RELEASE_PLEASE_TOKEN` is set in repository secrets.
 
@@ -163,10 +165,10 @@ If you accidentally created a tag that failed to publish, clean it up:
 
 ```bash
 # Delete local tag
-git tag -d v0.1.X
+git tag -d v10.12.X
 
 # Delete remote tag (only if it failed to publish)
-git push origin :refs/tags/v0.1.X
+git push origin :refs/tags/v10.12.X
 ```
 
 **Warning**: Only delete tags that have NOT been successfully published to PyPI.
@@ -183,5 +185,5 @@ Once a version is on PyPI, the tag should remain in git for version traceability
 If you need to fix a release:
 
 1. Don't modify existing tags
-2. Create a new patch version (e.g., if `v0.1.1` has issues, create `v0.1.2`)
+2. Create a new patch version (e.g., if `v10.12.2` has issues, create `v10.12.3`)
 3. Keep the git history clean and traceable

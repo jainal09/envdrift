@@ -4,12 +4,17 @@ envdrift can be configured using a TOML configuration file. This page documents 
 
 ## Configuration Files
 
-envdrift looks for configuration in this order:
+envdrift resolves configuration as follows:
 
-1. Explicit `--config` flag on CLI commands
-2. `envdrift.toml` in current directory
-3. `envdrift.toml` in parent directories (up to root)
-4. `pyproject.toml` with `[tool.envdrift]` section
+1. An explicit `--config` flag on CLI commands always wins.
+2. Otherwise, envdrift walks upward from the current directory to the
+   filesystem root. In each directory it checks `envdrift.toml` first, then a
+   `pyproject.toml` containing a `[tool.envdrift]` section, before moving to the
+   parent directory.
+
+The nearest directory wins overall, and within a single directory `envdrift.toml`
+takes precedence over `pyproject.toml`. As a result, a nearer directory's
+`pyproject.toml` outranks a farther parent's `envdrift.toml`.
 
 ## File Formats
 
@@ -70,13 +75,20 @@ environments = ["development", "staging", "production"]
 
 ### [validation] — Validation Settings
 
-Controls how `envdrift validate` behaves.
+Settings parsed under the `[validation]` section.
+
+> **Note:** `envdrift validate` does not currently read these keys. The command
+> always loads its options from CLI flags (for example
+> `--check-encryption/--no-check-encryption`, default on) and always treats
+> extra variables as errors. `strict_extra` and `secret_patterns` are parsed
+> into the config object but are not yet consumed by any command, so setting
+> them has no effect on validation behavior today.
 
 | Option | Type | Default | Description |
 |:-------|:-----|:--------|:------------|
-| `check_encryption` | `bool` | `true` | Warn if sensitive fields are not encrypted |
-| `strict_extra` | `bool` | `true` | Treat extra variables as errors (matches `extra="forbid"`) |
-| `secret_patterns` | `list[string]` | `[]` | Additional regex patterns for detecting sensitive variables |
+| `check_encryption` | `bool` | `true` | Parsed but not consumed; the same-named `--check-encryption/--no-check-encryption` CLI flag (default on) controls this instead |
+| `strict_extra` | `bool` | `true` | Parsed but not consumed; extra variables are always treated as errors |
+| `secret_patterns` | `list[string]` | `[]` | Parsed but not consumed; no command reads these patterns |
 
 ```toml
 [validation]
@@ -95,13 +107,18 @@ Configuration for the `envdrift guard` command.
 
 | Option | Type | Default | Description |
 |:-------|:-----|:--------|:------------|
-| `scanners` | `list[string]` | `["native", "gitleaks"]` | Scanners to enable (`native`, `gitleaks`, `trufflehog`, `detect-secrets`) |
+| `scanners` | `list[string]` | `["native", "gitleaks"]` | Scanners to enable (`native`, `gitleaks`, `trufflehog`, `detect-secrets`, `kingfisher`, `git-secrets`, `talisman`, `trivy`, `infisical`) |
 | `auto_install` | `bool` | `true` | Auto-install missing external scanners |
 | `include_history` | `bool` | `false` | Scan git history for secrets |
 | `check_entropy` | `bool` | `false` | Enable entropy detection in the native scanner |
 | `entropy_threshold` | `float` | `4.5` | Minimum entropy to flag a value as suspicious |
 | `fail_on_severity` | `string` | `"high"` | Severity threshold used by `envdrift guard --ci` |
+| `skip_clear_files` | `bool` | `false` | Skip `.clear` files from scanning entirely |
+| `skip_encrypted_files` | `bool` | `true` | Skip findings from files with dotenvx/SOPS encryption markers |
+| `skip_duplicate` | `bool` | `false` | Show only unique findings by secret value |
+| `skip_gitignored` | `bool` | `false` | Skip findings from files that are in `.gitignore` |
 | `ignore_paths` | `list[string]` | `[]` | Glob patterns ignored by the native scanner |
+| `ignore_rules` | `dict[string, list[string]]` | `{}` | Per-rule path patterns to ignore (rule ID → glob patterns) |
 | `verify_secrets` | `bool` | `false` | Reserved for future verified secret checks |
 
 ```toml
@@ -112,13 +129,22 @@ include_history = false
 check_entropy = true
 entropy_threshold = 4.5
 fail_on_severity = "high"
+skip_clear_files = false
+skip_encrypted_files = true
+skip_duplicate = false
+skip_gitignored = false
 ignore_paths = ["tests/**", "*.test.py"]
 verify_secrets = false
+
+[guard.ignore_rules]
+"high-entropy-string" = ["**/*.clear"]
 ```
 
 Notes:
 
 - `ignore_paths` applies to the native scanner's file walk.
+- `skip_encrypted_files` defaults to `true`, so findings from files carrying
+  dotenvx/SOPS encryption markers are filtered out unless you set it to `false`.
 - `scanners` can be set under `[tool.envdrift.guard]` in `pyproject.toml`.
 
 ### [encryption] — Encryption Settings
@@ -128,10 +154,12 @@ Configuration for encryption backends.
 | Option | Type | Default | Description |
 |:-------|:-----|:--------|:------------|
 | `backend` | `string` | `"dotenvx"` | Encryption backend: `dotenvx` or `sops` |
+| `smart_encryption` | `bool` | `false` | Skip re-encryption when file content is unchanged (reduces git noise) |
 
 ```toml
 [encryption]
 backend = "dotenvx"
+smart_encryption = false
 ```
 
 #### [encryption.dotenvx] — dotenvx Settings
@@ -253,33 +281,74 @@ Each mapping defines how a vault secret maps to a local service directory.
 | Option | Type | Default | Description |
 |:-------|:-----|:--------|:------------|
 | `secret_name` | `string` | **required** | Name of the secret in the vault |
-| `folder_path` | `string` | **required** | Local folder containing .env.keys |
-| `vault_name` | `string` | `null` | Override default vault name |
-| `environment` | `string` | `null` | Environment suffix (e.g., `production` for `DOTENV_PRIVATE_KEY_PRODUCTION`) |
-| `profile` | `string` | `null` | Profile name for filtering with `--profile` |
-| `activate_to` | `string` | `null` | Path to copy decrypted file when profile is activated |
-| `ephemeral_keys` | `bool` | `null` | Per-mapping override for ephemeral mode |
+| `folder_path` | `string` | **required** | Local folder containing `.env.keys` |
+| `vault_name` | `string` | `null` | Parsed but informational only — every mapping is fetched from the single vault you configured via `--vault-url` / `[vault.<provider>]`. See the note in [env-file-sync.md](../guides/env-file-sync.md#mappings). |
+| `environment` | `string` | `null` (resolves to profile name, else `"production"`) | **Identity** — which `.env.<environment>` file this mapping targets and which `DOTENV_PRIVATE_KEY_<ENVIRONMENT>` key it reads/writes. Always runs (unless filtered out by `profile`). |
+| `env_file` | `string` | `null` | Custom dotenv filename relative to `folder_path` (e.g. `postgresql.env`). When set, this exact file is used instead of the `.env.<environment>` lookup; `environment` still controls the `DOTENV_PRIVATE_KEY_<ENVIRONMENT>` key name. |
+| `profile` | `string` | `null` | **Selector** — tags this mapping as profile-only. Untagged mappings always run. Profile-tagged mappings only run when you pass a matching `--profile <name>` on the CLI. |
+| `activate_to` | `string` | `null` | After decrypt, copy the decrypted file to this path. Typical use: `activate_to = ".env"` on a profile mapping so apps that read a plain `.env` get the right one for the active profile. |
+| `ephemeral_keys` | `bool` | `null` | Per-mapping override for ephemeral mode (no `.env.keys` written to disk). |
+
+##### `environment` vs `profile` — when to use which
+
+These two fields solve different problems and are often used together:
+
+- `environment` answers **"which file?"** — it pins the mapping to
+  `.env.<environment>` and `DOTENV_PRIVATE_KEY_<ENVIRONMENT>`. Use it whenever
+  the mapping should always be processed (typical for monorepos where every
+  service has its own env).
+- `profile` answers **"should this run now?"** — it's a CLI-driven filter.
+  Untagged mappings always run; a mapping with `profile = "X"` only runs when
+  you pass `--profile X`. Use it when one project has multiple mutually
+  exclusive env configs (e.g. local vs prod-debug on the same laptop) and you
+  want to switch between them with a flag.
+
+Resolution rule for the effective environment (the `.env.<X>` file name and
+`DOTENV_PRIVATE_KEY_<X>` key): **explicit `environment` > `profile` >
+`"production"`**. So a mapping with only `profile = "local"` and no
+`environment` resolves to `.env.local` / `DOTENV_PRIVATE_KEY_LOCAL`; set
+`environment` explicitly to decouple the CLI selector name from the file name.
+
+See [Profiles in the Env File Sync guide](../guides/env-file-sync.md#profiles)
+for full worked examples.
 
 ```toml
-# Basic mapping
+# Basic mapping — always runs, targets .env.production
 [[vault.sync.mappings]]
 secret_name = "myapp-dotenvx-key"
 folder_path = "."
 environment = "production"
 
-# Mapping with vault override
+# Always-runs mapping for a different service + environment
 [[vault.sync.mappings]]
 secret_name = "service2-key"
 folder_path = "services/service2"
-vault_name = "other-vault"
 environment = "staging"
 
-# Profile mapping (used with --profile)
+# Mapping with a custom dotenv filename
+[[vault.sync.mappings]]
+secret_name = "postgres-key"
+folder_path = "secrets/postgresql"
+environment = "production"  # key stays DOTENV_PRIVATE_KEY_PRODUCTION
+env_file = "postgresql.env" # file path is secrets/postgresql/postgresql.env
+
+# Profile mapping — only runs with `envdrift pull --profile local`.
+# `environment` defaults to the profile name, so this targets .env.local
+# and uses DOTENV_PRIVATE_KEY_LOCAL.
 [[vault.sync.mappings]]
 secret_name = "local-dev-key"
 folder_path = "."
 profile = "local"
 activate_to = ".env"  # Copy .env.local to .env after decrypt
+
+# Profile + explicit environment — only runs with `--profile qa-laptop`,
+# but the file is .env.staging (decoupled from the CLI selector name).
+[[vault.sync.mappings]]
+secret_name = "qa-key"
+folder_path = "."
+profile = "qa-laptop"
+environment = "staging"
+activate_to = ".env"
 
 # Ephemeral mapping (never stores keys locally for this service)
 [[vault.sync.mappings]]
@@ -308,6 +377,29 @@ files = [
 ".env.production" = "config.settings:ProductionSettings"
 ".env.staging" = "config.settings:StagingSettings"
 ```
+
+### [git_hook_check] — Git Hook Enforcement
+
+Configuration for automatic git hook setup checks. When enabled, envdrift
+commands install or verify either direct git hooks or a `.pre-commit-config.yaml`
+entry.
+
+| Option | Type | Default | Description |
+|:-------|:-----|:--------|:------------|
+| `method` | `string` | `null` | Hook setup method. Use `"direct git hook"` or `"precommit.yaml"` |
+| `precommit_config` | `string` | `null` | Pre-commit config path, required when `method = "precommit.yaml"` |
+
+```toml
+[git_hook_check]
+method = "direct git hook"
+
+# Or:
+# method = "precommit.yaml"
+# precommit_config = ".pre-commit-config.yaml"
+```
+
+The installed pre-commit enforcement runs `envdrift guard --staged --native-only --ci`,
+so custom `[vault.sync].mappings.env_file` names are checked before commit.
 
 ### [partial_encryption] — Partial Encryption Settings
 
@@ -365,6 +457,35 @@ name = "production"
 secrets_only = true
 secrets_dir = "secrets/production/"
 pattern = ".env*"
+```
+
+### [guardian] — Background Agent Settings
+
+Per-project configuration for the background agent (envdrift-agent), which
+watches `.env` files and auto-encrypts them after a period of inactivity.
+
+> **Note:** `enabled = true` does **not** auto-register the project with the
+> agent. Registration is explicit — run `envdrift agent register` (or
+> `envdrift init --watch`) from the project root to add it to
+> `~/.envdrift/projects.json`. The daemon then loads the project and honors
+> the `[guardian]` settings below. `enabled = false` (the default) tells the
+> daemon to skip an already-registered project.
+
+| Option | Type | Default | Description |
+|:-------|:-----|:--------|:------------|
+| `enabled` | `bool` | `false` | Permit the agent to watch this project (requires explicit `envdrift agent register`) |
+| `idle_timeout` | `string` | `"5m"` | Encrypt after the file is idle for this long; format `<number><s\|m\|h\|d>` (e.g. `30s`, `5m`, `1h`) |
+| `patterns` | `list[string]` | `[".env*"]` | File patterns to watch |
+| `exclude` | `list[string]` | `[".env.example", ".env.sample", ".env.keys"]` | Files to skip |
+| `notify` | `bool` | `true` | Show a desktop notification when encrypting |
+
+```toml
+[guardian]
+enabled = false
+idle_timeout = "5m"
+patterns = [".env*"]
+exclude = [".env.example", ".env.sample", ".env.keys"]
+notify = true
 ```
 
 ## Complete Example

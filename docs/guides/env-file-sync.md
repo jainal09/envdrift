@@ -20,10 +20,11 @@ secret.
     **SOPS users don't use Vault Sync** — and don't need to. SOPS has no portable
     `.env.keys` private key; it delegates decryption to your KMS/age/PGP, which is
     *already* a key-distribution system that controls who can decrypt. You still get
-    the rest of envdrift with SOPS — `envdrift encrypt`/`decrypt --backend sops`, and
-    the `pull`/`lock` workflow encrypt and decrypt SOPS files — you just grant
-    decryption access through SOPS's own key management instead of pushing a key to a
-    vault.
+    the rest of envdrift with SOPS — `envdrift encrypt`/`decrypt --backend sops` are
+    the recommended path, and `lock`/`pull` can drive SOPS too (they need a
+    `[vault.sync]` section, and `pull` needs `--skip-sync`). You just grant decryption
+    access through SOPS's own key management instead of pushing a key to a vault. See
+    the [SOPS Backend Guide](sops.md) for the full setup.
 
 ## Overview
 
@@ -59,6 +60,10 @@ config-driven path for a whole team. Start with the first, graduate to the secon
 Push a key to your vault, then pull it back somewhere else — no config file at all.
 
 ```bash
+# Positional args:  <folder>  <secret-name>
+#   <folder>       directory holding .env.keys (here ".", the current dir)
+#   <secret-name>  name to store/read the key under in the vault
+
 # You: encrypt and push the key to the vault (once)
 envdrift encrypt .env.production
 envdrift vault-push . myapp-dotenvx-key --env production \
@@ -114,18 +119,15 @@ infrastructure.
 
 ### 1. Install with vault support
 
-```bash
-pip install "envdrift[azure]"       # Azure Key Vault
-pip install "envdrift[aws]"         # AWS Secrets Manager
-pip install "envdrift[hashicorp]"   # HashiCorp Vault
-pip install "envdrift[gcp]"         # GCP Secret Manager
-pip install "envdrift[vault]"       # all providers
-```
+Install envdrift with your provider's vault extra (e.g. `envdrift[azure]`, or
+`envdrift[vault]` for all providers) — see the
+[Installation guide](../getting-started/installation.md#vault-backends).
 
 ### 2. Create `envdrift.toml`
 
 One config file, one provider. Pick the provider you actually use — you don't stack
-multiple providers in the same config.
+multiple providers in the same config. For every available option, see the
+[Configuration reference](../reference/configuration.md#vaultsync-vault-sync-settings).
 
 ```toml
 [vault]
@@ -146,6 +148,12 @@ folder_path = "services/myapp"
 secret_name = "auth-service-dotenvx-key"
 folder_path = "services/auth"
 environment = "staging"   # reads/writes DOTENV_PRIVATE_KEY_STAGING
+
+[[vault.sync.mappings]]
+secret_name = "postgres-key"
+folder_path = "secrets/postgresql"
+environment = "production"
+env_file = "postgresql.env"  # custom dotenv filename inside folder_path
 ```
 
 Using a different provider? Replace the `provider` value and the provider block:
@@ -196,16 +204,23 @@ Using a different provider? Replace the `provider` value and the provider block:
 
 ### 3. Store your key in the vault
 
-Read the dotenvx private key out of `.env.keys` and store it as a vault secret. Use
-`envdrift vault-push` (works for any provider without leaving envdrift), or your
-provider's own CLI for the one-time upload:
+Your `envdrift.toml` is only the *map* — it says which secret belongs to which
+folder, but the vault is still empty. The private key currently lives only in your
+local `.env.keys`. This one-time step actually uploads it so teammates can pull.
 
-=== "envdrift (any provider)"
+Because you already wrote the config, use **`--all`**: it reads the provider, vault
+URL, and every `[[vault.sync.mappings]]` from the toml and pushes them all — no need
+to repeat any of it.
+
+=== "envdrift (reads your toml)"
 
     ```bash
-    envdrift vault-push services/myapp myapp-dotenvx-key --env production \
-      -p azure --vault-url https://my-keyvault.vault.azure.net/
+    # Pushes every mapping in [vault.sync] using the provider/URL from envdrift.toml
+    envdrift vault-push --all
     ```
+
+    (Without a config — the Tier 1 path — pass them explicitly instead:
+    `envdrift vault-push <folder> <secret-name> --env <env> -p azure --vault-url <url>`.)
 
 === "Azure CLI"
 
@@ -300,7 +315,11 @@ document:
     }
     ```
 
-## Configuration reference
+## Configuration options
+
+The options you'll reach for most often, explained in context. For the exhaustive
+field-by-field list, see the
+[Configuration reference](../reference/configuration.md#vaultsync-vault-sync-settings).
 
 ### Mappings
 
@@ -323,8 +342,26 @@ environment = "staging"          # uses DOTENV_PRIVATE_KEY_STAGING
 [[vault.sync.mappings]]
 secret_name = "prod-key"
 folder_path = "services/prod"
-vault_name = "production-vault"  # override default_vault_name per mapping
+vault_name = "production-vault"  # informational only — see note below
 ```
+
+!!! note "`vault_name` / `default_vault_name` do not switch the vault"
+    These fields are parsed and accepted, but the sync/pull engine fetches every
+    secret from the single vault you configured via `--vault-url` /
+    `[vault.azure].vault_url` (or `--region` / `--project-id`). A per-mapping
+    `vault_name` does **not** route that secret to a different vault. To use a
+    separate vault, run a separate config.
+
+By default, envdrift looks for `.env.<environment>` and then falls back to `.env`
+or a single `.env.*` file. Use `env_file` when a service uses another dotenv-style
+filename, such as `postgresql.env` or `dotnet-service-template.env.sqa`.
+`environment` remains the source of truth for key names, so the examples above
+still use keys like `DOTENV_PRIVATE_KEY_PRODUCTION` and `DOTENV_PRIVATE_KEY_STAGING`.
+The installed git hook and `guard --staged` read these mappings and block
+plaintext custom env files before commit. The background agent also adds mapped
+`env_file` names to its watch patterns when project `[guardian]` is enabled; the
+VS Code extension remains settings-driven, so add custom names to
+`envdrift.patterns` there.
 
 ### Ephemeral keys mode
 
@@ -351,39 +388,89 @@ decrypts in place, and writes no key file.
 
 ### Profiles
 
-Profiles let one project hold multiple environment configurations (local, staging,
-prod). A mapping tagged with `profile` is only processed when you pass that
-`--profile`; untagged mappings always run.
+`environment` and `profile` solve different problems — this section is the
+disambiguation. They are often used together.
+
+| Field | What it answers | When the mapping runs |
+|:--|:--|:--|
+| `environment` | **Identity** — which file (`.env.<environment>`) and which dotenvx key (`DOTENV_PRIVATE_KEY_<ENVIRONMENT>`) | Always (unless filtered out by `profile`) |
+| `profile` | **Selector** — a CLI-driven filter tag | Only when you pass a matching `--profile <name>`; untagged mappings always run |
+
+Resolution rule for the effective environment: **explicit `environment` >
+`profile` > `"production"`**. So `profile = "local"` with no `environment`
+resolves to `.env.local` / `DOTENV_PRIVATE_KEY_LOCAL`.
+
+#### Use case A — `environment` only (monorepo, no profiles)
+
+Different services, each pinned to its own env file. Every mapping always runs;
+a single `envdrift pull` brings everything down.
 
 ```toml
+[[vault.sync.mappings]]
+secret_name = "myapp-key"
+folder_path = "services/myapp"
+environment = "production"        # → services/myapp/.env.production
+
+[[vault.sync.mappings]]
+secret_name = "auth-key"
+folder_path = "services/auth"
+environment = "staging"           # → services/auth/.env.staging
+```
+
+```bash
+envdrift pull   # decrypts BOTH, no flags needed
+```
+
+#### Use case B — `profile` (one project, multiple modes, pick one at a time)
+
+Same project, mutually exclusive env configs (local dev vs prod-debug). Pick the
+active one with `--profile`; `activate_to` swaps the chosen file into `.env` so
+your app — which only knows how to read `.env` — picks up the right values.
+
+```toml
+# Untagged: always runs (e.g. shared dotenvx key used across profiles)
 [[vault.sync.mappings]]
 secret_name = "shared-key"
 folder_path = "."
 
+# Profile-tagged: only runs with --profile local. environment defaults to
+# the profile name, so this maps to .env.local + DOTENV_PRIVATE_KEY_LOCAL.
 [[vault.sync.mappings]]
 secret_name = "local-key"
 folder_path = "."
-profile = "local"          # only with --profile local
-activate_to = ".env"       # copy decrypted .env.local → .env
+profile = "local"
+activate_to = ".env"              # copy decrypted .env.local → .env
 
 [[vault.sync.mappings]]
-secret_name = "prod-key"
+secret_name = "prod-debug-key"
 folder_path = "."
 profile = "prod"
 activate_to = ".env"
 ```
 
 ```bash
-envdrift pull --profile local
-envdrift pull --profile prod
+envdrift pull --profile local   # runs shared-key + local-key; prod-debug-key skipped
+envdrift pull --profile prod    # runs shared-key + prod-debug-key; local-key skipped
+envdrift pull                   # runs shared-key only (no --profile, tagged mappings skipped)
 ```
 
-- **`profile`** — tags a mapping for filtering. Without `--profile`, only untagged
-  mappings run.
-- **`activate_to`** — path to copy the decrypted file to (e.g. `.env`) for apps that
-  expect a plain `.env`.
-- **`environment`** — if omitted, defaults to the `profile` value (profile `local` →
-  `.env.local`).
+#### Use case C — `profile` + `environment` together (decouple selector from file name)
+
+When the CLI selector name shouldn't match the env file name (e.g. several
+laptops point at the same `.env.staging` but you want a friendlier flag):
+
+```toml
+[[vault.sync.mappings]]
+secret_name = "qa-key"
+folder_path = "."
+profile = "qa-laptop"             # CLI selector: --profile qa-laptop
+environment = "staging"           # but the file is .env.staging
+activate_to = ".env"
+```
+
+```bash
+envdrift pull --profile qa-laptop   # decrypts .env.staging, copies to .env
+```
 
 ### Legacy `pair.txt`
 
@@ -394,7 +481,7 @@ provider defaults and mappings together).
 # secret-name=folder-path
 myapp-dotenvx-key=services/myapp
 auth-service-key=services/auth
-production-vault/prod-key=services/prod   # explicit vault name (Azure)
+production-vault/prod-key=services/prod   # vault-name/ prefix parsed but ignored
 ```
 
 ## Drift detection
@@ -412,8 +499,9 @@ envdrift decrypt .env.production --verify-vault --ci \
 Exit `0` if the vault key can decrypt the file, `1` if it can't — with repair steps:
 
 1. `git restore .env.production`
-2. `envdrift sync --force` (auto-discovers `envdrift.toml`; add `-c` / provider flags
-   only to override)
+2. `envdrift sync --force -p <provider>` (the printed command includes
+   `-c <resolved-config>` when a TOML config was discovered, and appends
+   `--vault-url` / `--region` / `--project-id` when you passed them)
 3. `envdrift encrypt .env.production`
 
 See [`decrypt`](../cli/decrypt.md) for the full verify-vault behavior.
@@ -480,7 +568,7 @@ See [`decrypt`](../cli/decrypt.md) for the full verify-vault behavior.
 # 1. Encrypt locally (creates .env.keys with DOTENV_PRIVATE_KEY_PRODUCTION)
 envdrift encrypt .env.production
 
-# 2. Store the key in the vault
+# 2. Store the key in the vault — vault-push <folder> <secret-name> --env <env>
 envdrift vault-push . myapp-dotenvx-key --env production \
   -p azure --vault-url https://my-keyvault.vault.azure.net/
 
@@ -508,6 +596,7 @@ dotenvx for everything else). After rotating, re-push the new key and teammates 
 
 ```bash
 dotenvx encrypt .env.production --rotate     # dotenvx CLI: new key in .env.keys
+# re-push the rotated key — vault-push <folder> <secret-name> --env <env>
 envdrift vault-push . myapp-dotenvx-key --env production \
   -p azure --vault-url https://my-keyvault.vault.azure.net/
 # teammates pick it up with:

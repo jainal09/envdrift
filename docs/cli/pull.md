@@ -1,7 +1,11 @@
 # envdrift pull
 
 Pull keys from vault and decrypt all env files (one-command developer setup).
-This workflow is specific to dotenvx and does not apply to SOPS.
+
+The **key-sync** part of this workflow is dotenvx-only. The decrypt step uses your
+configured backend, so `pull --skip-sync` *can* decrypt SOPS files when a
+`[vault.sync]` section is present — but the recommended SOPS path is plain
+`envdrift decrypt`. See the [SOPS Backend Guide](../guides/sops.md#using-pull-and-lock-with-sops).
 
 ## Synopsis
 
@@ -212,6 +216,12 @@ secret_name = "myapp-key"
 folder_path = "services/myapp"
 environment = "production"
 
+[[vault.sync.mappings]]
+secret_name = "postgres-key"
+folder_path = "secrets/postgresql"
+environment = "production"  # Key stays DOTENV_PRIVATE_KEY_PRODUCTION
+env_file = "postgresql.env" # Decrypt secrets/postgresql/postgresql.env
+
 # Profile mappings (processed only with --profile)
 [[vault.sync.mappings]]
 secret_name = "local-key"
@@ -229,9 +239,10 @@ activate_to = ".env"
 ### Profile vs Environment
 
 - **`environment`**: Specifies which `.env.<environment>` file to look for (e.g., `production` → `.env.production`)
+- **`env_file`**: Overrides the file path when a service uses another dotenv-style filename (e.g., `postgresql.env`)
 - **`profile`**: Tags a mapping for filtering with `--profile`
 
-When `environment` is not set, it defaults from:
+The effective environment is resolved in this priority order:
 
 1. The explicit `environment` field (if set)
 2. The `profile` field (if set)
@@ -247,7 +258,8 @@ When `environment` is not set, it defaults from:
 ## Prerequisites
 
 - Cloud vault credentials configured (Azure CLI, AWS credentials, etc.)
-- `dotenvx` installed for decryption
+- The decryption tool matching your configured backend installed: `dotenvx` (default)
+  or SOPS — whichever your `[encryption]` backend is
 
 ## See Also
 

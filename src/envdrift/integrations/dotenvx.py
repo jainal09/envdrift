@@ -109,6 +109,97 @@ PROBLEMATIC_FILENAME_PATTERNS = [
     r"^\.env\.local$",
 ]
 
+_PUBLIC_KEY_NAME_RE = re.compile(r"\bDOTENV_PUBLIC_KEY_[A-Za-z0-9_-]+=")
+_PRIVATE_KEY_LINE_RE = re.compile(r"^DOTENV_PRIVATE_KEY_[A-Za-z0-9_-]+=(.*)$")
+
+
+def normalize_dotenvx_metadata(
+    env_file: Path | str,
+    env_keys_file: Path | str,
+    environment: str,
+) -> None:
+    """Normalize dotenvx metadata to envdrift's configured environment name.
+
+    dotenvx can encrypt any dotenv-format filename via ``--env-file``, but it
+    derives ``DOTENV_PUBLIC_KEY_*`` and ``DOTENV_PRIVATE_KEY_*`` names from that
+    filename. Vault sync uses the configured mapping environment as the source of
+    truth, so mapped custom filenames are normalized back to
+    ``DOTENV_*_<environment>`` after dotenvx runs.
+    """
+    env_file = Path(env_file)
+    env_keys_file = Path(env_keys_file)
+    canonical_suffix = environment.upper()
+    canonical_public_key = f"DOTENV_PUBLIC_KEY_{canonical_suffix}"
+    canonical_private_key = f"DOTENV_PRIVATE_KEY_{canonical_suffix}"
+    custom_comment = f"# {env_file.name}"
+    canonical_comment = f"# .env.{environment}"
+
+    if env_file.exists():
+        content = env_file.read_text(encoding="utf-8")
+        rewritten = []
+        for line in content.splitlines():
+            # Line-anchored: only rewrite the dotenvx filename comment and the
+            # public-key assignment line, never substrings of unrelated prose.
+            if line.strip() == custom_comment:
+                rewritten.append(canonical_comment)
+            else:
+                rewritten.append(_PUBLIC_KEY_NAME_RE.sub(f"{canonical_public_key}=", line))
+        new_content = "\n".join(rewritten)
+        if content.endswith("\n"):
+            new_content += "\n"
+        if new_content != content:
+            env_file.write_text(new_content, encoding="utf-8")
+
+    if not env_keys_file.exists():
+        return
+
+    content = env_keys_file.read_text(encoding="utf-8")
+    lines = content.splitlines()
+
+    canonical_idx = next(
+        (i for i, line in enumerate(lines) if line.startswith(f"{canonical_private_key}=")),
+        None,
+    )
+    custom_comment_idx = next(
+        (i for i, line in enumerate(lines) if line.strip() == custom_comment),
+        None,
+    )
+
+    generated_idx = None
+    key_value = ""
+    if custom_comment_idx is not None:
+        for i in range(custom_comment_idx + 1, len(lines)):
+            stripped = lines[i].strip()
+            if not stripped:
+                continue
+            if stripped.startswith("#"):
+                break
+            match = _PRIVATE_KEY_LINE_RE.match(stripped)
+            if match:
+                generated_idx = i
+                key_value = match.group(1)
+            break
+
+    if generated_idx is None:
+        return
+    if canonical_idx is not None and canonical_idx != generated_idx:
+        lines[canonical_idx] = f"{canonical_private_key}={key_value}"
+        indexes_to_delete = [generated_idx]
+        if custom_comment_idx is not None:
+            indexes_to_delete.append(custom_comment_idx)
+        for idx in sorted(indexes_to_delete, reverse=True):
+            del lines[idx]
+    else:
+        if custom_comment_idx is not None:
+            lines[custom_comment_idx] = canonical_comment
+        lines[generated_idx] = f"{canonical_private_key}={key_value}"
+
+    new_content = "\n".join(lines)
+    if content.endswith("\n") or new_content:
+        new_content += "\n"
+    if new_content != content:
+        env_keys_file.write_text(new_content, encoding="utf-8")
+
 
 def get_platform_info() -> tuple[str, str]:
     """

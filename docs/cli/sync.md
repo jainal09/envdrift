@@ -76,7 +76,7 @@ Only required when using legacy configs or overriding the TOML defaults.
 
 Check only mode. Reports differences without modifying files.
 
-Use this in CI/CD to verify keys are in sync without making changes.
+Reports mismatches as errors but exits non-zero only when combined with `--ci`. In CI/CD, use `--verify --ci` so the build fails on drift.
 
 ### `--force`, `-f`
 
@@ -133,6 +133,12 @@ secret_name = "auth-service-key"
 folder_path = "services/auth"
 vault_name = "other-vault"  # Override default
 environment = "staging"     # Use DOTENV_PRIVATE_KEY_STAGING
+
+[[vault.sync.mappings]]
+secret_name = "postgres-key"
+folder_path = "secrets/postgresql"
+environment = "production"  # Use DOTENV_PRIVATE_KEY_PRODUCTION
+env_file = "postgresql.env" # Custom dotenv filename inside folder_path
 ```
 
 Place the file in the project root so auto-discovery finds it; pass `-c envdrift.toml` in CI to pin the exact file.
@@ -261,11 +267,12 @@ Update local file with vault value? (y/N):
 
 ### Verify Mode (`--verify`)
 
-Reports differences without modifying files. Returns exit code 1 if mismatches detected.
+Reports differences without modifying files. Mismatches are reported as errors, but the command exits non-zero only when combined with `--ci`
+(use `--verify --ci` to fail the build on mismatch).
 
 ```text
   x services/myapp - error
-    Error: Value mismatch detected
+    Error: Local value differs from vault
     Local:  abc123def456...
     Vault:  xyz789abc012...
 ```
@@ -350,8 +357,8 @@ Uses boto3's credential chain:
 
 ### HashiCorp Vault
 
-1. `--token` option
-2. `VAULT_TOKEN` environment variable
+For `sync`, the only supported authentication method is the `VAULT_TOKEN` environment variable.
+(The vault client also accepts a `token` parameter, but that is internal/programmatic only and is not exposed as a CLI flag.)
 
 ## Security Notes
 

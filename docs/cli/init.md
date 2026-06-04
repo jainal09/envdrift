@@ -49,16 +49,14 @@ envdrift init .env --class-name AppConfig
 envdrift init .env -c ProductionSettings
 ```
 
-### `--detect-sensitive` / `--no-detect-sensitive`
+### `--detect-sensitive`
 
-Control automatic detection of sensitive variables.
+Enable automatic detection of sensitive variables. This is on by default, so the
+flag is rarely needed; there is currently no CLI option to turn detection off.
 
 ```bash
-# Enable detection (default)
+# Enable detection (the default)
 envdrift init .env --detect-sensitive
-
-# Disable detection
-envdrift init .env --no-detect-sensitive
 ```
 
 ## Examples
@@ -97,11 +95,15 @@ class Settings(BaseSettings):
     )
 
     API_KEY: str = Field(json_schema_extra={"sensitive": True})
-    DATABASE_URL: str = Field(json_schema_extra={"sensitive": True})
+    DATABASE_URL: str
     DEBUG: bool = True
     LOG_LEVEL: str
     PORT: int = 8000
 ```
+
+The console reports `Detected 1 sensitive variable(s)` — only `API_KEY` matches
+(its value starts with `sk-`). `DATABASE_URL=postgres://localhost/mydb` has no
+embedded credentials, so it stays a required `str`.
 
 ### Custom Output Path
 
@@ -114,14 +116,6 @@ envdrift init .env.production --output config/production.py
 ```bash
 envdrift init .env --output settings.py --class-name AppSettings
 ```
-
-### Without Sensitive Detection
-
-```bash
-envdrift init .env --no-detect-sensitive
-```
-
-All fields will be generated without `sensitive=True`, even if they look like secrets.
 
 ## Type Inference
 
@@ -138,13 +132,16 @@ Variables are marked sensitive if their **name** matches:
 - `*_KEY`, `*_SECRET`, `*_TOKEN`
 - `*_PASSWORD`, `*_PASS`
 - `*_CREDENTIAL*`, `*_API_KEY`
-- `JWT_*`, `AUTH_*`, `*_DSN`
+- `JWT_*`, `AUTH_*`, `PRIVATE_*`, `*_DSN`
 
 Or if their **value** matches patterns:
 
-- API keys: `sk-*`, `pk-*`
+- API keys: `sk-*`/`sk_*`, `pk-*`/`pk_*` (dash or underscore)
+- GitHub tokens: `ghp_*`, `gho_*`
+- Slack tokens: `xox*` (e.g. `xoxb-`, `xoxp-`)
 - AWS keys: `AKIA*`
-- Database URLs with credentials
+- Database URLs with embedded credentials (`postgres://`, `mysql://`,
+  `redis://`, `mongodb://`)
 - JWT tokens
 
 ## Generated Schema Features

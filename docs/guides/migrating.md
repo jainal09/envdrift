@@ -16,17 +16,24 @@ envdrift init .env --output config.py
 This creates a Pydantic Settings class:
 
 ```python
-# config.py (generated)
+"""Auto-generated Pydantic Settings class."""
+
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-class Settings(BaseSettings):
-    model_config = SettingsConfigDict(extra="forbid")
 
-    DATABASE_URL: str = Field(json_schema_extra={"sensitive": True})
+class Settings(BaseSettings):
+    """Settings generated from .env."""
+
+    model_config = SettingsConfigDict(
+        env_file=".env",
+        extra="forbid",
+    )
+
     API_KEY: str = Field(json_schema_extra={"sensitive": True})
+    DATABASE_URL: str
     DEBUG: bool = False
-    LOG_LEVEL: str = "INFO"
+    LOG_LEVEL: str
 ```
 
 ### Step 2: Review and Refine
@@ -306,7 +313,7 @@ dotenv-vault is similar to envdrift's encryption features.
 
 1. Decrypt your dotenv-vault files
 2. Re-encrypt with envdrift: `envdrift encrypt .env.production`
-3. Push keys to your vault: `envdrift vault-push`
+3. Push keys to your vault: `envdrift vault-push --all`
 
 ## General Migration Checklist
 
@@ -330,10 +337,10 @@ envdrift validate .env --schema config:Settings
 
 # Phase 2: Encryption (later)
 envdrift encrypt .env.production
-envdrift vault-push . my-key --env production
+envdrift vault-push . my-key --env production -p azure --vault-url https://myvault.vault.azure.net/
 
 # Team members pull it back (config-free) and decrypt
-envdrift vault-pull . my-key --env production
+envdrift vault-pull . my-key --env production -p azure --vault-url https://myvault.vault.azure.net/
 ```
 
 ### Keep Existing Loaders

@@ -66,7 +66,7 @@ if not os.getenv("ENVDRIFT_SCHEMA_EXTRACTION"):
 
 ```text
 EXTRA VARIABLES (not in schema):
-  - EXTRA_VAR
+  * EXTRA_VAR
 ```
 
 **Solution:**
@@ -127,7 +127,7 @@ Install SOPS:
 brew install sops
 
 # Linux
-wget https://github.com/getsops/sops/releases/download/v3.8.1/sops-v3.8.1.linux.amd64 -O /usr/local/bin/sops
+wget https://github.com/getsops/sops/releases/download/v3.13.1/sops-v3.13.1.linux.amd64 -O /usr/local/bin/sops
 chmod +x /usr/local/bin/sops
 ```
 
@@ -347,9 +347,9 @@ Error: No key found to decrypt
 # GitHub Actions example
 - name: Decrypt env
   env:
-    DOTENV_PRIVATE_KEY: ${{ secrets.DOTENV_PRIVATE_KEY }}
+    DOTENV_PRIVATE_KEY_PRODUCTION: ${{ secrets.DOTENV_PRIVATE_KEY_PRODUCTION }}
   run: |
-    echo "DOTENV_PRIVATE_KEY=$DOTENV_PRIVATE_KEY" > .env.keys
+    echo "DOTENV_PRIVATE_KEY_PRODUCTION=$DOTENV_PRIVATE_KEY_PRODUCTION" > .env.keys
     envdrift decrypt .env.production
 ```
 

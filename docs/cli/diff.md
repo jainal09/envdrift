@@ -152,8 +152,8 @@ Output:
 
 ```json
 {
-  "env1": ".env.development",
-  "env2": ".env.production",
+  "env1": ".env.dev",
+  "env2": ".env.prod",
   "summary": {
     "added": 1,
     "removed": 1,
@@ -173,7 +173,7 @@ Output:
       "type": "added",
       "value_env1": null,
       "value_env2": "https://...",
-      "sensitive": true
+      "sensitive": false
     }
   ]
 }
@@ -215,7 +215,7 @@ envdrift diff .env.dev .env.prod --show-values
       const fs = require('fs');
       const drift = JSON.parse(fs.readFileSync('drift.json', 'utf8'));
 
-      if (drift.has_drift) {
+      if (drift.summary.has_drift) {
         github.rest.issues.createComment({
           issue_number: context.issue.number,
           owner: context.repo.owner,

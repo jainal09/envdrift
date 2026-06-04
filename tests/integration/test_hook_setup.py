@@ -100,7 +100,9 @@ def test_hook_setup_precommit_auto_installs(hook_integration_env):
 
     _run_envdrift(["decrypt", env_file.name], cwd=work_dir, env=env)
     assert precommit_path.exists()
-    assert "envdrift-encryption" in precommit_path.read_text()
+    precommit_content = precommit_path.read_text()
+    assert "envdrift-encryption" in precommit_content
+    assert "envdrift-guard" in precommit_content
 
 
 @pytest.mark.integration
@@ -141,5 +143,5 @@ def test_hook_setup_direct_auto_installs(hook_integration_env):
 
     assert pre_commit.exists()
     assert pre_push.exists()
-    assert "envdrift encrypt --check" in pre_commit.read_text()
+    assert "envdrift guard --staged --native-only --ci" in pre_commit.read_text()
     assert "envdrift lock --check" in pre_push.read_text()

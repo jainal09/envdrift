@@ -132,8 +132,12 @@ Both backends use the same envdrift commands:
 # Encrypt with dotenvx (default)
 envdrift encrypt .env.production
 
-# Encrypt with SOPS
+# Encrypt with SOPS (age recipients)
 envdrift encrypt .env.production --backend sops --age "age1..."
+
+# Encrypt with SOPS using a cloud KMS key
+# (use --kms for AWS, --gcp-kms for GCP, --azure-kv for Azure)
+envdrift encrypt .env.production --backend sops --kms "arn:aws:kms:us-east-1:123456789:key/abc-123"
 
 # Check encryption status
 envdrift encrypt .env.production --check
@@ -141,6 +145,11 @@ envdrift encrypt .env.production --check
 # Decrypt
 envdrift decrypt .env.production
 ```
+
+`encrypt`/`decrypt` operate on a single env file. To encrypt or decrypt every env
+file in a project at once, use the higher-level `envdrift lock` (verify keys and
+encrypt all env files) and `envdrift pull` (pull keys from the vault and decrypt all
+env files) commands. See the [Env File Sync guide](../guides/env-file-sync.md).
 
 ### Backend Auto-Detection
 
@@ -153,7 +162,9 @@ envdrift decrypt .env.production
 
 ## Configuration
 
-Set a default backend in `envdrift.toml`:
+Set a default backend in `envdrift.toml`. Backend-specific options live in the
+`[encryption.dotenvx]` and `[encryption.sops]` subsections (flat `sops_*` keys
+under `[encryption]` are ignored by the parser):
 
 ```toml
 [encryption]
@@ -161,14 +172,23 @@ Set a default backend in `envdrift.toml`:
 backend = "dotenvx"
 
 # dotenvx settings
-dotenvx_auto_install = true
+[encryption.dotenvx]
+auto_install = true
 
 # SOPS settings
-sops_auto_install = true
-sops_config_file = ".sops.yaml"
-sops_age_key_file = "~/.config/sops/age/keys.txt"
-sops_age_recipients = "age1abc..."
+[encryption.sops]
+auto_install = true
+config_file = ".sops.yaml"
+age_key_file = "~/.config/sops/age/keys.txt"
+age_recipients = "age1abc..."
+# Cloud KMS alternatives to age (set the one you use)
+# kms_arn = "arn:aws:kms:us-east-1:123456789:key/abc-123"
+# gcp_kms = "projects/my-project/locations/global/keyRings/my-ring/cryptoKeys/my-key"
+# azure_kv = "https://my-vault.vault.azure.net/keys/my-key/<version>"
 ```
+
+For a full SOPS setup (including the Azure Key Vault walkthrough and how `lock`/`pull`
+behave with SOPS), see the [SOPS Backend Guide](../guides/sops.md).
 
 ## Migration Between Backends
 

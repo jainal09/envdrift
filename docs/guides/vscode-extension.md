@@ -21,8 +21,14 @@ Before using the extension, ensure you have:
 ### 2. envdrift installed
 
 ```bash
-pip install envdrift
+# macOS / Linux
+curl -sSL https://raw.githubusercontent.com/jainal09/envdrift/main/install.sh | sh
+
+# Windows (PowerShell)
+irm https://raw.githubusercontent.com/jainal09/envdrift/main/install.ps1 | iex
 ```
+
+Alternatively, install from PyPI with `pip install envdrift`.
 
 ### 3. dotenvx (used internally by envdrift)
 
@@ -69,7 +75,7 @@ Access settings via `Code > Preferences > Settings > Extensions > EnvDrift`
 ```json
 {
   "envdrift.enabled": true,
-  "envdrift.patterns": [".env*", "*.env"],
+  "envdrift.patterns": [".env*", "*.env", "postgresql.env"],
   "envdrift.exclude": [
     ".env.example",
     ".env.sample", 
@@ -90,6 +96,9 @@ Access via Command Palette (`Cmd+Shift+P` / `Ctrl+Shift+P`):
 | `EnvDrift: Disable Auto-Encryption` | Turn off auto-encryption |
 | `EnvDrift: Encrypt Current File` | Manually encrypt the active file |
 | `EnvDrift: Show Status` | Display current settings and status |
+| `EnvDrift: Start Background Agent` | Start the envdrift background agent |
+| `EnvDrift: Stop Background Agent` | Stop the envdrift background agent |
+| `EnvDrift: Refresh Agent Status` | Re-check the agent status |
 
 ## How It Works
 
@@ -109,12 +118,12 @@ Access via Command Palette (`Cmd+Shift+P` / `Ctrl+Shift+P`):
 │                       └─────────────────────────┘   │
 │                                                     │
 │  ┌─────────────────────────────────────────────┐    │
-│  │ Status Bar:  🔐 EnvDrift                    │    │
+│  │ Status Bar:  $(lock) EnvDrift               │    │
 │  └─────────────────────────────────────────────┘    │
 └─────────────────────────────────────────────────────┘
 ```
 
-1. **File Close Listener** - Detects when `.env*` files are closed
+1. **File Close Listener** - Detects when configured env file patterns are closed
 2. **Pattern Matching** - Checks if file matches configured patterns
 3. **Encryption Check** - Verifies file isn't already encrypted
 4. **envdrift lock** - Calls CLI to encrypt (respects `envdrift.toml`)
@@ -126,8 +135,8 @@ The extension adds a status bar item at the bottom of VS Code:
 
 | Icon | Meaning |
 |------|---------|
-| 🔐 | Auto-encryption **enabled** |
-| 🔓 | Auto-encryption **disabled** |
+| `$(lock)` (closed padlock) | Auto-encryption **enabled** |
+| `$(unlock)` (open padlock, warning background) | Auto-encryption **disabled** |
 
 **Click the icon to toggle auto-encryption on/off.**
 
@@ -137,22 +146,36 @@ The extension calls `envdrift lock`, which means it respects all settings in you
 
 ```toml
 # envdrift.toml in your project root
-[encryption]
-partial_encryption = true  # Only encrypt secrets
+[partial_encryption]
+enabled = true            # Only encrypt secrets
 
 [vault]
-provider = "github"
-push_on_lock = true       # Auto-push keys to vault
+provider = "azure"        # azure, aws, hashicorp, gcp
 
-[ephemeral]
-enabled = true            # Never write keys to disk
+[vault.azure]
+vault_url = "https://my-vault.vault.azure.net/"
+
+[vault.sync]
+# Note: the extension calls `envdrift lock <file>` without `--sync-keys` /
+# `--verify-vault`, so dotenvx still creates/uses `.env.keys` locally even
+# when this flag is set. For true ephemeral-key flows, run `envdrift pull`
+# or `envdrift lock --sync-keys` from the terminal — not from the extension.
+ephemeral_keys = true
 ```
+
+To push local keys to the vault, run `envdrift vault-push --all`.
 
 When the extension encrypts a file:
 
 - **Partial encryption** applies if configured
 - **Vault sync** happens if configured
-- **Ephemeral keys** are used if enabled
+- **Ephemeral keys**: only active when triggered via the terminal commands
+  noted above; the extension's encrypt action does not honor this flag
+
+For custom `[vault.sync].mappings.env_file` names, add the filename to
+`envdrift.patterns` in VS Code settings. The extension calls `envdrift lock`
+after a matching file closes, but pattern matching itself is controlled by the
+extension settings.
 
 ## Workflow Examples
 
@@ -189,20 +212,20 @@ When the extension encrypts a file:
 
 1. **Check patterns**: Ensure file matches `envdrift.patterns`
 2. **Check exclusions**: File might be in `envdrift.exclude`
-3. **Check status bar**: Is auto-encryption enabled? (🔐 vs 🔓)
+3. **Check status bar**: Is auto-encryption enabled? (`$(lock)` vs `$(unlock)`)
 4. **Check notifications setting**: Enable `showNotifications` to see errors
 
 ### "envdrift not found" error
 
 ```bash
-# Ensure envdrift is installed
-pip install envdrift
+# Ensure envdrift is installed (macOS / Linux)
+curl -sSL https://raw.githubusercontent.com/jainal09/envdrift/main/install.sh | sh
+
+# Windows (PowerShell)
+irm https://raw.githubusercontent.com/jainal09/envdrift/main/install.ps1 | iex
 
 # Add to PATH if needed
 which envdrift
-
-# Or configure in settings
-python -m envdrift --version
 ```
 
 ### Encryption failing

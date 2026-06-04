@@ -14,17 +14,29 @@ This creates a Pydantic Settings class based on your existing variables:
 
 ```python
 # config.py (generated)
+"""Auto-generated Pydantic Settings class."""
+
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-class Settings(BaseSettings):
-    model_config = SettingsConfigDict(extra="forbid")
 
-    DATABASE_URL: str = Field(json_schema_extra={"sensitive": True})
+class Settings(BaseSettings):
+    """Settings generated from .env."""
+
+    model_config = SettingsConfigDict(
+        env_file=".env",
+        extra="forbid",
+    )
+
     API_KEY: str = Field(json_schema_extra={"sensitive": True})
+    DATABASE_URL: str = Field(json_schema_extra={"sensitive": True})
     DEBUG: bool = False
-    LOG_LEVEL: str = "INFO"
+    LOG_LEVEL: str
 ```
+
+Fields are emitted in alphabetical order, and variables detected as sensitive (by
+name or value) are annotated with `json_schema_extra={"sensitive": True}`. Plain
+string variables without a boolean or integer value are left required (no default).
 
 ## Option B: Write Schema Manually
 
@@ -66,8 +78,10 @@ If everything matches:
 ╰─────────────────────────────────────────────────────────────────╯
 
 Validation PASSED
-Summary: 0 error(s), 0 warning(s)
 ```
+
+The `Summary:` line is printed only when there are errors or warnings; a fully
+clean pass ends at `Validation PASSED`.
 
 If there's a mismatch:
 
@@ -75,7 +89,7 @@ If there's a mismatch:
 Validation FAILED
 
 MISSING REQUIRED VARIABLES:
-  * API_KEY - No default value, must be set
+  * API_KEY
 
 TYPE ERRORS:
   * PORT: Expected integer, got 'not_a_number'
@@ -94,17 +108,22 @@ envdrift diff .env.dev .env.prod
 Output:
 
 ```text
-Comparing: .env.dev vs .env.prod
+╭───────────────────── envdrift diff ──────────────────────╮
+│ Comparing: .env.dev vs .env.prod                         │
+╰──────────────────────────────────────────────────────────╯
 
-ADDED (in .env.prod only):
-  + SENTRY_DSN
+┏━━━━━━━━━━━━━━┳━━━━━━━━━━━┳━━━━━━━━━━━━━━━━━━━━━━━━━┳━━━━━━━━━┓
+┃ Variable     ┃ .env.dev  ┃ .env.prod               ┃ Status  ┃
+┡━━━━━━━━━━━━━━╇━━━━━━━━━━━╇━━━━━━━━━━━━━━━━━━━━━━━━━╇━━━━━━━━━┩
+│ DEBUG        │ true      │ false                   │ changed │
+│ DEV_ONLY_VAR │ x         │ (missing)               │ removed │
+│ LOG_LEVEL    │ DEBUG     │ WARNING                 │ changed │
+│ SENTRY_DSN   │ (missing) │ https://abc@sentry.io/1 │  added  │
+└──────────────┴───────────┴─────────────────────────┴─────────┘
 
-REMOVED (in .env.dev only):
-  - DEV_ONLY_VAR
+Summary: 2 changed, 1 added, 1 removed
 
-CHANGED:
-  ~ DEBUG: true -> false
-  ~ LOG_LEVEL: DEBUG -> WARNING
+Drift detected between environments
 ```
 
 ## Encrypt Secrets

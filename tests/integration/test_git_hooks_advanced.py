@@ -158,7 +158,7 @@ def test_hook_blocks_unencrypted_commit(git_hook_env):
     # Verify hooks were installed
     pre_commit = work_dir / ".git" / "hooks" / "pre-commit"
     assert pre_commit.exists(), "pre-commit hook should be installed"
-    assert "envdrift encrypt --check" in pre_commit.read_text()
+    assert "envdrift guard --staged --native-only --ci" in pre_commit.read_text()
 
     # Stage the plaintext file
     _run_git(["add", env_file.name], cwd=work_dir)
@@ -171,9 +171,69 @@ def test_hook_blocks_unencrypted_commit(git_hook_env):
     )
 
     assert result.returncode != 0, "Commit should be blocked by pre-commit hook"
-    assert (
-        "encryption check failed" in result.stderr or "encryption check failed" in result.stdout
-    ), "Error message should mention encryption check failure"
+    assert "guard scan failed" in result.stderr or "guard scan failed" in result.stdout, (
+        "Error message should mention guard failure"
+    )
+
+
+@pytest.mark.integration
+def test_hook_blocks_custom_mapped_env_file(git_hook_env):
+    """Direct pre-commit hook must enforce custom vault.sync env_file names."""
+    work_dir = git_hook_env["work_dir"]
+    env = git_hook_env["env"]
+
+    config = textwrap.dedent(
+        """\
+        [git_hook_check]
+        method = "direct git hook"
+
+        [encryption]
+        backend = "dotenvx"
+
+        [encryption.dotenvx]
+        auto_install = true
+
+        [vault]
+        provider = "azure"
+
+        [vault.sync]
+        [[vault.sync.mappings]]
+        secret_name = "test-postgresql-key"
+        folder_path = "secrets/postgresql"
+        environment = "production"
+        env_file = "postgresql.env"
+        """
+    )
+    (work_dir / "envdrift.toml").write_text(config)
+
+    service_dir = work_dir / "secrets" / "postgresql"
+    service_dir.mkdir(parents=True)
+    env_file = service_dir / "postgresql.env"
+    env_file.write_text("POSTGRES_PASSWORD=plaintext-leak\n")
+
+    _run_envdrift(
+        ["encrypt", "--check", str(env_file.relative_to(work_dir))],
+        cwd=work_dir,
+        env=env,
+        check=False,
+    )
+
+    pre_commit = work_dir / ".git" / "hooks" / "pre-commit"
+    assert pre_commit.exists(), "pre-commit hook should be installed"
+    assert "envdrift guard --staged --native-only --ci" in pre_commit.read_text()
+
+    _run_git(["add", "envdrift.toml", str(env_file.relative_to(work_dir))], cwd=work_dir)
+
+    result = _run_git(
+        ["commit", "-m", "Add plaintext custom env file"],
+        cwd=work_dir,
+        check=False,
+    )
+
+    assert result.returncode != 0, "Commit should be blocked by pre-commit hook"
+    combined_output = result.stderr + result.stdout
+    assert "guard scan failed" in combined_output
+    assert "postgresql.env" in combined_output
 
 
 @pytest.mark.integration
@@ -286,8 +346,8 @@ def _install_partial_hooks(work_dir: Path, env: dict[str, str]) -> Path:
 def test_hook_allows_plaintext_clear_file(git_hook_env):
     """A plaintext .clear file must commit fine — it is plaintext by design.
 
-    Regression test for the bug where the hook ran ``encrypt --check`` on every
-    staged ``.env*`` file, including ``.clear`` files, and wrongly blocked them.
+    Regression test for hook enforcement on staged env files. The guard scans
+    ``.clear`` content for secrets but does not require encryption for it.
     """
     work_dir = git_hook_env["work_dir"]
     env = git_hook_env["env"]
@@ -320,9 +380,9 @@ def test_hook_blocks_plaintext_secret_file(git_hook_env):
     result = _run_git(["commit", "-m", "Oops plaintext secret"], cwd=work_dir, check=False)
 
     assert result.returncode != 0, "Committing a plaintext .secret file must be blocked"
-    assert (
-        "encryption check failed" in result.stderr or "encryption check failed" in result.stdout
-    ), f"Expected an encryption-check failure message. stderr:\n{result.stderr}"
+    assert "guard scan failed" in result.stderr or "guard scan failed" in result.stdout, (
+        f"Expected a guard failure message. stderr:\n{result.stderr}"
+    )
 
 
 @pytest.mark.integration

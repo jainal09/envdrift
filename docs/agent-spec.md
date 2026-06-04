@@ -61,14 +61,22 @@ notify = true
 ### Agent Global Config
 
 ```toml
-# ~/.envdrift/agent.toml (global, minimal)
-[agent]
+# ~/.envdrift/guardian.toml (global, minimal)
+[guardian]
 enabled = true
-registered_projects = [
-  "~/projects/myapp",
-  "~/code/api-server"
-]
+idle_timeout = "5m"
+patterns = [".env*"]
+exclude = [".env.example", ".env.sample", ".env.keys"]
+notify = true
+
+[directories]
+watch = ["~/projects"]
+recursive = true
 ```
+
+The list of registered projects is kept separately in `~/.envdrift/projects.json`
+(see [Central Registry Architecture](#central-registry-architecture)), not in
+`guardian.toml`.
 
 ### New CLI Commands
 
@@ -108,16 +116,16 @@ envdrift watch disable
 ```toml
 # envdrift.toml
 [guardian]
-enabled = true        # Registers this directory with the agent
+enabled = true        # Permits the agent to watch this project once registered
 idle_timeout = "5m"
 notify = true
 ```
 
-When `[guardian].enabled = true`:
-
-1. CLI automatically calls agent to register directory
-2. Agent reads settings from project's `envdrift.toml`
-3. No separate registration step needed
+`[guardian].enabled = true` does **not** auto-register the project. Registration
+is explicit: run `envdrift agent register` (or `envdrift init --watch`) to add
+the project path to `~/.envdrift/projects.json`. Only then does the daemon load
+the project and apply the `[guardian]` settings — `enabled = false` causes the
+daemon to skip an already-registered project.
 
 #### Communication Mechanism
 
@@ -169,7 +177,7 @@ Machine (your laptop)
 
 ### How It Works
 
-1. **User runs** `envdrift init --watch` or sets `[guardian].enabled = true`
+1. **User runs** `envdrift agent register` (or `envdrift init --watch`) explicitly — setting `[guardian].enabled = true` alone is not enough
 2. **CLI adds** the project path to `~/.envdrift/projects.json`
 3. **Agent watches** `projects.json` for changes (via fsnotify)
 4. **Agent reads** each project's `envdrift.toml` for patterns/excludes
@@ -209,7 +217,9 @@ envdrift install check              # Check installation status
 1. Detect platform (macOS/Linux/Windows + arch: amd64, arm64)
 2. Download latest binary from GitHub releases
 3. Install to standard location:
-   - **Unix**: `/usr/local/bin` → `/opt/homebrew/bin` → `~/.local/bin`
+   - **Unix**: `~/.envdrift/bin` → `/usr/local/bin` → `/opt/homebrew/bin` → `~/.local/bin`
+     (a system dir is only used if it already exists and is writable; otherwise
+     `~/.envdrift/bin` is created as the default)
    - **Windows**: `%LOCALAPPDATA%\Programs\envdrift\envdrift-agent.exe`
 4. Run `envdrift-agent install` to set up auto-start (unless `--skip-autostart`)
 5. Register current directory if has `envdrift.toml` (unless `--skip-register`)
@@ -1180,11 +1190,11 @@ envdrift-agent health
 }
 ```
 
-**Optional HTTP endpoint:**
+**Optional HTTP endpoint (proposed, not yet implemented):**
 
 ```toml
-# ~/.envdrift/agent.toml
-[agent]
+# ~/.envdrift/guardian.toml
+[guardian]
 health_endpoint = "127.0.0.1:9847"  # localhost only
 ```
 

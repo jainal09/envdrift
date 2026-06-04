@@ -104,6 +104,10 @@ recursive = true
 5. **Encrypts** using `envdrift lock` (respects `envdrift.toml`)
 6. **Notifies** (optional) via desktop notification
 
+Project-level `vault.sync.mappings.env_file` names are added to the effective
+watch patterns when `[guardian] enabled = true`, so custom dotenv filenames such
+as `postgresql.env` can be encrypted automatically.
+
 > 📖 **See the [comprehensive setup guide](../docs/guides/agent-setup.md) for detailed configuration and troubleshooting.**
 
 ## Platform-Specific Details

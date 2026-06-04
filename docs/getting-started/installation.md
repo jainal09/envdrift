@@ -108,7 +108,7 @@ pip install envdrift[all]
 
 ```bash
 envdrift version
-# Output: envdrift 0.1.0
+# Output: envdrift 10.12.3
 ```
 
 ## Requirements

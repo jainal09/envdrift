@@ -1,5 +1,38 @@
 # Changelog
 
+## [10.13.0](https://github.com/jainal09/envdrift/compare/v10.12.4...v10.13.0) (2026-06-04)
+
+
+### Features
+
+* **vault-sync:** support custom dotenv filenames via env_file ([#296](https://github.com/jainal09/envdrift/issues/296)) ([d102597](https://github.com/jainal09/envdrift/commit/d1025973a8796e67fe5fd5f69a90f08f7823c24f))
+
+
+### Bug Fixes
+
+* remove stale verify-vault sync config hint ([#294](https://github.com/jainal09/envdrift/issues/294)) ([a1367bc](https://github.com/jainal09/envdrift/commit/a1367bc4d8eea7b5721a75d40b31302e2ba426b5))
+
+## [10.12.4](https://github.com/jainal09/envdrift/compare/v10.12.3...v10.12.4) (2026-06-03)
+
+
+### Documentation
+
+* fix 141 stale/incorrect claims across the docs (audit + lint-gated) ([#291](https://github.com/jainal09/envdrift/issues/291)) ([8952dc3](https://github.com/jainal09/envdrift/commit/8952dc327aefb29e49fb5dc4ddfeba5ad1d811fc))
+
+## [10.12.3](https://github.com/jainal09/envdrift/compare/v10.12.2...v10.12.3) (2026-06-03)
+
+
+### Documentation
+
+* Env File Sync guide follow-ups ([#285](https://github.com/jainal09/envdrift/issues/285)) — card title, de-dup install, config link ([#287](https://github.com/jainal09/envdrift/issues/287)) ([916974e](https://github.com/jainal09/envdrift/commit/916974eac1cefe9354af478f3de19cadd1a1ffe5))
+
+## [10.12.2](https://github.com/jainal09/envdrift/compare/v10.12.1...v10.12.2) (2026-06-03)
+
+
+### Documentation
+
+* **sops:** add dedicated SOPS backend guide + fix backend docs ([#288](https://github.com/jainal09/envdrift/issues/288)) ([8eb0e7e](https://github.com/jainal09/envdrift/commit/8eb0e7e999c04ae455185724a2060b4b2553f341))
+
 ## [10.12.1](https://github.com/jainal09/envdrift/compare/v10.12.0...v10.12.1) (2026-06-03)
 
 

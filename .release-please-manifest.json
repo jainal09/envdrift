@@ -1,5 +1,5 @@
 {
-  ".": "10.12.1",
-  "envdrift-agent": "1.0.4",
-  "envdrift-vscode": "0.1.3"
+  ".": "10.13.0",
+  "envdrift-agent": "1.1.0",
+  "envdrift-vscode": "0.1.4"
 }

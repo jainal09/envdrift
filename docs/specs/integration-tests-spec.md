@@ -11,9 +11,16 @@
 - Git hook auto-installation (pre-commit framework + direct hooks)
 - Full lock → pull --merge → lock cycle (partial encryption workflow)
 
-### Major Gaps
+### Status
 
-The current integration tests **do not** test actual cloud provider interactions. All vault operations are either mocked or skipped.
+Most of the work described in this spec has shipped. The integration suite now
+drives real emulators via container-backed tests: `test_aws_integration.py`
+exercises a real `boto3` Secrets Manager client against LocalStack, and
+`test_hashicorp_integration.py` drives a real `hvac` client against a Vault dev
+container. Azure tests run against a Lowkey Vault container. The sections below
+are retained as the original design record; treat the "Proposed" infrastructure,
+phases, and test categories as largely implemented rather than purely
+forward-looking.
 
 ---
 
@@ -101,7 +108,7 @@ def vault_server():
 # docker-compose.test.yml
 services:
   lowkey-vault:
-    image: nagyesta/lowkey-vault:2.4
+    image: nagyesta/lowkey-vault:7.1.32
     ports:
       - "8443:8443"
     environment:
@@ -514,7 +521,7 @@ def vault_test_secrets(vault_server):
     """Pre-populate Vault with test secrets."""
     import hvac
 
-    client = hvac.Client(url=vault_server, token="test-token")
+    client = hvac.Client(url=vault_server, token="test-root-token")
 
     # Enable KV v2 at secret/
     client.sys.enable_secrets_engine("kv", path="secret", options={"version": "2"})
@@ -537,13 +544,14 @@ def vault_test_secrets(vault_server):
 ```toml
 # pyproject.toml [project.optional-dependencies]
 test-integration = [
-    "pytest-docker>=2.0.0",
-    "testcontainers>=3.7.0",
-    "boto3>=1.28.0",
-    "hvac>=1.2.0",
-    "docker>=6.0.0",
+    "envdrift[dev,vault]",
+    "docker>=7.0.0",
 ]
 ```
+
+The `[vault]` extra pulls in `boto3>=1.34` and `hvac>=2.0` transitively, and the
+suite starts containers via `docker compose` (see the `test-integration` Makefile
+target), not testcontainers.
 
 ---
 
@@ -556,7 +564,7 @@ tests/
 │   ├── test_encryption_tools.py # Existing
 │   ├── test_hook_setup.py       # Existing
 │   ├── test_aws_integration.py  # NEW: LocalStack tests
-│   ├── test_vault_integration.py # NEW: HashiCorp Vault tests
+│   ├── test_hashicorp_integration.py # NEW: HashiCorp Vault tests
 │   ├── test_e2e_workflows.py    # NEW: Full workflow tests
 │   ├── test_encryption_edge_cases.py # NEW
 │   ├── test_validation_edge_cases.py # NEW
@@ -579,8 +587,8 @@ markers = [
     "integration: Integration tests that download dotenvx/sops binaries.",
     "aws: Tests requiring LocalStack (AWS Secrets Manager).",
     "vault: Tests requiring HashiCorp Vault container.",
+    "azure: Tests requiring Lowkey Vault (Azure Key Vault emulator).",
     "gcp: Tests requiring GCP credentials (skipped by default).",
-    "azure: Tests requiring Azure credentials (skipped by default).",
     "slow: Tests that take >10 seconds.",
 ]
 ```
