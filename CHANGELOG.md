@@ -1,5 +1,17 @@
 # Changelog
 
+## [10.13.0](https://github.com/jainal09/envdrift/compare/v10.12.4...v10.13.0) (2026-06-04)
+
+
+### Features
+
+* **vault-sync:** support custom dotenv filenames via env_file ([#296](https://github.com/jainal09/envdrift/issues/296)) ([d102597](https://github.com/jainal09/envdrift/commit/d1025973a8796e67fe5fd5f69a90f08f7823c24f))
+
+
+### Bug Fixes
+
+* remove stale verify-vault sync config hint ([#294](https://github.com/jainal09/envdrift/issues/294)) ([a1367bc](https://github.com/jainal09/envdrift/commit/a1367bc4d8eea7b5721a75d40b31302e2ba426b5))
+
 ## [10.12.4](https://github.com/jainal09/envdrift/compare/v10.12.3...v10.12.4) (2026-06-03)
 
 
