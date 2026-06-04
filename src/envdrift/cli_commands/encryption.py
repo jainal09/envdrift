@@ -7,6 +7,7 @@ Supports multiple encryption backends:
 
 from __future__ import annotations
 
+import shlex
 from pathlib import Path
 from typing import Annotated
 
@@ -306,6 +307,7 @@ def _verify_decryption_with_vault(
     secret_name: str,
     ci: bool = False,
     auto_install: bool = False,
+    config_path: Path | None = None,
 ) -> bool:
     """
     Verify that a vault-stored private key can decrypt the given .env file.
@@ -319,6 +321,7 @@ def _verify_decryption_with_vault(
         region (str | None): Region identifier for providers that require it (e.g., AWS); may be None.
         project_id (str | None): GCP project ID for Secret Manager.
         secret_name (str): Name of the secret in the vault that contains the private key (or an environment-style value like "DOTENV_PRIVATE_KEY_ENV=key").
+        config_path (Path | None): Resolved TOML config path to preserve in the repair hint when known.
 
     Returns:
         bool: `True` if the vault key successfully decrypts a temporary copy of `env_file`, `False` otherwise.
@@ -435,13 +438,16 @@ def _verify_decryption_with_vault(
                 console.print(f"  1. Restore the encrypted file: git restore {env_file}")
 
                 # Construct sync command with the same provider options
-                sync_cmd = f"envdrift sync --force -c pair.txt -p {provider}"
+                sync_cmd = "envdrift sync --force"
+                if config_path:
+                    sync_cmd += f" -c {shlex.quote(str(config_path))}"
+                sync_cmd += f" -p {shlex.quote(provider)}"
                 if vault_url:
-                    sync_cmd += f" --vault-url {vault_url}"
+                    sync_cmd += f" --vault-url {shlex.quote(vault_url)}"
                 if region:
-                    sync_cmd += f" --region {region}"
+                    sync_cmd += f" --region {shlex.quote(region)}"
                 if project_id:
-                    sync_cmd += f" --project-id {project_id}"
+                    sync_cmd += f" --project-id {shlex.quote(project_id)}"
                 console.print(f"  2. Restore vault key locally: {sync_cmd}")
 
                 console.print(f"  3. Re-encrypt with the vault key: envdrift encrypt {env_file}")
@@ -616,6 +622,7 @@ def decrypt_cmd(
             secret_name=vault_secret,
             ci=ci,
             auto_install=encryption_config.dotenvx_auto_install if encryption_config else False,
+            config_path=config_path,
         )
         if not vault_check_passed:
             raise typer.Exit(code=1)

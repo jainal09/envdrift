@@ -499,8 +499,9 @@ envdrift decrypt .env.production --verify-vault --ci \
 Exit `0` if the vault key can decrypt the file, `1` if it can't — with repair steps:
 
 1. `git restore .env.production`
-2. `envdrift sync --force -c pair.txt -p <provider>` (the printed command also
-   appends `--vault-url` / `--region` / `--project-id` when you passed them)
+2. `envdrift sync --force -p <provider>` (the printed command includes
+   `-c <resolved-config>` when a TOML config was discovered, and appends
+   `--vault-url` / `--region` / `--project-id` when you passed them)
 3. `envdrift encrypt .env.production`
 
 See [`decrypt`](../cli/decrypt.md) for the full verify-vault behavior.

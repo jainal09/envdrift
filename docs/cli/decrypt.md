@@ -169,8 +169,10 @@ On failure it prints `✗ Vault key CANNOT decrypt this file!` followed by repai
 steps:
 
 - `git restore <file>`
-- `envdrift sync --force -c pair.txt -p <provider>` (with `--vault-url`/`--region`/`--project-id`
-  appended when those flags were passed) to restore the vault key locally
+- `envdrift sync --force -p <provider>` to restore the vault key locally. When
+  the current command discovered a TOML config, the hint includes
+  `-c <resolved-config>`; `--vault-url`/`--region`/`--project-id` are appended
+  when those flags were passed.
 - `envdrift encrypt <file>` to re-encrypt with the vault key
 
 !!! note "`--verify-vault` only verifies — it does not fetch the key"
@@ -200,7 +202,7 @@ When using `--verify-vault`, a wrong key returns exit 1 with a message like:
 ...
 To fix:
   1. Restore the encrypted file: git restore .env.production
-  2. Restore vault key locally: envdrift sync --force -c pair.txt -p azure
+  2. Restore vault key locally: envdrift sync --force -p azure
   3. Re-encrypt with the vault key: envdrift encrypt .env.production
 ```
 

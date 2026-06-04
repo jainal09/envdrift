@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+import shlex
 import tomllib
 from pathlib import Path
 from textwrap import dedent
 from types import SimpleNamespace
 from typing import Any, cast
 
+import pytest
 from typer.testing import CliRunner
 
 from envdrift.cli import app
@@ -584,7 +586,7 @@ class TestDecryptCommand:
         env_file = tmp_path / ".env.production"
         env_file.write_text("SECRET=encrypted")
 
-        called = {"verify": False}
+        called: dict[str, Any] = {"verify": False}
 
         def fake_verify(**kwargs):
             """
@@ -597,6 +599,7 @@ class TestDecryptCommand:
                 True indicating the verification succeeded.
             """
             called["verify"] = True
+            called["kwargs"] = kwargs
             return True
 
         monkeypatch.setattr(
@@ -627,6 +630,46 @@ class TestDecryptCommand:
 
         assert result.exit_code == 0
         assert called["verify"] is True
+        assert called["kwargs"]["config_path"] is None
+
+    def test_decrypt_verify_vault_passes_discovered_config_path(self, monkeypatch, tmp_path: Path):
+        """--verify-vault should pass the resolved TOML config path to repair hints."""
+
+        env_file = tmp_path / ".env.production"
+        env_file.write_text("SECRET=encrypted")
+
+        config_path = tmp_path / "envdrift.toml"
+        config_path.write_text('[encryption]\nbackend = "dotenvx"\n')
+
+        captured: dict[str, Any] = {}
+
+        def fake_verify(**kwargs):
+            captured.update(kwargs)
+            return True
+
+        monkeypatch.setattr("envdrift.config.find_config", lambda: config_path)
+        monkeypatch.setattr(
+            "envdrift.cli_commands.encryption._verify_decryption_with_vault", fake_verify
+        )
+
+        result = runner.invoke(
+            app,
+            [
+                "decrypt",
+                str(env_file),
+                "--verify-vault",
+                "-p",
+                "azure",
+                "--vault-url",
+                "https://example.vault.azure.net",
+                "--secret",
+                "env-drift-production-key",
+                "--ci",
+            ],
+        )
+
+        assert result.exit_code == 0
+        assert captured["config_path"] == config_path
         assert "not decrypted" in result.output.lower()
 
     def test_encrypt_verify_vault_is_deprecated(self, tmp_path: Path):
@@ -1081,11 +1124,74 @@ class TestVaultVerification:
         assert "DOTENV_PRIVATE_KEY_STAGING" not in subprocess_env
         assert captured["cwd"] is not None and captured["cwd"] != env_file.parent
 
-    def test_verify_vault_failure_suggests_restore(self, monkeypatch, tmp_path: Path):
+    @pytest.mark.parametrize(
+        (
+            "provider",
+            "vault_url",
+            "region",
+            "project_id",
+            "config_filename",
+            "expected_extra_options",
+        ),
+        [
+            (
+                "azure",
+                "https://example.vault.azure.net",
+                None,
+                None,
+                None,
+                " --vault-url https://example.vault.azure.net",
+            ),
+            (
+                "aws",
+                None,
+                "us-east-1",
+                None,
+                None,
+                " --region us-east-1",
+            ),
+            (
+                "gcp",
+                None,
+                None,
+                "my-gcp-project",
+                None,
+                " --project-id my-gcp-project",
+            ),
+            (
+                "azure",
+                "https://example.vault.azure.net",
+                None,
+                None,
+                "envdrift.toml",
+                " --vault-url https://example.vault.azure.net",
+            ),
+            (
+                "azure",
+                "https://example.vault.azure.net",
+                None,
+                None,
+                "env drift.toml",
+                " --vault-url https://example.vault.azure.net",
+            ),
+        ],
+    )
+    def test_verify_vault_failure_suggests_restore(
+        self,
+        monkeypatch,
+        tmp_path: Path,
+        provider: str,
+        vault_url: str | None,
+        region: str | None,
+        project_id: str | None,
+        config_filename: str | None,
+        expected_extra_options: str,
+    ):
         """Vault verification failure should guide restoring encrypted file and keys."""
 
         env_file = tmp_path / ".env.production"
         env_file.write_text("SECRET=encrypted")
+        config_path = tmp_path / config_filename if config_filename else None
 
         secret_value = SimpleNamespace(value="DOTENV_PRIVATE_KEY_PRODUCTION=vault-key")
 
@@ -1127,18 +1233,24 @@ class TestVaultVerification:
 
         result = _verify_decryption_with_vault(
             env_file=env_file,
-            provider="azure",
-            vault_url="https://example.vault.azure.net",
-            region=None,
-            project_id=None,
+            provider=provider,
+            vault_url=vault_url,
+            region=region,
+            project_id=project_id,
             secret_name="env-drift-production-key",
+            config_path=config_path,
         )
 
         assert result is False
         joined = " ".join(printed)
+        expected_sync_cmd = "envdrift sync --force"
+        if config_path:
+            expected_sync_cmd += f" -c {shlex.quote(str(config_path))}"
+        expected_sync_cmd += f" -p {provider}{expected_extra_options}"
         assert "git restore" in joined
         assert str(env_file) in joined
-        assert "envdrift sync --force" in joined
+        assert expected_sync_cmd in joined
+        assert "-c pair.txt" not in joined
 
     def test_verify_vault_gcp_passes_project_id(self, monkeypatch, tmp_path: Path):
         """GCP provider should pass project_id through to the vault client."""
@@ -1182,48 +1294,6 @@ class TestVaultVerification:
         assert result is True
         assert captured["provider"] == "gcp"
         assert captured["kwargs"]["project_id"] == "my-gcp-project"
-
-    def test_verify_vault_gcp_failure_includes_project_id(self, monkeypatch, tmp_path: Path):
-        """Failure guidance should include gcp project-id in sync command."""
-        env_file = tmp_path / ".env.production"
-        env_file.write_text("SECRET=encrypted")
-
-        secret_value = SimpleNamespace(value="DOTENV_PRIVATE_KEY_PRODUCTION=vault-key")
-
-        class DummyVault:
-            def ensure_authenticated(self) -> None:
-                return None
-
-            def get_secret(self, name: str):
-                return secret_value
-
-        monkeypatch.setattr("envdrift.vault.get_vault_client", lambda *_, **__: DummyVault())
-        monkeypatch.setattr(
-            "envdrift.integrations.dotenvx.DotenvxWrapper.is_installed",
-            lambda self: True,
-        )
-        monkeypatch.setattr(
-            "envdrift.integrations.dotenvx.DotenvxWrapper.decrypt",
-            lambda *_, **__: (_ for _ in ()).throw(DotenvxError("bad key")),
-        )
-
-        printed: list[str] = []
-        monkeypatch.setattr(
-            "envdrift.output.rich.console.print", lambda msg="", *a, **k: printed.append(str(msg))
-        )
-
-        result = _verify_decryption_with_vault(
-            env_file=env_file,
-            provider="gcp",
-            vault_url=None,
-            region=None,
-            project_id="my-gcp-project",
-            secret_name="env-drift-production-key",
-        )
-
-        assert result is False
-        joined = " ".join(printed)
-        assert "--project-id my-gcp-project" in joined
 
     def test_verify_vault_aws_with_raw_secret(self, monkeypatch, tmp_path: Path):
         """Vault verification should accept raw secrets and derive key name."""
