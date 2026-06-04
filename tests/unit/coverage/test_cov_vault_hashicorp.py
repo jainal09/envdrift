@@ -57,6 +57,12 @@ class TestImportFallback:
         """
         import sys
 
+        # Only run when hvac is genuinely importable, so the reload in the
+        # ``finally`` block restores the real typed Unauthorized/Forbidden
+        # sentinels rather than leaving them as the bare Exception fallback,
+        # which would pollute the typed-exception assertions in later tests.
+        pytest.importorskip("hvac")
+
         real_import = builtins.__import__
 
         def fake_import(name: str, *args: object, **kwargs: object):

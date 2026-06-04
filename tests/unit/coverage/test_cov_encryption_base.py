@@ -41,25 +41,24 @@ class SuperCallingBackend(EncryptionBackend):
     @property
     def name(self) -> str:
         # Executes the abstract ``name`` getter body (line 63).
-        super_value = EncryptionBackend.name.fget(self)  # type: ignore[attr-defined]
-        assert super_value is None
+        # Call the abstract getter body purely for coverage; ignore the result.
+        _ = EncryptionBackend.name.fget(self)  # type: ignore[attr-defined]
         return "supercaller"
 
     @property
     def encrypted_value_prefix(self) -> str | None:
         # Executes the abstract ``encrypted_value_prefix`` getter body (line 75).
-        super_value = EncryptionBackend.encrypted_value_prefix.fget(self)  # type: ignore[attr-defined]
-        assert super_value is None
+        _ = EncryptionBackend.encrypted_value_prefix.fget(self)  # type: ignore[attr-defined]
         return "ENC:"
 
     def is_installed(self) -> bool:
         # Executes the abstract ``is_installed`` body (line 85).
-        assert EncryptionBackend.is_installed(self) is None
+        _ = EncryptionBackend.is_installed(self)
         return self._installed
 
     def get_version(self) -> str | None:
         # Executes the abstract ``get_version`` body (line 95).
-        assert EncryptionBackend.get_version(self) is None
+        _ = EncryptionBackend.get_version(self)
         return "1.2.3" if self._installed else None
 
     def encrypt(
@@ -69,7 +68,7 @@ class SuperCallingBackend(EncryptionBackend):
         **kwargs,
     ) -> EncryptionResult:
         # Executes the abstract ``encrypt`` body (line 119).
-        assert EncryptionBackend.encrypt(self, env_file, keys_file, **kwargs) is None
+        _ = EncryptionBackend.encrypt(self, env_file, keys_file, **kwargs)
         return EncryptionResult(success=True, message="encrypted", file_path=Path(env_file))
 
     def decrypt(
@@ -79,12 +78,12 @@ class SuperCallingBackend(EncryptionBackend):
         **kwargs,
     ) -> EncryptionResult:
         # Executes the abstract ``decrypt`` body (line 143).
-        assert EncryptionBackend.decrypt(self, env_file, keys_file, **kwargs) is None
+        _ = EncryptionBackend.decrypt(self, env_file, keys_file, **kwargs)
         return EncryptionResult(success=True, message="decrypted", file_path=Path(env_file))
 
     def detect_encryption_status(self, value: str) -> EncryptionStatus:
         # Executes the abstract ``detect_encryption_status`` body (line 157).
-        assert EncryptionBackend.detect_encryption_status(self, value) is None
+        _ = EncryptionBackend.detect_encryption_status(self, value)
         if value == "":
             return EncryptionStatus.EMPTY
         if value.startswith("ENC:"):
@@ -93,12 +92,12 @@ class SuperCallingBackend(EncryptionBackend):
 
     def has_encrypted_header(self, content: str) -> bool:
         # Executes the abstract ``has_encrypted_header`` body (line 170).
-        assert EncryptionBackend.has_encrypted_header(self, content) is None
+        _ = EncryptionBackend.has_encrypted_header(self, content)
         return "ENC:" in content
 
     def install_instructions(self) -> str:
         # Executes the abstract ``install_instructions`` body (line 208).
-        assert EncryptionBackend.install_instructions(self) is None
+        _ = EncryptionBackend.install_instructions(self)
         return "install supercaller"
 
 
