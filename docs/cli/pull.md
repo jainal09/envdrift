@@ -216,6 +216,12 @@ secret_name = "myapp-key"
 folder_path = "services/myapp"
 environment = "production"
 
+[[vault.sync.mappings]]
+secret_name = "postgres-key"
+folder_path = "secrets/postgresql"
+environment = "production"  # Key stays DOTENV_PRIVATE_KEY_PRODUCTION
+env_file = "postgresql.env" # Decrypt secrets/postgresql/postgresql.env
+
 # Profile mappings (processed only with --profile)
 [[vault.sync.mappings]]
 secret_name = "local-key"
@@ -233,6 +239,7 @@ activate_to = ".env"
 ### Profile vs Environment
 
 - **`environment`**: Specifies which `.env.<environment>` file to look for (e.g., `production` → `.env.production`)
+- **`env_file`**: Overrides the file path when a service uses another dotenv-style filename (e.g., `postgresql.env`)
 - **`profile`**: Tags a mapping for filtering with `--profile`
 
 The effective environment is resolved in this priority order:

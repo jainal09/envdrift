@@ -92,7 +92,17 @@ repos:
         language: system
         files: ^\.env\.(production|staging)$
         pass_filenames: true
+
+      - id: envdrift-guard
+        name: Guard staged env files
+        entry: envdrift guard --staged --native-only --ci
+        language: system
+        always_run: true
+        pass_filenames: false
 ```
+
+`envdrift-guard` is the config-aware safety net. Keep it enabled for custom
+`[vault.sync].mappings.env_file` names that do not match `.env*`.
 
 Install:
 

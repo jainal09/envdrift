@@ -63,6 +63,32 @@ class TestSyncEngineBasic:
         assert result.services[0].action == SyncAction.CREATED
         assert (service_dir / ".env.keys").exists()
 
+    def test_sync_uses_custom_env_file(self, mock_vault_client: MagicMock, tmp_path: Path) -> None:
+        """Sync should use mapping.env_file when deciding whether a service exists."""
+        mock_vault_client.get_secret.return_value = SecretValue(name="test-key", value="secret123")
+
+        service_dir = tmp_path / "service1"
+        service_dir.mkdir()
+        (service_dir / "postgresql.env").write_text("DB_URL=encrypted:xyz\n")
+
+        config = SyncConfig(
+            mappings=[
+                ServiceMapping(
+                    secret_name="test-key",
+                    folder_path=service_dir,
+                    environment="production",
+                    env_file=Path("postgresql.env"),
+                ),
+            ],
+        )
+
+        engine = SyncEngine(config=config, vault_client=mock_vault_client)
+        result = engine.sync_all()
+
+        assert len(result.services) == 1
+        assert result.services[0].action == SyncAction.CREATED
+        assert "DOTENV_PRIVATE_KEY_PRODUCTION=secret123" in (service_dir / ".env.keys").read_text()
+
     def test_sync_skips_when_env_file_does_not_exist(
         self, mock_vault_client: MagicMock, tmp_path: Path
     ) -> None:

@@ -57,6 +57,17 @@ that are missing from the vault.
 envdrift vault-push --all
 ```
 
+If a sync mapping sets `env_file`, `--all` encrypts that custom dotenv filename
+and still pushes the canonical key named by `environment`:
+
+```toml
+[[vault.sync.mappings]]
+secret_name = "postgres-key"
+folder_path = "secrets/postgresql"
+environment = "production"
+env_file = "postgresql.env"
+```
+
 To overwrite existing secrets instead of skipping them, add `--force`:
 
 ```bash

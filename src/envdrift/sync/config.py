@@ -24,6 +24,7 @@ class ServiceMapping:
     folder_path: Path
     vault_name: str | None = None
     environment: str | None = None  # Defaults to profile if set, else "production"
+    env_file: Path | None = None  # Optional custom env filename relative to folder_path
     profile: str | None = None  # Profile name for filtering (e.g., "local", "prod")
     activate_to: Path | None = None  # Path to copy decrypted file when profile is activated
     ephemeral_keys: bool | None = None  # None = inherit from central SyncConfig
@@ -146,6 +147,9 @@ class SyncConfig:
                     folder_path=Path(mapping_data["folder_path"]),
                     vault_name=mapping_data.get("vault_name"),
                     environment=mapping_data.get("environment"),  # None = use effective_environment
+                    env_file=Path(mapping_data["env_file"])
+                    if mapping_data.get("env_file")
+                    else None,
                     profile=mapping_data.get("profile"),
                     activate_to=Path(activate_to) if activate_to else None,
                     ephemeral_keys=mapping_data.get("ephemeral_keys"),  # None = inherit

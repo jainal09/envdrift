@@ -101,7 +101,7 @@ export async function encryptCurrentFile(): Promise<void> {
 
     // Check if file matches pattern
     if (!matchesPatterns(path.basename(filePath), config.patterns)) {
-        vscode.window.showWarningMessage('This file does not match .env patterns');
+        vscode.window.showWarningMessage('This file does not match configured EnvDrift patterns');
         return;
     }
 

@@ -285,6 +285,92 @@ def test_sops_lock_and_pull_roundtrip(integration_env):
 
 
 @pytest.mark.integration
+def test_dotenvx_lock_pull_custom_env_files_use_canonical_keys(integration_env):
+    """Custom vault.sync env_file names keep key names based on environment."""
+    work_dir = integration_env["base_dir"] / "dotenvx-custom-lock-pull"
+    work_dir.mkdir()
+    env = integration_env["env"].copy()
+    _scrub_cloud_credentials(env)
+
+    postgres_dir = work_dir / "postgresql"
+    postgres_dir.mkdir()
+    postgres_env = postgres_dir / "postgresql.env"
+    postgres_env.write_text("POSTGRES_PASSWORD=topsecret\n")
+
+    dotnet_dir = work_dir / "dotnet-service-template"
+    dotnet_dir.mkdir()
+    dotnet_env = dotnet_dir / "dotnet-service-template.env.sqa"
+    dotnet_env.write_text("API_KEY=service-secret\n")
+
+    config = textwrap.dedent(
+        """\
+        [encryption]
+        backend = "dotenvx"
+
+        [encryption.dotenvx]
+        auto_install = true
+
+        [vault]
+        provider = "azure"
+
+        [vault.azure]
+        vault_url = "https://dummy.vault.azure.net/"
+
+        [vault.sync]
+        default_vault_name = "dummy"
+
+        [[vault.sync.mappings]]
+        secret_name = "postgres-key"
+        folder_path = "postgresql"
+        environment = "production"
+        env_file = "postgresql.env"
+
+        [[vault.sync.mappings]]
+        secret_name = "dotnet-key"
+        folder_path = "dotnet-service-template"
+        environment = "sqa"
+        env_file = "dotnet-service-template.env.sqa"
+        """
+    )
+    (work_dir / "envdrift.toml").write_text(config)
+
+    _run_envdrift(["lock", "--force"], cwd=work_dir, env=env)
+
+    postgres_locked = postgres_env.read_text()
+    assert "encrypted:" in postgres_locked
+    assert "POSTGRES_PASSWORD=topsecret" not in postgres_locked
+    assert "DOTENV_PUBLIC_KEY_PRODUCTION" in postgres_locked
+    assert "postgresql.env" not in postgres_locked
+
+    postgres_keys = (postgres_dir / ".env.keys").read_text()
+    postgres_private_keys = [
+        line for line in postgres_keys.splitlines() if line.startswith("DOTENV_PRIVATE_KEY_")
+    ]
+    assert len(postgres_private_keys) == 1
+    assert postgres_private_keys[0].startswith("DOTENV_PRIVATE_KEY_PRODUCTION=")
+
+    dotnet_locked = dotnet_env.read_text()
+    assert "encrypted:" in dotnet_locked
+    assert "API_KEY=service-secret" not in dotnet_locked
+    assert "DOTENV_PUBLIC_KEY_SQA" in dotnet_locked
+    assert "dotnet-service-template.env.sqa" not in dotnet_locked
+
+    dotnet_keys = (dotnet_dir / ".env.keys").read_text()
+    dotnet_private_keys = [
+        line for line in dotnet_keys.splitlines() if line.startswith("DOTENV_PRIVATE_KEY_")
+    ]
+    assert len(dotnet_private_keys) == 1
+    assert dotnet_private_keys[0].startswith("DOTENV_PRIVATE_KEY_SQA=")
+
+    _run_envdrift(["pull", "--skip-sync"], cwd=work_dir, env=env)
+
+    assert "POSTGRES_PASSWORD=topsecret" in postgres_env.read_text()
+    assert "encrypted:" not in postgres_env.read_text()
+    assert "API_KEY=service-secret" in dotnet_env.read_text()
+    assert "encrypted:" not in dotnet_env.read_text()
+
+
+@pytest.mark.integration
 def test_sops_lock_pull_require_vault_sync_config(integration_env):
     """`lock`/`pull` are the Vault Sync family and fail fast without `[vault.sync]`.
 

@@ -148,6 +148,12 @@ folder_path = "services/myapp"
 secret_name = "auth-service-dotenvx-key"
 folder_path = "services/auth"
 environment = "staging"   # reads/writes DOTENV_PRIVATE_KEY_STAGING
+
+[[vault.sync.mappings]]
+secret_name = "postgres-key"
+folder_path = "secrets/postgresql"
+environment = "production"
+env_file = "postgresql.env"  # custom dotenv filename inside folder_path
 ```
 
 Using a different provider? Replace the `provider` value and the provider block:
@@ -345,6 +351,17 @@ vault_name = "production-vault"  # informational only — see note below
     `[vault.azure].vault_url` (or `--region` / `--project-id`). A per-mapping
     `vault_name` does **not** route that secret to a different vault. To use a
     separate vault, run a separate config.
+
+By default, envdrift looks for `.env.<environment>` and then falls back to `.env`
+or a single `.env.*` file. Use `env_file` when a service uses another dotenv-style
+filename, such as `postgresql.env` or `dotnet-service-template.env.sqa`.
+`environment` remains the source of truth for key names, so the examples above
+still use keys like `DOTENV_PRIVATE_KEY_PRODUCTION` and `DOTENV_PRIVATE_KEY_STAGING`.
+The installed git hook and `guard --staged` read these mappings and block
+plaintext custom env files before commit. The background agent also adds mapped
+`env_file` names to its watch patterns when project `[guardian]` is enabled; the
+VS Code extension remains settings-driven, so add custom names to
+`envdrift.patterns` there.
 
 ### Ephemeral keys mode
 

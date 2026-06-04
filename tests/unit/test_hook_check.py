@@ -201,6 +201,7 @@ class TestCheckPrecommitHooks:
         result = check_precommit_hooks(None)
 
         assert result["envdrift-encryption"] is False
+        assert result["envdrift-guard"] is False
 
     def test_reports_installed_hooks(self, monkeypatch, tmp_path: Path):
         config_path = tmp_path / ".pre-commit-config.yaml"
@@ -214,6 +215,7 @@ class TestCheckPrecommitHooks:
         result = check_precommit_hooks(config_path)
 
         assert result["envdrift-encryption"] is True
+        assert result["envdrift-guard"] is False
 
     def test_custom_required_hooks(self, monkeypatch, tmp_path: Path):
         config_path = tmp_path / ".pre-commit-config.yaml"
@@ -330,6 +332,7 @@ class TestEnsureGitHookSetup:
         assert errors == []
         content = (tmp_path / ".pre-commit-config.yaml").read_text()
         assert "envdrift-encryption" in content
+        assert "envdrift-guard" in content
 
     def test_ensure_direct_installs_hooks(self, tmp_path: Path):
         hooks_dir = tmp_path / ".git" / "hooks"
@@ -344,7 +347,7 @@ class TestEnsureGitHookSetup:
         pre_push = hooks_dir / "pre-push"
         assert pre_commit.exists()
         assert pre_push.exists()
-        assert "envdrift encrypt --check" in pre_commit.read_text()
+        assert "envdrift guard --staged --native-only --ci" in pre_commit.read_text()
         assert "envdrift lock --check" in pre_push.read_text()
 
     def test_unknown_method_returns_error(self):

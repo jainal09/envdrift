@@ -28,6 +28,7 @@ class TestGetHookConfig:
         assert result == HOOK_CONFIG
         assert "envdrift-validate" in result
         assert "envdrift-encryption" in result
+        assert "envdrift-guard" in result
 
     def test_contains_yaml_structure(self):
         """Test the config contains valid YAML structure markers."""
@@ -44,7 +45,7 @@ class TestHookEntry:
         """Test HOOK_ENTRY has correct structure."""
         assert HOOK_ENTRY["repo"] == "local"
         assert "hooks" in HOOK_ENTRY
-        assert len(HOOK_ENTRY["hooks"]) == 2
+        assert len(HOOK_ENTRY["hooks"]) == 3
 
     def test_validate_hook_entry(self):
         """Test envdrift-validate hook entry."""
@@ -59,6 +60,15 @@ class TestHookEntry:
         encrypt_hook = next(h for h in hooks if h["id"] == "envdrift-encryption")
         assert encrypt_hook["language"] == "system"
         assert "encrypt" in encrypt_hook["entry"]
+
+    def test_guard_hook_entry(self):
+        """Test envdrift-guard hook entry."""
+        hooks = cast(list[dict[str, Any]], HOOK_ENTRY["hooks"])
+        guard_hook = next(h for h in hooks if h["id"] == "envdrift-guard")
+        assert guard_hook["language"] == "system"
+        assert guard_hook["entry"] == "envdrift guard --staged --native-only --ci"
+        assert guard_hook["always_run"] is True
+        assert guard_hook["pass_filenames"] is False
 
 
 class TestFindPrecommitConfig:
@@ -184,6 +194,7 @@ class TestInstallHooks:
         hook_ids = [h["id"] for h in local_repo["hooks"]]
         assert "envdrift-validate" in hook_ids
         assert "envdrift-encryption" in hook_ids
+        assert "envdrift-guard" in hook_ids
 
     def test_raises_when_config_not_found_and_no_create(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -213,8 +224,8 @@ class TestInstallHooks:
                 if hook.get("id", "").startswith("envdrift-"):
                     envdrift_hooks.append(hook)
 
-        # Should only have 2 hooks (validate and encryption), not 4
-        assert len(envdrift_hooks) == 2
+        # Should only have 3 hooks (validate, encryption, guard), not 6
+        assert len(envdrift_hooks) == 3
 
 
 class TestUninstallHooks:
@@ -263,8 +274,8 @@ class TestUninstallHooks:
 class TestVerifyHooksInstalled:
     """Tests for verify_hooks_installed function."""
 
-    def test_both_hooks_installed(self, tmp_path: Path):
-        """Test detects both hooks when installed."""
+    def test_all_hooks_installed(self, tmp_path: Path):
+        """Test detects all hooks when installed."""
         config_file = tmp_path / ".pre-commit-config.yaml"
         install_hooks(config_path=config_file)
 
@@ -272,15 +283,17 @@ class TestVerifyHooksInstalled:
 
         assert result["envdrift-validate"] is True
         assert result["envdrift-encryption"] is True
+        assert result["envdrift-guard"] is True
 
     def test_no_hooks_installed(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-        """Test returns False for both when no config."""
+        """Test returns False for all when no config."""
         monkeypatch.chdir(tmp_path)
 
         result = verify_hooks_installed()
 
         assert result["envdrift-validate"] is False
         assert result["envdrift-encryption"] is False
+        assert result["envdrift-guard"] is False
 
     def test_partial_hooks_installed(self, tmp_path: Path):
         """Test detects partial installation."""
@@ -301,3 +314,23 @@ class TestVerifyHooksInstalled:
 
         assert result["envdrift-validate"] is True
         assert result["envdrift-encryption"] is False
+        assert result["envdrift-guard"] is False
+
+    def test_malformed_yaml_reports_all_hooks_absent(self, tmp_path: Path):
+        """Unparseable YAML reports all hooks as absent instead of crashing."""
+        config_file = tmp_path / ".pre-commit-config.yaml"
+        config_file.write_text("repos: [unbalanced\n")
+
+        result = verify_hooks_installed(config_path=config_file)
+
+        assert result == dict.fromkeys(result, False)
+        assert result["envdrift-guard"] is False
+
+    def test_non_mapping_yaml_reports_all_hooks_absent(self, tmp_path: Path):
+        """A YAML document whose root is not a mapping is treated as no hooks."""
+        config_file = tmp_path / ".pre-commit-config.yaml"
+        config_file.write_text("- just\n- a\n- list\n")
+
+        result = verify_hooks_installed(config_path=config_file)
+
+        assert result == dict.fromkeys(result, False)

@@ -35,6 +35,7 @@ from rich.spinner import Spinner
 from rich.text import Text
 
 from envdrift.config import load_config
+from envdrift.env_files import resolve_custom_env_file
 from envdrift.scanner.base import FindingSeverity
 from envdrift.scanner.engine import GuardConfig, ScanEngine
 from envdrift.scanner.output import format_json, format_rich, format_sarif
@@ -381,12 +382,27 @@ def guard(
     # These files are intentionally unencrypted and should not be flagged
     allowed_clear_files = []
     combined_files = []
+    mapped_env_files = []
     if file_config.partial_encryption.enabled:
         for env in file_config.partial_encryption.environments:
             if env.clear_file:
                 allowed_clear_files.append(env.clear_file)
             if env.combined_file:
                 combined_files.append(env.combined_file)
+
+    for mapping in file_config.vault.sync.mappings:
+        if mapping.env_file:
+            try:
+                mapped_env_files.append(
+                    str(
+                        resolve_custom_env_file(
+                            Path(mapping.folder_path), mapping.env_file
+                        ).resolve()
+                    )
+                )
+            except ValueError as e:
+                console.print(f"[red]Error:[/red] Invalid env_file for {mapping.folder_path}: {e}")
+                raise typer.Exit(code=1) from e
 
     # Determine skip_clear_files (CLI overrides config)
     skip_clear_final = skip_clear if skip_clear is not None else guard_cfg.skip_clear_files
@@ -430,6 +446,7 @@ def guard(
         fail_on_severity=fail_severity,
         allowed_clear_files=allowed_clear_files,
         combined_files=combined_files,
+        mapped_env_files=mapped_env_files,
     )
 
     # Create output console (suppress colors in CI mode or JSON/SARIF output)

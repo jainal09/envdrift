@@ -133,6 +133,12 @@ secret_name = "auth-service-key"
 folder_path = "services/auth"
 vault_name = "other-vault"  # Override default
 environment = "staging"     # Use DOTENV_PRIVATE_KEY_STAGING
+
+[[vault.sync.mappings]]
+secret_name = "postgres-key"
+folder_path = "secrets/postgresql"
+environment = "production"  # Use DOTENV_PRIVATE_KEY_PRODUCTION
+env_file = "postgresql.env" # Custom dotenv filename inside folder_path
 ```
 
 Place the file in the project root so auto-discovery finds it; pass `-c envdrift.toml` in CI to pin the exact file.

@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/pelletier/go-toml/v2"
@@ -33,9 +34,10 @@ type GuardianConfig struct {
 	IdleTimeoutStr string `toml:"idle_timeout"`
 }
 
-// envdriftConfig represents the full envdrift.toml structure (we only need guardian section).
+// envdriftConfig represents the envdrift.toml structure used by the agent.
 type envdriftConfig struct {
 	Guardian guardianToml `toml:"guardian"`
+	Vault    vaultToml    `toml:"vault"`
 }
 
 // guardianToml is the raw TOML representation.
@@ -45,6 +47,18 @@ type guardianToml struct {
 	Patterns    []string `toml:"patterns"`
 	Exclude     []string `toml:"exclude"`
 	Notify      *bool    `toml:"notify"`
+}
+
+type vaultToml struct {
+	Sync vaultSyncToml `toml:"sync"`
+}
+
+type vaultSyncToml struct {
+	Mappings []vaultSyncMappingToml `toml:"mappings"`
+}
+
+type vaultSyncMappingToml struct {
+	EnvFile string `toml:"env_file"`
 }
 
 // LoadProjectConfig loads the guardian configuration from a project's envdrift.toml.
@@ -65,7 +79,7 @@ func LoadProjectConfig(projectPath string) (*GuardianConfig, error) {
 		return nil, err
 	}
 
-	return parseGuardianConfig(&cfg.Guardian)
+	return parseGuardianConfig(&cfg.Guardian, cfg.Vault.Sync.Mappings)
 }
 
 // DefaultGuardianConfig returns a GuardianConfig with default values.
@@ -80,7 +94,7 @@ func DefaultGuardianConfig() *GuardianConfig {
 }
 
 // parseGuardianConfig converts the raw TOML config to GuardianConfig with defaults.
-func parseGuardianConfig(raw *guardianToml) (*GuardianConfig, error) {
+func parseGuardianConfig(raw *guardianToml, vaultMappings []vaultSyncMappingToml) (*GuardianConfig, error) {
 	cfg := DefaultGuardianConfig()
 
 	// Apply values from TOML if present
@@ -109,7 +123,51 @@ func parseGuardianConfig(raw *guardianToml) (*GuardianConfig, error) {
 		cfg.Notify = *raw.Notify
 	}
 
+	cfg.Patterns = appendVaultEnvFilePatterns(cfg.Patterns, vaultMappings)
+
 	return cfg, nil
+}
+
+func appendVaultEnvFilePatterns(patterns []string, mappings []vaultSyncMappingToml) []string {
+	result := append([]string{}, patterns...)
+
+	for _, mapping := range mappings {
+		envFile := strings.TrimSpace(mapping.EnvFile)
+		if envFile == "" || filepath.IsAbs(envFile) {
+			continue
+		}
+
+		clean := filepath.Clean(envFile)
+		if clean == "." || clean == ".." || strings.HasPrefix(clean, ".."+string(filepath.Separator)) {
+			continue
+		}
+
+		name := filepath.Base(clean)
+		if name == "." || name == string(filepath.Separator) {
+			continue
+		}
+
+		if patternListMatches(result, name) {
+			continue
+		}
+
+		result = append(result, name)
+	}
+
+	return result
+}
+
+func patternListMatches(patterns []string, name string) bool {
+	for _, pattern := range patterns {
+		matched, err := filepath.Match(pattern, name)
+		if err == nil && matched {
+			return true
+		}
+		if pattern == name {
+			return true
+		}
+	}
+	return false
 }
 
 // ParseIdleTimeout parses a duration string like "5m", "30s", "1h", "2d" into time.Duration.

@@ -369,11 +369,13 @@ class TestSyncConfig:
             folder_path="services/api",
             vault_name="other-vault",
             environment="staging",
+            env_file="api.env.staging",
         )
         assert mapping.secret_name == "api-key"
         assert mapping.folder_path == "services/api"
         assert mapping.vault_name == "other-vault"
         assert mapping.environment == "staging"
+        assert mapping.env_file == "api.env.staging"
 
     def test_sync_mapping_config_with_profile(self):
         """Test SyncMappingConfig with profile and activate_to."""
@@ -425,6 +427,7 @@ class TestSyncConfig:
                             "secret_name": "app-key",
                             "folder_path": "services/app",
                             "environment": "production",
+                            "env_file": "app.env",
                         },
                         {
                             "secret_name": "api-key",
@@ -448,6 +451,7 @@ class TestSyncConfig:
         assert first_mapping.folder_path == "services/app"
         assert first_mapping.vault_name is None
         assert first_mapping.environment == "production"
+        assert first_mapping.env_file == "app.env"
 
         second_mapping = config.vault.sync.mappings[1]
         assert second_mapping.secret_name == "api-key"
@@ -492,6 +496,7 @@ max_workers = 2
 secret_name = "myapp-key"
 folder_path = "."
 environment = "production"
+env_file = "myapp.env"
 
 [[vault.sync.mappings]]
 secret_name = "service-key"
@@ -507,6 +512,7 @@ environment = "staging"
         assert config.vault.sync.max_workers == 2
         assert len(config.vault.sync.mappings) == 2
         assert config.vault.sync.mappings[0].secret_name == "myapp-key"
+        assert config.vault.sync.mappings[0].env_file == "myapp.env"
         assert config.vault.sync.mappings[1].vault_name == "backend-vault"
 
 

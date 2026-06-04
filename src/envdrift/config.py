@@ -33,6 +33,7 @@ class SyncMappingConfig:
     folder_path: str
     vault_name: str | None = None
     environment: str | None = None  # None = derive from profile or default to "production"
+    env_file: str | None = None  # Optional custom env filename relative to folder_path
     profile: str | None = None  # Profile name for filtering (e.g., "local", "prod")
     activate_to: str | None = None  # Path to copy decrypted file when profile is activated
     ephemeral_keys: bool | None = None  # None = inherit from central SyncConfig
@@ -251,6 +252,7 @@ class EnvdriftConfig:
                 folder_path=m["folder_path"],
                 vault_name=m.get("vault_name"),
                 environment=m.get("environment"),  # None = derive from profile
+                env_file=m.get("env_file"),
                 profile=m.get("profile"),
                 activate_to=m.get("activate_to"),
                 ephemeral_keys=m.get("ephemeral_keys"),  # None = inherit from central

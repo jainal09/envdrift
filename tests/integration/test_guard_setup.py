@@ -570,7 +570,7 @@ class TestHookScriptContent:
         content = pre_commit.read_text()
 
         # Should contain encryption check
-        assert "envdrift encrypt --check" in content or "envdrift" in content
+        assert "envdrift guard --staged --native-only --ci" in content
 
     def test_pre_push_script_checks_lock(self, guard_test_env):
         """Test that pre-push hook checks lock status."""

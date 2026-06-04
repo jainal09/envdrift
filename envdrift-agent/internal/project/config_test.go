@@ -146,6 +146,71 @@ idle_timeout = "1m"
 	}
 }
 
+func TestLoadProjectConfig_AppendsVaultEnvFilePatterns(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	tomlContent := `
+[guardian]
+enabled = true
+patterns = [".env*", "service.env"]
+
+[vault.sync]
+[[vault.sync.mappings]]
+folder_path = "secrets/postgresql"
+environment = "production"
+secret_name = "postgresql-key"
+env_file = "postgresql.env"
+
+[[vault.sync.mappings]]
+folder_path = "secrets/keycloak"
+environment = "production"
+secret_name = "keycloak-key"
+env_file = "keycloak/keycloak-local.env"
+
+[[vault.sync.mappings]]
+folder_path = "secrets/ignored"
+environment = "production"
+secret_name = "ignored-key"
+env_file = "../outside.env"
+
+[[vault.sync.mappings]]
+folder_path = "secrets/already-covered"
+environment = "production"
+secret_name = "already-covered-key"
+env_file = "service.env"
+`
+	if err := os.WriteFile(filepath.Join(tmpDir, "envdrift.toml"), []byte(tomlContent), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := LoadProjectConfig(tmpDir)
+	if err != nil {
+		t.Fatalf("LoadProjectConfig() error = %v", err)
+	}
+
+	if !patternListMatches(cfg.Patterns, "postgresql.env") {
+		t.Errorf("Expected postgresql.env to be covered, got %v", cfg.Patterns)
+	}
+
+	if !patternListMatches(cfg.Patterns, "keycloak-local.env") {
+		t.Errorf("Expected keycloak-local.env to be covered, got %v", cfg.Patterns)
+	}
+
+	if patternListMatches(cfg.Patterns, "outside.env") {
+		t.Errorf("Expected escaping env_file to be ignored, got %v", cfg.Patterns)
+	}
+
+	servicePatternCount := 0
+	for _, pattern := range cfg.Patterns {
+		if pattern == "service.env" {
+			servicePatternCount++
+		}
+	}
+	if servicePatternCount != 1 {
+		t.Errorf("Expected service.env to stay de-duplicated, got %v", cfg.Patterns)
+	}
+}
+
 func TestLoadAllProjectConfigs(t *testing.T) {
 	// Create two project directories
 	proj1 := t.TempDir()
