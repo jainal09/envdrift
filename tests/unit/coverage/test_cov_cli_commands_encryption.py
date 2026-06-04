@@ -206,8 +206,8 @@ def test_encrypt_sops_passes_all_kms_kwargs(monkeypatch, tmp_path: Path):
     assert dummy.encrypt_kwargs, "encrypt should have been called"
     kwargs = dummy.encrypt_kwargs[0]
     assert kwargs["kms_arn"] == "arn:aws:kms:us-east-1:111:key/abc"
-    assert str(kwargs["gcp_kms"]).startswith("projects/")
-    assert str(kwargs["azure_kv"]).startswith("https://kv.vault.azure.net")
+    assert kwargs["gcp_kms"] == "projects/p/locations/l/keyRings/r/cryptoKeys/k"
+    assert kwargs["azure_kv"] == "https://kv.vault.azure.net/keys/k/v"
 
 
 def test_encrypt_result_failure_exits_nonzero(monkeypatch, tmp_path: Path):

@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import builtins
 import importlib
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -31,7 +32,6 @@ def authed_client(monkeypatch: pytest.MonkeyPatch):
     The factory lets each test install its own MagicMock client and have it
     returned by ``hvac.Client(...)`` and reported as authenticated.
     """
-    from unittest.mock import MagicMock
 
     def _make(secret_client: MagicMock) -> HashiCorpVaultClient:
         secret_client.is_authenticated.return_value = True
@@ -108,7 +108,6 @@ class TestAuthenticateErrorBranches:
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """Unauthorized during Client construction -> AuthenticationError (line 89)."""
-        from unittest.mock import MagicMock
 
         mock_hvac = MagicMock()
         mock_hvac.Client.side_effect = hashicorp.Unauthorized("bad token")
@@ -124,7 +123,6 @@ class TestAuthenticateErrorBranches:
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """Forbidden during is_authenticated() -> AuthenticationError (line 89)."""
-        from unittest.mock import MagicMock
 
         secret_client = MagicMock()
         secret_client.is_authenticated.side_effect = hashicorp.Forbidden("denied")
@@ -140,7 +138,6 @@ class TestAuthenticateErrorBranches:
 
     def test_is_authenticated_swallows_exception(self, authed_client) -> None:
         """is_authenticated() returns False if the hvac call raises (lines 104-105)."""
-        from unittest.mock import MagicMock
 
         secret_client = MagicMock()
         client = authed_client(secret_client)
@@ -155,7 +152,6 @@ class TestGenericErrorBranches:
 
     def test_get_secret_generic_error_raises_vault_error(self, authed_client) -> None:
         """Unexpected error in get_secret -> VaultError (lines 160-161)."""
-        from unittest.mock import MagicMock
 
         secret_client = MagicMock()
         client = authed_client(secret_client)
@@ -166,7 +162,6 @@ class TestGenericErrorBranches:
 
     def test_list_secrets_unauthorized_raises_auth_error(self, authed_client) -> None:
         """Unauthorized in list_secrets -> AuthenticationError (lines 185-186)."""
-        from unittest.mock import MagicMock
 
         secret_client = MagicMock()
         client = authed_client(secret_client)
@@ -177,7 +172,6 @@ class TestGenericErrorBranches:
 
     def test_list_secrets_forbidden_raises_auth_error(self, authed_client) -> None:
         """Forbidden in list_secrets -> AuthenticationError (lines 185-186)."""
-        from unittest.mock import MagicMock
 
         secret_client = MagicMock()
         client = authed_client(secret_client)
@@ -188,7 +182,6 @@ class TestGenericErrorBranches:
 
     def test_list_secrets_generic_error_raises_vault_error(self, authed_client) -> None:
         """Unexpected error in list_secrets -> VaultError (lines 187-188)."""
-        from unittest.mock import MagicMock
 
         secret_client = MagicMock()
         client = authed_client(secret_client)
@@ -199,7 +192,6 @@ class TestGenericErrorBranches:
 
     def test_create_or_update_secret_generic_error_raises_vault_error(self, authed_client) -> None:
         """Unexpected error in create_or_update_secret -> VaultError (lines 231-232)."""
-        from unittest.mock import MagicMock
 
         secret_client = MagicMock()
         client = authed_client(secret_client)
