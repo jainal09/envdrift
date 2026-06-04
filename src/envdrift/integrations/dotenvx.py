@@ -136,8 +136,17 @@ def normalize_dotenvx_metadata(
 
     if env_file.exists():
         content = env_file.read_text(encoding="utf-8")
-        new_content = _PUBLIC_KEY_NAME_RE.sub(f"{canonical_public_key}=", content)
-        new_content = new_content.replace(custom_comment, canonical_comment)
+        rewritten = []
+        for line in content.splitlines():
+            # Line-anchored: only rewrite the dotenvx filename comment and the
+            # public-key assignment line, never substrings of unrelated prose.
+            if line.strip() == custom_comment:
+                rewritten.append(canonical_comment)
+            else:
+                rewritten.append(_PUBLIC_KEY_NAME_RE.sub(f"{canonical_public_key}=", line))
+        new_content = "\n".join(rewritten)
+        if content.endswith("\n"):
+            new_content += "\n"
         if new_content != content:
             env_file.write_text(new_content, encoding="utf-8")
 
@@ -157,25 +166,22 @@ def normalize_dotenvx_metadata(
     )
 
     generated_idx = None
+    key_value = ""
     if custom_comment_idx is not None:
         for i in range(custom_comment_idx + 1, len(lines)):
-            line = lines[i].strip()
-            if not line:
+            stripped = lines[i].strip()
+            if not stripped:
                 continue
-            if line.startswith("#"):
+            if stripped.startswith("#"):
                 break
-            if _PRIVATE_KEY_LINE_RE.match(line):
+            match = _PRIVATE_KEY_LINE_RE.match(stripped)
+            if match:
                 generated_idx = i
+                key_value = match.group(1)
             break
 
     if generated_idx is None:
         return
-
-    match = _PRIVATE_KEY_LINE_RE.match(lines[generated_idx].strip())
-    if not match:
-        return
-
-    key_value = match.group(1)
     if canonical_idx is not None and canonical_idx != generated_idx:
         lines[canonical_idx] = f"{canonical_private_key}={key_value}"
         indexes_to_delete = [generated_idx]

@@ -1974,6 +1974,41 @@ class TestPullCommand:
         assert env_file in decrypted
         assert "setup complete" in result.output.lower()
 
+    def test_pull_reports_invalid_env_file(self, monkeypatch, tmp_path: Path):
+        """An env_file that escapes folder_path is reported, not silently used."""
+        service_dir = tmp_path / "service"
+        service_dir.mkdir()
+
+        config_file = tmp_path / "envdrift.toml"
+        config_file.write_text(
+            dedent(
+                f"""
+                [vault]
+                provider = "aws"
+
+                [vault.aws]
+                region = "us-east-1"
+
+                [vault.sync]
+                env_keys_filename = ".env.keys"
+
+                [[vault.sync.mappings]]
+                secret_name = "dotenv-key"
+                folder_path = "{service_dir.as_posix()}"
+                environment = "local"
+                env_file = "../escape.env"
+                """
+            ).lstrip()
+        )
+
+        monkeypatch.setattr("envdrift.vault.get_vault_client", lambda *_, **__: SimpleNamespace())
+        _mock_sync_engine_success(monkeypatch)
+        _mock_encryption_backend(monkeypatch, decrypted_paths=[])
+
+        result = runner.invoke(app, ["pull", "-c", str(config_file), "--skip-sync"])
+
+        assert "invalid env_file" in result.output.lower()
+
     def test_pull_skips_partial_combined_file(self, monkeypatch, tmp_path: Path):
         """Pull should skip combined partial-encryption files."""
         service_dir = tmp_path / "service"
@@ -2943,6 +2978,44 @@ class TestLockCommand:
 
         assert result.exit_code == 0, result.output
         assert env_file.resolve() in [path.resolve() for path in encrypted]
+
+    def test_lock_reports_invalid_env_file(self, monkeypatch, tmp_path: Path):
+        """An env_file that escapes folder_path is reported during lock."""
+        service_dir = tmp_path / "service"
+        service_dir.mkdir()
+
+        config_file = tmp_path / "envdrift.toml"
+        config_file.write_text(
+            dedent(
+                f"""
+                [vault]
+                provider = "aws"
+
+                [vault.aws]
+                region = "us-east-1"
+
+                [vault.sync]
+                env_keys_filename = ".env.keys"
+
+                [[vault.sync.mappings]]
+                secret_name = "dotenv-key"
+                folder_path = "{service_dir.as_posix()}"
+                environment = "sqa"
+                env_file = "../escape.env"
+                """
+            ).lstrip()
+        )
+
+        monkeypatch.setattr("envdrift.vault.get_vault_client", lambda *_, **__: SimpleNamespace())
+        monkeypatch.setattr(
+            "envdrift.integrations.hook_check.ensure_git_hook_setup",
+            lambda **_kwargs: [],
+        )
+        _mock_encryption_backend(monkeypatch, encrypted_paths=[])
+
+        result = runner.invoke(app, ["lock", "-c", str(config_file), "--force"])
+
+        assert "invalid env_file" in result.output.lower()
 
     def test_lock_skips_partial_combined_file(self, monkeypatch, tmp_path: Path):
         """Lock should skip combined partial-encryption files."""

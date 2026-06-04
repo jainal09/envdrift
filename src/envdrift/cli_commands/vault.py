@@ -357,7 +357,7 @@ def vault_push(
 
                         normalize_dotenvx_metadata(
                             env_file,
-                            mapping.folder_path / sync_config.env_keys_filename,
+                            mapping.folder_path / (sync_config.env_keys_filename or ".env.keys"),
                             effective_environment,
                         )
 

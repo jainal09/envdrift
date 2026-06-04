@@ -147,6 +147,29 @@ class TestNativeScannerInternals:
 
         assert mapped_env.resolve() in collected
 
+    def test_collect_files_finds_relative_mapped_file_in_subdir_scan(
+        self, tmp_path: Path, monkeypatch
+    ):
+        """A relative mapped path is found when scanning its subdirectory.
+
+        Regression: relative mapped paths used to be re-rooted under each scan
+        directory, so ``guard secrets/postgresql`` looked for
+        ``secrets/postgresql/secrets/postgresql/postgresql.env`` and missed it.
+        """
+        service_dir = tmp_path / "secrets" / "postgresql"
+        service_dir.mkdir(parents=True)
+        mapped_env = service_dir / "postgresql.env"
+        mapped_env.write_text("POSTGRES_PASSWORD=plaintext-leak\n")
+
+        monkeypatch.chdir(tmp_path)
+        # Path is relative to cwd, as guard would pass it.
+        scanner = NativeScanner(mapped_env_files=["secrets/postgresql/postgresql.env"])
+
+        # Scanning the service subdirectory still collects the mapped file.
+        collected = {p.resolve() for p in scanner._collect_files(service_dir)}
+        assert mapped_env.resolve() in collected
+        assert scanner._is_env_file(mapped_env)
+
     def test_collect_files_excludes_gitignored_env_keys(self, tmp_path: Path):
         """A gitignored .env.keys must NOT be collected — that is its correct state.
 

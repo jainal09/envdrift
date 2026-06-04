@@ -62,7 +62,10 @@ def test_resolve_mapping_env_file_missing_custom_file_reports_expected_path(
     assert detection.environment == "production"
 
 
-@pytest.mark.parametrize("env_file", ["../outside.env", "/tmp/outside.env"])
+@pytest.mark.parametrize(
+    "env_file",
+    ["../outside.env", "/tmp/outside.env", "nested/../postgresql.env", "../service/inside.env"],
+)
 def test_resolve_custom_env_file_rejects_paths_outside_folder(
     tmp_path: Path,
     env_file: str,
@@ -70,6 +73,7 @@ def test_resolve_custom_env_file_rejects_paths_outside_folder(
     service_dir = tmp_path / "service"
     service_dir.mkdir()
 
+    # Any '..' segment is rejected up front, even if it would resolve back inside.
     with pytest.raises(ValueError):
         resolve_custom_env_file(service_dir, env_file)
 
@@ -114,3 +118,19 @@ def test_resolve_mapping_env_file_preserves_legacy_single_env_detection(
     assert detection.status == "found"
     assert detection.path == env_file
     assert detection.environment == "sqa"
+
+
+def test_resolve_mapping_env_file_reports_folder_not_found(tmp_path: Path) -> None:
+    """A custom env_file under a missing folder reports folder_not_found."""
+    mapping = ServiceMapping(
+        secret_name="dotenv-key",
+        folder_path=tmp_path / "does-not-exist",
+        environment="production",
+        env_file=Path("postgresql.env"),
+    )
+
+    detection = resolve_mapping_env_file(mapping)
+
+    assert detection.status == "folder_not_found"
+    assert detection.path is None
+    assert detection.environment == "production"

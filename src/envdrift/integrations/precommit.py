@@ -276,8 +276,14 @@ def verify_hooks_installed(config_path: Path | None = None) -> dict[str, bool]:
     if config_path is None or not config_path.exists():
         return empty_result
 
-    content = config_path.read_text()
-    config = yaml.safe_load(content) or {}
+    try:
+        content = config_path.read_text()
+        config = yaml.safe_load(content) or {}
+    except (OSError, yaml.YAMLError):
+        return empty_result
+
+    if not isinstance(config, dict):
+        return empty_result
 
     result = empty_result.copy()
 

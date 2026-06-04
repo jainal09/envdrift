@@ -394,7 +394,11 @@ def guard(
         if mapping.env_file:
             try:
                 mapped_env_files.append(
-                    str(resolve_custom_env_file(Path(mapping.folder_path), mapping.env_file))
+                    str(
+                        resolve_custom_env_file(
+                            Path(mapping.folder_path), mapping.env_file
+                        ).resolve()
+                    )
                 )
             except ValueError as e:
                 console.print(f"[red]Error:[/red] Invalid env_file for {mapping.folder_path}: {e}")

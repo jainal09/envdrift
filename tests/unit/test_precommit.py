@@ -315,3 +315,22 @@ class TestVerifyHooksInstalled:
         assert result["envdrift-validate"] is True
         assert result["envdrift-encryption"] is False
         assert result["envdrift-guard"] is False
+
+    def test_malformed_yaml_reports_all_hooks_absent(self, tmp_path: Path):
+        """Unparseable YAML reports all hooks as absent instead of crashing."""
+        config_file = tmp_path / ".pre-commit-config.yaml"
+        config_file.write_text("repos: [unbalanced\n")
+
+        result = verify_hooks_installed(config_path=config_file)
+
+        assert result == dict.fromkeys(result, False)
+        assert result["envdrift-guard"] is False
+
+    def test_non_mapping_yaml_reports_all_hooks_absent(self, tmp_path: Path):
+        """A YAML document whose root is not a mapping is treated as no hooks."""
+        config_file = tmp_path / ".pre-commit-config.yaml"
+        config_file.write_text("- just\n- a\n- list\n")
+
+        result = verify_hooks_installed(config_path=config_file)
+
+        assert result == dict.fromkeys(result, False)

@@ -170,7 +170,9 @@ def test_guard_passes_custom_env_files_to_engine(tmp_path: Path, monkeypatch):
     result = runner.invoke(app, ["guard", "."])
 
     assert result.exit_code == 0, result.output
-    assert created_configs[0].mapped_env_files == ["secrets/postgresql/postgresql.env"]
+    # Guard resolves mapped env files to absolute paths so the scanner matches
+    # them regardless of which directory is scanned.
+    assert created_configs[0].mapped_env_files == [str((service_dir / "postgresql.env").resolve())]
 
 
 def test_guard_rejects_custom_env_files_outside_folder(tmp_path: Path, monkeypatch):

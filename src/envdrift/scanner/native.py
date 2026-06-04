@@ -287,7 +287,14 @@ class NativeScanner(ScannerBackend):
         self._entropy_threshold = entropy_threshold
         self._allowed_clear_files = set(allowed_clear_files or [])
         self._skip_clear_files = skip_clear_files
-        self._mapped_env_files = {Path(p) for p in mapped_env_files or []}
+        # Canonicalize mapped env files to absolute paths so they match regardless
+        # of which directory is being scanned (relative paths would otherwise be
+        # re-rooted per scan dir, letting a mapped file slip past the guard).
+        cwd = Path.cwd()
+        self._mapped_env_files = {
+            (Path(p) if Path(p).is_absolute() else cwd / Path(p)).resolve()
+            for p in mapped_env_files or []
+        }
 
         if ignore_patterns is not None:
             self._ignore_patterns = tuple(ignore_patterns)
@@ -447,8 +454,13 @@ class NativeScanner(ScannerBackend):
 
         # Method 4: Add explicitly configured custom env files from vault.sync.
         # These may not match ".env*" and can otherwise be missed when untracked.
-        for configured in self._mapped_env_files:
-            candidate = configured if configured.is_absolute() else directory / configured
+        # Paths are already absolute; only include those under the scan directory.
+        directory_resolved = directory.resolve()
+        for candidate in self._mapped_env_files:
+            try:
+                candidate.relative_to(directory_resolved)
+            except ValueError:
+                continue
             if candidate.exists() and candidate.is_file():
                 files.add(candidate)
 
@@ -678,20 +690,13 @@ class NativeScanner(ScannerBackend):
         if not self._mapped_env_files:
             return False
 
-        path_str = path.as_posix()
-        with_cwd = (Path.cwd() / path).resolve() if not path.is_absolute() else path.resolve()
-        for configured in self._mapped_env_files:
-            configured_str = configured.as_posix()
-            configured_abs = (
-                configured.resolve()
-                if configured.is_absolute()
-                else (Path.cwd() / configured).resolve()
-            )
-            if with_cwd == configured_abs:
-                return True
-            if path_str == configured_str or path_str.endswith(f"/{configured_str}"):
-                return True
-        return False
+        # _mapped_env_files are canonical absolute paths; compare on the same form.
+        candidate = path if path.is_absolute() else Path.cwd() / path
+        try:
+            resolved = candidate.resolve()
+        except OSError:
+            return False
+        return resolved in self._mapped_env_files
 
     def _is_private_key_file(self, path: Path) -> bool:
         """Check if a file is dotenvx's private-key file (``.env.keys``).

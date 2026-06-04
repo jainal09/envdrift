@@ -69,6 +69,8 @@ def resolve_custom_env_file(folder_path: Path, env_file: Path | str) -> Path:
     env_file_path = Path(env_file)
     if env_file_path.is_absolute():
         raise ValueError("env_file must be relative to folder_path")
+    if ".." in env_file_path.parts:
+        raise ValueError("env_file must not contain '..'")
 
     resolved_folder = folder_path.resolve()
     resolved_file = (folder_path / env_file_path).resolve()

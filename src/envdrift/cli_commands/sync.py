@@ -246,7 +246,9 @@ def _normalize_mapped_dotenvx_metadata(
     effective_environment: str,
     backend_provider: Any,
 ) -> None:
-    if getattr(backend_provider, "value", None) != "dotenvx" or mapping.env_file is None:
+    from envdrift.encryption import EncryptionProvider
+
+    if backend_provider != EncryptionProvider.DOTENVX or mapping.env_file is None:
         return
 
     from envdrift.integrations.dotenvx import normalize_dotenvx_metadata

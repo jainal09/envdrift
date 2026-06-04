@@ -90,11 +90,12 @@ class SyncEngine:
                 or detection.path is None
                 or detection.environment is None
             ):
-                expected = (
-                    detection.path
-                    if detection.path is not None
-                    else mapping.folder_path / f".env.{mapping.effective_environment}"
-                )
+                if detection.path is not None:
+                    expected = detection.path
+                elif mapping.env_file is not None:
+                    expected = mapping.folder_path / mapping.env_file
+                else:
+                    expected = mapping.folder_path / f".env.{mapping.effective_environment}"
                 return ServiceSyncResult(
                     secret_name=mapping.secret_name,
                     folder_path=mapping.folder_path,
