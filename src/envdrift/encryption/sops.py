@@ -316,6 +316,18 @@ class SOPSEncryptionBackend(EncryptionBackend):
             args.extend(["--output", str(output_file)])
         elif in_place:
             args.append("--in-place")
+        else:
+            # Neither in-place nor an output file: sops would stream plaintext to
+            # stdout where _run() captures and discards it. Refuse rather than
+            # silently dropping the decrypted secrets while reporting success.
+            return EncryptionResult(
+                success=False,
+                message=(
+                    "decrypt(in_place=False) requires an output_file; "
+                    "otherwise the decrypted plaintext is discarded."
+                ),
+                file_path=env_file,
+            )
 
         # Specify input type for .env files
         args.extend(["--input-type", "dotenv", "--output-type", "dotenv"])
