@@ -91,6 +91,21 @@ def pytest_configure(config: pytest.Config) -> None:
     config.addinivalue_line("markers", "slow: Tests that take >10 seconds")
 
 
+@pytest.fixture(autouse=True)
+def _deterministic_cli_output(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Make envdrift CLI subprocesses emit un-colorized, parseable output.
+
+    CI exports ``FORCE_COLOR=1`` globally. Integration helpers pass
+    ``os.environ.copy()`` to the CLI, so without this the CLI would render
+    ANSI-colored stdout — breaking ``--format json`` parsing and exact-text
+    assertions. ``FORCE_COLOR`` overrides ``NO_COLOR`` in Rich, so we must
+    *remove* it (setting ``NO_COLOR`` alone is not enough). ``monkeypatch``
+    restores the original environment after each test.
+    """
+    monkeypatch.delenv("FORCE_COLOR", raising=False)
+    monkeypatch.setenv("NO_COLOR", "1")
+
+
 # --- LocalStack (AWS) Fixtures ---
 
 

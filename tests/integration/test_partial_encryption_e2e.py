@@ -1,0 +1,547 @@
+"""Partial encryption end-to-end integration tests (real dotenvx binary + real git).
+
+These tests exercise the ``envdrift push`` / ``envdrift pull-partial`` commands
+as real subprocesses against the **real dotenvx binary** and **real git**. No
+mocking of the behavior under test: encryption/decryption is performed by the
+actual dotenvx CLI and the combined-file / secrets-only logic runs end to end.
+
+Test categories:
+- Secrets-only push/pull-partial (HP-05/06/07, BP-09/13)
+- Combine-mode push --check staleness (BP-12) and combined-file structure (HP-01, EC-07)
+- Full lock/pull/lock cycle (HP-11) and .env.keys exclusion (EC-09)
+
+Gating:
+- The dotenvx binary is required; tests skip if it is absent (CI installs it).
+- git is required and is provided by the ``git_repo`` fixture (skips if absent).
+
+Resource isolation: each test uses its own ``tmp_path``-backed ``work_dir`` and
+secrets directory, so concurrent / repeated runs never collide.
+"""
+
+from __future__ import annotations
+
+import os
+import shutil
+import subprocess
+from pathlib import Path
+
+import pytest
+
+# Mark all tests in this module. No container needed: real dotenvx + real git.
+pytestmark = [pytest.mark.integration]
+
+# dotenvx is the encryption backend used by partial encryption. Skip the whole
+# module locally when it is not installed (CI installs it). git is gated per-test
+# via the ``git_repo`` fixture.
+pytestmark.append(
+    pytest.mark.skipif(
+        shutil.which("dotenvx") is None,
+        reason="dotenvx binary not installed (required for real partial-encryption e2e)",
+    )
+)
+
+
+# --- Local helpers (defined here so conftest.py is never modified) ---
+
+
+def _run_envdrift(
+    args: list[str],
+    *,
+    cwd: Path,
+    integration_pythonpath: str,
+    envdrift_cmd: list[str],
+    timeout: int = 60,
+) -> subprocess.CompletedProcess[str]:
+    """Run the real envdrift CLI as a subprocess and capture its output."""
+    env = os.environ.copy()
+    env["PYTHONPATH"] = integration_pythonpath
+    return subprocess.run(
+        [*envdrift_cmd, *args],
+        cwd=cwd,
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=timeout,
+    )
+
+
+def _write_secrets_only_config(work_dir: Path, *, name: str, secrets_dir: str) -> None:
+    """Write a secrets-only envdrift.toml for one environment."""
+    (work_dir / "envdrift.toml").write_text(
+        "[partial_encryption]\n"
+        "enabled = true\n\n"
+        "[[partial_encryption.environments]]\n"
+        f'name = "{name}"\n'
+        "secrets_only = true\n"
+        f'secrets_dir = "{secrets_dir}"\n'
+    )
+
+
+def _write_combine_config(
+    work_dir: Path,
+    *,
+    name: str,
+    clear_file: str,
+    secret_file: str,
+    combined_file: str,
+) -> None:
+    """Write a combine-mode envdrift.toml for one environment."""
+    (work_dir / "envdrift.toml").write_text(
+        "[partial_encryption]\n"
+        "enabled = true\n\n"
+        "[[partial_encryption.environments]]\n"
+        f'name = "{name}"\n'
+        f'clear_file = "{clear_file}"\n'
+        f'secret_file = "{secret_file}"\n'
+        f'combined_file = "{combined_file}"\n'
+    )
+
+
+def _out(result: subprocess.CompletedProcess[str]) -> str:
+    """Combined stdout+stderr for substring assertions."""
+    return result.stdout + result.stderr
+
+
+# ---------------------------------------------------------------------------
+# P0 tests
+# ---------------------------------------------------------------------------
+
+
+class TestSecretsOnlyPushPull:
+    """Secrets-only push/pull-partial against the real dotenvx binary."""
+
+    def test_secrets_only_push_encrypts_all_matching_files_real_binary(
+        self,
+        git_repo: Path,
+        integration_pythonpath: str,
+        envdrift_cmd: list[str],
+    ):
+        """HP-06: push encrypts every matching file in secrets_dir in place."""
+        work_dir = git_repo
+        secrets = work_dir / "secrets"
+        secrets.mkdir()
+        _write_secrets_only_config(work_dir, name="prod", secrets_dir="secrets")
+
+        api = secrets / ".env.api"
+        web = secrets / ".env.web"
+        api.write_text("STRIPE_KEY=sk_live_fake\nDB=postgres://x\n")
+        web.write_text("TOKEN=abc123\n")
+
+        result = _run_envdrift(
+            ["push"],
+            cwd=work_dir,
+            integration_pythonpath=integration_pythonpath,
+            envdrift_cmd=envdrift_cmd,
+        )
+
+        assert result.returncode == 0, _out(result)
+        assert "Encrypted 2 file(s)" in _out(result), _out(result)
+
+        for f in (api, web):
+            content = f.read_text()
+            assert "encrypted:" in content, f"{f} not encrypted:\n{content}"
+            assert "DOTENV_PUBLIC_KEY" in content, f"{f} missing public-key header:\n{content}"
+
+        # dotenvx writes the private key file next to the encrypted files.
+        assert (secrets / ".env.keys").exists(), "private key file (.env.keys) was not created"
+
+    def test_secrets_only_pull_decrypts_all_matching_files_real_binary(
+        self,
+        git_repo: Path,
+        integration_pythonpath: str,
+        envdrift_cmd: list[str],
+    ):
+        """HP-07: pull-partial decrypts every encrypted file back to plaintext."""
+        work_dir = git_repo
+        secrets = work_dir / "secrets"
+        secrets.mkdir()
+        _write_secrets_only_config(work_dir, name="prod", secrets_dir="secrets")
+
+        api = secrets / ".env.api"
+        web = secrets / ".env.web"
+        api.write_text("STRIPE_KEY=sk_live_fake\n")
+        web.write_text("TOKEN=abc123\n")
+
+        push = _run_envdrift(
+            ["push"],
+            cwd=work_dir,
+            integration_pythonpath=integration_pythonpath,
+            envdrift_cmd=envdrift_cmd,
+        )
+        assert push.returncode == 0, _out(push)
+        assert "encrypted:" in api.read_text()
+
+        pull = _run_envdrift(
+            ["pull-partial"],
+            cwd=work_dir,
+            integration_pythonpath=integration_pythonpath,
+            envdrift_cmd=envdrift_cmd,
+        )
+
+        assert pull.returncode == 0, _out(pull)
+        assert "Decrypted 2 file(s)" in _out(pull), _out(pull)
+
+        api_content = api.read_text()
+        assert "STRIPE_KEY=sk_live_fake" in api_content, api_content
+        # No encrypted value lines should remain after a real decrypt.
+        assert "encrypted:" not in api_content, api_content
+        assert "TOKEN=abc123" in web.read_text()
+
+    def test_secrets_only_push_check_reports_in_sync_when_all_encrypted(
+        self,
+        git_repo: Path,
+        integration_pythonpath: str,
+        envdrift_cmd: list[str],
+    ):
+        """HP-05: push --check is a dry run reporting in_sync (exit 0), mutating nothing."""
+        work_dir = git_repo
+        secrets = work_dir / "secrets"
+        secrets.mkdir()
+        _write_secrets_only_config(work_dir, name="prod", secrets_dir="secrets")
+
+        api = secrets / ".env.api"
+        api.write_text("STRIPE_KEY=sk_live_fake\n")
+
+        push = _run_envdrift(
+            ["push"],
+            cwd=work_dir,
+            integration_pythonpath=integration_pythonpath,
+            envdrift_cmd=envdrift_cmd,
+        )
+        assert push.returncode == 0, _out(push)
+
+        before = api.read_bytes()
+
+        check = _run_envdrift(
+            ["push", "--check"],
+            cwd=work_dir,
+            integration_pythonpath=integration_pythonpath,
+            envdrift_cmd=envdrift_cmd,
+        )
+
+        assert check.returncode == 0, _out(check)
+        out = _out(check)
+        assert "up to date" in out, out
+        assert "Out of date: 0" in out, out
+        # Dry run must not touch the encrypted file.
+        assert api.read_bytes() == before, "push --check mutated the encrypted file"
+
+    def test_secrets_only_push_check_fails_when_files_unencrypted(
+        self,
+        git_repo: Path,
+        integration_pythonpath: str,
+        envdrift_cmd: list[str],
+    ):
+        """BP-13: push --check exits non-zero when a secrets-only file is still plaintext."""
+        work_dir = git_repo
+        secrets = work_dir / "secrets"
+        secrets.mkdir()
+        _write_secrets_only_config(work_dir, name="prod", secrets_dir="secrets")
+
+        api = secrets / ".env.api"
+        api.write_text("STRIPE_KEY=sk_live_fake\n")
+
+        check = _run_envdrift(
+            ["push", "--check"],
+            cwd=work_dir,
+            integration_pythonpath=integration_pythonpath,
+            envdrift_cmd=envdrift_cmd,
+        )
+
+        assert check.returncode == 1, _out(check)
+        out = _out(check).lower()
+        assert "not encrypted" in out or "out of date" in out, _out(check)
+        # Dry run leaves the file plaintext.
+        assert "encrypted:" not in api.read_text(), api.read_text()
+        # secrets-only mode never produces a combined file.
+        assert "combined file" not in out, _out(check)
+
+    def test_secrets_only_pull_partial_missing_keys_surfaces_error_real_binary(
+        self,
+        git_repo: Path,
+        integration_pythonpath: str,
+        envdrift_cmd: list[str],
+    ):
+        """BP-09: pull-partial with .env.keys removed surfaces MISSING_PRIVATE_KEY, exits non-zero."""
+        work_dir = git_repo
+        secrets = work_dir / "secrets"
+        secrets.mkdir()
+        _write_secrets_only_config(work_dir, name="prod", secrets_dir="secrets")
+
+        api = secrets / ".env.api"
+        api.write_text("STRIPE_KEY=sk_live_fake\n")
+
+        push = _run_envdrift(
+            ["push"],
+            cwd=work_dir,
+            integration_pythonpath=integration_pythonpath,
+            envdrift_cmd=envdrift_cmd,
+        )
+        assert push.returncode == 0, _out(push)
+        assert "encrypted:" in api.read_text()
+
+        # Remove every private-key file so dotenvx cannot decrypt.
+        for keys in (secrets / ".env.keys", work_dir / ".env.keys"):
+            if keys.exists():
+                keys.unlink()
+
+        pull = _run_envdrift(
+            ["pull-partial"],
+            cwd=work_dir,
+            integration_pythonpath=integration_pythonpath,
+            envdrift_cmd=envdrift_cmd,
+        )
+
+        assert pull.returncode == 1, _out(pull)
+        out = _out(pull)
+        assert "Failed to decrypt" in out, out
+        assert "MISSING_PRIVATE_KEY" in out or "private key" in out.lower(), out
+        assert "Errors: 1" in out, out
+        # File must remain encrypted (no partial/half-written state).
+        assert "encrypted:" in api.read_text(), api.read_text()
+
+
+class TestCombineModePush:
+    """Combine-mode push --check staleness and combined-file structure (real binary)."""
+
+    def test_combine_push_check_fails_when_combined_stale_real_binary(
+        self,
+        git_repo: Path,
+        integration_pythonpath: str,
+        envdrift_cmd: list[str],
+    ):
+        """BP-12: push --check exits non-zero when the combined file is stale after a manual edit."""
+        work_dir = git_repo
+        _write_combine_config(
+            work_dir,
+            name="production",
+            clear_file=".env.production.clear",
+            secret_file=".env.production.secret",
+            combined_file=".env.production",
+        )
+        (work_dir / ".env.production.clear").write_text("APP_NAME=myapp\n")
+        secret = work_dir / ".env.production.secret"
+        secret.write_text("STRIPE_KEY=sk_live_x\n")
+
+        push = _run_envdrift(
+            ["push", "--env", "production"],
+            cwd=work_dir,
+            integration_pythonpath=integration_pythonpath,
+            envdrift_cmd=envdrift_cmd,
+        )
+        assert push.returncode == 0, _out(push)
+        assert "encrypted:" in secret.read_text()
+
+        # Manually corrupt the generated combined file so it is now stale.
+        combined = work_dir / ".env.production"
+        combined.write_text(combined.read_text() + "STALE=yes\n")
+
+        check = _run_envdrift(
+            ["push", "--check", "--env", "production"],
+            cwd=work_dir,
+            integration_pythonpath=integration_pythonpath,
+            envdrift_cmd=envdrift_cmd,
+        )
+
+        assert check.returncode == 1, _out(check)
+        assert "out of date" in _out(check).lower(), _out(check)
+        # Dry run must not regenerate the combined file: manual edit survives.
+        assert "STALE=yes" in combined.read_text(), combined.read_text()
+        # Secret source stays encrypted.
+        assert "encrypted:" in secret.read_text(), secret.read_text()
+
+    def test_combine_push_strips_public_key_border_and_excludes_it_from_count_real_binary(
+        self,
+        git_repo: Path,
+        integration_pythonpath: str,
+        envdrift_cmd: list[str],
+    ):
+        """EC-07: dotenvx public-key border lines are stripped and the public key is not counted."""
+        work_dir = git_repo
+        _write_combine_config(
+            work_dir,
+            name="production",
+            clear_file=".env.production.clear",
+            secret_file=".env.production.secret",
+            combined_file=".env.production",
+        )
+        (work_dir / ".env.production.clear").write_text("APP_NAME=myapp\n")
+        secret = work_dir / ".env.production.secret"
+        secret.write_text("STRIPE_KEY=sk_live_x\nDB_PASS=hunter2\n")
+
+        push = _run_envdrift(
+            ["push", "--env", "production"],
+            cwd=work_dir,
+            integration_pythonpath=integration_pythonpath,
+            envdrift_cmd=envdrift_cmd,
+        )
+
+        assert push.returncode == 0, _out(push)
+
+        combined = (work_dir / ".env.production").read_text()
+        # Both real secrets land in the combined file as encrypted values.
+        assert combined.count("encrypted:") == 2, combined
+        # dotenvx's own public-key block border is stripped (it starts with "#/---").
+        assert "[DOTENV_PUBLIC_KEY]" not in combined, combined
+        # The public key is excluded from the reported secret-var count: 2 (not 3).
+        assert "2 encrypted" in _out(push), _out(push)
+        assert "Encrypted vars: 2" in _out(push), _out(push)
+
+
+# ---------------------------------------------------------------------------
+# P1 tests
+# ---------------------------------------------------------------------------
+
+
+class TestSecretsOnlyLifecycle:
+    """Full lock/pull/lock cycle and .env.keys exclusion (real binary)."""
+
+    def test_secrets_only_full_lock_pull_lock_cycle_real_binary(
+        self,
+        git_repo: Path,
+        integration_pythonpath: str,
+        envdrift_cmd: list[str],
+    ):
+        """HP-11: secrets-only push -> pull-partial -> push round-trips losslessly."""
+        work_dir = git_repo
+        secrets = work_dir / "secrets"
+        secrets.mkdir()
+        _write_secrets_only_config(work_dir, name="prod", secrets_dir="secrets")
+
+        api = secrets / ".env.api"
+        web = secrets / ".env.web"
+        api.write_text("STRIPE_KEY=sk_live_fake\nDB=postgres://x\n")
+        web.write_text("TOKEN=abc123\n")
+
+        # Step 1: encrypt
+        push1 = _run_envdrift(
+            ["push"],
+            cwd=work_dir,
+            integration_pythonpath=integration_pythonpath,
+            envdrift_cmd=envdrift_cmd,
+        )
+        assert push1.returncode == 0, _out(push1)
+        assert "encrypted:" in api.read_text()
+        assert "encrypted:" in web.read_text()
+
+        # Step 2: decrypt — original plaintext secret values are restored.
+        # (dotenvx keeps its public-key header in the file, so we assert on the
+        # restored values + absence of ciphertext, not byte-for-byte equality.)
+        pull = _run_envdrift(
+            ["pull-partial"],
+            cwd=work_dir,
+            integration_pythonpath=integration_pythonpath,
+            envdrift_cmd=envdrift_cmd,
+        )
+        assert pull.returncode == 0, _out(pull)
+        api_decrypted = api.read_text()
+        assert "STRIPE_KEY=sk_live_fake" in api_decrypted, api_decrypted
+        assert "DB=postgres://x" in api_decrypted, api_decrypted
+        assert "encrypted:" not in api_decrypted, api_decrypted
+        web_decrypted = web.read_text()
+        assert "TOKEN=abc123" in web_decrypted, web_decrypted
+        assert "encrypted:" not in web_decrypted, web_decrypted
+
+        # Step 3: re-encrypt
+        push2 = _run_envdrift(
+            ["push"],
+            cwd=work_dir,
+            integration_pythonpath=integration_pythonpath,
+            envdrift_cmd=envdrift_cmd,
+        )
+        assert push2.returncode == 0, _out(push2)
+        assert "encrypted:" in api.read_text()
+        assert "encrypted:" in web.read_text()
+
+    def test_secrets_only_excludes_env_keys_from_encrypt_decrypt_real_binary(
+        self,
+        git_repo: Path,
+        integration_pythonpath: str,
+        envdrift_cmd: list[str],
+    ):
+        """EC-09: .env.keys is never encrypted/decrypted even though it matches .env*."""
+        work_dir = git_repo
+        secrets = work_dir / "secrets"
+        secrets.mkdir()
+        _write_secrets_only_config(work_dir, name="prod", secrets_dir="secrets")
+
+        api = secrets / ".env.api"
+        web = secrets / ".env.web"
+        api.write_text("A=1\n")
+        web.write_text("B=2\n")
+
+        push = _run_envdrift(
+            ["push"],
+            cwd=work_dir,
+            integration_pythonpath=integration_pythonpath,
+            envdrift_cmd=envdrift_cmd,
+        )
+        assert push.returncode == 0, _out(push)
+        # Keys file not counted: only the two real files are reported encrypted.
+        assert "Encrypted 2 file(s)" in _out(push), _out(push)
+
+        env_keys = secrets / ".env.keys"
+        assert env_keys.exists(), "dotenvx did not create .env.keys"
+        keys_bytes = env_keys.read_bytes()
+        # It must never itself be encrypted.
+        assert "encrypted:" not in env_keys.read_text(), env_keys.read_text()
+        assert "encrypted:" in api.read_text()
+        assert "encrypted:" in web.read_text()
+
+        # A pull-partial must leave .env.keys byte-identical.
+        pull = _run_envdrift(
+            ["pull-partial"],
+            cwd=work_dir,
+            integration_pythonpath=integration_pythonpath,
+            envdrift_cmd=envdrift_cmd,
+        )
+        assert pull.returncode == 0, _out(pull)
+        assert env_keys.read_bytes() == keys_bytes, ".env.keys changed across pull-partial"
+
+
+class TestCombineModeStructure:
+    """Combined-file structure assertions (real binary)."""
+
+    def test_combine_push_produces_correct_combined_file_strong_assertions(
+        self,
+        git_repo: Path,
+        integration_pythonpath: str,
+        envdrift_cmd: list[str],
+    ):
+        """HP-01: combine push produces a combined file with header, clear lines, encrypted values."""
+        work_dir = git_repo
+        _write_combine_config(
+            work_dir,
+            name="production",
+            clear_file=".env.production.clear",
+            secret_file=".env.production.secret",
+            combined_file=".env.production",
+        )
+        (work_dir / ".env.production.clear").write_text("APP_NAME=myapp\nDEBUG=false\n")
+        secret = work_dir / ".env.production.secret"
+        secret.write_text("STRIPE_KEY=sk_live_supersecret\nDB_PASS=hunter2\n")
+
+        push = _run_envdrift(
+            ["push", "--env", "production"],
+            cwd=work_dir,
+            integration_pythonpath=integration_pythonpath,
+            envdrift_cmd=envdrift_cmd,
+        )
+
+        assert push.returncode == 0, _out(push)
+
+        combined = (work_dir / ".env.production").read_text()
+        # Auto-generated warning header.
+        assert "WARNING: AUTO-GENERATED FILE" in combined, combined
+        # Verbatim clear section, with its provenance comment.
+        assert "# From .env.production.clear" in combined, combined
+        assert "APP_NAME=myapp" in combined, combined
+        assert "DEBUG=false" in combined, combined
+        # Encrypted secret section with two encrypted values.
+        assert "# From .env.production.secret (encrypted)" in combined, combined
+        assert combined.count("encrypted:") == 2, combined
+        # Raw secret values must never appear in the combined (committed) artifact.
+        assert "sk_live_supersecret" not in combined, "plaintext secret leaked into combined file"
+        assert "hunter2" not in combined, "plaintext secret leaked into combined file"
+        # The .secret source is now encrypted in place.
+        assert "encrypted:" in secret.read_text(), secret.read_text()

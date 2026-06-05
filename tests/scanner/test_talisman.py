@@ -16,6 +16,7 @@ from envdrift.scanner.talisman import (
     TalismanInstallError,
     TalismanNotFoundError,
     TalismanScanner,
+    _get_talisman_version,
     get_platform_info,
     get_talisman_path,
 )
@@ -84,7 +85,7 @@ class TestTalismanInstaller:
     def test_default_version_from_constants(self):
         """Test that installer uses version from constants."""
         installer = TalismanInstaller()
-        assert installer.version == "1.32.0"
+        assert installer.version == _get_talisman_version()
 
     def test_custom_version(self):
         """Test that custom version can be specified."""

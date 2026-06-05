@@ -40,7 +40,7 @@
         "linux_arm64": "https://github.com/thoughtworks/talisman/releases/download/v{version}/talisman_linux_arm64",
         "windows_amd64": "https://github.com/thoughtworks/talisman/releases/download/v{version}/talisman_windows_amd64.exe"
     },
-    "trivy_version": "0.58.0",
+    "trivy_version": "0.71.0",
     "trivy_download_urls": {
         "darwin_amd64": "https://github.com/aquasecurity/trivy/releases/download/v{version}/trivy_{version}_macOS-64bit.tar.gz",
         "darwin_arm64": "https://github.com/aquasecurity/trivy/releases/download/v{version}/trivy_{version}_macOS-ARM64.tar.gz",
