@@ -1,0 +1,36 @@
+tests/integration/test_sops_backend_e2e.py
+  s_dfc6cd6692ed8f::t_ac743494f1eef5 435-438,440
+  s_dfc6cd6692ed8f::t_bec8c202ceff9a 158,163
+  s_dfc6cd6692ed8f::t_cd845a31a08351 371,374-377,381-382,387-434,439,441,445-449
+  s_dfc6cd6692ed8f::t_d73334a848ccf3 96,101-104,106,112
+  s_dfc6cd6692ed8f::t_c67f07a38f4431 442-444
+  s_dfc6cd6692ed8f::t_3a7dca6e953bd3 97-100,105,107-111,113-118
+  s_dfc6cd6692ed8f::t_b2550422d2f612 15
+  s_dfc6cd6692ed8f::t_7e3a752459a2ec 127-129,132-134,138,153,155-157,159-162,164-176
+src/envdrift/encryption/sops.py
+  s_dfc6cd6692ed8f::t_b4bd72877586de 467-470
+  s_dfc6cd6692ed8f::t_afb406915a03e5 47-54
+  s_dfc6cd6692ed8f::t_e9b7fb904924c2 14
+  s_dfc6cd6692ed8f::t_add4aa71eadf4e 392-394
+tests/unit/test_encryption_backends.py
+  s_dfc6cd6692ed8f::t_e7fce3067dc156 356-361,363
+  s_dfc6cd6692ed8f::t_1739962c8aa799 366-376,380-398
+  s_dfc6cd6692ed8f::t_11ce3d0cb0dfde 662-664
+  s_dfc6cd6692ed8f::t_0fc7a978b85101 377-379
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.3",
+  "base_commit_sha": "cec281b6930d239557ac25fcea1d6cde641bc300",
+  "prompts": {},
+  "sessions": {
+    "s_dfc6cd6692ed8f": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "fd23e738-3512-4420-9290-d985ad979bfd",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Jainal Gosaliya <jainal09gosalia@gmail.com>"
+    }
+  }
+}
