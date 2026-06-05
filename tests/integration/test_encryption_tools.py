@@ -929,3 +929,120 @@ def test_full_lock_pull_merge_cycle(integration_env):
     # Verify .secret file is encrypted again
     secret_content = secret_file.read_text()
     assert "=encrypted:" in secret_content, "Secret file should be encrypted after lock"
+
+
+# --- Vault-sync auto-detection of custom dotenv filenames (end-to-end) ---
+
+# Each tuple: (folder, filename, environment-or-None, plaintext, canonical key suffix).
+# Covers every auto-detected convention with NO `env_file` configured:
+#   postgresql.env           -> <prefix>.env       (default -> production)
+#   svc.env.docker           -> <prefix>.env.<env> (suffix)
+#   app-local.env            -> <prefix>-<env>.env  (infix)
+_CUSTOM_FILENAME_CASES = [
+    ("secrets/postgresql", "postgresql.env", None, "DB_PASSWORD=pgsecret", "PRODUCTION"),
+    ("secrets/svc", "svc.env.docker", "docker", "TOKEN=dockersecret", "DOCKER"),
+    ("secrets/app", "app-local.env", "local", "APP_KEY=localsecret", "LOCAL"),
+]
+
+
+def _write_custom_filename_project(work_dir: Path) -> None:
+    """Lay down plaintext custom-named env files plus an envdrift.toml with no env_file."""
+    mappings = []
+    for folder, filename, environment, plaintext, _suffix in _CUSTOM_FILENAME_CASES:
+        (work_dir / folder).mkdir(parents=True, exist_ok=True)
+        (work_dir / folder / filename).write_text(plaintext + "\n")
+        env_line = f'\nenvironment = "{environment}"' if environment else ""
+        mappings.append(
+            textwrap.dedent(
+                f"""\
+                [[vault.sync.mappings]]
+                secret_name = "{folder.replace("/", "-")}-key"
+                folder_path = "{folder}"{env_line}
+                """
+            )
+        )
+    config = (
+        textwrap.dedent(
+            """\
+            [encryption]
+            backend = "dotenvx"
+
+            [encryption.dotenvx]
+            auto_install = true
+
+            [vault]
+            provider = "azure"
+
+            [vault.azure]
+            vault_url = "https://example.vault.azure.net/"
+
+            [vault.sync]
+            """
+        )
+        + "\n"
+        + "\n".join(mappings)
+    )
+    (work_dir / "envdrift.toml").write_text(config)
+
+
+@pytest.mark.integration
+def test_lock_autodetects_custom_dotenv_filenames(integration_env):
+    """`lock` auto-detects custom filenames and writes CANONICAL dotenvx keys.
+
+    Regression guard for vault-sync: without `env_file`, services named
+    `postgresql.env` / `svc.env.docker` / `app-local.env` must be detected,
+    encrypted, and have their `.env.keys` carry `DOTENV_PRIVATE_KEY_<ENV>` derived
+    from the mapping environment — not the non-canonical name dotenvx derives from
+    the filename (e.g. `DOTENV_PRIVATE_KEY_POSTGRESQLPRODUCTION`).
+    """
+    work_dir = integration_env["base_dir"] / "vault-sync-custom"
+    work_dir.mkdir()
+    env = integration_env["env"].copy()
+
+    _write_custom_filename_project(work_dir)
+
+    # check=True asserts a clean exit (no "No .env file found" skips, no errors).
+    result = _run_envdrift(["lock", "--force"], cwd=work_dir, env=env)
+    output = re.sub(r"\x1b\[[0-9;]*m", "", result.stdout + result.stderr)
+    assert "Encrypted: 3" in output, output
+
+    for folder, filename, _env, _plain, suffix in _CUSTOM_FILENAME_CASES:
+        encrypted = (work_dir / folder / filename).read_text()
+        assert "encrypted:" in encrypted, f"{filename} should be encrypted"
+        assert f"DOTENV_PUBLIC_KEY_{suffix}" in encrypted, f"{filename} public key not canonical"
+
+        keys = (work_dir / folder / ".env.keys").read_text()
+        private_keys = [
+            line.split("=", 1)[0]
+            for line in keys.splitlines()
+            if line.startswith("DOTENV_PRIVATE_KEY_")
+        ]
+        # Exactly one private key, and it is the canonical DOTENV_PRIVATE_KEY_<ENV>.
+        assert private_keys == [f"DOTENV_PRIVATE_KEY_{suffix}"], (
+            f"{folder}/.env.keys has non-canonical key(s): {private_keys}"
+        )
+
+
+@pytest.mark.integration
+def test_lock_custom_filename_decrypt_roundtrip(integration_env):
+    """A custom-named file locked via auto-detection decrypts back to plaintext.
+
+    Proves the normalized canonical key in `.env.keys` actually decrypts the file,
+    despite dotenvx deriving its key name from the (custom) filename.
+    """
+    work_dir = integration_env["base_dir"] / "vault-sync-roundtrip"
+    work_dir.mkdir()
+    env = integration_env["env"].copy()
+
+    _write_custom_filename_project(work_dir)
+    _run_envdrift(["lock", "--force"], cwd=work_dir, env=env)
+
+    for folder, filename, _env, plaintext, _suffix in _CUSTOM_FILENAME_CASES:
+        target = f"{folder}/{filename}"
+        assert "encrypted:" in (work_dir / target).read_text()
+
+        _run_envdrift(["decrypt", target], cwd=work_dir, env=env)
+
+        decrypted = (work_dir / target).read_text()
+        assert plaintext in decrypted, f"{target} did not round-trip to {plaintext!r}"
+        assert "encrypted:" not in decrypted
