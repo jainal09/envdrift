@@ -15,6 +15,7 @@ Requires: pydantic-settings installed
 
 from __future__ import annotations
 
+import os
 import subprocess
 import sys
 import textwrap
@@ -798,7 +799,9 @@ def _run_validate(
     env_file = tmp_path / ".env"
     env_file.write_text(textwrap.dedent(env_text))
 
-    env = {"PYTHONPATH": integration_pythonpath, "COLUMNS": "200"}
+    env = os.environ.copy()
+    env["PYTHONPATH"] = integration_pythonpath
+    env["COLUMNS"] = "200"
 
     cmd = [
         sys.executable,

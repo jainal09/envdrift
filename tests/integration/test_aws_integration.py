@@ -555,6 +555,17 @@ def _force_delete(aws_secrets_client, name: str) -> None:
         aws_secrets_client.delete_secret(SecretId=name, ForceDeleteWithoutRecovery=True)
 
 
+def _create_secret(aws_secrets_client, **kwargs):
+    """Create a secret, force-deleting any leftover of the same name first.
+
+    Makes every create rerun-safe: a secret left behind by a previously crashed
+    run (or a shared LocalStack instance) would otherwise raise
+    ``ResourceExistsException`` before the test's own ``finally`` cleanup runs.
+    """
+    _force_delete(aws_secrets_client, kwargs["Name"])
+    return aws_secrets_client.create_secret(**kwargs)
+
+
 def _dotenvx_available() -> bool:
     """Return True when the real dotenvx binary is on PATH."""
     import shutil
@@ -661,7 +672,7 @@ class TestAWSVaultPushPullCLIRealBackend:
         old_value = "DOTENV_PRIVATE_KEY_STAGING=OLDKEY-original"
 
         # Pre-create the secret with an OLD value so the first --all run skips it.
-        aws_secrets_client.create_secret(Name=secret_name, SecretString=old_value)
+        _create_secret(aws_secrets_client, Name=secret_name, SecretString=old_value)
         old_version = aws_secrets_client.get_secret_value(SecretId=secret_name)["VersionId"]
 
         config_content = f"""\
@@ -739,7 +750,8 @@ environment = "staging"
         """HP-10: vault-pull writes a single, non-doubled DOTENV_PRIVATE_KEY prefix."""
         secret_name = "envdrift-test/pull-strip-prefix"
         # Stored with the full KEY=value form (as vault-push would store it).
-        aws_secrets_client.create_secret(
+        _create_secret(
+            aws_secrets_client,
             Name=secret_name,
             SecretString="DOTENV_PRIVATE_KEY_PRODUCTION=ec-prefixed-1234",
         )
@@ -788,7 +800,8 @@ environment = "staging"
     ) -> None:
         """HP-02: first sync creates the key, immediate second sync reports SKIPPED."""
         secret_name = "envdrift-test/pull-idempotent"
-        aws_secrets_client.create_secret(
+        _create_secret(
+            aws_secrets_client,
             Name=secret_name,
             SecretString="DOTENV_PRIVATE_KEY_PRODUCTION=idem-key-abc",
         )
@@ -860,7 +873,8 @@ environment = "production"
     ) -> None:
         """BP-19: pulling --env production a secret stored as STAGING fails fast."""
         secret_name = "envdrift-test/pull-env-mismatch"
-        aws_secrets_client.create_secret(
+        _create_secret(
+            aws_secrets_client,
             Name=secret_name,
             SecretString="DOTENV_PRIVATE_KEY_STAGING=staging-secret-val",
         )
@@ -897,10 +911,14 @@ environment = "production"
             assert "DOTENV_PRIVATE_KEY_STAGING" in combined
             assert "DOTENV_PRIVATE_KEY_PRODUCTION" in combined
 
-            # .env.keys must not have been written with the production key.
+            # A fast-failed mismatch must not write .env.keys at all. Assert the
+            # file is absent (no pre-run snapshot existed) — this also catches a
+            # wrongly-written STAGING key, not just the production key.
             keys_path = work_dir / ".env.keys"
-            if keys_path.exists():
-                assert "DOTENV_PRIVATE_KEY_PRODUCTION" not in keys_path.read_text()
+            assert not keys_path.exists(), (
+                ".env.keys must not be written on a fast-failed env mismatch; "
+                f"found: {keys_path.read_text()}"
+            )
         finally:
             _force_delete(aws_secrets_client, secret_name)
 
@@ -925,7 +943,8 @@ environment = "production"
 
         # The value we actually pull is independent of the real key; we only
         # assert the key is written and the encrypted file stays byte-identical.
-        aws_secrets_client.create_secret(
+        _create_secret(
+            aws_secrets_client,
             Name=secret_name,
             SecretString=f"DOTENV_PRIVATE_KEY_PRODUCTION={real_key}",
         )
@@ -984,7 +1003,8 @@ environment = "production"
         env_prod = work_dir / ".env.production"
         assert b"encrypted:" in env_prod.read_bytes()
 
-        aws_secrets_client.create_secret(
+        _create_secret(
+            aws_secrets_client,
             Name=secret_name,
             SecretString=f"DOTENV_PRIVATE_KEY_PRODUCTION={real_key}",
         )
@@ -1068,7 +1088,7 @@ class TestAWSClientValueDecoding:
         import json
 
         name = "envdrift-test/get-secret-json-dict"
-        aws_secrets_client.create_secret(Name=name, SecretString=json.dumps({"a": "1", "b": "2"}))
+        _create_secret(aws_secrets_client, Name=name, SecretString=json.dumps({"a": "1", "b": "2"}))
 
         try:
             secret = aws_client_configured.get_secret(name)
@@ -1084,7 +1104,7 @@ class TestAWSClientValueDecoding:
         """HP-04: SecretBinary holding valid UTF-8 bytes decodes to the original string."""
         name = "envdrift-test/get-secret-utf8-binary"
         raw = "hello-utf8-é".encode()
-        aws_secrets_client.create_secret(Name=name, SecretBinary=raw)
+        _create_secret(aws_secrets_client, Name=name, SecretBinary=raw)
 
         try:
             secret = aws_client_configured.get_secret(name)
@@ -1097,7 +1117,7 @@ class TestAWSClientValueDecoding:
     ) -> None:
         """EC-02: a non-JSON secret value is returned verbatim."""
         name = "envdrift-test/get-secret-invalid-json"
-        aws_secrets_client.create_secret(Name=name, SecretString="not-json: {broken")
+        _create_secret(aws_secrets_client, Name=name, SecretString="not-json: {broken")
 
         try:
             secret = aws_client_configured.get_secret(name)
@@ -1136,7 +1156,8 @@ class TestAWSSyncEngineRealBackend:
         from envdrift.sync.result import SyncAction
 
         secret_name = "envdrift-test/force-update-backup"
-        aws_secrets_client.create_secret(
+        _create_secret(
+            aws_secrets_client,
             Name=secret_name,
             SecretString="DOTENV_PRIVATE_KEY_PRODUCTION=vault-new-value",
         )
@@ -1176,7 +1197,8 @@ class TestAWSSyncEngineRealBackend:
         from envdrift.sync.result import SyncAction
 
         secret_name = "envdrift-test/ephemeral-key"
-        aws_secrets_client.create_secret(
+        _create_secret(
+            aws_secrets_client,
             Name=secret_name,
             SecretString="DOTENV_PRIVATE_KEY_PRODUCTION=eph-real-key",
         )
@@ -1216,7 +1238,8 @@ class TestAWSSyncEngineRealBackend:
         from envdrift.sync.result import SyncAction
 
         secret_name = "envdrift-test/verify-drift-gate"
-        aws_secrets_client.create_secret(
+        _create_secret(
+            aws_secrets_client,
             Name=secret_name,
             SecretString="DOTENV_PRIVATE_KEY_PRODUCTION=vault-value-A",
         )

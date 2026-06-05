@@ -483,9 +483,30 @@ def _delete_secret(session, endpoint: str, name: str) -> None:
 
 
 def _looks_like_auth_failure(combined: str) -> bool:
-    """Heuristic: did the command get to the vault and fail to authenticate?"""
+    """Heuristic: did the command fail specifically because of AUTHENTICATION?
+
+    Matches concrete auth signatures only. A blanket ``"vault"`` match would also
+    swallow non-auth regressions (``--vault-url`` handling bugs, Lowkey 4xx/5xx,
+    generic CLI errors that merely mention the vault), turning real failures into
+    skips. Keep this to explicit authentication signals.
+    """
     low = combined.lower()
-    return "credential" in low or "vault" in low or "authentication" in low
+    auth_signatures = (
+        "authentication failed",
+        "failed to authenticate",
+        "could not authenticate",
+        "unable to authenticate",
+        "authenticationerror",
+        "invalid credential",
+        "credential",
+        "defaultazurecredential",
+        "unauthorized",
+        "access denied",
+        "forbidden",
+        " 401",
+        " 403",
+    )
+    return any(sig in low for sig in auth_signatures)
 
 
 # --- CLI argument / path validation (deterministic, no vault auth) ---------
@@ -583,8 +604,10 @@ class TestAzureVaultFactory:
         """
         pytest.importorskip("azure.keyvault.secrets")
 
+        from azure.core.exceptions import ServiceRequestError, ServiceResponseError
+
         from envdrift.vault.azure import AzureKeyVaultClient
-        from envdrift.vault.base import AuthenticationError, VaultError
+        from envdrift.vault.base import VaultError
 
         # Scrub every credential DefaultAzureCredential could pick up so that
         # acquiring a token must fail. (monkeypatch on env vars only — the
@@ -607,16 +630,24 @@ class TestAzureVaultFactory:
         monkeypatch.setenv("PATH", "")
 
         client = AzureKeyVaultClient(vault_url="https://nonexistent-vault.vault.azure.net/")
+        # The raw azure.core ClientAuthenticationError must be mapped into envdrift's
+        # VaultError hierarchy. Catch ONLY VaultError so a leaked raw azure exception
+        # propagates and FAILS this test (that is exactly the regression being
+        # guarded). Skip only when authenticate() unexpectedly SUCCEEDS, which means
+        # ambient Azure credentials are present (CI runners shouldn't have any).
         try:
-            with pytest.raises((AuthenticationError, VaultError)) as exc_info:
-                client.authenticate()
-        except Exception:  # pragma: no cover - environment-dependent
-            # If the local environment somehow has ambient Azure credentials
-            # (CI runners shouldn't), don't hard-fail the suite.
-            pytest.skip("Ambient Azure credentials available; cannot test auth failure")
-        # The raised exception must be an envdrift VaultError subclass, not a
-        # raw azure.core exception leaking through.
-        assert isinstance(exc_info.value, VaultError), exc_info.value
+            client.authenticate()
+        except VaultError:
+            pass  # correct: the azure auth error was mapped into the VaultError hierarchy
+        except (ServiceRequestError, ServiceResponseError):
+            # Ambient Azure credentials (CI runners shouldn't have any) let auth
+            # proceed to a network call against the unreachable test host. That is a
+            # transport failure, not the auth-error-mapping regression under test, so
+            # we can't exercise it here. A raw ClientAuthenticationError (the actual
+            # regression) is NOT caught here and will correctly FAIL the test.
+            pytest.skip("Ambient Azure credentials present; auth reached a network call")
+        else:
+            pytest.skip("authenticate() unexpectedly succeeded (ambient Azure credentials)")
 
 
 # --- Round-trip against the live Lowkey emulator (GREEN-OR-GATED) ----------

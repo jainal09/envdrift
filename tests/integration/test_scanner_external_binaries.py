@@ -249,7 +249,10 @@ def test_scan_engine_parallel_multi_real_scanner_aggregation(git_repo):
     assert len(result.unique_findings) >= 1
     assert result.total_findings >= len(result.unique_findings)
     # Findings should come from more than one scanner (native + trivy at minimum).
-    scanners_with_findings = {f.scanner for f in result.unique_findings}
+    # Use the per-scanner results, NOT unique_findings: ScanEngine deduplicates
+    # after aggregation, so two scanners finding the same secret would collapse to
+    # one entry in unique_findings and understate scanner participation.
+    scanners_with_findings = {r.scanner_name for r in result.results if r.findings}
     assert len(scanners_with_findings) >= 2, (
         f"expected findings from >=2 scanners, got {scanners_with_findings}"
     )
@@ -302,6 +305,12 @@ def test_scan_engine_skip_encrypted_files_filters_real_scanner_findings(tmp_path
 def test_scan_engine_filters_dotenvx_public_keys_from_real_output(tmp_path):
     """EC-12: ScanEngine filters dotenvx EC secp256k1 public keys (66 hex, 02/03)."""
     _write_secret_file(tmp_path, "creds.env")
+    # Plant a real dotenvx-style EC public key (66 hex, starts with 03) in the
+    # scanned tree so the real ScanEngine.scan() path below has an actual public
+    # key to filter — without this the real-output loop is vacuous and only the
+    # synthetic control at the end exercises _filter_public_keys.
+    real_pubkey = "03" + "cd" * 32  # 66 hex chars
+    (tmp_path / "keys.env").write_text(f"DOTENV_PUBLIC_KEY_PRODUCTION={real_pubkey}\n")
 
     config = GuardConfig(
         use_native=True,

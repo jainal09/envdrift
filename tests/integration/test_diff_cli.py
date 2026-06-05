@@ -17,6 +17,7 @@ Requires: pydantic-settings installed (provided by the project venv).
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import sys
 import textwrap
@@ -43,7 +44,8 @@ def _run_diff(
     venv interpreter (``sys.executable``) with ``PYTHONPATH`` set to the ``src``
     tree, so the real CLI and its dependencies are loaded.
     """
-    env = {"PYTHONPATH": integration_pythonpath}
+    env = os.environ.copy()
+    env["PYTHONPATH"] = integration_pythonpath
     return subprocess.run(
         [sys.executable, "-m", "envdrift.cli", "diff", *args],
         cwd=str(cwd),

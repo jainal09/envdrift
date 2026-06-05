@@ -66,6 +66,12 @@ jobs:
           VAULT_DEV_ROOT_TOKEN_ID: test-root-token
           VAULT_DEV_LISTEN_ADDRESS: 0.0.0.0:8200
           VAULT_ADDR: http://0.0.0.0:8200
+          # The hashicorp/vault entrypoint calls `setcap` to grant mlock; recent
+          # image builds ship without the setcap binary, so the container dies with
+          # "setcap: not found". Dev mode doesn't need mlock — skip setcap and
+          # disable mlock so the service container starts reliably.
+          SKIP_SETCAP: "true"
+          VAULT_DISABLE_MLOCK: "true"
         options: >-
           --user root
           --cap-add=IPC_LOCK
@@ -110,7 +116,10 @@ jobs:
         run: |
           mkdir -p "$HOME/.local/bin"
           # Version is the single source of truth in constants.json (kept current by Renovate).
-          DOTENVX_VERSION=$(python -c "import json; print(json.load(open('src/envdrift/constants.json'))['dotenvx_version'])")
+          # Fail fast with a clear message if the file/key is missing or malformed.
+          DOTENVX_VERSION=$(python -c "import json,sys; sys.stdout.write(json.load(open('src/envdrift/constants.json'))['dotenvx_version'])") \
+            || { echo 'ERROR: could not read dotenvx_version from src/envdrift/constants.json' >&2; exit 1; }
+          test -n "$DOTENVX_VERSION" || { echo 'ERROR: dotenvx_version resolved empty' >&2; exit 1; }
           curl -sfS "https://dotenvx.sh?directory=$HOME/.local/bin" | sh -s -- --version="$DOTENVX_VERSION"
           echo "$HOME/.local/bin" >> $GITHUB_PATH
 
@@ -118,7 +127,11 @@ jobs:
         run: |
           mkdir -p "$HOME/.local/bin"
           # Version + download URL come from constants.json (kept current by Renovate's sops_version manager).
-          read -r SOPS_URL < <(python -c "import json; c=json.load(open('src/envdrift/constants.json')); print(c['sops_download_urls']['linux_amd64'].format(version=c['sops_version']))")
+          # Use $(...) (POSIX-portable, not bash-only process substitution) and fail
+          # fast with a clear message if the file/keys are missing or malformed.
+          SOPS_URL=$(python -c "import json,sys; c=json.load(open('src/envdrift/constants.json')); sys.stdout.write(c['sops_download_urls']['linux_amd64'].format(version=c['sops_version']))") \
+            || { echo 'ERROR: could not read sops config from src/envdrift/constants.json' >&2; exit 1; }
+          test -n "$SOPS_URL" || { echo 'ERROR: SOPS_URL resolved empty' >&2; exit 1; }
           curl -sfL "$SOPS_URL" -o "$HOME/.local/bin/sops"
           chmod +x "$HOME/.local/bin/sops"
           echo "$HOME/.local/bin" >> $GITHUB_PATH
@@ -276,6 +289,9 @@ jobs:
         run: |
           echo "$GCP_KEY_CONTENT" > gcp_key.json
           export GOOGLE_APPLICATION_CREDENTIALS=$(pwd)/gcp_key.json
+          # The real-backend GCP tests also gate on GOOGLE_CLOUD_PROJECT; derive it
+          # from the service-account key so the round-trip suite actually runs here.
+          export GOOGLE_CLOUD_PROJECT=$(python -c "import json; print(json.load(open('gcp_key.json'))['project_id'])")
           uv run pytest tests/integration/ -v -m gcp --timeout=120
           rm gcp_key.json
 

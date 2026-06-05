@@ -64,13 +64,6 @@ GCP_REAL_BACKEND = (
 )
 
 
-def pytest_configure(config: pytest.Config) -> None:
-    """Register the gcp marker so ``-m gcp`` works and there are no warnings."""
-    config.addinivalue_line(
-        "markers", "gcp: Tests requiring GCP Secret Manager SDK / real GCP creds"
-    )
-
-
 # --- CLI guard tests (no credentials required) ---
 
 
