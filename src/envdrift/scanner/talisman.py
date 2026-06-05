@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import json
 import platform
+import re
 import shutil
 import stat
 import subprocess  # nosec B404
@@ -57,6 +58,52 @@ SEVERITY_MAP: dict[str, FindingSeverity] = {
     "medium": FindingSeverity.HIGH,
     "low": FindingSeverity.MEDIUM,
 }
+
+# Talisman embeds the offending content inside the failure ``message`` rather
+# than a dedicated field. Real 1.3x messages look like:
+#   'Expected file to not contain base64 encoded texts such as: "<secret>"'
+#   'Expected file to not contain base64 encoded texts such as: <secret>...'
+#   'Potential secret pattern : <key> = "<secret>"'
+# These markers anchor the start of the embedded secret so we can recover a
+# preview/hash for deduplication.
+_TALISMAN_SECRET_MARKERS = (
+    "such as:",
+    "secret pattern :",
+    "secret pattern:",
+)
+
+
+def _extract_secret_from_message(message: str) -> str:
+    """Recover the offending secret/content from a talisman failure message.
+
+    Talisman's ``failure_list`` items have no ``match`` field; the secret is
+    embedded in the human-readable ``message``. This pulls out the text after a
+    known marker, strips surrounding quotes and a trailing ``...`` truncation
+    marker so the result can be redacted/hashed for dedup.
+
+    Args:
+        message: The talisman failure ``message`` string.
+
+    Returns:
+        The extracted secret/content, or an empty string if none is found.
+    """
+    if not message:
+        return ""
+
+    lowered = message.lower()
+    for marker in _TALISMAN_SECRET_MARKERS:
+        idx = lowered.find(marker)
+        if idx == -1:
+            continue
+        candidate = message[idx + len(marker) :].strip()
+        # Drop a trailing truncation ellipsis talisman adds to long content.
+        candidate = re.sub(r"\.{3,}$", "", candidate).strip()
+        # Unwrap surrounding quotes when talisman quotes the literal.
+        if len(candidate) >= 2 and candidate[0] in "\"'" and candidate[-1] == candidate[0]:
+            candidate = candidate[1:-1]
+        return candidate.strip()
+
+    return ""
 
 
 class TalismanNotFoundError(Exception):
@@ -496,19 +543,21 @@ class TalismanScanner(ScannerBackend):
                 else:
                     file_path = base_path / file_path
 
-            # Parse failures/warnings in result
-            for failure in result.get("failures", []):
+            # Parse failures/warnings in result. Real talisman reports use the
+            # keys ``failure_list``/``warning_list``/``ignore_list``; older/test
+            # fixtures may use ``failures``/``warnings``/``ignores``.
+            for failure in result.get("failure_list") or result.get("failures", []):
                 finding = self._parse_failure(failure, file_path)
                 if finding:
                     findings.append(finding)
 
-            for warning in result.get("warnings", []):
+            for warning in result.get("warning_list") or result.get("warnings", []):
                 finding = self._parse_failure(warning, file_path, is_warning=True)
                 if finding:
                     findings.append(finding)
 
             # Also check for ignores that are still flagged
-            for _ignore in result.get("ignores", []):
+            for _ignore in result.get("ignore_list") or result.get("ignores", []):
                 # These are acknowledged but still noted
                 pass
 
@@ -541,10 +590,20 @@ class TalismanScanner(ScannerBackend):
             if is_warning:
                 severity = FindingSeverity.MEDIUM
 
-            # Get the matched content if available
-            matched = failure.get("match", "")
+            # Get the matched content. Real talisman ``failure_list`` items have
+            # no ``match`` field — the offending secret is embedded in the
+            # ``message`` — so fall back to extracting it from there.
+            matched = failure.get("match") or _extract_secret_from_message(message)
             redacted = redact_secret(matched) if matched else ""
             secret_hash = hash_secret(matched) if matched else ""
+
+            # Real reports expose related commits as a ``commits`` list; older
+            # fixtures may use a singular ``commit``. Use the first commit SHA.
+            commit_sha = failure.get("commit")
+            if not commit_sha:
+                commits = failure.get("commits") or []
+                if commits:
+                    commit_sha = commits[0]
 
             # Build rule ID from type
             rule_id = f"talisman-{failure_type.lower().replace(' ', '-')}"
@@ -559,7 +618,7 @@ class TalismanScanner(ScannerBackend):
                 severity=severity,
                 secret_preview=redacted,
                 secret_hash=secret_hash,
-                commit_sha=failure.get("commit"),
+                commit_sha=commit_sha,
                 commit_author=failure.get("author"),
                 commit_date=failure.get("date"),
                 entropy=failure.get("entropy"),

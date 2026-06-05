@@ -273,14 +273,12 @@ def test_high_unencrypted_env_file_exit_code_two_non_ci(git_repo: Path) -> None:
 def test_staged_secret_dropped_when_run_from_subdirectory(git_repo: Path) -> None:
     """``guard --staged`` must catch a staged leak regardless of the run cwd.
 
-    From the repo root the staged AWS secret is correctly caught (exit 1). The
-    desired behaviour is identical from a repo subdirectory: ``git diff --cached``
-    yields repo-relative paths, so running from ``sub/`` currently makes
-    ``Path(f).exists()`` false and the whole staged set is silently dropped to
-    "No staged files to scan." (exit 0) — a real leak slips through. That
-    subdirectory expectation is asserted under xfail so the bug is documented and
-    will flip the test to a hard failure once the code resolves staged paths
-    against the repo root.
+    ``git diff --cached`` yields repo-root-relative paths, so the guard must
+    resolve them against the git toplevel rather than the process cwd. From the
+    repo root and from a repo subdirectory the staged AWS secret is caught
+    identically (exit 1). This is the regression guard for #302, where running
+    from ``sub/`` made ``Path(f).exists()`` false and silently dropped the whole
+    staged set to "No staged files to scan." (exit 0).
     """
     work_dir = git_repo
     (work_dir / "sub").mkdir()
@@ -299,19 +297,21 @@ def test_staged_secret_dropped_when_run_from_subdirectory(git_repo: Path) -> Non
     )
     assert "aws-secret-access-key" in _rule_ids(root_json)
 
-    # From a subdirectory: desired behaviour is the SAME leak detection (exit 1).
+    # From a subdirectory: the SAME leak detection (exit 1) — repo-relative
+    # staged paths are resolved against the git toplevel, not the subdir cwd.
     sub_dir = work_dir / "sub"
     sub_result = _run_envdrift(["guard", "--staged", "--native-only"], cwd=sub_dir)
     combined = sub_result.stdout + sub_result.stderr
-    if sub_result.returncode == 0 and "No staged files to scan." in combined:
-        pytest.xfail(
-            "Known bug (#302): guard --staged from a repo subdirectory drops staged files "
-            "(repo-relative paths fail Path.exists() against the subdir cwd) and "
-            "exits 0 instead of catching the staged leak."
-        )
+    assert "No staged files to scan." not in combined, (
+        f"staged scan from a subdir must not silently drop staged files\n{combined}"
+    )
     assert sub_result.returncode == 1, (
         f"staged scan from a subdir must catch the leak, got {sub_result.returncode}\n{combined}"
     )
+    sub_json = _guard_json(
+        _run_envdrift(["guard", "--staged", "--native-only", "--json"], cwd=sub_dir)
+    )
+    assert "aws-secret-access-key" in _rule_ids(sub_json)
 
 
 # --- HP-17 (P0): allowed clear_file exempt from unencrypted, secrets still found -

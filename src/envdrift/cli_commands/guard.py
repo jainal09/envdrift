@@ -255,6 +255,27 @@ def guard(
     """
     import subprocess  # nosec B404
 
+    def _git_toplevel() -> Path:
+        """Return the git repository root, falling back to cwd if unavailable.
+
+        ``git diff`` emits paths relative to the repository root, so returned
+        paths must be resolved against the toplevel (not the process cwd) or
+        every file is dropped by the ``.exists()`` filter when guard is invoked
+        from a subdirectory.
+        """
+        try:
+            toplevel = subprocess.run(  # nosec B603, B607
+                ["git", "rev-parse", "--show-toplevel"],
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+            if toplevel.returncode == 0 and toplevel.stdout.strip():
+                return Path(toplevel.stdout.strip())
+        except (subprocess.TimeoutExpired, FileNotFoundError):
+            pass
+        return Path.cwd()
+
     # Handle --staged flag (pre-commit mode)
     if staged:
         try:
@@ -265,7 +286,8 @@ def guard(
                 timeout=10,
             )
             if result.returncode == 0 and result.stdout.strip():
-                staged_files = [Path(f) for f in result.stdout.strip().split("\n") if f]
+                repo_root = _git_toplevel()
+                staged_files = [repo_root / f for f in result.stdout.strip().split("\n") if f]
                 paths = [f for f in staged_files if f.exists()]
                 if not paths:
                     console.print("[green]No staged files to scan.[/green]")
@@ -284,8 +306,11 @@ def guard(
     # Handle --pr-base flag (CI mode for PRs)
     elif pr_base:
         try:
-            # Fetch the base branch first to ensure it's up to date
-            base_ref = pr_base.replace("origin/", "")
+            # Fetch the base branch first to ensure it's up to date.
+            # Strip only a leading "origin/" prefix; a global replace would
+            # corrupt refs that contain "origin/" elsewhere (e.g.
+            # "release/origin-mirror").
+            base_ref = pr_base.removeprefix("origin/")
             if not base_ref:
                 base_ref = pr_base
             fetch_result = subprocess.run(  # nosec B603, B607
@@ -305,7 +330,8 @@ def guard(
                 timeout=10,
             )
             if result.returncode == 0 and result.stdout.strip():
-                changed_files = [Path(f) for f in result.stdout.strip().split("\n") if f]
+                repo_root = _git_toplevel()
+                changed_files = [repo_root / f for f in result.stdout.strip().split("\n") if f]
                 paths = [f for f in changed_files if f.exists()]
                 if not paths:
                     console.print("[green]No changed files to scan in this PR.[/green]")

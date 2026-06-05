@@ -220,6 +220,34 @@ def test_guard_pr_base_fetch_warns_on_failure(tmp_path: Path, monkeypatch):
     assert "warning" in result.output.lower()
 
 
+def test_guard_pr_base_strips_only_leading_origin_prefix(tmp_path: Path, monkeypatch):
+    """--pr-base must strip only a leading ``origin/`` when deriving the fetch ref.
+
+    Regression for #319: a global ``str.replace('origin/', '')`` corrupts refs
+    that contain ``origin/`` elsewhere (e.g. ``origin/release/origin-mirror``).
+    The fetch must request ``release/origin-mirror`` unchanged.
+    """
+    import subprocess
+
+    config = EnvdriftConfig()
+    _patch_guard_dependencies(monkeypatch, config, _build_result([]))
+
+    fetched_refs: list[str] = []
+
+    def mock_run(cmd, *args, **kwargs):
+        if "fetch" in cmd:
+            fetched_refs.append(cmd[-1])
+            return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+        return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+
+    monkeypatch.setattr("subprocess.run", mock_run)
+
+    monkeypatch.chdir(tmp_path)
+    result = runner.invoke(app, ["guard", "--pr-base", "origin/release/origin-mirror"])
+    assert result.exit_code == 0
+    assert fetched_refs == ["release/origin-mirror"], fetched_refs
+
+
 def test_guard_config_can_disable_gitleaks(tmp_path: Path, monkeypatch):
     """Config scanners can disable gitleaks when not listed."""
     config = EnvdriftConfig(guard=FileGuardConfig(scanners=["native"]))
@@ -419,6 +447,63 @@ def test_guard_staged_scans_only_staged_files(tmp_path: Path, monkeypatch):
     assert result.exit_code == 0
     assert scan_paths  # Verify scan was called
     assert len(scan_paths[0]) == 2  # Two staged files
+
+
+def test_guard_staged_resolves_repo_relative_paths_against_toplevel(tmp_path: Path, monkeypatch):
+    """--staged resolves git's repo-relative paths against the toplevel.
+
+    Regression for #302: ``git diff --cached`` emits repo-root-relative paths.
+    Run from a subdirectory, the staged file lives at ``<root>/sub/leak.env``
+    but git reports ``sub/leak.env``. The guard must join against the git
+    toplevel (not the subdir cwd) or ``Path.exists()`` drops the file and the
+    leak is silently skipped.
+    """
+    import subprocess
+
+    config = EnvdriftConfig()
+    scan_paths: list[list[Path]] = []
+    dummy_result = _build_result([])
+
+    class DummyScanner:
+        def __init__(self, name: str):
+            self.name = name
+
+    class DummyEngine:
+        def __init__(self, guard_config):
+            self.scanners = [DummyScanner("native")]
+
+        def get_scanner_info(self):
+            return []
+
+        def scan(self, paths, on_scanner_complete=None):
+            scan_paths.append(paths)
+            return dummy_result
+
+    monkeypatch.setattr("envdrift.cli_commands.guard.load_config", lambda _p=None: config)
+    monkeypatch.setattr("envdrift.cli_commands.guard.ScanEngine", DummyEngine)
+
+    repo_root = tmp_path
+    sub_dir = repo_root / "sub"
+    sub_dir.mkdir()
+    (sub_dir / "leak.env").write_text("SECRET=value")
+
+    def mock_run(cmd, *args, **kwargs):
+        if "rev-parse" in cmd and "--show-toplevel" in cmd:
+            return subprocess.CompletedProcess(cmd, 0, stdout=f"{repo_root}\n", stderr="")
+        if "diff" in cmd and "--cached" in cmd:
+            # git reports the path relative to the repo root, not the cwd.
+            return subprocess.CompletedProcess(cmd, 0, stdout="sub/leak.env\n", stderr="")
+        return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+
+    monkeypatch.setattr("subprocess.run", mock_run)
+
+    # Run from the subdirectory: the file must still be found and scanned.
+    monkeypatch.chdir(sub_dir)
+    result = runner.invoke(app, ["guard", "--staged"])
+    assert result.exit_code == 0, result.output
+    assert "no staged files" not in result.output.lower(), result.output
+    assert scan_paths
+    assert scan_paths[0] == [repo_root / "sub" / "leak.env"]
 
 
 def test_guard_staged_without_git_fails(tmp_path: Path, monkeypatch):

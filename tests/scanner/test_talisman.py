@@ -275,21 +275,29 @@ class TestFindingParsing:
         assert finding.severity == FindingSeverity.MEDIUM
 
     def test_parse_report(self, scanner: TalismanScanner, tmp_path: Path):
-        """Test parsing a complete report."""
+        """Test parsing a complete report using real talisman keys.
+
+        Real talisman report.json uses ``failure_list``/``warning_list``/
+        ``ignore_list`` (not ``failures``/``warnings``/``ignores``), and the
+        offending secret is embedded in ``message`` (no ``match`` field).
+        """
         report_data: dict[str, Any] = {
             "results": [
                 {
                     "filename": "secrets.py",
-                    "failures": [
+                    "failure_list": [
                         {
                             "type": "filecontent",
-                            "message": "AWS Key detected",
+                            "message": (
+                                "Expected file to not contain base64 encoded texts "
+                                'such as: "AKIAIOSFODNN7EXAMPLE"'
+                            ),
+                            "commits": ["abc123def456"],
                             "severity": "high",
-                            "match": "AKIAIOSFODNN7EXAMPLE",
                         }
                     ],
-                    "warnings": [],
-                    "ignores": [],
+                    "warning_list": [],
+                    "ignore_list": [],
                 }
             ]
         }
@@ -297,21 +305,31 @@ class TestFindingParsing:
 
         assert files_scanned == 1
         assert len(findings) == 1
-        assert findings[0].rule_id == "talisman-filecontent"
+        finding = findings[0]
+        assert finding.rule_id == "talisman-filecontent"
+        assert finding.severity == FindingSeverity.CRITICAL  # high -> CRITICAL
+        # Secret is recovered from the message -> non-empty redacted preview/hash.
+        assert finding.secret_preview, "secret should be extracted from message"
+        assert "*" in finding.secret_preview
+        assert "AKIAIOSFODNN7EXAMPLE" not in finding.secret_preview
+        assert finding.secret_hash
+        # The commits list maps to the first commit SHA.
+        assert finding.commit_sha == "abc123def456"
 
     def test_parse_report_with_warnings(self, scanner: TalismanScanner, tmp_path: Path):
-        """Test parsing a report with warnings."""
+        """Test parsing a report with warnings using real ``warning_list`` key."""
         report_data: dict[str, Any] = {
             "results": [
                 {
                     "filename": "data.json",
-                    "failures": [],
-                    "warnings": [
+                    "failure_list": [],
+                    "warning_list": [
                         {
                             "type": "filesize",
                             "message": "Large file detected",
                         }
                     ],
+                    "ignore_list": [],
                 }
             ]
         }
@@ -320,6 +338,31 @@ class TestFindingParsing:
         assert files_scanned == 1
         assert len(findings) == 1
         assert findings[0].severity == FindingSeverity.MEDIUM
+
+    def test_parse_real_failure_list_item_populates_preview(
+        self, scanner: TalismanScanner, tmp_path: Path
+    ):
+        """A real ``failure_list`` item (no match/line_number) still yields a preview.
+
+        Regression for #315: items carry only type/message/commits/severity, so
+        the secret_preview/secret_hash must be derived from the message.
+        """
+        failure: dict[str, Any] = {
+            "type": "filecontent",
+            "message": (
+                "Potential secret pattern : "
+                'aws_secret_access_key = "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"'
+            ),
+            "commits": ["4c3905bc8ebd645a0c9d6b85c7c2e847277fdb89"],
+            "severity": "high",
+        }
+        finding = scanner._parse_failure(failure, tmp_path / "secrets.py")
+
+        assert finding is not None
+        assert finding.secret_preview, "preview must be derived from message"
+        assert "*" in finding.secret_preview
+        assert finding.secret_hash
+        assert finding.commit_sha == "4c3905bc8ebd645a0c9d6b85c7c2e847277fdb89"
 
     def test_parse_failure_with_commit_info(self, scanner: TalismanScanner, tmp_path: Path):
         """Test parsing a failure with git commit information."""
