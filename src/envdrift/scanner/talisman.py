@@ -557,7 +557,7 @@ class TalismanScanner(ScannerBackend):
                     findings.append(finding)
 
             # Also check for ignores that are still flagged
-            for _ignore in result.get("ignore_list") or result.get("ignores", []):
+            for _ignore in result.get("ignore_list", result.get("ignores", [])):
                 # These are acknowledged but still noted
                 pass
 

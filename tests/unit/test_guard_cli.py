@@ -510,6 +510,107 @@ def test_guard_staged_resolves_repo_relative_paths_against_toplevel(tmp_path: Pa
     assert (Path.cwd() / scan_paths[0][0]).resolve() == (repo_root / "sub" / "leak.env").resolve()
 
 
+def _patch_dummy_engine(monkeypatch, config, scan_paths):
+    """Wire load_config + a recording DummyEngine for the path-resolution tests."""
+
+    class DummyScanner:
+        def __init__(self, name: str):
+            self.name = name
+
+    class DummyEngine:
+        def __init__(self, guard_config):
+            self.scanners = [DummyScanner("native")]
+
+        def get_scanner_info(self):
+            return []
+
+        def scan(self, paths, on_scanner_complete=None):
+            scan_paths.append(paths)
+            return _build_result([])
+
+    monkeypatch.setattr("envdrift.cli_commands.guard.load_config", lambda _p=None: config)
+    monkeypatch.setattr("envdrift.cli_commands.guard.ScanEngine", DummyEngine)
+
+
+def test_guard_staged_git_toplevel_falls_back_to_cwd(tmp_path: Path, monkeypatch):
+    """When ``git rev-parse --show-toplevel`` raises (git missing/timeout),
+    _git_toplevel swallows it and falls back to cwd so staged files relative to
+    cwd are still scanned (not dropped)."""
+    import subprocess
+
+    scan_paths: list[list[Path]] = []
+    _patch_dummy_engine(monkeypatch, EnvdriftConfig(), scan_paths)
+    (tmp_path / "leak.env").write_text("SECRET=value")
+
+    def mock_run(cmd, *args, **kwargs):
+        if "rev-parse" in cmd and "--show-toplevel" in cmd:
+            # Exercise the except (subprocess.TimeoutExpired, FileNotFoundError) path.
+            raise FileNotFoundError("git not found")
+        if "diff" in cmd and "--cached" in cmd:
+            return subprocess.CompletedProcess(cmd, 0, stdout="leak.env\n", stderr="")
+        return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+
+    monkeypatch.setattr("subprocess.run", mock_run)
+    monkeypatch.chdir(tmp_path)
+
+    result = runner.invoke(app, ["guard", "--staged"])
+    assert result.exit_code == 0, result.output
+    assert scan_paths
+    assert (Path.cwd() / scan_paths[0][0]).resolve() == (tmp_path / "leak.env").resolve()
+
+
+def test_guard_pr_base_no_changed_files(tmp_path: Path, monkeypatch):
+    """--pr-base with an empty diff reports 'No changed files' and exits 0."""
+    import subprocess
+
+    scan_paths: list[list[Path]] = []
+    _patch_dummy_engine(monkeypatch, EnvdriftConfig(), scan_paths)
+
+    def mock_run(cmd, *args, **kwargs):
+        if "rev-parse" in cmd and "--show-toplevel" in cmd:
+            return subprocess.CompletedProcess(cmd, 0, stdout=f"{tmp_path}\n", stderr="")
+        return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+
+    monkeypatch.setattr("subprocess.run", mock_run)
+    monkeypatch.chdir(tmp_path)
+
+    result = runner.invoke(app, ["guard", "--pr-base", "origin/main"])
+    assert result.exit_code == 0, result.output
+    assert "no changed files" in result.output.lower()
+    assert not scan_paths
+
+
+def test_guard_pr_base_resolves_repo_relative_paths_against_toplevel(tmp_path: Path, monkeypatch):
+    """--pr-base resolves git's repo-relative diff paths against the toplevel
+    (regression for #302, --pr-base branch)."""
+    import subprocess
+
+    scan_paths: list[list[Path]] = []
+    _patch_dummy_engine(monkeypatch, EnvdriftConfig(), scan_paths)
+
+    repo_root = tmp_path
+    sub_dir = repo_root / "sub"
+    sub_dir.mkdir()
+    (sub_dir / "leak.env").write_text("SECRET=value")
+
+    def mock_run(cmd, *args, **kwargs):
+        if "rev-parse" in cmd and "--show-toplevel" in cmd:
+            return subprocess.CompletedProcess(cmd, 0, stdout=f"{repo_root}\n", stderr="")
+        if "diff" in cmd:
+            # git reports the path relative to the repo root, not the cwd.
+            return subprocess.CompletedProcess(cmd, 0, stdout="sub/leak.env\n", stderr="")
+        return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+
+    monkeypatch.setattr("subprocess.run", mock_run)
+    monkeypatch.chdir(sub_dir)
+
+    result = runner.invoke(app, ["guard", "--pr-base", "origin/main"])
+    assert result.exit_code == 0, result.output
+    assert scan_paths
+    assert len(scan_paths[0]) == 1
+    assert (Path.cwd() / scan_paths[0][0]).resolve() == (repo_root / "sub" / "leak.env").resolve()
+
+
 def test_guard_staged_without_git_fails(tmp_path: Path, monkeypatch):
     """--staged fails gracefully without git."""
     config = EnvdriftConfig()
