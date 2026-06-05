@@ -92,16 +92,24 @@ pip install "envdrift[aws]"
 Uses boto3's credential chain. envdrift never passes explicit credentials to
 boto3 (it only sets the region), so the chain's first step — explicit
 credentials passed to `boto3.client()`/`boto3.Session()` — is not reachable
-through envdrift. The reachable providers, tried in this order, are:
+through envdrift. The remaining providers are then tried roughly in the order
+botocore resolves them (botocore owns the exact chain; this list is indicative,
+not exhaustive):
 
 1. **Environment variables** (`AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_SESSION_TOKEN`)
 2. **Assume Role providers** (profiles with `role_arn` and `source_profile`)
 3. **Assume Role with Web Identity** (IRSA for Kubernetes, web identity tokens)
 4. **AWS IAM Identity Center (SSO)** credential provider
 5. **Shared credentials file** (`~/.aws/credentials`)
-6. **AWS config file** (`~/.aws/config`)
-7. **Container credential provider** (ECS/EKS task roles)
-8. **Instance Metadata Service (IMDS)** (EC2 instance profile)
+6. **Process provider** (`credential_process` in `~/.aws/config` — an external command that emits credentials)
+7. **AWS config file** (`~/.aws/config`)
+8. **Container credential provider** (ECS/EKS task roles)
+9. **Instance Metadata Service (IMDS)** (EC2 instance profile)
+
+The shared-credentials and config-file providers can also source credentials
+indirectly (e.g. `credential_source`, `sso_*`, or a nested `credential_process`).
+For the authoritative, version-specific chain see the
+[boto3 credentials guide](https://boto3.amazonaws.com/v1/documentation/api/latest/guide/credentials.html).
 
 ### Configuration
 
