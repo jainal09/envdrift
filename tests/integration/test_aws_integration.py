@@ -739,6 +739,179 @@ environment = "staging"
         finally:
             _force_delete(aws_secrets_client, secret_name)
 
+    def test_push_all_empty_env_keys_filename_falls_back_to_dot_env_keys(
+        self,
+        work_dir: Path,
+        aws_test_env: dict[str, str],
+        aws_secrets_client,
+        integration_pythonpath: str,
+        envdrift_cmd: list[str],
+    ) -> None:
+        """#318: env_keys_filename = "" must resolve to .env.keys, not the folder dir.
+
+        With an empty ``env_keys_filename`` the key-read path previously collapsed to
+        ``mapping.folder_path / ""`` (the folder itself), so ``EnvKeysFile`` read a
+        directory and surfaced a misleading ``Is a directory`` error instead of
+        pushing. The fallback must use ``.env.keys``.
+        """
+        secret_name = "envdrift-test/empty-keys-filename"
+        # Ensure the secret does not exist so the push path (not skip) is taken.
+        _force_delete(aws_secrets_client, secret_name)
+
+        (work_dir / "envdrift.toml").write_text(
+            '[encryption]\nbackend = "dotenvx"\n'
+            '[vault]\nprovider = "aws"\nregion = "us-east-1"\n'
+            '[vault.sync]\nenv_keys_filename = ""\n'  # <-- the bug trigger
+            "[[vault.sync.mappings]]\n"
+            f'secret_name = "{secret_name}"\nfolder_path = "."\nenvironment = "staging"\n'
+        )
+        (work_dir / ".env.keys").write_text("DOTENV_PRIVATE_KEY_STAGING=NEWKEY-from-local\n")
+
+        env = aws_test_env.copy()
+        env["PYTHONPATH"] = integration_pythonpath
+        try:
+            result = subprocess.run(
+                [*envdrift_cmd, "vault-push", "--all", "--skip-encrypt"],
+                cwd=work_dir,
+                env=env,
+                capture_output=True,
+                text=True,
+                timeout=60,
+            )
+            out = (result.stdout + result.stderr).lower()
+            assert "is a directory" not in out, out
+            assert ".env.keys not found" not in out, out
+            assert result.returncode == 0, out
+            stored = aws_secrets_client.get_secret_value(SecretId=secret_name)["SecretString"]
+            assert stored == "DOTENV_PRIVATE_KEY_STAGING=NEWKEY-from-local"
+        finally:
+            _force_delete(aws_secrets_client, secret_name)
+
+    def test_push_all_skipped_existing_does_not_mutate_local_files(
+        self,
+        work_dir: Path,
+        aws_test_env: dict[str, str],
+        aws_secrets_client,
+        integration_pythonpath: str,
+        envdrift_cmd: list[str],
+    ) -> None:
+        """#347: a skipped --all push (secret exists, no --force) must not mutate disk.
+
+        Run WITHOUT ``--skip-encrypt`` so the encrypt-then-skip path is exercised:
+        previously a plaintext env file was encrypted (and ``.env.keys`` generated)
+        BEFORE the existence/skip check, mutating the working tree even though the
+        push was ultimately a no-op. After the fix the skip check runs first, so a
+        plaintext file stays plaintext and no ``.env.keys`` appears.
+        """
+        if not _dotenvx_available():
+            pytest.skip("dotenvx binary required")
+
+        secret_name = "envdrift-test/push-all-idempotent"
+        # Pre-create the secret so the push is skipped (no --force).
+        _create_secret(
+            aws_secrets_client,
+            Name=secret_name,
+            SecretString="DOTENV_PRIVATE_KEY_PRODUCTION=preexisting",
+        )
+
+        (work_dir / "envdrift.toml").write_text(
+            '[encryption]\nbackend = "dotenvx"\n'
+            '[vault]\nprovider = "aws"\nregion = "us-east-1"\n'
+            "[vault.sync]\n"
+            "[[vault.sync.mappings]]\n"
+            f'secret_name = "{secret_name}"\nfolder_path = "."\nenvironment = "production"\n'
+        )
+        # A *plaintext* env file: on the buggy path it would be encrypted before
+        # the skip check, mutating the file and creating .env.keys.
+        env_file = work_dir / ".env.production"
+        env_file.write_text("FOO=bar\nBAZ=qux\n")
+        env_before = env_file.read_bytes()
+        keys_path = work_dir / ".env.keys"
+        assert not keys_path.exists()
+
+        env = aws_test_env.copy()
+        env["PYTHONPATH"] = integration_pythonpath
+        try:
+            result = subprocess.run(
+                [*envdrift_cmd, "vault-push", "--all"],  # NO --skip-encrypt, NO --force
+                cwd=work_dir,
+                env=env,
+                capture_output=True,
+                text=True,
+                timeout=90,
+            )
+            out = (result.stdout + result.stderr).lower()
+            assert result.returncode == 0, out
+            assert "skip" in out or "already exists" in out, out
+            # The file must NOT have been encrypted, and no .env.keys generated.
+            assert env_file.read_bytes() == env_before, (
+                "skipped push encrypted/mutated .env.production (#347)"
+            )
+            assert "encrypting" not in out, out
+            assert not keys_path.exists(), "skipped push generated .env.keys (#347)"
+        finally:
+            _force_delete(aws_secrets_client, secret_name)
+
+    def test_ephemeral_pull_uses_environment_key_name_not_folder_name(
+        self,
+        work_dir: Path,
+        aws_test_env: dict[str, str],
+        aws_secrets_client,
+        integration_pythonpath: str,
+        envdrift_cmd: list[str],
+    ) -> None:
+        """#325: ephemeral pull derives the key name from the environment.
+
+        Folder basename (``svc-a``) differs from the mapping environment
+        (``production``). The injected ephemeral key name must be
+        ``DOTENV_PRIVATE_KEY_PRODUCTION`` (env-derived), not
+        ``DOTENV_PRIVATE_KEY_SVC-A`` (folder-derived), so the real dotenvx file
+        decrypts. This guards the env-derived key-name path the fix hardens.
+        """
+        if not _dotenvx_available():
+            pytest.skip("dotenvx binary required")
+
+        secret_name = "envdrift-test/ephemeral-folder-mismatch"
+        svc = work_dir / "svc-a"  # folder name 'svc-a' != env 'production'
+        svc.mkdir()
+        priv = _make_encrypted_project(svc, "production")  # encrypts svc-a/.env.production
+        _create_secret(
+            aws_secrets_client,
+            Name=secret_name,
+            SecretString=f"DOTENV_PRIVATE_KEY_PRODUCTION={priv}",
+        )
+
+        (work_dir / "envdrift.toml").write_text(
+            '[encryption]\nbackend = "dotenvx"\n'
+            '[vault]\nprovider = "aws"\nregion = "us-east-1"\n'
+            "[vault.sync]\nephemeral_keys = true\n"
+            "[[vault.sync.mappings]]\n"
+            f'secret_name = "{secret_name}"\nfolder_path = "svc-a"\nenvironment = "production"\n'
+        )
+
+        env = aws_test_env.copy()
+        env["PYTHONPATH"] = integration_pythonpath
+        try:
+            result = subprocess.run(
+                [*envdrift_cmd, "pull", "--config", "envdrift.toml"],
+                cwd=work_dir,
+                env=env,
+                capture_output=True,
+                text=True,
+                timeout=90,
+            )
+            out = result.stdout + result.stderr
+            assert result.returncode == 0, out
+            assert "DOTENV_PRIVATE_KEY_SVC-A" not in out, (
+                "folder-derived key name injected instead of env-derived (#325)"
+            )
+            # Decryption succeeded -> plaintext present; ephemeral -> no .env.keys.
+            decrypted = (svc / ".env.production").read_text()
+            assert "FOO=bar" in decrypted, decrypted
+            assert not (svc / ".env.keys").exists()
+        finally:
+            _force_delete(aws_secrets_client, secret_name)
+
     def test_pull_strips_dotenv_private_key_prefix_end_to_end(
         self,
         work_dir: Path,

@@ -390,6 +390,97 @@ class TestPullCommand:
         assert "Syncing keys from vault" in result.output
 
     @patch("envdrift.cli_commands.encryption_helpers.resolve_encryption_backend")
+    def test_pull_ephemeral_injects_environment_key_name_not_folder_name(
+        self, mock_resolve, monkeypatch, tmp_path, loaded_config, no_git_hook
+    ):
+        """#325: ephemeral pull injects the ENV-derived key name, not the folder name.
+
+        Folder basename ``svc-a`` differs from the mapping environment
+        ``production``. The decrypt env override must carry
+        ``DOTENV_PRIVATE_KEY_PRODUCTION`` (env-derived), never
+        ``DOTENV_PRIVATE_KEY_SVC-A`` (folder-derived).
+        """
+        backend = DummyEncryptionBackend()
+        mock_resolve.return_value = (backend, EncryptionProvider.DOTENVX, None)
+
+        svc = tmp_path / "svc-a"
+        svc.mkdir()
+        (svc / ".env.production").write_text(
+            "#/---BEGIN DOTENV ENCRYPTED---/\nSECRET=encrypted:xyz\n"
+        )
+
+        mapping = ServiceMapping(secret_name="s", folder_path=svc, environment="production")
+        loaded_config(_sync_config([mapping]))
+
+        # Engine returns an EPHEMERAL result carrying the fetched key value.
+        ephemeral_result = SyncResult(
+            services=[
+                ServiceSyncResult(
+                    secret_name="s",
+                    folder_path=svc,
+                    action=SyncAction.EPHEMERAL,
+                    message="ephemeral",
+                    vault_key_value="the-private-key-value",
+                )
+            ]
+        )
+        _patch_engine(monkeypatch, ephemeral_result)
+
+        result = runner.invoke(app, ["pull"])
+        assert result.exit_code == 0, result.output
+        assert backend.decrypt_calls == [(svc / ".env.production").resolve()]
+        injected_env = backend.decrypt_kwargs[0]["env"]
+        assert injected_env is not None
+        assert injected_env["DOTENV_PRIVATE_KEY_PRODUCTION"] == "the-private-key-value"
+        assert "DOTENV_PRIVATE_KEY_SVC-A" not in injected_env
+
+    @patch("envdrift.cli_commands.encryption_helpers.resolve_encryption_backend")
+    def test_pull_ephemeral_falls_back_to_folder_name_when_no_mapping_matches(
+        self, mock_resolve, monkeypatch, tmp_path, loaded_config, no_git_hook
+    ):
+        """#325 defensive fallback: an ephemeral result with no matching mapping
+        derives the key name from the folder basename (last-resort path).
+
+        This should not happen in normal CLI flow (every ephemeral result comes
+        from a mapping), but the branch must stay correct and covered.
+        """
+        backend = DummyEncryptionBackend()
+        mock_resolve.return_value = (backend, EncryptionProvider.DOTENVX, None)
+
+        svc = tmp_path / "svc-a"
+        svc.mkdir()
+        (svc / ".env.production").write_text(
+            "#/---BEGIN DOTENV ENCRYPTED---/\nSECRET=encrypted:xyz\n"
+        )
+        mapping = ServiceMapping(secret_name="s", folder_path=svc, environment="production")
+        loaded_config(_sync_config([mapping]))
+
+        # Engine returns an EPHEMERAL result for a DIFFERENT, unmapped folder so
+        # the resolved-path lookup misses and the folder-name fallback is used.
+        orphan = tmp_path / "orphan-folder"
+        ephemeral_result = SyncResult(
+            services=[
+                ServiceSyncResult(
+                    secret_name="other",
+                    folder_path=orphan,
+                    action=SyncAction.EPHEMERAL,
+                    message="ephemeral",
+                    vault_key_value="orphan-key",
+                )
+            ]
+        )
+        _patch_engine(monkeypatch, ephemeral_result)
+
+        result = runner.invoke(app, ["pull"])
+        # The orphan result has no env file to decrypt (its key is never injected
+        # into svc-a's decrypt env), so the mapped file decrypts with no override.
+        assert result.exit_code == 0, result.output
+        injected_env = backend.decrypt_kwargs[0]["env"]
+        # The svc-a mapping found no ephemeral entry for its own folder, so no
+        # ephemeral override is injected (env stays None).
+        assert injected_env is None
+
+    @patch("envdrift.cli_commands.encryption_helpers.resolve_encryption_backend")
     def test_pull_sync_errors_exit(
         self, mock_resolve, monkeypatch, tmp_path, loaded_config, no_git_hook
     ):
@@ -721,6 +812,32 @@ class TestLockRekeyOnKeyNameMismatch:
         target = (tmp_path / ".env.production").resolve()
         assert target in backend.decrypt_calls
         assert target in backend.encrypt_calls
+
+    @patch("envdrift.cli_commands.encryption_helpers.resolve_encryption_backend")
+    def test_lock_check_rekey_is_read_only(
+        self, mock_resolve, tmp_path, loaded_config, no_git_hook
+    ):
+        """#303: under --check the re-key branch reports but never decrypts/encrypts."""
+        backend = DummyEncryptionBackend()
+        mock_resolve.return_value = (backend, EncryptionProvider.DOTENVX, None)
+        self._setup_mismatched_keys(tmp_path)
+        keys_before = (tmp_path / ".env.keys").read_bytes()
+        env_before = (tmp_path / ".env.production").read_bytes()
+        mapping = ServiceMapping(secret_name="s", folder_path=tmp_path, environment="production")
+        loaded_config(_sync_config([mapping]))
+
+        result = runner.invoke(app, ["lock", "--check"])
+
+        # --check reports drift (a file that "would" be re-keyed) and exits 1, the
+        # standard check-mode "needs action" signal — but it must not mutate.
+        assert result.exit_code == 1, result.output
+        assert "would re-key" in result.output
+        assert "re-encrypted with new key" not in result.output
+        # Dry run: neither decrypt nor encrypt is invoked, files untouched.
+        assert backend.decrypt_calls == []
+        assert backend.encrypt_calls == []
+        assert (tmp_path / ".env.keys").read_bytes() == keys_before
+        assert (tmp_path / ".env.production").read_bytes() == env_before
 
     @patch("envdrift.cli_commands.encryption_helpers.resolve_encryption_backend")
     def test_lock_rekey_decrypt_failure_records_error(

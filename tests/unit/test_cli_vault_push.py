@@ -300,6 +300,10 @@ class TestVaultPushAll:
         service_dir.mkdir()
         (service_dir / ".env.production").write_text("ENC[AES256_GCM,data:abc]")
 
+        # Secret absent so the push proceeds past the (now first) existence check
+        # into the provider-mismatch branch.
+        mock_client.get_secret.side_effect = SecretNotFoundError("missing")
+
         result = runner.invoke(app, ["vault-push", "--all"])
 
         assert result.exit_code == 0
@@ -347,6 +351,10 @@ class TestVaultPushAll:
         service_dir = tmp_path / "service1"
         service_dir.mkdir()
         (service_dir / ".env.production").write_text("PLAIN=text")
+
+        # Secret absent so the push proceeds past the (now first) existence check
+        # into the encrypt step, which fails.
+        mock_client.get_secret.side_effect = SecretNotFoundError("missing")
 
         result = runner.invoke(app, ["vault-push", "--all"])
 
@@ -460,14 +468,18 @@ class TestVaultPushAll:
         (tmp_path / "s5" / ".env.prod").write_text("SECRET=encrypted:abc123")
         (tmp_path / "s5" / ".env.keys").write_text("OTHER_KEY=val")
 
-        # Client side effects
-        # s1: skipped before client call
-        # s2: skipped before client call (encryption fail)
-        # s3: calls get_secret -> raises VaultError
-        # s4: calls get_secret -> raises SecretNotFoundError -> checks keys -> fail
-        # s5: calls get_secret -> raises SecretNotFoundError -> checks keys -> reads -> None -> fail
+        # Client side effects. The vault existence check now runs FIRST for every
+        # mapping (before any file mutation, per #347), so each of s1..s5 calls
+        # get_secret exactly once, in order:
+        # s1: SecretNotFound -> proceeds -> no .env file -> Skipped
+        # s2: SecretNotFound -> proceeds -> encrypt raises -> Error
+        # s3: VaultError -> Error (never touches the file)
+        # s4: SecretNotFound -> proceeds -> missing .env.keys -> Error
+        # s5: SecretNotFound -> proceeds -> key absent in .env.keys -> Error
 
         mock_client.get_secret.side_effect = [
+            SecretNotFoundError("miss"),  # s1
+            SecretNotFoundError("miss"),  # s2
             VaultError("api error"),  # s3
             SecretNotFoundError("miss"),  # s4
             SecretNotFoundError("miss"),  # s5
@@ -556,6 +568,10 @@ class TestVaultPushAll:
         env_file.write_text(
             "#/---BEGIN DOTENV ENCRYPTED---/\nDOTENV_PUBLIC_KEY=abc\nSECRET=encrypted:abc123\n"
         )
+
+        # Secret absent so the push proceeds past the (now first) existence check
+        # into the dotenvx-vs-sops mismatch branch.
+        mock_client.get_secret.side_effect = SecretNotFoundError("missing")
 
         result = runner.invoke(app, ["vault-push", "--all"])
 

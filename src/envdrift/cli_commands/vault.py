@@ -297,6 +297,28 @@ def vault_push(
                 )
                 effective_environment = detection.environment or mapping.effective_environment
 
+                # Check if the secret exists in vault BEFORE any file mutation
+                # (encrypt/normalize), so a skipped push leaves the working tree
+                # untouched (#347). This needs only `force` and the secret name,
+                # both independent of the encrypt/normalize block below.
+                if not force:
+                    try:
+                        client.get_secret(mapping.secret_name)
+                        # If successful, secret exists
+                        console.print(
+                            f"[dim]Skipped[/dim] {mapping.folder_path}: "
+                            f"Secret '{mapping.secret_name}' already exists"
+                        )
+                        skipped_count += 1
+                        continue
+                    except SecretNotFoundError:
+                        # Secret missing, proceed to push
+                        pass
+                    except VaultError as e:
+                        print_error(f"Vault error checking {mapping.secret_name}: {e}")
+                        error_count += 1
+                        continue
+
                 if not skip_encrypt:
                     if detection.status != "found" or detection.path is None:
                         missing_description = (
@@ -365,27 +387,8 @@ def vault_push(
                             effective_environment,
                         )
 
-                # Check if secret exists in vault
-                if not force:
-                    try:
-                        client.get_secret(mapping.secret_name)
-                        # If successful, secret exists
-                        console.print(
-                            f"[dim]Skipped[/dim] {mapping.folder_path}: "
-                            f"Secret '{mapping.secret_name}' already exists"
-                        )
-                        skipped_count += 1
-                        continue
-                    except SecretNotFoundError:
-                        # Secret missing, proceed to push
-                        pass
-                    except VaultError as e:
-                        print_error(f"Vault error checking {mapping.secret_name}: {e}")
-                        error_count += 1
-                        continue
-
                 # Read key to push
-                env_keys_path = mapping.folder_path / sync_config.env_keys_filename
+                env_keys_path = mapping.folder_path / (sync_config.env_keys_filename or ".env.keys")
                 if not env_keys_path.exists():
                     print_error(f"Skipped {mapping.folder_path}: .env.keys not found")
                     error_count += 1
