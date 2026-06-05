@@ -22,6 +22,7 @@ from envdrift.scanner.gitleaks import (
     GitleaksInstallError,
     GitleaksNotFoundError,
     GitleaksScanner,
+    _get_gitleaks_version,
     get_gitleaks_path,
     get_platform_info,
     get_venv_bin_dir,
@@ -176,7 +177,7 @@ class TestGitleaksInstaller:
     def test_default_version_from_constants(self):
         """Test that installer uses version from constants."""
         installer = GitleaksInstaller()
-        assert installer.version == "8.30.0"
+        assert installer.version == _get_gitleaks_version()
 
     def test_custom_version(self):
         """Test that custom version can be specified."""

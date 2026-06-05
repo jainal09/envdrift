@@ -16,6 +16,7 @@ from envdrift.scanner.infisical import (
     InfisicalInstallError,
     InfisicalNotFoundError,
     InfisicalScanner,
+    _get_infisical_version,
     get_infisical_path,
     get_platform_info,
 )
@@ -76,7 +77,7 @@ class TestInfisicalInstaller:
     def test_default_version_from_constants(self):
         """Test that installer uses version from constants."""
         installer = InfisicalInstaller()
-        assert installer.version == "0.31.1"
+        assert installer.version == _get_infisical_version()
 
     def test_custom_version(self):
         """Test that custom version can be specified."""

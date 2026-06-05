@@ -15,6 +15,7 @@ Requires: pydantic-settings installed
 
 from __future__ import annotations
 
+import os
 import subprocess
 import sys
 import textwrap
@@ -757,3 +758,430 @@ class TestValidateCommand:
         # Should exit with error
         assert result.returncode != 0
         assert "Traceback" not in result.stderr, "Should not crash with traceback"
+
+
+# ---------------------------------------------------------------------------
+# Additional real e2e coverage for the validate CLI.
+#
+# These tests drive the real ``python -m envdrift.cli validate`` subprocess over
+# real .env files and real ``settings.py`` modules (no mocks, no container).
+#
+# IMPORTANT: envdrift's validator matches schema field names against .env keys
+# *case-sensitively* (see src/envdrift/core/validator.py:124-146). To exercise
+# the *documented* behavior (missing-required / extra / type-error detection)
+# rather than the case-sensitivity bug, these schemas declare their fields in
+# UPPERCASE so they match the conventional UPPERCASE .env keys exactly.
+#
+# Also note: pydantic-settings BaseSettings defaults ``model_config["extra"]``
+# to "forbid", so a schema must explicitly set ``extra="ignore"`` to downgrade
+# unknown variables from errors to warnings.
+# ---------------------------------------------------------------------------
+
+
+def _run_validate(
+    *,
+    tmp_path: Path,
+    integration_pythonpath: str,
+    settings_src: str,
+    env_text: str,
+    extra_args: list[str] | None = None,
+    schema: str = "settings:Settings",
+) -> subprocess.CompletedProcess[str]:
+    """Run the real ``envdrift validate`` CLI as a subprocess.
+
+    Writes ``settings.py`` and ``.env`` into ``tmp_path`` and invokes the CLI
+    against them. ``COLUMNS`` is pinned wide so Rich does not wrap section
+    headers / value lines, keeping output assertions stable in a non-TTY pipe.
+    """
+    settings_module = tmp_path / "settings.py"
+    settings_module.write_text(textwrap.dedent(settings_src))
+
+    env_file = tmp_path / ".env"
+    env_file.write_text(textwrap.dedent(env_text))
+
+    env = os.environ.copy()
+    env["PYTHONPATH"] = integration_pythonpath
+    env["COLUMNS"] = "200"
+
+    cmd = [
+        sys.executable,
+        "-m",
+        "envdrift.cli",
+        "validate",
+        str(env_file),
+        "--schema",
+        schema,
+        "--service-dir",
+        str(tmp_path),
+    ]
+    if extra_args:
+        cmd.extend(extra_args)
+
+    return subprocess.run(
+        cmd,
+        cwd=tmp_path,
+        env=env,
+        capture_output=True,
+        text=True,
+    )
+
+
+class TestValidateRealEdgeCases:
+    """High-value real e2e edge cases for the validate command."""
+
+    def test_validate_extra_ignore_emits_warning_not_error(
+        self,
+        tmp_path: Path,
+        integration_pythonpath: str,
+    ) -> None:
+        """HP-06: extra='ignore' downgrades an unknown var to a warning.
+
+        Validation must PASS (exit 0 even with --ci) and the unknown variable
+        is reported only as a warning, never in an EXTRA VARIABLES error
+        section.
+        """
+        result = _run_validate(
+            tmp_path=tmp_path,
+            integration_pythonpath=integration_pythonpath,
+            settings_src='''
+                from pydantic_settings import BaseSettings
+
+                class Settings(BaseSettings):
+                    """Schema that tolerates extra vars."""
+                    APP_NAME: str
+                    model_config = {"extra": "ignore"}
+            ''',
+            env_text="""
+                APP_NAME=MyApp
+                UNKNOWN_VAR=tolerated
+            """,
+            extra_args=["--no-check-encryption", "--ci"],
+        )
+
+        combined = result.stdout + result.stderr
+        assert result.returncode == 0, (
+            f"extra=ignore should pass even with --ci. Output: {combined}"
+        )
+        assert "Traceback" not in result.stderr
+        assert "PASSED" in combined, f"Should report PASSED. Output: {combined}"
+        # Reported as a warning, not an error section.
+        assert "EXTRA VARIABLES" not in combined, (
+            f"extra=ignore must not produce an error section. Output: {combined}"
+        )
+        assert "Extra variable 'UNKNOWN_VAR' not in schema" in combined, (
+            f"Should warn about UNKNOWN_VAR. Output: {combined}"
+        )
+
+    def test_validate_extra_forbid_reports_error_matching_case(
+        self,
+        tmp_path: Path,
+        integration_pythonpath: str,
+    ) -> None:
+        """BP-04: extra='forbid' with a case-matching extra var is an ERROR.
+
+        The unknown variable appears under an EXTRA VARIABLES section,
+        validation FAILS, and --ci exits 1.
+        """
+        result = _run_validate(
+            tmp_path=tmp_path,
+            integration_pythonpath=integration_pythonpath,
+            settings_src='''
+                from pydantic_settings import BaseSettings
+
+                class Settings(BaseSettings):
+                    """Schema that forbids extra vars."""
+                    APP_NAME: str
+                    model_config = {"extra": "forbid"}
+            ''',
+            env_text="""
+                APP_NAME=MyApp
+                UNKNOWN_VAR=should_be_rejected
+            """,
+            extra_args=["--no-check-encryption", "--ci"],
+        )
+
+        combined = result.stdout + result.stderr
+        assert result.returncode == 1, f"extra=forbid + --ci must exit 1. Output: {combined}"
+        assert "Traceback" not in result.stderr
+        assert "FAILED" in combined, f"Should report FAILED. Output: {combined}"
+        assert "EXTRA VARIABLES" in combined, (
+            f"Should print EXTRA VARIABLES section. Output: {combined}"
+        )
+        assert "UNKNOWN_VAR" in combined, f"Should list UNKNOWN_VAR. Output: {combined}"
+
+    def test_validate_type_errors_for_float_and_bool(
+        self,
+        tmp_path: Path,
+        integration_pythonpath: str,
+    ) -> None:
+        """BP-03: invalid float and non-canonical bool produce TYPE ERRORS."""
+        result = _run_validate(
+            tmp_path=tmp_path,
+            integration_pythonpath=integration_pythonpath,
+            settings_src='''
+                from pydantic_settings import BaseSettings
+
+                class Settings(BaseSettings):
+                    """Schema with a float and a bool field."""
+                    RATIO: float
+                    ENABLED: bool
+            ''',
+            env_text="""
+                RATIO=not_a_float
+                ENABLED=maybe
+            """,
+            extra_args=["--no-check-encryption"],
+        )
+
+        combined = result.stdout + result.stderr
+        assert "Traceback" not in result.stderr
+        assert "TYPE ERRORS" in combined, f"Should print TYPE ERRORS section. Output: {combined}"
+        assert "RATIO" in combined and "float" in combined, (
+            f"Should flag RATIO as a float error. Output: {combined}"
+        )
+        assert "ENABLED" in combined and "boolean" in combined, (
+            f"Should flag ENABLED as a boolean error. Output: {combined}"
+        )
+
+    def test_validate_fix_template_encrypted_placeholder_for_sensitive_required(
+        self,
+        tmp_path: Path,
+        integration_pythonpath: str,
+    ) -> None:
+        """HP-12: --fix uses an encrypted placeholder for sensitive required fields.
+
+        A missing sensitive required field renders as
+        ``API_KEY="encrypted:YOUR_VALUE_HERE"`` while a missing non-sensitive
+        required field renders as a bare ``PUBLIC_NAME=`` assignment.
+        """
+        result = _run_validate(
+            tmp_path=tmp_path,
+            integration_pythonpath=integration_pythonpath,
+            settings_src='''
+                from pydantic_settings import BaseSettings
+                from pydantic import Field
+
+                class Settings(BaseSettings):
+                    """Schema with a sensitive and a non-sensitive required field."""
+                    APP_NAME: str
+                    API_KEY: str = Field(json_schema_extra={"sensitive": True})
+                    PUBLIC_NAME: str
+                    model_config = {"extra": "ignore"}
+            ''',
+            env_text="""
+                APP_NAME=MyApp
+            """,
+            extra_args=["--no-check-encryption", "--fix"],
+        )
+
+        combined = result.stdout + result.stderr
+        assert "Traceback" not in result.stderr
+        assert "Fix template:" in combined, f"Should print a fix template. Output: {combined}"
+        assert 'API_KEY="encrypted:YOUR_VALUE_HERE"' in combined, (
+            f"Sensitive required field needs encrypted placeholder. Output: {combined}"
+        )
+        # Non-sensitive required field is a bare assignment (own line).
+        assert any(line.strip() == "PUBLIC_NAME=" for line in combined.splitlines()), (
+            f"Non-sensitive required field should be a bare assignment. Output: {combined}"
+        )
+
+    def test_validate_fix_is_noop_when_validation_passes(
+        self,
+        tmp_path: Path,
+        integration_pythonpath: str,
+    ) -> None:
+        """EC-22: --fix is a no-op when validation passes."""
+        result = _run_validate(
+            tmp_path=tmp_path,
+            integration_pythonpath=integration_pythonpath,
+            settings_src='''
+                from pydantic_settings import BaseSettings
+
+                class Settings(BaseSettings):
+                    """Schema satisfied by the .env."""
+                    APP_NAME: str
+                    model_config = {"extra": "ignore"}
+            ''',
+            env_text="""
+                APP_NAME=MyApp
+            """,
+            extra_args=["--no-check-encryption", "--fix", "--ci"],
+        )
+
+        combined = result.stdout + result.stderr
+        assert result.returncode == 0, f"Passing validation should exit 0. Output: {combined}"
+        assert "Traceback" not in result.stderr
+        assert "PASSED" in combined, f"Should report PASSED. Output: {combined}"
+        assert "Fix template" not in combined, (
+            f"--fix must be a no-op on a passing run. Output: {combined}"
+        )
+        assert "YOUR_VALUE_HERE" not in combined, (
+            f"No placeholder should be emitted on a passing run. Output: {combined}"
+        )
+
+    def test_validate_encrypted_value_skips_type_check(
+        self,
+        tmp_path: Path,
+        integration_pythonpath: str,
+    ) -> None:
+        """EC-09: an encrypted value for an int field produces no type error."""
+        result = _run_validate(
+            tmp_path=tmp_path,
+            integration_pythonpath=integration_pythonpath,
+            settings_src='''
+                from pydantic_settings import BaseSettings
+
+                class Settings(BaseSettings):
+                    """Schema with a single int field."""
+                    PORT: int
+                    model_config = {"extra": "ignore"}
+            ''',
+            env_text="""
+                PORT=encrypted:c2VjcmV0LXBvcnQtdmFsdWU
+            """,
+            extra_args=["--no-check-encryption"],
+        )
+
+        combined = result.stdout + result.stderr
+        assert result.returncode == 0, f"Encrypted int value should pass. Output: {combined}"
+        assert "Traceback" not in result.stderr
+        assert "PASSED" in combined, f"Should report PASSED. Output: {combined}"
+        assert "TYPE ERRORS" not in combined, (
+            f"Encrypted value must not trigger a type check. Output: {combined}"
+        )
+        assert "Expected integer" not in combined, (
+            f"No spurious integer error for encrypted value. Output: {combined}"
+        )
+
+    def test_validate_suspicious_token_warns_even_when_not_in_schema(
+        self,
+        tmp_path: Path,
+        integration_pythonpath: str,
+    ) -> None:
+        """EC-21: a GitHub-token-shaped value not in schema warns under --check-encryption.
+
+        With extra='ignore' the unknown var is not an error, so validation
+        PASSES (exit 0 without --ci) yet still warns that the value looks like
+        a secret.
+        """
+        result = _run_validate(
+            tmp_path=tmp_path,
+            integration_pythonpath=integration_pythonpath,
+            settings_src='''
+                from pydantic_settings import BaseSettings
+
+                class Settings(BaseSettings):
+                    """Schema that does not declare the suspicious var."""
+                    APP_NAME: str
+                    model_config = {"extra": "ignore"}
+            ''',
+            env_text="""
+                APP_NAME=MyApp
+                GITHUB_TOKEN=ghp_1234567890abcdefABCDEF1234567890abcd
+            """,
+            extra_args=["--check-encryption"],
+        )
+
+        combined = result.stdout + result.stderr
+        assert result.returncode == 0, (
+            f"extra=ignore keeps a suspicious extra var non-fatal. Output: {combined}"
+        )
+        assert "Traceback" not in result.stderr
+        assert "PASSED" in combined, f"Should report PASSED. Output: {combined}"
+        assert "GITHUB_TOKEN" in combined, f"Should mention GITHUB_TOKEN. Output: {combined}"
+        assert "looks like a secret" in combined or "suggesting sensitive data" in combined, (
+            f"Should warn the value/name looks sensitive. Output: {combined}"
+        )
+
+    def test_validate_rejects_malformed_dotted_path(
+        self,
+        tmp_path: Path,
+        integration_pythonpath: str,
+    ) -> None:
+        """BP-05: a schema path missing the ':' separator is rejected, exit 1."""
+        result = _run_validate(
+            tmp_path=tmp_path,
+            integration_pythonpath=integration_pythonpath,
+            settings_src="""
+                from pydantic_settings import BaseSettings
+
+                class Settings(BaseSettings):
+                    APP_NAME: str
+            """,
+            env_text="""
+                APP_NAME=MyApp
+            """,
+            schema="settings_missing_colon",
+            extra_args=["--no-check-encryption"],
+        )
+
+        combined = result.stdout + result.stderr
+        assert result.returncode == 1, f"Malformed schema path must exit 1. Output: {combined}"
+        assert "Traceback" not in result.stderr
+        assert "Invalid schema path" in combined, (
+            f"Should explain the path is invalid. Output: {combined}"
+        )
+        assert "Expected format: 'module.path:ClassName'" in combined, (
+            f"Should show the expected format. Output: {combined}"
+        )
+
+    def test_validate_rejects_non_basesettings_class(
+        self,
+        tmp_path: Path,
+        integration_pythonpath: str,
+    ) -> None:
+        """BP-07: --schema pointing at a non-BaseSettings class exits 1 cleanly."""
+        result = _run_validate(
+            tmp_path=tmp_path,
+            integration_pythonpath=integration_pythonpath,
+            settings_src='''
+                class Plain:
+                    """Not a Pydantic BaseSettings subclass."""
+                    pass
+            ''',
+            env_text="""
+                APP_NAME=MyApp
+            """,
+            schema="settings:Plain",
+            extra_args=["--no-check-encryption"],
+        )
+
+        combined = result.stdout + result.stderr
+        assert result.returncode == 1, f"Non-BaseSettings class must exit 1. Output: {combined}"
+        assert "Traceback" not in result.stderr
+        assert "'Plain' is not a Pydantic BaseSettings subclass" in combined, (
+            f"Should explain the class is not BaseSettings. Output: {combined}"
+        )
+
+    def test_validate_empty_value_parsed_as_empty_skips_type_check(
+        self,
+        tmp_path: Path,
+        integration_pythonpath: str,
+    ) -> None:
+        """EC-01: an empty value (KEY=) is EMPTY status, so an int field passes."""
+        result = _run_validate(
+            tmp_path=tmp_path,
+            integration_pythonpath=integration_pythonpath,
+            settings_src='''
+                from pydantic_settings import BaseSettings
+
+                class Settings(BaseSettings):
+                    """Schema with a single int field."""
+                    PORT: int
+                    model_config = {"extra": "ignore"}
+            ''',
+            env_text="""
+                PORT=
+            """,
+            extra_args=["--no-check-encryption"],
+        )
+
+        combined = result.stdout + result.stderr
+        assert result.returncode == 0, (
+            f"Empty value should not fail an int field. Output: {combined}"
+        )
+        assert "Traceback" not in result.stderr
+        assert "PASSED" in combined, f"Should report PASSED. Output: {combined}"
+        assert "Expected integer" not in combined, (
+            f"Empty value must not trigger an integer type error. Output: {combined}"
+        )
