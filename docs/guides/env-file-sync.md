@@ -153,7 +153,7 @@ environment = "staging"   # reads/writes DOTENV_PRIVATE_KEY_STAGING
 secret_name = "postgres-key"
 folder_path = "secrets/postgresql"
 environment = "production"
-env_file = "postgresql.env"  # custom dotenv filename inside folder_path
+# postgresql.env is auto-detected; set env_file only for a non-conventional name
 ```
 
 Using a different provider? Replace the `provider` value and the provider block:
@@ -352,11 +352,18 @@ vault_name = "production-vault"  # informational only — see note below
     `vault_name` does **not** route that secret to a different vault. To use a
     separate vault, run a separate config.
 
-By default, envdrift looks for `.env.<environment>` and then falls back to `.env`
-or a single `.env.*` file. Use `env_file` when a service uses another dotenv-style
-filename, such as `postgresql.env` or `dotnet-service-template.env.sqa`.
-`environment` remains the source of truth for key names, so the examples above
-still use keys like `DOTENV_PRIVATE_KEY_PRODUCTION` and `DOTENV_PRIVATE_KEY_STAGING`.
+By default, envdrift resolves each mapping's env file with no extra config, in
+this order: an exact `.env.<environment>`; then a custom-named file that encodes
+the environment — `<prefix>.env.<environment>` (e.g.
+`dotnet-service-template.env.sqa`), an infix `<prefix>-<environment>.env` /
+`<prefix>.<environment>.env` / `<prefix>_<environment>.env` (e.g.
+`dotnet-service-template-local.env`), or, for the default `production`
+environment, a plain `<prefix>.env` (e.g. `postgresql.env`); and finally a
+fallback to plain `.env` or a single `.env.*` file. Companion files (`.example`,
+`.sample`, `.template`, `.keys`) are never picked. Set `env_file` only for a name
+that matches none of these conventions. `environment` remains the source of truth
+for key names, so these files still use keys like `DOTENV_PRIVATE_KEY_PRODUCTION`
+and `DOTENV_PRIVATE_KEY_STAGING`.
 The installed git hook and `guard --staged` read these mappings and block
 plaintext custom env files before commit. The background agent also adds mapped
 `env_file` names to its watch patterns when project `[guardian]` is enabled; the

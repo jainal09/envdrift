@@ -284,7 +284,7 @@ Each mapping defines how a vault secret maps to a local service directory.
 | `folder_path` | `string` | **required** | Local folder containing `.env.keys` |
 | `vault_name` | `string` | `null` | Parsed but informational only — every mapping is fetched from the single vault you configured via `--vault-url` / `[vault.<provider>]`. See the note in [env-file-sync.md](../guides/env-file-sync.md#mappings). |
 | `environment` | `string` | `null` (resolves to profile name, else `"production"`) | **Identity** — which `.env.<environment>` file this mapping targets and which `DOTENV_PRIVATE_KEY_<ENVIRONMENT>` key it reads/writes. Always runs (unless filtered out by `profile`). |
-| `env_file` | `string` | `null` | Custom dotenv filename relative to `folder_path` (e.g. `postgresql.env`). When set, this exact file is used instead of the `.env.<environment>` lookup; `environment` still controls the `DOTENV_PRIVATE_KEY_<ENVIRONMENT>` key name. |
+| `env_file` | `string` | `null` | Optional override for the dotenv filename, relative to `folder_path`. Usually unnecessary — common conventions are auto-detected: `.env.<environment>`, `<prefix>.env.<environment>`, infix `<prefix>-<environment>.env`, and a plain `<prefix>.env` for the default environment (e.g. `postgresql.env`). Set `env_file` only for an arbitrary name matching none of those. When set, this exact file is used and `environment` still controls the `DOTENV_PRIVATE_KEY_<ENVIRONMENT>` key name. |
 | `profile` | `string` | `null` | **Selector** — tags this mapping as profile-only. Untagged mappings always run. Profile-tagged mappings only run when you pass a matching `--profile <name>` on the CLI. |
 | `activate_to` | `string` | `null` | After decrypt, copy the decrypted file to this path. Typical use: `activate_to = ".env"` on a profile mapping so apps that read a plain `.env` get the right one for the active profile. |
 | `ephemeral_keys` | `bool` | `null` | Per-mapping override for ephemeral mode (no `.env.keys` written to disk). |
@@ -325,12 +325,13 @@ secret_name = "service2-key"
 folder_path = "services/service2"
 environment = "staging"
 
-# Mapping with a custom dotenv filename
+# Mapping with a custom dotenv filename (auto-detected — env_file not needed)
 [[vault.sync.mappings]]
 secret_name = "postgres-key"
 folder_path = "secrets/postgresql"
 environment = "production"  # key stays DOTENV_PRIVATE_KEY_PRODUCTION
-env_file = "postgresql.env" # file path is secrets/postgresql/postgresql.env
+# secrets/postgresql/postgresql.env is auto-detected; set env_file only for a
+# non-conventional name that none of the detection rules match
 
 # Profile mapping — only runs with `envdrift pull --profile local`.
 # `environment` defaults to the profile name, so this targets .env.local

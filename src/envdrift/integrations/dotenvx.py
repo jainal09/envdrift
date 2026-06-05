@@ -113,6 +113,19 @@ _PUBLIC_KEY_NAME_RE = re.compile(r"\bDOTENV_PUBLIC_KEY_[A-Za-z0-9_-]+=")
 _PRIVATE_KEY_LINE_RE = re.compile(r"^DOTENV_PRIVATE_KEY_[A-Za-z0-9_-]+=(.*)$")
 
 
+def dotenvx_filename_needs_normalization(env_file: Path | str, environment: str) -> bool:
+    """Return True when a dotenvx file's metadata must be normalized to canonical.
+
+    dotenvx derives ``DOTENV_*_<NAME>`` from the filename, so only the canonical
+    ``.env`` and ``.env.<environment>`` names already map to the
+    ``DOTENV_*_<ENVIRONMENT>`` key envdrift uses. Any other name — service-prefixed
+    or infix custom files, whether configured via ``env_file`` or auto-detected —
+    yields a non-canonical key that :func:`normalize_dotenvx_metadata` must rewrite.
+    """
+    name = Path(env_file).name
+    return name != ".env" and name != f".env.{environment}"
+
+
 def normalize_dotenvx_metadata(
     env_file: Path | str,
     env_keys_file: Path | str,
