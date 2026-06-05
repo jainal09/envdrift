@@ -430,7 +430,7 @@ class TestPullCommand:
         assert result.exit_code == 0, result.output
         assert backend.decrypt_calls == [(svc / ".env.production").resolve()]
         injected_env = backend.decrypt_kwargs[0]["env"]
-        assert injected_env is not None
+        assert isinstance(injected_env, dict)
         assert injected_env["DOTENV_PRIVATE_KEY_PRODUCTION"] == "the-private-key-value"
         assert "DOTENV_PRIVATE_KEY_SVC-A" not in injected_env
 
