@@ -842,6 +842,32 @@ class DotenvxWrapper:
 
         return modified
 
+    def _raise_on_error_output(self, result: subprocess.CompletedProcess, action: str) -> None:
+        """Raise ``DotenvxError`` if a dotenvx run reported a failure.
+
+        dotenvx sometimes prints an error (e.g. "decryption failed", a missing key)
+        while still exiting 0, so both the combined output and the return code are
+        inspected. ``action`` is the human-readable verb ("encryption"/"decryption")
+        used in the error message.
+
+        Parameters:
+            result: The completed dotenvx subprocess.
+            action: Verb describing the operation for the error message.
+
+        Raises:
+            DotenvxError: If an error pattern is present in the output or the
+                command exited non-zero.
+        """
+        combined_output = (result.stdout or "") + (result.stderr or "")
+        for pattern in self.ENCRYPT_ERROR_PATTERNS:
+            if pattern.lower() in combined_output.lower():
+                clean_output = self._clean_output(combined_output).strip()
+                raise DotenvxError(f"dotenvx {action} failed: {clean_output}")
+
+        if result.returncode != 0:
+            clean_stderr = self._clean_output(result.stderr or "").strip()
+            raise DotenvxError(f"dotenvx command failed (exit {result.returncode}): {clean_stderr}")
+
     def encrypt(
         self,
         env_file: Path | str,
@@ -889,19 +915,7 @@ class DotenvxWrapper:
 
         # Run with check=False to handle exit code 0 errors ourselves
         result = self._run(args, env=env, cwd=cwd, check=False)
-
-        # Check for error patterns in output (dotenvx sometimes returns 0 on errors)
-        combined_output = (result.stdout or "") + (result.stderr or "")
-        # Clean output for readable error messages
-        clean_output = self._clean_output(combined_output).strip()
-        for pattern in self.ENCRYPT_ERROR_PATTERNS:
-            if pattern.lower() in combined_output.lower():
-                raise DotenvxError(f"dotenvx encryption failed: {clean_output}")
-
-        # Also check if return code was non-zero
-        if result.returncode != 0:
-            clean_stderr = self._clean_output(result.stderr or "").strip()
-            raise DotenvxError(f"dotenvx command failed (exit {result.returncode}): {clean_stderr}")
+        self._raise_on_error_output(result, "encryption")
 
     def decrypt(
         self,
@@ -947,17 +961,7 @@ class DotenvxWrapper:
         # "MISSING_DOTENV_KEY") while still exiting 0. Without this post-check a
         # 0-exit-with-error-output would be reported as a successful decrypt.
         result = self._run(args, env=env, cwd=cwd, check=False)
-
-        combined_output = (result.stdout or "") + (result.stderr or "")
-        clean_output = self._clean_output(combined_output).strip()
-        for pattern in self.ENCRYPT_ERROR_PATTERNS:
-            if pattern.lower() in combined_output.lower():
-                raise DotenvxError(f"dotenvx decryption failed: {clean_output}")
-
-        # Also surface a non-zero exit code as a failure.
-        if result.returncode != 0:
-            clean_stderr = self._clean_output(result.stderr or "").strip()
-            raise DotenvxError(f"dotenvx command failed (exit {result.returncode}): {clean_stderr}")
+        self._raise_on_error_output(result, "decryption")
 
     def run(self, env_file: Path | str, command: list[str]) -> subprocess.CompletedProcess:
         """
