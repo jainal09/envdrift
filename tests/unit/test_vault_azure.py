@@ -329,3 +329,53 @@ class TestAzureKeyVaultClient:
 
             with pytest.raises(VaultError):
                 client.list_secrets()
+
+    def test_get_secret_http_error_raises_vault_error(self, mock_azure):
+        """A non-not-found HTTP error during get_secret should raise VaultError."""
+
+        class HttpResponseError(Exception):
+            pass
+
+        class ResourceNotFoundError(Exception):
+            pass
+
+        mock_azure.HttpResponseError = HttpResponseError
+        mock_azure.ResourceNotFoundError = ResourceNotFoundError
+
+        mock_credential = MagicMock()
+        mock_secret_client = MagicMock()
+        mock_secret_client.list_properties_of_secrets.return_value = iter([])
+        mock_secret_client.get_secret.side_effect = HttpResponseError("boom")
+
+        with (
+            patch.object(mock_azure, "_DefaultAzureCredential", return_value=mock_credential),
+            patch.object(mock_azure, "_SecretClient", return_value=mock_secret_client),
+        ):
+            client = mock_azure.AzureKeyVaultClient(vault_url="https://test.vault.azure.net")
+            client.authenticate()
+
+            with pytest.raises(VaultError):
+                client.get_secret("some-secret")
+
+    def test_set_secret_http_error_raises_vault_error(self, mock_azure):
+        """A HTTP error during set_secret should raise VaultError."""
+
+        class HttpResponseError(Exception):
+            pass
+
+        mock_azure.HttpResponseError = HttpResponseError
+
+        mock_credential = MagicMock()
+        mock_secret_client = MagicMock()
+        mock_secret_client.list_properties_of_secrets.return_value = iter([])
+        mock_secret_client.set_secret.side_effect = HttpResponseError("boom")
+
+        with (
+            patch.object(mock_azure, "_DefaultAzureCredential", return_value=mock_credential),
+            patch.object(mock_azure, "_SecretClient", return_value=mock_secret_client),
+        ):
+            client = mock_azure.AzureKeyVaultClient(vault_url="https://test.vault.azure.net")
+            client.authenticate()
+
+            with pytest.raises(VaultError):
+                client.set_secret("some-secret", "value")

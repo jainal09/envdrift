@@ -599,6 +599,114 @@ class TestAWSSecretsManagerClient:
         with pytest.raises(VaultError):
             client.set_secret("name", "value")
 
+    def test_authenticate_service_error_wraps_as_vault_error(self, mock_boto3):
+        """A Secrets Manager service error (non-auth code) during authenticate
+        surfaces as VaultError, not AuthenticationError."""
+
+        class FakeClientError(Exception):
+            def __init__(self, code):
+                self.response = {"Error": {"Code": code}}
+
+        class FakeCredentialsError(Exception):
+            pass
+
+        mock_boto3.NoCredentialsError = FakeCredentialsError
+        mock_boto3.PartialCredentialsError = FakeCredentialsError
+
+        with patch("boto3.client") as mock_client:
+            mock_client.side_effect = FakeClientError("InternalServiceError")
+
+            client = mock_boto3.AWSSecretsManagerClient()
+            with pytest.raises(VaultError):
+                client.authenticate()
+
+    def test_authenticate_unknown_error_propagates(self, mock_boto3):
+        """An error with no AWS error code propagates unchanged from authenticate()."""
+
+        class FakeCredentialsError(Exception):
+            pass
+
+        # Distinct credential-error sentinels so an unrelated error does not match them.
+        mock_boto3.NoCredentialsError = FakeCredentialsError
+        mock_boto3.PartialCredentialsError = FakeCredentialsError
+
+        class WeirdError(Exception):
+            pass
+
+        with patch("boto3.client") as mock_client:
+            mock_client.side_effect = WeirdError("no error code here")
+
+            client = mock_boto3.AWSSecretsManagerClient()
+            with pytest.raises(WeirdError):
+                client.authenticate()
+
+    def test_get_secret_unknown_error_propagates(self, mock_boto3, patched_boto_clients):
+        """An error with no AWS error code propagates unchanged from get_secret()."""
+
+        class WeirdError(Exception):
+            pass
+
+        mock_sm_client, _ = patched_boto_clients
+        mock_sm_client.get_secret_value.side_effect = WeirdError("no code")
+
+        client = mock_boto3.AWSSecretsManagerClient()
+        client.authenticate()
+
+        with pytest.raises(WeirdError):
+            client.get_secret("secret")
+
+    def test_list_secrets_unknown_error_propagates(self, mock_boto3, patched_boto_clients):
+        """An error with no AWS error code propagates unchanged from list_secrets()."""
+
+        class WeirdError(Exception):
+            pass
+
+        mock_sm_client, _ = patched_boto_clients
+        mock_sm_client.get_paginator.side_effect = WeirdError("no code")
+
+        client = mock_boto3.AWSSecretsManagerClient()
+        client.authenticate()
+
+        with pytest.raises(WeirdError):
+            client.list_secrets()
+
+    def test_put_secret_value_unknown_error_propagates(self, mock_boto3, patched_boto_clients):
+        """An error with no AWS error code propagates unchanged from _put_secret_value()."""
+
+        class WeirdError(Exception):
+            pass
+
+        mock_sm_client, _ = patched_boto_clients
+        mock_sm_client.put_secret_value.side_effect = WeirdError("no code")
+
+        client = mock_boto3.AWSSecretsManagerClient()
+        client.authenticate()
+
+        with pytest.raises(WeirdError):
+            client._put_secret_value("name", "value")
+
+    def test_set_secret_requires_authentication(self, mock_boto3):
+        """set_secret should require authentication."""
+        client = mock_boto3.AWSSecretsManagerClient()
+
+        with pytest.raises(VaultError):
+            client.set_secret("name", "value")
+
+    def test_set_secret_unknown_error_propagates(self, mock_boto3, patched_boto_clients):
+        """An error with no AWS error code propagates unchanged from set_secret()."""
+
+        class WeirdError(Exception):
+            pass
+
+        mock_sm_client, _ = patched_boto_clients
+        mock_sm_client.create_secret.side_effect = WeirdError("no code")
+
+        client = mock_boto3.AWSSecretsManagerClient()
+        client.authenticate()
+
+        with pytest.raises(WeirdError):
+            client.set_secret("name", "value")
+
     def test_set_secret_dict(self, mock_boto3, patched_boto_clients):
         """Test set_secret_dict creates secret with JSON-encoded dict."""
         mock_sm_client, _ = patched_boto_clients
