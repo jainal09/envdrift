@@ -11,6 +11,7 @@ Encrypted values have the format: ENC[AES256_GCM,data:...,iv:...,tag:...,type:st
 from __future__ import annotations
 
 import re
+import shlex
 import shutil
 import subprocess  # nosec B404
 from pathlib import Path
@@ -43,11 +44,14 @@ class SOPSEncryptionBackend(EncryptionBackend):
     # Format: ENC[AES256_GCM,data:...,iv:...,tag:...,type:str]
     ENCRYPTED_PATTERN = re.compile(r"^ENC\[AES256_GCM,")
 
-    # Alternative SOPS patterns (for YAML/JSON metadata)
-    SOPS_METADATA_MARKERS = [
-        "sops:",  # YAML metadata section
-        '"sops":',  # JSON metadata section
-        "sops_version:",  # Version marker in metadata
+    # Line-anchored SOPS metadata markers, matched with re.MULTILINE so a bare
+    # in-line 'sops:' substring in plaintext (e.g. URL=https://sops:8200) does NOT
+    # match, but a genuine SOPS metadata block in any output format does.
+    SOPS_METADATA_PATTERNS = [
+        re.compile(r"^sops:\s*$", re.MULTILINE),  # YAML: top-level `sops:` mapping (col 0)
+        re.compile(r'^\s*"sops"\s*:', re.MULTILINE),  # JSON: `"sops":` (allows indent)
+        re.compile(r"^sops_version\s*=", re.MULTILINE),  # dotenv: flat `sops_version=`
+        re.compile(r"^sops_mac\s*=", re.MULTILINE),  # dotenv: flat `sops_mac=`
     ]
 
     def __init__(
@@ -385,9 +389,9 @@ class SOPSEncryptionBackend(EncryptionBackend):
         if "ENC[AES256_GCM," in content:
             return True
 
-        # Check for SOPS metadata markers (in YAML/JSON files)
-        for marker in self.SOPS_METADATA_MARKERS:
-            if marker in content:
+        # Check for SOPS metadata markers (line-anchored; YAML/JSON/dotenv).
+        for pattern in self.SOPS_METADATA_PATTERNS:
+            if pattern.search(content):
                 return True
 
         return False
@@ -460,14 +464,10 @@ See https://github.com/getsops/sops for full documentation.
         if not self.is_installed():
             raise EncryptionNotFoundError(f"SOPS is not installed.\n{self.install_instructions()}")
 
-        # SOPS exec-env runs a command with secrets as environment variables
-        args = [
-            "exec-env",
-            "--input-type",
-            "dotenv",
-            str(env_file),
-            "--",
-        ] + command
+        # `sops exec-env [file] [command-to-run]`: no --input-type (type is
+        # inferred from the file extension), and the command is a SINGLE shell
+        # string, not a `-- argv` list. shlex.join safely quotes the argv.
+        args = ["exec-env", str(env_file), shlex.join(command)]
 
         return self._run(
             args,
