@@ -1,5 +1,26 @@
 # Changelog
 
+## [10.13.4](https://github.com/jainal09/envdrift/compare/v10.13.3...v10.13.4) (2026-06-05)
+
+
+### Bug Fixes
+
+* resolve 6 security false-negatives (scanner/guard/sops/gitleaks) ([#337](https://github.com/jainal09/envdrift/issues/337)) ([f4521a0](https://github.com/jainal09/envdrift/commit/f4521a027533a66e28b588da59f447c81944a8c4))
+
+## [10.13.3](https://github.com/jainal09/envdrift/compare/v10.13.2...v10.13.3) (2026-06-05)
+
+
+### Documentation
+
+* add CLAUDE.md engineering conventions + PR checklist ([#343](https://github.com/jainal09/envdrift/issues/343)) ([d1f7341](https://github.com/jainal09/envdrift/commit/d1f73417500d166c88b37c42886baa1971519c6f))
+
+## [10.13.2](https://github.com/jainal09/envdrift/compare/v10.13.1...v10.13.2) (2026-06-05)
+
+
+### Bug Fixes
+
+* **test:** main Publish CI flake — gcp test reloads envdrift.vault and corrupts VaultProvider enum ([#338](https://github.com/jainal09/envdrift/issues/338)) ([a0300f3](https://github.com/jainal09/envdrift/commit/a0300f380b77f5612ab9875360ce9e93feb2e734))
+
 ## [10.13.1](https://github.com/jainal09/envdrift/compare/v10.13.0...v10.13.1) (2026-06-05)
 
 
