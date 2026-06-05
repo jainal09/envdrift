@@ -266,6 +266,37 @@ class TestAWSSecretsManagerClient:
         with pytest.raises(AuthenticationError):
             client.set_secret("name", "value")
 
+    def test_set_secret_create_access_denied_raises_auth_error(
+        self, mock_boto3, patched_boto_clients
+    ):
+        """Regression #308: a create AccessDeniedException must surface as an
+        AuthenticationError, not be silently masked by falling back to
+        put_secret_value."""
+
+        class FakeClientError(Exception):
+            def __init__(self, code):
+                self.response = {"Error": {"Code": code}}
+
+        mock_boto3._ClientError = FakeClientError
+
+        mock_sm_client, _ = patched_boto_clients
+        mock_sm_client.create_secret.side_effect = FakeClientError("AccessDeniedException")
+        # put_secret_value would succeed, masking the create denial if invoked.
+        mock_sm_client.put_secret_value.return_value = {
+            "Name": "existing-secret",
+            "VersionId": "v2",
+            "ARN": "arn:aws:...",
+        }
+
+        client = mock_boto3.AWSSecretsManagerClient()
+        client.authenticate()
+
+        with pytest.raises(AuthenticationError):
+            client.set_secret("existing-secret", "value")
+
+        # The create-permission denial must not be reinterpreted as an update.
+        mock_sm_client.put_secret_value.assert_not_called()
+
     def test_put_secret_value_requires_authentication(self, mock_boto3):
         """_put_secret_value should require authentication."""
         client = mock_boto3.AWSSecretsManagerClient()
@@ -494,6 +525,25 @@ class TestAWSSecretsManagerClient:
         assert result.name == "binary-secret"
         assert result.value == "//4="  # base64 encoding of b"\xff\xfe"
         assert result.version == "v1"
+
+    def test_get_secret_missing_both_value_keys_raises_vault_error(
+        self, mock_boto3, patched_boto_clients
+    ):
+        """Regression #313: a response with neither SecretString nor
+        SecretBinary must raise a domain VaultError, not a bare KeyError."""
+
+        mock_sm_client, _ = patched_boto_clients
+        mock_sm_client.get_secret_value.return_value = {
+            "Name": "malformed-secret",
+            "VersionId": "v1",
+            "ARN": "arn:aws:...",
+        }
+
+        client = mock_boto3.AWSSecretsManagerClient()
+        client.authenticate()
+
+        with pytest.raises(VaultError):
+            client.get_secret("malformed-secret")
 
     def test_list_secrets_error_wraps(self, mock_boto3, patched_boto_clients):
         """Paginator errors should raise VaultError."""

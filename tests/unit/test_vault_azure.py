@@ -228,6 +228,61 @@ class TestAzureKeyVaultClient:
             with pytest.raises(VaultError):
                 client.authenticate()
 
+    def test_is_authenticated_false_after_failed_auth_error(self, mock_azure):
+        """After authenticate() fails on the probe, is_authenticated() must be False.
+
+        Regression for #304: self._client was assigned before the verification
+        probe, so a failed probe left _client non-None and is_authenticated()
+        wrongly returned True.
+        """
+
+        class ClientAuthError(Exception):
+            pass
+
+        mock_azure.ClientAuthenticationError = ClientAuthError
+
+        mock_secret_client = MagicMock()
+        mock_secret_client.list_properties_of_secrets.side_effect = ClientAuthError("bad creds")
+
+        with (
+            patch.object(mock_azure, "_DefaultAzureCredential", return_value=MagicMock()),
+            patch.object(mock_azure, "_SecretClient", return_value=mock_secret_client),
+        ):
+            client = mock_azure.AzureKeyVaultClient(vault_url="https://test.vault.azure.net")
+            with pytest.raises(AuthenticationError):
+                client.authenticate()
+
+            assert client.is_authenticated() is False
+            assert client._client is None
+            assert client._credential is None
+
+    def test_is_authenticated_false_after_failed_http_error(self, mock_azure):
+        """A failed probe raising HttpResponseError also leaves the client unauthenticated."""
+
+        class HttpResponseError(Exception):
+            pass
+
+        class ClientAuthenticationError(Exception):
+            pass
+
+        mock_azure.ClientAuthenticationError = ClientAuthenticationError
+        mock_azure.HttpResponseError = HttpResponseError
+
+        mock_secret_client = MagicMock()
+        mock_secret_client.list_properties_of_secrets.side_effect = HttpResponseError("boom")
+
+        with (
+            patch.object(mock_azure, "_DefaultAzureCredential", return_value=MagicMock()),
+            patch.object(mock_azure, "_SecretClient", return_value=mock_secret_client),
+        ):
+            client = mock_azure.AzureKeyVaultClient(vault_url="https://test.vault.azure.net")
+            with pytest.raises(VaultError):
+                client.authenticate()
+
+            assert client.is_authenticated() is False
+            assert client._client is None
+            assert client._credential is None
+
     def test_get_secret_not_found_raises(self, mock_azure):
         """Missing secrets should raise SecretNotFoundError."""
 

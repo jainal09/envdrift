@@ -83,8 +83,15 @@ class AzureKeyVaultClient(VaultClient):
             secrets_iter = self._client.list_properties_of_secrets()
             next(iter(secrets_iter), None)  # Consume one item to verify auth
         except ClientAuthenticationError as e:
+            # The verification probe failed: discard the half-initialized client and
+            # credential so is_authenticated() reports False and ensure_authenticated()
+            # re-attempts authentication on the next operation.
+            self._client = None
+            self._credential = None
             raise AuthenticationError(f"Azure authentication failed: {e}") from e
         except HttpResponseError as e:
+            self._client = None
+            self._credential = None
             raise VaultError(f"Azure Key Vault error: {e}") from e
 
     def is_authenticated(self) -> bool:

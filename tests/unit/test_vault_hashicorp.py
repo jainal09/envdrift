@@ -94,6 +94,42 @@ class TestHashiCorpVaultClientWithMock:
         client = HashiCorpVaultClient(url="http://localhost:8200")
         assert client.token == "env-token"
 
+    def test_token_only_resolved_from_param_or_vault_token_env(
+        self, monkeypatch: pytest.MonkeyPatch
+    ):
+        """Token is resolved only from the ``token`` param or VAULT_TOKEN env.
+
+        Regression guard for #328: a token supplied anywhere else (e.g. a
+        ``[vault.hashicorp] token`` TOML key, which the client never receives) is
+        NOT honored — with no param and no VAULT_TOKEN, the client has no token and
+        authenticate() must fail fast with AuthenticationError.
+        """
+        monkeypatch.delenv("VAULT_TOKEN", raising=False)
+
+        from envdrift.vault.hashicorp import HashiCorpVaultClient
+
+        client = HashiCorpVaultClient(url="http://localhost:8200")
+        assert client.token is None
+
+        with pytest.raises(AuthenticationError, match="No Vault token provided"):
+            client.authenticate()
+
+    def test_docstring_documents_token_only_auth(self):
+        """The class docstring is the source of truth: Token-only auth.
+
+        Regression guard for #327: docs must not over-promise auth methods that the
+        code does not implement. The class docstring explicitly states Token-only.
+        """
+        from envdrift.vault.hashicorp import HashiCorpVaultClient
+
+        doc = HashiCorpVaultClient.__doc__ or ""
+        assert "Token only" in doc
+        assert "NOT supported" in doc
+        # The unsupported methods named in the docs are explicitly called out as
+        # unsupported, not advertised as available.
+        for method in ("AppRole", "OIDC", "Kubernetes"):
+            assert method in doc
+
     def test_is_authenticated_false_initially(self):
         """Test is_authenticated returns False before authenticate."""
         from envdrift.vault.hashicorp import HashiCorpVaultClient
@@ -132,8 +168,14 @@ class TestHashiCorpVaultClientWithMock:
         assert client.is_authenticated() is True
 
     @patch("envdrift.vault.hashicorp._hvac")
-    def test_authenticate_invalid_token_raises(self, mock_hvac_module):
-        """Test authentication with invalid token raises."""
+    def test_authenticate_invalid_token_raises_authentication_error(self, mock_hvac_module):
+        """An invalid/expired token (is_authenticated() -> False) must raise
+        AuthenticationError, not a re-wrapped VaultError.
+
+        Regression test for #305: the broad ``except Exception`` previously caught
+        the just-raised AuthenticationError and re-wrapped it as VaultError. The
+        AuthenticationError must propagate so callers can match on it specifically.
+        """
         mock_client = MagicMock()
         mock_client.is_authenticated.return_value = False
         mock_hvac_module.Client.return_value = mock_client
@@ -142,8 +184,12 @@ class TestHashiCorpVaultClientWithMock:
 
         client = HashiCorpVaultClient(url="http://localhost:8200", token="invalid-token")
 
-        with pytest.raises((AuthenticationError, VaultError)):
+        with pytest.raises(AuthenticationError, match="invalid or expired") as exc_info:
             client.authenticate()
+
+        # It must be exactly AuthenticationError, not the broader VaultError wrapper.
+        assert type(exc_info.value) is AuthenticationError
+        assert "connection error" not in str(exc_info.value)
 
     @patch("envdrift.vault.hashicorp._hvac")
     def test_get_secret_with_single_value(self, mock_hvac_module):
