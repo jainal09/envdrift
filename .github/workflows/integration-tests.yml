@@ -109,8 +109,20 @@ jobs:
       - name: Install dotenvx
         run: |
           mkdir -p "$HOME/.local/bin"
-          curl -sfS "https://dotenvx.sh?directory=$HOME/.local/bin" | sh -s -- --version=1.51.4
+          # Version is the single source of truth in constants.json (kept current by Renovate).
+          DOTENVX_VERSION=$(python -c "import json; print(json.load(open('src/envdrift/constants.json'))['dotenvx_version'])")
+          curl -sfS "https://dotenvx.sh?directory=$HOME/.local/bin" | sh -s -- --version="$DOTENVX_VERSION"
           echo "$HOME/.local/bin" >> $GITHUB_PATH
+
+      - name: Install sops
+        run: |
+          mkdir -p "$HOME/.local/bin"
+          # Version + download URL come from constants.json (kept current by Renovate's sops_version manager).
+          read -r SOPS_URL < <(python -c "import json; c=json.load(open('src/envdrift/constants.json')); print(c['sops_download_urls']['linux_amd64'].format(version=c['sops_version']))")
+          curl -sfL "$SOPS_URL" -o "$HOME/.local/bin/sops"
+          chmod +x "$HOME/.local/bin/sops"
+          echo "$HOME/.local/bin" >> $GITHUB_PATH
+          "$HOME/.local/bin/sops" --version
 
       - name: Verify services are accessible
         run: |
