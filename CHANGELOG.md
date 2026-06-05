@@ -1,5 +1,12 @@
 # Changelog
 
+## [10.13.5](https://github.com/jainal09/envdrift/compare/v10.13.4...v10.13.5) (2026-06-05)
+
+
+### Bug Fixes
+
+* validator case-insensitivity, partial header, GuardConfig, git-secrets ([#306](https://github.com/jainal09/envdrift/issues/306)/[#314](https://github.com/jainal09/envdrift/issues/314)/[#316](https://github.com/jainal09/envdrift/issues/316)/[#322](https://github.com/jainal09/envdrift/issues/322)) ([#342](https://github.com/jainal09/envdrift/issues/342)) ([1a708f4](https://github.com/jainal09/envdrift/commit/1a708f4fc9b3dd65480e6eae285a3370c1397964))
+
 ## [10.13.4](https://github.com/jainal09/envdrift/compare/v10.13.3...v10.13.4) (2026-06-05)
 
 
