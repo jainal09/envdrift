@@ -1,5 +1,12 @@
 # Changelog
 
+## [10.13.1](https://github.com/jainal09/envdrift/compare/v10.13.0...v10.13.1) (2026-06-05)
+
+
+### Bug Fixes
+
+* **vault-sync:** auto-detect custom dotenv filenames without env_file ([#300](https://github.com/jainal09/envdrift/issues/300)) ([b428fdc](https://github.com/jainal09/envdrift/commit/b428fdc87aaaff7c8b192e99e8cf2515d72b4f18))
+
 ## [10.13.0](https://github.com/jainal09/envdrift/compare/v10.12.4...v10.13.0) (2026-06-04)
 
 
