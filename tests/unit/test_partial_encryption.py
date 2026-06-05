@@ -175,30 +175,48 @@ def test_combine_files_missing_secret(temp_env_files):
 
 
 def test_combine_files_filters_dotenvx_headers(temp_env_files):
-    """Test that dotenvx header comments are filtered from secret file."""
+    """The full dotenvx public-key header block is stripped from the secret file.
+
+    Regression for #316: the real dotenvx header is a 4-line block whose two
+    inner lines start with "#/ " (not "#/---"). The old filter only matched the
+    "#/---" border lines, leaking the inner public-key comment lines into the
+    combined output. All four lines must now be stripped.
+    """
     config = temp_env_files["config"]
     secret_file = temp_env_files["secret_file"]
     combined_file = temp_env_files["combined_file"]
 
-    # Add dotenvx headers to secret file
+    # The exact 4-line public-key header dotenvx writes to encrypted files.
     secret_file.write_text(
-        """#/---BEGIN DOTENV_VAULT---/
-#/---WARNING: ENCRYPTED FILE---/
-#/---END DOTENV_VAULT---/
-DATABASE_URL="encrypted:BDaLMxznvYWcHP..."
-"""
+        "#/-------------------[DOTENV_PUBLIC_KEY]--------------------/\n"
+        "#/            public-key encryption for .env files          /\n"
+        "#/       [how it works](https://dotenvx.com/encryption)     /\n"
+        "#/----------------------------------------------------------/\n"
+        'DOTENV_PUBLIC_KEY_TEST="03abc123..."\n'
+        "\n"
+        "# .env.test\n"
+        'DATABASE_URL="encrypted:BDaLMxznvYWcHP..."\n'
     )
 
     # Combine files
     combine_files(config)
 
-    # Verify headers are filtered
+    # Verify the entire header block is filtered, including the two inner
+    # "#/ ..." comment lines that previously leaked through.
     content = combined_file.read_text()
-    assert "#/---BEGIN DOTENV_VAULT---/" not in content
-    assert "#/---WARNING: ENCRYPTED FILE---/" not in content
-    assert "#/---END DOTENV_VAULT---/" not in content
+    assert "[DOTENV_PUBLIC_KEY]" not in content
+    assert "public-key encryption for .env files" not in content
+    assert "https://dotenvx.com/encryption" not in content
 
-    # But encrypted value should be present
+    # No leftover dotenvx header lines in the secret section. (The auto-generated
+    # warning box at the top also uses "#/" lines, so only inspect everything
+    # after the secret-section marker.)
+    marker = f"# From {config.secret_file} (encrypted)"
+    secret_section = content.split(marker, 1)[1]
+    assert not any(line.lstrip().startswith("#/") for line in secret_section.splitlines())
+
+    # But the public key and encrypted value should still be present.
+    assert "DOTENV_PUBLIC_KEY_TEST" in content
     assert "DATABASE_URL" in content
     assert "encrypted:BDaLMxznvYWcHP..." in content
 

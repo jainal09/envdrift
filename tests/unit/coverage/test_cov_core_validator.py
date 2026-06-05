@@ -66,6 +66,63 @@ class TestMissingOptional:
         assert result.warning_count >= 1
 
 
+class TestCaseInsensitiveMatching:
+    """Cover case-insensitive name matching (issue #306)."""
+
+    def test_uppercase_env_matches_lowercase_schema(self, tmp_path):
+        """Lowercase schema fields are satisfied by UPPERCASE env names."""
+        schema = SchemaMetadata(
+            class_name="S",
+            module_path="m",
+            fields={
+                "api_key": _field("api_key", required=True),
+                "database_url": _field("database_url", required=True),
+            },
+            extra_policy="forbid",
+        )
+        env = _parse_file(tmp_path, "API_KEY=x\nDATABASE_URL=y\n")
+
+        result = Validator().validate(env, schema, check_encryption=False)
+
+        # No false missing_required and no false extra_vars.
+        assert result.missing_required == set()
+        assert result.extra_vars == set()
+        assert result.valid is True
+
+    def test_genuinely_extra_uppercase_var_still_forbidden(self, tmp_path):
+        """An env var with no case-insensitive schema match is still extra."""
+        schema = SchemaMetadata(
+            class_name="S",
+            module_path="m",
+            fields={"api_key": _field("api_key", required=True)},
+            extra_policy="forbid",
+        )
+        env = _parse_file(tmp_path, "API_KEY=x\nTOTALLY_UNKNOWN=z\n")
+
+        result = Validator().validate(env, schema, check_encryption=False)
+
+        assert "api_key" not in result.missing_required
+        assert result.extra_vars == {"TOTALLY_UNKNOWN"}
+        assert result.valid is False
+
+    def test_case_insensitive_extra_ignore_emits_warning(self, tmp_path):
+        """Genuinely-extra var with extra=ignore is a warning, matched fields are not."""
+        schema = SchemaMetadata(
+            class_name="S",
+            module_path="m",
+            fields={"api_key": _field("api_key", required=True)},
+            extra_policy="ignore",
+        )
+        env = _parse_file(tmp_path, "API_KEY=x\nUNKNOWN_EXTRA=z\n")
+
+        result = Validator().validate(env, schema, check_encryption=False)
+
+        assert result.extra_vars == set()
+        assert result.valid is True
+        assert any("UNKNOWN_EXTRA" in w for w in result.warnings)
+        assert not any("API_KEY" in w for w in result.warnings)
+
+
 class TestTypeChecks:
     """Cover the float/bool/list/empty branches of _check_type."""
 
