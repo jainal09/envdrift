@@ -126,24 +126,23 @@ class Validator:
         # `api_key` field. Mirror that here by matching names case-insensitively
         # so an UPPERCASE .env against a lowercase schema is not falsely
         # reported as both missing_required and extra_vars (see issue #306).
-        env_names_lower = {name.lower() for name in env_file.variables}
         schema_names_lower = {name.lower() for name in schema.fields}
 
-        # Map a (lower-cased) schema field name to the matching env var.
-        #
-        # Because matching is case-insensitive, two distinct .env keys that
-        # differ only in case (e.g. ``API_KEY`` and ``api_key``) collapse to the
-        # same lower-cased bucket. Pydantic Settings resolves such a clash by
-        # last-wins, but doing so silently here would let one value be dropped
-        # without anyone noticing. Group every env var by its lower-cased name so
-        # we can both detect collisions and stay deterministic: the value used
-        # for matching is the last occurrence (mirroring Pydantic / dict ordering),
-        # and any collision is surfaced as a warning (see issue #306).
+        # One pass over the env vars derives everything case-insensitive matching
+        # needs (Pydantic Settings defaults to case_insensitive):
+        #   - env_names_lower: lower-cased names present (missing/extra checks)
+        #   - env_by_lower:    lower-cased name -> env var, last-wins like Pydantic
+        #   - env_groups:      lower-cased name -> every original name, so a
+        #     case-only collision (e.g. ``API_KEY`` + ``api_key``) is surfaced as
+        #     a warning instead of silently dropping a value (see issue #306).
+        env_names_lower: set[str] = set()
+        env_by_lower = {}
         env_groups: dict[str, list[str]] = {}
-        for name in env_file.variables:
-            env_groups.setdefault(name.lower(), []).append(name)
-
-        env_by_lower = {name.lower(): env_var for name, env_var in env_file.variables.items()}
+        for name, env_var in env_file.variables.items():
+            lower = name.lower()
+            env_names_lower.add(lower)
+            env_by_lower[lower] = env_var  # last-wins, mirroring Pydantic Settings
+            env_groups.setdefault(lower, []).append(name)
 
         for lower_name, names in env_groups.items():
             if len(names) > 1:
