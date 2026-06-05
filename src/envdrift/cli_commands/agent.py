@@ -30,6 +30,7 @@ from envdrift.agent.registry import (
     register_project,
     unregister_project,
 )
+from envdrift.cli_commands.agent_utils import parse_agent_running_status
 from envdrift.config import find_config, load_config
 
 console = Console()
@@ -97,13 +98,7 @@ def _get_agent_status() -> tuple[str, str | None]:
             check=False,
         )
         if result.returncode == 0:
-            running_state = None
-            for line in result.stdout.splitlines():
-                if line.strip().lower().startswith("running:"):
-                    value = line.split(":", 1)[1].strip().lower()
-                    if value in {"true", "false"}:
-                        running_state = value == "true"
-                    break
+            running_state = parse_agent_running_status(result.stdout)
 
             if running_state is None:
                 return "error", None

@@ -25,6 +25,8 @@ import typer
 from rich.console import Console
 from rich.progress import Progress, SpinnerColumn, TextColumn
 
+from envdrift.cli_commands.agent_utils import parse_agent_running_status
+
 console = Console()
 
 # Create the install CLI group
@@ -331,16 +333,10 @@ def install_agent(
                 text=True,
                 timeout=5,
             )
-            # Check for explicit running status patterns (avoid matching "Running: false")
-            output_lower = result.stdout.lower()
-            is_running = result.returncode == 0 and (
-                "status: running" in output_lower
-                or "is running" in output_lower
-                or (
-                    "running" in output_lower
-                    and "not running" not in output_lower
-                    and "running: false" not in output_lower
-                )
+            # Parse the "Running:" line value precisely; whitespace-fragile
+            # substring matching previously warned even when the agent was stopped.
+            is_running = (
+                result.returncode == 0 and parse_agent_running_status(result.stdout) is True
             )
             if is_running:
                 console.print(
@@ -506,7 +502,7 @@ def check_installation() -> None:
                 text=True,
                 timeout=5,
             )
-            if result.returncode == 0 and "running" in result.stdout.lower():
+            if result.returncode == 0 and parse_agent_running_status(result.stdout) is True:
                 console.print("  [green]⚡ Running[/green]")
             else:
                 console.print("  [dim]⭕ Not running[/dim]")

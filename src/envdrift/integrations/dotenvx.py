@@ -74,6 +74,12 @@ DOWNLOAD_URLS = {
     ("Windows", "x86_64"): _URL_TEMPLATES["windows_amd64"],
 }
 
+# Per-request timeout (seconds) for the binary download. Passed directly to
+# urllib.request.urlopen so a connection that is accepted then stalls cannot
+# hang the auto-install path indefinitely. Using urlopen's timeout keeps the
+# bound local to this request instead of mutating process-global socket state.
+DOWNLOAD_TIMEOUT_SECONDS = 60
+
 _ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-9;?]*[ -/]*[@-~]")
 
 
@@ -208,7 +214,7 @@ def normalize_dotenvx_metadata(
         lines[generated_idx] = f"{canonical_private_key}={key_value}"
 
     new_content = "\n".join(lines)
-    if content.endswith("\n") or new_content:
+    if content.endswith("\n"):
         new_content += "\n"
     if new_content != content:
         env_keys_file.write_text(new_content, encoding="utf-8")
@@ -399,9 +405,15 @@ class DotenvxInstaller:
             archive_name = url.split("/")[-1]
             archive_path = tmp_path / archive_name
 
-            # Download
+            # Download with a per-request timeout so a server that accepts the
+            # connection then stalls cannot hang install() forever. urlopen's
+            # timeout is local to this request, unlike socket.setdefaulttimeout
+            # which mutates process-global socket state.
             try:
-                urllib.request.urlretrieve(url, archive_path)  # nosec B310
+                with urllib.request.urlopen(  # nosec B310
+                    url, timeout=DOWNLOAD_TIMEOUT_SECONDS
+                ) as response:
+                    archive_path.write_bytes(response.read())
             except Exception as e:
                 raise DotenvxInstallError(f"Download failed: {e}") from e
 
@@ -596,7 +608,7 @@ class DotenvxWrapper:
             except DotenvxInstallError as e:
                 raise DotenvxNotFoundError(f"dotenvx not found and auto-install failed: {e}") from e
 
-        raise DotenvxNotFoundError("dotenvx not found. Install with: envdrift install-dotenvx")
+        raise DotenvxNotFoundError("dotenvx not found.\n" + self.install_instructions())
 
     @property
     def binary_path(self) -> Path:
@@ -830,6 +842,32 @@ class DotenvxWrapper:
 
         return modified
 
+    def _raise_on_error_output(self, result: subprocess.CompletedProcess, action: str) -> None:
+        """Raise ``DotenvxError`` if a dotenvx run reported a failure.
+
+        dotenvx sometimes prints an error (e.g. "decryption failed", a missing key)
+        while still exiting 0, so both the combined output and the return code are
+        inspected. ``action`` is the human-readable verb ("encryption"/"decryption")
+        used in the error message.
+
+        Parameters:
+            result: The completed dotenvx subprocess.
+            action: Verb describing the operation for the error message.
+
+        Raises:
+            DotenvxError: If an error pattern is present in the output or the
+                command exited non-zero.
+        """
+        combined_output = (result.stdout or "") + (result.stderr or "")
+        for pattern in self.ENCRYPT_ERROR_PATTERNS:
+            if pattern.lower() in combined_output.lower():
+                clean_output = self._clean_output(combined_output).strip()
+                raise DotenvxError(f"dotenvx {action} failed: {clean_output}")
+
+        if result.returncode != 0:
+            clean_stderr = self._clean_output(result.stderr or "").strip()
+            raise DotenvxError(f"dotenvx command failed (exit {result.returncode}): {clean_stderr}")
+
     def encrypt(
         self,
         env_file: Path | str,
@@ -877,19 +915,7 @@ class DotenvxWrapper:
 
         # Run with check=False to handle exit code 0 errors ourselves
         result = self._run(args, env=env, cwd=cwd, check=False)
-
-        # Check for error patterns in output (dotenvx sometimes returns 0 on errors)
-        combined_output = (result.stdout or "") + (result.stderr or "")
-        # Clean output for readable error messages
-        clean_output = self._clean_output(combined_output).strip()
-        for pattern in self.ENCRYPT_ERROR_PATTERNS:
-            if pattern.lower() in combined_output.lower():
-                raise DotenvxError(f"dotenvx encryption failed: {clean_output}")
-
-        # Also check if return code was non-zero
-        if result.returncode != 0:
-            clean_stderr = self._clean_output(result.stderr or "").strip()
-            raise DotenvxError(f"dotenvx command failed (exit {result.returncode}): {clean_stderr}")
+        self._raise_on_error_output(result, "encryption")
 
     def decrypt(
         self,
@@ -930,7 +956,12 @@ class DotenvxWrapper:
         if env_keys_file:
             args.extend(["-fk", str(env_keys_file)])
 
-        self._run(args, env=env, cwd=cwd)
+        # Run with check=False so we can detect the case where dotenvx prints a
+        # decrypt error (e.g. "decryption failed", "private key not found",
+        # "MISSING_DOTENV_KEY") while still exiting 0. Without this post-check a
+        # 0-exit-with-error-output would be reported as a successful decrypt.
+        result = self._run(args, env=env, cwd=cwd, check=False)
+        self._raise_on_error_output(result, "decryption")
 
     def run(self, env_file: Path | str, command: list[str]) -> subprocess.CompletedProcess:
         """
