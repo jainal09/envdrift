@@ -137,6 +137,26 @@ jobs:
           echo "$HOME/.local/bin" >> $GITHUB_PATH
           "$HOME/.local/bin/sops" --version
 
+      - name: Install secret scanners (talisman, trivy, infisical)
+        run: |
+          mkdir -p "$HOME/.local/bin"
+          # Versions + download URLs come from constants.json (Renovate-maintained),
+          # so the real scanner e2e tests (tests/integration/test_scanner_external_binaries.py)
+          # actually run in CI instead of skipping.
+          get_url() { python -c "import json,sys; c=json.load(open('src/envdrift/constants.json')); sys.stdout.write(c['${1}_download_urls']['linux_amd64'].format(version=c['${1}_version']))"; }
+          TALISMAN_URL=$(get_url talisman) || { echo 'ERROR: talisman url from constants.json' >&2; exit 1; }
+          TRIVY_URL=$(get_url trivy) || { echo 'ERROR: trivy url from constants.json' >&2; exit 1; }
+          INFISICAL_URL=$(get_url infisical) || { echo 'ERROR: infisical url from constants.json' >&2; exit 1; }
+          # talisman: single static binary; trivy/infisical: tarballs with the binary at the root.
+          curl -sfL "$TALISMAN_URL" -o "$HOME/.local/bin/talisman"
+          curl -sfL "$TRIVY_URL" | tar -xzf - -C "$HOME/.local/bin" trivy
+          curl -sfL "$INFISICAL_URL" | tar -xzf - -C "$HOME/.local/bin" infisical
+          chmod +x "$HOME/.local/bin/talisman" "$HOME/.local/bin/trivy" "$HOME/.local/bin/infisical"
+          echo "$HOME/.local/bin" >> $GITHUB_PATH
+          "$HOME/.local/bin/trivy" --version
+          "$HOME/.local/bin/infisical" --version || true
+          "$HOME/.local/bin/talisman" --version || true
+
       - name: Verify services are accessible
         run: |
           # Wait for services to fully start after health checks pass

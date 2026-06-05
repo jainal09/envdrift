@@ -33,6 +33,53 @@
       "depNameTemplate": "getsops/sops",
       "datasourceTemplate": "github-releases",
       "extractVersionTemplate": "^v(?<version>.*)$"
+    },
+    {
+      "customType": "regex",
+      "managerFilePatterns": ["/^src/envdrift/constants\\.json$/"],
+      "matchStrings": ["\"trivy_version\":\\s*\"(?<currentValue>\\d+\\.\\d+\\.\\d+)\""],
+      "depNameTemplate": "aquasecurity/trivy",
+      "datasourceTemplate": "github-releases",
+      "extractVersionTemplate": "^v(?<version>.*)$"
+    },
+    {
+      "customType": "regex",
+      "managerFilePatterns": ["/^src/envdrift/constants\\.json$/"],
+      "matchStrings": ["\"gitleaks_version\":\\s*\"(?<currentValue>\\d+\\.\\d+\\.\\d+)\""],
+      "depNameTemplate": "gitleaks/gitleaks",
+      "datasourceTemplate": "github-releases",
+      "extractVersionTemplate": "^v(?<version>.*)$"
+    },
+    {
+      "customType": "regex",
+      "managerFilePatterns": ["/^src/envdrift/constants\\.json$/"],
+      "matchStrings": ["\"trufflehog_version\":\\s*\"(?<currentValue>\\d+\\.\\d+\\.\\d+)\""],
+      "depNameTemplate": "trufflesecurity/trufflehog",
+      "datasourceTemplate": "github-releases",
+      "extractVersionTemplate": "^v(?<version>.*)$"
+    },
+    {
+      "customType": "regex",
+      "managerFilePatterns": ["/^src/envdrift/constants\\.json$/"],
+      "matchStrings": ["\"talisman_version\":\\s*\"(?<currentValue>\\d+\\.\\d+\\.\\d+)\""],
+      "depNameTemplate": "thoughtworks/talisman",
+      "datasourceTemplate": "github-releases",
+      "extractVersionTemplate": "^v(?<version>.*)$"
+    },
+    {
+      "customType": "regex",
+      "managerFilePatterns": ["/^src/envdrift/constants\\.json$/"],
+      "matchStrings": ["\"infisical_version\":\\s*\"(?<currentValue>\\d+\\.\\d+\\.\\d+)\""],
+      "depNameTemplate": "Infisical/infisical",
+      "datasourceTemplate": "github-releases",
+      "extractVersionTemplate": "^infisical-cli/v(?<version>.*)$"
+    },
+    {
+      "customType": "regex",
+      "managerFilePatterns": ["/^src/envdrift/constants\\.json$/"],
+      "matchStrings": ["\"detect_secrets_version\":\\s*\"(?<currentValue>\\d+\\.\\d+\\.\\d+)\""],
+      "depNameTemplate": "detect-secrets",
+      "datasourceTemplate": "pypi"
     }
   ],
   "packageRules": [
