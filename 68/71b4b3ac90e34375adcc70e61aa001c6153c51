@@ -1,0 +1,19 @@
+tests/unit/coverage/test_cov_cli_commands_sync.py
+  s_dfc6cd6692ed8f::t_b26bbab87043d0 433
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.3",
+  "base_commit_sha": "6871b4b3ac90e34375adcc70e61aa001c6153c51",
+  "prompts": {},
+  "sessions": {
+    "s_dfc6cd6692ed8f": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "fd23e738-3512-4420-9290-d985ad979bfd",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Jainal Gosaliya <jainal09gosalia@gmail.com>"
+    }
+  }
+}
