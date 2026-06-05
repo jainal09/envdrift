@@ -159,8 +159,11 @@ def combine_files(
 
     # Add encrypted secret section
     if secret_lines:
-        # Skip dotenvx header comments from secret file to avoid clutter
-        secret_content = [line for line in secret_lines if not line.strip().startswith("#/---")]
+        # Skip dotenvx header comments from secret file to avoid clutter.
+        # The real public-key header is a 4-line block: the border lines start
+        # with "#/---" while the two inner comment lines start with "#/ ". Match
+        # the whole "#/" block so the inner comments don't leak into the output.
+        secret_content = [line for line in secret_lines if not line.strip().startswith("#/")]
         combined_lines.append(f"# From {env_config.secret_file} (encrypted)")
         combined_lines.extend(secret_content)
 
