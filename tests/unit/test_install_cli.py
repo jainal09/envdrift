@@ -455,6 +455,33 @@ class TestCheckCommand:
             assert "Not running" in result.stdout
             assert "⚡ Running" not in result.stdout
 
+    def test_check_agent_status_unrecognized_value(self):
+        """An unrecognized ``Running:`` value is treated as not-running (#312).
+
+        ``parse_agent_running_status`` returns ``None`` for any value outside
+        ``{true, false}``, so ``install check`` must report 'Not running' rather
+        than falsely claiming '⚡ Running'.
+        """
+
+        def subprocess_side_effect(*args, **kwargs):
+            result = MagicMock()
+            if "status" in args[0]:
+                result.returncode = 0
+                result.stdout = "Installed: true\nRunning:   unknown\n"
+            else:
+                result.returncode = 0
+                result.stdout = "v1.0.0"
+            return result
+
+        with (
+            patch("shutil.which", return_value="/usr/local/bin/envdrift-agent"),
+            patch("subprocess.run", side_effect=subprocess_side_effect),
+        ):
+            result = runner.invoke(app, ["install", "check"])
+            assert result.exit_code == 0
+            assert "Not running" in result.stdout
+            assert "⚡ Running" not in result.stdout
+
 
 class TestInstallHelpCommand:
     """Tests for 'envdrift install --help' command."""
