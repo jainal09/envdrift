@@ -9,6 +9,7 @@ Tests for:
 from __future__ import annotations
 
 import os
+import shutil
 import subprocess
 import sys
 import textwrap
@@ -18,6 +19,8 @@ import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 PYTHONPATH = str(REPO_ROOT / "src")
+
+_GIT_SECRETS_AVAILABLE = shutil.which("git-secrets") is not None
 
 
 def _run_envdrift(
@@ -219,6 +222,57 @@ class TestScannerDetection:
             # JSON output might be empty if no findings
             if result.stdout.strip():
                 pytest.fail(f"Invalid JSON output: {result.stdout[:200]}")
+
+
+@pytest.mark.integration
+@pytest.mark.skipif(not _GIT_SECRETS_AVAILABLE, reason="git-secrets binary not installed")
+class TestGitSecretsRealBinary:
+    """End-to-end tests against the real git-secrets binary (issue #322).
+
+    Real git-secrets writes findings to STDERR and leaves stdout empty, so these
+    tests prove ``GitSecretsScanner.scan()`` recovers findings from stderr.
+    """
+
+    def _init_repo_with_aws_patterns(self, work_dir: Path) -> None:
+        subprocess.run(["git", "init", "-q"], cwd=str(work_dir), check=True, capture_output=True)
+        subprocess.run(
+            ["git", "secrets", "--register-aws"],
+            cwd=str(work_dir),
+            check=True,
+            capture_output=True,
+        )
+
+    def test_scan_detects_aws_key_via_stderr(self, scanner_test_env):
+        """scan() returns a finding for a real AWS key (emitted on stderr)."""
+        sys.path.insert(0, PYTHONPATH)
+        from envdrift.scanner.git_secrets import GitSecretsScanner
+
+        work_dir = scanner_test_env["work_dir"]
+        self._init_repo_with_aws_patterns(work_dir)
+        # Non-example key (git-secrets allowlists the AKIA...EXAMPLE key).
+        (work_dir / "leak.txt").write_text("AWS_KEY=AKIAZ9Q8W7E6R5T4Y3U2\n")
+
+        scanner = GitSecretsScanner(auto_install=False, register_aws=True)
+        result = scanner.scan([work_dir])
+
+        assert result.error is None
+        assert len(result.findings) >= 1, "git-secrets finding (emitted on stderr) was not captured"
+        assert any("aws" in f.rule_id for f in result.findings)
+
+    def test_scan_clean_repo_has_no_findings(self, scanner_test_env):
+        """scan() of a repo without secrets yields no findings and no error."""
+        sys.path.insert(0, PYTHONPATH)
+        from envdrift.scanner.git_secrets import GitSecretsScanner
+
+        work_dir = scanner_test_env["work_dir"]
+        self._init_repo_with_aws_patterns(work_dir)
+        (work_dir / "clean.txt").write_text("nothing to see here\n")
+
+        scanner = GitSecretsScanner(auto_install=False, register_aws=True)
+        result = scanner.scan([work_dir])
+
+        assert result.error is None
+        assert result.findings == []
 
 
 @pytest.mark.integration

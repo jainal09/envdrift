@@ -66,8 +66,8 @@ class TestGitSecretsInstaller:
     def test_install_homebrew_on_darwin(self) -> None:
         """Test install uses homebrew on macOS."""
         with patch("shutil.which") as mock_which:
-            mock_which.side_effect = (
-                lambda x: "/usr/local/bin/brew"
+            mock_which.side_effect = lambda x: (
+                "/usr/local/bin/brew"
                 if x == "brew"
                 else ("/usr/local/bin/git-secrets" if x == "git-secrets" else None)
             )
@@ -254,6 +254,78 @@ class TestGitSecretsParseOutput:
         assert findings == []
 
 
+class TestScanCapturesStderrFindings:
+    """Regression tests for issue #322.
+
+    git-secrets writes its ``path:line:content`` finding lines to STDERR (with a
+    non-zero exit code and an ``[ERROR] Matched...`` trailer), leaving stdout
+    empty. ``scan()`` must therefore recover findings from stderr.
+    """
+
+    def test_scan_parses_findings_from_stderr_with_empty_stdout(self, tmp_path: Path) -> None:
+        """Findings emitted on stderr (stdout empty) are captured by scan().
+
+        Mirrors real git-secrets output: rc=1, empty stdout, finding +
+        ``[ERROR]`` trailer on stderr. No mock is used for the stderr-parsing
+        logic under test - only the subprocess invocation is replaced with the
+        exact bytes a real git-secrets run emits.
+        """
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        (repo / ".git").mkdir()
+        leak = repo / "leak.txt"
+        leak.write_text("AWS_KEY=AKIAZ9Q8W7E6R5T4Y3U2\n")
+
+        scanner = GitSecretsScanner(auto_install=False)
+        scanner._binary_path = Path("git-secrets-subcommand")
+
+        def fake_run(args: list[str], cwd: Path) -> MagicMock:
+            # --list / --register-aws bookkeeping calls succeed quietly.
+            if "--scan" not in args:
+                return MagicMock(returncode=0, stdout="", stderr="")
+            # Real git-secrets: finding on STDERR, empty stdout, rc=1.
+            return MagicMock(
+                returncode=1,
+                stdout="",
+                stderr=(
+                    "leak.txt:1:AWS_KEY=AKIAZ9Q8W7E6R5T4Y3U2\n"
+                    "\n[ERROR] Matched one or more prohibited patterns\n"
+                ),
+            )
+
+        with patch.object(scanner, "_run_git_secrets", side_effect=fake_run):
+            result = scanner.scan([repo])
+
+        assert result.error is None
+        assert len(result.findings) == 1, (
+            f"expected stderr finding to be captured, got {result.findings}"
+        )
+        finding = result.findings[0]
+        assert finding.line_number == 1
+        assert finding.rule_id == "git-secrets-aws-access-key"
+
+    def test_scan_does_not_duplicate_when_both_streams_have_finding(self, tmp_path: Path) -> None:
+        """Identical findings on stdout and stderr are de-duplicated."""
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        (repo / ".git").mkdir()
+        (repo / "leak.txt").write_text("AWS_KEY=AKIAZ9Q8W7E6R5T4Y3U2\n")
+
+        scanner = GitSecretsScanner(auto_install=False)
+        scanner._binary_path = Path("git-secrets-subcommand")
+        line = "leak.txt:1:AWS_KEY=AKIAZ9Q8W7E6R5T4Y3U2\n"
+
+        def fake_run(args: list[str], cwd: Path) -> MagicMock:
+            if "--scan" not in args:
+                return MagicMock(returncode=0, stdout="", stderr="")
+            return MagicMock(returncode=1, stdout=line, stderr=line)
+
+        with patch.object(scanner, "_run_git_secrets", side_effect=fake_run):
+            result = scanner.scan([repo])
+
+        assert len(result.findings) == 1
+
+
 class TestScanEngineIntegration:
     """Tests for scanner integration with ScanEngine."""
 
@@ -381,7 +453,7 @@ class TestGitSecretsInstallerPaths:
     def test_install_homebrew_nonzero_no_already_installed_raises(self) -> None:
         """Test _install_homebrew raises when brew fails without 'already installed'."""
         with patch("shutil.which") as mock_which, patch("subprocess.run") as mock_run:
-            mock_which.side_effect = lambda x: ("/usr/local/bin/brew" if x == "brew" else None)
+            mock_which.side_effect = lambda x: "/usr/local/bin/brew" if x == "brew" else None
             mock_run.return_value = MagicMock(returncode=1, stdout="", stderr="Some brew error")
             installer = GitSecretsInstaller()
             with pytest.raises(GitSecretsInstallError, match="Homebrew installation failed"):
@@ -390,7 +462,7 @@ class TestGitSecretsInstallerPaths:
     def test_install_homebrew_binary_not_found_after_install_raises(self) -> None:
         """Test _install_homebrew raises when git-secrets is absent after install."""
         with patch("shutil.which") as mock_which, patch("subprocess.run") as mock_run:
-            mock_which.side_effect = lambda x: ("/usr/local/bin/brew" if x == "brew" else None)
+            mock_which.side_effect = lambda x: "/usr/local/bin/brew" if x == "brew" else None
             mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
             installer = GitSecretsInstaller()
             with pytest.raises(GitSecretsInstallError, match="not found after installation"):
@@ -399,7 +471,7 @@ class TestGitSecretsInstallerPaths:
     def test_install_homebrew_timeout_raises(self) -> None:
         """Test _install_homebrew raises GitSecretsInstallError on timeout."""
         with patch("shutil.which") as mock_which, patch("subprocess.run") as mock_run:
-            mock_which.side_effect = lambda x: ("/usr/local/bin/brew" if x == "brew" else None)
+            mock_which.side_effect = lambda x: "/usr/local/bin/brew" if x == "brew" else None
             mock_run.side_effect = subprocess.TimeoutExpired(cmd=["brew"], timeout=300)
             installer = GitSecretsInstaller()
             with pytest.raises(GitSecretsInstallError, match="timed out"):
@@ -408,7 +480,7 @@ class TestGitSecretsInstallerPaths:
     def test_install_homebrew_subprocess_error_raises(self) -> None:
         """Test _install_homebrew raises GitSecretsInstallError on SubprocessError."""
         with patch("shutil.which") as mock_which, patch("subprocess.run") as mock_run:
-            mock_which.side_effect = lambda x: ("/usr/local/bin/brew" if x == "brew" else None)
+            mock_which.side_effect = lambda x: "/usr/local/bin/brew" if x == "brew" else None
             mock_run.side_effect = subprocess.SubprocessError("pipe broken")
             installer = GitSecretsInstaller()
             with pytest.raises(GitSecretsInstallError, match="Homebrew installation failed"):

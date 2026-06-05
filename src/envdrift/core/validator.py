@@ -121,22 +121,30 @@ class Validator:
         """
         result = ValidationResult(valid=True)
 
-        env_var_names = set(env_file.variables.keys())
-        schema_field_names = set(schema.fields.keys())
+        # Pydantic Settings defaults to case_sensitive=False, loading e.g.
+        # `API_KEY` from a conventional UPPERCASE .env into a lowercase
+        # `api_key` field. Mirror that here by matching names case-insensitively
+        # so an UPPERCASE .env against a lowercase schema is not falsely
+        # reported as both missing_required and extra_vars (see issue #306).
+        env_names_lower = {name.lower() for name in env_file.variables}
+        schema_names_lower = {name.lower() for name in schema.fields}
+
+        # Map a (lower-cased) schema field name to the matching env var, if any.
+        env_by_lower = {name.lower(): env_var for name, env_var in env_file.variables.items()}
 
         # Check for missing required variables
         for field_name, field_meta in schema.fields.items():
-            if field_meta.required and field_name not in env_var_names:
+            if field_meta.required and field_name.lower() not in env_names_lower:
                 result.missing_required.add(field_name)
 
         # Check for missing optional variables (as warning)
         for field_name, field_meta in schema.fields.items():
-            if not field_meta.required and field_name not in env_var_names:
+            if not field_meta.required and field_name.lower() not in env_names_lower:
                 result.missing_optional.add(field_name)
 
         # Check for extra variables
         if check_extra:
-            extra = env_var_names - schema_field_names
+            extra = {name for name in env_file.variables if name.lower() not in schema_names_lower}
             if extra:
                 if schema.extra_policy == "forbid":
                     result.extra_vars = extra
@@ -148,10 +156,9 @@ class Validator:
         # Check encryption status for sensitive variables
         if check_encryption:
             for field_name, field_meta in schema.fields.items():
-                if field_name not in env_file.variables:
+                env_var = env_by_lower.get(field_name.lower())
+                if env_var is None:
                     continue
-
-                env_var = env_file.variables[field_name]
 
                 # Check schema-defined sensitive fields
                 if field_meta.sensitive:
@@ -159,16 +166,17 @@ class Validator:
                         result.unencrypted_secrets.add(field_name)
 
             # Also check for suspicious plaintext values
+            sensitive_lower = {name.lower() for name in schema.sensitive_fields}
             for var_name, env_var in env_file.variables.items():
                 if env_var.encryption_status == EncryptionStatus.PLAINTEXT:
                     if self.is_value_suspicious(env_var.value):
-                        if var_name not in schema.sensitive_fields:
+                        if var_name.lower() not in sensitive_lower:
                             result.warnings.append(
                                 f"'{var_name}' looks like a secret but "
                                 "is not marked sensitive in schema"
                             )
                     if self.is_name_suspicious(var_name):
-                        if var_name not in schema.sensitive_fields:
+                        if var_name.lower() not in sensitive_lower:
                             result.warnings.append(
                                 f"'{var_name}' has a name suggesting sensitive data "
                                 "but is not marked sensitive in schema"
@@ -176,10 +184,10 @@ class Validator:
 
         # Basic type validation
         for field_name, field_meta in schema.fields.items():
-            if field_name not in env_file.variables:
+            env_var = env_by_lower.get(field_name.lower())
+            if env_var is None:
                 continue
 
-            env_var = env_file.variables[field_name]
             type_error = self._check_type(env_var.value, field_meta.field_type)
             if type_error:
                 result.type_errors[field_name] = type_error

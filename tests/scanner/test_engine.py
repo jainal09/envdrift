@@ -124,6 +124,102 @@ class TestGuardConfig:
         config = GuardConfig(allowed_clear_files=[".env.production.clear"])
         assert config.allowed_clear_files == [".env.production.clear"]
 
+    def test_config_from_dict_partial_encryption_files(self):
+        """from_dict must preserve allowed_clear_files/combined_files (issue #314).
+
+        Previously from_dict dropped partial_encryption awareness, so declared
+        .clear files were flagged as unencrypted and combined-file security
+        checks returned nothing for SDK callers.
+        """
+        config = GuardConfig.from_dict(
+            {
+                "guard": {"scanners": ["native"]},
+                "partial_encryption": {
+                    "enabled": True,
+                    "environments": [
+                        {
+                            "clear_file": ".env.production.clear",
+                            "combined_file": ".env.production",
+                        },
+                        {
+                            "clear_file": ".env.staging.clear",
+                            "combined_file": ".env.staging",
+                        },
+                    ],
+                },
+            }
+        )
+
+        assert config.allowed_clear_files == [
+            ".env.production.clear",
+            ".env.staging.clear",
+        ]
+        assert config.combined_files == [".env.production", ".env.staging"]
+
+    def test_config_from_dict_partial_encryption_disabled(self):
+        """Disabled partial_encryption yields no clear/combined files."""
+        config = GuardConfig.from_dict(
+            {
+                "partial_encryption": {
+                    "enabled": False,
+                    "environments": [
+                        {
+                            "clear_file": ".env.production.clear",
+                            "combined_file": ".env.production",
+                        }
+                    ],
+                }
+            }
+        )
+
+        assert config.allowed_clear_files == []
+        assert config.combined_files == []
+
+    def test_config_from_dict_mapped_env_files(self, tmp_path):
+        """from_dict must resolve vault.sync mapped env files (issue #314)."""
+        folder = tmp_path / "service"
+        folder.mkdir()
+        config = GuardConfig.from_dict(
+            {
+                "vault": {
+                    "sync": {
+                        "mappings": [
+                            {
+                                "secret_name": "svc-secret",
+                                "folder_path": str(folder),
+                                "env_file": "custom.env",
+                            }
+                        ]
+                    }
+                }
+            }
+        )
+
+        expected = str((folder / "custom.env").resolve())
+        assert config.mapped_env_files == [expected]
+
+    def test_config_from_dict_mapped_env_file_escape_is_skipped(self, tmp_path):
+        """An env_file that escapes folder_path is skipped, not raised."""
+        folder = tmp_path / "service"
+        folder.mkdir()
+        config = GuardConfig.from_dict(
+            {
+                "vault": {
+                    "sync": {
+                        "mappings": [
+                            {
+                                "secret_name": "svc-secret",
+                                "folder_path": str(folder),
+                                "env_file": "../escape.env",
+                            }
+                        ]
+                    }
+                }
+            }
+        )
+
+        assert config.mapped_env_files == []
+
 
 class TestScanEngine:
     """Tests for ScanEngine class."""

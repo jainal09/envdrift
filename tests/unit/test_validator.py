@@ -1,5 +1,8 @@
 """Tests for Validator."""
 
+from pydantic import Field
+from pydantic_settings import BaseSettings, SettingsConfigDict
+
 from envdrift.core.parser import EnvParser
 from envdrift.core.schema import SchemaLoader
 from envdrift.core.validator import Validator
@@ -64,6 +67,75 @@ ANOTHER_EXTRA=also_not_in_schema
         assert result.valid is False
         assert "EXTRA_VAR" in result.extra_vars
         assert "ANOTHER_EXTRA" in result.extra_vars
+
+    def test_validate_uppercase_env_lowercase_schema_case_insensitive(self, tmp_path):
+        """UPPERCASE .env satisfies lowercase Pydantic fields (issue #306).
+
+        Pydantic Settings defaults to case_sensitive=False, so an UPPERCASE
+        .env loaded into lowercase model fields must validate. The validator
+        must not report the fields as missing_required NOR the env vars as
+        extra_vars.
+        """
+
+        class Settings(BaseSettings):
+            model_config = SettingsConfigDict(extra="forbid")
+
+            api_key: str = Field(json_schema_extra={"sensitive": True})
+            database_url: str
+
+        content = """
+API_KEY=encrypted:secret
+DATABASE_URL=postgres://localhost/db
+"""
+        env_file = tmp_path / ".env"
+        env_file.write_text(content)
+
+        env = EnvParser().parse(env_file)
+        schema = SchemaLoader().extract_metadata(Settings)
+
+        result = Validator().validate(env, schema, check_encryption=True)
+
+        # No false missing_required and no false extra_vars.
+        assert result.missing_required == set()
+        assert result.extra_vars == set()
+        assert result.valid is True
+        # Encryption check should resolve API_KEY -> api_key (sensitive),
+        # and since the value is encrypted it must not be flagged.
+        assert result.unencrypted_secrets == set()
+
+    def test_validate_uppercase_env_case_insensitive_detects_real_issues(self, tmp_path):
+        """Case-insensitive matching still surfaces genuine missing/type/secret issues.
+
+        With a lowercase schema and UPPERCASE .env, a truly absent required
+        field is still missing_required, a plaintext sensitive value is still
+        flagged unencrypted, and a bad type still errors (no false positives
+        from case-folding, no false negatives either).
+        """
+
+        class Settings(BaseSettings):
+            model_config = SettingsConfigDict(extra="forbid")
+
+            api_key: str = Field(json_schema_extra={"sensitive": True})
+            port: int
+            missing_one: str
+
+        content = """
+API_KEY=plaintext-secret
+PORT=not_a_number
+"""
+        env_file = tmp_path / ".env"
+        env_file.write_text(content)
+
+        env = EnvParser().parse(env_file)
+        schema = SchemaLoader().extract_metadata(Settings)
+
+        result = Validator().validate(env, schema, check_encryption=True)
+
+        assert "missing_one" in result.missing_required
+        assert "port" in result.type_errors
+        # API_KEY plaintext resolves to sensitive api_key -> unencrypted.
+        assert "api_key" in result.unencrypted_secrets
+        assert result.valid is False
 
     def test_validate_extra_vars_ignore(self, tmp_path, permissive_settings_class):
         """Allow extra vars when schema has extra=ignore."""
