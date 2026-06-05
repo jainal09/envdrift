@@ -238,26 +238,31 @@ class TestGCPFactory:
             assert expected_msg in str(exc_client.value)
             assert expected_hint in str(exc_client.value)
 
-            # 3. Factory path: reload the factory so it imports the reloaded gcp
-            #    module, then assert the same hint surfaces.
-            import envdrift.vault as vault_pkg
+            # 3. Factory path: get_vault_client imports the gcp module LAZILY
+            #    inside the function, so it already picks up the reloaded
+            #    (unavailable) gcp module and surfaces the same hint. Do NOT
+            #    importlib.reload(envdrift.vault) here — that rebuilds the
+            #    VaultProvider enum with a fresh identity and corrupts provider
+            #    comparisons for any test that imported it earlier in the same
+            #    process (e.g. test_vault.py::test_azure_client_creation under the
+            #    full unit+integration suite that the Publish workflow runs).
+            from envdrift.vault import get_vault_client
 
-            vault_pkg = importlib.reload(vault_pkg)
             with pytest.raises(ImportError) as exc_factory:
-                vault_pkg.get_vault_client("gcp", project_id="p")
+                get_vault_client("gcp", project_id="p")
             assert expected_msg in str(exc_factory.value)
             assert expected_hint in str(exc_factory.value)
         finally:
-            # Restore hidden modules and reload back to the real implementations.
+            # Restore hidden modules and reload only the gcp submodule back to the
+            # real implementation. We intentionally do NOT reload envdrift.vault
+            # (see the note above) — reloading the gcp submodule is enough because
+            # the factory imports it lazily at call time.
             for name, mod in saved.items():
                 if mod is None:
                     sys.modules.pop(name, None)
                 else:
                     sys.modules[name] = mod
             importlib.reload(gcp_mod)
-            import envdrift.vault as vault_pkg
-
-            importlib.reload(vault_pkg)
             assert gcp_mod.GCP_AVAILABLE is True
 
 
