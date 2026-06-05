@@ -1,5 +1,12 @@
 # Changelog
 
+## [10.13.4](https://github.com/jainal09/envdrift/compare/v10.13.3...v10.13.4) (2026-06-05)
+
+
+### Bug Fixes
+
+* resolve 6 security false-negatives (scanner/guard/sops/gitleaks) ([#337](https://github.com/jainal09/envdrift/issues/337)) ([f4521a0](https://github.com/jainal09/envdrift/commit/f4521a027533a66e28b588da59f447c81944a8c4))
+
 ## [10.13.3](https://github.com/jainal09/envdrift/compare/v10.13.2...v10.13.3) (2026-06-05)
 
 
