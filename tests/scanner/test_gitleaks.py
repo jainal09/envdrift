@@ -22,6 +22,7 @@ from envdrift.scanner.gitleaks import (
     GitleaksInstallError,
     GitleaksNotFoundError,
     GitleaksScanner,
+    _get_gitleaks_download_urls,
     _get_gitleaks_version,
     get_gitleaks_path,
     get_platform_info,
@@ -202,22 +203,39 @@ class TestGitleaksInstaller:
         assert "8.21.2" in url
 
     @patch("envdrift.scanner.gitleaks.get_platform_info")
-    def test_get_download_url_linux_amd64(self, mock_platform: MagicMock):
-        """Test download URL for Linux AMD64."""
-        mock_platform.return_value = ("Linux", "x86_64")
-        installer = GitleaksInstaller(version="8.21.2")
+    def test_get_download_url_darwin_amd64_uses_x64(self, mock_platform: MagicMock):
+        """Test macOS x86_64 download URL uses the gitleaks x64 asset name."""
+        mock_platform.return_value = ("Darwin", "x86_64")
+        installer = GitleaksInstaller(version="8.30.1")
         url = installer.get_download_url()
-        assert "linux" in url
-        assert "amd64" in url
+        # gitleaks ships darwin_x64, not darwin_amd64
+        assert url.endswith("gitleaks_8.30.1_darwin_x64.tar.gz")
+        assert "amd64" not in url
+
+    @patch("envdrift.scanner.gitleaks.get_platform_info")
+    def test_get_download_url_linux_amd64_uses_x64(self, mock_platform: MagicMock):
+        """Test Linux x86_64 download URL uses the gitleaks x64 asset name.
+
+        Regression for #335: gitleaks releases ship ``linux_x64`` assets, not
+        ``linux_amd64`` — the templated ``amd64`` name 404s.
+        """
+        mock_platform.return_value = ("Linux", "x86_64")
+        installer = GitleaksInstaller(version="8.30.1")
+        url = installer.get_download_url()
+        assert url.endswith("gitleaks_8.30.1_linux_x64.tar.gz")
+        assert "linux_amd64" not in url
 
     @patch("envdrift.scanner.gitleaks.get_platform_info")
     def test_get_download_url_windows(self, mock_platform: MagicMock):
-        """Test download URL for Windows."""
+        """Test download URL for Windows uses the gitleaks x64 asset name."""
         mock_platform.return_value = ("Windows", "x86_64")
-        installer = GitleaksInstaller(version="8.21.2")
+        installer = GitleaksInstaller(version="8.30.1")
         url = installer.get_download_url()
         assert "windows" in url
         assert ".zip" in url
+        # gitleaks ships windows_x64, not windows_amd64
+        assert url.endswith("gitleaks_8.30.1_windows_x64.zip")
+        assert "amd64" not in url
 
     @patch("envdrift.scanner.gitleaks.get_platform_info")
     def test_unsupported_platform_raises_error(self, mock_platform: MagicMock):
@@ -226,6 +244,42 @@ class TestGitleaksInstaller:
         installer = GitleaksInstaller()
         with pytest.raises(GitleaksInstallError, match="Unsupported platform"):
             installer.get_download_url()
+
+    def test_constants_use_gitleaks_x64_asset_names(self):
+        """Constants templates must match gitleaks' actual asset naming (#335).
+
+        gitleaks releases name x86_64 assets ``*_x64.*`` (not ``*_amd64.*``)
+        on every platform. A stale ``amd64`` template 404s on download.
+        """
+        version = _get_gitleaks_version()
+        urls = _get_gitleaks_download_urls()
+        # The x86_64 entries (keyed by amd64 per PLATFORM_MAP) must resolve to
+        # x64 asset names; no template may contain the broken amd64 asset suffix.
+        for key in ("darwin_amd64", "linux_amd64", "windows_amd64"):
+            rendered = urls[key].format(version=version)
+            assert f"{key}.tar.gz" not in rendered
+            assert f"{key}.zip" not in rendered
+        assert (
+            urls["darwin_amd64"]
+            .format(version=version)
+            .endswith(f"gitleaks_{version}_darwin_x64.tar.gz")
+        )
+        assert (
+            urls["linux_amd64"]
+            .format(version=version)
+            .endswith(f"gitleaks_{version}_linux_x64.tar.gz")
+        )
+        assert (
+            urls["windows_amd64"]
+            .format(version=version)
+            .endswith(f"gitleaks_{version}_windows_x64.zip")
+        )
+        # arm64 assets keep their amd64-free name unchanged.
+        assert (
+            urls["linux_arm64"]
+            .format(version=version)
+            .endswith(f"gitleaks_{version}_linux_arm64.tar.gz")
+        )
 
     def test_platform_map_completeness(self):
         """Test that all common platforms are supported."""

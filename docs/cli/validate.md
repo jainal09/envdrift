@@ -232,6 +232,15 @@ else:
 | Extra vars (with `extra="forbid"`) | Error         | Unknown variables not allowed                        |
 | Extra vars (with `extra="ignore"`) | Warning       | Unknown variables allowed but noted                  |
 | Unencrypted sensitive vars         | Warning       | Fields marked `sensitive=True` should be encrypted   |
+| Case-insensitive name collision    | Warning       | Two `.env` keys differ only in case                  |
+
+> **Note:** Variable names are matched against schema fields
+> case-insensitively, mirroring Pydantic Settings (`case_sensitive=False`). So an
+> UPPERCASE `.env` (e.g. `API_KEY`) satisfies a lowercase field (`api_key`). If a
+> single `.env` defines two keys that differ only in case (e.g. both `API_KEY` and
+> `api_key`), they collapse to one field: the **last occurrence wins** (matching
+> Pydantic) and a warning reports which value was kept and which was ignored, so
+> the collision is never silent.
 
 ## See Also
 

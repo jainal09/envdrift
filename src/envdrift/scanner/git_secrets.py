@@ -505,17 +505,21 @@ class GitSecretsScanner(ScannerBackend):
                     args = ["--scan", "-r"] + scan_paths
                     result = self._run_git_secrets(args, cwd)
 
-                # Parse output
-                # git-secrets outputs format: path:line_number:content
-                if result.returncode != 0 and result.stdout:
-                    findings = self._parse_output(result.stdout, cwd)
-                    all_findings.extend(findings)
-
-                # Also check stderr for findings
+                # Parse output.
+                # git-secrets writes its findings (format: path:line_number:content,
+                # followed by an "[ERROR] Matched..." trailer) to STDERR, not stdout,
+                # and exits non-zero when matches are found. Parse stderr to capture
+                # them; _parse_output skips the "[ERROR]"/"error:" trailer lines.
                 if result.stderr:
-                    # Filter out actual errors vs finding output
                     stderr_findings = self._parse_output(result.stderr, cwd)
                     for finding in stderr_findings:
+                        if finding not in all_findings:
+                            all_findings.append(finding)
+
+                # Defensive fallback: some git-secrets variants/wrappers may emit
+                # findings on stdout. Parse it too so findings are never dropped.
+                if result.stdout:
+                    for finding in self._parse_output(result.stdout, cwd):
                         if finding not in all_findings:
                             all_findings.append(finding)
 

@@ -16,6 +16,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from envdrift.env_files import resolve_custom_env_file
 from envdrift.scanner.base import (
     AggregatedScanResult,
     FindingSeverity,
@@ -102,6 +103,12 @@ class GuardConfig:
 
         Parses the "guard" section to enable scanner flags, normalization of the "scanners" entry (accepts a string or list; defaults to ["native", "gitleaks"]), and reads other guard settings such as auto_install, include_history, entropy checks, ignore paths/rules, and skip_clear_files. Interprets "fail_on_severity" case-insensitively and falls back to FindingSeverity.HIGH on invalid values.
 
+        Also reads partial-encryption awareness fields so SDK callers get the same
+        false-positive/false-negative protection as the CLI: ``allowed_clear_files``
+        and ``combined_files`` are pulled from ``partial_encryption.environments``,
+        and ``mapped_env_files`` from ``vault.sync.mappings`` (resolved relative to
+        each mapping's ``folder_path``, mirroring the CLI construction).
+
         Parameters:
             config (dict): Configuration dictionary that may contain a "guard" mapping.
 
@@ -121,6 +128,10 @@ class GuardConfig:
             fail_severity = FindingSeverity(fail_on.lower())
         except ValueError:
             fail_severity = FindingSeverity.HIGH
+
+        allowed_clear_files, combined_files, mapped_env_files = cls._partial_encryption_files(
+            config
+        )
 
         return cls(
             use_native="native" in scanners,
@@ -143,7 +154,61 @@ class GuardConfig:
             ignore_paths=guard_config.get("ignore_paths", []),
             ignore_rules=guard_config.get("ignore_rules", {}),
             fail_on_severity=fail_severity,
+            allowed_clear_files=allowed_clear_files,
+            combined_files=combined_files,
+            mapped_env_files=mapped_env_files,
         )
+
+    @staticmethod
+    def _partial_encryption_files(
+        config: dict,
+    ) -> tuple[list[str], list[str], list[str]]:
+        """Extract partial-encryption-aware file lists from a raw config dict.
+
+        Mirrors the CLI construction in ``cli_commands/guard.py`` so SDK callers
+        that build a config via :meth:`from_dict` keep the same awareness of
+        intentionally-unencrypted ``.clear`` files, combined files, and custom
+        mapped env files.
+
+        Returns:
+            A tuple of ``(allowed_clear_files, combined_files, mapped_env_files)``.
+        """
+        allowed_clear_files: list[str] = []
+        combined_files: list[str] = []
+        mapped_env_files: list[str] = []
+
+        partial = config.get("partial_encryption", {})
+        if partial.get("enabled", False):
+            for env in partial.get("environments", []):
+                # Skip malformed entries (None/str/list) so a bad SDK config is
+                # ignored rather than crashing this pure constructor.
+                if not isinstance(env, dict):
+                    continue
+                clear_file = env.get("clear_file")
+                if clear_file:
+                    allowed_clear_files.append(clear_file)
+                combined_file = env.get("combined_file")
+                if combined_file:
+                    combined_files.append(combined_file)
+
+        mappings = config.get("vault", {}).get("sync", {}).get("mappings", [])
+        for mapping in mappings:
+            if not isinstance(mapping, dict):
+                continue
+            env_file = mapping.get("env_file")
+            folder_path = mapping.get("folder_path")
+            if not env_file or not folder_path:
+                continue
+            try:
+                resolved = resolve_custom_env_file(Path(folder_path), env_file).resolve()
+            except (TypeError, ValueError):
+                # Invalid env_file (escapes folder_path); skip rather than crash.
+                # The CLI surfaces this as an error, but from_dict is a pure
+                # constructor for SDK callers and must not raise here.
+                continue
+            mapped_env_files.append(str(resolved))
+
+        return allowed_clear_files, combined_files, mapped_env_files
 
 
 class ScanEngine:

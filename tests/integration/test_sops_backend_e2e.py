@@ -137,12 +137,12 @@ def test_exec_env_injects_decrypted_secrets_without_writing_disk(
     assert env_file.read_text() == encrypted_snapshot
 
 
-def test_decrypt_in_place_false_no_output_discards_stdout_leaves_file_encrypted(
+def test_decrypt_in_place_false_no_output_fails_without_discarding_plaintext(
     tmp_path: Path, sops_workspace: Path
 ) -> None:
-    """EC-07: decrypt(in_place=False) with no output_file reports success but
-    discards plaintext to stdout, leaving the file encrypted (known bug captured
-    as documented current behavior)."""
+    """EC-07 (regression for #307): decrypt(in_place=False) with no output_file
+    must report failure instead of silently discarding the decrypted plaintext to
+    stdout while claiming success. The on-disk file stays encrypted and untouched."""
     _require_sops()
     backend = _make_backend(sops_workspace)
     env_file = _write_and_encrypt(
@@ -156,9 +156,11 @@ def test_decrypt_in_place_false_no_output_discards_stdout_leaves_file_encrypted(
 
     result = backend.decrypt(env_file, in_place=False)
 
-    assert result.success is True
+    # No false success: the plaintext would have been discarded, so this fails.
+    assert result.success is False
+    assert "output_file" in result.message
     assert result.file_path == env_file
-    # Plaintext went to (discarded) stdout: the file remains encrypted.
+    # The file is left exactly as it was: still encrypted, no plaintext leaked.
     assert env_file.read_text() == encrypted_snapshot
     assert "hunter2" not in env_file.read_text()
 

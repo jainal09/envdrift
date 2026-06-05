@@ -91,6 +91,20 @@ def test_talisman_scans_committed_repo_and_parses_real_report_json(git_repo, tmp
     assert result.error is None, f"unexpected error: {result.error}"
     assert result.duration_ms >= 0
     assert isinstance(result.findings, list)
+    # #301: real talisman report.json uses ``failure_list`` — the scanner must
+    # parse it into at least one finding (a planted GitHub PAT in a committed
+    # file is reliably flagged), not silently return zero (false negative).
+    assert len(result.findings) >= 1, "talisman must surface the planted secret"
+    for finding in result.findings:
+        assert finding.scanner == "talisman"
+        assert finding.rule_id.startswith("talisman-")
+        # The raw secret is never exposed in the preview.
+        assert GITHUB_TOKEN not in finding.secret_preview
+    # #315: at least one finding carries a recovered secret preview/hash derived
+    # from the message (the embedded base64/secret-pattern detection).
+    assert any(f.secret_preview and f.secret_hash for f in result.findings), (
+        "expected at least one finding with a recovered secret preview/hash"
+    )
 
 
 @requires_talisman
