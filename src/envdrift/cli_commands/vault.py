@@ -238,6 +238,7 @@ def vault_push(
             EncryptionProvider,
             detect_encryption_provider,
         )
+        from envdrift.integrations.dotenvx import dotenvx_filename_needs_normalization
 
         # Load sync config and client
         sync_config, client, effective_provider, _, _, _ = load_sync_config_and_client(
@@ -348,10 +349,13 @@ def vault_push(
                     # Normalize dotenvx metadata for custom filenames so the vault
                     # key name stays canonical (DOTENV_*_<environment>). This runs
                     # whether we just encrypted the file or it was already encrypted
-                    # by a prior run, so the canonical key always exists below.
+                    # by a prior run, so the canonical key always exists below. It
+                    # applies to any non-canonical filename — configured (env_file)
+                    # or auto-detected (e.g. postgresql.env) — since dotenvx derives
+                    # its key name from the filename.
                     if (
                         backend_provider == EncryptionProvider.DOTENVX
-                        and mapping.env_file is not None
+                        and dotenvx_filename_needs_normalization(env_file, effective_environment)
                     ):
                         from envdrift.integrations.dotenvx import normalize_dotenvx_metadata
 
