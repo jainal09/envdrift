@@ -114,6 +114,31 @@ def test_normalize_renames_generated_private_key(tmp_path):
     assert content.endswith("\n")
 
 
+def test_normalize_preserves_missing_trailing_newline_in_keys_file(tmp_path):
+    """Regression for #320: a .env.keys with no trailing newline keeps none.
+
+    The keys branch must mirror the env-file branch and only re-add a trailing
+    newline when the original had one, rather than appending one unconditionally
+    after a rewrite.
+    """
+    env_file = tmp_path / "postgresql.env"
+    env_file.write_text("DOTENV_PUBLIC_KEY_POSTGRESQLPRODUCTION=03abc\n")
+    keys_file = tmp_path / ".env.keys"
+    # No trailing newline on the final private-key line.
+    keys_file.write_text(
+        _keys_header() + "\n# postgresql.env\n" + "DOTENV_PRIVATE_KEY_POSTGRESQLPRODUCTION=deadbeef"
+    )
+
+    normalize_dotenvx_metadata(env_file, keys_file, "production")
+
+    content = keys_file.read_text()
+    # The rewrite happened...
+    assert "DOTENV_PRIVATE_KEY_PRODUCTION=deadbeef" in content
+    assert "POSTGRESQLPRODUCTION" not in content
+    # ...but the original no-trailing-newline shape is preserved.
+    assert not content.endswith("\n")
+
+
 def test_normalize_merges_into_existing_canonical_key(tmp_path):
     """When a canonical key already exists, the generated key+comment are merged in."""
     env_file = tmp_path / "postgresql.env"

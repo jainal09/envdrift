@@ -108,7 +108,7 @@ def test_download_failure_unreachable_url_raises_install_error(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """BP-10: a download against an unreachable URL raises a clear error."""
-    # Port 1 is privileged and never listening -> urlretrieve fails fast.
+    # Port 1 is privileged and never listening -> urlopen fails fast.
     unreachable = "http://127.0.0.1:1/dotenvx.tar.gz"
     monkeypatch.setattr(
         DotenvxInstaller,

@@ -311,7 +311,8 @@ class TestInstallAgentCommand:
         """Test force reinstall warns when agent is running."""
         status_result = MagicMock()
         status_result.returncode = 0
-        status_result.stdout = "Agent is running"
+        # Real agent output: an "Installed:" line plus a "Running:" line.
+        status_result.stdout = "Installed: true\nRunning:   true\n"
 
         with (
             patch("shutil.which", return_value="/usr/local/bin/envdrift-agent"),
@@ -320,7 +321,31 @@ class TestInstallAgentCommand:
         ):
             result = runner.invoke(app, ["install", "agent", "--force"])
             # Should warn about running agent
-            assert "running" in result.stdout.lower() or "Warning" in result.stdout
+            assert "Agent is currently running" in result.stdout
+
+    def test_force_reinstall_with_stopped_agent_no_warning(self):
+        """Regression for #323: a stopped agent must NOT trigger the running warning.
+
+        The real agent prints ``Running:   false`` (three spaces after the colon).
+        The previous whitespace-fragile substring guard ("running: false") failed
+        to match, so the spurious 'Agent is currently running' warning printed.
+        """
+        status_result = MagicMock()
+        status_result.returncode = 0
+        status_result.stdout = "Installed: true\nRunning:   false\n"
+
+        # Make the rest of the install fail fast after the status check so we only
+        # exercise the warning guard (no real download / network).
+        with (
+            patch("shutil.which", return_value="/usr/local/bin/envdrift-agent"),
+            patch("subprocess.run", return_value=status_result),
+            patch(
+                "envdrift.cli_commands.install._detect_platform",
+                side_effect=typer.BadParameter("stop here"),
+            ),
+        ):
+            result = runner.invoke(app, ["install", "agent", "--force"])
+            assert "Agent is currently running" not in result.stdout
 
 
 class TestCheckCommand:
@@ -388,7 +413,7 @@ class TestCheckCommand:
             result = MagicMock()
             if "status" in args[0]:
                 result.returncode = 0
-                result.stdout = "Agent is running"
+                result.stdout = "Installed: true\nRunning:   true\n"
             else:
                 result.returncode = 0
                 result.stdout = "v1.0.0"
@@ -400,7 +425,62 @@ class TestCheckCommand:
         ):
             result = runner.invoke(app, ["install", "check"])
             assert result.exit_code == 0
-            assert "Running" in result.stdout
+            assert "⚡ Running" in result.stdout
+            assert "Not running" not in result.stdout
+
+    def test_check_agent_stopped_status(self):
+        """Regression for #312: a stopped agent must report 'Not running'.
+
+        The agent always prints a ``Running:`` line, and the value is ``false``
+        when stopped. The previous naive ``"running" in stdout`` substring check
+        matched both cases and misreported a stopped agent as '⚡ Running'.
+        """
+
+        def subprocess_side_effect(*args, **kwargs):
+            result = MagicMock()
+            if "status" in args[0]:
+                result.returncode = 0
+                result.stdout = "Installed: true\nRunning:   false\n"
+            else:
+                result.returncode = 0
+                result.stdout = "v1.0.0"
+            return result
+
+        with (
+            patch("shutil.which", return_value="/usr/local/bin/envdrift-agent"),
+            patch("subprocess.run", side_effect=subprocess_side_effect),
+        ):
+            result = runner.invoke(app, ["install", "check"])
+            assert result.exit_code == 0
+            assert "Not running" in result.stdout
+            assert "⚡ Running" not in result.stdout
+
+    def test_check_agent_status_unrecognized_value(self):
+        """An unrecognized ``Running:`` value is treated as not-running (#312).
+
+        ``parse_agent_running_status`` returns ``None`` for any value outside
+        ``{true, false}``, so ``install check`` must report 'Not running' rather
+        than falsely claiming '⚡ Running'.
+        """
+
+        def subprocess_side_effect(*args, **kwargs):
+            result = MagicMock()
+            if "status" in args[0]:
+                result.returncode = 0
+                result.stdout = "Installed: true\nRunning:   unknown\n"
+            else:
+                result.returncode = 0
+                result.stdout = "v1.0.0"
+            return result
+
+        with (
+            patch("shutil.which", return_value="/usr/local/bin/envdrift-agent"),
+            patch("subprocess.run", side_effect=subprocess_side_effect),
+        ):
+            result = runner.invoke(app, ["install", "check"])
+            assert result.exit_code == 0
+            assert "Not running" in result.stdout
+            assert "⚡ Running" not in result.stdout
 
 
 class TestInstallHelpCommand:
