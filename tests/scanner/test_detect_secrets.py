@@ -18,6 +18,7 @@ from envdrift.scanner.detect_secrets import (
     DetectSecretsInstallError,
     DetectSecretsNotFoundError,
     DetectSecretsScanner,
+    _get_detect_secrets_version,
 )
 
 
@@ -27,7 +28,7 @@ class TestDetectSecretsInstaller:
     def test_default_version_from_constants(self):
         """Installer uses pinned version by default."""
         installer = DetectSecretsInstaller()
-        assert installer.version == "1.5.0"
+        assert installer.version == _get_detect_secrets_version()
 
     def test_custom_version(self):
         """Custom version can be specified."""

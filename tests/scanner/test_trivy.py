@@ -16,6 +16,7 @@ from envdrift.scanner.trivy import (
     TrivyInstallError,
     TrivyNotFoundError,
     TrivyScanner,
+    _get_trivy_version,
     get_platform_info,
     get_trivy_path,
 )
@@ -74,7 +75,7 @@ class TestTrivyInstaller:
     def test_default_version_from_constants(self):
         """Test that installer uses version from constants."""
         installer = TrivyInstaller()
-        assert installer.version == "0.58.0"
+        assert installer.version == _get_trivy_version()
 
     def test_custom_version(self):
         """Test that custom version can be specified."""

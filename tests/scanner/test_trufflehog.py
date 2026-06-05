@@ -21,6 +21,7 @@ from envdrift.scanner.trufflehog import (
     TrufflehogInstallError,
     TrufflehogNotFoundError,
     TrufflehogScanner,
+    _get_trufflehog_version,
     get_platform_info,
     get_trufflehog_path,
     get_venv_bin_dir,
@@ -177,7 +178,7 @@ class TestTrufflehogInstaller:
     def test_default_version_from_constants(self):
         """Test that installer uses version from constants."""
         installer = TrufflehogInstaller()
-        assert installer.version == "3.92.4"
+        assert installer.version == _get_trufflehog_version()
 
     def test_custom_version(self):
         """Test that custom version can be specified."""
