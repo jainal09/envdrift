@@ -230,16 +230,74 @@ def test_resolve_mapping_env_file_reports_ambiguous_environment_match(tmp_path: 
     assert detection.path is None
 
 
-def test_detect_env_file_finds_prefixed_plain_file(tmp_path: Path) -> None:
-    """``detect_env_file`` recognizes a single ``<prefix>.env`` file."""
+def test_resolve_mapping_env_file_default_ignores_other_environment_files(
+    tmp_path: Path,
+) -> None:
+    """A default mapping picks the plain file, not the env-specific neighbor.
+
+    Regression: a folder with ``service.env`` + ``service.env.staging`` must not
+    look ambiguous to a production mapping just because two dotenv files exist.
+    """
+    service_dir = tmp_path / "service"
+    service_dir.mkdir()
+    plain = service_dir / "service.env"
+    plain.write_text("SECRET=value\n")
+    (service_dir / "service.env.staging").write_text("SECRET=staging\n")
+
+    mapping = ServiceMapping(secret_name="dotenv-key", folder_path=service_dir)
+
+    detection = resolve_mapping_env_file(mapping)
+
+    assert detection.status == "found"
+    assert detection.path == plain
+    assert detection.environment == "production"
+
+
+def test_resolve_mapping_env_file_env_specific_ignores_plain_file(tmp_path: Path) -> None:
+    """An environment-specific mapping never grabs a plain ``<prefix>.env`` file."""
+    service_dir = tmp_path / "service"
+    service_dir.mkdir()
+    (service_dir / "service.env").write_text("SECRET=value\n")
+    docker = service_dir / "service.env.docker"
+    docker.write_text("SECRET=docker\n")
+
+    mapping = ServiceMapping(
+        secret_name="dotenv-key",
+        folder_path=service_dir,
+        environment="docker",
+    )
+
+    detection = resolve_mapping_env_file(mapping)
+
+    assert detection.status == "found"
+    assert detection.path == docker
+    assert detection.environment == "docker"
+
+
+def test_detect_env_file_ignores_prefixed_plain_file(tmp_path: Path) -> None:
+    """``detect_env_file`` stays narrow: ``<prefix>.env`` is resolve()'s job, not its."""
     (tmp_path / "keycloak.env").write_text("SECRET=value\n")
-    (tmp_path / "keycloak.env.example").write_text("SECRET=example\n")
 
     detection = detect_env_file(tmp_path)
 
-    assert detection.status == "found"
-    assert detection.path == tmp_path / "keycloak.env"
-    assert detection.environment == "production"
+    assert detection.status == "not_found"
+    assert detection.path is None
+
+
+@pytest.mark.parametrize("resolver", ["resolve", "detect"])
+def test_env_detection_handles_non_directory_path(tmp_path: Path, resolver: str) -> None:
+    """A folder_path that is a file must not crash on iterdir()."""
+    not_a_dir = tmp_path / "service"
+    not_a_dir.write_text("oops, a file\n")
+
+    if resolver == "detect":
+        detection = detect_env_file(not_a_dir)
+    else:
+        mapping = ServiceMapping(secret_name="dotenv-key", folder_path=not_a_dir)
+        detection = resolve_mapping_env_file(mapping)
+
+    assert detection.status == "folder_not_found"
+    assert detection.path is None
 
 
 def test_resolve_mapping_env_file_reports_folder_not_found(tmp_path: Path) -> None:
