@@ -137,6 +137,70 @@ PORT=not_a_number
         assert "api_key" in result.unencrypted_secrets
         assert result.valid is False
 
+    def test_case_insensitive_collision_is_surfaced_not_silent(self, tmp_path):
+        """Two .env keys differing only in case must not be silently dropped.
+
+        With case-insensitive matching (issue #306), ``API_KEY`` and
+        ``api_key`` collapse to the same lower-cased bucket. Pydantic Settings
+        resolves this last-wins; the validator must stay deterministic (last
+        occurrence wins) AND surface a warning so the dropped value is not lost
+        silently (greptile P2).
+        """
+
+        class Settings(BaseSettings):
+            model_config = SettingsConfigDict(extra="forbid")
+
+            api_key: str
+
+        # Both spellings present; the last (lowercase) one wins for matching.
+        content = """
+API_KEY=first-value
+api_key=second-value
+"""
+        env_file = tmp_path / ".env"
+        env_file.write_text(content)
+
+        env = EnvParser().parse(env_file)
+        schema = SchemaLoader().extract_metadata(Settings)
+
+        result = Validator().validate(env, schema, check_encryption=False)
+
+        # The collision must be reported, not swallowed.
+        collision_warnings = [w for w in result.warnings if "collision" in w.lower()]
+        assert len(collision_warnings) == 1, result.warnings
+        warning = collision_warnings[0]
+        assert "'API_KEY'" in warning
+        assert "'api_key'" in warning
+        # Deterministic last-wins: the later occurrence is kept, the earlier
+        # one is reported as ignored.
+        assert "value from 'api_key' is used" in warning
+        assert "'API_KEY' ignored" in warning
+        # Both names map to the schema field, so neither is a false extra var
+        # and the required field is satisfied.
+        assert result.extra_vars == set()
+        assert result.missing_required == set()
+
+    def test_no_collision_warning_without_case_clash(self, tmp_path):
+        """Distinct env names that do not case-collide produce no collision warning."""
+
+        class Settings(BaseSettings):
+            api_key: str
+            database_url: str
+
+        content = """
+API_KEY=secret
+DATABASE_URL=postgres://localhost/db
+"""
+        env_file = tmp_path / ".env"
+        env_file.write_text(content)
+
+        env = EnvParser().parse(env_file)
+        schema = SchemaLoader().extract_metadata(Settings)
+
+        result = Validator().validate(env, schema, check_encryption=False)
+
+        assert [w for w in result.warnings if "collision" in w.lower()] == []
+
     def test_validate_extra_vars_ignore(self, tmp_path, permissive_settings_class):
         """Allow extra vars when schema has extra=ignore."""
         content = """

@@ -129,8 +129,31 @@ class Validator:
         env_names_lower = {name.lower() for name in env_file.variables}
         schema_names_lower = {name.lower() for name in schema.fields}
 
-        # Map a (lower-cased) schema field name to the matching env var, if any.
+        # Map a (lower-cased) schema field name to the matching env var.
+        #
+        # Because matching is case-insensitive, two distinct .env keys that
+        # differ only in case (e.g. ``API_KEY`` and ``api_key``) collapse to the
+        # same lower-cased bucket. Pydantic Settings resolves such a clash by
+        # last-wins, but doing so silently here would let one value be dropped
+        # without anyone noticing. Group every env var by its lower-cased name so
+        # we can both detect collisions and stay deterministic: the value used
+        # for matching is the last occurrence (mirroring Pydantic / dict ordering),
+        # and any collision is surfaced as a warning (see issue #306).
+        env_groups: dict[str, list[str]] = {}
+        for name in env_file.variables:
+            env_groups.setdefault(name.lower(), []).append(name)
+
         env_by_lower = {name.lower(): env_var for name, env_var in env_file.variables.items()}
+
+        for lower_name, names in env_groups.items():
+            if len(names) > 1:
+                kept = names[-1]
+                dropped = ", ".join(repr(n) for n in names[:-1])
+                result.warnings.append(
+                    f"Case-insensitive name collision for {lower_name!r}: "
+                    f"{', '.join(repr(n) for n in names)} all map to the same field; "
+                    f"value from {kept!r} is used, {dropped} ignored"
+                )
 
         # Check for missing required variables
         for field_name, field_meta in schema.fields.items():

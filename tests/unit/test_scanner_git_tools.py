@@ -277,7 +277,10 @@ class TestScanCapturesStderrFindings:
         leak.write_text("AWS_KEY=AKIAZ9Q8W7E6R5T4Y3U2\n")
 
         scanner = GitSecretsScanner(auto_install=False)
-        scanner._binary_path = Path("git-secrets-subcommand")
+        # The logic under test is stderr parsing, not binary discovery. Stub
+        # _find_binary so the test does not depend on git-secrets being
+        # installed in the environment (it is absent in CI).
+        binary = Path("git-secrets-subcommand")
 
         def fake_run(args: list[str], cwd: Path) -> MagicMock:
             # --list / --register-aws bookkeeping calls succeed quietly.
@@ -293,7 +296,10 @@ class TestScanCapturesStderrFindings:
                 ),
             )
 
-        with patch.object(scanner, "_run_git_secrets", side_effect=fake_run):
+        with (
+            patch.object(scanner, "_find_binary", return_value=binary),
+            patch.object(scanner, "_run_git_secrets", side_effect=fake_run),
+        ):
             result = scanner.scan([repo])
 
         assert result.error is None
@@ -312,7 +318,9 @@ class TestScanCapturesStderrFindings:
         (repo / "leak.txt").write_text("AWS_KEY=AKIAZ9Q8W7E6R5T4Y3U2\n")
 
         scanner = GitSecretsScanner(auto_install=False)
-        scanner._binary_path = Path("git-secrets-subcommand")
+        # Stub binary discovery; the dedup logic under test is independent of
+        # whether git-secrets is installed in the environment (absent in CI).
+        binary = Path("git-secrets-subcommand")
         line = "leak.txt:1:AWS_KEY=AKIAZ9Q8W7E6R5T4Y3U2\n"
 
         def fake_run(args: list[str], cwd: Path) -> MagicMock:
@@ -320,7 +328,10 @@ class TestScanCapturesStderrFindings:
                 return MagicMock(returncode=0, stdout="", stderr="")
             return MagicMock(returncode=1, stdout=line, stderr=line)
 
-        with patch.object(scanner, "_run_git_secrets", side_effect=fake_run):
+        with (
+            patch.object(scanner, "_find_binary", return_value=binary),
+            patch.object(scanner, "_run_git_secrets", side_effect=fake_run),
+        ):
             result = scanner.scan([repo])
 
         assert len(result.findings) == 1

@@ -220,6 +220,40 @@ class TestGuardConfig:
 
         assert config.mapped_env_files == []
 
+    def test_config_from_dict_mapped_env_file_incomplete_mapping_skipped(self, tmp_path):
+        """A mapping missing env_file or folder_path is skipped, not raised.
+
+        Covers the guard branch that drops incomplete vault.sync mappings so a
+        partially-specified config cannot crash :meth:`GuardConfig.from_dict`.
+        """
+        folder = tmp_path / "service"
+        folder.mkdir()
+        config = GuardConfig.from_dict(
+            {
+                "vault": {
+                    "sync": {
+                        "mappings": [
+                            # Missing env_file.
+                            {"secret_name": "a", "folder_path": str(folder)},
+                            # Missing folder_path.
+                            {"secret_name": "b", "env_file": "custom.env"},
+                            # Empty values are also treated as missing.
+                            {"secret_name": "c", "folder_path": "", "env_file": ""},
+                            # Fully specified -> resolved.
+                            {
+                                "secret_name": "d",
+                                "folder_path": str(folder),
+                                "env_file": "ok.env",
+                            },
+                        ]
+                    }
+                }
+            }
+        )
+
+        # Only the complete mapping survives; the incomplete ones are skipped.
+        assert config.mapped_env_files == [str((folder / "ok.env").resolve())]
+
 
 class TestScanEngine:
     """Tests for ScanEngine class."""
