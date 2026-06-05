@@ -33,13 +33,15 @@ These are the conventions we actually enforce — follow them on every change.
 
 ## External binary versions — never hardcode
 
-- Versions and download-URL templates for `dotenvx`, `sops`, `gitleaks`,
-  `trufflehog`, `talisman`, `trivy`, `infisical`, `detect-secrets` live in
+- Pinned versions for the external tools (`dotenvx`, `sops`, `gitleaks`,
+  `trufflehog`, `talisman`, `trivy`, `infisical`, `detect-secrets`) live in
   **`src/envdrift/constants.json`** and are bumped by **Renovate**
-  (`renovate.json` custom managers). Add a Renovate manager when you add a binary.
+  (`renovate.json` custom managers). Most also carry a download-URL template
+  there; `detect-secrets` is installed via pip (Renovate's `pypi` datasource).
+  Add a Renovate manager when you add a tool.
 - CI install steps and source code read the version/URL from `constants.json`
-  (e.g. `python -c "import json; print(json.load(open('src/envdrift/constants.json'))['sops_version'])"`).
-  Do **not** pin a literal version in a workflow, install script, or test.
+  (load it with `json` and pull the `<tool>_version` / `<tool>_download_urls`
+  key) — do **not** pin a literal version in a workflow, install script, or test.
 - Version-assertion tests read the expected value **dynamically** from
   `constants.json` (e.g. `assert installer.version == _get_<tool>_version()`), so
   Renovate bumps don't break CI.
