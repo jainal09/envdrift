@@ -8,6 +8,14 @@ from typing import Any, Literal
 
 EnvFileStatus = Literal["found", "folder_not_found", "multiple_found", "not_found"]
 
+# Environment a dotenv file belongs to when its name encodes none of its own
+# (a plain ``.env`` or ``<prefix>.env``). Mirrors ServiceMapping.effective_environment.
+_DEFAULT_ENVIRONMENT = "production"
+
+# Suffixes that mark a file as a non-secret companion (examples, keys), never the
+# env file itself. Matched against the full filename, e.g. "service.env.example".
+_EXCLUDED_ENV_SUFFIXES = (".example", ".sample", ".template", ".keys")
+
 
 @dataclass(frozen=True)
 class EnvFileDetection:
@@ -18,40 +26,85 @@ class EnvFileDetection:
     status: EnvFileStatus
 
 
+def _is_excluded_env_file(name: str) -> bool:
+    """Return True for companion files (.example/.sample/.template/.keys)."""
+    return any(name.endswith(suffix) for suffix in _EXCLUDED_ENV_SUFFIXES)
+
+
+def _name_encodes_environment(name: str, environment: str) -> bool:
+    """Return True if dotenv file ``name`` belongs to ``environment``.
+
+    Recognizes the conventions where the environment is encoded in the filename:
+    - suffix:  ``.env.<env>`` / ``<prefix>.env.<env>``   ("service.env.docker")
+    - infix:   ``<prefix>-<env>.env`` / ``.<env>.env`` / ``_<env>.env`` / ``<env>.env``
+               ("service-local.env")
+
+    A plain file that encodes no environment of its own (``.env`` or
+    ``<prefix>.env``, e.g. "postgresql.env") belongs to the default environment,
+    so it matches only when ``environment`` is the default. This keeps an
+    environment-specific lookup (e.g. "docker") from grabbing a plain file, and
+    avoids relabeling a plain file under a non-default environment.
+    """
+    if name.endswith(f".env.{environment}"):
+        return True
+    if name == f"{environment}.env":
+        return True
+    if any(name.endswith(f"{sep}{environment}.env") for sep in ("-", ".", "_")):
+        return True
+    # Plain ".env" / "<prefix>.env" carries no encoded environment -> default only.
+    return environment == _DEFAULT_ENVIRONMENT and name.endswith(".env")
+
+
+def _match_env_files_for_environment(folder_path: Path, environment: str) -> list[Path]:
+    """Return env files in ``folder_path`` whose name belongs to ``environment``."""
+    if not folder_path.is_dir():
+        return []
+    matches = [
+        f
+        for f in folder_path.iterdir()
+        if f.is_file()
+        and not _is_excluded_env_file(f.name)
+        and _name_encodes_environment(f.name, environment)
+    ]
+    return sorted(matches)
+
+
 def detect_env_file(folder_path: Path, default_environment: str = "production") -> EnvFileDetection:
     """
-    Auto-detect .env file in a folder.
+    Auto-detect a canonical .env file in a folder.
 
     Checks for:
     1. Plain .env file (returns default environment)
     2. Single .env.* file (returns environment from suffix)
 
+    Custom service-prefixed names (e.g. ``service.env.docker``) are intentionally
+    not handled here; that requires the mapping's environment and lives in
+    :func:`resolve_mapping_env_file`.
+
     Returns an EnvFileDetection with status:
     - "found": env file found
-    - "folder_not_found": folder doesn't exist
+    - "folder_not_found": folder doesn't exist (or isn't a directory)
     - "multiple_found": multiple .env.* files exist (ambiguous)
     - "not_found": no env files found
     """
-    if not folder_path.exists():
+    if not folder_path.is_dir():
         return EnvFileDetection(None, None, "folder_not_found")
 
-    # First, check for plain .env file
+    # First, check for plain .env file (takes precedence over any .env.* file)
     plain_env = folder_path / ".env"
-    if plain_env.exists() and plain_env.is_file():
+    if plain_env.is_file():
         return EnvFileDetection(plain_env, default_environment, "found")
 
-    # Find all .env.* files, excluding special files
-    exclude_patterns = {".env.keys", ".env.example", ".env.sample", ".env.template"}
-    env_files = []
-
-    for f in folder_path.iterdir():
-        if f.is_file() and f.name.startswith(".env.") and f.name not in exclude_patterns:
-            env_files.append(f)
+    env_files = [
+        f
+        for f in folder_path.iterdir()
+        if f.is_file() and f.name.startswith(".env.") and not _is_excluded_env_file(f.name)
+    ]
 
     if len(env_files) == 1:
         env_file = env_files[0]
         # Extract environment from filename: .env.soak -> soak
-        environment = env_file.name[5:]  # Remove ".env." prefix
+        environment = env_file.name[len(".env.") :]
         return EnvFileDetection(env_file, environment, "found")
 
     if len(env_files) > 1:
@@ -88,11 +141,14 @@ def resolve_mapping_env_file(mapping: Any) -> EnvFileDetection:
     Resolution order:
     1. Explicit ``mapping.env_file`` relative to ``mapping.folder_path``.
     2. Exact ``.env.<effective_environment>``.
-    3. Existing legacy auto-detection for ``.env`` or a single ``.env.*`` file.
+    3. A custom-named file that belongs to the environment, such as
+       ``service.env.<env>`` or ``service-<env>.env`` (and, for a default
+       environment, a plain ``service.env``).
+    4. Legacy auto-detection for ``.env`` or a single ``.env.*`` file.
 
-    Explicit custom filenames keep ``mapping.effective_environment`` as the
-    environment of record. This preserves canonical vault key names even when
-    the dotenv filename uses a service-specific convention.
+    Custom filenames matched via steps 2-3 keep ``mapping.effective_environment``
+    as the environment of record. This preserves canonical vault key names even
+    when the dotenv filename uses a service-specific convention.
     """
     folder_path = Path(mapping.folder_path)
     effective_environment = mapping.effective_environment
@@ -111,4 +167,13 @@ def resolve_mapping_env_file(mapping: Any) -> EnvFileDetection:
     if exact_env.exists() and exact_env.is_file():
         return EnvFileDetection(exact_env, effective_environment, "found")
 
-    return detect_env_file(folder_path)
+    # Match custom-named files that encode this environment (e.g.
+    # "service.env.docker" or "service-local.env"). The configured environment
+    # stays canonical so vault/dotenvx key names remain config-driven.
+    env_matches = _match_env_files_for_environment(folder_path, effective_environment)
+    if len(env_matches) == 1:
+        return EnvFileDetection(env_matches[0], effective_environment, "found")
+    if len(env_matches) > 1:
+        return EnvFileDetection(None, effective_environment, "multiple_found")
+
+    return detect_env_file(folder_path, effective_environment)

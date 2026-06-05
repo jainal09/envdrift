@@ -240,18 +240,24 @@ def _normalize_max_workers(max_workers: int | None) -> int | None:
 
 
 def _normalize_mapped_dotenvx_metadata(
-    mapping: ServiceMapping,
     env_file: Path,
     env_keys_file: Path,
     effective_environment: str,
     backend_provider: Any,
 ) -> None:
     from envdrift.encryption import EncryptionProvider
+    from envdrift.integrations.dotenvx import (
+        dotenvx_filename_needs_normalization,
+        normalize_dotenvx_metadata,
+    )
 
-    if backend_provider != EncryptionProvider.DOTENVX or mapping.env_file is None:
+    if backend_provider != EncryptionProvider.DOTENVX:
         return
-
-    from envdrift.integrations.dotenvx import normalize_dotenvx_metadata
+    # Normalize whenever the resolved filename is non-canonical — configured via
+    # env_file or auto-detected (e.g. postgresql.env) — since dotenvx derives its
+    # key name from the filename and would otherwise write a non-canonical key.
+    if not dotenvx_filename_needs_normalization(env_file, effective_environment):
+        return
 
     normalize_dotenvx_metadata(env_file, env_keys_file, effective_environment)
 
@@ -733,7 +739,6 @@ def pull(
             continue
 
         _normalize_mapped_dotenvx_metadata(
-            mapping,
             env_file,
             mapping.folder_path / (sync_config.env_keys_filename or ".env.keys"),
             effective_env,
@@ -1388,7 +1393,6 @@ def lock(
             warnings.append(f"{env_file}: no .env.keys file found, new key will be generated")
 
         _normalize_mapped_dotenvx_metadata(
-            mapping,
             env_file,
             env_keys_file,
             effective_env,
@@ -1500,7 +1504,6 @@ def lock(
                                     error_count += 1
                                     continue
                                 _normalize_mapped_dotenvx_metadata(
-                                    mapping,
                                     env_file,
                                     env_keys_file,
                                     effective_env,
@@ -1595,7 +1598,6 @@ def lock(
                 error_count += 1
                 continue
             _normalize_mapped_dotenvx_metadata(
-                mapping,
                 env_file,
                 env_keys_file,
                 effective_env,
@@ -1648,7 +1650,6 @@ def lock(
                 error_count += 1
                 continue
             _normalize_mapped_dotenvx_metadata(
-                task.mapping,
                 task.env_file,
                 task.env_keys_file,
                 task.effective_environment,
