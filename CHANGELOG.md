@@ -1,5 +1,12 @@
 # Changelog
 
+## [10.13.6](https://github.com/jainal09/envdrift/compare/v10.13.5...v10.13.6) (2026-06-05)
+
+
+### Bug Fixes
+
+* dotenvx decrypt/install hardening + agent status parse ([#309](https://github.com/jainal09/envdrift/issues/309)-312/[#320](https://github.com/jainal09/envdrift/issues/320)/[#323](https://github.com/jainal09/envdrift/issues/323)) ([#341](https://github.com/jainal09/envdrift/issues/341)) ([e368d91](https://github.com/jainal09/envdrift/commit/e368d9138b686032749a85d0ca47bed65e599fa5))
+
 ## [10.13.5](https://github.com/jainal09/envdrift/compare/v10.13.4...v10.13.5) (2026-06-05)
 
 
