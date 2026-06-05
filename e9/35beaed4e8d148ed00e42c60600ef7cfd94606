@@ -1,0 +1,28 @@
+src/envdrift/cli_commands/agent.py
+  s_dfc6cd6692ed8f::t_ae5d3dae6716ec 101
+  s_dfc6cd6692ed8f::t_1af7ea3b276fad 33
+src/envdrift/cli_commands/agent_utils.py
+  s_dfc6cd6692ed8f::t_8083ce9c34cc96 1-33
+src/envdrift/cli_commands/install.py
+  s_dfc6cd6692ed8f::t_1c127e71aa12a8 338-340
+  s_dfc6cd6692ed8f::t_462aad59fcc6b1 505
+  s_dfc6cd6692ed8f::t_26261b4aca994f 28-29
+tests/unit/test_install_cli.py
+  s_dfc6cd6692ed8f::t_9977465ba7194a 458-484
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.3",
+  "base_commit_sha": "e935beaed4e8d148ed00e42c60600ef7cfd94606",
+  "prompts": {},
+  "sessions": {
+    "s_dfc6cd6692ed8f": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "fd23e738-3512-4420-9290-d985ad979bfd",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Jainal Gosaliya <jainal09gosalia@gmail.com>"
+    }
+  }
+}
