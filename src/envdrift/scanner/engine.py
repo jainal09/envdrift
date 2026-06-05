@@ -180,6 +180,10 @@ class GuardConfig:
         partial = config.get("partial_encryption", {})
         if partial.get("enabled", False):
             for env in partial.get("environments", []):
+                # Skip malformed entries (None/str/list) so a bad SDK config is
+                # ignored rather than crashing this pure constructor.
+                if not isinstance(env, dict):
+                    continue
                 clear_file = env.get("clear_file")
                 if clear_file:
                     allowed_clear_files.append(clear_file)
@@ -189,13 +193,15 @@ class GuardConfig:
 
         mappings = config.get("vault", {}).get("sync", {}).get("mappings", [])
         for mapping in mappings:
+            if not isinstance(mapping, dict):
+                continue
             env_file = mapping.get("env_file")
             folder_path = mapping.get("folder_path")
             if not env_file or not folder_path:
                 continue
             try:
                 resolved = resolve_custom_env_file(Path(folder_path), env_file).resolve()
-            except ValueError:
+            except (TypeError, ValueError):
                 # Invalid env_file (escapes folder_path); skip rather than crash.
                 # The CLI surfaces this as an error, but from_dict is a pure
                 # constructor for SDK callers and must not raise here.

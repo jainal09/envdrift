@@ -254,6 +254,42 @@ class TestGuardConfig:
         # Only the complete mapping survives; the incomplete ones are skipped.
         assert config.mapped_env_files == [str((folder / "ok.env").resolve())]
 
+    def test_config_from_dict_skips_non_dict_entries(self, tmp_path):
+        """Malformed (non-dict) environments/mappings entries are skipped, not raised.
+
+        from_dict is a pure constructor for SDK callers, so a bad config
+        (None / strings / lists where a dict is expected) must be ignored rather
+        than crashing with AttributeError on ``.get``.
+        """
+        folder = tmp_path / "service"
+        folder.mkdir()
+        config = GuardConfig.from_dict(
+            {
+                "partial_encryption": {
+                    "enabled": True,
+                    "environments": [
+                        None,
+                        "oops",
+                        ["list", "entry"],
+                        {"clear_file": ".env.production.clear"},
+                    ],
+                },
+                "vault": {
+                    "sync": {
+                        "mappings": [
+                            None,
+                            "not-a-mapping",
+                            {"folder_path": str(folder), "env_file": "ok.env"},
+                        ]
+                    }
+                },
+            }
+        )
+
+        # The single valid entry in each list survives; the junk is skipped.
+        assert config.allowed_clear_files == [".env.production.clear"]
+        assert config.mapped_env_files == [str((folder / "ok.env").resolve())]
+
 
 class TestScanEngine:
     """Tests for ScanEngine class."""
