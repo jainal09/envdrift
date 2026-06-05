@@ -17,6 +17,8 @@ from pathlib import Path
 
 import pytest
 
+from envdrift.scanner.git_secrets import GitSecretsScanner
+
 REPO_ROOT = Path(__file__).resolve().parents[2]
 PYTHONPATH = str(REPO_ROOT / "src")
 
@@ -244,9 +246,6 @@ class TestGitSecretsRealBinary:
 
     def test_scan_detects_aws_key_via_stderr(self, scanner_test_env):
         """scan() returns a finding for a real AWS key (emitted on stderr)."""
-        sys.path.insert(0, PYTHONPATH)
-        from envdrift.scanner.git_secrets import GitSecretsScanner
-
         work_dir = scanner_test_env["work_dir"]
         self._init_repo_with_aws_patterns(work_dir)
         # Non-example key (git-secrets allowlists the AKIA...EXAMPLE key).
@@ -261,9 +260,6 @@ class TestGitSecretsRealBinary:
 
     def test_scan_clean_repo_has_no_findings(self, scanner_test_env):
         """scan() of a repo without secrets yields no findings and no error."""
-        sys.path.insert(0, PYTHONPATH)
-        from envdrift.scanner.git_secrets import GitSecretsScanner
-
         work_dir = scanner_test_env["work_dir"]
         self._init_repo_with_aws_patterns(work_dir)
         (work_dir / "clean.txt").write_text("nothing to see here\n")
