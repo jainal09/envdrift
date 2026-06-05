@@ -1,0 +1,40 @@
+tests/integration/test_aws_integration.py
+  s_dfc6cd6692ed8f::t_8898ad1d0967f7 742-914
+src/envdrift/cli_commands/vault.py
+  s_dfc6cd6692ed8f::t_91fe1ce92a9618 300-321,391
+tests/unit/coverage/test_cov_cli_commands_sync.py
+  s_dfc6cd6692ed8f::t_de1b28f55a1218 438-482
+  s_dfc6cd6692ed8f::t_38ef32004a6608 831-833
+  s_dfc6cd6692ed8f::t_e59258579eeaf7 393-437
+  s_dfc6cd6692ed8f::t_c9f754063a7edd 817-830,834-842
+src/envdrift/cli_commands/sync.py
+  s_dfc6cd6692ed8f::t_09a4fac086328c 1419
+  s_dfc6cd6692ed8f::t_c703f6af13d397 247,263-267
+  s_dfc6cd6692ed8f::t_26fe8405727edb 661-669,674-681,1492-1505
+tests/unit/test_cli_vault_push.py
+  s_dfc6cd6692ed8f::t_5379e9dc54d0f1 303-306
+  s_dfc6cd6692ed8f::t_9355f5da0b97f4 471-478,481-482
+  s_dfc6cd6692ed8f::t_abcead0d7fd5dc 572-575
+  s_dfc6cd6692ed8f::t_7336486e6fd032 355-358
+tests/integration/test_e2e_workflows.py
+  s_dfc6cd6692ed8f::t_88dff69107a7b2 501-532,534-591
+  s_dfc6cd6692ed8f::t_616dea45067820 593-670
+  s_dfc6cd6692ed8f::t_f4a4530518c2a3 533,592
+  s_dfc6cd6692ed8f::t_42365968d5045f 18,25
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.3",
+  "base_commit_sha": "f5a7998b458101a8045d4161b7759ad86d8dcbdc",
+  "prompts": {},
+  "sessions": {
+    "s_dfc6cd6692ed8f": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "fd23e738-3512-4420-9290-d985ad979bfd",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Jainal Gosaliya <jainal09gosalia@gmail.com>"
+    }
+  }
+}
