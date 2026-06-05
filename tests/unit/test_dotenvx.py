@@ -411,82 +411,75 @@ class TestDownloadUrls:
 class TestDotenvxInstallerExtended:
     """Extended tests for DotenvxInstaller class."""
 
-    @patch("envdrift.integrations.dotenvx.urllib.request.urlretrieve")
+    @patch("envdrift.integrations.dotenvx.urllib.request.urlopen")
     @patch("envdrift.integrations.dotenvx.get_dotenvx_path")
     @patch("platform.system", return_value="Linux")
     @patch("platform.machine", return_value="x86_64")
     def test_download_and_extract_tar_gz(
-        self, mock_machine, mock_system, mock_path, mock_urlretrieve, tmp_path
+        self, mock_machine, mock_system, mock_path, mock_urlopen, tmp_path
     ):
         """Test download_and_extract with tar.gz archive."""
         target = tmp_path / "dotenvx"
         mock_path.return_value = target
 
-        # Create a mock tarfile
+        # Build a real tar.gz with a fake dotenvx binary, in memory.
         import io
         import tarfile
 
-        tar_path = tmp_path / "dotenvx.tar.gz"
-
-        # Create tar.gz with dotenvx binary
-        with tarfile.open(tar_path, "w:gz") as tar:
-            # Add a fake dotenvx binary
+        buffer = io.BytesIO()
+        with tarfile.open(fileobj=buffer, mode="w:gz") as tar:
             data = b"#!/bin/bash\necho 'mock dotenvx'"
             tarinfo = tarfile.TarInfo(name="dotenvx")
             tarinfo.size = len(data)
             tar.addfile(tarinfo, io.BytesIO(data))
+        archive_bytes = buffer.getvalue()
 
-        # Mock urlretrieve to copy our test tar
-        def mock_download(_url, path):
-            import shutil
-
-            shutil.copy(tar_path, path)
-
-        mock_urlretrieve.side_effect = mock_download
+        # urlopen is used as a context manager whose response.read() yields bytes.
+        mock_response = MagicMock()
+        mock_response.read.return_value = archive_bytes
+        mock_urlopen.return_value.__enter__.return_value = mock_response
 
         installer = DotenvxInstaller()
         installer.download_and_extract(target)
 
         assert target.exists()
 
-    @patch("envdrift.integrations.dotenvx.urllib.request.urlretrieve")
+    @patch("envdrift.integrations.dotenvx.urllib.request.urlopen")
     @patch("envdrift.integrations.dotenvx.get_dotenvx_path")
     @patch("platform.system", return_value="Windows")
     @patch("platform.machine", return_value="AMD64")
     def test_download_and_extract_zip(
-        self, mock_machine, mock_system, mock_path, mock_urlretrieve, tmp_path
+        self, mock_machine, mock_system, mock_path, mock_urlopen, tmp_path
     ):
         """Test download_and_extract with zip archive."""
         target = tmp_path / "dotenvx.exe"
         mock_path.return_value = target
 
-        # Create a mock zip file
+        # Build a real zip with a fake dotenvx binary, in memory.
+        import io
         import zipfile
 
-        zip_path = tmp_path / "dotenvx.zip"
-
-        with zipfile.ZipFile(zip_path, "w") as zf:
+        buffer = io.BytesIO()
+        with zipfile.ZipFile(buffer, "w") as zf:
             zf.writestr("dotenvx.exe", b"mock dotenvx binary")
+        archive_bytes = buffer.getvalue()
 
-        # Mock urlretrieve to copy our test zip
-        def mock_download(_url, path):
-            import shutil
-
-            shutil.copy(zip_path, path)
-
-        mock_urlretrieve.side_effect = mock_download
+        # urlopen is used as a context manager whose response.read() yields bytes.
+        mock_response = MagicMock()
+        mock_response.read.return_value = archive_bytes
+        mock_urlopen.return_value.__enter__.return_value = mock_response
 
         installer = DotenvxInstaller()
         installer.download_and_extract(target)
 
         assert target.exists()
 
-    @patch("envdrift.integrations.dotenvx.urllib.request.urlretrieve")
+    @patch("envdrift.integrations.dotenvx.urllib.request.urlopen")
     @patch("platform.system", return_value="Linux")
     @patch("platform.machine", return_value="x86_64")
-    def test_download_failed(self, mock_machine, mock_system, mock_urlretrieve, tmp_path):
+    def test_download_failed(self, mock_machine, mock_system, mock_urlopen, tmp_path):
         """Test download_and_extract handles download failure."""
-        mock_urlretrieve.side_effect = Exception("Network error")
+        mock_urlopen.side_effect = Exception("Network error")
 
         installer = DotenvxInstaller()
 
@@ -495,31 +488,22 @@ class TestDotenvxInstallerExtended:
 
         assert "Download failed" in str(exc_info.value)
 
-    @patch("envdrift.integrations.dotenvx.urllib.request.urlretrieve")
+    @patch("envdrift.integrations.dotenvx.urllib.request.urlopen")
     @patch("platform.system", return_value="Linux")
     @patch("platform.machine", return_value="x86_64")
-    def test_download_applies_socket_timeout(
-        self, mock_machine, mock_system, mock_urlretrieve, tmp_path
+    def test_download_applies_request_timeout(
+        self, mock_machine, mock_system, mock_urlopen, tmp_path
     ):
-        """Regression for #311: the download bounds the socket with a timeout.
+        """Regression for #311: the download bounds the request with a timeout.
 
-        urlretrieve takes no timeout argument, so a stalled connection would
-        otherwise hang forever. The download must set a default socket timeout
-        while urlretrieve runs and restore the previous value afterward.
+        A connection that is accepted then stalls would otherwise hang forever.
+        The download passes a per-request timeout to urlopen (rather than mutating
+        process-global socket state) and surfaces a stall as an install error.
         """
-        import socket
-
         from envdrift.integrations.dotenvx import DOWNLOAD_TIMEOUT_SECONDS
 
-        observed: dict[str, float | None] = {}
+        mock_urlopen.side_effect = TimeoutError("stalled")
 
-        def record_timeout(*_args, **_kwargs):
-            observed["during"] = socket.getdefaulttimeout()
-            raise TimeoutError("stalled")
-
-        mock_urlretrieve.side_effect = record_timeout
-
-        previous = socket.getdefaulttimeout()
         installer = DotenvxInstaller()
 
         with pytest.raises(DotenvxInstallError) as exc_info:
@@ -527,21 +511,22 @@ class TestDotenvxInstallerExtended:
 
         # A stalled download surfaces as an install error, not a hang.
         assert "Download failed" in str(exc_info.value)
-        # The timeout was active during urlretrieve...
-        assert observed["during"] == DOWNLOAD_TIMEOUT_SECONDS
-        # ...and the prior global timeout is restored afterward.
-        assert socket.getdefaulttimeout() == previous
+        # urlopen was bounded by the per-request timeout, not a global socket setting.
+        assert mock_urlopen.call_args.kwargs["timeout"] == DOWNLOAD_TIMEOUT_SECONDS
 
-    @patch("envdrift.integrations.dotenvx.urllib.request.urlretrieve")
+    @patch("envdrift.integrations.dotenvx.urllib.request.urlopen")
     @patch("platform.system", return_value="Linux")
     @patch("platform.machine", return_value="x86_64")
-    def test_unknown_archive_format(self, mock_machine, mock_system, mock_urlretrieve, tmp_path):
+    def test_unknown_archive_format(self, mock_machine, mock_system, mock_urlopen, tmp_path):
         """Test download_and_extract raises for unknown archive format."""
         # Mock URL to return unknown format
         with patch.object(
             DotenvxInstaller, "get_download_url", return_value="https://example.com/dotenvx.unknown"
         ):
-            mock_urlretrieve.return_value = None  # Success
+            # Download succeeds; the format check fires before extraction.
+            mock_response = MagicMock()
+            mock_response.read.return_value = b"irrelevant"
+            mock_urlopen.return_value.__enter__.return_value = mock_response
 
             installer = DotenvxInstaller()
 
@@ -677,9 +662,13 @@ class TestDotenvxWrapper:
         message = str(exc_info.value)
         assert "dotenvx not found" in message
         # Regression for #310: the hint must not reference the non-existent
-        # CLI command and must point to a working remediation instead.
+        # CLI command and must point to the real curl-based installer instead.
+        # Assert on distinctive non-URL phrases of that hint (asserting the bare
+        # "https://dotenvx.sh" substring would trip
+        # py/incomplete-url-substring-sanitization without adding meaning).
         assert "envdrift install-dotenvx" not in message
-        assert "https://dotenvx.sh" in message
+        assert "Install to ~/.local/bin (recommended)" in message
+        assert "| sh -s -- --version=" in message
 
     @patch("shutil.which", return_value=None)
     @patch("envdrift.integrations.dotenvx.get_dotenvx_path")

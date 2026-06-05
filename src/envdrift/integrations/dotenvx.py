@@ -16,7 +16,6 @@ import os
 import platform
 import re
 import shutil
-import socket
 import stat
 import subprocess  # nosec B404
 import sys
@@ -75,9 +74,10 @@ DOWNLOAD_URLS = {
     ("Windows", "x86_64"): _URL_TEMPLATES["windows_amd64"],
 }
 
-# Socket timeout (seconds) for the binary download. urllib.request.urlretrieve
-# accepts no timeout argument, so this is applied via socket.setdefaulttimeout to
-# prevent a stalled connection from hanging the auto-install path indefinitely.
+# Per-request timeout (seconds) for the binary download. Passed directly to
+# urllib.request.urlopen so a connection that is accepted then stalls cannot
+# hang the auto-install path indefinitely. Using urlopen's timeout keeps the
+# bound local to this request instead of mutating process-global socket state.
 DOWNLOAD_TIMEOUT_SECONDS = 60
 
 _ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-9;?]*[ -/]*[@-~]")
@@ -405,18 +405,17 @@ class DotenvxInstaller:
             archive_name = url.split("/")[-1]
             archive_path = tmp_path / archive_name
 
-            # Download. urlretrieve accepts no timeout argument, so bound it with a
-            # default socket timeout; otherwise a server that accepts the connection
-            # then stalls would hang install() forever. Restore the prior timeout
-            # afterward so we do not leak global socket state.
-            previous_timeout = socket.getdefaulttimeout()
+            # Download with a per-request timeout so a server that accepts the
+            # connection then stalls cannot hang install() forever. urlopen's
+            # timeout is local to this request, unlike socket.setdefaulttimeout
+            # which mutates process-global socket state.
             try:
-                socket.setdefaulttimeout(DOWNLOAD_TIMEOUT_SECONDS)
-                urllib.request.urlretrieve(url, archive_path)  # nosec B310
+                with urllib.request.urlopen(  # nosec B310
+                    url, timeout=DOWNLOAD_TIMEOUT_SECONDS
+                ) as response:
+                    archive_path.write_bytes(response.read())
             except Exception as e:
                 raise DotenvxInstallError(f"Download failed: {e}") from e
-            finally:
-                socket.setdefaulttimeout(previous_timeout)
 
             self.progress("Extracting...")
 
