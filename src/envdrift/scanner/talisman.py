@@ -546,12 +546,12 @@ class TalismanScanner(ScannerBackend):
             # Parse failures/warnings in result. Real talisman reports use the
             # keys ``failure_list``/``warning_list``/``ignore_list``; older/test
             # fixtures may use ``failures``/``warnings``/``ignores``.
-            for failure in result.get("failure_list") or result.get("failures", []):
+            for failure in result.get("failure_list", result.get("failures", [])):
                 finding = self._parse_failure(failure, file_path)
                 if finding:
                     findings.append(finding)
 
-            for warning in result.get("warning_list") or result.get("warnings", []):
+            for warning in result.get("warning_list", result.get("warnings", [])):
                 finding = self._parse_failure(warning, file_path, is_warning=True)
                 if finding:
                     findings.append(finding)

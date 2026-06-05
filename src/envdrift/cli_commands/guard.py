@@ -24,6 +24,7 @@ Configuration can be set in envdrift.toml:
 
 from __future__ import annotations
 
+import os
 import time as time_module
 from pathlib import Path
 from typing import Annotated
@@ -287,8 +288,13 @@ def guard(
             )
             if result.returncode == 0 and result.stdout.strip():
                 repo_root = _git_toplevel()
-                staged_files = [repo_root / f for f in result.stdout.strip().split("\n") if f]
-                paths = [f for f in staged_files if f.exists()]
+                candidates = [repo_root / f for f in result.stdout.strip().split("\n") if f]
+                # Check existence against the repo-root-resolved path, but scan
+                # with cwd-relative paths so findings display the short relative
+                # filename (a long absolute path gets truncated by the Rich
+                # panel) and path-based config matching behaves as it did from
+                # the repo root.
+                paths = [Path(os.path.relpath(p, Path.cwd())) for p in candidates if p.exists()]
                 if not paths:
                     console.print("[green]No staged files to scan.[/green]")
                     raise typer.Exit(code=0)
@@ -331,8 +337,10 @@ def guard(
             )
             if result.returncode == 0 and result.stdout.strip():
                 repo_root = _git_toplevel()
-                changed_files = [repo_root / f for f in result.stdout.strip().split("\n") if f]
-                paths = [f for f in changed_files if f.exists()]
+                candidates = [repo_root / f for f in result.stdout.strip().split("\n") if f]
+                # Resolve against the repo root for existence, scan with
+                # cwd-relative paths (see the --staged branch for rationale).
+                paths = [Path(os.path.relpath(p, Path.cwd())) for p in candidates if p.exists()]
                 if not paths:
                     console.print("[green]No changed files to scan in this PR.[/green]")
                     raise typer.Exit(code=0)

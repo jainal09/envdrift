@@ -503,7 +503,11 @@ def test_guard_staged_resolves_repo_relative_paths_against_toplevel(tmp_path: Pa
     assert result.exit_code == 0, result.output
     assert "no staged files" not in result.output.lower(), result.output
     assert scan_paths
-    assert scan_paths[0] == [repo_root / "sub" / "leak.env"]
+    # The repo-relative "sub/leak.env" is resolved against the repo root for the
+    # existence check, then handed to the scanner as a cwd-relative path (we run
+    # from sub/, so it is just "leak.env"). It must resolve to the same file.
+    assert len(scan_paths[0]) == 1
+    assert (Path.cwd() / scan_paths[0][0]).resolve() == (repo_root / "sub" / "leak.env").resolve()
 
 
 def test_guard_staged_without_git_fails(tmp_path: Path, monkeypatch):
