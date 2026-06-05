@@ -16,6 +16,7 @@ import os
 import platform
 import re
 import shutil
+import socket
 import stat
 import subprocess  # nosec B404
 import sys
@@ -73,6 +74,11 @@ DOWNLOAD_URLS = {
     ("Windows", "AMD64"): _URL_TEMPLATES["windows_amd64"],
     ("Windows", "x86_64"): _URL_TEMPLATES["windows_amd64"],
 }
+
+# Socket timeout (seconds) for the binary download. urllib.request.urlretrieve
+# accepts no timeout argument, so this is applied via socket.setdefaulttimeout to
+# prevent a stalled connection from hanging the auto-install path indefinitely.
+DOWNLOAD_TIMEOUT_SECONDS = 60
 
 _ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-9;?]*[ -/]*[@-~]")
 
@@ -208,7 +214,7 @@ def normalize_dotenvx_metadata(
         lines[generated_idx] = f"{canonical_private_key}={key_value}"
 
     new_content = "\n".join(lines)
-    if content.endswith("\n") or new_content:
+    if content.endswith("\n"):
         new_content += "\n"
     if new_content != content:
         env_keys_file.write_text(new_content, encoding="utf-8")
@@ -399,11 +405,18 @@ class DotenvxInstaller:
             archive_name = url.split("/")[-1]
             archive_path = tmp_path / archive_name
 
-            # Download
+            # Download. urlretrieve accepts no timeout argument, so bound it with a
+            # default socket timeout; otherwise a server that accepts the connection
+            # then stalls would hang install() forever. Restore the prior timeout
+            # afterward so we do not leak global socket state.
+            previous_timeout = socket.getdefaulttimeout()
             try:
+                socket.setdefaulttimeout(DOWNLOAD_TIMEOUT_SECONDS)
                 urllib.request.urlretrieve(url, archive_path)  # nosec B310
             except Exception as e:
                 raise DotenvxInstallError(f"Download failed: {e}") from e
+            finally:
+                socket.setdefaulttimeout(previous_timeout)
 
             self.progress("Extracting...")
 
@@ -596,7 +609,7 @@ class DotenvxWrapper:
             except DotenvxInstallError as e:
                 raise DotenvxNotFoundError(f"dotenvx not found and auto-install failed: {e}") from e
 
-        raise DotenvxNotFoundError("dotenvx not found. Install with: envdrift install-dotenvx")
+        raise DotenvxNotFoundError("dotenvx not found.\n" + self.install_instructions())
 
     @property
     def binary_path(self) -> Path:
@@ -930,7 +943,22 @@ class DotenvxWrapper:
         if env_keys_file:
             args.extend(["-fk", str(env_keys_file)])
 
-        self._run(args, env=env, cwd=cwd)
+        # Run with check=False so we can detect the case where dotenvx prints a
+        # decrypt error (e.g. "decryption failed", "private key not found",
+        # "MISSING_DOTENV_KEY") while still exiting 0. Without this post-check a
+        # 0-exit-with-error-output would be reported as a successful decrypt.
+        result = self._run(args, env=env, cwd=cwd, check=False)
+
+        combined_output = (result.stdout or "") + (result.stderr or "")
+        clean_output = self._clean_output(combined_output).strip()
+        for pattern in self.ENCRYPT_ERROR_PATTERNS:
+            if pattern.lower() in combined_output.lower():
+                raise DotenvxError(f"dotenvx decryption failed: {clean_output}")
+
+        # Also surface a non-zero exit code as a failure.
+        if result.returncode != 0:
+            clean_stderr = self._clean_output(result.stderr or "").strip()
+            raise DotenvxError(f"dotenvx command failed (exit {result.returncode}): {clean_stderr}")
 
     def run(self, env_file: Path | str, command: list[str]) -> subprocess.CompletedProcess:
         """

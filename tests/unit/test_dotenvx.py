@@ -498,6 +498,43 @@ class TestDotenvxInstallerExtended:
     @patch("envdrift.integrations.dotenvx.urllib.request.urlretrieve")
     @patch("platform.system", return_value="Linux")
     @patch("platform.machine", return_value="x86_64")
+    def test_download_applies_socket_timeout(
+        self, mock_machine, mock_system, mock_urlretrieve, tmp_path
+    ):
+        """Regression for #311: the download bounds the socket with a timeout.
+
+        urlretrieve takes no timeout argument, so a stalled connection would
+        otherwise hang forever. The download must set a default socket timeout
+        while urlretrieve runs and restore the previous value afterward.
+        """
+        import socket
+
+        from envdrift.integrations.dotenvx import DOWNLOAD_TIMEOUT_SECONDS
+
+        observed: dict[str, float | None] = {}
+
+        def record_timeout(*_args, **_kwargs):
+            observed["during"] = socket.getdefaulttimeout()
+            raise TimeoutError("stalled")
+
+        mock_urlretrieve.side_effect = record_timeout
+
+        previous = socket.getdefaulttimeout()
+        installer = DotenvxInstaller()
+
+        with pytest.raises(DotenvxInstallError) as exc_info:
+            installer.download_and_extract(tmp_path / "dotenvx")
+
+        # A stalled download surfaces as an install error, not a hang.
+        assert "Download failed" in str(exc_info.value)
+        # The timeout was active during urlretrieve...
+        assert observed["during"] == DOWNLOAD_TIMEOUT_SECONDS
+        # ...and the prior global timeout is restored afterward.
+        assert socket.getdefaulttimeout() == previous
+
+    @patch("envdrift.integrations.dotenvx.urllib.request.urlretrieve")
+    @patch("platform.system", return_value="Linux")
+    @patch("platform.machine", return_value="x86_64")
     def test_unknown_archive_format(self, mock_machine, mock_system, mock_urlretrieve, tmp_path):
         """Test download_and_extract raises for unknown archive format."""
         # Mock URL to return unknown format
@@ -637,7 +674,12 @@ class TestDotenvxWrapper:
         with pytest.raises(DotenvxNotFoundError) as exc_info:
             wrapper._find_binary()
 
-        assert "dotenvx not found" in str(exc_info.value)
+        message = str(exc_info.value)
+        assert "dotenvx not found" in message
+        # Regression for #310: the hint must not reference the non-existent
+        # CLI command and must point to a working remediation instead.
+        assert "envdrift install-dotenvx" not in message
+        assert "https://dotenvx.sh" in message
 
     @patch("shutil.which", return_value=None)
     @patch("envdrift.integrations.dotenvx.get_dotenvx_path")
@@ -773,6 +815,70 @@ class TestDotenvxWrapper:
             wrapper.decrypt(tmp_path / "nonexistent.env")
 
         assert "File not found" in str(exc_info.value)
+
+    @patch("subprocess.run")
+    @patch("envdrift.integrations.dotenvx.get_dotenvx_path")
+    def test_decrypt_raises_on_error_pattern_with_exit_code_zero(
+        self, mock_path, mock_run, tmp_path
+    ):
+        """Regression for #309: decrypt detects an error printed with exit code 0.
+
+        dotenvx sometimes exits 0 while printing a decrypt error. Without the
+        post-check, decrypt would return normally and the backend would report
+        success even though the file was never decrypted.
+        """
+        binary_path = tmp_path / "dotenvx"
+        binary_path.touch()
+        mock_path.return_value = binary_path
+
+        env_file = tmp_path / ".env"
+        env_file.write_text("ENCRYPTED_KEY=xyz")
+
+        # Exit 0 but an error in stderr -> must be treated as a failure.
+        mock_run.return_value = MagicMock(
+            returncode=0, stdout="", stderr="decryption failed: private key not found"
+        )
+
+        wrapper = DotenvxWrapper()
+        with pytest.raises(DotenvxError) as exc_info:
+            wrapper.decrypt(env_file)
+
+        assert "decryption failed" in str(exc_info.value)
+
+    @patch("subprocess.run")
+    @patch("envdrift.integrations.dotenvx.get_dotenvx_path")
+    def test_decrypt_raises_on_nonzero_exit(self, mock_path, mock_run, tmp_path):
+        """A non-zero decrypt exit code is surfaced as a DotenvxError."""
+        binary_path = tmp_path / "dotenvx"
+        binary_path.touch()
+        mock_path.return_value = binary_path
+
+        env_file = tmp_path / ".env"
+        env_file.write_text("ENCRYPTED_KEY=xyz")
+
+        mock_run.return_value = MagicMock(returncode=1, stdout="", stderr="boom")
+
+        wrapper = DotenvxWrapper()
+        with pytest.raises(DotenvxError) as exc_info:
+            wrapper.decrypt(env_file)
+
+        assert "exit 1" in str(exc_info.value)
+
+    @patch("subprocess.run")
+    @patch("envdrift.integrations.dotenvx.get_dotenvx_path")
+    def test_decrypt_succeeds_on_clean_output(self, mock_path, mock_run, tmp_path):
+        """A clean exit-0 decrypt with no error patterns succeeds."""
+        binary_path = tmp_path / "dotenvx"
+        binary_path.touch()
+        mock_path.return_value = binary_path
+
+        env_file = tmp_path / ".env"
+        env_file.write_text("ENCRYPTED_KEY=xyz")
+
+        mock_run.return_value = MagicMock(returncode=0, stdout="decrypted (1 line)", stderr="")
+
+        wrapper = DotenvxWrapper()
+        wrapper.decrypt(env_file)  # must not raise
 
     @patch("subprocess.run")
     @patch("envdrift.integrations.dotenvx.get_dotenvx_path")

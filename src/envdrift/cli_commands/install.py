@@ -258,6 +258,30 @@ def _download_binary(url: str, dest: Path, progress: Progress) -> bool:
                 tmp_path.unlink()
 
 
+def _parse_agent_running(status_stdout: str) -> bool | None:
+    """Parse the agent ``status`` output to determine if it is running.
+
+    The agent always prints a ``Running:   <bool>`` line (with variable
+    whitespace after the colon), so a naive ``"running" in stdout`` substring
+    check matches both the running and stopped cases. This parses the value of
+    the ``Running:`` line precisely instead.
+
+    Args:
+        status_stdout: The stdout captured from the agent ``status`` command.
+
+    Returns:
+        True if running, False if stopped, or None if no parseable
+        ``Running:`` line was found.
+    """
+    for line in status_stdout.splitlines():
+        if line.strip().lower().startswith("running:"):
+            value = line.split(":", 1)[1].strip().lower()
+            if value in {"true", "false"}:
+                return value == "true"
+            break
+    return None
+
+
 def _run_agent_install(binary_path: Path) -> bool:
     """Run the agent's install command to set up auto-start.
 
@@ -331,17 +355,9 @@ def install_agent(
                 text=True,
                 timeout=5,
             )
-            # Check for explicit running status patterns (avoid matching "Running: false")
-            output_lower = result.stdout.lower()
-            is_running = result.returncode == 0 and (
-                "status: running" in output_lower
-                or "is running" in output_lower
-                or (
-                    "running" in output_lower
-                    and "not running" not in output_lower
-                    and "running: false" not in output_lower
-                )
-            )
+            # Parse the "Running:" line value precisely; whitespace-fragile
+            # substring matching previously warned even when the agent was stopped.
+            is_running = result.returncode == 0 and _parse_agent_running(result.stdout) is True
             if is_running:
                 console.print(
                     "[yellow]⚠ Warning:[/yellow] Agent is currently running. "
@@ -506,7 +522,7 @@ def check_installation() -> None:
                 text=True,
                 timeout=5,
             )
-            if result.returncode == 0 and "running" in result.stdout.lower():
+            if result.returncode == 0 and _parse_agent_running(result.stdout) is True:
                 console.print("  [green]⚡ Running[/green]")
             else:
                 console.print("  [dim]⭕ Not running[/dim]")
