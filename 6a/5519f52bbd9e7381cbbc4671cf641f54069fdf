@@ -1,0 +1,44 @@
+tests/scanner/test_engine.py
+  s_dfc6cd6692ed8f::t_31fa8a8a032ea5 1356-1364,1374-1378,1382-1384,1386-1395,1397-1402,1407-1409,1411-1421,1423-1428,1433-1435,1437-1457,1459-1466,1471-1472,1474-1488
+  s_dfc6cd6692ed8f::t_e3fd58ac6e843d 1299-1353
+src/envdrift/scanner/native.py
+  s_dfc6cd6692ed8f::t_7c16443a7ac457 828-847,867-872,882-884,890-895,916-931
+  s_dfc6cd6692ed8f::t_8e037986200c4f 27
+  s_dfc6cd6692ed8f::t_a3ae1a51180427 44-52
+  s_dfc6cd6692ed8f::t_b2ec14938a5d59 948-955
+  s_dfc6cd6692ed8f::t_d340528810acc0 873-881
+  s_dfc6cd6692ed8f::t_9958a6f26a77b4 14
+tests/integration/test_scanner_external_binaries.py
+  s_dfc6cd6692ed8f::t_088f2918f037ff 320-330,332-333,347-348,350-355,357-358,360,364,366-367,370,374,377
+tests/scanner/test_native.py
+  s_dfc6cd6692ed8f::t_5a90ff6519dc18 1021-1108,1110-1198,1200-1204
+src/envdrift/scanner/patterns.py
+  s_dfc6cd6692ed8f::t_eeaaeaf6b87ee2 27-37,49
+  s_dfc6cd6692ed8f::t_f953dfd412f0c0 330
+  s_dfc6cd6692ed8f::t_6463511b2ab0ac 377
+  s_dfc6cd6692ed8f::t_d7f56ba017e7e2 38-41,50
+  s_dfc6cd6692ed8f::t_9bc46912189071 205-212,214
+  s_dfc6cd6692ed8f::t_2473c5c6bbe6d9 256
+  s_dfc6cd6692ed8f::t_7c390250718dff 232,240
+src/envdrift/scanner/engine.py
+  s_dfc6cd6692ed8f::t_f0ea2ee2122de3 691-697
+  s_dfc6cd6692ed8f::t_3672765615458f 35
+  s_dfc6cd6692ed8f::t_f411c480fc43a2 734-746,754-756,759-761,771-800
+  s_dfc6cd6692ed8f::t_e0a2778295302d 12
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.3",
+  "base_commit_sha": "6a5519f52bbd9e7381cbbc4671cf641f54069fdf",
+  "prompts": {},
+  "sessions": {
+    "s_dfc6cd6692ed8f": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "fd23e738-3512-4420-9290-d985ad979bfd",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Jainal Gosaliya <jainal09gosalia@gmail.com>"
+    }
+  }
+}
