@@ -120,6 +120,9 @@ jobs:
           # without it the installers' (now fail-closed) checksum step aborts.
           # `sha256sum`'s "<hash>  <filename>" format is exactly what they parse.
           cd release
+          # rm first so a retry's stale checksums.txt isn't hashed into itself
+          # (the glob expands after the rm, so it only covers the binaries).
+          rm -f checksums.txt
           sha256sum * > checksums.txt
           cat checksums.txt
 
