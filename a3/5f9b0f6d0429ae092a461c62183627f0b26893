@@ -1,0 +1,39 @@
+envdrift-vscode/src/agentStatus.ts
+  s_dfc6cd6692ed8f::t_f6662fd2715f1e 70
+  s_dfc6cd6692ed8f::t_2756c088220e5c 39
+  s_dfc6cd6692ed8f::t_cac7f237ed870f 164
+  s_dfc6cd6692ed8f::t_7c54684680dcab 24-26
+  s_dfc6cd6692ed8f::t_8c6884b7557c8f 180
+  s_dfc6cd6692ed8f::t_13ece59a0472a6 51
+envdrift-vscode/package.json
+  s_dfc6cd6692ed8f::t_13033027aa4efb 27-33,36-44
+envdrift-vscode/src/fileWatcher.ts
+  s_dfc6cd6692ed8f::t_81799eed5b0a2a 13-30,41-45
+  s_dfc6cd6692ed8f::t_36d850b943b352 115-121
+  s_dfc6cd6692ed8f::t_0f1044ab54850b 131,134,139-141
+envdrift-vscode/src/test/unit/exclusion.test.ts
+  s_dfc6cd6692ed8f::t_9539e4a44fcf38 1-61
+envdrift-vscode/src/test/unit/shouldEncrypt.test.ts
+  s_dfc6cd6692ed8f::t_f1a7de4852a02a 1-27
+envdrift-vscode/src/utils.ts
+  s_dfc6cd6692ed8f::t_6a2b58d9807178 7-17,24,28-30,35
+envdrift-vscode/src/test/unit/config.test.ts
+  s_dfc6cd6692ed8f::t_3cff233ecd7859 81-87,93,95-105
+  s_dfc6cd6692ed8f::t_778306f048867d 88-92,94
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.3",
+  "base_commit_sha": "a35f9b0f6d0429ae092a461c62183627f0b26893",
+  "prompts": {},
+  "sessions": {
+    "s_dfc6cd6692ed8f": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "fd23e738-3512-4420-9290-d985ad979bfd",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Jainal Gosaliya <jainal09gosalia@gmail.com>"
+    }
+  }
+}
