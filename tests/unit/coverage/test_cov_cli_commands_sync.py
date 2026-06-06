@@ -399,25 +399,45 @@ class TestPullCommand:
         ``production``. The decrypt env override must carry
         ``DOTENV_PRIVATE_KEY_PRODUCTION`` (env-derived), never
         ``DOTENV_PRIVATE_KEY_SVC-A`` (folder-derived).
+
+        This is load-bearing: the ``ServiceSyncResult.folder_path`` is a DISTINCT
+        ``Path`` value from the mapping's ``folder_path`` — the mapping uses the
+        absolute/resolved dir while the result uses a relative ``Path("svc-a")``
+        — so ``result.folder_path != mapping.folder_path`` as raw Paths, yet
+        both ``.resolve()`` to the same directory (cwd is ``tmp_path``). The
+        pre-fix code's raw ``==`` match therefore FAILS and falls back to the
+        folder-name key, while the fix's ``.resolve()``-based lookup still
+        matches and injects the environment key. (A same-``Path``-object
+        construction passes on pre-fix code, so it would not exercise #325.)
         """
         backend = DummyEncryptionBackend()
         mock_resolve.return_value = (backend, EncryptionProvider.DOTENVX, None)
 
-        svc = tmp_path / "svc-a"
-        svc.mkdir()
-        (svc / ".env.production").write_text(
+        # cwd == tmp_path so a relative "svc-a" resolves to tmp_path/"svc-a".
+        monkeypatch.chdir(tmp_path)
+
+        svc_abs = (tmp_path / "svc-a").resolve()
+        svc_abs.mkdir()
+        (svc_abs / ".env.production").write_text(
             "#/---BEGIN DOTENV ENCRYPTED---/\nSECRET=encrypted:xyz\n"
         )
 
-        mapping = ServiceMapping(secret_name="s", folder_path=svc, environment="production")
+        # Mapping carries the ABSOLUTE, resolved folder path.
+        mapping = ServiceMapping(secret_name="s", folder_path=svc_abs, environment="production")
         loaded_config(_sync_config([mapping]))
 
-        # Engine returns an EPHEMERAL result carrying the fetched key value.
+        # Engine returns an EPHEMERAL result whose folder_path is a DISTINCT
+        # Path value (relative) that resolves to the SAME directory. This is the
+        # #325 trigger: a result path that is not object/value-equal to the
+        # mapping path but points at the same dir.
+        svc_rel = Path("svc-a")
+        assert svc_rel != mapping.folder_path  # distinct as raw Paths
+        assert svc_rel.resolve() == mapping.folder_path.resolve()  # same dir
         ephemeral_result = SyncResult(
             services=[
                 ServiceSyncResult(
                     secret_name="s",
-                    folder_path=svc,
+                    folder_path=svc_rel,
                     action=SyncAction.EPHEMERAL,
                     message="ephemeral",
                     vault_key_value="the-private-key-value",
@@ -428,7 +448,7 @@ class TestPullCommand:
 
         result = runner.invoke(app, ["pull"])
         assert result.exit_code == 0, result.output
-        assert backend.decrypt_calls == [(svc / ".env.production").resolve()]
+        assert backend.decrypt_calls == [(svc_abs / ".env.production").resolve()]
         injected_env = backend.decrypt_kwargs[0]["env"]
         assert isinstance(injected_env, dict)
         assert injected_env["DOTENV_PRIVATE_KEY_PRODUCTION"] == "the-private-key-value"

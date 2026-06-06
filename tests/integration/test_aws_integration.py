@@ -862,19 +862,36 @@ environment = "staging"
     ) -> None:
         """#325: ephemeral pull derives the key name from the environment.
 
-        Folder basename (``svc-a``) differs from the mapping environment
-        (``production``). The injected ephemeral key name must be
-        ``DOTENV_PRIVATE_KEY_PRODUCTION`` (env-derived), not
-        ``DOTENV_PRIVATE_KEY_SVC-A`` (folder-derived), so the real dotenvx file
-        decrypts. This guards the env-derived key-name path the fix hardens.
+        Load-bearing construction mirroring the unit test: the mapping's
+        ``folder_path`` is a DISTINCT path value from the directory the engine
+        ultimately operates on, but the two ``.resolve()`` to the same dir. Here
+        the configured ``folder_path`` is a **symlink** (``svc-link``) pointing
+        at the real encrypted project dir (``svc-a``); the symlink's basename
+        (``svc-link``) differs from both the real folder name (``svc-a``) and the
+        environment (``production``). The injected ephemeral key name must be
+        ``DOTENV_PRIVATE_KEY_PRODUCTION`` (env-derived) — never
+        ``DOTENV_PRIVATE_KEY_SVC-LINK`` / ``DOTENV_PRIVATE_KEY_SVC-A``
+        (folder-derived) — so the real dotenvx file decrypts. The fix keys the
+        ephemeral map by the *resolved* folder path, so the symlinked /
+        relative-vs-absolute mismatch the pre-fix raw ``==`` lookup could not
+        bridge now matches.
         """
         if not _dotenvx_available():
             pytest.skip("dotenvx binary required")
 
         secret_name = "envdrift-test/ephemeral-folder-mismatch"
-        svc = work_dir / "svc-a"  # folder name 'svc-a' != env 'production'
+        # Real encrypted project lives in 'svc-a' (folder name != env).
+        svc = work_dir / "svc-a"
         svc.mkdir()
         priv = _make_encrypted_project(svc, "production")  # encrypts svc-a/.env.production
+
+        # Config points at a DISTINCT path (symlink) resolving to the same dir.
+        svc_link = work_dir / "svc-link"
+        svc_link.symlink_to(svc, target_is_directory=True)
+        # Sanity: distinct raw path, same resolved directory (the #325 trigger).
+        assert svc_link != svc
+        assert svc_link.resolve() == svc.resolve()
+
         _create_secret(
             aws_secrets_client,
             Name=secret_name,
@@ -886,7 +903,7 @@ environment = "staging"
             '[vault]\nprovider = "aws"\nregion = "us-east-1"\n'
             "[vault.sync]\nephemeral_keys = true\n"
             "[[vault.sync.mappings]]\n"
-            f'secret_name = "{secret_name}"\nfolder_path = "svc-a"\nenvironment = "production"\n'
+            f'secret_name = "{secret_name}"\nfolder_path = "svc-link"\nenvironment = "production"\n'
         )
 
         env = aws_test_env.copy()
@@ -902,6 +919,9 @@ environment = "staging"
             )
             out = result.stdout + result.stderr
             assert result.returncode == 0, out
+            assert "DOTENV_PRIVATE_KEY_SVC-LINK" not in out, (
+                "folder-derived key name injected instead of env-derived (#325)"
+            )
             assert "DOTENV_PRIVATE_KEY_SVC-A" not in out, (
                 "folder-derived key name injected instead of env-derived (#325)"
             )

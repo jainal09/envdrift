@@ -677,9 +677,11 @@ def pull(
                 else:
                     # No mapping matched (should not happen) — last-resort fallback.
                     key_name = f"DOTENV_PRIVATE_KEY_{service_result.folder_path.name.upper()}"
-                # Key the map on the UNRESOLVED folder_path to preserve the
-                # contract with Step 2's lookup (it uses mapping.folder_path).
-                ephemeral_keys_map[service_result.folder_path] = (
+                # Key the map on the RESOLVED folder_path so Step 2's lookup
+                # (also resolved) matches even when the result's folder_path is a
+                # different Path value than the mapping's but points at the same
+                # directory (#325 — e.g. a relative result vs an absolute mapping).
+                ephemeral_keys_map[service_result.folder_path.resolve()] = (
                     key_name,
                     vault_key_value,
                 )
@@ -797,8 +799,12 @@ def pull(
             _DecryptTask(
                 mapping=mapping,
                 env_file=env_file,
-                ephemeral_key=ephemeral_keys_map.get(mapping.folder_path, (None, None))[1],
-                ephemeral_key_name=ephemeral_keys_map.get(mapping.folder_path, (None, None))[0],
+                ephemeral_key=ephemeral_keys_map.get(mapping.folder_path.resolve(), (None, None))[
+                    1
+                ],
+                ephemeral_key_name=ephemeral_keys_map.get(
+                    mapping.folder_path.resolve(), (None, None)
+                )[0],
             )
         )
 
