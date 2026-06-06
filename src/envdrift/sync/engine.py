@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import re
 import shutil
 import subprocess  # nosec B404
@@ -23,6 +24,8 @@ from envdrift.vault.base import SecretNotFoundError, VaultError
 
 if TYPE_CHECKING:
     from envdrift.vault import VaultClient
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -290,15 +293,41 @@ class SyncEngine:
 
         return None
 
+    @staticmethod
+    def _safe_restore(backup_path: Path, target_file: Path) -> bool:
+        """
+        Restore ``target_file`` from ``backup_path`` without ever raising.
+
+        The restore is only attempted when ``backup_path`` exists, and the copy
+        itself is wrapped so that a restore failure (for example because the
+        initial backup copy never completed, or the target is no longer
+        writable) cannot escape and mask the original error. The caller is
+        already on a failure path and will return DecryptionTestResult.FAILED
+        regardless.
+
+        Returns:
+            ``True`` when the file is in a known-good state — the backup did not
+            exist (nothing to restore) or the restore copy succeeded. ``False``
+            when a restore was attempted but failed, meaning the target may be
+            left modified and the backup must be preserved as the recovery copy.
+        """
+        if not backup_path.exists():
+            return True
+        try:
+            shutil.copy2(backup_path, target_file)
+        except Exception:
+            return False
+        return True
+
     def _test_decryption(self, mapping: ServiceMapping) -> DecryptionTestResult:
         """
         Attempt to verify that the synchronized key can decrypt an environment file for the service.
 
-        The method locates an environment file for the mapping (preferring .env.<environment>, then .env.production, .env.staging, .env.development), checks whether the file appears encrypted, and uses the `dotenvx` utility to decrypt and then re-encrypt the file to confirm the key works. If decryption or re-encryption fails the file is restored to its original state before returning.
+        The method locates an environment file for the mapping (preferring .env.<environment>, then .env.production, .env.staging, .env.development), checks whether the file appears encrypted, and uses the `dotenvx` utility to decrypt and then re-encrypt the file to confirm the key works. If decryption or re-encryption fails the file is restored to its original state (when a backup exists) before returning. Any unexpected error, including a failure to create the backup, results in DecryptionTestResult.FAILED rather than an escaping exception.
 
         Returns:
             DecryptionTestResult.PASSED if decryption and re-encryption both succeed.
-            DecryptionTestResult.FAILED if decryption or re-encryption fails (the original file is restored).
+            DecryptionTestResult.FAILED if decryption or re-encryption fails (the original file is restored when a backup exists).
             DecryptionTestResult.SKIPPED if no suitable env file exists, the file does not appear encrypted, or the `dotenvx` utility is not available.
         """
         detection = resolve_mapping_env_file(mapping)
@@ -317,9 +346,23 @@ class SyncEngine:
 
         backup_path = target_file.with_suffix(".backup_decryption_test")
 
+        # Create the backup up front and outside the main try block. If this
+        # copy fails (permission/disk error, missing parent dir), there is no
+        # backup to restore from, so the run is a failed decryption test rather
+        # than a dotenvx-not-installed SKIP — and we must not fall through to a
+        # restore that would raise a secondary FileNotFoundError (see #317).
         try:
             shutil.copy2(target_file, backup_path)
+        except Exception:
+            return DecryptionTestResult.FAILED
 
+        # The backup may only be deleted when the target is in a known-good
+        # state: the happy-path re-encrypt succeeded, or every attempted restore
+        # succeeded. If a restore is attempted and *fails*, the target may be
+        # left decrypted (plaintext secret on disk) and the backup is the only
+        # recovery copy — so it must be preserved (see cubic P1 on #317).
+        backup_safe_to_delete = True
+        try:
             # Try to decrypt using dotenvx
             result = subprocess.run(  # nosec B603
                 [dotenvx_path, "decrypt", "-f", str(target_file)],
@@ -331,7 +374,7 @@ class SyncEngine:
 
             if result.returncode != 0:
                 # Restore from backup
-                shutil.copy2(backup_path, target_file)
+                backup_safe_to_delete = self._safe_restore(backup_path, target_file)
                 return DecryptionTestResult.FAILED
 
             # Re-encrypt to not leave file decrypted
@@ -344,23 +387,37 @@ class SyncEngine:
             )
 
             if encrypt_result.returncode != 0:
-                shutil.copy2(backup_path, target_file)
+                backup_safe_to_delete = self._safe_restore(backup_path, target_file)
                 return DecryptionTestResult.FAILED
 
+            # Happy path: the file is correctly re-encrypted, backup is disposable.
             return DecryptionTestResult.PASSED
 
         except FileNotFoundError:
-            # dotenvx not installed
+            # dotenvx not installed; the file was never modified.
             return DecryptionTestResult.SKIPPED
         except subprocess.TimeoutExpired:
-            shutil.copy2(backup_path, target_file)
+            backup_safe_to_delete = self._safe_restore(backup_path, target_file)
             return DecryptionTestResult.FAILED
         except Exception:
-            shutil.copy2(backup_path, target_file)
+            # Any other failure is a failed decryption test; restore only when a
+            # backup actually exists so the restore cannot itself raise.
+            backup_safe_to_delete = self._safe_restore(backup_path, target_file)
             return DecryptionTestResult.FAILED
         finally:
-            # Clean up backup
-            backup_path.unlink(missing_ok=True)
+            # Only delete the backup when the file is in a known-good state. If a
+            # restore was attempted and failed, KEEP the backup as the recovery
+            # copy and warn the user that the file may be left decrypted.
+            if backup_safe_to_delete:
+                backup_path.unlink(missing_ok=True)
+            else:
+                logger.warning(
+                    "Failed to restore %s after a decryption-test failure; the file "
+                    "may be left decrypted. The backup has been preserved at %s — "
+                    "restore it manually to recover the original encrypted file.",
+                    target_file,
+                    backup_path,
+                )
 
     def _validate_schema(self, mapping: ServiceMapping) -> bool:
         """Run schema validation for the service."""

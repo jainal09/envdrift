@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import shutil
 import subprocess
 from pathlib import Path
 from textwrap import dedent
@@ -538,6 +539,157 @@ class TestSyncEngineDecryptionTest:
         result = engine._test_decryption(mapping)
 
         assert result == DecryptionTestResult.FAILED
+        assert env_file.read_text() == original
+
+    def test_decryption_test_failed_backup_copy_returns_failed(
+        self, mock_vault_client: MagicMock, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A failed initial backup copy returns FAILED, never a secondary error.
+
+        Regression for #317: the original code copied the target to a backup
+        path inside the main try block; if that very first ``shutil.copy2``
+        raised, control fell into the generic ``except`` which immediately tried
+        to restore *from* the backup that was never created — raising a
+        secondary ``FileNotFoundError`` that escaped the method uncaught instead
+        of returning ``DecryptionTestResult.FAILED``.
+        """
+        mapping = ServiceMapping(
+            secret_name="test-key", folder_path=tmp_path, environment="production"
+        )
+        env_file = tmp_path / ".env.production"
+        original = 'DOTENV_PUBLIC_KEY="abc"\nSECRET="encrypted:xyz"\n'
+        env_file.write_text(original)
+        backup_path = env_file.with_suffix(".backup_decryption_test")
+
+        # dotenvx is "present" so the method reaches the backup copy (not SKIP).
+        monkeypatch.setattr("envdrift.sync.engine.shutil.which", lambda _: "/usr/bin/dotenvx")
+
+        # Make the very first backup copy (target -> backup) fail as it would on
+        # a read-only directory or full disk. A restore copy (backup -> target)
+        # is a different call; this fixture only fails the backup write so we can
+        # prove the restore path is never wrongly taken.
+        real_copy2 = shutil.copy2
+
+        def failing_backup_copy(src, dst, *args, **kwargs):
+            if Path(dst) == backup_path:
+                raise PermissionError(f"cannot write backup: {dst}")
+            return real_copy2(src, dst, *args, **kwargs)
+
+        monkeypatch.setattr("envdrift.sync.engine.shutil.copy2", failing_backup_copy)
+
+        # subprocess must never be reached; blow up loudly if the backup guard
+        # is broken and execution proceeds to dotenvx.
+        def unreachable_run(*args, **kwargs):
+            raise AssertionError("subprocess.run should not run after a failed backup copy")
+
+        monkeypatch.setattr("envdrift.sync.engine.subprocess.run", unreachable_run)
+
+        engine = SyncEngine(
+            config=SyncConfig(mappings=[mapping]), vault_client=mock_vault_client, mode=SyncMode()
+        )
+
+        # Must not raise FileNotFoundError (or anything) — must return FAILED.
+        result = engine._test_decryption(mapping)
+
+        assert result == DecryptionTestResult.FAILED
+        # No phantom backup left behind, and the original file is untouched.
+        assert not backup_path.exists()
+        assert env_file.read_text() == original
+
+    def test_decryption_test_failed_restore_preserves_backup(
+        self,
+        mock_vault_client: MagicMock,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """A failed *restore* must preserve the backup and warn (cubic P1 on #317).
+
+        When ``dotenvx decrypt`` fails, the engine attempts to restore the file
+        from the backup. If that restore copy itself fails (e.g. the target was
+        decrypted on disk and is now unwritable), the file may be left
+        decrypted — the backup is the only recovery copy. The old unconditional
+        ``finally: backup_path.unlink()`` deleted it anyway, destroying the only
+        way to recover the encrypted original. The backup must now be PRESERVED
+        and a warning surfaced, while still returning FAILED.
+        """
+        mapping = ServiceMapping(
+            secret_name="test-key", folder_path=tmp_path, environment="production"
+        )
+        env_file = tmp_path / ".env.production"
+        original = 'DOTENV_PUBLIC_KEY="abc"\nSECRET="encrypted:xyz"\n'
+        env_file.write_text(original)
+        backup_path = env_file.with_suffix(".backup_decryption_test")
+
+        monkeypatch.setattr("envdrift.sync.engine.shutil.which", lambda _: "/usr/bin/dotenvx")
+
+        # The initial backup copy (target -> backup) succeeds so a real backup
+        # exists; the *restore* copy (backup -> target) raises, simulating a file
+        # left decrypted on a now-unwritable target.
+        real_copy2 = shutil.copy2
+
+        def restore_fails_copy(src, dst, *args, **kwargs):
+            if Path(src) == backup_path:
+                raise PermissionError(f"cannot restore over: {dst}")
+            return real_copy2(src, dst, *args, **kwargs)
+
+        monkeypatch.setattr("envdrift.sync.engine.shutil.copy2", restore_fails_copy)
+
+        # dotenvx decrypt returns non-zero so the restore path is taken.
+        def fake_run(cmd, **kwargs):
+            return subprocess.CompletedProcess(cmd, 1)
+
+        monkeypatch.setattr("envdrift.sync.engine.subprocess.run", fake_run)
+
+        engine = SyncEngine(
+            config=SyncConfig(mappings=[mapping]), vault_client=mock_vault_client, mode=SyncMode()
+        )
+
+        with caplog.at_level("WARNING", logger="envdrift.sync.engine"):
+            result = engine._test_decryption(mapping)
+
+        assert result == DecryptionTestResult.FAILED
+        # The backup is the only recovery copy and MUST survive the finally block.
+        assert backup_path.exists()
+        # The user is warned the file may be left decrypted and where the backup is.
+        assert any(
+            "preserved" in record.message and str(backup_path) in record.message
+            for record in caplog.records
+        )
+
+    def test_decryption_test_encrypt_failure_restores_and_deletes_backup(
+        self, mock_vault_client: MagicMock, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A failed re-encrypt restores the original and (on success) deletes the backup.
+
+        Decrypt succeeds but re-encrypt returns non-zero: the file is restored
+        from the backup. Because that restore succeeds, the file is in a
+        known-good state and the backup is cleaned up (no leftover, no warning).
+        """
+        mapping = ServiceMapping(
+            secret_name="test-key", folder_path=tmp_path, environment="production"
+        )
+        env_file = tmp_path / ".env.production"
+        original = 'DOTENV_PUBLIC_KEY="abc"\nSECRET="encrypted:xyz"\n'
+        env_file.write_text(original)
+        backup_path = env_file.with_suffix(".backup_decryption_test")
+
+        monkeypatch.setattr("envdrift.sync.engine.shutil.which", lambda _: "/usr/bin/dotenvx")
+        runner = MagicMock()
+        runner.side_effect = [
+            subprocess.CompletedProcess(["decrypt"], 0),
+            subprocess.CompletedProcess(["encrypt"], 1),  # re-encrypt fails
+        ]
+        monkeypatch.setattr("envdrift.sync.engine.subprocess.run", runner)
+
+        engine = SyncEngine(
+            config=SyncConfig(mappings=[mapping]), vault_client=mock_vault_client, mode=SyncMode()
+        )
+        result = engine._test_decryption(mapping)
+
+        assert result == DecryptionTestResult.FAILED
+        # Restore succeeded -> known-good state -> backup is cleaned up.
+        assert not backup_path.exists()
         assert env_file.read_text() == original
 
 
