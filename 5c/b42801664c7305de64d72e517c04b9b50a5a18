@@ -1,0 +1,25 @@
+tests/integration/test_error_handling.py
+  s_dfc6cd6692ed8f::t_f20a7a49baa039 123-126
+tests/integration/conftest.py
+  s_dfc6cd6692ed8f::t_e3018c68cbf836 314-326,330-331
+  s_dfc6cd6692ed8f::t_5740fba546eae9 327-329
+tests/integration/test_validation_edge_cases.py
+  s_dfc6cd6692ed8f::t_a766aec7fa7fb5 784,795-797,805
+  s_dfc6cd6692ed8f::t_973aeb737bce01 831-843,845-854,861
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.3",
+  "base_commit_sha": "5cb42801664c7305de64d72e517c04b9b50a5a18",
+  "prompts": {},
+  "sessions": {
+    "s_dfc6cd6692ed8f": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "fd23e738-3512-4420-9290-d985ad979bfd",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Jainal Gosaliya <jainal09gosalia@gmail.com>"
+    }
+  }
+}
