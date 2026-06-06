@@ -230,6 +230,11 @@ class EnvParser:
         start of the value or preceded by whitespace. A `#` inside matching
         quotes, or glued to a token (e.g. `http://x#frag`), is preserved.
         """
+        # Fast path: the overwhelming majority of values contain no `#`, so skip
+        # the per-character quote-tracking scan entirely for them.
+        if "#" not in value:
+            return value
+
         in_single = False
         in_double = False
         for i, ch in enumerate(value):
