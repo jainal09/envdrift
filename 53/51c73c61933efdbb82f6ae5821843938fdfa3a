@@ -1,0 +1,26 @@
+tests/unit/test_vault_gcp_paths.py
+  s_dfc6cd6692ed8f::t_ee600ed32cf8c4 87-106
+src/envdrift/vault/gcp.py
+  s_dfc6cd6692ed8f::t_4065d7a731c4e2 40-46
+  s_dfc6cd6692ed8f::t_7c9c8e2b922d3e 74-82
+  s_dfc6cd6692ed8f::t_92fb5190531c26 6
+  s_dfc6cd6692ed8f::t_f826884654c4db 86-87,89
+tests/unit/test_vault_gcp.py
+  s_dfc6cd6692ed8f::t_81e20907774be9 178-180
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.3",
+  "base_commit_sha": "5351c73c61933efdbb82f6ae5821843938fdfa3a",
+  "prompts": {},
+  "sessions": {
+    "s_dfc6cd6692ed8f": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "fd23e738-3512-4420-9290-d985ad979bfd",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": null
+    }
+  }
+}
