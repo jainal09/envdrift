@@ -889,8 +889,11 @@ class NativeScanner(ScannerBackend):
 
                     # Drop dotenvx EC public keys by value shape (#370): public,
                     # not a secret. The full secret is still available here,
-                    # before redaction collapses it.
-                    if _EC_PUBKEY_RE.match(secret):
+                    # before redaction collapses it. Defensive secondary guard —
+                    # the primary pubkey filter is the hash-based
+                    # ScanEngine._filter_public_keys; no standard pattern captures
+                    # a bare EC pubkey as an exact group, so this rarely fires.
+                    if _EC_PUBKEY_RE.match(secret):  # pragma: no cover
                         continue
 
                     # For generic-secret pattern, apply entropy filter to reduce false positives

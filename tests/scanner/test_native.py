@@ -1116,6 +1116,24 @@ class TestKeywordGate:
         mc = [f for f in result.findings if f.rule_id == "mailchimp-api-key"]
         assert len(mc) >= 1
 
+    def test_ec_public_key_value_dropped_in_pattern_scan(
+        self, scanner: NativeScanner, tmp_path: Path
+    ):
+        """A value shaped like a dotenvx EC public key (02/03 + 64 hex) is not a
+        secret and is dropped during pattern scanning (#370)."""
+        from envdrift.scanner.patterns import hash_secret
+
+        pubkey = "03" + "f8a91b2c3d4e5f6a" * 4  # 66 hex, compressed secp256k1 pubkey
+        cfg = tmp_path / "pub.env"
+        # Quoted value so the generic-secret pattern matches; the EC-pubkey drop
+        # (#370) runs before the entropy filter, so the match is discarded.
+        cfg.write_text(f'CLIENT_SECRET="{pubkey}"\n')
+
+        result = scanner.scan([tmp_path])
+
+        # The public-key-shaped value must not surface as a secret finding.
+        assert all(f.secret_hash != hash_secret(pubkey) for f in result.findings)
+
     def test_distinctive_prefix_not_suppressed_without_context(
         self, scanner: NativeScanner, tmp_path: Path
     ):

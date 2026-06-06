@@ -1423,6 +1423,30 @@ class TestFilterPublicKeys:
         result = engine._filter_public_keys([real_finding])
         assert result == [real_finding]
 
+    def test_filter_public_keys_unreadable_file_swallows_oserror(self, tmp_path):
+        """A finding whose file can't be opened doesn't crash pubkey collection (#370)."""
+        from envdrift.scanner.patterns import hash_secret, redact_secret
+
+        config = GuardConfig(use_native=True, use_gitleaks=False)
+        engine = ScanEngine(config)
+
+        real = "sk_live_" + "anotherrealsecretvalue012345"  # split: dodge push-protection
+        finding = ScanFinding(
+            file_path=tmp_path / "does-not-exist.env",  # open() -> OSError -> skipped
+            rule_id="generic-secret",
+            rule_description="secret",
+            description="x",
+            severity=FindingSeverity.HIGH,
+            scanner="gitleaks",
+            secret_preview=redact_secret(real),
+            secret_hash=hash_secret(real),
+        )
+
+        # No public keys are collectible (file unreadable), so the finding
+        # survives and no exception escapes.
+        result = engine._filter_public_keys([finding])
+        assert result == [finding]
+
     def test_filter_public_keys_mixed_findings(self, tmp_path):
         """In a mixed batch only the public-key finding is dropped."""
         from envdrift.scanner.patterns import hash_secret, redact_secret
