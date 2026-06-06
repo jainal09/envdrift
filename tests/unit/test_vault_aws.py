@@ -249,7 +249,9 @@ class TestAWSSecretsManagerClient:
         assert secret.version == "v2"
 
     def test_set_secret_unauthorized_raises_auth_error(self, mock_boto3, patched_boto_clients):
-        """Unauthorized errors should raise AuthenticationError."""
+        """Regression #308: a create UnauthorizedException must surface as an
+        AuthenticationError, not be silently masked by falling back to
+        put_secret_value (mirrors the AccessDeniedException arm in aws.py:283)."""
 
         class FakeClientError(Exception):
             def __init__(self, code):
@@ -259,12 +261,21 @@ class TestAWSSecretsManagerClient:
 
         mock_sm_client, _ = patched_boto_clients
         mock_sm_client.create_secret.side_effect = FakeClientError("UnauthorizedException")
+        # put_secret_value would succeed, masking the create denial if invoked.
+        mock_sm_client.put_secret_value.return_value = {
+            "Name": "existing-secret",
+            "VersionId": "v2",
+            "ARN": "arn:aws:...",
+        }
 
         client = mock_boto3.AWSSecretsManagerClient()
         client.authenticate()
 
         with pytest.raises(AuthenticationError):
             client.set_secret("name", "value")
+
+        # The create-permission denial must not be reinterpreted as an update.
+        mock_sm_client.put_secret_value.assert_not_called()
 
     def test_set_secret_create_access_denied_raises_auth_error(
         self, mock_boto3, patched_boto_clients

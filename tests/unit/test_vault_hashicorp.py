@@ -222,6 +222,9 @@ class TestHashiCorpVaultClientWithMock:
         # It must be exactly AuthenticationError, not the broader VaultError wrapper.
         assert type(exc_info.value) is AuthenticationError
         assert "connection error" not in str(exc_info.value)
+        # The half-initialized client must be cleared so the unauthenticated-state
+        # invariant holds after a failed authenticate() (mirrors gcp/azure).
+        assert client._client is None
 
     @patch("envdrift.vault.hashicorp._hvac")
     def test_authenticate_unauthorized_raises_authentication_error(self, mock_hvac_module):

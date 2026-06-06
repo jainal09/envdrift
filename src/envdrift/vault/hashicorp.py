@@ -93,11 +93,15 @@ class HashiCorpVaultClient(VaultClient):
         except AuthenticationError:
             # The invalid/expired-token case raises AuthenticationError above;
             # let it propagate instead of being re-wrapped as a VaultError by the
-            # broad `except Exception` below.
+            # broad `except Exception` below. Clear the half-initialized client so
+            # the unauthenticated-state invariant holds (mirrors gcp/azure).
+            self._client = None
             raise
         except (Unauthorized, Forbidden) as e:
+            self._client = None
             raise AuthenticationError(f"Vault authentication failed: {e}") from e
         except Exception as e:
+            self._client = None
             raise VaultError(f"Vault connection error: {e}") from e
 
     def is_authenticated(self) -> bool:
