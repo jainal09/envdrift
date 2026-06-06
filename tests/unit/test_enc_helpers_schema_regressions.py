@@ -173,3 +173,53 @@ def test_schema_load_no_service_dir_leak(tmp_path: Path) -> None:
 
     assert str(svc.resolve()) not in sys.path
     assert sys.path == before
+
+
+def test_monorepo_same_named_sibling_module_isolation(tmp_path: Path) -> None:
+    """#391: two services each shipping a same-named top-level *sibling* module
+    (e.g. ``common.py``) must not bleed across loads.
+
+    Each service's settings module does ``from common import TAG``; svc_a's
+    ``common`` carries ``TAG="AAA"`` and svc_b's carries ``TAG="BBB"``. Before the
+    fix, the first-loaded ``common`` stayed pinned in ``sys.modules`` and svc_b
+    silently reused svc_a's ``common`` (seeing ``AAA``). The loader must evict
+    *every* module the import transitively added, not just ``root_pkg.*``.
+    """
+    import sys
+
+    svc_a = tmp_path / "svc_a_sib"
+    svc_b = tmp_path / "svc_b_sib"
+    for svc, tag in ((svc_a, "AAA"), (svc_b, "BBB")):
+        svc.mkdir()
+        (svc / "common.py").write_text(f'TAG = "{tag}"\n')
+        (svc / "settings_mod.py").write_text(
+            "from pydantic_settings import BaseSettings\n"
+            "from common import TAG\n\n"
+            "WHO = TAG\n\n"
+            "class Settings(BaseSettings):\n    placeholder: str = WHO\n"
+        )
+
+    # Snapshot the keys we might touch so the full-suite run (one process) is not
+    # polluted regardless of pass/fail.
+    saved = {k: sys.modules.get(k) for k in ("common", "settings_mod")}
+    try:
+        loader = SchemaLoader()
+        cls_a = loader.load("settings_mod:Settings", service_dir=svc_a)
+        cls_b = loader.load("settings_mod:Settings", service_dir=svc_b)
+
+        # The default carries the TAG resolved at import time via `from common ...`.
+        assert cls_a.model_fields["placeholder"].default == "AAA"
+        assert cls_b.model_fields["placeholder"].default == "BBB", (
+            "svc_b reused svc_a's cached sibling `common` (saw AAA, expected BBB)"
+        )
+        # svc_a's `common` must not leak into / persist after svc_b's load.
+        leaked = sys.modules.get("common")
+        assert leaked is None or getattr(leaked, "TAG", None) != "AAA", (
+            "svc_a's `common` (TAG=AAA) leaked into sys.modules after svc_b load"
+        )
+    finally:
+        for k, v in saved.items():
+            if v is None:
+                sys.modules.pop(k, None)
+            else:
+                sys.modules[k] = v

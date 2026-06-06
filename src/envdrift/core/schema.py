@@ -129,6 +129,14 @@ class SchemaLoader:
         # module *and its whole root-package namespace* (a cached parent package
         # pins the first service's directory via __path__), import fresh against
         # the service dir we just prepended, then restore the prior cache.
+        #
+        # Evicting only the root namespace is not enough, though: a schema module
+        # often `import`s a same-named *top-level sibling* (e.g. each service dir
+        # ships its own `common.py` and the settings module does
+        # `from common import TAG`). The first-loaded `common` would stay cached
+        # and the second service would silently reuse it (#391). So we also
+        # snapshot the full sys.modules keyset before importing and evict *every*
+        # module the import transitively added afterwards.
         saved_modules = {
             name: mod
             for name, mod in list(sys.modules.items())
@@ -136,6 +144,7 @@ class SchemaLoader:
         }
         for name in saved_modules:
             del sys.modules[name]
+        before = set(sys.modules)
 
         # Set environment variable to signal schema extraction mode
         # This allows user code to skip Settings instantiation during import
@@ -153,10 +162,12 @@ class SchemaLoader:
             if inserted_path is not None:
                 with contextlib.suppress(ValueError):
                     sys.path.remove(inserted_path)
-            # Drop whatever this import added under the root namespace, then
-            # restore the modules we evicted so we leave sys.modules as we found
-            # it (the returned class keeps its own reference regardless).
-            for name in [n for n in sys.modules if n == root_pkg or n.startswith(root_pkg + ".")]:
+            # Drop every module this import added — including transitively
+            # imported same-named siblings (`common`, etc.) outside the root
+            # namespace — then restore the modules we evicted so we leave
+            # sys.modules as we found it (the returned class keeps its own
+            # reference regardless).
+            for name in set(sys.modules) - before:
                 del sys.modules[name]
             sys.modules.update(saved_modules)
 
