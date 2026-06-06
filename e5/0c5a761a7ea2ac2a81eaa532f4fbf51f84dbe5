@@ -1,0 +1,58 @@
+install.ps1
+  s_dfc6cd6692ed8f::t_e8b40ed8a82841 37
+  s_dfc6cd6692ed8f::t_1d04e953adb483 16,24
+  s_dfc6cd6692ed8f::t_26ef6abb83833b 362-368,375,389
+  s_dfc6cd6692ed8f::t_ecb7e5fae8d5c8 340
+  s_dfc6cd6692ed8f::t_eb899c4d8ce496 89-94,97-101
+install.sh
+  s_dfc6cd6692ed8f::t_e208c285da709e 87-92
+  s_dfc6cd6692ed8f::t_97147e512bbd8a 33
+  s_dfc6cd6692ed8f::t_b3a5e13a65cede 10
+  s_dfc6cd6692ed8f::t_2f0a14b66253cd 112-115
+  s_dfc6cd6692ed8f::t_8364dc0d3ca32e 357
+  s_dfc6cd6692ed8f::t_0635b555339c08 373-379,383-384,399,408
+docs/getting-started/installation.md
+  s_dfc6cd6692ed8f::t_a03ffa19f700a2 22-24
+  s_dfc6cd6692ed8f::t_febce565a6c93e 44-46
+  s_dfc6cd6692ed8f::t_aea561d7f645bf 56
+  s_dfc6cd6692ed8f::t_0fe30a41b513e9 67-69
+tests/integration/test_validation_edge_cases.py
+  s_dfc6cd6692ed8f::t_1186931150da0b 843-864,866-868
+  s_dfc6cd6692ed8f::t_72952becf9ff2c 76-77,150-151,205-206,254-255,316-317,381-382,444-445,490-491,535-536,579-580,618-619,670-671,712-713,751-752
+.github/workflows/agent-release.yml
+  s_dfc6cd6692ed8f::t_94d92f43f9a6cf 116-125
+.github/workflows/integration-tests.yml
+  s_dfc6cd6692ed8f::t_982508e7b2992a 311-317,320
+  s_dfc6cd6692ed8f::t_0d4551c319726b 62-63
+tests/integration/test_error_handling.py
+  s_dfc6cd6692ed8f::t_ce98a78c977f04 559-560
+  s_dfc6cd6692ed8f::t_c000ba0d68eb47 126-137
+  s_dfc6cd6692ed8f::t_f359c78e310f73 68-69,285-286,321-322,357-358,405-406,444-445
+  s_dfc6cd6692ed8f::t_8d4ca3f5206f57 17
+tests/docker-compose.test.yml
+  s_dfc6cd6692ed8f::t_eb213c68ab5614 27-29
+.github/workflows/vscode-release.yml
+  s_dfc6cd6692ed8f::t_89f42eb400c9b6 180-183
+.github/workflows/publish.yml
+  s_dfc6cd6692ed8f::t_d2a7d027f5ef71 45-47
+  s_dfc6cd6692ed8f::t_aab98fb70949e2 25,53
+  s_dfc6cd6692ed8f::t_1cf5773736011a 5-8
+  s_dfc6cd6692ed8f::t_d9dbc726960a5e 28,58
+  s_dfc6cd6692ed8f::t_31ccd6428d050c 33,63
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.3",
+  "base_commit_sha": "e50c5a761a7ea2ac2a81eaa532f4fbf51f84dbe5",
+  "prompts": {},
+  "sessions": {
+    "s_dfc6cd6692ed8f": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "fd23e738-3512-4420-9290-d985ad979bfd",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Jainal Gosaliya <jainal09gosalia@gmail.com>"
+    }
+  }
+}
