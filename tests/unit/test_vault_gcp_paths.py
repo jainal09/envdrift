@@ -13,8 +13,18 @@ import importlib.util
 
 import pytest
 
+
+def _gcp_sdk_available() -> bool:
+    # find_spec raises ModuleNotFoundError when a *parent* package is missing
+    # (e.g. google.cloud absent), so guard it rather than letting collection crash.
+    try:
+        return importlib.util.find_spec("google.cloud.secretmanager") is not None
+    except ModuleNotFoundError:
+        return False
+
+
 pytestmark = pytest.mark.skipif(
-    importlib.util.find_spec("google.cloud.secretmanager") is None,
+    not _gcp_sdk_available(),
     reason="GCP SDK not installed (pip install envdrift[gcp])",
 )
 
@@ -75,14 +85,23 @@ def test_malformed_projects_name_is_rejected() -> None:
 
 
 def test_get_secret_rejects_cross_project_before_client_call() -> None:
-    """``get_secret`` with a cross-project name fails fast with VaultError, even
-    without live credentials -- the guard runs before ``access_secret_version``.
-
-    ``ensure_authenticated`` would normally need a client; assert the validator
-    fires either via that path or the resource-name guard. We isolate the guard
-    by calling the version-path builder ``get_secret`` uses.
-    """
+    """``get_secret`` (not just the path builder) rejects a cross-project name
+    with VaultError BEFORE any ``access_secret_version`` call — proven with a spy
+    client that fails if it is ever reached."""
     c = _client()
+
+    class _SpyClient:
+        def __init__(self) -> None:
+            self.called = False
+
+        def access_secret_version(self, request):  # pragma: no cover - must not run
+            self.called = True
+            raise AssertionError("access_secret_version must not run for a cross-project name")
+
+    spy = _SpyClient()
+    c._client = spy  # pre-set so ensure_authenticated is a no-op (no real network)
+
     cross = "projects/victim-project/secrets/db-password/versions/latest"
     with pytest.raises(VaultError):
-        c._version_path(cross)
+        c.get_secret(cross)
+    assert spy.called is False

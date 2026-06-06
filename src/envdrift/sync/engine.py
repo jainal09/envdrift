@@ -142,7 +142,7 @@ class SyncEngine:
             env_keys_path = mapping.folder_path / self.config.env_keys_filename
             env_keys_file = EnvKeysFile(env_keys_path)
             local_value = env_keys_file.read_key(effective_key_name)
-            local_preview = redact_value(local_value) if local_value else None
+            local_preview = redact_value(local_value) if local_value is not None else None
 
             # Compare values
             if local_value is None:
