@@ -1116,17 +1116,64 @@ class TestKeywordGate:
         mc = [f for f in result.findings if f.rule_id == "mailchimp-api-key"]
         assert len(mc) >= 1
 
-    def test_ec_public_key_value_dropped_in_pattern_scan(
+    def test_ec_pubkey_dropped_by_value_shape_under_api_key_var(
         self, scanner: NativeScanner, tmp_path: Path
     ):
-        """A value shaped like a dotenvx EC public key (02/03 + 64 hex) is not a
-        secret and is dropped during pattern scanning (#370)."""
+        """A bare EC public key under a non-dotenvx var (API_KEY=…) is dropped by
+        value shape, not by var name or entropy (#370).
+
+        This is the *load-bearing* test for the in-``_scan_patterns``
+        ``_EC_PUBKEY_RE`` drop. The chain that makes the drop the **sole**
+        suppressor here:
+
+        * ``generic-api-key`` (``api[_-]?key`` … ``([a-zA-Z0-9_-]{20,})``) captures
+          the value **bare** — its char class excludes ``"``, so the closing quote
+          terminates the capture and group(1) is exactly the 66-hex pubkey.
+        * ``generic-api-key`` carries **no entropy filter** (only ``generic-secret``
+          does), so the value is *not* dropped by entropy.
+        * ``API_KEY`` is **not** ``is_dotenvx_public_key_var``, so the var-name skip
+          does not apply.
+
+        Verified empirically: on ``origin/main`` (no ``_EC_PUBKEY_RE`` drop) this
+        line is reported as ``generic-api-key``; with the drop it is suppressed.
+        Revert the drop → this test fails; restore → it passes.
+        """
         from envdrift.scanner.patterns import hash_secret
 
-        pubkey = "03" + "f8a91b2c3d4e5f6a" * 4  # 66 hex, compressed secp256k1 pubkey
+        # 66-hex compressed secp256k1 pubkey shape (03 + 64 hex) built via
+        # concatenation so no realistic-looking secret literal is committed.
+        pubkey = "03" + "12456789abcdef" + ("0123456789abcdef" * 3) + "01"
+        assert len(pubkey) == 66
+        cfg = tmp_path / "api.env"
+        cfg.write_text(f'API_KEY="{pubkey}"\n')
+
+        result = scanner.scan([tmp_path])
+
+        # generic-api-key would otherwise flag the bare pubkey; the value-shape
+        # drop is the only thing that suppresses it here.
+        assert all(f.rule_id != "generic-api-key" for f in result.findings)
+        assert all(f.secret_hash != hash_secret(pubkey) for f in result.findings)
+
+    def test_low_entropy_pubkey_under_secret_var_dropped_by_entropy(
+        self, scanner: NativeScanner, tmp_path: Path
+    ):
+        """A pubkey-shaped value under a ``secret`` var is dropped by the
+        generic-secret entropy filter (entropy < 4.0), independent of #370.
+
+        NOTE: this is *not* a test of the ``_EC_PUBKEY_RE`` drop. ``generic-secret``
+        includes ``"`` in its char class, so ``SECRET="<pubkey>"`` captures
+        ``<pubkey>"`` (with the quote) — which does *not* match the anchored
+        ``_EC_PUBKEY_RE`` — and the entropy filter is what suppresses it. The
+        value-shape drop is covered by
+        ``test_ec_pubkey_dropped_by_value_shape_under_api_key_var`` above.
+        """
+        from envdrift.scanner.patterns import calculate_entropy, hash_secret
+
+        pubkey = "03" + "f8a91b2c3d4e5f6a" * 4  # 66 hex, low symbol diversity
+        # Entropy of the captured value (incl. trailing quote) is < 4.0, so the
+        # generic-secret entropy filter — not the EC drop — discards it.
+        assert calculate_entropy(pubkey + '"') < 4.0
         cfg = tmp_path / "pub.env"
-        # Var name at a word boundary ("secret") so generic-secret actually fires;
-        # the EC-pubkey drop (#370) runs before the entropy filter and discards it.
         cfg.write_text(f'SECRET="{pubkey}"\n')
 
         result = scanner.scan([tmp_path])
@@ -1191,7 +1238,15 @@ class TestLowercaseEntropyAssignment:
 
 
 class TestEcPublicKeyDropped:
-    """#370 — dotenvx EC compressed public keys are dropped by value shape."""
+    """#370 — dotenvx EC compressed public keys are not flagged as secrets.
+
+    These cases use the canonical ``DOTENV_PUBLIC_KEY`` var name, so suppression
+    here flows through the var-name skip (``is_dotenvx_public_key_var``) and the
+    hash-based ``ScanEngine._filter_public_keys`` path — *not* the in-scan
+    ``_EC_PUBKEY_RE`` value-shape drop. The value-shape drop (which fires for a
+    bare pubkey under an *unexpected* var name) is exercised load-bearingly by
+    ``TestKeywordGate.test_ec_pubkey_dropped_by_value_shape_under_api_key_var``.
+    """
 
     @pytest.fixture
     def scanner(self) -> NativeScanner:

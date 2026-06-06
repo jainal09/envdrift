@@ -892,12 +892,17 @@ class NativeScanner(ScannerBackend):
                     secret = match.group(1) if match.groups() else match.group(0)
 
                     # Drop dotenvx EC public keys by value shape (#370): public,
-                    # not a secret. Defensive secondary guard — the primary pubkey
-                    # filter is the hash-based ScanEngine._filter_public_keys; no
-                    # standard pattern captures a bare EC pubkey as its exact
-                    # group (generic-secret captures the keyword), so this is hard
-                    # to exercise directly and is excluded from coverage.
-                    if _EC_PUBKEY_RE.match(secret):  # pragma: no cover
+                    # not a secret. This IS reachable: the generic-api-key pattern
+                    # (api[_-]?key … ([a-zA-Z0-9_-]{20,})) excludes the quote char
+                    # from its capture group, so `API_KEY="<66-hex pubkey>"`
+                    # captures the *bare* pubkey as `secret`, and that pattern has
+                    # no entropy filter (only generic-secret does). Without this
+                    # drop the bare pubkey is reported as a generic-api-key FP under
+                    # an unexpected (non-DOTENV_PUBLIC_KEY) var name; the var-name
+                    # skip above and the hash-based ScanEngine._filter_public_keys
+                    # don't cover that case. Covered by
+                    # TestKeywordGate.test_ec_pubkey_dropped_by_value_shape_under_api_key_var.
+                    if _EC_PUBKEY_RE.match(secret):
                         continue
 
                     # For generic-secret pattern, apply entropy filter to reduce false positives
