@@ -78,6 +78,31 @@ suite('Config Unit Tests', () => {
         test('should handle empty excludes array', () => {
             assert.strictEqual(isExcluded('.env.example', []), false);
         });
+
+        test('should exclude via wildcard pattern', () => {
+            assert.strictEqual(isExcluded('app.keys', ['*.keys']), true);
+            assert.strictEqual(isExcluded('.env.keys', ['*.keys']), true);
+        });
+
+        test('should exclude via prefix+suffix wildcard', () => {
+            // `.env*.local` -> /^\.env.*\.local$/  matches both forms.
+            assert.strictEqual(isExcluded('.env.prod.local', ['.env*.local']), true);
+            assert.strictEqual(isExcluded('.env.local', ['.env*.local']), true);
+            // `.env.*.local` -> /^\.env\..*\.local$/  requires a middle segment,
+            // so it matches `.env.prod.local` but NOT `.env.local`.
+            assert.strictEqual(isExcluded('.env.prod.local', ['.env.*.local']), true);
+            assert.strictEqual(isExcluded('.env.local', ['.env.*.local']), false);
+        });
+
+        test('should not exclude non-matching wildcard', () => {
+            assert.strictEqual(isExcluded('.env.production', ['*.keys']), false);
+            assert.strictEqual(isExcluded('.env', ['.env.*.local']), false);
+        });
+
+        test('should still treat literal exclude as exact match', () => {
+            assert.strictEqual(isExcluded('.env.example', ['.env.example']), true);
+            assert.strictEqual(isExcluded('.env.example.bak', ['.env.example']), false);
+        });
     });
 
     suite('isContentEncrypted', () => {

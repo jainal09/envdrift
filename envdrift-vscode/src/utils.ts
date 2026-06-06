@@ -4,26 +4,35 @@
  */
 
 /**
+ * Test a single basename against one glob pattern.
+ * Supports `*` (matches any run of chars); all other chars are literal.
+ * Pure + deterministic — safe to unit test outside VS Code.
+ */
+function matchesGlob(baseName: string, pattern: string): boolean {
+    // Escape regex special chars except *, then convert * to .*
+    const escaped = pattern.replace(/[.+?^${}()|[\]\\]/g, '\\$&');
+    const regex = new RegExp('^' + escaped.replace(/\*/g, '.*') + '$');
+    return regex.test(baseName);
+}
+
+/**
  * Check if a file matches the given patterns
  */
 export function matchesPatterns(fileName: string, patterns: string[]): boolean {
     // Handle both forward slashes and backslashes for cross-platform support
     const baseName = fileName.split(/[/\\]/).pop() || fileName;
-    return patterns.some(pattern => {
-        // Escape regex special chars except *, then convert * to .*
-        const escaped = pattern.replace(/[.+?^${}()|[\]\\]/g, '\\$&');
-        const regex = new RegExp('^' + escaped.replace(/\*/g, '.*') + '$');
-        return regex.test(baseName);
-    });
+    return patterns.some(pattern => matchesGlob(baseName, pattern));
 }
 
 /**
- * Check if a file should be excluded
+ * Check if a file should be excluded.
+ * Exclude entries are glob patterns (same semantics as `patterns`),
+ * so wildcard excludes like `*.keys` or `.env.*.local` work.
  */
 export function isExcluded(fileName: string, exclude: string[]): boolean {
     // Handle both forward slashes and backslashes for cross-platform support
     const baseName = fileName.split(/[/\\]/).pop() || fileName;
-    return exclude.includes(baseName);
+    return exclude.some(pattern => matchesGlob(baseName, pattern));
 }
 
 /**
