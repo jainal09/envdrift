@@ -350,3 +350,43 @@ def test_diff_duplicate_keys_last_wins(tmp_path: Path, integration_pythonpath: s
 
     assert payload["summary"]["has_drift"] is False
     assert payload["differences"] == []
+
+
+def test_diff_json_no_ansi_under_force_color(tmp_path: Path, integration_pythonpath: str) -> None:
+    """#333: `diff --format json` stays valid JSON with no ESC bytes even when FORCE_COLOR=1.
+
+    The autouse `_deterministic_cli_output` fixture strips FORCE_COLOR from the
+    parent env, so we re-set it on the child explicitly to reproduce the CI
+    condition that surfaced the bug (FORCE_COLOR overrides NO_COLOR in Rich).
+    """
+    (tmp_path / ".env.a").write_text("X=1\n")
+    (tmp_path / ".env.b").write_text("X=2\n")
+
+    env = os.environ.copy()
+    env["PYTHONPATH"] = integration_pythonpath
+    env["FORCE_COLOR"] = "1"
+    env.pop("NO_COLOR", None)
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "envdrift.cli",
+            "diff",
+            ".env.a",
+            ".env.b",
+            "--format",
+            "json",
+        ],
+        cwd=str(tmp_path),
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=30.0,
+    )
+
+    assert result.returncode == 0, f"stderr:\n{result.stderr}"
+    assert "\x1b" not in result.stdout, "JSON output contained ANSI escape bytes"
+    payload = json.loads(result.stdout)
+    assert payload["summary"]["changed"] == 1
+    assert payload["summary"]["has_drift"] is True
