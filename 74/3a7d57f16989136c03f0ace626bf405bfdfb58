@@ -1,0 +1,20 @@
+tests/scanner/test_native.py
+  s_dfc6cd6692ed8f::t_1cb78a4dd8027a 1241-1249
+  s_dfc6cd6692ed8f::t_df3816483be33d 1119,1122-1140,1143-1175
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.3",
+  "base_commit_sha": "743a7d57f16989136c03f0ace626bf405bfdfb58",
+  "prompts": {},
+  "sessions": {
+    "s_dfc6cd6692ed8f": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "fd23e738-3512-4420-9290-d985ad979bfd",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Jainal Gosaliya <jainal09gosalia@gmail.com>"
+    }
+  }
+}
