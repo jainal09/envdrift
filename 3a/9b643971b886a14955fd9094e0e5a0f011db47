@@ -1,0 +1,19 @@
+tests/unit/test_vault_azure.py
+  s_dfc6cd6692ed8f::t_21a9f2e80c84ee 5-7,15-48,73-102,118,142,163,190,216,234-236,238-240,247,249-251,265,269-274,282-319,328-330,332-337,353,357-362,378-380,382-384,395,397-399,411,413-415,426-428,431-433,442,444-446,456,458-460
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.3",
+  "base_commit_sha": "3a9b643971b886a14955fd9094e0e5a0f011db47",
+  "prompts": {},
+  "sessions": {
+    "s_dfc6cd6692ed8f": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "fd23e738-3512-4420-9290-d985ad979bfd",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Jainal Gosaliya <jainal09gosalia@gmail.com>"
+    }
+  }
+}
