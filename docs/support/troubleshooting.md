@@ -224,7 +224,9 @@ hvac.exceptions.Forbidden: permission denied
 
 1. Check your token has the correct policies
 2. Ensure the token hasn't expired
-3. Verify the secret path is correct — it is **relative to the KV v2 mount**, with **no** `secret/data/` prefix (the client inserts the `data/` segment internally; adding it yourself produces a wrong path)
+3. Verify the secret path is correct — it is **relative to the KV v2 mount**,
+   with **no** `secret/data/` prefix. The client inserts the `data/` segment
+   internally, so adding the prefix yourself produces a wrong path.
 
 ```bash
 export VAULT_TOKEN="hvs.xxx"
