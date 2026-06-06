@@ -28,8 +28,11 @@
     "workspaceContains:**/.env.*",
     "workspaceContains:**/envdrift.toml",
     "onCommand:envdrift.enable",
+    "onCommand:envdrift.disable",
     "onCommand:envdrift.encryptNow",
+    "onCommand:envdrift.showStatus",
     "onCommand:envdrift.startAgent",
+    "onCommand:envdrift.stopAgent",
     "onCommand:envdrift.refreshAgentStatus"
   ],
   "main": "./out/extension.js",
