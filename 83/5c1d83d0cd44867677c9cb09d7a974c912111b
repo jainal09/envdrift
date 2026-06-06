@@ -1,0 +1,22 @@
+docs/support/troubleshooting.md
+  s_dfc6cd6692ed8f::t_1f8f2a04622a9d 227-229
+docs/agent-spec.md
+  s_dfc6cd6692ed8f::t_29111cf284ab15 125
+  s_dfc6cd6692ed8f::t_a10d0c784574f3 180
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.3",
+  "base_commit_sha": "835c1d83d0cd44867677c9cb09d7a974c912111b",
+  "prompts": {},
+  "sessions": {
+    "s_dfc6cd6692ed8f": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "fd23e738-3512-4420-9290-d985ad979bfd",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Jainal Gosaliya <jainal09gosalia@gmail.com>"
+    }
+  }
+}
