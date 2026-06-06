@@ -356,26 +356,51 @@ class SyncEngine:
         except Exception:
             return DecryptionTestResult.FAILED
 
-        # The backup may only be deleted when the target is in a known-good
-        # state: the happy-path re-encrypt succeeded, or every attempted restore
-        # succeeded. If a restore is attempted and *fails*, the target may be
-        # left decrypted (plaintext secret on disk) and the backup is the only
-        # recovery copy — so it must be preserved (see cubic P1 on #317).
+        # The backup may only be deleted when the on-disk target file is in its
+        # original (encrypted) state: it was never modified, OR the happy-path
+        # re-encrypt restored it, OR every attempted restore succeeded. If the
+        # file has been decrypted on disk and a restore is attempted and *fails*,
+        # the target is left as plaintext secret on disk and the backup is the
+        # only recovery copy — so it must be preserved (see cubic P1 on #317).
         backup_safe_to_delete = True
+
+        # Tracks whether the live target file has been rewritten to plaintext on
+        # disk by `dotenvx decrypt`. Once True, any subsequent failure (a missing
+        # dotenvx binary at the encrypt stage, a timeout, a vanished cwd, …) must
+        # NOT be treated as "dotenvx not installed / file untouched": the file is
+        # decrypted and we must restore + preserve the backup, never delete it.
+        file_modified = False
+
         try:
-            # Try to decrypt using dotenvx
-            result = subprocess.run(  # nosec B603
-                [dotenvx_path, "decrypt", "-f", str(target_file)],
-                cwd=str(mapping.folder_path),
-                capture_output=True,
-                text=True,
-                timeout=30,
-            )
+            # Wrap ONLY the first `decrypt` subprocess so a FileNotFoundError
+            # here (dotenvx genuinely missing) maps to SKIPPED with the file
+            # untouched. A FileNotFoundError raised later (the encrypt stage,
+            # after the file is already plaintext) flows through the outer
+            # failure/restore handlers below instead, so the backup is never
+            # deleted while the file is left decrypted.
+            try:
+                result = subprocess.run(  # nosec B603
+                    [dotenvx_path, "decrypt", "-f", str(target_file)],
+                    cwd=str(mapping.folder_path),
+                    capture_output=True,
+                    text=True,
+                    timeout=30,
+                )
+            except FileNotFoundError:
+                # dotenvx not installed; the decrypt never ran and the file was
+                # never modified, so the backup is safe to delete (finally).
+                return DecryptionTestResult.SKIPPED
 
             if result.returncode != 0:
-                # Restore from backup
+                # Decrypt failed: dotenvx may or may not have modified the file,
+                # so restore from backup to be conservative.
                 backup_safe_to_delete = self._safe_restore(backup_path, target_file)
                 return DecryptionTestResult.FAILED
+
+            # Decrypt returned 0: the live file is now plaintext on disk. From
+            # this point on the backup is the ONLY encrypted copy, so no failure
+            # path may delete it without first restoring/re-encrypting the file.
+            file_modified = True
 
             # Re-encrypt to not leave file decrypted
             encrypt_result = subprocess.run(  # nosec B603
@@ -394,8 +419,16 @@ class SyncEngine:
             return DecryptionTestResult.PASSED
 
         except FileNotFoundError:
-            # dotenvx not installed; the file was never modified.
-            return DecryptionTestResult.SKIPPED
+            # dotenvx vanished mid-run (e.g. at the encrypt stage). If the file
+            # was never decrypted, it is untouched and this is a SKIP. Once
+            # `file_modified` is True the file is already plaintext on disk, so
+            # this is a real FAILURE, not a SKIP: restore from backup and
+            # preserve it if the restore fails so the plaintext file can be
+            # recovered (never delete the only encrypted copy).
+            if not file_modified:
+                return DecryptionTestResult.SKIPPED
+            backup_safe_to_delete = self._safe_restore(backup_path, target_file)
+            return DecryptionTestResult.FAILED
         except subprocess.TimeoutExpired:
             backup_safe_to_delete = self._safe_restore(backup_path, target_file)
             return DecryptionTestResult.FAILED
