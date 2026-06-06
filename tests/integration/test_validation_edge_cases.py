@@ -73,7 +73,8 @@ class TestNestedPydanticModel:
         """)
         )
 
-        env = {"PYTHONPATH": integration_pythonpath}
+        env = os.environ.copy()
+        env["PYTHONPATH"] = integration_pythonpath
 
         # Run validate command
         result = subprocess.run(
@@ -146,7 +147,8 @@ class TestCustomValidators:
         env_file = tmp_path / ".env"
         env_file.write_text("EMAIL=test@example.com\nPORT=8080\n")
 
-        env = {"PYTHONPATH": integration_pythonpath}
+        env = os.environ.copy()
+        env["PYTHONPATH"] = integration_pythonpath
 
         result = subprocess.run(
             [
@@ -200,7 +202,8 @@ class TestOptionalVsRequired:
         env_file = tmp_path / ".env"
         env_file.write_text("REQUIRED_FIELD=present\n")
 
-        env = {"PYTHONPATH": integration_pythonpath}
+        env = os.environ.copy()
+        env["PYTHONPATH"] = integration_pythonpath
 
         result = subprocess.run(
             [
@@ -248,7 +251,8 @@ class TestOptionalVsRequired:
         env_file = tmp_path / ".env"
         env_file.write_text("API_KEY=secret123\n")
 
-        env = {"PYTHONPATH": integration_pythonpath}
+        env = os.environ.copy()
+        env["PYTHONPATH"] = integration_pythonpath
 
         result = subprocess.run(
             [
@@ -309,7 +313,8 @@ class TestExtraForbid:
         """)
         )
 
-        env = {"PYTHONPATH": integration_pythonpath}
+        env = os.environ.copy()
+        env["PYTHONPATH"] = integration_pythonpath
 
         result = subprocess.run(
             [
@@ -373,7 +378,8 @@ class TestSensitivePatterns:
         """)
         )
 
-        env = {"PYTHONPATH": integration_pythonpath}
+        env = os.environ.copy()
+        env["PYTHONPATH"] = integration_pythonpath
 
         # Run with encryption check enabled
         result = subprocess.run(
@@ -435,7 +441,8 @@ class TestTypeCoercion:
         env_file = tmp_path / ".env"
         env_file.write_text("DEBUG_MODE=true\nVERBOSE_MODE=False\n")
 
-        env = {"PYTHONPATH": integration_pythonpath}
+        env = os.environ.copy()
+        env["PYTHONPATH"] = integration_pythonpath
 
         result = subprocess.run(
             [
@@ -480,7 +487,8 @@ class TestTypeCoercion:
         env_file = tmp_path / ".env"
         env_file.write_text("PORT=8080\nMAX_CONNECTIONS=100\n")
 
-        env = {"PYTHONPATH": integration_pythonpath}
+        env = os.environ.copy()
+        env["PYTHONPATH"] = integration_pythonpath
 
         result = subprocess.run(
             [
@@ -524,7 +532,8 @@ class TestTypeCoercion:
         env_file = tmp_path / ".env"
         env_file.write_text("PORT=not_a_number\n")
 
-        env = {"PYTHONPATH": integration_pythonpath}
+        env = os.environ.copy()
+        env["PYTHONPATH"] = integration_pythonpath
 
         result = subprocess.run(
             [
@@ -567,7 +576,8 @@ class TestValidateCommand:
         env_file = tmp_path / ".env"
         env_file.write_text("API_KEY=secret\n")
 
-        env = {"PYTHONPATH": integration_pythonpath}
+        env = os.environ.copy()
+        env["PYTHONPATH"] = integration_pythonpath
 
         result = subprocess.run(
             [sys.executable, "-m", "envdrift.cli", "validate", str(env_file)],
@@ -605,7 +615,8 @@ class TestValidateCommand:
         env_file = tmp_path / ".env"
         env_file.write_text("API_KEY=secret123\n")
 
-        env = {"PYTHONPATH": integration_pythonpath}
+        env = os.environ.copy()
+        env["PYTHONPATH"] = integration_pythonpath
 
         result = subprocess.run(
             [
@@ -656,7 +667,8 @@ class TestValidateCommand:
         env_file = tmp_path / ".env"
         env_file.write_text("")
 
-        env = {"PYTHONPATH": integration_pythonpath}
+        env = os.environ.copy()
+        env["PYTHONPATH"] = integration_pythonpath
 
         result = subprocess.run(
             [
@@ -697,7 +709,8 @@ class TestValidateCommand:
         """)
         )
 
-        env = {"PYTHONPATH": integration_pythonpath}
+        env = os.environ.copy()
+        env["PYTHONPATH"] = integration_pythonpath
 
         result = subprocess.run(
             [
@@ -735,7 +748,8 @@ class TestValidateCommand:
         env_file = tmp_path / ".env"
         env_file.write_text("API_KEY=secret\n")
 
-        env = {"PYTHONPATH": integration_pythonpath}
+        env = os.environ.copy()
+        env["PYTHONPATH"] = integration_pythonpath
 
         result = subprocess.run(
             [
@@ -823,6 +837,32 @@ def _run_validate(
         env=env,
         capture_output=True,
         text=True,
+    )
+
+
+def test_subprocess_env_carries_path_and_home(integration_pythonpath: str) -> None:
+    """Regression for #331: a constructed test env must keep PATH and HOME.
+
+    Integration tests build the child env from ``os.environ.copy()`` then add
+    ``PYTHONPATH``. A bare ``{"PYTHONPATH": ...}`` dict strips PATH/HOME, so the
+    child cannot resolve ``uv``/``dotenvx``/``sops`` (PATH) or auto-install
+    binaries under ``$HOME`` — the exact failure mode #331 describes. This
+    asserts the contract the fix restores.
+    """
+    env = os.environ.copy()
+    env["PYTHONPATH"] = integration_pythonpath
+    out = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            "import os;print(os.environ.get('PATH') is not None, os.environ.get('HOME') is not None)",
+        ],
+        env=env,
+        capture_output=True,
+        text=True,
+    )
+    assert out.stdout.strip() == "True True", (
+        f"PATH/HOME must survive into the child env. stdout: {out.stdout!r} stderr: {out.stderr!r}"
     )
 
 

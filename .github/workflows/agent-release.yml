@@ -113,6 +113,16 @@ jobs:
           find dist -type f -exec mv {} release/ \;
           ls -la release/
 
+      - name: Generate checksums
+        working-directory: .
+        run: |
+          # install.sh / install.ps1 verify the agent binary against this file;
+          # without it the installers' (now fail-closed) checksum step aborts.
+          # `sha256sum`'s "<hash>  <filename>" format is exactly what they parse.
+          cd release
+          sha256sum * > checksums.txt
+          cat checksums.txt
+
       - name: Get version from tag
         id: version
         env:

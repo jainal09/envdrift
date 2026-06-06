@@ -14,6 +14,7 @@ Requires: docker-compose -f tests/docker-compose.test.yml up -d
 from __future__ import annotations
 
 import contextlib
+import os
 import subprocess
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -64,7 +65,8 @@ environment = "production"
         (work_dir / "envdrift.toml").write_text(config_content)
         (work_dir / ".env.production").write_text('SECRET="encrypted:..."')
 
-        env = {"PYTHONPATH": integration_pythonpath}
+        env = os.environ.copy()
+        env["PYTHONPATH"] = integration_pythonpath
 
         # Run with a timeout - the command should fail gracefully, not hang
         result = subprocess.run(
@@ -121,15 +123,18 @@ environment = "production"
 
         # Build environment with unreachable endpoint (port that's not listening)
         # Using localhost with wrong port fails fast (connection refused)
-        env = {
-            "PYTHONPATH": integration_pythonpath,
-            "AWS_ENDPOINT_URL": "http://127.0.0.1:59999",  # Port not listening
-            "AWS_ACCESS_KEY_ID": "test",
-            "AWS_SECRET_ACCESS_KEY": "test",
-            "AWS_DEFAULT_REGION": "us-east-1",
-            "AWS_MAX_ATTEMPTS": "1",
-            "AWS_RETRY_MODE": "standard",
-        }
+        env = os.environ.copy()
+        env.update(
+            {
+                "PYTHONPATH": integration_pythonpath,
+                "AWS_ENDPOINT_URL": "http://127.0.0.1:59999",  # Port not listening
+                "AWS_ACCESS_KEY_ID": "test",
+                "AWS_SECRET_ACCESS_KEY": "test",
+                "AWS_DEFAULT_REGION": "us-east-1",
+                "AWS_MAX_ATTEMPTS": "1",
+                "AWS_RETRY_MODE": "standard",
+            }
+        )
 
         result = subprocess.run(
             [*envdrift_cmd, "pull"],
@@ -277,7 +282,8 @@ backend = "dotenvx"
 """
         (work_dir / "envdrift.toml").write_text(config_content)
 
-        env = {"PYTHONPATH": integration_pythonpath}
+        env = os.environ.copy()
+        env["PYTHONPATH"] = integration_pythonpath
 
         # Run lock --check which will parse the .env file
         result = subprocess.run(
@@ -312,7 +318,8 @@ backend = "dotenvx"
 """
         (work_dir / "envdrift.toml").write_text(config_content)
 
-        env = {"PYTHONPATH": integration_pythonpath}
+        env = os.environ.copy()
+        env["PYTHONPATH"] = integration_pythonpath
 
         result = subprocess.run(
             [*envdrift_cmd, "lock", "--check"],
@@ -347,7 +354,8 @@ backend = "dotenvx"
 """
         (work_dir / "envdrift.toml").write_text(config_content)
 
-        env = {"PYTHONPATH": integration_pythonpath}
+        env = os.environ.copy()
+        env["PYTHONPATH"] = integration_pythonpath
 
         result = subprocess.run(
             [*envdrift_cmd, "lock", "--check"],
@@ -394,7 +402,8 @@ backend = "dotenvx"
 """
         (work_dir / "envdrift.toml").write_text(config_content)
 
-        env = {"PYTHONPATH": integration_pythonpath}
+        env = os.environ.copy()
+        env["PYTHONPATH"] = integration_pythonpath
 
         # Try to decrypt - should fail gracefully
         result = subprocess.run(
@@ -432,7 +441,8 @@ backend = "dotenvx"
 """
         (work_dir / "envdrift.toml").write_text(config_content)
 
-        env = {"PYTHONPATH": integration_pythonpath}
+        env = os.environ.copy()
+        env["PYTHONPATH"] = integration_pythonpath
 
         result = subprocess.run(
             [*envdrift_cmd, "lock", "--check"],
@@ -546,7 +556,8 @@ environment = "production"
             (work_dir / "envdrift.toml").write_text(config_content)
             (work_dir / ".env.production").write_text('SECRET="encrypted:..."')
 
-            env = {"PYTHONPATH": integration_pythonpath}
+            env = os.environ.copy()
+            env["PYTHONPATH"] = integration_pythonpath
 
             # This would try to write to .env.keys
             # Should handle permission error gracefully

@@ -19,6 +19,9 @@ curl -sSL https://raw.githubusercontent.com/jainal09/envdrift/main/install.sh | 
 # Install a specific version
 curl -sSL https://raw.githubusercontent.com/jainal09/envdrift/main/install.sh | sh -s -- --version 1.2.3
 
+# Skip agent checksum verification (unsafe — installs an unverified binary)
+curl -sSL https://raw.githubusercontent.com/jainal09/envdrift/main/install.sh | sh -s -- --insecure-skip-checksum
+
 # Uninstall
 curl -sSL https://raw.githubusercontent.com/jainal09/envdrift/main/install.sh | sh -s -- --uninstall
 ```
@@ -38,6 +41,9 @@ $env:ENVDRIFT_NO_AGENT = "1"; irm https://raw.githubusercontent.com/jainal09/env
 # Install a specific version
 $env:ENVDRIFT_VERSION = "1.2.3"; irm https://raw.githubusercontent.com/jainal09/envdrift/main/install.ps1 | iex
 
+# Skip agent checksum verification (unsafe — installs an unverified binary)
+$env:ENVDRIFT_INSECURE_SKIP_CHECKSUM = "1"; irm https://raw.githubusercontent.com/jainal09/envdrift/main/install.ps1 | iex
+
 # Uninstall
 $env:ENVDRIFT_UNINSTALL = "1"; irm https://raw.githubusercontent.com/jainal09/envdrift/main/install.ps1 | iex
 ```
@@ -47,6 +53,7 @@ If running the script directly (saved locally), you can use parameters instead:
 ```powershell
 .\install.ps1 -NoAgent
 .\install.ps1 -Version 1.2.3
+.\install.ps1 -InsecureSkipChecksum
 .\install.ps1 -Uninstall
 ```
 
@@ -57,7 +64,9 @@ If running the script directly (saved locally), you can use parameters instead:
 3. Creates an isolated virtual environment at `~/.envdrift/venv`
 4. Installs `envdrift[vault]` (all vault backends)
 5. Creates a wrapper script at `~/.envdrift/bin/envdrift`
-6. Optionally downloads the envdrift-agent binary (with checksum verification)
+6. Optionally downloads the envdrift-agent binary (SHA256-verified against the
+   release `checksums.txt`; the install **aborts** if the checksum is missing or
+   does not match, unless you pass `--insecure-skip-checksum`)
 
 Add `~/.envdrift/bin` to your `PATH` to use `envdrift` from anywhere.
 
