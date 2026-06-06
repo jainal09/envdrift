@@ -228,6 +228,111 @@ class TestAzureKeyVaultClient:
             with pytest.raises(VaultError):
                 client.authenticate()
 
+    def test_authenticate_list_forbidden_accepts_least_privilege_identity(self, mock_azure):
+        """A 403/Forbidden on the list probe must NOT fail authentication (#359).
+
+        The list probe is not a least-privilege check: an identity granted only
+        Get/Set on secrets (no List) authenticates fine but is forbidden to
+        enumerate secrets. authenticate() must keep the client and report
+        is_authenticated() == True so get_secret/set_secret can proceed.
+        """
+
+        class HttpResponseError(Exception):
+            def __init__(self, message, status_code):
+                super().__init__(message)
+                self.status_code = status_code
+
+        class ClientAuthenticationError(Exception):
+            pass
+
+        mock_azure.HttpResponseError = HttpResponseError
+        mock_azure.ClientAuthenticationError = ClientAuthenticationError
+
+        mock_credential = MagicMock()
+        mock_secret_client = MagicMock()
+        mock_secret_client.list_properties_of_secrets.side_effect = HttpResponseError(
+            "Forbidden", status_code=403
+        )
+
+        with (
+            patch.object(mock_azure, "_DefaultAzureCredential", return_value=mock_credential),
+            patch.object(mock_azure, "_SecretClient", return_value=mock_secret_client),
+        ):
+            client = mock_azure.AzureKeyVaultClient(vault_url="https://test.vault.azure.net")
+
+            # Must NOT raise: 403 on list means authenticated-but-cannot-list.
+            client.authenticate()
+
+            assert client.is_authenticated() is True
+            assert client._client is not None
+            assert client._credential is not None
+
+    def test_authenticate_list_client_auth_error_still_fails(self, mock_azure):
+        """A genuine ClientAuthenticationError on the probe still rejects the bad credential (#359).
+
+        Counterpart to the 403 case: a real authentication failure must keep
+        raising AuthenticationError and leave the client unauthenticated.
+        """
+
+        class ClientAuthError(Exception):
+            pass
+
+        mock_azure.ClientAuthenticationError = ClientAuthError
+
+        mock_credential = MagicMock()
+        mock_secret_client = MagicMock()
+        mock_secret_client.list_properties_of_secrets.side_effect = ClientAuthError("bad creds")
+
+        with (
+            patch.object(mock_azure, "_DefaultAzureCredential", return_value=mock_credential),
+            patch.object(mock_azure, "_SecretClient", return_value=mock_secret_client),
+        ):
+            client = mock_azure.AzureKeyVaultClient(vault_url="https://test.vault.azure.net")
+
+            with pytest.raises(AuthenticationError):
+                client.authenticate()
+
+            assert client.is_authenticated() is False
+            assert client._client is None
+            assert client._credential is None
+
+    def test_authenticate_list_non_403_http_error_still_raises_vault_error(self, mock_azure):
+        """A non-403 HTTP error on the list probe is still a real failure (VaultError).
+
+        Only 403/Forbidden is treated as authenticated-but-cannot-list; other HTTP
+        errors (e.g. 500) remain genuine Key Vault failures.
+        """
+
+        class HttpResponseError(Exception):
+            def __init__(self, message, status_code):
+                super().__init__(message)
+                self.status_code = status_code
+
+        class ClientAuthenticationError(Exception):
+            pass
+
+        mock_azure.HttpResponseError = HttpResponseError
+        mock_azure.ClientAuthenticationError = ClientAuthenticationError
+
+        mock_credential = MagicMock()
+        mock_secret_client = MagicMock()
+        mock_secret_client.list_properties_of_secrets.side_effect = HttpResponseError(
+            "Server Error", status_code=500
+        )
+
+        with (
+            patch.object(mock_azure, "_DefaultAzureCredential", return_value=mock_credential),
+            patch.object(mock_azure, "_SecretClient", return_value=mock_secret_client),
+        ):
+            client = mock_azure.AzureKeyVaultClient(vault_url="https://test.vault.azure.net")
+
+            with pytest.raises(VaultError):
+                client.authenticate()
+
+            assert client.is_authenticated() is False
+            assert client._client is None
+            assert client._credential is None
+
     def test_is_authenticated_false_after_failed_auth_error(self, mock_azure):
         """After authenticate() fails on the probe, is_authenticated() must be False.
 
