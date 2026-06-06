@@ -253,22 +253,20 @@ class SyncEngine:
         secret = self.vault_client.get_secret(mapping.secret_name)
         value = secret.value
 
-        # Handle case where vault stores full line (KEY=value)
-        # Strip any DOTENV_PRIVATE_KEY_*= prefix, not just the current environment's
-        # Support uppercase, lowercase, digits in environment names (e.g., soak, local, prod)
-        pattern = r"^DOTENV_PRIVATE_KEY_[A-Za-z0-9_]+=(.+)$"
-        match = re.match(pattern, value)
-        if match:
-            value = match.group(1)
-
-        # Strip a single layer of surrounding quotes to match read_key()
-        # (operations.py), so a quoted vault value and an unquoted local value
-        # compare equal instead of mismatching forever.
+        # Normalize the same way read_key() (operations.py) does so a vault value
+        # and the local file value converge instead of mismatching forever (#356).
+        # Order matters: surrounding whitespace, THEN a single layer of surrounding
+        # quotes, THEN any DOTENV_PRIVATE_KEY_*= prefix — quotes must come off
+        # before the prefix so a quoted full `KEY=value` line
+        # (e.g. `"DOTENV_PRIVATE_KEY_PROD=abc"`) still has its prefix stripped.
+        value = value.strip()
         if len(value) >= 2 and (
-            (value.startswith('"') and value.endswith('"'))
-            or (value.startswith("'") and value.endswith("'"))
+            (value[0] == '"' and value[-1] == '"') or (value[0] == "'" and value[-1] == "'")
         ):
             value = value[1:-1]
+        match = re.match(r"^DOTENV_PRIVATE_KEY_[A-Za-z0-9_]+=(.+)$", value)
+        if match:
+            value = match.group(1)
 
         return value
 

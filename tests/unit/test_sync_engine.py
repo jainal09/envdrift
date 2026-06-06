@@ -705,6 +705,16 @@ class TestSyncEngineFetchVaultSecret:
 
         assert engine._fetch_vault_secret(mapping) == secret
 
+    def test_fetch_vault_secret_quoted_full_line_strips_prefix(self, tmp_path: Path) -> None:
+        """#356 review: a quoted full `KEY=value` line strips quotes BEFORE the
+        DOTENV_PRIVATE_KEY_*= prefix, so the prefix doesn't leak; whitespace too."""
+        secret = "abc" + "123"
+        client = _StoredVaultClient({"k": f'  "DOTENV_PRIVATE_KEY_PROD={secret}"  '})
+        mapping = ServiceMapping(secret_name="k", folder_path=tmp_path)
+        engine = SyncEngine(config=SyncConfig(mappings=[mapping]), vault_client=client)
+
+        assert engine._fetch_vault_secret(mapping) == secret
+
 
 class TestSyncResult:
     """Tests for SyncResult aggregation."""

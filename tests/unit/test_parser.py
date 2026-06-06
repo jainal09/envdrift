@@ -318,6 +318,31 @@ BAR=plaintext
         # First `#` is glued (kept); the second, space-preceded `#` is a comment.
         assert result.variables["MIXED"].value == "a#b"
 
+    def test_parse_value_starting_with_hash_not_zeroed(self, tmp_path):
+        """#357 regression: a value that BEGINS with `#` (e.g. a hex color) is a
+        value, not a comment, and must not be silently zeroed."""
+        content = "COLOR=#FF0000\nALSO=#123 # real comment\nEMPTY=  # just a comment\n"
+        env_file = tmp_path / ".env"
+        env_file.write_text(content)
+
+        result = EnvParser().parse(env_file)
+        assert result.variables["COLOR"].value == "#FF0000"
+        # leading `#` value kept; the later space-preceded `#` is the comment.
+        assert result.variables["ALSO"].value == "#123"
+        # value is only whitespace + a space-preceded comment -> empty.
+        assert result.variables["EMPTY"].value == ""
+
+    def test_parse_inline_comment_escaped_quote(self, tmp_path):
+        """#357: an escaped quote does not toggle quote state, so a `#` inside the
+        quoted span stays protected."""
+        content = 'Q="a \\" # b"\n'
+        env_file = tmp_path / ".env"
+        env_file.write_text(content)
+
+        result = EnvParser().parse(env_file)
+        # The `\"` is escaped (quote stays open), so the `#` is inside quotes.
+        assert "#" in result.variables["Q"].value
+
     def test_parse_inline_comment_only_is_empty(self, tmp_path):
         """#357: a value that is only a comment collapses to EMPTY."""
         content = "ONLY=   # just a comment\n"
