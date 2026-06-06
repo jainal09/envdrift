@@ -1,0 +1,23 @@
+src/envdrift/sync/engine.py
+  s_dfc6cd6692ed8f::t_802ee28b202991 375-392
+  s_dfc6cd6692ed8f::t_40062df38b786b 422-429
+  s_dfc6cd6692ed8f::t_caddc4bcaa71aa 359-364,366-373,395-396,400-404,430-431
+tests/unit/test_sync_engine.py
+  s_dfc6cd6692ed8f::t_4c730b66f3b74b 695-810
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.3",
+  "base_commit_sha": "24b086c27af0c17c90a6e0271020b10e5ac15540",
+  "prompts": {},
+  "sessions": {
+    "s_dfc6cd6692ed8f": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "fd23e738-3512-4420-9290-d985ad979bfd",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Jainal Gosaliya <jainal09gosalia@gmail.com>"
+    }
+  }
+}
