@@ -1,0 +1,23 @@
+src/envdrift/cli_commands/sync.py
+  s_dfc6cd6692ed8f::t_c6b4371b894a7c 680-684,802-807
+tests/unit/coverage/test_cov_cli_commands_sync.py
+  s_dfc6cd6692ed8f::t_548ff38a5d68b7 402-411,416-421,425-426,429-435,440,451
+tests/integration/test_aws_integration.py
+  s_dfc6cd6692ed8f::t_ca53633065efce 865-877,883-884,887-894,906,922-924
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.3",
+  "base_commit_sha": "db8da113a5ccac05c13057e58b0049a5830258ea",
+  "prompts": {},
+  "sessions": {
+    "s_dfc6cd6692ed8f": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "fd23e738-3512-4420-9290-d985ad979bfd",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Jainal Gosaliya <jainal09gosalia@gmail.com>"
+    }
+  }
+}
