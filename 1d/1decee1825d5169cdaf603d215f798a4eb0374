@@ -1,0 +1,24 @@
+tests/unit/test_vault_hashicorp.py
+  s_dfc6cd6692ed8f::t_818c5f7837590c 225-227
+src/envdrift/vault/hashicorp.py
+  s_dfc6cd6692ed8f::t_d92c6ac44376bb 98
+  s_dfc6cd6692ed8f::t_208ae7d8401e65 96-97,101,104
+tests/unit/test_vault_aws.py
+  s_dfc6cd6692ed8f::t_79c52e46be66fd 252-254,264-269,277-278
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.3",
+  "base_commit_sha": "1d1decee1825d5169cdaf603d215f798a4eb0374",
+  "prompts": {},
+  "sessions": {
+    "s_dfc6cd6692ed8f": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "fd23e738-3512-4420-9290-d985ad979bfd",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Jainal Gosaliya <jainal09gosalia@gmail.com>"
+    }
+  }
+}
