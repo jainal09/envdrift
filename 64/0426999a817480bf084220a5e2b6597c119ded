@@ -1,0 +1,28 @@
+tests/unit/test_partial_encryption.py
+  s_dfc6cd6692ed8f::t_843d8c6ca04fe6 112-121
+  s_dfc6cd6692ed8f::t_f988def4e27858 89-97
+  s_dfc6cd6692ed8f::t_db0ad8ba1079e9 5-7
+  s_dfc6cd6692ed8f::t_24831bd1a5f6d9 1049-1058,1061-1071,1073-1074,1076-1078,1080-1089,1091-1093,1096-1101,1103,1106-1118,1120-1121,1123-1125,1132-1145,1147,1149-1151
+src/envdrift/core/partial_encryption.py
+  s_dfc6cd6692ed8f::t_5fe047b5e46d45 114-130
+tests/integration/test_partial_encryption_e2e.py
+  s_dfc6cd6692ed8f::t_4eacb736cb036f 551-563
+  s_dfc6cd6692ed8f::t_26ca61f11d51e6 591-597,614,620-627
+  s_dfc6cd6692ed8f::t_8127497560f553 639-646
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.3",
+  "base_commit_sha": "640426999a817480bf084220a5e2b6597c119ded",
+  "prompts": {},
+  "sessions": {
+    "s_dfc6cd6692ed8f": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "fd23e738-3512-4420-9290-d985ad979bfd",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Jainal Gosaliya <jainal09gosalia@gmail.com>"
+    }
+  }
+}
