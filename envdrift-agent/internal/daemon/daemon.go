@@ -2,6 +2,8 @@
 package daemon
 
 import (
+	"bytes"
+	"encoding/xml"
 	"fmt"
 	"os"
 	"os/exec"
@@ -86,7 +88,7 @@ func launchAgentPath() (string, error) {
 }
 
 // installMacOS creates a user LaunchAgent plist for the EnvDrift guardian and loads it with launchctl.
-// 
+//
 // The plist will run the current executable with the "start" argument, configure the agent to run at
 // login and keep alive, and redirect stdout/stderr to /tmp. It returns an error if writing the plist,
 // creating the target directory, obtaining the executable path, or loading the LaunchAgent fails.
@@ -96,7 +98,29 @@ func installMacOS() error {
 		return err
 	}
 
-	plist := fmt.Sprintf(`<?xml version="1.0" encoding="UTF-8"?>
+	plist := buildLaunchdPlist(execPath)
+
+	plistPath, err := launchAgentPath()
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(filepath.Dir(plistPath), 0755); err != nil {
+		return err
+	}
+
+	if err := os.WriteFile(plistPath, []byte(plist), 0644); err != nil {
+		return err
+	}
+
+	// Load the agent
+	return exec.Command("launchctl", "load", plistPath).Run()
+}
+
+// buildLaunchdPlist returns the launchd plist XML for the EnvDrift guardian,
+// running execPath with the "start" argument. The exec path is XML-escaped so
+// special characters (&, <, >) in the path produce valid XML (#348 G5).
+func buildLaunchdPlist(execPath string) string {
+	return fmt.Sprintf(`<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
@@ -116,22 +140,16 @@ func installMacOS() error {
     <key>StandardErrorPath</key>
     <string>/tmp/envdrift-agent.err</string>
 </dict>
-</plist>`, execPath)
+</plist>`, xmlEscape(execPath))
+}
 
-	plistPath, err := launchAgentPath()
-	if err != nil {
-		return err
+// xmlEscape escapes s for safe inclusion in a plist <string> element (#348 G5).
+func xmlEscape(s string) string {
+	var buf bytes.Buffer
+	if err := xml.EscapeText(&buf, []byte(s)); err != nil {
+		return s
 	}
-	if err := os.MkdirAll(filepath.Dir(plistPath), 0755); err != nil {
-		return err
-	}
-
-	if err := os.WriteFile(plistPath, []byte(plist), 0644); err != nil {
-		return err
-	}
-
-	// Load the agent
-	return exec.Command("launchctl", "load", plistPath).Run()
+	return buf.String()
 }
 
 // uninstallMacOS removes the per-user LaunchAgent plist for com.envdrift.guardian and attempts to unload it from launchd.
@@ -187,18 +205,7 @@ func installLinux() error {
 		return err
 	}
 
-	service := fmt.Sprintf(`[Unit]
-Description=EnvDrift Guardian - Auto-encrypt .env files
-After=default.target
-
-[Service]
-ExecStart=%s start
-Restart=always
-RestartSec=10
-
-[Install]
-WantedBy=default.target
-`, execPath)
+	service := buildSystemdUnit(execPath)
 
 	servicePath, err := systemdPath()
 	if err != nil {
@@ -216,6 +223,33 @@ WantedBy=default.target
 	_ = exec.Command("systemctl", "--user", "daemon-reload").Run()
 	_ = exec.Command("systemctl", "--user", "enable", linuxServiceName).Run()
 	return exec.Command("systemctl", "--user", "start", linuxServiceName).Run()
+}
+
+// buildSystemdUnit returns the systemd user unit for the EnvDrift guardian,
+// running execPath with the "start" argument. The exec path is double-quoted
+// so a path containing spaces or special characters is not split by systemd
+// into multiple arguments (#348 G4).
+func buildSystemdUnit(execPath string) string {
+	return fmt.Sprintf(`[Unit]
+Description=EnvDrift Guardian - Auto-encrypt .env files
+After=default.target
+
+[Service]
+ExecStart=%s start
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=default.target
+`, systemdQuote(execPath))
+}
+
+// systemdQuote double-quotes a path for use in a systemd ExecStart line,
+// escaping backslashes and double quotes per systemd's quoting rules (#348 G4).
+func systemdQuote(s string) string {
+	s = strings.ReplaceAll(s, `\`, `\\`)
+	s = strings.ReplaceAll(s, `"`, `\"`)
+	return `"` + s + `"`
 }
 
 // uninstallLinux stops and disables the user systemd service and removes its unit file from the user's systemd directory.

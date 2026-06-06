@@ -21,14 +21,16 @@ type FileEvent struct {
 
 // Watcher watches directories for .env file changes
 type Watcher struct {
-	fsWatcher *fsnotify.Watcher
-	patterns  []string
-	exclude   []string
-	recursive bool
-	events    chan FileEvent
-	done      chan struct{}
-	mu        sync.RWMutex
-	lastMod   map[string]time.Time
+	fsWatcher       *fsnotify.Watcher
+	patterns        []string
+	exclude         []string
+	recursive       bool
+	events          chan FileEvent
+	done            chan struct{}
+	stopOnce        sync.Once
+	closeEventsOnce sync.Once
+	mu              sync.RWMutex
+	lastMod         map[string]time.Time
 }
 
 // New creates and returns a Watcher configured with the provided filename include patterns, exclude patterns, and recursion setting.
@@ -82,15 +84,22 @@ func (w *Watcher) Start() {
 	go w.run()
 }
 
-// Stop stops the watcher
+// Stop stops the watcher. It signals shutdown via w.done and closes the
+// fsnotify watcher; w.events is closed by run() (the sole sender) so there is
+// no send-on-closed-channel panic. Stop is safe to call multiple times (#362).
 func (w *Watcher) Stop() {
-	close(w.done)
+	w.stopOnce.Do(func() {
+		close(w.done)
+	})
 	if err := w.fsWatcher.Close(); err != nil {
 		log.Printf("Watcher close error: %v", err)
 	}
 }
 
 func (w *Watcher) run() {
+	// The sole sender closes w.events on exit so consumers observe ok==false
+	// and don't leak goroutines waiting on a never-closed channel (#362).
+	defer w.closeEvents()
 	for {
 		select {
 		case <-w.done:
@@ -109,6 +118,12 @@ func (w *Watcher) run() {
 	}
 }
 
+// closeEvents closes the events channel exactly once. Only run() (the sole
+// sender) may call this, on its way out, to avoid a send-on-closed panic.
+func (w *Watcher) closeEvents() {
+	w.closeEventsOnce.Do(func() { close(w.events) })
+}
+
 func (w *Watcher) handleEvent(event fsnotify.Event) {
 	// Only care about writes and creates
 	if event.Op&(fsnotify.Write|fsnotify.Create) == 0 {
@@ -116,6 +131,17 @@ func (w *Watcher) handleEvent(event fsnotify.Event) {
 	}
 
 	path := event.Name
+
+	// If a new directory was created, start watching it (recursively) so that
+	// .env files created beneath it later are not missed (#348 G2). Do this
+	// before the pattern filter, since a directory name won't match .env*.
+	if w.recursive && event.Op&fsnotify.Create != 0 {
+		if info, err := os.Stat(path); err == nil && info.IsDir() {
+			if err := w.AddDirectory(path); err != nil {
+				log.Printf("Watcher add subdir error: %v", err)
+			}
+		}
+	}
 
 	// Check if it matches our patterns
 	if !w.matchesPattern(path) {
@@ -137,11 +163,15 @@ func (w *Watcher) handleEvent(event fsnotify.Event) {
 	w.lastMod[path] = info.ModTime()
 	w.mu.Unlock()
 
-	// Send event
-	w.events <- FileEvent{
+	// Send event, but bail out if we're shutting down so a full buffer can't
+	// wedge run() and leak the goroutine (#362).
+	select {
+	case w.events <- FileEvent{
 		Path:      path,
 		ModTime:   info.ModTime(),
 		Operation: event.Op.String(),
+	}:
+	case <-w.done:
 	}
 }
 
