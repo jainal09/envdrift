@@ -1125,9 +1125,9 @@ class TestKeywordGate:
 
         pubkey = "03" + "f8a91b2c3d4e5f6a" * 4  # 66 hex, compressed secp256k1 pubkey
         cfg = tmp_path / "pub.env"
-        # Quoted value so the generic-secret pattern matches; the EC-pubkey drop
-        # (#370) runs before the entropy filter, so the match is discarded.
-        cfg.write_text(f'CLIENT_SECRET="{pubkey}"\n')
+        # Var name at a word boundary ("secret") so generic-secret actually fires;
+        # the EC-pubkey drop (#370) runs before the entropy filter and discards it.
+        cfg.write_text(f'SECRET="{pubkey}"\n')
 
         result = scanner.scan([tmp_path])
 

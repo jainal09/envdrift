@@ -826,8 +826,17 @@ class NativeScanner(ScannerBackend):
         lines = content.splitlines()
 
         # File-scope keyword gate (#355): a keyword-gated pattern only fires when
-        # one of its context keywords appears anywhere in the file. Computed once.
+        # one of its context keywords appears anywhere in the file. Computed once
+        # for the whole file (not per line). A pattern flagged require_keyword but
+        # configured with no keywords is treated as always-gated (fail-safe: it
+        # never fires without context) rather than silently disabling the gate.
         content_lower = content.lower()
+        gated_out_patterns = {
+            pattern.id
+            for pattern in ALL_PATTERNS
+            if pattern.require_keyword
+            and not any(kw.lower() in content_lower for kw in pattern.keywords)
+        }
 
         def _build_finding(
             pattern: SecretPattern, secret: str, line_num: int, col_num: int
@@ -870,16 +879,11 @@ class NativeScanner(ScannerBackend):
                     continue
 
                 # File-scope keyword gate (#355): suppress broad-regex matches
-                # unless the file mentions the provider context somewhere. Only
-                # applies to patterns flagged require_keyword (ambiguous prefixes
-                # like twilio AC<32hex>); distinctive-prefix patterns (AKIA…,
-                # sq0atp-…) are never suppressed, so a genuine key with no
+                # unless the file mentions the provider context somewhere (gate
+                # set precomputed once above). Distinctive-prefix patterns (AKIA…,
+                # sq0atp-…) aren't require_keyword, so a genuine key with no
                 # sibling provider context is still reported.
-                if (
-                    pattern.require_keyword
-                    and pattern.keywords
-                    and not any(kw.lower() in content_lower for kw in pattern.keywords)
-                ):
+                if pattern.id in gated_out_patterns:
                     continue
 
                 match = pattern.pattern.search(line)
@@ -888,11 +892,11 @@ class NativeScanner(ScannerBackend):
                     secret = match.group(1) if match.groups() else match.group(0)
 
                     # Drop dotenvx EC public keys by value shape (#370): public,
-                    # not a secret. The full secret is still available here,
-                    # before redaction collapses it. Defensive secondary guard —
-                    # the primary pubkey filter is the hash-based
-                    # ScanEngine._filter_public_keys; no standard pattern captures
-                    # a bare EC pubkey as an exact group, so this rarely fires.
+                    # not a secret. Defensive secondary guard — the primary pubkey
+                    # filter is the hash-based ScanEngine._filter_public_keys; no
+                    # standard pattern captures a bare EC pubkey as its exact
+                    # group (generic-secret captures the keyword), so this is hard
+                    # to exercise directly and is excluded from coverage.
                     if _EC_PUBKEY_RE.match(secret):  # pragma: no cover
                         continue
 
@@ -926,8 +930,9 @@ class NativeScanner(ScannerBackend):
         for pattern in ALL_PATTERNS:
             if not pattern.multiline:
                 continue
-            match = pattern.pattern.search(content)
-            if match:
+            # finditer (not search): a file may hold multiple service-account
+            # JSON blocks; search() would report only the first.
+            for match in pattern.pattern.finditer(content):
                 secret = match.group(1) if match.groups() else match.group(0)
                 line_num = content.count("\n", 0, match.start()) + 1
                 col_num = match.start() - content.rfind("\n", 0, match.start())

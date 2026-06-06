@@ -751,12 +751,18 @@ class ScanEngine:
         Returns:
             Filtered list excluding public key findings.
         """
-        known_pubkey_hashes = self._collect_public_key_hashes(findings)
-        if not known_pubkey_hashes:
+        pubkey_hashes_by_file = self._collect_public_key_hashes(findings)
+        if not pubkey_hashes_by_file:
             return findings
 
         def is_public_key(finding: ScanFinding) -> bool:
-            if finding.secret_hash and finding.secret_hash in known_pubkey_hashes:
+            # Per-file: a finding is only a public key if ITS OWN file declares
+            # that value on a DOTENV_PUBLIC_KEY line. A global set would let a key
+            # in file A suppress a same-hash finding in file B (cross-file FN).
+            if not finding.secret_hash:
+                return False
+            file_hashes = pubkey_hashes_by_file.get(str(finding.file_path))
+            if file_hashes and finding.secret_hash in file_hashes:
                 logger.debug("Filtering dotenvx public key finding by hash")
                 return True
             return False
@@ -773,22 +779,23 @@ class ScanEngine:
         r'^\s*DOTENV_PUBLIC_KEY[A-Za-z0-9_]*\s*=\s*["\']?(0[23][0-9a-fA-F]{64})["\']?'
     )
 
-    def _collect_public_key_hashes(self, findings: list[ScanFinding]) -> set[str]:
-        """Build the set of ``hash_secret`` values for every dotenvx public key
-        declared in the files referenced by ``findings``.
+    def _collect_public_key_hashes(self, findings: list[ScanFinding]) -> dict[str, set[str]]:
+        """Map each referenced file to the ``hash_secret`` values of the dotenvx
+        public keys declared IN THAT FILE.
 
-        The public key is present, in cleartext, in the file's
+        The public key is present, in cleartext, on the file's
         ``DOTENV_PUBLIC_KEY*`` line. We hash it the same way scanners hash the
-        secret they report, so a finding whose value *is* that public key matches
-        by ``secret_hash`` and gets dropped. Each file is parsed once.
+        secret they report, so a finding whose value *is* that file's public key
+        matches by ``secret_hash`` and gets dropped. Per-file (not a global set)
+        so a key in one file can't suppress findings in another. Each file is
+        parsed once.
         """
-        hashes: set[str] = set()
-        seen_files: set[str] = set()
+        by_file: dict[str, set[str]] = {}
         for finding in findings:
             file_path = str(finding.file_path)
-            if file_path in seen_files:
+            if file_path in by_file:
                 continue
-            seen_files.add(file_path)
+            hashes: set[str] = set()
             try:
                 with open(file_path, encoding="utf-8", errors="ignore") as f:
                     for line in f:
@@ -796,8 +803,9 @@ class ScanEngine:
                         if match:
                             hashes.add(hash_secret(match.group(1)))
             except OSError:
-                continue
-        return hashes
+                hashes = set()
+            by_file[file_path] = hashes
+        return by_file
 
     def _filter_gitignored_files(self, findings: list[ScanFinding]) -> list[ScanFinding]:
         """Filter out findings from files that are in .gitignore.
