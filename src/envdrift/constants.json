@@ -48,7 +48,7 @@
         "linux_arm64": "https://github.com/aquasecurity/trivy/releases/download/v{version}/trivy_{version}_Linux-ARM64.tar.gz",
         "windows_amd64": "https://github.com/aquasecurity/trivy/releases/download/v{version}/trivy_{version}_windows-64bit.zip"
     },
-    "infisical_version": "0.31.1",
+    "infisical_version": "0.41.90",
     "infisical_download_urls": {
         "darwin_amd64": "https://github.com/Infisical/infisical/releases/download/infisical-cli/v{version}/infisical_{version}_darwin_amd64.tar.gz",
         "darwin_arm64": "https://github.com/Infisical/infisical/releases/download/infisical-cli/v{version}/infisical_{version}_darwin_arm64.tar.gz",
