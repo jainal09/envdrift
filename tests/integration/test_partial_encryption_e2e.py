@@ -548,8 +548,19 @@ class TestCombineModeStructure:
 
 
 # ---------------------------------------------------------------------------
-# #352: is_file_encrypted / encrypt_secret_file must key off real ciphertext,
-# not the literal substring "encrypted:". Lock -> pull -> lock must re-encrypt.
+# #352: is_file_encrypted must key off a real ciphertext VALUE, not the bare
+# substring "encrypted:" anywhere in the file. The actual bug: a PLAINTEXT
+# value literally containing "encrypted:" (e.g. NOTE=... stored encrypted: see
+# docs) false-positived under the old check
+# (`"encrypted:" in content or "DOTENV_VAULT" in content`), so
+# encrypt_secret_file early-returned and the real secret was committed in
+# cleartext. The load-bearing #352 regression is
+# `test_plaintext_value_literally_containing_encrypted_prefix_is_not_encrypted`
+# (it fails on the old substring code and passes on the value-scan). The
+# residual-public-key and lock->pull->lock cases below are FORWARD-GUARDS: the
+# old code already returned False for a decrypted file (it holds neither
+# "encrypted:" nor "DOTENV_VAULT"), so they passed pre-fix too — they lock in
+# the value-scan behaviour against future regressions.
 # ---------------------------------------------------------------------------
 
 
@@ -577,9 +588,13 @@ class TestIsFileEncryptedRealBinary:
     def test_decrypted_file_with_residual_public_key_is_not_encrypted(self, tmp_path: Path):
         """Lock then pull: values are plaintext but DOTENV_PUBLIC_KEY remains => False.
 
-        Regression for #352: the leftover public-key header must NOT make the file
-        look encrypted; otherwise a real push would skip re-encryption and the
-        plaintext secret would be committed.
+        FORWARD-GUARD, not a #352 repro. A dotenvx-decrypted file contains
+        neither "encrypted:" nor "DOTENV_VAULT", so the OLD substring check
+        already returned False here — this case passed before the fix. It is
+        kept to lock in that the new value-scan still reads a leftover
+        public-key header (and plaintext values) as NOT encrypted, so a future
+        regression that mistook the header for ciphertext — which would make
+        encrypt_secret_file skip re-encryption — is caught.
         """
         from envdrift.core.partial_encryption import is_file_encrypted
 
@@ -596,13 +611,20 @@ class TestIsFileEncryptedRealBinary:
         assert "DOTENV_PUBLIC_KEY" in decrypted
         assert plaintext in decrypted
         assert "encrypted:" not in decrypted
-        # The key assertion of #352:
+        # Forward-guard: header alone must not read as encrypted.
         assert is_file_encrypted(secret) is False
 
     def test_plaintext_value_literally_containing_encrypted_prefix_is_not_encrypted(
         self, tmp_path: Path
     ):
-        """A plaintext value that contains the literal text 'encrypted:' => False (#352)."""
+        """Plaintext value literally containing 'encrypted:' => False (the real #352 bug).
+
+        This is the load-bearing #352 regression test (real-binary twin). The
+        OLD check (``"encrypted:" in content``) false-positived on the NOTE
+        value below and returned True, so encrypt_secret_file early-returned and
+        the genuinely-secret API_KEY was committed in cleartext. Fails on the
+        old substring code; passes on the value-scan.
+        """
         from envdrift.core.partial_encryption import is_file_encrypted
 
         secret = tmp_path / ".env.secret"
@@ -614,7 +636,14 @@ class TestIsFileEncryptedRealBinary:
 
 
 class TestLockPullLockReEncrypts:
-    """encrypt_secret_file re-encrypts a decrypted-with-residual-header file (#352)."""
+    """encrypt_secret_file re-encrypts a decrypted-with-residual-header file.
+
+    FORWARD-GUARD for the value-scan, not a #352 repro: the decrypted file in
+    the middle of this flow holds neither "encrypted:" nor "DOTENV_VAULT", so
+    the OLD substring check already returned False for it and this flow
+    re-encrypted correctly before the fix too. Kept to ensure lock->pull->lock
+    keeps re-encrypting once the value-scan is in place.
+    """
 
     def test_encrypt_secret_file_reencrypts_after_pull(self, git_repo: Path):
         """lock -> pull -> lock: re-encryption produces ciphertext, no plaintext left."""

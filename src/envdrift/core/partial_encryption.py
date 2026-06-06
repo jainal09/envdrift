@@ -111,12 +111,23 @@ def is_file_encrypted(file_path: Path) -> bool:
 
     True requires at least one assigned VALUE to be genuinely encrypted
     (dotenvx ``encrypted:`` or SOPS ``ENC[AES256_GCM,``), or a real SOPS
-    metadata block. A dotenvx file that has been DECRYPTED keeps its
-    ``DOTENV_PUBLIC_KEY_*`` line and header comment but holds plaintext values,
-    so those markers (and the bare substring ``encrypted:`` appearing inside a
-    plaintext value) must NOT count as encrypted — otherwise
-    ``encrypt_secret_file`` early-returns and leaves a real secret in cleartext
-    (#352).
+    metadata block.
+
+    The #352 bug this fixes: the old check was
+    ``"encrypted:" in content or "DOTENV_VAULT" in content``, so a PLAINTEXT
+    value that merely *contained* the substring ``encrypted:`` (e.g.
+    ``NOTE=... the secret is stored encrypted: see docs``) false-positived as
+    "already encrypted". ``encrypt_secret_file`` then early-returned and the
+    real secrets in that file were committed in cleartext. Anchoring detection
+    to a VALUE that *starts with* a ciphertext prefix removes that false
+    positive.
+
+    Related safety property (a forward-guard, not the #352 bug itself): a
+    dotenvx file that has been DECRYPTED keeps its ``DOTENV_PUBLIC_KEY_*`` line
+    and header comment while its values revert to plaintext. Those markers must
+    not count as encrypted either, so re-encryption (lock -> pull -> lock) still
+    fires. The old substring check already returned False for such files (they
+    hold neither substring); the value-scan preserves that.
 
     Args:
         file_path: Path to check
