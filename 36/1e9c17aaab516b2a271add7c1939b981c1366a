@@ -1,0 +1,59 @@
+envdrift-agent/internal/encrypt/encrypt.go
+  s_dfc6cd6692ed8f::t_39be1e3f784826 74,83,88-95,100-103,105-106,110,113,118,121,125
+envdrift-agent/internal/encrypt/encrypt_test.go
+  s_dfc6cd6692ed8f::t_da94b3907d7240 7-8
+  s_dfc6cd6692ed8f::t_1cfc7d29f19eac 48-66
+  s_dfc6cd6692ed8f::t_6a95a33ce9bacd 103-191
+envdrift-agent/internal/cmd/root.go
+  s_dfc6cd6692ed8f::t_78bca1a47ccdff 167-172
+envdrift-agent/internal/guardian/guardian.go
+  s_dfc6cd6692ed8f::t_dd39ab6fb98589 136-140
+  s_dfc6cd6692ed8f::t_6f7d915d27d1fd 192-197,199-200,202-204
+  s_dfc6cd6692ed8f::t_229b37ed6abe67 198,201
+envdrift-agent/internal/daemon/daemon.go
+  s_dfc6cd6692ed8f::t_d884e0cda5d6b8 5-6
+  s_dfc6cd6692ed8f::t_fe8f2ab7df939c 101
+  s_dfc6cd6692ed8f::t_6427eda9cdf2c6 228-254
+  s_dfc6cd6692ed8f::t_b345a728d03097 119-123,143-144,146-150,152
+  s_dfc6cd6692ed8f::t_ce3ede5ee98845 208
+envdrift-agent/internal/watcher/watcher_test.go
+  s_dfc6cd6692ed8f::t_fc0726f4594fe0 168-305
+  s_dfc6cd6692ed8f::t_fb909d3ce485ad 7
+envdrift-agent/internal/guardian/guardian_leak_test.go
+  s_dfc6cd6692ed8f::t_d8d1e3d3a884b5 6-7
+  s_dfc6cd6692ed8f::t_4bcc2b1dea0744 1-5,8-53,59,62-65,67-68,73-122
+  s_dfc6cd6692ed8f::t_b92773b62097d0 54-58,60-61,66
+  s_dfc6cd6692ed8f::t_73a4b70c0359e0 69-72
+envdrift-agent/internal/guardian/guardian_race_test.go
+  s_dfc6cd6692ed8f::t_380d9d8e55cada 1-5,8-14,21,37-41,43-53,55,57,61-62,66-67,70,79-82,88
+  s_dfc6cd6692ed8f::t_a6cc90bf8f8407 15-20,22-27,42,54,56,58-60,63-65,68-69,71-78,83-87
+  s_dfc6cd6692ed8f::t_76d51c69dfafd6 6-7
+  s_dfc6cd6692ed8f::t_18714907963edb 28-36
+envdrift-agent/internal/daemon/daemon_test.go
+  s_dfc6cd6692ed8f::t_cc1a59ddaac952 121-123
+  s_dfc6cd6692ed8f::t_8ddb0e531f7605 5
+  s_dfc6cd6692ed8f::t_f8e292f256e1b4 6-7
+  s_dfc6cd6692ed8f::t_4dc34041555676 59-120,124-128
+envdrift-agent/internal/guardian/guardian_test.go
+  s_dfc6cd6692ed8f::t_f1642859604e8c 1-87
+envdrift-agent/internal/watcher/watcher.go
+  s_dfc6cd6692ed8f::t_1b44023dc76bca 24-33
+  s_dfc6cd6692ed8f::t_f5f5c524472558 166-169,173-174
+  s_dfc6cd6692ed8f::t_a49a3e3dcb5c2a 87-89,91-93,100-102,121-124
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.3",
+  "base_commit_sha": "361e9c17aaab516b2a271add7c1939b981c1366a",
+  "prompts": {},
+  "sessions": {
+    "s_dfc6cd6692ed8f": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "fd23e738-3512-4420-9290-d985ad979bfd",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Jainal Gosaliya <jainal09gosalia@gmail.com>"
+    }
+  }
+}
