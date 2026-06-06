@@ -1,0 +1,35 @@
+src/envdrift/sync/operations.py
+  s_dfc6cd6692ed8f::t_81014b551909b0 5,7,12-15
+  s_dfc6cd6692ed8f::t_abae47c147c380 141-154
+tests/unit/test_sync_operations.py
+  s_dfc6cd6692ed8f::t_c23ee33c397782 223-274
+  s_dfc6cd6692ed8f::t_b05a8da29cf78d 14,18-24
+src/envdrift/sync/engine.py
+  s_dfc6cd6692ed8f::t_9b10433e3996b1 145
+  s_dfc6cd6692ed8f::t_b6c66b7ddde0e1 15
+  s_dfc6cd6692ed8f::t_2746bfaaeb2e18 113
+tests/unit/test_rich_output.py
+  s_dfc6cd6692ed8f::t_6518d38d432ed9 242-278,280-282
+src/envdrift/vault/gcp.py
+  s_dfc6cd6692ed8f::t_4366ea829bbad8 65-85,87,97,101
+tests/unit/test_vault_gcp.py
+  s_dfc6cd6692ed8f::t_b3ddfa7192335f 172,176-181,183-184,186-187
+tests/unit/test_vault_gcp_paths.py
+  s_dfc6cd6692ed8f::t_d0d7e294295ed3 1-88
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.3",
+  "base_commit_sha": "39c0bb53a3393d6af63a9b4948735f7f5f080d7f",
+  "prompts": {},
+  "sessions": {
+    "s_dfc6cd6692ed8f": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "fd23e738-3512-4420-9290-d985ad979bfd",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Jainal Gosaliya <jainal09gosalia@gmail.com>"
+    }
+  }
+}
