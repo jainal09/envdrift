@@ -703,3 +703,38 @@ class TestSecretsOnlyCompanionsUntouched:
         assert keys_file.exists(), "dotenvx should have generated .env.keys"
         assert "DOTENV_PRIVATE_KEY" in keys_file.read_text()
         assert "encrypted:" not in keys_file.read_text()
+
+    def test_pull_secrets_only_decrypts_only_dot_env_not_companions(self, git_repo: Path):
+        """pull_secrets_only skips companion files too (#358 pull branch)."""
+        from envdrift.config import PartialEncryptionEnvironmentConfig
+        from envdrift.core.partial_encryption import (
+            is_file_encrypted,
+            pull_secrets_only,
+            push_secrets_only,
+        )
+
+        secrets = git_repo / "secrets"
+        secrets.mkdir()
+        real = secrets / ".env"
+        real.write_text("API_KEY=" + "sk_live_" + "0123456789abcdef" * 2 + "\n")
+        companions = {
+            ".env.example": "API_KEY=changeme\n",
+            ".env.sample": "API_KEY=sample\n",
+            ".env.template": "API_KEY=tmpl\n",
+        }
+        for name, body in companions.items():
+            (secrets / name).write_text(body)
+
+        cfg = PartialEncryptionEnvironmentConfig(
+            name="prod", secrets_only=True, secrets_dir=str(secrets), pattern=".env*"
+        )
+        # Encrypt first so there is ciphertext to pull (decrypt).
+        push_secrets_only(cfg)
+        assert is_file_encrypted(real) is True
+
+        pull_secrets_only(cfg)
+
+        # The real secret file was decrypted; companions were never processed.
+        assert is_file_encrypted(real) is False
+        for name, body in companions.items():
+            assert (secrets / name).read_text() == body, f"{name} was modified by pull"

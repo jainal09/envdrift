@@ -127,7 +127,12 @@ def is_file_encrypted(file_path: Path) -> bool:
     if not file_path.exists():
         return False
 
-    content = file_path.read_text(encoding="utf-8")
+    # errors="replace": a non-UTF-8 file (e.g. a Latin-1 byte in a value) must not
+    # raise UnicodeDecodeError here — is_file_encrypted is called from the push/
+    # pull/encrypt paths with no surrounding handler, so an exception would abort
+    # the whole operation. A real dotenvx/SOPS ciphertext marker is ASCII, so
+    # replacement characters cannot turn a plaintext file into a false positive.
+    content = file_path.read_text(encoding="utf-8", errors="replace")
 
     for raw_line in content.splitlines():
         line = raw_line.strip()
