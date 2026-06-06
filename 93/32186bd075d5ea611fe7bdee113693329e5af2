@@ -1,0 +1,25 @@
+src/envdrift/cli_commands/vault.py
+  s_dfc6cd6692ed8f::t_c818cbd11b9bc6 421-423
+docs/cli/vault-push.md
+  s_dfc6cd6692ed8f::t_01365be08c5875 240-243
+tests/unit/test_cli_vault_push.py
+  s_dfc6cd6692ed8f::t_802a5f8102f95e 587-633
+  s_dfc6cd6692ed8f::t_03aa912ab8f247 361-362
+  s_dfc6cd6692ed8f::t_6b3b7ec99b93c4 491-493
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.3",
+  "base_commit_sha": "9332186bd075d5ea611fe7bdee113693329e5af2",
+  "prompts": {},
+  "sessions": {
+    "s_dfc6cd6692ed8f": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "fd23e738-3512-4420-9290-d985ad979bfd",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Jainal Gosaliya <jainal09gosalia@gmail.com>"
+    }
+  }
+}
