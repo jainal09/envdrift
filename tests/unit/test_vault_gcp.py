@@ -18,23 +18,33 @@ class DummyGcpError(Exception):
 
 
 class DummyGoogleAPICallError(DummyGcpError):
-    """Fake GoogleAPICallError."""
+    """Fake GoogleAPICallError.
+
+    The real ``google.api_core.exceptions.GoogleAPICallError`` is the generic
+    base of the concrete status errors below (PermissionDenied, Unauthenticated,
+    NotFound, AlreadyExists all subclass it via ClientError). Mirroring that MRO
+    here is load-bearing: ``authenticate()`` relies on the *specific* clauses
+    (PermissionDenied -> accept, Unauthenticated -> reject) preceding the generic
+    ``except GoogleAPICallError`` clause. If these fakes were flat siblings, a
+    reordering regression (generic clause first) would still pass the tests while
+    re-breaking #359 in the real SDK. See test_authenticate_except_clause_ordering.
+    """
 
 
-class DummyPermissionDeniedError(DummyGcpError):
-    """Fake PermissionDenied."""
+class DummyPermissionDeniedError(DummyGoogleAPICallError):
+    """Fake PermissionDenied (a GoogleAPICallError subclass, as in the real SDK)."""
 
 
-class DummyUnauthenticatedError(DummyGcpError):
-    """Fake Unauthenticated."""
+class DummyUnauthenticatedError(DummyGoogleAPICallError):
+    """Fake Unauthenticated (a GoogleAPICallError subclass, as in the real SDK)."""
 
 
-class DummyNotFoundError(DummyGcpError):
-    """Fake NotFound."""
+class DummyNotFoundError(DummyGoogleAPICallError):
+    """Fake NotFound (a GoogleAPICallError subclass, as in the real SDK)."""
 
 
-class DummyAlreadyExistsError(DummyGcpError):
-    """Fake AlreadyExists."""
+class DummyAlreadyExistsError(DummyGoogleAPICallError):
+    """Fake AlreadyExists (a GoogleAPICallError subclass, as in the real SDK)."""
 
 
 class DummyDefaultCredentialsError(Exception):
@@ -255,6 +265,48 @@ class TestGCPSecretManagerClient:
             client.authenticate()
 
         assert client.is_authenticated() is False
+
+    def test_authenticate_except_clause_ordering(self, mock_gcp):
+        """The specific PermissionDenied/Unauthenticated clauses must precede the
+        generic GoogleAPICallError clause in authenticate().
+
+        Both PermissionDenied and Unauthenticated subclass GoogleAPICallError (in
+        the real SDK and now in these fakes), so a generic-first ordering would
+        swallow BOTH of them as VaultError. This test pins the outcomes that only
+        hold under the production specific-before-generic order:
+
+        - PermissionDenied (subclass of GoogleAPICallError) -> ACCEPTED (no raise,
+          client retained), per the #359 least-privilege fix.
+        - Unauthenticated (subclass of GoogleAPICallError) -> AuthenticationError,
+          NOT VaultError.
+
+        If someone moves ``except GoogleAPICallError`` ahead of the specific
+        clauses, PermissionDenied stops being accepted (caught as VaultError) and
+        Unauthenticated is mis-categorized as VaultError — both assertions below
+        fail, catching the regression.
+        """
+        exc = mock_gcp._google_exceptions
+        # Sanity: the fakes mirror the real MRO (specific errors ARE GoogleAPICallError).
+        assert issubclass(exc.PermissionDenied, exc.GoogleAPICallError)
+        assert issubclass(exc.Unauthenticated, exc.GoogleAPICallError)
+
+        # PermissionDenied is accepted even though it is a GoogleAPICallError subclass.
+        mock_client = MagicMock()
+        mock_client.list_secrets.side_effect = exc.PermissionDenied("list denied")
+        mock_gcp._secretmanager.SecretManagerServiceClient.return_value = mock_client
+        client = mock_gcp.GCPSecretManagerClient(project_id="my-project")
+        client.authenticate()
+        assert client.is_authenticated() is True
+        assert client._client is mock_client
+
+        # Unauthenticated maps to AuthenticationError (not VaultError) and drops the client.
+        mock_client_2 = MagicMock()
+        mock_client_2.list_secrets.side_effect = exc.Unauthenticated("invalid creds")
+        mock_gcp._secretmanager.SecretManagerServiceClient.return_value = mock_client_2
+        client_2 = mock_gcp.GCPSecretManagerClient(project_id="my-project")
+        with pytest.raises(AuthenticationError):
+            client_2.authenticate()
+        assert client_2.is_authenticated() is False
 
     def test_get_secret_binary_payload(self, mock_gcp):
         """Binary payload should be base64-encoded."""
