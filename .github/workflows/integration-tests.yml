@@ -82,7 +82,7 @@ jobs:
           --health-start-period=5s
 
       lowkey-vault:
-        image: nagyesta/lowkey-vault:7.2.18
+        image: nagyesta/lowkey-vault:7.2.26
         ports:
           - 8443:8443
         env:
