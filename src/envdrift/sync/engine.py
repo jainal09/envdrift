@@ -12,7 +12,7 @@ from typing import TYPE_CHECKING
 
 from envdrift.env_files import detect_env_file, resolve_mapping_env_file
 from envdrift.sync.config import ServiceMapping, SyncConfig
-from envdrift.sync.operations import EnvKeysFile, ensure_directory, preview_value
+from envdrift.sync.operations import EnvKeysFile, ensure_directory, redact_value
 from envdrift.sync.result import (
     DecryptionTestResult,
     ServiceSyncResult,
@@ -110,7 +110,7 @@ class SyncEngine:
 
             # Fetch secret from vault
             vault_value = self._fetch_vault_secret(mapping)
-            vault_preview = preview_value(vault_value)
+            vault_preview = redact_value(vault_value)
 
             # Check for ephemeral mode - skip local file operations
             is_ephemeral = self.config.get_effective_ephemeral(mapping)
@@ -142,7 +142,7 @@ class SyncEngine:
             env_keys_path = mapping.folder_path / self.config.env_keys_filename
             env_keys_file = EnvKeysFile(env_keys_path)
             local_value = env_keys_file.read_key(effective_key_name)
-            local_preview = preview_value(local_value) if local_value else None
+            local_preview = redact_value(local_value) if local_value else None
 
             # Compare values
             if local_value is None:

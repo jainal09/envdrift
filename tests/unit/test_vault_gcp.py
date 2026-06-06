@@ -169,19 +169,22 @@ class TestGCPSecretManagerClient:
         assert result.version == "5"
 
     def test_secret_helpers(self, mock_gcp):
-        """Test helper path methods."""
+        """Test helper path methods (same-project fully-qualified names allowed)."""
         client = mock_gcp.GCPSecretManagerClient(project_id="my-project")
 
         assert client._secret_id("plain-secret") == "plain-secret"
-        assert client._secret_id("projects/p/secrets/secret-1") == "secret-1"
-        assert client._secret_id("projects/p/secrets/secret-2/versions/9") == "secret-2"
-        assert client._secret_id("projects/p/other/secret-3") == "projects/p/other/secret-3"
-
-        assert client._version_path("projects/p/secrets/secret-4/versions/7") == (
-            "projects/p/secrets/secret-4/versions/7"
+        assert client._secret_id("projects/my-project/secrets/secret-1") == "secret-1"
+        assert client._secret_id("projects/my-project/secrets/secret-2/versions/9") == "secret-2"
+        assert (
+            client._secret_id("projects/my-project/other/secret-3")
+            == "projects/my-project/other/secret-3"
         )
-        assert client._version_path("projects/p/secrets/secret-5", version="8") == (
-            "projects/p/secrets/secret-5/versions/8"
+
+        assert client._version_path("projects/my-project/secrets/secret-4/versions/7") == (
+            "projects/my-project/secrets/secret-4/versions/7"
+        )
+        assert client._version_path("projects/my-project/secrets/secret-5", version="8") == (
+            "projects/my-project/secrets/secret-5/versions/8"
         )
         assert client._version_path("secret-6") == (
             "projects/my-project/secrets/secret-6/versions/latest"

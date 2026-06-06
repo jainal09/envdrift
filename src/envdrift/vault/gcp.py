@@ -62,7 +62,29 @@ class GCPSecretManagerClient(VaultClient):
     def _project_path(self) -> str:
         return f"projects/{self.project_id}"
 
+    def _validate_project(self, name: str) -> None:
+        """Reject fully-qualified resource names that target a different project.
+
+        A bare secret name is left to resolve under the bound project. A
+        ``projects/<P>/secrets/...`` name is only allowed when ``<P>`` matches the
+        project this backend is bound to, preventing a caller-supplied name from
+        crossing the configured project boundary.
+        """
+        if not name.startswith("projects/"):
+            return
+        parts = name.split("/")
+        if len(parts) < 2 or not parts[1]:
+            raise VaultError(f"Malformed GCP secret resource name: {name!r}")
+        requested_project = parts[1]
+        if requested_project != self.project_id:
+            raise VaultError(
+                f"Secret resource name targets project {requested_project!r}, "
+                f"but this backend is bound to project {self.project_id!r}. "
+                f"Cross-project access is not allowed."
+            )
+
     def _secret_id(self, name: str) -> str:
+        self._validate_project(name)
         if name.startswith("projects/"):
             parts = name.split("/")
             if "secrets" in parts:
@@ -72,9 +94,11 @@ class GCPSecretManagerClient(VaultClient):
         return name
 
     def _secret_path(self, name: str) -> str:
+        self._validate_project(name)
         return f"{self._project_path()}/secrets/{self._secret_id(name)}"
 
     def _version_path(self, name: str, version: str = "latest") -> str:
+        self._validate_project(name)
         if name.startswith("projects/") and "/versions/" in name:
             return name
         if name.startswith("projects/") and "/secrets/" in name:
