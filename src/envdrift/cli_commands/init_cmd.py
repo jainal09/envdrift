@@ -25,6 +25,9 @@ def init(
     detect_sensitive: Annotated[
         bool, typer.Option("--detect-sensitive", help="Auto-detect sensitive variables")
     ] = True,
+    force: Annotated[
+        bool, typer.Option("--force", "-f", help="Overwrite an existing output file")
+    ] = False,
 ) -> None:
     """
     Generate a Pydantic BaseSettings subclass from variables in an .env file.
@@ -40,6 +43,8 @@ def init(
         class_name (str): Name to use for the generated `BaseSettings` subclass.
         detect_sensitive (bool): If true, attempt to auto-detect sensitive variables
             (by name and value) and mark them in the generated fields.
+        force (bool): If true, overwrite an existing output file; otherwise the
+            command errors when the output already exists.
     """
     if not env_file.exists():
         print_error(f"ENV file not found: {env_file}")
@@ -108,6 +113,11 @@ def init(
                 lines.append(f"    {var_name}: {type_hint}")
 
     lines.append("")
+
+    # Guard against clobbering an existing (possibly hand-edited) file
+    if output.exists() and not force:
+        print_error(f"Output file already exists: {output} (use --force to overwrite)")
+        raise typer.Exit(code=1)
 
     # Write output
     output.write_text("\n".join(lines))

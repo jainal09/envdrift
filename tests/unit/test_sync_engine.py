@@ -36,6 +36,31 @@ def simple_config(tmp_path: Path) -> SyncConfig:
     )
 
 
+class _StoredVaultClient(VaultClient):
+    """Real in-process VaultClient backed by a dict (value source, not a behavior mock)."""
+
+    def __init__(self, store: dict[str, str]) -> None:
+        self._store = store
+
+    def get_secret(self, name: str) -> SecretValue:
+        if name not in self._store:
+            raise SecretNotFoundError(name)
+        return SecretValue(name=name, value=self._store[name])
+
+    def list_secrets(self, prefix: str = "") -> list[str]:
+        return [k for k in self._store if k.startswith(prefix)]
+
+    def is_authenticated(self) -> bool:
+        return True
+
+    def authenticate(self) -> None:  # pragma: no cover - always authed
+        return None
+
+    def set_secret(self, name: str, value: str) -> SecretValue:
+        self._store[name] = value
+        return SecretValue(name=name, value=value)
+
+
 class TestSyncEngineBasic:
     """Basic sync engine tests."""
 
@@ -645,6 +670,40 @@ class TestSyncEngineFetchVaultSecret:
         # Should strip the Prod2 prefix and write with PROD2 key
         assert "DOTENV_PRIVATE_KEY_PROD2=actual_secret" in content
         assert "DOTENV_PRIVATE_KEY_Prod2=" not in content
+
+    def test_quoted_vault_value_converges_with_unquoted_local(self, tmp_path: Path) -> None:
+        """#356: vault stores value quoted, local stores it unquoted -> they converge.
+
+        read_key strips quotes; before the fix _fetch_vault_secret did not, so the
+        comparison was a permanent false mismatch. After the fix: SKIPPED (values match).
+        """
+        secret = "abc" + "123" + "def"  # fake secret via concatenation
+        client = _StoredVaultClient({"test-key": f'"{secret}"'})  # quoted in vault
+
+        service_dir = tmp_path / "service1"
+        service_dir.mkdir()
+        (service_dir / ".env.production").write_text("DB_URL=encrypted:xyz\n")
+        # Local stores it unquoted (as read_key would normalize it).
+        (service_dir / ".env.keys").write_text(f"DOTENV_PRIVATE_KEY_PRODUCTION={secret}\n")
+
+        config = SyncConfig(
+            mappings=[ServiceMapping(secret_name="test-key", folder_path=service_dir)]
+        )
+        engine = SyncEngine(config=config, vault_client=client)
+        result = engine.sync_all()
+
+        assert result.services[0].action == SyncAction.SKIPPED
+        # And the file is not rewritten with quotes.
+        assert (service_dir / ".env.keys").read_text().count(secret) == 1
+
+    def test_fetch_vault_secret_strips_surrounding_quotes(self, tmp_path: Path) -> None:
+        """#356 (direct): _fetch_vault_secret normalizes quotes like read_key does."""
+        secret = "xyz" + "789"
+        client = _StoredVaultClient({"test-key": f'"{secret}"'})
+        mapping = ServiceMapping(secret_name="test-key", folder_path=tmp_path)
+        engine = SyncEngine(config=SyncConfig(mappings=[mapping]), vault_client=client)
+
+        assert engine._fetch_vault_secret(mapping) == secret
 
 
 class TestSyncResult:

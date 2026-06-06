@@ -261,6 +261,15 @@ class SyncEngine:
         if match:
             value = match.group(1)
 
+        # Strip a single layer of surrounding quotes to match read_key()
+        # (operations.py), so a quoted vault value and an unquoted local value
+        # compare equal instead of mismatching forever.
+        if len(value) >= 2 and (
+            (value.startswith('"') and value.endswith('"'))
+            or (value.startswith("'") and value.endswith("'"))
+        ):
+            value = value[1:-1]
+
         return value
 
     def _detect_env_file(self, folder_path: Path) -> tuple[Path, str] | None:

@@ -140,8 +140,8 @@ class EnvParser:
     # Combined pattern for backward compatibility
     ENCRYPTED_PATTERN = re.compile(r"^(encrypted:|ENC\[AES256_GCM,)")
 
-    # Pattern to match KEY=value lines
-    LINE_PATTERN = re.compile(r"^([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)$")
+    # Pattern to match KEY=value lines (optionally prefixed with `export `)
+    LINE_PATTERN = re.compile(r"^(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)$")
 
     def parse(self, path: Path | str) -> EnvFile:
         """
@@ -201,6 +201,9 @@ class EnvParser:
             key = match.group(1)
             value = match.group(2).strip()
 
+            # Strip an unquoted trailing inline comment (e.g. `8080 # prod`)
+            value = self._strip_inline_comment(value)
+
             # Remove surrounding quotes
             value = self._unquote(value)
 
@@ -219,6 +222,25 @@ class EnvParser:
             env_file.variables[key] = env_var
 
         return env_file
+
+    def _strip_inline_comment(self, value: str) -> str:
+        """Strip an unquoted trailing ` #...` comment from a value.
+
+        A `#` only starts a comment when it is outside quotes AND is at the
+        start of the value or preceded by whitespace. A `#` inside matching
+        quotes, or glued to a token (e.g. `http://x#frag`), is preserved.
+        """
+        in_single = False
+        in_double = False
+        for i, ch in enumerate(value):
+            if ch == "'" and not in_double:
+                in_single = not in_single
+            elif ch == '"' and not in_single:
+                in_double = not in_double
+            elif ch == "#" and not in_single and not in_double:
+                if i == 0 or value[i - 1].isspace():
+                    return value[:i].rstrip()
+        return value
 
     def _unquote(self, value: str) -> str:
         """
