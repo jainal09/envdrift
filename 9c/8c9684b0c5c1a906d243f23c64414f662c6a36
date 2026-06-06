@@ -1,0 +1,23 @@
+docs/support/troubleshooting.md
+  s_dfc6cd6692ed8f::t_cae87eaa02260f 227
+docs/support/faq.md
+  s_dfc6cd6692ed8f::t_54658c1fd16dc2 199-204
+docs/reference/configuration.md
+  s_dfc6cd6692ed8f::t_db2cf8720eba0e 469-470
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.3",
+  "base_commit_sha": "9c8c9684b0c5c1a906d243f23c64414f662c6a36",
+  "prompts": {},
+  "sessions": {
+    "s_dfc6cd6692ed8f": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "fd23e738-3512-4420-9290-d985ad979bfd",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Jainal Gosaliya <jainal09gosalia@gmail.com>"
+    }
+  }
+}
