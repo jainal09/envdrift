@@ -1,0 +1,31 @@
+src/envdrift/sync/engine.py
+  s_dfc6cd6692ed8f::t_6436cd14812718 359-364,377,390,393,397,400,405
+  s_dfc6cd6692ed8f::t_1337e929c4c79e 420
+  s_dfc6cd6692ed8f::t_66b997a78efdeb 349-353,356-357,365
+  s_dfc6cd6692ed8f::t_b4f9eba92c04cb 5,28
+  s_dfc6cd6692ed8f::t_68be1da611eedd 297,307-312,315-316,318-320
+  s_dfc6cd6692ed8f::t_0bc997c1ba9ee3 302-306
+  s_dfc6cd6692ed8f::t_faa3724e52f2f6 403-404
+  s_dfc6cd6692ed8f::t_47d4fca9ebe63b 296,298-301,313-314,317,321,326,330
+tests/unit/test_sync_engine.py
+  s_dfc6cd6692ed8f::t_c9693f98449512 5
+  s_dfc6cd6692ed8f::t_c7e79b47688de4 544-598
+  s_dfc6cd6692ed8f::t_18e1e90bddb589 660-694
+  s_dfc6cd6692ed8f::t_75fb53c678af39 599-659
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.3",
+  "base_commit_sha": "05637cee5b3ff8ea337fdab1bbc4127cc49975ba",
+  "prompts": {},
+  "sessions": {
+    "s_dfc6cd6692ed8f": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "fd23e738-3512-4420-9290-d985ad979bfd",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": null
+    }
+  }
+}
