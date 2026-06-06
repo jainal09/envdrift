@@ -1,0 +1,20 @@
+tests/unit/test_vault_gcp.py
+  s_dfc6cd6692ed8f::t_897f1bce08edd7 21,23-31,34-35,38-39,42-43,45-47
+  s_dfc6cd6692ed8f::t_e19776fc96df2e 269-310
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.3",
+  "base_commit_sha": "fdabb222acae426caf8bc3321db0062f30740881",
+  "prompts": {},
+  "sessions": {
+    "s_dfc6cd6692ed8f": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "fd23e738-3512-4420-9290-d985ad979bfd",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Jainal Gosaliya <jainal09gosalia@gmail.com>"
+    }
+  }
+}
