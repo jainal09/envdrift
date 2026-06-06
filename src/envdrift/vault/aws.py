@@ -138,31 +138,16 @@ class AWSSecretsManagerClient(VaultClient):
 
             # SecretString contains the value, SecretBinary for binary secrets
             if "SecretString" in response:
-                secret_string = response["SecretString"]
-                # Try to parse as JSON, fall back to raw string
-                try:
-                    parsed = json.loads(secret_string)
-                    # Convert dict to JSON string for storage
-                    if isinstance(parsed, dict):
-                        return SecretValue(
-                            name=name,
-                            value=json.dumps(parsed),
-                            version=version_id,
-                            metadata=metadata,
-                        )
-                    return SecretValue(
-                        name=name,
-                        value=json.dumps(parsed),
-                        version=version_id,
-                        metadata=metadata,
-                    )
-                except json.JSONDecodeError:
-                    return SecretValue(
-                        name=name,
-                        value=secret_string,
-                        version=version_id,
-                        metadata=metadata,
-                    )
+                # Return the stored string byte-for-byte. Round-tripping
+                # through json.loads/json.dumps would silently re-serialize
+                # JSON-shaped values (e.g. "[1,2,3]" -> "[1, 2, 3]", losing
+                # number/whitespace formatting), mutating the secret (#373).
+                return SecretValue(
+                    name=name,
+                    value=response["SecretString"],
+                    version=version_id,
+                    metadata=metadata,
+                )
             elif "SecretBinary" in response:
                 # Binary secret - decode and return
                 try:

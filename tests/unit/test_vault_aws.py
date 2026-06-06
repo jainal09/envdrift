@@ -373,6 +373,41 @@ class TestAWSSecretsManagerClient:
         secret = client.get_secret("json-secret")
         assert secret.value == json.dumps(json_data)
 
+    @pytest.mark.parametrize(
+        "stored",
+        [
+            "[1,2,3]",
+            '{"a":1,  "b":2}',
+            '{"n": 1.0}',
+            "  [1, 2, 3]  ",
+            '{"z":1,"a":2}',
+            "[1, 2, 3]",
+        ],
+    )
+    def test_get_secret_json_string_returned_byte_for_byte(
+        self, mock_boto3, patched_boto_clients, stored
+    ):
+        """Regression #373: a JSON-shaped SecretString must be returned
+        exactly as stored, never re-serialized via json.loads/json.dumps.
+
+        The old implementation round-tripped through json, normalizing
+        whitespace/number formatting/key order (e.g. "[1,2,3]" came back as
+        "[1, 2, 3]"), silently mutating the secret. get_secret must hand
+        back the raw stored bytes.
+        """
+        mock_sm_client, _ = patched_boto_clients
+        mock_sm_client.get_secret_value.return_value = {
+            "Name": "json-secret",
+            "SecretString": stored,
+            "VersionId": "v1",
+        }
+
+        client = mock_boto3.AWSSecretsManagerClient()
+        client.authenticate()
+
+        secret = client.get_secret("json-secret")
+        assert secret.value == stored
+
     def test_get_secret_requires_authentication(self, mock_boto3):
         """get_secret should require authentication."""
         client = mock_boto3.AWSSecretsManagerClient()
