@@ -418,7 +418,9 @@ def vault_push(
         console.print(
             f"Done. Pushed: {pushed_count}, Skipped: {skipped_count}, Errors: {error_count}"
         )
-        if dotenvx_mismatch:
+        # Exit non-zero on any per-mapping failure (not just dotenvx mismatch) so
+        # CI/automation can detect a partially-failed bulk push (#353).
+        if dotenvx_mismatch or error_count > 0:
             raise typer.Exit(code=1)
         return
 

@@ -358,7 +358,8 @@ class TestVaultPushAll:
 
         result = runner.invoke(app, ["vault-push", "--all"])
 
-        assert result.exit_code == 0
+        # An encrypt failure counts an error, which must yield a non-zero exit (#353).
+        assert result.exit_code == 1
         output = result.output.lower()
         assert "encrypt failed" in output
         assert "errors: 1" in output
@@ -487,7 +488,9 @@ class TestVaultPushAll:
 
         result = runner.invoke(app, ["vault-push", "--all"])
 
-        assert result.exit_code == 0
+        # Any per-mapping failure must surface as a non-zero exit so CI/automation
+        # can detect a partially-failed bulk push (#353).
+        assert result.exit_code == 1
 
         output = result.output.replace("\n", " ").replace("  ", " ")
 
@@ -578,6 +581,56 @@ class TestVaultPushAll:
         assert result.exit_code == 1
         output = " ".join(result.output.lower().split())
         assert "encrypted with dotenvx" in output
+
+    @patch("envdrift.cli_commands.encryption_helpers.resolve_encryption_backend")
+    @patch("envdrift.cli_commands.sync.load_sync_config_and_client")
+    def test_push_all_exits_nonzero_on_per_mapping_error(
+        self,
+        mock_loader,
+        mock_resolve_backend,
+        tmp_path,
+    ):
+        """A per-mapping push failure (error_count > 0) must exit non-zero (#353).
+
+        Regression for #353: previously only a dotenvx/sops mismatch triggered a
+        non-zero exit, so a bulk push that failed every mapping could still report
+        ``Errors: N`` while exiting 0 — making CI/automation treat it as success.
+        Here a single mapping fails its vault existence check (VaultError), which
+        increments ``error_count`` without setting ``dotenvx_mismatch``; the
+        command must exit with code 1.
+        """
+        mock_client = MagicMock()
+        service_dir = tmp_path / "service1"
+        service_dir.mkdir()
+        (service_dir / ".env.production").write_text("SECRET=encrypted:abc123\n")
+
+        mock_sync_config = SyncConfig(
+            mappings=[
+                ServiceMapping(
+                    secret_name="boom-secret",
+                    folder_path=service_dir,
+                    environment="production",
+                )
+            ]
+        )
+        mock_loader.return_value = (mock_sync_config, mock_client, "azure", None, None, None)
+
+        mock_resolve_backend.return_value = (
+            DummyEncryptionBackend(),
+            EncryptionProvider.DOTENVX,
+            None,
+        )
+
+        # The first-thing vault existence check fails -> error_count += 1 and the
+        # mapping is skipped, but no dotenvx_mismatch is set.
+        mock_client.get_secret.side_effect = VaultError("api error")
+
+        result = runner.invoke(app, ["vault-push", "--all"])
+
+        assert result.exit_code == 1, result.output
+        output = result.output.replace("\n", " ")
+        assert "Errors: 1" in output
+        assert "Pushed: 0" in output
 
     @patch("envdrift.cli_commands.encryption_helpers.resolve_encryption_backend")
     @patch("envdrift.cli_commands.sync.load_sync_config_and_client")
