@@ -1061,6 +1061,25 @@ class TestInitCommand:
         assert second.exit_code == 0
         assert "class Second" in out.read_text()
 
+    def test_init_unicode_digit_value_does_not_crash(self, tmp_path: Path) -> None:
+        """#321: a Unicode-digit value (²=U+00B2) is inferred str, not a crashing int()."""
+        env_file = tmp_path / ".env"
+        # ² (U+00B2): str.isdigit() is True but int("²") raises ValueError.
+        env_file.write_text("LEVEL=²\nPORT=8080\n")
+        out = tmp_path / "settings.py"
+
+        result = runner.invoke(
+            app, ["init", str(env_file), "--output", str(out), "--class-name", "Cfg"]
+        )
+
+        assert result.exit_code == 0, result.output
+        content = out.read_text()
+        # Unicode-digit value falls through to str (not int).
+        assert "LEVEL: str" in content
+        assert "LEVEL: int" not in content
+        # Happy path: an ASCII digit is still inferred as int.
+        assert "PORT: int = 8080" in content
+
 
 class TestHookCommand:
     """Tests for the hook CLI command."""

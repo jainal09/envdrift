@@ -90,7 +90,7 @@ def init(
         if value.lower() in ("true", "false"):
             type_hint = "bool"
             default_val = value.lower() == "true"
-        elif value.isdigit():
+        elif value.isascii() and value.isdigit():
             type_hint = "int"
             default_val = int(value)
         else:
