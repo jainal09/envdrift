@@ -130,12 +130,21 @@ class GCPSecretManagerClient(VaultClient):
             )
             next(iter(secrets_iter), None)
         except DefaultCredentialsError as e:
+            # No usable credentials at all (no ADC, bad GOOGLE_APPLICATION_CREDENTIALS,
+            # etc.) — a genuine authentication failure.
             self._client = None
             raise AuthenticationError(f"GCP authentication failed: {e}") from e
-        except (
-            google_exceptions.PermissionDenied,
-            google_exceptions.Unauthenticated,
-        ) as e:
+        except google_exceptions.PermissionDenied:
+            # The credential authenticated successfully but lacks
+            # `secretmanager.secrets.list`. A least-privilege service account that
+            # only holds `secretmanager.versions.access` (enough for get_secret,
+            # which is all sync needs) hits this on the list probe. Treat it as
+            # authenticated-but-cannot-list: keep the client. If a specific secret
+            # genuinely can't be read, get_secret() surfaces a clear error later.
+            pass
+        except google_exceptions.Unauthenticated as e:
+            # The credential itself is invalid/expired — a genuine auth failure,
+            # distinct from PermissionDenied (authenticated, missing list permission).
             self._client = None
             raise AuthenticationError(f"GCP authentication failed: {e}") from e
         except google_exceptions.GoogleAPICallError as e:

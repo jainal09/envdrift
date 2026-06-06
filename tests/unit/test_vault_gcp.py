@@ -202,11 +202,37 @@ class TestGCPSecretManagerClient:
 
         assert client.is_authenticated() is False
 
-    def test_authenticate_permission_denied(self, mock_gcp):
-        """PermissionDenied should map to AuthenticationError."""
+    def test_authenticate_permission_denied_on_list_probe_accepted(self, mock_gcp):
+        """PermissionDenied on the list probe means the credential authenticated but
+        lacks ``secretmanager.secrets.list``.
+
+        A least-privilege service account holding only
+        ``secretmanager.versions.access`` (enough for get_secret, which is all sync
+        needs) hits this. authenticate() must NOT raise and must retain the client so
+        get_secret can still surface a clear error per-secret later (see #359, GCP half).
+        """
         mock_client = MagicMock()
         mock_client.list_secrets.side_effect = mock_gcp._google_exceptions.PermissionDenied(
-            "denied"
+            "permission 'secretmanager.secrets.list' denied"
+        )
+        mock_gcp._secretmanager.SecretManagerServiceClient.return_value = mock_client
+
+        client = mock_gcp.GCPSecretManagerClient(project_id="my-project")
+        client.authenticate()
+
+        assert client.is_authenticated() is True
+        assert client._client is mock_client
+
+    def test_authenticate_unauthenticated_still_fails(self, mock_gcp):
+        """Unauthenticated is a genuine credential failure and must still raise.
+
+        Unlike PermissionDenied (authenticated, missing list permission), an
+        Unauthenticated error means the credential itself is invalid/expired, so
+        authenticate() must map it to AuthenticationError and drop the client.
+        """
+        mock_client = MagicMock()
+        mock_client.list_secrets.side_effect = mock_gcp._google_exceptions.Unauthenticated(
+            "invalid credentials"
         )
         mock_gcp._secretmanager.SecretManagerServiceClient.return_value = mock_client
 
