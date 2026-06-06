@@ -1,0 +1,21 @@
+.github/workflows/publish.yml
+  s_dfc6cd6692ed8f::t_f80582634d8728 52-61
+.github/workflows/agent-release.yml
+  s_dfc6cd6692ed8f::t_bf4347b9beaae7 123-125
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.3",
+  "base_commit_sha": "077f872362381ee246db32b00a45a0855e135482",
+  "prompts": {},
+  "sessions": {
+    "s_dfc6cd6692ed8f": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "fd23e738-3512-4420-9290-d985ad979bfd",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Jainal Gosaliya <jainal09gosalia@gmail.com>"
+    }
+  }
+}
