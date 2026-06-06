@@ -9,11 +9,44 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from envdrift.cli_commands.encryption_helpers import (
+    _resolve_relative,
     resolve_encryption_backend,
     should_skip_reencryption,
 )
 from envdrift.core.schema import SchemaLoader
 from envdrift.encryption.sops import SOPSEncryptionBackend
+
+
+def test_resolve_relative_absolute_and_no_base_passthrough(tmp_path: Path) -> None:
+    """#348a: absolute paths (and a missing base_dir) are returned unchanged."""
+    abs_path = str(tmp_path / "abs.sops.yaml")
+    # Absolute path: returned as-is regardless of base_dir.
+    assert _resolve_relative(abs_path, tmp_path / "elsewhere") == abs_path
+    # base_dir None: no resolution, the expanded candidate string is returned.
+    assert _resolve_relative("rel.sops.yaml", None) == "rel.sops.yaml"
+
+
+def test_schema_load_evicts_precached_same_named_module(tmp_path: Path) -> None:
+    """#348c: a stale same-named module already in sys.modules is evicted, so the
+    fresh service directory is loaded instead of the cached one."""
+    import sys
+    import types
+
+    svc = tmp_path / "svc"
+    svc.mkdir()
+    (svc / "myschema.py").write_text(
+        "from pydantic_settings import BaseSettings\n\n"
+        "class Settings(BaseSettings):\n    fresh: int = 1\n"
+    )
+    stale = types.ModuleType("myschema")
+    stale.MARKER = "stale"  # type: ignore[attr-defined]
+    sys.modules["myschema"] = stale  # simulate a pre-cached collision
+    try:
+        cls = SchemaLoader().load("myschema:Settings", service_dir=svc)
+        assert cls.__name__ == "Settings"
+        assert hasattr(cls, "model_fields") and "fresh" in cls.model_fields
+    finally:
+        sys.modules.pop("myschema", None)
 
 
 def test_relative_sops_config_resolves_from_other_cwd(
