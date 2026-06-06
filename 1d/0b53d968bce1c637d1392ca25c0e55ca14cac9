@@ -1,0 +1,21 @@
+tests/unit/test_vault_gcp.py
+  s_dfc6cd6692ed8f::t_329d3409502aa2 205-213,216-235
+src/envdrift/vault/gcp.py
+  s_dfc6cd6692ed8f::t_6974c285b11cd3 133-134,137-147
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.3",
+  "base_commit_sha": "1d0b53d968bce1c637d1392ca25c0e55ca14cac9",
+  "prompts": {},
+  "sessions": {
+    "s_dfc6cd6692ed8f": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "fd23e738-3512-4420-9290-d985ad979bfd",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Jainal Gosaliya <jainal09gosalia@gmail.com>"
+    }
+  }
+}
