@@ -249,6 +249,11 @@ WantedBy=default.target
 func systemdQuote(s string) string {
 	s = strings.ReplaceAll(s, `\`, `\\`)
 	s = strings.ReplaceAll(s, `"`, `\"`)
+	// systemd expands `%` specifiers (%h, %u, …) and `$`/`${}` env refs even
+	// inside a double-quoted ExecStart value; escape literal occurrences so a
+	// path containing them isn't reinterpreted.
+	s = strings.ReplaceAll(s, `%`, `%%`)
+	s = strings.ReplaceAll(s, `$`, `$$`)
 	return `"` + s + `"`
 }
 

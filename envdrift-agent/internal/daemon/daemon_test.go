@@ -86,6 +86,18 @@ func TestSystemdUnitQuotesExecStart(t *testing.T) {
 			execPath: `/opt/a\b/agent`,
 			want:     `ExecStart="/opt/a\\b/agent" start`,
 		},
+		{
+			// systemd would otherwise expand %h/%u etc. even inside quotes.
+			name:     "path with percent specifier",
+			execPath: `/opt/app%home/agent`,
+			want:     `ExecStart="/opt/app%%home/agent" start`,
+		},
+		{
+			// systemd would otherwise treat $FOO / ${FOO} as an env reference.
+			name:     "path with dollar",
+			execPath: `/opt/app$HOME/agent`,
+			want:     `ExecStart="/opt/app$$HOME/agent" start`,
+		},
 	}
 
 	for _, tt := range tests {

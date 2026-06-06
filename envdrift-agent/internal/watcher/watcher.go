@@ -88,12 +88,15 @@ func (w *Watcher) Start() {
 // fsnotify watcher; w.events is closed by run() (the sole sender) so there is
 // no send-on-closed-channel panic. Stop is safe to call multiple times (#362).
 func (w *Watcher) Stop() {
+	// Both close(w.done) and fsWatcher.Close() run inside stopOnce so a second or
+	// concurrent Stop() can't double-close the fsnotify watcher (which logs a
+	// spurious "already closed" and isn't safe for concurrent calls).
 	w.stopOnce.Do(func() {
 		close(w.done)
+		if err := w.fsWatcher.Close(); err != nil {
+			log.Printf("Watcher close error: %v", err)
+		}
 	})
-	if err := w.fsWatcher.Close(); err != nil {
-		log.Printf("Watcher close error: %v", err)
-	}
 }
 
 func (w *Watcher) run() {
