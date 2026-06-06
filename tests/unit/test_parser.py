@@ -288,6 +288,15 @@ BAR=plaintext
         result = EnvParser().parse(env_file)
         assert result.variables["GREETING"].value == "hi # there"
 
+    def test_parse_inline_comment_hash_in_single_quotes_preserved(self, tmp_path):
+        """#357: `#` inside a SINGLE-quoted value is NOT a comment (single-quote path)."""
+        content = "GREETING='hi # there' # trailing\n"
+        env_file = tmp_path / ".env"
+        env_file.write_text(content)
+
+        result = EnvParser().parse(env_file)
+        assert result.variables["GREETING"].value == "hi # there"
+
     def test_parse_inline_comment_quoted_url_with_fragment(self, tmp_path):
         """#357: a quoted URL keeps its `#frag` (quotes protect the hash)."""
         content = 'API="https://x.test/path#frag"\n'
