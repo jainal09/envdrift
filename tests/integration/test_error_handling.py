@@ -14,7 +14,6 @@ Requires: docker-compose -f tests/docker-compose.test.yml up -d
 from __future__ import annotations
 
 import contextlib
-import os
 import subprocess
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -34,7 +33,7 @@ class TestNetworkTimeoutVault:
     def test_vault_unreachable_timeout(
         self,
         work_dir: Path,
-        integration_pythonpath: str,
+        integration_env: dict[str, str],
         envdrift_cmd: list[str],
     ) -> None:
         """Test that operations timeout gracefully when vault is unreachable.
@@ -65,8 +64,7 @@ environment = "production"
         (work_dir / "envdrift.toml").write_text(config_content)
         (work_dir / ".env.production").write_text('SECRET="encrypted:..."')
 
-        env = os.environ.copy()
-        env["PYTHONPATH"] = integration_pythonpath
+        env = integration_env
 
         # Run with a timeout - the command should fail gracefully, not hang
         result = subprocess.run(
@@ -98,7 +96,7 @@ environment = "production"
     def test_aws_endpoint_unreachable(
         self,
         work_dir: Path,
-        integration_pythonpath: str,
+        integration_env: dict[str, str],
         envdrift_cmd: list[str],
     ) -> None:
         """Test AWS client handles unreachable endpoint gracefully."""
@@ -122,11 +120,12 @@ environment = "production"
         (work_dir / ".env.production").write_text('SECRET="encrypted:..."')
 
         # Build environment with unreachable endpoint (port that's not listening)
-        # Using localhost with wrong port fails fast (connection refused)
-        env = os.environ.copy()
+        # Using localhost with wrong port fails fast (connection refused).
+        # Copy the shared fixture (which carries PATH/HOME/PYTHONPATH — #331) so
+        # the fixture value is not mutated, then layer the AWS overrides on top.
+        env = dict(integration_env)
         env.update(
             {
-                "PYTHONPATH": integration_pythonpath,
                 "AWS_ENDPOINT_URL": "http://127.0.0.1:59999",  # Port not listening
                 "AWS_ACCESS_KEY_ID": "test",
                 "AWS_SECRET_ACCESS_KEY": "test",
@@ -254,7 +253,7 @@ class TestCorruptEnvFile:
     def test_malformed_env_file_parsing(
         self,
         work_dir: Path,
-        integration_pythonpath: str,
+        integration_env: dict[str, str],
         envdrift_cmd: list[str],
     ) -> None:
         """
@@ -282,8 +281,7 @@ backend = "dotenvx"
 """
         (work_dir / "envdrift.toml").write_text(config_content)
 
-        env = os.environ.copy()
-        env["PYTHONPATH"] = integration_pythonpath
+        env = integration_env
 
         # Run lock --check which will parse the .env file
         result = subprocess.run(
@@ -304,7 +302,7 @@ backend = "dotenvx"
     def test_binary_content_in_env_file(
         self,
         work_dir: Path,
-        integration_pythonpath: str,
+        integration_env: dict[str, str],
         envdrift_cmd: list[str],
     ) -> None:
         """Test handling of binary content in .env files."""
@@ -318,8 +316,7 @@ backend = "dotenvx"
 """
         (work_dir / "envdrift.toml").write_text(config_content)
 
-        env = os.environ.copy()
-        env["PYTHONPATH"] = integration_pythonpath
+        env = integration_env
 
         result = subprocess.run(
             [*envdrift_cmd, "lock", "--check"],
@@ -338,7 +335,7 @@ backend = "dotenvx"
     def test_empty_env_file(
         self,
         work_dir: Path,
-        integration_pythonpath: str,
+        integration_env: dict[str, str],
         envdrift_cmd: list[str],
     ) -> None:
         """
@@ -354,8 +351,7 @@ backend = "dotenvx"
 """
         (work_dir / "envdrift.toml").write_text(config_content)
 
-        env = os.environ.copy()
-        env["PYTHONPATH"] = integration_pythonpath
+        env = integration_env
 
         result = subprocess.run(
             [*envdrift_cmd, "lock", "--check"],
@@ -376,7 +372,7 @@ class TestCorruptEncryptedFile:
     def test_tampered_ciphertext_detection(
         self,
         work_dir: Path,
-        integration_pythonpath: str,
+        integration_env: dict[str, str],
         envdrift_cmd: list[str],
     ) -> None:
         """Test that tampered encrypted content is detected."""
@@ -402,8 +398,7 @@ backend = "dotenvx"
 """
         (work_dir / "envdrift.toml").write_text(config_content)
 
-        env = os.environ.copy()
-        env["PYTHONPATH"] = integration_pythonpath
+        env = integration_env
 
         # Try to decrypt - should fail gracefully
         result = subprocess.run(
@@ -421,7 +416,7 @@ backend = "dotenvx"
     def test_incomplete_encryption_markers(
         self,
         work_dir: Path,
-        integration_pythonpath: str,
+        integration_env: dict[str, str],
         envdrift_cmd: list[str],
     ) -> None:
         """Test handling of files with incomplete encryption markers."""
@@ -441,8 +436,7 @@ backend = "dotenvx"
 """
         (work_dir / "envdrift.toml").write_text(config_content)
 
-        env = os.environ.copy()
-        env["PYTHONPATH"] = integration_pythonpath
+        env = integration_env
 
         result = subprocess.run(
             [*envdrift_cmd, "lock", "--check"],
@@ -523,7 +517,7 @@ class TestFilePermissionErrors:
     def test_readonly_env_keys_file(
         self,
         work_dir: Path,
-        integration_pythonpath: str,
+        integration_env: dict[str, str],
         envdrift_cmd: list[str],
     ) -> None:
         """Test handling when .env.keys is read-only."""
@@ -556,8 +550,7 @@ environment = "production"
             (work_dir / "envdrift.toml").write_text(config_content)
             (work_dir / ".env.production").write_text('SECRET="encrypted:..."')
 
-            env = os.environ.copy()
-            env["PYTHONPATH"] = integration_pythonpath
+            env = integration_env
 
             # This would try to write to .env.keys
             # Should handle permission error gracefully
