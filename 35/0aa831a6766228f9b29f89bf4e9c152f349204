@@ -1,0 +1,21 @@
+src/envdrift/vault/gcp.py
+  s_dfc6cd6692ed8f::t_7c9c8e2b922d3e 66-74,79-88
+tests/unit/test_vault_gcp_paths.py
+  s_dfc6cd6692ed8f::t_ee600ed32cf8c4 87-106
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.3",
+  "base_commit_sha": "350aa831a6766228f9b29f89bf4e9c152f349204",
+  "prompts": {},
+  "sessions": {
+    "s_dfc6cd6692ed8f": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "fd23e738-3512-4420-9290-d985ad979bfd",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Jainal Gosaliya <jainal09gosalia@gmail.com>"
+    }
+  }
+}
