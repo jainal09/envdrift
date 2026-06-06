@@ -1018,3 +1018,190 @@ class TestSkipClearFiles:
         # Should be scanned but not flagged as unencrypted
         unencrypted_findings = [f for f in result.findings if f.rule_id == "unencrypted-env-file"]
         assert len(unencrypted_findings) == 0
+
+
+# Real, fully-formed GCP service-account JSON (synthetic key material). The
+# "type" and "private_key" anchors land on different lines — the bug (#354) was
+# that the per-line scan never saw both anchors together.
+_GCP_SERVICE_ACCOUNT_JSON = """{
+  "type": "service_account",
+  "project_id": "demo-project",
+  "private_key_id": "0123456789abcdef0123456789abcdef01234567",
+  "private_key": "-----BEGIN PRIVATE KEY-----\\nMIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSjAgEAAoIBAQ\\n-----END PRIVATE KEY-----\\n",
+  "client_email": "demo@demo-project.iam.gserviceaccount.com",
+  "client_id": "123456789012345678901",
+  "auth_uri": "https://accounts.google.com/o/oauth2/auth",
+  "token_uri": "https://oauth2.googleapis.com/token"
+}
+"""
+
+
+class TestMultilineGcpServiceAccount:
+    """#354 — multi-line GCP service-account JSON is detected via full-content pass."""
+
+    @pytest.fixture
+    def scanner(self) -> NativeScanner:
+        return NativeScanner()
+
+    def test_multiline_gcp_service_account_flagged(self, scanner: NativeScanner, tmp_path: Path):
+        """A real multi-line service_account JSON file is flagged (true positive)."""
+        sa = tmp_path / "service-account.json"
+        sa.write_text(_GCP_SERVICE_ACCOUNT_JSON)
+
+        result = scanner.scan([tmp_path])
+
+        gcp = [f for f in result.findings if f.rule_id == "gcp-service-account"]
+        assert len(gcp) >= 1
+        assert gcp[0].severity == FindingSeverity.CRITICAL
+
+    def test_ordinary_multiline_json_not_flagged(self, scanner: NativeScanner, tmp_path: Path):
+        """An ordinary multi-line JSON (no service_account/private_key) is NOT flagged."""
+        ordinary = tmp_path / "config.json"
+        ordinary.write_text(
+            "{\n"
+            '  "type": "config",\n'
+            '  "name": "demo",\n'
+            '  "values": [1, 2, 3],\n'
+            '  "nested": {"a": "b", "c": "d"}\n'
+            "}\n"
+        )
+
+        result = scanner.scan([tmp_path])
+
+        gcp = [f for f in result.findings if f.rule_id == "gcp-service-account"]
+        assert len(gcp) == 0
+
+
+class TestKeywordGate:
+    """#355 — broad/ambiguous prefix patterns require a context keyword."""
+
+    @pytest.fixture
+    def scanner(self) -> NativeScanner:
+        return NativeScanner()
+
+    def test_twilio_sid_with_context_flagged(self, scanner: NativeScanner, tmp_path: Path):
+        """AC<32hex> with a 'twilio' keyword in the file is flagged (true positive)."""
+        cfg = tmp_path / "twilio.env"
+        # Built via concatenation so no complete AC<32hex> literal is committed
+        # (GitHub push-protection flags real-looking secret literals in fixtures).
+        fake_sid = "AC" + "0123456789abcdef" * 2
+        cfg.write_text(f"# twilio credentials\nTWILIO_ACCOUNT_SID={fake_sid}\n")
+
+        result = scanner.scan([tmp_path])
+
+        sid = [f for f in result.findings if f.rule_id == "twilio-account-sid"]
+        assert len(sid) >= 1
+
+    def test_bare_ac_hex_without_keyword_not_flagged(self, scanner: NativeScanner, tmp_path: Path):
+        """A bare AC<32hex> CACHE_KEY with no twilio keyword is NOT flagged (FP killed)."""
+        cfg = tmp_path / "cache.env"
+        fake_sid = "AC" + "0123456789abcdef" * 2
+        cfg.write_text(f"CACHE_KEY={fake_sid}\n")
+
+        result = scanner.scan([tmp_path])
+
+        sid = [f for f in result.findings if f.rule_id == "twilio-account-sid"]
+        assert len(sid) == 0
+
+    def test_mailchimp_keyword_still_catches_true_positive(
+        self, scanner: NativeScanner, tmp_path: Path
+    ):
+        """Another keyword-gated pattern (mailchimp) still catches its true positive."""
+        cfg = tmp_path / "mailchimp.env"
+        fake_key = "0123456789abcdef" * 2 + "-us21"
+        cfg.write_text(f"# mailchimp api\nMAILCHIMP_KEY={fake_key}\n")
+
+        result = scanner.scan([tmp_path])
+
+        mc = [f for f in result.findings if f.rule_id == "mailchimp-api-key"]
+        assert len(mc) >= 1
+
+    def test_distinctive_prefix_not_suppressed_without_context(
+        self, scanner: NativeScanner, tmp_path: Path
+    ):
+        """AKIA… (require_keyword=False) is still flagged with no sibling context."""
+        cfg = tmp_path / "lone.env"
+        cfg.write_text("SOME_VALUE=AKIAIOSFODNN7EXAMPLE\n")
+
+        result = scanner.scan([tmp_path])
+
+        aws = [f for f in result.findings if "aws" in f.rule_id.lower()]
+        assert len(aws) >= 1
+
+
+class TestLowercaseEntropyAssignment:
+    """#369 — entropy assignment LHS accepts lower/mixed case var names."""
+
+    @pytest.fixture
+    def scanner(self) -> NativeScanner:
+        return NativeScanner(check_entropy=True, entropy_threshold=4.0)
+
+    def test_lowercase_api_key_flagged(self, scanner: NativeScanner, tmp_path: Path):
+        """lowercase api_key="<high entropy>" is flagged (was missed before #369)."""
+        cfg = tmp_path / "config.py"
+        cfg.write_text('api_key = "aB3xK9mN2pQ5vR8tY1wZ4cF7hJ0kL6"\n')
+
+        result = scanner.scan([tmp_path])
+
+        ent = [f for f in result.findings if f.rule_id == "high-entropy-string"]
+        assert len(ent) >= 1
+
+    def test_uppercase_still_flagged(self, scanner: NativeScanner, tmp_path: Path):
+        """UPPERCASE var name still flagged (no regression)."""
+        cfg = tmp_path / "config.py"
+        cfg.write_text('API_KEY = "aB3xK9mN2pQ5vR8tY1wZ4cF7hJ0kL6"\n')
+
+        result = scanner.scan([tmp_path])
+
+        ent = [f for f in result.findings if f.rule_id == "high-entropy-string"]
+        assert len(ent) >= 1
+
+    def test_ordinary_lowercase_config_not_flooded(self, scanner: NativeScanner, tmp_path: Path):
+        """Ordinary low-entropy lowercase config is not flagged (no egregious FPs)."""
+        cfg = tmp_path / "settings.py"
+        cfg.write_text(
+            "host = localhost\n"
+            "port = 5432\n"
+            "database_name = my_application_database\n"
+            "log_level = information\n"
+        )
+
+        result = scanner.scan([tmp_path])
+
+        ent = [f for f in result.findings if f.rule_id == "high-entropy-string"]
+        assert len(ent) == 0
+
+
+class TestEcPublicKeyDropped:
+    """#370 — dotenvx EC compressed public keys are dropped by value shape."""
+
+    @pytest.fixture
+    def scanner(self) -> NativeScanner:
+        return NativeScanner(check_entropy=True, entropy_threshold=3.0)
+
+    def test_ec_public_key_not_flagged(self, scanner: NativeScanner, tmp_path: Path):
+        """A 02/03 + 64-hex compressed EC public key is not flagged as a secret."""
+        pub = "03" + "a1b2c3d4e5f6071829" * 3 + "a1b2c3d4e5"  # 66 hex chars
+        assert len(pub) == 66
+        cfg = tmp_path / ".env"
+        cfg.write_text(f"DOTENV_PUBLIC_KEY={pub}\n")
+
+        result = scanner.scan([tmp_path])
+
+        # The pubkey value itself must not appear as any pattern/entropy finding.
+        from envdrift.scanner.patterns import hash_secret
+
+        pub_hash = hash_secret(pub)
+        assert all(f.secret_hash != pub_hash for f in result.findings)
+
+    def test_real_secret_next_to_pubkey_still_flagged(self, scanner: NativeScanner, tmp_path: Path):
+        """A genuine AWS key sitting next to a public key is still flagged."""
+        pub = "02" + "f0e1d2c3b4a5968778" * 3 + "f0e1d2c3b4"  # 66 hex chars
+        assert len(pub) == 66
+        cfg = tmp_path / ".env"
+        cfg.write_text(f"DOTENV_PUBLIC_KEY={pub}\nAWS_ACCESS_KEY_ID=AKIAIOSFODNN7EXAMPLE\n")
+
+        result = scanner.scan([tmp_path])
+
+        aws = [f for f in result.findings if "aws" in f.rule_id.lower()]
+        assert len(aws) >= 1

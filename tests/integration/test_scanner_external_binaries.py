@@ -317,12 +317,20 @@ def test_scan_engine_skip_encrypted_files_filters_real_scanner_findings(tmp_path
 
 @requires_trivy
 def test_scan_engine_filters_dotenvx_public_keys_from_real_output(tmp_path):
-    """EC-12: ScanEngine filters dotenvx EC secp256k1 public keys (66 hex, 02/03)."""
+    """EC-12: ScanEngine filters dotenvx EC public keys via secret_hash (#370).
+
+    Scanners only ever expose a *redacted* preview plus a one-way ``secret_hash``;
+    the old length-66 preview check was dead (previews are ~8 chars). The filter
+    now hashes the ``DOTENV_PUBLIC_KEY*`` value declared in a finding's file and
+    drops findings whose ``secret_hash`` matches — this test exercises that
+    hash-based contract.
+    """
+    from envdrift.scanner.base import FindingSeverity
+    from envdrift.scanner.patterns import hash_secret
+
     _write_secret_file(tmp_path, "creds.env")
-    # Plant a real dotenvx-style EC public key (66 hex, starts with 03) in the
-    # scanned tree so the real ScanEngine.scan() path below has an actual public
-    # key to filter — without this the real-output loop is vacuous and only the
-    # synthetic control at the end exercises _filter_public_keys.
+    # Plant a real dotenvx-style EC public key (66 hex, starts with 03), declared
+    # on a DOTENV_PUBLIC_KEY line so the engine can hash + filter it.
     real_pubkey = "03" + "cd" * 32  # 66 hex chars
     (tmp_path / "keys.env").write_text(f"DOTENV_PUBLIC_KEY_PRODUCTION={real_pubkey}\n")
 
@@ -336,38 +344,37 @@ def test_scan_engine_filters_dotenvx_public_keys_from_real_output(tmp_path):
     engine = ScanEngine(config)
     result = engine.scan([tmp_path])
 
-    # No surviving finding should be a 66-hex EC public key starting 02/03.
+    # No surviving finding may hash to the planted public key.
+    planted_hash = hash_secret(real_pubkey)
     for finding in result.unique_findings:
-        clean = finding.secret_preview.replace("*", "")
-        is_pubkey = clean.startswith(("02", "03")) and len(clean) == 66
-        if is_pubkey:
-            try:
-                int(clean, 16)
-                pytest.fail(f"public key leaked through filter: {finding.secret_preview}")
-            except ValueError:
-                pass
+        assert finding.secret_hash != planted_hash, (
+            f"public key leaked through filter: {finding.rule_id} in {finding.file_path}"
+        )
 
-    # Control: a synthetic pubkey finding is removed while a normal one is kept.
+    # Control: a finding whose secret_hash matches a DOTENV_PUBLIC_KEY value in
+    # its own file is removed; a normal secret (different hash) is kept.
     pubkey = "02" + "ab" * 32  # 66 hex chars, starts with 02
+    ctrl = tmp_path / "ctrl.env"
+    ctrl.write_text(f"DOTENV_PUBLIC_KEY_X={pubkey}\n")
     pubkey_finding = ScanFinding(
-        file_path=tmp_path / "keys.env",
+        file_path=ctrl,
         rule_id="trivy-generic",
         rule_description="Public Key",
         description="pubkey",
-        severity=result.unique_findings[0].severity
-        if result.unique_findings
-        else __import__("envdrift.scanner.base", fromlist=["FindingSeverity"]).FindingSeverity.HIGH,
+        severity=FindingSeverity.HIGH,
         scanner="trivy",
-        secret_preview=pubkey,  # unredacted, exactly 66 hex
+        secret_preview="02ab****abab",  # redacted, as a real scanner emits
+        secret_hash=hash_secret(pubkey),
     )
     normal_finding = ScanFinding(
-        file_path=tmp_path / "keys.env",
+        file_path=ctrl,
         rule_id="trivy-github-pat",
         rule_description="GitHub PAT",
         description="secret",
-        severity=pubkey_finding.severity,
+        severity=FindingSeverity.HIGH,
         scanner="trivy",
         secret_preview="ghp_****abcd",
+        secret_hash=hash_secret("ghp_realtokenvalue1234567890abcdEFGH"),
     )
     kept = engine._filter_public_keys([pubkey_finding, normal_finding])
     assert pubkey_finding not in kept

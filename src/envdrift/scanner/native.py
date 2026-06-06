@@ -11,6 +11,7 @@ any external tools. It checks for:
 from __future__ import annotations
 
 import fnmatch
+import re
 import time
 from pathlib import Path
 
@@ -23,6 +24,7 @@ from envdrift.scanner.base import (
 )
 from envdrift.scanner.patterns import (
     ALL_PATTERNS,
+    SecretPattern,
     calculate_entropy,
     hash_secret,
     redact_secret,
@@ -37,6 +39,15 @@ def _is_encrypted_value_line(line: str) -> bool:
     values are never re-flagged. Shared by both scans so they stay in sync.
     """
     return "encrypted:" in line or "ENC[" in line
+
+
+# A dotenvx public key is a secp256k1 *compressed* EC point: a 0x02/0x03 prefix
+# byte followed by 32 bytes (64 hex chars) — 66 hex chars total. It is public by
+# definition (not a secret) but is high-entropy and matches generic patterns, so
+# we drop it at detection by value shape (anchored) regardless of var name. This
+# complements the var-name skip (is_dotenvx_public_key_var) for cases where the
+# key appears under an unexpected name. See #370.
+_EC_PUBKEY_RE = re.compile(r"^0[23][0-9a-fA-F]{64}$")
 
 
 # Encryption markers for dotenvx
@@ -814,6 +825,26 @@ class NativeScanner(ScannerBackend):
         findings: list[ScanFinding] = []
         lines = content.splitlines()
 
+        # File-scope keyword gate (#355): a keyword-gated pattern only fires when
+        # one of its context keywords appears anywhere in the file. Computed once.
+        content_lower = content.lower()
+
+        def _build_finding(
+            pattern: SecretPattern, secret: str, line_num: int, col_num: int
+        ) -> ScanFinding:
+            return ScanFinding(
+                file_path=file_path,
+                line_number=line_num,
+                column_number=col_num,
+                rule_id=pattern.id,
+                rule_description=pattern.description,
+                description=f"Potential {pattern.description} detected",
+                severity=pattern.severity,
+                secret_preview=redact_secret(secret),
+                secret_hash=hash_secret(secret),
+                scanner=self.name,
+            )
+
         for line_num, line in enumerate(lines, start=1):
             # Skip empty lines and comments
             stripped = line.strip()
@@ -833,10 +864,34 @@ class NativeScanner(ScannerBackend):
                 continue
 
             for pattern in ALL_PATTERNS:
+                # Multiline patterns (e.g. gcp-service-account JSON) are scanned
+                # against the whole file in a separate pass below (#354).
+                if pattern.multiline:
+                    continue
+
+                # File-scope keyword gate (#355): suppress broad-regex matches
+                # unless the file mentions the provider context somewhere. Only
+                # applies to patterns flagged require_keyword (ambiguous prefixes
+                # like twilio AC<32hex>); distinctive-prefix patterns (AKIA…,
+                # sq0atp-…) are never suppressed, so a genuine key with no
+                # sibling provider context is still reported.
+                if (
+                    pattern.require_keyword
+                    and pattern.keywords
+                    and not any(kw.lower() in content_lower for kw in pattern.keywords)
+                ):
+                    continue
+
                 match = pattern.pattern.search(line)
                 if match:
                     # Extract the secret (first group or full match)
                     secret = match.group(1) if match.groups() else match.group(0)
+
+                    # Drop dotenvx EC public keys by value shape (#370): public,
+                    # not a secret. The full secret is still available here,
+                    # before redaction collapses it.
+                    if _EC_PUBKEY_RE.match(secret):
+                        continue
 
                     # For generic-secret pattern, apply entropy filter to reduce false positives
                     # Real secrets have high entropy (randomness), code variables don't
@@ -858,20 +913,22 @@ class NativeScanner(ScannerBackend):
                     # Calculate column number
                     col_num = match.start() + 1
 
-                    findings.append(
-                        ScanFinding(
-                            file_path=file_path,
-                            line_number=line_num,
-                            column_number=col_num,
-                            rule_id=pattern.id,
-                            rule_description=pattern.description,
-                            description=f"Potential {pattern.description} detected",
-                            severity=pattern.severity,
-                            secret_preview=redact_secret(secret),
-                            secret_hash=hash_secret(secret),
-                            scanner=self.name,
-                        )
-                    )
+                    findings.append(_build_finding(pattern, secret, line_num, col_num))
+
+        # Full-content pass for multiline patterns (#354). These match across
+        # newlines (re.DOTALL is baked into the compiled regex), so they cannot be
+        # found in the per-line loop above. The keyword gate is intentionally not
+        # applied here: the multiline patterns carry their own strong anchors
+        # (e.g. "type":"service_account").
+        for pattern in ALL_PATTERNS:
+            if not pattern.multiline:
+                continue
+            match = pattern.pattern.search(content)
+            if match:
+                secret = match.group(1) if match.groups() else match.group(0)
+                line_num = content.count("\n", 0, match.start()) + 1
+                col_num = match.start() - content.rfind("\n", 0, match.start())
+                findings.append(_build_finding(pattern, secret, line_num, col_num))
 
         return findings
 
@@ -885,13 +942,17 @@ class NativeScanner(ScannerBackend):
         Returns:
             List of entropy-based findings.
         """
-        import re
-
         findings: list[ScanFinding] = []
         lines = content.splitlines()
 
-        # Pattern for assignment-like statements
-        assignment_pattern = re.compile(r"[A-Z_][A-Z0-9_]*\s*[=:]\s*[\"']?([^\"'\s=]{16,})[\"']?")
+        # Pattern for assignment-like statements. The LHS allows lower/upper/mixed
+        # case (#369) so lowercase or camelCase var names — api_key=, apiKey:,
+        # secretToken = — are not missed. Downstream filters (URL/path skip,
+        # alpha-only skip, template-string skip, entropy threshold) contain the
+        # added surface to genuine high-entropy assignments.
+        assignment_pattern = re.compile(
+            r"[A-Za-z_][A-Za-z0-9_]*\s*[=:]\s*[\"']?([^\"'\s=]{16,})[\"']?"
+        )
 
         for line_num, line in enumerate(lines, start=1):
             # Skip comments
