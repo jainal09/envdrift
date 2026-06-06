@@ -13,13 +13,10 @@ from pathlib import Path
 from typing import NamedTuple
 
 from envdrift.config import PartialEncryptionEnvironmentConfig
+from envdrift.env_files import _is_excluded_env_file
 from envdrift.integrations.dotenvx import DotenvxError, DotenvxWrapper
 
 logger = logging.getLogger(__name__)
-
-# dotenvx stores private keys in this file. It must never be encrypted/decrypted
-# as a secret — doing so would lock away the keys needed to decrypt everything else.
-_KEYS_FILENAME = ".env.keys"
 
 # Minimum inner width of the warning box. Long file paths expand the box beyond
 # this so the right-hand border always stays aligned (see _build_warning_header).
@@ -28,6 +25,13 @@ _WARNING_BOX_MIN_WIDTH = 50
 # dotenvx writes a public-key assignment into encrypted files. It is not a
 # secret (public keys are public) so it must not be counted as a secret var.
 _DOTENVX_PUBLIC_KEY_PREFIX = "DOTENV_PUBLIC_KEY"
+
+# A dotenvx-encrypted value starts with this prefix; a SOPS-encrypted dotenv
+# value starts with the AES-GCM marker. Detection keys off an actual assigned
+# VALUE being ciphertext — never a header comment or a public-key line, both of
+# which survive ``dotenvx decrypt`` while the values revert to plaintext (#352).
+_DOTENVX_CIPHERTEXT_PREFIX = "encrypted:"
+_SOPS_CIPHERTEXT_PREFIX = "ENC[AES256_GCM,"
 
 
 def _build_warning_header(clear_file: str, secret_file: str) -> str:
@@ -89,21 +93,54 @@ class PartialEncryptionError(Exception):
         return cls(f"Secret file not found: {path}")
 
 
-def is_file_encrypted(file_path: Path) -> bool:
+def _value_is_ciphertext(value: str) -> bool:
+    """Return True if an assigned dotenv VALUE is genuine ciphertext.
+
+    Strips a single layer of surrounding quotes first because SOPS emits
+    ``KEY="ENC[AES256_GCM,...]"`` (quoted), while dotenvx emits an unquoted
+    ``KEY=encrypted:...``.
     """
-    Check if a file contains dotenvx encrypted content.
+    v = value.strip()
+    if len(v) >= 2 and ((v[0] == '"' and v[-1] == '"') or (v[0] == "'" and v[-1] == "'")):
+        v = v[1:-1]
+    return v.startswith(_DOTENVX_CIPHERTEXT_PREFIX) or v.startswith(_SOPS_CIPHERTEXT_PREFIX)
+
+
+def is_file_encrypted(file_path: Path) -> bool:
+    """Return True only when the file actually contains CIPHERTEXT.
+
+    True requires at least one assigned VALUE to be genuinely encrypted
+    (dotenvx ``encrypted:`` or SOPS ``ENC[AES256_GCM,``), or a real SOPS
+    metadata block. A dotenvx file that has been DECRYPTED keeps its
+    ``DOTENV_PUBLIC_KEY_*`` line and header comment but holds plaintext values,
+    so those markers (and the bare substring ``encrypted:`` appearing inside a
+    plaintext value) must NOT count as encrypted — otherwise
+    ``encrypt_secret_file`` early-returns and leaves a real secret in cleartext
+    (#352).
 
     Args:
         file_path: Path to check
 
     Returns:
-        True if file contains encrypted: prefix or DOTENV_VAULT markers
+        True if the file holds at least one encrypted value or a SOPS metadata block.
     """
     if not file_path.exists():
         return False
 
-    content = file_path.read_text()
-    return "encrypted:" in content or "DOTENV_VAULT" in content
+    content = file_path.read_text(encoding="utf-8")
+
+    for raw_line in content.splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        _, _, value = line.partition("=")
+        if _value_is_ciphertext(value):
+            return True
+
+    # Real SOPS metadata block: the trailer carries sops_version alongside an
+    # encrypted MAC value. Both present means it is a genuine SOPS file even if
+    # the assignment scan above did not trip (defensive belt-and-suspenders).
+    return "sops_version" in content and _SOPS_CIPHERTEXT_PREFIX in content
 
 
 def combine_files(
@@ -139,11 +176,11 @@ def combine_files(
     # Read files
     clear_lines = []
     if clear_file.exists():
-        clear_lines = clear_file.read_text().splitlines()
+        clear_lines = clear_file.read_text(encoding="utf-8").splitlines()
 
     secret_lines = []
     if secret_file.exists():
-        secret_lines = secret_file.read_text().splitlines()
+        secret_lines = secret_file.read_text(encoding="utf-8").splitlines()
 
     # Build combined content with warning header
     warning = _build_warning_header(env_config.clear_file, env_config.secret_file)
@@ -169,11 +206,11 @@ def combine_files(
 
     new_content = "\n".join(combined_lines) + "\n"
 
-    existing = combined_file.read_text() if combined_file.exists() else None
+    existing = combined_file.read_text(encoding="utf-8") if combined_file.exists() else None
     in_sync = existing == new_content
 
     if write:
-        combined_file.write_text(new_content)
+        combined_file.write_text(new_content, encoding="utf-8")
         in_sync = True
 
     # Count real secret variables (excludes comments and dotenvx public-key line)
@@ -396,8 +433,9 @@ def push_secrets_only(
     for file in files:
         if not file.is_file():
             continue
-        if file.name == _KEYS_FILENAME:
-            # Never encrypt the dotenvx key file, even if it matches the pattern.
+        if _is_excluded_env_file(file.name):
+            # Never encrypt companion files (.example/.sample/.template) or the
+            # dotenvx key file (.keys), even if they match the glob pattern (#358).
             continue
         if is_file_encrypted(file):
             if not check:
@@ -456,8 +494,9 @@ def pull_secrets_only(env_config: PartialEncryptionEnvironmentConfig) -> dict[st
     for file in files:
         if not file.is_file():
             continue
-        if file.name == _KEYS_FILENAME:
-            # Never decrypt the dotenvx key file, even if it matches the pattern.
+        if _is_excluded_env_file(file.name):
+            # Never decrypt companion files (.example/.sample/.template) or the
+            # dotenvx key file (.keys), even if they match the glob pattern (#358).
             continue
         if not is_file_encrypted(file):
             # Already plaintext on disk — still protect it from accidental commit.

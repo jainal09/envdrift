@@ -71,18 +71,45 @@ def test_is_file_encrypted_with_encrypted_prefix(tmp_path: Path):
     assert is_file_encrypted(encrypted_file)
 
 
-def test_is_file_encrypted_with_vault_marker(tmp_path: Path):
-    """Test detection of files with DOTENV_VAULT marker."""
-    vault_file = tmp_path / ".env.vault"
-    vault_file.write_text(
-        """DATABASE_URL=value
-#/---BEGIN DOTENV_VAULT---/
-DOTENV_VAULT_PRODUCTION="vlt_abc123..."
-#/---END DOTENV_VAULT---/
-"""
+def test_is_file_encrypted_with_sops_value(tmp_path: Path):
+    """A SOPS-encrypted dotenv value (quoted ENC[AES256_GCM,...]) => True (#352)."""
+    sops_file = tmp_path / ".env.sops"
+    # Build the ciphertext-shaped value by concatenation (no real secret).
+    sops_file.write_text(
+        'DATABASE_URL="ENC[AES256_GCM,data:' + "ab" * 8 + ',type:str]"\n', encoding="utf-8"
     )
 
-    assert is_file_encrypted(vault_file)
+    assert is_file_encrypted(sops_file)
+
+
+def test_is_file_encrypted_decrypted_file_with_residual_public_key(tmp_path: Path):
+    """A decrypted dotenvx file keeps DOTENV_PUBLIC_KEY but has plaintext values => False (#352).
+
+    The leftover public-key header line must NOT make the file look encrypted,
+    otherwise encrypt_secret_file would skip re-encryption and leak cleartext.
+    """
+    decrypted = tmp_path / ".env.secret"
+    decrypted.write_text(
+        "#/-------------------[DOTENV_PUBLIC_KEY]--------------------/\n"
+        "#/            public-key encryption for .env files          /\n"
+        'DOTENV_PUBLIC_KEY_TEST="024f56daf45b' + "0" * 8 + 'fe"\n'
+        "API_KEY=" + "sk_live_" + "0123456789abcdef" * 2 + "\n",
+        encoding="utf-8",
+    )
+
+    assert is_file_encrypted(decrypted) is False
+
+
+def test_is_file_encrypted_plaintext_value_contains_encrypted_word(tmp_path: Path):
+    """A plaintext value literally containing 'encrypted:' must read as NOT encrypted (#352)."""
+    note_file = tmp_path / ".env.secret"
+    note_file.write_text(
+        "NOTE=the password is stored encrypted: see the vault docs\n"
+        "API_KEY=" + "sk_live_" + "0123456789abcdef" * 2 + "\n",
+        encoding="utf-8",
+    )
+
+    assert is_file_encrypted(note_file) is False
 
 
 def test_combine_files(temp_env_files):
@@ -997,3 +1024,60 @@ def test_git_unskip_worktree_returns_false_on_git_missing(tmp_path: Path):
         side_effect=FileNotFoundError("git not found"),
     ):
         assert _git_unskip_worktree(tmp_path / ".env.secret") is False
+
+
+# ---------------------------------------------------------------------------
+# #371: non-ASCII values must round-trip regardless of the platform default
+# encoding. read_text/write_text must pass encoding="utf-8".
+# ---------------------------------------------------------------------------
+
+
+def _force_ascii_default(monkeypatch):
+    """Make Path.read_text/write_text default to ascii, as a non-utf8 locale would.
+
+    On a UTF-8 box the #371 bug is latent; forcing the default codec to ascii
+    reproduces the UnicodeDecodeError a cp1252 / C-locale CI box would hit.
+    """
+    import locale
+
+    monkeypatch.setattr(locale, "getpreferredencoding", lambda do_setlocale=True: "ascii")
+    # Python caches the text-IO default via locale; also force the IO encoding.
+    monkeypatch.setenv("PYTHONIOENCODING", "ascii")
+    monkeypatch.setenv("PYTHONUTF8", "0")
+
+
+def test_is_file_encrypted_handles_non_ascii_under_ascii_locale(tmp_path, monkeypatch):
+    """is_file_encrypted reads non-ASCII secrets without UnicodeError (#371)."""
+    _force_ascii_default(monkeypatch)
+    secret = tmp_path / ".env.secret"
+    # Accented + emoji value written as utf-8 bytes.
+    secret.write_bytes("PASSWORD=héllo_café_\U0001f511\n".encode())
+
+    # Must not raise UnicodeDecodeError; plaintext utf-8 is not encrypted.
+    assert is_file_encrypted(secret) is False
+
+
+def test_combine_files_handles_non_ascii_under_ascii_locale(tmp_path, monkeypatch):
+    """combine_files reads/writes non-ASCII values without UnicodeError (#371)."""
+    _force_ascii_default(monkeypatch)
+    clear = tmp_path / ".env.test.clear"
+    secret = tmp_path / ".env.test.secret"
+    combined = tmp_path / ".env.test"
+    clear.write_bytes("APP_NAME=café\n".encode())
+    secret.write_bytes("PASSWORD=héllo_\U0001f511\n".encode())
+
+    config = PartialEncryptionEnvironmentConfig(
+        name="test",
+        clear_file=str(clear),
+        secret_file=str(secret),
+        combined_file=str(combined),
+    )
+
+    stats = combine_files(config)  # must not raise UnicodeError
+
+    assert stats["clear_lines"] == 1
+    assert stats["secret_vars"] == 1
+    # Round-trip preserved the accented/emoji content (read back as utf-8).
+    written = combined.read_bytes().decode("utf-8")
+    assert "café" in written
+    assert "héllo_\U0001f511" in written
