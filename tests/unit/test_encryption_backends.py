@@ -527,6 +527,61 @@ class TestSOPSEncryptionBackend:
         with pytest.raises(EncryptionBackendError):
             backend.encrypt(env_file)
 
+    def test_encrypt_in_place_false_no_output_fails_without_running(self, tmp_path, monkeypatch):
+        """Regression for #360: encrypt(in_place=False) with no output_file must
+        report failure (not run sops at all) instead of streaming the ciphertext
+        to discarded stdout while leaving the file plaintext and claiming success."""
+        env_file = tmp_path / ".env"
+        env_file.write_text("KEY=value")
+
+        backend = SOPSEncryptionBackend()
+        monkeypatch.setattr(backend, "is_installed", lambda: True)
+
+        ran = {"called": False}
+
+        def fake_run(args, env=None, cwd=None):
+            ran["called"] = True
+            return MagicMock(returncode=0, stderr="", stdout="ENC[AES256_GCM,data:zzz]")
+
+        monkeypatch.setattr(backend, "_run", fake_run)
+
+        result = backend.encrypt(env_file, in_place=False)
+
+        # No false success and sops is never invoked (ciphertext would be lost).
+        assert result.success is False
+        assert "output_file" in result.message
+        assert result.file_path == env_file
+        assert ran["called"] is False
+        # The on-disk file is left untouched (still plaintext, not silently lost).
+        assert env_file.read_text() == "KEY=value"
+
+    def test_encrypt_with_output_file(self, tmp_path, monkeypatch):
+        """Regression for #360: encrypt(in_place=False, output_file=...) honors the
+        output file via --output instead of discarding the ciphertext to stdout."""
+        env_file = tmp_path / ".env"
+        env_file.write_text("KEY=value")
+        output_file = tmp_path / ".env.enc"
+
+        backend = SOPSEncryptionBackend()
+        monkeypatch.setattr(backend, "is_installed", lambda: True)
+
+        captured = {}
+
+        def fake_run(args, env=None, cwd=None):
+            captured["args"] = args
+            return MagicMock(returncode=0, stderr="", stdout="")
+
+        monkeypatch.setattr(backend, "_run", fake_run)
+
+        result = backend.encrypt(env_file, output_file=output_file)
+
+        assert result.success is True
+        assert result.file_path == output_file
+        assert "--output" in captured["args"]
+        assert str(output_file) in captured["args"]
+        # In-place flag must NOT be emitted when writing to a separate output file.
+        assert "--in-place" not in captured["args"]
+
     @patch("shutil.which")
     @patch("subprocess.run")
     def test_decrypt_success(self, mock_run, mock_which, tmp_path):

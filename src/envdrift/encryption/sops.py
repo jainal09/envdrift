@@ -217,6 +217,8 @@ class SOPSEncryptionBackend(EncryptionBackend):
                 - env (dict): Environment variables to pass to subprocess.
                 - cwd (Path | str): Working directory for subprocess.
                 - in_place (bool): Encrypt in-place (default True).
+                - output_file (Path | str): Write ciphertext to a different file
+                  (required when in_place is False).
                 - age_recipients (str): Age public keys for encryption.
                 - kms_arn (str): AWS KMS key ARN.
                 - gcp_kms (str): GCP KMS resource ID.
@@ -252,8 +254,25 @@ class SOPSEncryptionBackend(EncryptionBackend):
 
         # In-place encryption by default
         in_place = kwargs.get("in_place", True)
-        if in_place:
+        output_file = kwargs.get("output_file")
+
+        if output_file:
+            args.extend(["--output", str(output_file)])
+        elif in_place:
             args.append("--in-place")
+        else:
+            # Neither in-place nor an output file: sops would stream the
+            # ciphertext to stdout where _run() captures and discards it, leaving
+            # the on-disk file as PLAINTEXT. Refuse rather than silently dropping
+            # the ciphertext (and the secrets) while reporting success.
+            return EncryptionResult(
+                success=False,
+                message=(
+                    "encrypt(in_place=False) requires an output_file; "
+                    "otherwise the ciphertext is discarded and the file stays plaintext."
+                ),
+                file_path=env_file,
+            )
 
         # Specify input type for .env files
         args.extend(["--input-type", "dotenv", "--output-type", "dotenv"])
@@ -270,10 +289,11 @@ class SOPSEncryptionBackend(EncryptionBackend):
             error_msg = result.stderr.strip() if result.stderr else "Unknown error"
             raise EncryptionBackendError(f"SOPS encryption failed: {error_msg}")
 
+        output_path = Path(output_file) if output_file else env_file
         return EncryptionResult(
             success=True,
-            message=f"Encrypted {env_file}",
-            file_path=env_file,
+            message=f"Encrypted {output_path}",
+            file_path=output_path,
         )
 
     def decrypt(

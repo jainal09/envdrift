@@ -204,6 +204,65 @@ def test_decrypt_in_place_false_no_output_fails_without_discarding_plaintext(
     assert "hunter2" not in env_file.read_text()
 
 
+def test_encrypt_in_place_false_no_output_fails_without_discarding_ciphertext(
+    tmp_path: Path, sops_workspace: Path
+) -> None:
+    """EC-08 (regression for #360): encrypt(in_place=False) with no output_file
+    must report failure instead of streaming the ciphertext to discarded stdout
+    while leaving the on-disk file as PLAINTEXT yet claiming success. The
+    plaintext file stays exactly as written and is never silently consumed."""
+    _require_sops()
+    backend = _make_backend(sops_workspace)
+    env_file = sops_workspace / ".env.discard-enc"
+    env_file.write_text("DB_PASSWORD=hunter2\n")
+    plaintext_snapshot = env_file.read_text()
+
+    result = backend.encrypt(
+        env_file, age_recipients=AGE_PUBLIC_KEY, in_place=False, cwd=sops_workspace
+    )
+
+    # No false success: the ciphertext would have been discarded to stdout.
+    assert result.success is False
+    assert "output_file" in result.message
+    assert result.file_path == env_file
+    # The file is untouched: still the original plaintext, not silently lost.
+    assert env_file.read_text() == plaintext_snapshot
+    assert "ENC[AES256_GCM," not in env_file.read_text()
+
+
+def test_encrypt_with_output_file_writes_ciphertext(tmp_path: Path, sops_workspace: Path) -> None:
+    """HP-11 (regression for #360): encrypt(in_place=False, output_file=...) writes
+    real sops ciphertext to the output file via --output. The output is genuinely
+    encrypted (ENC[...] + sops metadata) and differs from the plaintext, while the
+    source file is left unmodified."""
+    _require_sops()
+    backend = _make_backend(sops_workspace)
+    env_file = sops_workspace / ".env.src"
+    env_file.write_text("DB_PASSWORD=hunter2\n")
+    plaintext_snapshot = env_file.read_text()
+    output_file = sops_workspace / ".env.out"
+
+    result = backend.encrypt(
+        env_file,
+        age_recipients=AGE_PUBLIC_KEY,
+        in_place=False,
+        output_file=output_file,
+        cwd=sops_workspace,
+    )
+
+    assert result.success is True, f"encrypt failed: {result.message}"
+    assert result.file_path == output_file
+    # The output file holds genuine sops ciphertext (markers + metadata).
+    assert output_file.exists()
+    ciphertext = output_file.read_text()
+    assert "ENC[AES256_GCM," in ciphertext
+    assert "hunter2" not in ciphertext
+    assert ciphertext != plaintext_snapshot
+    assert backend.has_encrypted_header(ciphertext) is True
+    # The source plaintext file is left unmodified.
+    assert env_file.read_text() == plaintext_snapshot
+
+
 def test_decrypt_with_wrong_age_key_raises_backend_error(
     tmp_path: Path, sops_workspace: Path
 ) -> None:
