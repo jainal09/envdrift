@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import contextlib
+import re
 from typing import Any
 
 from envdrift.vault.base import (
@@ -36,6 +37,13 @@ def _get_gcp_modules() -> tuple[Any, Any]:
     return _secretmanager, _google_exceptions
 
 
+# Canonical GCP Secret Manager resource name: projects/<P>/secrets/<S> optionally
+# followed by /versions/<V>. Each segment is non-empty and slash-free. A bare
+# secret name (no `projects/` prefix) is handled separately and resolves under the
+# bound project. Declaring the shape once here keeps validation in a single place.
+_QUALIFIED_NAME_RE = re.compile(r"^projects/(?P<project>[^/]+)/secrets/[^/]+(?:/versions/[^/]+)?$")
+
+
 class GCPSecretManagerClient(VaultClient):
     """GCP Secret Manager implementation.
 
@@ -63,19 +71,22 @@ class GCPSecretManagerClient(VaultClient):
         return f"projects/{self.project_id}"
 
     def _validate_project(self, name: str) -> None:
-        """Reject fully-qualified resource names that target a different project.
+        """Reject resource names that are malformed or target a different project.
 
-        A bare secret name is left to resolve under the bound project. A
-        ``projects/<P>/secrets/...`` name is only allowed when ``<P>`` matches the
-        project this backend is bound to, preventing a caller-supplied name from
-        crossing the configured project boundary.
+        A bare secret name (no ``projects/`` prefix) is left to resolve under the
+        bound project. A fully-qualified name must match the canonical shape
+        ``projects/<P>/secrets/<S>`` optionally followed by ``/versions/<V>``, and
+        ``<P>`` must match the project this backend is bound to. This prevents a
+        caller-supplied name from being silently rewritten into a synthetic path
+        (e.g. ``projects/<P>`` or ``projects/<P>/other/<S>``) or from crossing the
+        configured project boundary.
         """
         if not name.startswith("projects/"):
             return
-        parts = name.split("/")
-        if len(parts) < 2 or not parts[1]:
+        match = _QUALIFIED_NAME_RE.match(name)
+        if match is None:
             raise VaultError(f"Malformed GCP secret resource name: {name!r}")
-        requested_project = parts[1]
+        requested_project = match.group("project")
         if requested_project != self.project_id:
             raise VaultError(
                 f"Secret resource name targets project {requested_project!r}, "

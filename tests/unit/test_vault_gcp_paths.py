@@ -84,6 +84,26 @@ def test_malformed_projects_name_is_rejected() -> None:
     assert "Malformed" in str(exc.value)
 
 
+@pytest.mark.parametrize(
+    "bad",
+    [
+        "projects/my-project",  # no /secrets/<S> segment — would be rewritten synthetically
+        "projects/my-project/other/x",  # third segment isn't 'secrets'
+        "projects/my-project/secrets/",  # empty secret id
+        "projects/my-project/secrets/x/versions",  # 'versions' with no version id
+        "projects/my-project/secrets/x/versions/",  # empty version id
+        "projects/my-project/secrets/x/foo/latest",  # fifth segment isn't 'versions'
+    ],
+)
+def test_malformed_fully_qualified_names_are_rejected(bad: str) -> None:
+    """Fully-qualified names that don't match ``projects/<P>/secrets/<S>[/versions/<V>]``
+    hard-fail with a clear VaultError instead of being silently rewritten into a
+    synthetic secret/version path (even when the project matches the bound one)."""
+    with pytest.raises(VaultError) as exc:
+        _client()._version_path(bad)
+    assert "Malformed" in str(exc.value)
+
+
 def test_get_secret_rejects_cross_project_before_client_call() -> None:
     """``get_secret`` (not just the path builder) rejects a cross-project name
     with VaultError BEFORE any ``access_secret_version`` call — proven with a spy

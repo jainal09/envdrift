@@ -175,10 +175,10 @@ class TestGCPSecretManagerClient:
         assert client._secret_id("plain-secret") == "plain-secret"
         assert client._secret_id("projects/my-project/secrets/secret-1") == "secret-1"
         assert client._secret_id("projects/my-project/secrets/secret-2/versions/9") == "secret-2"
-        assert (
+        # A fully-qualified name that isn't the canonical projects/<P>/secrets/<S>[/versions/<V>]
+        # shape is now hard-failed rather than silently passed through (see #393 / CodeRabbit).
+        with pytest.raises(VaultError, match="Malformed"):
             client._secret_id("projects/my-project/other/secret-3")
-            == "projects/my-project/other/secret-3"
-        )
 
         assert client._version_path("projects/my-project/secrets/secret-4/versions/7") == (
             "projects/my-project/secrets/secret-4/versions/7"
