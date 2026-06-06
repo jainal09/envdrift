@@ -1,0 +1,21 @@
+tests/unit/test_enc_helpers_schema_regressions.py
+  s_dfc6cd6692ed8f::t_27e80bc67d1aa7 176-225
+src/envdrift/core/schema.py
+  s_dfc6cd6692ed8f::t_8752c34c4bb7e6 132-139,147,165-170
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.3",
+  "base_commit_sha": "66e9fb12f0beafaf2885e2436f1adf752f014f03",
+  "prompts": {},
+  "sessions": {
+    "s_dfc6cd6692ed8f": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "fd23e738-3512-4420-9290-d985ad979bfd",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Jainal Gosaliya <jainal09gosalia@gmail.com>"
+    }
+  }
+}
