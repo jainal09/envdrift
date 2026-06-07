@@ -1,0 +1,56 @@
+tests/unit/test_encryption.py
+  s_dfc6cd6692ed8f::t_98da041c6dfb07 245-270,273-276
+  s_dfc6cd6692ed8f::t_e97d19a6428f62 271-272
+src/envdrift/cli_commands/guard.py
+  s_dfc6cd6692ed8f::t_d7ba0ac65b4922 628-638
+src/envdrift/core/encryption.py
+  s_dfc6cd6692ed8f::t_eb58e9ac4d5304 242
+  s_dfc6cd6692ed8f::t_a0a9ac88e1955a 112-113
+  s_dfc6cd6692ed8f::t_f2495dcb9bf13a 268-272
+  s_dfc6cd6692ed8f::t_69c788c82df806 104-111,114-118
+  s_dfc6cd6692ed8f::t_caa45ff01d932f 274-276
+src/envdrift/scanner/native.py
+  s_dfc6cd6692ed8f::t_cf5539acbb7574 1061
+  s_dfc6cd6692ed8f::t_512821f4faced6 63,65-70,72,74-102
+  s_dfc6cd6692ed8f::t_1cfb03e55ecb1a 1053
+  s_dfc6cd6692ed8f::t_d3612a991332a7 51
+  s_dfc6cd6692ed8f::t_ef01084fd380f7 64,71,73,103-104
+  s_dfc6cd6692ed8f::t_fff908b0d80321 1054-1060
+  s_dfc6cd6692ed8f::t_4852b48e612b0b 40-49
+tests/scanner/test_native.py
+  s_dfc6cd6692ed8f::t_e97d19a6428f62 1540,1566
+  s_dfc6cd6692ed8f::t_6c061f4a0ec51e 1493-1539,1541-1565,1567-1597
+tests/unit/test_guard_cli.py
+  s_dfc6cd6692ed8f::t_5f033c60f53cb1 353-381
+src/envdrift/encryption/__init__.py
+  s_dfc6cd6692ed8f::t_6682a0938d3848 86-88,90-91
+  s_dfc6cd6692ed8f::t_f7af5309b0bd23 92-97
+  s_dfc6cd6692ed8f::t_1cf795f01c9b34 89
+src/envdrift/scanner/engine.py
+  s_dfc6cd6692ed8f::t_e97d19a6428f62 997
+  s_dfc6cd6692ed8f::t_7c16b663b37351 983-984,990-996,1008,1010-1022
+tests/scanner/test_engine.py
+  s_dfc6cd6692ed8f::t_e97d19a6428f62 1481
+  s_dfc6cd6692ed8f::t_0995fbe0500ec6 1450-1463,1468,1471-1480,1482-1483
+  s_dfc6cd6692ed8f::t_69d3e323a06799 1464-1467,1469-1470
+docs/cli/guard.md
+  s_dfc6cd6692ed8f::t_7c73009d40e924 261-265
+tests/unit/test_encryption_backends.py
+  s_dfc6cd6692ed8f::t_6401dbb1922c9b 118-134
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.3",
+  "base_commit_sha": "51d2e15410aa731d95783dae525cf9f4e1978719",
+  "prompts": {},
+  "sessions": {
+    "s_dfc6cd6692ed8f": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "fd23e738-3512-4420-9290-d985ad979bfd",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Jainal Gosaliya <jainal09gosalia@gmail.com>"
+    }
+  }
+}
