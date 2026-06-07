@@ -5,6 +5,13 @@ All notable changes to the EnvDrift VS Code Extension will be documented in this
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.5](https://github.com/jainal09/envdrift/compare/vscode-v0.1.4...vscode-v0.1.5) (2026-06-07)
+
+
+### Bug Fixes
+
+* **vscode:** workspace-trust gating + exec timeouts + exclusions + activation ([#348](https://github.com/jainal09/envdrift/issues/348) VS Code) ([#387](https://github.com/jainal09/envdrift/issues/387)) ([8a39a51](https://github.com/jainal09/envdrift/commit/8a39a5121f27e74a302aeca01e5d03b82c84e179))
+
 ## [0.1.4](https://github.com/jainal09/envdrift/compare/vscode-v0.1.3...vscode-v0.1.4) (2026-06-04)
 
 
