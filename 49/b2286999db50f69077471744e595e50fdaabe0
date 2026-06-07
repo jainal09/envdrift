@@ -1,0 +1,43 @@
+tests/scanner/test_output.py
+  s_dfc6cd6692ed8f::t_2ce1dd315395a3 17-22
+  s_dfc6cd6692ed8f::t_3f0e89f0c1b695 321-338,342-344
+  s_dfc6cd6692ed8f::t_0c3924d2e4408a 339-341
+src/envdrift/scanner/output.py
+  s_dfc6cd6692ed8f::t_a01f9aaa7f9b18 291-334
+src/envdrift/cli_commands/guard.py
+  s_dfc6cd6692ed8f::t_8ee3d802d4fd7e 454
+  s_dfc6cd6692ed8f::t_ae1bdb4d926134 86-101
+  s_dfc6cd6692ed8f::t_2b8e4ca89513e9 451-453
+  s_dfc6cd6692ed8f::t_c7af8c10c1ebb0 44-49
+  s_dfc6cd6692ed8f::t_a16ff8df99bf5b 40
+  s_dfc6cd6692ed8f::t_0c3924d2e4408a 85
+  s_dfc6cd6692ed8f::t_189aa2c6b201d6 105-111,113-115
+src/envdrift/cli_commands/diff.py
+  s_dfc6cd6692ed8f::t_0c3924d2e4408a 18
+  s_dfc6cd6692ed8f::t_2d68b7f6b59ff8 19-36
+  s_dfc6cd6692ed8f::t_4a21a92959d173 14
+  s_dfc6cd6692ed8f::t_f6121b4dd7b0d8 100
+tests/unit/test_guard_machine_output.py
+  s_dfc6cd6692ed8f::t_dd145a4323bb79 25,27
+  s_dfc6cd6692ed8f::t_baa2788327ebdb 1-24,28-100,102-108,110,112-119,121-122,124,126-130
+  s_dfc6cd6692ed8f::t_0c3924d2e4408a 26
+  s_dfc6cd6692ed8f::t_e9828ae26ee781 101,109,111,120,123,125
+tests/unit/test_cli.py
+  s_dfc6cd6692ed8f::t_5b4ffaff261b37 366-383
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.3",
+  "base_commit_sha": "49b2286999db50f69077471744e595e50fdaabe0",
+  "prompts": {},
+  "sessions": {
+    "s_dfc6cd6692ed8f": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "fd23e738-3512-4420-9290-d985ad979bfd",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Jainal Gosaliya <jainal09gosalia@gmail.com>"
+    }
+  }
+}
