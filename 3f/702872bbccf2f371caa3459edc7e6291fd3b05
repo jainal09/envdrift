@@ -1,0 +1,24 @@
+src/envdrift/scanner/_native_filters.py
+  s_dfc6cd6692ed8f::t_8450556623b205 1-163
+tests/scanner/test_native.py
+  s_dfc6cd6692ed8f::t_d9b80741d10e9b 1640,1653,1658,1665
+src/envdrift/scanner/native.py
+  s_dfc6cd6692ed8f::t_8a887e0ff04362 26
+  s_dfc6cd6692ed8f::t_2a9ad324fffa21 19-25,27-30
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.3",
+  "base_commit_sha": "3f702872bbccf2f371caa3459edc7e6291fd3b05",
+  "prompts": {},
+  "sessions": {
+    "s_dfc6cd6692ed8f": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "fd23e738-3512-4420-9290-d985ad979bfd",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Jainal Gosaliya <jainal09gosalia@gmail.com>"
+    }
+  }
+}
