@@ -24,7 +24,21 @@ class SecretPattern:
         description: Human-readable description of what this pattern detects.
         pattern: Compiled regex pattern. Should have a capture group for the secret.
         severity: Severity level when this pattern matches.
-        keywords: Optional context keywords that increase confidence.
+        keywords: Optional context keywords that increase confidence. Used as a
+            file-scope gate **only** when ``require_keyword`` is True (so a
+            distinctive-prefix pattern can still expose keywords for ranking
+            without being suppressed when none appear).
+        require_keyword: When True the pattern only fires if one of its
+            ``keywords`` appears anywhere in the file (#355). Set this only for
+            *broad* regexes with ambiguous prefixes (e.g. twilio ``AC<32hex>``,
+            telegram ``<digits>:<base64>``) that flood combined files with false
+            positives. Distinctive-prefix patterns (``AKIA…``, ``sq0atp-…``,
+            ``EAA…``) keep ``require_keyword=False`` so a genuine key with no
+            sibling provider context is never wrongly suppressed.
+        multiline: When True the pattern is matched against the *whole file
+            content* (with ``re.DOTALL`` baked into the regex) instead of
+            per-line, for secrets whose tokens span multiple lines (e.g. a GCP
+            service-account JSON).
     """
 
     id: str
@@ -32,6 +46,8 @@ class SecretPattern:
     pattern: re.Pattern[str]
     severity: FindingSeverity
     keywords: tuple[str, ...] = ()
+    require_keyword: bool = False
+    multiline: bool = False
 
 
 # High-confidence patterns - known secret formats with distinctive prefixes
@@ -186,8 +202,16 @@ CRITICAL_PATTERNS: list[SecretPattern] = [
     SecretPattern(
         id="gcp-service-account",
         description="GCP Service Account Key",
-        pattern=re.compile(r'"type"\s*:\s*"service_account".*"private_key"\s*:\s*"-----BEGIN'),
+        # Real service-account JSON spans multiple lines, so the two anchor
+        # tokens are never on one line. Match against the whole file with
+        # re.DOTALL and a lazy ``.*?`` bounded to the nearest private_key, and
+        # flag the pattern as multiline so the scanner uses a full-content pass.
+        pattern=re.compile(
+            r'"type"\s*:\s*"service_account".*?"private_key"\s*:\s*"-----BEGIN',
+            re.DOTALL,
+        ),
         severity=FindingSeverity.CRITICAL,
+        multiline=True,
     ),
     # Azure
     SecretPattern(
@@ -205,6 +229,7 @@ CRITICAL_PATTERNS: list[SecretPattern] = [
         pattern=re.compile(r"(SK[a-fA-F0-9]{32})"),
         severity=FindingSeverity.HIGH,
         keywords=("twilio",),
+        require_keyword=True,
     ),
     SecretPattern(
         id="twilio-account-sid",
@@ -212,6 +237,7 @@ CRITICAL_PATTERNS: list[SecretPattern] = [
         pattern=re.compile(r"(AC[a-fA-F0-9]{32})"),
         severity=FindingSeverity.HIGH,
         keywords=("twilio",),
+        require_keyword=True,
     ),
     # SendGrid
     SecretPattern(
@@ -227,6 +253,7 @@ CRITICAL_PATTERNS: list[SecretPattern] = [
         pattern=re.compile(r"([a-f0-9]{32}-us[0-9]{1,2})"),
         severity=FindingSeverity.HIGH,
         keywords=("mailchimp",),
+        require_keyword=True,
     ),
     # NPM
     SecretPattern(
@@ -300,6 +327,7 @@ CRITICAL_PATTERNS: list[SecretPattern] = [
         pattern=re.compile(r"([0-9]{8,10}:[a-zA-Z0-9_-]{35})"),
         severity=FindingSeverity.HIGH,
         keywords=("telegram", "bot"),
+        require_keyword=True,
     ),
     # Heroku
     SecretPattern(
@@ -346,6 +374,7 @@ CRITICAL_PATTERNS: list[SecretPattern] = [
         pattern=re.compile(r"(AP[a-fA-F0-9]{32})"),
         severity=FindingSeverity.HIGH,
         keywords=("twilio",),
+        require_keyword=True,
     ),
     # Square (legacy format - modern tokens are opaque bearer strings)
     # These patterns detect older sq0atp/sq0csp prefixed tokens
