@@ -1,0 +1,20 @@
+.github/workflows/vscode-release.yml
+  s_dfc6cd6692ed8f::t_5229a0bd280b7e 188-190
+  s_dfc6cd6692ed8f::t_d4c265773ee40c 145-150
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.3",
+  "base_commit_sha": "db70a1b55e3d1f08d53dd03f965808e7f6cdaaf5",
+  "prompts": {},
+  "sessions": {
+    "s_dfc6cd6692ed8f": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "fd23e738-3512-4420-9290-d985ad979bfd",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Jainal Gosaliya <jainal09gosalia@gmail.com>"
+    }
+  }
+}
