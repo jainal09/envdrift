@@ -10,6 +10,24 @@ let disposable: vscode.Disposable | undefined;
  * Start watching for file close events
  */
 export function startWatching(context: vscode.ExtensionContext): void {
+    // Only auto-encrypt in a trusted workspace: encryption shells out to
+    // `envdrift lock`, which must never run on untrusted folder content.
+    if (vscode.workspace.isTrusted) {
+        registerCloseWatcher(context);
+    }
+
+    // If the user later grants trust, start watching then.
+    context.subscriptions.push(
+        vscode.workspace.onDidGrantWorkspaceTrust(() => {
+            registerCloseWatcher(context);
+        })
+    );
+}
+
+function registerCloseWatcher(context: vscode.ExtensionContext): void {
+    if (disposable) {
+        return; // already watching
+    }
     disposable = vscode.workspace.onDidCloseTextDocument(async (document) => {
         await handleDocumentClose(document);
     });
@@ -20,6 +38,11 @@ export function startWatching(context: vscode.ExtensionContext): void {
  * Handle document close event
  */
 async function handleDocumentClose(document: vscode.TextDocument): Promise<void> {
+    // Never auto-encrypt in an untrusted workspace.
+    if (!vscode.workspace.isTrusted) {
+        return;
+    }
+
     const config = getConfig();
 
     // Check if enabled
@@ -89,6 +112,13 @@ export async function encryptCurrentFile(): Promise<void> {
         return;
     }
 
+    if (!vscode.workspace.isTrusted) {
+        vscode.window.showWarningMessage(
+            'EnvDrift: cannot encrypt — this workspace is not trusted.'
+        );
+        return;
+    }
+
     const document = editor.document;
 
     if (document.uri.scheme !== 'file') {
@@ -98,10 +128,17 @@ export async function encryptCurrentFile(): Promise<void> {
 
     const filePath = document.uri.fsPath;
     const config = getConfig();
+    const baseName = path.basename(filePath);
 
     // Check if file matches pattern
-    if (!matchesPatterns(path.basename(filePath), config.patterns)) {
+    if (!matchesPatterns(baseName, config.patterns)) {
         vscode.window.showWarningMessage('This file does not match configured EnvDrift patterns');
+        return;
+    }
+
+    // Check if file is excluded (e.g. .env.keys, .env.example)
+    if (isExcluded(baseName, config.exclude)) {
+        vscode.window.showWarningMessage('This file is excluded from EnvDrift encryption');
         return;
     }
 
