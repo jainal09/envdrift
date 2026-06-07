@@ -88,8 +88,33 @@ class TestAgentRegisterCommand:
         assert result.exit_code == 1
         assert "does not exist" in result.stdout
 
-    def test_register_invalid_config_shows_warning(self, tmp_path: Path):
-        """Test register handles invalid config gracefully."""
+    def test_register_invalid_guardian_idle_timeout_when_enabled(self, tmp_path: Path):
+        """Register surfaces a bad idle_timeout only when guardian is enabled (#413).
+
+        idle_timeout validation is deferred to GuardianWatchConfig.validate(),
+        which register calls at the agent surface when [guardian].enabled = true.
+        """
+
+        registry_path = tmp_path / ".envdrift" / "projects.json"
+        registry_module._registry = registry_module.ProjectRegistry(registry_path)
+
+        project_dir = tmp_path / "myproject"
+        project_dir.mkdir()
+        (project_dir / "envdrift.toml").write_text("""
+[guardian]
+enabled = true
+idle_timeout = "invalid"
+""")
+
+        result = runner.invoke(app, ["agent", "register", str(project_dir)])
+
+        # Registration still succeeds; the invalid agent-only knob is reported
+        # without crashing.
+        assert result.exit_code == 0
+        assert "Invalid [guardian] config" in result.stdout
+
+    def test_register_invalid_guardian_idle_timeout_disabled_is_ignored(self, tmp_path: Path):
+        """A bad idle_timeout with guardian disabled does not error (#413)."""
 
         registry_path = tmp_path / ".envdrift" / "projects.json"
         registry_module._registry = registry_module.ProjectRegistry(registry_path)
@@ -103,8 +128,11 @@ idle_timeout = "invalid"
 
         result = runner.invoke(app, ["agent", "register", str(project_dir)])
 
+        # Deferred validation: guardian isn't enabled, so the typo isn't
+        # consumed — registration succeeds and prints the enable hint.
         assert result.exit_code == 0
-        assert "Failed to load envdrift config" in result.stdout
+        assert "Failed to load envdrift config" not in result.stdout
+        assert "Guardian is not enabled" in result.stdout
 
 
 class TestAgentUnregisterCommand:

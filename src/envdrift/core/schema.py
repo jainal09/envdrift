@@ -265,15 +265,41 @@ class SchemaLoader:
             dict[str, Any] | None: The dictionary returned by get_schema_metadata() if callable and executed successfully,
             or `None` if the module cannot be imported or the function is absent.
         """
+        # Mirror load()'s sys.path / sys.modules isolation (#348c/#391, #413):
+        # prepend the service dir at the *front* so the right service wins when
+        # several expose the same module name, snapshot the cache, evict every
+        # module this import added, and restore + remove the path entry in
+        # finally. Without this, a stale cached module from another service (or a
+        # leaked sys.path entry) would make two services with same-named config
+        # modules resolve to each other's metadata.
+        root_pkg = module_path.split(".", 1)[0]
+        inserted_path: str | None = None
         if service_dir:
             service_dir = Path(service_dir).resolve()
-            if str(service_dir) not in sys.path:
-                sys.path.insert(0, str(service_dir))
+            inserted_path = str(service_dir)
+            sys.path.insert(0, inserted_path)
+
+        saved_modules = {
+            name: mod
+            for name, mod in list(sys.modules.items())
+            if name == root_pkg or name.startswith(root_pkg + ".")
+        }
+        for name in saved_modules:
+            del sys.modules[name]
+        before = set(sys.modules)
 
         try:
+            importlib.invalidate_caches()
             module = importlib.import_module(module_path)
         except ImportError:
             return None
+        finally:
+            if inserted_path is not None:
+                with contextlib.suppress(ValueError):
+                    sys.path.remove(inserted_path)
+            for name in set(sys.modules) - before:
+                del sys.modules[name]
+            sys.modules.update(saved_modules)
 
         func = getattr(module, "get_schema_metadata", None)
         if callable(func):

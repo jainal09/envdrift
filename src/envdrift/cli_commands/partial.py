@@ -8,7 +8,7 @@ from typing import Annotated
 import typer
 from rich.panel import Panel
 
-from envdrift.config import load_config
+from envdrift.config import load_config, validate_partial_encryption_environments
 from envdrift.core.partial_encryption import (
     PartialEncryptionError,
     pull_partial_encryption,
@@ -92,6 +92,14 @@ def push(
             '[cyan]combined_file = ".env.production"[/cyan]'
         )
         raise typer.Exit(code=1)
+
+    # Required-field validation is deferred to here (the consuming command) so an
+    # unrelated partial_encryption typo never crashes other commands (#413).
+    try:
+        validate_partial_encryption_environments(config.partial_encryption.environments)
+    except ValueError as e:
+        print_error(str(e))
+        raise typer.Exit(code=1) from None
 
     # Filter environments
     envs_to_process = config.partial_encryption.environments
@@ -262,6 +270,14 @@ def pull_cmd(
     if not config.partial_encryption.enabled:
         print_error("Partial encryption is not enabled in configuration")
         raise typer.Exit(code=1)
+
+    # Required-field validation is deferred to here (the consuming command) so an
+    # unrelated partial_encryption typo never crashes other commands (#413).
+    try:
+        validate_partial_encryption_environments(config.partial_encryption.environments)
+    except ValueError as e:
+        print_error(str(e))
+        raise typer.Exit(code=1) from None
 
     # Filter environments
     envs_to_process = config.partial_encryption.environments

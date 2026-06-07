@@ -180,6 +180,15 @@ def register(
                     console.print("  Add this to your envdrift.toml to enable auto-encryption:\n")
                     console.print("  [dim][guardian][/dim]")
                     console.print("  [dim]enabled = true[/dim]")
+                else:
+                    # idle_timeout validation is deferred to here, the agent
+                    # surface that consumes the guardian section (#413).
+                    try:
+                        config.guardian.validate()
+                    except ValueError as exc:
+                        # Escape the literal "[guardian]" so Rich doesn't treat
+                        # it as a style tag and swallow it.
+                        console.print(f"\n[red]✗[/red] Invalid \\[guardian] config: {exc}")
     else:
         if "already registered" in message.lower():
             console.print(f"[yellow]⚠[/yellow] {message}")

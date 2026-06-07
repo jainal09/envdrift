@@ -223,3 +223,45 @@ def test_monorepo_same_named_sibling_module_isolation(tmp_path: Path) -> None:
                 sys.modules.pop(k, None)
             else:
                 sys.modules[k] = v
+
+
+def test_get_schema_metadata_func_monorepo_isolation(tmp_path: Path) -> None:
+    """#413: get_schema_metadata_func must isolate same-named modules like load().
+
+    Two services each ship a ``schema_meta.py`` exposing ``get_schema_metadata``
+    that returns service-specific metadata. Before the fix, the first service's
+    module stayed cached in sys.modules (and its dir leaked onto sys.path), so
+    the second service silently reused the first's metadata.
+    """
+    import sys
+
+    svc_a = tmp_path / "svc_a_meta"
+    svc_b = tmp_path / "svc_b_meta"
+    for svc, who in ((svc_a, "AAA"), (svc_b, "BBB")):
+        svc.mkdir()
+        (svc / "schema_meta.py").write_text(
+            f'def get_schema_metadata():\n    return {{"service": "{who}"}}\n'
+        )
+
+    saved = {k: sys.modules.get(k) for k in ("schema_meta",)}
+    before_path = list(sys.path)
+    try:
+        loader = SchemaLoader()
+        meta_a = loader.get_schema_metadata_func("schema_meta", service_dir=svc_a)
+        meta_b = loader.get_schema_metadata_func("schema_meta", service_dir=svc_b)
+
+        assert meta_a == {"service": "AAA"}
+        assert meta_b == {"service": "BBB"}, (
+            "svc_b reused svc_a's cached schema_meta module (saw AAA, expected BBB)"
+        )
+
+        # Neither service dir may leak onto sys.path after the calls.
+        assert str(svc_a.resolve()) not in sys.path
+        assert str(svc_b.resolve()) not in sys.path
+        assert sys.path == before_path
+    finally:
+        for k, v in saved.items():
+            if v is None:
+                sys.modules.pop(k, None)
+            else:
+                sys.modules[k] = v

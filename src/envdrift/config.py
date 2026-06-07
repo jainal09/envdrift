@@ -13,14 +13,26 @@ from envdrift.utils import normalize_max_workers
 _GUARDIAN_IDLE_TIMEOUT_PATTERN = re.compile(r"^\d+(s|m|h|d)$")
 
 
+class ConfigValidationError(ValueError):
+    """A config section that a command consumes is invalid.
+
+    Subclasses ``ValueError`` so existing ``except ValueError`` handlers keep
+    working, while letting deferred validators (guardian/partial_encryption)
+    raise a typed error that consuming commands can convert to a clean message
+    (see #413).
+    """
+
+
 def _validate_guardian_idle_timeout(value: Any) -> str:
     """Validate guardian idle_timeout format (e.g., 5m, 1h, 30s)."""
     if not isinstance(value, str):
-        raise ValueError("guardian.idle_timeout must be a string like '5m'")
+        raise ConfigValidationError("guardian.idle_timeout must be a string like '5m'")
 
     normalized = value.strip().lower()
     if not _GUARDIAN_IDLE_TIMEOUT_PATTERN.match(normalized):
-        raise ValueError("guardian.idle_timeout must match '<number><s|m|h|d>', e.g. '5m' or '30s'")
+        raise ConfigValidationError(
+            "guardian.idle_timeout must match '<number><s|m|h|d>', e.g. '5m' or '30s'"
+        )
 
     return normalized
 
@@ -162,6 +174,34 @@ class PartialEncryptionEnvironmentConfig:
     pattern: str = ".env*"
 
 
+def validate_partial_encryption_environments(
+    environments: list[PartialEncryptionEnvironmentConfig],
+) -> None:
+    """Check each partial-encryption environment has the fields its mode needs.
+
+    Deferred until the partial-encryption commands actually consume the section
+    so an unrelated ``[[partial_encryption.environments]]`` typo can't crash
+    commands that never read it (encrypt/decrypt/guard/pull/sync) (#413). Raises
+    ``ConfigValidationError`` (a ``ValueError`` subclass).
+    """
+    for env in environments:
+        if env.secrets_only:
+            if not env.secrets_dir:
+                raise ConfigValidationError(
+                    f"partial_encryption environment '{env.name}': secrets_dir is "
+                    "required when secrets_only=true"
+                )
+        else:
+            missing = [
+                k for k in ("clear_file", "secret_file", "combined_file") if not getattr(env, k)
+            ]
+            if missing:
+                raise ConfigValidationError(
+                    f"partial_encryption environment '{env.name}': "
+                    f"missing required field(s) for combine mode: {', '.join(missing)}"
+                )
+
+
 @dataclass
 class GuardianWatchConfig:
     """Guardian background agent watch configuration.
@@ -184,6 +224,16 @@ class GuardianWatchConfig:
     exclude: list[str] = field(default_factory=lambda: [".env.example", ".env.sample", ".env.keys"])
     notify: bool = True  # Desktop notifications when encrypting
 
+    def validate(self) -> str:
+        """Validate and return the normalized ``idle_timeout``.
+
+        Deferred until the agent commands consume the ``[guardian]`` section so
+        a typo in this agent-only knob does not crash unrelated commands like
+        ``encrypt``/``decrypt``/``guard``/``pull`` (see #413). Raises
+        ``ConfigValidationError`` (a ``ValueError`` subclass).
+        """
+        return _validate_guardian_idle_timeout(self.idle_timeout)
+
 
 @dataclass
 class PartialEncryptionConfig:
@@ -191,6 +241,18 @@ class PartialEncryptionConfig:
 
     enabled: bool = False
     environments: list[PartialEncryptionEnvironmentConfig] = field(default_factory=list)
+
+    def validate(self) -> None:
+        """Validate that each environment has the fields its mode requires.
+
+        Deferred until the partial-encryption commands actually consume this
+        section: an unrelated typo in ``[[partial_encryption.environments]]``
+        must not crash ``encrypt``/``decrypt``/``guard``/``pull``/``sync``,
+        which never read these fields (see #413). Raises ``ConfigValidationError``
+        (a ``ValueError`` subclass) so callers that already catch ``ValueError``
+        surface a clean message.
+        """
+        validate_partial_encryption_environments(self.environments)
 
 
 @dataclass
@@ -289,38 +351,24 @@ class EnvdriftConfig:
             precommit_config=git_hook_check_section.get("precommit_config"),
         )
 
-        # Build partial_encryption config
+        # Build partial_encryption config. Required-field validation is deferred
+        # to PartialEncryptionConfig.validate(), called by the partial-encryption
+        # commands that consume this section, so a typo here cannot crash an
+        # unrelated command (encrypt/decrypt/guard/pull/sync) that never reads it
+        # (#413).
         partial_encryption_section = data.get("partial_encryption", {})
-        partial_encryption_envs = []
-        for env in partial_encryption_section.get("environments", []):
-            name = env["name"]
-            secrets_only = env.get("secrets_only", False)
-            if secrets_only:
-                if not env.get("secrets_dir"):
-                    raise ValueError(
-                        f"partial_encryption environment '{name}': secrets_dir is required "
-                        "when secrets_only=true"
-                    )
-            else:
-                missing = [
-                    k for k in ("clear_file", "secret_file", "combined_file") if not env.get(k)
-                ]
-                if missing:
-                    raise ValueError(
-                        f"partial_encryption environment '{name}': "
-                        f"missing required field(s) for combine mode: {', '.join(missing)}"
-                    )
-            partial_encryption_envs.append(
-                PartialEncryptionEnvironmentConfig(
-                    name=name,
-                    clear_file=env.get("clear_file", ""),
-                    secret_file=env.get("secret_file", ""),
-                    combined_file=env.get("combined_file", ""),
-                    secrets_only=secrets_only,
-                    secrets_dir=env.get("secrets_dir", ""),
-                    pattern=env.get("pattern", ".env*"),
-                )
+        partial_encryption_envs = [
+            PartialEncryptionEnvironmentConfig(
+                name=env["name"],
+                clear_file=env.get("clear_file", ""),
+                secret_file=env.get("secret_file", ""),
+                combined_file=env.get("combined_file", ""),
+                secrets_only=env.get("secrets_only", False),
+                secrets_dir=env.get("secrets_dir", ""),
+                pattern=env.get("pattern", ".env*"),
             )
+            for env in partial_encryption_section.get("environments", [])
+        ]
         partial_encryption = PartialEncryptionConfig(
             enabled=partial_encryption_section.get("enabled", False),
             environments=partial_encryption_envs,
@@ -363,13 +411,14 @@ class EnvdriftConfig:
             verify_secrets=guard_section.get("verify_secrets", False),
         )
 
-        # Build guardian config (for background agent)
+        # Build guardian config (for background agent). idle_timeout validation
+        # is deferred to GuardianWatchConfig.validate(), invoked by the agent
+        # commands, so a typo in this agent-only knob doesn't crash unrelated
+        # commands (encrypt/decrypt/guard/pull/sync) that never read it (#413).
         guardian_section = data.get("guardian", {})
         guardian = GuardianWatchConfig(
             enabled=guardian_section.get("enabled", False),
-            idle_timeout=_validate_guardian_idle_timeout(
-                guardian_section.get("idle_timeout", "5m")
-            ),
+            idle_timeout=guardian_section.get("idle_timeout", "5m"),
             patterns=guardian_section.get("patterns", [".env*"]),
             exclude=guardian_section.get("exclude", [".env.example", ".env.sample", ".env.keys"]),
             notify=guardian_section.get("notify", True),
@@ -520,13 +569,18 @@ schema = "config.settings:ProductionSettings"
 environments = ["development", "staging", "production"]
 
 [validation]
-# Check encryption by default
+# NOTE: the [validation] keys below are parsed into the config object but are
+# NOT currently consumed by any command (see docs/reference/configuration.md).
+# `envdrift validate` ignores them; the --check-encryption/--no-check-encryption
+# CLI flag (default on) controls encryption checking, and extra variables are
+# always treated as errors.
+# Parsed but not consumed:
 check_encryption = true
 
-# Treat extra vars as errors (matches Pydantic extra="forbid")
+# Parsed but not consumed (extra vars are always treated as errors):
 strict_extra = true
 
-# Additional secret detection patterns
+# Parsed but not consumed (no command reads these patterns):
 secret_patterns = [
     "^STRIPE_",
     "^TWILIO_",
