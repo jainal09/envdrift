@@ -237,10 +237,10 @@ On error:
 
 ## Exit Codes
 
-| Code | Meaning                                           |
-| :--- | :------------------------------------------------ |
-| 0    | Success (secret pushed)                           |
-| 1    | Error (auth failure, file not found, vault error) |
+| Code | Meaning                                                                          |
+| :--- | :------------------------------------------------------------------------------- |
+| 0    | Success (secret pushed; in `--all` mode, every mapping pushed or skipped cleanly) |
+| 1    | Error (auth failure, file not found, vault error, or any `--all` mapping failure) |
 
 ## Authentication
 
