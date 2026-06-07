@@ -15,7 +15,11 @@ from envdrift.vault.base import (
 
 try:
     import boto3 as _boto3
-    from botocore.exceptions import NoCredentialsError, PartialCredentialsError
+    from botocore.exceptions import (
+        BotoCoreError,
+        NoCredentialsError,
+        PartialCredentialsError,
+    )
 
     AWS_AVAILABLE = True
 except ImportError:
@@ -23,6 +27,7 @@ except ImportError:
     _boto3 = None
     NoCredentialsError = Exception  # type: ignore[misc, assignment]
     PartialCredentialsError = Exception  # type: ignore[misc, assignment]
+    BotoCoreError = Exception  # type: ignore[misc, assignment]
 
 
 def _get_boto3() -> Any:
@@ -81,6 +86,13 @@ class AWSSecretsManagerClient(VaultClient):
             sts.get_caller_identity()
         except (NoCredentialsError, PartialCredentialsError) as e:
             raise AuthenticationError(f"AWS authentication failed: {e}") from e
+        except BotoCoreError as e:
+            # Transport/connectivity failures (EndpointConnectionError,
+            # ConnectTimeoutError, ReadTimeoutError, ...) subclass BotoCoreError
+            # and carry no `.response`, so they never reach the error-code branches
+            # below. Wrap them in the domain hierarchy instead of letting a raw
+            # botocore exception escape to the CLI as an uncaught traceback.
+            raise VaultError(f"AWS Secrets Manager error: {e}") from e
         except Exception as e:
             error_code = _get_error_code(e)
             if error_code in ("AccessDenied", "InvalidClientTokenId"):
@@ -172,6 +184,11 @@ class AWSSecretsManagerClient(VaultClient):
             # Already a domain error (e.g. malformed-response above); do not
             # re-wrap or misclassify it via the AWS error-code branches below.
             raise
+        except BotoCoreError as e:
+            # Transport/connectivity failures carry no `.response` (error_code == "")
+            # and would otherwise escape via the bare `raise` below. Surface them as
+            # a domain VaultError instead of a raw botocore exception.
+            raise VaultError(f"Failed to get secret {name}: {e}") from e
         except Exception as e:
             error_code = _get_error_code(e)
             if error_code == "ResourceNotFoundException":
@@ -211,6 +228,10 @@ class AWSSecretsManagerClient(VaultClient):
                         secret_names.append(name)
 
             return sorted(secret_names)
+        except BotoCoreError as e:
+            # Transport/connectivity failures escape the error-code branches; wrap
+            # them in the domain hierarchy rather than leaking a raw botocore error.
+            raise VaultError(f"Failed to list secrets: {e}") from e
         except Exception as e:
             error_code = _get_error_code(e)
             if error_code in ("AccessDeniedException", "UnauthorizedException"):
@@ -235,6 +256,10 @@ class AWSSecretsManagerClient(VaultClient):
                 version=response.get("VersionId"),
                 metadata={"arn": response.get("ARN")},
             )
+        except BotoCoreError as e:
+            # Transport/connectivity failures escape the error-code branches; wrap
+            # them in the domain hierarchy rather than leaking a raw botocore error.
+            raise VaultError(f"Failed to set secret {name}: {e}") from e
         except Exception as e:
             error_code = _get_error_code(e)
             if error_code in ("AccessDeniedException", "UnauthorizedException"):
@@ -273,6 +298,10 @@ class AWSSecretsManagerClient(VaultClient):
                 version=response.get("VersionId"),
                 metadata={"arn": response.get("ARN")},
             )
+        except BotoCoreError as e:
+            # Transport/connectivity failures escape the error-code branches; wrap
+            # them in the domain hierarchy rather than leaking a raw botocore error.
+            raise VaultError(f"Failed to set secret {name}: {e}") from e
         except Exception as e:
             error_code = _get_error_code(e)
             # Secret already exists: fall back to updating its value.

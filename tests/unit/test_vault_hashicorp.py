@@ -353,6 +353,46 @@ class TestHashiCorpVaultClientWithMock:
         assert secret.value == "my-secret-value"
 
     @patch("envdrift.vault.hashicorp._hvac")
+    @pytest.mark.parametrize(
+        ("stored_value", "expected"),
+        [
+            (42, "42"),
+            (True, "true"),
+            (3.5, "3.5"),
+            ({"nested": "dict"}, '{"nested": "dict"}'),
+            ([1, 2, 3], "[1, 2, 3]"),
+        ],
+    )
+    def test_get_secret_single_non_string_value_is_coerced_to_str(
+        self, mock_hvac_module, stored_value, expected
+    ):
+        """Regression #413: a KV entry whose single ``value`` is a non-string
+        (int/bool/float/dict/list) must still yield a ``str`` SecretValue.value.
+
+        Vault KV stores arbitrary JSON, so ``secret_data["value"]`` can be a
+        non-string. The single-``value`` fast path previously assigned it verbatim
+        (no ``json.dumps``), so SecretValue.value was a non-str. The sync engine and
+        vault-pull then crash downstream when they treat the value as text. The
+        multi-key path already JSON-encodes; the single-value path must too.
+        """
+        mock_client = MagicMock()
+        mock_client.is_authenticated.return_value = True
+        mock_client.secrets.kv.v2.read_secret_version.return_value = {
+            "data": {"data": {"value": stored_value}, "metadata": {"version": 1}}
+        }
+        mock_hvac_module.Client.return_value = mock_client
+
+        from envdrift.vault.hashicorp import HashiCorpVaultClient
+
+        client = HashiCorpVaultClient(url="http://localhost:8200", token="valid-token")
+        client.authenticate()
+
+        secret = client.get_secret("my-secret")
+
+        assert isinstance(secret.value, str)
+        assert secret.value == expected
+
+    @patch("envdrift.vault.hashicorp._hvac")
     def test_get_secret_with_multiple_values(self, mock_hvac_module):
         """Test get_secret returns JSON for multiple values."""
         mock_client = MagicMock()

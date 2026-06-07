@@ -12,16 +12,38 @@ import pytest
 from envdrift.vault.base import AuthenticationError, SecretNotFoundError, VaultError
 
 
-class FakeHttpResponseError(Exception):
+class FakeAzureError(Exception):
+    """Stand-in for ``azure.core.exceptions.AzureError`` (the SDK error base).
+
+    The real MRO is ``HttpResponseError -> AzureError`` and
+    ``ServiceRequestError -> AzureError`` (the latter is a transport failure and is
+    NOT a ``HttpResponseError``). Modeling that here lets the tests prove a
+    transport ``ServiceRequestError`` is wrapped as a domain ``VaultError`` while
+    still reaching the dedicated ``AzureError`` catch-all clause.
+    """
+
+
+class FakeHttpResponseError(FakeAzureError):
     """Stand-in for ``azure.core.exceptions.HttpResponseError``.
 
     Carries a ``status_code`` like the real SDK exception so the production
-    ``status_code == 403`` accept branch can be exercised.
+    ``status_code == 403`` accept branch can be exercised. Subclasses
+    ``FakeAzureError`` to mirror the real ``HttpResponseError -> AzureError`` MRO.
     """
 
     def __init__(self, message: str = "", status_code: int | None = None):
         super().__init__(message)
         self.status_code = status_code
+
+
+class FakeServiceRequestError(FakeAzureError):
+    """Stand-in for ``azure.core.exceptions.ServiceRequestError`` (transport).
+
+    Critically it subclasses ``FakeAzureError`` but NOT ``FakeHttpResponseError``,
+    mirroring the real SDK: a DNS/TLS/connectivity failure that the production
+    ``except HttpResponseError`` clause does NOT catch, so it must fall through to
+    the dedicated ``except AzureError`` catch-all and be wrapped as a VaultError.
+    """
 
 
 class FakeClientAuthenticationError(FakeHttpResponseError):
@@ -94,6 +116,7 @@ class TestAzureKeyVaultClient:
             patch.object(mock_azure, "_SecretClient", return_value=secret_client),
         ):
             if faithful_exceptions:
+                mock_azure.AzureError = FakeAzureError
                 mock_azure.HttpResponseError = FakeHttpResponseError
                 mock_azure.ClientAuthenticationError = FakeClientAuthenticationError
                 mock_azure.ResourceNotFoundError = FakeResourceNotFoundError
@@ -462,3 +485,114 @@ class TestAzureKeyVaultClient:
 
             with pytest.raises(VaultError):
                 client.set_secret("some-secret", "value")
+
+    def test_get_secret_client_auth_error_maps_to_authentication_error(self, mock_azure):
+        """Regression #413 (low): a mid-session credential expiry (401) during
+        get_secret() must map to AuthenticationError, not a generic VaultError.
+
+        ClientAuthenticationError subclasses HttpResponseError, so the dedicated
+        ``except ClientAuthenticationError`` clause must precede ``except
+        HttpResponseError`` (ordering matters). Callers special-casing
+        AuthenticationError (e.g. to prompt re-login) rely on this distinction.
+        """
+        mock_secret_client = MagicMock()
+        mock_secret_client.list_properties_of_secrets.return_value = iter([])
+        mock_secret_client.get_secret.side_effect = FakeClientAuthenticationError(
+            "token expired", status_code=401
+        )
+
+        with self._patched_client(
+            mock_azure, mock_secret_client, faithful_exceptions=True
+        ) as client:
+            client.authenticate()
+
+            with pytest.raises(AuthenticationError):
+                client.get_secret("some-secret")
+
+    def test_list_secrets_client_auth_error_maps_to_authentication_error(self, mock_azure):
+        """Regression #413 (low): mid-session 401 during list_secrets() maps to
+        AuthenticationError (ClientAuthenticationError before HttpResponseError)."""
+        mock_secret_client = MagicMock()
+        mock_secret_client.list_properties_of_secrets.return_value = iter([])
+
+        with self._patched_client(
+            mock_azure, mock_secret_client, faithful_exceptions=True
+        ) as client:
+            client.authenticate()
+
+            mock_secret_client.list_properties_of_secrets.side_effect = (
+                FakeClientAuthenticationError("token expired", status_code=401)
+            )
+
+            with pytest.raises(AuthenticationError):
+                client.list_secrets()
+
+    def test_set_secret_client_auth_error_maps_to_authentication_error(self, mock_azure):
+        """Regression #413 (low): mid-session 401 during set_secret() maps to
+        AuthenticationError (ClientAuthenticationError before HttpResponseError)."""
+        mock_secret_client = MagicMock()
+        mock_secret_client.list_properties_of_secrets.return_value = iter([])
+        mock_secret_client.set_secret.side_effect = FakeClientAuthenticationError(
+            "token expired", status_code=401
+        )
+
+        with self._patched_client(
+            mock_azure, mock_secret_client, faithful_exceptions=True
+        ) as client:
+            client.authenticate()
+
+            with pytest.raises(AuthenticationError):
+                client.set_secret("some-secret", "value")
+
+    def test_get_secret_transport_error_maps_to_vault_error(self, mock_azure):
+        """Regression #413 (high): a transport ServiceRequestError (AzureError but
+        NOT HttpResponseError: DNS/TLS/connectivity) during get_secret() must be
+        wrapped as a domain VaultError, not escape raw to the CLI."""
+        mock_secret_client = MagicMock()
+        mock_secret_client.list_properties_of_secrets.return_value = iter([])
+        mock_secret_client.get_secret.side_effect = FakeServiceRequestError("DNS failure")
+
+        with self._patched_client(
+            mock_azure, mock_secret_client, faithful_exceptions=True
+        ) as client:
+            client.authenticate()
+
+            with pytest.raises(VaultError) as exc_info:
+                client.get_secret("some-secret")
+        # Wrapped, not leaked as the raw transport exception.
+        assert not isinstance(exc_info.value, FakeServiceRequestError)
+
+    def test_list_secrets_transport_error_maps_to_vault_error(self, mock_azure):
+        """Regression #413 (high): a transport ServiceRequestError during
+        list_secrets() is wrapped as a domain VaultError."""
+        mock_secret_client = MagicMock()
+        mock_secret_client.list_properties_of_secrets.return_value = iter([])
+
+        with self._patched_client(
+            mock_azure, mock_secret_client, faithful_exceptions=True
+        ) as client:
+            client.authenticate()
+
+            mock_secret_client.list_properties_of_secrets.side_effect = FakeServiceRequestError(
+                "connection reset"
+            )
+
+            with pytest.raises(VaultError) as exc_info:
+                client.list_secrets()
+        assert not isinstance(exc_info.value, FakeServiceRequestError)
+
+    def test_set_secret_transport_error_maps_to_vault_error(self, mock_azure):
+        """Regression #413 (high): a transport ServiceRequestError during
+        set_secret() is wrapped as a domain VaultError."""
+        mock_secret_client = MagicMock()
+        mock_secret_client.list_properties_of_secrets.return_value = iter([])
+        mock_secret_client.set_secret.side_effect = FakeServiceRequestError("TLS handshake failed")
+
+        with self._patched_client(
+            mock_azure, mock_secret_client, faithful_exceptions=True
+        ) as client:
+            client.authenticate()
+
+            with pytest.raises(VaultError) as exc_info:
+                client.set_secret("some-secret", "value")
+        assert not isinstance(exc_info.value, FakeServiceRequestError)

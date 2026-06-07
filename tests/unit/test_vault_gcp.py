@@ -47,8 +47,27 @@ class DummyAlreadyExistsError(DummyGoogleAPICallError):
     """Fake AlreadyExists (a GoogleAPICallError subclass, as in the real SDK)."""
 
 
-class DummyDefaultCredentialsError(Exception):
-    """Fake DefaultCredentialsError."""
+class DummyGoogleAuthError(Exception):
+    """Fake ``google.auth.exceptions.GoogleAuthError`` (the auth-layer base).
+
+    The real SDK makes ``DefaultCredentialsError``, ``RefreshError`` and
+    ``TransportError`` all subclass ``GoogleAuthError`` (and crucially NONE of them
+    subclass ``GoogleAPICallError``). Mirroring that here is load-bearing: it lets
+    the tests exercise the production split where ``RefreshError`` -> auth failure
+    and other ``GoogleAuthError`` (e.g. ``TransportError``) -> ``VaultError``.
+    """
+
+
+class DummyDefaultCredentialsError(DummyGoogleAuthError):
+    """Fake DefaultCredentialsError (a GoogleAuthError subclass, as in the real SDK)."""
+
+
+class DummyRefreshError(DummyGoogleAuthError):
+    """Fake RefreshError (a GoogleAuthError subclass; e.g. invalid_grant)."""
+
+
+class DummyTransportError(DummyGoogleAuthError):
+    """Fake TransportError (a GoogleAuthError subclass; DNS/TLS/connectivity)."""
 
 
 @pytest.fixture
@@ -64,7 +83,10 @@ def mock_gcp():
     api_core_mod = SimpleNamespace(exceptions=exceptions_mod)
 
     auth_exceptions_mod = SimpleNamespace(
+        GoogleAuthError=DummyGoogleAuthError,
         DefaultCredentialsError=DummyDefaultCredentialsError,
+        RefreshError=DummyRefreshError,
+        TransportError=DummyTransportError,
     )
     auth_mod = SimpleNamespace(exceptions=auth_exceptions_mod)
 
@@ -307,6 +329,98 @@ class TestGCPSecretManagerClient:
         with pytest.raises(AuthenticationError):
             client_2.authenticate()
         assert client_2.is_authenticated() is False
+
+    def test_authenticate_refresh_error_maps_to_authentication_error(self, mock_gcp):
+        """Regression #413: a token-refresh failure (RefreshError, e.g. invalid_grant)
+        during authenticate() is an *auth* problem and must map to AuthenticationError.
+
+        RefreshError is a GoogleAuthError (NOT a GoogleAPICallError), so it previously
+        escaped every except clause and propagated as a raw SDK exception.
+        """
+        mock_client = MagicMock()
+        mock_client.list_secrets.side_effect = mock_gcp.RefreshError("invalid_grant")
+        mock_gcp._secretmanager.SecretManagerServiceClient.return_value = mock_client
+
+        client = mock_gcp.GCPSecretManagerClient(project_id="my-project")
+        with pytest.raises(AuthenticationError):
+            client.authenticate()
+
+        assert client.is_authenticated() is False
+
+    def test_authenticate_transport_error_maps_to_vault_error(self, mock_gcp):
+        """Regression #413: a transport-layer GoogleAuthError (TransportError:
+        DNS/TLS/connectivity) during authenticate() is wrapped as VaultError, not
+        leaked raw. It is a GoogleAuthError but NOT a GoogleAPICallError, so it
+        previously escaped all handlers.
+        """
+        mock_client = MagicMock()
+        mock_client.list_secrets.side_effect = mock_gcp.GoogleAuthError("network unreachable")
+        mock_gcp._secretmanager.SecretManagerServiceClient.return_value = mock_client
+
+        client = mock_gcp.GCPSecretManagerClient(project_id="my-project")
+        with pytest.raises(VaultError) as exc_info:
+            client.authenticate()
+
+        # Must be a domain VaultError, not the raw auth-layer exception.
+        assert not isinstance(exc_info.value, mock_gcp.GoogleAuthError)
+        assert client.is_authenticated() is False
+
+    def test_get_secret_refresh_error_maps_to_authentication_error(self, mock_gcp):
+        """Regression #413: a RefreshError during get_secret() maps to AuthenticationError."""
+        mock_client = MagicMock()
+        mock_client.list_secrets.return_value = iter([])
+        mock_client.access_secret_version.side_effect = mock_gcp.RefreshError("invalid_grant")
+        mock_gcp._secretmanager.SecretManagerServiceClient.return_value = mock_client
+
+        client = mock_gcp.GCPSecretManagerClient(project_id="my-project")
+        client.authenticate()
+
+        with pytest.raises(AuthenticationError):
+            client.get_secret("secret-name")
+
+    def test_get_secret_transport_error_maps_to_vault_error(self, mock_gcp):
+        """Regression #413: a transport GoogleAuthError during get_secret() is wrapped."""
+        mock_client = MagicMock()
+        mock_client.list_secrets.return_value = iter([])
+        mock_client.access_secret_version.side_effect = mock_gcp.GoogleAuthError("network down")
+        mock_gcp._secretmanager.SecretManagerServiceClient.return_value = mock_client
+
+        client = mock_gcp.GCPSecretManagerClient(project_id="my-project")
+        client.authenticate()
+
+        with pytest.raises(VaultError) as exc_info:
+            client.get_secret("secret-name")
+        assert not isinstance(exc_info.value, mock_gcp.GoogleAuthError)
+
+    def test_list_secrets_transport_error_maps_to_vault_error(self, mock_gcp):
+        """Regression #413: a transport GoogleAuthError during list_secrets() is wrapped."""
+        mock_client = MagicMock()
+        mock_client.list_secrets.side_effect = [
+            iter([]),
+            mock_gcp.GoogleAuthError("network down"),
+        ]
+        mock_gcp._secretmanager.SecretManagerServiceClient.return_value = mock_client
+
+        client = mock_gcp.GCPSecretManagerClient(project_id="my-project")
+        client.authenticate()
+
+        with pytest.raises(VaultError) as exc_info:
+            client.list_secrets()
+        assert not isinstance(exc_info.value, mock_gcp.GoogleAuthError)
+
+    def test_set_secret_transport_error_maps_to_vault_error(self, mock_gcp):
+        """Regression #413: a transport GoogleAuthError during set_secret() is wrapped."""
+        mock_client = MagicMock()
+        mock_client.list_secrets.return_value = iter([])
+        mock_client.add_secret_version.side_effect = mock_gcp.GoogleAuthError("network down")
+        mock_gcp._secretmanager.SecretManagerServiceClient.return_value = mock_client
+
+        client = mock_gcp.GCPSecretManagerClient(project_id="my-project")
+        client.authenticate()
+
+        with pytest.raises(VaultError) as exc_info:
+            client.set_secret("write-error", "value")
+        assert not isinstance(exc_info.value, mock_gcp.GoogleAuthError)
 
     def test_get_secret_binary_payload(self, mock_gcp):
         """Binary payload should be base64-encoded."""

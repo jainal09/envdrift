@@ -14,6 +14,7 @@ from envdrift.vault.base import (
 
 try:
     from azure.core.exceptions import (
+        AzureError,
         ClientAuthenticationError,
         HttpResponseError,
         ResourceNotFoundError,
@@ -29,6 +30,7 @@ except ImportError:
     ResourceNotFoundError = Exception  # type: ignore[misc, assignment]
     ClientAuthenticationError = Exception  # type: ignore[misc, assignment]
     HttpResponseError = Exception  # type: ignore[misc, assignment]
+    AzureError = Exception  # type: ignore[misc, assignment]
 
 
 def _get_azure_classes() -> tuple[Any, Any]:
@@ -154,7 +156,17 @@ class AzureKeyVaultClient(VaultClient):
             )
         except ResourceNotFoundError as e:
             raise SecretNotFoundError(f"Secret '{name}' not found in vault") from e
+        except ClientAuthenticationError as e:
+            # A token that expires/is revoked mid-session (401) is an auth failure.
+            # ClientAuthenticationError subclasses HttpResponseError, so this clause
+            # MUST precede the HttpResponseError handler below (ordering matters).
+            raise AuthenticationError(f"Access denied to secret '{name}': {e}") from e
         except HttpResponseError as e:
+            raise VaultError(f"Azure Key Vault error: {e}") from e
+        except AzureError as e:
+            # Transport/connectivity failures (ServiceRequestError: DNS/TLS/network)
+            # are AzureError but NOT HttpResponseError, so they would otherwise escape
+            # as a raw SDK exception. Wrap them in the domain hierarchy.
             raise VaultError(f"Azure Key Vault error: {e}") from e
 
     def list_secrets(self, prefix: str = "") -> list[str]:
@@ -176,7 +188,14 @@ class AzureKeyVaultClient(VaultClient):
                 if name and (not prefix or name.startswith(prefix)):
                     secrets.append(name)
             return sorted(secrets)
+        except ClientAuthenticationError as e:
+            # Mid-session credential expiry (401) is an auth failure; this clause must
+            # precede HttpResponseError since ClientAuthenticationError subclasses it.
+            raise AuthenticationError(f"Access denied to list secrets: {e}") from e
         except HttpResponseError as e:
+            raise VaultError(f"Azure Key Vault error: {e}") from e
+        except AzureError as e:
+            # Transport/connectivity failures (ServiceRequestError) — wrap, don't leak.
             raise VaultError(f"Azure Key Vault error: {e}") from e
 
     def set_secret(self, name: str, value: str) -> SecretValue:
@@ -198,5 +217,12 @@ class AzureKeyVaultClient(VaultClient):
                     "enabled": secret.properties.enabled,
                 },
             )
+        except ClientAuthenticationError as e:
+            # Mid-session credential expiry (401) is an auth failure; this clause must
+            # precede HttpResponseError since ClientAuthenticationError subclasses it.
+            raise AuthenticationError(f"Access denied to write secret '{name}': {e}") from e
         except HttpResponseError as e:
+            raise VaultError(f"Azure Key Vault error: {e}") from e
+        except AzureError as e:
+            # Transport/connectivity failures (ServiceRequestError) — wrap, don't leak.
             raise VaultError(f"Azure Key Vault error: {e}") from e

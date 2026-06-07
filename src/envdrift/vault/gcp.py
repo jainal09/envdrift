@@ -16,7 +16,11 @@ from envdrift.vault.base import (
 
 try:
     from google.api_core import exceptions as _google_exceptions
-    from google.auth.exceptions import DefaultCredentialsError
+    from google.auth.exceptions import (
+        DefaultCredentialsError,
+        GoogleAuthError,
+        RefreshError,
+    )
     from google.cloud import secretmanager as _secretmanager
 
     GCP_AVAILABLE = True
@@ -25,6 +29,8 @@ except ImportError:
     _secretmanager = None
     _google_exceptions = None
     DefaultCredentialsError = Exception  # type: ignore[misc, assignment]
+    GoogleAuthError = Exception  # type: ignore[misc, assignment]
+    RefreshError = Exception  # type: ignore[misc, assignment]
 
 
 def _get_gcp_modules() -> tuple[Any, Any]:
@@ -150,6 +156,18 @@ class GCPSecretManagerClient(VaultClient):
         except google_exceptions.GoogleAPICallError as e:
             self._client = None
             raise VaultError(f"GCP Secret Manager error: {e}") from e
+        except RefreshError as e:
+            # Token refresh failure (e.g. invalid_grant on a service-account key) is
+            # an authentication problem, not a transport one. It is a GoogleAuthError
+            # (not a GoogleAPICallError), so it would otherwise escape uncaught.
+            self._client = None
+            raise AuthenticationError(f"GCP authentication failed: {e}") from e
+        except GoogleAuthError as e:
+            # Other auth-layer failures (e.g. TransportError: DNS/TLS/connectivity)
+            # also escape the GoogleAPICallError handler above; map them into the
+            # domain hierarchy instead of leaking a raw SDK exception to the CLI.
+            self._client = None
+            raise VaultError(f"GCP Secret Manager error: {e}") from e
 
     def is_authenticated(self) -> bool:
         return self._client is not None
@@ -193,6 +211,12 @@ class GCPSecretManagerClient(VaultClient):
             raise AuthenticationError(f"Access denied to secret '{name}': {e}") from e
         except google_exceptions.GoogleAPICallError as e:
             raise VaultError(f"GCP Secret Manager error: {e}") from e
+        except RefreshError as e:
+            # Mid-session token refresh failure — an auth problem, surfaced as such.
+            raise AuthenticationError(f"Access denied to secret '{name}': {e}") from e
+        except GoogleAuthError as e:
+            # Transport/auth-layer failure (e.g. TransportError) — wrap rather than leak.
+            raise VaultError(f"GCP Secret Manager error: {e}") from e
 
     def list_secrets(self, prefix: str = "") -> list[str]:
         """
@@ -217,6 +241,12 @@ class GCPSecretManagerClient(VaultClient):
         ) as e:
             raise AuthenticationError(f"Access denied to list secrets: {e}") from e
         except google_exceptions.GoogleAPICallError as e:
+            raise VaultError(f"GCP Secret Manager error: {e}") from e
+        except RefreshError as e:
+            # Mid-session token refresh failure — an auth problem, surfaced as such.
+            raise AuthenticationError(f"Access denied to list secrets: {e}") from e
+        except GoogleAuthError as e:
+            # Transport/auth-layer failure (e.g. TransportError) — wrap rather than leak.
             raise VaultError(f"GCP Secret Manager error: {e}") from e
 
     def set_secret(self, name: str, value: str) -> SecretValue:
@@ -261,4 +291,10 @@ class GCPSecretManagerClient(VaultClient):
         ) as e:
             raise AuthenticationError(f"Access denied to write secret '{name}': {e}") from e
         except google_exceptions.GoogleAPICallError as e:
+            raise VaultError(f"GCP Secret Manager error: {e}") from e
+        except RefreshError as e:
+            # Mid-session token refresh failure — an auth problem, surfaced as such.
+            raise AuthenticationError(f"Access denied to write secret '{name}': {e}") from e
+        except GoogleAuthError as e:
+            # Transport/auth-layer failure (e.g. TransportError) — wrap rather than leak.
             raise VaultError(f"GCP Secret Manager error: {e}") from e

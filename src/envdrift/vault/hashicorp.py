@@ -149,11 +149,17 @@ class HashiCorpVaultClient(VaultClient):
 
             # If there's a single "value" key, return that
             # Otherwise return the JSON string of all data
+            import json
+
             if "value" in secret_data and len(secret_data) == 1:
                 value = secret_data["value"]
+                # KV stores arbitrary JSON, so a single "value" can be a non-string
+                # (int/bool/list/dict). SecretValue.value must always be a str, or the
+                # sync engine and vault-pull crash downstream; coerce non-strings to JSON
+                # (mirroring the multi-key path's json.dumps()).
+                if not isinstance(value, str):
+                    value = json.dumps(value)
             else:
-                import json
-
                 value = json.dumps(secret_data)
 
             return SecretValue(
