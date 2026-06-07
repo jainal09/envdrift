@@ -27,9 +27,8 @@ from envdrift.scanner.base import (
 )
 from envdrift.scanner.ignores import IgnoreConfig, IgnoreFilter
 from envdrift.scanner.native import (
-    DOTENVX_MARKERS,
-    SOPS_MARKERS,
     NativeScanner,
+    _content_is_encrypted,
     _is_encrypted_value_line,
 )
 from envdrift.scanner.patterns import hash_secret
@@ -695,11 +694,12 @@ class ScanEngine:
                     # leaked their ciphertext as findings. This matches line_at()
                     # and the native scanner, which both read full content.
                     content = f.read()
-                    # Use markers from native scanner
-                    for marker in DOTENVX_MARKERS + SOPS_MARKERS:
-                        if marker in content:
-                            encrypted_files.add(file_path)
-                            return True
+                    # Structure-aware encryption check (#348): require the dotenvx
+                    # marker in value position / canonical SOPS envelopes, not a bare
+                    # substring (which misfired on plaintext mentioning "encrypted:").
+                    if _content_is_encrypted(content):
+                        encrypted_files.add(file_path)
+                        return True
             except OSError:
                 pass
             return False
