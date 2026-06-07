@@ -324,16 +324,10 @@ def _run_envdrift_cli(
 
 
 # The documented contract is that an invalid token surfaces as
-# AuthenticationError("Vault token is invalid or expired"). A known bug
-# (src/envdrift/vault/hashicorp.py:86-91) re-wraps that AuthenticationError as a
-# VaultError via the broad `except Exception`, so the assertion below currently
-# fails on a real container. xfail(strict=False) keeps the test green while
-# encoding the correct, documented behavior (it will XPASS once the bug is fixed).
-@pytest.mark.xfail(
-    reason="hashicorp.authenticate() re-wraps AuthenticationError as VaultError "
-    "(broad except Exception at hashicorp.py:90) — see #305",
-    strict=False,
-)
+# AuthenticationError("Vault token is invalid or expired"). Fixed in #305:
+# authenticate() now re-raises the AuthenticationError before the broad
+# `except Exception`, so an invalid/expired token is no longer re-wrapped as a
+# VaultError. This test asserts that corrected behavior directly.
 def test_hcv_invalid_token_raises_authentication_error(vault_endpoint: str):
     """BP-02: an invalid token must raise AuthenticationError on authenticate()."""
     from envdrift.vault.base import AuthenticationError

@@ -311,6 +311,25 @@ def integration_pythonpath() -> str:
 
 
 @pytest.fixture
+def integration_env(integration_pythonpath: str) -> dict[str, str]:
+    """Return the child env for running the envdrift CLI as a subprocess.
+
+    Regression for #331: integration tests previously built the child env as a
+    bare ``{"PYTHONPATH": ...}`` dict, which strips ``PATH``/``HOME`` so the
+    child cannot resolve ``uv``/``dotenvx``/``sops`` (PATH) or auto-install
+    binaries under ``$HOME``. Building from ``os.environ.copy()`` preserves the
+    parent environment and layers ``PYTHONPATH`` on top.
+
+    Function-scoped: returns a *fresh* dict each call. Call sites that need to
+    add more env keys must start from a copy (``dict(integration_env)``) so the
+    shared fixture value is never mutated.
+    """
+    env = os.environ.copy()
+    env["PYTHONPATH"] = integration_pythonpath
+    return env
+
+
+@pytest.fixture
 def work_dir(tmp_path: Path) -> Path:
     """Create a temporary working directory for a test."""
     return tmp_path

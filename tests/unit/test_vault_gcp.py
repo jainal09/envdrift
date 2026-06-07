@@ -18,23 +18,33 @@ class DummyGcpError(Exception):
 
 
 class DummyGoogleAPICallError(DummyGcpError):
-    """Fake GoogleAPICallError."""
+    """Fake GoogleAPICallError.
+
+    The real ``google.api_core.exceptions.GoogleAPICallError`` is the generic
+    base of the concrete status errors below (PermissionDenied, Unauthenticated,
+    NotFound, AlreadyExists all subclass it via ClientError). Mirroring that MRO
+    here is load-bearing: ``authenticate()`` relies on the *specific* clauses
+    (PermissionDenied -> accept, Unauthenticated -> reject) preceding the generic
+    ``except GoogleAPICallError`` clause. If these fakes were flat siblings, a
+    reordering regression (generic clause first) would still pass the tests while
+    re-breaking #359 in the real SDK. See test_authenticate_except_clause_ordering.
+    """
 
 
-class DummyPermissionDeniedError(DummyGcpError):
-    """Fake PermissionDenied."""
+class DummyPermissionDeniedError(DummyGoogleAPICallError):
+    """Fake PermissionDenied (a GoogleAPICallError subclass, as in the real SDK)."""
 
 
-class DummyUnauthenticatedError(DummyGcpError):
-    """Fake Unauthenticated."""
+class DummyUnauthenticatedError(DummyGoogleAPICallError):
+    """Fake Unauthenticated (a GoogleAPICallError subclass, as in the real SDK)."""
 
 
-class DummyNotFoundError(DummyGcpError):
-    """Fake NotFound."""
+class DummyNotFoundError(DummyGoogleAPICallError):
+    """Fake NotFound (a GoogleAPICallError subclass, as in the real SDK)."""
 
 
-class DummyAlreadyExistsError(DummyGcpError):
-    """Fake AlreadyExists."""
+class DummyAlreadyExistsError(DummyGoogleAPICallError):
+    """Fake AlreadyExists (a GoogleAPICallError subclass, as in the real SDK)."""
 
 
 class DummyDefaultCredentialsError(Exception):
@@ -169,19 +179,22 @@ class TestGCPSecretManagerClient:
         assert result.version == "5"
 
     def test_secret_helpers(self, mock_gcp):
-        """Test helper path methods."""
+        """Test helper path methods (same-project fully-qualified names allowed)."""
         client = mock_gcp.GCPSecretManagerClient(project_id="my-project")
 
         assert client._secret_id("plain-secret") == "plain-secret"
-        assert client._secret_id("projects/p/secrets/secret-1") == "secret-1"
-        assert client._secret_id("projects/p/secrets/secret-2/versions/9") == "secret-2"
-        assert client._secret_id("projects/p/other/secret-3") == "projects/p/other/secret-3"
+        assert client._secret_id("projects/my-project/secrets/secret-1") == "secret-1"
+        assert client._secret_id("projects/my-project/secrets/secret-2/versions/9") == "secret-2"
+        # A fully-qualified name that isn't the canonical projects/<P>/secrets/<S>[/versions/<V>]
+        # shape is now hard-failed rather than silently passed through (see #393 / CodeRabbit).
+        with pytest.raises(VaultError, match="Malformed"):
+            client._secret_id("projects/my-project/other/secret-3")
 
-        assert client._version_path("projects/p/secrets/secret-4/versions/7") == (
-            "projects/p/secrets/secret-4/versions/7"
+        assert client._version_path("projects/my-project/secrets/secret-4/versions/7") == (
+            "projects/my-project/secrets/secret-4/versions/7"
         )
-        assert client._version_path("projects/p/secrets/secret-5", version="8") == (
-            "projects/p/secrets/secret-5/versions/8"
+        assert client._version_path("projects/my-project/secrets/secret-5", version="8") == (
+            "projects/my-project/secrets/secret-5/versions/8"
         )
         assert client._version_path("secret-6") == (
             "projects/my-project/secrets/secret-6/versions/latest"
@@ -199,11 +212,37 @@ class TestGCPSecretManagerClient:
 
         assert client.is_authenticated() is False
 
-    def test_authenticate_permission_denied(self, mock_gcp):
-        """PermissionDenied should map to AuthenticationError."""
+    def test_authenticate_permission_denied_on_list_probe_accepted(self, mock_gcp):
+        """PermissionDenied on the list probe means the credential authenticated but
+        lacks ``secretmanager.secrets.list``.
+
+        A least-privilege service account holding only
+        ``secretmanager.versions.access`` (enough for get_secret, which is all sync
+        needs) hits this. authenticate() must NOT raise and must retain the client so
+        get_secret can still surface a clear error per-secret later (see #359, GCP half).
+        """
         mock_client = MagicMock()
         mock_client.list_secrets.side_effect = mock_gcp._google_exceptions.PermissionDenied(
-            "denied"
+            "permission 'secretmanager.secrets.list' denied"
+        )
+        mock_gcp._secretmanager.SecretManagerServiceClient.return_value = mock_client
+
+        client = mock_gcp.GCPSecretManagerClient(project_id="my-project")
+        client.authenticate()
+
+        assert client.is_authenticated() is True
+        assert client._client is mock_client
+
+    def test_authenticate_unauthenticated_still_fails(self, mock_gcp):
+        """Unauthenticated is a genuine credential failure and must still raise.
+
+        Unlike PermissionDenied (authenticated, missing list permission), an
+        Unauthenticated error means the credential itself is invalid/expired, so
+        authenticate() must map it to AuthenticationError and drop the client.
+        """
+        mock_client = MagicMock()
+        mock_client.list_secrets.side_effect = mock_gcp._google_exceptions.Unauthenticated(
+            "invalid credentials"
         )
         mock_gcp._secretmanager.SecretManagerServiceClient.return_value = mock_client
 
@@ -226,6 +265,48 @@ class TestGCPSecretManagerClient:
             client.authenticate()
 
         assert client.is_authenticated() is False
+
+    def test_authenticate_except_clause_ordering(self, mock_gcp):
+        """The specific PermissionDenied/Unauthenticated clauses must precede the
+        generic GoogleAPICallError clause in authenticate().
+
+        Both PermissionDenied and Unauthenticated subclass GoogleAPICallError (in
+        the real SDK and now in these fakes), so a generic-first ordering would
+        swallow BOTH of them as VaultError. This test pins the outcomes that only
+        hold under the production specific-before-generic order:
+
+        - PermissionDenied (subclass of GoogleAPICallError) -> ACCEPTED (no raise,
+          client retained), per the #359 least-privilege fix.
+        - Unauthenticated (subclass of GoogleAPICallError) -> AuthenticationError,
+          NOT VaultError.
+
+        If someone moves ``except GoogleAPICallError`` ahead of the specific
+        clauses, PermissionDenied stops being accepted (caught as VaultError) and
+        Unauthenticated is mis-categorized as VaultError — both assertions below
+        fail, catching the regression.
+        """
+        exc = mock_gcp._google_exceptions
+        # Sanity: the fakes mirror the real MRO (specific errors ARE GoogleAPICallError).
+        assert issubclass(exc.PermissionDenied, exc.GoogleAPICallError)
+        assert issubclass(exc.Unauthenticated, exc.GoogleAPICallError)
+
+        # PermissionDenied is accepted even though it is a GoogleAPICallError subclass.
+        mock_client = MagicMock()
+        mock_client.list_secrets.side_effect = exc.PermissionDenied("list denied")
+        mock_gcp._secretmanager.SecretManagerServiceClient.return_value = mock_client
+        client = mock_gcp.GCPSecretManagerClient(project_id="my-project")
+        client.authenticate()
+        assert client.is_authenticated() is True
+        assert client._client is mock_client
+
+        # Unauthenticated maps to AuthenticationError (not VaultError) and drops the client.
+        mock_client_2 = MagicMock()
+        mock_client_2.list_secrets.side_effect = exc.Unauthenticated("invalid creds")
+        mock_gcp._secretmanager.SecretManagerServiceClient.return_value = mock_client_2
+        client_2 = mock_gcp.GCPSecretManagerClient(project_id="my-project")
+        with pytest.raises(AuthenticationError):
+            client_2.authenticate()
+        assert client_2.is_authenticated() is False
 
     def test_get_secret_binary_payload(self, mock_gcp):
         """Binary payload should be base64-encoded."""

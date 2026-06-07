@@ -197,6 +197,66 @@ class TestPromptCallbackPath:
         assert "Value mismatch for k" in received[0]
         assert "new_secret" in (service_dir / ".env.keys").read_text()
 
+    def test_prompt_message_redacts_realistic_secrets(
+        self, mock_vault_client: MagicMock, tmp_path: Path
+    ) -> None:
+        """Regression for #348 (leak surface #2): the interactive-overwrite prompt
+        message must never contain plaintext of the local or vault secret value.
+
+        Drives the real ``SyncEngine`` mismatch -> ``prompt_callback`` path with
+        distinct, realistic 64-hex secrets (so the old ``value[:32]`` behavior
+        would leak a 32-char window) and asserts that no substantial window of
+        either raw secret reaches the prompt, while the redacted marker does.
+        """
+        # Distinct, realistic 64-hex secrets (resemble real dotenvx private keys).
+        vault_value = "a" + "0123456789abcdef" * 4  # 65 chars, well over 32
+        local_value = "b" + "fedcba9876543210" * 4
+        assert vault_value != local_value
+        assert len(vault_value) > 32 and len(local_value) > 32
+
+        mock_vault_client.get_secret.return_value = SecretValue(name="k", value=vault_value)
+        service_dir = _make_service(tmp_path)
+        (service_dir / ".env.keys").write_text(f"DOTENV_PRIVATE_KEY_PRODUCTION={local_value}\n")
+
+        received: list[str] = []
+
+        def prompt(msg: str) -> bool:
+            received.append(msg)
+            return False  # decline, so we don't mutate the file under test
+
+        mapping = ServiceMapping(secret_name="k", folder_path=service_dir)
+        engine = SyncEngine(
+            config=SyncConfig(mappings=[mapping]),
+            vault_client=mock_vault_client,
+            prompt_callback=prompt,
+        )
+        result = engine.sync_all()
+
+        assert result.services[0].action == SyncAction.SKIPPED
+        assert received, "prompt_callback was never invoked on the mismatch path"
+        msg = received[0]
+
+        # No substantial window (>= 8 consecutive chars) of either raw secret may
+        # appear in the prompt message. Sliding-window check catches the old
+        # ``value[:32]`` leak as well as any partial-prefix leak.
+        window = 8
+        for raw, label in ((vault_value, "vault"), (local_value, "local")):
+            for i in range(len(raw) - window + 1):
+                chunk = raw[i : i + window]
+                assert chunk not in msg, (
+                    f"{label} secret window {chunk!r} leaked into prompt message: {msg!r}"
+                )
+
+        # The redacted discriminator MUST be present for both previews.
+        from envdrift.sync.operations import redact_value
+
+        local_redacted = redact_value(local_value)
+        vault_redacted = redact_value(vault_value)
+        assert local_redacted is not None and vault_redacted is not None
+        assert local_redacted in msg
+        assert vault_redacted in msg
+        assert "<redacted len=" in msg
+
     def test_prompt_declines_update_is_skipped(
         self, mock_vault_client: MagicMock, tmp_path: Path
     ) -> None:

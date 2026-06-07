@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import re
 import shutil
+import subprocess
 import sys
 import textwrap
 from pathlib import Path
@@ -92,33 +93,49 @@ def _write_and_encrypt(
     return env_file
 
 
+def _sops_encrypt_inplace(sops_bin: Path, config_free_dir: Path, name: str, content: str) -> Path:
+    """Encrypt a YAML/JSON file in place by driving the real sops binary directly.
+
+    The backend's ``encrypt`` is dotenv-specific (it forces
+    ``--input-type/--output-type dotenv``), so for YAML/JSON we invoke sops
+    itself; the format is inferred from the file extension. ``config_free_dir``
+    MUST be a directory with no ``.sops.yaml`` on its path to root (sops walks
+    parents), so sops uses the explicit ``--age`` recipient instead of the
+    workspace ``.sops.yaml`` (whose only rule matches ``.env*``).
+    """
+    src = config_free_dir / name
+    src.write_text(content)
+    completed = subprocess.run(
+        [str(sops_bin), "--encrypt", "--age", AGE_PUBLIC_KEY, "--in-place", str(src)],
+        capture_output=True,
+        text=True,
+        cwd=config_free_dir,
+        check=False,
+    )
+    assert completed.returncode == 0, f"sops encrypt failed: {completed.stderr}"
+    return src
+
+
 # --------------------------------------------------------------------------- #
 # P0
 # --------------------------------------------------------------------------- #
 
 
-@pytest.mark.xfail(
-    strict=False,
-    reason=(
-        "BUG: SOPSEncryptionBackend.exec_env builds an invalid sops invocation "
-        "('exec-env --input-type dotenv <file> -- <cmd...>'). Real sops rejects "
-        "the unsupported '--input-type' subcommand flag plus the '--'/list command "
-        "form with 'error: missing file to decrypt'. The correct form is "
-        "'sops exec-env <file> <command-as-single-string>' with the dotenv type "
-        "inferred from the file extension. This test asserts the documented "
-        "behavior; remove the xfail when sops.py:451-458 is fixed (see #329)."
-    ),
-)
 def test_exec_env_injects_decrypted_secrets_without_writing_disk(
     tmp_path: Path, sops_workspace: Path
 ) -> None:
-    """HP-10: exec_env runs a child with decrypted secrets; file stays encrypted."""
+    """HP-10 (regression for #329): exec_env runs a child process with the
+    decrypted secrets injected as env vars (never written to disk); the on-disk
+    file stays encrypted. Drives the real sops binary."""
     _require_sops()
     backend = _make_backend(sops_workspace)
+    # Filename MUST end in `.env` so sops exec-env infers the dotenv format from
+    # the extension (sops exec-env ignores --input-type; a non-.env suffix such
+    # as ".env.exec" is parsed as JSON and fails to unmarshal).
     env_file = _write_and_encrypt(
         backend,
         sops_workspace,
-        ".env.exec",
+        "secrets.env",
         "DB_PASSWORD=hunter2\n",
     )
     encrypted_snapshot = env_file.read_text()
@@ -133,8 +150,30 @@ def test_exec_env_injects_decrypted_secrets_without_writing_disk(
 
     assert cp.returncode == 0, f"exec-env failed: {cp.stderr}"
     assert cp.stdout.strip() == "hunter2"
-    # The on-disk file is still the encrypted snapshot.
+    # The on-disk file is still the encrypted snapshot (no plaintext leaked).
     assert env_file.read_text() == encrypted_snapshot
+    assert "hunter2" not in env_file.read_text()
+
+
+def test_exec_env_propagates_child_exit_code(tmp_path: Path, sops_workspace: Path) -> None:
+    """#329: exec_env returns the child's exit code; the secret is sourced from
+    the encrypted file (the child exits 0 only if it saw the injected value)."""
+    _require_sops()
+    backend = _make_backend(sops_workspace)
+    env_file = _write_and_encrypt(backend, sops_workspace, "child.env", "DB_PASSWORD=hunter2\n")
+    cp = backend.exec_env(
+        env_file,
+        [
+            sys.executable,
+            "-c",
+            "import os,sys; sys.exit(0 if os.environ.get('DB_PASSWORD')=='hunter2' else 3)",
+        ],
+    )
+    # Child saw the injected secret -> exits 0; if missing it would be 3.
+    assert cp.returncode == 0, f"secret not injected: {cp.stderr}"
+    # File is still encrypted (not the original plaintext).
+    assert env_file.read_text() != "DB_PASSWORD=hunter2\n"
+    assert "ENC[AES256_GCM," in env_file.read_text()
 
 
 def test_decrypt_in_place_false_no_output_fails_without_discarding_plaintext(
@@ -163,6 +202,65 @@ def test_decrypt_in_place_false_no_output_fails_without_discarding_plaintext(
     # The file is left exactly as it was: still encrypted, no plaintext leaked.
     assert env_file.read_text() == encrypted_snapshot
     assert "hunter2" not in env_file.read_text()
+
+
+def test_encrypt_in_place_false_no_output_fails_without_discarding_ciphertext(
+    tmp_path: Path, sops_workspace: Path
+) -> None:
+    """EC-08 (regression for #360): encrypt(in_place=False) with no output_file
+    must report failure instead of streaming the ciphertext to discarded stdout
+    while leaving the on-disk file as PLAINTEXT yet claiming success. The
+    plaintext file stays exactly as written and is never silently consumed."""
+    _require_sops()
+    backend = _make_backend(sops_workspace)
+    env_file = sops_workspace / ".env.discard-enc"
+    env_file.write_text("DB_PASSWORD=hunter2\n")
+    plaintext_snapshot = env_file.read_text()
+
+    result = backend.encrypt(
+        env_file, age_recipients=AGE_PUBLIC_KEY, in_place=False, cwd=sops_workspace
+    )
+
+    # No false success: the ciphertext would have been discarded to stdout.
+    assert result.success is False
+    assert "output_file" in result.message
+    assert result.file_path == env_file
+    # The file is untouched: still the original plaintext, not silently lost.
+    assert env_file.read_text() == plaintext_snapshot
+    assert "ENC[AES256_GCM," not in env_file.read_text()
+
+
+def test_encrypt_with_output_file_writes_ciphertext(tmp_path: Path, sops_workspace: Path) -> None:
+    """HP-11 (regression for #360): encrypt(in_place=False, output_file=...) writes
+    real sops ciphertext to the output file via --output. The output is genuinely
+    encrypted (ENC[...] + sops metadata) and differs from the plaintext, while the
+    source file is left unmodified."""
+    _require_sops()
+    backend = _make_backend(sops_workspace)
+    env_file = sops_workspace / ".env.src"
+    env_file.write_text("DB_PASSWORD=hunter2\n")
+    plaintext_snapshot = env_file.read_text()
+    output_file = sops_workspace / ".env.out"
+
+    result = backend.encrypt(
+        env_file,
+        age_recipients=AGE_PUBLIC_KEY,
+        in_place=False,
+        output_file=output_file,
+        cwd=sops_workspace,
+    )
+
+    assert result.success is True, f"encrypt failed: {result.message}"
+    assert result.file_path == output_file
+    # The output file holds genuine sops ciphertext (markers + metadata).
+    assert output_file.exists()
+    ciphertext = output_file.read_text()
+    assert "ENC[AES256_GCM," in ciphertext
+    assert "hunter2" not in ciphertext
+    assert ciphertext != plaintext_snapshot
+    assert backend.has_encrypted_header(ciphertext) is True
+    # The source plaintext file is left unmodified.
+    assert env_file.read_text() == plaintext_snapshot
 
 
 def test_decrypt_with_wrong_age_key_raises_backend_error(
@@ -329,18 +427,82 @@ def test_decrypt_nonencrypted_file_raises_backend_error_with_stderr(
     assert plain.read_text() == "DB_PASSWORD=hunter2\n"
 
 
-def test_has_encrypted_header_false_positive_on_plaintext_sops_url(
+def test_has_encrypted_header_plaintext_sops_substring_not_encrypted(
     tmp_path: Path, sops_workspace: Path
 ) -> None:
-    """EC-04: has_encrypted_header is a documented false positive for plaintext
-    containing the literal substring 'sops:' (e.g. a URL), while
-    detect_encryption_status on a single plain value stays PLAINTEXT."""
+    """EC-04 (regression for #324): plaintext that merely contains the literal
+    substring 'sops:' (e.g. a repo URL) must NOT be misclassified as encrypted.
+    Only a real SOPS header (ENC[AES256_GCM, ...) or a line-anchored SOPS
+    metadata block counts as encrypted."""
     backend = _make_backend(sops_workspace)
 
     content = "REPO=https://github.com/getsops/sops:main\n"
-    assert backend.has_encrypted_header(content) is True
-    # Value-level classification is not fooled.
+    assert backend.has_encrypted_header(content) is False
+    # Value-level classification is not fooled either.
     assert (
         backend.detect_encryption_status("https://github.com/getsops/sops:main")
         == EncryptionStatus.PLAINTEXT
     )
+
+
+@pytest.mark.parametrize(
+    "content",
+    [
+        "REPO=https://github.com/getsops/sops:main\n",  # 'sops:' in a URL
+        'config = "sops: see the docs"\n',  # 'sops:' in prose
+        '{"note": "we use sops:age for secrets"}\n',  # 'sops:' substring in JSON-ish text
+        "DB_PASSWORD=hunter2\nOTHER=plain\n",  # ordinary plaintext .env
+        "SOPS_VERSION_NOTE=we pin 3.13.1\n",  # dotenv-ish but not a sops_version= marker
+    ],
+)
+def test_has_encrypted_header_false_on_plaintext_with_sops_substring(
+    tmp_path: Path, sops_workspace: Path, content: str
+) -> None:
+    """#324: plaintext containing the literal 'sops:' substring (or a sops-ish
+    key name) is NOT encrypted. Pure-Python; no sops binary required."""
+    backend = _make_backend(sops_workspace)
+    assert backend.has_encrypted_header(content) is False
+
+
+def test_has_encrypted_header_true_on_genuinely_encrypted_dotenv(
+    tmp_path: Path, sops_workspace: Path
+) -> None:
+    """#324: a real sops-encrypted dotenv file is classified encrypted."""
+    _require_sops()
+    backend = _make_backend(sops_workspace)
+    env_file = _write_and_encrypt(
+        backend, sops_workspace, ".env.enc-dotenv", "DB_PASSWORD=hunter2\n"
+    )
+    content = env_file.read_text()
+    assert "ENC[AES256_GCM," in content
+    assert backend.has_encrypted_header(content) is True
+    assert backend.is_file_encrypted(env_file) is True
+
+
+@pytest.mark.parametrize(
+    ("name", "plaintext"),
+    [
+        ("secrets.yaml", "DB_PASSWORD: hunter2\n"),
+        ("secrets.json", '{"DB_PASSWORD": "hunter2"}\n'),
+    ],
+)
+def test_has_encrypted_header_true_on_genuinely_encrypted_yaml_json(
+    tmp_path: Path, sops_workspace: Path, name: str, plaintext: str
+) -> None:
+    """#324: real sops-encrypted YAML and JSON files are classified encrypted.
+
+    Driven by the real sops binary directly (the backend's encrypt is
+    dotenv-only); sops infers the YAML/JSON format from the file extension and
+    emits a line-anchored ``sops:`` / ``"sops":`` metadata block plus
+    ``ENC[AES256_GCM,`` values.
+    """
+    sops_bin = _require_sops()
+    backend = _make_backend(sops_workspace)
+    # Encrypt under tmp_path (NOT sops_workspace), which has no .sops.yaml on its
+    # path to root, so sops honours the explicit --age recipient.
+    src = _sops_encrypt_inplace(sops_bin, tmp_path, name, plaintext)
+
+    content = src.read_text()
+    assert "ENC[AES256_GCM," in content
+    assert backend.has_encrypted_header(content) is True
+    assert backend.is_file_encrypted(src) is True

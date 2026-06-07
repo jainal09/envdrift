@@ -193,3 +193,21 @@ BOOL_FALSE=false
         assert "INT_VAR: int = 42" in content
         assert "BOOL_TRUE: bool = True" in content
         assert "BOOL_FALSE: bool = False" in content
+
+    def test_init_unicode_digit_inferred_as_str(self, tmp_path: Path):
+        """#321: a non-ASCII-digit value (²=U+00B2) is str, not a crashing int()."""
+        env_file = tmp_path / ".env"
+        # ² (U+00B2) is str.isdigit() -> True but int("²") raises ValueError.
+        env_file.write_text("LEVEL=²\nPORT=8080")
+
+        output = tmp_path / "settings.py"
+        # Must not raise ValueError on the Unicode-digit value.
+        result = init(env_file, output, detect_sensitive=False)
+
+        assert result == output
+        content = output.read_text()
+        # Unicode-digit value falls through to str (not int).
+        assert "LEVEL: str" in content
+        assert "LEVEL: int" not in content
+        # Happy path: a real ASCII digit is still inferred as int.
+        assert "PORT: int = 8080" in content
