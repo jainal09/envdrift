@@ -14,6 +14,7 @@ from typing import TYPE_CHECKING
 
 from envdrift.core.parser import EncryptionStatus, EnvFile
 from envdrift.core.schema import SchemaMetadata
+from envdrift.encryption.sops import SOPSEncryptionBackend
 
 if TYPE_CHECKING:
     pass
@@ -105,18 +106,15 @@ class EncryptionDetector:
     # match anywhere without false positives).
     SOPS_ENC_VALUE_MARKER = "ENC[AES256_GCM,"
 
-    # Line-anchored SOPS metadata markers, matched with re.MULTILINE so a bare
-    # in-line ``sops:`` substring in a plaintext value (e.g.
-    # ``VAULT_ADDR=https://sops:8200``) does NOT match, but a genuine SOPS
-    # metadata block in any output format does. Mirrors the canonical set in
-    # ``envdrift.encryption.sops.SOPSEncryptionBackend.SOPS_METADATA_PATTERNS`` so
-    # this detector and the SOPS backend agree on what a real SOPS file is (#413).
-    SOPS_METADATA_PATTERNS = [
-        re.compile(r"^sops:\s*$", re.MULTILINE),  # YAML: top-level `sops:` mapping (col 0)
-        re.compile(r'^\s*"sops"\s*:', re.MULTILINE),  # JSON: `"sops":` (allows indent)
-        re.compile(r"^sops_version\s*=", re.MULTILINE),  # dotenv: flat `sops_version=`
-        re.compile(r"^sops_mac\s*=", re.MULTILINE),  # dotenv: flat `sops_mac=`
-    ]
+    # Line-anchored SOPS metadata markers (YAML/JSON/dotenv), matched with
+    # re.MULTILINE so a bare in-line ``sops:`` substring in a plaintext value
+    # (e.g. ``VAULT_ADDR=https://sops:8200``) does NOT match, but a genuine SOPS
+    # metadata block in any output format does (#413). Aliased directly to the
+    # canonical set on ``SOPSEncryptionBackend`` (the single source of truth) so a
+    # new SOPS format variant added there is automatically honoured here — the
+    # scanner / ``is_file_encrypted`` / ``detect_backend_for_file`` paths can never
+    # silently diverge and false-flag a real SOPS file as "unencrypted".
+    SOPS_METADATA_PATTERNS = SOPSEncryptionBackend.SOPS_METADATA_PATTERNS
 
     # Patterns for suspicious plaintext secrets
     SECRET_VALUE_PATTERNS = [

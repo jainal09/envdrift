@@ -236,6 +236,18 @@ class TestAggregatedScanResult:
             scanner="native",
         )
 
+    @pytest.fixture
+    def low_finding(self) -> ScanFinding:
+        """Create a low severity (policy-violation) finding."""
+        return ScanFinding(
+            file_path=Path(".env"),
+            rule_id="unencrypted-env-file",
+            rule_description="Unencrypted env file",
+            description="Plaintext .env policy violation",
+            severity=FindingSeverity.LOW,
+            scanner="native",
+        )
+
     def test_empty_result(self):
         """Test empty aggregated result."""
         result = AggregatedScanResult(
@@ -286,6 +298,24 @@ class TestAggregatedScanResult:
         )
 
         assert result.exit_code == 3
+        assert result.has_blocking_findings is False
+
+    def test_exit_code_low_has_dedicated_code(self, low_finding: ScanFinding):
+        """LOW maps to its own exit code 4, not HIGH's code 2 (#413).
+
+        A pipeline that branches on a specific exit code (``if [ $? -eq 2 ]``)
+        must not misclassify a LOW-only policy violation as a HIGH finding.
+        """
+        result = AggregatedScanResult(
+            results=[],
+            total_findings=1,
+            unique_findings=[low_finding],
+            scanners_used=["native"],
+            total_duration_ms=100,
+        )
+
+        assert result.exit_code == 4
+        # LOW is a policy violation, not a "blocking finding" for display purposes.
         assert result.has_blocking_findings is False
 
     def test_exit_code_mixed_severities(

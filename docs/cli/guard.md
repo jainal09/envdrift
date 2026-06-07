@@ -260,8 +260,9 @@ envdrift guard --ci --fail-on high
 
 Minimum severity to return a non-zero exit code in CI mode. Accepts
 `critical`, `high`, `medium`, or `low`. Any finding at or above the chosen
-threshold fails CI — including `--fail-on low` on a LOW-only result (such as an
-unencrypted-file policy violation), which returns a non-zero exit code.
+threshold fails CI with that severity's exit code (see [Exit Codes](#exit-codes))
+— including `--fail-on low` on a LOW-only result (such as an unencrypted-file
+policy violation), which exits with code `4`, distinct from HIGH's code `2`.
 `INFO` findings are informational only and never fail CI.
 
 ```bash
@@ -370,8 +371,15 @@ envdrift guard ./db --kingfisher --native-only
 | 1 | Critical findings |
 | 2 | High findings |
 | 3 | Medium findings |
+| 4 | Low findings (policy violations, e.g. unencrypted file) |
 
-With `--ci`, the `--fail-on` threshold controls what counts as blocking.
+Each severity has its own code so a pipeline branching on a specific exit code
+(`if [ $? -eq 2 ]`) can tell them apart — a LOW-only result never collides with
+HIGH's code 2.
+
+With `--ci`, the `--fail-on` threshold controls what counts as blocking. A
+finding at or above the threshold fails CI with the severity-derived code above;
+anything below the threshold exits 0.
 
 ## Configuration
 

@@ -1594,6 +1594,81 @@ class TestGenericSecretDottedValue:
             f"{[f.secret_preview for f in generic]}"
         )
 
+    def test_dotted_secret_with_stray_vowel_segment_is_reported(
+        self, scanner: NativeScanner, tmp_path: Path
+    ):
+        """#413 (cubic P2) — a noisy dotted segment with one stray vowel is still a secret.
+
+        The member-access skip used a single-vowel test, so a high-entropy dotted
+        value whose random segment happened to contain one vowel
+        (``config.mQ2vLpaWRt4nZs6yBdFh``) was misclassified as code and silently
+        skipped. The vowel-density rule now treats long vowel-sparse segments as
+        secret noise, so it is reported.
+        """
+        from envdrift.scanner.patterns import calculate_entropy
+
+        # 20-char random base62 segment with exactly one vowel ('a').
+        secret = "config.mQ2vLpaWRt4nZs6yBdFh"
+        assert calculate_entropy(secret) >= 4.0
+        cfg = tmp_path / "stray.conf"
+        cfg.write_text(f"password={secret}\n")
+
+        result = scanner.scan([cfg])
+
+        generic = [f for f in result.findings if f.rule_id == "generic-secret"]
+        assert len(generic) >= 1, (
+            "a high-entropy dotted secret whose noisy segment has a stray vowel "
+            f"must still be reported, got rules: {[f.rule_id for f in result.findings]}"
+        )
+
+
+class TestMemberAccessHeuristic:
+    """Unit coverage for the member-access code-vs-secret heuristic (#413)."""
+
+    @pytest.mark.parametrize(
+        "segment",
+        [
+            "ReadToken()",  # method call
+            "env",  # short member (<=4 chars)
+            "id",
+            "Password",  # word-like, natural vowel density
+            "apiKey",
+            "Connection",
+        ],
+    )
+    def test_segment_is_word_like_true(self, segment: str):
+        from envdrift.scanner.native import _segment_is_word_like
+
+        assert _segment_is_word_like(segment) is True
+
+    @pytest.mark.parametrize(
+        "segment",
+        [
+            "mQ2vLpaWRt4nZs6yBdFh",  # 20 chars, 1 vowel -> secret noise
+            "Xk9aZ2vqLp8wRt4nZs6",  # 19 chars, 1 vowel
+            "mQ2vLp8wRt4nZs6yBdFh",  # 20 chars, 0 vowels
+        ],
+    )
+    def test_segment_is_word_like_false(self, segment: str):
+        from envdrift.scanner.native import _segment_is_word_like
+
+        assert _segment_is_word_like(segment) is False
+
+    def test_looks_like_code_member_access_true_chain(self):
+        from envdrift.scanner.native import _looks_like_code_member_access
+
+        assert _looks_like_code_member_access("config.Database.Password") is True
+        assert _looks_like_code_member_access("handler.ReadToken()") is True
+        assert _looks_like_code_member_access("obj?.Property") is True
+
+    def test_looks_like_code_member_access_false_non_chain(self):
+        from envdrift.scanner.native import _looks_like_code_member_access
+
+        # Not a member-access shape at all.
+        assert _looks_like_code_member_access("justplain") is False
+        # Member-access shape but a vowel-sparse noisy segment => real secret.
+        assert _looks_like_code_member_access("config.mQ2vLpaWRt4nZs6yBdFh") is False
+
 
 class TestLowercaseEntropyAssignment:
     """#369 — entropy assignment LHS accepts lower/mixed case var names."""

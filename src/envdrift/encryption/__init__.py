@@ -61,6 +61,26 @@ def get_encryption_backend(provider: EncryptionProvider | str, **config) -> Encr
     raise ValueError(f"Unsupported encryption provider: {provider}")
 
 
+# dotenvx header markers — either marks a file dotenvx wrote / can encrypt.
+_DOTENVX_FILE_MARKERS = ("#/---BEGIN DOTENV ENCRYPTED---/", "DOTENV_PUBLIC_KEY")
+
+
+def _content_is_sops_encrypted(content: str) -> bool:
+    """True if ``content`` carries a genuine SOPS encrypted-value or metadata block.
+
+    A SOPS-encrypted file has an ``ENC[AES256_GCM,`` encrypted-value envelope or a
+    line-anchored metadata block (``sops:`` / ``"sops":`` / ``sops_version=`` /
+    ``sops_mac=``). Reuse the SOPS backend's structure-aware patterns so a
+    plaintext value that merely contains the substring ``sops:`` (e.g.
+    ``VAULT_ADDR=https://sops:8200``) is NOT misclassified as SOPS (#413).
+    """
+    from envdrift.encryption.sops import SOPSEncryptionBackend
+
+    if "ENC[AES256_GCM," in content:
+        return True
+    return any(p.search(content) for p in SOPSEncryptionBackend.SOPS_METADATA_PATTERNS)
+
+
 def detect_encryption_provider(file_path) -> EncryptionProvider | None:
     """
     Auto-detect which encryption provider was used to encrypt a file.
@@ -77,35 +97,15 @@ def detect_encryption_provider(file_path) -> EncryptionProvider | None:
 
     content = path.read_text(encoding="utf-8")
 
-    # Check for dotenvx markers first (most common)
-    dotenvx_markers = ["#/---BEGIN DOTENV ENCRYPTED---/", "DOTENV_PUBLIC_KEY"]
-    for marker in dotenvx_markers:
-        if marker in content:
-            return EncryptionProvider.DOTENVX
+    # Check for dotenvx markers first (most common).
+    if any(marker in content for marker in _DOTENVX_FILE_MARKERS):
+        return EncryptionProvider.DOTENVX
 
-    # Check for SOPS markers. A genuinely SOPS-encrypted file carries an
-    # ``ENC[AES256_GCM,`` encrypted-value envelope or a real SOPS metadata block
-    # (line-anchored ``sops:`` / ``"sops":`` / ``sops_version=`` / ``sops_mac=``).
-    # Reuse the SOPS backend's structure-aware detection so a plaintext value that
-    # merely contains the substring ``sops:`` (e.g. ``VAULT_ADDR=https://sops:8200``)
-    # is NOT misclassified as SOPS-encrypted (#413).
-    from envdrift.encryption.sops import SOPSEncryptionBackend
-
-    if "ENC[AES256_GCM," in content or any(
-        pattern.search(content) for pattern in SOPSEncryptionBackend.SOPS_METADATA_PATTERNS
-    ):
+    if _content_is_sops_encrypted(content):
         return EncryptionProvider.SOPS
 
-    # Check for .sops.yaml in same directory or parent
-    sops_config_locations = [
-        path.parent / ".sops.yaml",
-        path.parent.parent / ".sops.yaml",
-    ]
-    for sops_config in sops_config_locations:
-        if sops_config.exists():
-            # .sops.yaml alone does not prove encryption; avoid false positives for plaintext files.
-            return None
-
+    # A nearby ``.sops.yaml`` config alone does not prove the file is encrypted, so
+    # we do not infer a provider from it (avoids false positives on plaintext).
     return None
 
 
