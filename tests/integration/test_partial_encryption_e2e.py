@@ -545,3 +545,225 @@ class TestCombineModeStructure:
         assert "hunter2" not in combined, "plaintext secret leaked into combined file"
         # The .secret source is now encrypted in place.
         assert "encrypted:" in secret.read_text(), secret.read_text()
+
+
+# ---------------------------------------------------------------------------
+# #352: is_file_encrypted must key off a real ciphertext VALUE, not the bare
+# substring "encrypted:" anywhere in the file. The actual bug: a PLAINTEXT
+# value literally containing "encrypted:" (e.g. NOTE=... stored encrypted: see
+# docs) false-positived under the old check
+# (`"encrypted:" in content or "DOTENV_VAULT" in content`), so
+# encrypt_secret_file early-returned and the real secret was committed in
+# cleartext. The load-bearing #352 regression is
+# `test_plaintext_value_literally_containing_encrypted_prefix_is_not_encrypted`
+# (it fails on the old substring code and passes on the value-scan). The
+# residual-public-key and lock->pull->lock cases below are FORWARD-GUARDS: the
+# old code already returned False for a decrypted file (it holds neither
+# "encrypted:" nor "DOTENV_VAULT"), so they passed pre-fix too — they lock in
+# the value-scan behaviour against future regressions.
+# ---------------------------------------------------------------------------
+
+
+class TestIsFileEncryptedRealBinary:
+    """is_file_encrypted against real dotenvx output and tricky plaintext (#352)."""
+
+    def _dotenvx(self, args: list[str], *, cwd: Path) -> subprocess.CompletedProcess[str]:
+        return subprocess.run(
+            ["dotenvx", *args], cwd=cwd, capture_output=True, text=True, timeout=60
+        )
+
+    def test_genuinely_encrypted_file_is_detected(self, tmp_path: Path):
+        """A real dotenvx-encrypted file => is_file_encrypted True."""
+        from envdrift.core.partial_encryption import is_file_encrypted
+
+        secret = tmp_path / ".env.secret"
+        # Build the fake secret by concatenation so push-protection never sees it.
+        secret.write_text("API_KEY=" + "sk_live_" + "0123456789abcdef" * 2 + "\n")
+        enc = self._dotenvx(["encrypt", "-f", str(secret)], cwd=tmp_path)
+        assert enc.returncode == 0, enc.stdout + enc.stderr
+        assert "encrypted:" in secret.read_text()
+
+        assert is_file_encrypted(secret) is True
+
+    def test_decrypted_file_with_residual_public_key_is_not_encrypted(self, tmp_path: Path):
+        """Lock then pull: values are plaintext but DOTENV_PUBLIC_KEY remains => False.
+
+        FORWARD-GUARD, not a #352 repro. A dotenvx-decrypted file contains
+        neither "encrypted:" nor "DOTENV_VAULT", so the OLD substring check
+        already returned False here — this case passed before the fix. It is
+        kept to lock in that the new value-scan still reads a leftover
+        public-key header (and plaintext values) as NOT encrypted, so a future
+        regression that mistook the header for ciphertext — which would make
+        encrypt_secret_file skip re-encryption — is caught.
+        """
+        from envdrift.core.partial_encryption import is_file_encrypted
+
+        secret = tmp_path / ".env.secret"
+        plaintext = "sk_live_" + "0123456789abcdef" * 2
+        secret.write_text(f"API_KEY={plaintext}\n")
+
+        assert self._dotenvx(["encrypt", "-f", str(secret)], cwd=tmp_path).returncode == 0
+        assert is_file_encrypted(secret) is True
+        assert self._dotenvx(["decrypt", "-f", str(secret)], cwd=tmp_path).returncode == 0
+
+        decrypted = secret.read_text()
+        # dotenvx leaves the public-key header in place but restores plaintext values.
+        assert "DOTENV_PUBLIC_KEY" in decrypted
+        assert plaintext in decrypted
+        assert "encrypted:" not in decrypted
+        # Forward-guard: header alone must not read as encrypted.
+        assert is_file_encrypted(secret) is False
+
+    def test_plaintext_value_literally_containing_encrypted_prefix_is_not_encrypted(
+        self, tmp_path: Path
+    ):
+        """Plaintext value literally containing 'encrypted:' => False (the real #352 bug).
+
+        This is the load-bearing #352 regression test (real-binary twin). The
+        OLD check (``"encrypted:" in content``) false-positived on the NOTE
+        value below and returned True, so encrypt_secret_file early-returned and
+        the genuinely-secret API_KEY was committed in cleartext. Fails on the
+        old substring code; passes on the value-scan.
+        """
+        from envdrift.core.partial_encryption import is_file_encrypted
+
+        secret = tmp_path / ".env.secret"
+        secret.write_text(
+            "NOTE=the password is stored encrypted: see the vault docs\n"
+            "API_KEY=" + "sk_live_" + "0123456789abcdef" * 2 + "\n"
+        )
+        assert is_file_encrypted(secret) is False
+
+
+class TestLockPullLockReEncrypts:
+    """encrypt_secret_file re-encrypts a decrypted-with-residual-header file.
+
+    FORWARD-GUARD for the value-scan, not a #352 repro: the decrypted file in
+    the middle of this flow holds neither "encrypted:" nor "DOTENV_VAULT", so
+    the OLD substring check already returned False for it and this flow
+    re-encrypted correctly before the fix too. Kept to ensure lock->pull->lock
+    keeps re-encrypting once the value-scan is in place.
+    """
+
+    def test_encrypt_secret_file_reencrypts_after_pull(self, git_repo: Path):
+        """lock -> pull -> lock: re-encryption produces ciphertext, no plaintext left."""
+        from envdrift.config import PartialEncryptionEnvironmentConfig
+        from envdrift.core.partial_encryption import (
+            decrypt_secret_file,
+            encrypt_secret_file,
+            is_file_encrypted,
+        )
+
+        work = git_repo
+        secret = work / ".env.production.secret"
+        plaintext = "sk_live_" + "0123456789abcdef" * 2
+        secret.write_text(f"API_KEY={plaintext}\n")
+        cfg = PartialEncryptionEnvironmentConfig(
+            name="production",
+            clear_file=str(work / ".env.production.clear"),
+            secret_file=str(secret),
+            combined_file=str(work / ".env.production"),
+        )
+
+        # lock
+        encrypt_secret_file(cfg)
+        assert is_file_encrypted(secret) is True
+        assert plaintext not in secret.read_text()
+
+        # pull (decrypt in place) -> residual public-key header, plaintext value
+        decrypt_secret_file(cfg)
+        assert is_file_encrypted(secret) is False
+        assert plaintext in secret.read_text()
+
+        # lock again -> MUST re-encrypt despite the residual DOTENV_PUBLIC_KEY header
+        encrypt_secret_file(cfg)
+        assert is_file_encrypted(secret) is True, secret.read_text()
+        assert "encrypted:" in secret.read_text()
+        assert plaintext not in secret.read_text(), "plaintext secret survived re-encryption"
+
+
+# ---------------------------------------------------------------------------
+# #358: secrets-only push must encrypt ONLY the real secret file, never the
+# .env.example / .env.sample / .env.template companions or .env.keys.
+# ---------------------------------------------------------------------------
+
+
+class TestSecretsOnlyCompanionsUntouched:
+    def test_push_secrets_only_encrypts_only_dot_env_not_companions(self, git_repo: Path):
+        """push_secrets_only encrypts .env only; companions + .env.keys stay plaintext (#358)."""
+        from envdrift.config import PartialEncryptionEnvironmentConfig
+        from envdrift.core.partial_encryption import is_file_encrypted, push_secrets_only
+
+        secrets = git_repo / "secrets"
+        secrets.mkdir()
+        real = secrets / ".env"
+        real.write_text("API_KEY=" + "sk_live_" + "0123456789abcdef" * 2 + "\n")
+        companions = {
+            ".env.example": "API_KEY=changeme\n",
+            ".env.sample": "API_KEY=sample\n",
+            ".env.template": "API_KEY=tmpl\n",
+        }
+        for name, body in companions.items():
+            (secrets / name).write_text(body)
+        # No pre-planted .env.keys: dotenvx GENERATES a real one during encrypt,
+        # and our glob loop must skip it (.keys suffix) so the private key is
+        # never itself encrypted. (A hand-written placeholder key would break
+        # dotenvx's keystore and make the encrypt a silent no-op.)
+
+        cfg = PartialEncryptionEnvironmentConfig(
+            name="prod", secrets_only=True, secrets_dir=str(secrets), pattern=".env*"
+        )
+
+        result = push_secrets_only(cfg)
+
+        # Only the real secret file was encrypted.
+        assert result["encrypted"] == 1, result
+        assert is_file_encrypted(real) is True
+        assert "encrypted:" in real.read_text()
+
+        # Companions untouched: byte-for-byte the original plaintext.
+        for name, body in companions.items():
+            assert (secrets / name).read_text() == body, f"{name} was modified"
+            assert is_file_encrypted(secrets / name) is False
+
+        # dotenvx wrote a real private-key file; the loop skipped it (.keys
+        # suffix) so it was never encrypted and still holds the cleartext key.
+        keys_file = secrets / ".env.keys"
+        assert keys_file.exists(), "dotenvx should have generated .env.keys"
+        assert "DOTENV_PRIVATE_KEY" in keys_file.read_text()
+        assert "encrypted:" not in keys_file.read_text()
+
+    def test_pull_secrets_only_decrypts_only_dot_env_not_companions(self, git_repo: Path):
+        """pull_secrets_only skips companion files too (#358 pull branch)."""
+        from envdrift.config import PartialEncryptionEnvironmentConfig
+        from envdrift.core.partial_encryption import (
+            is_file_encrypted,
+            pull_secrets_only,
+            push_secrets_only,
+        )
+
+        secrets = git_repo / "secrets"
+        secrets.mkdir()
+        real = secrets / ".env"
+        real.write_text("API_KEY=" + "sk_live_" + "0123456789abcdef" * 2 + "\n")
+        companions = {
+            ".env.example": "API_KEY=changeme\n",
+            ".env.sample": "API_KEY=sample\n",
+            ".env.template": "API_KEY=tmpl\n",
+        }
+        for name, body in companions.items():
+            (secrets / name).write_text(body)
+
+        cfg = PartialEncryptionEnvironmentConfig(
+            name="prod", secrets_only=True, secrets_dir=str(secrets), pattern=".env*"
+        )
+        # Encrypt first so there is ciphertext to pull (decrypt).
+        push_secrets_only(cfg)
+        assert is_file_encrypted(real) is True
+
+        pull_secrets_only(cfg)
+
+        # The real secret file was decrypted; companions were never processed.
+        assert is_file_encrypted(real) is False
+        for name, body in companions.items():
+            assert (secrets / name).read_text() == body, f"{name} was modified by pull"

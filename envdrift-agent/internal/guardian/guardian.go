@@ -119,12 +119,24 @@ func New(cfg *config.Config) (*Guardian, error) {
 
 // Start begins the guardian loop.
 func (g *Guardian) Start(ctx context.Context) error {
+	// Honor the global guardian switch (#348 G3): when disabled, no-op cleanly
+	// before standing up any watcher or goroutine.
+	if g.globalConfig == nil || !g.globalConfig.Guardian.Enabled {
+		log.Println("Guardian disabled in config; not starting.")
+		return nil
+	}
+
 	// Check envdrift availability
 	if !encrypt.IsEnvdriftAvailable() {
 		return errNoEnvdrift
 	}
 
 	log.Println("EnvDrift Guardian starting...")
+
+	// Create an aggregated events channel and publish ctx/events under g.mu
+	// before the registry watcher can fire onRegistryChange (which reads them
+	// under the same lock), so the write here never races the read (#361).
+	events := g.publishContext(ctx)
 
 	// Set up registry watcher
 	rw, err := registry.NewRegistryWatcher(g.onRegistryChange)
@@ -144,11 +156,6 @@ func (g *Guardian) Start(ctx context.Context) error {
 	// Start the check loop
 	ticker := time.NewTicker(g.checkTick)
 	defer ticker.Stop()
-
-	// Create an aggregated events channel and store for use by onRegistryChange
-	events := make(chan projectEvent, 100)
-	g.ctx = ctx
-	g.events = events
 
 	// Start event forwarding for existing projects
 	g.mu.RLock()
@@ -182,6 +189,19 @@ func (g *Guardian) Start(ctx context.Context) error {
 	}
 }
 
+// publishContext stores ctx and a fresh aggregated events channel on the
+// Guardian under g.mu, and returns the channel. onRegistryChange reads g.ctx /
+// g.events under the same lock from the registry-watcher goroutine, so this
+// mutex-guarded write keeps the two from racing (#361).
+func (g *Guardian) publishContext(ctx context.Context) chan projectEvent {
+	events := make(chan projectEvent, 100)
+	g.mu.Lock()
+	g.ctx = ctx
+	g.events = events
+	g.mu.Unlock()
+	return events
+}
+
 // projectEvent represents a file event from a specific project.
 type projectEvent struct {
 	projectPath string
@@ -197,12 +217,20 @@ func (g *Guardian) forwardEvents(ctx context.Context, projectPath string, pw *Pr
 			return
 		case event, ok := <-pw.Events():
 			if !ok {
+				// The watcher closed its events channel (project removed /
+				// stopped); the forwarder is done (#362).
 				return
 			}
-			out <- projectEvent{
+			// Guard the send on ctx.Done() too, so a slow/absent consumer can't
+			// wedge this goroutine after the guardian shuts down (#362).
+			select {
+			case out <- projectEvent{
 				projectPath: projectPath,
 				filePath:    event.Path,
 				modTime:     event.ModTime,
+			}:
+			case <-ctx.Done():
+				return
 			}
 		}
 	}

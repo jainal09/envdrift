@@ -32,7 +32,16 @@ func IsEncrypted(path string) (encrypted bool, err error) {
 		if line == "" || strings.HasPrefix(line, "#") {
 			continue
 		}
-		if strings.Contains(strings.ToLower(line), "encrypted:") {
+		// An encrypted entry has a value that starts with "encrypted:"
+		// (e.g. KEY="encrypted:..."). Anchor to the value so a plaintext
+		// substring like `NOTE=not encrypted: yet` is not a false positive (#348 G6).
+		eq := strings.IndexByte(line, '=')
+		if eq < 0 {
+			continue
+		}
+		value := strings.TrimSpace(line[eq+1:])
+		value = strings.Trim(value, `"'`)
+		if strings.HasPrefix(strings.ToLower(value), "encrypted:") {
 			return true, nil
 		}
 	}
@@ -62,7 +71,7 @@ func EncryptSilent(path string) error {
 
 // IsEnvdriftAvailable checks if envdrift CLI is available.
 func IsEnvdriftAvailable() bool {
-	_, err := findEnvdrift()
+	_, _, err := findEnvdrift()
 	return err == nil
 }
 
@@ -71,38 +80,47 @@ func buildEncryptCommand(path string) (*exec.Cmd, error) {
 	dir := filepath.Dir(path)
 	fileName := filepath.Base(path)
 
-	envdrift, err := findEnvdrift()
+	envdrift, isPython, err := findEnvdrift()
 	if err != nil {
 		return nil, ErrEnvdriftNotFound
 	}
 
-	cmd := exec.Command(envdrift, "lock", fileName)
+	var cmd *exec.Cmd
+	if isPython {
+		// A Python interpreter must be invoked as `python -m envdrift ...`
+		// rather than directly (#348 G1).
+		cmd = exec.Command(envdrift, "-m", "envdrift", "lock", fileName)
+	} else {
+		cmd = exec.Command(envdrift, "lock", fileName)
+	}
 	cmd.Dir = dir
 	return cmd, nil
 }
 
-// findEnvdrift locates the envdrift executable.
-func findEnvdrift() (string, error) {
+// findEnvdrift locates the envdrift executable. isPython is true when the
+// resolved binary is a Python interpreter that must be invoked as
+// `python -m envdrift ...` rather than directly.
+func findEnvdrift() (path string, isPython bool, err error) {
 	// Check if envdrift is in PATH
-	if path, err := exec.LookPath("envdrift"); err == nil {
-		return path, nil
+	if p, lookErr := exec.LookPath("envdrift"); lookErr == nil {
+		return p, false, nil
 	}
 
 	// Try python3 -m envdrift
-	if python, err := exec.LookPath("python3"); err == nil {
+	if python, lookErr := exec.LookPath("python3"); lookErr == nil {
 		cmd := exec.Command(python, "-m", "envdrift", "--version")
 		if cmd.Run() == nil {
-			return python, nil // Will need special handling
+			return python, true, nil
 		}
 	}
 
 	// Try python -m envdrift
-	if python, err := exec.LookPath("python"); err == nil {
+	if python, lookErr := exec.LookPath("python"); lookErr == nil {
 		cmd := exec.Command(python, "-m", "envdrift", "--version")
 		if cmd.Run() == nil {
-			return python, nil
+			return python, true, nil
 		}
 	}
 
-	return "", exec.ErrNotFound
+	return "", false, exec.ErrNotFound
 }

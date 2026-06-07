@@ -196,7 +196,12 @@ See [Vault Providers](../concepts/vault-providers.md) for details.
 
 ### Can I use multiple vault providers?
 
-You can specify different providers per mapping, but you'll need to provide credentials for each when syncing.
+The provider is **global per sync command** — it's set once in the `[vault]`
+section (`provider = "aws" | "azure" | "gcp" | "hashicorp"`) and every mapping in
+that run uses it. A `provider` key on an individual `[[vault.sync.mappings]]`
+entry is not supported and is ignored. To sync against a different provider, run
+the command again with that provider configured (e.g. a separate config or
+`--provider`).
 
 ### How do I set up vault access in CI/CD?
 

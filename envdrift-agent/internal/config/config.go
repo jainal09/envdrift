@@ -31,7 +31,7 @@ type DirectoriesConfig struct {
 }
 
 // DefaultConfig returns a *Config populated with sensible defaults for the Guardian and Directories sections.
-// 
+//
 // Defaults:
 //   - Guardian: Enabled=true, IdleTimeout=5m, Patterns=[".env*"], Exclude=[".env.example", ".env.sample", ".env.keys"], Notify=true
 //   - Directories: Watch=["$HOME/projects"], Recursive=true
