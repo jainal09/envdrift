@@ -2,10 +2,17 @@
 
 from __future__ import annotations
 
+import hashlib
 import re
+import secrets
 import shutil
 from datetime import datetime
 from pathlib import Path
+
+# Per-process salt so the redaction digest is a within-run discriminator only
+# (local vs vault in the same output), never an offline brute-force / rainbow
+# target across runs. Not persisted.
+_REDACTION_SALT = secrets.token_bytes(16)
 
 # dotenvx header format
 DOTENVX_HEADER = """#/------------------!DOTENV_PRIVATE_KEYS!-------------------\\#
@@ -131,8 +138,17 @@ def ensure_directory(path: Path) -> None:
     path.mkdir(parents=True, exist_ok=True)
 
 
-def preview_value(value: str, length: int = 32) -> str:
-    """Return a preview of the value (first N chars + ...)."""
-    if len(value) <= length:
-        return value
-    return f"{value[:length]}..."
+def redact_value(value: str | None) -> str | None:
+    """Return a non-reversible, within-run discriminator for a secret value.
+
+    Emits ``<redacted len=N sha=XXXXXXXX>`` -- never any plaintext of the secret.
+    Two different values yield different output (a visible mismatch signal);
+    identical values yield identical output. The digest is salted per process,
+    so it cannot be brute-forced offline or correlated across runs.
+    """
+    if value is None:
+        return None
+    if value == "":
+        return "<empty>"
+    digest = hashlib.blake2b(value.encode("utf-8"), salt=_REDACTION_SALT, digest_size=4).hexdigest()
+    return f"<redacted len={len(value)} sha={digest}>"
