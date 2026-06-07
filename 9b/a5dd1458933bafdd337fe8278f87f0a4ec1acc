@@ -1,0 +1,31 @@
+tests/unit/coverage/test_cov_sync_engine.py
+  s_dfc6cd6692ed8f::t_7d2d04e62715ae 84,89,94,97,108-133
+src/envdrift/env_files.py
+  s_dfc6cd6692ed8f::t_51c51ca19871f2 78-83,93
+  s_dfc6cd6692ed8f::t_a777864751491b 159-162
+  s_dfc6cd6692ed8f::t_0cb102e92a3633 113-120
+docs/guides/env-file-sync.md
+  s_dfc6cd6692ed8f::t_6f57154a963859 362-366
+tests/unit/test_env_files.py
+  s_dfc6cd6692ed8f::t_44810b8d00eb64 109,118,128-155
+tests/unit/test_cli.py
+  s_dfc6cd6692ed8f::t_97e9dfd9df8da6 4338-4362
+tests/unit/test_cli_vault_push.py
+  s_dfc6cd6692ed8f::t_b8bf5296bc7a0c 377,384,418-471
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.3",
+  "base_commit_sha": "9ba5dd1458933bafdd337fe8278f87f0a4ec1acc",
+  "prompts": {},
+  "sessions": {
+    "s_dfc6cd6692ed8f": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "fd23e738-3512-4420-9290-d985ad979bfd",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Jainal Gosaliya <jainal09gosalia@gmail.com>"
+    }
+  }
+}
