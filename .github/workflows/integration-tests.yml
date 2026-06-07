@@ -59,8 +59,8 @@ jobs:
           --health-start-period=10s
 
       vault:
-        # Keep in sync with tests/docker-compose.test.yml (hashicorp/vault:1.18).
-        image: hashicorp/vault:1.18
+        # Keep in sync with tests/docker-compose.test.yml (hashicorp/vault:1.21).
+        image: hashicorp/vault:1.21
         ports:
           - 8200:8200
         env:
