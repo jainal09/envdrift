@@ -14,6 +14,7 @@ from envdrift.config import PartialEncryptionEnvironmentConfig
 from envdrift.core.partial_encryption import (
     PartialEncryptionError,
     combine_files,
+    has_plaintext_secret_value,
     is_file_encrypted,
     pull_secrets_only,
     push_partial_encryption,
@@ -528,6 +529,41 @@ def test_push_partial_check_out_of_sync_when_secret_plaintext(tmp_path: Path):
     stats = push_partial_encryption(config, check=True)
 
     # Combined text matches, but the plaintext secret forces out-of-sync.
+    assert stats["in_sync"] is False
+
+
+def test_push_partial_check_out_of_sync_when_secret_mixed_state(tmp_path: Path):
+    """--check must report out-of-sync for a MIXED-STATE secret file.
+
+    Regression for the greptile P1 on #416: a mixed file (some values already
+    ``encrypted:``, one freshly-added plaintext) trips ``is_file_encrypted`` on
+    the first ciphertext value, so the dry-run path used to leave ``in_sync``
+    True even though a real push would re-encrypt the new plaintext secret. The
+    check path now uses the same fully-encrypted predicate as the push path.
+    """
+    clear_file = tmp_path / ".env.test.clear"
+    secret_file = tmp_path / ".env.test.secret"
+    combined_file = tmp_path / ".env.test"
+    clear_file.write_text("DEBUG=false\n")
+    # Mixed state: one already-encrypted value, one freshly-added plaintext value.
+    secret_file.write_text('OLD_KEY="encrypted:abc..."\nNEW_LEAK=plaintext-value\n')
+
+    config = PartialEncryptionEnvironmentConfig(
+        name="test",
+        clear_file=str(clear_file),
+        secret_file=str(secret_file),
+        combined_file=str(combined_file),
+    )
+
+    # Build the combined file straight from the mixed secret so the combined text
+    # is byte-for-byte in sync — yet a plaintext secret still leaks on disk.
+    combine_files(config)
+    assert is_file_encrypted(secret_file)  # the ciphertext value trips this
+    assert has_plaintext_secret_value(secret_file)  # but a plaintext leak remains
+
+    stats = push_partial_encryption(config, check=True)
+
+    # is_file_encrypted alone would say "in sync"; the plaintext leak forces False.
     assert stats["in_sync"] is False
 
 
