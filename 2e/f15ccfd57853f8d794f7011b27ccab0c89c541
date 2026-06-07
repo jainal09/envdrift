@@ -1,0 +1,21 @@
+tests/unit/test_vault_azure.py
+  s_dfc6cd6692ed8f::t_13002b94108ea5 393-416
+src/envdrift/vault/azure.py
+  s_dfc6cd6692ed8f::t_1e1325528466df 132-141
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.3",
+  "base_commit_sha": "2ef15ccfd57853f8d794f7011b27ccab0c89c541",
+  "prompts": {},
+  "sessions": {
+    "s_dfc6cd6692ed8f": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "fd23e738-3512-4420-9290-d985ad979bfd",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Jainal Gosaliya <jainal09gosalia@gmail.com>"
+    }
+  }
+}
