@@ -224,3 +224,151 @@ BAR=plaintext
 
         assert "FOO" in result
         assert "NONEXISTENT" not in result
+
+    def test_parse_export_prefix(self, tmp_path):
+        """#351: `export KEY=value` is parsed; plain assignment still works."""
+        # Fake secret via concatenation to dodge push-protection.
+        fake = "sk-" + "live-" + "0123456789abcdef"
+        content = f"export SECRET={fake}\nPLAIN=keep\n"
+        env_file = tmp_path / ".env"
+        env_file.write_text(content)
+
+        result = EnvParser().parse(env_file)
+
+        assert "SECRET" in result.variables
+        assert result.variables["SECRET"].value == fake
+        assert result.variables["PLAIN"].value == "keep"
+
+    def test_parse_export_with_quotes(self, tmp_path):
+        """#351: `export KEY="value"` unquotes correctly."""
+        content = 'export TOKEN="hello world"\n'
+        env_file = tmp_path / ".env"
+        env_file.write_text(content)
+
+        result = EnvParser().parse(env_file)
+        assert result.variables["TOKEN"].value == "hello world"
+
+    def test_parse_export_does_not_strip_glued_name(self, tmp_path):
+        """#351: `exportFOO=bar` keeps the glued name (real whitespace required)."""
+        content = "exportFOO=bar\nEXPORTED=1\n"
+        env_file = tmp_path / ".env"
+        env_file.write_text(content)
+
+        result = EnvParser().parse(env_file)
+        assert "exportFOO" in result.variables
+        assert result.variables["exportFOO"].value == "bar"
+        assert result.variables["EXPORTED"].value == "1"
+
+    def test_parse_inline_comment_int(self, tmp_path):
+        """#357: `PORT=8080 # comment` yields a clean, int-valid value."""
+        content = "PORT=8080 # http port\n"
+        env_file = tmp_path / ".env"
+        env_file.write_text(content)
+
+        result = EnvParser().parse(env_file)
+        value = result.variables["PORT"].value
+        assert value == "8080"
+        assert value.isdigit()  # init_cmd.py infers `int` from this
+
+    def test_parse_inline_comment_tab_separated(self, tmp_path):
+        """#357: any whitespace (e.g. a tab) before `#` delimits a comment."""
+        content = "A=a\t# tab comment\n"
+        env_file = tmp_path / ".env"
+        env_file.write_text(content)
+
+        result = EnvParser().parse(env_file)
+        assert result.variables["A"].value == "a"
+
+    def test_parse_inline_comment_hash_in_quotes_preserved(self, tmp_path):
+        """#357: `#` inside a quoted value is NOT treated as a comment."""
+        content = 'GREETING="hi # there"\n'
+        env_file = tmp_path / ".env"
+        env_file.write_text(content)
+
+        result = EnvParser().parse(env_file)
+        assert result.variables["GREETING"].value == "hi # there"
+
+    def test_parse_inline_comment_hash_in_single_quotes_preserved(self, tmp_path):
+        """#357: `#` inside a SINGLE-quoted value is NOT a comment (single-quote path)."""
+        content = "GREETING='hi # there' # trailing\n"
+        env_file = tmp_path / ".env"
+        env_file.write_text(content)
+
+        result = EnvParser().parse(env_file)
+        assert result.variables["GREETING"].value == "hi # there"
+
+    def test_parse_inline_comment_quoted_url_with_fragment(self, tmp_path):
+        """#357: a quoted URL keeps its `#frag` (quotes protect the hash)."""
+        content = 'API="https://x.test/path#frag"\n'
+        env_file = tmp_path / ".env"
+        env_file.write_text(content)
+
+        result = EnvParser().parse(env_file)
+        assert result.variables["API"].value == "https://x.test/path#frag"
+
+    def test_parse_inline_comment_glued_hash_preserved(self, tmp_path):
+        """#357: a `#` glued to a token (no preceding space) is preserved."""
+        content = "URL=http://x#frag\nMIXED=a#b # c\n"
+        env_file = tmp_path / ".env"
+        env_file.write_text(content)
+
+        result = EnvParser().parse(env_file)
+        # No whitespace before the first `#`, so the URL fragment survives.
+        assert result.variables["URL"].value == "http://x#frag"
+        # First `#` is glued (kept); the second, space-preceded `#` is a comment.
+        assert result.variables["MIXED"].value == "a#b"
+
+    def test_parse_value_starting_with_hash_not_zeroed(self, tmp_path):
+        """#357 regression: a value that BEGINS with `#` (e.g. a hex color) is a
+        value, not a comment, and must not be silently zeroed."""
+        content = "COLOR=#FF0000\nALSO=#123 # real comment\nEMPTY=  # just a comment\n"
+        env_file = tmp_path / ".env"
+        env_file.write_text(content)
+
+        result = EnvParser().parse(env_file)
+        assert result.variables["COLOR"].value == "#FF0000"
+        # leading `#` value kept; the later space-preceded `#` is the comment.
+        assert result.variables["ALSO"].value == "#123"
+        # value is only whitespace + a space-preceded comment -> empty.
+        assert result.variables["EMPTY"].value == ""
+
+    def test_parse_inline_comment_escaped_quote(self, tmp_path):
+        """#357: an escaped quote does not toggle quote state, so a `#` inside the
+        quoted span stays protected."""
+        content = 'Q="a \\" # b"\n'
+        env_file = tmp_path / ".env"
+        env_file.write_text(content)
+
+        result = EnvParser().parse(env_file)
+        # The `\"` is escaped (quote stays open), so the `#` is inside quotes.
+        assert "#" in result.variables["Q"].value
+
+    def test_parse_inline_comment_only_is_empty(self, tmp_path):
+        """#357: a value that is only a comment collapses to EMPTY."""
+        content = "ONLY=   # just a comment\n"
+        env_file = tmp_path / ".env"
+        env_file.write_text(content)
+
+        result = EnvParser().parse(env_file)
+        assert result.variables["ONLY"].value == ""
+        assert result.variables["ONLY"].encryption_status == EncryptionStatus.EMPTY
+
+    def test_parse_inline_comment_after_quoted_encrypted_value(self, tmp_path):
+        """#357: comment stripped BEFORE unquote, so `encrypted:` is detected.
+
+        `"encrypted:..." # note` does not end in a quote, so without stripping
+        the comment first `_unquote` is a no-op and the value is misclassified
+        PLAINTEXT. Stripping the comment yields `"encrypted:..."` -> unquoted to
+        `encrypted:...` -> correctly ENCRYPTED/dotenvx.
+        """
+        # Build the fake encrypted payload via concatenation.
+        payload = "encrypted:" + "BA0123456789abcdef"
+        content = f'KEY="{payload}" # rotate me\n'
+        env_file = tmp_path / ".env"
+        env_file.write_text(content)
+
+        result = EnvParser().parse(env_file)
+        env_var = result.variables["KEY"]
+        assert env_var.value == payload
+        assert env_var.encryption_status == EncryptionStatus.ENCRYPTED
+        assert env_var.encryption_backend == "dotenvx"

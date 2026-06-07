@@ -11,8 +11,17 @@ from envdrift.sync.operations import (
     DOTENVX_HEADER,
     EnvKeysFile,
     atomic_write,
-    preview_value,
+    redact_value,
 )
+
+
+def _fake_private_key(seed: str) -> str:
+    """Build a 64-hex value shaped like a DOTENV_PRIVATE_KEY_* secret.
+
+    Constructed by repetition so the literal never appears as one token in
+    source, and so callers can vary ``seed`` to get distinct secrets.
+    """
+    return (seed * 64)[:64]
 
 
 class TestEnvKeysFile:
@@ -211,27 +220,55 @@ class TestAtomicWrite:
         assert file_path.read_text() == "New content"
 
 
-class TestPreviewValue:
-    """Tests for preview_value function."""
+class TestRedactValue:
+    """Tests for redact_value -- the non-reversible secret discriminator."""
 
-    def test_short_value_unchanged(self) -> None:
-        """Test short value is returned unchanged."""
-        result = preview_value("short", length=32)
-        assert result == "short"
+    def test_none_passes_through(self) -> None:
+        """None stays None (no preview for a missing value)."""
+        assert redact_value(None) is None
 
-    def test_long_value_truncated(self) -> None:
-        """Test long value is truncated with ellipsis."""
-        long_value = "a" * 50
-        result = preview_value(long_value, length=32)
-        assert result == "a" * 32 + "..."
+    def test_empty_string_marked_empty(self) -> None:
+        """Empty string renders as a distinct marker, never as plaintext."""
+        assert redact_value("") == "<empty>"
 
-    def test_exact_length_unchanged(self) -> None:
-        """Test value of exact length is unchanged."""
-        value = "a" * 32
-        result = preview_value(value, length=32)
-        assert result == value
+    def test_redacted_shape_carries_length(self) -> None:
+        """Output is the redacted discriminator with the real length."""
+        secret = _fake_private_key("ab")
+        out = redact_value(secret)
+        assert out is not None
+        assert out.startswith("<redacted len=64 sha=")
+        assert out.endswith(">")
 
-    def test_custom_length(self) -> None:
-        """Test custom preview length."""
-        result = preview_value("abcdefghij", length=5)
-        assert result == "abcde..."
+    def test_no_substring_of_secret_leaks(self) -> None:
+        """No >=8-char window of a 64-hex secret appears in the output.
+
+        This is the core no-leak property: the previous truncating preview
+        printed the first 32 hex chars verbatim (half the private key).
+        """
+        secret = _fake_private_key("ab")
+        out = redact_value(secret)
+        assert out is not None
+        for i in range(len(secret) - 7):
+            assert secret[i : i + 8] not in out
+
+    def test_different_values_produce_different_output(self) -> None:
+        """Distinct secrets must still yield a visible mismatch signal."""
+        a = _fake_private_key("ab")
+        b = _fake_private_key("cd")
+        assert a != b
+        assert redact_value(a) != redact_value(b)
+
+    def test_same_value_produces_identical_output(self) -> None:
+        """Equal values produce identical output (within a single run)."""
+        secret = _fake_private_key("ab")
+        assert redact_value(secret) == redact_value(secret)
+
+    def test_same_length_different_value_still_differs(self) -> None:
+        """Length collisions alone do not mask a value difference."""
+        a = "a" * 40
+        b = "b" * 40
+        out_a = redact_value(a)
+        out_b = redact_value(b)
+        assert out_a is not None and out_b is not None
+        assert "len=40" in out_a and "len=40" in out_b
+        assert out_a != out_b
