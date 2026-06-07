@@ -5,6 +5,13 @@ All notable changes to the EnvDrift Agent will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.1](https://github.com/jainal09/envdrift/compare/agent-v1.1.0...agent-v1.1.1) (2026-06-07)
+
+
+### Bug Fixes
+
+* **agent:** data race + goroutine leak + 6 correctness bugs ([#361](https://github.com/jainal09/envdrift/issues/361),[#362](https://github.com/jainal09/envdrift/issues/362), [#348](https://github.com/jainal09/envdrift/issues/348) Go) ([#386](https://github.com/jainal09/envdrift/issues/386)) ([63eb476](https://github.com/jainal09/envdrift/commit/63eb47669a0a15a7963ccf01c7dc7b4e68bb3d4e))
+
 ## [1.1.0](https://github.com/jainal09/envdrift/compare/agent-v1.0.4...agent-v1.1.0) (2026-06-04)
 
 
