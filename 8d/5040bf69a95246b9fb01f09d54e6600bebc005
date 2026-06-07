@@ -1,0 +1,24 @@
+src/envdrift/vault/aws.py
+  s_dfc6cd6692ed8f::t_d414b339041729 284
+  s_dfc6cd6692ed8f::t_46e226eb9561c0 132
+  s_dfc6cd6692ed8f::t_62754a714bf9b8 225
+  s_dfc6cd6692ed8f::t_523bb86323edf4 261
+  s_dfc6cd6692ed8f::t_0a96d6a619dfae 326
+  s_dfc6cd6692ed8f::t_0d9a60dbaeb0cb 56,63-65,70,76,83
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.3",
+  "base_commit_sha": "8d5040bf69a95246b9fb01f09d54e6600bebc005",
+  "prompts": {},
+  "sessions": {
+    "s_dfc6cd6692ed8f": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "fd23e738-3512-4420-9290-d985ad979bfd",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Jainal Gosaliya <jainal09gosalia@gmail.com>"
+    }
+  }
+}
