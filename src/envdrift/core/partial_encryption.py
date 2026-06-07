@@ -112,6 +112,15 @@ class PartialEncryptionError(Exception):
         return cls(f"Secret file not found: {path}")
 
 
+def _is_quote_wrapped(v: str) -> bool:
+    """Return True if ``v`` is wrapped in a single matching pair of quotes.
+
+    Recognises both ``"..."`` and ``'...'`` (the two quote styles dotenv/SOPS
+    emit). A bare ``"`` or unbalanced quotes are not wrapped.
+    """
+    return len(v) >= 2 and v[0] in ('"', "'") and v[-1] == v[0]
+
+
 def _unquote_value(value: str) -> str:
     """Strip surrounding whitespace and a single layer of matching quotes.
 
@@ -122,7 +131,7 @@ def _unquote_value(value: str) -> str:
     surrounding whitespace must be removed first.
     """
     v = value.strip()
-    if len(v) >= 2 and ((v[0] == '"' and v[-1] == '"') or (v[0] == "'" and v[-1] == "'")):
+    if _is_quote_wrapped(v):
         v = v[1:-1].strip()
     return v
 
@@ -136,21 +145,17 @@ def _value_is_ciphertext(value: str) -> bool:
 def _line_has_plaintext_secret(line: str) -> bool:
     """Return True if a single ``.secret`` line is a PLAINTEXT secret assignment.
 
-    Comments, blank lines, non-assignments, dotenvx's ``DOTENV_PUBLIC_KEY_*``
-    artifact (a public key is not a secret) and empty assignments
-    (``KEY=`` / ``KEY=""`` / ``KEY=''``) all carry no secret to leak and return
-    False. A real assignment whose value is not ciphertext returns True.
+    Comments, blank lines, non-assignments and dotenvx's ``DOTENV_PUBLIC_KEY_*``
+    artifact (a public key is not a secret) are filtered by ``_is_secret_var_line``
+    and return False. Among real secret assignments, empty values
+    (``KEY=`` / ``KEY=""`` / ``KEY=''``) carry no secret to leak, and ciphertext
+    values are already encrypted; only a non-empty plaintext value returns True.
     """
-    stripped = line.strip()
-    if not stripped or stripped.startswith("#") or "=" not in stripped:
+    if not _is_secret_var_line(line):
         return False
-    key, _, value = stripped.partition("=")
-    if key.strip().startswith(_DOTENVX_PUBLIC_KEY_PREFIX):
-        return False
-    if not _unquote_value(value):
-        # Empty assignment (KEY=, KEY="", KEY='') carries no secret to leak.
-        return False
-    return not _value_is_ciphertext(value)
+    _, _, value = line.strip().partition("=")
+    # Empty assignment (KEY=, KEY="", KEY='') carries no secret to leak.
+    return bool(_unquote_value(value)) and not _value_is_ciphertext(value)
 
 
 def has_plaintext_secret_value(file_path: Path) -> bool:
