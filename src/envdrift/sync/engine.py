@@ -352,8 +352,17 @@ class SyncEngine:
             return DecryptionTestResult.SKIPPED
         target_file = detection.path
 
+        # Reading the env file can raise for a non-UTF-8 file
+        # (UnicodeDecodeError) or an unreadable one (OSError). Neither must escape
+        # as a traceback: a file we cannot even decode/open is not a key we can
+        # verify, so treat it as a FAILED decryption test rather than crashing the
+        # whole sync run (see #413).
+        try:
+            content = target_file.read_text()
+        except (OSError, UnicodeDecodeError):
+            return DecryptionTestResult.FAILED
+
         # Check if file is encrypted (contains dotenvx markers)
-        content = target_file.read_text()
         if "encrypted:" not in content.lower():
             return DecryptionTestResult.SKIPPED
 

@@ -460,7 +460,7 @@ def sync(
     # Run sync
     try:
         result = engine.sync_all()
-    except (VaultError, SyncConfigError, SecretNotFoundError) as e:
+    except (VaultError, SyncConfigError, SecretNotFoundError, OSError, UnicodeDecodeError) as e:
         print_error(f"Sync failed: {e}")
         raise typer.Exit(code=1) from None
 
@@ -918,6 +918,15 @@ def pull(
             pull_partial_encryption,
             pull_secrets_only,
         )
+
+        # When --merge writes combined files with DECRYPTED secrets, they must be
+        # gitignored just like `push` does — otherwise a routine `git add .` stages
+        # plaintext secrets. Mirror push's _ensure_combined_gitignore (which also
+        # protects the dotenvx .env.keys file) before writing anything (see #413).
+        if merge:
+            from envdrift.cli_commands.partial import _ensure_combined_gitignore
+
+            _ensure_combined_gitignore(partial_config.partial_encryption.environments)
 
         for env_config in partial_config.partial_encryption.environments:
             if env_config.secrets_only:

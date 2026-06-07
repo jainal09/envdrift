@@ -106,8 +106,14 @@ When this flag is used with partial encryption enabled, the command will:
 
 1. Decrypt `.env.{env}.secret` files
 2. Merge `.env.{env}.clear` + decrypted `.env.{env}.secret` → `.env.{env}`
+3. Add the combined file to `.gitignore` (it contains decrypted secrets)
 
 This creates a single usable `.env` file for local development.
+
+> **Note:** The merged `.env.{env}` file contains decrypted secrets, so it is
+> added to `.gitignore` (just like `envdrift push`) to keep a routine
+> `git add .` from staging plaintext secrets. Commit only the `.clear` and
+> `.secret` files, never the combined file.
 
 ```bash
 # Decrypt and merge partial encryption files

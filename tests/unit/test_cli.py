@@ -1935,6 +1935,61 @@ class TestSyncCommand:
         assert captured["kwargs"]["project_id"] == "my-gcp-project"
         assert captured["config"].default_vault_name == "gcp"
 
+    def test_sync_unicode_decode_error_exits_cleanly(self, monkeypatch, tmp_path: Path):
+        """A non-UTF-8 env file during sync exits 1, not a traceback (#413).
+
+        Regression for #413: ``sync --check-decryption`` read env files outside any
+        guard, so a non-UTF-8 file raised ``UnicodeDecodeError`` that escaped the
+        CLI's narrow ``except (VaultError, SyncConfigError, SecretNotFoundError)``.
+        The catch is now broadened to ``OSError``/``UnicodeDecodeError`` so the user
+        gets a clean error and exit code 1 instead of a crash.
+        """
+        config_file = tmp_path / "envdrift.toml"
+        config_file.write_text(
+            dedent(
+                """
+                [vault]
+                provider = "gcp"
+
+                [vault.gcp]
+                project_id = "my-gcp-project"
+
+                [vault.sync]
+                default_vault_name = "gcp"
+
+                [[vault.sync.mappings]]
+                secret_name = "dotenv-key"
+                folder_path = "services/api"
+                """
+            )
+        )
+        monkeypatch.chdir(tmp_path)
+
+        monkeypatch.setattr(
+            "envdrift.vault.get_vault_client",
+            lambda *_a, **_k: SimpleNamespace(ensure_authenticated=lambda: None),
+        )
+        monkeypatch.setattr("envdrift.output.rich.print_service_sync_status", lambda *_, **__: None)
+        monkeypatch.setattr("envdrift.output.rich.print_sync_result", lambda *_, **__: None)
+
+        class DummyEngine:
+            def __init__(self, config, vault_client, mode, prompt_callback, progress_callback):
+                pass
+
+            def sync_all(self):
+                # Simulate the real engine hitting a non-UTF-8 env file.
+                b"\xff\xfe".decode("utf-8")
+                raise AssertionError("decode above should have raised")
+
+        monkeypatch.setattr("envdrift.sync.engine.SyncEngine", DummyEngine)
+
+        result = runner.invoke(app, ["sync", "--check-decryption"])
+
+        assert result.exit_code == 1
+        assert "sync failed" in result.output.lower()
+        # No raw traceback leaked to the user.
+        assert "Traceback" not in result.output
+
     def test_sync_invalid_toml_config_errors(self, monkeypatch, tmp_path: Path):
         """Invalid TOML sync config should raise a SyncConfigError."""
 
@@ -3016,6 +3071,129 @@ class TestPullCommand:
         assert "DEBUG=true" in content
         assert "API_KEY=decrypted_key" in content
         assert "DB_PASS=decrypted_pass" in content
+
+    def test_pull_merge_gitignores_combined_file(
+        self,
+        monkeypatch,
+        tmp_path: Path,
+    ):
+        """Pull --merge must gitignore the decrypted combined file (#413).
+
+        Regression for #413: the ``--merge`` branch wrote a combined file
+        containing merged clear + DECRYPTED secret values but never added it to
+        ``.gitignore`` (unlike ``push``, which calls ``_ensure_combined_gitignore``
+        first). A routine ``git add .`` then staged plaintext secrets. This test
+        runs the real ``pull --merge`` path against a real git repo and asserts the
+        combined file lands in ``.gitignore``.
+        """
+        import subprocess
+
+        # A real git repo so ensure_gitignore_entries can resolve the git root and
+        # write a real .gitignore (no mock of the behavior under test).
+        subprocess.run(
+            ["git", "init"],
+            cwd=str(tmp_path),
+            capture_output=True,
+            check=True,
+        )
+
+        service_dir = tmp_path / "service"
+        service_dir.mkdir()
+
+        clear_file = service_dir / ".env.prod.clear"
+        secret_file = service_dir / ".env.prod.secret"
+        combined_file = service_dir / ".env.prod"
+
+        clear_file.write_text("APP_NAME=myapp\n")
+        secret_file.write_text("API_KEY=decrypted_key\n")
+
+        config_file = tmp_path / "envdrift.toml"
+        config_file.write_text(
+            dedent(
+                f"""
+                [vault]
+                provider = "aws"
+
+                [vault.sync]
+                [[vault.sync.mappings]]
+                secret_name = "key"
+                folder_path = "{service_dir.as_posix()}"
+                environment = "prod"
+
+                [partial_encryption]
+                enabled = true
+
+                [[partial_encryption.environments]]
+                name = "prod"
+                clear_file = "{clear_file.as_posix()}"
+                secret_file = "{secret_file.as_posix()}"
+                combined_file = "{combined_file.as_posix()}"
+                """
+            ).lstrip()
+        )
+
+        monkeypatch.setattr(
+            "envdrift.cli_commands.encryption_helpers.resolve_encryption_backend",
+            lambda *_args, **_kwargs: (
+                DummyEncryptionBackend(
+                    name="dotenvx",
+                    installed=True,
+                    has_encrypted_header=lambda _: False,
+                ),
+                EncryptionProvider.DOTENVX,
+                None,
+            ),
+        )
+        monkeypatch.setattr(
+            "envdrift.core.partial_encryption.pull_partial_encryption",
+            lambda _: (False, True),  # (was_decrypted, protected)
+        )
+
+        from envdrift.sync.config import ServiceMapping, SyncConfig
+
+        sync_config = SyncConfig(
+            mappings=[
+                ServiceMapping(
+                    secret_name="key",
+                    folder_path=service_dir,
+                    environment="prod",
+                )
+            ],
+        )
+        monkeypatch.setattr(
+            "envdrift.cli_commands.sync.load_sync_config_and_client",
+            lambda *_args, **_kwargs: (sync_config, SimpleNamespace(), "aws", None, None, None),
+        )
+        monkeypatch.setattr(
+            "envdrift.integrations.hook_check.ensure_git_hook_setup",
+            lambda **_kwargs: [],
+        )
+
+        result = runner.invoke(app, ["pull", "-c", str(config_file), "--skip-sync", "--merge"])
+
+        assert result.exit_code == 0, result.output
+        assert combined_file.exists()
+
+        # The decrypted combined artifact must be gitignored, matching `push`.
+        gitignore = tmp_path / ".gitignore"
+        assert gitignore.exists(), ".gitignore was not created for the decrypted combined file"
+        ignored = {line.strip() for line in gitignore.read_text().splitlines() if line.strip()}
+        combined_rel = combined_file.resolve().relative_to(tmp_path.resolve()).as_posix()
+        assert combined_rel in ignored, (
+            f"{combined_rel} not gitignored; .gitignore has: {sorted(ignored)}"
+        )
+
+        # `git status` must NOT see the combined file as untracked-and-stageable.
+        status = subprocess.run(
+            ["git", "status", "--porcelain", "--", combined_rel],
+            cwd=str(tmp_path),
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        assert status.stdout.strip() == "", (
+            f"combined file is still visible to git: {status.stdout!r}"
+        )
 
 
 class TestLockCommand:
