@@ -1,0 +1,21 @@
+tests/unit/test_cli_vault_push.py
+  s_dfc6cd6692ed8f::t_bdfcc04abd7552 19-65
+  s_dfc6cd6692ed8f::t_33a377e2a09bb0 426-428
+  s_dfc6cd6692ed8f::t_b7f06246031756 457-462
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.3",
+  "base_commit_sha": "4087a383a87a86df7fadb91f66e170fd9cd10f53",
+  "prompts": {},
+  "sessions": {
+    "s_dfc6cd6692ed8f": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "fd23e738-3512-4420-9290-d985ad979bfd",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Jainal Gosaliya <jainal09gosalia@gmail.com>"
+    }
+  }
+}
