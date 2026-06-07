@@ -10,7 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Bug Fixes
 
-* **agent:** data race + goroutine leak + 6 correctness bugs ([#361](https://github.com/jainal09/envdrift/issues/361),[#362](https://github.com/jainal09/envdrift/issues/362), [#348](https://github.com/jainal09/envdrift/issues/348) Go) ([#386](https://github.com/jainal09/envdrift/issues/386)) ([63eb476](https://github.com/jainal09/envdrift/commit/63eb47669a0a15a7963ccf01c7dc7b4e68bb3d4e))
+* **agent:** data race + goroutine leak + 6 correctness bugs ([#361](https://github.com/jainal09/envdrift/issues/361), [#362](https://github.com/jainal09/envdrift/issues/362), [#348](https://github.com/jainal09/envdrift/issues/348)) ([#386](https://github.com/jainal09/envdrift/issues/386)) ([63eb476](https://github.com/jainal09/envdrift/commit/63eb47669a0a15a7963ccf01c7dc7b4e68bb3d4e))
 
 ## [1.1.0](https://github.com/jainal09/envdrift/compare/agent-v1.0.4...agent-v1.1.0) (2026-06-04)
 
