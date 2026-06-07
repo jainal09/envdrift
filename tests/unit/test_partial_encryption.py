@@ -178,6 +178,36 @@ def test_has_plaintext_secret_value_ignores_public_key_and_comments(tmp_path: Pa
     assert has_plaintext_secret_value(f) is False
 
 
+def test_has_plaintext_secret_value_quoted_empty_values_are_not_secrets(tmp_path: Path):
+    """Quoted empty placeholders (KEY="" / KEY='') carry no secret to leak.
+
+    Regression for the cubic P2 finding on #416: ``KEY=""`` has a non-empty
+    raw value (the two quote chars), so the old ``if not value.strip()`` guard
+    did not skip it and ``_value_is_ciphertext('""')`` returned False — flagging
+    a fully-encrypted file with empty placeholders as still holding plaintext,
+    causing repeated re-encryption / spurious out-of-sync.
+    """
+    from envdrift.core.partial_encryption import has_plaintext_secret_value
+
+    f = tmp_path / ".env.secret"
+    f.write_text(
+        'API_KEY="encrypted:abc..."\n'
+        'EMPTY_DQ=""\n'  # quoted-empty double
+        "EMPTY_SQ=''\n"  # quoted-empty single
+        'PADDED=" "\n'  # quotes around whitespace only
+    )
+    assert has_plaintext_secret_value(f) is False
+
+
+def test_has_plaintext_secret_value_quoted_plaintext_is_secret(tmp_path: Path):
+    """A quoted NON-empty plaintext value is still a leaking secret."""
+    from envdrift.core.partial_encryption import has_plaintext_secret_value
+
+    f = tmp_path / ".env.secret"
+    f.write_text('API_KEY="encrypted:abc..."\nLEAK="plaintext_value"\n')
+    assert has_plaintext_secret_value(f) is True
+
+
 def test_encrypt_secret_file_reencrypts_mixed_state(tmp_path: Path):
     """encrypt_secret_file MUST re-run dotenvx.encrypt on a mixed-state file (#413).
 
@@ -606,6 +636,46 @@ def test_push_secrets_only_skips_already_encrypted(secrets_only_config, secrets_
     assert result["encrypted"] == 0
     assert result["already_encrypted"] == 2
     instance.encrypt.assert_not_called()
+
+
+def test_push_secrets_only_check_dry_run_counts_plaintext_without_encrypting(
+    secrets_only_config, secrets_dir
+):
+    """check=True is a dry run: plaintext files are counted as 'would-encrypt', untouched."""
+    before = {f: f.read_bytes() for f in secrets_dir.iterdir()}
+
+    with patch("envdrift.core.partial_encryption.DotenvxWrapper") as mock_dotenvx_cls:
+        instance = mock_dotenvx_cls.return_value
+        result = push_secrets_only(secrets_only_config, check=True)
+
+    assert result["encrypted"] == 2  # both plaintext files would be encrypted
+    assert result["already_encrypted"] == 0
+    assert result["in_sync"] is False
+    instance.encrypt.assert_not_called()  # dry run mutates nothing
+    for f, content in before.items():
+        assert f.read_bytes() == content
+
+
+def test_push_secrets_only_check_dry_run_skips_unskip_when_fully_encrypted(
+    secrets_only_config, secrets_dir
+):
+    """check=True on a fully-encrypted file reports in_sync and never touches git."""
+    for f in secrets_dir.iterdir():
+        f.write_text('KEY="encrypted:abc123"\n')
+
+    with (
+        patch("envdrift.core.partial_encryption.DotenvxWrapper") as mock_dotenvx_cls,
+        patch("envdrift.core.partial_encryption._git_unskip_worktree") as mock_unskip,
+    ):
+        instance = mock_dotenvx_cls.return_value
+        result = push_secrets_only(secrets_only_config, check=True)
+
+    assert result["encrypted"] == 0
+    assert result["already_encrypted"] == 2
+    assert result["in_sync"] is True
+    instance.encrypt.assert_not_called()
+    # Dry run must not mutate git skip-worktree state for already-encrypted files.
+    mock_unskip.assert_not_called()
 
 
 def test_push_secrets_only_raises_when_dir_missing(tmp_path: Path):

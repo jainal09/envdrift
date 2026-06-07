@@ -112,17 +112,45 @@ class PartialEncryptionError(Exception):
         return cls(f"Secret file not found: {path}")
 
 
-def _value_is_ciphertext(value: str) -> bool:
-    """Return True if an assigned dotenv VALUE is genuine ciphertext.
+def _unquote_value(value: str) -> str:
+    """Strip surrounding whitespace and a single layer of matching quotes.
 
-    Strips a single layer of surrounding quotes first because SOPS emits
-    ``KEY="ENC[AES256_GCM,...]"`` (quoted), while dotenvx emits an unquoted
-    ``KEY=encrypted:...``.
+    SOPS emits ``KEY="ENC[AES256_GCM,...]"`` (quoted) while dotenvx emits an
+    unquoted ``KEY=encrypted:...``; quoted empty placeholders appear as
+    ``KEY=""`` / ``KEY=''``. Callers compare the returned bare value against the
+    ciphertext prefixes or test it for emptiness, so both quote styles and
+    surrounding whitespace must be removed first.
     """
     v = value.strip()
     if len(v) >= 2 and ((v[0] == '"' and v[-1] == '"') or (v[0] == "'" and v[-1] == "'")):
-        v = v[1:-1]
+        v = v[1:-1].strip()
+    return v
+
+
+def _value_is_ciphertext(value: str) -> bool:
+    """Return True if an assigned dotenv VALUE is genuine ciphertext."""
+    v = _unquote_value(value)
     return v.startswith(_DOTENVX_CIPHERTEXT_PREFIX) or v.startswith(_SOPS_CIPHERTEXT_PREFIX)
+
+
+def _line_has_plaintext_secret(line: str) -> bool:
+    """Return True if a single ``.secret`` line is a PLAINTEXT secret assignment.
+
+    Comments, blank lines, non-assignments, dotenvx's ``DOTENV_PUBLIC_KEY_*``
+    artifact (a public key is not a secret) and empty assignments
+    (``KEY=`` / ``KEY=""`` / ``KEY=''``) all carry no secret to leak and return
+    False. A real assignment whose value is not ciphertext returns True.
+    """
+    stripped = line.strip()
+    if not stripped or stripped.startswith("#") or "=" not in stripped:
+        return False
+    key, _, value = stripped.partition("=")
+    if key.strip().startswith(_DOTENVX_PUBLIC_KEY_PREFIX):
+        return False
+    if not _unquote_value(value):
+        # Empty assignment (KEY=, KEY="", KEY='') carries no secret to leak.
+        return False
+    return not _value_is_ciphertext(value)
 
 
 def has_plaintext_secret_value(file_path: Path) -> bool:
@@ -149,20 +177,7 @@ def has_plaintext_secret_value(file_path: Path) -> bool:
     # cannot make a plaintext value look like ciphertext.
     content = file_path.read_text(encoding="utf-8", errors="replace")
 
-    for raw_line in content.splitlines():
-        line = raw_line.strip()
-        if not line or line.startswith("#") or "=" not in line:
-            continue
-        key, _, value = line.partition("=")
-        if key.strip().startswith(_DOTENVX_PUBLIC_KEY_PREFIX):
-            # The public-key line is plaintext but is not a secret; skip it.
-            continue
-        if not value.strip():
-            # Empty assignment (KEY=) carries no secret to leak.
-            continue
-        if not _value_is_ciphertext(value):
-            return True
-    return False
+    return any(_line_has_plaintext_secret(raw_line) for raw_line in content.splitlines())
 
 
 def is_file_encrypted(file_path: Path) -> bool:
@@ -516,42 +531,58 @@ def push_secrets_only(
     dotenvx = DotenvxWrapper()
 
     for file in files:
-        if not file.is_file():
+        if not _is_pushable_secret_file(file):
             continue
-        if _is_excluded_env_file(file.name):
-            # Never encrypt companion files (.example/.sample/.template) or the
-            # dotenvx key file (.keys), even if they match the glob pattern (#358).
-            continue
-        # A file counts as "already encrypted" only when it is FULLY encrypted:
-        # ciphertext present AND no leftover plaintext secret value. A MIXED
-        # file (some values encrypted, one freshly-added plaintext) must be
-        # re-encrypted, or the new plaintext secret ships verbatim. is_file_
-        # encrypted() trips on the first ciphertext value, so it alone treats a
-        # mixed file as done — has_plaintext_secret_value() catches the leak.
-        if is_file_encrypted(file) and not has_plaintext_secret_value(file):
-            if not check:
-                # Already fully encrypted — lift any stale skip-worktree
-                # protection so the encrypted diff is visible to git.
-                _git_unskip_worktree(file)
+        if _encrypt_secrets_only_file(dotenvx, file, check=check):
+            encrypted += 1
+        else:
             already_encrypted += 1
-            continue
-        if check:
-            # Dry run: this plaintext / mixed file would be encrypted by a real push.
-            encrypted += 1
-            continue
-        try:
-            dotenvx.encrypt(file)
-            encrypted += 1
-        except DotenvxError as e:
-            raise PartialEncryptionError.encrypt_failed(file, e) from e
-        # Re-enable git tracking now the file is encrypted again.
-        _git_unskip_worktree(file)
 
     return {
         "encrypted": encrypted,
         "already_encrypted": already_encrypted,
         "in_sync": encrypted == 0,
     }
+
+
+def _is_pushable_secret_file(file: Path) -> bool:
+    """Return True if ``file`` is a real secret file eligible for encryption.
+
+    Skips non-files and companion files (.example/.sample/.template) or the
+    dotenvx key file (.keys), even if they match the glob pattern (#358).
+    """
+    return file.is_file() and not _is_excluded_env_file(file.name)
+
+
+def _encrypt_secrets_only_file(dotenvx: DotenvxWrapper, file: Path, *, check: bool) -> bool:
+    """Encrypt a single secrets-only file in place; return True if it was (re)encrypted.
+
+    A file counts as "already encrypted" only when it is FULLY encrypted:
+    ciphertext present AND no leftover plaintext secret value. A MIXED file
+    (some values encrypted, one freshly-added plaintext) must be re-encrypted,
+    or the new plaintext secret ships verbatim. ``is_file_encrypted`` trips on
+    the first ciphertext value, so it alone treats a mixed file as done —
+    ``has_plaintext_secret_value`` catches the leak.
+
+    Returns False (already-encrypted) without touching ``dotenvx`` when the file
+    is fully encrypted. In ``check`` mode no file is modified.
+    """
+    if is_file_encrypted(file) and not has_plaintext_secret_value(file):
+        if not check:
+            # Already fully encrypted — lift any stale skip-worktree protection
+            # so the encrypted diff is visible to git.
+            _git_unskip_worktree(file)
+        return False
+    if check:
+        # Dry run: this plaintext / mixed file would be encrypted by a real push.
+        return True
+    try:
+        dotenvx.encrypt(file)
+    except DotenvxError as e:
+        raise PartialEncryptionError.encrypt_failed(file, e) from e
+    # Re-enable git tracking now the file is encrypted again.
+    _git_unskip_worktree(file)
+    return True
 
 
 def pull_secrets_only(env_config: PartialEncryptionEnvironmentConfig) -> dict[str, int]:
