@@ -464,6 +464,69 @@ def test_has_encrypted_header_false_on_plaintext_with_sops_substring(
     assert backend.has_encrypted_header(content) is False
 
 
+def test_encrypt_twice_is_idempotent_clean_noop(tmp_path: Path, sops_workspace: Path) -> None:
+    """Regression for #413 (cluster G, HIGH): re-encrypting an already
+    SOPS-encrypted file is a clean no-op success, not an exit-1 failure.
+
+    Real sops refuses to encrypt a file that already carries a top-level ``sops``
+    metadata block and exits non-zero; without the short-circuit the backend
+    would raise ``EncryptionBackendError`` on the second run (a pre-commit hook
+    firing twice, a CI re-run, a documented re-run). Drives the real sops binary.
+    """
+    _require_sops()
+    backend = _make_backend(sops_workspace)
+    env_file = sops_workspace / ".env.idempotent"
+    env_file.write_text("DB_PASSWORD=hunter2\n")
+
+    first = backend.encrypt(env_file, age_recipients=AGE_PUBLIC_KEY, cwd=sops_workspace)
+    assert first.success is True
+    encrypted_snapshot = env_file.read_text()
+    assert "ENC[AES256_GCM," in encrypted_snapshot
+
+    # Second run on the already-encrypted file: clean success, file untouched.
+    second = backend.encrypt(env_file, age_recipients=AGE_PUBLIC_KEY, cwd=sops_workspace)
+    assert second.success is True, f"second encrypt failed: {second.message}"
+    assert "already encrypted" in second.message.lower()
+    assert second.file_path == env_file
+    # The on-disk ciphertext is byte-for-byte identical (no re-encrypt, no churn).
+    assert env_file.read_text() == encrypted_snapshot
+
+    # And it still round-trips: the no-op did not corrupt the ciphertext.
+    dec = backend.decrypt(env_file, cwd=sops_workspace)
+    assert dec.success is True
+    assert "DB_PASSWORD=hunter2" in env_file.read_text()
+
+
+def test_encrypt_explicit_missing_config_raises_clear_error(
+    tmp_path: Path, sops_workspace: Path
+) -> None:
+    """Regression for #413 (cluster G, MEDIUM): an explicit but missing
+    ``--config`` path raises a clear ``EncryptionBackendError`` rather than being
+    silently dropped (which would let sops fall back to an ambient .sops.yaml with
+    the wrong keys and exit 0). The plaintext file is left untouched.
+    """
+    _require_sops()
+    missing_config = sops_workspace / "nope" / "missing.sops.yaml"
+    assert not missing_config.exists()
+    backend = SOPSEncryptionBackend(
+        config_file=missing_config,
+        age_key_file=sops_workspace / "age.key",
+    )
+
+    env_file = sops_workspace / ".env.missing-config"
+    env_file.write_text("DB_PASSWORD=hunter2\n")
+
+    with pytest.raises(EncryptionBackendError) as exc:
+        backend.encrypt(env_file, age_recipients=AGE_PUBLIC_KEY, cwd=sops_workspace)
+
+    message = str(exc.value)
+    assert "SOPS config file not found" in message
+    assert str(missing_config) in message
+    # The plaintext file was never encrypted with the wrong (ambient) keys.
+    assert env_file.read_text() == "DB_PASSWORD=hunter2\n"
+    assert "ENC[AES256_GCM," not in env_file.read_text()
+
+
 def test_has_encrypted_header_true_on_genuinely_encrypted_dotenv(
     tmp_path: Path, sops_workspace: Path
 ) -> None:

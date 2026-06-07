@@ -180,7 +180,15 @@ class SOPSEncryptionBackend(EncryptionBackend):
         cmd = [str(binary)]
 
         # Add config file before positional args; SOPS treats late flags as extra paths.
-        if self._config_file and self._config_file.exists():
+        # An explicit config path that does not exist is a user error: silently
+        # dropping --config would let SOPS fall back to an ambient .sops.yaml (wrong
+        # keys, exit 0 — a data-integrity hazard) instead of surfacing the typo.
+        # self._config_file is only ever set from an explicit CLI --sops-config or
+        # TOML sops_config_file (never from auto-discovery), so a missing one is
+        # always an explicit-but-wrong path.
+        if self._config_file is not None:
+            if not self._config_file.exists():
+                raise EncryptionBackendError(f"SOPS config file not found: {self._config_file}")
             cmd.extend(["--config", str(self._config_file)])
 
         cmd.extend(args)
@@ -238,6 +246,26 @@ class SOPSEncryptionBackend(EncryptionBackend):
 
         if not self.is_installed():
             raise EncryptionNotFoundError(f"SOPS is not installed.\n{self.install_instructions()}")
+
+        # Idempotency: SOPS refuses to re-encrypt a file that already carries a
+        # top-level `sops` metadata block and exits non-zero, which would surface
+        # as an EncryptionBackendError -> exit 1 on any second run (a pre-commit
+        # hook firing twice, a CI re-run, a documented re-run). Mirror the dotenvx
+        # path and treat an already-encrypted in-place target as a clean no-op.
+        # Skipped only for in-place encryption (no output_file): an explicit
+        # output_file is a distinct target and must still be written.
+        in_place_target = not kwargs.get("output_file")
+        if in_place_target:
+            try:
+                existing = env_file.read_text()
+            except (OSError, UnicodeDecodeError):
+                existing = ""
+            if existing and self.has_encrypted_header(existing):
+                return EncryptionResult(
+                    success=True,
+                    message=f"{env_file} is already encrypted (no change)",
+                    file_path=env_file,
+                )
 
         # Build SOPS arguments
         args = ["--encrypt"]
