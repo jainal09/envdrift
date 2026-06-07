@@ -33,7 +33,7 @@ class TestNestedPydanticModel:
     def test_validate_nested_pydantic_model(
         self,
         tmp_path: Path,
-        integration_pythonpath: str,
+        integration_env: dict[str, str],
     ) -> None:
         """Test validation of nested BaseSettings with sub-models.
 
@@ -73,7 +73,7 @@ class TestNestedPydanticModel:
         """)
         )
 
-        env = {"PYTHONPATH": integration_pythonpath}
+        env = integration_env
 
         # Run validate command
         result = subprocess.run(
@@ -108,7 +108,7 @@ class TestCustomValidators:
     def test_validate_custom_validators(
         self,
         tmp_path: Path,
-        integration_pythonpath: str,
+        integration_env: dict[str, str],
     ) -> None:
         """Test validation with custom field validators.
 
@@ -146,7 +146,7 @@ class TestCustomValidators:
         env_file = tmp_path / ".env"
         env_file.write_text("EMAIL=test@example.com\nPORT=8080\n")
 
-        env = {"PYTHONPATH": integration_pythonpath}
+        env = integration_env
 
         result = subprocess.run(
             [
@@ -177,7 +177,7 @@ class TestOptionalVsRequired:
     def test_validate_optional_vs_required(
         self,
         tmp_path: Path,
-        integration_pythonpath: str,
+        integration_env: dict[str, str],
     ) -> None:
         """Test that optional fields with defaults don't fail validation,
         but required fields without values do.
@@ -200,7 +200,7 @@ class TestOptionalVsRequired:
         env_file = tmp_path / ".env"
         env_file.write_text("REQUIRED_FIELD=present\n")
 
-        env = {"PYTHONPATH": integration_pythonpath}
+        env = integration_env
 
         result = subprocess.run(
             [
@@ -229,7 +229,7 @@ class TestOptionalVsRequired:
     def test_validate_missing_required_field(
         self,
         tmp_path: Path,
-        integration_pythonpath: str,
+        integration_env: dict[str, str],
     ) -> None:
         """Test that missing required fields are reported."""
         settings_module = tmp_path / "settings.py"
@@ -248,7 +248,7 @@ class TestOptionalVsRequired:
         env_file = tmp_path / ".env"
         env_file.write_text("API_KEY=secret123\n")
 
-        env = {"PYTHONPATH": integration_pythonpath}
+        env = integration_env
 
         result = subprocess.run(
             [
@@ -282,7 +282,7 @@ class TestExtraForbid:
     def test_validate_extra_forbid(
         self,
         tmp_path: Path,
-        integration_pythonpath: str,
+        integration_env: dict[str, str],
     ) -> None:
         """Test that extra variables are rejected when strict_extra is enabled."""
         settings_module = tmp_path / "settings.py"
@@ -309,7 +309,7 @@ class TestExtraForbid:
         """)
         )
 
-        env = {"PYTHONPATH": integration_pythonpath}
+        env = integration_env
 
         result = subprocess.run(
             [
@@ -345,7 +345,7 @@ class TestSensitivePatterns:
     def test_validate_sensitive_patterns(
         self,
         tmp_path: Path,
-        integration_pythonpath: str,
+        integration_env: dict[str, str],
     ) -> None:
         """Test that sensitive patterns are detected."""
         settings_module = tmp_path / "settings.py"
@@ -373,7 +373,7 @@ class TestSensitivePatterns:
         """)
         )
 
-        env = {"PYTHONPATH": integration_pythonpath}
+        env = integration_env
 
         # Run with encryption check enabled
         result = subprocess.run(
@@ -412,7 +412,7 @@ class TestTypeCoercion:
     def test_validate_type_coercion_bool(
         self,
         tmp_path: Path,
-        integration_pythonpath: str,
+        integration_env: dict[str, str],
     ) -> None:
         """Test that string 'true'/'false' values coerce to bool.
 
@@ -435,7 +435,7 @@ class TestTypeCoercion:
         env_file = tmp_path / ".env"
         env_file.write_text("DEBUG_MODE=true\nVERBOSE_MODE=False\n")
 
-        env = {"PYTHONPATH": integration_pythonpath}
+        env = integration_env
 
         result = subprocess.run(
             [
@@ -462,7 +462,7 @@ class TestTypeCoercion:
     def test_validate_type_coercion_int(
         self,
         tmp_path: Path,
-        integration_pythonpath: str,
+        integration_env: dict[str, str],
     ) -> None:
         """Test that string numbers coerce to int."""
         settings_module = tmp_path / "settings.py"
@@ -480,7 +480,7 @@ class TestTypeCoercion:
         env_file = tmp_path / ".env"
         env_file.write_text("PORT=8080\nMAX_CONNECTIONS=100\n")
 
-        env = {"PYTHONPATH": integration_pythonpath}
+        env = integration_env
 
         result = subprocess.run(
             [
@@ -507,7 +507,7 @@ class TestTypeCoercion:
     def test_validate_type_error_invalid_int(
         self,
         tmp_path: Path,
-        integration_pythonpath: str,
+        integration_env: dict[str, str],
     ) -> None:
         """Test that invalid int values are caught."""
         settings_module = tmp_path / "settings.py"
@@ -524,7 +524,7 @@ class TestTypeCoercion:
         env_file = tmp_path / ".env"
         env_file.write_text("PORT=not_a_number\n")
 
-        env = {"PYTHONPATH": integration_pythonpath}
+        env = integration_env
 
         result = subprocess.run(
             [
@@ -561,13 +561,13 @@ class TestValidateCommand:
     def test_validate_missing_schema_arg(
         self,
         tmp_path: Path,
-        integration_pythonpath: str,
+        integration_env: dict[str, str],
     ) -> None:
         """Test that validate fails gracefully without --schema."""
         env_file = tmp_path / ".env"
         env_file.write_text("API_KEY=secret\n")
 
-        env = {"PYTHONPATH": integration_pythonpath}
+        env = integration_env
 
         result = subprocess.run(
             [sys.executable, "-m", "envdrift.cli", "validate", str(env_file)],
@@ -585,7 +585,7 @@ class TestValidateCommand:
     def test_validate_fix_template(
         self,
         tmp_path: Path,
-        integration_pythonpath: str,
+        integration_env: dict[str, str],
     ) -> None:
         """Test that --fix generates a template for missing variables."""
         settings_module = tmp_path / "settings.py"
@@ -605,7 +605,7 @@ class TestValidateCommand:
         env_file = tmp_path / ".env"
         env_file.write_text("API_KEY=secret123\n")
 
-        env = {"PYTHONPATH": integration_pythonpath}
+        env = integration_env
 
         result = subprocess.run(
             [
@@ -638,7 +638,7 @@ class TestValidateCommand:
     def test_validate_ci_mode_exit_code(
         self,
         tmp_path: Path,
-        integration_pythonpath: str,
+        integration_env: dict[str, str],
     ) -> None:
         """Test that --ci returns non-zero exit on failure."""
         settings_module = tmp_path / "settings.py"
@@ -656,7 +656,7 @@ class TestValidateCommand:
         env_file = tmp_path / ".env"
         env_file.write_text("")
 
-        env = {"PYTHONPATH": integration_pythonpath}
+        env = integration_env
 
         result = subprocess.run(
             [
@@ -684,7 +684,7 @@ class TestValidateCommand:
     def test_validate_nonexistent_env_file(
         self,
         tmp_path: Path,
-        integration_pythonpath: str,
+        integration_env: dict[str, str],
     ) -> None:
         """Test graceful handling of missing env file."""
         settings_module = tmp_path / "settings.py"
@@ -697,7 +697,7 @@ class TestValidateCommand:
         """)
         )
 
-        env = {"PYTHONPATH": integration_pythonpath}
+        env = integration_env
 
         result = subprocess.run(
             [
@@ -729,13 +729,13 @@ class TestValidateCommand:
     def test_validate_invalid_schema_path(
         self,
         tmp_path: Path,
-        integration_pythonpath: str,
+        integration_env: dict[str, str],
     ) -> None:
         """Test graceful handling of invalid schema path."""
         env_file = tmp_path / ".env"
         env_file.write_text("API_KEY=secret\n")
 
-        env = {"PYTHONPATH": integration_pythonpath}
+        env = integration_env
 
         result = subprocess.run(
             [
@@ -781,7 +781,7 @@ class TestValidateCommand:
 def _run_validate(
     *,
     tmp_path: Path,
-    integration_pythonpath: str,
+    integration_env: dict[str, str],
     settings_src: str,
     env_text: str,
     extra_args: list[str] | None = None,
@@ -792,6 +792,9 @@ def _run_validate(
     Writes ``settings.py`` and ``.env`` into ``tmp_path`` and invokes the CLI
     against them. ``COLUMNS`` is pinned wide so Rich does not wrap section
     headers / value lines, keeping output assertions stable in a non-TTY pipe.
+    The child env is built from the shared ``integration_env`` fixture (which
+    carries PATH/HOME — see #331); we copy it before adding ``COLUMNS`` so the
+    fixture value is not mutated.
     """
     settings_module = tmp_path / "settings.py"
     settings_module.write_text(textwrap.dedent(settings_src))
@@ -799,8 +802,7 @@ def _run_validate(
     env_file = tmp_path / ".env"
     env_file.write_text(textwrap.dedent(env_text))
 
-    env = os.environ.copy()
-    env["PYTHONPATH"] = integration_pythonpath
+    env = dict(integration_env)
     env["COLUMNS"] = "200"
 
     cmd = [
@@ -826,13 +828,52 @@ def _run_validate(
     )
 
 
+def test_subprocess_env_carries_path_and_home(
+    integration_env: dict[str, str],
+    integration_pythonpath: str,
+) -> None:
+    """Regression for #331: the shared child env must keep PATH and HOME.
+
+    Every integration call site builds its subprocess env from the shared
+    ``integration_env`` fixture. A bare ``{"PYTHONPATH": ...}`` dict (the #331
+    bug) strips PATH/HOME, so the child cannot resolve ``uv``/``dotenvx``/
+    ``sops`` (PATH) or auto-install binaries under ``$HOME``. This guards the
+    fixture's contract directly: revert ``integration_env`` to a bare dict and
+    this test fails. Because all ~22 call sites build from this fixture, no site
+    can reintroduce the bug without bypassing the fixture entirely.
+    """
+    # 1. Contract at the fixture: PATH/HOME are inherited from the parent env
+    #    and PYTHONPATH points at the repo's src dir.
+    assert "PATH" in integration_env, "integration_env must inherit PATH (#331)"
+    assert "HOME" in integration_env, "integration_env must inherit HOME (#331)"
+    assert integration_env["PATH"] == os.environ["PATH"]
+    assert integration_env["HOME"] == os.environ["HOME"]
+    assert integration_env["PYTHONPATH"] == integration_pythonpath
+
+    # 2. Real child subprocess launched with the fixture env confirms PATH/HOME
+    #    actually reach the child process.
+    out = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            "import os;print(os.environ.get('PATH') is not None, os.environ.get('HOME') is not None)",
+        ],
+        env=integration_env,
+        capture_output=True,
+        text=True,
+    )
+    assert out.stdout.strip() == "True True", (
+        f"PATH/HOME must survive into the child env. stdout: {out.stdout!r} stderr: {out.stderr!r}"
+    )
+
+
 class TestValidateRealEdgeCases:
     """High-value real e2e edge cases for the validate command."""
 
     def test_validate_extra_ignore_emits_warning_not_error(
         self,
         tmp_path: Path,
-        integration_pythonpath: str,
+        integration_env: dict[str, str],
     ) -> None:
         """HP-06: extra='ignore' downgrades an unknown var to a warning.
 
@@ -842,7 +883,7 @@ class TestValidateRealEdgeCases:
         """
         result = _run_validate(
             tmp_path=tmp_path,
-            integration_pythonpath=integration_pythonpath,
+            integration_env=integration_env,
             settings_src='''
                 from pydantic_settings import BaseSettings
 
@@ -875,7 +916,7 @@ class TestValidateRealEdgeCases:
     def test_validate_extra_forbid_reports_error_matching_case(
         self,
         tmp_path: Path,
-        integration_pythonpath: str,
+        integration_env: dict[str, str],
     ) -> None:
         """BP-04: extra='forbid' with a case-matching extra var is an ERROR.
 
@@ -884,7 +925,7 @@ class TestValidateRealEdgeCases:
         """
         result = _run_validate(
             tmp_path=tmp_path,
-            integration_pythonpath=integration_pythonpath,
+            integration_env=integration_env,
             settings_src='''
                 from pydantic_settings import BaseSettings
 
@@ -912,12 +953,12 @@ class TestValidateRealEdgeCases:
     def test_validate_type_errors_for_float_and_bool(
         self,
         tmp_path: Path,
-        integration_pythonpath: str,
+        integration_env: dict[str, str],
     ) -> None:
         """BP-03: invalid float and non-canonical bool produce TYPE ERRORS."""
         result = _run_validate(
             tmp_path=tmp_path,
-            integration_pythonpath=integration_pythonpath,
+            integration_env=integration_env,
             settings_src='''
                 from pydantic_settings import BaseSettings
 
@@ -946,7 +987,7 @@ class TestValidateRealEdgeCases:
     def test_validate_fix_template_encrypted_placeholder_for_sensitive_required(
         self,
         tmp_path: Path,
-        integration_pythonpath: str,
+        integration_env: dict[str, str],
     ) -> None:
         """HP-12: --fix uses an encrypted placeholder for sensitive required fields.
 
@@ -956,7 +997,7 @@ class TestValidateRealEdgeCases:
         """
         result = _run_validate(
             tmp_path=tmp_path,
-            integration_pythonpath=integration_pythonpath,
+            integration_env=integration_env,
             settings_src='''
                 from pydantic_settings import BaseSettings
                 from pydantic import Field
@@ -988,12 +1029,12 @@ class TestValidateRealEdgeCases:
     def test_validate_fix_is_noop_when_validation_passes(
         self,
         tmp_path: Path,
-        integration_pythonpath: str,
+        integration_env: dict[str, str],
     ) -> None:
         """EC-22: --fix is a no-op when validation passes."""
         result = _run_validate(
             tmp_path=tmp_path,
-            integration_pythonpath=integration_pythonpath,
+            integration_env=integration_env,
             settings_src='''
                 from pydantic_settings import BaseSettings
 
@@ -1022,12 +1063,12 @@ class TestValidateRealEdgeCases:
     def test_validate_encrypted_value_skips_type_check(
         self,
         tmp_path: Path,
-        integration_pythonpath: str,
+        integration_env: dict[str, str],
     ) -> None:
         """EC-09: an encrypted value for an int field produces no type error."""
         result = _run_validate(
             tmp_path=tmp_path,
-            integration_pythonpath=integration_pythonpath,
+            integration_env=integration_env,
             settings_src='''
                 from pydantic_settings import BaseSettings
 
@@ -1056,7 +1097,7 @@ class TestValidateRealEdgeCases:
     def test_validate_suspicious_token_warns_even_when_not_in_schema(
         self,
         tmp_path: Path,
-        integration_pythonpath: str,
+        integration_env: dict[str, str],
     ) -> None:
         """EC-21: a GitHub-token-shaped value not in schema warns under --check-encryption.
 
@@ -1066,7 +1107,7 @@ class TestValidateRealEdgeCases:
         """
         result = _run_validate(
             tmp_path=tmp_path,
-            integration_pythonpath=integration_pythonpath,
+            integration_env=integration_env,
             settings_src='''
                 from pydantic_settings import BaseSettings
 
@@ -1096,12 +1137,12 @@ class TestValidateRealEdgeCases:
     def test_validate_rejects_malformed_dotted_path(
         self,
         tmp_path: Path,
-        integration_pythonpath: str,
+        integration_env: dict[str, str],
     ) -> None:
         """BP-05: a schema path missing the ':' separator is rejected, exit 1."""
         result = _run_validate(
             tmp_path=tmp_path,
-            integration_pythonpath=integration_pythonpath,
+            integration_env=integration_env,
             settings_src="""
                 from pydantic_settings import BaseSettings
 
@@ -1128,12 +1169,12 @@ class TestValidateRealEdgeCases:
     def test_validate_rejects_non_basesettings_class(
         self,
         tmp_path: Path,
-        integration_pythonpath: str,
+        integration_env: dict[str, str],
     ) -> None:
         """BP-07: --schema pointing at a non-BaseSettings class exits 1 cleanly."""
         result = _run_validate(
             tmp_path=tmp_path,
-            integration_pythonpath=integration_pythonpath,
+            integration_env=integration_env,
             settings_src='''
                 class Plain:
                     """Not a Pydantic BaseSettings subclass."""
@@ -1156,12 +1197,12 @@ class TestValidateRealEdgeCases:
     def test_validate_empty_value_parsed_as_empty_skips_type_check(
         self,
         tmp_path: Path,
-        integration_pythonpath: str,
+        integration_env: dict[str, str],
     ) -> None:
         """EC-01: an empty value (KEY=) is EMPTY status, so an int field passes."""
         result = _run_validate(
             tmp_path=tmp_path,
-            integration_pythonpath=integration_pythonpath,
+            integration_env=integration_env,
             settings_src='''
                 from pydantic_settings import BaseSettings
 

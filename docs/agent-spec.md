@@ -122,7 +122,7 @@ notify = true
 ```
 
 `[guardian].enabled = true` does **not** auto-register the project. Registration
-is explicit: run `envdrift agent register` (or `envdrift init --watch`) to add
+is explicit: run `envdrift agent register` to add
 the project path to `~/.envdrift/projects.json`. Only then does the daemon load
 the project and apply the `[guardian]` settings — `enabled = false` causes the
 daemon to skip an already-registered project.
@@ -177,7 +177,7 @@ Machine (your laptop)
 
 ### How It Works
 
-1. **User runs** `envdrift agent register` (or `envdrift init --watch`) explicitly — setting `[guardian].enabled = true` alone is not enough
+1. **User runs** `envdrift agent register` explicitly — setting `[guardian].enabled = true` alone is not enough
 2. **CLI adds** the project path to `~/.envdrift/projects.json`
 3. **Agent watches** `projects.json` for changes (via fsnotify)
 4. **Agent reads** each project's `envdrift.toml` for patterns/excludes

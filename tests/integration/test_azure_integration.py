@@ -638,7 +638,12 @@ class TestAzureVaultFactory:
         try:
             client.authenticate()
         except VaultError:
-            pass  # correct: the azure auth error was mapped into the VaultError hierarchy
+            # Correct: the azure auth error was mapped into the VaultError hierarchy.
+            # Regression #304: a failed authenticate() must also leave the client
+            # unauthenticated so ensure_authenticated() retries on the next call.
+            assert client.is_authenticated() is False
+            assert client._client is None
+            assert client._credential is None
         except (ServiceRequestError, ServiceResponseError):
             # Ambient Azure credentials (CI runners shouldn't have any) let auth
             # proceed to a network call against the unreachable test host. That is a
