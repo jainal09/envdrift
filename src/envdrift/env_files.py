@@ -69,6 +69,21 @@ def _match_env_files_for_environment(folder_path: Path, environment: str) -> lis
     return sorted(matches)
 
 
+def _resolve_lone_env_file(env_file: Path, default_environment: str) -> EnvFileDetection:
+    """Resolve a single ``.env.<suffix>`` file against the requested environment.
+
+    Only adopt the suffix's environment when it matches ``default_environment``.
+    A single ``.env.staging`` must NOT be claimed by a ``production`` lookup:
+    doing so would sync that file under the wrong ``DOTENV_PRIVATE_KEY_<ENV>``
+    (see #395). Mismatches report "not_found" so the caller SKIPS rather than
+    silently operating on a different environment.
+    """
+    environment = env_file.name[len(".env.") :]  # .env.soak -> soak
+    if environment == default_environment:
+        return EnvFileDetection(env_file, environment, "found")
+    return EnvFileDetection(None, None, "not_found")
+
+
 def detect_env_file(folder_path: Path, default_environment: str = "production") -> EnvFileDetection:
     """
     Auto-detect a canonical .env file in a folder.
@@ -107,17 +122,7 @@ def detect_env_file(folder_path: Path, default_environment: str = "production") 
     ]
 
     if len(env_files) == 1:
-        env_file = env_files[0]
-        # Extract environment from filename: .env.soak -> soak
-        environment = env_file.name[len(".env.") :]
-        # Only adopt the suffix's environment when it matches the requested one.
-        # A single ``.env.staging`` must NOT be claimed by a ``production`` lookup:
-        # doing so would sync that file under the wrong DOTENV_PRIVATE_KEY_<ENV>
-        # (see #395). Mismatches fall through to "not_found" so the caller SKIPS
-        # rather than silently operating on a different environment.
-        if environment == default_environment:
-            return EnvFileDetection(env_file, environment, "found")
-        return EnvFileDetection(None, None, "not_found")
+        return _resolve_lone_env_file(env_files[0], default_environment)
 
     if len(env_files) > 1:
         return EnvFileDetection(None, None, "multiple_found")

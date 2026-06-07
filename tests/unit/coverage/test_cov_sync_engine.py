@@ -81,17 +81,18 @@ class TestSyncAllSchemaValidation:
 
 
 class TestAutoDetectEnvFile:
-    """When .env.<env> is missing, a matching detected file is used (lines 93-95)."""
+    """A .env.<env> matching the mapping's environment drives the key name."""
 
     def test_uses_detected_env_file_for_key_name(
         self, mock_vault_client: MagicMock, tmp_path: Path
     ) -> None:
-        """A lone .env.<env> matching the mapping env drives the key name written."""
+        """A .env.<env> matching the mapping env drives the key name written."""
         mock_vault_client.get_secret.return_value = SecretValue(name="k", value="secret")
 
         service_dir = tmp_path / "service"
         service_dir.mkdir()
-        # No .env.staging via the exact path, but a single matching file exists.
+        # .env.staging matches the mapping's environment ("staging"), so it is
+        # resolved via the exact-match path and its suffix drives the key name.
         (service_dir / ".env.staging").write_text("DB_URL=encrypted:xyz\n")
 
         mapping = ServiceMapping(secret_name="k", folder_path=service_dir, environment="staging")
