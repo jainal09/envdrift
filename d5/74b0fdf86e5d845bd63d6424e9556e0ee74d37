@@ -1,0 +1,34 @@
+tests/unit/test_partial_encryption.py
+  s_dfc6cd6692ed8f::t_2d8337e5906a68 594-598,600
+  s_dfc6cd6692ed8f::t_9fdf31e3e4845d 191,231
+  s_dfc6cd6692ed8f::t_6eadc8b9bc02f3 132-190,192-230,232-241
+tests/integration/test_partial_encryption_e2e.py
+  s_dfc6cd6692ed8f::t_c6d3511209ee37 686-759
+src/envdrift/core/partial_encryption.py
+  s_dfc6cd6692ed8f::t_4cf491376af1a2 11,22-38
+  s_dfc6cd6692ed8f::t_3a0e21b48d0ad8 370-375,377,382-383
+  s_dfc6cd6692ed8f::t_dafaaf63ac26d1 276-280,282
+  s_dfc6cd6692ed8f::t_8fd5c0005ac7ff 525-530,533-534,539
+  s_dfc6cd6692ed8f::t_874ec518a2d2ac 376,531
+  s_dfc6cd6692ed8f::t_36a87cef229438 275,281
+  s_dfc6cd6692ed8f::t_45636da902e78a 257,259-260
+  s_dfc6cd6692ed8f::t_617808405a10d3 128-167
+docs/guides/partial-encryption.md
+  s_dfc6cd6692ed8f::t_0481769bab2d0d 342-345
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.3",
+  "base_commit_sha": "d574b0fdf86e5d845bd63d6424e9556e0ee74d37",
+  "prompts": {},
+  "sessions": {
+    "s_dfc6cd6692ed8f": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "fd23e738-3512-4420-9290-d985ad979bfd",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Jainal Gosaliya <jainal09gosalia@gmail.com>"
+    }
+  }
+}
