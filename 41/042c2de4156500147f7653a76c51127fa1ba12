@@ -1,0 +1,38 @@
+src/envdrift/scanner/base.py
+  s_dfc6cd6692ed8f::t_541495f59539d4 183-186,192,205-206
+src/envdrift/core/encryption.py
+  s_dfc6cd6692ed8f::t_3cef9443bc583c 17
+  s_dfc6cd6692ed8f::t_2e9914c3bd9c06 109-117
+tests/scanner/test_base.py
+  s_dfc6cd6692ed8f::t_8e2adeefa64f6f 239-250
+  s_dfc6cd6692ed8f::t_64881d834a08d4 303-320
+src/envdrift/scanner/native.py
+  s_dfc6cd6692ed8f::t_1cd25380002d44 74-75,78-102,108-112,120
+  s_dfc6cd6692ed8f::t_7ece9eeb6a9369 116-117,119
+docs/cli/guard.md
+  s_dfc6cd6692ed8f::t_44ff01fc9f7ed3 263-265
+  s_dfc6cd6692ed8f::t_02d4032d0120cc 374,376-382
+src/envdrift/encryption/__init__.py
+  s_dfc6cd6692ed8f::t_c323e9a89bdefc 64-83,100-102,104,107-108
+tests/scanner/test_native.py
+  s_dfc6cd6692ed8f::t_74c151a12ea8bb 1625-1671
+  s_dfc6cd6692ed8f::t_9abecc464bac2f 1597-1623
+src/envdrift/cli_commands/guard.py
+  s_dfc6cd6692ed8f::t_d6fc622e4ab6b6 628-634
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.3",
+  "base_commit_sha": "41042c2de4156500147f7653a76c51127fa1ba12",
+  "prompts": {},
+  "sessions": {
+    "s_dfc6cd6692ed8f": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "fd23e738-3512-4420-9290-d985ad979bfd",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Jainal Gosaliya <jainal09gosalia@gmail.com>"
+    }
+  }
+}
