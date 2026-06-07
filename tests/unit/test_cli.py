@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import importlib.util
+import keyword
 import shlex
 import tomllib
 from pathlib import Path
@@ -1079,6 +1081,104 @@ class TestInitCommand:
         assert "LEVEL: int" not in content
         # Happy path: an ASCII digit is still inferred as int.
         assert "PORT: int = 8080" in content
+
+    def test_init_keyword_var_name_produces_importable_module(self, tmp_path: Path) -> None:
+        """#413: a .env key that is a Python keyword yields an importable module.
+
+        Previously `class=...` / `import=...` produced raw `class: str` lines —
+        a SyntaxError module that init still wrote with exit 0 and `[OK]`. The
+        fix aliases such fields to a sanitized identifier so the module imports.
+        """
+        env_file = tmp_path / ".env"
+        env_file.write_text("class=foo\nimport=bar\nVALID=baz\n")
+        out = tmp_path / "settings.py"
+
+        result = runner.invoke(
+            app, ["init", str(env_file), "--output", str(out), "--class-name", "Cfg"]
+        )
+        assert result.exit_code == 0, result.output
+
+        content = out.read_text()
+        # The raw keyword name must NOT appear as a bare attribute annotation.
+        assert "\n    class: " not in content
+        assert "\n    import: " not in content
+        # The original name is preserved as a Pydantic alias.
+        assert "alias='class'" in content
+        assert "alias='import'" in content
+
+        # The generated module must be importable (no SyntaxError).
+        spec = importlib.util.spec_from_file_location("gen_kw_settings", out)
+        assert spec is not None and spec.loader is not None
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        assert hasattr(module, "Cfg")
+
+    def test_init_invalid_class_name_errors(self, tmp_path: Path) -> None:
+        """#413: a class name that is not a valid identifier fails nonzero.
+
+        `--class-name=123Bad` previously emitted `class 123Bad(...)` (a
+        SyntaxError module) with exit 0. The fix rejects it before writing.
+        """
+        env_file = tmp_path / ".env"
+        env_file.write_text("FOO=bar\n")
+        out = tmp_path / "settings.py"
+
+        result = runner.invoke(
+            app, ["init", str(env_file), "--output", str(out), "--class-name=123Bad"]
+        )
+        assert result.exit_code != 0
+        assert "invalid class name" in result.output.lower()
+        # No broken module is left behind.
+        assert not out.exists()
+
+    def test_init_keyword_class_name_errors(self, tmp_path: Path) -> None:
+        """#413: a class name that is a Python keyword fails nonzero."""
+        env_file = tmp_path / ".env"
+        env_file.write_text("FOO=bar\n")
+        out = tmp_path / "settings.py"
+
+        result = runner.invoke(
+            app, ["init", str(env_file), "--output", str(out), "--class-name=class"]
+        )
+        assert result.exit_code != 0
+        assert "invalid class name" in result.output.lower()
+        assert not out.exists()
+
+    def test_init_warns_on_non_identifier_keys(self, tmp_path: Path) -> None:
+        """#413: .env keys the parser cannot read are warned about, not dropped.
+
+        `2FA_ENABLED` (leading digit) and `MY-DASH-VAR` (dash) never enter the
+        parsed variable set, so init previously omitted them with no warning.
+        """
+        env_file = tmp_path / ".env"
+        env_file.write_text("2FA_ENABLED=true\nMY-DASH-VAR=x\nVALID=keep\n")
+        out = tmp_path / "settings.py"
+
+        result = runner.invoke(
+            app, ["init", str(env_file), "--output", str(out), "--class-name", "Cfg"]
+        )
+        assert result.exit_code == 0, result.output
+        # Both un-parseable keys are named in the warning output.
+        assert "2FA_ENABLED" in result.output
+        assert "MY-DASH-VAR" in result.output
+        # The parseable variable is still emitted.
+        assert "VALID" in out.read_text()
+
+    def test_sanitize_identifier_produces_valid_non_keyword_names(self) -> None:
+        """#413: the sanitizer always yields a valid, non-keyword identifier."""
+        from envdrift.cli_commands.init_cmd import _sanitize_identifier
+
+        # Keyword -> suffixed identifier.
+        assert _sanitize_identifier("class").isidentifier()
+        assert not keyword.iskeyword(_sanitize_identifier("class"))
+        # Leading digit / non-identifier chars -> prefixed/replaced.
+        assert _sanitize_identifier("2FA").isidentifier()
+        assert _sanitize_identifier("MY-DASH").isidentifier()
+        assert _sanitize_identifier("123").isidentifier()
+        # Soft keyword (`match`) is also avoided.
+        assert not keyword.issoftkeyword(_sanitize_identifier("match"))
+        # Empty-ish input still yields a usable identifier.
+        assert _sanitize_identifier("@").isidentifier()
 
 
 class TestHookCommand:

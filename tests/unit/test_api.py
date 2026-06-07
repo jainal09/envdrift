@@ -211,3 +211,37 @@ BOOL_FALSE=false
         assert "LEVEL: int" not in content
         # Happy path: a real ASCII digit is still inferred as int.
         assert "PORT: int = 8080" in content
+
+    def test_init_keyword_key_produces_importable_module(self, tmp_path: Path):
+        """#413: the public init() also emits an importable module for keywords.
+
+        `class=...` previously rendered a bare `class: str` line — a SyntaxError
+        module the API still wrote and returned. The fix aliases the field.
+        """
+        import importlib.util
+
+        env_file = tmp_path / ".env"
+        env_file.write_text("class=foo\nVALID=bar\n")
+        output = tmp_path / "settings.py"
+
+        init(env_file, output, detect_sensitive=False)
+        content = output.read_text()
+        assert "\n    class: " not in content
+        assert "alias='class'" in content
+
+        spec = importlib.util.spec_from_file_location("gen_api_kw", output)
+        assert spec is not None and spec.loader is not None
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        assert hasattr(module, "Settings")
+
+    def test_init_invalid_class_name_raises(self, tmp_path: Path):
+        """#413: the public init() rejects a non-identifier class name."""
+        env_file = tmp_path / ".env"
+        env_file.write_text("FOO=bar\n")
+        output = tmp_path / "settings.py"
+
+        with pytest.raises(ValueError, match="not a valid Python identifier"):
+            init(env_file, output, class_name="123Bad")
+        # No broken module written.
+        assert not output.exists()

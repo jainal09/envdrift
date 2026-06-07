@@ -125,6 +125,28 @@ envdrift init .env --output settings.py --class-name AppSettings
 | `123`, `8000`               | `int`         | Yes           |
 | `hello`, `postgres://...`   | `str`         | No (required) |
 
+## Variable Names and Identifiers
+
+The generated module is always valid, importable Python:
+
+- **Keyword names get an alias.** A key whose name is a valid identifier but a
+  Python keyword (e.g. `class`, `import`) is emitted under a sanitized attribute
+  name plus a Pydantic `alias` so the field still binds to the original variable:
+
+  ```python
+  class_: str = Field(alias="class")
+  ```
+
+- **Non-identifier keys are reported.** Keys the parser cannot read because they
+  are not identifier-style (a leading digit like `2FA_ENABLED`, or a dash like
+  `MY-DASH-VAR`) are skipped and listed in a `[WARN]` line, never silently
+  dropped.
+
+- **Invalid class names fail fast.** A `--class-name` that is not a valid Python
+  identifier (e.g. `123Bad`) or is a keyword (e.g. `class`) errors with a
+  non-zero exit code instead of writing a module that would raise `SyntaxError`
+  on import.
+
 ## Sensitive Detection
 
 Variables are marked sensitive if their **name** matches:

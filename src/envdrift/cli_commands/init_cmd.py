@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import keyword
+import re
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Annotated
 
@@ -9,7 +12,170 @@ import typer
 
 from envdrift.core.encryption import EncryptionDetector
 from envdrift.core.parser import EnvParser
-from envdrift.output.rich import console, print_error, print_success
+from envdrift.output.rich import console, print_error, print_success, print_warning
+
+# Matches the left-hand side of any `KEY=value` assignment in a raw .env file,
+# accepting keys the strict EnvParser.LINE_PATTERN rejects (leading digits,
+# dashes, etc.) so init can warn about variables it would otherwise drop.
+_RAW_ASSIGNMENT_PATTERN = re.compile(r"^\s*(?:export\s+)?([^\s=#]+)\s*=")
+
+
+@dataclass
+class SettingsGeneration:
+    """Result of rendering a Settings module from an .env file."""
+
+    source: str
+    sensitive_vars: set[str] = field(default_factory=set)
+    aliased_count: int = 0
+    # .env keys present in the raw text but rejected by the strict parser.
+    unparsed_keys: list[str] = field(default_factory=list)
+
+
+def _sanitize_identifier(name: str) -> str:
+    """Turn an arbitrary .env key into a valid, non-keyword Python identifier.
+
+    Non-identifier characters become ``_``; a leading digit (or empty result)
+    gets a ``field_`` prefix; a Python keyword/soft-keyword gets a ``_`` suffix.
+    The original name is preserved separately as a Pydantic alias so the schema
+    still round-trips against the real environment variable.
+    """
+    sanitized = re.sub(r"\W", "_", name)
+    if not sanitized or sanitized[0].isdigit():
+        sanitized = f"field_{sanitized}"
+    while keyword.iskeyword(sanitized) or keyword.issoftkeyword(sanitized):
+        sanitized = f"{sanitized}_"
+    return sanitized
+
+
+def _raw_assignment_keys(text: str) -> list[str]:
+    """Extract every assignment key from raw .env text (parser-independent)."""
+    keys: list[str] = []
+    for raw_line in text.splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#"):
+            continue
+        match = _RAW_ASSIGNMENT_PATTERN.match(line)
+        if match:
+            keys.append(match.group(1))
+    return keys
+
+
+def generate_settings_module(
+    env_file: Path,
+    class_name: str = "Settings",
+    detect_sensitive: bool = True,
+) -> SettingsGeneration:
+    """Render a Pydantic ``BaseSettings`` module from an .env file.
+
+    Shared by the ``init`` CLI command and the public ``envdrift.api.init`` so
+    both entry points generate the same safe, importable Python.
+
+    Guarantees the emitted module is importable:
+      * ``class_name`` is validated as a real (non-keyword) identifier.
+      * Each field whose .env key is not a valid identifier (or is a keyword) is
+        emitted with a sanitized attribute name plus a Pydantic ``alias`` so the
+        schema still binds to the original environment variable.
+
+    Raises:
+        ValueError: If ``class_name`` is not a valid Python identifier.
+    """
+    if not class_name.isidentifier() or keyword.iskeyword(class_name):
+        raise ValueError(f"Invalid class name: {class_name!r} is not a valid Python identifier")
+
+    parser = EnvParser()
+    env = parser.parse(env_file)
+
+    # The strict EnvParser only accepts identifier-style keys, so keys like
+    # `2FA_ENABLED` or `MY-DASH-VAR` never become variables. Record every
+    # assignment present in the raw text but missing from the parsed set so the
+    # caller can warn rather than silently drop it (validate would later flag it
+    # as a forbidden extra under extra="forbid").
+    raw_keys = _raw_assignment_keys(env_file.read_text(encoding="utf-8"))
+    unparsed_keys = [k for k in dict.fromkeys(raw_keys) if k not in env.variables]
+
+    detector = EncryptionDetector()
+    sensitive_vars: set[str] = set()
+    if detect_sensitive:
+        for var_name, env_var in env.variables.items():
+            if detector.is_name_sensitive(var_name) or detector.is_value_suspicious(env_var.value):
+                sensitive_vars.add(var_name)
+
+    lines = [
+        '"""Auto-generated Pydantic Settings class."""',
+        "",
+        "from pydantic import Field",
+        "from pydantic_settings import BaseSettings, SettingsConfigDict",
+        "",
+        "",
+        f"class {class_name}(BaseSettings):",
+        f'    """Settings generated from {env_file}."""',
+        "",
+        "    model_config = SettingsConfigDict(",
+        f'        env_file="{env_file}",',
+        '        extra="forbid",',
+        "    )",
+        "",
+    ]
+
+    aliased_count = 0
+    used_names: set[str] = set()
+    for var_name, env_var in sorted(env.variables.items()):
+        is_sensitive = var_name in sensitive_vars
+
+        # A var name that is not a valid identifier (or is a keyword) cannot be a
+        # Python attribute. Emit a sanitized field name plus a Pydantic alias so
+        # the module imports cleanly and still binds to the real env var.
+        field_name = var_name
+        alias = None
+        if not var_name.isidentifier() or keyword.iskeyword(var_name):
+            field_name = _sanitize_identifier(var_name)
+            alias = var_name
+        # Guard against two distinct keys collapsing to the same sanitized name.
+        while field_name in used_names:
+            field_name = f"{field_name}_"
+        used_names.add(field_name)
+        if alias is not None:
+            aliased_count += 1
+
+        # Try to infer type from value
+        value = env_var.value
+        if value.lower() in ("true", "false"):
+            type_hint = "bool"
+            default_val = value.lower() == "true"
+        elif value.isascii() and value.isdigit():
+            type_hint = "int"
+            default_val = int(value)
+        else:
+            type_hint = "str"
+            default_val = None  # Will be required
+
+        # Only reach for Field(...) when we actually need its metadata (an alias
+        # for a non-identifier name, or the sensitive marker). The common case
+        # stays the plain `KEY: type` / `KEY: type = default` form.
+        needs_field = alias is not None or is_sensitive
+        if needs_field:
+            field_args: list[str] = []
+            if alias is not None:
+                field_args.append(f"alias={alias!r}")
+            if default_val is not None:
+                field_args.append(f"default={default_val!r}")
+            if is_sensitive:
+                field_args.append('json_schema_extra={"sensitive": True}')
+            joined = ", ".join(field_args)
+            lines.append(f"    {field_name}: {type_hint} = Field({joined})")
+        elif default_val is not None:
+            lines.append(f"    {field_name}: {type_hint} = {default_val!r}")
+        else:
+            lines.append(f"    {field_name}: {type_hint}")
+
+    lines.append("")
+
+    return SettingsGeneration(
+        source="\n".join(lines),
+        sensitive_vars=sensitive_vars,
+        aliased_count=aliased_count,
+        unparsed_keys=unparsed_keys,
+    )
 
 
 def init(
@@ -50,69 +216,19 @@ def init(
         print_error(f"ENV file not found: {env_file}")
         raise typer.Exit(code=1)
 
-    # Parse env file
-    parser = EnvParser()
-    env = parser.parse(env_file)
+    # A class name that is not a valid identifier (or is a keyword) would produce
+    # a module that raises SyntaxError on import. Fail loudly instead of writing.
+    try:
+        result = generate_settings_module(env_file, class_name, detect_sensitive)
+    except ValueError as exc:
+        print_error(str(exc))
+        raise typer.Exit(code=1) from exc
 
-    # Detect sensitive variables if requested
-    detector = EncryptionDetector()
-    sensitive_vars = set()
-    if detect_sensitive:
-        for var_name, env_var in env.variables.items():
-            is_name_sens = detector.is_name_sensitive(var_name)
-            is_val_susp = detector.is_value_suspicious(env_var.value)
-            if is_name_sens or is_val_susp:
-                sensitive_vars.add(var_name)
-
-    # Generate settings class
-    lines = [
-        '"""Auto-generated Pydantic Settings class."""',
-        "",
-        "from pydantic import Field",
-        "from pydantic_settings import BaseSettings, SettingsConfigDict",
-        "",
-        "",
-        f"class {class_name}(BaseSettings):",
-        f'    """Settings generated from {env_file}."""',
-        "",
-        "    model_config = SettingsConfigDict(",
-        f'        env_file="{env_file}",',
-        '        extra="forbid",',
-        "    )",
-        "",
-    ]
-
-    for var_name, env_var in sorted(env.variables.items()):
-        is_sensitive = var_name in sensitive_vars
-
-        # Try to infer type from value
-        value = env_var.value
-        if value.lower() in ("true", "false"):
-            type_hint = "bool"
-            default_val = value.lower() == "true"
-        elif value.isascii() and value.isdigit():
-            type_hint = "int"
-            default_val = int(value)
-        else:
-            type_hint = "str"
-            default_val = None  # Will be required
-
-        # Build field
-        if is_sensitive:
-            extra = 'json_schema_extra={"sensitive": True}'
-            if default_val is not None:
-                lines.append(
-                    f"    {var_name}: {type_hint} = Field(default={default_val!r}, {extra})"
-                )
-            else:
-                lines.append(f"    {var_name}: {type_hint} = Field({extra})")
-        else:
-            if default_val is not None:
-                lines.append(f"    {var_name}: {type_hint} = {default_val!r}")
-            else:
-                lines.append(f"    {var_name}: {type_hint}")
-
-    lines.append("")
+    if result.unparsed_keys:
+        print_warning(
+            "Skipped .env variable(s) the parser cannot read "
+            f"(non-identifier keys): {', '.join(result.unparsed_keys)}"
+        )
 
     # Guard against clobbering an existing (possibly hand-edited) file
     if output.exists() and not force:
@@ -120,8 +236,14 @@ def init(
         raise typer.Exit(code=1)
 
     # Write output
-    output.write_text("\n".join(lines))
+    output.write_text(result.source)
     print_success(f"Generated {output}")
 
-    if sensitive_vars:
-        console.print(f"[dim]Detected {len(sensitive_vars)} sensitive variable(s)[/dim]")
+    if result.sensitive_vars:
+        console.print(f"[dim]Detected {len(result.sensitive_vars)} sensitive variable(s)[/dim]")
+
+    if result.aliased_count:
+        console.print(
+            f"[dim]Aliased {result.aliased_count} variable(s) whose name is not a "
+            "valid Python identifier[/dim]"
+        )
