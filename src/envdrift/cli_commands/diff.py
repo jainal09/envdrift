@@ -11,7 +11,7 @@ import typer
 from envdrift.core.diff import DiffEngine
 from envdrift.core.parser import EnvParser
 from envdrift.core.schema import SchemaLoader, SchemaLoadError
-from envdrift.output.rich import console, print_diff_result, print_error, print_warning
+from envdrift.output.rich import print_diff_result, print_error, print_warning
 
 
 def diff(
@@ -99,6 +99,8 @@ def diff(
 
     # Output
     if format_ == "json":
-        console.print_json(json.dumps(engine.to_dict(result), indent=2))
+        # Emit plain JSON via stdlib print so forced color / TTY (FORCE_COLOR)
+        # never injects ANSI into machine-readable output (#333).
+        print(json.dumps(engine.to_dict(result), indent=2))
     else:
         print_diff_result(result, show_unchanged=include_unchanged)

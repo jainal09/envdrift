@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import contextlib
 import logging
+import os
 import re
+import tempfile
 import tomllib
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -18,6 +20,19 @@ if TYPE_CHECKING:
     from envdrift.encryption.base import EncryptionBackend
 
 logger = logging.getLogger(__name__)
+
+
+def _resolve_relative(path_str: str, base_dir: Path | None) -> str:
+    """Resolve a possibly-relative path against ``base_dir`` (the config dir).
+
+    Absolute paths and ``~`` are returned expanded but otherwise unchanged. A
+    relative path is joined onto ``base_dir`` when known, so it resolves against
+    the envdrift config file's directory rather than the process cwd.
+    """
+    candidate = Path(path_str).expanduser()
+    if candidate.is_absolute() or base_dir is None:
+        return str(candidate)
+    return str((base_dir / candidate).resolve())
 
 
 def resolve_encryption_backend(
@@ -57,10 +72,19 @@ def resolve_encryption_backend(
             encryption_config.sops_auto_install if encryption_config else False
         )
         if encryption_config:
+            # Relative sops_config_file / age_key_file are meant to be relative to
+            # the envdrift config file's directory, not the process cwd. Resolve
+            # them here so running from another cwd still finds the intended
+            # .sops.yaml / age key (#348a). Absolute paths are passed through.
+            config_dir = config_path.parent if config_path else None
             if encryption_config.sops_config_file:
-                backend_config["config_file"] = encryption_config.sops_config_file
+                backend_config["config_file"] = _resolve_relative(
+                    encryption_config.sops_config_file, config_dir
+                )
             if encryption_config.sops_age_key_file:
-                backend_config["age_key_file"] = encryption_config.sops_age_key_file
+                backend_config["age_key_file"] = _resolve_relative(
+                    encryption_config.sops_age_key_file, config_dir
+                )
 
     backend = get_encryption_backend(provider, **backend_config)
     return backend, provider, encryption_config
@@ -154,11 +178,21 @@ def should_skip_reencryption(
     elif not backend.has_encrypted_header(git_content):
         return False, "git version is not encrypted"
 
-    # Decrypt the git version to compare
-    temp_path = env_file.with_name(f".{env_file.name}.envdrift-tmp")
+    # Decrypt the git version to compare. Use a unique temp file in the SAME
+    # directory as env_file so backend decrypt (which may rename a sibling) and
+    # the comparison keep their same-dir semantics, while never clobbering a real
+    # project file at a predictable path (#348b). mkstemp creates the file
+    # atomically and we only ever unlink the file we created.
+    fd, tmp_name = tempfile.mkstemp(
+        dir=str(env_file.parent),
+        prefix=f".{env_file.name}.",
+        suffix=".envdrift-tmp",
+    )
+    temp_path = Path(tmp_name)
     try:
         try:
-            temp_path.write_text(git_content)
+            with os.fdopen(fd, "w") as tmp_fh:
+                tmp_fh.write(git_content)
 
             # Try to decrypt the git version
             result = backend.decrypt(temp_path)
@@ -168,10 +202,9 @@ def should_skip_reencryption(
             # Read the decrypted content from git
             git_decrypted = temp_path.read_text()
         finally:
-            # Cleanup temp file
+            # Cleanup only the temp file we created.
             with contextlib.suppress(OSError):
-                if temp_path.exists():
-                    temp_path.unlink()
+                temp_path.unlink()
 
         # Read current file content
         current_content = env_file.read_text()

@@ -85,8 +85,10 @@ def test_resolve_encryption_backend_sops_config(tmp_path, monkeypatch):
 
     assert captured["provider"] == EncryptionProvider.SOPS
     assert captured["config"]["auto_install"] is True
-    assert captured["config"]["config_file"] == ".sops.yaml"
-    assert captured["config"]["age_key_file"] == ".agekey"
+    # #348a: relative sops paths are resolved against the config file's dir
+    # (tmp_path here), not passed through as raw cwd-relative strings.
+    assert captured["config"]["config_file"] == str(tmp_path / ".sops.yaml")
+    assert captured["config"]["age_key_file"] == str(tmp_path / ".agekey")
 
 
 def test_resolve_encryption_backend_warns_on_bad_config(tmp_path, caplog):

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import importlib
 import os
 import sys
@@ -102,12 +103,6 @@ class SchemaLoader:
             SchemaLoadError: If the path format is invalid, the module cannot be imported, the class is missing,
                              or the resolved object is not a subclass of `BaseSettings`.
         """
-        # Add service directory to path if provided
-        if service_dir:
-            service_dir = Path(service_dir).resolve()
-            if str(service_dir) not in sys.path:
-                sys.path.insert(0, str(service_dir))
-
         # Parse the dotted path
         if ":" not in dotted_path:
             raise SchemaLoadError(
@@ -115,17 +110,66 @@ class SchemaLoader:
             )
 
         module_path, class_name = dotted_path.rsplit(":", 1)
+        root_pkg = module_path.split(".", 1)[0]
+
+        # Put the service directory at the *front* of sys.path for this import so
+        # the right service wins when multiple services expose the same module
+        # name, and remove it again afterwards (#348c). Leaving stale service
+        # dirs on the path would let a later load resolve a repeated module name
+        # against an earlier service's directory.
+        inserted_path: str | None = None
+        if service_dir:
+            service_dir = Path(service_dir).resolve()
+            inserted_path = str(service_dir)
+            sys.path.insert(0, inserted_path)
+
+        # Isolate the import from the module cache so monorepos with repeated
+        # module names (e.g. two services each exposing `settings.py`) don't
+        # return a stale, previously-cached class (#348c). We evict the target
+        # module *and its whole root-package namespace* (a cached parent package
+        # pins the first service's directory via __path__), import fresh against
+        # the service dir we just prepended, then restore the prior cache.
+        #
+        # Evicting only the root namespace is not enough, though: a schema module
+        # often `import`s a same-named *top-level sibling* (e.g. each service dir
+        # ships its own `common.py` and the settings module does
+        # `from common import TAG`). The first-loaded `common` would stay cached
+        # and the second service would silently reuse it (#391). So we also
+        # snapshot the full sys.modules keyset before importing and evict *every*
+        # module the import transitively added afterwards.
+        saved_modules = {
+            name: mod
+            for name, mod in list(sys.modules.items())
+            if name == root_pkg or name.startswith(root_pkg + ".")
+        }
+        for name in saved_modules:
+            del sys.modules[name]
+        before = set(sys.modules)
 
         # Set environment variable to signal schema extraction mode
         # This allows user code to skip Settings instantiation during import
         os.environ[ENVDRIFT_SCHEMA_EXTRACTION] = "1"
         try:
+            importlib.invalidate_caches()
             module = importlib.import_module(module_path)
         except ImportError as e:
             raise SchemaLoadError(f"Cannot import module '{module_path}': {e}") from e
         finally:
             # Clean up the environment variable
             os.environ.pop(ENVDRIFT_SCHEMA_EXTRACTION, None)
+            # Remove the service dir we prepended (only the first match, in case
+            # it was already present for another reason).
+            if inserted_path is not None:
+                with contextlib.suppress(ValueError):
+                    sys.path.remove(inserted_path)
+            # Drop every module this import added — including transitively
+            # imported same-named siblings (`common`, etc.) outside the root
+            # namespace — then restore the modules we evicted so we leave
+            # sys.modules as we found it (the returned class keeps its own
+            # reference regardless).
+            for name in set(sys.modules) - before:
+                del sys.modules[name]
+            sys.modules.update(saved_modules)
 
         try:
             settings_cls = getattr(module, class_name)
