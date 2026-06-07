@@ -37,11 +37,16 @@ from rich.live import Live
 from rich.spinner import Spinner
 from rich.text import Text
 
-from envdrift.config import ConfigNotFoundError, load_config
+from envdrift.config import ConfigNotFoundError, EnvdriftConfig, load_config
 from envdrift.env_files import resolve_custom_env_file
 from envdrift.scanner.base import AggregatedScanResult, FindingSeverity
 from envdrift.scanner.engine import GuardConfig, ScanEngine
-from envdrift.scanner.output import format_json, format_rich, format_sarif
+from envdrift.scanner.output import (
+    format_json,
+    format_rich,
+    format_sarif,
+    format_sarif_error,
+)
 
 console = Console()
 
@@ -77,15 +82,37 @@ def _emit_empty_or_prose(json_output: bool, sarif: bool, prose: str) -> None:
         console.print(prose)
 
 
+def _load_guard_config(config_file: Path | None, json_output: bool, sarif: bool) -> EnvdriftConfig:
+    """Load envdrift config, converting load failures into a clean CLI exit.
+
+    ``load_config`` can raise ``ConfigNotFoundError`` (explicit --config that
+    doesn't exist), ``tomllib.TOMLDecodeError`` (malformed TOML), or
+    ``ValueError`` (eager config validation). All three are turned into a
+    structured error document (json/sarif) or error prose plus ``Exit(1)`` so a
+    Rich traceback never contaminates machine output (#413). Mirrors sync.py /
+    encryption_helpers.py.
+    """
+    try:
+        return load_config(config_file)
+    except (ConfigNotFoundError, tomllib.TOMLDecodeError, ValueError) as exc:
+        _emit_error(json_output, sarif, f"Could not load config: {exc}")
+        raise typer.Exit(code=1) from None
+
+
 def _emit_error(json_output: bool, sarif: bool, message: str) -> None:
     """Emit a structured error (json/sarif) or human-readable error prose.
 
-    In ``--json``/``--sarif`` mode a clean ``{"error": ...}`` object is written
-    to stdout so consumers parsing guard output never receive a Rich traceback
-    or a bare ``Error:`` sentence (#413). The literal ``message`` is emitted via
-    stdlib ``json``/``print`` so no ANSI escapes leak into machine output.
+    In ``--sarif`` mode a schema-valid SARIF run with ``executionSuccessful:
+    false`` is written so a Code Scanning consumer that always expects SARIF
+    still parses cleanly (mirrors the ``format_sarif`` success path). In
+    ``--json`` mode a clean ``{"error": ...}`` object is written instead. Either
+    way stdout never receives a Rich traceback or a bare ``Error:`` sentence
+    (#413), and the literal ``message`` is emitted via stdlib ``json``/``print``
+    so no ANSI escapes leak into machine output.
     """
-    if json_output or sarif:
+    if sarif:
+        print(format_sarif_error(message))
+    elif json_output:
         print(json.dumps({"error": message}, indent=2))
     else:
         console.print(f"[red]Error:[/red] {message}")
@@ -421,17 +448,10 @@ def guard(
                 _emit_error(json_output, sarif, f"Path not found: {path}")
                 raise typer.Exit(code=1)
 
-    # Load configuration from envdrift.toml (if available).
-    # load_config can raise ConfigNotFoundError (explicit --config that doesn't
-    # exist), tomllib.TOMLDecodeError (malformed TOML), or ValueError (eager
-    # config validation). Catch all three so the failure is a clean error /
-    # JSON error object instead of a Rich traceback that contaminates
-    # --json/--sarif stdout (#413). Mirrors sync.py / encryption_helpers.py.
-    try:
-        file_config = load_config(config_file)
-    except (ConfigNotFoundError, tomllib.TOMLDecodeError, ValueError) as exc:
-        _emit_error(json_output, sarif, f"Could not load config: {exc}")
-        raise typer.Exit(code=1) from None
+    # Load configuration from envdrift.toml (if available). A bad/missing
+    # explicit --config surfaces as a clean error (or JSON/SARIF error doc on
+    # machine output) instead of a Rich traceback (#413).
+    file_config = _load_guard_config(config_file, json_output, sarif)
     guard_cfg = file_config.guard
 
     # Determine fail_on severity (CLI overrides config)

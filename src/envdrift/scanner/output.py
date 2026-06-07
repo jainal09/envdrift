@@ -288,6 +288,52 @@ def format_sarif(result: AggregatedScanResult) -> str:
     return json.dumps(sarif, indent=2)
 
 
+def format_sarif_error(message: str) -> str:
+    """Format a tool/configuration error as a valid SARIF document.
+
+    Used by the error paths (missing/malformed config, path-not-found) so a
+    consumer that always parses ``guard --sarif`` stdout receives a
+    schema-valid SARIF run with ``executionSuccessful: false`` and an ``error``
+    notification, instead of a bare ``{"error": ...}`` object that would fail
+    SARIF validation (mirrors ``format_sarif`` on the success path).
+
+    Args:
+        message: Human-readable error message.
+
+    Returns:
+        SARIF JSON string describing the failed invocation.
+    """
+    sarif = {
+        "$schema": "https://json.schemastore.org/sarif-2.1.0.json",
+        "version": "2.1.0",
+        "runs": [
+            {
+                "tool": {
+                    "driver": {
+                        "name": "envdrift guard",
+                        "version": "0.1.0",
+                        "informationUri": "https://github.com/your-org/envdrift",
+                        "rules": [],
+                    }
+                },
+                "results": [],
+                "invocations": [
+                    {
+                        "executionSuccessful": False,
+                        "toolConfigurationNotifications": [
+                            {
+                                "level": "error",
+                                "message": {"text": message},
+                            }
+                        ],
+                    }
+                ],
+            }
+        ],
+    }
+    return json.dumps(sarif, indent=2)
+
+
 def _severity_to_sarif_level(severity: FindingSeverity) -> str:
     """Map FindingSeverity to SARIF level.
 

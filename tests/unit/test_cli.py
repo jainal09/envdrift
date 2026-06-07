@@ -363,6 +363,24 @@ class TestDiffCommand:
         # The warning is surfaced on stderr instead.
         assert "Could not load schema" in result.stderr
 
+    def test_diff_table_schema_warning_inline(self, tmp_path: Path):
+        """In table mode a schema-load failure stays an inline Rich warning (#413).
+
+        The stderr routing is json-only; table output keeps the human-readable
+        warning where a user expects it and still renders the diff (exit 0).
+        """
+        env1 = tmp_path / "env1"
+        env2 = tmp_path / "env2"
+        env1.write_text("FOO=bar")
+        env2.write_text("FOO=baz")
+
+        result = runner.invoke(
+            app,
+            ["diff", str(env1), str(env2), "--schema", "nonexistent.module:Settings"],
+        )
+        assert result.exit_code == 0
+        assert "Could not load schema" in result.output
+
 
 class TestEncryptCommand:
     """Tests for the encrypt CLI command."""

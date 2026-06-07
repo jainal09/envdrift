@@ -11,8 +11,27 @@ import typer
 
 from envdrift.core.diff import DiffEngine
 from envdrift.core.parser import EnvParser
-from envdrift.core.schema import SchemaLoader, SchemaLoadError
+from envdrift.core.schema import SchemaLoader, SchemaLoadError, SchemaMetadata
 from envdrift.output.rich import print_diff_result, print_error, print_warning
+
+
+def _load_schema_meta(schema: str, service_dir: Path | None, format_: str) -> SchemaMetadata | None:
+    """Load schema metadata for masking, surfacing a load failure as a warning.
+
+    In ``json`` mode the warning is routed to stderr so stdout stays pure JSON
+    and a documented ``--format json > drift.json`` capture still parses (#413).
+    Returns ``None`` when the schema can't be loaded.
+    """
+    loader = SchemaLoader()
+    try:
+        settings_cls = loader.load(schema, service_dir)
+        return loader.extract_metadata(settings_cls)
+    except SchemaLoadError as e:
+        if format_ == "json":
+            print(f"[WARN] Could not load schema: {e}", file=sys.stderr)
+        else:
+            print_warning(f"Could not load schema: {e}")
+        return None
 
 
 def diff(
@@ -78,19 +97,7 @@ def diff(
         raise typer.Exit(code=1)
 
     # Load schema if provided
-    schema_meta = None
-    if schema:
-        loader = SchemaLoader()
-        try:
-            settings_cls = loader.load(schema, service_dir)
-            schema_meta = loader.extract_metadata(settings_cls)
-        except SchemaLoadError as e:
-            # In json mode keep stdout pure JSON: route the warning to stderr so
-            # a documented `--format json > drift.json` capture still parses (#413).
-            if format_ == "json":
-                print(f"[WARN] Could not load schema: {e}", file=sys.stderr)
-            else:
-                print_warning(f"Could not load schema: {e}")
+    schema_meta = _load_schema_meta(schema, service_dir, format_) if schema else None
 
     # Parse env files
     parser = EnvParser()

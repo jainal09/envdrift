@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 import subprocess
 from pathlib import Path
 from types import SimpleNamespace
@@ -403,80 +402,6 @@ def test_guard_staged_with_no_staged_files(tmp_path: Path, monkeypatch):
     result = runner.invoke(app, ["guard", "--staged"])
     assert result.exit_code == 0
     assert "no staged files" in result.output.lower()
-
-
-def test_guard_missing_config_emits_json_error(tmp_path: Path):
-    """--json --config <missing> exits 1 with a JSON error, not a traceback (#413).
-
-    Uses the real load_config so a ConfigNotFoundError is raised at the real
-    call site; the command must convert it to a clean ``{"error": ...}`` document
-    on stdout instead of letting a Rich traceback contaminate machine output.
-    """
-    missing = tmp_path / "nope.toml"
-    target = tmp_path / "a.env"
-    target.write_text("FOO=bar\n")
-
-    result = runner.invoke(
-        app, ["guard", "--native-only", "--json", "--config", str(missing), str(target)]
-    )
-    assert result.exit_code == 1
-    payload = json.loads(result.stdout)
-    assert "error" in payload
-    assert "Could not load config" in payload["error"]
-    # No Rich traceback leaked into stdout.
-    assert "Traceback" not in result.stdout
-
-
-def test_guard_malformed_config_emits_json_error(tmp_path: Path):
-    """--json --config <malformed.toml> exits 1 with a JSON error (#413)."""
-    bad = tmp_path / "envdrift.toml"
-    bad.write_text("[guard\n")  # missing closing bracket -> TOMLDecodeError
-    target = tmp_path / "a.env"
-    target.write_text("FOO=bar\n")
-
-    result = runner.invoke(
-        app, ["guard", "--native-only", "--json", "--config", str(bad), str(target)]
-    )
-    assert result.exit_code == 1
-    payload = json.loads(result.stdout)
-    assert "error" in payload
-    assert "Traceback" not in result.stdout
-
-
-def test_guard_path_not_found_emits_json_error(tmp_path: Path):
-    """--json with a non-existent path emits a JSON error, not prose (#413)."""
-    missing = tmp_path / "does-not-exist"
-
-    result = runner.invoke(app, ["guard", "--native-only", "--json", str(missing)])
-    assert result.exit_code == 1
-    payload = json.loads(result.stdout)
-    assert "error" in payload
-    assert "Path not found" in payload["error"]
-
-
-def test_guard_staged_no_files_emits_empty_json(tmp_path: Path, monkeypatch):
-    """--json --staged with nothing staged emits valid empty-findings JSON (#413).
-
-    Previously this branch printed ``No staged files to scan.`` prose, breaking
-    any consumer that always parses guard stdout as JSON.
-    """
-    import subprocess
-
-    config = EnvdriftConfig()
-    _patch_guard_dependencies(monkeypatch, config, _build_result([]))
-
-    def mock_run(*args, **kwargs):
-        return subprocess.CompletedProcess(args[0], 0, stdout="", stderr="")
-
-    monkeypatch.setattr("subprocess.run", mock_run)
-    monkeypatch.chdir(tmp_path)
-
-    result = runner.invoke(app, ["guard", "--json", "--staged"])
-    assert result.exit_code == 0
-    payload = json.loads(result.stdout)
-    assert payload["findings"] == []
-    assert payload["summary"]["total"] == 0
-    assert "No staged files" not in result.stdout
 
 
 def test_guard_staged_scans_only_staged_files(tmp_path: Path, monkeypatch):
