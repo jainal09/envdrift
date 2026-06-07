@@ -1,0 +1,54 @@
+envdrift-agent/internal/watcher/watcher_test.go
+  s_dfc6cd6692ed8f::t_fb2354861b28cd 218-319
+docs/guides/agent-setup.md
+  s_dfc6cd6692ed8f::t_74533aa25c1db7 68
+envdrift-agent/internal/registry/registry.go
+  s_dfc6cd6692ed8f::t_f17838f97abf3c 77,79-83,129-134,136-147,161,174,184-199,201-210
+envdrift-agent/internal/daemon/daemon_test.go
+  s_dfc6cd6692ed8f::t_8580e7b175b045 60-93
+envdrift-agent/internal/watcher/watcher.go
+  s_dfc6cd6692ed8f::t_bd3e2b02faf26e 76
+  s_dfc6cd6692ed8f::t_f6c43272c0e26a 65-69,77
+  s_dfc6cd6692ed8f::t_fd5f79db98463a 70
+envdrift-agent/internal/daemon/daemon.go
+  s_dfc6cd6692ed8f::t_89cd23d6d50846 303-312
+  s_dfc6cd6692ed8f::t_2e03d8efbbe791 45-61
+  s_dfc6cd6692ed8f::t_b8062b987dd746 186-199
+  s_dfc6cd6692ed8f::t_df01ed1bb01da9 358-367
+envdrift-agent/internal/lockcheck/lockcheck_test.go
+  s_dfc6cd6692ed8f::t_a1a5c7b6089a9e 6
+  s_dfc6cd6692ed8f::t_70a2c8735a9f09 75-104
+envdrift-agent/internal/registry/registry_test.go
+  s_dfc6cd6692ed8f::t_364da532606d3c 105-143,188-198,201-202,205,207-215,217,220-221,223-228
+  s_dfc6cd6692ed8f::t_632f40c3582335 151,199-200,203-204,206,219
+  s_dfc6cd6692ed8f::t_fcab572a0a45a0 144-150,152-187,216,218,222
+  s_dfc6cd6692ed8f::t_10b6a774fc51bd 7,9
+envdrift-agent/internal/lockcheck/lockcheck.go
+  s_dfc6cd6692ed8f::t_8bc70bd17dc273 6,11,14-15
+  s_dfc6cd6692ed8f::t_f3ff794f1ac497 46-65
+  s_dfc6cd6692ed8f::t_1c8814d45c360e 7
+  s_dfc6cd6692ed8f::t_21af17a4d22de6 33-37
+envdrift-agent/internal/cmd/root.go
+  s_dfc6cd6692ed8f::t_0ccaf5441db444 201-202,204,206-211
+  s_dfc6cd6692ed8f::t_e62a700db1dce4 193,195-198
+envdrift-agent/internal/guardian/guardian.go
+  s_dfc6cd6692ed8f::t_53bcdccdba0be1 282-296
+envdrift-agent/internal/cmd/root_test.go
+  s_dfc6cd6692ed8f::t_6f16ae71920fb6 1-78
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.3",
+  "base_commit_sha": "4c1160e4233f83a9277ee0da1cb0e0f00e237e57",
+  "prompts": {},
+  "sessions": {
+    "s_dfc6cd6692ed8f": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "fd23e738-3512-4420-9290-d985ad979bfd",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Jainal Gosaliya <jainal09gosalia@gmail.com>"
+    }
+  }
+}
