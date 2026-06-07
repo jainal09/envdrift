@@ -78,13 +78,37 @@ class AzureKeyVaultClient(VaultClient):
                 vault_url=self.vault_url,
                 credential=self._credential,
             )
-            # Test authentication by actually consuming one item from the iterator
-            # The iterator is lazy and won't authenticate until iterated
+            # Test authentication by actually consuming one item from the iterator.
+            # The iterator is lazy and won't authenticate until iterated.
+            #
+            # A *list* probe is not a least-privilege check: an identity granted
+            # only Get/Set on secrets (no List) authenticates fine but is forbidden
+            # to enumerate secrets. Mirroring the AWS backend (which probes with STS
+            # get_caller_identity rather than list_secrets to avoid requiring extra
+            # permissions, see aws.py), we distinguish a genuine *authentication*
+            # failure from a mere *authorization* (List) denial: a 403/Forbidden on
+            # the list probe means the credential authenticated but lacks List, so we
+            # keep the client and let get_secret/set_secret proceed (#359).
             secrets_iter = self._client.list_properties_of_secrets()
             next(iter(secrets_iter), None)  # Consume one item to verify auth
         except ClientAuthenticationError as e:
+            # Genuine credential/authentication failure (e.g. bad credential / 401):
+            # discard the half-initialized client and credential so is_authenticated()
+            # reports False and ensure_authenticated() re-attempts authentication on
+            # the next operation.
+            self._client = None
+            self._credential = None
             raise AuthenticationError(f"Azure authentication failed: {e}") from e
         except HttpResponseError as e:
+            # 403/Forbidden = authenticated but not authorized to *list* secrets.
+            # This is exactly the least-privilege Get/Set identity case: the
+            # credential is valid, so keep self._client and let get_secret/set_secret
+            # surface any per-secret read denial later (#359). Any other HTTP error
+            # is a real Key Vault failure and is surfaced as a VaultError.
+            if getattr(e, "status_code", None) == 403:
+                return
+            self._client = None
+            self._credential = None
             raise VaultError(f"Azure Key Vault error: {e}") from e
 
     def is_authenticated(self) -> bool:

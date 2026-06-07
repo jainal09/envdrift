@@ -59,7 +59,8 @@ jobs:
           --health-start-period=10s
 
       vault:
-        image: hashicorp/vault:2.0
+        # Keep in sync with tests/docker-compose.test.yml (hashicorp/vault:1.18).
+        image: hashicorp/vault:1.18
         ports:
           - 8200:8200
         env:
@@ -82,7 +83,7 @@ jobs:
           --health-start-period=5s
 
       lowkey-vault:
-        image: nagyesta/lowkey-vault:7.2.18
+        image: nagyesta/lowkey-vault:7.2.26
         ports:
           - 8443:8443
         env:
@@ -104,7 +105,7 @@ jobs:
           python-version: ${{ matrix.python-version }}
 
       - name: Install uv
-        uses: astral-sh/setup-uv@v8.1.0
+        uses: astral-sh/setup-uv@v8.2.0
 
       - name: Install dependencies
         run: |
@@ -295,7 +296,7 @@ jobs:
           python-version: "3.14"
 
       - name: Install uv
-        uses: astral-sh/setup-uv@v8.1.0
+        uses: astral-sh/setup-uv@v8.2.0
 
       - name: Install dependencies
         run: |
@@ -307,13 +308,17 @@ jobs:
         env:
           GCP_KEY_CONTENT: ${{ secrets.GCP_SERVICE_ACCOUNT_KEY }}
         run: |
-          echo "$GCP_KEY_CONTENT" > gcp_key.json
-          export GOOGLE_APPLICATION_CREDENTIALS=$(pwd)/gcp_key.json
+          # Guarantee the plaintext SA key is shredded even if pytest (or the
+          # project-id parse) fails — `bash -e` would otherwise skip a trailing
+          # `rm` on non-zero exit, leaking the key onto the runner FS.
+          cleanup() { rm -f gcp_key.json; }
+          trap cleanup EXIT
+          printf '%s' "$GCP_KEY_CONTENT" > gcp_key.json
+          export GOOGLE_APPLICATION_CREDENTIALS="$(pwd)/gcp_key.json"
           # The real-backend GCP tests also gate on GOOGLE_CLOUD_PROJECT; derive it
           # from the service-account key so the round-trip suite actually runs here.
-          export GOOGLE_CLOUD_PROJECT=$(python -c "import json; print(json.load(open('gcp_key.json'))['project_id'])")
+          export GOOGLE_CLOUD_PROJECT="$(python -c "import json; print(json.load(open('gcp_key.json'))['project_id'])")"
           uv run pytest tests/integration/ -v -m gcp --timeout=120
-          rm gcp_key.json
 
       - name: Run Azure tests (if configured)
         if: env.ENVDRIFT_TEST_AZURE == '1'

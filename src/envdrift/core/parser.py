@@ -140,8 +140,11 @@ class EnvParser:
     # Combined pattern for backward compatibility
     ENCRYPTED_PATTERN = re.compile(r"^(encrypted:|ENC\[AES256_GCM,)")
 
-    # Pattern to match KEY=value lines
-    LINE_PATTERN = re.compile(r"^([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)$")
+    # Pattern to match KEY=value lines (optionally prefixed with `export `)
+    # Note: no `\s*` after `=` — leading value whitespace is captured in group(2)
+    # so _strip_inline_comment can distinguish `K= # c` (comment) from `K=#v`
+    # (a value beginning with `#`). Leading/trailing whitespace is stripped after.
+    LINE_PATTERN = re.compile(r"^(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=(.*)$")
 
     def parse(self, path: Path | str) -> EnvFile:
         """
@@ -199,7 +202,11 @@ class EnvParser:
                 continue
 
             key = match.group(1)
-            value = match.group(2).strip()
+            # Strip an inline comment from the RAW value first — the whitespace
+            # context distinguishes `K= # c` (comment) from `K=#FF0000` (a value
+            # that begins with `#`) — then strip surrounding whitespace + quotes.
+            value = self._strip_inline_comment(match.group(2))
+            value = value.strip()
 
             # Remove surrounding quotes
             value = self._unquote(value)
@@ -219,6 +226,40 @@ class EnvParser:
             env_file.variables[key] = env_var
 
         return env_file
+
+    def _strip_inline_comment(self, value: str) -> str:
+        """Strip an unquoted trailing ` #...` comment from a (raw) value.
+
+        A `#` starts a comment only when it is outside quotes AND preceded by
+        whitespace. A `#` at the very start of the value (e.g. `#FF0000`), inside
+        matching quotes, glued to a token (`http://x#frag`), or escaped (`\\#`,
+        and an escaped quote `\\"` that must not toggle quote state), is
+        preserved. Call this on the raw `value` (before stripping) so the
+        whitespace context is intact.
+        """
+        # Fast path: the overwhelming majority of values contain no `#`, so skip
+        # the per-character quote-tracking scan entirely for them.
+        if "#" not in value:
+            return value
+
+        in_single = False
+        in_double = False
+        i = 0
+        n = len(value)
+        while i < n:
+            ch = value[i]
+            if ch == "\\" and i + 1 < n:
+                # An escaped char can't open/close a quote or start a comment.
+                i += 2
+                continue
+            if ch == "'" and not in_double:
+                in_single = not in_single
+            elif ch == '"' and not in_single:
+                in_double = not in_double
+            elif ch == "#" and not in_single and not in_double and i > 0 and value[i - 1].isspace():
+                return value[:i].rstrip()
+            i += 1
+        return value
 
     def _unquote(self, value: str) -> str:
         """
