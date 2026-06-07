@@ -690,6 +690,87 @@ class TestDeduplication:
         assert len(unique) == 1
         assert unique[0].secret_hash == "hash-123"
 
+    def test_deduplicate_distinct_secrets_same_line_both_kept(self):
+        """Two distinct secrets on the same line, same rule, are both kept (#348).
+
+        The default dedup key now includes the secret hash, so two genuinely
+        different secrets matching the same rule on the same line do not collapse
+        into a single finding. Without this, the ``finditer`` per-line fix in the
+        native scanner would be silently undone by the engine for real
+        ``envdrift guard`` / ``scan`` invocations.
+        """
+        config = GuardConfig(use_native=True, use_gitleaks=False)
+        engine = ScanEngine(config)
+
+        findings = [
+            ScanFinding(
+                file_path=Path("config.py"),
+                line_number=1,
+                column_number=7,
+                rule_id="aws-access-key-id",
+                rule_description="AWS Key",
+                description="AWS key",
+                severity=FindingSeverity.HIGH,
+                scanner="native",
+                secret_hash="hash-aaa",
+            ),
+            ScanFinding(
+                file_path=Path("config.py"),
+                line_number=1,
+                column_number=29,
+                rule_id="aws-access-key-id",
+                rule_description="AWS Key",
+                description="AWS key",
+                severity=FindingSeverity.HIGH,
+                scanner="native",
+                secret_hash="hash-bbb",
+            ),
+        ]
+
+        unique = engine._deduplicate(findings)
+
+        assert len(unique) == 2
+        assert {f.secret_hash for f in unique} == {"hash-aaa", "hash-bbb"}
+
+    def test_deduplicate_hashless_collapses_into_hashed_same_location(self):
+        """A hashless finding collapses into a co-located hashed one (same secret).
+
+        When one scanner extracts the secret value (hash present) and another
+        reports the same finding at the same location without one, the hashless
+        finding is the less precise duplicate and is dropped in favour of the
+        hashed finding -- it must not survive alongside it.
+        """
+        config = GuardConfig(use_native=True, use_gitleaks=False)
+        engine = ScanEngine(config)
+
+        findings = [
+            ScanFinding(
+                file_path=Path("config.py"),
+                line_number=5,
+                rule_id="secret",
+                rule_description="Secret",
+                description="Secret",
+                severity=FindingSeverity.HIGH,
+                scanner="scanner-no-hash",
+                secret_hash="",
+            ),
+            ScanFinding(
+                file_path=Path("config.py"),
+                line_number=5,
+                rule_id="secret",
+                rule_description="Secret",
+                description="Secret",
+                severity=FindingSeverity.HIGH,
+                scanner="scanner-with-hash",
+                secret_hash="hash-123",
+            ),
+        ]
+
+        unique = engine._deduplicate(findings)
+
+        assert len(unique) == 1
+        assert unique[0].secret_hash == "hash-123"
+
     def test_deduplicate_deterministic_tie_breaker(self):
         """Test deterministic tie-breaker for equal findings."""
         config = GuardConfig(use_native=True, use_gitleaks=False)

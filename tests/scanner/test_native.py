@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 
 from envdrift.scanner.base import FindingSeverity
+from envdrift.scanner.engine import GuardConfig, ScanEngine
 from envdrift.scanner.native import NativeScanner
 
 
@@ -784,9 +785,13 @@ AWS_KEY = "AKIAIOSFODNN7EXAMPLE"
     ):
         """Adjacent AWS keys split by a single delimiter both match (#348).
 
-        The aws pattern consumes a trailing boundary char ``(?:[^A-Z0-9]|$)``;
-        that delimiter doubles as the leading boundary of the next key, so
-        ``finditer`` still finds both even with no spare separator between them.
+        The aws pattern ends in a zero-width lookahead ``(?=[^A-Z0-9]|$)`` rather
+        than a consuming group. Because the lookahead does not consume the
+        trailing delimiter, that same delimiter remains available as the leading
+        boundary of the next key, so ``finditer`` still finds both even with no
+        spare separator between them. (A *consuming* trailing group would eat the
+        single delimiter, leaving the second key with no leading boundary -- the
+        bug this PR fixes.)
         """
         config_file = tmp_path / "config.py"
         config_file.write_text("KEYS=AKIAIOSFODNN7EXAMPLE,AKIAI44QH8DHBEXAMPLE\n")
@@ -833,6 +838,59 @@ AWS_KEY = "AKIAIOSFODNN7EXAMPLE"
         assert len(aws_findings) == 1, (
             f"a single-secret line must yield exactly one finding, got: "
             f"{[(f.rule_id, f.column_number) for f in aws_findings]}"
+        )
+
+    def test_two_aws_keys_one_line_survive_engine_dedup_default(self, tmp_path: Path):
+        """End-to-end: two distinct same-line keys survive default engine dedup (#348).
+
+        The ``finditer`` fix makes ``NativeScanner`` emit both keys, but the
+        user-facing path runs findings through ``ScanEngine._deduplicate``. With
+        the default config (``skip_duplicate=False``) the dedup key used to be
+        ``(file_path, line_number, rule_id)``, which collapsed two *distinct*
+        secrets on one line back into a single finding -- defeating the fix for
+        real ``envdrift guard`` / ``scan`` invocations. The dedup key now also
+        includes the secret's hash, so genuinely different secrets both survive.
+        This test drives the engine end-to-end (not just the scanner) to lock in
+        that behavior.
+        """
+        config_file = tmp_path / "config.py"
+        config_file.write_text("KEYS = AKIAIOSFODNN7EXAMPLE, AKIAI44QH8DHBEXAMPLE\n")
+
+        engine = ScanEngine(config=GuardConfig())
+        # Use only the native scanner so the assertion is deterministic and does
+        # not depend on optional external scanner binaries being installed.
+        engine.scanners = [NativeScanner()]
+        result = engine.scan([tmp_path])
+
+        aws_findings = [f for f in result.unique_findings if f.rule_id == "aws-access-key-id"]
+        assert len(aws_findings) == 2, (
+            f"both distinct same-line AWS keys must survive engine dedup, got: "
+            f"{[(f.rule_id, f.column_number) for f in result.unique_findings]}"
+        )
+        # Distinct columns and distinct secret hashes prove these are two
+        # different secrets, not one duplicated finding.
+        assert len({f.column_number for f in aws_findings}) == 2
+        assert len({f.secret_hash for f in aws_findings}) == 2
+
+    def test_same_secret_repeated_collapses_in_engine_dedup_default(self, tmp_path: Path):
+        """End-to-end: the *same* secret repeated still collapses under default dedup.
+
+        Counterpart to the multi-secret test: including the secret hash in the
+        default dedup key must not regress the case where one identical secret
+        appears more than once on a line -- those share a hash and must still
+        deduplicate to a single finding.
+        """
+        config_file = tmp_path / "config.py"
+        config_file.write_text("KEYS = AKIAIOSFODNN7EXAMPLE, AKIAIOSFODNN7EXAMPLE\n")
+
+        engine = ScanEngine(config=GuardConfig())
+        engine.scanners = [NativeScanner()]
+        result = engine.scan([tmp_path])
+
+        aws_findings = [f for f in result.unique_findings if f.rule_id == "aws-access-key-id"]
+        assert len(aws_findings) == 1, (
+            f"the same secret repeated on a line must dedup to one finding, got: "
+            f"{[(f.rule_id, f.column_number) for f in result.unique_findings]}"
         )
 
 

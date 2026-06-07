@@ -551,7 +551,13 @@ class ScanEngine:
     def _deduplicate(self, findings: list[ScanFinding]) -> list[ScanFinding]:
         """Remove duplicate findings, keeping the highest severity.
 
-        By default, duplicates are identified by file path, line number, and rule ID.
+        By default, duplicates are identified by file path, line number, rule ID,
+        and the secret's hash (when present). Including the hash means two
+        *distinct* secrets that match the same rule on the same line (e.g. two
+        AWS keys on one ``.env`` line, #348) are both reported, while the same
+        secret found at one location by several scanners still collapses to one
+        finding. Findings without a secret value (policy findings) fall back to
+        the location-only key so they continue to deduplicate by location.
         When skip_duplicate is enabled, duplicates are identified by secret value only,
         showing each unique secret only once regardless of where/how it was found.
 
@@ -588,8 +594,18 @@ class ScanEngine:
                 else:
                     key = (finding.file_path, finding.line_number, finding.rule_id)
             else:
-                # Default: deduplicate by file, line, and rule
-                key = (finding.file_path, finding.line_number, finding.rule_id)
+                # Default: deduplicate by file, line, rule, and the secret's
+                # hash. Two distinct secrets matching the same rule on the same
+                # line have different hashes, so both survive (#348); the same
+                # secret reported at one location by multiple scanners shares a
+                # hash and still collapses to one finding. Policy findings carry
+                # no secret_hash, so they keep the historical location-only key.
+                key = (
+                    finding.file_path,
+                    finding.line_number,
+                    finding.rule_id,
+                    finding.secret_hash or None,
+                )
 
             if key not in seen:
                 seen[key] = finding
@@ -611,9 +627,27 @@ class ScanEngine:
                             if _tie_key(finding) < _tie_key(existing):
                                 seen[key] = finding
 
+        survivors = list(seen.values())
+        if not self.config.skip_duplicate:
+            # A hashless finding (no extractable secret value) at the same
+            # (file, line, rule) as one or more hashed findings is the less
+            # precise duplicate of a hashed one -- drop it so we keep the hashed
+            # finding(s). This preserves "prefer the hashed finding" for the
+            # one-secret case without merging *distinct* hashed secrets that
+            # legitimately share a line (#348), since those each keep their own
+            # hashed key above.
+            hashed_locations = {
+                (f.file_path, f.line_number, f.rule_id) for f in survivors if f.secret_hash
+            }
+            survivors = [
+                f
+                for f in survivors
+                if f.secret_hash or (f.file_path, f.line_number, f.rule_id) not in hashed_locations
+            ]
+
         # Sort by severity (highest first), then by file path
         return sorted(
-            seen.values(),
+            survivors,
             key=lambda f: (f.severity, str(f.file_path), f.line_number or 0),
             reverse=True,
         )
