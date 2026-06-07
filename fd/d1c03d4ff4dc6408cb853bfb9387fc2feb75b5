@@ -1,0 +1,23 @@
+renovate.json
+  s_dfc6cd6692ed8f::t_524eaf2362fc7c 83-89
+.github/workflows/agent-ci.yml
+  s_dfc6cd6692ed8f::t_9112a28047c7a7 195-197,212-216
+.github/workflows/vscode-ci.yml
+  s_dfc6cd6692ed8f::t_02351107fae7b7 25-27
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.3",
+  "base_commit_sha": "fdd1c03d4ff4dc6408cb853bfb9387fc2feb75b5",
+  "prompts": {},
+  "sessions": {
+    "s_dfc6cd6692ed8f": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "fd23e738-3512-4420-9290-d985ad979bfd",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Jainal Gosaliya <jainal09gosalia@gmail.com>"
+    }
+  }
+}
