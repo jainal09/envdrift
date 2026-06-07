@@ -1,0 +1,31 @@
+tests/unit/test_git_utils.py
+  s_dfc6cd6692ed8f::t_e7a7deedbda317 6
+  s_dfc6cd6692ed8f::t_c435257a20d699 159-166,170,172-175,185-189,196
+  s_dfc6cd6692ed8f::t_b289604e5dc527 126-158,167-169,171,176-184,190-195,197
+src/envdrift/scanner/native.py
+  s_dfc6cd6692ed8f::t_d261ab4d41a212 16
+  s_dfc6cd6692ed8f::t_891cb024a3ec14 850-853
+  s_dfc6cd6692ed8f::t_fe8724fd9e3511 855,858-859,861,864
+tests/scanner/test_native.py
+  s_dfc6cd6692ed8f::t_04e50b0afc8cfa 1318-1353
+  s_dfc6cd6692ed8f::t_3b7d4e67829087 5
+src/envdrift/utils/git.py
+  s_dfc6cd6692ed8f::t_fe8724fd9e3511 92
+  s_dfc6cd6692ed8f::t_523ca8ba661dd9 88-90
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.3",
+  "base_commit_sha": "dc17556f25c74256c5014060c92edd79d0a837f9",
+  "prompts": {},
+  "sessions": {
+    "s_dfc6cd6692ed8f": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "fd23e738-3512-4420-9290-d985ad979bfd",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Jainal Gosaliya <jainal09gosalia@gmail.com>"
+    }
+  }
+}
