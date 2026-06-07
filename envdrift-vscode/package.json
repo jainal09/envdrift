@@ -24,9 +24,27 @@
     "security"
   ],
   "activationEvents": [
-    "onStartupFinished"
+    "workspaceContains:**/.env",
+    "workspaceContains:**/.env.*",
+    "workspaceContains:**/envdrift.toml",
+    "onCommand:envdrift.enable",
+    "onCommand:envdrift.disable",
+    "onCommand:envdrift.encryptNow",
+    "onCommand:envdrift.showStatus",
+    "onCommand:envdrift.startAgent",
+    "onCommand:envdrift.stopAgent",
+    "onCommand:envdrift.refreshAgentStatus"
   ],
   "main": "./out/extension.js",
+  "capabilities": {
+    "untrustedWorkspaces": {
+      "supported": "limited",
+      "description": "EnvDrift only shows status and agent UI in untrusted workspaces. Automatic and manual encryption (which runs the envdrift binary against workspace files) is disabled until you trust the workspace.",
+      "restrictedConfigurations": [
+        "envdrift.enabled"
+      ]
+    }
+  },
   "contributes": {
     "commands": [
       {

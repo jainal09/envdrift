@@ -249,7 +249,9 @@ class TestAWSSecretsManagerClient:
         assert secret.version == "v2"
 
     def test_set_secret_unauthorized_raises_auth_error(self, mock_boto3, patched_boto_clients):
-        """Unauthorized errors should raise AuthenticationError."""
+        """Regression #308: a create UnauthorizedException must surface as an
+        AuthenticationError, not be silently masked by falling back to
+        put_secret_value (mirrors the AccessDeniedException arm in aws.py:283)."""
 
         class FakeClientError(Exception):
             def __init__(self, code):
@@ -259,12 +261,52 @@ class TestAWSSecretsManagerClient:
 
         mock_sm_client, _ = patched_boto_clients
         mock_sm_client.create_secret.side_effect = FakeClientError("UnauthorizedException")
+        # put_secret_value would succeed, masking the create denial if invoked.
+        mock_sm_client.put_secret_value.return_value = {
+            "Name": "existing-secret",
+            "VersionId": "v2",
+            "ARN": "arn:aws:...",
+        }
 
         client = mock_boto3.AWSSecretsManagerClient()
         client.authenticate()
 
         with pytest.raises(AuthenticationError):
             client.set_secret("name", "value")
+
+        # The create-permission denial must not be reinterpreted as an update.
+        mock_sm_client.put_secret_value.assert_not_called()
+
+    def test_set_secret_create_access_denied_raises_auth_error(
+        self, mock_boto3, patched_boto_clients
+    ):
+        """Regression #308: a create AccessDeniedException must surface as an
+        AuthenticationError, not be silently masked by falling back to
+        put_secret_value."""
+
+        class FakeClientError(Exception):
+            def __init__(self, code):
+                self.response = {"Error": {"Code": code}}
+
+        mock_boto3._ClientError = FakeClientError
+
+        mock_sm_client, _ = patched_boto_clients
+        mock_sm_client.create_secret.side_effect = FakeClientError("AccessDeniedException")
+        # put_secret_value would succeed, masking the create denial if invoked.
+        mock_sm_client.put_secret_value.return_value = {
+            "Name": "existing-secret",
+            "VersionId": "v2",
+            "ARN": "arn:aws:...",
+        }
+
+        client = mock_boto3.AWSSecretsManagerClient()
+        client.authenticate()
+
+        with pytest.raises(AuthenticationError):
+            client.set_secret("existing-secret", "value")
+
+        # The create-permission denial must not be reinterpreted as an update.
+        mock_sm_client.put_secret_value.assert_not_called()
 
     def test_put_secret_value_requires_authentication(self, mock_boto3):
         """_put_secret_value should require authentication."""
@@ -341,6 +383,41 @@ class TestAWSSecretsManagerClient:
 
         secret = client.get_secret("json-secret")
         assert secret.value == json.dumps(json_data)
+
+    @pytest.mark.parametrize(
+        "stored",
+        [
+            "[1,2,3]",
+            '{"a":1,  "b":2}',
+            '{"n": 1.0}',
+            "  [1, 2, 3]  ",
+            '{"z":1,"a":2}',
+            "[1, 2, 3]",
+        ],
+    )
+    def test_get_secret_json_string_returned_byte_for_byte(
+        self, mock_boto3, patched_boto_clients, stored
+    ):
+        """Regression #373: a JSON-shaped SecretString must be returned
+        exactly as stored, never re-serialized via json.loads/json.dumps.
+
+        The old implementation round-tripped through json, normalizing
+        whitespace/number formatting/key order (e.g. "[1,2,3]" came back as
+        "[1, 2, 3]"), silently mutating the secret. get_secret must hand
+        back the raw stored bytes.
+        """
+        mock_sm_client, _ = patched_boto_clients
+        mock_sm_client.get_secret_value.return_value = {
+            "Name": "json-secret",
+            "SecretString": stored,
+            "VersionId": "v1",
+        }
+
+        client = mock_boto3.AWSSecretsManagerClient()
+        client.authenticate()
+
+        secret = client.get_secret("json-secret")
+        assert secret.value == stored
 
     def test_get_secret_requires_authentication(self, mock_boto3):
         """get_secret should require authentication."""
@@ -495,6 +572,25 @@ class TestAWSSecretsManagerClient:
         assert result.value == "//4="  # base64 encoding of b"\xff\xfe"
         assert result.version == "v1"
 
+    def test_get_secret_missing_both_value_keys_raises_vault_error(
+        self, mock_boto3, patched_boto_clients
+    ):
+        """Regression #313: a response with neither SecretString nor
+        SecretBinary must raise a domain VaultError, not a bare KeyError."""
+
+        mock_sm_client, _ = patched_boto_clients
+        mock_sm_client.get_secret_value.return_value = {
+            "Name": "malformed-secret",
+            "VersionId": "v1",
+            "ARN": "arn:aws:...",
+        }
+
+        client = mock_boto3.AWSSecretsManagerClient()
+        client.authenticate()
+
+        with pytest.raises(VaultError):
+            client.get_secret("malformed-secret")
+
     def test_list_secrets_error_wraps(self, mock_boto3, patched_boto_clients):
         """Paginator errors should raise VaultError."""
 
@@ -547,6 +643,114 @@ class TestAWSSecretsManagerClient:
         client.authenticate()
 
         with pytest.raises(VaultError):
+            client.set_secret("name", "value")
+
+    def test_authenticate_service_error_wraps_as_vault_error(self, mock_boto3):
+        """A Secrets Manager service error (non-auth code) during authenticate
+        surfaces as VaultError, not AuthenticationError."""
+
+        class FakeClientError(Exception):
+            def __init__(self, code):
+                self.response = {"Error": {"Code": code}}
+
+        class FakeCredentialsError(Exception):
+            pass
+
+        mock_boto3.NoCredentialsError = FakeCredentialsError
+        mock_boto3.PartialCredentialsError = FakeCredentialsError
+
+        with patch("boto3.client") as mock_client:
+            mock_client.side_effect = FakeClientError("InternalServiceError")
+
+            client = mock_boto3.AWSSecretsManagerClient()
+            with pytest.raises(VaultError):
+                client.authenticate()
+
+    def test_authenticate_unknown_error_propagates(self, mock_boto3):
+        """An error with no AWS error code propagates unchanged from authenticate()."""
+
+        class FakeCredentialsError(Exception):
+            pass
+
+        # Distinct credential-error sentinels so an unrelated error does not match them.
+        mock_boto3.NoCredentialsError = FakeCredentialsError
+        mock_boto3.PartialCredentialsError = FakeCredentialsError
+
+        class WeirdError(Exception):
+            pass
+
+        with patch("boto3.client") as mock_client:
+            mock_client.side_effect = WeirdError("no error code here")
+
+            client = mock_boto3.AWSSecretsManagerClient()
+            with pytest.raises(WeirdError):
+                client.authenticate()
+
+    def test_get_secret_unknown_error_propagates(self, mock_boto3, patched_boto_clients):
+        """An error with no AWS error code propagates unchanged from get_secret()."""
+
+        class WeirdError(Exception):
+            pass
+
+        mock_sm_client, _ = patched_boto_clients
+        mock_sm_client.get_secret_value.side_effect = WeirdError("no code")
+
+        client = mock_boto3.AWSSecretsManagerClient()
+        client.authenticate()
+
+        with pytest.raises(WeirdError):
+            client.get_secret("secret")
+
+    def test_list_secrets_unknown_error_propagates(self, mock_boto3, patched_boto_clients):
+        """An error with no AWS error code propagates unchanged from list_secrets()."""
+
+        class WeirdError(Exception):
+            pass
+
+        mock_sm_client, _ = patched_boto_clients
+        mock_sm_client.get_paginator.side_effect = WeirdError("no code")
+
+        client = mock_boto3.AWSSecretsManagerClient()
+        client.authenticate()
+
+        with pytest.raises(WeirdError):
+            client.list_secrets()
+
+    def test_put_secret_value_unknown_error_propagates(self, mock_boto3, patched_boto_clients):
+        """An error with no AWS error code propagates unchanged from _put_secret_value()."""
+
+        class WeirdError(Exception):
+            pass
+
+        mock_sm_client, _ = patched_boto_clients
+        mock_sm_client.put_secret_value.side_effect = WeirdError("no code")
+
+        client = mock_boto3.AWSSecretsManagerClient()
+        client.authenticate()
+
+        with pytest.raises(WeirdError):
+            client._put_secret_value("name", "value")
+
+    def test_set_secret_requires_authentication(self, mock_boto3):
+        """set_secret should require authentication."""
+        client = mock_boto3.AWSSecretsManagerClient()
+
+        with pytest.raises(VaultError):
+            client.set_secret("name", "value")
+
+    def test_set_secret_unknown_error_propagates(self, mock_boto3, patched_boto_clients):
+        """An error with no AWS error code propagates unchanged from set_secret()."""
+
+        class WeirdError(Exception):
+            pass
+
+        mock_sm_client, _ = patched_boto_clients
+        mock_sm_client.create_secret.side_effect = WeirdError("no code")
+
+        client = mock_boto3.AWSSecretsManagerClient()
+        client.authenticate()
+
+        with pytest.raises(WeirdError):
             client.set_secret("name", "value")
 
     def test_set_secret_dict(self, mock_boto3, patched_boto_clients):

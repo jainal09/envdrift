@@ -9,6 +9,7 @@ The ScanEngine is responsible for:
 
 from __future__ import annotations
 
+import re
 import time
 from collections.abc import Callable
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
@@ -31,6 +32,7 @@ from envdrift.scanner.native import (
     NativeScanner,
     _is_encrypted_value_line,
 )
+from envdrift.scanner.patterns import hash_secret
 
 if TYPE_CHECKING:
     pass
@@ -686,8 +688,13 @@ class ScanEngine:
             checked_files.add(file_path)
             try:
                 with open(file_path, encoding="utf-8", errors="ignore") as f:
-                    # Read first 2KB to check for markers
-                    content = f.read(2048)
+                    # Read the whole file (#368): the dotenvx ``encrypted:`` marker
+                    # is a *value* prefix that can sit far past the first 2KB in a
+                    # combined file (cleartext config first, encrypted secrets
+                    # after). A 2KB window misjudged such files as unencrypted and
+                    # leaked their ciphertext as findings. This matches line_at()
+                    # and the native scanner, which both read full content.
+                    content = f.read()
                     # Use markers from native scanner
                     for marker in DOTENVX_MARKERS + SOPS_MARKERS:
                         if marker in content:
@@ -724,9 +731,19 @@ class ScanEngine:
     def _filter_public_keys(self, findings: list[ScanFinding]) -> list[ScanFinding]:
         """Filter out findings that are dotenvx public keys.
 
-        Dotenvx public keys are EC secp256k1 keys that start with 02 or 03
-        followed by 64 hex characters. These are meant to be public and
-        should not be flagged as secrets.
+        Dotenvx public keys are EC secp256k1 compressed keys (``02``/``03`` + 64
+        hex chars). They are public by definition and should not be flagged as
+        secrets.
+
+        Production findings only carry a *redacted* ``secret_preview`` (the
+        middle is collapsed to ``*``) and a one-way ``secret_hash`` — never the
+        full secret. The previous implementation compared the preview's length to
+        66, which is never true after redaction, so the filter was dead on real
+        data (#370). The native scanner now drops these keys at detection by
+        value shape; this central filter salvages cross-scanner coverage
+        (gitleaks/trufflehog/native, all of which hash with ``hash_secret``) by
+        matching each finding's ``secret_hash`` against the hash of the public
+        key declared in its own file's ``DOTENV_PUBLIC_KEY*`` line.
 
         Args:
             findings: List of findings to filter.
@@ -734,24 +751,20 @@ class ScanEngine:
         Returns:
             Filtered list excluding public key findings.
         """
-        # Note: ec_pubkey_pattern is not used - we rely on simpler checks below
-        # that can handle truncated previews with redaction markers
+        pubkey_hashes_by_file = self._collect_public_key_hashes(findings)
+        if not pubkey_hashes_by_file:
+            return findings
 
         def is_public_key(finding: ScanFinding) -> bool:
-            preview = finding.secret_preview
-            if not preview:
+            # Per-file: a finding is only a public key if ITS OWN file declares
+            # that value on a DOTENV_PUBLIC_KEY line. A global set would let a key
+            # in file A suppress a same-hash finding in file B (cross-file FN).
+            if not finding.secret_hash:
                 return False
-            # Remove redaction markers (****) and check the full pattern
-            # EC secp256k1 compressed public keys are exactly 66 hex chars (33 bytes)
-            clean = preview.replace("*", "")
-            if clean.startswith(("02", "03")) and len(clean) == 66:
-                # Check if remaining chars are hex
-                try:
-                    int(clean, 16)
-                    logger.debug("Filtering dotenvx public key finding")
-                    return True
-                except ValueError:
-                    pass
+            file_hashes = pubkey_hashes_by_file.get(str(finding.file_path))
+            if file_hashes and finding.secret_hash in file_hashes:
+                logger.debug("Filtering dotenvx public key finding by hash")
+                return True
             return False
 
         before_count = len(findings)
@@ -760,6 +773,39 @@ class ScanEngine:
         if before_count != after_count:
             logger.info(f"Filtered {before_count - after_count} public key findings")
         return filtered
+
+    # Matches a dotenvx public-key assignment and captures the compressed EC key.
+    _DOTENV_PUBLIC_KEY_RE = re.compile(
+        r'^\s*DOTENV_PUBLIC_KEY[A-Za-z0-9_]*\s*=\s*["\']?(0[23][0-9a-fA-F]{64})["\']?'
+    )
+
+    def _collect_public_key_hashes(self, findings: list[ScanFinding]) -> dict[str, set[str]]:
+        """Map each referenced file to the ``hash_secret`` values of the dotenvx
+        public keys declared IN THAT FILE.
+
+        The public key is present, in cleartext, on the file's
+        ``DOTENV_PUBLIC_KEY*`` line. We hash it the same way scanners hash the
+        secret they report, so a finding whose value *is* that file's public key
+        matches by ``secret_hash`` and gets dropped. Per-file (not a global set)
+        so a key in one file can't suppress findings in another. Each file is
+        parsed once.
+        """
+        by_file: dict[str, set[str]] = {}
+        for finding in findings:
+            file_path = str(finding.file_path)
+            if file_path in by_file:
+                continue
+            hashes: set[str] = set()
+            try:
+                with open(file_path, encoding="utf-8", errors="ignore") as f:
+                    for line in f:
+                        match = self._DOTENV_PUBLIC_KEY_RE.match(line)
+                        if match:
+                            hashes.add(hash_secret(match.group(1)))
+            except OSError:
+                hashes = set()
+            by_file[file_path] = hashes
+        return by_file
 
     def _filter_gitignored_files(self, findings: list[ScanFinding]) -> list[ScanFinding]:
         """Filter out findings from files that are in .gitignore.

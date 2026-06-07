@@ -1009,6 +1009,77 @@ class TestInitCommand:
         content = output_file.read_text()
         assert "SECRET_KEY" in content
 
+    def test_init_no_overwrite_without_force(self, tmp_path: Path) -> None:
+        """#372: a 2nd init without --force errors and leaves settings.py intact."""
+        env_file = tmp_path / ".env"
+        env_file.write_text("FOO=bar\n")
+        out = tmp_path / "settings.py"
+
+        first = runner.invoke(
+            app, ["init", str(env_file), "--output", str(out), "--class-name", "First"]
+        )
+        assert first.exit_code == 0
+        original = out.read_text()
+        assert "class First" in original
+
+        second = runner.invoke(
+            app, ["init", str(env_file), "--output", str(out), "--class-name", "Second"]
+        )
+        assert second.exit_code != 0
+        assert "exist" in second.output.lower() or "force" in second.output.lower()
+        # First file untouched.
+        assert out.read_text() == original
+        assert "class Second" not in out.read_text()
+
+    def test_init_overwrites_with_force(self, tmp_path: Path) -> None:
+        """#372: --force overwrites the existing settings.py."""
+        env_file = tmp_path / ".env"
+        env_file.write_text("FOO=bar\n")
+        out = tmp_path / "settings.py"
+
+        runner.invoke(app, ["init", str(env_file), "--output", str(out), "--class-name", "First"])
+        second = runner.invoke(
+            app,
+            ["init", str(env_file), "--output", str(out), "--class-name", "Second", "--force"],
+        )
+        assert second.exit_code == 0
+        content = out.read_text()
+        assert "class Second" in content
+        assert "class First" not in content
+
+    def test_init_force_shorthand(self, tmp_path: Path) -> None:
+        """#372: the `-f` shorthand also overwrites an existing file."""
+        env_file = tmp_path / ".env"
+        env_file.write_text("FOO=bar\n")
+        out = tmp_path / "settings.py"
+
+        runner.invoke(app, ["init", str(env_file), "--output", str(out), "--class-name", "First"])
+        second = runner.invoke(
+            app,
+            ["init", str(env_file), "--output", str(out), "--class-name", "Second", "-f"],
+        )
+        assert second.exit_code == 0
+        assert "class Second" in out.read_text()
+
+    def test_init_unicode_digit_value_does_not_crash(self, tmp_path: Path) -> None:
+        """#321: a Unicode-digit value (²=U+00B2) is inferred str, not a crashing int()."""
+        env_file = tmp_path / ".env"
+        # ² (U+00B2): str.isdigit() is True but int("²") raises ValueError.
+        env_file.write_text("LEVEL=²\nPORT=8080\n")
+        out = tmp_path / "settings.py"
+
+        result = runner.invoke(
+            app, ["init", str(env_file), "--output", str(out), "--class-name", "Cfg"]
+        )
+
+        assert result.exit_code == 0, result.output
+        content = out.read_text()
+        # Unicode-digit value falls through to str (not int).
+        assert "LEVEL: str" in content
+        assert "LEVEL: int" not in content
+        # Happy path: an ASCII digit is still inferred as int.
+        assert "PORT: int = 8080" in content
+
 
 class TestHookCommand:
     """Tests for the hook CLI command."""

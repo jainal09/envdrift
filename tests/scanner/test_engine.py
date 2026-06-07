@@ -1296,9 +1296,72 @@ class TestFilterEncryptedFiles:
 
         assert engine._filter_encrypted_files([finding]) == []
 
+    def test_filter_encrypted_marker_beyond_2kb_still_filters(self, tmp_path):
+        """#368: the dotenvx ``encrypted:`` marker can sit far past the first 2KB
+        in a combined file (cleartext config first, encrypted secrets after).
+
+        The old 2KB-only read misjudged such files as unencrypted and leaked
+        their ciphertext lines as findings. Reading the whole file recognizes the
+        marker and drops the ciphertext finding.
+        """
+        config = GuardConfig(use_native=True, use_gitleaks=False)
+        engine = ScanEngine(config)
+
+        f = tmp_path / ".env.production"
+        filler = "".join(
+            f"CONFIG_{i}=plain_padding_value_xxxxxxxxxxxxxxxxxxxxxxxx\n" for i in range(60)
+        )
+        assert len(filler) > 2048  # marker is genuinely beyond the old window
+        f.write_text(filler + 'SECRET="encrypted:vault1GENUINECIPHERTEXTblob+/="\n')
+        cipher_line = filler.count("\n") + 1
+
+        finding = ScanFinding(
+            file_path=f,
+            line_number=cipher_line,
+            rule_id="high-entropy-string",
+            rule_description="entropy",
+            description="blob",
+            severity=FindingSeverity.MEDIUM,
+            scanner="detect-secrets",
+        )
+        assert engine._filter_encrypted_files([finding]) == []
+
+    def test_filter_cleartext_finding_survives_when_marker_beyond_2kb(self, tmp_path):
+        """#368 regression-guard: a finding on a *cleartext* line of the same
+        combined file (whose marker is past 2KB) must still survive."""
+        config = GuardConfig(use_native=True, use_gitleaks=False)
+        engine = ScanEngine(config)
+
+        f = tmp_path / ".env.production"
+        filler = "".join(
+            f"CONFIG_{i}=plain_padding_value_xxxxxxxxxxxxxxxxxxxxxxxx\n" for i in range(60)
+        )
+        assert len(filler) > 2048
+        f.write_text(filler + 'SECRET="encrypted:vault1CIPHERTEXTblob+/="\n')
+
+        cleartext_finding = ScanFinding(
+            file_path=f,
+            line_number=1,  # a cleartext CONFIG_0 line
+            rule_id="generic-secret",
+            rule_description="secret",
+            description="cleartext",
+            severity=FindingSeverity.HIGH,
+            scanner="native",
+        )
+        result = engine._filter_encrypted_files([cleartext_finding])
+        assert result == [cleartext_finding]
+
 
 class TestFilterPublicKeys:
-    """Tests for _filter_public_keys method."""
+    """Tests for _filter_public_keys (#370).
+
+    The filter operates on *production* data: findings carry a redacted
+    ``secret_preview`` and a one-way ``secret_hash`` — never the full secret.
+    Public keys are identified by hashing the file's own ``DOTENV_PUBLIC_KEY*``
+    declaration and matching ``secret_hash``. The previous raw-un-redacted-preview
+    tests were invalid (the pipeline never produces a 66-char preview) and masked
+    the bug; these tests reflect the real pipeline.
+    """
 
     def test_filter_public_keys_empty_list(self):
         """Test filter with empty findings list."""
@@ -1308,96 +1371,145 @@ class TestFilterPublicKeys:
         result = engine._filter_public_keys([])
         assert result == []
 
-    def test_filter_public_keys_ec_compressed_key(self):
-        """Test that EC compressed public keys are filtered."""
+    def test_filter_public_keys_by_hash_with_redacted_preview(self, tmp_path):
+        """A finding carrying the file's DOTENV_PUBLIC_KEY value (matched by
+        ``secret_hash``) is filtered, even though its preview is redacted."""
+        from envdrift.scanner.patterns import hash_secret, redact_secret
+
         config = GuardConfig(use_native=True, use_gitleaks=False)
         engine = ScanEngine(config)
 
-        # EC secp256k1 compressed public key - exactly 66 hex chars starting with 02 or 03
-        ec_pubkey = "02" + "a" * 64  # 66 chars total
+        pubkey = "02" + "a" * 64  # 66-hex compressed EC public key
+        env_file = tmp_path / ".env"
+        env_file.write_text(f'DOTENV_PUBLIC_KEY="{pubkey}"\nSECRET="encrypted:xyz"\n')
 
-        findings = [
-            ScanFinding(
-                file_path=Path("test.py"),
-                rule_id="test-rule",
-                rule_description="Test",
-                description="Test finding",
-                severity=FindingSeverity.HIGH,
-                scanner="native",
-                secret_preview=ec_pubkey,
-            ),
-        ]
+        pub_finding = ScanFinding(
+            file_path=env_file,
+            rule_id="high-entropy-string",
+            rule_description="entropy",
+            description="x",
+            severity=FindingSeverity.MEDIUM,
+            scanner="gitleaks",
+            secret_preview=redact_secret(pubkey),  # PRODUCTION form (redacted)
+            secret_hash=hash_secret(pubkey),
+        )
 
-        result = engine._filter_public_keys(findings)
-        assert len(result) == 0
+        result = engine._filter_public_keys([pub_finding])
+        assert result == []
 
-    def test_filter_public_keys_short_hex_not_filtered(self):
-        """Test that short hex strings starting with 02/03 are NOT filtered."""
+    def test_filter_public_keys_preserves_real_secret(self, tmp_path):
+        """A real secret (whose hash is not the file's public key) survives."""
+        from envdrift.scanner.patterns import hash_secret, redact_secret
+
         config = GuardConfig(use_native=True, use_gitleaks=False)
         engine = ScanEngine(config)
 
-        # Short hex that starts with 02 but is not a full EC public key
-        short_secret = "0200abcd"
+        pubkey = "03" + "b" * 64
+        env_file = tmp_path / ".env"
+        env_file.write_text(f'DOTENV_PUBLIC_KEY="{pubkey}"\n')
 
-        findings = [
-            ScanFinding(
-                file_path=Path("test.py"),
-                rule_id="test-rule",
-                rule_description="Test",
-                description="Test finding",
-                severity=FindingSeverity.HIGH,
-                scanner="native",
-                secret_preview=short_secret,
-            ),
-        ]
+        real = "sk_live_" + "realsecretvalue0123456789"  # split: dodge push-protection
+        real_finding = ScanFinding(
+            file_path=env_file,
+            rule_id="generic-secret",
+            rule_description="secret",
+            description="x",
+            severity=FindingSeverity.HIGH,
+            scanner="gitleaks",
+            secret_preview=redact_secret(real),
+            secret_hash=hash_secret(real),
+        )
 
-        result = engine._filter_public_keys(findings)
-        # Should NOT be filtered - too short to be an EC public key
-        assert len(result) == 1
+        result = engine._filter_public_keys([real_finding])
+        assert result == [real_finding]
 
-    def test_filter_public_keys_non_hex_not_filtered(self):
-        """Test that non-hex strings are not filtered."""
+    def test_filter_public_keys_unreadable_file_swallows_oserror(self, tmp_path):
+        """A finding whose file can't be opened doesn't crash pubkey collection (#370)."""
+        from envdrift.scanner.patterns import hash_secret, redact_secret
+
         config = GuardConfig(use_native=True, use_gitleaks=False)
         engine = ScanEngine(config)
 
-        # Starts with 02 but contains non-hex characters
-        non_hex = "02" + "g" * 64  # 'g' is not hex
+        real = "sk_live_" + "anotherrealsecretvalue012345"  # split: dodge push-protection
+        finding = ScanFinding(
+            file_path=tmp_path / "does-not-exist.env",  # open() -> OSError -> skipped
+            rule_id="generic-secret",
+            rule_description="secret",
+            description="x",
+            severity=FindingSeverity.HIGH,
+            scanner="gitleaks",
+            secret_preview=redact_secret(real),
+            secret_hash=hash_secret(real),
+        )
 
-        findings = [
-            ScanFinding(
-                file_path=Path("test.py"),
-                rule_id="test-rule",
-                rule_description="Test",
-                description="Test finding",
-                severity=FindingSeverity.HIGH,
-                scanner="native",
-                secret_preview=non_hex,
-            ),
-        ]
+        # No public keys are collectible (file unreadable), so the finding
+        # survives and no exception escapes.
+        result = engine._filter_public_keys([finding])
+        assert result == [finding]
 
-        result = engine._filter_public_keys(findings)
-        # Should NOT be filtered - not valid hex
-        assert len(result) == 1
+    def test_filter_public_keys_mixed_findings(self, tmp_path):
+        """In a mixed batch only the public-key finding is dropped."""
+        from envdrift.scanner.patterns import hash_secret, redact_secret
 
-    def test_filter_public_keys_preserves_normal_findings(self):
-        """Test that normal findings are not filtered."""
         config = GuardConfig(use_native=True, use_gitleaks=False)
         engine = ScanEngine(config)
 
-        findings = [
-            ScanFinding(
-                file_path=Path("test.py"),
-                rule_id="test-rule",
-                rule_description="Test",
-                description="Test finding",
-                severity=FindingSeverity.HIGH,
-                scanner="native",
-                secret_preview="AKIA****WXYZ",  # AWS key preview
-            ),
-        ]
+        pubkey = "02" + "c" * 64
+        env_file = tmp_path / ".env"
+        env_file.write_text(f"DOTENV_PUBLIC_KEY={pubkey}\nSECRET=encrypted:xyz\n")
 
-        result = engine._filter_public_keys(findings)
-        assert len(result) == 1
+        real = "ghp_realgithubtoken0123456789abcdef0123"
+        pub_finding = ScanFinding(
+            file_path=env_file,
+            rule_id="high-entropy-string",
+            rule_description="entropy",
+            description="x",
+            severity=FindingSeverity.MEDIUM,
+            scanner="trufflehog",
+            secret_preview=redact_secret(pubkey),
+            secret_hash=hash_secret(pubkey),
+        )
+        real_finding = ScanFinding(
+            file_path=env_file,
+            rule_id="github-pat",
+            rule_description="GitHub PAT",
+            description="x",
+            severity=FindingSeverity.CRITICAL,
+            scanner="trufflehog",
+            secret_preview=redact_secret(real),
+            secret_hash=hash_secret(real),
+        )
+
+        result = engine._filter_public_keys([pub_finding, real_finding])
+        kept_rules = {f.rule_id for f in result}
+        assert "high-entropy-string" not in kept_rules
+        assert "github-pat" in kept_rules
+
+    def test_filter_public_keys_no_pubkey_in_file_keeps_all(self, tmp_path):
+        """When no file declares a public key, nothing is filtered."""
+        from envdrift.scanner.patterns import hash_secret, redact_secret
+
+        config = GuardConfig(use_native=True, use_gitleaks=False)
+        engine = ScanEngine(config)
+
+        env_file = tmp_path / ".env"
+        env_file.write_text("API_KEY=plainvalue123\n")  # no DOTENV_PUBLIC_KEY
+
+        secret = "02" + "d" * 64  # pubkey-shaped value but not declared in file
+        finding = ScanFinding(
+            file_path=env_file,
+            rule_id="high-entropy-string",
+            rule_description="entropy",
+            description="x",
+            severity=FindingSeverity.MEDIUM,
+            scanner="gitleaks",
+            secret_preview=redact_secret(secret),
+            secret_hash=hash_secret(secret),
+        )
+
+        # No DOTENV_PUBLIC_KEY line -> no known hashes -> finding survives.
+        result = engine._filter_public_keys([finding])
+        assert result == [finding]
 
 
 class TestGitignoreFilter:

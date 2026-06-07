@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import os
+import subprocess
+import sys
 from pathlib import Path
 from unittest.mock import patch
 
@@ -71,18 +74,59 @@ def test_is_file_encrypted_with_encrypted_prefix(tmp_path: Path):
     assert is_file_encrypted(encrypted_file)
 
 
-def test_is_file_encrypted_with_vault_marker(tmp_path: Path):
-    """Test detection of files with DOTENV_VAULT marker."""
-    vault_file = tmp_path / ".env.vault"
-    vault_file.write_text(
-        """DATABASE_URL=value
-#/---BEGIN DOTENV_VAULT---/
-DOTENV_VAULT_PRODUCTION="vlt_abc123..."
-#/---END DOTENV_VAULT---/
-"""
+def test_is_file_encrypted_with_sops_value(tmp_path: Path):
+    """A SOPS-encrypted dotenv value (quoted ENC[AES256_GCM,...]) => True (#352)."""
+    sops_file = tmp_path / ".env.sops"
+    # Build the ciphertext-shaped value by concatenation (no real secret).
+    sops_file.write_text(
+        'DATABASE_URL="ENC[AES256_GCM,data:' + "ab" * 8 + ',type:str]"\n', encoding="utf-8"
     )
 
-    assert is_file_encrypted(vault_file)
+    assert is_file_encrypted(sops_file)
+
+
+def test_is_file_encrypted_decrypted_file_with_residual_public_key(tmp_path: Path):
+    """Decrypted dotenvx file (residual DOTENV_PUBLIC_KEY, plaintext values) => False.
+
+    Forward-guard, NOT a #352 regression. The old substring check
+    (``"encrypted:" in content or "DOTENV_VAULT" in content``) already returned
+    False here — a decrypted dotenvx file contains neither substring — so this
+    case passed before the fix too. It is kept to lock in that the new
+    value-scan still treats a leftover public-key header as plaintext, guarding
+    against a future regression where the header alone is mistaken for
+    ciphertext (which would make encrypt_secret_file skip re-encryption).
+    """
+    decrypted = tmp_path / ".env.secret"
+    decrypted.write_text(
+        "#/-------------------[DOTENV_PUBLIC_KEY]--------------------/\n"
+        "#/            public-key encryption for .env files          /\n"
+        'DOTENV_PUBLIC_KEY_TEST="024f56daf45b' + "0" * 8 + 'fe"\n'
+        "API_KEY=" + "sk_live_" + "0123456789abcdef" * 2 + "\n",
+        encoding="utf-8",
+    )
+
+    assert is_file_encrypted(decrypted) is False
+
+
+def test_is_file_encrypted_plaintext_value_contains_encrypted_word(tmp_path: Path):
+    """Plaintext value literally containing 'encrypted:' => NOT encrypted (the real #352 bug).
+
+    This is the load-bearing #352 regression test. The OLD substring check
+    (``"encrypted:" in content``) false-positived on a plaintext value like
+    ``NOTE=... stored encrypted: see docs`` and returned True, so
+    encrypt_secret_file early-returned and the genuinely-secret API_KEY below it
+    was committed in cleartext. The value-scan keys off a VALUE starting with
+    the ciphertext prefix, so the substring buried inside a note no longer
+    counts. Fails on pre-fix code; passes on the fix.
+    """
+    note_file = tmp_path / ".env.secret"
+    note_file.write_text(
+        "NOTE=the password is stored encrypted: see the vault docs\n"
+        "API_KEY=" + "sk_live_" + "0123456789abcdef" * 2 + "\n",
+        encoding="utf-8",
+    )
+
+    assert is_file_encrypted(note_file) is False
 
 
 def test_combine_files(temp_env_files):
@@ -997,3 +1041,115 @@ def test_git_unskip_worktree_returns_false_on_git_missing(tmp_path: Path):
         side_effect=FileNotFoundError("git not found"),
     ):
         assert _git_unskip_worktree(tmp_path / ".env.secret") is False
+
+
+# ---------------------------------------------------------------------------
+# #371: non-ASCII values must round-trip regardless of the platform default
+# encoding. read_text/write_text must pass encoding="utf-8".
+#
+# These run the functions in a CHILD interpreter under a hostile C locale
+# (LC_ALL=C / LANG=C / PYTHONUTF8=0 / PYTHONIOENCODING=ascii). That is the only
+# faithful way to exercise the bug: ``Path.read_text()`` with no ``encoding=``
+# resolves its text-mode codec from the interpreter's startup/UTF-8 state, NOT
+# from a runtime ``monkeypatch`` of ``locale.getpreferredencoding`` — so an
+# in-process monkeypatch leaves ``read_text()`` decoding as UTF-8 and the bug
+# stays hidden. In the child, the PRE-FIX code (no ``encoding=``) raises
+# ``UnicodeDecodeError`` on the 0xC3 byte and exits non-zero; the fixed code
+# (``encoding="utf-8"``) exits 0. We assert on the child exit status.
+# ---------------------------------------------------------------------------
+
+# Hostile, non-UTF-8 child environment. ``LC_ALL``/``LANG`` set the locale to
+# the C codec; ``PYTHONUTF8=0`` disables UTF-8 mode (otherwise CPython would
+# force UTF-8 regardless); ``PYTHONIOENCODING`` keeps stdio ascii too.
+_ASCII_LOCALE_ENV = {
+    "LC_ALL": "C",
+    "LANG": "C",
+    "LC_CTYPE": "C",
+    "PYTHONUTF8": "0",
+    "PYTHONIOENCODING": "ascii",
+}
+
+
+def _run_under_ascii_locale(body: str, *, cwd: Path) -> subprocess.CompletedProcess[str]:
+    """Run ``body`` in a child interpreter under a hostile C locale.
+
+    The child imports the REAL functions under test; ``cwd`` is the repo so the
+    package is importable. Returns the completed process so the caller can
+    assert on ``returncode`` (0 == the utf-8 read succeeded under C locale).
+    """
+    env = {**os.environ, **_ASCII_LOCALE_ENV}
+    return subprocess.run(  # nosec B603
+        [sys.executable, "-c", body],
+        cwd=str(cwd),
+        capture_output=True,
+        text=True,
+        timeout=60,
+        env=env,
+    )
+
+
+# The repo root holds the importable ``src`` layout via the installed package;
+# the child runs from there so ``import envdrift`` resolves.
+_REPO_ROOT = Path(__file__).resolve().parents[2]
+
+
+def test_is_file_encrypted_handles_non_ascii_under_ascii_locale(tmp_path):
+    """is_file_encrypted reads non-ASCII secrets without UnicodeError (#371).
+
+    Fails on the pre-fix code (no ``encoding=``): the child raises
+    ``UnicodeDecodeError`` under LC_ALL=C and exits non-zero.
+    """
+    secret = tmp_path / ".env.secret"
+    # Accented + emoji value written as utf-8 bytes (0xC3 trips the ascii codec).
+    secret.write_bytes("PASSWORD=héllo_café_\U0001f511\n".encode())
+
+    body = (
+        "import sys\n"
+        "from envdrift.core.partial_encryption import is_file_encrypted\n"
+        "from pathlib import Path\n"
+        f"assert is_file_encrypted(Path(r{str(secret)!r})) is False\n"
+        "sys.exit(0)\n"
+    )
+    result = _run_under_ascii_locale(body, cwd=_REPO_ROOT)
+
+    assert result.returncode == 0, (
+        "is_file_encrypted raised under C locale (pre-fix bug #371):\n" + result.stderr
+    )
+
+
+def test_combine_files_handles_non_ascii_under_ascii_locale(tmp_path):
+    """combine_files reads/writes non-ASCII values without UnicodeError (#371).
+
+    Fails on the pre-fix code (no ``encoding=``): reading the accented .clear /
+    .secret files in the child raises ``UnicodeDecodeError`` under LC_ALL=C.
+    """
+    clear = tmp_path / ".env.test.clear"
+    secret = tmp_path / ".env.test.secret"
+    combined = tmp_path / ".env.test"
+    clear.write_bytes("APP_NAME=café\n".encode())
+    secret.write_bytes("PASSWORD=héllo_\U0001f511\n".encode())
+
+    body = (
+        "import sys\n"
+        "from envdrift.config import PartialEncryptionEnvironmentConfig\n"
+        "from envdrift.core.partial_encryption import combine_files\n"
+        "cfg = PartialEncryptionEnvironmentConfig(\n"
+        "    name='test',\n"
+        f"    clear_file=r{str(clear)!r},\n"
+        f"    secret_file=r{str(secret)!r},\n"
+        f"    combined_file=r{str(combined)!r},\n"
+        ")\n"
+        "stats = combine_files(cfg)\n"
+        "assert stats['clear_lines'] == 1, stats\n"
+        "assert stats['secret_vars'] == 1, stats\n"
+        "sys.exit(0)\n"
+    )
+    result = _run_under_ascii_locale(body, cwd=_REPO_ROOT)
+
+    assert result.returncode == 0, (
+        "combine_files raised under C locale (pre-fix bug #371):\n" + result.stderr
+    )
+    # Round-trip preserved the accented/emoji content (read back as utf-8).
+    written = combined.read_bytes().decode("utf-8")
+    assert "café" in written
+    assert "héllo_\U0001f511" in written
