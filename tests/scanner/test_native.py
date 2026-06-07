@@ -1490,6 +1490,111 @@ class TestKeywordGate:
         assert len(aws) >= 1
 
 
+class TestPerLineEncryptionSkipIsStructural:
+    """#413 — the per-line encryption skip must be structure-aware.
+
+    ``_is_encrypted_value_line`` previously returned True for ANY line containing
+    the substring ``encrypted:`` or ``ENC[``, so a plaintext line that merely
+    *mentions* those substrings was skipped wholesale and any real secret sitting
+    on it was never reported. The skip is now anchored to a real dotenvx-encrypted
+    value or a canonical ``ENC[AES256_GCM,`` envelope.
+    """
+
+    @pytest.fixture
+    def scanner(self) -> NativeScanner:
+        return NativeScanner()
+
+    def test_aws_key_on_bare_enc_line_is_reported(self, scanner: NativeScanner, tmp_path: Path):
+        """A bare ``ENC[...]`` (not ``ENC[AES256_GCM,``) must not skip the line."""
+        cfg = tmp_path / "app.conf"
+        cfg.write_text("DATA=ENC[something] AKIAIOSFODNN7EXAMPLE\n")
+
+        result = scanner.scan([cfg])
+
+        aws = [f for f in result.findings if "aws" in f.rule_id.lower()]
+        assert len(aws) >= 1, (
+            "a real AWS key adjacent to a bare ENC[...] token must still be reported"
+        )
+
+    def test_aws_key_on_inline_encrypted_substring_line_is_reported(
+        self, scanner: NativeScanner, tmp_path: Path
+    ):
+        """An inline ``encrypted:`` substring in a URL must not skip the line."""
+        cfg = tmp_path / "url.conf"
+        cfg.write_text("URL=https://example.com/encrypted:path?key=AKIAIOSFODNN7EXAMPLE\n")
+
+        result = scanner.scan([cfg])
+
+        aws = [f for f in result.findings if "aws" in f.rule_id.lower()]
+        assert len(aws) >= 1, (
+            "a real AWS key on a line whose value merely contains 'encrypted:' "
+            "must still be reported"
+        )
+
+    def test_genuine_encrypted_value_lines_still_skipped(
+        self, scanner: NativeScanner, tmp_path: Path
+    ):
+        """Real dotenvx / SOPS encrypted values are still skipped (no regression)."""
+        cfg = tmp_path / ".env.production"
+        cfg.write_text(
+            "#/---[DOTENV_PUBLIC_KEY]---/\n"
+            'DOTENV_PUBLIC_KEY="abc123"\n'
+            'DATABASE_URL="encrypted:vault1AbCdEfGhIjKlMnOpQrStUvWxYz0123456789"\n'
+            "API_KEY=ENC[AES256_GCM,data:xyz789,iv:a,tag:b,type:str]\n"
+        )
+
+        result = scanner.scan([cfg])
+
+        assert result.findings == [], (
+            f"genuinely-encrypted values must stay skipped, got: "
+            f"{[f.rule_id for f in result.findings]}"
+        )
+
+
+class TestGenericSecretDottedValue:
+    """#413 — generic-secret must not drop every value containing a '.'/'?'.
+
+    The rule used to skip any captured value containing ``.`` or ``?`` to filter
+    out code member-access (``config.Password``). That dropped real high-entropy
+    dotted secrets. The skip now only fires for word-like member-access chains.
+    """
+
+    @pytest.fixture
+    def scanner(self) -> NativeScanner:
+        return NativeScanner()
+
+    def test_high_entropy_dotted_password_is_reported(self, scanner: NativeScanner, tmp_path: Path):
+        """A dotted high-entropy password clears the entropy gate and is reported."""
+        from envdrift.scanner.patterns import calculate_entropy
+
+        secret = "Xk9.mQ2vLp8wRt4nZs6yBdFh"  # entropy ~4.585, contains a dot
+        assert calculate_entropy(secret) >= 4.0
+        cfg = tmp_path / "creds.conf"
+        cfg.write_text(f"password={secret}\n")
+
+        result = scanner.scan([cfg])
+
+        generic = [f for f in result.findings if f.rule_id == "generic-secret"]
+        assert len(generic) >= 1, (
+            "a high-entropy dotted password must be reported as generic-secret, "
+            f"got rules: {[f.rule_id for f in result.findings]}"
+        )
+
+    def test_code_member_access_still_dropped(self, scanner: NativeScanner, tmp_path: Path):
+        """A dotted code member-access reference is still suppressed (no regression)."""
+        cfg = tmp_path / "code.conf"
+        # Word-like member-access chain; not a secret.
+        cfg.write_text("password=config.Database.Password\n")
+
+        result = scanner.scan([cfg])
+
+        generic = [f for f in result.findings if f.rule_id == "generic-secret"]
+        assert generic == [], (
+            f"code member-access must not be flagged as generic-secret, got: "
+            f"{[f.secret_preview for f in generic]}"
+        )
+
+
 class TestLowercaseEntropyAssignment:
     """#369 — entropy assignment LHS accepts lower/mixed case var names."""
 

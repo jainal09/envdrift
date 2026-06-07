@@ -625,7 +625,17 @@ def guard(
 
         has_blocking = any(f.severity in blocking_severities for f in result.unique_findings)
 
-        if not has_blocking:
+        if has_blocking:
+            # Derive the CI exit code from ``has_blocking`` so a blocking finding
+            # always fails CI — even one whose severity maps to ``result.exit_code``
+            # 0 (LOW, e.g. ``--fail-on low`` with only LOW findings). Previously the
+            # CI block could only *lower* ``exit_code`` (reset to 0 below threshold)
+            # and never *raise* a 0 to nonzero, so ``--fail-on low`` silently passed
+            # CI on LOW-only findings (#413). Keep the existing severity-derived code
+            # when it is already nonzero (preserves CRITICAL=1/HIGH=2/MEDIUM=3).
+            if exit_code == 0:
+                exit_code = 2
+        else:
             exit_code = 0
 
     if exit_code != 0:

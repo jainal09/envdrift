@@ -37,8 +37,18 @@ def _is_encrypted_value_line(line: str) -> bool:
 
     Used to skip such lines during pattern and entropy scanning so encrypted
     values are never re-flagged. Shared by both scans so they stay in sync.
+
+    Structure-aware (mirrors the file-level ``_content_is_encrypted``): a bare
+    ``"encrypted:" in line`` / ``"ENC[" in line`` substring check misfires on a
+    plaintext line that merely *mentions* the marker — e.g.
+    ``DATA=ENC[something] AKIA…`` or ``URL=https://x/encrypted:y?key=AKIA…`` —
+    causing the whole line (and any real adjacent secret on it) to be skipped
+    and never reported (#413). We instead require the marker in its real
+    structural position: a dotenvx-encrypted value (anchored value-position
+    ``encrypted:``) or a canonical SOPS ``ENC[AES256_GCM,`` envelope — not a
+    bare ``ENC[``.
     """
-    return "encrypted:" in line or "ENC[" in line
+    return _line_is_dotenvx_encrypted(line) or bool(_SOPS_ENC_RE.search(line))
 
 
 # A dotenvx public key is a secp256k1 *compressed* EC point: a 0x02/0x03 prefix
@@ -48,6 +58,48 @@ def _is_encrypted_value_line(line: str) -> bool:
 # complements the var-name skip (is_dotenvx_public_key_var) for cases where the
 # key appears under an unexpected name. See #370.
 _EC_PUBKEY_RE = re.compile(r"^0[23][0-9a-fA-F]{64}$")
+
+
+# Code member-access shape: identifier segments chained by ``.`` / ``?.`` / ``->``,
+# optional trailing call parens — e.g. ``config.Password``, ``handler.ReadToken()``,
+# ``obj?.Property``, ``ptr->field``, ``this.props.apiKey``. The generic-secret rule
+# uses this to drop values that look like dotted *code references* without
+# discarding every value that merely contains a ``.``/``?`` — a high-entropy
+# dotted password like ``Xk9.mQ2vLp8wRt4nZs6yBdFh`` is a real secret and must
+# still be reported (it already cleared the entropy gate) (#413).
+_MEMBER_ACCESS_SHAPE_RE = re.compile(
+    r"^[A-Za-z_$][A-Za-z0-9_$]*"  # leading identifier
+    r"(?:\s*(?:\?\.|\.|->)\s*[A-Za-z_$][A-Za-z0-9_$]*(?:\(\s*\))?)+$"
+)
+# Each dotted segment of real code is a word-like identifier (has a vowel, or is a
+# short member / method call). A random secret segment like ``mQ2vLp8wRt4nZs6yBdFh``
+# is long with sparse vowels, so it fails this. Splitting on the access operators:
+_MEMBER_SPLIT_RE = re.compile(r"\?\.|->|\.")
+_VOWEL_RE = re.compile(r"[AaEeIiOoUu]")
+
+
+def _looks_like_code_member_access(value: str) -> bool:
+    """True if ``value`` is a dotted/arrow code member-access chain, not a secret.
+
+    Requires the structural member-access shape AND that every segment is
+    word-like (a trailing ``()`` method call, ≤4 chars, or contains a vowel), so a
+    high-entropy dotted password whose segments are random base62 noise is NOT
+    misclassified as code and is still reported as a generic-secret (#413).
+    """
+    if not _MEMBER_ACCESS_SHAPE_RE.match(value):
+        return False
+    for segment in _MEMBER_SPLIT_RE.split(value):
+        seg = segment.strip()
+        if not seg:
+            continue
+        if seg.endswith("()"):  # method call, e.g. ReadToken()
+            continue
+        if len(seg) <= 4:  # short member, e.g. env, props, id
+            continue
+        if _VOWEL_RE.search(seg):  # word-like identifier, e.g. Password, apiKey
+            continue
+        return False  # long, vowel-less, non-call segment => random secret noise
+    return True
 
 
 # Encryption markers for dotenvx
@@ -998,9 +1050,15 @@ class NativeScanner(ScannerBackend):
                         # Universal patterns: ${VAR}, $(cmd), $VAR, %VAR%, {{var}}, {var}, \${var}
                         if secret.startswith(("${", "$(", "$", "%", "{{", "{", "\\${")):
                             continue
-                        # Skip code patterns - method/property access (real secrets don't have dots)
-                        # e.g., "config.Password", "handler.ReadToken()", "obj?.Property"
-                        if "." in secret or "?" in secret:
+                        # Skip values that look like code member access — a chain
+                        # of word-like identifiers joined by '.'/'?.'/'->' (with
+                        # optional call parens), e.g. "config.Password",
+                        # "handler.ReadToken()", "obj?.Property". Do NOT skip every
+                        # value that merely contains a '.' or '?': a high-entropy
+                        # dotted password such as "Xk9.mQ2vLp8wRt4nZs6yBdFh" is a
+                        # real secret and must be reported (it already cleared the
+                        # entropy gate above) (#413).
+                        if _looks_like_code_member_access(secret):
                             continue
 
                     # Calculate column number

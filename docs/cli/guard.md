@@ -258,7 +258,11 @@ envdrift guard --ci --fail-on high
 
 ### `--fail-on`
 
-Minimum severity to return a non-zero exit code in CI mode.
+Minimum severity to return a non-zero exit code in CI mode. Accepts
+`critical`, `high`, `medium`, or `low`. Any finding at or above the chosen
+threshold fails CI — including `--fail-on low` on a LOW-only result (such as an
+unencrypted-file policy violation), which returns a non-zero exit code.
+`INFO` findings are informational only and never fail CI.
 
 ```bash
 envdrift guard --ci --fail-on critical
