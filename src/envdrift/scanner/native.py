@@ -64,6 +64,86 @@ SOPS_MARKERS = (
     "ENC[AES256_GCM,",
 )
 
+# Structure-aware encryption detection (#348). A bare ``"encrypted:" in content``
+# / ``"sops:" in content`` substring check misfires on plaintext that merely
+# mentions the marker — e.g. a comment ``# this is not encrypted: true`` or a
+# value ``MESSAGE=not encrypted: yes`` would suppress the unencrypted-env-file
+# policy and hide a real leak. We instead require the marker in its real
+# structural position.
+
+# dotenvx: ``encrypted:`` must be the (optionally quoted) start of an assignment's
+# *value* — ``NAME="encrypted:..."`` / ``NAME=encrypted:...`` — not anywhere in the
+# line (and never inside a comment line, which is excluded separately).
+_DOTENVX_VALUE_RE = re.compile(
+    r"^\s*[A-Za-z_][A-Za-z0-9_]*\s*=\s*[\"']?encrypted:",
+)
+
+# SOPS: a canonical ``ENC[AES256_GCM,...]`` value envelope (dotenv- or YAML-style).
+_SOPS_ENC_RE = re.compile(r"ENC\[AES256_GCM,")
+
+# SOPS metadata block markers, matched per (non-comment) line. These mirror the
+# canonical set in ``envdrift.encryption.sops.SopsBackend.SOPS_METADATA_PATTERNS``
+# so the scanner and the encryption backend agree on what a real SOPS file is. A
+# bare ``^sops[:_]`` prefix was too loose: it matched plaintext dotenv assignments
+# like ``sops_token=...`` / ``sops_enabled=...`` (vars that merely *start with*
+# ``sops_``), misclassifying an unencrypted file as encrypted (#348). SOPS only
+# emits ``sops_version`` / ``sops_mac`` keys in its dotenv metadata trailer.
+_SOPS_METADATA_RES = (
+    re.compile(r"^sops:\s*$"),  # YAML: top-level ``sops:`` mapping key (col 0)
+    re.compile(r'^\s*"sops"\s*:'),  # JSON: ``"sops":`` (allows indent)
+    re.compile(r"^sops_version\s*="),  # dotenv: flat ``sops_version=``
+    re.compile(r"^sops_mac\s*="),  # dotenv: flat ``sops_mac=``
+)
+
+
+def _line_is_dotenvx_encrypted(line: str) -> bool:
+    """True if ``line`` assigns an actual dotenvx-encrypted value."""
+    return bool(_DOTENVX_VALUE_RE.match(line))
+
+
+def _line_is_sops_metadata(line: str) -> bool:
+    """True if ``line`` is a canonical SOPS metadata-block marker."""
+    return any(pattern.match(line) for pattern in _SOPS_METADATA_RES)
+
+
+def _content_has_sops_markers(content: str) -> bool:
+    """True if ``content`` carries canonical SOPS structural markers.
+
+    Requires either an ``ENC[AES256_GCM,...]`` value envelope or a canonical SOPS
+    metadata key (top-level ``sops:`` / ``"sops":`` / ``sops_version=`` /
+    ``sops_mac=``), each on a non-comment line — not a loose substring match and
+    not an arbitrary ``sops_*`` plaintext var. Comment lines are skipped so the
+    SOPS path is consistent with the dotenvx path in ``_content_is_encrypted``.
+    """
+    for line in content.splitlines():
+        if line.lstrip().startswith("#"):
+            continue
+        if _SOPS_ENC_RE.search(line):
+            return True
+        if _line_is_sops_metadata(line):
+            return True
+    return False
+
+
+def _content_is_encrypted(content: str) -> bool:
+    """True if ``content`` is dotenvx- or SOPS-encrypted (structure-aware).
+
+    Comment lines (stripped form starts with ``#``) never count on any path, so
+    the dotenvx, SOPS-envelope, and SOPS-metadata checks stay consistent: a plain
+    comment that merely *mentions* ``encrypted:`` / ``ENC[AES256_GCM,`` / ``sops:``
+    does not suppress the unencrypted-file policy (#348). The dotenvx marker must
+    sit in value position on an assignment line; SOPS detection (envelope or
+    canonical metadata key) is delegated to ``_content_has_sops_markers``, which
+    applies the same comment filter.
+    """
+    for line in content.splitlines():
+        if line.lstrip().startswith("#"):
+            continue
+        if _line_is_dotenvx_encrypted(line):
+            return True
+    return _content_has_sops_markers(content)
+
+
 # Default patterns to ignore - comprehensive list for all major languages and tools
 DEFAULT_IGNORE_PATTERNS = (
     # Env file examples/templates
@@ -790,17 +870,11 @@ class NativeScanner(ScannerBackend):
         Returns:
             True if encryption markers are present.
         """
-        # Check dotenvx markers
-        for marker in DOTENVX_MARKERS:
-            if marker in content:
-                return True
-
-        # Check SOPS markers
-        for marker in SOPS_MARKERS:
-            if marker in content:
-                return True
-
-        return False
+        # Structure-aware (#348): the dotenvx ``encrypted:`` marker must appear in
+        # value position on an assignment line (not in a comment or arbitrary text),
+        # and SOPS needs its canonical envelope/top-level metadata key — a bare
+        # substring match falsely suppressed the unencrypted-env-file policy.
+        return _content_is_encrypted(content)
 
     def _has_sops_markers(self, content: str) -> bool:
         """Return True if content has SOPS encryption markers.
@@ -810,7 +884,7 @@ class NativeScanner(ScannerBackend):
         positives. Used to skip pattern scanning for them while still scanning
         dotenvx combined files line-by-line.
         """
-        return any(marker in content for marker in SOPS_MARKERS)
+        return _content_has_sops_markers(content)
 
     def _scan_patterns(self, file_path: Path, content: str) -> list[ScanFinding]:
         """Scan content for secret patterns.

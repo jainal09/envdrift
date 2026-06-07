@@ -400,6 +400,149 @@ sops:
         assert not [f for f in result.findings if f.rule_id == "unencrypted-env-file"]
 
 
+class TestStructureAwareEncryptionDetection:
+    """Structure-aware encryption marker detection (#348).
+
+    A bare substring check (``"encrypted:" in content`` / ``"sops:" in content``)
+    falsely treated plaintext that merely *mentions* a marker as encrypted, which
+    suppressed the unencrypted-env-file / unencrypted-secret-file policy and hid a
+    real leak. Detection must require the marker in its real structural position:
+    the dotenvx marker in value position on an assignment line (never a comment),
+    and SOPS via a canonical ``ENC[AES256_GCM,...]`` envelope or a top-level
+    ``sops:`` metadata key.
+    """
+
+    @pytest.fixture
+    def scanner(self) -> NativeScanner:
+        """Create a native scanner instance."""
+        return NativeScanner()
+
+    def test_comment_mentioning_marker_does_not_suppress(
+        self, scanner: NativeScanner, tmp_path: Path
+    ):
+        """A comment ``# ... not encrypted: true`` must NOT mark the file encrypted."""
+        env_file = tmp_path / ".env"
+        env_file.write_text(
+            "# this is not encrypted: true\nDATABASE_URL=postgres://user:hunter2@localhost/db\n"
+        )
+
+        result = scanner.scan([tmp_path])
+
+        unencrypted = [f for f in result.findings if f.rule_id == "unencrypted-env-file"]
+        assert len(unencrypted) == 1, "comment mentioning 'encrypted:' must not suppress the policy"
+
+    def test_comment_marker_in_secret_file_still_flagged(
+        self, scanner: NativeScanner, tmp_path: Path
+    ):
+        """A plaintext .secret with a misleading comment stays unencrypted-secret-file."""
+        secret = tmp_path / ".env.production.secret"
+        secret.write_text("# this is not encrypted: true\nAPI_KEY=plaintext-leak\n")
+
+        result = scanner.scan([tmp_path])
+
+        secret_findings = [f for f in result.findings if f.rule_id == "unencrypted-secret-file"]
+        assert len(secret_findings) == 1
+        assert secret_findings[0].severity == FindingSeverity.CRITICAL
+
+    def test_value_mentioning_marker_does_not_suppress(
+        self, scanner: NativeScanner, tmp_path: Path
+    ):
+        """A value like ``MESSAGE=not encrypted: yes`` must NOT mark the file encrypted."""
+        env_file = tmp_path / ".env"
+        env_file.write_text("MESSAGE=not encrypted: yes\nDB_PASSWORD=hunter2\n")
+
+        result = scanner.scan([tmp_path])
+
+        unencrypted = [f for f in result.findings if f.rule_id == "unencrypted-env-file"]
+        assert len(unencrypted) == 1, "'encrypted:' mid-value must not suppress the policy"
+
+    def test_loose_sops_substring_does_not_suppress(self, scanner: NativeScanner, tmp_path: Path):
+        """A plaintext value mentioning ``sops:`` mid-line must NOT mark file encrypted."""
+        env_file = tmp_path / ".env"
+        env_file.write_text("NOTE=ask sops: about the deploy\nSECRET_KEY=plaintext-leak\n")
+
+        result = scanner.scan([tmp_path])
+
+        unencrypted = [f for f in result.findings if f.rule_id == "unencrypted-env-file"]
+        assert len(unencrypted) == 1, "inline 'sops:' must not suppress the policy"
+
+    def test_var_starting_with_sops_underscore_does_not_suppress(
+        self, scanner: NativeScanner, tmp_path: Path
+    ):
+        """A plaintext var like ``sops_token=...`` must NOT mark the file encrypted.
+
+        Regression for the over-loose ``^sops[:_]`` marker: SOPS only emits
+        ``sops_version`` / ``sops_mac`` keys in its dotenv metadata trailer, so a
+        user var that merely *starts with* ``sops_`` (``sops_token``,
+        ``sops_enabled``, ...) is plaintext and must still be flagged.
+        """
+        env_file = tmp_path / ".env"
+        env_file.write_text("sops_token=plaintext-leak\nsops_enabled=true\n")
+
+        result = scanner.scan([tmp_path])
+
+        unencrypted = [f for f in result.findings if f.rule_id == "unencrypted-env-file"]
+        assert len(unencrypted) == 1, "a var starting with 'sops_' must not suppress the policy"
+
+    def test_comment_mentioning_enc_envelope_does_not_suppress(
+        self, scanner: NativeScanner, tmp_path: Path
+    ):
+        """A comment mentioning ``ENC[AES256_GCM,`` must NOT mark the file encrypted.
+
+        Regression for the SOPS-envelope path being unfiltered for comments while
+        the dotenvx path skipped them: a doc comment describing the SOPS ciphertext
+        envelope must not suppress the unencrypted-env-file policy.
+        """
+        env_file = tmp_path / ".env"
+        env_file.write_text(
+            "# SOPS wraps ciphertext as ENC[AES256_GCM,data:...,type:str]\n"
+            "DB_PASSWORD=plaintext-leak\n"
+        )
+
+        result = scanner.scan([tmp_path])
+
+        unencrypted = [f for f in result.findings if f.rule_id == "unencrypted-env-file"]
+        assert len(unencrypted) == 1, "a comment mentioning 'ENC[AES256_GCM,' must not suppress"
+
+    def test_genuine_sops_dotenv_metadata_still_encrypted(
+        self, scanner: NativeScanner, tmp_path: Path
+    ):
+        """A real SOPS dotenv file (``sops_version=`` / ``sops_mac=`` trailer) stays encrypted."""
+        env_file = tmp_path / ".env"
+        env_file.write_text(
+            "DATABASE_URL=ENC[AES256_GCM,data:xyz789,type:str]\n"
+            "sops_version=3.7.0\n"
+            "sops_mac=ENC[AES256_GCM,data:abc,type:str]\n"
+        )
+
+        result = scanner.scan([tmp_path])
+
+        assert not [f for f in result.findings if f.rule_id == "unencrypted-env-file"]
+
+    def test_genuine_dotenvx_file_still_encrypted(self, scanner: NativeScanner, tmp_path: Path):
+        """A real dotenvx-encrypted value (``KEY="encrypted:BASE64..."``) is still encrypted."""
+        env_file = tmp_path / ".env"
+        env_file.write_text(
+            '#/---[DOTENV_PUBLIC_KEY]---/\nDOTENV_PUBLIC_KEY="abc123"\n'
+            'DATABASE_URL="encrypted:vault1AbCdEfGhIjKlMnOpQrStUvWxYz0123456789"\n'
+        )
+
+        result = scanner.scan([tmp_path])
+
+        assert not [f for f in result.findings if f.rule_id == "unencrypted-env-file"]
+
+    def test_genuine_sops_file_still_encrypted(self, scanner: NativeScanner, tmp_path: Path):
+        """A real SOPS file (ENC[...] envelope + top-level sops:) is still encrypted."""
+        env_file = tmp_path / ".env"
+        env_file.write_text(
+            "DATABASE_URL=ENC[AES256_GCM,data:xyz789,type:str]\nsops:\n    version: 3.7.0\n"
+        )
+
+        result = scanner.scan([tmp_path])
+
+        assert not [f for f in result.findings if f.rule_id == "unencrypted-env-file"]
+
+
 class TestUnencryptedSecretFile:
     """Tests for the dedicated plaintext .secret rule (Severity 2 hard block).
 
