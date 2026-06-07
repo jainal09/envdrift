@@ -353,10 +353,48 @@ class TestSOPSEncryptionBackend:
         assert backend.has_encrypted_header(content) is True
 
     def test_has_encrypted_header_with_sops_yaml(self):
-        """Test has_encrypted_header with YAML sops: marker."""
+        """Test has_encrypted_header with a genuinely-encrypted YAML block.
+
+        A real SOPS YAML file carries both an ``ENC[AES256_GCM,`` value and a
+        col-0 ``sops:`` metadata mapping; the authoritative ``ENC[`` marker
+        classifies it encrypted.
+        """
         backend = SOPSEncryptionBackend()
-        content = "key: value\nsops:\n  version: 3.8.1"
+        content = "key: ENC[AES256_GCM,data:abc,iv:xyz,tag:123,type:str]\nsops:\n  version: 3.8.1"
         assert backend.has_encrypted_header(content) is True
+
+    def test_has_encrypted_header_metadata_only_no_enc_marker(self):
+        """Metadata markers alone (no ``ENC[``) still classify as encrypted (#324).
+
+        Pins the line-anchored ``SOPS_METADATA_PATTERNS`` branch — content that
+        carries a genuine SOPS metadata block but no ``ENC[AES256_GCM,`` value
+        (e.g. a file encrypted with ``--unencrypted-suffix``) must still be
+        detected. Covers the YAML col-0 ``sops:`` mapping and the flat dotenv
+        ``sops_version=`` / ``sops_mac=`` markers.
+        """
+        backend = SOPSEncryptionBackend()
+        assert backend.has_encrypted_header("key: value\nsops:\n  version: 3.8.1\n") is True
+        assert (
+            backend.has_encrypted_header('{\n\t"sops": {\n\t\t"version": "3.13.1"\n\t}\n}') is True
+        )
+        assert backend.has_encrypted_header("FOO=bar\nsops_version=3.13.1\n") is True
+        assert backend.has_encrypted_header("FOO=bar\nsops_mac=abc123\n") is True
+
+    def test_has_encrypted_header_plaintext_sops_substring_not_encrypted(self):
+        """Plaintext containing the substring 'sops:' is NOT encrypted (#324).
+
+        The old unscoped ``"sops:" in content`` marker false-positived on any
+        plaintext mentioning ``sops:`` (a URL, a comment, a value). The
+        line-anchored patterns must reject these.
+        """
+        backend = SOPSEncryptionBackend()
+        for plaintext in (
+            "URL=https://sops:8200/v1\n",
+            "REPO=https://github.com/getsops/sops:main\n",
+            "# a comment about sops: usage\n",
+            'JSON={"endpoint": "https://sops:8200"}\n',
+        ):
+            assert backend.has_encrypted_header(plaintext) is False, plaintext
 
     def test_has_encrypted_header_false(self):
         """Test has_encrypted_header with plaintext."""
@@ -488,6 +526,61 @@ class TestSOPSEncryptionBackend:
 
         with pytest.raises(EncryptionBackendError):
             backend.encrypt(env_file)
+
+    def test_encrypt_in_place_false_no_output_fails_without_running(self, tmp_path, monkeypatch):
+        """Regression for #360: encrypt(in_place=False) with no output_file must
+        report failure (not run sops at all) instead of streaming the ciphertext
+        to discarded stdout while leaving the file plaintext and claiming success."""
+        env_file = tmp_path / ".env"
+        env_file.write_text("KEY=value")
+
+        backend = SOPSEncryptionBackend()
+        monkeypatch.setattr(backend, "is_installed", lambda: True)
+
+        ran = {"called": False}
+
+        def fake_run(args, env=None, cwd=None):
+            ran["called"] = True
+            return MagicMock(returncode=0, stderr="", stdout="ENC[AES256_GCM,data:zzz]")
+
+        monkeypatch.setattr(backend, "_run", fake_run)
+
+        result = backend.encrypt(env_file, in_place=False)
+
+        # No false success and sops is never invoked (ciphertext would be lost).
+        assert result.success is False
+        assert "output_file" in result.message
+        assert result.file_path == env_file
+        assert ran["called"] is False
+        # The on-disk file is left untouched (still plaintext, not silently lost).
+        assert env_file.read_text() == "KEY=value"
+
+    def test_encrypt_with_output_file(self, tmp_path, monkeypatch):
+        """Regression for #360: encrypt(in_place=False, output_file=...) honors the
+        output file via --output instead of discarding the ciphertext to stdout."""
+        env_file = tmp_path / ".env"
+        env_file.write_text("KEY=value")
+        output_file = tmp_path / ".env.enc"
+
+        backend = SOPSEncryptionBackend()
+        monkeypatch.setattr(backend, "is_installed", lambda: True)
+
+        captured = {}
+
+        def fake_run(args, env=None, cwd=None):
+            captured["args"] = args
+            return MagicMock(returncode=0, stderr="", stdout="")
+
+        monkeypatch.setattr(backend, "_run", fake_run)
+
+        result = backend.encrypt(env_file, output_file=output_file)
+
+        assert result.success is True
+        assert result.file_path == output_file
+        assert "--output" in captured["args"]
+        assert str(output_file) in captured["args"]
+        # In-place flag must NOT be emitted when writing to a separate output file.
+        assert "--in-place" not in captured["args"]
 
     @patch("shutil.which")
     @patch("subprocess.run")
@@ -621,7 +714,9 @@ class TestSOPSEncryptionBackend:
 
         result = backend.exec_env(env_file, ["echo", "ok"])
         assert result.returncode == 0
-        assert captured["args"][:4] == ["exec-env", "--input-type", "dotenv", str(env_file)]
+        # `sops exec-env <file> <command-as-single-shell-string>` (no
+        # --input-type; type is inferred from the file extension).
+        assert captured["args"] == ["exec-env", str(env_file), "echo ok"]
 
     def test_encrypt_includes_key_options(self, tmp_path, monkeypatch):
         """Encrypt should include provided key options in SOPS args."""
