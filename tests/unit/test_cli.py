@@ -3239,6 +3239,47 @@ class TestPullCommand:
         # The decrypted combined artifact must not be left half-written.
         assert not env["combined_file"].exists()
 
+    @staticmethod
+    def test_write_merged_combined_file_handles_missing_inputs(tmp_path: Path):
+        """The merge writer tolerates a missing clear and/or secret file.
+
+        Exercises every existence branch of ``_write_merged_combined_file``:
+        both present, only clear, only secret, and neither. The header lines
+        from the secret file (``#/---`` banner, ``DOTENV_PUBLIC_KEY``) are
+        always stripped.
+        """
+        from envdrift.cli_commands.sync import _write_merged_combined_file
+
+        clear = tmp_path / ".env.clear"
+        secret = tmp_path / ".env.secret"
+        combined = tmp_path / ".env"
+
+        # Both present: clear lines, a blank separator, then stripped secret lines.
+        clear.write_text("APP=web\n")
+        secret.write_text("#/--- banner\nDOTENV_PUBLIC_KEY=abc\nAPI_KEY=k\n")
+        _write_merged_combined_file(clear, secret, combined)
+        body = combined.read_text()
+        assert "APP=web" in body
+        assert "API_KEY=k" in body
+        assert "banner" not in body
+        assert "DOTENV_PUBLIC_KEY" not in body
+
+        # Only the secret file present (clear missing): no separator needed.
+        clear.unlink()
+        _write_merged_combined_file(clear, secret, combined)
+        assert combined.read_text().strip() == "API_KEY=k"
+
+        # Only the clear file present (secret missing).
+        clear.write_text("APP=web\n")
+        secret.unlink()
+        _write_merged_combined_file(clear, secret, combined)
+        assert combined.read_text() == "APP=web\n\n"
+
+        # Neither input present: an empty (single trailing newline) combined file.
+        clear.unlink()
+        _write_merged_combined_file(clear, secret, combined)
+        assert combined.read_text() == "\n"
+
 
 class TestLockCommand:
     """Tests for the lock CLI command."""
