@@ -77,7 +77,11 @@ Name of the secret to fetch from the vault.
 `.env.<env>` file is decrypted unless `--no-decrypt` is used.
 
 The secret value may be stored as either `DOTENV_PRIVATE_KEY_<ENV>=<value>`
-(the format written by `vault-push`) or a bare value — both are handled.
+(the format written by `vault-push`) or a bare value — both are handled. When
+the stored value carries a `DOTENV_PRIVATE_KEY_<SUFFIX>=` prefix, the `<SUFFIX>`
+must match `--env`; a mismatch (e.g. a `DOTENV_PRIVATE_KEY_STAGING=` value pulled
+with `--env production`) is rejected rather than silently relabeled, so a key
+for one environment is never installed as another.
 
 ### `--no-decrypt`
 
