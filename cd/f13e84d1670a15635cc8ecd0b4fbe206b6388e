@@ -1,0 +1,29 @@
+tests/unit/test_partial_encryption.py
+  s_dfc6cd6692ed8f::t_16067d2c1bece1 535-548,550-569
+  s_dfc6cd6692ed8f::t_0a8c9083d81bff 549
+  s_dfc6cd6692ed8f::t_72c2ac48de1256 17
+docs/guides/partial-encryption.md
+  s_dfc6cd6692ed8f::t_76305e463374b8 163-166
+src/envdrift/core/partial_encryption.py
+  s_dfc6cd6692ed8f::t_273e9670528e75 595
+  s_dfc6cd6692ed8f::t_ce5d44a0c58af3 241-254
+  s_dfc6cd6692ed8f::t_484f79c7642565 410
+  s_dfc6cd6692ed8f::t_b1ac0c6c55f802 478-482
+  s_dfc6cd6692ed8f::t_d0c42a1e8af727 493-499,501
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.3",
+  "base_commit_sha": "cdf13e84d1670a15635cc8ecd0b4fbe206b6388e",
+  "prompts": {},
+  "sessions": {
+    "s_dfc6cd6692ed8f": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "fd23e738-3512-4420-9290-d985ad979bfd",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Jainal Gosaliya <jainal09gosalia@gmail.com>"
+    }
+  }
+}
