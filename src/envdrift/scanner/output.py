@@ -19,6 +19,7 @@ from rich.text import Text
 from envdrift.scanner.base import (
     AggregatedScanResult,
     FindingSeverity,
+    ScanFinding,
 )
 
 if TYPE_CHECKING:
@@ -189,78 +190,55 @@ def format_json(result: AggregatedScanResult) -> str:
     return json.dumps(data, indent=2)
 
 
-def format_sarif(result: AggregatedScanResult) -> str:
-    """Format results as SARIF for GitHub/GitLab Code Scanning.
+def _sarif_rule(finding: ScanFinding) -> dict[str, Any]:
+    """Build the SARIF ``rules`` entry for a finding."""
+    return {
+        "id": finding.rule_id,
+        "name": finding.rule_description,
+        "shortDescription": {"text": finding.rule_description},
+        "fullDescription": {"text": finding.description},
+        "defaultConfiguration": {"level": _severity_to_sarif_level(finding.severity)},
+        "properties": {
+            "tags": ["security", "secrets"],
+            "security-severity": _severity_to_security_severity(finding.severity),
+        },
+    }
 
-    SARIF (Static Analysis Results Interchange Format) is an OASIS standard
-    for the output of static analysis tools.
 
-    Args:
-        result: Aggregated scan results.
+def _sarif_result(finding: ScanFinding) -> dict[str, Any]:
+    """Build the SARIF ``results`` entry for a finding (location + fingerprints)."""
+    region: dict[str, Any] = {"startLine": finding.line_number or 1}
+    if finding.column_number:
+        region["startColumn"] = finding.column_number
 
-    Returns:
-        SARIF JSON string.
-    """
-    # Build rules from unique rule IDs
-    rules_seen: set[str] = set()
-    rules: list[dict[str, Any]] = []
-
-    for finding in result.unique_findings:
-        if finding.rule_id not in rules_seen:
-            rules.append(
-                {
-                    "id": finding.rule_id,
-                    "name": finding.rule_description,
-                    "shortDescription": {"text": finding.rule_description},
-                    "fullDescription": {"text": finding.description},
-                    "defaultConfiguration": {"level": _severity_to_sarif_level(finding.severity)},
-                    "properties": {
-                        "tags": ["security", "secrets"],
-                        "security-severity": _severity_to_security_severity(finding.severity),
+    sarif_result: dict[str, Any] = {
+        "ruleId": finding.rule_id,
+        "level": _severity_to_sarif_level(finding.severity),
+        "message": {"text": finding.description},
+        "locations": [
+            {
+                "physicalLocation": {
+                    "artifactLocation": {
+                        "uri": str(finding.file_path),
+                        "uriBaseId": "%SRCROOT%",
                     },
+                    "region": region,
                 }
-            )
-            rules_seen.add(finding.rule_id)
+            }
+        ],
+        "fingerprints": {"primary": f"{finding.file_path}:{finding.line_number}:{finding.rule_id}"},
+    }
+    if finding.secret_preview:
+        sarif_result["partialFingerprints"] = {"secretPreview": finding.secret_preview}
+    return sarif_result
 
-    # Build results
-    sarif_results: list[dict[str, Any]] = []
-    for finding in result.unique_findings:
-        sarif_result: dict[str, Any] = {
-            "ruleId": finding.rule_id,
-            "level": _severity_to_sarif_level(finding.severity),
-            "message": {"text": finding.description},
-            "locations": [
-                {
-                    "physicalLocation": {
-                        "artifactLocation": {
-                            "uri": str(finding.file_path),
-                            "uriBaseId": "%SRCROOT%",
-                        },
-                        "region": {
-                            "startLine": finding.line_number or 1,
-                        },
-                    }
-                }
-            ],
-        }
 
-        # Add column if available
-        if finding.column_number:
-            sarif_result["locations"][0]["physicalLocation"]["region"]["startColumn"] = (
-                finding.column_number
-            )
-
-        # Add fingerprint for deduplication
-        sarif_result["fingerprints"] = {
-            "primary": f"{finding.file_path}:{finding.line_number}:{finding.rule_id}"
-        }
-
-        # Add partial fingerprint for secret preview
-        if finding.secret_preview:
-            sarif_result["partialFingerprints"] = {"secretPreview": finding.secret_preview}
-
-        sarif_results.append(sarif_result)
-
+def _sarif_document(
+    rules: list[dict[str, Any]],
+    results: list[dict[str, Any]],
+    invocation: dict[str, Any],
+) -> str:
+    """Wrap rules/results/invocation in the shared SARIF 2.1.0 run envelope."""
     sarif = {
         "$schema": "https://json.schemastore.org/sarif-2.1.0.json",
         "version": "2.1.0",
@@ -274,18 +252,36 @@ def format_sarif(result: AggregatedScanResult) -> str:
                         "rules": rules,
                     }
                 },
-                "results": sarif_results,
-                "invocations": [
-                    {
-                        "executionSuccessful": True,
-                        "toolExecutionNotifications": [],
-                    }
-                ],
+                "results": results,
+                "invocations": [invocation],
             }
         ],
     }
-
     return json.dumps(sarif, indent=2)
+
+
+def format_sarif(result: AggregatedScanResult) -> str:
+    """Format results as SARIF for GitHub/GitLab Code Scanning.
+
+    SARIF (Static Analysis Results Interchange Format) is an OASIS standard
+    for the output of static analysis tools.
+
+    Args:
+        result: Aggregated scan results.
+
+    Returns:
+        SARIF JSON string.
+    """
+    # Deduplicate rules by rule_id while preserving first-seen order.
+    rules_by_id: dict[str, dict[str, Any]] = {}
+    for finding in result.unique_findings:
+        rules_by_id.setdefault(finding.rule_id, _sarif_rule(finding))
+
+    return _sarif_document(
+        rules=list(rules_by_id.values()),
+        results=[_sarif_result(f) for f in result.unique_findings],
+        invocation={"executionSuccessful": True, "toolExecutionNotifications": []},
+    )
 
 
 def format_sarif_error(message: str) -> str:
@@ -303,35 +299,14 @@ def format_sarif_error(message: str) -> str:
     Returns:
         SARIF JSON string describing the failed invocation.
     """
-    sarif = {
-        "$schema": "https://json.schemastore.org/sarif-2.1.0.json",
-        "version": "2.1.0",
-        "runs": [
-            {
-                "tool": {
-                    "driver": {
-                        "name": "envdrift guard",
-                        "version": "0.1.0",
-                        "informationUri": "https://github.com/your-org/envdrift",
-                        "rules": [],
-                    }
-                },
-                "results": [],
-                "invocations": [
-                    {
-                        "executionSuccessful": False,
-                        "toolConfigurationNotifications": [
-                            {
-                                "level": "error",
-                                "message": {"text": message},
-                            }
-                        ],
-                    }
-                ],
-            }
-        ],
-    }
-    return json.dumps(sarif, indent=2)
+    return _sarif_document(
+        rules=[],
+        results=[],
+        invocation={
+            "executionSuccessful": False,
+            "toolConfigurationNotifications": [{"level": "error", "message": {"text": message}}],
+        },
+    )
 
 
 def _severity_to_sarif_level(severity: FindingSeverity) -> str:

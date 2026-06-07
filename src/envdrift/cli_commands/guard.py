@@ -50,6 +50,11 @@ from envdrift.scanner.output import (
 
 console = Console()
 
+# Early-exit prose for the git-discovery branches; emitted only in human mode
+# (machine modes get an empty-findings doc via _emit_empty_or_prose).
+_NO_STAGED = "[green]No staged files to scan.[/green]"
+_NO_PR_CHANGES = "[green]No changed files to scan in this PR.[/green]"
+
 
 def _empty_scan_result() -> AggregatedScanResult:
     """Build an empty (no-findings) scan result for machine-readable output.
@@ -370,13 +375,11 @@ def guard(
                 # the repo root.
                 paths = [Path(os.path.relpath(p, Path.cwd())) for p in candidates if p.exists()]
                 if not paths:
-                    _emit_empty_or_prose(
-                        json_output, sarif, "[green]No staged files to scan.[/green]"
-                    )
+                    _emit_empty_or_prose(json_output, sarif, _NO_STAGED)
                     raise typer.Exit(code=0)
                 console.print(f"[dim]Scanning {len(paths)} staged file(s)...[/dim]")
             else:
-                _emit_empty_or_prose(json_output, sarif, "[green]No staged files to scan.[/green]")
+                _emit_empty_or_prose(json_output, sarif, _NO_STAGED)
                 raise typer.Exit(code=0)
         except subprocess.TimeoutExpired as err:
             console.print("[red]Error:[/red] Git command timed out")
@@ -418,17 +421,13 @@ def guard(
                 # cwd-relative paths (see the --staged branch for rationale).
                 paths = [Path(os.path.relpath(p, Path.cwd())) for p in candidates if p.exists()]
                 if not paths:
-                    _emit_empty_or_prose(
-                        json_output, sarif, "[green]No changed files to scan in this PR.[/green]"
-                    )
+                    _emit_empty_or_prose(json_output, sarif, _NO_PR_CHANGES)
                     raise typer.Exit(code=0)
                 console.print(
                     f"[bold]Scanning {len(paths)} file(s) changed since {pr_base}...[/bold]"
                 )
             else:
-                _emit_empty_or_prose(
-                    json_output, sarif, "[green]No changed files to scan in this PR.[/green]"
-                )
+                _emit_empty_or_prose(json_output, sarif, _NO_PR_CHANGES)
                 raise typer.Exit(code=0)
         except subprocess.TimeoutExpired as err:
             console.print("[red]Error:[/red] Git command timed out")
@@ -448,9 +447,8 @@ def guard(
                 _emit_error(json_output, sarif, f"Path not found: {path}")
                 raise typer.Exit(code=1)
 
-    # Load configuration from envdrift.toml (if available). A bad/missing
-    # explicit --config surfaces as a clean error (or JSON/SARIF error doc on
-    # machine output) instead of a Rich traceback (#413).
+    # Load configuration from envdrift.toml (a bad/missing --config exits
+    # cleanly via _load_guard_config instead of a Rich traceback; see #413).
     file_config = _load_guard_config(config_file, json_output, sarif)
     guard_cfg = file_config.guard
 
