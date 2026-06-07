@@ -56,7 +56,12 @@ CRITICAL_PATTERNS: list[SecretPattern] = [
     SecretPattern(
         id="aws-access-key-id",
         description="AWS Access Key ID",
-        pattern=re.compile(r"(?:^|[^A-Z0-9])((AKIA|ABIA|ACCA|ASIA)[A-Z0-9]{16})(?:[^A-Z0-9]|$)"),
+        # Trailing boundary is a zero-width lookahead, not a consuming class, so
+        # finditer reports both keys when two are adjacent with a single
+        # delimiter (e.g. ``AKIA...,AKIA...``): the delimiter is left available
+        # as the leading boundary of the next match instead of being eaten by
+        # the previous one (#348). Single-match behaviour is unchanged.
+        pattern=re.compile(r"(?:^|[^A-Z0-9])((AKIA|ABIA|ACCA|ASIA)[A-Z0-9]{16})(?=[^A-Z0-9]|$)"),
         severity=FindingSeverity.CRITICAL,
         keywords=("aws", "amazon", "access_key", "access-key"),
     ),
