@@ -11,8 +11,8 @@ permissions:
   contents: read
 
 jobs:
-  tests:
-    name: Tests & Coverage
+  lint:
+    name: Lint
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -32,6 +32,30 @@ jobs:
       - name: Lint with ruff
         run: uv run ruff check src tests
 
+      - name: Check formatting with ruff
+        run: uv run ruff format --check .
+
+      - name: Lint markdown docs
+        run: make lint-docs
+
+  tests:
+    name: Tests & Coverage
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.14"
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v8.2.0
+
+      - name: Install dependencies
+        run: uv sync --all-extras
+
       - name: Type check with pyrefly
         run: uv run pyrefly check
 
@@ -43,9 +67,6 @@ jobs:
 
       - name: Run integration tests
         run: uv run pytest -m integration --cov-append
-
-      - name: Lint markdown docs
-        run: make lint-docs
 
       - name: Upload coverage reports to Codecov
         uses: codecov/codecov-action@v7
