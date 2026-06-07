@@ -425,8 +425,9 @@ def test_push_check_passes_when_combined_in_sync(monkeypatch, tmp_path: Path):
     received_check = []
     monkeypatch.setattr(
         "envdrift.cli_commands.partial.push_partial_encryption",
-        lambda _env, check=False: received_check.append(check)
-        or {"clear_lines": 1, "secret_vars": 1, "in_sync": True},
+        lambda _env, check=False: (
+            received_check.append(check) or {"clear_lines": 1, "secret_vars": 1, "in_sync": True}
+        ),
     )
 
     gitignore_called = []
