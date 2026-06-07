@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
+import os
 import re
 import secrets
 import shutil
+import tempfile
 from datetime import datetime
 from pathlib import Path
 
@@ -118,18 +121,43 @@ def atomic_write(path: Path, content: str, permissions: int = 0o600) -> None:
     """
     Write file atomically with proper permissions.
 
-    Uses a temporary file and rename to ensure atomicity.
+    Creates the temp file in the destination directory with an unguessable name
+    via ``tempfile.mkstemp`` (``O_EXCL``, owned by us, never following a
+    pre-existing symlink) and applies permissions to the *fd we created* with
+    ``os.fchmod`` -- not a path-based ``chmod`` that could be redirected through
+    a symlinked sibling. The temp file is then atomically renamed onto ``path``.
+    If the destination already exists, its current mode is preserved instead of
+    unconditionally forcing ``permissions``.
     """
     # Ensure parent directory exists
     path.parent.mkdir(parents=True, exist_ok=True)
 
-    tmp_path = path.with_suffix(".tmp")
+    # Preserve the destination's existing mode if it already exists; otherwise
+    # use the requested default. Resolve before creating the temp file.
+    mode = permissions
+    with contextlib.suppress(FileNotFoundError):
+        mode = path.stat().st_mode & 0o777
+
+    fd, tmp_name = tempfile.mkstemp(
+        dir=str(path.parent), prefix=f".{path.name}.", suffix=".envdrift-tmp"
+    )
+    tmp_path = Path(tmp_name)
     try:
-        tmp_path.write_text(content)
-        tmp_path.chmod(permissions)
+        # ``os.fchmod`` applies to the fd we own, never a symlink target. It is
+        # absent on Windows, where permission bits are largely a no-op anyway.
+        if hasattr(os, "fchmod"):
+            os.fchmod(fd, mode)
+        with os.fdopen(fd, "w") as tmp_file:
+            tmp_file.write(content)
+        # fdopen has consumed the fd; closing it again would error.
+        fd = -1
         tmp_path.replace(path)
-    except Exception:
-        tmp_path.unlink(missing_ok=True)
+    except BaseException:
+        if fd != -1:
+            os.close(fd)
+        # Only ever unlink the temp file we created, never the destination.
+        with contextlib.suppress(FileNotFoundError):
+            tmp_path.unlink()
         raise
 
 

@@ -219,6 +219,98 @@ class TestAtomicWrite:
 
         assert file_path.read_text() == "New content"
 
+    @pytest.mark.skipif(os.name == "nt", reason="symlink/fchmod semantics differ on non-POSIX")
+    def test_atomic_write_does_not_follow_predictable_tmp_symlink(self, tmp_path: Path) -> None:
+        """A pre-planted symlink at the predictable temp name is not written through.
+
+        The old implementation wrote to ``path.with_suffix('.tmp')`` with
+        ``write_text``, which follows a symlink and clobbers its target. An
+        attacker who can create ``<dest>.tmp`` (or ``.env.tmp`` for ``.env.keys``)
+        as a symlink to a file they don't own could redirect the secret write.
+        """
+        dest = tmp_path / ".env.keys"
+
+        outside = tmp_path / "outside_target"
+        outside.write_text("ORIGINAL_OUTSIDE")
+
+        # Plant symlinks at every predictable sibling the old code could pick.
+        for predictable in (dest.with_suffix(".tmp"), Path(str(dest) + ".tmp")):
+            if not predictable.exists():
+                predictable.symlink_to(outside)
+
+        atomic_write(dest, "SECRET_DEST_CONTENT")
+
+        # The real destination got the content; the outside target is untouched.
+        assert dest.read_text() == "SECRET_DEST_CONTENT"
+        assert outside.read_text() == "ORIGINAL_OUTSIDE"
+        # The destination is a real file, not a symlink to the outside file.
+        assert not dest.is_symlink()
+
+    @pytest.mark.skipif(os.name == "nt", reason="symlink/fchmod semantics differ on non-POSIX")
+    def test_atomic_write_does_not_use_literal_predictable_tmp_name(self, tmp_path: Path) -> None:
+        """The temp file used is not the literal ``path.with_suffix('.tmp')``.
+
+        We block ``os.replace`` from completing so the temp file is left behind,
+        then assert the leftover is an unguessable ``mkstemp`` name rather than
+        the predictable sibling the vulnerable code used.
+        """
+        dest = tmp_path / "secret.txt"
+        predictable = dest.with_suffix(".tmp")
+
+        # Make os.replace fail so the temp file is not consumed/renamed away.
+        original_replace = os.replace
+
+        def boom(src: str | os.PathLike[str], dst: str | os.PathLike[str]) -> None:
+            raise OSError("blocked replace for test")
+
+        os.replace = boom  # type: ignore[assignment]
+        try:
+            with pytest.raises(OSError, match="blocked replace"):
+                atomic_write(dest, "data")
+        finally:
+            os.replace = original_replace  # type: ignore[assignment]
+
+        # The vulnerable predictable name must never have been created...
+        assert not predictable.exists()
+        # ...and atomic_write cleans up its own (unguessable) temp file on failure.
+        leftovers = [
+            p
+            for p in tmp_path.iterdir()
+            if p.name.startswith(".secret.txt.") and p.name.endswith(".envdrift-tmp")
+        ]
+        assert leftovers == []
+
+    @pytest.mark.skipif(os.name == "nt", reason="symlink/fchmod semantics differ on non-POSIX")
+    def test_atomic_write_chmod_targets_destination_not_symlink(self, tmp_path: Path) -> None:
+        """chmod is applied to the file we create, not a followed symlink target."""
+        dest = tmp_path / "new_secret.txt"
+
+        outside = tmp_path / "victim"
+        outside.write_text("victim content")
+        outside.chmod(0o644)
+
+        # Plant a symlink at the predictable temp name pointing at the victim.
+        dest.with_suffix(".tmp").symlink_to(outside)
+
+        atomic_write(dest, "secret", permissions=0o600)
+
+        # Destination has the tight mode; the victim's mode is unchanged.
+        assert dest.stat().st_mode & 0o777 == 0o600
+        assert outside.stat().st_mode & 0o777 == 0o644
+        assert outside.read_text() == "victim content"
+
+    @pytest.mark.skipif(os.name == "nt", reason="POSIX mode semantics")
+    def test_atomic_write_preserves_existing_destination_mode(self, tmp_path: Path) -> None:
+        """Overwriting an existing file preserves its current mode (no force 0o600)."""
+        dest = tmp_path / "existing.txt"
+        dest.write_text("old")
+        dest.chmod(0o640)
+
+        atomic_write(dest, "new", permissions=0o600)
+
+        assert dest.read_text() == "new"
+        assert dest.stat().st_mode & 0o777 == 0o640
+
 
 class TestRedactValue:
     """Tests for redact_value -- the non-reversible secret discriminator."""
