@@ -8,6 +8,7 @@ This module implements a simple build pattern for partial encryption:
 from __future__ import annotations
 
 import logging
+import re
 import subprocess  # nosec B404
 from pathlib import Path
 from typing import NamedTuple
@@ -17,6 +18,24 @@ from envdrift.env_files import _is_excluded_env_file
 from envdrift.integrations.dotenvx import DotenvxError, DotenvxWrapper
 
 logger = logging.getLogger(__name__)
+
+# The dotenvx public-key header is a 4-line "#/" border/comment block:
+#   #/---...[DOTENV_PUBLIC_KEY]---/   (top border, carries the marker)
+#   #/ public-key encryption ... /   (inner comment)
+#   #/ [how it works] ...         /   (inner comment)
+#   #/---...---/                      (bottom border)
+# combine_files strips ONLY this block from the secret file so the boilerplate
+# does not clutter the combined artifact, while keeping the DOTENV_PUBLIC_KEY
+# assignment and any legitimate user "#/" comment line intact. This mirrors the
+# leading four "#/" lines of DotenvxWrapper.DOTENVX_HEADER_BLOCK_PATTERN
+# (integrations/dotenvx.py) but stops before the public-key assignment so that
+# line survives into the combined file.
+_DOTENVX_HEADER_COMMENT_BLOCK = re.compile(
+    r"#/-+\[DOTENV_PUBLIC_KEY\]-+/\n"
+    r"#/[^\n]*/\n"
+    r"#/[^\n]*/\n"
+    r"#/-+/\n",
+)
 
 # Minimum inner width of the warning box. Long file paths expand the box beyond
 # this so the right-hand border always stays aligned (see _build_warning_header).
@@ -104,6 +123,46 @@ def _value_is_ciphertext(value: str) -> bool:
     if len(v) >= 2 and ((v[0] == '"' and v[-1] == '"') or (v[0] == "'" and v[-1] == "'")):
         v = v[1:-1]
     return v.startswith(_DOTENVX_CIPHERTEXT_PREFIX) or v.startswith(_SOPS_CIPHERTEXT_PREFIX)
+
+
+def has_plaintext_secret_value(file_path: Path) -> bool:
+    """Return True if the file still holds at least one PLAINTEXT secret value.
+
+    A "plaintext secret value" is a real variable assignment whose value is not
+    ciphertext — excluding comments, blank lines and dotenvx's
+    ``DOTENV_PUBLIC_KEY_*`` artifact (a public key is not a secret).
+
+    This distinguishes a MIXED-STATE file (some values already ``encrypted:``,
+    at least one freshly-added plaintext value) from a fully-encrypted one.
+    ``is_file_encrypted`` returns True on the *first* ciphertext value, so a
+    mixed file looks "already encrypted" to it and the push path would early-
+    return — shipping the new plaintext secret verbatim into the committed
+    ``.secret`` file and the generated combined file. Callers force a re-encrypt
+    when this returns True (``dotenvx encrypt`` is idempotent: it re-encrypts
+    only the plaintext values and leaves existing ciphertext untouched).
+    """
+    if not file_path.exists():
+        return False
+
+    # errors="replace" for the same reason as is_file_encrypted: callers have no
+    # surrounding handler, and a ciphertext marker is ASCII so replacement chars
+    # cannot make a plaintext value look like ciphertext.
+    content = file_path.read_text(encoding="utf-8", errors="replace")
+
+    for raw_line in content.splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, _, value = line.partition("=")
+        if key.strip().startswith(_DOTENVX_PUBLIC_KEY_PREFIX):
+            # The public-key line is plaintext but is not a secret; skip it.
+            continue
+        if not value.strip():
+            # Empty assignment (KEY=) carries no secret to leak.
+            continue
+        if not _value_is_ciphertext(value):
+            return True
+    return False
 
 
 def is_file_encrypted(file_path: Path) -> bool:
@@ -195,8 +254,10 @@ def combine_files(
         clear_lines = clear_file.read_text(encoding="utf-8").splitlines()
 
     secret_lines = []
+    secret_file_content = None
     if secret_file.exists():
-        secret_lines = secret_file.read_text(encoding="utf-8").splitlines()
+        secret_file_content = secret_file.read_text(encoding="utf-8")
+        secret_lines = secret_file_content.splitlines()
 
     # Build combined content with warning header
     warning = _build_warning_header(env_config.clear_file, env_config.secret_file)
@@ -211,12 +272,14 @@ def combine_files(
         combined_lines.append("")
 
     # Add encrypted secret section
-    if secret_lines:
-        # Skip dotenvx header comments from secret file to avoid clutter.
-        # The real public-key header is a 4-line block: the border lines start
-        # with "#/---" while the two inner comment lines start with "#/ ". Match
-        # the whole "#/" block so the inner comments don't leak into the output.
-        secret_content = [line for line in secret_lines if not line.strip().startswith("#/")]
+    if secret_lines and secret_file_content is not None:
+        # Strip ONLY the dotenvx public-key header block (the 4-line "#/"
+        # border/comment boilerplate) to avoid clutter. Matching the precise
+        # block — rather than every line starting with "#/" — preserves a
+        # legitimate user comment such as "#/ note about this key" that would
+        # otherwise be silently dropped from the generated combined file.
+        stripped_text = _DOTENVX_HEADER_COMMENT_BLOCK.sub("", secret_file_content)
+        secret_content = stripped_text.splitlines()
         combined_lines.append(f"# From {env_config.secret_file} (encrypted)")
         combined_lines.extend(secret_content)
 
@@ -304,14 +367,20 @@ def encrypt_secret_file(env_config: PartialEncryptionEnvironmentConfig) -> None:
     if not secret_file.exists():
         return
 
-    # Check if already encrypted
-    if is_file_encrypted(secret_file):
-        # Already encrypted (e.g. push run twice) — still lift any stale
+    # Skip re-encryption ONLY when the file is FULLY encrypted: it holds
+    # ciphertext AND no leftover plaintext secret value. A MIXED file (some
+    # values already encrypted, one freshly-added plaintext) must still be
+    # re-encrypted — otherwise the new plaintext secret leaks into the committed
+    # .secret file and the combined file. is_file_encrypted() returns True on
+    # the first ciphertext value, so it alone cannot tell the two apart.
+    if is_file_encrypted(secret_file) and not has_plaintext_secret_value(secret_file):
+        # Already fully encrypted (e.g. push run twice) — still lift any stale
         # skip-worktree protection so the encrypted diff is visible to git.
         _git_unskip_worktree(secret_file)
         return
 
-    # Encrypt using dotenvx
+    # Encrypt using dotenvx (idempotent: re-encrypts only the plaintext values,
+    # leaving any already-encrypted values untouched).
     dotenvx = DotenvxWrapper()
     try:
         dotenvx.encrypt(secret_file)
@@ -453,15 +522,21 @@ def push_secrets_only(
             # Never encrypt companion files (.example/.sample/.template) or the
             # dotenvx key file (.keys), even if they match the glob pattern (#358).
             continue
-        if is_file_encrypted(file):
+        # A file counts as "already encrypted" only when it is FULLY encrypted:
+        # ciphertext present AND no leftover plaintext secret value. A MIXED
+        # file (some values encrypted, one freshly-added plaintext) must be
+        # re-encrypted, or the new plaintext secret ships verbatim. is_file_
+        # encrypted() trips on the first ciphertext value, so it alone treats a
+        # mixed file as done — has_plaintext_secret_value() catches the leak.
+        if is_file_encrypted(file) and not has_plaintext_secret_value(file):
             if not check:
-                # Already encrypted — lift any stale skip-worktree protection so
-                # the encrypted diff is visible to git.
+                # Already fully encrypted — lift any stale skip-worktree
+                # protection so the encrypted diff is visible to git.
                 _git_unskip_worktree(file)
             already_encrypted += 1
             continue
         if check:
-            # Dry run: this plaintext file would be encrypted by a real push.
+            # Dry run: this plaintext / mixed file would be encrypted by a real push.
             encrypted += 1
             continue
         try:

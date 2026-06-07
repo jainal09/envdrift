@@ -339,7 +339,10 @@ secrets/**/*.bak
 1. ✅ **Zero impact on configs** — envdrift never reads or writes your configs directory
 2. ✅ **No merge step** — no generated combined file to manage
 3. ✅ **Directory-level operation** — one config entry handles all files in `secrets_dir`
-4. ✅ **Idempotent** — already-encrypted files are skipped on push; already-decrypted files are skipped on pull
+4. ✅ **Idempotent** — fully-encrypted files are skipped on push; already-decrypted files
+   are skipped on pull. A file in a **mixed state** (some values already encrypted plus a
+   newly-added plaintext value) is re-encrypted on push, so a new secret can never leak into
+   the committed file
 
 ---
 
