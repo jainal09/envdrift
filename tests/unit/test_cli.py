@@ -4335,6 +4335,31 @@ class TestDetectEnvFile:
         assert detection.path == env_file
         assert detection.environment == "production"
 
+    def test_single_env_file_mismatched_environment_is_not_found(self, tmp_path: Path):
+        """A lone .env.<other> must not be adopted for a different env (see #395)."""
+        from envdrift.env_files import detect_env_file
+
+        (tmp_path / ".env.staging").write_text("SECRET=value")
+
+        detection = detect_env_file(tmp_path, default_environment="production")
+
+        assert detection.status == "not_found"
+        assert detection.path is None
+        assert detection.environment is None
+
+    def test_single_env_file_matching_environment_is_found(self, tmp_path: Path):
+        """A lone .env.<env> is adopted when the requested env matches its suffix."""
+        from envdrift.env_files import detect_env_file
+
+        env_file = tmp_path / ".env.staging"
+        env_file.write_text("SECRET=value")
+
+        detection = detect_env_file(tmp_path, default_environment="staging")
+
+        assert detection.status == "found"
+        assert detection.path == env_file
+        assert detection.environment == "staging"
+
     def test_returns_multiple_found_status(self, tmp_path: Path):
         """Test that multiple .env.* files return multiple_found status."""
         from envdrift.env_files import detect_env_file

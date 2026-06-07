@@ -359,8 +359,11 @@ the environment — `<prefix>.env.<environment>` (e.g.
 `<prefix>.<environment>.env` / `<prefix>_<environment>.env` (e.g.
 `dotnet-service-template-local.env`), or, for the default `production`
 environment, a plain `<prefix>.env` (e.g. `postgresql.env`); and finally a
-fallback to plain `.env` or a single `.env.*` file. Companion files (`.example`,
-`.sample`, `.template`, `.keys`) are never picked. Set `env_file` only for a name
+fallback to plain `.env`, or a single `.env.<environment>` whose suffix matches
+the mapping's environment. A lone `.env.*` for a *different* environment is not
+adopted — the mapping is skipped rather than synced under the wrong key. Companion
+files (`.example`, `.sample`, `.template`, `.keys`) are never picked. Set
+`env_file` only for a name
 that matches none of these conventions. `environment` remains the source of truth
 for key names, so these files still use keys like `DOTENV_PRIVATE_KEY_PRODUCTION`
 and `DOTENV_PRIVATE_KEY_STAGING`.

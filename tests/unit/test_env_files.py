@@ -106,10 +106,40 @@ def test_resolve_mapping_env_file_preserves_legacy_exact_environment(
 def test_resolve_mapping_env_file_preserves_legacy_single_env_detection(
     tmp_path: Path,
 ) -> None:
+    """A lone ``.env.<env>`` is adopted only when it matches the mapping's env."""
     service_dir = tmp_path / "service"
     service_dir.mkdir()
     env_file = service_dir / ".env.sqa"
     env_file.write_text("SECRET=value\n")
+
+    mapping = ServiceMapping(
+        secret_name="dotenv-key",
+        folder_path=service_dir,
+        environment="sqa",
+    )
+
+    detection = resolve_mapping_env_file(mapping)
+
+    assert detection.status == "found"
+    assert detection.path == env_file
+    assert detection.environment == "sqa"
+
+
+def test_resolve_mapping_env_file_skips_lone_other_environment_file(
+    tmp_path: Path,
+) -> None:
+    """Regression for #395.
+
+    A mapping for ``production`` with no ``.env.production`` (and no custom
+    match) but exactly one ``.env.staging`` must NOT fall through to legacy
+    detection and claim staging. Doing so would sync ``.env.staging`` under
+    ``DOTENV_PRIVATE_KEY_STAGING`` for a production mapping. The resolver must
+    report "not_found" so ``_sync_service`` SKIPS instead.
+    """
+    service_dir = tmp_path / "service"
+    service_dir.mkdir()
+    staging = service_dir / ".env.staging"
+    staging.write_text("SECRET=value\n")
 
     mapping = ServiceMapping(
         secret_name="dotenv-key",
@@ -119,9 +149,10 @@ def test_resolve_mapping_env_file_preserves_legacy_single_env_detection(
 
     detection = resolve_mapping_env_file(mapping)
 
-    assert detection.status == "found"
-    assert detection.path == env_file
-    assert detection.environment == "sqa"
+    assert detection.status == "not_found"
+    assert detection.path is None
+    # Crucially, the staging suffix is never adopted as the environment of record.
+    assert detection.environment != "staging"
 
 
 @pytest.mark.parametrize(

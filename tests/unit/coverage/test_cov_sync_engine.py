@@ -81,19 +81,21 @@ class TestSyncAllSchemaValidation:
 
 
 class TestAutoDetectEnvFile:
-    """When .env.<env> is missing, a detected file is used (lines 93-95)."""
+    """A .env.<env> matching the mapping's environment drives the key name."""
 
     def test_uses_detected_env_file_for_key_name(
         self, mock_vault_client: MagicMock, tmp_path: Path
     ) -> None:
+        """A .env.<env> matching the mapping env drives the key name written."""
         mock_vault_client.get_secret.return_value = SecretValue(name="k", value="secret")
 
         service_dir = tmp_path / "service"
         service_dir.mkdir()
-        # No .env.production, but a single .env.staging file exists.
+        # .env.staging matches the mapping's environment ("staging"), so it is
+        # resolved via the exact-match path and its suffix drives the key name.
         (service_dir / ".env.staging").write_text("DB_URL=encrypted:xyz\n")
 
-        mapping = ServiceMapping(secret_name="k", folder_path=service_dir)
+        mapping = ServiceMapping(secret_name="k", folder_path=service_dir, environment="staging")
         config = SyncConfig(mappings=[mapping])
         engine = SyncEngine(config=config, vault_client=mock_vault_client)
 
@@ -103,6 +105,33 @@ class TestAutoDetectEnvFile:
         # Detected environment "staging" should drive the key name written.
         content = (service_dir / ".env.keys").read_text()
         assert "DOTENV_PRIVATE_KEY_STAGING=secret" in content
+
+    def test_lone_other_env_file_is_skipped_not_synced(
+        self, mock_vault_client: MagicMock, tmp_path: Path
+    ) -> None:
+        """Regression for #395: a production mapping must not sync a lone .env.staging.
+
+        With no .env.production (and no custom match) but a single .env.staging,
+        the engine previously fell through to detection and synced staging under
+        DOTENV_PRIVATE_KEY_STAGING. It must now SKIP and write no .env.keys.
+        """
+        mock_vault_client.get_secret.return_value = SecretValue(name="k", value="secret")
+
+        service_dir = tmp_path / "service"
+        service_dir.mkdir()
+        # No .env.production; only a single .env.staging for a *different* env.
+        (service_dir / ".env.staging").write_text("DB_URL=encrypted:xyz\n")
+
+        # No environment -> effective_environment defaults to "production".
+        mapping = ServiceMapping(secret_name="k", folder_path=service_dir)
+        config = SyncConfig(mappings=[mapping])
+        engine = SyncEngine(config=config, vault_client=mock_vault_client)
+
+        result = engine.sync_all()
+
+        assert result.services[0].action == SyncAction.SKIPPED
+        # The staging key must never be written for a production mapping.
+        assert not (service_dir / ".env.keys").exists()
 
 
 class TestFolderDoesNotExist:
