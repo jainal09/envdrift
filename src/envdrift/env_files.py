@@ -60,18 +60,33 @@ def _name_encodes_environment(name: str, environment: str) -> bool:
     return environment == _DEFAULT_ENVIRONMENT and name.endswith(".env")
 
 
-def _match_env_files_for_environment(folder_path: Path, environment: str) -> list[Path]:
-    """Return env files in ``folder_path`` whose name belongs to ``environment``."""
+def _candidate_env_files(folder_path: Path) -> list[Path]:
+    """Files in ``folder_path`` that could be the env file (excludes companions).
+
+    Returns an empty list when the folder is missing. Shared by the detectors so
+    the "real file, not an .example/.sample/.template/.keys companion" filter
+    lives in one place.
+    """
     if not folder_path.is_dir():
         return []
+    return [f for f in folder_path.iterdir() if f.is_file() and not _is_excluded_env_file(f.name)]
+
+
+def _match_env_files_for_environment(folder_path: Path, environment: str) -> list[Path]:
+    """Return env files in ``folder_path`` whose name belongs to ``environment``."""
     matches = [
         f
-        for f in folder_path.iterdir()
-        if f.is_file()
-        and not _is_excluded_env_file(f.name)
-        and _name_encodes_environment(f.name, environment)
+        for f in _candidate_env_files(folder_path)
+        if _name_encodes_environment(f.name, environment)
     ]
     return sorted(matches)
+
+
+def _one_or_ambiguous(matches: list[Path], environment: str | None) -> EnvFileDetection:
+    """Classify a non-empty match list: exactly one -> found, several -> ambiguous."""
+    if len(matches) == 1:
+        return EnvFileDetection(matches[0], environment, "found")
+    return EnvFileDetection(None, environment, "multiple_found")
 
 
 def _resolve_lone_env_file(env_file: Path, default_environment: str) -> EnvFileDetection:
@@ -120,18 +135,12 @@ def detect_env_file(folder_path: Path, default_environment: str = "production") 
     if plain_env.is_file():
         return EnvFileDetection(plain_env, default_environment, "found")
 
-    env_files = [
-        f
-        for f in folder_path.iterdir()
-        if f.is_file() and f.name.startswith(".env.") and not _is_excluded_env_file(f.name)
-    ]
+    env_files = [f for f in _candidate_env_files(folder_path) if f.name.startswith(".env.")]
 
     if len(env_files) == 1:
         return _resolve_lone_env_file(env_files[0], default_environment)
-
     if len(env_files) > 1:
         return EnvFileDetection(None, None, "multiple_found")
-
     return EnvFileDetection(None, None, "not_found")
 
 
@@ -207,9 +216,7 @@ def resolve_mapping_env_file(mapping: Any) -> EnvFileDetection:
     # "service.env.docker" or "service-local.env"). The configured environment
     # stays canonical so vault/dotenvx key names remain config-driven.
     env_matches = _match_env_files_for_environment(folder_path, effective_environment)
-    if len(env_matches) == 1:
-        return EnvFileDetection(env_matches[0], effective_environment, "found")
-    if len(env_matches) > 1:
-        return EnvFileDetection(None, effective_environment, "multiple_found")
+    if env_matches:
+        return _one_or_ambiguous(env_matches, effective_environment)
 
     return detect_env_file(folder_path, effective_environment)
