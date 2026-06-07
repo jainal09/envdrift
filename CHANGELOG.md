@@ -1,5 +1,30 @@
 # Changelog
 
+## [10.13.7](https://github.com/jainal09/envdrift/compare/v10.13.6...v10.13.7) (2026-06-07)
+
+
+### Bug Fixes
+
+* **ci:** gate vscode publish on env, not secrets, in step if ([#400](https://github.com/jainal09/envdrift/issues/400)) ([eca1a72](https://github.com/jainal09/envdrift/commit/eca1a723801a8dbd9b21108612b27e00a3a38b6b))
+* **ci:** test env + vault image + fail-closed checksums + SHA pins + key cleanup ([#331](https://github.com/jainal09/envdrift/issues/331),[#332](https://github.com/jainal09/envdrift/issues/332),[#334](https://github.com/jainal09/envdrift/issues/334),[#365](https://github.com/jainal09/envdrift/issues/365),[#374](https://github.com/jainal09/envdrift/issues/374),[#348](https://github.com/jainal09/envdrift/issues/348)) ([#394](https://github.com/jainal09/envdrift/issues/394)) ([8a54859](https://github.com/jainal09/envdrift/commit/8a54859a0b99cd5a17e776773b574e41f3a1c6be))
+* **parser:** export prefix + inline comments + vault quote convergence + init guard ([#351](https://github.com/jainal09/envdrift/issues/351),[#357](https://github.com/jainal09/envdrift/issues/357),[#356](https://github.com/jainal09/envdrift/issues/356),[#372](https://github.com/jainal09/envdrift/issues/372)) ([#385](https://github.com/jainal09/envdrift/issues/385)) ([6fa155e](https://github.com/jainal09/envdrift/commit/6fa155e6a80364513a506cdf6adf5660aeb8414d))
+* **partial-encryption:** ciphertext-anchored is_file_encrypted + companion/utf-8 ([#352](https://github.com/jainal09/envdrift/issues/352),[#358](https://github.com/jainal09/envdrift/issues/358),[#371](https://github.com/jainal09/envdrift/issues/371)) ([#378](https://github.com/jainal09/envdrift/issues/378)) ([22431e4](https://github.com/jainal09/envdrift/commit/22431e4d879cc0d0ecf2cd53c18f2b0c0670d4a7))
+* **scanner:** native-scanner false-positive/negative correctness ([#354](https://github.com/jainal09/envdrift/issues/354),[#355](https://github.com/jainal09/envdrift/issues/355),[#368](https://github.com/jainal09/envdrift/issues/368),[#369](https://github.com/jainal09/envdrift/issues/369),[#370](https://github.com/jainal09/envdrift/issues/370)) ([#377](https://github.com/jainal09/envdrift/issues/377)) ([eec72e2](https://github.com/jainal09/envdrift/commit/eec72e237612439672f40ebea897260a2a084ede))
+* **scanner:** report all secrets per line via finditer ([#406](https://github.com/jainal09/envdrift/issues/406)) ([883fdb7](https://github.com/jainal09/envdrift/commit/883fdb7658a93c2958bb30427996c4cfbc2db8f6))
+* **scanner:** structure-aware encryption detection in native scanner ([#404](https://github.com/jainal09/envdrift/issues/404)) ([f61d930](https://github.com/jainal09/envdrift/commit/f61d9304d5e8a3a00954dfb967fe9f603e0a01f7))
+* **security:** redact secret previews in sync output + enforce GCP project boundary ([#348](https://github.com/jainal09/envdrift/issues/348)) ([#393](https://github.com/jainal09/envdrift/issues/393)) ([13aab54](https://github.com/jainal09/envdrift/commit/13aab548fefcc4a07cdb852590b230e63347deb1))
+* **sops:** anchor metadata markers + correct exec-env invocation ([#324](https://github.com/jainal09/envdrift/issues/324), [#329](https://github.com/jainal09/envdrift/issues/329)) ([#350](https://github.com/jainal09/envdrift/issues/350)) ([b724cdf](https://github.com/jainal09/envdrift/commit/b724cdfbef3599b99f6c4708ddb14fda4aabaa3e))
+* **sync:** atomic_write via mkstemp to block predictable-tmp symlink ([#405](https://github.com/jainal09/envdrift/issues/405)) ([3e9e40d](https://github.com/jainal09/envdrift/commit/3e9e40d2577b14aa072e568a979f3963d23a886e))
+* **sync:** lock --check read-only + vault push --all correctness ([#303](https://github.com/jainal09/envdrift/issues/303),[#318](https://github.com/jainal09/envdrift/issues/318),[#325](https://github.com/jainal09/envdrift/issues/325),[#347](https://github.com/jainal09/envdrift/issues/347)) ([#376](https://github.com/jainal09/envdrift/issues/376)) ([5d550a5](https://github.com/jainal09/envdrift/commit/5d550a50e450398c766e85d63478acf5ac950dbd))
+* **sync:** skip lone mismatched .env.&lt;env&gt; in auto-detect ([#407](https://github.com/jainal09/envdrift/issues/407)) ([906d438](https://github.com/jainal09/envdrift/commit/906d438ea6bd0e087919e04b9197e53e8e82b5c0))
+* **sync:** validate DOTENV_PRIVATE_KEY env suffix on vault pull ([#403](https://github.com/jainal09/envdrift/issues/403)) ([d502f5d](https://github.com/jainal09/envdrift/commit/d502f5d93910de36ab172805a892576101470a68))
+* vault auth-state + config correctness ([#304](https://github.com/jainal09/envdrift/issues/304)/[#305](https://github.com/jainal09/envdrift/issues/305)/[#308](https://github.com/jainal09/envdrift/issues/308)/[#313](https://github.com/jainal09/envdrift/issues/313)/[#326](https://github.com/jainal09/envdrift/issues/326)-328) ([#340](https://github.com/jainal09/envdrift/issues/340)) ([721f10e](https://github.com/jainal09/envdrift/commit/721f10e00134ee7a482e29ad9bbd75c0c9bc62e9))
+
+
+### Documentation
+
+* fix init --watch, per-mapping providers, and secret/data prefix claims ([#366](https://github.com/jainal09/envdrift/issues/366),[#367](https://github.com/jainal09/envdrift/issues/367),[#375](https://github.com/jainal09/envdrift/issues/375)) ([#392](https://github.com/jainal09/envdrift/issues/392)) ([8d655eb](https://github.com/jainal09/envdrift/commit/8d655ebb96e536d471361fdb718132600230daf6))
+
 ## [10.13.6](https://github.com/jainal09/envdrift/compare/v10.13.5...v10.13.6) (2026-06-05)
 
 
