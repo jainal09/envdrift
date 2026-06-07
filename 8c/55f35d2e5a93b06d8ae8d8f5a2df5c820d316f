@@ -1,0 +1,45 @@
+tests/unit/test_vault_hashicorp.py
+  s_dfc6cd6692ed8f::t_a92e3fe8a7b2d1 567-593
+src/envdrift/vault/aws.py
+  s_dfc6cd6692ed8f::t_8ca42bb3b5b991 260-265
+  s_dfc6cd6692ed8f::t_3beb771e49b810 127-137
+  s_dfc6cd6692ed8f::t_b4587f1b7bac32 223-229
+  s_dfc6cd6692ed8f::t_1031efed7848f3 322-325,327-332
+  s_dfc6cd6692ed8f::t_8baa947f3d9f6e 284-289
+  s_dfc6cd6692ed8f::t_b45ce1512ef01a 49-85
+src/envdrift/vault/gcp.py
+  s_dfc6cd6692ed8f::t_64bace5fbb3284 248-251
+  s_dfc6cd6692ed8f::t_79160195d738dc 223-229
+  s_dfc6cd6692ed8f::t_723159091800b3 180-182,184-188
+  s_dfc6cd6692ed8f::t_6168464c4f2503 46-74
+  s_dfc6cd6692ed8f::t_872b5336a8e26b 289-292
+  s_dfc6cd6692ed8f::t_212c3bd74210d9 175-179
+tests/unit/test_vault_gcp.py
+  s_dfc6cd6692ed8f::t_90c001180b1164 368-376,378-383,387,389-393,397-411,413
+src/envdrift/vault/hashicorp.py
+  s_dfc6cd6692ed8f::t_bcb6218c1881ef 30-43
+  s_dfc6cd6692ed8f::t_d8cdfd728555ff 165-167
+  s_dfc6cd6692ed8f::t_491249a692ed14 5
+  s_dfc6cd6692ed8f::t_b42b9b0434e200 240-242
+src/envdrift/vault/azure.py
+  s_dfc6cd6692ed8f::t_9ac432747da394 43-59
+  s_dfc6cd6692ed8f::t_ecb0291c8feea3 221-223
+  s_dfc6cd6692ed8f::t_4ba1af68e6b5d2 199
+  s_dfc6cd6692ed8f::t_bdf1711af87166 177
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.3",
+  "base_commit_sha": "8c55f35d2e5a93b06d8ae8d8f5a2df5c820d316f",
+  "prompts": {},
+  "sessions": {
+    "s_dfc6cd6692ed8f": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "fd23e738-3512-4420-9290-d985ad979bfd",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Jainal Gosaliya <jainal09gosalia@gmail.com>"
+    }
+  }
+}
