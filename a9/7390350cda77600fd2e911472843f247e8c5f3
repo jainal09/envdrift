@@ -1,0 +1,46 @@
+src/envdrift/cli_commands/agent.py
+  s_dfc6cd6692ed8f::t_a6b6f9b731e09c 183-191
+tests/unit/test_config.py
+  s_dfc6cd6692ed8f::t_a6b6f9b731e09c 10,584-585,589-592,594-595,597-599,602-606,608,641-646,653-657,659,681,684-689,696-697,699,702,709-710,712,733-789
+  s_dfc6cd6692ed8f::t_39e5bc42a65311 593
+tests/unit/test_guard_cli.py
+  s_dfc6cd6692ed8f::t_a6b6f9b731e09c 149-224
+src/envdrift/cli_commands/partial.py
+  s_dfc6cd6692ed8f::t_e60e48f1df2439 281
+  s_dfc6cd6692ed8f::t_f1805c43612750 99,277
+  s_dfc6cd6692ed8f::t_a6b6f9b731e09c 96-98,100-103,274-276,278-280
+  s_dfc6cd6692ed8f::t_cc6dadd5595181 11
+tests/unit/test_agent_cli.py
+  s_dfc6cd6692ed8f::t_a6b6f9b731e09c 91-117,131-132,134-135
+tests/unit/test_enc_helpers_schema_regressions.py
+  s_dfc6cd6692ed8f::t_a6b6f9b731e09c 226-242,244-267
+  s_dfc6cd6692ed8f::t_5097d6941622d2 243
+tests/unit/test_partial_cli.py
+  s_dfc6cd6692ed8f::t_ffbe9a04487a51 506,532,559
+src/envdrift/config.py
+  s_dfc6cd6692ed8f::t_23ce0f57ec11b4 572-573
+  s_dfc6cd6692ed8f::t_26454130ff234a 236
+  s_dfc6cd6692ed8f::t_623d320ac23e17 256
+  s_dfc6cd6692ed8f::t_a250c98edc8fff 177-204
+  s_dfc6cd6692ed8f::t_a6b6f9b731e09c 16-25,29,33-35,227-235,245-254,354-358,360-368,370-371,414-417,574-577,580,583
+  s_dfc6cd6692ed8f::t_1ba0d9fa42c385 255
+  s_dfc6cd6692ed8f::t_88adb215c80028 421
+src/envdrift/core/schema.py
+  s_dfc6cd6692ed8f::t_835be4ad1b3670 268-276,279-289,292,296-302
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.3",
+  "base_commit_sha": "a97390350cda77600fd2e911472843f247e8c5f3",
+  "prompts": {},
+  "sessions": {
+    "s_dfc6cd6692ed8f": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "fd23e738-3512-4420-9290-d985ad979bfd",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Jainal Gosaliya <jainal09gosalia@gmail.com>"
+    }
+  }
+}
