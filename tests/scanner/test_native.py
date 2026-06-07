@@ -1351,6 +1351,23 @@ class TestSkipClearFiles:
         no_match = Path("/repo/other/.env.public")
         assert scanner._is_allowed_clear_file(no_match) is False
 
+    def test_bare_filename_clear_file_matches_by_basename(self):
+        """A bare-filename clear_file matches by basename in any directory.
+
+        Covers the filename-only branch of ``_is_allowed_clear_file``: when the
+        allow entry has no path segment, any file with that basename matches,
+        regardless of the directory (or OS separator) it was enumerated under.
+        """
+        scanner = NativeScanner(allowed_clear_files=[".env.public"])
+
+        # Matches in a nested POSIX directory by basename alone.
+        assert scanner._is_allowed_clear_file(Path("/repo/config/.env.public")) is True
+        # Matches under a Windows-style (backslash) directory layout too.
+        windows_path = PureWindowsPath(r"C:\repo\config\.env.public")
+        assert scanner._is_allowed_clear_file(windows_path) is True  # type: ignore[arg-type]
+        # A different basename does not match.
+        assert scanner._is_allowed_clear_file(Path("/repo/config/.env.secret")) is False
+
 
 # Real, fully-formed GCP service-account JSON (synthetic key material). The
 # "type" and "private_key" anchors land on different lines — the bug (#354) was

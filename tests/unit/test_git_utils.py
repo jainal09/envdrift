@@ -189,6 +189,9 @@ class TestGetFileFromGit:
         ):
             get_file_from_git(nested_file)
 
+        # Fail clearly if the spy never fired (e.g. ``get_file_from_git`` returned
+        # early) rather than raising a confusing ``KeyError`` on the lookup below.
+        assert "rev_arg" in captured, "git show was never invoked; spy did not capture a rev arg"
         rev_arg = captured["rev_arg"]
         assert isinstance(rev_arg, str)
         # ``HEAD:services/api/.env.production`` — forward slashes, no backslashes.
