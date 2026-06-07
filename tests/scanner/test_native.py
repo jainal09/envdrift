@@ -466,6 +466,59 @@ class TestStructureAwareEncryptionDetection:
         unencrypted = [f for f in result.findings if f.rule_id == "unencrypted-env-file"]
         assert len(unencrypted) == 1, "inline 'sops:' must not suppress the policy"
 
+    def test_var_starting_with_sops_underscore_does_not_suppress(
+        self, scanner: NativeScanner, tmp_path: Path
+    ):
+        """A plaintext var like ``sops_token=...`` must NOT mark the file encrypted.
+
+        Regression for the over-loose ``^sops[:_]`` marker: SOPS only emits
+        ``sops_version`` / ``sops_mac`` keys in its dotenv metadata trailer, so a
+        user var that merely *starts with* ``sops_`` (``sops_token``,
+        ``sops_enabled``, ...) is plaintext and must still be flagged.
+        """
+        env_file = tmp_path / ".env"
+        env_file.write_text("sops_token=plaintext-leak\nsops_enabled=true\n")
+
+        result = scanner.scan([tmp_path])
+
+        unencrypted = [f for f in result.findings if f.rule_id == "unencrypted-env-file"]
+        assert len(unencrypted) == 1, "a var starting with 'sops_' must not suppress the policy"
+
+    def test_comment_mentioning_enc_envelope_does_not_suppress(
+        self, scanner: NativeScanner, tmp_path: Path
+    ):
+        """A comment mentioning ``ENC[AES256_GCM,`` must NOT mark the file encrypted.
+
+        Regression for the SOPS-envelope path being unfiltered for comments while
+        the dotenvx path skipped them: a doc comment describing the SOPS ciphertext
+        envelope must not suppress the unencrypted-env-file policy.
+        """
+        env_file = tmp_path / ".env"
+        env_file.write_text(
+            "# SOPS wraps ciphertext as ENC[AES256_GCM,data:...,type:str]\n"
+            "DB_PASSWORD=plaintext-leak\n"
+        )
+
+        result = scanner.scan([tmp_path])
+
+        unencrypted = [f for f in result.findings if f.rule_id == "unencrypted-env-file"]
+        assert len(unencrypted) == 1, "a comment mentioning 'ENC[AES256_GCM,' must not suppress"
+
+    def test_genuine_sops_dotenv_metadata_still_encrypted(
+        self, scanner: NativeScanner, tmp_path: Path
+    ):
+        """A real SOPS dotenv file (``sops_version=`` / ``sops_mac=`` trailer) stays encrypted."""
+        env_file = tmp_path / ".env"
+        env_file.write_text(
+            "DATABASE_URL=ENC[AES256_GCM,data:xyz789,type:str]\n"
+            "sops_version=3.7.0\n"
+            "sops_mac=ENC[AES256_GCM,data:abc,type:str]\n"
+        )
+
+        result = scanner.scan([tmp_path])
+
+        assert not [f for f in result.findings if f.rule_id == "unencrypted-env-file"]
+
     def test_genuine_dotenvx_file_still_encrypted(self, scanner: NativeScanner, tmp_path: Path):
         """A real dotenvx-encrypted value (``KEY="encrypted:BASE64..."``) is still encrypted."""
         env_file = tmp_path / ".env"
