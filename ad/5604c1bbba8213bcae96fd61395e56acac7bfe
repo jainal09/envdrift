@@ -1,0 +1,30 @@
+docs/cli/sync.md
+  s_dfc6cd6692ed8f::t_47afe50049e4ef 146-152,156
+  s_dfc6cd6692ed8f::t_e411e59f0aec48 164,170-172
+  s_dfc6cd6692ed8f::t_1662cf4bc9e990 134
+  s_dfc6cd6692ed8f::t_067708c520c06c 153-155
+docs/cli/decrypt.md
+  s_dfc6cd6692ed8f::t_444d0f0569c6db 217,221,224,229-231
+docs/cli/push.md
+  s_dfc6cd6692ed8f::t_0ef201b85c781b 138-149
+docs/cli/init.md
+  s_dfc6cd6692ed8f::t_81cde9fa91433f 62-77
+tests/unit/test_docs_accuracy.py
+  s_dfc6cd6692ed8f::t_adcbbe7040f57c 1-117
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.3",
+  "base_commit_sha": "ad5604c1bbba8213bcae96fd61395e56acac7bfe",
+  "prompts": {},
+  "sessions": {
+    "s_dfc6cd6692ed8f": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "fd23e738-3512-4420-9290-d985ad979bfd",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Jainal Gosaliya <jainal09gosalia@gmail.com>"
+    }
+  }
+}
