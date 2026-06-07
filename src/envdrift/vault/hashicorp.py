@@ -39,7 +39,12 @@ class HashiCorpVaultClient(VaultClient):
     Supports KV v2 secrets engine (the default in modern Vault).
 
     Authentication methods supported:
-    - Token (via token parameter or VAULT_TOKEN env var)
+    - Token only, sourced from the ``token`` parameter or the ``VAULT_TOKEN``
+      environment variable.
+
+    Other hvac auth methods (AppRole, OIDC, Kubernetes, etc.) are NOT supported.
+    A ``token`` placed under the ``[vault.hashicorp]`` TOML section is NOT read:
+    the token must be passed to ``token`` or set via ``VAULT_TOKEN``.
     """
 
     def __init__(
@@ -85,9 +90,18 @@ class HashiCorpVaultClient(VaultClient):
 
             if not self._client.is_authenticated():
                 raise AuthenticationError("Vault token is invalid or expired")
+        except AuthenticationError:
+            # The invalid/expired-token case raises AuthenticationError above;
+            # let it propagate instead of being re-wrapped as a VaultError by the
+            # broad `except Exception` below. Clear the half-initialized client so
+            # the unauthenticated-state invariant holds (mirrors gcp/azure).
+            self._client = None
+            raise
         except (Unauthorized, Forbidden) as e:
+            self._client = None
             raise AuthenticationError(f"Vault authentication failed: {e}") from e
         except Exception as e:
+            self._client = None
             raise VaultError(f"Vault connection error: {e}") from e
 
     def is_authenticated(self) -> bool:

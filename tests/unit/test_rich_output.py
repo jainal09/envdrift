@@ -239,6 +239,47 @@ class TestSyncOutput:
         assert "Decryption" in joined
         assert "Schema" in joined
 
+    def test_service_sync_status_does_not_leak_secret_prefix(self):
+        """Rendered mismatch must flag the diff WITHOUT printing the secret (or
+        any long prefix of it). Drives the real renderer + real redaction
+        pipeline used by the sync engine."""
+        from envdrift.sync.operations import redact_value
+
+        def _fake_secret(seed: str) -> str:
+            # 64-hex, shaped like a DOTENV_PRIVATE_KEY_* value; built by concat
+            # so the literal never appears as one token in source.
+            return (seed * 64)[:64]
+
+        local_secret = _fake_secret("ab")  # 'abab...ab'
+        vault_secret = _fake_secret("cd")  # 'cdcd...cd' (different value)
+        assert local_secret != vault_secret and len(local_secret) == 64
+
+        result = SimpleNamespace(
+            action=SyncAction.UPDATED,
+            folder_path="svc",
+            error=None,
+            # exercise the same path the engine uses:
+            local_value_preview=redact_value(local_secret),
+            vault_value_preview=redact_value(vault_secret),
+            backup_path=None,
+            decryption_result=None,
+            schema_valid=None,
+        )
+
+        with patch.object(console, "print") as mock_print:
+            print_service_sync_status(cast(ServiceSyncResult, result))
+        rendered = "\n".join(str(c.args[0]) for c in mock_print.call_args_list)
+
+        # 1) the full secret never appears
+        assert local_secret not in rendered
+        assert vault_secret not in rendered
+        # 2) no long prefix leaks (any >=8-char run of either secret)
+        for secret in (local_secret, vault_secret):
+            for i in range(len(secret) - 7):
+                assert secret[i : i + 8] not in rendered, f"leaked 8-char window of {secret[:4]}..."
+        # 3) but the renderer STILL signals a mismatch
+        assert "Local" in rendered and "Vault" in rendered
+
     def test_print_sync_result(self):
         """Render aggregate sync result with decryption stats."""
         sync_result = SimpleNamespace(

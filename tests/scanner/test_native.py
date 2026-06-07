@@ -1018,3 +1018,263 @@ class TestSkipClearFiles:
         # Should be scanned but not flagged as unencrypted
         unencrypted_findings = [f for f in result.findings if f.rule_id == "unencrypted-env-file"]
         assert len(unencrypted_findings) == 0
+
+
+# Real, fully-formed GCP service-account JSON (synthetic key material). The
+# "type" and "private_key" anchors land on different lines — the bug (#354) was
+# that the per-line scan never saw both anchors together.
+_GCP_SERVICE_ACCOUNT_JSON = """{
+  "type": "service_account",
+  "project_id": "demo-project",
+  "private_key_id": "0123456789abcdef0123456789abcdef01234567",
+  "private_key": "-----BEGIN PRIVATE KEY-----\\nMIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSjAgEAAoIBAQ\\n-----END PRIVATE KEY-----\\n",
+  "client_email": "demo@demo-project.iam.gserviceaccount.com",
+  "client_id": "123456789012345678901",
+  "auth_uri": "https://accounts.google.com/o/oauth2/auth",
+  "token_uri": "https://oauth2.googleapis.com/token"
+}
+"""
+
+
+class TestMultilineGcpServiceAccount:
+    """#354 — multi-line GCP service-account JSON is detected via full-content pass."""
+
+    @pytest.fixture
+    def scanner(self) -> NativeScanner:
+        return NativeScanner()
+
+    def test_multiline_gcp_service_account_flagged(self, scanner: NativeScanner, tmp_path: Path):
+        """A real multi-line service_account JSON file is flagged (true positive)."""
+        sa = tmp_path / "service-account.json"
+        sa.write_text(_GCP_SERVICE_ACCOUNT_JSON)
+
+        result = scanner.scan([tmp_path])
+
+        gcp = [f for f in result.findings if f.rule_id == "gcp-service-account"]
+        assert len(gcp) >= 1
+        assert gcp[0].severity == FindingSeverity.CRITICAL
+
+    def test_ordinary_multiline_json_not_flagged(self, scanner: NativeScanner, tmp_path: Path):
+        """An ordinary multi-line JSON (no service_account/private_key) is NOT flagged."""
+        ordinary = tmp_path / "config.json"
+        ordinary.write_text(
+            "{\n"
+            '  "type": "config",\n'
+            '  "name": "demo",\n'
+            '  "values": [1, 2, 3],\n'
+            '  "nested": {"a": "b", "c": "d"}\n'
+            "}\n"
+        )
+
+        result = scanner.scan([tmp_path])
+
+        gcp = [f for f in result.findings if f.rule_id == "gcp-service-account"]
+        assert len(gcp) == 0
+
+
+class TestKeywordGate:
+    """#355 — broad/ambiguous prefix patterns require a context keyword."""
+
+    @pytest.fixture
+    def scanner(self) -> NativeScanner:
+        return NativeScanner()
+
+    def test_twilio_sid_with_context_flagged(self, scanner: NativeScanner, tmp_path: Path):
+        """AC<32hex> with a 'twilio' keyword in the file is flagged (true positive)."""
+        cfg = tmp_path / "twilio.env"
+        # Built via concatenation so no complete AC<32hex> literal is committed
+        # (GitHub push-protection flags real-looking secret literals in fixtures).
+        fake_sid = "AC" + "0123456789abcdef" * 2
+        cfg.write_text(f"# twilio credentials\nTWILIO_ACCOUNT_SID={fake_sid}\n")
+
+        result = scanner.scan([tmp_path])
+
+        sid = [f for f in result.findings if f.rule_id == "twilio-account-sid"]
+        assert len(sid) >= 1
+
+    def test_bare_ac_hex_without_keyword_not_flagged(self, scanner: NativeScanner, tmp_path: Path):
+        """A bare AC<32hex> CACHE_KEY with no twilio keyword is NOT flagged (FP killed)."""
+        cfg = tmp_path / "cache.env"
+        fake_sid = "AC" + "0123456789abcdef" * 2
+        cfg.write_text(f"CACHE_KEY={fake_sid}\n")
+
+        result = scanner.scan([tmp_path])
+
+        sid = [f for f in result.findings if f.rule_id == "twilio-account-sid"]
+        assert len(sid) == 0
+
+    def test_mailchimp_keyword_still_catches_true_positive(
+        self, scanner: NativeScanner, tmp_path: Path
+    ):
+        """Another keyword-gated pattern (mailchimp) still catches its true positive."""
+        cfg = tmp_path / "mailchimp.env"
+        fake_key = "0123456789abcdef" * 2 + "-us21"
+        cfg.write_text(f"# mailchimp api\nMAILCHIMP_KEY={fake_key}\n")
+
+        result = scanner.scan([tmp_path])
+
+        mc = [f for f in result.findings if f.rule_id == "mailchimp-api-key"]
+        assert len(mc) >= 1
+
+    def test_ec_pubkey_dropped_by_value_shape_under_api_key_var(
+        self, scanner: NativeScanner, tmp_path: Path
+    ):
+        """A bare EC public key under a non-dotenvx var (API_KEY=…) is dropped by
+        value shape, not by var name or entropy (#370).
+
+        This is the *load-bearing* test for the in-``_scan_patterns``
+        ``_EC_PUBKEY_RE`` drop. The chain that makes the drop the **sole**
+        suppressor here:
+
+        * ``generic-api-key`` (``api[_-]?key`` … ``([a-zA-Z0-9_-]{20,})``) captures
+          the value **bare** — its char class excludes ``"``, so the closing quote
+          terminates the capture and group(1) is exactly the 66-hex pubkey.
+        * ``generic-api-key`` carries **no entropy filter** (only ``generic-secret``
+          does), so the value is *not* dropped by entropy.
+        * ``API_KEY`` is **not** ``is_dotenvx_public_key_var``, so the var-name skip
+          does not apply.
+
+        Verified empirically: on ``origin/main`` (no ``_EC_PUBKEY_RE`` drop) this
+        line is reported as ``generic-api-key``; with the drop it is suppressed.
+        Revert the drop → this test fails; restore → it passes.
+        """
+        from envdrift.scanner.patterns import hash_secret
+
+        # 66-hex compressed secp256k1 pubkey shape (03 + 64 hex) built via
+        # concatenation so no realistic-looking secret literal is committed.
+        pubkey = "03" + "12456789abcdef" + ("0123456789abcdef" * 3) + "01"
+        assert len(pubkey) == 66
+        cfg = tmp_path / "api.env"
+        cfg.write_text(f'API_KEY="{pubkey}"\n')
+
+        result = scanner.scan([tmp_path])
+
+        # generic-api-key would otherwise flag the bare pubkey; the value-shape
+        # drop is the only thing that suppresses it here.
+        assert all(f.rule_id != "generic-api-key" for f in result.findings)
+        assert all(f.secret_hash != hash_secret(pubkey) for f in result.findings)
+
+    def test_low_entropy_pubkey_under_secret_var_dropped_by_entropy(
+        self, scanner: NativeScanner, tmp_path: Path
+    ):
+        """A pubkey-shaped value under a ``secret`` var is dropped by the
+        generic-secret entropy filter (entropy < 4.0), independent of #370.
+
+        NOTE: this is *not* a test of the ``_EC_PUBKEY_RE`` drop. ``generic-secret``
+        includes ``"`` in its char class, so ``SECRET="<pubkey>"`` captures
+        ``<pubkey>"`` (with the quote) — which does *not* match the anchored
+        ``_EC_PUBKEY_RE`` — and the entropy filter is what suppresses it. The
+        value-shape drop is covered by
+        ``test_ec_pubkey_dropped_by_value_shape_under_api_key_var`` above.
+        """
+        from envdrift.scanner.patterns import calculate_entropy, hash_secret
+
+        pubkey = "03" + "f8a91b2c3d4e5f6a" * 4  # 66 hex, low symbol diversity
+        # Entropy of the captured value (incl. trailing quote) is < 4.0, so the
+        # generic-secret entropy filter — not the EC drop — discards it.
+        assert calculate_entropy(pubkey + '"') < 4.0
+        cfg = tmp_path / "pub.env"
+        cfg.write_text(f'SECRET="{pubkey}"\n')
+
+        result = scanner.scan([tmp_path])
+
+        # The public-key-shaped value must not surface as a secret finding.
+        assert all(f.secret_hash != hash_secret(pubkey) for f in result.findings)
+
+    def test_distinctive_prefix_not_suppressed_without_context(
+        self, scanner: NativeScanner, tmp_path: Path
+    ):
+        """AKIA… (require_keyword=False) is still flagged with no sibling context."""
+        cfg = tmp_path / "lone.env"
+        cfg.write_text("SOME_VALUE=AKIAIOSFODNN7EXAMPLE\n")
+
+        result = scanner.scan([tmp_path])
+
+        aws = [f for f in result.findings if "aws" in f.rule_id.lower()]
+        assert len(aws) >= 1
+
+
+class TestLowercaseEntropyAssignment:
+    """#369 — entropy assignment LHS accepts lower/mixed case var names."""
+
+    @pytest.fixture
+    def scanner(self) -> NativeScanner:
+        return NativeScanner(check_entropy=True, entropy_threshold=4.0)
+
+    def test_lowercase_api_key_flagged(self, scanner: NativeScanner, tmp_path: Path):
+        """lowercase api_key="<high entropy>" is flagged (was missed before #369)."""
+        cfg = tmp_path / "config.py"
+        cfg.write_text('api_key = "aB3xK9mN2pQ5vR8tY1wZ4cF7hJ0kL6"\n')
+
+        result = scanner.scan([tmp_path])
+
+        ent = [f for f in result.findings if f.rule_id == "high-entropy-string"]
+        assert len(ent) >= 1
+
+    def test_uppercase_still_flagged(self, scanner: NativeScanner, tmp_path: Path):
+        """UPPERCASE var name still flagged (no regression)."""
+        cfg = tmp_path / "config.py"
+        cfg.write_text('API_KEY = "aB3xK9mN2pQ5vR8tY1wZ4cF7hJ0kL6"\n')
+
+        result = scanner.scan([tmp_path])
+
+        ent = [f for f in result.findings if f.rule_id == "high-entropy-string"]
+        assert len(ent) >= 1
+
+    def test_ordinary_lowercase_config_not_flooded(self, scanner: NativeScanner, tmp_path: Path):
+        """Ordinary low-entropy lowercase config is not flagged (no egregious FPs)."""
+        cfg = tmp_path / "settings.py"
+        cfg.write_text(
+            "host = localhost\n"
+            "port = 5432\n"
+            "database_name = my_application_database\n"
+            "log_level = information\n"
+        )
+
+        result = scanner.scan([tmp_path])
+
+        ent = [f for f in result.findings if f.rule_id == "high-entropy-string"]
+        assert len(ent) == 0
+
+
+class TestEcPublicKeyDropped:
+    """#370 — dotenvx EC compressed public keys are not flagged as secrets.
+
+    These cases use the canonical ``DOTENV_PUBLIC_KEY`` var name, so suppression
+    here flows through the var-name skip (``is_dotenvx_public_key_var``) and the
+    hash-based ``ScanEngine._filter_public_keys`` path — *not* the in-scan
+    ``_EC_PUBKEY_RE`` value-shape drop. The value-shape drop (which fires for a
+    bare pubkey under an *unexpected* var name) is exercised load-bearingly by
+    ``TestKeywordGate.test_ec_pubkey_dropped_by_value_shape_under_api_key_var``.
+    """
+
+    @pytest.fixture
+    def scanner(self) -> NativeScanner:
+        return NativeScanner(check_entropy=True, entropy_threshold=3.0)
+
+    def test_ec_public_key_not_flagged(self, scanner: NativeScanner, tmp_path: Path):
+        """A 02/03 + 64-hex compressed EC public key is not flagged as a secret."""
+        pub = "03" + "a1b2c3d4e5f6071829" * 3 + "a1b2c3d4e5"  # 66 hex chars
+        assert len(pub) == 66
+        cfg = tmp_path / ".env"
+        cfg.write_text(f"DOTENV_PUBLIC_KEY={pub}\n")
+
+        result = scanner.scan([tmp_path])
+
+        # The pubkey value itself must not appear as any pattern/entropy finding.
+        from envdrift.scanner.patterns import hash_secret
+
+        pub_hash = hash_secret(pub)
+        assert all(f.secret_hash != pub_hash for f in result.findings)
+
+    def test_real_secret_next_to_pubkey_still_flagged(self, scanner: NativeScanner, tmp_path: Path):
+        """A genuine AWS key sitting next to a public key is still flagged."""
+        pub = "02" + "f0e1d2c3b4a5968778" * 3 + "f0e1d2c3b4"  # 66 hex chars
+        assert len(pub) == 66
+        cfg = tmp_path / ".env"
+        cfg.write_text(f"DOTENV_PUBLIC_KEY={pub}\nAWS_ACCESS_KEY_ID=AKIAIOSFODNN7EXAMPLE\n")
+
+        result = scanner.scan([tmp_path])
+
+        aws = [f for f in result.findings if "aws" in f.rule_id.lower()]
+        assert len(aws) >= 1

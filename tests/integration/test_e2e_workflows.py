@@ -15,11 +15,14 @@ from __future__ import annotations
 
 import contextlib
 import os
+import shutil
 import subprocess
 from pathlib import Path
 from typing import TYPE_CHECKING
 
 import pytest
+
+DOTENVX_AVAILABLE = shutil.which("dotenvx") is not None
 
 if TYPE_CHECKING:
     pass
@@ -494,4 +497,174 @@ activate_to = ".env.development"
         # Should complete without hanging/crashing
         assert result.returncode in (0, 1), (
             f"Pull with profile failed unexpectedly: {result.stderr}"
+        )
+
+
+@pytest.mark.slow
+@pytest.mark.skipif(not DOTENVX_AVAILABLE, reason="dotenvx binary required")
+class TestLockCheckIsReadOnly:
+    """`lock --check` is a dry run: it must never mutate files on disk (#303)."""
+
+    def test_lock_check_does_not_mutate_on_key_name_mismatch(
+        self,
+        work_dir: Path,
+        integration_pythonpath: str,
+        envdrift_cmd: list[str],
+    ) -> None:
+        """#303: lock --check must not re-encrypt/regenerate keys on a key mismatch.
+
+        Reproduces a real dotenvx file that was encrypted as ``.env.local`` (key
+        ``DOTENV_PRIVATE_KEY_LOCAL``) then *renamed* to ``.env.localenv`` while the
+        config maps it to environment ``localenv`` (expected key
+        ``DOTENV_PRIVATE_KEY_LOCALENV``). The file's own metadata + the present
+        LOCAL private key still decrypt it, so the re-key branch can run and would
+        rewrite both the env file and ``.env.keys``. Under ``--check`` (a documented
+        dry run) nothing on disk may change.
+        """
+        dotenvx = shutil.which("dotenvx")
+        assert dotenvx is not None
+
+        svc = work_dir / "svc"
+        svc.mkdir()
+
+        # Many value lines so the encryption ratio is comfortably >= 0.9 and the
+        # "fully encrypted" re-key branch is reached.
+        env_file = svc / ".env.local"
+        env_file.write_text("A=1\nB=2\nC=3\nD=4\nE=5\nF=6\nG=7\nH=8\nI=9\nJ=10\nK=11\nL=12\nM=13\n")
+        enc = subprocess.run(
+            [dotenvx, "encrypt", "-f", str(env_file)],
+            cwd=str(svc),
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        assert enc.returncode == 0, enc.stderr
+
+        # Rename the encrypted file to .env.localenv. Its metadata + the .env.keys
+        # entry still say LOCAL (which decrypts it), but config env is localenv so
+        # the expected key is DOTENV_PRIVATE_KEY_LOCALENV -> triggers needs_rekey.
+        renamed = svc / ".env.localenv"
+        env_file.rename(renamed)
+        keys_file = svc / ".env.keys"
+
+        (work_dir / "envdrift.toml").write_text(
+            '[encryption]\nbackend = "dotenvx"\n'
+            "[vault.sync]\n"
+            "[[vault.sync.mappings]]\n"
+            'secret_name = "s"\nfolder_path = "svc"\nenvironment = "localenv"\n'
+        )
+
+        env_before = renamed.read_bytes()
+        keys_before = keys_file.read_bytes()
+
+        env = os.environ.copy()
+        env["PYTHONPATH"] = integration_pythonpath
+        # --provider is required by lock; aws is fine, the re-key branch is purely
+        # local (no vault round-trip) so no credentials/containers are needed here.
+        result = subprocess.run(
+            [
+                *envdrift_cmd,
+                "lock",
+                "--check",
+                "--provider",
+                "aws",
+                "--region",
+                "us-east-1",
+                "--config",
+                "envdrift.toml",
+            ],
+            cwd=work_dir,
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+
+        out = (result.stdout + result.stderr).lower()
+        # The check still REPORTS the intended re-key (read-only diagnosis).
+        assert "would re-key" in out or "key name mismatch" in out, out
+        # The actual mutation phrasing must NOT appear under --check.
+        assert "re-encrypted with new key" not in out, out
+        # And on disk: both files byte-identical to the pre-check snapshot.
+        assert renamed.read_bytes() == env_before, (
+            "lock --check mutated the encrypted env file (#303)"
+        )
+        assert keys_file.read_bytes() == keys_before, "lock --check regenerated .env.keys (#303)"
+
+    def test_lock_check_does_not_normalize_noncanonical_filename(
+        self,
+        work_dir: Path,
+        integration_pythonpath: str,
+        envdrift_cmd: list[str],
+    ) -> None:
+        """#303: lock --check must not rewrite dotenvx metadata for a non-canonical name.
+
+        A second read-only violation distinct from the re-key branch: when a
+        mapping pins a file whose name is non-canonical for its environment
+        (``env_file = ".env.local"`` mapped to ``environment = "localenv"``),
+        ``_normalize_mapped_dotenvx_metadata`` rewrites ``.env.keys`` and the file
+        header to the canonical ``LOCALENV`` key. That ``write_text`` ran *before*
+        the ``check_only`` guard, so ``--check`` mutated the tree. It must not.
+        """
+        dotenvx = shutil.which("dotenvx")
+        assert dotenvx is not None
+
+        svc = work_dir / "svc"
+        svc.mkdir()
+
+        env_file = svc / ".env.local"
+        env_file.write_text("A=1\nB=2\nC=3\nD=4\nE=5\nF=6\nG=7\nH=8\nI=9\nJ=10\nK=11\nL=12\nM=13\n")
+        enc = subprocess.run(
+            [dotenvx, "encrypt", "-f", str(env_file)],
+            cwd=str(svc),
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        assert enc.returncode == 0, enc.stderr
+
+        keys_file = svc / ".env.keys"
+
+        # Keep the non-canonical name .env.local but map it to environment
+        # localenv via env_file: the resolved filename is non-canonical, so
+        # _normalize_mapped_dotenvx_metadata would rewrite .env.keys + the header.
+        (work_dir / "envdrift.toml").write_text(
+            '[encryption]\nbackend = "dotenvx"\n'
+            "[vault.sync]\n"
+            "[[vault.sync.mappings]]\n"
+            'secret_name = "s"\nfolder_path = "svc"\n'
+            'env_file = ".env.local"\nenvironment = "localenv"\n'
+        )
+
+        env_before = env_file.read_bytes()
+        keys_before = keys_file.read_bytes()
+
+        env = os.environ.copy()
+        env["PYTHONPATH"] = integration_pythonpath
+        result = subprocess.run(
+            [
+                *envdrift_cmd,
+                "lock",
+                "--check",
+                "--provider",
+                "aws",
+                "--region",
+                "us-east-1",
+                "--config",
+                "envdrift.toml",
+            ],
+            cwd=work_dir,
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+
+        # On disk: both files byte-identical to the pre-check snapshot — the
+        # metadata-normalization write must be skipped under --check.
+        assert env_file.read_bytes() == env_before, (
+            f"lock --check rewrote env-file metadata (#303 normalize path)\n{result.stdout}"
+        )
+        assert keys_file.read_bytes() == keys_before, (
+            f"lock --check rewrote .env.keys (#303 normalize path)\n{result.stdout}"
         )

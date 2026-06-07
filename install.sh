@@ -7,6 +7,7 @@
 #   --no-agent          Skip downloading the envdrift-agent binary
 #   --version X.Y.Z     Install a specific envdrift version
 #   --agent-version X.Y.Z  Install a specific agent version
+#   --insecure-skip-checksum  Skip SHA256 verification of the agent binary (unsafe)
 #   --uninstall         Remove envdrift installation
 #   --help              Show this help message
 
@@ -29,6 +30,7 @@ INSTALL_AGENT=1
 ENVDRIFT_VERSION=""
 AGENT_VERSION=""
 UNINSTALL=0
+SKIP_CHECKSUM=0
 
 # -------------------------------------------------------------------
 # Cleanup trap
@@ -82,11 +84,12 @@ Usage:
   install.sh [options]
 
 Options:
-  --no-agent              Skip downloading the envdrift-agent binary
-  --version X.Y.Z         Install a specific envdrift Python package version
-  --agent-version X.Y.Z   Install a specific agent binary version
-  --uninstall             Remove the envdrift installation (~/.envdrift)
-  --help                  Show this help message
+  --no-agent                  Skip downloading the envdrift-agent binary
+  --version X.Y.Z             Install a specific envdrift Python package version
+  --agent-version X.Y.Z       Install a specific agent binary version
+  --insecure-skip-checksum    Skip SHA256 verification of the agent binary (unsafe)
+  --uninstall                 Remove the envdrift installation (~/.envdrift)
+  --help                      Show this help message
 EOF
 }
 
@@ -105,6 +108,10 @@ while [ $# -gt 0 ]; do
             [ $# -ge 2 ] || die "--agent-version requires a value"
             AGENT_VERSION="$2"
             shift 2
+            ;;
+        --insecure-skip-checksum)
+            SKIP_CHECKSUM=1
+            shift
             ;;
         --uninstall)
             UNINSTALL=1
@@ -347,7 +354,7 @@ for r in releases:
         return
     fi
 
-    # Verify checksum (best-effort)
+    # Verify checksum (fail-closed unless --insecure-skip-checksum was passed)
     verify_checksum "${tmp_binary}" "${binary_name}" "${checksum_url}"
 
     mv "${tmp_binary}" "${dest}"
@@ -363,12 +370,18 @@ verify_checksum() {
     name="$2"
     url="$3"
 
+    # Fail-closed: an unverified binary is refused unless the user explicitly
+    # opts out. This is a supply-chain integrity gate, not a best-effort hint.
+    if [ "${SKIP_CHECKSUM:-0}" = "1" ]; then
+        warn "Skipping checksum verification (--insecure-skip-checksum)"
+        return
+    fi
+
     tmp_checksums="$(mktemp)"
     add_tmp "${tmp_checksums}"
 
-    if ! download "${url}" "${tmp_checksums}" 2>/dev/null; then
-        warn "Checksums file not available — skipping verification"
-        return
+    if ! download "${url}" "${tmp_checksums}"; then
+        die "Checksums file not available at ${url} — refusing to install an unverified binary (use --insecure-skip-checksum to override)."
     fi
 
     expected=""
@@ -383,8 +396,7 @@ verify_checksum() {
     done < "${tmp_checksums}"
 
     if [ -z "${expected}" ]; then
-        warn "No checksum entry for ${name} — skipping verification"
-        return
+        die "No checksum entry for ${name} — refusing to install an unverified binary (use --insecure-skip-checksum to override)."
     fi
 
     # Compute SHA256
@@ -393,8 +405,7 @@ verify_checksum() {
     elif command -v shasum >/dev/null 2>&1; then
         actual="$(shasum -a 256 "${file}" | awk '{print $1}')"
     else
-        warn "No sha256sum or shasum found — skipping verification"
-        return
+        die "No sha256sum or shasum found — cannot verify the agent binary. Install one or pass --insecure-skip-checksum."
     fi
 
     if [ "${actual}" != "${expected}" ]; then

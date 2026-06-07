@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import contextlib
+import re
 from typing import Any
 
 from envdrift.vault.base import (
@@ -36,6 +37,13 @@ def _get_gcp_modules() -> tuple[Any, Any]:
     return _secretmanager, _google_exceptions
 
 
+# Canonical GCP Secret Manager resource name: projects/<P>/secrets/<S> optionally
+# followed by /versions/<V>. Each segment is non-empty and slash-free. A bare
+# secret name (no `projects/` prefix) is handled separately and resolves under the
+# bound project. Declaring the shape once here keeps validation in a single place.
+_QUALIFIED_NAME_RE = re.compile(r"^projects/(?P<project>[^/]+)/secrets/[^/]+(?:/versions/[^/]+)?$")
+
+
 class GCPSecretManagerClient(VaultClient):
     """GCP Secret Manager implementation.
 
@@ -62,7 +70,32 @@ class GCPSecretManagerClient(VaultClient):
     def _project_path(self) -> str:
         return f"projects/{self.project_id}"
 
+    def _validate_project(self, name: str) -> None:
+        """Reject resource names that are malformed or target a different project.
+
+        A bare secret name (no ``projects/`` prefix) is left to resolve under the
+        bound project. A fully-qualified name must match the canonical shape
+        ``projects/<P>/secrets/<S>`` optionally followed by ``/versions/<V>``, and
+        ``<P>`` must match the project this backend is bound to. This prevents a
+        caller-supplied name from being silently rewritten into a synthetic path
+        (e.g. ``projects/<P>`` or ``projects/<P>/other/<S>``) or from crossing the
+        configured project boundary.
+        """
+        if not name.startswith("projects/"):
+            return
+        match = _QUALIFIED_NAME_RE.match(name)
+        if match is None:
+            raise VaultError(f"Malformed GCP secret resource name: {name!r}")
+        requested_project = match.group("project")
+        if requested_project != self.project_id:
+            raise VaultError(
+                f"Secret resource name targets project {requested_project!r}, "
+                f"but this backend is bound to project {self.project_id!r}. "
+                f"Cross-project access is not allowed."
+            )
+
     def _secret_id(self, name: str) -> str:
+        self._validate_project(name)
         if name.startswith("projects/"):
             parts = name.split("/")
             if "secrets" in parts:
@@ -72,9 +105,11 @@ class GCPSecretManagerClient(VaultClient):
         return name
 
     def _secret_path(self, name: str) -> str:
+        self._validate_project(name)
         return f"{self._project_path()}/secrets/{self._secret_id(name)}"
 
     def _version_path(self, name: str, version: str = "latest") -> str:
+        self._validate_project(name)
         if name.startswith("projects/") and "/versions/" in name:
             return name
         if name.startswith("projects/") and "/secrets/" in name:
@@ -95,12 +130,21 @@ class GCPSecretManagerClient(VaultClient):
             )
             next(iter(secrets_iter), None)
         except DefaultCredentialsError as e:
+            # No usable credentials at all (no ADC, bad GOOGLE_APPLICATION_CREDENTIALS,
+            # etc.) — a genuine authentication failure.
             self._client = None
             raise AuthenticationError(f"GCP authentication failed: {e}") from e
-        except (
-            google_exceptions.PermissionDenied,
-            google_exceptions.Unauthenticated,
-        ) as e:
+        except google_exceptions.PermissionDenied:
+            # The credential authenticated successfully but lacks
+            # `secretmanager.secrets.list`. A least-privilege service account that
+            # only holds `secretmanager.versions.access` (enough for get_secret,
+            # which is all sync needs) hits this on the list probe. Treat it as
+            # authenticated-but-cannot-list: keep the client. If a specific secret
+            # genuinely can't be read, get_secret() surfaces a clear error later.
+            pass
+        except google_exceptions.Unauthenticated as e:
+            # The credential itself is invalid/expired — a genuine auth failure,
+            # distinct from PermissionDenied (authenticated, missing list permission).
             self._client = None
             raise AuthenticationError(f"GCP authentication failed: {e}") from e
         except google_exceptions.GoogleAPICallError as e:

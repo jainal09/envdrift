@@ -244,6 +244,7 @@ def _normalize_mapped_dotenvx_metadata(
     env_keys_file: Path,
     effective_environment: str,
     backend_provider: Any,
+    check_only: bool = False,
 ) -> None:
     from envdrift.encryption import EncryptionProvider
     from envdrift.integrations.dotenvx import (
@@ -257,6 +258,13 @@ def _normalize_mapped_dotenvx_metadata(
     # env_file or auto-detected (e.g. postgresql.env) — since dotenvx derives its
     # key name from the filename and would otherwise write a non-canonical key.
     if not dotenvx_filename_needs_normalization(env_file, effective_environment):
+        return
+
+    # `lock --check` is a documented read-only dry run (see #303): the file's
+    # non-canonical key name is still surfaced downstream (re-key detection
+    # reports "would re-key"), but we must NOT rewrite .env.keys / the header
+    # here. normalize_dotenvx_metadata() write_text()s both files.
+    if check_only:
         return
 
     normalize_dotenvx_metadata(env_file, env_keys_file, effective_environment)
@@ -650,17 +658,30 @@ def pull(
         # Build ephemeral keys map from sync results
         from envdrift.sync.result import SyncAction
 
+        # Index mappings by resolved folder path so ephemeral key names are
+        # derived from the mapping's ENVIRONMENT (the source of truth), not the
+        # folder basename, and the match is robust to relative/absolute paths
+        # (#325). setdefault keeps the FIRST mapping when two share a folder,
+        # preserving the original break-on-first semantics deterministically.
+        mappings_by_folder: dict[Path, ServiceMapping] = {}
+        for m in filtered_mappings:
+            mappings_by_folder.setdefault(m.folder_path.resolve(), m)
+
         for service_result in sync_result.services:
             action = getattr(service_result, "action", None)
             vault_key_value = getattr(service_result, "vault_key_value", None)
             if action == SyncAction.EPHEMERAL and vault_key_value:
-                key_name = f"DOTENV_PRIVATE_KEY_{service_result.folder_path.name.upper()}"
-                # Find the matching mapping to get the effective environment
-                for m in filtered_mappings:
-                    if m.folder_path == service_result.folder_path:
-                        key_name = f"DOTENV_PRIVATE_KEY_{m.effective_environment.upper()}"
-                        break
-                ephemeral_keys_map[service_result.folder_path] = (
+                matched = mappings_by_folder.get(service_result.folder_path.resolve())
+                if matched is not None:
+                    key_name = f"DOTENV_PRIVATE_KEY_{matched.effective_environment.upper()}"
+                else:
+                    # No mapping matched (should not happen) — last-resort fallback.
+                    key_name = f"DOTENV_PRIVATE_KEY_{service_result.folder_path.name.upper()}"
+                # Key the map on the RESOLVED folder_path so Step 2's lookup
+                # (also resolved) matches even when the result's folder_path is a
+                # different Path value than the mapping's but points at the same
+                # directory (#325 — e.g. a relative result vs an absolute mapping).
+                ephemeral_keys_map[service_result.folder_path.resolve()] = (
                     key_name,
                     vault_key_value,
                 )
@@ -778,8 +799,12 @@ def pull(
             _DecryptTask(
                 mapping=mapping,
                 env_file=env_file,
-                ephemeral_key=ephemeral_keys_map.get(mapping.folder_path, (None, None))[1],
-                ephemeral_key_name=ephemeral_keys_map.get(mapping.folder_path, (None, None))[0],
+                ephemeral_key=ephemeral_keys_map.get(mapping.folder_path.resolve(), (None, None))[
+                    1
+                ],
+                ephemeral_key_name=ephemeral_keys_map.get(
+                    mapping.folder_path.resolve(), (None, None)
+                )[0],
             )
         )
 
@@ -1397,6 +1422,7 @@ def lock(
             env_keys_file,
             effective_env,
             backend_provider,
+            check_only=check_only,
         )
 
         # Check if file is already encrypted
@@ -1469,6 +1495,20 @@ def lock(
                                             break
 
                         if needs_rekey and old_key_name:
+                            if check_only:
+                                # Dry run: report the intended re-key without
+                                # touching the env file or .env.keys on disk (#303).
+                                console.print(
+                                    f"  [cyan]?[/cyan] {env_file} "
+                                    f"[dim]- would re-key ({old_key_name} -> "
+                                    f"{expected_key_name})[/dim]"
+                                )
+                                warnings.append(
+                                    f"{env_file}: key name mismatch, would re-encrypt to "
+                                    f"generate {expected_key_name}"
+                                )
+                                encrypted_count += 1
+                                continue
                             console.print(
                                 f"  [yellow]~[/yellow] {env_file} "
                                 f"[dim]- key name mismatch ({old_key_name} -> {expected_key_name}), "
