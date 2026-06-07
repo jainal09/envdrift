@@ -142,6 +142,12 @@ jobs:
     name: Publish to Marketplace
     runs-on: ubuntu-latest
     needs: release
+    # `secrets` is not available in a step `if:` (causes "Unrecognized named-value:
+    # 'secrets'"), which breaks workflow validation when release-please.yml reuses
+    # this file. Expose the PAT as job-level env so the publish step can gate on
+    # `env.VSCE_PAT` instead.
+    env:
+      VSCE_PAT: ${{ secrets.VSCE_PAT }}
     # Only publish stable releases to marketplace (no -rc, -beta, -alpha suffixes)
     # Use tag from release job instead of github.ref_name, which is 'main' in workflow_call runs
     if: ${{ !contains(needs.release.outputs.tag, '-rc') && !contains(needs.release.outputs.tag, '-beta') && !contains(needs.release.outputs.tag, '-alpha') }}
@@ -179,8 +185,9 @@ jobs:
       - name: Publish to VS Code Marketplace
         # Skip cleanly when the PAT is not configured, but do NOT swallow a real
         # publish failure (expired/insufficient PAT, network, etc.) — those must
-        # fail the job so a silent non-publish is visible.
-        if: ${{ secrets.VSCE_PAT != '' }}
+        # fail the job so a silent non-publish is visible. Gate on env (job-level)
+        # rather than secrets, which is not a valid context in a step `if:`.
+        if: ${{ env.VSCE_PAT != '' }}
         run: npx vsce publish --packagePath ../release/envdrift-${{ steps.version.outputs.VERSION }}.vsix
         env:
           VSCE_PAT: ${{ secrets.VSCE_PAT }}
