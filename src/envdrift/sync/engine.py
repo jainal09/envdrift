@@ -112,7 +112,7 @@ class SyncEngine:
             effective_key_name = f"DOTENV_PRIVATE_KEY_{effective_environment.upper()}"
 
             # Fetch secret from vault
-            vault_value = self._fetch_vault_secret(mapping)
+            vault_value = self._fetch_vault_secret(mapping, effective_environment)
             vault_preview = redact_value(vault_value)
 
             # Check for ephemeral mode - skip local file operations
@@ -251,8 +251,18 @@ class SyncEngine:
                 error=str(e),
             )
 
-    def _fetch_vault_secret(self, mapping: ServiceMapping) -> str:
-        """Fetch secret from vault."""
+    def _fetch_vault_secret(self, mapping: ServiceMapping, effective_environment: str) -> str:
+        """Fetch secret from vault.
+
+        ``effective_environment`` is the environment the value will be installed
+        as (derived from the detected ``.env.<env>`` file). When the vault value
+        is a full ``DOTENV_PRIVATE_KEY_<SUFFIX>=...`` line we strip the prefix so
+        it converges with the locally-stored value (#356) — but only after
+        confirming ``<SUFFIX>`` matches the target environment. A mismatch means
+        a key labeled for one environment would be silently relabeled and
+        installed as another (e.g. staging key written as production), so we
+        raise instead of stripping (#348).
+        """
         secret = self.vault_client.get_secret(mapping.secret_name)
         value = secret.value
 
@@ -267,9 +277,16 @@ class SyncEngine:
             (value[0] == '"' and value[-1] == '"') or (value[0] == "'" and value[-1] == "'")
         ):
             value = value[1:-1]
-        match = re.match(r"^DOTENV_PRIVATE_KEY_[A-Za-z0-9_]+=(.+)$", value)
+        match = re.match(r"^DOTENV_PRIVATE_KEY_([A-Za-z0-9_]+)=(.+)$", value)
         if match:
-            value = match.group(1)
+            suffix = match.group(1)
+            if suffix.upper() != effective_environment.upper():
+                raise VaultError(
+                    f"vault key labeled for environment {suffix.upper()} cannot be "
+                    f"installed as environment {effective_environment.upper()} "
+                    f"(secret {mapping.secret_name!r})"
+                )
+            value = match.group(2)
 
         return value
 

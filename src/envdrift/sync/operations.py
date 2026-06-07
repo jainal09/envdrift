@@ -2,10 +2,14 @@
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
+import os
 import re
 import secrets
 import shutil
+import stat
+import tempfile
 from datetime import datetime
 from pathlib import Path
 
@@ -118,18 +122,59 @@ def atomic_write(path: Path, content: str, permissions: int = 0o600) -> None:
     """
     Write file atomically with proper permissions.
 
-    Uses a temporary file and rename to ensure atomicity.
+    Creates the temp file in the destination directory with an unguessable name
+    via ``tempfile.mkstemp`` (``O_EXCL``, owned by us, never following a
+    pre-existing symlink) and applies permissions to the *fd we created* with
+    ``os.fchmod`` -- not a path-based ``chmod`` that could be redirected through
+    a symlinked sibling. The temp file is then atomically renamed onto ``path``.
+    If the destination already exists as a *real file*, its current mode is
+    preserved instead of unconditionally forcing ``permissions``; a destination
+    that is a symlink is ignored for mode purposes so a pre-planted symlink
+    cannot inject an overly permissive mode onto the new secret.
     """
     # Ensure parent directory exists
     path.parent.mkdir(parents=True, exist_ok=True)
 
-    tmp_path = path.with_suffix(".tmp")
+    # Preserve the destination's existing mode if it already exists as a real
+    # file. Use ``lstat`` (does not follow symlinks) and skip preservation when
+    # the destination is a symlink: an attacker who pre-plants a symlink at the
+    # destination pointing at a 0o777 file they own must not be able to force
+    # that permissive mode onto the freshly written secret.
+    mode = permissions
+    with contextlib.suppress(FileNotFoundError):
+        dest_stat = path.lstat()
+        if not stat.S_ISLNK(dest_stat.st_mode):
+            mode = dest_stat.st_mode & 0o777
+
+    fd, tmp_name = tempfile.mkstemp(
+        dir=str(path.parent), prefix=f".{path.name}.", suffix=".envdrift-tmp"
+    )
+    tmp_path = Path(tmp_name)
+    # ``mkstemp`` returns an fd we own. Hand it to ``os.fdopen`` *immediately* so
+    # the wrapper owns it for the entire body and closes it exactly once on
+    # ``__exit__`` (success *or* exception). We never close the fd ourselves --
+    # doing so would either double-close (masking the real error with ``EBADF``
+    # and leaking the temp file) or leak it. ``fchmod`` and ``fsync`` operate on
+    # the same fd via ``fileno()`` while the wrapper still owns it.
     try:
-        tmp_path.write_text(content)
-        tmp_path.chmod(permissions)
+        with os.fdopen(fd, "w") as tmp_file:
+            # ``os.fchmod`` applies to the fd we own, never a symlink target. It
+            # is absent on Windows, where permission bits are largely a no-op.
+            if hasattr(os, "fchmod"):
+                os.fchmod(tmp_file.fileno(), mode)
+            tmp_file.write(content)
+            tmp_file.flush()
+            os.fsync(tmp_file.fileno())
+        # The fdopen wrapper has closed the fd; the rename promotes the temp
+        # file atomically onto the destination (``Path.replace`` delegates to
+        # ``os.replace``).
         tmp_path.replace(path)
-    except Exception:
-        tmp_path.unlink(missing_ok=True)
+    except BaseException:
+        # The fd is owned/closed by the fdopen wrapper, so we never close it
+        # here. Only ever unlink the temp file we created, never the
+        # destination; suppress its absence so the original error propagates.
+        with contextlib.suppress(FileNotFoundError):
+            tmp_path.unlink()
         raise
 
 

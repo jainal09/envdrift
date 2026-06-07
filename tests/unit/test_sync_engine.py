@@ -843,14 +843,20 @@ class TestSyncEngineFetchVaultSecret:
         assert "DOTENV_PRIVATE_KEY_PRODUCTION=actual_secret" in content
         assert "DOTENV_PRIVATE_KEY_PRODUCTION=DOTENV_PRIVATE_KEY" not in content
 
-    def test_strips_any_key_prefix_from_value(
+    def test_rejects_cross_environment_key_prefix(
         self, mock_vault_client: MagicMock, tmp_path: Path
     ) -> None:
-        """Test that any DOTENV_PRIVATE_KEY_*= prefix is stripped from vault value."""
-        # Vault stores key with different environment than config
+        """#348: a vault value labeled for one environment must NOT be relabeled.
+
+        A ``DOTENV_PRIVATE_KEY_STAGING=...`` value fetched for a ``production``
+        mapping previously had its prefix stripped and was re-written as
+        ``DOTENV_PRIVATE_KEY_PRODUCTION=...`` — silently installing the staging
+        key as the production key. The engine must error instead.
+        """
+        # Vault stores a key labeled STAGING, mapping targets production.
         mock_vault_client.get_secret.return_value = SecretValue(
             name="test-key",
-            value="DOTENV_PRIVATE_KEY_SOAK=actual_secret",
+            value="DOTENV_PRIVATE_KEY_STAGING=actual_secret",
         )
 
         service_dir = tmp_path / "service1"
@@ -868,12 +874,75 @@ class TestSyncEngineFetchVaultSecret:
         )
 
         engine = SyncEngine(config=config, vault_client=mock_vault_client)
-        engine.sync_all()
+        result = engine.sync_all()
 
+        # Mismatch -> ERROR, and NOTHING is written under the production label.
+        assert result.services[0].action == SyncAction.ERROR
+        assert result.services[0].error is not None
+        assert "STAGING" in result.services[0].error
+        assert "PRODUCTION" in result.services[0].error
+        assert not (service_dir / ".env.keys").exists()
+
+    def test_matching_environment_key_prefix_is_stripped(
+        self, mock_vault_client: MagicMock, tmp_path: Path
+    ) -> None:
+        """#348: when the suffix matches the target env, strip and write normally."""
+        mock_vault_client.get_secret.return_value = SecretValue(
+            name="test-key",
+            value="DOTENV_PRIVATE_KEY_PRODUCTION=actual_secret",
+        )
+
+        service_dir = tmp_path / "service1"
+        service_dir.mkdir()
+        (service_dir / ".env.production").write_text("DB_URL=encrypted:xyz\n")
+
+        config = SyncConfig(
+            mappings=[
+                ServiceMapping(
+                    secret_name="test-key",
+                    folder_path=service_dir,
+                    environment="production",
+                ),
+            ],
+        )
+
+        engine = SyncEngine(config=config, vault_client=mock_vault_client)
+        result = engine.sync_all()
+
+        assert result.services[0].action == SyncAction.CREATED
         content = (service_dir / ".env.keys").read_text()
-        # Should strip the SOAK prefix and write with PRODUCTION key
         assert "DOTENV_PRIVATE_KEY_PRODUCTION=actual_secret" in content
-        assert "DOTENV_PRIVATE_KEY_SOAK" not in content
+        assert "DOTENV_PRIVATE_KEY_PRODUCTION=DOTENV_PRIVATE_KEY" not in content
+
+    def test_bare_value_without_prefix_is_unaffected(
+        self, mock_vault_client: MagicMock, tmp_path: Path
+    ) -> None:
+        """#348: a bare value (no DOTENV_PRIVATE_KEY_* prefix) is written as-is."""
+        mock_vault_client.get_secret.return_value = SecretValue(
+            name="test-key",
+            value="actual_secret",
+        )
+
+        service_dir = tmp_path / "service1"
+        service_dir.mkdir()
+        (service_dir / ".env.production").write_text("DB_URL=encrypted:xyz\n")
+
+        config = SyncConfig(
+            mappings=[
+                ServiceMapping(
+                    secret_name="test-key",
+                    folder_path=service_dir,
+                    environment="production",
+                ),
+            ],
+        )
+
+        engine = SyncEngine(config=config, vault_client=mock_vault_client)
+        result = engine.sync_all()
+
+        assert result.services[0].action == SyncAction.CREATED
+        content = (service_dir / ".env.keys").read_text()
+        assert "DOTENV_PRIVATE_KEY_PRODUCTION=actual_secret" in content
 
     def test_strips_lowercase_key_prefix_from_value(
         self, mock_vault_client: MagicMock, tmp_path: Path
@@ -971,17 +1040,30 @@ class TestSyncEngineFetchVaultSecret:
         mapping = ServiceMapping(secret_name="test-key", folder_path=tmp_path)
         engine = SyncEngine(config=SyncConfig(mappings=[mapping]), vault_client=client)
 
-        assert engine._fetch_vault_secret(mapping) == secret
+        assert engine._fetch_vault_secret(mapping, "production") == secret
 
     def test_fetch_vault_secret_quoted_full_line_strips_prefix(self, tmp_path: Path) -> None:
         """#356 review: a quoted full `KEY=value` line strips quotes BEFORE the
-        DOTENV_PRIVATE_KEY_*= prefix, so the prefix doesn't leak; whitespace too."""
+        DOTENV_PRIVATE_KEY_*= prefix, so the prefix doesn't leak; whitespace too.
+
+        The prefix suffix (PROD) matches the effective environment, so it strips.
+        """
         secret = "abc" + "123"
         client = _StoredVaultClient({"k": f'  "DOTENV_PRIVATE_KEY_PROD={secret}"  '})
         mapping = ServiceMapping(secret_name="k", folder_path=tmp_path)
         engine = SyncEngine(config=SyncConfig(mappings=[mapping]), vault_client=client)
 
-        assert engine._fetch_vault_secret(mapping) == secret
+        assert engine._fetch_vault_secret(mapping, "prod") == secret
+
+    def test_fetch_vault_secret_cross_environment_raises(self, tmp_path: Path) -> None:
+        """#348 (direct): a prefix labeled for a different env raises VaultError."""
+        secret = "abc" + "123"
+        client = _StoredVaultClient({"k": f"DOTENV_PRIVATE_KEY_STAGING={secret}"})
+        mapping = ServiceMapping(secret_name="k", folder_path=tmp_path)
+        engine = SyncEngine(config=SyncConfig(mappings=[mapping]), vault_client=client)
+
+        with pytest.raises(VaultError, match=r"STAGING.*PRODUCTION"):
+            engine._fetch_vault_secret(mapping, "production")
 
 
 class TestSyncResult:

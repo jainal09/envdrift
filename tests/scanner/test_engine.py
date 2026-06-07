@@ -1472,6 +1472,56 @@ class TestFilterEncryptedFiles:
         result = engine._filter_encrypted_files([cleartext_finding])
         assert result == [cleartext_finding]
 
+    def test_filter_keeps_lineless_finding_in_plaintext_file_mentioning_marker(self, tmp_path):
+        """#348 engine regression: a plaintext file that merely *mentions* an
+        encryption marker must NOT have its findings dropped as "encrypted".
+
+        ``_filter_encrypted_files`` drops findings from files it deems encrypted
+        when the finding has no line info (the external-scanner ciphertext-blob
+        case). The old code used ``marker in content`` over ``DOTENVX_MARKERS +
+        SOPS_MARKERS``, so a plaintext env file whose comment said
+        ``# this file is not encrypted: yet`` (or a value ``NOTE=ask sops:``) was
+        classed as encrypted and a real lineless finding was silently dropped — a
+        false negative that hides a leak. The structure-aware
+        ``_content_is_encrypted`` delegation classes the file as plaintext, so the
+        finding survives.
+
+        Load-bearing for the engine.py change specifically: reverting
+        ``is_file_encrypted`` to the substring loop (while keeping native.py)
+        makes ``is_file_encrypted`` return True here, dropping the lineless
+        finding and failing this assertion. A line-numbered finding would survive
+        either way (the line-aware filter keeps cleartext lines), so the lineless
+        shape is what exercises the drop path.
+        """
+        config = GuardConfig(use_native=True, use_gitleaks=False)
+        engine = ScanEngine(config)
+
+        plaintext = tmp_path / ".env.production"
+        # Comment mentions ``encrypted:`` and a value mentions ``sops:`` mid-line —
+        # both are loose substrings the old loop matched, but neither is a real
+        # structural marker. The file is genuinely plaintext.
+        plaintext.write_text(
+            "# remember: this file is not encrypted: yet\n"  # line 1
+            "NOTE=ask sops: team about rotation\n"  # line 2
+            "API_KEY=plaintext-leak\n"  # line 3
+        )
+
+        finding = ScanFinding(
+            file_path=plaintext,
+            line_number=None,  # external-scanner blob: no line info -> drop path
+            rule_id="high-entropy-string",
+            rule_description="entropy",
+            description="secret in plaintext file mentioning a marker",
+            severity=FindingSeverity.HIGH,
+            scanner="detect-secrets",
+        )
+
+        result = engine._filter_encrypted_files([finding])
+        assert result == [finding], (
+            "a finding in a plaintext file that only mentions 'encrypted:'/'sops:' "
+            "must survive the encrypted-file filter (must not be dropped as a false negative)"
+        )
+
 
 class TestFilterPublicKeys:
     """Tests for _filter_public_keys (#370).
