@@ -30,8 +30,11 @@ coverage:
       default:
         target: auto
         # Allow the total to dip by up to 0.5% vs. the base without failing.
+        # (No-Python-change PRs are absorbed by this threshold, not by
+        # `if_ci_failed`.)
         threshold: 0.5%
-        # A PR that touches no measured code shouldn't fail the project status.
+        # If CI crashes before coverage is generated, surface an error rather
+        # than silently passing the status.
         if_ci_failed: error
         only_pulls: false
 
@@ -50,4 +53,6 @@ codecov:
 comment:
   layout: "reach, diff, flags, files"
   behavior: default
-  require_changes: false
+  # Don't post a coverage comment when the PR has no coverage delta (e.g.
+  # CI-only/docs-only changes) — keeps the noise-reduction goal consistent.
+  require_changes: true
