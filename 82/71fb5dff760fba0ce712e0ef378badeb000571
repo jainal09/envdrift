@@ -1,0 +1,31 @@
+docs/cli/guard.md
+  s_dfc6cd6692ed8f::t_b165c85aee76c9 184-190
+src/envdrift/scanner/engine.py
+  s_dfc6cd6692ed8f::t_d6485bd617c5ea 597-608
+  s_dfc6cd6692ed8f::t_1fdd8f669cf1a1 645
+  s_dfc6cd6692ed8f::t_58e3f08969282b 630-644,646-647,650
+  s_dfc6cd6692ed8f::t_66ee064cd93f02 554-560
+tests/scanner/test_engine.py
+  s_dfc6cd6692ed8f::t_fe2e84542aaf5b 693-773
+tests/scanner/test_native.py
+  s_dfc6cd6692ed8f::t_bd8321b39335cf 843-864,866-889,891-895
+  s_dfc6cd6692ed8f::t_f12192157126c5 788-794
+  s_dfc6cd6692ed8f::t_1fdd8f669cf1a1 865,890
+  s_dfc6cd6692ed8f::t_c46c4cb78e27b0 10
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.3",
+  "base_commit_sha": "8271fb5dff760fba0ce712e0ef378badeb000571",
+  "prompts": {},
+  "sessions": {
+    "s_dfc6cd6692ed8f": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "fd23e738-3512-4420-9290-d985ad979bfd",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Jainal Gosaliya <jainal09gosalia@gmail.com>"
+    }
+  }
+}
