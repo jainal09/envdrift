@@ -213,16 +213,23 @@ class TestMonorepoMultiService:
             "web": "e2e-test/monorepo/web-key",
         }
 
+        # Each service uses a plain ``.env`` (which resolves to the ``production``
+        # environment), so the vault-stored key line is labeled
+        # ``DOTENV_PRIVATE_KEY_PRODUCTION`` to match. envdrift now rejects a key
+        # whose ``DOTENV_PRIVATE_KEY_<SUFFIX>`` doesn't match the target
+        # environment (so a staging key can't be installed as production), so the
+        # label must agree with the file's environment — anything else is the
+        # cross-environment misinstall guarded against in test_sync_engine.py.
         for service_name, secret_name in services.items():
             try:
                 aws_secrets_client.create_secret(
                     Name=secret_name,
-                    SecretString=f"DOTENV_PRIVATE_KEY_{service_name.upper()}=key-{service_name}-123",
+                    SecretString=f"DOTENV_PRIVATE_KEY_PRODUCTION=key-{service_name}-123",
                 )
             except aws_secrets_client.exceptions.ResourceExistsException:
                 aws_secrets_client.put_secret_value(
                     SecretId=secret_name,
-                    SecretString=f"DOTENV_PRIVATE_KEY_{service_name.upper()}=key-{service_name}-123",
+                    SecretString=f"DOTENV_PRIVATE_KEY_PRODUCTION=key-{service_name}-123",
                 )
 
         # Step 2: Create monorepo structure
