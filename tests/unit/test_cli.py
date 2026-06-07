@@ -3072,30 +3072,19 @@ class TestPullCommand:
         assert "API_KEY=decrypted_key" in content
         assert "DB_PASS=decrypted_pass" in content
 
-    def test_pull_merge_gitignores_combined_file(
-        self,
-        monkeypatch,
-        tmp_path: Path,
-    ):
-        """Pull --merge must gitignore the decrypted combined file (#413).
+    @staticmethod
+    def _setup_merge_pull_env(monkeypatch, tmp_path: Path) -> dict[str, Path]:
+        """Build a real git repo + config for the ``pull --merge`` regression test.
 
-        Regression for #413: the ``--merge`` branch wrote a combined file
-        containing merged clear + DECRYPTED secret values but never added it to
-        ``.gitignore`` (unlike ``push``, which calls ``_ensure_combined_gitignore``
-        first). A routine ``git add .`` then staged plaintext secrets. This test
-        runs the real ``pull --merge`` path against a real git repo and asserts the
-        combined file lands in ``.gitignore``.
+        Returns the clear/secret/combined paths and the config file. Only the
+        vault/backend/hook seams are stubbed; the gitignore + combined-file
+        writing under test runs for real.
         """
         import subprocess
 
         # A real git repo so ensure_gitignore_entries can resolve the git root and
         # write a real .gitignore (no mock of the behavior under test).
-        subprocess.run(
-            ["git", "init"],
-            cwd=str(tmp_path),
-            capture_output=True,
-            check=True,
-        )
+        subprocess.run(["git", "init"], cwd=str(tmp_path), capture_output=True, check=True)
 
         service_dir = tmp_path / "service"
         service_dir.mkdir()
@@ -3153,11 +3142,7 @@ class TestPullCommand:
 
         sync_config = SyncConfig(
             mappings=[
-                ServiceMapping(
-                    secret_name="key",
-                    folder_path=service_dir,
-                    environment="prod",
-                )
+                ServiceMapping(secret_name="key", folder_path=service_dir, environment="prod")
             ],
         )
         monkeypatch.setattr(
@@ -3168,6 +3153,33 @@ class TestPullCommand:
             "envdrift.integrations.hook_check.ensure_git_hook_setup",
             lambda **_kwargs: [],
         )
+
+        return {
+            "clear_file": clear_file,
+            "secret_file": secret_file,
+            "combined_file": combined_file,
+            "config_file": config_file,
+        }
+
+    def test_pull_merge_gitignores_combined_file(
+        self,
+        monkeypatch,
+        tmp_path: Path,
+    ):
+        """Pull --merge must gitignore the decrypted combined file (#413).
+
+        Regression for #413: the ``--merge`` branch wrote a combined file
+        containing merged clear + DECRYPTED secret values but never added it to
+        ``.gitignore`` (unlike ``push``, which calls ``_ensure_combined_gitignore``
+        first). A routine ``git add .`` then staged plaintext secrets. This test
+        runs the real ``pull --merge`` path against a real git repo and asserts the
+        combined file lands in ``.gitignore``.
+        """
+        import subprocess
+
+        env = self._setup_merge_pull_env(monkeypatch, tmp_path)
+        combined_file = env["combined_file"]
+        config_file = env["config_file"]
 
         result = runner.invoke(app, ["pull", "-c", str(config_file), "--skip-sync", "--merge"])
 
