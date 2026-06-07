@@ -55,8 +55,8 @@ jobs:
           --health-cmd="curl -f http://localhost:4566/_localstack/health"
           --health-interval=5s
           --health-timeout=5s
-          --health-retries=10
-          --health-start-period=10s
+          --health-retries=20
+          --health-start-period=30s
 
       vault:
         # Keep in sync with tests/docker-compose.test.yml (hashicorp/vault:1.21).
