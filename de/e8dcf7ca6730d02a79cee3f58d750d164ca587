@@ -1,0 +1,25 @@
+docs/cli/vault-pull.md
+  s_dfc6cd6692ed8f::t_a5084c3f717a9b 80-84
+src/envdrift/sync/engine.py
+  s_dfc6cd6692ed8f::t_9ffc6e665a464a 115,254-265,280,282-289
+tests/unit/test_sync_engine.py
+  s_dfc6cd6692ed8f::t_d3b7dd868bad37 1043,1047-1050,1056-1061,1066
+  s_dfc6cd6692ed8f::t_f354cbf9eaa350 846,849-856,859,877-897,899-943
+  s_dfc6cd6692ed8f::t_82af02586a27e3 1065
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.3",
+  "base_commit_sha": "dee8dcf7ca6730d02a79cee3f58d750d164ca587",
+  "prompts": {},
+  "sessions": {
+    "s_dfc6cd6692ed8f": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "fd23e738-3512-4420-9290-d985ad979bfd",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Jainal Gosaliya <jainal09gosalia@gmail.com>"
+    }
+  }
+}
