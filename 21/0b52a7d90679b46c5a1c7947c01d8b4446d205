@@ -1,0 +1,22 @@
+tests/scanner/test_native.py
+  s_dfc6cd6692ed8f::t_fa3deb590b27f5 1366-1367
+  s_dfc6cd6692ed8f::t_03751371ce79ab 1354-1365,1368-1370
+tests/unit/test_git_utils.py
+  s_dfc6cd6692ed8f::t_72292e1253c8e2 192-194
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.3",
+  "base_commit_sha": "210b52a7d90679b46c5a1c7947c01d8b4446d205",
+  "prompts": {},
+  "sessions": {
+    "s_dfc6cd6692ed8f": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "fd23e738-3512-4420-9290-d985ad979bfd",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Jainal Gosaliya <jainal09gosalia@gmail.com>"
+    }
+  }
+}
