@@ -18,8 +18,6 @@ def _finding(
     *,
     file_path: str = "config.py",
     rule_id: str = "secret",
-    rule_description: str = "Secret",
-    description: str = "Secret",
     severity: FindingSeverity = FindingSeverity.HIGH,
     line_number: int | None = 10,
     column_number: int | None = None,
@@ -33,14 +31,19 @@ def _finding(
     severity, no secret value. Dedup keys depend on
     ``file_path`` / ``line_number`` / ``rule_id`` / ``secret_hash``, so each test
     overrides exactly the fields that define its scenario and leaves the rest at
-    these (cosmetic) defaults. ``file_path`` may be passed as a ``str``.
+    these defaults. ``file_path`` may be passed as a ``str``.
+
+    The keyword arguments map one-to-one onto the ``ScanFinding`` fields a test
+    can vary; they are explicit (rather than ``**kwargs``) so the type checker
+    validates every call site. ``rule_description`` / ``description`` are cosmetic
+    (asserted nowhere) and fixed here.
     """
     return ScanFinding(
         scanner=scanner,
         file_path=Path(file_path),
         rule_id=rule_id,
-        rule_description=rule_description,
-        description=description,
+        rule_description="Secret",
+        description="Secret",
         severity=severity,
         line_number=line_number,
         column_number=column_number,
@@ -250,8 +253,13 @@ class TestDeduplication:
         assert unique[1].severity == FindingSeverity.MEDIUM
         assert unique[2].severity == FindingSeverity.LOW
 
-    def test_deduplicate_skip_duplicate_by_secret_value(self):
-        """skip_duplicate deduplicates by secret value only (same preview collapses)."""
+    def test_deduplicate_same_secret_two_files_skip_vs_default(self):
+        """Same secret value in two files: collapses under skip_duplicate, kept by default.
+
+        ``skip_duplicate`` keys on the secret value alone, so the same preview in
+        two files collapses to one. On the default path the key includes the
+        location, so the two files stay as two findings.
+        """
         # Same secret value appearing in different files.
         findings = [
             _finding(
@@ -270,6 +278,7 @@ class TestDeduplication:
         ]
 
         assert len(_dedup(findings, skip_duplicate=True)) == 1
+        assert len(_dedup(findings)) == 2
 
     def test_deduplicate_skip_duplicate_prefers_secret_hash_key(self):
         """skip_duplicate keys on secret_hash when available (matching hash collapses)."""
@@ -327,25 +336,3 @@ class TestDeduplication:
         ]
 
         assert len(_dedup(findings, skip_duplicate=True)) == 2
-
-    def test_deduplicate_skip_duplicate_disabled_keeps_all_locations(self):
-        """With skip_duplicate=False, the same secret in different files is kept."""
-        # Same secret value appearing in different files.
-        findings = [
-            _finding(
-                "native",
-                file_path="config1.py",
-                rule_id="aws-key",
-                secret_preview="AKIA****XXXX",
-            ),
-            _finding(
-                "native",
-                file_path="config2.py",
-                line_number=20,
-                rule_id="aws-key",
-                secret_preview="AKIA****XXXX",  # Same secret value
-            ),
-        ]
-
-        # Different locations -> both kept on the default path.
-        assert len(_dedup(findings)) == 2
