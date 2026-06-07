@@ -27,9 +27,8 @@ from envdrift.scanner.base import (
 )
 from envdrift.scanner.ignores import IgnoreConfig, IgnoreFilter
 from envdrift.scanner.native import (
-    DOTENVX_MARKERS,
-    SOPS_MARKERS,
     NativeScanner,
+    _content_is_encrypted,
     _is_encrypted_value_line,
 )
 from envdrift.scanner.patterns import hash_secret
@@ -551,7 +550,18 @@ class ScanEngine:
     def _deduplicate(self, findings: list[ScanFinding]) -> list[ScanFinding]:
         """Remove duplicate findings, keeping the highest severity.
 
-        By default, duplicates are identified by file path, line number, and rule ID.
+        By default, duplicates are identified by file path, line number, rule ID,
+        and the secret's hash (when present). Including the hash means two
+        *distinct* secrets that match the same rule on the same line (e.g. two
+        AWS keys on one ``.env`` line, #348) are both reported, while the same
+        secret matched by the same rule at one location still collapses to one
+        finding. Because the rule ID is part of the key and each scanner
+        namespaces its rule IDs, the *same* secret flagged by two *different*
+        scanners keeps two findings on this default path; cross-scanner
+        same-secret collapse happens only under ``skip_duplicate`` (which keys on
+        the secret hash alone). Findings without a secret value (policy findings)
+        fall back to the location-only key so they continue to deduplicate by
+        location.
         When skip_duplicate is enabled, duplicates are identified by secret value only,
         showing each unique secret only once regardless of where/how it was found.
 
@@ -566,57 +576,114 @@ class ScanEngine:
             Deduplicated list sorted by severity (highest first).
         """
         seen: dict[tuple, ScanFinding] = {}
-
-        def _tie_key(finding: ScanFinding) -> tuple:
-            """Deterministic tie-breaker for duplicate findings."""
-            return (
-                str(finding.file_path),
-                finding.line_number or 0,
-                finding.rule_id,
-                finding.scanner,
-            )
-
         for finding in findings:
-            if self.config.skip_duplicate:
-                # Deduplicate by secret value only - same secret = one finding.
-                # Prefer secret_hash (accurate) over secret_preview (may have collisions).
-                # If neither is present (policy findings), fall back to location-based key.
-                if finding.secret_hash:
-                    key = (finding.secret_hash,)
-                elif finding.secret_preview:
-                    key = (finding.secret_preview,)
-                else:
-                    key = (finding.file_path, finding.line_number, finding.rule_id)
-            else:
-                # Default: deduplicate by file, line, and rule
-                key = (finding.file_path, finding.line_number, finding.rule_id)
-
-            if key not in seen:
+            key = self._dedup_key(finding)
+            existing = seen.get(key)
+            if existing is None or self._should_replace(finding, existing):
                 seen[key] = finding
-            else:
-                existing = seen[key]
-                # Keep higher severity
-                if finding.severity > existing.severity:
-                    seen[key] = finding
-                elif finding.severity == existing.severity:
-                    # Prefer verified over unverified
-                    if finding.verified and not existing.verified:
-                        seen[key] = finding
-                    elif finding.verified == existing.verified:
-                        # Prefer findings with a real secret_hash for accuracy
-                        if bool(finding.secret_hash) and not bool(existing.secret_hash):
-                            seen[key] = finding
-                        elif bool(finding.secret_hash) == bool(existing.secret_hash):
-                            # Deterministic tie-breaker to avoid run-to-run drift
-                            if _tie_key(finding) < _tie_key(existing):
-                                seen[key] = finding
+
+        survivors = list(seen.values())
+        if not self.config.skip_duplicate:
+            survivors = self._drop_hashless_duplicates(survivors)
 
         # Sort by severity (highest first), then by file path
         return sorted(
-            seen.values(),
+            survivors,
             key=lambda f: (f.severity, str(f.file_path), f.line_number or 0),
             reverse=True,
         )
+
+    def _dedup_key(self, finding: ScanFinding) -> tuple:
+        """Build the dedup key for ``finding`` under the active config.
+
+        ``skip_duplicate``: key on the secret value only -- the secret hash when
+        present (accurate), else the preview (may collide), else the location for
+        policy findings with no secret value. This is the only mode that collapses
+        the same secret across scanners.
+
+        Default: ``(file, line, rule, secret_hash)``. Two distinct secrets matching
+        the same rule on one line have different hashes, so both survive (#348);
+        the same secret matched by the same rule at one location shares a hash and
+        collapses. Rule IDs are scanner-namespaced (e.g. ``gitleaks-...`` vs native
+        bare ids), so the same secret found by two different scanners has different
+        rule IDs and is *not* collapsed here. Policy findings carry no secret_hash
+        and keep the historical location-only key.
+        """
+        if self.config.skip_duplicate:
+            if finding.secret_hash:
+                return (finding.secret_hash,)
+            if finding.secret_preview:
+                return (finding.secret_preview,)
+            return (finding.file_path, finding.line_number, finding.rule_id)
+        return (
+            finding.file_path,
+            finding.line_number,
+            finding.rule_id,
+            finding.secret_hash or None,
+        )
+
+    @staticmethod
+    def _tie_key(finding: ScanFinding) -> tuple:
+        """Deterministic tie-breaker for otherwise-equal duplicate findings."""
+        return (
+            str(finding.file_path),
+            finding.line_number or 0,
+            finding.rule_id,
+            finding.scanner,
+        )
+
+    @classmethod
+    def _should_replace(cls, finding: ScanFinding, existing: ScanFinding) -> bool:
+        """Whether ``finding`` should replace ``existing`` at the same dedup key.
+
+        Preference order, most significant first: higher severity, then verified
+        over unverified, then a real ``secret_hash`` over none, then a stable
+        tie-break so dedup is deterministic across runs.
+        """
+        if finding.severity != existing.severity:
+            return finding.severity > existing.severity
+        if finding.verified != existing.verified:
+            return finding.verified
+        if bool(finding.secret_hash) != bool(existing.secret_hash):
+            return bool(finding.secret_hash)
+        return cls._tie_key(finding) < cls._tie_key(existing)
+
+    @staticmethod
+    def _drop_hashless_duplicates(survivors: list[ScanFinding]) -> list[ScanFinding]:
+        """Drop hashless findings that merely duplicate a co-located hashed one.
+
+        A hashless finding (no extractable secret value) at the same
+        ``(file, line, rule)`` as one or more hashed findings is the less
+        precise duplicate of a hashed one -- drop it so we keep the hashed
+        finding(s). This preserves "prefer the hashed finding" for the
+        one-secret case without merging *distinct* hashed secrets that
+        legitimately share a line (#348), since those each keep their own
+        hashed key.
+
+        A hashless finding is kept when it carries *higher* severity than every
+        co-located hashed finding, so pruning never lowers the severity reported
+        at a location (the hashed finding is more precise, but the hashless one
+        may flag a more serious problem -- keep both rather than lose signal).
+        """
+        # Highest severity among hashed findings at each (file, line, rule).
+        hashed_max_severity: dict[tuple, FindingSeverity] = {}
+        for f in survivors:
+            if not f.secret_hash:
+                continue
+            loc = (f.file_path, f.line_number, f.rule_id)
+            current = hashed_max_severity.get(loc)
+            if current is None or f.severity > current:
+                hashed_max_severity[loc] = f.severity
+
+        kept: list[ScanFinding] = []
+        for f in survivors:
+            if f.secret_hash:
+                kept.append(f)
+                continue
+            co_located = hashed_max_severity.get((f.file_path, f.line_number, f.rule_id))
+            if co_located is None or f.severity > co_located:
+                kept.append(f)
+        return kept
 
     def get_scanner_info(self) -> list[dict]:
         """Get information about configured scanners.
@@ -695,11 +762,12 @@ class ScanEngine:
                     # leaked their ciphertext as findings. This matches line_at()
                     # and the native scanner, which both read full content.
                     content = f.read()
-                    # Use markers from native scanner
-                    for marker in DOTENVX_MARKERS + SOPS_MARKERS:
-                        if marker in content:
-                            encrypted_files.add(file_path)
-                            return True
+                    # Structure-aware encryption check (#348): require the dotenvx
+                    # marker in value position / canonical SOPS envelopes, not a bare
+                    # substring (which misfired on plaintext mentioning "encrypted:").
+                    if _content_is_encrypted(content):
+                        encrypted_files.add(file_path)
+                        return True
             except OSError:
                 pass
             return False

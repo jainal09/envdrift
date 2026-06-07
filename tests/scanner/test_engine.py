@@ -559,409 +559,6 @@ class TestScanEngine:
         assert info[0]["installed"] is True
 
 
-class TestDeduplication:
-    """Tests for finding deduplication."""
-
-    def test_deduplicate_identical_findings(self):
-        """Test that identical findings are deduplicated."""
-        config = GuardConfig(use_native=True, use_gitleaks=False)
-        engine = ScanEngine(config)
-
-        findings = [
-            ScanFinding(
-                file_path=Path("config.py"),
-                line_number=10,
-                rule_id="aws-key",
-                rule_description="AWS Key",
-                description="AWS key",
-                severity=FindingSeverity.CRITICAL,
-                scanner="scanner1",
-            ),
-            ScanFinding(
-                file_path=Path("config.py"),
-                line_number=10,
-                rule_id="aws-key",
-                rule_description="AWS Key",
-                description="AWS key",
-                severity=FindingSeverity.CRITICAL,
-                scanner="scanner2",
-            ),
-        ]
-
-        unique = engine._deduplicate(findings)
-
-        assert len(unique) == 1
-
-    def test_deduplicate_keeps_higher_severity(self):
-        """Test that deduplication keeps higher severity."""
-        config = GuardConfig(use_native=True, use_gitleaks=False)
-        engine = ScanEngine(config)
-
-        findings = [
-            ScanFinding(
-                file_path=Path("config.py"),
-                line_number=10,
-                rule_id="secret",
-                rule_description="Secret",
-                description="Secret",
-                severity=FindingSeverity.MEDIUM,
-                scanner="scanner1",
-            ),
-            ScanFinding(
-                file_path=Path("config.py"),
-                line_number=10,
-                rule_id="secret",
-                rule_description="Secret",
-                description="Secret",
-                severity=FindingSeverity.CRITICAL,
-                scanner="scanner2",
-            ),
-        ]
-
-        unique = engine._deduplicate(findings)
-
-        assert len(unique) == 1
-        assert unique[0].severity == FindingSeverity.CRITICAL
-
-    def test_deduplicate_prefers_verified(self):
-        """Test that deduplication prefers verified findings."""
-        config = GuardConfig(use_native=True, use_gitleaks=False)
-        engine = ScanEngine(config)
-
-        findings = [
-            ScanFinding(
-                file_path=Path("config.py"),
-                line_number=10,
-                rule_id="secret",
-                rule_description="Secret",
-                description="Secret",
-                severity=FindingSeverity.HIGH,
-                scanner="scanner1",
-                verified=False,
-            ),
-            ScanFinding(
-                file_path=Path("config.py"),
-                line_number=10,
-                rule_id="secret",
-                rule_description="Secret",
-                description="Secret",
-                severity=FindingSeverity.HIGH,
-                scanner="scanner2",
-                verified=True,
-            ),
-        ]
-
-        unique = engine._deduplicate(findings)
-
-        assert len(unique) == 1
-        assert unique[0].verified is True
-
-    def test_deduplicate_prefers_secret_hash(self):
-        """Test that deduplication prefers findings with secret_hash when tied."""
-        config = GuardConfig(use_native=True, use_gitleaks=False)
-        engine = ScanEngine(config)
-
-        findings = [
-            ScanFinding(
-                file_path=Path("config.py"),
-                line_number=10,
-                rule_id="secret",
-                rule_description="Secret",
-                description="Secret",
-                severity=FindingSeverity.HIGH,
-                scanner="scanner1",
-                verified=False,
-            ),
-            ScanFinding(
-                file_path=Path("config.py"),
-                line_number=10,
-                rule_id="secret",
-                rule_description="Secret",
-                description="Secret",
-                severity=FindingSeverity.HIGH,
-                scanner="scanner2",
-                verified=False,
-                secret_hash="hash-123",
-            ),
-        ]
-
-        unique = engine._deduplicate(findings)
-
-        assert len(unique) == 1
-        assert unique[0].secret_hash == "hash-123"
-
-    def test_deduplicate_deterministic_tie_breaker(self):
-        """Test deterministic tie-breaker for equal findings."""
-        config = GuardConfig(use_native=True, use_gitleaks=False)
-        engine = ScanEngine(config)
-
-        finding_a = ScanFinding(
-            file_path=Path("config.py"),
-            line_number=10,
-            rule_id="secret",
-            rule_description="Secret",
-            description="Secret",
-            severity=FindingSeverity.HIGH,
-            scanner="a-scanner",
-            verified=False,
-            secret_hash="hash-123",
-        )
-        finding_b = ScanFinding(
-            file_path=Path("config.py"),
-            line_number=10,
-            rule_id="secret",
-            rule_description="Secret",
-            description="Secret",
-            severity=FindingSeverity.HIGH,
-            scanner="b-scanner",
-            verified=False,
-            secret_hash="hash-123",
-        )
-
-        unique_first = engine._deduplicate([finding_b, finding_a])
-        unique_second = engine._deduplicate([finding_a, finding_b])
-
-        assert len(unique_first) == 1
-        assert len(unique_second) == 1
-        assert unique_first[0].scanner == unique_second[0].scanner == "a-scanner"
-
-    def test_deduplicate_different_locations(self):
-        """Test that findings at different locations are kept."""
-        config = GuardConfig(use_native=True, use_gitleaks=False)
-        engine = ScanEngine(config)
-
-        findings = [
-            ScanFinding(
-                file_path=Path("config1.py"),
-                line_number=10,
-                rule_id="secret",
-                rule_description="Secret",
-                description="Secret",
-                severity=FindingSeverity.HIGH,
-                scanner="native",
-            ),
-            ScanFinding(
-                file_path=Path("config2.py"),
-                line_number=10,
-                rule_id="secret",
-                rule_description="Secret",
-                description="Secret",
-                severity=FindingSeverity.HIGH,
-                scanner="native",
-            ),
-        ]
-
-        unique = engine._deduplicate(findings)
-
-        assert len(unique) == 2
-
-    def test_deduplicate_sorted_by_severity(self):
-        """Test that results are sorted by severity."""
-        config = GuardConfig(use_native=True, use_gitleaks=False)
-        engine = ScanEngine(config)
-
-        findings = [
-            ScanFinding(
-                file_path=Path("a.py"),
-                rule_id="low",
-                rule_description="Low",
-                description="Low",
-                severity=FindingSeverity.LOW,
-                scanner="native",
-            ),
-            ScanFinding(
-                file_path=Path("b.py"),
-                rule_id="critical",
-                rule_description="Critical",
-                description="Critical",
-                severity=FindingSeverity.CRITICAL,
-                scanner="native",
-            ),
-            ScanFinding(
-                file_path=Path("c.py"),
-                rule_id="medium",
-                rule_description="Medium",
-                description="Medium",
-                severity=FindingSeverity.MEDIUM,
-                scanner="native",
-            ),
-        ]
-
-        unique = engine._deduplicate(findings)
-
-        # Should be sorted: CRITICAL, MEDIUM, LOW
-        assert unique[0].severity == FindingSeverity.CRITICAL
-        assert unique[1].severity == FindingSeverity.MEDIUM
-        assert unique[2].severity == FindingSeverity.LOW
-
-    def test_deduplicate_skip_duplicate_by_secret_value(self):
-        """Test skip_duplicate deduplicates by secret value only."""
-        config = GuardConfig(use_native=True, use_gitleaks=False, skip_duplicate=True)
-        engine = ScanEngine(config)
-
-        # Same secret appearing in different files
-        findings = [
-            ScanFinding(
-                file_path=Path("config1.py"),
-                line_number=10,
-                rule_id="aws-key",
-                rule_description="AWS Key",
-                description="AWS Key found",
-                severity=FindingSeverity.HIGH,
-                scanner="native",
-                secret_preview="AKIA****XXXX",
-            ),
-            ScanFinding(
-                file_path=Path("config2.py"),
-                line_number=20,
-                rule_id="aws-key",
-                rule_description="AWS Key",
-                description="AWS Key found",
-                severity=FindingSeverity.HIGH,
-                scanner="gitleaks",
-                secret_preview="AKIA****XXXX",  # Same secret value
-            ),
-        ]
-
-        unique = engine._deduplicate(findings)
-
-        # Should be deduplicated to 1 since same secret_preview
-        assert len(unique) == 1
-
-    def test_deduplicate_skip_duplicate_prefers_secret_hash_key(self):
-        """Test skip_duplicate uses secret_hash as key when available."""
-        config = GuardConfig(use_native=True, use_gitleaks=False, skip_duplicate=True)
-        engine = ScanEngine(config)
-
-        findings = [
-            ScanFinding(
-                file_path=Path("config1.py"),
-                line_number=10,
-                rule_id="secret",
-                rule_description="Secret",
-                description="Secret",
-                severity=FindingSeverity.HIGH,
-                scanner="native",
-                secret_preview="PREVIEW-1",
-                secret_hash="hash-xyz",
-            ),
-            ScanFinding(
-                file_path=Path("config2.py"),
-                line_number=20,
-                rule_id="secret",
-                rule_description="Secret",
-                description="Secret",
-                severity=FindingSeverity.HIGH,
-                scanner="gitleaks",
-                secret_preview="PREVIEW-2",
-                secret_hash="hash-xyz",
-            ),
-        ]
-
-        unique = engine._deduplicate(findings)
-
-        # Should deduplicate to 1 since secret_hash matches
-        assert len(unique) == 1
-
-    def test_deduplicate_skip_duplicate_fallback_location(self):
-        """Test skip_duplicate falls back to location when no secret value is present."""
-        config = GuardConfig(use_native=True, use_gitleaks=False, skip_duplicate=True)
-        engine = ScanEngine(config)
-
-        findings = [
-            ScanFinding(
-                file_path=Path("policy.json"),
-                line_number=5,
-                rule_id="policy-violation",
-                rule_description="Policy",
-                description="Policy finding",
-                severity=FindingSeverity.MEDIUM,
-                scanner="scanner1",
-            ),
-            ScanFinding(
-                file_path=Path("policy.json"),
-                line_number=5,
-                rule_id="policy-violation",
-                rule_description="Policy",
-                description="Policy finding",
-                severity=FindingSeverity.MEDIUM,
-                scanner="scanner2",
-            ),
-        ]
-
-        unique = engine._deduplicate(findings)
-
-        # Should be deduplicated by location since no secret_hash/preview
-        assert len(unique) == 1
-
-    def test_deduplicate_skip_duplicate_keeps_different_secrets(self):
-        """Test skip_duplicate keeps findings with different secret values."""
-        config = GuardConfig(use_native=True, use_gitleaks=False, skip_duplicate=True)
-        engine = ScanEngine(config)
-
-        findings = [
-            ScanFinding(
-                file_path=Path("config.py"),
-                line_number=10,
-                rule_id="aws-key",
-                rule_description="AWS Key",
-                description="AWS Key found",
-                severity=FindingSeverity.HIGH,
-                scanner="native",
-                secret_preview="AKIA****XXXX",
-            ),
-            ScanFinding(
-                file_path=Path("config.py"),
-                line_number=20,
-                rule_id="aws-key",
-                rule_description="AWS Key",
-                description="AWS Key found",
-                severity=FindingSeverity.HIGH,
-                scanner="native",
-                secret_preview="AKIA****YYYY",  # Different secret value
-            ),
-        ]
-
-        unique = engine._deduplicate(findings)
-
-        # Should keep both since different secret values
-        assert len(unique) == 2
-
-    def test_deduplicate_skip_duplicate_disabled_keeps_all_locations(self):
-        """Test that with skip_duplicate=False, same secret in different locations is kept."""
-        config = GuardConfig(use_native=True, use_gitleaks=False, skip_duplicate=False)
-        engine = ScanEngine(config)
-
-        # Same secret appearing in different files
-        findings = [
-            ScanFinding(
-                file_path=Path("config1.py"),
-                line_number=10,
-                rule_id="aws-key",
-                rule_description="AWS Key",
-                description="AWS Key found",
-                severity=FindingSeverity.HIGH,
-                scanner="native",
-                secret_preview="AKIA****XXXX",
-            ),
-            ScanFinding(
-                file_path=Path("config2.py"),
-                line_number=20,
-                rule_id="aws-key",
-                rule_description="AWS Key",
-                description="AWS Key found",
-                severity=FindingSeverity.HIGH,
-                scanner="native",
-                secret_preview="AKIA****XXXX",  # Same secret value
-            ),
-        ]
-
-        unique = engine._deduplicate(findings)
-
-        # Should keep both since they're in different files
-        assert len(unique) == 2
-
-
 class TestIntegration:
     """Integration tests for the scan engine."""
 
@@ -1350,6 +947,56 @@ class TestFilterEncryptedFiles:
         )
         result = engine._filter_encrypted_files([cleartext_finding])
         assert result == [cleartext_finding]
+
+    def test_filter_keeps_lineless_finding_in_plaintext_file_mentioning_marker(self, tmp_path):
+        """#348 engine regression: a plaintext file that merely *mentions* an
+        encryption marker must NOT have its findings dropped as "encrypted".
+
+        ``_filter_encrypted_files`` drops findings from files it deems encrypted
+        when the finding has no line info (the external-scanner ciphertext-blob
+        case). The old code used ``marker in content`` over ``DOTENVX_MARKERS +
+        SOPS_MARKERS``, so a plaintext env file whose comment said
+        ``# this file is not encrypted: yet`` (or a value ``NOTE=ask sops:``) was
+        classed as encrypted and a real lineless finding was silently dropped — a
+        false negative that hides a leak. The structure-aware
+        ``_content_is_encrypted`` delegation classes the file as plaintext, so the
+        finding survives.
+
+        Load-bearing for the engine.py change specifically: reverting
+        ``is_file_encrypted`` to the substring loop (while keeping native.py)
+        makes ``is_file_encrypted`` return True here, dropping the lineless
+        finding and failing this assertion. A line-numbered finding would survive
+        either way (the line-aware filter keeps cleartext lines), so the lineless
+        shape is what exercises the drop path.
+        """
+        config = GuardConfig(use_native=True, use_gitleaks=False)
+        engine = ScanEngine(config)
+
+        plaintext = tmp_path / ".env.production"
+        # Comment mentions ``encrypted:`` and a value mentions ``sops:`` mid-line —
+        # both are loose substrings the old loop matched, but neither is a real
+        # structural marker. The file is genuinely plaintext.
+        plaintext.write_text(
+            "# remember: this file is not encrypted: yet\n"  # line 1
+            "NOTE=ask sops: team about rotation\n"  # line 2
+            "API_KEY=plaintext-leak\n"  # line 3
+        )
+
+        finding = ScanFinding(
+            file_path=plaintext,
+            line_number=None,  # external-scanner blob: no line info -> drop path
+            rule_id="high-entropy-string",
+            rule_description="entropy",
+            description="secret in plaintext file mentioning a marker",
+            severity=FindingSeverity.HIGH,
+            scanner="detect-secrets",
+        )
+
+        result = engine._filter_encrypted_files([finding])
+        assert result == [finding], (
+            "a finding in a plaintext file that only mentions 'encrypted:'/'sops:' "
+            "must survive the encrypted-file filter (must not be dropped as a false negative)"
+        )
 
 
 class TestFilterPublicKeys:

@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 
 from envdrift.scanner.base import FindingSeverity
+from envdrift.scanner.engine import GuardConfig, ScanEngine
 from envdrift.scanner.native import NativeScanner
 
 
@@ -400,6 +401,149 @@ sops:
         assert not [f for f in result.findings if f.rule_id == "unencrypted-env-file"]
 
 
+class TestStructureAwareEncryptionDetection:
+    """Structure-aware encryption marker detection (#348).
+
+    A bare substring check (``"encrypted:" in content`` / ``"sops:" in content``)
+    falsely treated plaintext that merely *mentions* a marker as encrypted, which
+    suppressed the unencrypted-env-file / unencrypted-secret-file policy and hid a
+    real leak. Detection must require the marker in its real structural position:
+    the dotenvx marker in value position on an assignment line (never a comment),
+    and SOPS via a canonical ``ENC[AES256_GCM,...]`` envelope or a top-level
+    ``sops:`` metadata key.
+    """
+
+    @pytest.fixture
+    def scanner(self) -> NativeScanner:
+        """Create a native scanner instance."""
+        return NativeScanner()
+
+    def test_comment_mentioning_marker_does_not_suppress(
+        self, scanner: NativeScanner, tmp_path: Path
+    ):
+        """A comment ``# ... not encrypted: true`` must NOT mark the file encrypted."""
+        env_file = tmp_path / ".env"
+        env_file.write_text(
+            "# this is not encrypted: true\nDATABASE_URL=postgres://user:hunter2@localhost/db\n"
+        )
+
+        result = scanner.scan([tmp_path])
+
+        unencrypted = [f for f in result.findings if f.rule_id == "unencrypted-env-file"]
+        assert len(unencrypted) == 1, "comment mentioning 'encrypted:' must not suppress the policy"
+
+    def test_comment_marker_in_secret_file_still_flagged(
+        self, scanner: NativeScanner, tmp_path: Path
+    ):
+        """A plaintext .secret with a misleading comment stays unencrypted-secret-file."""
+        secret = tmp_path / ".env.production.secret"
+        secret.write_text("# this is not encrypted: true\nAPI_KEY=plaintext-leak\n")
+
+        result = scanner.scan([tmp_path])
+
+        secret_findings = [f for f in result.findings if f.rule_id == "unencrypted-secret-file"]
+        assert len(secret_findings) == 1
+        assert secret_findings[0].severity == FindingSeverity.CRITICAL
+
+    def test_value_mentioning_marker_does_not_suppress(
+        self, scanner: NativeScanner, tmp_path: Path
+    ):
+        """A value like ``MESSAGE=not encrypted: yes`` must NOT mark the file encrypted."""
+        env_file = tmp_path / ".env"
+        env_file.write_text("MESSAGE=not encrypted: yes\nDB_PASSWORD=hunter2\n")
+
+        result = scanner.scan([tmp_path])
+
+        unencrypted = [f for f in result.findings if f.rule_id == "unencrypted-env-file"]
+        assert len(unencrypted) == 1, "'encrypted:' mid-value must not suppress the policy"
+
+    def test_loose_sops_substring_does_not_suppress(self, scanner: NativeScanner, tmp_path: Path):
+        """A plaintext value mentioning ``sops:`` mid-line must NOT mark file encrypted."""
+        env_file = tmp_path / ".env"
+        env_file.write_text("NOTE=ask sops: about the deploy\nSECRET_KEY=plaintext-leak\n")
+
+        result = scanner.scan([tmp_path])
+
+        unencrypted = [f for f in result.findings if f.rule_id == "unencrypted-env-file"]
+        assert len(unencrypted) == 1, "inline 'sops:' must not suppress the policy"
+
+    def test_var_starting_with_sops_underscore_does_not_suppress(
+        self, scanner: NativeScanner, tmp_path: Path
+    ):
+        """A plaintext var like ``sops_token=...`` must NOT mark the file encrypted.
+
+        Regression for the over-loose ``^sops[:_]`` marker: SOPS only emits
+        ``sops_version`` / ``sops_mac`` keys in its dotenv metadata trailer, so a
+        user var that merely *starts with* ``sops_`` (``sops_token``,
+        ``sops_enabled``, ...) is plaintext and must still be flagged.
+        """
+        env_file = tmp_path / ".env"
+        env_file.write_text("sops_token=plaintext-leak\nsops_enabled=true\n")
+
+        result = scanner.scan([tmp_path])
+
+        unencrypted = [f for f in result.findings if f.rule_id == "unencrypted-env-file"]
+        assert len(unencrypted) == 1, "a var starting with 'sops_' must not suppress the policy"
+
+    def test_comment_mentioning_enc_envelope_does_not_suppress(
+        self, scanner: NativeScanner, tmp_path: Path
+    ):
+        """A comment mentioning ``ENC[AES256_GCM,`` must NOT mark the file encrypted.
+
+        Regression for the SOPS-envelope path being unfiltered for comments while
+        the dotenvx path skipped them: a doc comment describing the SOPS ciphertext
+        envelope must not suppress the unencrypted-env-file policy.
+        """
+        env_file = tmp_path / ".env"
+        env_file.write_text(
+            "# SOPS wraps ciphertext as ENC[AES256_GCM,data:...,type:str]\n"
+            "DB_PASSWORD=plaintext-leak\n"
+        )
+
+        result = scanner.scan([tmp_path])
+
+        unencrypted = [f for f in result.findings if f.rule_id == "unencrypted-env-file"]
+        assert len(unencrypted) == 1, "a comment mentioning 'ENC[AES256_GCM,' must not suppress"
+
+    def test_genuine_sops_dotenv_metadata_still_encrypted(
+        self, scanner: NativeScanner, tmp_path: Path
+    ):
+        """A real SOPS dotenv file (``sops_version=`` / ``sops_mac=`` trailer) stays encrypted."""
+        env_file = tmp_path / ".env"
+        env_file.write_text(
+            "DATABASE_URL=ENC[AES256_GCM,data:xyz789,type:str]\n"
+            "sops_version=3.7.0\n"
+            "sops_mac=ENC[AES256_GCM,data:abc,type:str]\n"
+        )
+
+        result = scanner.scan([tmp_path])
+
+        assert not [f for f in result.findings if f.rule_id == "unencrypted-env-file"]
+
+    def test_genuine_dotenvx_file_still_encrypted(self, scanner: NativeScanner, tmp_path: Path):
+        """A real dotenvx-encrypted value (``KEY="encrypted:BASE64..."``) is still encrypted."""
+        env_file = tmp_path / ".env"
+        env_file.write_text(
+            '#/---[DOTENV_PUBLIC_KEY]---/\nDOTENV_PUBLIC_KEY="abc123"\n'
+            'DATABASE_URL="encrypted:vault1AbCdEfGhIjKlMnOpQrStUvWxYz0123456789"\n'
+        )
+
+        result = scanner.scan([tmp_path])
+
+        assert not [f for f in result.findings if f.rule_id == "unencrypted-env-file"]
+
+    def test_genuine_sops_file_still_encrypted(self, scanner: NativeScanner, tmp_path: Path):
+        """A real SOPS file (ENC[...] envelope + top-level sops:) is still encrypted."""
+        env_file = tmp_path / ".env"
+        env_file.write_text(
+            "DATABASE_URL=ENC[AES256_GCM,data:xyz789,type:str]\nsops:\n    version: 3.7.0\n"
+        )
+
+        result = scanner.scan([tmp_path])
+
+        assert not [f for f in result.findings if f.rule_id == "unencrypted-env-file"]
+
+
 class TestUnencryptedSecretFile:
     """Tests for the dedicated plaintext .secret rule (Severity 2 hard block).
 
@@ -747,6 +891,158 @@ AWS_KEY = "AKIAIOSFODNN7EXAMPLE"
         preview = aws_findings[0].secret_preview
         assert "AKIA" in preview
         assert "*" in preview
+
+    def test_two_aws_keys_on_one_line_yield_two_findings(
+        self, scanner: NativeScanner, tmp_path: Path
+    ):
+        """Two AWS access keys on a single line each produce a finding (#348).
+
+        The per-line pattern pass used ``search`` (first match only), so the
+        second key on the line was silently dropped. With ``finditer`` both keys
+        are reported, each with its own distinct column number.
+        """
+        config_file = tmp_path / "config.py"
+        # Canonical AWS documentation example keys (not live credentials),
+        # separated by ", " on one line.
+        config_file.write_text("KEYS = AKIAIOSFODNN7EXAMPLE, AKIAI44QH8DHBEXAMPLE\n")
+
+        result = scanner.scan([tmp_path])
+
+        aws_findings = [f for f in result.findings if f.rule_id == "aws-access-key-id"]
+        assert len(aws_findings) == 2, (
+            f"both AWS keys on the line must be flagged, got: "
+            f"{[(f.rule_id, f.column_number) for f in result.findings]}"
+        )
+        # Both on line 1, with distinct (ascending) column numbers. The aws
+        # pattern's match starts at the leading boundary char (the space before
+        # the first key / the comma before the second), so column_number
+        # (match.start() + 1) points one char ahead of each key.
+        assert {f.line_number for f in aws_findings} == {1}
+        assert all(f.column_number is not None for f in aws_findings)
+        columns = sorted(f.column_number for f in aws_findings if f.column_number is not None)
+        assert len(set(columns)) == 2, f"columns must be distinct, got {columns}"
+        assert columns == [7, 29], f"unexpected columns {columns}"
+
+    def test_two_adjacent_aws_keys_single_delimiter_yield_two_findings(
+        self, scanner: NativeScanner, tmp_path: Path
+    ):
+        """Adjacent AWS keys split by a single delimiter both match (#348).
+
+        The aws pattern ends in a zero-width lookahead ``(?=[^A-Z0-9]|$)`` rather
+        than a consuming group. Because the lookahead does not consume the
+        trailing delimiter, that same delimiter remains available as the leading
+        boundary of the next key, so ``finditer`` still finds both even with no
+        spare separator between them. (A *consuming* trailing group would eat the
+        single delimiter, leaving the second key with no leading boundary -- the
+        bug this PR fixes.)
+        """
+        config_file = tmp_path / "config.py"
+        config_file.write_text("KEYS=AKIAIOSFODNN7EXAMPLE,AKIAI44QH8DHBEXAMPLE\n")
+
+        result = scanner.scan([tmp_path])
+
+        aws_findings = [f for f in result.findings if f.rule_id == "aws-access-key-id"]
+        assert len(aws_findings) == 2, (
+            f"adjacent AWS keys split by one delimiter must both be flagged, got: "
+            f"{[(f.rule_id, f.column_number) for f in result.findings]}"
+        )
+        assert len({f.column_number for f in aws_findings}) == 2
+
+    def test_two_api_key_assignments_on_one_line_yield_two_findings(
+        self, scanner: NativeScanner, tmp_path: Path
+    ):
+        """Two generic api_key assignments on one line each produce a finding (#348)."""
+        config_file = tmp_path / "config.cfg"
+        # Build the high-entropy values by concatenation so the literal never
+        # looks like a single committed secret to push-protection scanners.
+        val_a = "abcdefghij" + "1234567890"
+        val_b = "zyxwvutsrq" + "0987654321"
+        config_file.write_text(f"api_key={val_a} apikey={val_b}\n")
+
+        result = scanner.scan([tmp_path])
+
+        api_findings = [f for f in result.findings if f.rule_id == "generic-api-key"]
+        assert len(api_findings) == 2, (
+            f"both api_key assignments must be flagged, got: "
+            f"{[(f.rule_id, f.column_number) for f in result.findings]}"
+        )
+        assert len({f.column_number for f in api_findings}) == 2
+
+    def test_single_aws_key_line_yields_exactly_one_finding(
+        self, scanner: NativeScanner, tmp_path: Path
+    ):
+        """A single-secret line yields exactly one finding (no finditer regression)."""
+        config_file = tmp_path / "config.py"
+        config_file.write_text('AWS_KEY = "AKIAIOSFODNN7EXAMPLE"\n')
+
+        result = scanner.scan([tmp_path])
+
+        aws_findings = [f for f in result.findings if f.rule_id == "aws-access-key-id"]
+        assert len(aws_findings) == 1, (
+            f"a single-secret line must yield exactly one finding, got: "
+            f"{[(f.rule_id, f.column_number) for f in aws_findings]}"
+        )
+
+    def test_two_aws_keys_one_line_survive_engine_dedup_default(self, tmp_path: Path):
+        """End-to-end: two distinct same-line keys survive default engine dedup (#348).
+
+        The ``finditer`` fix makes ``NativeScanner`` emit both keys, but the
+        user-facing path runs findings through ``ScanEngine._deduplicate``. With
+        the default config (``skip_duplicate=False``) the dedup key used to be
+        ``(file_path, line_number, rule_id)``, which collapsed two *distinct*
+        secrets on one line back into a single finding -- defeating the fix for
+        real ``envdrift guard`` / ``scan`` invocations. The dedup key now also
+        includes the secret's hash, so genuinely different secrets both survive.
+        This test drives the engine end-to-end (not just the scanner) to lock in
+        that behavior.
+        """
+        config_file = tmp_path / "config.py"
+        config_file.write_text("KEYS = AKIAIOSFODNN7EXAMPLE, AKIAI44QH8DHBEXAMPLE\n")
+
+        # Native-only, no auto-install: keeps the assertion deterministic and
+        # avoids constructing/probing optional external scanners (e.g. gitleaks
+        # auto-install/lookup) during engine init, which the overridden
+        # ``engine.scanners`` below would otherwise still trigger.
+        engine = ScanEngine(
+            config=GuardConfig(use_native=True, use_gitleaks=False, auto_install=False)
+        )
+        engine.scanners = [NativeScanner()]
+        result = engine.scan([tmp_path])
+
+        aws_findings = [f for f in result.unique_findings if f.rule_id == "aws-access-key-id"]
+        assert len(aws_findings) == 2, (
+            f"both distinct same-line AWS keys must survive engine dedup, got: "
+            f"{[(f.rule_id, f.column_number) for f in result.unique_findings]}"
+        )
+        # Distinct columns and distinct secret hashes prove these are two
+        # different secrets, not one duplicated finding.
+        assert len({f.column_number for f in aws_findings}) == 2
+        assert len({f.secret_hash for f in aws_findings}) == 2
+
+    def test_same_secret_repeated_collapses_in_engine_dedup_default(self, tmp_path: Path):
+        """End-to-end: the *same* secret repeated still collapses under default dedup.
+
+        Counterpart to the multi-secret test: including the secret hash in the
+        default dedup key must not regress the case where one identical secret
+        appears more than once on a line -- those share a hash and must still
+        deduplicate to a single finding.
+        """
+        config_file = tmp_path / "config.py"
+        config_file.write_text("KEYS = AKIAIOSFODNN7EXAMPLE, AKIAIOSFODNN7EXAMPLE\n")
+
+        # Native-only, no auto-install (see sibling test) -- deterministic and
+        # never probes optional external scanners during engine construction.
+        engine = ScanEngine(
+            config=GuardConfig(use_native=True, use_gitleaks=False, auto_install=False)
+        )
+        engine.scanners = [NativeScanner()]
+        result = engine.scan([tmp_path])
+
+        aws_findings = [f for f in result.unique_findings if f.rule_id == "aws-access-key-id"]
+        assert len(aws_findings) == 1, (
+            f"the same secret repeated on a line must dedup to one finding, got: "
+            f"{[(f.rule_id, f.column_number) for f in result.unique_findings]}"
+        )
 
 
 class TestEntropyDetection:
