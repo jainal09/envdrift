@@ -53,33 +53,34 @@ _ACCESS_DENIED_CODES = ("AccessDeniedException", "UnauthorizedException")
 def _map_aws_error(
     e: Exception,
     *,
-    transport_msg: str,
+    error_msg: str,
     not_found: tuple[str, str] | None = None,
     access_denied: tuple[tuple[str, ...], str] | None = None,
-    generic_msg: str,
 ) -> Exception:
     """Translate a botocore/boto3 exception into a domain VaultError.
 
     Centralizes the catch-ladder shared by every AWS operation so each method
-    delegates instead of repeating the `BotoCoreError`-then-error-code branches:
+    delegates instead of repeating the `BotoCoreError`-then-error-code branches.
+    `error_msg` is the generic prefix used for both transport failures and
+    unclassified error codes (always the same text per call site):
 
     - `BotoCoreError` (transport/connectivity, no `.response`) -> ``VaultError``.
     - An error code matching `not_found` (code, message) -> ``SecretNotFoundError``.
     - An error code in `access_denied` (codes, message) -> ``AuthenticationError``.
-    - Any other code -> ``VaultError(generic_msg)``.
+    - Any other error code -> ``VaultError(error_msg)``.
 
     Returns the exception to raise, or re-raises ``e`` unchanged when it carries
     no recognizable error code (so the caller's ``raise`` semantics are preserved).
     """
     if isinstance(e, BotoCoreError):
-        return VaultError(f"{transport_msg}: {e}")
+        return VaultError(f"{error_msg}: {e}")
     error_code = _get_error_code(e)
     if not_found is not None and error_code == not_found[0]:
         return SecretNotFoundError(not_found[1])
     if access_denied is not None and error_code in access_denied[0]:
         return AuthenticationError(access_denied[1])
     if error_code:
-        return VaultError(f"{generic_msg}: {e}")
+        return VaultError(f"{error_msg}: {e}")
     raise e
 
 
@@ -128,12 +129,11 @@ class AWSSecretsManagerClient(VaultClient):
             # error codes both map to the domain hierarchy via the shared helper.
             raise _map_aws_error(
                 e,
-                transport_msg="AWS Secrets Manager error",
+                error_msg="AWS Secrets Manager error",
                 access_denied=(
                     ("AccessDenied", "InvalidClientTokenId"),
                     f"AWS authentication failed: {e}",
                 ),
-                generic_msg="AWS Secrets Manager error",
             ) from e
 
     def is_authenticated(self) -> bool:
@@ -222,10 +222,9 @@ class AWSSecretsManagerClient(VaultClient):
         except Exception as e:
             raise _map_aws_error(
                 e,
-                transport_msg=f"Failed to get secret {name}",
+                error_msg=f"Failed to get secret {name}",
                 not_found=("ResourceNotFoundException", f"Secret not found: {name}"),
                 access_denied=(_ACCESS_DENIED_CODES, f"Access denied for secret: {name}"),
-                generic_msg=f"Failed to get secret {name}",
             ) from e
 
     def list_secrets(self, prefix: str = "") -> list[str]:
@@ -259,9 +258,8 @@ class AWSSecretsManagerClient(VaultClient):
         except Exception as e:
             raise _map_aws_error(
                 e,
-                transport_msg="Failed to list secrets",
+                error_msg="Failed to list secrets",
                 access_denied=(_ACCESS_DENIED_CODES, "Access denied when listing secrets"),
-                generic_msg="Failed to list secrets",
             ) from e
 
     def _put_secret_value(self, name: str, value: str) -> SecretValue:
@@ -283,9 +281,8 @@ class AWSSecretsManagerClient(VaultClient):
         except Exception as e:
             raise _map_aws_error(
                 e,
-                transport_msg=f"Failed to set secret {name}",
+                error_msg=f"Failed to set secret {name}",
                 access_denied=(_ACCESS_DENIED_CODES, f"Access denied for secret: {name}"),
-                generic_msg=f"Failed to set secret {name}",
             ) from e
 
     def set_secret(self, name: str, value: str) -> SecretValue:
@@ -326,9 +323,8 @@ class AWSSecretsManagerClient(VaultClient):
                 return self._put_secret_value(name, value)
             raise _map_aws_error(
                 e,
-                transport_msg=f"Failed to set secret {name}",
+                error_msg=f"Failed to set secret {name}",
                 access_denied=(_ACCESS_DENIED_CODES, f"Access denied for secret: {name}"),
-                generic_msg=f"Failed to set secret {name}",
             ) from e
 
     def set_secret_dict(self, name: str, value: dict[str, Any]) -> SecretValue:
