@@ -390,6 +390,31 @@ class TestAzureKeyVaultClient:
             assert client._client is None
             assert client._credential is None
 
+    def test_authenticate_transport_error_maps_to_vault_error(self, mock_azure):
+        """Regression #413: a transport ServiceRequestError during authenticate()
+        (an AzureError that is NOT an HttpResponseError, e.g. DNS/TLS failure) must
+        be wrapped as a domain VaultError, not escape as the raw SDK exception, and
+        the half-initialized client/credential must be discarded.
+        """
+        mock_credential = MagicMock()
+        mock_secret_client = MagicMock()
+        mock_secret_client.list_properties_of_secrets.side_effect = FakeServiceRequestError(
+            "DNS failure"
+        )
+
+        with self._patched_client(
+            mock_azure,
+            mock_secret_client,
+            credential=mock_credential,
+            faithful_exceptions=True,
+        ) as client:
+            with pytest.raises(VaultError):
+                client.authenticate()
+
+            assert client.is_authenticated() is False
+            assert client._client is None
+            assert client._credential is None
+
     def test_is_authenticated_false_after_failed_auth_error(self, mock_azure):
         """After authenticate() fails on the probe, is_authenticated() must be False.
 

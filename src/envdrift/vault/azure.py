@@ -129,6 +129,16 @@ class AzureKeyVaultClient(VaultClient):
             self._client = None
             self._credential = None
             raise VaultError(f"Azure Key Vault error: {e}") from e
+        except AzureError as e:
+            # Transport-layer failure that is not an HttpResponseError -- e.g.
+            # ServiceRequestError (DNS/TLS/connectivity). This is a genuine
+            # failure, not a least-privilege List denial, so discard the
+            # half-initialized client and surface it as a VaultError (matching
+            # how get_secret/list_secrets/set_secret map transport errors), rather
+            # than letting the raw SDK exception escape the domain hierarchy.
+            self._client = None
+            self._credential = None
+            raise VaultError(f"Azure Key Vault error: {e}") from e
 
     def is_authenticated(self) -> bool:
         """
