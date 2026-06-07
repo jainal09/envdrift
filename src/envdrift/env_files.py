@@ -45,11 +45,16 @@ def _name_encodes_environment(name: str, environment: str) -> bool:
     environment-specific lookup (e.g. "docker") from grabbing a plain file, and
     avoids relabeling a plain file under a non-default environment.
     """
-    if name.endswith(f".env.{environment}"):
-        return True
-    if name == f"{environment}.env":
-        return True
-    if any(name.endswith(f"{sep}{environment}.env") for sep in ("-", ".", "_")):
+    # Suffix conventions ".env.<env>"/"<prefix>.env.<env>" and infix forms
+    # "<prefix>-<env>.env" / ".<env>.env" / "_<env>.env". ``str.endswith`` accepts
+    # a tuple, so all the encoded forms collapse to one check.
+    encoded_suffixes = (
+        f".env.{environment}",
+        f"-{environment}.env",
+        f".{environment}.env",
+        f"_{environment}.env",
+    )
+    if name == f"{environment}.env" or name.endswith(encoded_suffixes):
         return True
     # Plain ".env" / "<prefix>.env" carries no encoded environment -> default only.
     return environment == _DEFAULT_ENVIRONMENT and name.endswith(".env")
@@ -152,6 +157,23 @@ def resolve_custom_env_file(folder_path: Path, env_file: Path | str) -> Path:
     return folder_path / env_file_path
 
 
+def _resolve_explicit_env_file(
+    folder_path: Path, env_file: Any, environment: str
+) -> EnvFileDetection:
+    """Resolve an explicitly-configured ``mapping.env_file`` under ``folder_path``.
+
+    Returns "folder_not_found" when the folder is missing, "found" when the
+    configured file exists, else "not_found" (the path is still surfaced so the
+    caller can report where it looked).
+    """
+    if not folder_path.exists():
+        return EnvFileDetection(None, environment, "folder_not_found")
+    resolved = resolve_custom_env_file(folder_path, env_file)
+    if resolved.exists() and resolved.is_file():
+        return EnvFileDetection(resolved, environment, "found")
+    return EnvFileDetection(resolved, environment, "not_found")
+
+
 def resolve_mapping_env_file(mapping: Any) -> EnvFileDetection:
     """Resolve the env file for a sync mapping.
 
@@ -175,13 +197,7 @@ def resolve_mapping_env_file(mapping: Any) -> EnvFileDetection:
     env_file = getattr(mapping, "env_file", None)
 
     if env_file is not None:
-        if not folder_path.exists():
-            return EnvFileDetection(None, effective_environment, "folder_not_found")
-
-        resolved = resolve_custom_env_file(folder_path, env_file)
-        if resolved.exists() and resolved.is_file():
-            return EnvFileDetection(resolved, effective_environment, "found")
-        return EnvFileDetection(resolved, effective_environment, "not_found")
+        return _resolve_explicit_env_file(folder_path, env_file, effective_environment)
 
     exact_env = folder_path / f".env.{effective_environment}"
     if exact_env.exists() and exact_env.is_file():
