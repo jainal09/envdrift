@@ -164,6 +164,12 @@ func runStart(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
+	// Honor the global guardian switch (#348 G3): when disabled, no-op.
+	if !cfg.Guardian.Enabled {
+		fmt.Println("Guardian is disabled in config (guardian.enabled = false); nothing to do.")
+		return nil
+	}
+
 	g, err := guardian.New(cfg)
 	if err != nil {
 		return err
