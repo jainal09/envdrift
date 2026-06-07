@@ -1,0 +1,20 @@
+tests/integration/test_e2e_workflows.py
+  s_dfc6cd6692ed8f::t_6a3cc8cf6966bb 227,232
+  s_dfc6cd6692ed8f::t_95a6526f0b32dc 216-222
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.3",
+  "base_commit_sha": "5329915144e29e88a0bcf4e5ccd45b7270559bd8",
+  "prompts": {},
+  "sessions": {
+    "s_dfc6cd6692ed8f": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "fd23e738-3512-4420-9290-d985ad979bfd",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Jainal Gosaliya <jainal09gosalia@gmail.com>"
+    }
+  }
+}
