@@ -80,6 +80,13 @@
       "matchStrings": ["\"detect_secrets_version\":\\s*\"(?<currentValue>\\d+\\.\\d+\\.\\d+)\""],
       "depNameTemplate": "detect-secrets",
       "datasourceTemplate": "pypi"
+    },
+    {
+      "customType": "regex",
+      "managerFilePatterns": ["/^\\.github/workflows/agent-ci\\.yml$/"],
+      "matchStrings": [
+        "# renovate: datasource=(?<datasource>\\S+) depName=(?<depName>\\S+)\\s+version:\\s*(?<currentValue>v\\d+\\.\\d+\\.\\d+)"
+      ]
     }
   ],
   "packageRules": [
