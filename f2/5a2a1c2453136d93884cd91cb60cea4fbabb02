@@ -1,0 +1,20 @@
+codecov.yml
+  s_dfc6cd6692ed8f::t_b37b825a353e0d 33-34,36-37
+  s_dfc6cd6692ed8f::t_76aea9a8334929 56-58
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.3",
+  "base_commit_sha": "f25a2a1c2453136d93884cd91cb60cea4fbabb02",
+  "prompts": {},
+  "sessions": {
+    "s_dfc6cd6692ed8f": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "fd23e738-3512-4420-9290-d985ad979bfd",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Jainal Gosaliya <jainal09gosalia@gmail.com>"
+    }
+  }
+}
