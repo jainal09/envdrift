@@ -564,6 +564,34 @@ class TestHashiCorpVaultClientWithMock:
         assert call_args[1]["secret"] == {"key": "value"}
 
     @patch("envdrift.vault.hashicorp._hvac")
+    def test_create_or_update_secret_single_non_string_value_returns_str(self, mock_hvac_module):
+        """Regression #413: writing a non-string single ``value`` returns a ``str``.
+
+        ``SecretValue.value`` must always be a str (the sync engine/vault-pull treat
+        it as text), so the write path coerces a non-string single value to JSON,
+        mirroring the read path. The secret stored in Vault keeps its raw type.
+        """
+        mock_client = MagicMock()
+        mock_client.is_authenticated.return_value = True
+        mock_client.secrets.kv.v2.create_or_update_secret.return_value = {
+            "data": {"version": 1, "created_time": "now"}
+        }
+        mock_hvac_module.Client.return_value = mock_client
+
+        from envdrift.vault.hashicorp import HashiCorpVaultClient
+
+        client = HashiCorpVaultClient(url="http://localhost:8200", token="valid-token")
+        client.authenticate()
+
+        result = client.create_or_update_secret("num-secret", {"value": 123})
+
+        # Returned value is a JSON-coerced str; the payload written to Vault is raw.
+        assert isinstance(result.value, str)
+        assert result.value == "123"
+        call_args = mock_client.secrets.kv.v2.create_or_update_secret.call_args
+        assert call_args[1]["secret"] == {"value": 123}
+
+    @patch("envdrift.vault.hashicorp._hvac")
     def test_set_secret_delegates_to_create_or_update(self, mock_hvac_module):
         """Test set_secret is an alias."""
         mock_client = MagicMock()

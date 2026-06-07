@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 from typing import Any
 
@@ -24,6 +25,20 @@ except ImportError:
     InvalidPath = Exception  # type: ignore[misc, assignment]
     Forbidden = Exception  # type: ignore[misc, assignment]
     Unauthorized = Exception  # type: ignore[misc, assignment]
+
+
+def _coerce_secret_value(secret_data: dict[str, Any]) -> str:
+    """Render KV-v2 secret data as the single string ``SecretValue.value`` requires.
+
+    A lone ``value`` key is returned as-is when already a string; KV stores
+    arbitrary JSON, so a non-string single ``value`` (int/bool/list/dict) — or any
+    multi-key payload — is JSON-encoded. ``SecretValue.value`` must always be a
+    str, or the sync engine and vault-pull crash downstream.
+    """
+    if "value" in secret_data and len(secret_data) == 1:
+        value = secret_data["value"]
+        return value if isinstance(value, str) else json.dumps(value)
+    return json.dumps(secret_data)
 
 
 def _get_hvac() -> Any:
@@ -147,20 +162,9 @@ class HashiCorpVaultClient(VaultClient):
             secret_data = data.get("data", {})
             metadata = data.get("metadata", {})
 
-            # If there's a single "value" key, return that
-            # Otherwise return the JSON string of all data
-            import json
-
-            if "value" in secret_data and len(secret_data) == 1:
-                value = secret_data["value"]
-                # KV stores arbitrary JSON, so a single "value" can be a non-string
-                # (int/bool/list/dict). SecretValue.value must always be a str, or the
-                # sync engine and vault-pull crash downstream; coerce non-strings to JSON
-                # (mirroring the multi-key path's json.dumps()).
-                if not isinstance(value, str):
-                    value = json.dumps(value)
-            else:
-                value = json.dumps(secret_data)
+            # A single "value" key returns that value; otherwise the whole dict is
+            # JSON-encoded. Coercion lives in a helper to keep this method simple.
+            value = _coerce_secret_value(secret_data)
 
             return SecretValue(
                 name=name,
@@ -233,10 +237,9 @@ class HashiCorpVaultClient(VaultClient):
 
             metadata = response.get("data", {})
 
-            # Use same value extraction logic as get_secret for consistency
-            import json
-
-            value = data["value"] if ("value" in data and len(data) == 1) else json.dumps(data)
+            # Same string-coercion as get_secret so the returned SecretValue.value
+            # is always a str even when the caller stored a non-string single value.
+            value = _coerce_secret_value(data)
 
             return SecretValue(
                 name=name,

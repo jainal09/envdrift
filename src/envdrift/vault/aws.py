@@ -46,6 +46,43 @@ def _get_error_code(e: Exception) -> str:
     return str(error.get("Code", ""))
 
 
+# Error codes that mean "authenticated but not authorized" across operations.
+_ACCESS_DENIED_CODES = ("AccessDeniedException", "UnauthorizedException")
+
+
+def _map_aws_error(
+    e: Exception,
+    *,
+    transport_msg: str,
+    not_found: tuple[str, str] | None = None,
+    access_denied: tuple[tuple[str, ...], str] | None = None,
+    generic_msg: str,
+) -> Exception:
+    """Translate a botocore/boto3 exception into a domain VaultError.
+
+    Centralizes the catch-ladder shared by every AWS operation so each method
+    delegates instead of repeating the `BotoCoreError`-then-error-code branches:
+
+    - `BotoCoreError` (transport/connectivity, no `.response`) -> ``VaultError``.
+    - An error code matching `not_found` (code, message) -> ``SecretNotFoundError``.
+    - An error code in `access_denied` (codes, message) -> ``AuthenticationError``.
+    - Any other code -> ``VaultError(generic_msg)``.
+
+    Returns the exception to raise, or re-raises ``e`` unchanged when it carries
+    no recognizable error code (so the caller's ``raise`` semantics are preserved).
+    """
+    if isinstance(e, BotoCoreError):
+        return VaultError(f"{transport_msg}: {e}")
+    error_code = _get_error_code(e)
+    if not_found is not None and error_code == not_found[0]:
+        return SecretNotFoundError(not_found[1])
+    if access_denied is not None and error_code in access_denied[0]:
+        return AuthenticationError(access_denied[1])
+    if error_code:
+        return VaultError(f"{generic_msg}: {e}")
+    raise e
+
+
 class AWSSecretsManagerClient(VaultClient):
     """AWS Secrets Manager implementation.
 
@@ -86,20 +123,18 @@ class AWSSecretsManagerClient(VaultClient):
             sts.get_caller_identity()
         except (NoCredentialsError, PartialCredentialsError) as e:
             raise AuthenticationError(f"AWS authentication failed: {e}") from e
-        except BotoCoreError as e:
-            # Transport/connectivity failures (EndpointConnectionError,
-            # ConnectTimeoutError, ReadTimeoutError, ...) subclass BotoCoreError
-            # and carry no `.response`, so they never reach the error-code branches
-            # below. Wrap them in the domain hierarchy instead of letting a raw
-            # botocore exception escape to the CLI as an uncaught traceback.
-            raise VaultError(f"AWS Secrets Manager error: {e}") from e
         except Exception as e:
-            error_code = _get_error_code(e)
-            if error_code in ("AccessDenied", "InvalidClientTokenId"):
-                raise AuthenticationError(f"AWS authentication failed: {e}") from e
-            if error_code:
-                raise VaultError(f"AWS Secrets Manager error: {e}") from e
-            raise
+            # Transport failures (BotoCoreError, no `.response`) and credential
+            # error codes both map to the domain hierarchy via the shared helper.
+            raise _map_aws_error(
+                e,
+                transport_msg="AWS Secrets Manager error",
+                access_denied=(
+                    ("AccessDenied", "InvalidClientTokenId"),
+                    f"AWS authentication failed: {e}",
+                ),
+                generic_msg="AWS Secrets Manager error",
+            ) from e
 
     def is_authenticated(self) -> bool:
         """
@@ -184,21 +219,14 @@ class AWSSecretsManagerClient(VaultClient):
             # Already a domain error (e.g. malformed-response above); do not
             # re-wrap or misclassify it via the AWS error-code branches below.
             raise
-        except BotoCoreError as e:
-            # Transport/connectivity failures carry no `.response` (error_code == "")
-            # and would otherwise escape via the bare `raise` below. Surface them as
-            # a domain VaultError instead of a raw botocore exception.
-            raise VaultError(f"Failed to get secret {name}: {e}") from e
         except Exception as e:
-            error_code = _get_error_code(e)
-            if error_code == "ResourceNotFoundException":
-                raise SecretNotFoundError(f"Secret not found: {name}") from e
-            if error_code in ("AccessDeniedException", "UnauthorizedException"):
-                raise AuthenticationError(f"Access denied for secret: {name}") from e
-            # Check if it's a ClientError (with safe isinstance check)
-            if error_code:
-                raise VaultError(f"Failed to get secret {name}: {e}") from e
-            raise
+            raise _map_aws_error(
+                e,
+                transport_msg=f"Failed to get secret {name}",
+                not_found=("ResourceNotFoundException", f"Secret not found: {name}"),
+                access_denied=(_ACCESS_DENIED_CODES, f"Access denied for secret: {name}"),
+                generic_msg=f"Failed to get secret {name}",
+            ) from e
 
     def list_secrets(self, prefix: str = "") -> list[str]:
         """
@@ -228,17 +256,13 @@ class AWSSecretsManagerClient(VaultClient):
                         secret_names.append(name)
 
             return sorted(secret_names)
-        except BotoCoreError as e:
-            # Transport/connectivity failures escape the error-code branches; wrap
-            # them in the domain hierarchy rather than leaking a raw botocore error.
-            raise VaultError(f"Failed to list secrets: {e}") from e
         except Exception as e:
-            error_code = _get_error_code(e)
-            if error_code in ("AccessDeniedException", "UnauthorizedException"):
-                raise AuthenticationError("Access denied when listing secrets") from e
-            if error_code:
-                raise VaultError(f"Failed to list secrets: {e}") from e
-            raise
+            raise _map_aws_error(
+                e,
+                transport_msg="Failed to list secrets",
+                access_denied=(_ACCESS_DENIED_CODES, "Access denied when listing secrets"),
+                generic_msg="Failed to list secrets",
+            ) from e
 
     def _put_secret_value(self, name: str, value: str) -> SecretValue:
         """Update an existing secret value."""
@@ -256,17 +280,13 @@ class AWSSecretsManagerClient(VaultClient):
                 version=response.get("VersionId"),
                 metadata={"arn": response.get("ARN")},
             )
-        except BotoCoreError as e:
-            # Transport/connectivity failures escape the error-code branches; wrap
-            # them in the domain hierarchy rather than leaking a raw botocore error.
-            raise VaultError(f"Failed to set secret {name}: {e}") from e
         except Exception as e:
-            error_code = _get_error_code(e)
-            if error_code in ("AccessDeniedException", "UnauthorizedException"):
-                raise AuthenticationError(f"Access denied for secret: {name}") from e
-            if error_code:
-                raise VaultError(f"Failed to set secret {name}: {e}") from e
-            raise
+            raise _map_aws_error(
+                e,
+                transport_msg=f"Failed to set secret {name}",
+                access_denied=(_ACCESS_DENIED_CODES, f"Access denied for secret: {name}"),
+                generic_msg=f"Failed to set secret {name}",
+            ) from e
 
     def set_secret(self, name: str, value: str) -> SecretValue:
         """
@@ -298,22 +318,18 @@ class AWSSecretsManagerClient(VaultClient):
                 version=response.get("VersionId"),
                 metadata={"arn": response.get("ARN")},
             )
-        except BotoCoreError as e:
-            # Transport/connectivity failures escape the error-code branches; wrap
-            # them in the domain hierarchy rather than leaking a raw botocore error.
-            raise VaultError(f"Failed to set secret {name}: {e}") from e
         except Exception as e:
-            error_code = _get_error_code(e)
-            # Secret already exists: fall back to updating its value.
-            if error_code == "ResourceExistsException":
+            # Secret already exists: fall back to updating its value. A genuine
+            # create-permission denial must still surface (consistent with the
+            # other entry points), so only ResourceExistsException short-circuits.
+            if not isinstance(e, BotoCoreError) and _get_error_code(e) == "ResourceExistsException":
                 return self._put_secret_value(name, value)
-            # A genuine create-permission denial must surface, not be masked
-            # as an update attempt (consistent with the other entry points).
-            if error_code in ("AccessDeniedException", "UnauthorizedException"):
-                raise AuthenticationError(f"Access denied for secret: {name}") from e
-            if error_code:
-                raise VaultError(f"Failed to set secret {name}: {e}") from e
-            raise
+            raise _map_aws_error(
+                e,
+                transport_msg=f"Failed to set secret {name}",
+                access_denied=(_ACCESS_DENIED_CODES, f"Access denied for secret: {name}"),
+                generic_msg=f"Failed to set secret {name}",
+            ) from e
 
     def set_secret_dict(self, name: str, value: dict[str, Any]) -> SecretValue:
         """
