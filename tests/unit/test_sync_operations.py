@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import tempfile
 from pathlib import Path
 
 import pytest
@@ -247,37 +248,125 @@ class TestAtomicWrite:
         assert not dest.is_symlink()
 
     @pytest.mark.skipif(os.name == "nt", reason="symlink/fchmod semantics differ on non-POSIX")
-    def test_atomic_write_does_not_use_literal_predictable_tmp_name(self, tmp_path: Path) -> None:
-        """The temp file used is not the literal ``path.with_suffix('.tmp')``.
+    def test_atomic_write_does_not_write_through_predictable_tmp_name(self, tmp_path: Path) -> None:
+        """A symlink planted at the predictable temp name is never written through.
 
-        We block ``os.replace`` from completing so the temp file is left behind,
-        then assert the leftover is an unguessable ``mkstemp`` name rather than
-        the predictable sibling the vulnerable code used.
+        The vulnerable implementation wrote to ``path.with_suffix('.tmp')`` (i.e.
+        ``secret.tmp``) via a path-based ``write_text``, which follows a symlink
+        and clobbers its target. ``mkstemp`` instead picks an unguessable name
+        with ``O_EXCL``, so a symlink pre-planted at the predictable sibling is
+        left untouched. This assertion fails against the old code (it follows the
+        symlink and overwrites the victim) and passes against the mkstemp fix.
+        """
+        dest = tmp_path / "secret.txt"
+        predictable = dest.with_suffix(".tmp")  # 'secret.tmp'
+
+        victim = tmp_path / "victim"
+        victim.write_text("ORIGINAL_VICTIM")
+        predictable.symlink_to(victim)
+
+        atomic_write(dest, "SECRET_DEST_CONTENT")
+
+        # The destination got the content; the predictable-name symlink's target
+        # was never written through and the symlink itself still dangles intact.
+        assert dest.read_text() == "SECRET_DEST_CONTENT"
+        assert victim.read_text() == "ORIGINAL_VICTIM"
+        assert predictable.is_symlink()
+
+    @pytest.mark.skipif(os.name == "nt", reason="symlink/fchmod semantics differ on non-POSIX")
+    def test_atomic_write_uses_unguessable_tmp_name_and_cleans_up_on_failure(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The temp file is an unguessable ``mkstemp`` name, removed on failure.
+
+        We capture the temp name actually created (while it still exists) and
+        block ``os.replace`` so the temp file is left for cleanup. The captured
+        name must be the ``mkstemp`` form, never the predictable
+        ``path.with_suffix('.tmp')`` the vulnerable code used, and the cleanup
+        path must leave nothing behind.
         """
         dest = tmp_path / "secret.txt"
         predictable = dest.with_suffix(".tmp")
 
-        # Make os.replace fail so the temp file is not consumed/renamed away.
-        original_replace = os.replace
+        # Capture the temp name(s) created during the write, before cleanup runs.
+        real_mkstemp = tempfile.mkstemp
+        created: list[str] = []
+
+        def spy_mkstemp(*args: object, **kwargs: object) -> tuple[int, str]:
+            fd, name = real_mkstemp(*args, **kwargs)  # type: ignore[arg-type]
+            created.append(name)
+            return fd, name
+
+        monkeypatch.setattr(tempfile, "mkstemp", spy_mkstemp)
 
         def boom(src: str | os.PathLike[str], dst: str | os.PathLike[str]) -> None:
             raise OSError("blocked replace for test")
 
-        os.replace = boom  # type: ignore[assignment]
-        try:
-            with pytest.raises(OSError, match="blocked replace"):
-                atomic_write(dest, "data")
-        finally:
-            os.replace = original_replace  # type: ignore[assignment]
+        monkeypatch.setattr(os, "replace", boom)
+        with pytest.raises(OSError, match="blocked replace"):
+            atomic_write(dest, "data")
 
-        # The vulnerable predictable name must never have been created...
+        # An unguessable mkstemp name was used, never the predictable sibling.
+        assert len(created) == 1
+        tmp_name = Path(created[0]).name
+        assert tmp_name != predictable.name
+        assert tmp_name.startswith(".secret.txt.")
+        assert tmp_name.endswith(".envdrift-tmp")
+        # The predictable name was never created, and the temp file is gone.
         assert not predictable.exists()
-        # ...and atomic_write cleans up its own (unguessable) temp file on failure.
         leftovers = [
             p
             for p in tmp_path.iterdir()
             if p.name.startswith(".secret.txt.") and p.name.endswith(".envdrift-tmp")
         ]
+        assert leftovers == []
+
+    @pytest.mark.skipif(os.name == "nt", reason="POSIX fd/error semantics")
+    def test_atomic_write_propagates_write_error_without_leaking_temp(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A write failure propagates the *original* error and leaves no temp file.
+
+        Regression for the fd double-close/leak: the vulnerable code closed the
+        fd a second time in the failure path (after ``fdopen`` had already closed
+        it), raising ``EBADF`` -- which both masked the real error (e.g. ENOSPC)
+        and aborted cleanup before the temp file was unlinked, leaking it. The fix
+        lets the ``fdopen`` wrapper own/close the fd exactly once, so the original
+        error survives and the temp file is always cleaned up.
+        """
+        dest = tmp_path / "secret.txt"
+
+        real_open = os.fdopen
+
+        class FailingWriter:
+            """Wraps a real file object but raises on ``write`` (disk-full sim)."""
+
+            def __init__(self, fileobj: object) -> None:
+                self._f = fileobj
+
+            def __enter__(self) -> FailingWriter:
+                return self
+
+            def __exit__(self, *exc: object) -> None:
+                self._f.__exit__(*exc)  # type: ignore[attr-defined]
+
+            def fileno(self) -> int:
+                return self._f.fileno()  # type: ignore[attr-defined]
+
+            def write(self, _data: str) -> int:
+                raise OSError("No space left on device")
+
+        def fake_fdopen(fd: int, *args: object, **kwargs: object) -> FailingWriter:
+            return FailingWriter(real_open(fd, *args, **kwargs))  # type: ignore[arg-type]
+
+        monkeypatch.setattr(os, "fdopen", fake_fdopen)
+
+        with pytest.raises(OSError, match="No space left on device"):
+            atomic_write(dest, "secret-data")
+
+        # The destination was never created, and no mkstemp temp file leaked.
+        assert not dest.exists()
+        leftovers = [p for p in tmp_path.iterdir() if p.name.endswith(".envdrift-tmp")]
         assert leftovers == []
 
     @pytest.mark.skipif(os.name == "nt", reason="symlink/fchmod semantics differ on non-POSIX")
@@ -310,6 +399,36 @@ class TestAtomicWrite:
 
         assert dest.read_text() == "new"
         assert dest.stat().st_mode & 0o777 == 0o640
+
+    @pytest.mark.skipif(os.name == "nt", reason="POSIX mode/symlink semantics")
+    def test_atomic_write_symlinked_destination_does_not_inject_permissive_mode(
+        self, tmp_path: Path
+    ) -> None:
+        """A pre-planted destination symlink cannot force a permissive mode.
+
+        Regression for the ``path.stat()`` (symlink-following) mode preservation:
+        if an attacker plants a symlink at the destination pointing at a 0o777
+        file they own, the vulnerable code copied that 0o777 onto the freshly
+        written secret. The fix uses ``lstat`` and skips mode preservation for a
+        symlinked destination, so the requested tight default is applied instead.
+        """
+        attacker_owned = tmp_path / "attacker_owned"
+        attacker_owned.write_text("attacker content")
+        attacker_owned.chmod(0o777)
+
+        dest = tmp_path / "secret.txt"
+        dest.symlink_to(attacker_owned)
+
+        atomic_write(dest, "TOPSECRET", permissions=0o600)
+
+        # The new secret got the tight requested mode, not the injected 0o777,
+        # and the destination is a real file (the symlink was replaced).
+        assert not dest.is_symlink()
+        assert dest.read_text() == "TOPSECRET"
+        assert dest.stat().st_mode & 0o777 == 0o600
+        # The attacker's file is untouched (content and mode).
+        assert attacker_owned.read_text() == "attacker content"
+        assert attacker_owned.stat().st_mode & 0o777 == 0o777
 
 
 class TestRedactValue:
