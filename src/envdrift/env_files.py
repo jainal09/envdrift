@@ -75,7 +75,12 @@ def detect_env_file(folder_path: Path, default_environment: str = "production") 
 
     Checks for:
     1. Plain .env file (returns default environment)
-    2. Single .env.* file (returns environment from suffix)
+    2. Single .env.* file, but only when its suffix matches ``default_environment``
+
+    A single ``.env.<suffix>`` whose suffix differs from ``default_environment``
+    is *not* adopted: returning it would let a ``production`` lookup sync, say,
+    ``.env.staging`` under ``DOTENV_PRIVATE_KEY_STAGING`` (see #395). Such a
+    mismatch reports "not_found" so the caller skips instead.
 
     Custom service-prefixed names (e.g. ``service.env.docker``) are intentionally
     not handled here; that requires the mapping's environment and lives in
@@ -85,7 +90,7 @@ def detect_env_file(folder_path: Path, default_environment: str = "production") 
     - "found": env file found
     - "folder_not_found": folder doesn't exist (or isn't a directory)
     - "multiple_found": multiple .env.* files exist (ambiguous)
-    - "not_found": no env files found
+    - "not_found": no env files found (or the only .env.* file is for another env)
     """
     if not folder_path.is_dir():
         return EnvFileDetection(None, None, "folder_not_found")
@@ -105,7 +110,14 @@ def detect_env_file(folder_path: Path, default_environment: str = "production") 
         env_file = env_files[0]
         # Extract environment from filename: .env.soak -> soak
         environment = env_file.name[len(".env.") :]
-        return EnvFileDetection(env_file, environment, "found")
+        # Only adopt the suffix's environment when it matches the requested one.
+        # A single ``.env.staging`` must NOT be claimed by a ``production`` lookup:
+        # doing so would sync that file under the wrong DOTENV_PRIVATE_KEY_<ENV>
+        # (see #395). Mismatches fall through to "not_found" so the caller SKIPS
+        # rather than silently operating on a different environment.
+        if environment == default_environment:
+            return EnvFileDetection(env_file, environment, "found")
+        return EnvFileDetection(None, None, "not_found")
 
     if len(env_files) > 1:
         return EnvFileDetection(None, None, "multiple_found")
@@ -144,7 +156,10 @@ def resolve_mapping_env_file(mapping: Any) -> EnvFileDetection:
     3. A custom-named file that belongs to the environment, such as
        ``service.env.<env>`` or ``service-<env>.env`` (and, for a default
        environment, a plain ``service.env``).
-    4. Legacy auto-detection for ``.env`` or a single ``.env.*`` file.
+    4. Legacy auto-detection for a plain ``.env`` (default env) or a single
+       ``.env.<effective_environment>`` file. A lone ``.env.*`` for a *different*
+       environment is not adopted, so the mapping is skipped rather than synced
+       under the wrong key (see #395).
 
     Custom filenames matched via steps 2-3 keep ``mapping.effective_environment``
     as the environment of record. This preserves canonical vault key names even

@@ -374,14 +374,14 @@ class TestVaultPushAll:
         mock_resolve_backend,
         tmp_path,
     ):
-        """vault-push --all should auto-detect env files and update environment."""
+        """vault-push --all should auto-detect a lone env file matching the env."""
         mock_client = MagicMock()
         mock_sync_config = SyncConfig(
             mappings=[
                 ServiceMapping(
                     secret_name="my-secret",
                     folder_path=tmp_path / "service1",
-                    environment="production",
+                    environment="staging",
                 )
             ]
         )
@@ -414,6 +414,61 @@ class TestVaultPushAll:
         mock_client.set_secret.assert_called_with(
             "my-secret", "DOTENV_PRIVATE_KEY_STAGING=secret123"
         )
+
+    @patch("envdrift.cli_commands.encryption_helpers.resolve_encryption_backend")
+    @patch("envdrift.cli_commands.sync.load_sync_config_and_client")
+    @patch("envdrift.sync.operations.EnvKeysFile")
+    def test_push_all_skips_lone_other_environment_file(
+        self,
+        mock_keys_file,
+        mock_loader,
+        mock_resolve_backend,
+        tmp_path,
+    ):
+        """Regression for #395.
+
+        A production mapping with no .env.production but a lone .env.staging must
+        NOT be auto-detected and pushed under DOTENV_PRIVATE_KEY_STAGING. The push
+        must skip: nothing is encrypted and no secret is written to the vault.
+        """
+        mock_client = MagicMock()
+        mock_sync_config = SyncConfig(
+            mappings=[
+                ServiceMapping(
+                    secret_name="my-secret",
+                    folder_path=tmp_path / "service1",
+                    environment="production",
+                )
+            ]
+        )
+        mock_loader.return_value = (mock_sync_config, mock_client, "azure", None, None, None)
+
+        dummy_backend = DummyEncryptionBackend()
+        mock_resolve_backend.return_value = (
+            dummy_backend,
+            EncryptionProvider.DOTENVX,
+            None,
+        )
+
+        service_dir = tmp_path / "service1"
+        service_dir.mkdir()
+        # Only a .env.staging for a *different* environment than the mapping.
+        (service_dir / ".env.staging").write_text("PLAIN=text")
+        (service_dir / ".env.keys").write_text("DOTENV_PRIVATE_KEY_STAGING=secret123")
+
+        mock_keys_instance = MagicMock()
+        mock_keys_instance.read_key.return_value = "secret123"
+        mock_keys_file.return_value = mock_keys_instance
+
+        mock_client.get_secret.side_effect = SecretNotFoundError("missing")
+
+        result = runner.invoke(app, ["vault-push", "--all"])
+
+        assert result.exit_code == 0
+        # The staging file is never encrypted nor pushed under the staging key.
+        assert dummy_backend.encrypt_calls == []
+        mock_keys_instance.read_key.assert_not_called()
+        mock_client.set_secret.assert_not_called()
 
     @patch("envdrift.cli_commands.encryption_helpers.resolve_encryption_backend")
     @patch("envdrift.cli_commands.sync.load_sync_config_and_client")
