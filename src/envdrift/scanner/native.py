@@ -960,8 +960,15 @@ class NativeScanner(ScannerBackend):
                 if pattern.id in gated_out_patterns:
                     continue
 
-                match = pattern.pattern.search(line)
-                if match:
+                # finditer (not search): a single line may hold multiple
+                # independent secrets for the same pattern (e.g. two AWS access
+                # keys, or two api_key= assignments). search() would report only
+                # the first and silently drop the rest (#348). This mirrors the
+                # multiline finditer pass below. The aws pattern's trailing
+                # boundary is a zero-width lookahead (see patterns.py), so a
+                # single delimiter between two adjacent keys is left available as
+                # the leading boundary of the next match — both keys are found.
+                for match in pattern.pattern.finditer(line):
                     # Extract the secret (first group or full match)
                     secret = match.group(1) if match.groups() else match.group(0)
 

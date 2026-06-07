@@ -181,6 +181,16 @@ envdrift guard --skip-duplicate
 envdrift guard --no-skip-duplicate
 ```
 
+By default (`--no-skip-duplicate`), findings are deduplicated by file, line, rule, and
+secret value: the same secret matched by the same rule at one location collapses to a
+single finding, but two *distinct* secrets matching the same rule on the same line
+(for example two AWS keys on one `.env` line) are both reported. Because the rule is
+part of the key and each scanner namespaces its rule IDs, the same secret flagged by
+two *different* scanners stays as two findings on this default path. `--skip-duplicate`
+instead keys solely on the secret value, so each unique secret appears once regardless
+of where or by which scanner it was found — that is the mode that collapses the same
+secret across scanners.
+
 ### `--skip-encrypted` / `--no-skip-encrypted`
 
 Skip findings from files that contain dotenvx or SOPS encryption markers. Enabled by
