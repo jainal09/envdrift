@@ -1,0 +1,21 @@
+src/envdrift/env_files.py
+  s_dfc6cd6692ed8f::t_ec16b7c3465dce 48-57
+  s_dfc6cd6692ed8f::t_5af00cb435107e 160-176
+  s_dfc6cd6692ed8f::t_7f75ba4d28f4f8 200
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.3",
+  "base_commit_sha": "7e5b39ab4a5759c6ff60bfcb7364d6119f214996",
+  "prompts": {},
+  "sessions": {
+    "s_dfc6cd6692ed8f": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "fd23e738-3512-4420-9290-d985ad979bfd",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Jainal Gosaliya <jainal09gosalia@gmail.com>"
+    }
+  }
+}
