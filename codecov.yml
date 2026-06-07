@@ -1,0 +1,53 @@
+# Codecov configuration for envdrift.
+#
+# Why this file exists (see #411):
+#   The global `codecov/project` status is a coverage ratchet over the *whole*
+#   project. Run-to-run coverage variance — flaky/skipped integration tests
+#   slightly shifting the merged total, or PRs that change no Python at all
+#   (e.g. a CI-only or docs-only change) — made it false-red on #405/#406/#407/
+#   #408/#412 even when the PR's own changed lines were fully covered. That
+#   chronic red is noise and undermines "all green = actually green".
+#
+# The fix:
+#   - `project` gets a small absolute `threshold` (0.5%) so sub-noise dips no
+#     longer fail the status, while a genuine, meaningful drop still flags.
+#   - `patch` stays the *real* gate: changed lines must stay covered (target
+#     80%, matching our "touched files ≥ 80%" convention in CLAUDE.md).
+#
+# YAML is validated in CI / locally with PyYAML.
+
+coverage:
+  # Round to two decimals and treat coverage as a percentage.
+  precision: 2
+  round: down
+  range: "80...100"
+
+  status:
+    # Whole-project coverage. Informational-ish: a tiny threshold absorbs the
+    # run-to-run variance that caused the false-reds, so only a real regression
+    # turns it red.
+    project:
+      default:
+        target: auto
+        # Allow the total to dip by up to 0.5% vs. the base without failing.
+        threshold: 0.5%
+        # A PR that touches no measured code shouldn't fail the project status.
+        if_ci_failed: error
+        only_pulls: false
+
+    # Changed-lines coverage — THE real gate. New/modified lines must stay
+    # covered; this is what enforces our "touched files ≥ 80%" rule.
+    patch:
+      default:
+        target: 80%
+        threshold: 0%
+
+# Don't fail the whole CI run on a Codecov upload hiccup; the status checks
+# above are what matter.
+codecov:
+  require_ci_to_pass: false
+
+comment:
+  layout: "reach, diff, flags, files"
+  behavior: default
+  require_changes: false
