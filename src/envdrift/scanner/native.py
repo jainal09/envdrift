@@ -71,54 +71,38 @@ _MEMBER_ACCESS_SHAPE_RE = re.compile(
     r"^[A-Za-z_$][A-Za-z0-9_$]*"  # leading identifier
     r"(?:\s*(?:\?\.|\.|->)\s*[A-Za-z_$][A-Za-z0-9_$]*(?:\(\s*\))?)+$"
 )
-# Each dotted segment of real code is a word-like identifier. Splitting on the
-# access operators:
+# Real code segments are word-like identifiers; split a chain on its access ops.
 _MEMBER_SPLIT_RE = re.compile(r"\?\.|->|\.")
 _VOWEL_RE = re.compile(r"[AaEeIiOoUu]")
-# A genuine identifier has a natural vowel density — roughly one vowel per few
-# letters (``Password`` 2/8, ``apiKey`` 3/6, ``Connection`` 4/10). Random base62
-# secret noise has *sparse* vowels even when it happens to contain one
-# (``mQ2vLpaWRt4nZs6yBdFh`` is 1/20). A single-vowel test is therefore too
-# permissive — a dotted secret whose noisy segment carries one stray vowel would
-# be misclassified as code and silently skipped (#413). Require at least one
-# vowel per ``_VOWEL_DENSITY_CHARS`` characters instead, which cleanly admits
-# real identifiers and rejects high-entropy noise.
+# Min vowel density of a real identifier: >=1 vowel per 6 chars. A single-vowel
+# test is too permissive — random base62 noise with one stray vowel (e.g.
+# ``mQ2vLpaWRt4nZs6yBdFh``, 1/20) would be misread as code and a dotted secret
+# silently skipped (#413). Density admits identifiers, rejects high-entropy noise.
 _VOWEL_DENSITY_CHARS = 6
 
 
 def _segment_is_word_like(seg: str) -> bool:
-    """True if a member-access segment looks like real code, not secret noise.
+    """True if a member-access segment is real code, not random secret noise.
 
-    Word-like means a trailing ``()`` method call, a short member (≤4 chars, e.g.
-    ``env``/``id``), or a longer identifier with a natural vowel density. A long,
-    vowel-sparse segment (random base62) is treated as secret noise, not code.
+    Word-like: a trailing ``()`` call, a short member (<=4 chars), or a longer
+    identifier with natural vowel density. Long vowel-sparse segments are noise.
     """
-    if seg.endswith("()"):  # method call, e.g. ReadToken()
+    if seg.endswith("()") or len(seg) <= 4:  # method call / short member (env, id)
         return True
-    if len(seg) <= 4:  # short member, e.g. env, props, id
-        return True
-    vowels = len(_VOWEL_RE.findall(seg))
-    # e.g. a 20-char segment needs ≥4 vowels to read as a word, not a secret.
-    return vowels * _VOWEL_DENSITY_CHARS >= len(seg)
+    return len(_VOWEL_RE.findall(seg)) * _VOWEL_DENSITY_CHARS >= len(seg)
 
 
 def _looks_like_code_member_access(value: str) -> bool:
     """True if ``value`` is a dotted/arrow code member-access chain, not a secret.
 
-    Requires the structural member-access shape AND that *every* segment is
-    word-like (see ``_segment_is_word_like``), so a high-entropy dotted password
-    whose segments are random base62 noise — even noise that happens to contain a
-    stray vowel — is NOT misclassified as code and is still reported as a
-    generic-secret (#413).
+    Requires the member-access shape AND that *every* segment is word-like, so a
+    high-entropy dotted password whose segments are random base62 noise — even
+    noise with a stray vowel — is reported as a generic-secret, not skipped (#413).
     """
     if not _MEMBER_ACCESS_SHAPE_RE.match(value):
         return False
-    # The shape regex guarantees a non-empty identifier after every access
-    # operator, so each split segment is non-empty.
-    for segment in _MEMBER_SPLIT_RE.split(value):
-        if not _segment_is_word_like(segment.strip()):
-            return False  # long, vowel-sparse, non-call segment => secret noise
-    return True
+    # The shape regex guarantees a non-empty identifier after each access operator.
+    return all(_segment_is_word_like(seg.strip()) for seg in _MEMBER_SPLIT_RE.split(value))
 
 
 # Encryption markers for dotenvx
