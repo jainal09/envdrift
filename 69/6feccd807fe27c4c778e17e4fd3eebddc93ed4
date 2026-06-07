@@ -1,0 +1,20 @@
+tests/scanner/test_engine_dedup.py
+  s_dfc6cd6692ed8f::t_adf7f518fea223 34-39,45-46
+  s_dfc6cd6692ed8f::t_b45200bc10861f 256-262,281
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.3",
+  "base_commit_sha": "696feccd807fe27c4c778e17e4fd3eebddc93ed4",
+  "prompts": {},
+  "sessions": {
+    "s_dfc6cd6692ed8f": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "fd23e738-3512-4420-9290-d985ad979bfd",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Jainal Gosaliya <jainal09gosalia@gmail.com>"
+    }
+  }
+}
