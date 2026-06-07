@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import sys
 from pathlib import Path
 from typing import Annotated
 
@@ -59,6 +60,15 @@ def diff(
         include_unchanged (bool): If True, include variables that are unchanged between the two files in the output.
         normalize (bool): If True (default), normalize values before comparing — strips leading/trailing whitespace, treats `true/True/TRUE` (and similar bool aliases) as equal, and parses JSON-style lists/dicts so quote-style differences don't read as drift. When a `--schema` is provided, values are also coerced through the corresponding Pydantic type before comparison. Pass `--strict` to disable and fall back to raw string compare.
     """
+    # Validate output format up-front (mirrors guard's --fail-on validation).
+    # Lowercase first so "JSON"/"Table" are accepted, but reject anything else
+    # instead of silently falling back to a Rich table (which would corrupt a
+    # CI pipeline that captured stdout expecting JSON).
+    format_ = format_.lower()
+    if format_ not in {"table", "json"}:
+        print_error(f"Invalid --format '{format_}'. Valid options: table, json")
+        raise typer.Exit(code=1)
+
     # Check files exist
     if not env1.exists():
         print_error(f"ENV file not found: {env1}")
@@ -75,7 +85,12 @@ def diff(
             settings_cls = loader.load(schema, service_dir)
             schema_meta = loader.extract_metadata(settings_cls)
         except SchemaLoadError as e:
-            print_warning(f"Could not load schema: {e}")
+            # In json mode keep stdout pure JSON: route the warning to stderr so
+            # a documented `--format json > drift.json` capture still parses (#413).
+            if format_ == "json":
+                print(f"[WARN] Could not load schema: {e}", file=sys.stderr)
+            else:
+                print_warning(f"Could not load schema: {e}")
 
     # Parse env files
     parser = EnvParser()

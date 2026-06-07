@@ -178,7 +178,7 @@ def register(
                 if not config.guardian.enabled:
                     console.print("\n[yellow]⚠[/yellow] Guardian is not enabled in envdrift.toml")
                     console.print("  Add this to your envdrift.toml to enable auto-encryption:\n")
-                    console.print("  [dim][guardian][/dim]")
+                    console.print(r"  [dim]\[guardian][/dim]")
                     console.print("  [dim]enabled = true[/dim]")
     else:
         if "already registered" in message.lower():
