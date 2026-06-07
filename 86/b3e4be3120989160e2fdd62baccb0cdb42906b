@@ -1,0 +1,51 @@
+src/envdrift/vault/gcp.py
+  s_dfc6cd6692ed8f::t_1831765e75f966 19-23,32-33
+  s_dfc6cd6692ed8f::t_4895e2e69f2bff 214-219
+  s_dfc6cd6692ed8f::t_eac906dd0e87b8 295-300
+  s_dfc6cd6692ed8f::t_3e5ab7da083d17 159-170
+  s_dfc6cd6692ed8f::t_17741874f20d40 245-250
+src/envdrift/vault/hashicorp.py
+  s_dfc6cd6692ed8f::t_04034a8376d9d7 152-153,156-161
+src/envdrift/vault/aws.py
+  s_dfc6cd6692ed8f::t_8f9c597ea4cbee 18-22,30
+  s_dfc6cd6692ed8f::t_493bfcee3947c9 89-95
+  s_dfc6cd6692ed8f::t_42922ddd26dee5 187-191
+  s_dfc6cd6692ed8f::t_cbc2c5858a8450 259-262
+  s_dfc6cd6692ed8f::t_699c12c884d114 231-234
+  s_dfc6cd6692ed8f::t_f7c9079fd8efc9 301-304
+src/envdrift/vault/azure.py
+  s_dfc6cd6692ed8f::t_7a1269b0cb4426 220-223,226-227
+  s_dfc6cd6692ed8f::t_3fd02b78716781 17,33
+  s_dfc6cd6692ed8f::t_645e25f9363d33 191-194,197-198
+  s_dfc6cd6692ed8f::t_37e5426cbce6dd 159-163,166-169
+tests/unit/test_vault_aws.py
+  s_dfc6cd6692ed8f::t_9114a85c05ed68 83-90
+  s_dfc6cd6692ed8f::t_2809b9384bb21d 780-858
+  s_dfc6cd6692ed8f::t_54f4d9910c3b52 19-34
+tests/unit/test_vault_hashicorp.py
+  s_dfc6cd6692ed8f::t_13c5857d34d435 356-394
+tests/unit/test_vault_gcp.py
+  s_dfc6cd6692ed8f::t_445866ddc88b08 86,88-89
+  s_dfc6cd6692ed8f::t_eaa0384551eede 333-424
+  s_dfc6cd6692ed8f::t_c841888211d5fa 50-70
+tests/unit/test_vault_azure.py
+  s_dfc6cd6692ed8f::t_50c43766ef873d 488-598
+  s_dfc6cd6692ed8f::t_cea618b2a9d830 119
+  s_dfc6cd6692ed8f::t_846d8eb8c29885 15-26,30-31,39-46
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.3",
+  "base_commit_sha": "86b3e4be3120989160e2fdd62baccb0cdb42906b",
+  "prompts": {},
+  "sessions": {
+    "s_dfc6cd6692ed8f": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "fd23e738-3512-4420-9290-d985ad979bfd",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Jainal Gosaliya <jainal09gosalia@gmail.com>"
+    }
+  }
+}
