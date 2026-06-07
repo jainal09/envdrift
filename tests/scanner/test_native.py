@@ -856,9 +856,13 @@ AWS_KEY = "AKIAIOSFODNN7EXAMPLE"
         config_file = tmp_path / "config.py"
         config_file.write_text("KEYS = AKIAIOSFODNN7EXAMPLE, AKIAI44QH8DHBEXAMPLE\n")
 
-        engine = ScanEngine(config=GuardConfig())
-        # Use only the native scanner so the assertion is deterministic and does
-        # not depend on optional external scanner binaries being installed.
+        # Native-only, no auto-install: keeps the assertion deterministic and
+        # avoids constructing/probing optional external scanners (e.g. gitleaks
+        # auto-install/lookup) during engine init, which the overridden
+        # ``engine.scanners`` below would otherwise still trigger.
+        engine = ScanEngine(
+            config=GuardConfig(use_native=True, use_gitleaks=False, auto_install=False)
+        )
         engine.scanners = [NativeScanner()]
         result = engine.scan([tmp_path])
 
@@ -883,7 +887,11 @@ AWS_KEY = "AKIAIOSFODNN7EXAMPLE"
         config_file = tmp_path / "config.py"
         config_file.write_text("KEYS = AKIAIOSFODNN7EXAMPLE, AKIAIOSFODNN7EXAMPLE\n")
 
-        engine = ScanEngine(config=GuardConfig())
+        # Native-only, no auto-install (see sibling test) -- deterministic and
+        # never probes optional external scanners during engine construction.
+        engine = ScanEngine(
+            config=GuardConfig(use_native=True, use_gitleaks=False, auto_install=False)
+        )
         engine.scanners = [NativeScanner()]
         result = engine.scan([tmp_path])
 

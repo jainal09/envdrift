@@ -629,21 +629,7 @@ class ScanEngine:
 
         survivors = list(seen.values())
         if not self.config.skip_duplicate:
-            # A hashless finding (no extractable secret value) at the same
-            # (file, line, rule) as one or more hashed findings is the less
-            # precise duplicate of a hashed one -- drop it so we keep the hashed
-            # finding(s). This preserves "prefer the hashed finding" for the
-            # one-secret case without merging *distinct* hashed secrets that
-            # legitimately share a line (#348), since those each keep their own
-            # hashed key above.
-            hashed_locations = {
-                (f.file_path, f.line_number, f.rule_id) for f in survivors if f.secret_hash
-            }
-            survivors = [
-                f
-                for f in survivors
-                if f.secret_hash or (f.file_path, f.line_number, f.rule_id) not in hashed_locations
-            ]
+            survivors = self._drop_hashless_duplicates(survivors)
 
         # Sort by severity (highest first), then by file path
         return sorted(
@@ -651,6 +637,43 @@ class ScanEngine:
             key=lambda f: (f.severity, str(f.file_path), f.line_number or 0),
             reverse=True,
         )
+
+    @staticmethod
+    def _drop_hashless_duplicates(survivors: list[ScanFinding]) -> list[ScanFinding]:
+        """Drop hashless findings that merely duplicate a co-located hashed one.
+
+        A hashless finding (no extractable secret value) at the same
+        ``(file, line, rule)`` as one or more hashed findings is the less
+        precise duplicate of a hashed one -- drop it so we keep the hashed
+        finding(s). This preserves "prefer the hashed finding" for the
+        one-secret case without merging *distinct* hashed secrets that
+        legitimately share a line (#348), since those each keep their own
+        hashed key.
+
+        A hashless finding is kept when it carries *higher* severity than every
+        co-located hashed finding, so pruning never lowers the severity reported
+        at a location (the hashed finding is more precise, but the hashless one
+        may flag a more serious problem -- keep both rather than lose signal).
+        """
+        # Highest severity among hashed findings at each (file, line, rule).
+        hashed_max_severity: dict[tuple, FindingSeverity] = {}
+        for f in survivors:
+            if not f.secret_hash:
+                continue
+            loc = (f.file_path, f.line_number, f.rule_id)
+            current = hashed_max_severity.get(loc)
+            if current is None or f.severity > current:
+                hashed_max_severity[loc] = f.severity
+
+        kept: list[ScanFinding] = []
+        for f in survivors:
+            if f.secret_hash:
+                kept.append(f)
+                continue
+            co_located = hashed_max_severity.get((f.file_path, f.line_number, f.rule_id))
+            if co_located is None or f.severity > co_located:
+                kept.append(f)
+        return kept
 
     def get_scanner_info(self) -> list[dict]:
         """Get information about configured scanners.

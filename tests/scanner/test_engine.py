@@ -771,6 +771,46 @@ class TestDeduplication:
         assert len(unique) == 1
         assert unique[0].secret_hash == "hash-123"
 
+    def test_deduplicate_keeps_higher_severity_hashless_over_hashed(self):
+        """A hashless finding more severe than the co-located hashed one survives.
+
+        Pruning the hashless duplicate must never lower the severity reported at
+        a location: if the hashless finding carries higher severity than every
+        co-located hashed finding, it is not merely the less-precise duplicate --
+        dropping it would hide a more serious signal, so it is kept alongside.
+        """
+        config = GuardConfig(use_native=True, use_gitleaks=False)
+        engine = ScanEngine(config)
+
+        findings = [
+            ScanFinding(
+                file_path=Path("config.py"),
+                line_number=5,
+                rule_id="secret",
+                rule_description="Secret",
+                description="Secret",
+                severity=FindingSeverity.CRITICAL,
+                scanner="scanner-no-hash",
+                secret_hash="",
+            ),
+            ScanFinding(
+                file_path=Path("config.py"),
+                line_number=5,
+                rule_id="secret",
+                rule_description="Secret",
+                description="Secret",
+                severity=FindingSeverity.MEDIUM,
+                scanner="scanner-with-hash",
+                secret_hash="hash-123",
+            ),
+        ]
+
+        unique = engine._deduplicate(findings)
+
+        # Both survive: the highest severity present is still reported.
+        assert len(unique) == 2
+        assert max(f.severity for f in unique) == FindingSeverity.CRITICAL
+
     def test_deduplicate_deterministic_tie_breaker(self):
         """Test deterministic tie-breaker for equal findings."""
         config = GuardConfig(use_native=True, use_gitleaks=False)
