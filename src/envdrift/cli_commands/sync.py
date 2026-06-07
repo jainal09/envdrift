@@ -999,9 +999,16 @@ def pull(
                 # Merge if requested
                 if merge:
                     combined_file = Path(env_config.combined_file)
-                    _write_merged_combined_file(
-                        Path(env_config.clear_file), secret_file, combined_file
-                    )
+                    try:
+                        _write_merged_combined_file(
+                            Path(env_config.clear_file), secret_file, combined_file
+                        )
+                    except (OSError, UnicodeDecodeError) as e:
+                        console.print(
+                            f"  [red]![/red] {combined_file} [red]- merge failed: {e}[/red]"
+                        )
+                        partial_errors.append(f"{env_config.name}: {e}")
+                        continue
                     console.print(
                         f"  [cyan]→[/cyan] {combined_file} [dim]- merged (decrypted)[/dim]"
                     )

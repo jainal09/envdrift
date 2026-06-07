@@ -3073,30 +3073,8 @@ class TestPullCommand:
         assert "DB_PASS=decrypted_pass" in content
 
     @staticmethod
-    def _setup_merge_pull_env(monkeypatch, tmp_path: Path) -> dict[str, Path]:
-        """Build a real git repo + config for the ``pull --merge`` regression test.
-
-        Returns the clear/secret/combined paths and the config file. Only the
-        vault/backend/hook seams are stubbed; the gitignore + combined-file
-        writing under test runs for real.
-        """
-        import subprocess
-
-        # A real git repo so ensure_gitignore_entries can resolve the git root and
-        # write a real .gitignore (no mock of the behavior under test).
-        subprocess.run(["git", "init"], cwd=str(tmp_path), capture_output=True, check=True)
-
-        service_dir = tmp_path / "service"
-        service_dir.mkdir()
-
-        clear_file = service_dir / ".env.prod.clear"
-        secret_file = service_dir / ".env.prod.secret"
-        combined_file = service_dir / ".env.prod"
-
-        clear_file.write_text("APP_NAME=myapp\n")
-        secret_file.write_text("API_KEY=decrypted_key\n")
-
-        config_file = tmp_path / "envdrift.toml"
+    def _write_partial_config(config_file: Path, service_dir: Path, paths: dict[str, Path]) -> None:
+        """Write a sync TOML with one ``prod`` partial-encryption environment."""
         config_file.write_text(
             dedent(
                 f"""
@@ -3114,12 +3092,20 @@ class TestPullCommand:
 
                 [[partial_encryption.environments]]
                 name = "prod"
-                clear_file = "{clear_file.as_posix()}"
-                secret_file = "{secret_file.as_posix()}"
-                combined_file = "{combined_file.as_posix()}"
+                clear_file = "{paths["clear_file"].as_posix()}"
+                secret_file = "{paths["secret_file"].as_posix()}"
+                combined_file = "{paths["combined_file"].as_posix()}"
                 """
             ).lstrip()
         )
+
+    @staticmethod
+    def _stub_merge_pull_seams(monkeypatch, service_dir: Path) -> None:
+        """Stub only the vault/backend/hook seams for ``pull --merge`` tests.
+
+        The gitignore + combined-file writing under test still runs for real.
+        """
+        from envdrift.sync.config import ServiceMapping, SyncConfig
 
         monkeypatch.setattr(
             "envdrift.cli_commands.encryption_helpers.resolve_encryption_backend",
@@ -3137,9 +3123,6 @@ class TestPullCommand:
             "envdrift.core.partial_encryption.pull_partial_encryption",
             lambda _: (False, True),  # (was_decrypted, protected)
         )
-
-        from envdrift.sync.config import ServiceMapping, SyncConfig
-
         sync_config = SyncConfig(
             mappings=[
                 ServiceMapping(secret_name="key", folder_path=service_dir, environment="prod")
@@ -3154,12 +3137,35 @@ class TestPullCommand:
             lambda **_kwargs: [],
         )
 
-        return {
-            "clear_file": clear_file,
-            "secret_file": secret_file,
-            "combined_file": combined_file,
-            "config_file": config_file,
+    @classmethod
+    def _setup_merge_pull_env(cls, monkeypatch, tmp_path: Path) -> dict[str, Path]:
+        """Build a real git repo + config for the ``pull --merge`` regression test.
+
+        Returns the clear/secret/combined paths and the config file. Only the
+        vault/backend/hook seams are stubbed; the gitignore + combined-file
+        writing under test runs for real.
+        """
+        import subprocess
+
+        # A real git repo so ensure_gitignore_entries can resolve the git root and
+        # write a real .gitignore (no mock of the behavior under test).
+        subprocess.run(["git", "init"], cwd=str(tmp_path), capture_output=True, check=True)
+
+        service_dir = tmp_path / "service"
+        service_dir.mkdir()
+
+        paths = {
+            "clear_file": service_dir / ".env.prod.clear",
+            "secret_file": service_dir / ".env.prod.secret",
+            "combined_file": service_dir / ".env.prod",
+            "config_file": tmp_path / "envdrift.toml",
         }
+        paths["clear_file"].write_text("APP_NAME=myapp\n")
+        paths["secret_file"].write_text("API_KEY=decrypted_key\n")
+
+        cls._write_partial_config(paths["config_file"], service_dir, paths)
+        cls._stub_merge_pull_seams(monkeypatch, service_dir)
+        return paths
 
     def test_pull_merge_gitignores_combined_file(
         self,
@@ -3206,6 +3212,32 @@ class TestPullCommand:
         assert status.stdout.strip() == "", (
             f"combined file is still visible to git: {status.stdout!r}"
         )
+
+    def test_pull_merge_reports_error_on_non_utf8_secret(
+        self,
+        monkeypatch,
+        tmp_path: Path,
+    ):
+        """A non-UTF-8 secret file must surface a partial error, not crash.
+
+        The merge writer reads files as UTF-8; a decrypted secret with invalid
+        bytes raises ``UnicodeDecodeError``. ``pull --merge`` must catch it,
+        record a partial error, and exit 1 cleanly rather than propagating an
+        unhandled exception out of the command.
+        """
+        env = self._setup_merge_pull_env(monkeypatch, tmp_path)
+        # Overwrite the secret file with bytes that are not valid UTF-8 so the
+        # real merge writer (read_text(encoding="utf-8")) raises.
+        env["secret_file"].write_bytes(b"API_KEY=\xff\xfe_not_utf8\n")
+        config_file = env["config_file"]
+
+        result = runner.invoke(app, ["pull", "-c", str(config_file), "--skip-sync", "--merge"])
+
+        assert result.exit_code == 1, result.output
+        assert "merge failed" in result.output.lower()
+        assert "partial encryption" in result.output.lower()
+        # The decrypted combined artifact must not be left half-written.
+        assert not env["combined_file"].exists()
 
 
 class TestLockCommand:
