@@ -1637,7 +1637,7 @@ class TestMemberAccessHeuristic:
         ],
     )
     def test_segment_is_word_like_true(self, segment: str):
-        from envdrift.scanner.native import _segment_is_word_like
+        from envdrift.scanner._native_filters import _segment_is_word_like
 
         assert _segment_is_word_like(segment) is True
 
@@ -1650,19 +1650,19 @@ class TestMemberAccessHeuristic:
         ],
     )
     def test_segment_is_word_like_false(self, segment: str):
-        from envdrift.scanner.native import _segment_is_word_like
+        from envdrift.scanner._native_filters import _segment_is_word_like
 
         assert _segment_is_word_like(segment) is False
 
     def test_looks_like_code_member_access_true_chain(self):
-        from envdrift.scanner.native import _looks_like_code_member_access
+        from envdrift.scanner._native_filters import _looks_like_code_member_access
 
         assert _looks_like_code_member_access("config.Database.Password") is True
         assert _looks_like_code_member_access("handler.ReadToken()") is True
         assert _looks_like_code_member_access("obj?.Property") is True
 
     def test_looks_like_code_member_access_false_non_chain(self):
-        from envdrift.scanner.native import _looks_like_code_member_access
+        from envdrift.scanner._native_filters import _looks_like_code_member_access
 
         # Not a member-access shape at all.
         assert _looks_like_code_member_access("justplain") is False
