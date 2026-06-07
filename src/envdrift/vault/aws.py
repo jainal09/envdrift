@@ -138,32 +138,17 @@ class AWSSecretsManagerClient(VaultClient):
 
             # SecretString contains the value, SecretBinary for binary secrets
             if "SecretString" in response:
-                secret_string = response["SecretString"]
-                # Try to parse as JSON, fall back to raw string
-                try:
-                    parsed = json.loads(secret_string)
-                    # Convert dict to JSON string for storage
-                    if isinstance(parsed, dict):
-                        return SecretValue(
-                            name=name,
-                            value=json.dumps(parsed),
-                            version=version_id,
-                            metadata=metadata,
-                        )
-                    return SecretValue(
-                        name=name,
-                        value=json.dumps(parsed),
-                        version=version_id,
-                        metadata=metadata,
-                    )
-                except json.JSONDecodeError:
-                    return SecretValue(
-                        name=name,
-                        value=secret_string,
-                        version=version_id,
-                        metadata=metadata,
-                    )
-            else:
+                # Return the stored string byte-for-byte. Round-tripping
+                # through json.loads/json.dumps would silently re-serialize
+                # JSON-shaped values (e.g. "[1,2,3]" -> "[1, 2, 3]", losing
+                # number/whitespace formatting), mutating the secret (#373).
+                return SecretValue(
+                    name=name,
+                    value=response["SecretString"],
+                    version=version_id,
+                    metadata=metadata,
+                )
+            elif "SecretBinary" in response:
                 # Binary secret - decode and return
                 try:
                     value = response["SecretBinary"].decode("utf-8")
@@ -177,6 +162,16 @@ class AWSSecretsManagerClient(VaultClient):
                     version=version_id,
                     metadata=metadata,
                 )
+            else:
+                # Malformed response: neither SecretString nor SecretBinary.
+                raise VaultError(
+                    f"Malformed response for secret {name}: "
+                    "missing both SecretString and SecretBinary"
+                )
+        except VaultError:
+            # Already a domain error (e.g. malformed-response above); do not
+            # re-wrap or misclassify it via the AWS error-code branches below.
+            raise
         except Exception as e:
             error_code = _get_error_code(e)
             if error_code == "ResourceNotFoundException":
@@ -280,10 +275,12 @@ class AWSSecretsManagerClient(VaultClient):
             )
         except Exception as e:
             error_code = _get_error_code(e)
-            # Secret exists, or create denied but update may be allowed
-            if error_code in ("ResourceExistsException", "AccessDeniedException"):
+            # Secret already exists: fall back to updating its value.
+            if error_code == "ResourceExistsException":
                 return self._put_secret_value(name, value)
-            if error_code == "UnauthorizedException":
+            # A genuine create-permission denial must surface, not be masked
+            # as an update attempt (consistent with the other entry points).
+            if error_code in ("AccessDeniedException", "UnauthorizedException"):
                 raise AuthenticationError(f"Access denied for secret: {name}") from e
             if error_code:
                 raise VaultError(f"Failed to set secret {name}: {e}") from e

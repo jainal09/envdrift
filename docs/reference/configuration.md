@@ -466,8 +466,8 @@ Per-project configuration for the background agent (envdrift-agent), which
 watches `.env` files and auto-encrypts them after a period of inactivity.
 
 > **Note:** `enabled = true` does **not** auto-register the project with the
-> agent. Registration is explicit — run `envdrift agent register` (or
-> `envdrift init --watch`) from the project root to add it to
+> agent. Registration is explicit — run `envdrift agent register` from the
+> project root to add it to
 > `~/.envdrift/projects.json`. The daemon then loads the project and honors
 > the `[guardian]` settings below. `enabled = false` (the default) tells the
 > daemon to skip an already-registered project.

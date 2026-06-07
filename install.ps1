@@ -13,6 +13,7 @@
 #   -NoAgent            Skip downloading the envdrift-agent binary
 #   -Version X.Y.Z      Install a specific envdrift version
 #   -AgentVersion X.Y.Z Install a specific agent version
+#   -InsecureSkipChecksum  Skip SHA256 verification of the agent binary (unsafe)
 #   -Uninstall          Remove envdrift installation
 #   -Help               Show this help message
 
@@ -20,6 +21,7 @@ param(
     [switch]$NoAgent,
     [string]$Version = "",
     [string]$AgentVersion = "",
+    [switch]$InsecureSkipChecksum,
     [switch]$Uninstall,
     [switch]$Help
 )
@@ -32,6 +34,7 @@ $ErrorActionPreference = "Stop"
 if ($env:ENVDRIFT_NO_AGENT -eq "1") { $NoAgent = [switch]::new($true) }
 if ($env:ENVDRIFT_VERSION) { $Version = $env:ENVDRIFT_VERSION }
 if ($env:ENVDRIFT_AGENT_VERSION) { $AgentVersion = $env:ENVDRIFT_AGENT_VERSION }
+if ($env:ENVDRIFT_INSECURE_SKIP_CHECKSUM -eq "1") { $InsecureSkipChecksum = [switch]::new($true) }
 if ($env:ENVDRIFT_UNINSTALL -eq "1") { $Uninstall = [switch]::new($true) }
 
 # -------------------------------------------------------------------
@@ -83,17 +86,19 @@ Usage:
     `$env:ENVDRIFT_NO_AGENT = "1"; irm https://raw.githubusercontent.com/jainal09/envdrift/main/install.ps1 | iex
 
 Options:
-  -NoAgent              Skip downloading the envdrift-agent binary
-  -Version X.Y.Z        Install a specific envdrift Python package version
-  -AgentVersion X.Y.Z   Install a specific agent binary version
-  -Uninstall            Remove the envdrift installation (~/.envdrift)
-  -Help                 Show this help message
+  -NoAgent                 Skip downloading the envdrift-agent binary
+  -Version X.Y.Z           Install a specific envdrift Python package version
+  -AgentVersion X.Y.Z      Install a specific agent binary version
+  -InsecureSkipChecksum    Skip SHA256 verification of the agent binary (unsafe)
+  -Uninstall               Remove the envdrift installation (~/.envdrift)
+  -Help                    Show this help message
 
 Environment Variables (for irm | iex):
-  ENVDRIFT_NO_AGENT=1         Same as -NoAgent
-  ENVDRIFT_VERSION=X.Y.Z      Same as -Version
-  ENVDRIFT_AGENT_VERSION=X.Y.Z Same as -AgentVersion
-  ENVDRIFT_UNINSTALL=1         Same as -Uninstall
+  ENVDRIFT_NO_AGENT=1               Same as -NoAgent
+  ENVDRIFT_VERSION=X.Y.Z            Same as -Version
+  ENVDRIFT_AGENT_VERSION=X.Y.Z      Same as -AgentVersion
+  ENVDRIFT_INSECURE_SKIP_CHECKSUM=1 Same as -InsecureSkipChecksum
+  ENVDRIFT_UNINSTALL=1              Same as -Uninstall
 "@
     exit 0
 }
@@ -332,7 +337,7 @@ function Install-Agent {
             return
         }
 
-        # Verify checksum (best-effort)
+        # Verify checksum (fail-closed unless -InsecureSkipChecksum was passed)
         Test-Checksum -File $tmpBinary -Name $binaryName -Url $checksumUrl
 
         try {
@@ -354,14 +359,20 @@ function Install-Agent {
 function Test-Checksum {
     param([string]$File, [string]$Name, [string]$Url)
 
+    # Fail-closed: an unverified binary is refused unless the user explicitly
+    # opts out. This is a supply-chain integrity gate, not a best-effort hint.
+    if ($InsecureSkipChecksum) {
+        Write-Warn "Skipping checksum verification (-InsecureSkipChecksum)"
+        return
+    }
+
     $tmpChecksums = [System.IO.Path]::GetTempFileName()
     try {
         Get-Download -Url $Url -Dest $tmpChecksums
     }
     catch {
-        Write-Warn "Checksums file not available - skipping verification"
         Remove-Item $tmpChecksums -Force -ErrorAction SilentlyContinue
-        return
+        Stop-WithError "Checksums file not available at $Url - refusing to install an unverified binary (use -InsecureSkipChecksum to override)."
     }
 
     $expected = $null
@@ -375,8 +386,7 @@ function Test-Checksum {
     Remove-Item $tmpChecksums -Force -ErrorAction SilentlyContinue
 
     if (-not $expected) {
-        Write-Warn "No checksum entry for $Name - skipping verification"
-        return
+        Stop-WithError "No checksum entry for $Name - refusing to install an unverified binary (use -InsecureSkipChecksum to override)."
     }
 
     $hash = (Get-FileHash -Path $File -Algorithm SHA256).Hash.ToLower()
