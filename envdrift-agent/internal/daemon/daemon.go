@@ -42,6 +42,23 @@ func Uninstall() error {
 	}
 }
 
+// Stop stops the running agent service without removing its install unit, so a
+// subsequent `install`/boot can start it again. It delegates to the
+// platform-specific stop implementation and returns an error if the operation
+// fails or the platform is unsupported.
+func Stop() error {
+	switch runtime.GOOS {
+	case "darwin":
+		return stopMacOS()
+	case "linux":
+		return stopLinux()
+	case "windows":
+		return stopWindows()
+	default:
+		return fmt.Errorf("unsupported platform: %s", runtime.GOOS)
+	}
+}
+
 // IsInstalled reports whether the agent is installed as a background service for the current user on the running platform.
 // It returns `true` if the platform-specific service/unit/task is present, `false` otherwise.
 func IsInstalled() bool {
@@ -166,6 +183,20 @@ func uninstallMacOS() error {
 	return os.Remove(plistPath)
 }
 
+// stopMacOS unloads the EnvDrift Guardian LaunchAgent (so KeepAlive stops
+// respawning it) without removing the plist, leaving the agent installed.
+// It returns an error if the plist path cannot be resolved or launchctl fails.
+func stopMacOS() error {
+	plistPath, err := launchAgentPath()
+	if err != nil {
+		return err
+	}
+	if err := exec.Command("launchctl", "unload", plistPath).Run(); err != nil {
+		return fmt.Errorf("failed to stop agent: %w", err)
+	}
+	return nil
+}
+
 // isInstalledMacOS reports whether the macOS LaunchAgent plist for EnvDrift Guardian exists.
 // It returns `true` if the plist file exists at the user's ~/Library/LaunchAgents path, `false` if it does not or if the path cannot be determined.
 func isInstalledMacOS() bool {
@@ -269,6 +300,16 @@ func uninstallLinux() error {
 	return os.Remove(path)
 }
 
+// stopLinux stops the user systemd service without disabling or removing its
+// unit, so it remains installed and can be started again. It returns an error if
+// `systemctl --user stop` fails.
+func stopLinux() error {
+	if err := exec.Command("systemctl", "--user", "stop", linuxServiceName).Run(); err != nil {
+		return fmt.Errorf("failed to stop agent: %w", err)
+	}
+	return nil
+}
+
 // isInstalledLinux reports whether the systemd user unit file for the daemon exists at the user's systemd configuration path.
 // It returns `true` if the unit file exists and `false` otherwise.
 func isInstalledLinux() bool {
@@ -312,6 +353,16 @@ func installWindows() error {
 // It returns any error encountered while executing the schtasks delete command.
 func uninstallWindows() error {
 	return exec.Command("schtasks", "/delete", "/tn", "EnvDriftGuardian", "/f").Run()
+}
+
+// stopWindows ends the running EnvDriftGuardian scheduled task without deleting
+// it, so the task remains registered and will run again at the next logon. It
+// returns an error if `schtasks /end` fails.
+func stopWindows() error {
+	if err := exec.Command("schtasks", "/end", "/tn", "EnvDriftGuardian").Run(); err != nil {
+		return fmt.Errorf("failed to stop agent: %w", err)
+	}
+	return nil
 }
 
 // isInstalledWindows reports whether the "EnvDriftGuardian" scheduled task exists on Windows.

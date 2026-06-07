@@ -215,6 +215,108 @@ func TestNewSubdirectoryIsWatched(t *testing.T) {
 	}
 }
 
+// TestAddDirectoryDottedRootIsWatched is the #413 regression: a recursive
+// watcher whose registered ROOT directory name is dotted (e.g. ~/.dotfiles)
+// must still be watched. filepath.Walk visits the root first, so an unconditional
+// "skip hidden dirs" rule SkipDir'd the entire subtree, silently watching
+// nothing and never firing an event for .env files written there.
+func TestAddDirectoryDottedRootIsWatched(t *testing.T) {
+	if testing.Short() {
+		t.Skip("Skipping fs event test in short mode")
+	}
+
+	parent := t.TempDir()
+	// Leaf dir name starts with a dot, like ~/.dotfiles.
+	root := filepath.Join(parent, ".dotfiles")
+	if err := os.Mkdir(root, 0o755); err != nil {
+		t.Fatalf("Failed to create dotted root: %v", err)
+	}
+
+	w, err := New([]string{".env*"}, []string{}, true) // recursive
+	if err != nil {
+		t.Fatalf("Failed to create watcher: %v", err)
+	}
+	defer w.Stop()
+
+	if err := w.AddDirectory(root); err != nil {
+		t.Fatalf("Failed to add dotted directory: %v", err)
+	}
+	w.Start()
+
+	// Writing a .env in the dotted root must fire an event; on the unfixed code
+	// the root was SkipDir'd and no event ever arrives.
+	envPath := filepath.Join(root, ".env.local")
+	if err := os.WriteFile(envPath, []byte("X=1\n"), 0o644); err != nil {
+		t.Fatalf("Failed to write .env in dotted root: %v", err)
+	}
+
+	deadline := time.After(3 * time.Second)
+	for {
+		select {
+		case event := <-w.Events():
+			if event.Path == envPath {
+				return // success: the dotted root is watched
+			}
+		case <-deadline:
+			t.Fatalf("no event for .env in dotted root %q (#413): root was SkipDir'd", root)
+		}
+	}
+}
+
+// TestAddDirectorySkipsNestedHidden confirms the fix still skips hidden
+// directories nested BELOW the registered root: a .env inside root/.git must not
+// fire (we don't watch VCS internals), even though the dotted root itself is now
+// watched.
+func TestAddDirectorySkipsNestedHidden(t *testing.T) {
+	if testing.Short() {
+		t.Skip("Skipping fs event test in short mode")
+	}
+
+	root := t.TempDir()
+	hidden := filepath.Join(root, ".git")
+	if err := os.Mkdir(hidden, 0o755); err != nil {
+		t.Fatalf("Failed to create nested hidden dir: %v", err)
+	}
+
+	w, err := New([]string{".env*"}, []string{}, true) // recursive
+	if err != nil {
+		t.Fatalf("Failed to create watcher: %v", err)
+	}
+	defer w.Stop()
+
+	if err := w.AddDirectory(root); err != nil {
+		t.Fatalf("Failed to add directory: %v", err)
+	}
+	w.Start()
+
+	// A .env written in root (not hidden) should fire...
+	rootEnv := filepath.Join(root, ".env.local")
+	if err := os.WriteFile(rootEnv, []byte("X=1\n"), 0o644); err != nil {
+		t.Fatalf("write root .env: %v", err)
+	}
+	// ...while a .env in the nested hidden dir should NOT.
+	hiddenEnv := filepath.Join(hidden, ".env.local")
+	if err := os.WriteFile(hiddenEnv, []byte("Y=2\n"), 0o644); err != nil {
+		t.Fatalf("write hidden .env: %v", err)
+	}
+
+	gotRoot := false
+	deadline := time.After(2 * time.Second)
+	for !gotRoot {
+		select {
+		case event := <-w.Events():
+			if event.Path == hiddenEnv {
+				t.Fatalf("nested hidden dir %q should not be watched", hidden)
+			}
+			if event.Path == rootEnv {
+				gotRoot = true
+			}
+		case <-deadline:
+			t.Fatalf("no event for root .env; root should be watched")
+		}
+	}
+}
+
 // TestStopClosesEvents is part of the #362 regression: after Stop, run() (the
 // sole sender) must close w.events so consumers observe ok==false instead of
 // blocking forever.

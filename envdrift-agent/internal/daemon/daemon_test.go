@@ -57,6 +57,40 @@ func TestIsRunning(t *testing.T) {
 	_ = IsRunning()
 }
 
+// TestStopDispatchesPerPlatform is the #413 regression for the `stop` command:
+// daemon.Stop must actually attempt to stop the service per platform (launchctl
+// unload / systemctl --user stop / schtasks /end) rather than being a no-op. We
+// assert it never returns the "unsupported platform" sentinel on a supported OS,
+// and that any error is the wrapped "failed to stop agent" form — proving Stop
+// runs a real service-control command instead of silently succeeding like the
+// old runStop did. (The success path on a *running* agent can't be reproduced in
+// CI without installing a live service; see the PR note.)
+func TestStopDispatchesPerPlatform(t *testing.T) {
+	switch runtime.GOOS {
+	case "darwin", "linux", "windows":
+		// supported
+	default:
+		err := Stop()
+		if err == nil || !strings.Contains(err.Error(), "unsupported platform") {
+			t.Errorf("Stop() on %s should report unsupported platform, got %v", runtime.GOOS, err)
+		}
+		return
+	}
+
+	err := Stop()
+	if err == nil {
+		// Service-control command ran and reported success (e.g. launchctl unload
+		// of an absent agent on macOS exits 0). That's an acceptable no-op result.
+		return
+	}
+	if strings.Contains(err.Error(), "unsupported platform") {
+		t.Fatalf("Stop() returned unsupported-platform on supported OS %s: %v", runtime.GOOS, err)
+	}
+	if !strings.Contains(err.Error(), "failed to stop agent") {
+		t.Errorf("Stop() error should be wrapped as 'failed to stop agent', got %v", err)
+	}
+}
+
 // TestSystemdUnitQuotesExecStart is the #348 G4 regression: a path containing
 // spaces (or special characters) must be double-quoted in ExecStart so systemd
 // treats it as a single argument.

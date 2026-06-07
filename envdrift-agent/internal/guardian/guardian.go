@@ -279,6 +279,21 @@ func (g *Guardian) loadProjects(reg *registry.Registry) {
 
 // onRegistryChange handles changes to the projects registry.
 func (g *Guardian) onRegistryChange(reg *registry.Registry) {
+	// If the guardian is already shutting down, do nothing: a late registry
+	// reload (e.g. a debounce timer that fired during Stop) must not re-create
+	// and start project watchers after stopAllProjects() cleared g.projects, or
+	// those fsnotify watchers/goroutines leak past shutdown (#413).
+	g.mu.RLock()
+	ctx := g.ctx
+	g.mu.RUnlock()
+	if ctx != nil {
+		select {
+		case <-ctx.Done():
+			return
+		default:
+		}
+	}
+
 	log.Println("Registry changed, reloading projects...")
 
 	// Get new project list

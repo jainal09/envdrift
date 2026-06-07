@@ -62,13 +62,19 @@ func (w *Watcher) AddDirectory(dir string) error {
 	dir = expandPath(dir)
 
 	if w.recursive {
+		// filepath.Walk visits the root first, so the hidden-dir skip must
+		// exclude the explicitly-registered root: a project whose own leaf dir
+		// is dotted (e.g. ~/.dotfiles) would otherwise SkipDir its entire
+		// subtree and silently watch nothing. Only skip hidden dirs *nested*
+		// below the root.
+		root := filepath.Clean(dir)
 		return filepath.Walk(dir, func(path string, info os.FileInfo, err error) error {
 			if err != nil {
 				return nil // Skip inaccessible directories
 			}
 			if info.IsDir() {
-				if strings.HasPrefix(info.Name(), ".") && info.Name() != "." {
-					return filepath.SkipDir // Skip hidden directories
+				if path != root && strings.HasPrefix(info.Name(), ".") && info.Name() != "." {
+					return filepath.SkipDir // Skip nested hidden directories
 				}
 				return w.fsWatcher.Add(path)
 			}

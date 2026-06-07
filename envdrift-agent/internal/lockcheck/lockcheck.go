@@ -3,10 +3,16 @@ package lockcheck
 
 import (
 	"bytes"
+	"errors"
+	"log"
 	"os/exec"
 	"runtime"
 	"strings"
+	"sync"
 )
+
+// lsofMissingOnce ensures the "lsof unavailable" warning is logged at most once.
+var lsofMissingOnce sync.Once
 
 // IsFileOpen checks if a file is currently open by any process.
 // IsFileOpen reports whether the file at path is currently open by any process.
@@ -24,7 +30,11 @@ func IsFileOpen(path string) bool {
 }
 
 // isFileOpenUnix reports whether the file at path is open by any process on Unix-like systems.
-// It invokes `lsof` for the path and returns `true` if `lsof` reports any output; if the command fails or returns no output it returns `false`.
+// It invokes `lsof` for the path. lsof exits 0 (with output) when the file is open and exits 1
+// when it is not. A clean exit-1 (*exec.ExitError) is the only "not open" signal; any other
+// failure — most importantly lsof being absent from PATH (*exec.Error) — is treated as
+// "open/unknown" (returns true) so the caller conservatively skips encrypting a file it cannot
+// vouch for, instead of silently bypassing the open-file safety check on minimal hosts.
 func isFileOpenUnix(path string) bool {
 	// lsof exits with 0 if file is open, 1 if not
 	cmd := exec.Command("lsof", "--", path)
@@ -33,8 +43,26 @@ func isFileOpenUnix(path string) bool {
 
 	err := cmd.Run()
 	if err != nil {
-		// Exit code 1 means file is not open
-		return false
+		var execErr *exec.Error
+		if errors.As(err, &execErr) {
+			// lsof binary missing (or not executable): we cannot tell whether the
+			// file is open, so assume it is and warn once.
+			lsofMissingOnce.Do(func() {
+				log.Printf("lockcheck: lsof unavailable (%v); treating files as open to avoid encrypting in-use files", execErr)
+			})
+			return true
+		}
+
+		var exitErr *exec.ExitError
+		if errors.As(err, &exitErr) && exitErr.ExitCode() == 1 {
+			// Clean exit-1: lsof ran and reported the file is not open.
+			return false
+		}
+
+		// Any other error (signal, timeout, unexpected exit code) is ambiguous;
+		// treat the file as open/unknown so we don't rewrite it underneath a user.
+		log.Printf("lockcheck: lsof failed for %s (%v); treating file as open", path, err)
+		return true
 	}
 
 	// If we got output, file is open
