@@ -25,6 +25,7 @@ from envdrift.output.rich import (
     print_success,
     print_warning,
 )
+from envdrift.utils.git import ensure_gitignore_entries
 from envdrift.vault.base import SecretNotFoundError, VaultError
 
 
@@ -55,6 +56,24 @@ def _resolve_config_path(config_path: Path | None, value: Path | str | None) -> 
     if config_path and not path.is_absolute():
         return (config_path.parent / path).resolve()
     return path
+
+
+def _protect_private_keys(env_file: Path) -> None:
+    """Ensure the dotenvx ``.env.keys`` private-key file is gitignored.
+
+    dotenvx writes the private decryption keys to ``.env.keys`` next to the
+    encrypted file; committing it would defeat the encryption entirely. Add it to
+    ``.gitignore`` if it exists and isn't already ignored (a no-op outside a git
+    repo, and for SOPS which writes no ``.env.keys``), and tell the user.
+    """
+    keys_file = env_file.parent / ".env.keys"
+    if not keys_file.exists():
+        return
+    added = ensure_gitignore_entries([keys_file])
+    if added:
+        print_warning(
+            f"Added {', '.join(added)} to .gitignore — never commit your private keys (.env.keys)."
+        )
 
 
 def encrypt_cmd(
@@ -286,6 +305,7 @@ def encrypt_cmd(
             result = encryption_backend.encrypt(env_file, **encrypt_kwargs)
             if result.success:
                 print_success(f"Encrypted {env_file} using {encryption_backend.name}")
+                _protect_private_keys(env_file)
             else:
                 print_error(result.message)
                 raise typer.Exit(code=1)
