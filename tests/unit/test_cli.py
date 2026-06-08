@@ -3194,6 +3194,9 @@ class TestPullCommand:
 
         assert result.exit_code == 1
         assert "activation failed" in result.output.lower()
+        # An activation failure must not be reported as a decryption failure (#413).
+        assert "could not be activated" in result.output.lower()
+        assert "could not be decrypted" not in result.output.lower()
 
     def test_pull_with_partial_encryption_decrypts_secret_files(
         self,

@@ -389,6 +389,35 @@ class TestPullCommand:
         assert backend.decrypt_calls == []  # never decrypted (already plaintext)
 
     @patch("envdrift.cli_commands.encryption_helpers.resolve_encryption_backend")
+    def test_pull_already_decrypted_activation_error_is_not_decrypt_error(
+        self, mock_resolve, tmp_path, loaded_config, no_git_hook
+    ):
+        """An activation failure on an already-decrypted file reports an
+        activation error, not a misleading "could not be decrypted" (#413)."""
+        backend = DummyEncryptionBackend()
+        mock_resolve.return_value = (backend, EncryptionProvider.DOTENVX, None)
+
+        folder = tmp_path / "svc"
+        folder.mkdir()
+        (folder / ".env.production").write_text("PLAIN=value\n")
+
+        mapping = ServiceMapping(
+            secret_name="s",
+            folder_path=folder,
+            environment="production",
+            profile="local",
+            activate_to=Path("../escape.env"),  # escapes folder -> activation error
+        )
+        loaded_config(_sync_config([mapping]))
+
+        result = runner.invoke(app, ["pull", "--profile", "local", "--skip-sync"])
+
+        assert result.exit_code == 1, result.output
+        assert "could not be activated" in result.output.lower()
+        assert "could not be decrypted" not in result.output.lower()
+        assert backend.decrypt_calls == []  # never decrypted (already plaintext)
+
+    @patch("envdrift.cli_commands.encryption_helpers.resolve_encryption_backend")
     def test_pull_decrypt_backend_error_exits(
         self, mock_resolve, tmp_path, loaded_config, no_git_hook
     ):

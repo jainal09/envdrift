@@ -774,6 +774,7 @@ def pull(
     skipped_count = 0
     error_count = 0
     activated_count = 0
+    activation_error_count = 0
     decrypt_tasks: list[_DecryptTask] = []
     partial_clear, _, partial_combined = _load_partial_encryption_paths(config_file)
 
@@ -859,7 +860,7 @@ def pull(
             if outcome == "activated":
                 activated_count += 1
             elif outcome == "error":
-                error_count += 1
+                activation_error_count += 1
             continue
 
         decrypt_tasks.append(
@@ -915,7 +916,7 @@ def pull(
         if outcome == "activated":
             activated_count += 1
         elif outcome == "error":
-            error_count += 1
+            activation_error_count += 1
 
     # === SUMMARY ===
     console.print()
@@ -926,6 +927,8 @@ def pull(
     ]
     if activated_count > 0:
         summary_lines.append(f"Activated: {activated_count}")
+    if activation_error_count > 0:
+        summary_lines.append(f"Activation errors: {activation_error_count}")
     console.print(
         Panel(
             "\n".join(summary_lines),
@@ -934,8 +937,14 @@ def pull(
         )
     )
 
+    # Decryption and activation are distinct failures — keep the messages
+    # accurate so an activation failure on an already-plaintext file isn't
+    # reported as "could not be decrypted" (#413).
     if error_count > 0:
         print_warning("Some files could not be decrypted")
+    if activation_error_count > 0:
+        print_warning("Some profile files could not be activated")
+    if error_count > 0 or activation_error_count > 0:
         raise typer.Exit(code=1)
 
     # === STEP 3: PARTIAL ENCRYPTION (decrypt .secret files + optional merge) ===
