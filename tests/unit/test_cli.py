@@ -1935,6 +1935,61 @@ class TestSyncCommand:
         assert captured["kwargs"]["project_id"] == "my-gcp-project"
         assert captured["config"].default_vault_name == "gcp"
 
+    def test_sync_unicode_decode_error_exits_cleanly(self, monkeypatch, tmp_path: Path):
+        """A non-UTF-8 env file during sync exits 1, not a traceback (#413).
+
+        Regression for #413: ``sync --check-decryption`` read env files outside any
+        guard, so a non-UTF-8 file raised ``UnicodeDecodeError`` that escaped the
+        CLI's narrow ``except (VaultError, SyncConfigError, SecretNotFoundError)``.
+        The catch is now broadened to ``OSError``/``UnicodeDecodeError`` so the user
+        gets a clean error and exit code 1 instead of a crash.
+        """
+        config_file = tmp_path / "envdrift.toml"
+        config_file.write_text(
+            dedent(
+                """
+                [vault]
+                provider = "gcp"
+
+                [vault.gcp]
+                project_id = "my-gcp-project"
+
+                [vault.sync]
+                default_vault_name = "gcp"
+
+                [[vault.sync.mappings]]
+                secret_name = "dotenv-key"
+                folder_path = "services/api"
+                """
+            )
+        )
+        monkeypatch.chdir(tmp_path)
+
+        monkeypatch.setattr(
+            "envdrift.vault.get_vault_client",
+            lambda *_a, **_k: SimpleNamespace(ensure_authenticated=lambda: None),
+        )
+        monkeypatch.setattr("envdrift.output.rich.print_service_sync_status", lambda *_, **__: None)
+        monkeypatch.setattr("envdrift.output.rich.print_sync_result", lambda *_, **__: None)
+
+        class DummyEngine:
+            def __init__(self, config, vault_client, mode, prompt_callback, progress_callback):
+                pass
+
+            def sync_all(self):
+                # Simulate the real engine hitting a non-UTF-8 env file.
+                b"\xff\xfe".decode("utf-8")
+                raise AssertionError("decode above should have raised")
+
+        monkeypatch.setattr("envdrift.sync.engine.SyncEngine", DummyEngine)
+
+        result = runner.invoke(app, ["sync", "--check-decryption"])
+
+        assert result.exit_code == 1
+        assert "sync failed" in result.output.lower()
+        # No raw traceback leaked to the user.
+        assert "Traceback" not in result.output
+
     def test_sync_invalid_toml_config_errors(self, monkeypatch, tmp_path: Path):
         """Invalid TOML sync config should raise a SyncConfigError."""
 
@@ -3016,6 +3071,214 @@ class TestPullCommand:
         assert "DEBUG=true" in content
         assert "API_KEY=decrypted_key" in content
         assert "DB_PASS=decrypted_pass" in content
+
+    @staticmethod
+    def _write_partial_config(config_file: Path, service_dir: Path, paths: dict[str, Path]) -> None:
+        """Write a sync TOML with one ``prod`` partial-encryption environment."""
+        config_file.write_text(
+            dedent(
+                f"""
+                [vault]
+                provider = "aws"
+
+                [vault.sync]
+                [[vault.sync.mappings]]
+                secret_name = "key"
+                folder_path = "{service_dir.as_posix()}"
+                environment = "prod"
+
+                [partial_encryption]
+                enabled = true
+
+                [[partial_encryption.environments]]
+                name = "prod"
+                clear_file = "{paths["clear_file"].as_posix()}"
+                secret_file = "{paths["secret_file"].as_posix()}"
+                combined_file = "{paths["combined_file"].as_posix()}"
+                """
+            ).lstrip()
+        )
+
+    @staticmethod
+    def _stub_merge_pull_seams(monkeypatch, service_dir: Path) -> None:
+        """Stub only the vault/backend/hook seams for ``pull --merge`` tests.
+
+        The gitignore + combined-file writing under test still runs for real.
+        """
+        from envdrift.sync.config import ServiceMapping, SyncConfig
+
+        monkeypatch.setattr(
+            "envdrift.cli_commands.encryption_helpers.resolve_encryption_backend",
+            lambda *_args, **_kwargs: (
+                DummyEncryptionBackend(
+                    name="dotenvx",
+                    installed=True,
+                    has_encrypted_header=lambda _: False,
+                ),
+                EncryptionProvider.DOTENVX,
+                None,
+            ),
+        )
+        monkeypatch.setattr(
+            "envdrift.core.partial_encryption.pull_partial_encryption",
+            lambda _: (False, True),  # (was_decrypted, protected)
+        )
+        sync_config = SyncConfig(
+            mappings=[
+                ServiceMapping(secret_name="key", folder_path=service_dir, environment="prod")
+            ],
+        )
+        monkeypatch.setattr(
+            "envdrift.cli_commands.sync.load_sync_config_and_client",
+            lambda *_args, **_kwargs: (sync_config, SimpleNamespace(), "aws", None, None, None),
+        )
+        monkeypatch.setattr(
+            "envdrift.integrations.hook_check.ensure_git_hook_setup",
+            lambda **_kwargs: [],
+        )
+
+    @classmethod
+    def _setup_merge_pull_env(cls, monkeypatch, tmp_path: Path) -> dict[str, Path]:
+        """Build a real git repo + config for the ``pull --merge`` regression test.
+
+        Returns the clear/secret/combined paths and the config file. Only the
+        vault/backend/hook seams are stubbed; the gitignore + combined-file
+        writing under test runs for real.
+        """
+        import subprocess
+
+        # A real git repo so ensure_gitignore_entries can resolve the git root and
+        # write a real .gitignore (no mock of the behavior under test).
+        subprocess.run(["git", "init"], cwd=str(tmp_path), capture_output=True, check=True)
+
+        service_dir = tmp_path / "service"
+        service_dir.mkdir()
+
+        paths = {
+            "clear_file": service_dir / ".env.prod.clear",
+            "secret_file": service_dir / ".env.prod.secret",
+            "combined_file": service_dir / ".env.prod",
+            "config_file": tmp_path / "envdrift.toml",
+        }
+        paths["clear_file"].write_text("APP_NAME=myapp\n")
+        paths["secret_file"].write_text("API_KEY=decrypted_key\n")
+
+        cls._write_partial_config(paths["config_file"], service_dir, paths)
+        cls._stub_merge_pull_seams(monkeypatch, service_dir)
+        return paths
+
+    def test_pull_merge_gitignores_combined_file(
+        self,
+        monkeypatch,
+        tmp_path: Path,
+    ):
+        """Pull --merge must gitignore the decrypted combined file (#413).
+
+        Regression for #413: the ``--merge`` branch wrote a combined file
+        containing merged clear + DECRYPTED secret values but never added it to
+        ``.gitignore`` (unlike ``push``, which calls ``_ensure_combined_gitignore``
+        first). A routine ``git add .`` then staged plaintext secrets. This test
+        runs the real ``pull --merge`` path against a real git repo and asserts the
+        combined file lands in ``.gitignore``.
+        """
+        import subprocess
+
+        env = self._setup_merge_pull_env(monkeypatch, tmp_path)
+        combined_file = env["combined_file"]
+        config_file = env["config_file"]
+
+        result = runner.invoke(app, ["pull", "-c", str(config_file), "--skip-sync", "--merge"])
+
+        assert result.exit_code == 0, result.output
+        assert combined_file.exists()
+
+        # The decrypted combined artifact must be gitignored, matching `push`.
+        gitignore = tmp_path / ".gitignore"
+        assert gitignore.exists(), ".gitignore was not created for the decrypted combined file"
+        ignored = {line.strip() for line in gitignore.read_text().splitlines() if line.strip()}
+        combined_rel = combined_file.resolve().relative_to(tmp_path.resolve()).as_posix()
+        assert combined_rel in ignored, (
+            f"{combined_rel} not gitignored; .gitignore has: {sorted(ignored)}"
+        )
+
+        # `git status` must NOT see the combined file as untracked-and-stageable.
+        status = subprocess.run(
+            ["git", "status", "--porcelain", "--", combined_rel],
+            cwd=str(tmp_path),
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        assert status.stdout.strip() == "", (
+            f"combined file is still visible to git: {status.stdout!r}"
+        )
+
+    def test_pull_merge_reports_error_on_non_utf8_secret(
+        self,
+        monkeypatch,
+        tmp_path: Path,
+    ):
+        """A non-UTF-8 secret file must surface a partial error, not crash.
+
+        The merge writer reads files as UTF-8; a decrypted secret with invalid
+        bytes raises ``UnicodeDecodeError``. ``pull --merge`` must catch it,
+        record a partial error, and exit 1 cleanly rather than propagating an
+        unhandled exception out of the command.
+        """
+        env = self._setup_merge_pull_env(monkeypatch, tmp_path)
+        # Overwrite the secret file with bytes that are not valid UTF-8 so the
+        # real merge writer (read_text(encoding="utf-8")) raises.
+        env["secret_file"].write_bytes(b"API_KEY=\xff\xfe_not_utf8\n")
+        config_file = env["config_file"]
+
+        result = runner.invoke(app, ["pull", "-c", str(config_file), "--skip-sync", "--merge"])
+
+        assert result.exit_code == 1, result.output
+        assert "merge failed" in result.output.lower()
+        assert "partial encryption" in result.output.lower()
+        # The decrypted combined artifact must not be left half-written.
+        assert not env["combined_file"].exists()
+
+    @staticmethod
+    def test_write_merged_combined_file_handles_missing_inputs(tmp_path: Path):
+        """The merge writer tolerates a missing clear and/or secret file.
+
+        Exercises every existence branch of ``_write_merged_combined_file``:
+        both present, only clear, only secret, and neither. The header lines
+        from the secret file (``#/---`` banner, ``DOTENV_PUBLIC_KEY``) are
+        always stripped.
+        """
+        from envdrift.cli_commands.sync import _write_merged_combined_file
+
+        clear = tmp_path / ".env.clear"
+        secret = tmp_path / ".env.secret"
+        combined = tmp_path / ".env"
+
+        # Both present: clear lines, a blank separator, then stripped secret lines.
+        clear.write_text("APP=web\n")
+        secret.write_text("#/--- banner\nDOTENV_PUBLIC_KEY=abc\nAPI_KEY=k\n")
+        _write_merged_combined_file(clear, secret, combined)
+        body = combined.read_text()
+        assert "APP=web" in body
+        assert "API_KEY=k" in body
+        assert "banner" not in body
+        assert "DOTENV_PUBLIC_KEY" not in body
+
+        # Only the secret file present (clear missing): no separator needed.
+        clear.unlink()
+        _write_merged_combined_file(clear, secret, combined)
+        assert combined.read_text().strip() == "API_KEY=k"
+
+        # Only the clear file present (secret missing).
+        clear.write_text("APP=web\n")
+        secret.unlink()
+        _write_merged_combined_file(clear, secret, combined)
+        assert combined.read_text() == "APP=web\n\n"
+
+        # Neither input present: an empty (single trailing newline) combined file.
+        clear.unlink()
+        _write_merged_combined_file(clear, secret, combined)
+        assert combined.read_text() == "\n"
 
 
 class TestLockCommand:

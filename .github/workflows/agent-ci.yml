@@ -192,7 +192,9 @@ jobs:
         run: ..\bin\envdrift-agent-windows-amd64.exe --help
 
   lint:
-    name: Lint
+    # Named "Agent Lint" (not "Lint") so it does not collide with the required
+    # repo-wide "Lint" status check from ci.yml on PRs that touch envdrift-agent/**.
+    name: Agent Lint
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
@@ -207,5 +209,9 @@ jobs:
       - name: golangci-lint
         uses: golangci/golangci-lint-action@v9
         with:
-          version: latest
+          # Pinned (not "latest"): "latest" makes the action fetch its
+          # version-mapping config from raw.githubusercontent.com on every run,
+          # which 429s under rate limiting (see #410). Bumped by Renovate.
+          # renovate: datasource=github-releases depName=golangci/golangci-lint
+          version: v2.12.2
           working-directory: envdrift-agent
