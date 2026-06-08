@@ -1217,6 +1217,21 @@ class TestInitCommand:
         assert val_result.exit_code == 0, val_result.output
         assert "PASSED" in val_result.output
 
+    def test_init_next_step_includes_service_dir_for_subdir_output(
+        self, tmp_path: Path, monkeypatch
+    ):
+        """A subdir --output must add --service-dir to the hint, or it sends the
+        user back into the No-module import error the hint is meant to avoid."""
+        monkeypatch.chdir(tmp_path)
+        (tmp_path / ".env").write_text("APP_NAME=demo\n")
+        (tmp_path / "src").mkdir()
+
+        result = runner.invoke(app, ["init", "--output", "src/settings.py"])
+
+        assert result.exit_code == 0, result.output
+        out = " ".join(result.output.split())
+        assert "validate --schema settings:Settings --service-dir src" in out
+
     def test_init_detects_sensitive_vars(self, tmp_path: Path):
         """Test init --detect-sensitive marks sensitive vars."""
         env_file = tmp_path / ".env"

@@ -310,13 +310,16 @@ def _print_next_step(output: Path, class_name: str) -> None:
 
     Without this, a new user runs the obvious ``validate --schema settings:Settings``
     and hits ``No module named 'settings'`` because the schema is in the cwd.
-    ``validate`` now defaults ``--service-dir`` to the cwd, so this command works
-    as-is from the project directory.
+    ``validate`` defaults ``--service-dir`` to the cwd, so the suggested command
+    works as-is for a schema in the project root. When ``--output`` targets a
+    subdirectory, include ``--service-dir <parent>`` so the suggestion still
+    imports (``output.stem`` alone would drop the directory and fail).
     """
-    console.print(
-        f"\n[bold]Next:[/bold] validate your .env against it — "
-        f"[cyan]envdrift validate --schema {output.stem}:{class_name}[/cyan]"
-    )
+    cmd = f"envdrift validate --schema {output.stem}:{class_name}"
+    parent = output.parent
+    if parent != Path():
+        cmd += f" --service-dir {parent}"
+    console.print(f"\n[bold]Next:[/bold] validate your .env against it — [cyan]{cmd}[/cyan]")
 
 
 def _generate_or_exit(
