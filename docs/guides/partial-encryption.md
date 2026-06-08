@@ -160,6 +160,13 @@ nothing and exits non-zero when a `push` is needed:
 envdrift push --check
 ```
 
+`--check` reports out of sync when the `.secret` file is not **fully** encrypted —
+a plaintext file, or a mixed-state file (a newly-added plaintext value alongside
+existing ciphertext), both fail the check because a real `push` would re-encrypt them.
+A fully SOPS-encrypted `.secret` is recognized as fully encrypted: its plaintext
+`sops_*` metadata trailer (`sops_version=`, `sops_lastmodified=`, the recipient key;
+only `sops_mac=` is ciphertext) is SOPS bookkeeping, not a leftover plaintext secret.
+
 ## After `git pull`
 
 If a teammate updated `.env.production.clear` or `.env.production.secret`, the combined
@@ -339,7 +346,10 @@ secrets/**/*.bak
 1. ✅ **Zero impact on configs** — envdrift never reads or writes your configs directory
 2. ✅ **No merge step** — no generated combined file to manage
 3. ✅ **Directory-level operation** — one config entry handles all files in `secrets_dir`
-4. ✅ **Idempotent** — already-encrypted files are skipped on push; already-decrypted files are skipped on pull
+4. ✅ **Idempotent** — fully-encrypted files are skipped on push; already-decrypted files
+   are skipped on pull. A file in a **mixed state** (some values already encrypted plus a
+   newly-added plaintext value) is re-encrypted on push, so a new secret can never leak into
+   the committed file
 
 ---
 

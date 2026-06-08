@@ -337,6 +337,31 @@ def _run_tasks(tasks: list[Any], worker, max_workers: int | None):
         return list(executor.map(worker, tasks))
 
 
+def _write_merged_combined_file(clear_file: Path, secret_file: Path, combined_file: Path) -> None:
+    """Write ``combined_file`` from the clear file plus the decrypted secret file.
+
+    The dotenvx header comments (``#/---`` banner and ``DOTENV_PUBLIC_KEY``) are
+    stripped from the secret content so the merged file is a clean .env. The
+    resulting file holds DECRYPTED secrets and must already be gitignored by the
+    caller (see ``_ensure_combined_gitignore``).
+    """
+    combined_lines: list[str] = []
+
+    if clear_file.exists():
+        combined_lines.extend(clear_file.read_text(encoding="utf-8").splitlines())
+        combined_lines.append("")
+
+    if secret_file.exists():
+        combined_lines.extend(
+            line
+            for line in secret_file.read_text(encoding="utf-8").splitlines()
+            if not line.strip().startswith("#/---")
+            and not line.strip().startswith("DOTENV_PUBLIC_KEY")
+        )
+
+    combined_file.write_text("\n".join(combined_lines) + "\n", encoding="utf-8")
+
+
 def sync(
     config_file: Annotated[
         Path | None,
@@ -460,7 +485,7 @@ def sync(
     # Run sync
     try:
         result = engine.sync_all()
-    except (VaultError, SyncConfigError, SecretNotFoundError) as e:
+    except (VaultError, SyncConfigError, SecretNotFoundError, OSError, UnicodeDecodeError) as e:
         print_error(f"Sync failed: {e}")
         raise typer.Exit(code=1) from None
 
@@ -919,6 +944,15 @@ def pull(
             pull_secrets_only,
         )
 
+        # When --merge writes combined files with DECRYPTED secrets, they must be
+        # gitignored just like `push` does — otherwise a routine `git add .` stages
+        # plaintext secrets. Mirror push's _ensure_combined_gitignore (which also
+        # protects the dotenvx .env.keys file) before writing anything (see #413).
+        if merge:
+            from envdrift.cli_commands.partial import _ensure_combined_gitignore
+
+            _ensure_combined_gitignore(partial_config.partial_encryption.environments)
+
         for env_config in partial_config.partial_encryption.environments:
             if env_config.secrets_only:
                 try:
@@ -965,29 +999,16 @@ def pull(
                 # Merge if requested
                 if merge:
                     combined_file = Path(env_config.combined_file)
-                    clear_file = Path(env_config.clear_file)
-
-                    # Build combined content (decrypted version)
-                    combined_lines = []
-
-                    # Add clear file content
-                    if clear_file.exists():
-                        combined_lines.extend(clear_file.read_text().splitlines())
-                        combined_lines.append("")
-
-                    # Add decrypted secret file content
-                    if secret_file.exists():
-                        secret_content = secret_file.read_text().splitlines()
-                        # Skip dotenvx header comments
-                        secret_content = [
-                            line
-                            for line in secret_content
-                            if not line.strip().startswith("#/---")
-                            and not line.strip().startswith("DOTENV_PUBLIC_KEY")
-                        ]
-                        combined_lines.extend(secret_content)
-
-                    combined_file.write_text("\n".join(combined_lines) + "\n")
+                    try:
+                        _write_merged_combined_file(
+                            Path(env_config.clear_file), secret_file, combined_file
+                        )
+                    except (OSError, UnicodeDecodeError) as e:
+                        console.print(
+                            f"  [red]![/red] {combined_file} [red]- merge failed: {e}[/red]"
+                        )
+                        partial_errors.append(f"{env_config.name}: {e}")
+                        continue
                     console.print(
                         f"  [cyan]→[/cyan] {combined_file} [dim]- merged (decrypted)[/dim]"
                     )
