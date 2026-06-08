@@ -155,6 +155,24 @@ def test_guard_path_not_found_emits_valid_sarif(tmp_path):
     assert "Path not found" in notification["message"]["text"]
 
 
+def test_guard_human_error_preserves_bracketed_literal(tmp_path):
+    """Human-mode error prose keeps bracketed literals intact (no Rich eating).
+
+    The ``_emit_error`` human branch interpolates the dynamic ``message`` into
+    Rich markup. A bracketed literal (e.g. a TOML section name like
+    ``[vault.sync]`` embedded in a path) must be escaped so Rich renders it
+    verbatim instead of interpreting it as a console tag and silently dropping
+    it. Without ``rich.markup.escape`` the ``[vault.sync]`` segment vanishes
+    from stdout; this asserts it survives.
+    """
+    missing = tmp_path / "[vault.sync].env"
+
+    result = runner.invoke(app, ["guard", "--native-only", str(missing)])
+    assert result.exit_code == 1
+    # The bracketed literal must appear verbatim, not be swallowed as markup.
+    assert "[vault.sync].env" in result.stdout
+
+
 @pytest.mark.skipif(shutil.which("git") is None, reason="git not installed")
 def test_guard_staged_no_files_emits_empty_json(tmp_path, monkeypatch):
     """--json --staged with nothing staged emits valid empty-findings JSON.
