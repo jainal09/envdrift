@@ -352,11 +352,20 @@ func uninstallWindows() error {
 // `stop` from failing when the agent is installed but idle. It returns an error
 // only when the task is running and ending it actually fails.
 func stopWindows() error {
-	if !isRunningWindows() {
-		return nil // nothing to stop; installed task is idle
-	}
+	// Do NOT gate the stop on isRunningWindows(): that probe runs `schtasks
+	// /query`, which can exit non-zero for transient reasons (Scheduler service
+	// unavailable, permission error). Gating on it would skip `/end` and falsely
+	// report success while the agent keeps running -- the exact failure mode
+	// runStop was fixed to avoid, and which stopMacOS/stopLinux sidestep by using
+	// idempotent commands. Run `/end` unconditionally instead.
 	if err := exec.Command("schtasks", "/end", "/tn", "EnvDriftGuardian").Run(); err != nil {
-		return fmt.Errorf("failed to stop agent: %w", err)
+		// `/end` exits non-zero when the task is not currently running, which is
+		// success for our purposes. Only surface a failure if the task is
+		// verifiably still running -- so a transient probe failure here cannot
+		// turn a real, un-stopped agent into a false success.
+		if isRunningWindows() {
+			return fmt.Errorf("failed to stop agent: %w", err)
+		}
 	}
 	return nil
 }

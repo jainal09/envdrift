@@ -21,54 +21,49 @@ func TestNew(t *testing.T) {
 	}
 }
 
+type baseMatchCase struct {
+	path     string
+	expected bool
+}
+
+// assertBaseMatchCases runs each case against baseMatchesAny with the given
+// pattern set, sub-testing per path. Shared by the pattern- and exclude-match
+// tests so the table-driven loop lives in one place.
+func assertBaseMatchCases(t *testing.T, patterns []string, label string, cases []baseMatchCase) {
+	t.Helper()
+	for _, tt := range cases {
+		t.Run(tt.path, func(t *testing.T) {
+			if got := baseMatchesAny(tt.path, patterns); got != tt.expected {
+				t.Errorf("baseMatchesAny(%q, %s) = %v, expected %v", tt.path, label, got, tt.expected)
+			}
+		})
+	}
+}
+
 func TestMatchesPattern(t *testing.T) {
 	w, _ := New([]string{".env*", "*.env"}, []string{}, false)
 	defer w.Stop()
 
-	tests := []struct {
-		path     string
-		expected bool
-	}{
+	assertBaseMatchCases(t, w.patterns, "patterns", []baseMatchCase{
 		{".env", true},
 		{".env.local", true},
 		{".env.production", true},
 		{"config.env", true},
 		{"README.md", false},
 		{"package.json", false},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.path, func(t *testing.T) {
-			result := baseMatchesAny(tt.path, w.patterns)
-			if result != tt.expected {
-				t.Errorf("baseMatchesAny(%q, patterns) = %v, expected %v", tt.path, result, tt.expected)
-			}
-		})
-	}
+	})
 }
 
 func TestIsExcluded(t *testing.T) {
 	w, _ := New([]string{".env*"}, []string{".env.example", ".env.sample"}, false)
 	defer w.Stop()
 
-	tests := []struct {
-		path     string
-		expected bool
-	}{
+	assertBaseMatchCases(t, w.exclude, "exclude", []baseMatchCase{
 		{".env.example", true},
 		{".env.sample", true},
 		{".env.production", false},
 		{".env", false},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.path, func(t *testing.T) {
-			result := baseMatchesAny(tt.path, w.exclude)
-			if result != tt.expected {
-				t.Errorf("baseMatchesAny(%q, exclude) = %v, expected %v", tt.path, result, tt.expected)
-			}
-		})
-	}
+	})
 }
 
 func TestExpandPath(t *testing.T) {
