@@ -1,0 +1,26 @@
+tests/integration/test_sops_backend_e2e.py
+  s_dfc6cd6692ed8f::t_d443e8f47fc297 500-527
+src/envdrift/encryption/sops.py
+  s_dfc6cd6692ed8f::t_589e17f70b6f38 169-201,213
+  s_dfc6cd6692ed8f::t_0eab37cd9fa78b 269-272,274-276,278-294,307-370
+  s_dfc6cd6692ed8f::t_ac0ffd8c640fa7 486-489,491-498
+tests/unit/test_encryption_sops.py
+  s_dfc6cd6692ed8f::t_e330e33356e0ef 330-356
+  s_dfc6cd6692ed8f::t_b12c12fa705281 240-329,357-378
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.6",
+  "base_commit_sha": "d1dfb255d433cbbe37190b546303179b69a7d6b0",
+  "prompts": {},
+  "sessions": {
+    "s_dfc6cd6692ed8f": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "fd23e738-3512-4420-9290-d985ad979bfd",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Jainal Gosaliya <jainal09gosalia@gmail.com>"
+    }
+  }
+}
