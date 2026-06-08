@@ -5,6 +5,13 @@ All notable changes to the EnvDrift Agent will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.3](https://github.com/jainal09/envdrift/compare/agent-v1.1.2...agent-v1.1.3) (2026-06-08)
+
+
+### Documentation
+
+* **changelog:** strip stray "cluster J" shorthand from release notes ([#428](https://github.com/jainal09/envdrift/issues/428)) ([0999683](https://github.com/jainal09/envdrift/commit/09996832f86b1dad4ffe227b918ef11d4b729298))
+
 ## [1.1.2](https://github.com/jainal09/envdrift/compare/agent-v1.1.1...agent-v1.1.2) (2026-06-08)
 
 
