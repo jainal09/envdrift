@@ -1,0 +1,21 @@
+tests/unit/test_partial_encryption_sops.py
+  s_dfc6cd6692ed8f::t_47dcd2dc006b5f 1-196
+tests/integration/test_partial_encryption_sops_e2e.py
+  s_dfc6cd6692ed8f::t_595fa01da3fd01 1-121
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.6",
+  "base_commit_sha": "9063f4009ec887052c769a39ead3b28d1cd1bd07",
+  "prompts": {},
+  "sessions": {
+    "s_dfc6cd6692ed8f": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "fd23e738-3512-4420-9290-d985ad979bfd",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Jainal Gosaliya <jainal09gosalia@gmail.com>"
+    }
+  }
+}
