@@ -348,6 +348,31 @@ class Settings(BaseSettings):
         assert result.exit_code == 1, result.output
         assert "Failed to load envdrift config" in result.output
 
+    def test_config_not_found_race_handled_cleanly(self, tmp_path: Path, monkeypatch):
+        """A ConfigNotFoundError from load_config (TOCTOU) is handled, not raised.
+
+        find_config() and load_config() are two separate filesystem checks; if the
+        file is removed in between, load_config raises ConfigNotFoundError (a plain
+        Exception, not OSError/ValueError). It must surface the clean message.
+        """
+        from envdrift.config import ConfigNotFoundError
+
+        args = self._project(
+            tmp_path,
+            self._FORBID_SCHEMA,
+            "APP_NAME=MyApp\n",
+            "[validation]\ncheck_encryption = true\n",
+        )
+        monkeypatch.chdir(tmp_path)
+
+        def _raise_not_found(_path):
+            raise ConfigNotFoundError("config vanished mid-call")
+
+        monkeypatch.setattr("envdrift.cli_commands.validate.load_config", _raise_not_found)
+        result = runner.invoke(app, args)
+        assert result.exit_code == 1, result.output
+        assert "Failed to load envdrift config" in result.output
+
 
 class TestDiffCommand:
     """Tests for the diff CLI command."""

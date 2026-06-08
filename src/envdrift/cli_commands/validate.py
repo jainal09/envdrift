@@ -8,11 +8,37 @@ from typing import Annotated
 
 import typer
 
-from envdrift.config import ValidationConfig, find_config, load_config
+from envdrift.config import ConfigNotFoundError, ValidationConfig, find_config, load_config
 from envdrift.core.parser import EnvParser
 from envdrift.core.schema import SchemaLoader, SchemaLoadError
 from envdrift.core.validator import Validator
 from envdrift.output.rich import console, print_error, print_validation_result
+
+
+def _resolve_validation_settings(check_encryption_flag: bool | None) -> tuple[bool, bool]:
+    """Resolve effective ``(check_encryption, check_extra)`` from the CLI flag
+    and ``[validation]`` config.
+
+    ``--check-encryption/--no-check-encryption`` overrides config when passed
+    explicitly; otherwise ``[validation].check_encryption`` is the default.
+    ``check_extra`` comes from ``[validation].strict_extra``. A config that
+    cannot be loaded raises ``typer.Exit(1)`` with a clean error.
+    """
+    validation_cfg = ValidationConfig()
+    config_path = find_config()
+    if config_path is not None:
+        try:
+            validation_cfg = load_config(config_path).validation
+        except (OSError, ValueError, tomllib.TOMLDecodeError, ConfigNotFoundError) as exc:
+            print_error(f"Failed to load envdrift config ({config_path}): {exc}")
+            raise typer.Exit(code=1) from None
+
+    effective_check_encryption = (
+        check_encryption_flag
+        if check_encryption_flag is not None
+        else validation_cfg.check_encryption
+    )
+    return effective_check_encryption, validation_cfg.strict_extra
 
 
 def validate(
@@ -94,30 +120,16 @@ def validate(
         print_error(str(e))
         raise typer.Exit(code=1) from None
 
-    # Resolve [validation] settings from envdrift.toml (if present). These seed
-    # the encryption-check default and control extra-variable checking.
-    validation_cfg = ValidationConfig()
-    config_path = find_config()
-    if config_path is not None:
-        try:
-            validation_cfg = load_config(config_path).validation
-        except (OSError, ValueError, tomllib.TOMLDecodeError) as exc:
-            print_error(f"Failed to load envdrift config ({config_path}): {exc}")
-            raise typer.Exit(code=1) from None
+    # Resolve [validation] config: CLI flag overrides check_encryption; strict_extra
+    # drives check_extra (False skips the extra-variable check entirely).
+    effective_check_encryption, check_extra = _resolve_validation_settings(check_encryption)
 
-    # --check-encryption/--no-check-encryption overrides the config default when
-    # passed explicitly; otherwise fall back to [validation].check_encryption.
-    effective_check_encryption = (
-        check_encryption if check_encryption is not None else validation_cfg.check_encryption
-    )
-
-    # Validate. strict_extra=False skips the extra-variable check entirely.
     validator = Validator()
     result = validator.validate(
         env,
         schema_meta,
         check_encryption=effective_check_encryption,
-        check_extra=validation_cfg.strict_extra,
+        check_extra=check_extra,
     )
 
     # Print result
