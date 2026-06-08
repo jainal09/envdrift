@@ -72,16 +72,30 @@ def test_push_md_warning_header_matches_generated_header() -> None:
         "  3. Edit: .env.production.secret",
         "  4. Run:  envdrift push (re-encrypts .secret and regenerates this)",
     ]
-    # Sanity: the lines we assert on are really the ones the code generates.
+    # Sanity: the lines we assert on are really the ones the code generates,
+    # in this exact order.
+    last = -1
     for line in instruction_lines:
-        assert line in generated, f"generated header changed: missing {line!r}"
+        idx = generated.find(line)
+        assert idx != -1, f"generated header changed: missing {line!r}"
+        assert idx > last, f"generated header reordered around {line!r}"
+        last = idx
 
-    # The doc must contain each instruction verbatim (ignoring the box border).
+    # The doc must contain each instruction verbatim *and in the same order* the
+    # code emits them (ignoring the box border), so a reordered push.md example
+    # fails the test instead of silently drifting from _build_warning_header.
+    last = -1
     for line in instruction_lines:
-        assert line in text, (
+        idx = text.find(line)
+        assert idx != -1, (
             f"push.md is missing the generated header line {line!r} (#413); the "
             "documented 'To make changes:' order must match _build_warning_header."
         )
+        assert idx > last, (
+            f"push.md lists {line!r} out of order (#413); the documented "
+            "'To make changes:' steps must appear in the same order the code emits."
+        )
+        last = idx
 
 
 def test_init_md_documents_force_option() -> None:
@@ -106,8 +120,13 @@ def test_sync_md_does_not_claim_vault_name_routes() -> None:
     assert "informational only" in text, (
         "sync.md must state vault_name is informational only (#413)."
     )
-    assert "does NOT route" in text or "do not switch the vault" in text, (
-        "sync.md must clarify vault_name does NOT route to a different vault (#413)."
+    # Both phrases are part of the documented fix, so require each independently —
+    # an `or` would let a future edit drop one of them silently.
+    assert "does NOT route" in text, (
+        "sync.md must contain 'does NOT route' to clarify vault_name behaviour (#413)."
+    )
+    assert "do not switch the vault" in text, (
+        "sync.md must contain 'do not switch the vault' in the admonition title (#413)."
     )
     # The old misleading inline comment must be gone.
     assert "# Override default\n" not in text
