@@ -232,6 +232,123 @@ class FixSettings(BaseSettings):
         assert "MISSING_VAR" in result.output or "template" in result.output.lower()
 
 
+class TestValidateConsumesValidationConfig:
+    """`envdrift validate` consumes the [validation] config section (#413).
+
+    Real in-process CLI invocations against a temp project; ``monkeypatch.chdir``
+    makes ``find_config()`` resolve the temp ``envdrift.toml`` deterministically.
+    """
+
+    _FORBID_SCHEMA = """
+from pydantic_settings import BaseSettings
+
+class Settings(BaseSettings):
+    APP_NAME: str
+    DEBUG: bool = False
+    model_config = {"extra": "forbid"}
+"""
+
+    _SENSITIVE_SCHEMA = """
+from pydantic import Field
+from pydantic_settings import BaseSettings
+
+class Settings(BaseSettings):
+    API_KEY: str = Field(json_schema_extra={"sensitive": True})
+"""
+
+    def _project(
+        self, tmp_path: Path, schema_src: str, env_text: str, toml: str | None
+    ) -> list[str]:
+        (tmp_path / "settings.py").write_text(schema_src)
+        (tmp_path / ".env").write_text(env_text)
+        if toml is not None:
+            (tmp_path / "envdrift.toml").write_text(toml)
+        return [
+            "validate",
+            str(tmp_path / ".env"),
+            "--schema",
+            "settings:Settings",
+            "--service-dir",
+            str(tmp_path),
+        ]
+
+    def test_strict_extra_false_skips_extra_check(self, tmp_path: Path, monkeypatch):
+        """strict_extra=false makes validate ignore variables absent from the schema."""
+        args = self._project(
+            tmp_path,
+            self._FORBID_SCHEMA,
+            "APP_NAME=MyApp\nDEBUG=true\nUNKNOWN_VAR=x\n",
+            "[validation]\nstrict_extra = false\ncheck_encryption = false\n",
+        )
+        monkeypatch.chdir(tmp_path)
+        result = runner.invoke(app, [*args, "--ci"])
+        assert result.exit_code == 0, result.output
+        assert "UNKNOWN_VAR" not in result.output
+
+    def test_strict_extra_true_rejects_extra(self, tmp_path: Path, monkeypatch):
+        """strict_extra=true (default) rejects variables absent from a forbid schema."""
+        args = self._project(
+            tmp_path,
+            self._FORBID_SCHEMA,
+            "APP_NAME=MyApp\nDEBUG=true\nUNKNOWN_VAR=x\n",
+            "[validation]\nstrict_extra = true\ncheck_encryption = false\n",
+        )
+        monkeypatch.chdir(tmp_path)
+        result = runner.invoke(app, [*args, "--ci"])
+        assert result.exit_code == 1, result.output
+        assert "UNKNOWN_VAR" in result.output
+
+    def test_check_encryption_config_default_used(self, tmp_path: Path, monkeypatch):
+        """check_encryption=false suppresses the unencrypted-secret check when no flag is passed."""
+        args = self._project(
+            tmp_path,
+            self._SENSITIVE_SCHEMA,
+            "API_KEY=plaintext_secret_value\n",
+            "[validation]\ncheck_encryption = false\n",
+        )
+        monkeypatch.chdir(tmp_path)
+        result = runner.invoke(app, args)
+        assert "UNENCRYPTED SECRETS" not in result.output, result.output
+
+    def test_check_encryption_cli_overrides_config(self, tmp_path: Path, monkeypatch):
+        """An explicit --check-encryption overrides check_encryption=false in config."""
+        args = self._project(
+            tmp_path,
+            self._SENSITIVE_SCHEMA,
+            "API_KEY=plaintext_secret_value\n",
+            "[validation]\ncheck_encryption = false\n",
+        )
+        monkeypatch.chdir(tmp_path)
+        result = runner.invoke(app, [*args, "--check-encryption"])
+        assert "UNENCRYPTED SECRETS" in result.output, result.output
+
+    def test_no_config_uses_defaults(self, tmp_path: Path, monkeypatch):
+        """With no envdrift.toml, defaults apply (extra vars checked) — backward compatible."""
+        args = self._project(
+            tmp_path,
+            self._FORBID_SCHEMA,
+            "APP_NAME=MyApp\nDEBUG=true\nUNKNOWN_VAR=x\n",
+            None,
+        )
+        monkeypatch.chdir(tmp_path)
+        result = runner.invoke(app, [*args, "--no-check-encryption", "--ci"])
+        assert result.exit_code == 1, result.output
+        assert "UNKNOWN_VAR" in result.output
+
+    def test_malformed_config_reports_error(self, tmp_path: Path, monkeypatch):
+        """A malformed envdrift.toml surfaces a clean error, not a traceback."""
+        args = self._project(
+            tmp_path,
+            self._FORBID_SCHEMA,
+            "APP_NAME=MyApp\n",
+            "[validation\ncheck_encryption = true\n",  # missing closing bracket
+        )
+        monkeypatch.chdir(tmp_path)
+        result = runner.invoke(app, args)
+        assert result.exit_code == 1, result.output
+        assert "Failed to load envdrift config" in result.output
+
+
 class TestDiffCommand:
     """Tests for the diff CLI command."""
 

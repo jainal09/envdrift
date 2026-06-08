@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import tomllib
 from pathlib import Path
 from typing import Annotated
 
 import typer
 
+from envdrift.config import ValidationConfig, find_config, load_config
 from envdrift.core.parser import EnvParser
 from envdrift.core.schema import SchemaLoader, SchemaLoadError
 from envdrift.core.validator import Validator
@@ -25,9 +27,13 @@ def validate(
     ] = None,
     ci: Annotated[bool, typer.Option("--ci", help="CI mode: exit with code 1 on failure")] = False,
     check_encryption: Annotated[
-        bool,
-        typer.Option("--check-encryption/--no-check-encryption", help="Check encryption"),
-    ] = True,
+        bool | None,
+        typer.Option(
+            "--check-encryption/--no-check-encryption",
+            help="Check that sensitive vars are encrypted "
+            "(default: [validation].check_encryption from envdrift.toml, else on)",
+        ),
+    ] = None,
     fix: Annotated[
         bool, typer.Option("--fix", help="Output template for missing variables")
     ] = False,
@@ -52,8 +58,11 @@ def validate(
         service_dir (Path | None): Optional directory to add to imports when
             resolving the schema.
         ci (bool): When true, exit with code 1 if validation fails.
-        check_encryption (bool): When true, validate encryption-related metadata
-            on sensitive fields.
+        check_encryption (bool | None): Tri-state. When explicitly set via
+            ``--check-encryption``/``--no-check-encryption`` it overrides config;
+            when left unset (None) it falls back to ``[validation].check_encryption``
+            from envdrift.toml (default on). Controls validation of
+            encryption-related metadata on sensitive fields.
         fix (bool): When true and validation fails, print a fix template with
             missing variables and defaults when available.
         verbose (bool): When true, include additional details in the validation
@@ -85,13 +94,30 @@ def validate(
         print_error(str(e))
         raise typer.Exit(code=1) from None
 
-    # Validate
+    # Resolve [validation] settings from envdrift.toml (if present). These seed
+    # the encryption-check default and control extra-variable checking.
+    validation_cfg = ValidationConfig()
+    config_path = find_config()
+    if config_path is not None:
+        try:
+            validation_cfg = load_config(config_path).validation
+        except (OSError, ValueError, tomllib.TOMLDecodeError) as exc:
+            print_error(f"Failed to load envdrift config ({config_path}): {exc}")
+            raise typer.Exit(code=1) from None
+
+    # --check-encryption/--no-check-encryption overrides the config default when
+    # passed explicitly; otherwise fall back to [validation].check_encryption.
+    effective_check_encryption = (
+        check_encryption if check_encryption is not None else validation_cfg.check_encryption
+    )
+
+    # Validate. strict_extra=False skips the extra-variable check entirely.
     validator = Validator()
     result = validator.validate(
         env,
         schema_meta,
-        check_encryption=check_encryption,
-        check_extra=True,
+        check_encryption=effective_check_encryption,
+        check_extra=validation_cfg.strict_extra,
     )
 
     # Print result
