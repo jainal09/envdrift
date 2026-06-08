@@ -117,7 +117,9 @@ class EnvKeysFile:
         Uses microsecond precision and, on the off chance two backups land on
         the same timestamp (coarse clock, or two calls within one tick), appends
         an incrementing suffix so an earlier backup is never silently
-        overwritten (#413).
+        overwritten (#413). The target path is claimed atomically with
+        ``O_CREAT | O_EXCL`` so a concurrent ``envdrift`` run sharing the
+        workspace can't slip a file in between the name choice and the copy.
         """
         if not self.path.exists():
             raise FileNotFoundError(f"Cannot backup non-existent file: {self.path}")
@@ -125,9 +127,17 @@ class EnvKeysFile:
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
         backup_path = self.path.parent / f"{self.path.name}.backup.{timestamp}"
         counter = 1
-        while backup_path.exists():
-            backup_path = self.path.parent / f"{self.path.name}.backup.{timestamp}.{counter}"
-            counter += 1
+        while True:
+            try:
+                # O_EXCL atomically fails if the path already exists, closing the
+                # TOCTOU window between an existence check and the copy.
+                fd = os.open(str(backup_path), os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+            except FileExistsError:
+                backup_path = self.path.parent / f"{self.path.name}.backup.{timestamp}.{counter}"
+                counter += 1
+                continue
+            os.close(fd)
+            break
         shutil.copy2(self.path, backup_path)
         return backup_path
 
