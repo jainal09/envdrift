@@ -1,0 +1,42 @@
+tests/unit/test_enc_helpers_schema_regressions.py
+  s_dfc6cd6692ed8f::t_ce8d9113d28d6e 268-312
+src/envdrift/cli_commands/agent.py
+  s_dfc6cd6692ed8f::t_3437303bf29d7f 34
+  s_dfc6cd6692ed8f::t_6be0515de02bed 203
+  s_dfc6cd6692ed8f::t_1d70062f3ab792 134-158
+src/envdrift/core/schema.py
+  s_dfc6cd6692ed8f::t_becb280ca31cd0 88-137
+  s_dfc6cd6692ed8f::t_e0de8671a90fa7 164-168,171-172,178-184
+  s_dfc6cd6692ed8f::t_d340aa159e2f96 278-283,285-288
+tests/unit/test_config_deferred_validation.py
+  s_dfc6cd6692ed8f::t_12dfe88adb703d 1-315
+src/envdrift/config.py
+  s_dfc6cd6692ed8f::t_dd490597733a29 296-382
+  s_dfc6cd6692ed8f::t_b1a4ceb12388c6 188-191
+  s_dfc6cd6692ed8f::t_bf69ca782fc27a 433-434
+  s_dfc6cd6692ed8f::t_2d2c83dc15e758 454,458-459
+  s_dfc6cd6692ed8f::t_f35f147712c93b 457
+  s_dfc6cd6692ed8f::t_12c6a29869638a 262-295
+src/envdrift/cli_commands/partial.py
+  s_dfc6cd6692ed8f::t_e0722cb5bf745c 286
+  s_dfc6cd6692ed8f::t_790fa800a19b6d 114
+  s_dfc6cd6692ed8f::t_b0029d41d20151 11-15
+  s_dfc6cd6692ed8f::t_db1434ba77b9a8 31-34,37-38,40-44
+  s_dfc6cd6692ed8f::t_9ba421cf9c7c9e 35-36,39
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.6",
+  "base_commit_sha": "fb03bd164dd602f5be66ad0365a37b8e67b0f770",
+  "prompts": {},
+  "sessions": {
+    "s_dfc6cd6692ed8f": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "fd23e738-3512-4420-9290-d985ad979bfd",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Jainal Gosaliya <jainal09gosalia@gmail.com>"
+    }
+  }
+}
