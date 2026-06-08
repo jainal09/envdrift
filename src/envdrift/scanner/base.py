@@ -180,11 +180,16 @@ class AggregatedScanResult:
     def exit_code(self) -> int:
         """Determine exit code based on highest severity finding.
 
+        Each severity maps to its own code so a pipeline that branches on a
+        specific exit code can tell them apart (LOW must not collide with HIGH's
+        code 2, see #413):
+
         Returns:
             0: No findings
             1: Critical severity findings
             2: High severity findings
             3: Medium severity findings
+            4: Low severity findings (policy violations, e.g. unencrypted file)
         """
         if not self.unique_findings:
             return 0
@@ -197,6 +202,8 @@ class AggregatedScanResult:
             return 2
         if FindingSeverity.MEDIUM in severities:
             return 3
+        if FindingSeverity.LOW in severities:
+            return 4
         return 0
 
     @property

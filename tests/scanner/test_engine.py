@@ -1447,6 +1447,40 @@ class TestCombinedFilesSecurity:
         # ...and guard must now agree the file is protected (no contradiction).
         assert engine.check_combined_files_security() == []
 
+    def test_no_false_warning_from_non_git_dir(self, tmp_path, monkeypatch):
+        """#413 — running from a non-git dir must not emit a false NOT-in-.gitignore warning.
+
+        ``git check-ignore`` returns 128 (error) outside a repo; that goes to
+        stderr with no exception, ``stdout`` is empty, so every combined file used
+        to be reported as "NOT in .gitignore". The check now resolves the repo root
+        first and skips cleanly when there is no git repo. Uses a real subprocess
+        from a real non-git directory (no git mocking).
+        """
+        import shutil
+
+        if shutil.which("git") is None:
+            pytest.skip("git not available")
+
+        from envdrift.utils.git import get_git_root
+
+        # tmp_path under the OS temp root is normally not inside a git repo; skip if
+        # the temp root happens to live under a checkout so the test stays valid.
+        monkeypatch.chdir(tmp_path)
+        if get_git_root(tmp_path) is not None:
+            pytest.skip("temp dir is inside a git repository")
+
+        config = GuardConfig(
+            use_native=True,
+            use_gitleaks=False,
+            combined_files=[".env.production"],
+        )
+        engine = ScanEngine(config)
+
+        warnings = engine.check_combined_files_security()
+        assert warnings == [], (
+            f"running outside a git repo must not emit a false .gitignore warning, got: {warnings}"
+        )
+
     def test_combined_files_multiple_files(self, monkeypatch):
         """Test with multiple combined files, some in gitignore, some not."""
         import subprocess

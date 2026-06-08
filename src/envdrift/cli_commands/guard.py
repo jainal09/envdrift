@@ -351,6 +351,7 @@ def guard(
       1 - Critical severity findings detected
       2 - High severity findings detected
       3 - Medium severity findings detected
+      4 - Low severity findings detected
 
     \b
     Examples:
@@ -739,8 +740,13 @@ def guard(
 
         has_blocking = any(f.severity in blocking_severities for f in result.unique_findings)
 
-        if not has_blocking:
-            exit_code = 0
+        # Fail CI iff a finding meets the threshold, using the severity-derived
+        # code so each severity stays distinguishable (CRITICAL=1/HIGH=2/MEDIUM=3/
+        # LOW=4). ``result.exit_code`` is already nonzero for any finding, so a
+        # blocking LOW (``--fail-on low`` with LOW-only findings) now fails CI with
+        # its own code 4 instead of silently passing or colliding with HIGH's 2
+        # (#413). No blocking finding => clean exit 0.
+        exit_code = result.exit_code if has_blocking else 0
 
     if exit_code != 0:
         raise typer.Exit(code=exit_code)

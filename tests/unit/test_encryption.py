@@ -242,6 +242,38 @@ NEW_FEATURE_FLAG=enabled
         env_file.write_text(content)
         assert detector.detect_backend_for_file(env_file) == "sops"
 
+    def test_plaintext_sops_substring_not_detected_as_sops(self, tmp_path):
+        """#413 — a bare ``sops:`` substring in plaintext is NOT SOPS-encrypted.
+
+        ``has_sops_header`` / ``detect_backend`` / ``detect_backend_for_file`` /
+        ``is_file_encrypted`` used unanchored ``"sops:" in content`` substring
+        checks, so a plaintext value like ``VAULT_ADDR=https://sops:8200`` was
+        misclassified as SOPS-encrypted — causing ``decrypt`` with no ``--backend``
+        to auto-select sops and attempt a SOPS decrypt of a plaintext file. The
+        checks are now line-anchored.
+        """
+        detector = EncryptionDetector()
+        content = "VAULT_ADDR=https://sops:8200\nAPI_KEY=plain"
+
+        assert detector.has_sops_header(content) is False
+        assert detector.detect_backend(content) is None
+
+        env_file = tmp_path / ".env"
+        env_file.write_text(content)
+        assert detector.detect_backend_for_file(env_file) is None
+        assert detector.is_file_encrypted(env_file) is False
+
+    def test_genuine_sops_metadata_block_still_detected(self, tmp_path):
+        """A real line-anchored SOPS metadata block is still detected (no regression)."""
+        detector = EncryptionDetector()
+        for content in (
+            "key: value\nsops:\n  version: 3.8.1\n",  # YAML
+            "API_KEY=plain\nsops_version=3.13.1\n",  # dotenv metadata trailer
+            "API_KEY=plain\nsops_mac=abc123\n",
+        ):
+            assert detector.has_sops_header(content) is True, content
+            assert detector.detect_backend(content) == "sops", content
+
     def test_detect_dotenvx_backend(self, tmp_path):
         """Detect dotenvx headers and markers."""
         detector = EncryptionDetector()

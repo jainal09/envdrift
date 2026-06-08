@@ -14,6 +14,7 @@ from typing import TYPE_CHECKING
 
 from envdrift.core.parser import EncryptionStatus, EnvFile
 from envdrift.core.schema import SchemaMetadata
+from envdrift.encryption.sops import SOPSEncryptionBackend
 
 if TYPE_CHECKING:
     pass
@@ -101,15 +102,19 @@ class EncryptionDetector:
         "DOTENV_PUBLIC_KEY",
     ]
 
-    # Header/content patterns that indicate the file has been encrypted by SOPS
-    SOPS_FILE_MARKERS = [
-        "sops:",  # YAML metadata
-        '"sops":',  # JSON metadata
-        "ENC[AES256_GCM,",  # Encrypted value marker
-    ]
+    # Canonical SOPS encrypted-value envelope (substring is specific enough to
+    # match anywhere without false positives).
+    SOPS_ENC_VALUE_MARKER = "ENC[AES256_GCM,"
 
-    # Combined file markers for backward compatibility
-    ENCRYPTED_FILE_MARKERS = DOTENVX_FILE_MARKERS + SOPS_FILE_MARKERS
+    # Line-anchored SOPS metadata markers (YAML/JSON/dotenv), matched with
+    # re.MULTILINE so a bare in-line ``sops:`` substring in a plaintext value
+    # (e.g. ``VAULT_ADDR=https://sops:8200``) does NOT match, but a genuine SOPS
+    # metadata block in any output format does (#413). Aliased directly to the
+    # canonical set on ``SOPSEncryptionBackend`` (the single source of truth) so a
+    # new SOPS format variant added there is automatically honoured here — the
+    # scanner / ``is_file_encrypted`` / ``detect_backend_for_file`` paths can never
+    # silently diverge and false-flag a real SOPS file as "unencrypted".
+    SOPS_METADATA_PATTERNS = SOPSEncryptionBackend.SOPS_METADATA_PATTERNS
 
     # Patterns for suspicious plaintext secrets
     SECRET_VALUE_PATTERNS = [
@@ -232,10 +237,7 @@ class EncryptionDetector:
         Returns:
             `true` if any encrypted-file marker is present in content, `false` otherwise.
         """
-        for marker in self.ENCRYPTED_FILE_MARKERS:
-            if marker in content:
-                return True
-        return False
+        return self.has_dotenvx_header(content) or self.has_sops_header(content)
 
     def has_dotenvx_header(self, content: str) -> bool:
         """
@@ -261,11 +263,15 @@ class EncryptionDetector:
 
         Returns:
             `true` if any SOPS marker is present in content, `false` otherwise.
+
+        Structure-aware: requires a canonical ``ENC[AES256_GCM,`` encrypted-value
+        envelope or a line-anchored SOPS metadata key, not a bare ``sops:``
+        substring. A plaintext value or comment that merely mentions ``sops:``
+        (e.g. ``VAULT_ADDR=https://sops:8200``) is NOT treated as encrypted (#413).
         """
-        for marker in self.SOPS_FILE_MARKERS:
-            if marker in content:
-                return True
-        return False
+        if self.SOPS_ENC_VALUE_MARKER in content:
+            return True
+        return any(pattern.search(content) for pattern in self.SOPS_METADATA_PATTERNS)
 
     def detect_backend(self, content: str) -> str | None:
         """

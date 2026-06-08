@@ -980,9 +980,21 @@ class ScanEngine:
         """
         import subprocess  # nosec B404
 
+        from envdrift.utils.git import get_git_root
+
         warnings: list[str] = []
 
         if not self.config.combined_files:
+            return warnings
+
+        # Config-relative combined-file paths resolve against the repo root, so run
+        # git check-ignore with cwd there (mirrors _filter_gitignored_files) — not
+        # the process cwd, which may be a subdirectory and mis-resolve the paths.
+        # Outside a git repo there is no .gitignore to consult, so skip the check
+        # rather than emit a false "NOT in .gitignore" warning for every file (#413).
+        git_root = get_git_root(Path.cwd())
+        if git_root is None:
+            logger.warning("Not in a git repository; skipping combined-file .gitignore check")
             return warnings
 
         try:
@@ -993,7 +1005,21 @@ class ScanEngine:
                 capture_output=True,
                 text=True,
                 timeout=30,
+                cwd=str(git_root),
             )
+            # git check-ignore exits 0 (some paths ignored) or 1 (none ignored) on
+            # success; anything else (e.g. 128) is an error reported on stderr with
+            # no exception raised. Skip on error so an empty stdout is not mistaken
+            # for "nothing ignored", which would flag every file (#413).
+            if result.returncode not in (0, 1):
+                logger.warning(
+                    "git check-ignore failed in %s (code %s): %s",
+                    git_root,
+                    result.returncode,
+                    result.stderr.strip()[:200],
+                )
+                return warnings
+
             gitignored = set(result.stdout.strip().split("\n")) if result.stdout.strip() else set()
 
             for combined_file in self.config.combined_files:

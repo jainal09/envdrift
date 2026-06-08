@@ -16,6 +16,18 @@ import time
 from pathlib import Path, PurePosixPath
 
 from envdrift.core.encryption import is_dotenvx_public_key_var
+
+# Structure-aware line/content classification helpers live in a sibling module to
+# keep this file within the single-file LOC budget. They are re-exported from here
+# because ``engine.py`` and the scanner tests import them from
+# ``envdrift.scanner.native``.
+from envdrift.scanner._native_filters import (
+    _EC_PUBKEY_RE,
+    _content_has_sops_markers,
+    _content_is_encrypted,
+    _is_encrypted_value_line,
+    _looks_like_code_member_access,
+)
 from envdrift.scanner.base import (
     FindingSeverity,
     ScanFinding,
@@ -31,25 +43,6 @@ from envdrift.scanner.patterns import (
 )
 from envdrift.utils.git import is_file_tracked
 
-
-def _is_encrypted_value_line(line: str) -> bool:
-    """Return True if a line holds an already-encrypted value (dotenvx or SOPS).
-
-    Used to skip such lines during pattern and entropy scanning so encrypted
-    values are never re-flagged. Shared by both scans so they stay in sync.
-    """
-    return "encrypted:" in line or "ENC[" in line
-
-
-# A dotenvx public key is a secp256k1 *compressed* EC point: a 0x02/0x03 prefix
-# byte followed by 32 bytes (64 hex chars) — 66 hex chars total. It is public by
-# definition (not a secret) but is high-entropy and matches generic patterns, so
-# we drop it at detection by value shape (anchored) regardless of var name. This
-# complements the var-name skip (is_dotenvx_public_key_var) for cases where the
-# key appears under an unexpected name. See #370.
-_EC_PUBKEY_RE = re.compile(r"^0[23][0-9a-fA-F]{64}$")
-
-
 # Encryption markers for dotenvx
 DOTENVX_MARKERS = (
     # Check for actual encrypted values, not just the public key header
@@ -63,85 +56,6 @@ SOPS_MARKERS = (
     "sops_",
     "ENC[AES256_GCM,",
 )
-
-# Structure-aware encryption detection (#348). A bare ``"encrypted:" in content``
-# / ``"sops:" in content`` substring check misfires on plaintext that merely
-# mentions the marker — e.g. a comment ``# this is not encrypted: true`` or a
-# value ``MESSAGE=not encrypted: yes`` would suppress the unencrypted-env-file
-# policy and hide a real leak. We instead require the marker in its real
-# structural position.
-
-# dotenvx: ``encrypted:`` must be the (optionally quoted) start of an assignment's
-# *value* — ``NAME="encrypted:..."`` / ``NAME=encrypted:...`` — not anywhere in the
-# line (and never inside a comment line, which is excluded separately).
-_DOTENVX_VALUE_RE = re.compile(
-    r"^\s*[A-Za-z_][A-Za-z0-9_]*\s*=\s*[\"']?encrypted:",
-)
-
-# SOPS: a canonical ``ENC[AES256_GCM,...]`` value envelope (dotenv- or YAML-style).
-_SOPS_ENC_RE = re.compile(r"ENC\[AES256_GCM,")
-
-# SOPS metadata block markers, matched per (non-comment) line. These mirror the
-# canonical set in ``envdrift.encryption.sops.SopsBackend.SOPS_METADATA_PATTERNS``
-# so the scanner and the encryption backend agree on what a real SOPS file is. A
-# bare ``^sops[:_]`` prefix was too loose: it matched plaintext dotenv assignments
-# like ``sops_token=...`` / ``sops_enabled=...`` (vars that merely *start with*
-# ``sops_``), misclassifying an unencrypted file as encrypted (#348). SOPS only
-# emits ``sops_version`` / ``sops_mac`` keys in its dotenv metadata trailer.
-_SOPS_METADATA_RES = (
-    re.compile(r"^sops:\s*$"),  # YAML: top-level ``sops:`` mapping key (col 0)
-    re.compile(r'^\s*"sops"\s*:'),  # JSON: ``"sops":`` (allows indent)
-    re.compile(r"^sops_version\s*="),  # dotenv: flat ``sops_version=``
-    re.compile(r"^sops_mac\s*="),  # dotenv: flat ``sops_mac=``
-)
-
-
-def _line_is_dotenvx_encrypted(line: str) -> bool:
-    """True if ``line`` assigns an actual dotenvx-encrypted value."""
-    return bool(_DOTENVX_VALUE_RE.match(line))
-
-
-def _line_is_sops_metadata(line: str) -> bool:
-    """True if ``line`` is a canonical SOPS metadata-block marker."""
-    return any(pattern.match(line) for pattern in _SOPS_METADATA_RES)
-
-
-def _content_has_sops_markers(content: str) -> bool:
-    """True if ``content`` carries canonical SOPS structural markers.
-
-    Requires either an ``ENC[AES256_GCM,...]`` value envelope or a canonical SOPS
-    metadata key (top-level ``sops:`` / ``"sops":`` / ``sops_version=`` /
-    ``sops_mac=``), each on a non-comment line — not a loose substring match and
-    not an arbitrary ``sops_*`` plaintext var. Comment lines are skipped so the
-    SOPS path is consistent with the dotenvx path in ``_content_is_encrypted``.
-    """
-    for line in content.splitlines():
-        if line.lstrip().startswith("#"):
-            continue
-        if _SOPS_ENC_RE.search(line):
-            return True
-        if _line_is_sops_metadata(line):
-            return True
-    return False
-
-
-def _content_is_encrypted(content: str) -> bool:
-    """True if ``content`` is dotenvx- or SOPS-encrypted (structure-aware).
-
-    Comment lines (stripped form starts with ``#``) never count on any path, so
-    the dotenvx, SOPS-envelope, and SOPS-metadata checks stay consistent: a plain
-    comment that merely *mentions* ``encrypted:`` / ``ENC[AES256_GCM,`` / ``sops:``
-    does not suppress the unencrypted-file policy (#348). The dotenvx marker must
-    sit in value position on an assignment line; SOPS detection (envelope or
-    canonical metadata key) is delegated to ``_content_has_sops_markers``, which
-    applies the same comment filter.
-    """
-    for line in content.splitlines():
-        if line.lstrip().startswith("#"):
-            continue
-        if _line_is_dotenvx_encrypted(line):
-            return True
-    return _content_has_sops_markers(content)
 
 
 # Default patterns to ignore - comprehensive list for all major languages and tools
@@ -1002,9 +916,15 @@ class NativeScanner(ScannerBackend):
                         # Universal patterns: ${VAR}, $(cmd), $VAR, %VAR%, {{var}}, {var}, \${var}
                         if secret.startswith(("${", "$(", "$", "%", "{{", "{", "\\${")):
                             continue
-                        # Skip code patterns - method/property access (real secrets don't have dots)
-                        # e.g., "config.Password", "handler.ReadToken()", "obj?.Property"
-                        if "." in secret or "?" in secret:
+                        # Skip values that look like code member access — a chain
+                        # of word-like identifiers joined by '.'/'?.'/'->' (with
+                        # optional call parens), e.g. "config.Password",
+                        # "handler.ReadToken()", "obj?.Property". Do NOT skip every
+                        # value that merely contains a '.' or '?': a high-entropy
+                        # dotted password such as "Xk9.mQ2vLp8wRt4nZs6yBdFh" is a
+                        # real secret and must be reported (it already cleared the
+                        # entropy gate above) (#413).
+                        if _looks_like_code_member_access(secret):
                             continue
 
                     # Calculate column number

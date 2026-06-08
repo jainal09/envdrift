@@ -544,6 +544,73 @@ class TestStructureAwareEncryptionDetection:
         assert not [f for f in result.findings if f.rule_id == "unencrypted-env-file"]
 
 
+class TestSopsMetadataPatternParity:
+    """The scanner's per-line SOPS markers are derived from the canonical set.
+
+    ``_native_filters._SOPS_METADATA_RES`` must not hand-copy the SOPS metadata
+    regexes: it derives them from ``SOPSEncryptionBackend.SOPS_METADATA_PATTERNS``
+    (the single source of truth, also aliased by ``core/encryption.py``). This
+    pins that derivation so a future SOPS format variant added to the backend is
+    honoured by the scanner automatically and the two paths can never silently
+    diverge (which would re-classify a genuinely SOPS-encrypted file as plaintext
+    and re-flag its ciphertext).
+    """
+
+    def test_scanner_markers_share_canonical_source_strings(self):
+        """Each scanner marker's regex source equals a canonical backend source."""
+        from envdrift.encryption.sops import SOPSEncryptionBackend
+        from envdrift.scanner._native_filters import _SOPS_METADATA_RES
+
+        canonical_sources = [p.pattern for p in SOPSEncryptionBackend.SOPS_METADATA_PATTERNS]
+        scanner_sources = [p.pattern for p in _SOPS_METADATA_RES]
+
+        # Same source strings, same order — derived, not independently authored.
+        assert scanner_sources == canonical_sources
+        # And the same count, so a new backend pattern can't be dropped on the floor.
+        assert len(_SOPS_METADATA_RES) == len(SOPSEncryptionBackend.SOPS_METADATA_PATTERNS)
+
+    def test_scanner_recognizes_every_canonical_metadata_marker(self):
+        """Every canonical SOPS metadata line the backend recognizes, the scanner does too.
+
+        Parity check: feed each backend pattern a minimal line it is meant to match
+        and assert the scanner's per-line ``_line_is_sops_metadata`` agrees. Without
+        the derivation (hand-copied patterns), adding a backend variant would break
+        this; with it, the scanner stays in lockstep.
+        """
+        from envdrift.encryption.sops import SOPSEncryptionBackend
+        from envdrift.scanner._native_filters import _line_is_sops_metadata
+
+        # One representative line per canonical metadata marker (matched per-line).
+        canonical_marker_lines = [
+            "sops:",  # YAML top-level mapping key
+            '  "sops":',  # JSON key (indented)
+            "sops_version=3.7.0",  # dotenv trailer
+            "sops_mac=ENC[AES256_GCM,data:abc,type:str]",  # dotenv MAC
+        ]
+        # Sanity: the fixture covers every canonical pattern (drift guard).
+        assert len(canonical_marker_lines) == len(SOPSEncryptionBackend.SOPS_METADATA_PATTERNS)
+
+        for line in canonical_marker_lines:
+            assert _line_is_sops_metadata(line), (
+                f"scanner must recognize SOPS marker line: {line!r}"
+            )
+
+    def test_scanner_markers_drop_multiline_flag_for_per_line_match(self):
+        """Scanner patterns are recompiled without re.MULTILINE for ``.match()`` use.
+
+        The canonical patterns carry ``re.MULTILINE`` for whole-content
+        ``.search()``; the scanner matches each line, so the flag must be stripped.
+        """
+        import re
+
+        from envdrift.scanner._native_filters import _SOPS_METADATA_RES
+
+        for pattern in _SOPS_METADATA_RES:
+            assert not (pattern.flags & re.MULTILINE), (
+                f"scanner SOPS marker {pattern.pattern!r} must not carry re.MULTILINE"
+            )
+
+
 class TestUnencryptedSecretFile:
     """Tests for the dedicated plaintext .secret rule (Severity 2 hard block).
 
@@ -1541,6 +1608,186 @@ class TestKeywordGate:
 
         aws = [f for f in result.findings if "aws" in f.rule_id.lower()]
         assert len(aws) >= 1
+
+
+class TestPerLineEncryptionSkipIsStructural:
+    """#413 — the per-line encryption skip must be structure-aware.
+
+    ``_is_encrypted_value_line`` previously returned True for ANY line containing
+    the substring ``encrypted:`` or ``ENC[``, so a plaintext line that merely
+    *mentions* those substrings was skipped wholesale and any real secret sitting
+    on it was never reported. The skip is now anchored to a real dotenvx-encrypted
+    value or a canonical ``ENC[AES256_GCM,`` envelope.
+    """
+
+    @pytest.fixture
+    def scanner(self) -> NativeScanner:
+        return NativeScanner()
+
+    def test_aws_key_on_bare_enc_line_is_reported(self, scanner: NativeScanner, tmp_path: Path):
+        """A bare ``ENC[...]`` (not ``ENC[AES256_GCM,``) must not skip the line."""
+        cfg = tmp_path / "app.conf"
+        cfg.write_text("DATA=ENC[something] AKIAIOSFODNN7EXAMPLE\n")
+
+        result = scanner.scan([cfg])
+
+        aws = [f for f in result.findings if "aws" in f.rule_id.lower()]
+        assert len(aws) >= 1, (
+            "a real AWS key adjacent to a bare ENC[...] token must still be reported"
+        )
+
+    def test_aws_key_on_inline_encrypted_substring_line_is_reported(
+        self, scanner: NativeScanner, tmp_path: Path
+    ):
+        """An inline ``encrypted:`` substring in a URL must not skip the line."""
+        cfg = tmp_path / "url.conf"
+        cfg.write_text("URL=https://example.com/encrypted:path?key=AKIAIOSFODNN7EXAMPLE\n")
+
+        result = scanner.scan([cfg])
+
+        aws = [f for f in result.findings if "aws" in f.rule_id.lower()]
+        assert len(aws) >= 1, (
+            "a real AWS key on a line whose value merely contains 'encrypted:' "
+            "must still be reported"
+        )
+
+    def test_genuine_encrypted_value_lines_still_skipped(
+        self, scanner: NativeScanner, tmp_path: Path
+    ):
+        """Real dotenvx / SOPS encrypted values are still skipped (no regression)."""
+        cfg = tmp_path / ".env.production"
+        cfg.write_text(
+            "#/---[DOTENV_PUBLIC_KEY]---/\n"
+            'DOTENV_PUBLIC_KEY="abc123"\n'
+            'DATABASE_URL="encrypted:vault1AbCdEfGhIjKlMnOpQrStUvWxYz0123456789"\n'
+            "API_KEY=ENC[AES256_GCM,data:xyz789,iv:a,tag:b,type:str]\n"
+        )
+
+        result = scanner.scan([cfg])
+
+        assert result.findings == [], (
+            f"genuinely-encrypted values must stay skipped, got: "
+            f"{[f.rule_id for f in result.findings]}"
+        )
+
+
+class TestGenericSecretDottedValue:
+    """#413 — generic-secret must not drop every value containing a '.'/'?'.
+
+    The rule used to skip any captured value containing ``.`` or ``?`` to filter
+    out code member-access (``config.Password``). That dropped real high-entropy
+    dotted secrets. The skip now only fires for word-like member-access chains.
+    """
+
+    @pytest.fixture
+    def scanner(self) -> NativeScanner:
+        return NativeScanner()
+
+    def test_high_entropy_dotted_password_is_reported(self, scanner: NativeScanner, tmp_path: Path):
+        """A dotted high-entropy password clears the entropy gate and is reported."""
+        from envdrift.scanner.patterns import calculate_entropy
+
+        secret = "Xk9.mQ2vLp8wRt4nZs6yBdFh"  # entropy ~4.585, contains a dot
+        assert calculate_entropy(secret) >= 4.0
+        cfg = tmp_path / "creds.conf"
+        cfg.write_text(f"password={secret}\n")
+
+        result = scanner.scan([cfg])
+
+        generic = [f for f in result.findings if f.rule_id == "generic-secret"]
+        assert len(generic) >= 1, (
+            "a high-entropy dotted password must be reported as generic-secret, "
+            f"got rules: {[f.rule_id for f in result.findings]}"
+        )
+
+    def test_code_member_access_still_dropped(self, scanner: NativeScanner, tmp_path: Path):
+        """A dotted code member-access reference is still suppressed (no regression)."""
+        cfg = tmp_path / "code.conf"
+        # Word-like member-access chain; not a secret.
+        cfg.write_text("password=config.Database.Password\n")
+
+        result = scanner.scan([cfg])
+
+        generic = [f for f in result.findings if f.rule_id == "generic-secret"]
+        assert generic == [], (
+            f"code member-access must not be flagged as generic-secret, got: "
+            f"{[f.secret_preview for f in generic]}"
+        )
+
+    def test_dotted_secret_with_stray_vowel_segment_is_reported(
+        self, scanner: NativeScanner, tmp_path: Path
+    ):
+        """#413 (cubic P2) — a noisy dotted segment with one stray vowel is still a secret.
+
+        The member-access skip used a single-vowel test, so a high-entropy dotted
+        value whose random segment happened to contain one vowel
+        (``config.mQ2vLpaWRt4nZs6yBdFh``) was misclassified as code and silently
+        skipped. The vowel-density rule now treats long vowel-sparse segments as
+        secret noise, so it is reported.
+        """
+        from envdrift.scanner.patterns import calculate_entropy
+
+        # 20-char random base62 segment with exactly one vowel ('a').
+        secret = "config.mQ2vLpaWRt4nZs6yBdFh"
+        assert calculate_entropy(secret) >= 4.0
+        cfg = tmp_path / "stray.conf"
+        cfg.write_text(f"password={secret}\n")
+
+        result = scanner.scan([cfg])
+
+        generic = [f for f in result.findings if f.rule_id == "generic-secret"]
+        assert len(generic) >= 1, (
+            "a high-entropy dotted secret whose noisy segment has a stray vowel "
+            f"must still be reported, got rules: {[f.rule_id for f in result.findings]}"
+        )
+
+
+class TestMemberAccessHeuristic:
+    """Unit coverage for the member-access code-vs-secret heuristic (#413)."""
+
+    @pytest.mark.parametrize(
+        "segment",
+        [
+            "ReadToken()",  # method call
+            "env",  # short member (<=4 chars)
+            "id",
+            "Password",  # word-like, natural vowel density
+            "apiKey",
+            "Connection",
+        ],
+    )
+    def test_segment_is_word_like_true(self, segment: str):
+        from envdrift.scanner._native_filters import _segment_is_word_like
+
+        assert _segment_is_word_like(segment) is True
+
+    @pytest.mark.parametrize(
+        "segment",
+        [
+            "mQ2vLpaWRt4nZs6yBdFh",  # 20 chars, 1 vowel -> secret noise
+            "Xk9aZ2vqLp8wRt4nZs6",  # 19 chars, 1 vowel
+            "mQ2vLp8wRt4nZs6yBdFh",  # 20 chars, 0 vowels
+        ],
+    )
+    def test_segment_is_word_like_false(self, segment: str):
+        from envdrift.scanner._native_filters import _segment_is_word_like
+
+        assert _segment_is_word_like(segment) is False
+
+    def test_looks_like_code_member_access_true_chain(self):
+        from envdrift.scanner._native_filters import _looks_like_code_member_access
+
+        assert _looks_like_code_member_access("config.Database.Password") is True
+        assert _looks_like_code_member_access("handler.ReadToken()") is True
+        assert _looks_like_code_member_access("obj?.Property") is True
+
+    def test_looks_like_code_member_access_false_non_chain(self):
+        from envdrift.scanner._native_filters import _looks_like_code_member_access
+
+        # Not a member-access shape at all.
+        assert _looks_like_code_member_access("justplain") is False
+        # Member-access shape but a vowel-sparse noisy segment => real secret.
+        assert _looks_like_code_member_access("config.mQ2vLpaWRt4nZs6yBdFh") is False
 
 
 class TestLowercaseEntropyAssignment:

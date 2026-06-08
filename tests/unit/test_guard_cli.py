@@ -426,6 +426,35 @@ def test_guard_ci_respects_fail_on_threshold(tmp_path: Path, monkeypatch):
     assert created_configs
 
 
+def test_guard_ci_fail_on_low_blocks_on_low_only_findings(tmp_path: Path, monkeypatch):
+    """#413 — ``--ci --fail-on low`` must fail CI on LOW-only findings.
+
+    The CI exit code was seeded from ``result.exit_code`` (LOW -> 0) and the CI
+    block could only *lower* it, never raise 0 -> nonzero. So a blocking LOW
+    finding (``has_blocking`` True) still exited 0 and CI silently passed. The
+    exit code is now derived from ``has_blocking``.
+    """
+    config = EnvdriftConfig()
+    findings = [_make_finding(FindingSeverity.LOW)]
+    created_configs, _info_calls = _patch_guard_dependencies(
+        monkeypatch, config, _build_result(findings)
+    )
+
+    result = runner.invoke(app, ["guard", str(tmp_path), "--ci", "--fail-on", "low"])
+    assert result.exit_code != 0, "a blocking LOW finding under --fail-on low must fail CI"
+    assert created_configs
+
+
+def test_guard_ci_fail_on_low_passes_on_info_only_findings(tmp_path: Path, monkeypatch):
+    """INFO is unblockable by design (no --fail-on info) — LOW-only fix must not regress this."""
+    config = EnvdriftConfig()
+    findings = [_make_finding(FindingSeverity.INFO)]
+    _patch_guard_dependencies(monkeypatch, config, _build_result(findings))
+
+    result = runner.invoke(app, ["guard", str(tmp_path), "--ci", "--fail-on", "low"])
+    assert result.exit_code == 0, "INFO-only findings must not block CI even under --fail-on low"
+
+
 def test_guard_exits_with_findings_non_ci(tmp_path: Path, monkeypatch):
     """Non-CI runs exit with scan-derived exit codes."""
     config = EnvdriftConfig()

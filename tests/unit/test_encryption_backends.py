@@ -115,6 +115,23 @@ KEY="encrypted:xyz"
         env_file.write_text("KEY=value\nOTHER=123")
         assert detect_encryption_provider(env_file) is None
 
+    def test_plaintext_with_sops_substring_returns_none(self, tmp_path):
+        """#413 — a bare ``sops:`` substring in a plaintext value is NOT SOPS.
+
+        ``detect_encryption_provider`` used unanchored ``"sops:" in content``
+        substring matching, so ``VAULT_ADDR=https://sops:8200`` was misclassified
+        as SOPS-encrypted. Detection is now line-anchored.
+        """
+        env_file = tmp_path / ".env"
+        env_file.write_text("VAULT_ADDR=https://sops:8200\nAPI_KEY=plain")
+        assert detect_encryption_provider(env_file) is None
+
+    def test_detect_sops_metadata_block(self, tmp_path):
+        """A genuine line-anchored SOPS metadata block is still detected as SOPS."""
+        env_file = tmp_path / ".env"
+        env_file.write_text("API_KEY=plain\nsops_version=3.13.1\n")
+        assert detect_encryption_provider(env_file) == EncryptionProvider.SOPS
+
     def test_detect_nonexistent_returns_none(self, tmp_path):
         """Test nonexistent file returns None."""
         assert detect_encryption_provider(tmp_path / "nonexistent") is None
