@@ -69,6 +69,78 @@ issue** — don't silently leave it. Cite `file:line` and evidence in the issue.
 - The branch may be auto-updated with `main` (a merge commit appears on the
   remote); `git fetch` + rebase before pushing rather than racing it.
 
+## Gotchas / hard-won lessons
+
+These have bitten us in CI or review and aren't obvious from the code alone.
+
+- **release-please force-pushes its release-PR branches.** On every push to
+  `main` it rebases each open `release-please--branches--main--components--*`
+  branch onto the new `main` and **regenerates** the CHANGELOG + manifest from
+  commit subjects — discarding any manual commit you pushed there. To fix a
+  changelog typo, wait until all release PRs merge, then edit the released
+  section in a normal `docs(changelog)` PR (release-please won't rewrite already
+  released sections) and `gh release edit <tag>` the published notes. Corollary:
+  keep internal cluster/sprint labels out of Conventional-Commit subjects —
+  they're copied verbatim into user-facing release notes.
+- **CLI output assertions must be width-independent.** `CliRunner` unit tests
+  that assert a phrase in `result.output` can pass locally and fail in CI: a
+  long pytest `tmp_path` prefix pushes Rich's soft-wrap point into the phrase
+  (`keys match vault` → `keys` + newline + `match vault`) at CI's narrower
+  width. Collapse whitespace first — `" ".join(result.output.split())` — and
+  assert `result.exit_code` explicitly (output-only checks miss failure-mode
+  regressions that still print the expected text).
+- **GitHub push-protection blocks realistic secret literals in fixtures.** A
+  scanner test that embeds a real-looking key as one token gets the push
+  rejected. Build the fixture by concatenation (e.g. `"AKIA" + "IOSF..."`) so
+  the literal never appears whole in the source.
+- **Docs CI runs markdownlint (MD013, 150-char prose).** Wrap long lines and run
+  `make lint-docs` before pushing a `docs/` change; grep all docs for a repeated
+  claim so every copy stays in sync.
+- **A stricter guard/parser breaks pre-existing sibling tests.** When you tighten
+  validation or a parser, grep the whole test tree and run
+  `pytest -m "not integration"` — not just the file you touched — because other
+  suites may assert the old behavior.
+- **`pyrefly` skips `tests/` inside `.claude/worktrees/`.** A worktree under the
+  gitignored `.claude/` makes pyrefly's ignore resolution drop the whole `tests/`
+  tree (`WARN Skipping include pattern … tests/**`), so a type error in a test
+  file passes locally but fails the `Tests & Coverage` CI job. Create scratch
+  worktrees as **siblings of the repo** (`../envdrift-<name>`), and always run the
+  **full** `uv run pyrefly check` (never scope it to `src/...`) — test-file types
+  are part of the gate.
+
+## CI, branch protection & merging
+
+- `main` is **strict up-to-date** + **requires conversation resolution** + 12
+  required checks: `Lint`, `Tests & Coverage`, the four
+  `Integration Tests (Python 3.11/3.12/3.13/3.14)`, `semantic-pr`, `commitlint`,
+  and the four `Analyze (python/go/javascript-typescript/actions)`. CodeScene,
+  codecov, `Agent Lint`, `VS Code Lint`, cubic and the CodeRabbit check are
+  **not** required — they don't block merge.
+- `mergeStateStatus` decoded: **`UNSTABLE`** (only a non-required check is red) is
+  still mergeable; **`BEHIND`** needs `gh pr update-branch`; green-but-**`BLOCKED`**
+  is almost always an **unresolved review thread** (conversation resolution), not
+  CI — `gh pr merge <n> --admin` prints the real reason ("A conversation must be
+  resolved …") so you can diagnose without actually admin-merging.
+- Strict up-to-date makes merging several PRs **serial**: each merge re-`BEHIND`s
+  the rest, so it's `update-branch` → wait CI green → merge, one PR at a time.
+- Transient infra failures — Docker Hub 429s, an "Initialize containers" step, the
+  occasional `commitlint` hiccup — are not your code: `gh run rerun <id> --failed`.
+  release-please PRs are merged by the repo's "Auto-merge Version Bumps" workflow.
+
+## CodeRabbit & review bots
+
+- CodeRabbit is rate-limited (~1 review/hour) and **silently skips** the
+  incremental review on commits pushed in a burst — no "skipped" notice. **Green
+  CI + zero unresolved threads does NOT mean it reviewed your latest commits.**
+  Verify by the walkthrough's coverage range: the trailing SHA in
+  `between <40hex> and <40hex>` must equal the PR head
+  (`gh pr view <n> --json headRefOid`). A plain `@coderabbitai review` is a no-op
+  unless auto-review is paused — use `@coderabbitai full review` to force one.
+- Treat any unresolved review thread (CodeRabbit, Greptile, the review-bot) as the
+  PR being **incomplete**: fix the underlying bug with a regression test, then
+  resolve the thread — never resolve-to-unblock. An `update-branch` merge commit
+  can re-trigger fresh review threads, so re-check after updating.
+
 ## Local gates (all must pass)
 
 ```bash
@@ -81,3 +153,6 @@ uv run pytest                 # full suite (containers via `make test-integratio
 ```
 
 Commits follow Conventional Commits (commitlint + `semantic-pr` enforce it).
+commitlint also caps the **header at ≤ 100 chars and every body line at ≤ 100** —
+hard-wrap commit bodies with real newlines (not one long paragraph); merge
+commits are exempt.
