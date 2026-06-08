@@ -1180,6 +1180,31 @@ class TestInitCommand:
         # Empty-ish input still yields a usable identifier.
         assert _sanitize_identifier("@").isidentifier()
 
+    def test_init_env_file_path_with_escapes_is_safe_literal(self, tmp_path: Path) -> None:
+        """#423: an env_file path with backslash/quote escapes stays a valid literal.
+
+        A raw `env_file="{path}"` interpolation would let a Windows-style path
+        (`\\n`, `\\t`) or an embedded quote corrupt the generated module. The path
+        is emitted via repr() so it round-trips to the exact original string.
+        """
+        from envdrift.cli_commands.init_cmd import _module_header
+
+        # A POSIX path that still contains escape-prone characters in its name.
+        tricky = tmp_path / 'we"ird\tname'
+        tricky.write_text("FOO=bar\n")
+
+        header = "\n".join(_module_header("Cfg", tricky))
+        # The emitted literal must repr back to the exact path string.
+        assert f"env_file={str(tricky)!r}" in header
+
+        # The generated module must parse cleanly (no SyntaxError from a broken
+        # string literal) and the model_config must hold the exact path.
+        full = "\n".join(_module_header("Cfg", tricky) + ["    FOO: str", ""])
+        ns: dict[str, object] = {}
+        exec(compile(full, "<gen>", "exec"), ns)  # noqa: S102 - generated-module smoke test
+        cfg_cls = ns["Cfg"]
+        assert cfg_cls.model_config["env_file"] == str(tricky)  # type: ignore[index,attr-defined]
+
     def test_init_aliased_field_keeps_typed_default(self, tmp_path: Path) -> None:
         """#423: an aliased keyword field with an int/bool value keeps its default.
 

@@ -11,7 +11,7 @@ from typing import Annotated
 import typer
 
 from envdrift.core.encryption import EncryptionDetector
-from envdrift.core.parser import EnvParser
+from envdrift.core.parser import EnvFile, EnvParser
 from envdrift.output.rich import console, print_error, print_success, print_warning
 
 # Matches the left-hand side of any `KEY=value` assignment in a raw .env file,
@@ -131,7 +131,13 @@ def _render_field_line(
 
 
 def _module_header(class_name: str, env_file: Path) -> list[str]:
-    """Build the static import/class/model_config preamble for the module."""
+    """Build the static import/class/model_config preamble for the module.
+
+    The ``env_file`` path is emitted with ``repr()`` so it survives as a correct
+    Python literal: a Windows path (``C:\\new\\test``) or one containing quotes
+    would otherwise be mangled by string-escape interpretation.
+    """
+    env_file_literal = repr(str(env_file))
     return [
         '"""Auto-generated Pydantic Settings class."""',
         "",
@@ -143,11 +149,44 @@ def _module_header(class_name: str, env_file: Path) -> list[str]:
         f'    """Settings generated from {env_file}."""',
         "",
         "    model_config = SettingsConfigDict(",
-        f'        env_file="{env_file}",',
+        f"        env_file={env_file_literal},",
         '        extra="forbid",',
         "    )",
         "",
     ]
+
+
+def _detect_sensitive_vars(env: EnvFile) -> set[str]:
+    """Return the set of variable names flagged sensitive by name or value."""
+    detector = EncryptionDetector()
+    return {
+        name
+        for name, var in env.variables.items()
+        if detector.is_name_sensitive(name) or detector.is_value_suspicious(var.value)
+    }
+
+
+def _render_fields(env: EnvFile, sensitive_vars: set[str]) -> tuple[list[str], int]:
+    """Render every Settings field line; return the lines and the alias count.
+
+    Walks the variables in sorted order so output is deterministic, resolving each
+    to a unique importable attribute name (with an alias when renamed) and an
+    inferred type/default.
+    """
+    field_lines: list[str] = []
+    aliased_count = 0
+    used_names: set[str] = set()
+    for var_name, env_var in sorted(env.variables.items()):
+        field_name, alias = _resolve_field_name(var_name, used_names)
+        if alias is not None:
+            aliased_count += 1
+        type_hint, default_val = _infer_type(env_var.value)
+        field_lines.append(
+            _render_field_line(
+                field_name, type_hint, default_val, alias, var_name in sensitive_vars
+            )
+        )
+    return field_lines, aliased_count
 
 
 def generate_settings_module(
@@ -172,8 +211,7 @@ def generate_settings_module(
     if not class_name.isidentifier() or keyword.iskeyword(class_name):
         raise ValueError(f"Invalid class name: {class_name!r} is not a valid Python identifier")
 
-    parser = EnvParser()
-    env = parser.parse(env_file)
+    env = EnvParser().parse(env_file)
 
     # The strict EnvParser only accepts identifier-style keys, so keys like
     # `2FA_ENABLED` or `MY-DASH-VAR` never become variables. Record every
@@ -183,29 +221,10 @@ def generate_settings_module(
     raw_keys = _raw_assignment_keys(env_file.read_text(encoding="utf-8"))
     unparsed_keys = [k for k in dict.fromkeys(raw_keys) if k not in env.variables]
 
-    detector = EncryptionDetector()
-    sensitive_vars: set[str] = set()
-    if detect_sensitive:
-        for var_name, env_var in env.variables.items():
-            if detector.is_name_sensitive(var_name) or detector.is_value_suspicious(env_var.value):
-                sensitive_vars.add(var_name)
+    sensitive_vars = _detect_sensitive_vars(env) if detect_sensitive else set()
 
-    lines = _module_header(class_name, env_file)
-
-    aliased_count = 0
-    used_names: set[str] = set()
-    for var_name, env_var in sorted(env.variables.items()):
-        field_name, alias = _resolve_field_name(var_name, used_names)
-        if alias is not None:
-            aliased_count += 1
-        type_hint, default_val = _infer_type(env_var.value)
-        lines.append(
-            _render_field_line(
-                field_name, type_hint, default_val, alias, var_name in sensitive_vars
-            )
-        )
-
-    lines.append("")
+    field_lines, aliased_count = _render_fields(env, sensitive_vars)
+    lines = [*_module_header(class_name, env_file), *field_lines, ""]
 
     return SettingsGeneration(
         source="\n".join(lines),
@@ -213,6 +232,17 @@ def generate_settings_module(
         aliased_count=aliased_count,
         unparsed_keys=unparsed_keys,
     )
+
+
+def _print_generation_summary(result: SettingsGeneration) -> None:
+    """Print the dim post-generation summary (sensitive + aliased counts)."""
+    if result.sensitive_vars:
+        console.print(f"[dim]Detected {len(result.sensitive_vars)} sensitive variable(s)[/dim]")
+    if result.aliased_count:
+        console.print(
+            f"[dim]Aliased {result.aliased_count} variable(s) whose attribute name "
+            "differs from the original (non-identifier, keyword, or name collision)[/dim]"
+        )
 
 
 def init(
@@ -275,12 +305,4 @@ def init(
     # Write output
     output.write_text(result.source)
     print_success(f"Generated {output}")
-
-    if result.sensitive_vars:
-        console.print(f"[dim]Detected {len(result.sensitive_vars)} sensitive variable(s)[/dim]")
-
-    if result.aliased_count:
-        console.print(
-            f"[dim]Aliased {result.aliased_count} variable(s) whose attribute name "
-            "differs from the original (non-identifier, keyword, or name collision)[/dim]"
-        )
+    _print_generation_summary(result)
