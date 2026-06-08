@@ -3335,7 +3335,13 @@ class TestPullCommand:
         result = runner.invoke(app, ["pull", "--profile", "local", "--skip-sync"])
 
         assert result.exit_code == 1
-        assert "activation failed" in result.output.lower()
+        # Collapse whitespace so Rich soft-wrap of long paths/messages at a narrow
+        # CI width doesn't split the asserted phrases across lines.
+        normalized = " ".join(result.output.lower().split())
+        assert "activation failed" in normalized
+        # An activation failure must not be reported as a decryption failure (#413).
+        assert "could not be activated" in normalized
+        assert "could not be decrypted" not in normalized
 
     def test_pull_with_partial_encryption_decrypts_secret_files(
         self,
@@ -3759,6 +3765,61 @@ class TestLockCommand:
 
         assert result.exit_code == 1
         assert "hook check failed" in result.output.lower()
+
+    def test_verify_vault_quoted_value_matches_no_false_mismatch(self, monkeypatch, tmp_path: Path):
+        """lock --verify-vault: a quoted vault value matching the local key
+        reports a match, not a false KEY MISMATCH (#413).
+
+        Before the fix the inline parser didn't strip quotes (unlike read_key),
+        so a vault value stored quoted always mismatched the unquoted local key.
+        """
+        secret = "abc" + "123" + "def"
+        service_dir = tmp_path / "svc"
+        service_dir.mkdir()
+        (service_dir / ".env.keys").write_text(f"DOTENV_PRIVATE_KEY_PRODUCTION={secret}\n")
+        (service_dir / ".env.production").write_text("SECRET=encrypted:xyz\n")
+
+        from envdrift.sync.config import ServiceMapping, SyncConfig
+
+        sync_config = SyncConfig(
+            mappings=[
+                ServiceMapping(secret_name="k", folder_path=service_dir, environment="production")
+            ],
+            env_keys_filename=".env.keys",
+        )
+
+        # Vault stores the key QUOTED; local stores it bare.
+        vault_secret = SimpleNamespace(value=f'"{secret}"')
+
+        class _VaultClient:
+            def ensure_authenticated(self) -> None:
+                pass
+
+            def get_secret(self, _name: str):
+                return vault_secret
+
+        monkeypatch.setattr(
+            "envdrift.cli_commands.sync.load_sync_config_and_client",
+            lambda *a, **k: (sync_config, _VaultClient(), "aws", None, None, None),
+        )
+        monkeypatch.setattr(
+            "envdrift.integrations.hook_check.ensure_git_hook_setup", lambda **_k: []
+        )
+        _mock_encryption_backend(monkeypatch)
+
+        config_file = tmp_path / "envdrift.toml"
+        config_file.write_text('[vault]\nprovider = "aws"\n')
+
+        result = runner.invoke(app, ["lock", "--verify-vault", "-c", str(config_file), "-p", "aws"])
+
+        # Keys match -> verify raises no issue and lock proceeds to a clean exit.
+        assert result.exit_code == 0, result.output
+        # Collapse whitespace so a Rich soft-wrap of the long tmp path (CI runs
+        # at a narrow width) doesn't split "keys match vault" across lines.
+        normalized = " ".join(result.output.split())
+        # The quoted vault value normalizes to the same bare key as local.
+        assert "keys match vault" in normalized, result.output
+        assert "KEY MISMATCH" not in normalized
 
     def test_lock_check_mode_exits_when_unencrypted(self, monkeypatch, tmp_path: Path):
         """Check mode should fail when a file needs encryption."""

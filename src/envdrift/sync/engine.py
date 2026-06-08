@@ -27,6 +27,46 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+# Match a `DOTENV_PRIVATE_KEY_<SUFFIX>=<value>` line, capturing the environment
+# suffix and the bare value.
+_DOTENV_PRIVATE_KEY_RE = re.compile(r"^DOTENV_PRIVATE_KEY_([A-Za-z0-9_]+)=(.+)$")
+
+
+def _strip_one_quote_layer(value: str) -> str:
+    """Remove a single layer of matching surrounding single/double quotes."""
+    if len(value) >= 2 and (
+        (value[0] == '"' and value[-1] == '"') or (value[0] == "'" and value[-1] == "'")
+    ):
+        return value[1:-1]
+    return value
+
+
+def normalize_vault_key_value(raw: str) -> tuple[str, str | None]:
+    """Normalize a raw vault secret value to its bare key material.
+
+    Strips surrounding whitespace, then a single layer of surrounding quotes,
+    then a ``DOTENV_PRIVATE_KEY_<SUFFIX>=`` prefix if present. The value *after*
+    that prefix is itself stripped and dequoted, exactly as
+    ``EnvKeysFile.read_key`` treats the post-``=`` part — so the two converge
+    even when the vault stores ``DOTENV_PRIVATE_KEY_PROD="abc"`` or
+    ``DOTENV_PRIVATE_KEY_PROD=  abc`` (without this, verify-vault false-mismatched
+    and the engine wrote literal quotes/whitespace as key material). Returns
+    ``(value, suffix)`` where ``suffix`` is the environment label from the prefix
+    (uppercase as stored) or ``None`` when there was no prefix.
+
+    Both the sync engine and ``lock --verify-vault`` use it so they parse
+    identically (#356, #413). Order matters: outer quotes come off before the
+    prefix, so a quoted full ``"DOTENV_PRIVATE_KEY_PROD=abc"`` line still has its
+    prefix stripped. The caller decides what to do with a suffix that does not
+    match the target environment (the engine raises; verify reports a mismatch).
+    """
+    value = _strip_one_quote_layer(raw.strip())
+    match = _DOTENV_PRIVATE_KEY_RE.match(value)
+    if match:
+        inner = _strip_one_quote_layer(match.group(2).strip())
+        return inner, match.group(1)
+    return value, None
+
 
 @dataclass
 class SyncMode:
@@ -264,29 +304,18 @@ class SyncEngine:
         raise instead of stripping (#348).
         """
         secret = self.vault_client.get_secret(mapping.secret_name)
-        value = secret.value
 
         # Normalize the same way read_key() (operations.py) does so a vault value
         # and the local file value converge instead of mismatching forever (#356).
-        # Order matters: surrounding whitespace, THEN a single layer of surrounding
-        # quotes, THEN any DOTENV_PRIVATE_KEY_*= prefix — quotes must come off
-        # before the prefix so a quoted full `KEY=value` line
-        # (e.g. `"DOTENV_PRIVATE_KEY_PROD=abc"`) still has its prefix stripped.
-        value = value.strip()
-        if len(value) >= 2 and (
-            (value[0] == '"' and value[-1] == '"') or (value[0] == "'" and value[-1] == "'")
-        ):
-            value = value[1:-1]
-        match = re.match(r"^DOTENV_PRIVATE_KEY_([A-Za-z0-9_]+)=(.+)$", value)
-        if match:
-            suffix = match.group(1)
-            if suffix.upper() != effective_environment.upper():
-                raise VaultError(
-                    f"vault key labeled for environment {suffix.upper()} cannot be "
-                    f"installed as environment {effective_environment.upper()} "
-                    f"(secret {mapping.secret_name!r})"
-                )
-            value = match.group(2)
+        value, suffix = normalize_vault_key_value(secret.value)
+        if suffix is not None and suffix.upper() != effective_environment.upper():
+            # A prefix labeled for a different env would silently relabel and
+            # install a key as the wrong environment, so raise instead (#348).
+            raise VaultError(
+                f"vault key labeled for environment {suffix.upper()} cannot be "
+                f"installed as environment {effective_environment.upper()} "
+                f"(secret {mapping.secret_name!r})"
+            )
 
         return value
 

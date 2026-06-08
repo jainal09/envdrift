@@ -37,6 +37,40 @@ class _EncryptTask:
     effective_environment: str
 
 
+def _maybe_activate_profile(mapping: ServiceMapping, env_file: Path, profile: str | None) -> str:
+    """Copy a decrypted profile env file to its ``activate_to`` path (#413).
+
+    Returns ``"activated"`` on success, ``"error"`` on an invalid path or copy
+    failure, or ``"noop"`` when there is nothing to activate (not the active
+    profile, or no ``activate_to``). Run from BOTH the post-decrypt path and the
+    "already decrypted" skip path so ``pull --profile`` is idempotent: a file
+    that was committed decrypted, or decrypted by an earlier run, is still
+    activated instead of being silently skipped.
+    """
+    if not (profile and mapping.profile == profile and mapping.activate_to):
+        return "noop"
+
+    activate_path = (mapping.folder_path / mapping.activate_to).resolve()
+    # Validate the target stays within folder_path to prevent directory traversal.
+    try:
+        activate_path.relative_to(mapping.folder_path.resolve())
+    except ValueError:
+        console.print(
+            f"  [red]![/red] {mapping.activate_to} [red]- invalid path (escapes folder)[/red]"
+        )
+        return "error"
+
+    try:
+        shutil.copy2(env_file, activate_path)
+        console.print(
+            f"  [cyan]→[/cyan] {activate_path} [dim]- activated from {env_file.name}[/dim]"
+        )
+        return "activated"
+    except OSError as e:
+        console.print(f"  [red]![/red] {activate_path} [red]- activation failed: {e}[/red]")
+        return "error"
+
+
 def load_sync_config_and_client(
     config_file: Path | None,
     provider: str | None,
@@ -740,6 +774,7 @@ def pull(
     skipped_count = 0
     error_count = 0
     activated_count = 0
+    activation_error_count = 0
     decrypt_tasks: list[_DecryptTask] = []
     partial_clear, _, partial_combined = _load_partial_encryption_paths(config_file)
 
@@ -818,6 +853,14 @@ def pull(
                 continue
             console.print(f"  [dim]=[/dim] {env_file} [dim]- skipped (not encrypted)[/dim]")
             skipped_count += 1
+            # An already-decrypted profile file must still be activated so
+            # `pull --profile` is idempotent (#413): a file committed decrypted
+            # or decrypted by an earlier run isn't silently left un-activated.
+            outcome = _maybe_activate_profile(mapping, env_file, profile)
+            if outcome == "activated":
+                activated_count += 1
+            elif outcome == "error":
+                activation_error_count += 1
             continue
 
         decrypt_tasks.append(
@@ -869,28 +912,11 @@ def pull(
         console.print(f"  [green]+[/green] {env_file} [dim]- decrypted[/dim]")
         decrypted_count += 1
 
-        # Activate profile: copy decrypted file to activate_to path if configured
-        if profile and mapping.profile == profile and mapping.activate_to:
-            activate_path = (mapping.folder_path / mapping.activate_to).resolve()
-            # Validate path is within folder_path to prevent directory traversal
-            try:
-                activate_path.relative_to(mapping.folder_path.resolve())
-            except ValueError:
-                console.print(
-                    f"  [red]![/red] {mapping.activate_to} [red]- invalid path (escapes folder)[/red]"
-                )
-                error_count += 1
-                continue
-
-            try:
-                shutil.copy2(env_file, activate_path)
-                console.print(
-                    f"  [cyan]→[/cyan] {activate_path} [dim]- activated from {env_file.name}[/dim]"
-                )
-                activated_count += 1
-            except OSError as e:
-                console.print(f"  [red]![/red] {activate_path} [red]- activation failed: {e}[/red]")
-                error_count += 1
+        outcome = _maybe_activate_profile(mapping, env_file, profile)
+        if outcome == "activated":
+            activated_count += 1
+        elif outcome == "error":
+            activation_error_count += 1
 
     # === SUMMARY ===
     console.print()
@@ -901,6 +927,8 @@ def pull(
     ]
     if activated_count > 0:
         summary_lines.append(f"Activated: {activated_count}")
+    if activation_error_count > 0:
+        summary_lines.append(f"Activation errors: {activation_error_count}")
     console.print(
         Panel(
             "\n".join(summary_lines),
@@ -909,8 +937,14 @@ def pull(
         )
     )
 
+    # Decryption and activation are distinct failures — keep the messages
+    # accurate so an activation failure on an already-plaintext file isn't
+    # reported as "could not be decrypted" (#413).
     if error_count > 0:
         print_warning("Some files could not be decrypted")
+    if activation_error_count > 0:
+        print_warning("Some profile files could not be activated")
+    if error_count > 0 or activation_error_count > 0:
         raise typer.Exit(code=1)
 
     # === STEP 3: PARTIAL ENCRYPTION (decrypt .secret files + optional merge) ===
@@ -1173,7 +1207,7 @@ def lock(
 
     # === FILTER MAPPINGS BY PROFILE ===
     from envdrift.sync.config import SyncConfig as SyncConfigClass
-    from envdrift.sync.engine import SyncEngine, SyncMode
+    from envdrift.sync.engine import SyncEngine, SyncMode, normalize_vault_key_value
 
     filtered_mappings = sync_config.filter_by_profile(profile)
 
@@ -1296,14 +1330,19 @@ def lock(
 
                     vault_value = vault_secret.value
 
-                    # Parse vault value (format: KEY_NAME=value)
-                    if "=" in vault_value and vault_value.startswith("DOTENV_PRIVATE_KEY"):
-                        vault_key = vault_value.split("=", 1)[1]
-                    else:
-                        vault_key = vault_value
+                    # Parse the vault value identically to the sync engine /
+                    # read_key (strip whitespace + surrounding quotes + a
+                    # DOTENV_PRIVATE_KEY_*= prefix) so a quoted or prefixed vault
+                    # value isn't reported as a false KEY MISMATCH (#413).
+                    vault_key, vault_suffix = normalize_vault_key_value(vault_value)
+                    # A key labeled for a different environment is a genuine
+                    # mismatch, not a parse artifact.
+                    suffix_ok = (
+                        vault_suffix is None or vault_suffix.upper() == effective_env.upper()
+                    )
 
                     # Compare keys
-                    if local_key == vault_key:
+                    if suffix_ok and local_key == vault_key:
                         console.print(
                             f"  [green]✓[/green] {mapping.folder_path} "
                             f"[dim]- keys match vault[/dim]"
