@@ -22,7 +22,9 @@ defaults:
 
 jobs:
   lint:
-    name: Lint
+    # Named "VS Code Lint" (not "Lint") so it does not collide with the required
+    # repo-wide "Lint" status check from ci.yml on PRs that touch envdrift-vscode/**.
+    name: VS Code Lint
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
