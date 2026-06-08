@@ -319,6 +319,52 @@ func TestAddDirectorySkipsNestedHidden(t *testing.T) {
 	drainEvents(t, w, eventWait{forbid: hiddenEnv, timeout: 300 * time.Millisecond})
 }
 
+// TestRuntimeCreatedHiddenDirIsNotWatched guards the cubic follow-up: a hidden
+// directory created AFTER Start (e.g. a tool drops a .cache dir) must not become
+// watched. handleEvent re-enters AddDirectory for newly-created dirs; without a
+// hidden-name guard the new dir would be its own (root-exempt) root and a .env
+// written inside it would wrongly fire.
+func TestRuntimeCreatedHiddenDirIsNotWatched(t *testing.T) {
+	if testing.Short() {
+		t.Skip("Skipping fs event test in short mode")
+	}
+
+	root := t.TempDir()
+
+	w, err := New([]string{".env*"}, []string{}, true) // recursive
+	if err != nil {
+		t.Fatalf("Failed to create watcher: %v", err)
+	}
+	defer w.Stop()
+
+	if err := w.AddDirectory(root); err != nil {
+		t.Fatalf("Failed to add directory: %v", err)
+	}
+	w.Start()
+
+	// Create a hidden dir at runtime, give the watcher time to (not) add it,
+	// then write a .env inside it: no event should ever fire for it.
+	hidden := filepath.Join(root, ".cache")
+	if err := os.Mkdir(hidden, 0o755); err != nil {
+		t.Fatalf("Failed to create runtime hidden dir: %v", err)
+	}
+	time.Sleep(200 * time.Millisecond)
+
+	hiddenEnv := filepath.Join(hidden, ".env.local")
+	if err := os.WriteFile(hiddenEnv, []byte("Y=2\n"), 0o644); err != nil {
+		t.Fatalf("write hidden .env: %v", err)
+	}
+	// A control .env in the watched root proves the watcher is live; the hidden
+	// one must never fire.
+	rootEnv := filepath.Join(root, ".env.local")
+	if err := os.WriteFile(rootEnv, []byte("X=1\n"), 0o644); err != nil {
+		t.Fatalf("write root .env: %v", err)
+	}
+
+	drainEvents(t, w, eventWait{want: rootEnv, forbid: hiddenEnv, timeout: 2 * time.Second, mustArrive: true})
+	drainEvents(t, w, eventWait{forbid: hiddenEnv, timeout: 300 * time.Millisecond})
+}
+
 // TestStopClosesEvents is part of the #362 regression: after Stop, run() (the
 // sole sender) must close w.events so consumers observe ok==false instead of
 // blocking forever.

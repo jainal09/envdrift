@@ -155,7 +155,12 @@ func (w *Watcher) handleEvent(event fsnotify.Event) {
 	// If a new directory was created, start watching it (recursively) so that
 	// .env files created beneath it later are not missed (#348 G2). Do this
 	// before the pattern filter, since a directory name won't match .env*.
-	if w.recursive && event.Op&fsnotify.Create != 0 {
+	// Skip hidden directories: a runtime-created .git/.venv/etc. must NOT be
+	// watched. AddDirectory exempts its own (possibly dotted) root so an
+	// explicitly-registered ~/.dotfiles is watched, but that exemption would
+	// also make a runtime-created hidden dir its own root and watch it, so we
+	// filter it out here before re-entering AddDirectory.
+	if w.recursive && event.Op&fsnotify.Create != 0 && !isHiddenName(filepath.Base(path)) {
 		if info, err := os.Stat(path); err == nil && info.IsDir() {
 			if err := w.AddDirectory(path); err != nil {
 				log.Printf("Watcher add subdir error: %v", err)

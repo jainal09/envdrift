@@ -344,9 +344,17 @@ func uninstallWindows() error {
 }
 
 // stopWindows ends the running EnvDriftGuardian scheduled task without deleting
-// it, so the task remains registered and will run again at the next logon. It
-// returns an error if `schtasks /end` fails.
+// it, so the task remains registered and will run again at the next logon.
+//
+// `schtasks /end` exits non-zero when the task has no running instance, so we
+// treat an installed-but-not-running task as a successful no-op (mirroring
+// launchctl unload / systemctl --user stop of an inactive unit). This keeps
+// `stop` from failing when the agent is installed but idle. It returns an error
+// only when the task is running and ending it actually fails.
 func stopWindows() error {
+	if !isRunningWindows() {
+		return nil // nothing to stop; installed task is idle
+	}
 	if err := exec.Command("schtasks", "/end", "/tn", "EnvDriftGuardian").Run(); err != nil {
 		return fmt.Errorf("failed to stop agent: %w", err)
 	}
