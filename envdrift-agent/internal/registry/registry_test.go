@@ -120,6 +120,27 @@ func writeRegistry(t *testing.T, paths ...string) {
 	}
 }
 
+// waitForArmedTimer blocks until rw's debounce timer has been armed (a registry
+// write was observed and scheduleReload ran) or fails the test after a deadline.
+// It makes the "Stop() inside the debounce window" tests deterministic instead
+// of relying on a fixed sleep.
+func waitForArmedTimer(t *testing.T, rw *RegistryWatcher) {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		rw.timerMu.Lock()
+		armed := rw.debounceTimer != nil
+		rw.timerMu.Unlock()
+		if armed {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("debounce timer was not armed within the deadline")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+}
+
 // TestRegistryWatcher_StopIsIdempotent is the #413 regression: Stop() must be
 // safe to call more than once. The bare close(rw.done) panicked with "close of
 // closed channel" on a second call; the sync.Once guard makes it idempotent
@@ -213,9 +234,12 @@ func TestRegistryWatcher_NoOnChangeAfterStop(t *testing.T) {
 		t.Fatalf("Start: %v", err)
 	}
 
-	// Arm the 100ms debounce timer, then Stop() inside the window.
+	// Arm the 100ms debounce timer, then Stop() inside the window. Poll until the
+	// timer is actually armed instead of sleeping a fixed duration: a fixed sleep
+	// can race the fsnotify+debounce plumbing and let the test pass without ever
+	// exercising the pending-debounce-after-Stop path this guards.
 	writeRegistry(t, "/tmp/some/project")
-	time.Sleep(40 * time.Millisecond)
+	waitForArmedTimer(t, rw)
 	close(stopped)
 	rw.Stop()
 

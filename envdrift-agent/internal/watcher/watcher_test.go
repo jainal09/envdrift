@@ -215,6 +215,51 @@ func TestNewSubdirectoryIsWatched(t *testing.T) {
 	}
 }
 
+// waitForEvent drains w.Events until an event for wantPath arrives (returning
+// nil) or the deadline elapses. If an event for any path in forbidden arrives
+// first, it fails the test immediately. Extracting this select/for loop keeps
+// the individual fs-event tests below simple (and below CodeScene's complexity
+// threshold) while giving them one consistent, race-free wait.
+func waitForEvent(t *testing.T, w *Watcher, wantPath string, timeout time.Duration, forbidden ...string) {
+	t.Helper()
+	deadline := time.After(timeout)
+	for {
+		select {
+		case event := <-w.Events():
+			for _, bad := range forbidden {
+				if event.Path == bad {
+					t.Fatalf("unexpected event for forbidden path %q", bad)
+				}
+			}
+			if event.Path == wantPath {
+				return
+			}
+		case <-deadline:
+			t.Fatalf("no event for %q within %s", wantPath, timeout)
+		}
+	}
+}
+
+// assertNoEvent drains w.Events for the grace window and fails if an event for
+// any forbidden path arrives. Use it after a positive event to confirm a
+// forbidden sibling event does not land shortly afterwards.
+func assertNoEvent(t *testing.T, w *Watcher, grace time.Duration, forbidden ...string) {
+	t.Helper()
+	deadline := time.After(grace)
+	for {
+		select {
+		case event := <-w.Events():
+			for _, bad := range forbidden {
+				if event.Path == bad {
+					t.Fatalf("unexpected event for forbidden path %q", bad)
+				}
+			}
+		case <-deadline:
+			return
+		}
+	}
+}
+
 // TestAddDirectoryDottedRootIsWatched is the #413 regression: a recursive
 // watcher whose registered ROOT directory name is dotted (e.g. ~/.dotfiles)
 // must still be watched. filepath.Walk visits the root first, so an unconditional
@@ -250,17 +295,8 @@ func TestAddDirectoryDottedRootIsWatched(t *testing.T) {
 		t.Fatalf("Failed to write .env in dotted root: %v", err)
 	}
 
-	deadline := time.After(3 * time.Second)
-	for {
-		select {
-		case event := <-w.Events():
-			if event.Path == envPath {
-				return // success: the dotted root is watched
-			}
-		case <-deadline:
-			t.Fatalf("no event for .env in dotted root %q (#413): root was SkipDir'd", root)
-		}
-	}
+	// success: the dotted root is watched (#413: was SkipDir'd before the fix).
+	waitForEvent(t, w, envPath, 3*time.Second)
 }
 
 // TestAddDirectorySkipsNestedHidden confirms the fix still skips hidden
@@ -300,21 +336,12 @@ func TestAddDirectorySkipsNestedHidden(t *testing.T) {
 		t.Fatalf("write hidden .env: %v", err)
 	}
 
-	gotRoot := false
-	deadline := time.After(2 * time.Second)
-	for !gotRoot {
-		select {
-		case event := <-w.Events():
-			if event.Path == hiddenEnv {
-				t.Fatalf("nested hidden dir %q should not be watched", hidden)
-			}
-			if event.Path == rootEnv {
-				gotRoot = true
-			}
-		case <-deadline:
-			t.Fatalf("no event for root .env; root should be watched")
-		}
-	}
+	// The root .env must fire and the hidden one must never fire (even if it
+	// arrives in the same batch, waitForEvent fails on it).
+	waitForEvent(t, w, rootEnv, 2*time.Second, hiddenEnv)
+	// Keep draining briefly: a hiddenEnv event can lag the rootEnv one, so a bare
+	// "stop on first rootEnv" would miss a hidden-dir watch regression (#413).
+	assertNoEvent(t, w, 300*time.Millisecond, hiddenEnv)
 }
 
 // TestStopClosesEvents is part of the #362 regression: after Stop, run() (the

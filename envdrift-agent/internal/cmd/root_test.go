@@ -38,30 +38,32 @@ func captureStdout(t *testing.T, fn func()) string {
 	return out
 }
 
-// TestRunStopMatchesBehavior is the #413 regression for the stop command.
+// TestRunStopNotInstalledIsNoOp is the #413 regression for the stop command.
 //
 // Previously runStop only printed status — when the agent was running it told
 // the user to run "envdrift-agent uninstall" and returned nil (exit 0), so the
 // help text "Stop the running agent" and docs were a lie. The fix actually stops
-// the service (daemon.Stop) when running and is a clean no-op when not.
+// the service (daemon.Stop) and is a clean no-op (exit 0) only when nothing is
+// installed.
 //
-// This test exercises the deterministic not-running path (CI has no agent
-// service loaded) and asserts:
-//   - exit 0 with a "not running" message, and
-//   - the old misleading "use 'envdrift-agent uninstall' to stop" guidance is gone.
-func TestRunStopMatchesBehavior(t *testing.T) {
-	if daemon.IsRunning() {
-		t.Skip("an envdrift-agent service is actually running on this host; skipping not-running assertion")
+// runStop now keys the no-op on IsInstalled() rather than IsRunning(): a status
+// probe that *fails* must not be read as "not running" and used to skip the stop
+// (which would falsely report success while the agent keeps running). We exercise
+// the deterministic not-installed path (CI has no agent installed) and assert
+// exit 0 with a "not installed" message that no longer punts to "uninstall".
+func TestRunStopNotInstalledIsNoOp(t *testing.T) {
+	if daemon.IsInstalled() {
+		t.Skip("an envdrift-agent service is installed on this host; skipping not-installed assertion")
 	}
 
 	out := captureStdout(t, func() {
 		if err := runStop(stopCmd, nil); err != nil {
-			t.Errorf("runStop returned error when not running: %v", err)
+			t.Errorf("runStop returned error when not installed: %v", err)
 		}
 	})
 
-	if !strings.Contains(out, "not running") {
-		t.Errorf("expected a 'not running' message, got:\n%s", out)
+	if !strings.Contains(out, "not installed") {
+		t.Errorf("expected a 'not installed' message, got:\n%s", out)
 	}
 	if strings.Contains(out, "uninstall") {
 		t.Errorf("stop must not punt to 'uninstall'; behavior must match the help text. got:\n%s", out)

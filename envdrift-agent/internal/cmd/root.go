@@ -192,15 +192,21 @@ func runStart(cmd *cobra.Command, args []string) error {
 
 // runStop stops the running agent service without uninstalling it.
 //
-// It is a no-op (exit 0) when the agent is not running. Otherwise it stops the
-// platform service via daemon.Stop (launchctl unload / systemctl --user stop /
-// schtasks /end), leaving the install unit in place so it can start again on the
-// next boot/login. It returns a non-nil error (non-zero exit) if stopping fails.
+// It is a no-op (exit 0) only when the agent is not installed. Otherwise it
+// always attempts to stop the platform service via daemon.Stop (launchctl
+// unload / systemctl --user stop / schtasks /end), leaving the install unit in
+// place so it can start again on the next boot/login. We deliberately do NOT
+// gate the stop on IsRunning(): that status probe can report false when the
+// underlying service-control query itself fails, which would otherwise let us
+// skip the stop and falsely report success while the agent keeps running. The
+// per-platform stop is idempotent (unloading an already-stopped agent is a
+// harmless no-op), so attempting it unconditionally is safe. It returns a
+// non-nil error (non-zero exit) if stopping fails.
 func runStop(cmd *cobra.Command, args []string) error {
 	fmt.Println("Stopping envdrift-agent...")
 
-	if !daemon.IsRunning() {
-		fmt.Println("Agent is not running")
+	if !daemon.IsInstalled() {
+		fmt.Println("Agent is not installed")
 		return nil
 	}
 

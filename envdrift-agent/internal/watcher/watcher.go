@@ -73,7 +73,10 @@ func (w *Watcher) AddDirectory(dir string) error {
 				return nil // Skip inaccessible directories
 			}
 			if info.IsDir() {
-				if path != root && strings.HasPrefix(info.Name(), ".") && info.Name() != "." {
+				// Compare the cleaned path against the cleaned root so a dotted
+				// root passed with a trailing slash or otherwise non-clean form
+				// (e.g. "~/.dotfiles/") still matches and isn't SkipDir'd.
+				if isNestedHiddenDir(filepath.Clean(path), root, info.Name()) {
 					return filepath.SkipDir // Skip nested hidden directories
 				}
 				return w.fsWatcher.Add(path)
@@ -83,6 +86,13 @@ func (w *Watcher) AddDirectory(dir string) error {
 	}
 
 	return w.fsWatcher.Add(dir)
+}
+
+// isNestedHiddenDir reports whether the directory at cleanPath is a hidden
+// directory nested below root. The registered root is never treated as nested
+// (so a dotted root like ~/.dotfiles is still watched), and "." is not hidden.
+func isNestedHiddenDir(cleanPath, root, name string) bool {
+	return cleanPath != root && name != "." && strings.HasPrefix(name, ".")
 }
 
 // Start begins watching for file changes

@@ -57,37 +57,85 @@ func TestIsRunning(t *testing.T) {
 	_ = IsRunning()
 }
 
-// TestStopDispatchesPerPlatform is the #413 regression for the `stop` command:
-// daemon.Stop must actually attempt to stop the service per platform (launchctl
-// unload / systemctl --user stop / schtasks /end) rather than being a no-op. We
-// assert it never returns the "unsupported platform" sentinel on a supported OS,
-// and that any error is the wrapped "failed to stop agent" form — proving Stop
-// runs a real service-control command instead of silently succeeding like the
-// old runStop did. (The success path on a *running* agent can't be reproduced in
-// CI without installing a live service; see the PR note.)
-func TestStopDispatchesPerPlatform(t *testing.T) {
-	switch runtime.GOOS {
-	case "darwin", "linux", "windows":
-		// supported
-	default:
-		err := Stop()
-		if err == nil || !strings.Contains(err.Error(), "unsupported platform") {
-			t.Errorf("Stop() on %s should report unsupported platform, got %v", runtime.GOOS, err)
-		}
-		return
+// TestDispatchRoutesPerPlatform is the #413 regression for the `stop` command:
+// the per-platform dispatch (which Stop/Install/Uninstall all route through)
+// must invoke the handler for the current OS and surface an "unsupported
+// platform" error on any other OS, rather than silently no-op'ing like the old
+// runStop did. We exercise dispatch() with stub handlers instead of calling the
+// real Stop(), so the unit test never runs a destructive service-control command
+// (launchctl unload / systemctl --user stop / schtasks /end) against a live
+// agent on the developer's or CI machine.
+func TestDispatchRoutesPerPlatform(t *testing.T) {
+	var called string
+	mark := func(name string) func() error {
+		return func() error { called = name; return nil }
 	}
 
-	err := Stop()
-	if err == nil {
-		// Service-control command ran and reported success (e.g. launchctl unload
-		// of an absent agent on macOS exits 0). That's an acceptable no-op result.
-		return
+	err := dispatch(mark("darwin"), mark("linux"), mark("windows"))
+
+	switch runtime.GOOS {
+	case "darwin", "linux", "windows":
+		if err != nil {
+			t.Fatalf("dispatch on supported OS %s returned error: %v", runtime.GOOS, err)
+		}
+		if called != runtime.GOOS {
+			t.Errorf("dispatch invoked %q handler on %s; want the %s handler", called, runtime.GOOS, runtime.GOOS)
+		}
+	default:
+		if err == nil || !strings.Contains(err.Error(), "unsupported platform") {
+			t.Errorf("dispatch on %s should report unsupported platform, got %v", runtime.GOOS, err)
+		}
+		if called != "" {
+			t.Errorf("dispatch invoked %q handler on unsupported OS %s; want none", called, runtime.GOOS)
+		}
 	}
-	if strings.Contains(err.Error(), "unsupported platform") {
-		t.Fatalf("Stop() returned unsupported-platform on supported OS %s: %v", runtime.GOOS, err)
+}
+
+// TestDispatchPropagatesHandlerError proves the chosen handler's error is
+// returned unchanged — so a real stopMacOS/stopLinux/stopWindows failure is
+// surfaced (and can then be wrapped as "failed to stop agent") rather than
+// swallowed. We only assert this on a supported OS, where exactly one handler
+// runs.
+func TestDispatchPropagatesHandlerError(t *testing.T) {
+	switch runtime.GOOS {
+	case "darwin", "linux", "windows":
+	default:
+		t.Skipf("no platform handler runs on %s", runtime.GOOS)
 	}
-	if !strings.Contains(err.Error(), "failed to stop agent") {
-		t.Errorf("Stop() error should be wrapped as 'failed to stop agent', got %v", err)
+
+	sentinel := errors.New("boom")
+	fail := func() error { return sentinel }
+	if err := dispatch(fail, fail, fail); !errors.Is(err, sentinel) {
+		t.Errorf("dispatch should return the handler error, got %v", err)
+	}
+}
+
+// TestDispatchBoolRoutesPerPlatform mirrors TestDispatchRoutesPerPlatform for
+// the bool-returning status probes (IsInstalled/IsRunning): the current OS's
+// handler runs and an unsupported OS yields false without invoking any handler.
+func TestDispatchBoolRoutesPerPlatform(t *testing.T) {
+	var called string
+	mark := func(name string) func() bool {
+		return func() bool { called = name; return true }
+	}
+
+	got := dispatchBool(mark("darwin"), mark("linux"), mark("windows"))
+
+	switch runtime.GOOS {
+	case "darwin", "linux", "windows":
+		if !got {
+			t.Errorf("dispatchBool on supported OS %s returned false", runtime.GOOS)
+		}
+		if called != runtime.GOOS {
+			t.Errorf("dispatchBool invoked %q handler on %s; want the %s handler", called, runtime.GOOS, runtime.GOOS)
+		}
+	default:
+		if got {
+			t.Errorf("dispatchBool on unsupported OS %s returned true", runtime.GOOS)
+		}
+		if called != "" {
+			t.Errorf("dispatchBool invoked %q handler on unsupported OS %s; want none", called, runtime.GOOS)
+		}
 	}
 }
 
