@@ -152,15 +152,10 @@ func (w *Watcher) handleEvent(event fsnotify.Event) {
 
 	path := event.Name
 
-	// If a new directory was created, start watching it (recursively) so that
-	// .env files created beneath it later are not missed (#348 G2). Do this
-	// before the pattern filter, since a directory name won't match .env*.
-	// Skip hidden directories: a runtime-created .git/.venv/etc. must NOT be
-	// watched. AddDirectory exempts its own (possibly dotted) root so an
-	// explicitly-registered ~/.dotfiles is watched, but that exemption would
-	// also make a runtime-created hidden dir its own root and watch it, so we
-	// filter it out here before re-entering AddDirectory.
-	if w.recursive && event.Op&fsnotify.Create != 0 && !isHiddenName(filepath.Base(path)) {
+	// If a new (non-hidden) directory was created, start watching it recursively
+	// so that .env files created beneath it later are not missed (#348 G2). Do
+	// this before the pattern filter, since a directory name won't match .env*.
+	if w.shouldWatchNewDir(event, path) {
 		if info, err := os.Stat(path); err == nil && info.IsDir() {
 			if err := w.AddDirectory(path); err != nil {
 				log.Printf("Watcher add subdir error: %v", err)
@@ -198,6 +193,19 @@ func (w *Watcher) handleEvent(event fsnotify.Event) {
 	}:
 	case <-w.done:
 	}
+}
+
+// shouldWatchNewDir reports whether a create event for path should trigger a
+// recursive AddDirectory: only in recursive mode, only for create events, and
+// never for hidden directories. AddDirectory exempts its own (possibly dotted)
+// root from the hidden-dir skip so a registered ~/.dotfiles is watched, but that
+// exemption would also make a runtime-created hidden dir its own root and watch
+// it — so hidden names are filtered out here before re-entering AddDirectory.
+func (w *Watcher) shouldWatchNewDir(event fsnotify.Event, path string) bool {
+	if !w.recursive || event.Op&fsnotify.Create == 0 {
+		return false
+	}
+	return !isHiddenName(filepath.Base(path))
 }
 
 func (w *Watcher) matchesPattern(path string) bool {
