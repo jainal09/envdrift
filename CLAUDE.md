@@ -100,6 +100,46 @@ These have bitten us in CI or review and aren't obvious from the code alone.
   validation or a parser, grep the whole test tree and run
   `pytest -m "not integration"` — not just the file you touched — because other
   suites may assert the old behavior.
+- **`pyrefly` skips `tests/` inside `.claude/worktrees/`.** A worktree under the
+  gitignored `.claude/` makes pyrefly's ignore resolution drop the whole `tests/`
+  tree (`WARN Skipping include pattern … tests/**`), so a type error in a test
+  file passes locally but fails the `Tests & Coverage` CI job. Create scratch
+  worktrees as **siblings of the repo** (`../envdrift-<name>`), and always run the
+  **full** `uv run pyrefly check` (never scope it to `src/...`) — test-file types
+  are part of the gate.
+
+## CI, branch protection & merging
+
+- `main` is **strict up-to-date** + **requires conversation resolution** + 12
+  required checks: `Lint`, `Tests & Coverage`, the four
+  `Integration Tests (Python 3.11/3.12/3.13/3.14)`, `semantic-pr`, `commitlint`,
+  and the four `Analyze (python/go/javascript-typescript/actions)`. CodeScene,
+  codecov, `Agent Lint`, `VS Code Lint`, cubic and the CodeRabbit check are
+  **not** required — they don't block merge.
+- `mergeStateStatus` decoded: **`UNSTABLE`** (only a non-required check is red) is
+  still mergeable; **`BEHIND`** needs `gh pr update-branch`; green-but-**`BLOCKED`**
+  is almost always an **unresolved review thread** (conversation resolution), not
+  CI — `gh pr merge <n> --admin` prints the real reason ("A conversation must be
+  resolved …") so you can diagnose without actually admin-merging.
+- Strict up-to-date makes merging several PRs **serial**: each merge re-`BEHIND`s
+  the rest, so it's `update-branch` → wait CI green → merge, one PR at a time.
+- Transient infra failures — Docker Hub 429s, an "Initialize containers" step, the
+  occasional `commitlint` hiccup — are not your code: `gh run rerun <id> --failed`.
+  release-please PRs are merged by the repo's "Auto-merge Version Bumps" workflow.
+
+## CodeRabbit & review bots
+
+- CodeRabbit is rate-limited (~1 review/hour) and **silently skips** the
+  incremental review on commits pushed in a burst — no "skipped" notice. **Green
+  CI + zero unresolved threads does NOT mean it reviewed your latest commits.**
+  Verify by the walkthrough's coverage range: the trailing SHA in
+  `between <40hex> and <40hex>` must equal the PR head
+  (`gh pr view <n> --json headRefOid`). A plain `@coderabbitai review` is a no-op
+  unless auto-review is paused — use `@coderabbitai full review` to force one.
+- Treat any unresolved review thread (CodeRabbit, Greptile, the review-bot) as the
+  PR being **incomplete**: fix the underlying bug with a regression test, then
+  resolve the thread — never resolve-to-unblock. An `update-branch` merge commit
+  can re-trigger fresh review threads, so re-check after updating.
 
 ## Local gates (all must pass)
 
@@ -113,3 +153,6 @@ uv run pytest                 # full suite (containers via `make test-integratio
 ```
 
 Commits follow Conventional Commits (commitlint + `semantic-pr` enforce it).
+commitlint also caps the **header at ≤ 100 chars and every body line at ≤ 100** —
+hard-wrap commit bodies with real newlines (not one long paragraph); merge
+commits are exempt.
