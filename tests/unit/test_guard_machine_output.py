@@ -36,6 +36,55 @@ def _stage_clean_file(path, name: str = "clean.env") -> None:
     subprocess.run(["git", "add", name], cwd=path, check=True)
 
 
+def _commit_pr_base_history(path) -> str:
+    """Build a two-commit history with one changed file; return the base SHA.
+
+    ``<base_sha>...HEAD`` then yields exactly one changed ``.env`` file, so the
+    ``--pr-base`` success path (files present to scan) is exercised against a
+    real git history. The changed file is secret-free so guard finishes with an
+    empty-findings doc and the assertion isolates the progress-prose leak.
+    """
+    base = path / "base.env"
+    base.write_text("BASE=1\n")
+    subprocess.run(["git", "add", "base.env"], cwd=path, check=True)
+    subprocess.run(["git", "commit", "-q", "-m", "base"], cwd=path, check=True)
+    base_sha = subprocess.run(
+        ["git", "rev-parse", "HEAD"], cwd=path, capture_output=True, text=True, check=True
+    ).stdout.strip()
+    changed = path / "changed.env"
+    changed.write_text("HELLO=world\n")
+    subprocess.run(["git", "add", "changed.env"], cwd=path, check=True)
+    subprocess.run(["git", "commit", "-q", "-m", "change"], cwd=path, check=True)
+    return base_sha
+
+
+def _assert_clean_json(result) -> None:
+    """Assert ``result`` is a single parseable empty-findings JSON doc, exit 0.
+
+    Shared success-path contract: ``json.loads`` of raw stdout must succeed (no
+    progress prose leaking ahead of the JSON), findings are empty, and no
+    ``Scanning ...`` sentence reached stdout (#413).
+    """
+    assert result.exit_code == 0
+    payload = json.loads(result.stdout)
+    assert payload["findings"] == []
+    assert "Scanning" not in result.stdout
+
+
+def _assert_valid_sarif(result) -> None:
+    """Assert ``result`` is a single schema-valid empty SARIF doc, exit 0.
+
+    Shared success-path contract for ``--sarif`` (counterpart of
+    :func:`_assert_clean_json`): SARIF ``version`` is present, the run has no
+    results, and no ``Scanning ...`` prose leaked onto stdout (#413).
+    """
+    assert result.exit_code == 0
+    payload = json.loads(result.stdout)
+    assert payload["version"] == "2.1.0"
+    assert payload["runs"][0]["results"] == []
+    assert "Scanning" not in result.stdout
+
+
 def test_guard_missing_config_emits_json_error(tmp_path):
     """--json --config <missing> exits 1 with a JSON error, not a traceback.
 
@@ -153,10 +202,7 @@ def test_guard_staged_with_files_emits_clean_json(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
 
     result = runner.invoke(app, ["guard", "--native-only", "--json", "--staged"])
-    assert result.exit_code == 0
-    payload = json.loads(result.stdout)
-    assert payload["findings"] == []
-    assert "Scanning" not in result.stdout
+    _assert_clean_json(result)
 
 
 @pytest.mark.skipif(shutil.which("git") is None, reason="git not installed")
@@ -167,11 +213,7 @@ def test_guard_staged_with_files_emits_valid_sarif(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
 
     result = runner.invoke(app, ["guard", "--native-only", "--sarif", "--staged"])
-    assert result.exit_code == 0
-    payload = json.loads(result.stdout)
-    assert payload["version"] == "2.1.0"
-    assert payload["runs"][0]["results"] == []
-    assert "Scanning" not in result.stdout
+    _assert_valid_sarif(result)
 
 
 @pytest.mark.skipif(shutil.which("git") is None, reason="git not installed")
@@ -183,46 +225,19 @@ def test_guard_pr_base_with_files_emits_clean_json(tmp_path, monkeypatch):
     ``Scanning N file(s) changed since ...`` to stdout ahead of the JSON.
     """
     _init_empty_git_repo(tmp_path)
-    base = tmp_path / "base.env"
-    base.write_text("BASE=1\n")
-    subprocess.run(["git", "add", "base.env"], cwd=tmp_path, check=True)
-    subprocess.run(["git", "commit", "-q", "-m", "base"], cwd=tmp_path, check=True)
-    base_sha = subprocess.run(
-        ["git", "rev-parse", "HEAD"], cwd=tmp_path, capture_output=True, text=True, check=True
-    ).stdout.strip()
-    changed = tmp_path / "changed.env"
-    changed.write_text("HELLO=world\n")
-    subprocess.run(["git", "add", "changed.env"], cwd=tmp_path, check=True)
-    subprocess.run(["git", "commit", "-q", "-m", "change"], cwd=tmp_path, check=True)
+    base_sha = _commit_pr_base_history(tmp_path)
     monkeypatch.chdir(tmp_path)
 
     result = runner.invoke(app, ["guard", "--native-only", "--json", "--pr-base", base_sha])
-    assert result.exit_code == 0
-    payload = json.loads(result.stdout)
-    assert payload["findings"] == []
-    assert "Scanning" not in result.stdout
+    _assert_clean_json(result)
 
 
 @pytest.mark.skipif(shutil.which("git") is None, reason="git not installed")
 def test_guard_pr_base_with_files_emits_valid_sarif(tmp_path, monkeypatch):
     """--sarif --pr-base WITH changed files emits a single schema-valid SARIF doc."""
     _init_empty_git_repo(tmp_path)
-    base = tmp_path / "base.env"
-    base.write_text("BASE=1\n")
-    subprocess.run(["git", "add", "base.env"], cwd=tmp_path, check=True)
-    subprocess.run(["git", "commit", "-q", "-m", "base"], cwd=tmp_path, check=True)
-    base_sha = subprocess.run(
-        ["git", "rev-parse", "HEAD"], cwd=tmp_path, capture_output=True, text=True, check=True
-    ).stdout.strip()
-    changed = tmp_path / "changed.env"
-    changed.write_text("HELLO=world\n")
-    subprocess.run(["git", "add", "changed.env"], cwd=tmp_path, check=True)
-    subprocess.run(["git", "commit", "-q", "-m", "change"], cwd=tmp_path, check=True)
+    base_sha = _commit_pr_base_history(tmp_path)
     monkeypatch.chdir(tmp_path)
 
     result = runner.invoke(app, ["guard", "--native-only", "--sarif", "--pr-base", base_sha])
-    assert result.exit_code == 0
-    payload = json.loads(result.stdout)
-    assert payload["version"] == "2.1.0"
-    assert payload["runs"][0]["results"] == []
-    assert "Scanning" not in result.stdout
+    _assert_valid_sarif(result)

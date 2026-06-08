@@ -123,6 +123,29 @@ def _emit_error(json_output: bool, sarif: bool, message: str) -> None:
         console.print(f"[red]Error:[/red] {message}")
 
 
+def _machine_mode(json_output: bool, sarif: bool) -> bool:
+    """Whether machine-readable output (``--json`` / ``--sarif``) is active.
+
+    Centralizes the ``json_output or sarif`` predicate so the call sites that
+    must suppress human-readable progress/status prose (to keep stdout valid
+    JSON/SARIF, #413) read as a single flat condition instead of repeating the
+    two-term boolean inline.
+    """
+    return json_output or sarif
+
+
+def _emit_progress(json_output: bool, sarif: bool, message: str) -> None:
+    """Print a human-mode progress/status line, suppressed in machine modes.
+
+    A no-op under ``--json``/``--sarif`` so machine-readable stdout never gains
+    a stray prose line (#413); otherwise the Rich-styled ``message`` is printed.
+    Keeps the discovery branches flat (no inline ``not json_output and not
+    sarif`` guard at each progress print).
+    """
+    if not _machine_mode(json_output, sarif):
+        console.print(message)
+
+
 def guard(
     paths: Annotated[
         list[Path] | None,
@@ -377,8 +400,9 @@ def guard(
                 if not paths:
                     _emit_empty_or_prose(json_output, sarif, _NO_STAGED)
                     raise typer.Exit(code=0)
-                if not json_output and not sarif:
-                    console.print(f"[dim]Scanning {len(paths)} staged file(s)...[/dim]")
+                _emit_progress(
+                    json_output, sarif, f"[dim]Scanning {len(paths)} staged file(s)...[/dim]"
+                )
             else:
                 _emit_empty_or_prose(json_output, sarif, _NO_STAGED)
                 raise typer.Exit(code=0)
@@ -404,9 +428,11 @@ def guard(
                 capture_output=True,
                 timeout=30,
             )
-            if fetch_result.returncode != 0 and verbose and not json_output and not sarif:
-                console.print(
-                    f"[yellow]Warning:[/yellow] Could not fetch {pr_base}, using local refs"
+            if fetch_result.returncode != 0 and verbose:
+                _emit_progress(
+                    json_output,
+                    sarif,
+                    f"[yellow]Warning:[/yellow] Could not fetch {pr_base}, using local refs",
                 )
             # Get all files changed between base and HEAD
             result = subprocess.run(  # nosec B603, B607
@@ -424,10 +450,11 @@ def guard(
                 if not paths:
                     _emit_empty_or_prose(json_output, sarif, _NO_PR_CHANGES)
                     raise typer.Exit(code=0)
-                if not json_output and not sarif:
-                    console.print(
-                        f"[bold]Scanning {len(paths)} file(s) changed since {pr_base}...[/bold]"
-                    )
+                _emit_progress(
+                    json_output,
+                    sarif,
+                    f"[bold]Scanning {len(paths)} file(s) changed since {pr_base}...[/bold]",
+                )
             else:
                 _emit_empty_or_prose(json_output, sarif, _NO_PR_CHANGES)
                 raise typer.Exit(code=0)
@@ -567,7 +594,7 @@ def guard(
 
     # Create output console (suppress colors in CI mode or JSON/SARIF output)
     output_console = console
-    if ci or json_output or sarif:
+    if ci or _machine_mode(json_output, sarif):
         output_console = Console(force_terminal=False, no_color=True)
 
     # Create scan engine
@@ -575,7 +602,7 @@ def guard(
 
     # Check combined files security (should be in .gitignore)
     # Only check if partial_encryption is enabled and not in JSON/SARIF mode
-    if combined_files and not json_output and not sarif:
+    if combined_files and not _machine_mode(json_output, sarif):
         security_warnings = engine.check_combined_files_security()
         for warning in security_warnings:
             output_console.print(f"[bold red]{warning}[/bold red]")
@@ -584,7 +611,7 @@ def guard(
 
     # Show scanner info in verbose mode or when running interactively
     scanner_names = [s.name for s in engine.scanners]
-    show_progress = not json_output and not sarif and scanner_names
+    show_progress = not _machine_mode(json_output, sarif) and scanner_names
 
     if show_progress:
         output_console.print(f"[bold]Running scanners:[/bold] {', '.join(scanner_names)}")
