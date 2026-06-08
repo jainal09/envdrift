@@ -3193,10 +3193,13 @@ class TestPullCommand:
         result = runner.invoke(app, ["pull", "--profile", "local", "--skip-sync"])
 
         assert result.exit_code == 1
-        assert "activation failed" in result.output.lower()
+        # Collapse whitespace so Rich soft-wrap of long paths/messages at a narrow
+        # CI width doesn't split the asserted phrases across lines.
+        normalized = " ".join(result.output.lower().split())
+        assert "activation failed" in normalized
         # An activation failure must not be reported as a decryption failure (#413).
-        assert "could not be activated" in result.output.lower()
-        assert "could not be decrypted" not in result.output.lower()
+        assert "could not be activated" in normalized
+        assert "could not be decrypted" not in normalized
 
     def test_pull_with_partial_encryption_decrypts_secret_files(
         self,
@@ -3667,9 +3670,12 @@ class TestLockCommand:
 
         result = runner.invoke(app, ["lock", "--verify-vault", "-c", str(config_file), "-p", "aws"])
 
+        # Collapse whitespace so a Rich soft-wrap of the long tmp path (CI runs
+        # at a narrow width) doesn't split "keys match vault" across lines.
+        normalized = " ".join(result.output.split())
         # The quoted vault value normalizes to the same bare key as local.
-        assert "keys match vault" in result.output, result.output
-        assert "KEY MISMATCH" not in result.output
+        assert "keys match vault" in normalized, result.output
+        assert "KEY MISMATCH" not in normalized
 
     def test_lock_check_mode_exits_when_unencrypted(self, monkeypatch, tmp_path: Path):
         """Check mode should fail when a file needs encryption."""

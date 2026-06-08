@@ -413,8 +413,11 @@ class TestPullCommand:
         result = runner.invoke(app, ["pull", "--profile", "local", "--skip-sync"])
 
         assert result.exit_code == 1, result.output
-        assert "could not be activated" in result.output.lower()
-        assert "could not be decrypted" not in result.output.lower()
+        # Collapse whitespace so a narrow-width Rich soft-wrap can't split the
+        # asserted phrases across lines.
+        normalized = " ".join(result.output.lower().split())
+        assert "could not be activated" in normalized
+        assert "could not be decrypted" not in normalized
         assert backend.decrypt_calls == []  # never decrypted (already plaintext)
 
     @patch("envdrift.cli_commands.encryption_helpers.resolve_encryption_backend")
