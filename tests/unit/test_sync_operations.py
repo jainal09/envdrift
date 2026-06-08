@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import tempfile
+from datetime import datetime
 from pathlib import Path
 
 import pytest
@@ -92,6 +93,32 @@ class TestEnvKeysFile:
 
         assert file.read_key("DOTENV_PRIVATE_KEY_PRODUCTION") == "abc123"
 
+    def test_read_key_empty_value_returns_empty_string(self, tmp_path: Path) -> None:
+        """A present-but-empty key (``KEY=``) reads back "" not None (#413).
+
+        None means "key absent"; conflating it with a present empty value made
+        an empty vault secret re-sync forever as CREATED and report a false
+        "Key file does not exist" in verify-only mode.
+        """
+        env_keys = tmp_path / ".env.keys"
+        env_keys.write_text("DOTENV_PRIVATE_KEY_PRODUCTION=\nDOTENV_PRIVATE_KEY_STAGING=def456\n")
+
+        file = EnvKeysFile(env_keys)
+
+        # Present but empty -> "" (not None); a genuinely absent key -> None.
+        assert file.read_key("DOTENV_PRIVATE_KEY_PRODUCTION") == ""
+        assert file.read_key("DOTENV_PRIVATE_KEY_STAGING") == "def456"
+        assert file.read_key("DOTENV_PRIVATE_KEY_DEV") is None
+
+    def test_write_then_read_empty_value_roundtrips(self, tmp_path: Path) -> None:
+        """Writing an empty value and reading it back yields "" (#413)."""
+        env_keys = tmp_path / ".env.keys"
+        file = EnvKeysFile(env_keys)
+
+        file.write_key("DOTENV_PRIVATE_KEY_PRODUCTION", "")
+
+        assert file.read_key("DOTENV_PRIVATE_KEY_PRODUCTION") == ""
+
     def test_write_key_new_file(self, tmp_path: Path) -> None:
         """Test writing key to new file creates header."""
         env_keys = tmp_path / ".env.keys"
@@ -178,6 +205,40 @@ class TestEnvKeysFile:
 
         with pytest.raises(FileNotFoundError):
             file.create_backup()
+
+    def test_create_backup_same_timestamp_no_overwrite(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Two backups at the same timestamp don't clobber each other (#413).
+
+        Freezes the clock so both backups derive the same timestamp string,
+        forcing the uniqueness path; mocking time (not the backup logic) is the
+        deterministic way to exercise the same-tick collision.
+        """
+        import envdrift.sync.operations as ops
+
+        env_keys = tmp_path / ".env.keys"
+        env_keys.write_text("ORIGINAL_CONTENT")
+        file = EnvKeysFile(env_keys)
+
+        fixed = datetime(2026, 6, 8, 12, 0, 0, 0)
+
+        class _FrozenDatetime:
+            @classmethod
+            def now(cls, tz: object = None) -> datetime:
+                return fixed
+
+        monkeypatch.setattr(ops, "datetime", _FrozenDatetime)
+
+        first = file.create_backup()
+        # Change the source so we can prove the first backup was not overwritten.
+        env_keys.write_text("UPDATED_CONTENT")
+        second = file.create_backup()
+
+        assert first != second
+        assert first.exists() and second.exists()
+        assert first.read_text() == "ORIGINAL_CONTENT"
+        assert second.read_text() == "UPDATED_CONTENT"
 
 
 class TestAtomicWrite:

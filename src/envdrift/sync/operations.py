@@ -46,7 +46,11 @@ class EnvKeysFile:
             return None
 
         content = self.path.read_text()
-        pattern = rf"^{re.escape(key_name)}=(.+)$"
+        # ``(.*)`` (not ``(.+)``) so a present-but-empty value (``KEY=``) returns
+        # "" rather than None. None means "key absent"; conflating the two made
+        # an empty vault secret re-sync forever as CREATED and report a false
+        # "Key file does not exist" in verify-only mode (#413).
+        pattern = rf"^{re.escape(key_name)}=(.*)$"
 
         for line in content.splitlines():
             match = re.match(pattern, line)
@@ -108,12 +112,22 @@ class EnvKeysFile:
         return "DOTENV_PRIVATE_KEYS" in content
 
     def create_backup(self) -> Path:
-        """Create timestamped backup of the file."""
+        """Create a timestamped backup of the file.
+
+        Uses microsecond precision and, on the off chance two backups land on
+        the same timestamp (coarse clock, or two calls within one tick), appends
+        an incrementing suffix so an earlier backup is never silently
+        overwritten (#413).
+        """
         if not self.path.exists():
             raise FileNotFoundError(f"Cannot backup non-existent file: {self.path}")
 
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
         backup_path = self.path.parent / f"{self.path.name}.backup.{timestamp}"
+        counter = 1
+        while backup_path.exists():
+            backup_path = self.path.parent / f"{self.path.name}.backup.{timestamp}.{counter}"
+            counter += 1
         shutil.copy2(self.path, backup_path)
         return backup_path
 
