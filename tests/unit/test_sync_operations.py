@@ -240,6 +240,29 @@ class TestEnvKeysFile:
         assert first.read_text() == "ORIGINAL_CONTENT"
         assert second.read_text() == "UPDATED_CONTENT"
 
+    def test_create_backup_removes_placeholder_on_copy_failure(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A failed copy must not leave the empty O_EXCL placeholder behind (#413)."""
+        import envdrift.sync.operations as ops
+
+        env_keys = tmp_path / ".env.keys"
+        env_keys.write_text("ORIGINAL")
+        file = EnvKeysFile(env_keys)
+
+        def _boom(*_args: object, **_kwargs: object) -> None:
+            raise OSError("disk full")
+
+        # Inject a copy failure (not a mock of the backup logic itself).
+        monkeypatch.setattr(ops.shutil, "copy2", _boom)
+
+        with pytest.raises(OSError, match="disk full"):
+            file.create_backup()
+
+        # No zero-byte placeholder left behind.
+        leftovers = list(tmp_path.glob(".env.keys.backup.*"))
+        assert leftovers == [], leftovers
+
 
 class TestAtomicWrite:
     """Tests for atomic file writing."""

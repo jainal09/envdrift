@@ -138,7 +138,14 @@ class EnvKeysFile:
                 continue
             os.close(fd)
             break
-        shutil.copy2(self.path, backup_path)
+        try:
+            shutil.copy2(self.path, backup_path)
+        except BaseException:
+            # A failed copy must not leave the empty O_EXCL placeholder behind —
+            # an empty "backup" is worse than none. Mirrors atomic_write().
+            with contextlib.suppress(FileNotFoundError):
+                backup_path.unlink()
+            raise
         return backup_path
 
 
