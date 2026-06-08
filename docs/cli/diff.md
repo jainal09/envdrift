@@ -50,7 +50,11 @@ envdrift diff .env.dev .env.prod -s config.settings:Settings -d /app/backend
 
 ### `--format`, `-f`
 
-Output format: `table` (default) or `json`.
+Output format: `table` (default) or `json`. The value is case-insensitive
+(`JSON` is accepted); any other value exits with code 1 instead of silently
+falling back to the table view. In `json` mode, stdout is always pure JSON —
+diagnostics such as a failed `--schema` load are routed to stderr so a
+`--format json > drift.json` capture stays parseable.
 
 ```bash
 # Human-readable table (default)

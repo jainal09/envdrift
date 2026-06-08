@@ -24,24 +24,131 @@ Configuration can be set in envdrift.toml:
 
 from __future__ import annotations
 
+import json
 import os
 import time as time_module
+import tomllib
 from pathlib import Path
 from typing import Annotated
 
 import typer
 from rich.console import Console
 from rich.live import Live
+from rich.markup import escape
 from rich.spinner import Spinner
 from rich.text import Text
 
-from envdrift.config import load_config
+from envdrift.config import ConfigNotFoundError, EnvdriftConfig, load_config
 from envdrift.env_files import resolve_custom_env_file
-from envdrift.scanner.base import FindingSeverity
+from envdrift.scanner.base import AggregatedScanResult, FindingSeverity
 from envdrift.scanner.engine import GuardConfig, ScanEngine
-from envdrift.scanner.output import format_json, format_rich, format_sarif
+from envdrift.scanner.output import (
+    format_json,
+    format_rich,
+    format_sarif,
+    format_sarif_error,
+)
 
 console = Console()
+
+# Early-exit prose for the git-discovery branches; emitted only in human mode
+# (machine modes get an empty-findings doc via _emit_empty_or_prose).
+_NO_STAGED = "[green]No staged files to scan.[/green]"
+_NO_PR_CHANGES = "[green]No changed files to scan in this PR.[/green]"
+
+
+def _empty_scan_result() -> AggregatedScanResult:
+    """Build an empty (no-findings) scan result for machine-readable output.
+
+    Used by the early-exit branches (nothing staged / no PR diff) so that
+    ``--json``/``--sarif`` consumers always receive a valid empty-findings
+    document on stdout instead of human-readable prose (#413).
+    """
+    return AggregatedScanResult(
+        results=[],
+        total_findings=0,
+        unique_findings=[],
+        scanners_used=[],
+        total_duration_ms=0,
+    )
+
+
+def _emit_empty_or_prose(json_output: bool, sarif: bool, prose: str) -> None:
+    """Emit an empty-findings document (json/sarif) or human-readable prose.
+
+    Keeps machine-readable stdout valid on the early-exit branches (#413): a
+    consumer that always parses guard stdout receives a real empty-findings
+    JSON/SARIF document instead of a sentence like ``No staged files to scan.``.
+    """
+    if sarif:
+        print(format_sarif(_empty_scan_result()))
+    elif json_output:
+        print(format_json(_empty_scan_result()))
+    else:
+        console.print(prose)
+
+
+def _load_guard_config(config_file: Path | None, json_output: bool, sarif: bool) -> EnvdriftConfig:
+    """Load envdrift config, converting load failures into a clean CLI exit.
+
+    ``load_config`` can raise ``ConfigNotFoundError`` (explicit --config that
+    doesn't exist), ``tomllib.TOMLDecodeError`` (malformed TOML), or
+    ``ValueError`` (eager config validation). All three are turned into a
+    structured error document (json/sarif) or error prose plus ``Exit(1)`` so a
+    Rich traceback never contaminates machine output (#413). Mirrors sync.py /
+    encryption_helpers.py.
+    """
+    try:
+        return load_config(config_file)
+    except (ConfigNotFoundError, tomllib.TOMLDecodeError, ValueError) as exc:
+        _emit_error(json_output, sarif, f"Could not load config: {exc}")
+        raise typer.Exit(code=1) from None
+
+
+def _emit_error(json_output: bool, sarif: bool, message: str) -> None:
+    """Emit a structured error (json/sarif) or human-readable error prose.
+
+    In ``--sarif`` mode a schema-valid SARIF run with ``executionSuccessful:
+    false`` is written so a Code Scanning consumer that always expects SARIF
+    still parses cleanly (mirrors the ``format_sarif`` success path). In
+    ``--json`` mode a clean ``{"error": ...}`` object is written instead. Either
+    way stdout never receives a Rich traceback or a bare ``Error:`` sentence
+    (#413), and the literal ``message`` is emitted via stdlib ``json``/``print``
+    so no ANSI escapes leak into machine output.
+    """
+    if sarif:
+        print(format_sarif_error(message))
+    elif json_output:
+        print(json.dumps({"error": message}, indent=2))
+    else:
+        # Escape the dynamic message so bracketed literals (e.g. TOML section
+        # names like ``[vault.sync]``) survive Rich markup instead of being
+        # interpreted as console tags and silently dropped (mirrors
+        # output/rich.py print_error). The static label stays markup.
+        console.print(f"[red]Error:[/red] {escape(message)}")
+
+
+def _machine_mode(json_output: bool, sarif: bool) -> bool:
+    """Whether machine-readable output (``--json`` / ``--sarif``) is active.
+
+    Centralizes the ``json_output or sarif`` predicate so the call sites that
+    must suppress human-readable progress/status prose (to keep stdout valid
+    JSON/SARIF, #413) read as a single flat condition instead of repeating the
+    two-term boolean inline.
+    """
+    return json_output or sarif
+
+
+def _emit_progress(json_output: bool, sarif: bool, message: str) -> None:
+    """Print a human-mode progress/status line, suppressed in machine modes.
+
+    A no-op under ``--json``/``--sarif`` so machine-readable stdout never gains
+    a stray prose line (#413); otherwise the Rich-styled ``message`` is printed.
+    Keeps the discovery branches flat (no inline ``not json_output and not
+    sarif`` guard at each progress print).
+    """
+    if not _machine_mode(json_output, sarif):
+        console.print(message)
 
 
 def guard(
@@ -296,11 +403,13 @@ def guard(
                 # the repo root.
                 paths = [Path(os.path.relpath(p, Path.cwd())) for p in candidates if p.exists()]
                 if not paths:
-                    console.print("[green]No staged files to scan.[/green]")
+                    _emit_empty_or_prose(json_output, sarif, _NO_STAGED)
                     raise typer.Exit(code=0)
-                console.print(f"[dim]Scanning {len(paths)} staged file(s)...[/dim]")
+                _emit_progress(
+                    json_output, sarif, f"[dim]Scanning {len(paths)} staged file(s)...[/dim]"
+                )
             else:
-                console.print("[green]No staged files to scan.[/green]")
+                _emit_empty_or_prose(json_output, sarif, _NO_STAGED)
                 raise typer.Exit(code=0)
         except subprocess.TimeoutExpired as err:
             console.print("[red]Error:[/red] Git command timed out")
@@ -325,8 +434,10 @@ def guard(
                 timeout=30,
             )
             if fetch_result.returncode != 0 and verbose:
-                console.print(
-                    f"[yellow]Warning:[/yellow] Could not fetch {pr_base}, using local refs"
+                _emit_progress(
+                    json_output,
+                    sarif,
+                    f"[yellow]Warning:[/yellow] Could not fetch {pr_base}, using local refs",
                 )
             # Get all files changed between base and HEAD
             result = subprocess.run(  # nosec B603, B607
@@ -342,13 +453,15 @@ def guard(
                 # cwd-relative paths (see the --staged branch for rationale).
                 paths = [Path(os.path.relpath(p, Path.cwd())) for p in candidates if p.exists()]
                 if not paths:
-                    console.print("[green]No changed files to scan in this PR.[/green]")
+                    _emit_empty_or_prose(json_output, sarif, _NO_PR_CHANGES)
                     raise typer.Exit(code=0)
-                console.print(
-                    f"[bold]Scanning {len(paths)} file(s) changed since {pr_base}...[/bold]"
+                _emit_progress(
+                    json_output,
+                    sarif,
+                    f"[bold]Scanning {len(paths)} file(s) changed since {pr_base}...[/bold]",
                 )
             else:
-                console.print("[green]No changed files to scan in this PR.[/green]")
+                _emit_empty_or_prose(json_output, sarif, _NO_PR_CHANGES)
                 raise typer.Exit(code=0)
         except subprocess.TimeoutExpired as err:
             console.print("[red]Error:[/red] Git command timed out")
@@ -365,11 +478,12 @@ def guard(
         # Validate paths exist
         for path in paths:
             if not path.exists():
-                console.print(f"[red]Error:[/red] Path not found: {path}")
+                _emit_error(json_output, sarif, f"Path not found: {path}")
                 raise typer.Exit(code=1)
 
-    # Load configuration from envdrift.toml (if available)
-    file_config = load_config(config_file)
+    # Load configuration from envdrift.toml (a bad/missing --config exits
+    # cleanly via _load_guard_config instead of a Rich traceback; see #413).
+    file_config = _load_guard_config(config_file, json_output, sarif)
     guard_cfg = file_config.guard
 
     # Determine fail_on severity (CLI overrides config)
@@ -485,7 +599,7 @@ def guard(
 
     # Create output console (suppress colors in CI mode or JSON/SARIF output)
     output_console = console
-    if ci or json_output or sarif:
+    if ci or _machine_mode(json_output, sarif):
         output_console = Console(force_terminal=False, no_color=True)
 
     # Create scan engine
@@ -493,7 +607,7 @@ def guard(
 
     # Check combined files security (should be in .gitignore)
     # Only check if partial_encryption is enabled and not in JSON/SARIF mode
-    if combined_files and not json_output and not sarif:
+    if combined_files and not _machine_mode(json_output, sarif):
         security_warnings = engine.check_combined_files_security()
         for warning in security_warnings:
             output_console.print(f"[bold red]{warning}[/bold red]")
@@ -502,7 +616,7 @@ def guard(
 
     # Show scanner info in verbose mode or when running interactively
     scanner_names = [s.name for s in engine.scanners]
-    show_progress = not json_output and not sarif and scanner_names
+    show_progress = not _machine_mode(json_output, sarif) and scanner_names
 
     if show_progress:
         output_console.print(f"[bold]Running scanners:[/bold] {', '.join(scanner_names)}")

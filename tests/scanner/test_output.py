@@ -14,7 +14,12 @@ from envdrift.scanner.base import (
     ScanFinding,
     ScanResult,
 )
-from envdrift.scanner.output import format_json, format_rich, format_sarif
+from envdrift.scanner.output import (
+    format_json,
+    format_rich,
+    format_sarif,
+    format_sarif_error,
+)
 
 
 class TestJsonOutput:
@@ -312,6 +317,30 @@ class TestSarifOutput:
 
         assert data["runs"][0]["results"] == []
         assert data["runs"][0]["tool"]["driver"]["rules"] == []
+
+    def test_sarif_error_is_valid_schema(self):
+        """format_sarif_error emits a schema-valid failed-invocation SARIF doc."""
+        output = format_sarif_error("Could not load config: boom")
+        data = json.loads(output)
+
+        assert data["version"] == "2.1.0"
+        assert data["runs"][0]["results"] == []
+        invocation = data["runs"][0]["invocations"][0]
+        assert invocation["executionSuccessful"] is False
+        notification = invocation["toolConfigurationNotifications"][0]
+        assert notification["level"] == "error"
+        assert notification["message"]["text"] == "Could not load config: boom"
+
+    def test_sarif_error_message_not_double_escaped(self):
+        """The literal message is preserved verbatim (no ANSI / Rich markup)."""
+        output = format_sarif_error("Path not found: a/b.env")
+        data = json.loads(output)
+
+        text = data["runs"][0]["invocations"][0]["toolConfigurationNotifications"][0]["message"][
+            "text"
+        ]
+        assert text == "Path not found: a/b.env"
+        assert "\x1b[" not in output
 
 
 class TestRichOutput:

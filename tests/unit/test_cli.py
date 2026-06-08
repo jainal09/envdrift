@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import importlib.util
+import json
 import keyword
 import shlex
 import tomllib
@@ -310,6 +311,77 @@ class TestDiffCommand:
         result = runner.invoke(app, ["diff", str(env1), str(env2), "--include-unchanged"])
         assert result.exit_code == 0
         assert "SAME" in result.output
+
+    def test_diff_format_unknown_exits_1(self, tmp_path: Path):
+        """diff --format <unknown> exits 1 instead of silently rendering a table (#413)."""
+        env1 = tmp_path / "env1"
+        env2 = tmp_path / "env2"
+        env1.write_text("FOO=bar")
+        env2.write_text("FOO=baz")
+
+        result = runner.invoke(app, ["diff", str(env1), str(env2), "--format", "bogus"])
+        assert result.exit_code == 1
+        assert "invalid --format" in result.output.lower()
+
+    def test_diff_format_uppercase_json(self, tmp_path: Path):
+        """diff --format JSON is lowercased and produces JSON, not a table (#413)."""
+        env1 = tmp_path / "env1"
+        env2 = tmp_path / "env2"
+        env1.write_text("FOO=bar")
+        env2.write_text("FOO=baz")
+
+        result = runner.invoke(app, ["diff", str(env1), str(env2), "--format", "JSON"])
+        assert result.exit_code == 0
+        assert json.loads(result.output)["summary"]["changed"] == 1
+
+    def test_diff_json_schema_warning_not_on_stdout(self, tmp_path: Path):
+        """A schema-load failure in --format json keeps stdout pure JSON (#413).
+
+        CliRunner separates streams: the [WARN] line must land on stderr while
+        stdout stays a parseable JSON document.
+        """
+        env1 = tmp_path / "env1"
+        env2 = tmp_path / "env2"
+        env1.write_text("FOO=bar")
+        env2.write_text("FOO=baz")
+
+        result = runner.invoke(
+            app,
+            [
+                "diff",
+                str(env1),
+                str(env2),
+                "--schema",
+                "nonexistent.module:Settings",
+                "--format",
+                "json",
+            ],
+        )
+        assert result.exit_code == 0
+        # stdout is pure JSON, no warning text.
+        assert "WARN" not in result.stdout
+        assert "Could not load schema" not in result.stdout
+        json.loads(result.stdout)
+        # The warning is surfaced on stderr instead.
+        assert "Could not load schema" in result.stderr
+
+    def test_diff_table_schema_warning_inline(self, tmp_path: Path):
+        """In table mode a schema-load failure stays an inline Rich warning (#413).
+
+        The stderr routing is json-only; table output keeps the human-readable
+        warning where a user expects it and still renders the diff (exit 0).
+        """
+        env1 = tmp_path / "env1"
+        env2 = tmp_path / "env2"
+        env1.write_text("FOO=bar")
+        env2.write_text("FOO=baz")
+
+        result = runner.invoke(
+            app,
+            ["diff", str(env1), str(env2), "--schema", "nonexistent.module:Settings"],
+        )
+        assert result.exit_code == 0
+        assert "Could not load schema" in result.output
 
 
 class TestEncryptCommand:

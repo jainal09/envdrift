@@ -142,7 +142,9 @@ def _report_guardian_status(config: EnvdriftConfig) -> None:
     if not config.guardian.enabled:
         console.print("\n[yellow]⚠[/yellow] Guardian is not enabled in envdrift.toml")
         console.print("  Add this to your envdrift.toml to enable auto-encryption:\n")
-        console.print("  [dim][guardian][/dim]")
+        # Escape the literal bracket so Rich renders [guardian] verbatim instead
+        # of treating it as a markup tag and emitting invalid TOML (#418).
+        console.print(r"  [dim]\[guardian][/dim]")
         console.print("  [dim]enabled = true[/dim]")
         return
 

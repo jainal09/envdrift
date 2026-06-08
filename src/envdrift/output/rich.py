@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from rich.console import Console
+from rich.markup import escape
 from rich.panel import Panel
 from rich.table import Table
 from rich.text import Text
@@ -29,15 +30,23 @@ def print_success(message: str) -> None:
 def print_error(message: str) -> None:
     """
     Print a message prefixed with a red "ERROR" badge to the module console.
+
+    The message is treated as literal text: any bracketed substrings (e.g. TOML
+    table names like ``[vault.sync]``) are escaped so Rich does not interpret
+    them as console markup and silently drop them.
     """
-    console.print(f"[red][ERROR][/red] {message}")
+    console.print(f"[red][ERROR][/red] {escape(message)}")
 
 
 def print_warning(message: str) -> None:
     """
     Display a yellow "WARN" badge followed by the provided message to the shared console.
+
+    The message is treated as literal text: any bracketed substrings (e.g. TOML
+    table names like ``[vault.sync]``) are escaped so Rich does not interpret
+    them as console markup and silently drop them.
     """
-    console.print(f"[yellow][WARN][/yellow] {message}")
+    console.print(f"[yellow][WARN][/yellow] {escape(message)}")
 
 
 def print_validation_result(

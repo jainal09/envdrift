@@ -88,6 +88,60 @@ class TestAgentRegisterCommand:
         assert result.exit_code == 1
         assert "does not exist" in result.stdout
 
+    def test_register_guardian_hint_emits_literal_section_header(self, tmp_path: Path):
+        """The 'enable guardian' hint prints a literal ``[guardian]`` header (#413).
+
+        Rich would otherwise parse ``[guardian]`` as a markup tag and strip it,
+        emitting invalid TOML that silently never turns auto-encryption on. We
+        render through a real no-color Console so the assertion is independent of
+        FORCE_COLOR / NO_COLOR in the environment.
+        """
+        import io
+
+        from rich.console import Console
+
+        import envdrift.cli_commands.agent as agent_module
+
+        registry_path = tmp_path / ".envdrift" / "projects.json"
+        registry_module._registry = registry_module.ProjectRegistry(registry_path)
+
+        project_dir = tmp_path / "myproject"
+        project_dir.mkdir()
+        # Guardian explicitly disabled -> the hint block is printed.
+        (project_dir / "envdrift.toml").write_text("[guardian]\nenabled = false\n")
+
+        buf = io.StringIO()
+        capture = Console(file=buf, force_terminal=False, no_color=True, width=200)
+        with patch.object(agent_module, "console", capture):
+            result = runner.invoke(app, ["agent", "register", str(project_dir)])
+
+        assert result.exit_code == 0
+        output = buf.getvalue()
+        assert "[guardian]" in output
+        assert "enabled = true" in output
+
+    def test_register_invalid_config_shows_warning(self, tmp_path: Path):
+        """Register reports an unparseable config without crashing.
+
+        With deferred guardian validation (#413) a bad idle_timeout no longer
+        fails at load time, so this exercises the load-failure branch with
+        genuinely malformed TOML instead.
+        """
+
+        registry_path = tmp_path / ".envdrift" / "projects.json"
+        registry_module._registry = registry_module.ProjectRegistry(registry_path)
+
+        project_dir = tmp_path / "myproject"
+        project_dir.mkdir()
+        # Missing closing bracket -> tomllib.TOMLDecodeError -> the register
+        # command surfaces it via the "Failed to load" branch (no crash).
+        (project_dir / "envdrift.toml").write_text("[guardian\nenabled = true\n")
+
+        result = runner.invoke(app, ["agent", "register", str(project_dir)])
+
+        assert result.exit_code == 0
+        assert "Failed to load envdrift config" in result.stdout
+
     def test_register_invalid_guardian_idle_timeout_when_enabled(self, tmp_path: Path):
         """Register surfaces a bad idle_timeout only when guardian is enabled (#413).
 
