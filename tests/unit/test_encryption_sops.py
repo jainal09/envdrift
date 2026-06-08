@@ -263,7 +263,59 @@ def test_run_relative_config_resolved_against_cwd(tmp_path):
     cmd = mock_run.call_args[0][0]
     assert "--config" in cmd
     # Resolved against cwd -> the absolute config path is what's passed.
-    assert str(work_dir / ".sops.yaml") in cmd
+    config_arg = Path(cmd[cmd.index("--config") + 1])
+    assert config_arg.is_absolute()
+    assert config_arg == (work_dir / ".sops.yaml").resolve()
+
+
+def test_run_relative_config_and_relative_cwd_not_applied_twice(tmp_path, monkeypatch):
+    """cubic P2 (re-review): when *cwd itself* is relative, the resolved
+    ``--config`` path must be made absolute so SOPS (which runs with that cwd) does
+    not re-resolve it and apply cwd a second time. The flag must point at the real
+    file, not ``cwd/cwd/config``."""
+    work_dir = tmp_path / "ws"
+    work_dir.mkdir()
+    (work_dir / ".sops.yaml").write_text("creation_rules: []\n")
+    binary = tmp_path / "sops"
+    binary.write_text("")
+
+    # Run from tmp_path so a *relative* cwd ("ws") points at work_dir.
+    monkeypatch.chdir(tmp_path)
+
+    backend = SOPSEncryptionBackend(config_file=Path(".sops.yaml"))
+    backend._binary_path = binary
+
+    with patch("envdrift.encryption.sops.subprocess.run") as mock_run:
+        mock_run.return_value = MagicMock(returncode=0, stderr="", stdout="")
+        backend._run(["--encrypt", "ws/.env"], cwd="ws")  # relative cwd
+
+    cmd = mock_run.call_args[0][0]
+    config_arg = Path(cmd[cmd.index("--config") + 1])
+    # Absolute and anchored to the real file -> no cwd/cwd/.sops.yaml double-apply.
+    assert config_arg.is_absolute()
+    assert config_arg == (work_dir / ".sops.yaml").resolve()
+    assert config_arg.exists()
+
+
+def test_run_relative_config_no_cwd_uses_process_dir(tmp_path, monkeypatch):
+    """A relative explicit config with no ``cwd`` is validated/passed as-is (it is
+    interpreted against the process working directory, mirroring sops with no cwd
+    override)."""
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / ".sops.yaml").write_text("creation_rules: []\n")
+    binary = tmp_path / "sops"
+    binary.write_text("")
+
+    backend = SOPSEncryptionBackend(config_file=Path(".sops.yaml"))
+    backend._binary_path = binary
+
+    with patch("envdrift.encryption.sops.subprocess.run") as mock_run:
+        mock_run.return_value = MagicMock(returncode=0, stderr="", stdout="")
+        backend._run(["--encrypt", str(tmp_path / ".env")])  # no cwd
+
+    cmd = mock_run.call_args[0][0]
+    assert "--config" in cmd
+    assert ".sops.yaml" in cmd[cmd.index("--config") + 1]
 
 
 def test_run_relative_config_missing_under_cwd_raises(tmp_path):

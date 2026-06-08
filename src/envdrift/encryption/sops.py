@@ -174,12 +174,21 @@ class SOPSEncryptionBackend(EncryptionBackend):
         missing one is always an explicit-but-wrong path. A *relative* config path
         is resolved against the ``cwd`` SOPS will run in (not the process cwd), so
         validation matches how SOPS itself would locate it.
+
+        The result is always made absolute: SOPS runs with ``cwd`` as its working
+        directory, so passing a still-relative ``--config`` would make SOPS resolve
+        it against ``cwd`` a *second* time. Anchoring to an absolute path here
+        (including when ``cwd`` itself is relative) avoids that double application.
         """
         if self._config_file is None:
             return None
         config_path = self._config_file
-        if cwd is not None and not config_path.is_absolute():
-            config_path = Path(cwd) / config_path
+        if config_path.is_absolute():
+            return config_path
+        if cwd is not None:
+            # Anchor a relative config under cwd, then make absolute so SOPS does
+            # not re-resolve it against its own working directory.
+            return (Path(cwd) / config_path).resolve()
         return config_path
 
     def _config_args(self, cwd: Path | str | None) -> list[str]:
