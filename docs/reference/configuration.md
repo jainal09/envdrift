@@ -75,30 +75,22 @@ environments = ["development", "staging", "production"]
 
 ### [validation] — Validation Settings
 
-Settings parsed under the `[validation]` section.
+Settings under the `[validation]` section, consumed by `envdrift validate`.
 
-> **Note:** `envdrift validate` does not currently read these keys. The command
-> always loads its options from CLI flags (for example
-> `--check-encryption/--no-check-encryption`, default on) and always treats
-> extra variables as errors. `strict_extra` and `secret_patterns` are parsed
-> into the config object but are not yet consumed by any command, so setting
-> them has no effect on validation behavior today.
+> **Note:** `check_encryption` seeds the default for the
+> `--check-encryption/--no-check-encryption` flag — passing the flag explicitly
+> overrides the config value. `strict_extra` controls whether `validate` checks
+> for variables absent from the schema at all.
 
 | Option | Type | Default | Description |
 |:-------|:-----|:--------|:------------|
-| `check_encryption` | `bool` | `true` | Parsed but not consumed; the same-named `--check-encryption/--no-check-encryption` CLI flag (default on) controls this instead |
-| `strict_extra` | `bool` | `true` | Parsed but not consumed; extra variables are always treated as errors |
-| `secret_patterns` | `list[string]` | `[]` | Parsed but not consumed; no command reads these patterns |
+| `check_encryption` | `bool` | `true` | Default for the encryption check; the `--check-encryption/--no-check-encryption` CLI flag overrides it when passed |
+| `strict_extra` | `bool` | `true` | When `true`, variables not in the schema are checked (and rejected if the schema sets `extra="forbid"`); `false` skips the extra-variable check entirely |
 
 ```toml
 [validation]
 check_encryption = true
 strict_extra = true
-secret_patterns = [
-    "^STRIPE_",
-    "^TWILIO_",
-    "^SENDGRID_",
-]
 ```
 
 ### [guard] — Secret Scanning Settings
@@ -501,7 +493,6 @@ environments = ["development", "staging", "production"]
 [validation]
 check_encryption = true
 strict_extra = true
-secret_patterns = ["^STRIPE_", "^TWILIO_"]
 
 [guard]
 scanners = ["native", "gitleaks"]

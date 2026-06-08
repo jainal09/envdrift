@@ -57,18 +57,15 @@ class TestValidationConfig:
         config = ValidationConfig()
         assert config.check_encryption is True
         assert config.strict_extra is True
-        assert config.secret_patterns == []
 
     def test_custom_values(self):
         """Test ValidationConfig with custom values."""
         config = ValidationConfig(
             check_encryption=False,
             strict_extra=False,
-            secret_patterns=["*_KEY", "*_SECRET"],
         )
         assert config.check_encryption is False
         assert config.strict_extra is False
-        assert config.secret_patterns == ["*_KEY", "*_SECRET"]
 
 
 class TestPrecommitConfig:
@@ -120,6 +117,8 @@ class TestEnvdriftConfig:
             "validation": {
                 "check_encryption": False,
                 "strict_extra": False,
+                # secret_patterns was dropped (#413); an old config carrying it
+                # must still load — the now-unknown key is silently ignored.
                 "secret_patterns": ["*_TOKEN"],
             },
             "vault": {
@@ -146,7 +145,9 @@ class TestEnvdriftConfig:
 
         assert config.validation.check_encryption is False
         assert config.validation.strict_extra is False
-        assert config.validation.secret_patterns == ["*_TOKEN"]
+        # secret_patterns was removed from ValidationConfig (#413); the stray
+        # key in the input is tolerated but never surfaces as an attribute.
+        assert not hasattr(config.validation, "secret_patterns")
 
         assert config.vault.provider == "aws"
         assert config.vault.aws_region == "eu-west-1"
