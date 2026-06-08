@@ -497,6 +497,34 @@ def test_encrypt_twice_is_idempotent_clean_noop(tmp_path: Path, sops_workspace: 
     assert "DB_PASSWORD=hunter2" in env_file.read_text()
 
 
+def test_encrypt_plaintext_with_enc_substring_is_actually_encrypted(
+    tmp_path: Path, sops_workspace: Path
+) -> None:
+    """cubic P1: a plaintext file whose *content* merely contains the literal
+    ``ENC[AES256_GCM,`` substring (e.g. in a comment) is NOT mistaken for an
+    already-encrypted file. The idempotency short-circuit keys off the genuine
+    line-anchored SOPS metadata block, so sops is still invoked and the file is
+    really encrypted instead of a false ``already encrypted`` no-op. Drives real
+    sops."""
+    _require_sops()
+    backend = _make_backend(sops_workspace)
+    env_file = sops_workspace / ".env.substring"
+    # The marker appears only inside a dotenv comment; there is no sops metadata.
+    env_file.write_text(
+        "# sample ciphertext looks like ENC[AES256_GCM,data:x]\nDB_PASSWORD=hunter2\n"
+    )
+
+    result = backend.encrypt(env_file, age_recipients=AGE_PUBLIC_KEY, cwd=sops_workspace)
+
+    assert result.success is True, f"encrypt failed: {result.message}"
+    assert "already encrypted" not in result.message.lower()
+    encrypted = env_file.read_text()
+    # The real secret value is now genuinely encrypted (not left plaintext).
+    assert "hunter2" not in encrypted
+    assert "DB_PASSWORD=ENC[AES256_GCM," in encrypted
+    assert backend._has_sops_metadata_block(encrypted) is True
+
+
 def test_encrypt_explicit_missing_config_raises_clear_error(
     tmp_path: Path, sops_workspace: Path
 ) -> None:

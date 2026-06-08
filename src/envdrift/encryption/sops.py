@@ -166,6 +166,39 @@ class SOPSEncryptionBackend(EncryptionBackend):
 
         return result
 
+    def _resolve_config_path(self, cwd: Path | str | None) -> Path | None:
+        """Resolve the explicit SOPS config path against the subprocess ``cwd``.
+
+        ``self._config_file`` is only ever set from an explicit CLI
+        ``--sops-config`` or TOML ``sops_config_file`` (never auto-discovery), so a
+        missing one is always an explicit-but-wrong path. A *relative* config path
+        is resolved against the ``cwd`` SOPS will run in (not the process cwd), so
+        validation matches how SOPS itself would locate it.
+        """
+        if self._config_file is None:
+            return None
+        config_path = self._config_file
+        if cwd is not None and not config_path.is_absolute():
+            config_path = Path(cwd) / config_path
+        return config_path
+
+    def _config_args(self, cwd: Path | str | None) -> list[str]:
+        """Build the ``--config <path>`` args, validating an explicit config path.
+
+        Raises ``EncryptionBackendError`` when an explicit config path does not
+        exist: silently dropping ``--config`` would let SOPS fall back to an
+        ambient ``.sops.yaml`` (wrong keys, exit 0 — a data-integrity hazard)
+        instead of surfacing the typo. Returns an empty list when no config is set.
+        """
+        config_path = self._resolve_config_path(cwd)
+        if config_path is None:
+            return []
+        if not config_path.exists():
+            raise EncryptionBackendError(f"SOPS config file not found: {config_path}")
+        # SOPS treats flags after positional args as extra paths, so --config must
+        # precede them; callers prepend this list before the positional file.
+        return ["--config", str(config_path)]
+
     def _run(
         self,
         args: list[str],
@@ -177,21 +210,7 @@ class SOPSEncryptionBackend(EncryptionBackend):
         if not binary:
             raise EncryptionNotFoundError(f"SOPS is not installed.\n{self.install_instructions()}")
 
-        cmd = [str(binary)]
-
-        # Add config file before positional args; SOPS treats late flags as extra paths.
-        # An explicit config path that does not exist is a user error: silently
-        # dropping --config would let SOPS fall back to an ambient .sops.yaml (wrong
-        # keys, exit 0 — a data-integrity hazard) instead of surfacing the typo.
-        # self._config_file is only ever set from an explicit CLI --sops-config or
-        # TOML sops_config_file (never from auto-discovery), so a missing one is
-        # always an explicit-but-wrong path.
-        if self._config_file is not None:
-            if not self._config_file.exists():
-                raise EncryptionBackendError(f"SOPS config file not found: {self._config_file}")
-            cmd.extend(["--config", str(self._config_file)])
-
-        cmd.extend(args)
+        cmd = [str(binary), *self._config_args(cwd), *args]
 
         try:
             result = subprocess.run(  # nosec B603
@@ -247,71 +266,32 @@ class SOPSEncryptionBackend(EncryptionBackend):
         if not self.is_installed():
             raise EncryptionNotFoundError(f"SOPS is not installed.\n{self.install_instructions()}")
 
-        # Idempotency: SOPS refuses to re-encrypt a file that already carries a
-        # top-level `sops` metadata block and exits non-zero, which would surface
-        # as an EncryptionBackendError -> exit 1 on any second run (a pre-commit
-        # hook firing twice, a CI re-run, a documented re-run). Mirror the dotenvx
-        # path and treat an already-encrypted in-place target as a clean no-op.
-        # Skipped only for in-place encryption (no output_file): an explicit
-        # output_file is a distinct target and must still be written.
-        in_place_target = not kwargs.get("output_file")
-        if in_place_target:
-            try:
-                existing = env_file.read_text()
-            except (OSError, UnicodeDecodeError):
-                existing = ""
-            if existing and self.has_encrypted_header(existing):
-                return EncryptionResult(
-                    success=True,
-                    message=f"{env_file} is already encrypted (no change)",
-                    file_path=env_file,
-                )
+        # Validate an explicit config path up front, *before* the idempotency
+        # short-circuit, so a misconfigured --sops-config is always surfaced — even
+        # when the target is already encrypted and _run() would otherwise be skipped.
+        self._config_args(kwargs.get("cwd"))
 
-        # Build SOPS arguments
-        args = ["--encrypt"]
+        noop = self._already_encrypted_noop(env_file, kwargs)
+        if noop is not None:
+            return noop
 
-        # Add encryption key options if provided
-        if kwargs.get("age_recipients"):
-            args.extend(["--age", kwargs["age_recipients"]])
-        if kwargs.get("kms_arn"):
-            args.extend(["--kms", kwargs["kms_arn"]])
-        if kwargs.get("gcp_kms"):
-            args.extend(["--gcp-kms", kwargs["gcp_kms"]])
-        if kwargs.get("azure_kv"):
-            args.extend(["--azure-kv", kwargs["azure_kv"]])
-
-        # In-place encryption by default
-        in_place = kwargs.get("in_place", True)
         output_file = kwargs.get("output_file")
+        output_args = self._encrypt_output_args(env_file, kwargs)
+        if isinstance(output_args, EncryptionResult):
+            return output_args
 
-        if output_file:
-            args.extend(["--output", str(output_file)])
-        elif in_place:
-            args.append("--in-place")
-        else:
-            # Neither in-place nor an output file: sops would stream the
-            # ciphertext to stdout where _run() captures and discards it, leaving
-            # the on-disk file as PLAINTEXT. Refuse rather than silently dropping
-            # the ciphertext (and the secrets) while reporting success.
-            return EncryptionResult(
-                success=False,
-                message=(
-                    "encrypt(in_place=False) requires an output_file; "
-                    "otherwise the ciphertext is discarded and the file stays plaintext."
-                ),
-                file_path=env_file,
-            )
+        args = [
+            "--encrypt",
+            *self._encrypt_key_args(kwargs),
+            *output_args,
+            "--input-type",
+            "dotenv",
+            "--output-type",
+            "dotenv",
+            str(env_file),
+        ]
 
-        # Specify input type for .env files
-        args.extend(["--input-type", "dotenv", "--output-type", "dotenv"])
-
-        args.append(str(env_file))
-
-        result = self._run(
-            args,
-            env=kwargs.get("env"),
-            cwd=kwargs.get("cwd"),
-        )
+        result = self._run(args, env=kwargs.get("env"), cwd=kwargs.get("cwd"))
 
         if result.returncode != 0:
             error_msg = result.stderr.strip() if result.stderr else "Unknown error"
@@ -322,6 +302,72 @@ class SOPSEncryptionBackend(EncryptionBackend):
             success=True,
             message=f"Encrypted {output_path}",
             file_path=output_path,
+        )
+
+    def _already_encrypted_noop(self, env_file: Path, kwargs: dict) -> EncryptionResult | None:
+        """Idempotency short-circuit for an already-encrypted in-place target.
+
+        SOPS refuses to re-encrypt a file that already carries a ``sops`` metadata
+        block and exits non-zero, which would surface as an EncryptionBackendError
+        -> exit 1 on any second run (a pre-commit hook firing twice, a CI re-run, a
+        documented re-run). Mirror the dotenvx path and treat such an in-place
+        target as a clean no-op. Returns ``None`` when encryption should proceed.
+
+        Skipped for an explicit ``output_file`` (a distinct target that must still
+        be written). Detection uses the genuine line-anchored SOPS metadata block
+        (not a bare ``ENC[AES256_GCM,`` substring, which can appear in plaintext),
+        matching exactly what SOPS refuses to re-encrypt.
+        """
+        if kwargs.get("output_file"):
+            return None
+        try:
+            existing = env_file.read_text()
+        except (OSError, UnicodeDecodeError):
+            return None
+        if existing and self._has_sops_metadata_block(existing):
+            return EncryptionResult(
+                success=True,
+                message=f"{env_file} is already encrypted (no change)",
+                file_path=env_file,
+            )
+        return None
+
+    @staticmethod
+    def _encrypt_key_args(kwargs: dict) -> list[str]:
+        """Build the SOPS recipient/key flags from encrypt() kwargs."""
+        flag_for_kwarg = {
+            "age_recipients": "--age",
+            "kms_arn": "--kms",
+            "gcp_kms": "--gcp-kms",
+            "azure_kv": "--azure-kv",
+        }
+        args: list[str] = []
+        for key, flag in flag_for_kwarg.items():
+            value = kwargs.get(key)
+            if value:
+                args.extend([flag, value])
+        return args
+
+    def _encrypt_output_args(self, env_file: Path, kwargs: dict) -> list[str] | EncryptionResult:
+        """Resolve the output destination flags for encrypt().
+
+        Returns the args list on success, or an ``EncryptionResult`` failure when
+        neither in-place nor an output file is requested (otherwise sops would
+        stream the ciphertext to discarded stdout, leaving the file PLAINTEXT while
+        reporting success).
+        """
+        output_file = kwargs.get("output_file")
+        if output_file:
+            return ["--output", str(output_file)]
+        if kwargs.get("in_place", True):
+            return ["--in-place"]
+        return EncryptionResult(
+            success=False,
+            message=(
+                "encrypt(in_place=False) requires an output_file; "
+                "otherwise the ciphertext is discarded and the file stays plaintext."
+            ),
+            file_path=env_file,
         )
 
     def decrypt(
@@ -437,12 +483,19 @@ class SOPSEncryptionBackend(EncryptionBackend):
         if "ENC[AES256_GCM," in content:
             return True
 
-        # Check for SOPS metadata markers (line-anchored; YAML/JSON/dotenv).
-        for pattern in self.SOPS_METADATA_PATTERNS:
-            if pattern.search(content):
-                return True
+        return self._has_sops_metadata_block(content)
 
-        return False
+    def _has_sops_metadata_block(self, content: str) -> bool:
+        """Return True iff ``content`` carries a genuine SOPS *metadata block*.
+
+        This is stricter than :meth:`has_encrypted_header`: it ignores bare
+        ``ENC[AES256_GCM,`` substrings (which can appear verbatim in a plaintext
+        comment or value) and looks only for the line-anchored metadata block SOPS
+        itself writes (``sops:`` / ``"sops":`` / ``sops_version=`` / ``sops_mac=``).
+        SOPS refuses to re-encrypt a file with such a block, so this is the precise
+        signal for the idempotency short-circuit.
+        """
+        return any(pattern.search(content) for pattern in self.SOPS_METADATA_PATTERNS)
 
     def install_instructions(self) -> str:
         """Return installation instructions for SOPS."""
