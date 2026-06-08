@@ -45,6 +45,21 @@ _WARNING_BOX_MIN_WIDTH = 50
 # secret (public keys are public) so it must not be counted as a secret var.
 _DOTENVX_PUBLIC_KEY_PREFIX = "DOTENV_PUBLIC_KEY"
 
+# SOPS appends a flat metadata trailer to a fully-encrypted dotenv file:
+#   sops_version=3.13.1
+#   sops_lastmodified=2021-...
+#   sops_unencrypted_suffix=_unencrypted
+#   sops_age__list_0__map_recipient=age1...   (or sops_kms_*/sops_pgp_*/...)
+#   sops_mac=ENC[AES256_GCM,...]               (the ONLY ciphertext line)
+# Every line except sops_mac= is PLAINTEXT (the version, timestamp, recipient
+# public key, etc.), but none is a real secret — they are SOPS bookkeeping. A
+# genuine SOPS .secret is therefore "fully encrypted" even though most of this
+# trailer is plaintext. The keys all share the canonical ``sops_`` prefix (the
+# same family `SOPSEncryptionBackend.SOPS_METADATA_PATTERNS` and the scanners
+# key off), so excluding that prefix lets has_plaintext_secret_value() ignore
+# the trailer instead of flagging it as leftover plaintext secrets (#416).
+_SOPS_METADATA_KEY_PREFIX = "sops_"
+
 # A dotenvx-encrypted value starts with this prefix; a SOPS-encrypted dotenv
 # value starts with the AES-GCM marker. Detection keys off an actual assigned
 # VALUE being ciphertext — never a header comment or a public-key line, both of
@@ -84,11 +99,15 @@ def _build_warning_header(clear_file: str, secret_file: str) -> str:
 def _is_secret_var_line(line: str) -> bool:
     """Return True if ``line`` is a real secret variable assignment.
 
-    Excludes comments and dotenvx's ``DOTENV_PUBLIC_KEY_*`` artifact so the
-    reported secret-var count reflects only the actual secrets.
+    Excludes comments, dotenvx's ``DOTENV_PUBLIC_KEY_*`` artifact and SOPS's
+    ``sops_*`` metadata trailer (version/timestamp/recipient/mac bookkeeping, not
+    real secrets — see #416) so the reported secret-var count and the plaintext
+    scan reflect only the actual secrets.
     """
     stripped = line.strip()
     if "=" not in stripped or stripped.startswith("#"):
+        return False
+    if stripped.startswith(_SOPS_METADATA_KEY_PREFIX):
         return False
     return not stripped.startswith(_DOTENVX_PUBLIC_KEY_PREFIX)
 
@@ -162,8 +181,13 @@ def has_plaintext_secret_value(file_path: Path) -> bool:
     """Return True if the file still holds at least one PLAINTEXT secret value.
 
     A "plaintext secret value" is a real variable assignment whose value is not
-    ciphertext — excluding comments, blank lines and dotenvx's
-    ``DOTENV_PUBLIC_KEY_*`` artifact (a public key is not a secret).
+    ciphertext — excluding comments, blank lines, dotenvx's
+    ``DOTENV_PUBLIC_KEY_*`` artifact (a public key is not a secret) and SOPS's
+    ``sops_*`` metadata trailer. A genuine SOPS dotenv file carries plaintext
+    bookkeeping lines (``sops_version=``, ``sops_lastmodified=``,
+    ``sops_unencrypted_suffix=``, the recipient public key, …; only ``sops_mac=``
+    is ciphertext); those are not leftover plaintext secrets, so a fully
+    SOPS-encrypted ``.secret`` is correctly treated as fully encrypted (#416).
 
     This distinguishes a MIXED-STATE file (some values already ``encrypted:``,
     at least one freshly-added plaintext value) from a fully-encrypted one.

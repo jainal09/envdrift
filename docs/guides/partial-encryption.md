@@ -163,6 +163,9 @@ envdrift push --check
 `--check` reports out of sync when the `.secret` file is not **fully** encrypted —
 a plaintext file, or a mixed-state file (a newly-added plaintext value alongside
 existing ciphertext), both fail the check because a real `push` would re-encrypt them.
+A fully SOPS-encrypted `.secret` is recognized as fully encrypted: its plaintext
+`sops_*` metadata trailer (`sops_version=`, `sops_lastmodified=`, the recipient key;
+only `sops_mac=` is ciphertext) is SOPS bookkeeping, not a leftover plaintext secret.
 
 ## After `git pull`
 
