@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import subprocess  # nosec B404
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 from unittest.mock import patch
 
 from envdrift.utils.git import (
@@ -122,6 +122,81 @@ class TestGetFileFromGit:
         test_file.write_text("content")
 
         assert get_file_from_git(test_file) is None
+
+    def test_returns_content_for_subdir_file(self, tmp_path: Path):
+        """Should return committed content for a file in a subdirectory.
+
+        Regression for #413 (cluster K): smart-encryption's git lookup must work
+        for non-root files, not just root-level ones.
+        """
+        subprocess.run(["git", "init"], cwd=tmp_path, capture_output=True)
+        subprocess.run(
+            ["git", "config", "user.email", "test@test.com"],
+            cwd=tmp_path,
+            capture_output=True,
+        )
+        subprocess.run(["git", "config", "user.name", "Test"], cwd=tmp_path, capture_output=True)
+
+        subdir = tmp_path / "services" / "api"
+        subdir.mkdir(parents=True)
+        nested_file = subdir / ".env.production"
+        nested_file.write_text("original nested content")
+        subprocess.run(
+            ["git", "add", "services/api/.env.production"], cwd=tmp_path, capture_output=True
+        )
+        subprocess.run(["git", "commit", "-m", "initial"], cwd=tmp_path, capture_output=True)
+
+        nested_file.write_text("modified nested content")
+
+        result = get_file_from_git(nested_file)
+        assert result == "original nested content"
+
+    def test_revision_arg_uses_forward_slashes_for_subdir(self, tmp_path: Path):
+        """The ``git show`` revision arg must use POSIX (forward-slash) separators.
+
+        Regression for #413 (cluster K): git's ``<rev>:<path>`` syntax does not
+        normalize backslashes, so a Windows ``str(Path)`` (e.g. ``sub\\file.env``)
+        would never resolve and ``get_file_from_git`` returned None for non-root
+        files. The fix builds the revision arg from ``relative_path.as_posix()``.
+
+        This is a deterministic, platform-independent reproducer: on macOS/Linux a
+        real ``Path`` already stringifies with forward slashes, so we force the
+        function's relative-path computation to yield a ``PureWindowsPath`` (which
+        stringifies with backslashes everywhere). The buggy f-string then produces
+        a backslash revision arg; the fixed ``.as_posix()`` call produces slashes.
+        """
+        subprocess.run(["git", "init"], cwd=tmp_path, capture_output=True)
+
+        nested_file = tmp_path / ".env.production"
+        nested_file.write_text("content")
+
+        # Simulate Windows: relative path within the repo uses backslashes.
+        windows_relative = PureWindowsPath(r"services\api\.env.production")
+        assert "\\" in str(windows_relative)  # guard: really backslash-separated
+
+        captured: dict[str, object] = {}
+        real_run = subprocess.run
+
+        def _spy(cmd, *args, **kwargs):
+            if isinstance(cmd, list) and cmd[:2] == ["git", "show"]:
+                captured["rev_arg"] = cmd[2]
+            return real_run(cmd, *args, **kwargs)
+
+        # Make ``file_path.resolve().relative_to(git_root)`` return the Windows path.
+        with (
+            patch.object(Path, "relative_to", return_value=windows_relative),
+            patch("envdrift.utils.git.subprocess.run", side_effect=_spy),
+        ):
+            get_file_from_git(nested_file)
+
+        # Fail clearly if the spy never fired (e.g. ``get_file_from_git`` returned
+        # early) rather than raising a confusing ``KeyError`` on the lookup below.
+        assert "rev_arg" in captured, "git show was never invoked; spy did not capture a rev arg"
+        rev_arg = captured["rev_arg"]
+        assert isinstance(rev_arg, str)
+        # ``HEAD:services/api/.env.production`` — forward slashes, no backslashes.
+        assert "\\" not in rev_arg
+        assert rev_arg == "HEAD:services/api/.env.production"
 
 
 class TestRestoreFileFromGit:

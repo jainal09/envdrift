@@ -85,8 +85,11 @@ def get_file_from_git(file_path: Path, ref: str = "HEAD") -> str | None:
         # Get relative path from git root
         relative_path = file_path.resolve().relative_to(git_root)
 
+        # git's ``<rev>:<path>`` revision syntax does NOT normalize backslashes,
+        # so the path must use forward slashes (POSIX) even on Windows — matching
+        # the ``.as_posix()`` usage elsewhere in this module (e.g. line 238/267).
         result = subprocess.run(  # nosec B603, B607
-            ["git", "show", f"{ref}:{relative_path}"],
+            ["git", "show", f"{ref}:{relative_path.as_posix()}"],
             cwd=str(git_root),
             capture_output=True,
             text=True,
