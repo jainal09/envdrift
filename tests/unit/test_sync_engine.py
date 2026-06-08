@@ -1380,3 +1380,27 @@ class TestNormalizeVaultKeyValue:
         # No DOTENV_PRIVATE_KEY_ prefix -> the whole (dequoted) value is the key
         # material, even if it contains '='.
         assert normalize_vault_key_value("opaque=keymaterial") == ("opaque=keymaterial", None)
+
+    def test_strips_inner_double_quotes_after_prefix(self) -> None:
+        # The value after the prefix is itself dequoted (matches read_key).
+        assert normalize_vault_key_value('DOTENV_PRIVATE_KEY_PROD="abc123"') == ("abc123", "PROD")
+
+    def test_strips_inner_single_quotes_after_prefix(self) -> None:
+        assert normalize_vault_key_value("DOTENV_PRIVATE_KEY_PROD='abc123'") == ("abc123", "PROD")
+
+    def test_strips_inner_whitespace_after_prefix(self) -> None:
+        assert normalize_vault_key_value("DOTENV_PRIVATE_KEY_PROD=  abc123  ") == ("abc123", "PROD")
+
+    def test_converges_with_read_key_for_inner_quoted_prefixed_value(self, tmp_path: Path) -> None:
+        """normalize_vault_key_value matches read_key for an inner-quoted prefixed
+        value, so verify-vault and the engine don't false-mismatch (#413 review)."""
+        from envdrift.sync.operations import EnvKeysFile
+
+        vault_value = 'DOTENV_PRIVATE_KEY_PRODUCTION="abc123"'
+        env_keys = tmp_path / ".env.keys"
+        env_keys.write_text(f"{vault_value}\n")
+        local = EnvKeysFile(env_keys).read_key("DOTENV_PRIVATE_KEY_PRODUCTION")
+
+        vault_key, suffix = normalize_vault_key_value(vault_value)
+        assert vault_key == local == "abc123"
+        assert suffix == "PRODUCTION"

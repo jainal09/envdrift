@@ -32,30 +32,39 @@ logger = logging.getLogger(__name__)
 _DOTENV_PRIVATE_KEY_RE = re.compile(r"^DOTENV_PRIVATE_KEY_([A-Za-z0-9_]+)=(.+)$")
 
 
+def _strip_one_quote_layer(value: str) -> str:
+    """Remove a single layer of matching surrounding single/double quotes."""
+    if len(value) >= 2 and (
+        (value[0] == '"' and value[-1] == '"') or (value[0] == "'" and value[-1] == "'")
+    ):
+        return value[1:-1]
+    return value
+
+
 def normalize_vault_key_value(raw: str) -> tuple[str, str | None]:
     """Normalize a raw vault secret value to its bare key material.
 
     Strips surrounding whitespace, then a single layer of surrounding quotes,
-    then a ``DOTENV_PRIVATE_KEY_<SUFFIX>=`` prefix if present. Returns
-    ``(value, suffix)`` where ``suffix`` is the environment label from the
-    prefix (uppercase as stored) or ``None`` when there was no prefix.
+    then a ``DOTENV_PRIVATE_KEY_<SUFFIX>=`` prefix if present. The value *after*
+    that prefix is itself stripped and dequoted, exactly as
+    ``EnvKeysFile.read_key`` treats the post-``=`` part — so the two converge
+    even when the vault stores ``DOTENV_PRIVATE_KEY_PROD="abc"`` or
+    ``DOTENV_PRIVATE_KEY_PROD=  abc`` (without this, verify-vault false-mismatched
+    and the engine wrote literal quotes/whitespace as key material). Returns
+    ``(value, suffix)`` where ``suffix`` is the environment label from the prefix
+    (uppercase as stored) or ``None`` when there was no prefix.
 
-    This mirrors how ``EnvKeysFile.read_key`` normalizes the locally-stored
-    value, so a vault value and the local value converge instead of mismatching
-    forever (#356). Both the sync engine and ``lock --verify-vault`` use it so
-    they parse identically (#413). Order matters: quotes come off before the
+    Both the sync engine and ``lock --verify-vault`` use it so they parse
+    identically (#356, #413). Order matters: outer quotes come off before the
     prefix, so a quoted full ``"DOTENV_PRIVATE_KEY_PROD=abc"`` line still has its
     prefix stripped. The caller decides what to do with a suffix that does not
     match the target environment (the engine raises; verify reports a mismatch).
     """
-    value = raw.strip()
-    if len(value) >= 2 and (
-        (value[0] == '"' and value[-1] == '"') or (value[0] == "'" and value[-1] == "'")
-    ):
-        value = value[1:-1]
+    value = _strip_one_quote_layer(raw.strip())
     match = _DOTENV_PRIVATE_KEY_RE.match(value)
     if match:
-        return match.group(2), match.group(1)
+        inner = _strip_one_quote_layer(match.group(2).strip())
+        return inner, match.group(1)
     return value, None
 
 
