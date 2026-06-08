@@ -808,6 +808,73 @@ class TestSyncEngineDecryptionTest:
             for record in caplog.records
         )
 
+    def test_decryption_test_non_utf8_file_returns_failed(
+        self, mock_vault_client: MagicMock, tmp_path: Path
+    ) -> None:
+        """A non-UTF-8 env file yields FAILED, never an uncaught traceback (#413).
+
+        Regression for #413: the ``resolve_mapping_env_file()`` /
+        ``target_file.read_text()`` preamble ran *outside* the method's try/except.
+        A genuinely non-UTF-8 env file (e.g. one with stray ``0xff 0xfe`` bytes)
+        made ``read_text()`` raise ``UnicodeDecodeError``, which escaped
+        ``_test_decryption`` and crashed the whole ``sync --check-decryption`` run
+        with a traceback. The read is now guarded and returns FAILED.
+        """
+        mapping = ServiceMapping(
+            secret_name="test-key", folder_path=tmp_path, environment="production"
+        )
+        env_file = tmp_path / ".env.production"
+        # Real undecodable bytes: a plausible "encrypted" value with raw 0xff 0xfe
+        # that is not valid UTF-8 — write_bytes so no encoding step sanitizes it.
+        env_file.write_bytes(b"FOO=encrypted:abc\xff\xfe\n")
+
+        engine = SyncEngine(
+            config=SyncConfig(mappings=[mapping]),
+            vault_client=mock_vault_client,
+            mode=SyncMode(check_decryption=True),
+        )
+
+        # Must NOT raise UnicodeDecodeError; must return FAILED.
+        result = engine._test_decryption(mapping)
+
+        assert result == DecryptionTestResult.FAILED
+
+    def test_sync_all_non_utf8_file_does_not_crash(
+        self, mock_vault_client: MagicMock, tmp_path: Path
+    ) -> None:
+        """sync_all with check_decryption survives a non-UTF-8 env file (#413).
+
+        End-to-end guard: the full ``sync_all`` path (the real call site at
+        engine.py invoking ``_test_decryption``) must record FAILED for the
+        service rather than propagating ``UnicodeDecodeError``.
+        """
+        mock_vault_client.get_secret.return_value = SecretValue(name="test-key", value="secret123")
+
+        service_dir = tmp_path / "service1"
+        service_dir.mkdir()
+        (service_dir / ".env.production").write_bytes(b"FOO=encrypted:abc\xff\xfe\n")
+
+        config = SyncConfig(
+            mappings=[
+                ServiceMapping(
+                    secret_name="test-key",
+                    folder_path=service_dir,
+                    environment="production",
+                ),
+            ],
+        )
+
+        engine = SyncEngine(
+            config=config,
+            vault_client=mock_vault_client,
+            mode=SyncMode(check_decryption=True),
+        )
+
+        # Must complete without raising.
+        result = engine.sync_all()
+
+        assert result.services[0].decryption_result == DecryptionTestResult.FAILED
+
 
 class TestSyncEngineFetchVaultSecret:
     """Tests for vault secret fetching."""
