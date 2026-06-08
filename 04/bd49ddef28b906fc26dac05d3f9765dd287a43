@@ -1,0 +1,29 @@
+tests/unit/test_guard_machine_output.py
+  s_dfc6cd6692ed8f::t_842449c05abbc9 205,216
+  s_dfc6cd6692ed8f::t_c16eb9bc1fadaf 228,232,239,243
+  s_dfc6cd6692ed8f::t_0a5d563413a978 39-87
+src/envdrift/cli_commands/guard.py
+  s_dfc6cd6692ed8f::t_c5d97df6bc856e 453-457
+  s_dfc6cd6692ed8f::t_2f5940a71d31ae 597
+  s_dfc6cd6692ed8f::t_9adca5db31fa40 605
+  s_dfc6cd6692ed8f::t_8216ac86d0a36b 614
+  s_dfc6cd6692ed8f::t_16828e1d8b1c2c 431-435
+  s_dfc6cd6692ed8f::t_07f06dec4bd6a8 126-148
+  s_dfc6cd6692ed8f::t_2ceb48a09a98f6 403-405
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.6",
+  "base_commit_sha": "04bd49ddef28b906fc26dac05d3f9765dd287a43",
+  "prompts": {},
+  "sessions": {
+    "s_dfc6cd6692ed8f": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "fd23e738-3512-4420-9290-d985ad979bfd",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Jainal Gosaliya <jainal09gosalia@gmail.com>"
+    }
+  }
+}
