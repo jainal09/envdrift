@@ -535,29 +535,41 @@ def load_config(path: Path | str | None = None) -> EnvdriftConfig:
 
     # Check if this is pyproject.toml with [tool.envdrift]
     if path.name == "pyproject.toml":
-        tool_config = data.get("tool", {}).get("envdrift", {})
-        if tool_config:
-            # Restructure to expected format (copy to avoid mutating original)
-            envdrift_section = dict(tool_config)
-            data = {"envdrift": envdrift_section}
-            if "validation" in envdrift_section:
-                data["validation"] = envdrift_section.pop("validation")
-            if "vault" in envdrift_section:
-                data["vault"] = envdrift_section.pop("vault")
-            if "encryption" in envdrift_section:
-                data["encryption"] = envdrift_section.pop("encryption")
-            if "precommit" in envdrift_section:
-                data["precommit"] = envdrift_section.pop("precommit")
-            if "git_hook_check" in envdrift_section:
-                data["git_hook_check"] = envdrift_section.pop("git_hook_check")
-            if "partial_encryption" in envdrift_section:
-                data["partial_encryption"] = envdrift_section.pop("partial_encryption")
-            if "guard" in envdrift_section:
-                data["guard"] = envdrift_section.pop("guard")
-            if "guardian" in envdrift_section:
-                data["guardian"] = envdrift_section.pop("guardian")
+        data = _restructure_pyproject(data)
 
     return EnvdriftConfig.from_dict(data)
+
+
+# Top-level sections that live under [tool.envdrift.*] in pyproject.toml and must
+# be hoisted to the root for from_dict (everything else stays under "envdrift").
+_PYPROJECT_TOPLEVEL_SECTIONS = (
+    "validation",
+    "vault",
+    "encryption",
+    "precommit",
+    "git_hook_check",
+    "partial_encryption",
+    "guard",
+    "guardian",
+)
+
+
+def _restructure_pyproject(data: dict[str, Any]) -> dict[str, Any]:
+    """Hoist a pyproject.toml's ``[tool.envdrift.*]`` config to from_dict's shape.
+
+    Returns ``data`` unchanged when there is no ``[tool.envdrift]`` table.
+    """
+    tool_config = data.get("tool", {}).get("envdrift", {})
+    if not tool_config:
+        return data
+
+    # Copy so we never mutate the caller's parsed pyproject data.
+    envdrift_section = dict(tool_config)
+    restructured: dict[str, Any] = {"envdrift": envdrift_section}
+    for section in _PYPROJECT_TOPLEVEL_SECTIONS:
+        if section in envdrift_section:
+            restructured[section] = envdrift_section.pop(section)
+    return restructured
 
 
 def get_schema_for_environment(config: EnvdriftConfig, environment: str) -> str | None:
