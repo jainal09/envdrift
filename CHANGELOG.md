@@ -1,5 +1,26 @@
 # Changelog
 
+## [10.13.8](https://github.com/jainal09/envdrift/compare/v10.13.7...v10.13.8) (2026-06-08)
+
+
+### Bug Fixes
+
+* **agent:** harden watcher, lockcheck, registry, and stop reliability ([#413](https://github.com/jainal09/envdrift/issues/413) cluster J) ([#424](https://github.com/jainal09/envdrift/issues/424)) ([b9f9993](https://github.com/jainal09/envdrift/commit/b9f99939680b61274e60582c49b26caaa1e17297))
+* **cli:** keep guard/diff machine output clean and unescape TOML in error messages ([#418](https://github.com/jainal09/envdrift/issues/418)) ([cbd2f56](https://github.com/jainal09/envdrift/commit/cbd2f566d14019068657214b52ab246b8902fb0a))
+* **config:** defer guardian/partial validation; harden schema metadata isolation ([#425](https://github.com/jainal09/envdrift/issues/425)) ([f9ccd49](https://github.com/jainal09/envdrift/commit/f9ccd494dbf585eccf31c47d85eb85c5a625820b))
+* **init:** generate safe, importable Python for keyword and non-identifier vars ([#423](https://github.com/jainal09/envdrift/issues/423)) ([e17a103](https://github.com/jainal09/envdrift/commit/e17a1037f6b8132e6f0ba0039e8eb2dea83dbfcc))
+* normalize Windows path separators in git lookup and clear-file match ([#420](https://github.com/jainal09/envdrift/issues/420)) ([a8adbc9](https://github.com/jainal09/envdrift/commit/a8adbc9c687d542ec4e498d04b5f71e2a241f73d))
+* **partial-encryption:** re-encrypt mixed-state .secret files to stop plaintext leak ([#416](https://github.com/jainal09/envdrift/issues/416)) ([34d7590](https://github.com/jainal09/envdrift/commit/34d759019c59e0093bfaa8405732d452c3ed054d))
+* **scanner:** harden scanner/guard correctness against false negatives ([#413](https://github.com/jainal09/envdrift/issues/413)) ([#419](https://github.com/jainal09/envdrift/issues/419)) ([47fbd18](https://github.com/jainal09/envdrift/commit/47fbd18db94c4e32059a0425b5ebe0684bebe00d))
+* **sops:** make encrypt idempotent and validate explicit config path ([#422](https://github.com/jainal09/envdrift/issues/422)) ([9439795](https://github.com/jainal09/envdrift/commit/9439795abd3e68dde4025085d4504b585358da42))
+* **sync:** gitignore decrypted merge artifact and guard non-UTF-8 env reads ([#415](https://github.com/jainal09/envdrift/issues/415)) ([a4717b1](https://github.com/jainal09/envdrift/commit/a4717b1c6953feb520234e44ab5dae6c00b3c468))
+* **vault:** wrap transport errors and coerce non-string HashiCorp values ([#417](https://github.com/jainal09/envdrift/issues/417)) ([e5696d9](https://github.com/jainal09/envdrift/commit/e5696d9f2290952f4871e663357063280715726e))
+
+
+### Documentation
+
+* **cli:** align sync/decrypt/push/init docs with real behavior ([#413](https://github.com/jainal09/envdrift/issues/413)) ([#421](https://github.com/jainal09/envdrift/issues/421)) ([d5edb2d](https://github.com/jainal09/envdrift/commit/d5edb2dde386012f756301270d252a76fa59aee4))
+
 ## [10.13.7](https://github.com/jainal09/envdrift/compare/v10.13.6...v10.13.7) (2026-06-07)
 
 
