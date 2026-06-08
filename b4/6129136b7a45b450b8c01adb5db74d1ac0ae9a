@@ -1,0 +1,19 @@
+src/envdrift/sync/operations.py
+  s_dfc6cd6692ed8f::t_3fda6e8e95e649 120-122,130-140
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.6",
+  "base_commit_sha": "b46129136b7a45b450b8c01adb5db74d1ac0ae9a",
+  "prompts": {},
+  "sessions": {
+    "s_dfc6cd6692ed8f": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "fd23e738-3512-4420-9290-d985ad979bfd",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Jainal Gosaliya <jainal09gosalia@gmail.com>"
+    }
+  }
+}
