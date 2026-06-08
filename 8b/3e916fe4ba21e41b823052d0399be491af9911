@@ -1,0 +1,37 @@
+envdrift-agent/internal/guardian/guardian.go
+  s_dfc6cd6692ed8f::t_bddb83cdbda28e 286-287,292-327,329,331-335,339-340,342-344,352,354-356
+envdrift-agent/internal/cmd/root.go
+  s_dfc6cd6692ed8f::t_56503ccb7322e1 195-204,208-209
+envdrift-agent/internal/registry/registry_test.go
+  s_dfc6cd6692ed8f::t_ddc9b105e552cb 237-240,242
+  s_dfc6cd6692ed8f::t_363dbd237aa9d6 123-143
+envdrift-agent/internal/cmd/root_test.go
+  s_dfc6cd6692ed8f::t_3b7fecf09730be 41,46-47,49-56,61,65-66
+envdrift-agent/internal/daemon/daemon.go
+  s_dfc6cd6692ed8f::t_d1deac0c4a0cbe 15-19,22,24,26,32-35,38,40,42,44,48-59,65,71,77
+envdrift-agent/internal/daemon/daemon_test.go
+  s_dfc6cd6692ed8f::t_a646e936003b21 60-75,78-83,86,88-89,92,94-103,106-109,111-119,121-138
+  s_dfc6cd6692ed8f::t_647e0fc5765267 87,120
+  s_dfc6cd6692ed8f::t_1e35b11bf81cfd 105
+envdrift-agent/internal/watcher/watcher_test.go
+  s_dfc6cd6692ed8f::t_d176ba66b7e947 218-262,298-299,339-344
+envdrift-agent/internal/watcher/watcher.go
+  s_dfc6cd6692ed8f::t_5990bdc3f97cb7 76-79
+  s_dfc6cd6692ed8f::t_b7f6e306113b7b 91-97
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.6",
+  "base_commit_sha": "8b3e916fe4ba21e41b823052d0399be491af9911",
+  "prompts": {},
+  "sessions": {
+    "s_dfc6cd6692ed8f": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "fd23e738-3512-4420-9290-d985ad979bfd",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Jainal Gosaliya <jainal09gosalia@gmail.com>"
+    }
+  }
+}
