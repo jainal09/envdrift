@@ -3670,6 +3670,8 @@ class TestLockCommand:
 
         result = runner.invoke(app, ["lock", "--verify-vault", "-c", str(config_file), "-p", "aws"])
 
+        # Keys match -> verify raises no issue and lock proceeds to a clean exit.
+        assert result.exit_code == 0, result.output
         # Collapse whitespace so a Rich soft-wrap of the long tmp path (CI runs
         # at a narrow width) doesn't split "keys match vault" across lines.
         normalized = " ".join(result.output.split())
