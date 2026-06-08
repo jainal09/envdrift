@@ -13,7 +13,7 @@ from __future__ import annotations
 import fnmatch
 import re
 import time
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 from envdrift.core.encryption import is_dotenvx_public_key_var
 
@@ -761,17 +761,21 @@ class NativeScanner(ScannerBackend):
         if not self._allowed_clear_files:
             return False
 
-        # Check against filename and path with strict matching
+        # Check against filename and path with strict matching. Normalize to
+        # POSIX separators on both sides so a path-qualified clear_file (e.g.
+        # "config/.env.public") matches on Windows, where ``str(Path)`` yields
+        # backslashes (``config\.env.public``) that the literal "/" check misses.
         name = path.name
-        path_str = str(path)
+        path_str = path.as_posix()
 
         for allowed in self._allowed_clear_files:
-            allowed_path = Path(allowed)
+            allowed_posix = Path(allowed).as_posix()
+            allowed_name = PurePosixPath(allowed_posix).name
             # If allowed is just a filename, match by filename only
-            if allowed_path.name == allowed and name == allowed:
+            if allowed_name == allowed_posix and name == allowed_posix:
                 return True
             # Match by path suffix (e.g., "config/.env.clear" matches "/path/to/config/.env.clear")
-            if path_str.endswith(f"/{allowed}") or path_str == allowed:
+            if path_str.endswith(f"/{allowed_posix}") or path_str == allowed_posix:
                 return True
         return False
 

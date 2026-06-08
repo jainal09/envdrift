@@ -47,8 +47,27 @@ class DummyAlreadyExistsError(DummyGoogleAPICallError):
     """Fake AlreadyExists (a GoogleAPICallError subclass, as in the real SDK)."""
 
 
-class DummyDefaultCredentialsError(Exception):
-    """Fake DefaultCredentialsError."""
+class DummyGoogleAuthError(Exception):
+    """Fake ``google.auth.exceptions.GoogleAuthError`` (the auth-layer base).
+
+    The real SDK makes ``DefaultCredentialsError``, ``RefreshError`` and
+    ``TransportError`` all subclass ``GoogleAuthError`` (and crucially NONE of them
+    subclass ``GoogleAPICallError``). Mirroring that here is load-bearing: it lets
+    the tests exercise the production split where ``RefreshError`` -> auth failure
+    and other ``GoogleAuthError`` (e.g. ``TransportError``) -> ``VaultError``.
+    """
+
+
+class DummyDefaultCredentialsError(DummyGoogleAuthError):
+    """Fake DefaultCredentialsError (a GoogleAuthError subclass, as in the real SDK)."""
+
+
+class DummyRefreshError(DummyGoogleAuthError):
+    """Fake RefreshError (a GoogleAuthError subclass; e.g. invalid_grant)."""
+
+
+class DummyTransportError(DummyGoogleAuthError):
+    """Fake TransportError (a GoogleAuthError subclass; DNS/TLS/connectivity)."""
 
 
 @pytest.fixture
@@ -64,7 +83,10 @@ def mock_gcp():
     api_core_mod = SimpleNamespace(exceptions=exceptions_mod)
 
     auth_exceptions_mod = SimpleNamespace(
+        GoogleAuthError=DummyGoogleAuthError,
         DefaultCredentialsError=DummyDefaultCredentialsError,
+        RefreshError=DummyRefreshError,
+        TransportError=DummyTransportError,
     )
     auth_mod = SimpleNamespace(exceptions=auth_exceptions_mod)
 
@@ -307,6 +329,89 @@ class TestGCPSecretManagerClient:
         with pytest.raises(AuthenticationError):
             client_2.authenticate()
         assert client_2.is_authenticated() is False
+
+    def test_authenticate_refresh_error_maps_to_authentication_error(self, mock_gcp):
+        """Regression #413: a token-refresh failure (RefreshError, e.g. invalid_grant)
+        during authenticate() is an *auth* problem and must map to AuthenticationError.
+
+        RefreshError is a GoogleAuthError (NOT a GoogleAPICallError), so it previously
+        escaped every except clause and propagated as a raw SDK exception.
+        """
+        mock_client = MagicMock()
+        mock_client.list_secrets.side_effect = mock_gcp.RefreshError("invalid_grant")
+        mock_gcp._secretmanager.SecretManagerServiceClient.return_value = mock_client
+
+        client = mock_gcp.GCPSecretManagerClient(project_id="my-project")
+        with pytest.raises(AuthenticationError):
+            client.authenticate()
+
+        assert client.is_authenticated() is False
+
+    def test_authenticate_transport_error_maps_to_vault_error(self, mock_gcp):
+        """Regression #413: a transport-layer GoogleAuthError (TransportError:
+        DNS/TLS/connectivity) during authenticate() is wrapped as VaultError, not
+        leaked raw. It is a GoogleAuthError but NOT a GoogleAPICallError, so it
+        previously escaped all handlers.
+        """
+        mock_client = MagicMock()
+        mock_client.list_secrets.side_effect = mock_gcp.GoogleAuthError("network unreachable")
+        mock_gcp._secretmanager.SecretManagerServiceClient.return_value = mock_client
+
+        client = mock_gcp.GCPSecretManagerClient(project_id="my-project")
+        with pytest.raises(VaultError) as exc_info:
+            client.authenticate()
+
+        # Must be a domain VaultError, not the raw auth-layer exception.
+        assert not isinstance(exc_info.value, mock_gcp.GoogleAuthError)
+        assert client.is_authenticated() is False
+
+    @staticmethod
+    def _authenticated_client_with_op_error(mock_gcp, *, op: str, error: Exception):
+        """Build an authenticated client whose post-auth ``op`` call raises ``error``.
+
+        Authentication consumes the first ``list_secrets`` (an empty iterator); the
+        injected error is wired onto the operation under test so the four
+        auth-layer-failure regressions (#413) share one setup instead of copying
+        the build/authenticate boilerplate.
+        """
+        mock_client = MagicMock()
+        if op == "list_secrets":
+            # list_secrets is called twice: once by authenticate(), once under test.
+            mock_client.list_secrets.side_effect = [iter([]), error]
+        else:
+            mock_client.list_secrets.return_value = iter([])
+            getattr(mock_client, op).side_effect = error
+        mock_gcp._secretmanager.SecretManagerServiceClient.return_value = mock_client
+        client = mock_gcp.GCPSecretManagerClient(project_id="my-project")
+        client.authenticate()
+        return client
+
+    def test_get_secret_refresh_error_maps_to_authentication_error(self, mock_gcp):
+        """Regression #413: a RefreshError during get_secret() maps to AuthenticationError."""
+        client = self._authenticated_client_with_op_error(
+            mock_gcp, op="access_secret_version", error=mock_gcp.RefreshError("invalid_grant")
+        )
+        with pytest.raises(AuthenticationError):
+            client.get_secret("secret-name")
+
+    @pytest.mark.parametrize(
+        ("op", "call"),
+        [
+            ("access_secret_version", lambda c: c.get_secret("secret-name")),
+            ("list_secrets", lambda c: c.list_secrets()),
+            ("add_secret_version", lambda c: c.set_secret("write-error", "value")),
+        ],
+    )
+    def test_transport_error_maps_to_vault_error(self, mock_gcp, op, call):
+        """Regression #413: a transport GoogleAuthError during any operation is wrapped
+        as a domain VaultError rather than leaked as a raw auth-layer SDK exception.
+        """
+        client = self._authenticated_client_with_op_error(
+            mock_gcp, op=op, error=mock_gcp.GoogleAuthError("network down")
+        )
+        with pytest.raises(VaultError) as exc_info:
+            call(client)
+        assert not isinstance(exc_info.value, mock_gcp.GoogleAuthError)
 
     def test_get_secret_binary_payload(self, mock_gcp):
         """Binary payload should be base64-encoded."""

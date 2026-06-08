@@ -13,14 +13,26 @@ from envdrift.utils import normalize_max_workers
 _GUARDIAN_IDLE_TIMEOUT_PATTERN = re.compile(r"^\d+(s|m|h|d)$")
 
 
+class ConfigValidationError(ValueError):
+    """A config section that a command consumes is invalid.
+
+    Subclasses ``ValueError`` so existing ``except ValueError`` handlers keep
+    working, while letting deferred validators (guardian/partial_encryption)
+    raise a typed error that consuming commands can convert to a clean message
+    (see #413).
+    """
+
+
 def _validate_guardian_idle_timeout(value: Any) -> str:
     """Validate guardian idle_timeout format (e.g., 5m, 1h, 30s)."""
     if not isinstance(value, str):
-        raise ValueError("guardian.idle_timeout must be a string like '5m'")
+        raise ConfigValidationError("guardian.idle_timeout must be a string like '5m'")
 
     normalized = value.strip().lower()
     if not _GUARDIAN_IDLE_TIMEOUT_PATTERN.match(normalized):
-        raise ValueError("guardian.idle_timeout must match '<number><s|m|h|d>', e.g. '5m' or '30s'")
+        raise ConfigValidationError(
+            "guardian.idle_timeout must match '<number><s|m|h|d>', e.g. '5m' or '30s'"
+        )
 
     return normalized
 
@@ -162,6 +174,38 @@ class PartialEncryptionEnvironmentConfig:
     pattern: str = ".env*"
 
 
+def validate_partial_encryption_environments(
+    environments: list[PartialEncryptionEnvironmentConfig],
+) -> None:
+    """Check each partial-encryption environment has the fields its mode needs.
+
+    Deferred until the partial-encryption commands actually consume the section
+    so an unrelated ``[[partial_encryption.environments]]`` typo can't crash
+    commands that never read it (encrypt/decrypt/guard/pull/sync) (#413). Raises
+    ``ConfigValidationError`` (a ``ValueError`` subclass).
+    """
+    for env in environments:
+        if not env.name:
+            raise ConfigValidationError(
+                "partial_encryption environment is missing the required 'name' field"
+            )
+        if env.secrets_only:
+            if not env.secrets_dir:
+                raise ConfigValidationError(
+                    f"partial_encryption environment '{env.name}': secrets_dir is "
+                    "required when secrets_only=true"
+                )
+        else:
+            missing = [
+                k for k in ("clear_file", "secret_file", "combined_file") if not getattr(env, k)
+            ]
+            if missing:
+                raise ConfigValidationError(
+                    f"partial_encryption environment '{env.name}': "
+                    f"missing required field(s) for combine mode: {', '.join(missing)}"
+                )
+
+
 @dataclass
 class GuardianWatchConfig:
     """Guardian background agent watch configuration.
@@ -184,6 +228,16 @@ class GuardianWatchConfig:
     exclude: list[str] = field(default_factory=lambda: [".env.example", ".env.sample", ".env.keys"])
     notify: bool = True  # Desktop notifications when encrypting
 
+    def validate(self) -> str:
+        """Validate and return the normalized ``idle_timeout``.
+
+        Deferred until the agent commands consume the ``[guardian]`` section so
+        a typo in this agent-only knob does not crash unrelated commands like
+        ``encrypt``/``decrypt``/``guard``/``pull`` (see #413). Raises
+        ``ConfigValidationError`` (a ``ValueError`` subclass).
+        """
+        return _validate_guardian_idle_timeout(self.idle_timeout)
+
 
 @dataclass
 class PartialEncryptionConfig:
@@ -191,6 +245,139 @@ class PartialEncryptionConfig:
 
     enabled: bool = False
     environments: list[PartialEncryptionEnvironmentConfig] = field(default_factory=list)
+
+    def validate(self) -> None:
+        """Validate that each environment has the fields its mode requires.
+
+        Deferred until the partial-encryption commands actually consume this
+        section: an unrelated typo in ``[[partial_encryption.environments]]``
+        must not crash ``encrypt``/``decrypt``/``guard``/``pull``/``sync``,
+        which never read these fields (see #413). Raises ``ConfigValidationError``
+        (a ``ValueError`` subclass) so callers that already catch ``ValueError``
+        surface a clean message.
+        """
+        validate_partial_encryption_environments(self.environments)
+
+
+def _build_vault_config(vault_section: dict[str, Any]) -> VaultConfig:
+    """Build the vault config, including its nested ``[vault.sync]`` section."""
+    sync_section = vault_section.get("sync", {})
+    sync_mappings = [
+        SyncMappingConfig(
+            secret_name=m["secret_name"],
+            folder_path=m["folder_path"],
+            vault_name=m.get("vault_name"),
+            environment=m.get("environment"),  # None = derive from profile
+            env_file=m.get("env_file"),
+            profile=m.get("profile"),
+            activate_to=m.get("activate_to"),
+            ephemeral_keys=m.get("ephemeral_keys"),  # None = inherit from central
+        )
+        for m in sync_section.get("mappings", [])
+    ]
+    sync_config = SyncConfig(
+        mappings=sync_mappings,
+        default_vault_name=sync_section.get("default_vault_name"),
+        env_keys_filename=sync_section.get("env_keys_filename", ".env.keys"),
+        max_workers=normalize_max_workers(sync_section.get("max_workers")),
+        ephemeral_keys=sync_section.get("ephemeral_keys", False),
+    )
+    return VaultConfig(
+        provider=vault_section.get("provider", "azure"),
+        azure_vault_url=vault_section.get("azure", {}).get("vault_url"),
+        aws_region=vault_section.get("aws", {}).get("region", "us-east-1"),
+        hashicorp_url=vault_section.get("hashicorp", {}).get("url"),
+        gcp_project_id=vault_section.get("gcp", {}).get("project_id"),
+        mappings=vault_section.get("mappings", {}),
+        sync=sync_config,
+    )
+
+
+def _build_encryption_config(encryption_section: dict[str, Any]) -> EncryptionConfig:
+    """Build the encryption config from the ``[encryption]`` section."""
+    sops_section = encryption_section.get("sops", {})
+    dotenvx_section = encryption_section.get("dotenvx", {})
+    return EncryptionConfig(
+        backend=encryption_section.get("backend", "dotenvx"),
+        smart_encryption=encryption_section.get("smart_encryption", False),
+        dotenvx_auto_install=dotenvx_section.get("auto_install", False),
+        sops_auto_install=sops_section.get("auto_install", False),
+        sops_config_file=sops_section.get("config_file"),
+        sops_age_key_file=sops_section.get("age_key_file"),
+        sops_age_recipients=sops_section.get("age_recipients"),
+        sops_kms_arn=sops_section.get("kms_arn"),
+        sops_gcp_kms=sops_section.get("gcp_kms"),
+        sops_azure_kv=sops_section.get("azure_kv"),
+    )
+
+
+def _build_partial_encryption_config(
+    partial_encryption_section: dict[str, Any],
+) -> PartialEncryptionConfig:
+    """Build the partial_encryption config from its section.
+
+    Required-field validation (including the ``name`` field) is deferred to
+    ``PartialEncryptionConfig.validate()``, called by the partial-encryption
+    commands that consume this section, so a typo here cannot crash an unrelated
+    command (encrypt/decrypt/guard/pull/sync) that never reads it (#413). We use
+    ``.get("name", "")`` rather than ``env["name"]`` so a missing name surfaces
+    as a clean deferred ``ConfigValidationError``, not an eager ``KeyError``.
+    """
+    environments = [
+        PartialEncryptionEnvironmentConfig(
+            name=env.get("name", ""),
+            clear_file=env.get("clear_file", ""),
+            secret_file=env.get("secret_file", ""),
+            combined_file=env.get("combined_file", ""),
+            secrets_only=env.get("secrets_only", False),
+            secrets_dir=env.get("secrets_dir", ""),
+            pattern=env.get("pattern", ".env*"),
+        )
+        for env in partial_encryption_section.get("environments", [])
+    ]
+    return PartialEncryptionConfig(
+        enabled=partial_encryption_section.get("enabled", False),
+        environments=environments,
+    )
+
+
+def _build_guard_config(guard_section: dict[str, Any]) -> GuardConfig:
+    """Build the guard config from the ``[guard]`` section."""
+    scanners = guard_section.get("scanners", ["native", "gitleaks"])
+    if isinstance(scanners, str):
+        scanners = [scanners]
+    return GuardConfig(
+        scanners=scanners,
+        auto_install=guard_section.get("auto_install", True),
+        include_history=guard_section.get("include_history", False),
+        check_entropy=guard_section.get("check_entropy", False),
+        entropy_threshold=guard_section.get("entropy_threshold", 4.5),
+        fail_on_severity=guard_section.get("fail_on_severity", "high"),
+        skip_clear_files=guard_section.get("skip_clear_files", False),
+        skip_encrypted_files=guard_section.get("skip_encrypted_files", True),
+        skip_duplicate=guard_section.get("skip_duplicate", False),
+        skip_gitignored=guard_section.get("skip_gitignored", False),
+        ignore_paths=guard_section.get("ignore_paths", []),
+        ignore_rules=guard_section.get("ignore_rules", {}),
+        verify_secrets=guard_section.get("verify_secrets", False),
+    )
+
+
+def _build_guardian_config(guardian_section: dict[str, Any]) -> GuardianWatchConfig:
+    """Build the guardian config from the ``[guardian]`` section.
+
+    ``idle_timeout`` validation is deferred to ``GuardianWatchConfig.validate()``,
+    invoked by the agent commands, so a typo in this agent-only knob doesn't
+    crash unrelated commands (encrypt/decrypt/guard/pull/sync) that never read
+    it (#413).
+    """
+    return GuardianWatchConfig(
+        enabled=guardian_section.get("enabled", False),
+        idle_timeout=guardian_section.get("idle_timeout", "5m"),
+        patterns=guardian_section.get("patterns", [".env*"]),
+        exclude=guardian_section.get("exclude", [".env.example", ".env.sample", ".env.keys"]),
+        notify=guardian_section.get("notify", True),
+    )
 
 
 @dataclass
@@ -243,40 +430,8 @@ class EnvdriftConfig:
             secret_patterns=validation_section.get("secret_patterns", []),
         )
 
-        # Build sync config from vault.sync section
-        sync_section = vault_section.get("sync", {})
-        max_workers = normalize_max_workers(sync_section.get("max_workers"))
-        sync_mappings = [
-            SyncMappingConfig(
-                secret_name=m["secret_name"],
-                folder_path=m["folder_path"],
-                vault_name=m.get("vault_name"),
-                environment=m.get("environment"),  # None = derive from profile
-                env_file=m.get("env_file"),
-                profile=m.get("profile"),
-                activate_to=m.get("activate_to"),
-                ephemeral_keys=m.get("ephemeral_keys"),  # None = inherit from central
-            )
-            for m in sync_section.get("mappings", [])
-        ]
-        sync_config = SyncConfig(
-            mappings=sync_mappings,
-            default_vault_name=sync_section.get("default_vault_name"),
-            env_keys_filename=sync_section.get("env_keys_filename", ".env.keys"),
-            max_workers=max_workers,
-            ephemeral_keys=sync_section.get("ephemeral_keys", False),
-        )
-
-        # Build vault config
-        vault = VaultConfig(
-            provider=vault_section.get("provider", "azure"),
-            azure_vault_url=vault_section.get("azure", {}).get("vault_url"),
-            aws_region=vault_section.get("aws", {}).get("region", "us-east-1"),
-            hashicorp_url=vault_section.get("hashicorp", {}).get("url"),
-            gcp_project_id=vault_section.get("gcp", {}).get("project_id"),
-            mappings=vault_section.get("mappings", {}),
-            sync=sync_config,
-        )
+        # Build vault config (and its nested sync config)
+        vault = _build_vault_config(vault_section)
 
         # Build precommit config
         precommit = PrecommitConfig(
@@ -289,92 +444,6 @@ class EnvdriftConfig:
             precommit_config=git_hook_check_section.get("precommit_config"),
         )
 
-        # Build partial_encryption config
-        partial_encryption_section = data.get("partial_encryption", {})
-        partial_encryption_envs = []
-        for env in partial_encryption_section.get("environments", []):
-            name = env["name"]
-            secrets_only = env.get("secrets_only", False)
-            if secrets_only:
-                if not env.get("secrets_dir"):
-                    raise ValueError(
-                        f"partial_encryption environment '{name}': secrets_dir is required "
-                        "when secrets_only=true"
-                    )
-            else:
-                missing = [
-                    k for k in ("clear_file", "secret_file", "combined_file") if not env.get(k)
-                ]
-                if missing:
-                    raise ValueError(
-                        f"partial_encryption environment '{name}': "
-                        f"missing required field(s) for combine mode: {', '.join(missing)}"
-                    )
-            partial_encryption_envs.append(
-                PartialEncryptionEnvironmentConfig(
-                    name=name,
-                    clear_file=env.get("clear_file", ""),
-                    secret_file=env.get("secret_file", ""),
-                    combined_file=env.get("combined_file", ""),
-                    secrets_only=secrets_only,
-                    secrets_dir=env.get("secrets_dir", ""),
-                    pattern=env.get("pattern", ".env*"),
-                )
-            )
-        partial_encryption = PartialEncryptionConfig(
-            enabled=partial_encryption_section.get("enabled", False),
-            environments=partial_encryption_envs,
-        )
-
-        # Build encryption config
-        sops_section = encryption_section.get("sops", {})
-        dotenvx_section = encryption_section.get("dotenvx", {})
-        encryption = EncryptionConfig(
-            backend=encryption_section.get("backend", "dotenvx"),
-            smart_encryption=encryption_section.get("smart_encryption", False),
-            dotenvx_auto_install=dotenvx_section.get("auto_install", False),
-            sops_auto_install=sops_section.get("auto_install", False),
-            sops_config_file=sops_section.get("config_file"),
-            sops_age_key_file=sops_section.get("age_key_file"),
-            sops_age_recipients=sops_section.get("age_recipients"),
-            sops_kms_arn=sops_section.get("kms_arn"),
-            sops_gcp_kms=sops_section.get("gcp_kms"),
-            sops_azure_kv=sops_section.get("azure_kv"),
-        )
-
-        # Build guard config
-        guard_section = data.get("guard", {})
-        scanners = guard_section.get("scanners", ["native", "gitleaks"])
-        if isinstance(scanners, str):
-            scanners = [scanners]
-        guard = GuardConfig(
-            scanners=scanners,
-            auto_install=guard_section.get("auto_install", True),
-            include_history=guard_section.get("include_history", False),
-            check_entropy=guard_section.get("check_entropy", False),
-            entropy_threshold=guard_section.get("entropy_threshold", 4.5),
-            fail_on_severity=guard_section.get("fail_on_severity", "high"),
-            skip_clear_files=guard_section.get("skip_clear_files", False),
-            skip_encrypted_files=guard_section.get("skip_encrypted_files", True),
-            skip_duplicate=guard_section.get("skip_duplicate", False),
-            skip_gitignored=guard_section.get("skip_gitignored", False),
-            ignore_paths=guard_section.get("ignore_paths", []),
-            ignore_rules=guard_section.get("ignore_rules", {}),
-            verify_secrets=guard_section.get("verify_secrets", False),
-        )
-
-        # Build guardian config (for background agent)
-        guardian_section = data.get("guardian", {})
-        guardian = GuardianWatchConfig(
-            enabled=guardian_section.get("enabled", False),
-            idle_timeout=_validate_guardian_idle_timeout(
-                guardian_section.get("idle_timeout", "5m")
-            ),
-            patterns=guardian_section.get("patterns", [".env*"]),
-            exclude=guardian_section.get("exclude", [".env.example", ".env.sample", ".env.keys"]),
-            notify=guardian_section.get("notify", True),
-        )
-
         return cls(
             schema=envdrift_section.get("schema"),
             environments=envdrift_section.get(
@@ -382,12 +451,12 @@ class EnvdriftConfig:
             ),
             validation=validation,
             vault=vault,
-            encryption=encryption,
+            encryption=_build_encryption_config(encryption_section),
             precommit=precommit,
             git_hook_check=git_hook_check,
-            partial_encryption=partial_encryption,
-            guard=guard,
-            guardian=guardian,
+            partial_encryption=_build_partial_encryption_config(data.get("partial_encryption", {})),
+            guard=_build_guard_config(data.get("guard", {})),
+            guardian=_build_guardian_config(data.get("guardian", {})),
             raw=data,
         )
 
@@ -466,29 +535,41 @@ def load_config(path: Path | str | None = None) -> EnvdriftConfig:
 
     # Check if this is pyproject.toml with [tool.envdrift]
     if path.name == "pyproject.toml":
-        tool_config = data.get("tool", {}).get("envdrift", {})
-        if tool_config:
-            # Restructure to expected format (copy to avoid mutating original)
-            envdrift_section = dict(tool_config)
-            data = {"envdrift": envdrift_section}
-            if "validation" in envdrift_section:
-                data["validation"] = envdrift_section.pop("validation")
-            if "vault" in envdrift_section:
-                data["vault"] = envdrift_section.pop("vault")
-            if "encryption" in envdrift_section:
-                data["encryption"] = envdrift_section.pop("encryption")
-            if "precommit" in envdrift_section:
-                data["precommit"] = envdrift_section.pop("precommit")
-            if "git_hook_check" in envdrift_section:
-                data["git_hook_check"] = envdrift_section.pop("git_hook_check")
-            if "partial_encryption" in envdrift_section:
-                data["partial_encryption"] = envdrift_section.pop("partial_encryption")
-            if "guard" in envdrift_section:
-                data["guard"] = envdrift_section.pop("guard")
-            if "guardian" in envdrift_section:
-                data["guardian"] = envdrift_section.pop("guardian")
+        data = _restructure_pyproject(data)
 
     return EnvdriftConfig.from_dict(data)
+
+
+# Top-level sections that live under [tool.envdrift.*] in pyproject.toml and must
+# be hoisted to the root for from_dict (everything else stays under "envdrift").
+_PYPROJECT_TOPLEVEL_SECTIONS = (
+    "validation",
+    "vault",
+    "encryption",
+    "precommit",
+    "git_hook_check",
+    "partial_encryption",
+    "guard",
+    "guardian",
+)
+
+
+def _restructure_pyproject(data: dict[str, Any]) -> dict[str, Any]:
+    """Hoist a pyproject.toml's ``[tool.envdrift.*]`` config to from_dict's shape.
+
+    Returns ``data`` unchanged when there is no ``[tool.envdrift]`` table.
+    """
+    tool_config = data.get("tool", {}).get("envdrift", {})
+    if not tool_config:
+        return data
+
+    # Copy so we never mutate the caller's parsed pyproject data.
+    envdrift_section = dict(tool_config)
+    restructured: dict[str, Any] = {"envdrift": envdrift_section}
+    for section in _PYPROJECT_TOPLEVEL_SECTIONS:
+        if section in envdrift_section:
+            restructured[section] = envdrift_section.pop(section)
+    return restructured
 
 
 def get_schema_for_environment(config: EnvdriftConfig, environment: str) -> str | None:
@@ -520,13 +601,18 @@ schema = "config.settings:ProductionSettings"
 environments = ["development", "staging", "production"]
 
 [validation]
-# Check encryption by default
+# NOTE: the [validation] keys below are parsed into the config object but are
+# NOT currently consumed by any command (see docs/reference/configuration.md).
+# `envdrift validate` ignores them; the --check-encryption/--no-check-encryption
+# CLI flag (default on) controls encryption checking, and extra variables are
+# always treated as errors.
+# Parsed but not consumed:
 check_encryption = true
 
-# Treat extra vars as errors (matches Pydantic extra="forbid")
+# Parsed but not consumed (extra vars are always treated as errors):
 strict_extra = true
 
-# Additional secret detection patterns
+# Parsed but not consumed (no command reads these patterns):
 secret_patterns = [
     "^STRIPE_",
     "^TWILIO_",

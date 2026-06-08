@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import io
 from pathlib import Path
 from types import SimpleNamespace
 from typing import cast
@@ -53,6 +54,37 @@ class TestPrintFunctions:
             mock_print.assert_called_once()
             call_args = str(mock_print.call_args)
             assert "WARN" in call_args or "Something suspicious" in call_args
+
+    def test_print_error_preserves_bracketed_toml_section(self):
+        """Bracketed TOML table names survive print_error (#413).
+
+        Rendering to a real (non-mocked) Console proves the message is escaped
+        before Rich interprets markup: a literal ``[vault.sync]`` must NOT be
+        swallowed as a console style tag.
+        """
+        from rich.console import Console
+
+        from envdrift.output import rich as rich_module
+
+        buf = io.StringIO()
+        capture = Console(file=buf, force_terminal=False, no_color=True, width=200)
+        with patch.object(rich_module, "console", capture):
+            rich_module.print_error("Expected [vault.sync] section with [[vault.sync.mappings]]")
+        output = buf.getvalue()
+        assert "[vault.sync]" in output
+        assert "[[vault.sync.mappings]]" in output
+
+    def test_print_warning_preserves_bracketed_toml_section(self):
+        """Bracketed TOML table names survive print_warning (#413)."""
+        from rich.console import Console
+
+        from envdrift.output import rich as rich_module
+
+        buf = io.StringIO()
+        capture = Console(file=buf, force_terminal=False, no_color=True, width=200)
+        with patch.object(rich_module, "console", capture):
+            rich_module.print_warning("Add a [tool.envdrift.vault.sync] block")
+        assert "[tool.envdrift.vault.sync]" in buf.getvalue()
 
 
 class TestConsole:

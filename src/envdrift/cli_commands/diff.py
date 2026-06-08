@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import sys
 from pathlib import Path
 from typing import Annotated
 
@@ -10,8 +11,27 @@ import typer
 
 from envdrift.core.diff import DiffEngine
 from envdrift.core.parser import EnvParser
-from envdrift.core.schema import SchemaLoader, SchemaLoadError
+from envdrift.core.schema import SchemaLoader, SchemaLoadError, SchemaMetadata
 from envdrift.output.rich import print_diff_result, print_error, print_warning
+
+
+def _load_schema_meta(schema: str, service_dir: Path | None, format_: str) -> SchemaMetadata | None:
+    """Load schema metadata for masking, surfacing a load failure as a warning.
+
+    In ``json`` mode the warning is routed to stderr so stdout stays pure JSON
+    and a documented ``--format json > drift.json`` capture still parses (#413).
+    Returns ``None`` when the schema can't be loaded.
+    """
+    loader = SchemaLoader()
+    try:
+        settings_cls = loader.load(schema, service_dir)
+        return loader.extract_metadata(settings_cls)
+    except SchemaLoadError as e:
+        if format_ == "json":
+            print(f"[WARN] Could not load schema: {e}", file=sys.stderr)
+        else:
+            print_warning(f"Could not load schema: {e}")
+        return None
 
 
 def diff(
@@ -59,6 +79,15 @@ def diff(
         include_unchanged (bool): If True, include variables that are unchanged between the two files in the output.
         normalize (bool): If True (default), normalize values before comparing — strips leading/trailing whitespace, treats `true/True/TRUE` (and similar bool aliases) as equal, and parses JSON-style lists/dicts so quote-style differences don't read as drift. When a `--schema` is provided, values are also coerced through the corresponding Pydantic type before comparison. Pass `--strict` to disable and fall back to raw string compare.
     """
+    # Validate output format up-front (mirrors guard's --fail-on validation).
+    # Lowercase first so "JSON"/"Table" are accepted, but reject anything else
+    # instead of silently falling back to a Rich table (which would corrupt a
+    # CI pipeline that captured stdout expecting JSON).
+    format_ = format_.lower()
+    if format_ not in {"table", "json"}:
+        print_error(f"Invalid --format '{format_}'. Valid options: table, json")
+        raise typer.Exit(code=1)
+
     # Check files exist
     if not env1.exists():
         print_error(f"ENV file not found: {env1}")
@@ -68,14 +97,7 @@ def diff(
         raise typer.Exit(code=1)
 
     # Load schema if provided
-    schema_meta = None
-    if schema:
-        loader = SchemaLoader()
-        try:
-            settings_cls = loader.load(schema, service_dir)
-            schema_meta = loader.extract_metadata(settings_cls)
-        except SchemaLoadError as e:
-            print_warning(f"Could not load schema: {e}")
+    schema_meta = _load_schema_meta(schema, service_dir, format_) if schema else None
 
     # Parse env files
     parser = EnvParser()

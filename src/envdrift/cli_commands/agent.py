@@ -31,7 +31,7 @@ from envdrift.agent.registry import (
     unregister_project,
 )
 from envdrift.cli_commands.agent_utils import parse_agent_running_status
-from envdrift.config import find_config, load_config
+from envdrift.config import EnvdriftConfig, find_config, load_config
 
 console = Console()
 
@@ -131,6 +131,33 @@ def _format_timestamp(iso_timestamp: str) -> str:
         return iso_timestamp
 
 
+def _report_guardian_status(config: EnvdriftConfig) -> None:
+    """Report guardian status after registering, validating it only if enabled.
+
+    idle_timeout validation is deferred to here — the agent surface that
+    consumes the ``[guardian]`` section — so an agent-only typo never crashes
+    unrelated commands (#413). When guardian is disabled we skip validation
+    entirely and just hint how to enable it.
+    """
+    if not config.guardian.enabled:
+        console.print("\n[yellow]⚠[/yellow] Guardian is not enabled in envdrift.toml")
+        console.print("  Add this to your envdrift.toml to enable auto-encryption:\n")
+        # Escape the literal bracket so Rich renders [guardian] verbatim instead
+        # of treating it as a markup tag and emitting invalid TOML (#418).
+        console.print(r"  [dim]\[guardian][/dim]")
+        console.print("  [dim]enabled = true[/dim]")
+        return
+
+    try:
+        # Store the normalized timeout back so any later reader sees the
+        # canonical value (e.g. "10M" -> "10m"), not the raw config string.
+        config.guardian.idle_timeout = config.guardian.validate()
+    except ValueError as exc:
+        # Escape the literal "[guardian]" so Rich doesn't treat it as a style
+        # tag and swallow it.
+        console.print(f"\n[red]✗[/red] Invalid \\[guardian] config: {exc}")
+
+
 @agent_app.command("register")
 def register(
     path: Annotated[
@@ -175,11 +202,7 @@ def register(
                 console.print(f"\n[red]✗[/red] Failed to load envdrift config: {config_path}")
                 console.print(f"  {exc}")
             else:
-                if not config.guardian.enabled:
-                    console.print("\n[yellow]⚠[/yellow] Guardian is not enabled in envdrift.toml")
-                    console.print("  Add this to your envdrift.toml to enable auto-encryption:\n")
-                    console.print("  [dim][guardian][/dim]")
-                    console.print("  [dim]enabled = true[/dim]")
+                _report_guardian_status(config)
     else:
         if "already registered" in message.lower():
             console.print(f"[yellow]⚠[/yellow] {message}")

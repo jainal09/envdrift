@@ -503,6 +503,7 @@ def test_pull_shows_security_notice_when_secrets_decrypted(monkeypatch, tmp_path
     env_config = SimpleNamespace(
         name="production",
         secrets_only=False,
+        clear_file=str(tmp_path / ".env.clear"),
         secret_file=str(tmp_path / ".env.secret"),
         combined_file=str(tmp_path / ".env"),
     )
@@ -528,6 +529,7 @@ def test_pull_no_security_notice_when_already_decrypted(monkeypatch, tmp_path: P
     env_config = SimpleNamespace(
         name="production",
         secrets_only=False,
+        clear_file=str(tmp_path / ".env.clear"),
         secret_file=str(tmp_path / ".env.secret"),
         combined_file=str(tmp_path / ".env"),
     )
@@ -554,6 +556,7 @@ def test_pull_danger_warning_when_skip_worktree_failed(monkeypatch, tmp_path: Pa
     env_config = SimpleNamespace(
         name="production",
         secrets_only=False,
+        clear_file=str(tmp_path / ".env.clear"),
         secret_file=str(tmp_path / ".env.secret"),
         combined_file=str(tmp_path / ".env"),
     )

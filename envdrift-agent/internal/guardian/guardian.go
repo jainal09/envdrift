@@ -279,25 +279,69 @@ func (g *Guardian) loadProjects(reg *registry.Registry) {
 
 // onRegistryChange handles changes to the projects registry.
 func (g *Guardian) onRegistryChange(reg *registry.Registry) {
+	// If the guardian is already shutting down, do nothing: a late registry
+	// reload (e.g. a debounce timer that fired during Stop) must not re-create
+	// and start project watchers after stopAllProjects() cleared g.projects, or
+	// those fsnotify watchers/goroutines leak past shutdown (#413).
+	if g.isShuttingDown() {
+		return
+	}
+
 	log.Println("Registry changed, reloading projects...")
 
-	// Get new project list
-	newPaths := make(map[string]bool)
-	for _, p := range reg.GetProjectPaths() {
-		newPaths[p] = true
-	}
-
-	// Load configs for new projects
-	configs, _ := project.LoadAllProjectConfigs(reg.GetProjectPaths())
-	enabledPaths := make(map[string]*project.GuardianConfig)
-	for _, pc := range configs {
-		enabledPaths[pc.Path] = pc.Guardian
-	}
+	enabledPaths := loadEnabledConfigs(reg.GetProjectPaths())
 
 	g.mu.Lock()
 	defer g.mu.Unlock()
 
-	// Stop watchers for removed projects
+	// Re-check shutdown *inside* g.mu, the same lock stopAllProjects() holds.
+	// The early isShuttingDown() check above is only a fast path; without this
+	// guarded re-check a Stop()/stopAllProjects() that lands between the two
+	// could be immediately followed by us re-adding watchers (TOCTOU, #413).
+	if g.ctxDone() {
+		return
+	}
+
+	g.stopRemovedProjects(enabledPaths)
+	g.startNewProjects(enabledPaths)
+}
+
+// isShuttingDown reports whether the guardian's context has been cancelled.
+// It takes g.mu.RLock; callers must not already hold g.mu.
+func (g *Guardian) isShuttingDown() bool {
+	g.mu.RLock()
+	defer g.mu.RUnlock()
+	return g.ctxDone()
+}
+
+// ctxDone reports whether g.ctx is cancelled. Callers must hold g.mu (RLock or
+// Lock); a nil ctx (Start not yet reached) is treated as "not shutting down".
+func (g *Guardian) ctxDone() bool {
+	if g.ctx == nil {
+		return false
+	}
+	select {
+	case <-g.ctx.Done():
+		return true
+	default:
+		return false
+	}
+}
+
+// loadEnabledConfigs loads the guardian config for each registered path and
+// returns the enabled ones keyed by project path.
+func loadEnabledConfigs(paths []string) map[string]*project.GuardianConfig {
+	configs, _ := project.LoadAllProjectConfigs(paths)
+	enabledPaths := make(map[string]*project.GuardianConfig, len(configs))
+	for _, pc := range configs {
+		enabledPaths[pc.Path] = pc.Guardian
+	}
+	return enabledPaths
+}
+
+// stopRemovedProjects stops and removes watchers for projects no longer present
+// in enabledPaths. Callers must hold g.mu.Lock.
+func (g *Guardian) stopRemovedProjects(enabledPaths map[string]*project.GuardianConfig) {
 	for path, pw := range g.projects {
 		if _, exists := enabledPaths[path]; !exists {
 			log.Printf("Stopping watcher for removed project: %s", path)
@@ -305,8 +349,11 @@ func (g *Guardian) onRegistryChange(reg *registry.Registry) {
 			delete(g.projects, path)
 		}
 	}
+}
 
-	// Add watchers for new projects
+// startNewProjects creates and starts watchers for newly-enabled projects.
+// Callers must hold g.mu.Lock.
+func (g *Guardian) startNewProjects(enabledPaths map[string]*project.GuardianConfig) {
 	for path, cfg := range enabledPaths {
 		if _, exists := g.projects[path]; exists {
 			continue

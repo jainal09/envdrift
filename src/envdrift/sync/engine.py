@@ -352,8 +352,17 @@ class SyncEngine:
             return DecryptionTestResult.SKIPPED
         target_file = detection.path
 
+        # Reading the env file can raise for a non-UTF-8 file
+        # (UnicodeDecodeError) or an unreadable one (OSError). Neither must escape
+        # as a traceback: a file we cannot even decode/open is not a key we can
+        # verify, so treat it as a FAILED decryption test rather than crashing the
+        # whole sync run (see #413).
+        try:
+            content = target_file.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError):
+            return DecryptionTestResult.FAILED
+
         # Check if file is encrypted (contains dotenvx markers)
-        content = target_file.read_text()
         if "encrypted:" not in content.lower():
             return DecryptionTestResult.SKIPPED
 
@@ -373,14 +382,44 @@ class SyncEngine:
         except Exception:
             return DecryptionTestResult.FAILED
 
-        # The backup may only be deleted when the on-disk target file is in its
-        # original (encrypted) state: it was never modified, OR the happy-path
-        # re-encrypt restored it, OR every attempted restore succeeded. If the
-        # file has been decrypted on disk and a restore is attempted and *fails*,
-        # the target is left as plaintext secret on disk and the backup is the
-        # only recovery copy — so it must be preserved (see cubic P1 on #317).
-        backup_safe_to_delete = True
+        result, backup_safe_to_delete = self._dotenvx_roundtrip(
+            dotenvx_path, target_file, backup_path, mapping
+        )
 
+        # Only delete the backup when the file is in a known-good state. If a
+        # restore was attempted and failed, KEEP the backup as the recovery copy
+        # and warn the user that the file may be left decrypted.
+        if backup_safe_to_delete:
+            backup_path.unlink(missing_ok=True)
+        else:
+            logger.warning(
+                "Failed to restore %s after a decryption-test failure; the file "
+                "may be left decrypted. The backup has been preserved at %s — "
+                "restore it manually to recover the original encrypted file.",
+                target_file,
+                backup_path,
+            )
+
+        return result
+
+    def _dotenvx_roundtrip(
+        self,
+        dotenvx_path: str,
+        target_file: Path,
+        backup_path: Path,
+        mapping: ServiceMapping,
+    ) -> tuple[DecryptionTestResult, bool]:
+        """
+        Decrypt then re-encrypt ``target_file`` with dotenvx to verify the key.
+
+        A backup already exists at ``backup_path``; this helper never deletes it.
+
+        Returns:
+            ``(result, backup_safe_to_delete)``. ``backup_safe_to_delete`` is
+            ``False`` only when the on-disk file was decrypted and a subsequent
+            restore failed — the backup is then the only encrypted copy and the
+            caller must preserve it (see cubic P1 on #317).
+        """
         # Tracks whether the live target file has been rewritten to plaintext on
         # disk by `dotenvx decrypt`. Once True, any subsequent failure (a missing
         # dotenvx binary at the encrypt stage, a timeout, a vanished cwd, …) must
@@ -405,14 +444,14 @@ class SyncEngine:
                 )
             except FileNotFoundError:
                 # dotenvx not installed; the decrypt never ran and the file was
-                # never modified, so the backup is safe to delete (finally).
-                return DecryptionTestResult.SKIPPED
+                # never modified, so the backup is safe to delete.
+                return DecryptionTestResult.SKIPPED, True
 
             if result.returncode != 0:
                 # Decrypt failed: dotenvx may or may not have modified the file,
                 # so restore from backup to be conservative.
-                backup_safe_to_delete = self._safe_restore(backup_path, target_file)
-                return DecryptionTestResult.FAILED
+                safe = self._safe_restore(backup_path, target_file)
+                return DecryptionTestResult.FAILED, safe
 
             # Decrypt returned 0: the live file is now plaintext on disk. From
             # this point on the backup is the ONLY encrypted copy, so no failure
@@ -429,11 +468,11 @@ class SyncEngine:
             )
 
             if encrypt_result.returncode != 0:
-                backup_safe_to_delete = self._safe_restore(backup_path, target_file)
-                return DecryptionTestResult.FAILED
+                safe = self._safe_restore(backup_path, target_file)
+                return DecryptionTestResult.FAILED, safe
 
             # Happy path: the file is correctly re-encrypted, backup is disposable.
-            return DecryptionTestResult.PASSED
+            return DecryptionTestResult.PASSED, True
 
         except FileNotFoundError:
             # dotenvx vanished mid-run (e.g. at the encrypt stage). If the file
@@ -443,31 +482,17 @@ class SyncEngine:
             # preserve it if the restore fails so the plaintext file can be
             # recovered (never delete the only encrypted copy).
             if not file_modified:
-                return DecryptionTestResult.SKIPPED
-            backup_safe_to_delete = self._safe_restore(backup_path, target_file)
-            return DecryptionTestResult.FAILED
+                return DecryptionTestResult.SKIPPED, True
+            safe = self._safe_restore(backup_path, target_file)
+            return DecryptionTestResult.FAILED, safe
         except subprocess.TimeoutExpired:
-            backup_safe_to_delete = self._safe_restore(backup_path, target_file)
-            return DecryptionTestResult.FAILED
+            safe = self._safe_restore(backup_path, target_file)
+            return DecryptionTestResult.FAILED, safe
         except Exception:
             # Any other failure is a failed decryption test; restore only when a
             # backup actually exists so the restore cannot itself raise.
-            backup_safe_to_delete = self._safe_restore(backup_path, target_file)
-            return DecryptionTestResult.FAILED
-        finally:
-            # Only delete the backup when the file is in a known-good state. If a
-            # restore was attempted and failed, KEEP the backup as the recovery
-            # copy and warn the user that the file may be left decrypted.
-            if backup_safe_to_delete:
-                backup_path.unlink(missing_ok=True)
-            else:
-                logger.warning(
-                    "Failed to restore %s after a decryption-test failure; the file "
-                    "may be left decrypted. The backup has been preserved at %s — "
-                    "restore it manually to recover the original encrypted file.",
-                    target_file,
-                    backup_path,
-                )
+            safe = self._safe_restore(backup_path, target_file)
+            return DecryptionTestResult.FAILED, safe
 
     def _validate_schema(self, mapping: ServiceMapping) -> bool:
         """Run schema validation for the service."""

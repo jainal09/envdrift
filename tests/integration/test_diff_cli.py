@@ -390,3 +390,56 @@ def test_diff_json_no_ansi_under_force_color(tmp_path: Path, integration_pythonp
     payload = json.loads(result.stdout)
     assert payload["summary"]["changed"] == 1
     assert payload["summary"]["has_drift"] is True
+
+
+def test_diff_json_schema_warning_stays_off_stdout(
+    tmp_path: Path, integration_pythonpath: str
+) -> None:
+    """#413: a schema-load failure in `--format json` must not pollute stdout.
+
+    The documented CI recipe is `diff ... --format json > drift.json` then
+    `JSON.parse(...)`. A leading `[WARN] Could not load schema: ...` line on
+    stdout breaks that parse. The warning belongs on stderr.
+    """
+    (tmp_path / ".env.a").write_text("X=1\n")
+    (tmp_path / ".env.b").write_text("X=2\n")
+
+    result = _run_diff(
+        [".env.a", ".env.b", "--schema", "nonexistent.module:Settings", "--format", "json"],
+        tmp_path,
+        integration_pythonpath,
+    )
+
+    assert result.returncode == 0, f"stderr:\n{result.stderr}"
+    # stdout is pure, parseable JSON with no warning text leaking in.
+    assert "WARN" not in result.stdout
+    assert "Could not load schema" not in result.stdout
+    payload = json.loads(result.stdout)
+    assert payload["summary"]["changed"] == 1
+    # The warning is still surfaced — on stderr.
+    assert "Could not load schema" in result.stderr
+
+
+def test_diff_format_uppercase_json_accepted(tmp_path: Path, integration_pythonpath: str) -> None:
+    """#413: `--format JSON` (uppercase) is lowercased and produces JSON, not a table."""
+    (tmp_path / ".env.a").write_text("X=1\n")
+    (tmp_path / ".env.b").write_text("X=2\n")
+
+    result = _run_diff([".env.a", ".env.b", "--format", "JSON"], tmp_path, integration_pythonpath)
+
+    assert result.returncode == 0, f"stderr:\n{result.stderr}"
+    payload = json.loads(result.stdout)
+    assert payload["summary"]["changed"] == 1
+
+
+def test_diff_format_unknown_value_exits_1(tmp_path: Path, integration_pythonpath: str) -> None:
+    """#413: an unknown `--format` value exits 1 instead of silently rendering a table."""
+    (tmp_path / ".env.a").write_text("X=1\n")
+    (tmp_path / ".env.b").write_text("X=2\n")
+
+    result = _run_diff([".env.a", ".env.b", "--format", "bogus"], tmp_path, integration_pythonpath)
+
+    assert result.returncode == 1
+    combined = result.stdout + result.stderr
+    assert "Invalid --format" in combined
+    assert "bogus" in combined
