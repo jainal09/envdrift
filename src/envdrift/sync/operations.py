@@ -46,7 +46,11 @@ class EnvKeysFile:
             return None
 
         content = self.path.read_text()
-        pattern = rf"^{re.escape(key_name)}=(.+)$"
+        # ``(.*)`` (not ``(.+)``) so a present-but-empty value (``KEY=``) returns
+        # "" rather than None. None means "key absent"; conflating the two made
+        # an empty vault secret re-sync forever as CREATED and report a false
+        # "Key file does not exist" in verify-only mode (#413).
+        pattern = rf"^{re.escape(key_name)}=(.*)$"
 
         for line in content.splitlines():
             match = re.match(pattern, line)
@@ -108,13 +112,40 @@ class EnvKeysFile:
         return "DOTENV_PRIVATE_KEYS" in content
 
     def create_backup(self) -> Path:
-        """Create timestamped backup of the file."""
+        """Create a timestamped backup of the file.
+
+        Uses microsecond precision and, on the off chance two backups land on
+        the same timestamp (coarse clock, or two calls within one tick), appends
+        an incrementing suffix so an earlier backup is never silently
+        overwritten (#413). The target path is claimed atomically with
+        ``O_CREAT | O_EXCL`` so a concurrent ``envdrift`` run sharing the
+        workspace can't slip a file in between the name choice and the copy.
+        """
         if not self.path.exists():
             raise FileNotFoundError(f"Cannot backup non-existent file: {self.path}")
 
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
         backup_path = self.path.parent / f"{self.path.name}.backup.{timestamp}"
-        shutil.copy2(self.path, backup_path)
+        counter = 1
+        while True:
+            try:
+                # O_EXCL atomically fails if the path already exists, closing the
+                # TOCTOU window between an existence check and the copy.
+                fd = os.open(str(backup_path), os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+            except FileExistsError:
+                backup_path = self.path.parent / f"{self.path.name}.backup.{timestamp}.{counter}"
+                counter += 1
+                continue
+            os.close(fd)
+            break
+        try:
+            shutil.copy2(self.path, backup_path)
+        except BaseException:
+            # A failed copy must not leave the empty O_EXCL placeholder behind —
+            # an empty "backup" is worse than none. Mirrors atomic_write().
+            with contextlib.suppress(FileNotFoundError):
+                backup_path.unlink()
+            raise
         return backup_path
 
 
