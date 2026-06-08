@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Annotated
 
 import typer
+from pydantic_settings import BaseSettings
 
 from envdrift.core.encryption import EncryptionDetector
 from envdrift.core.parser import EnvFile, EnvParser
@@ -18,6 +19,34 @@ from envdrift.output.rich import console, print_error, print_success, print_warn
 # accepting keys the strict EnvParser.LINE_PATTERN rejects (leading digits,
 # dashes, etc.) so init can warn about variables it would otherwise drop.
 _RAW_ASSIGNMENT_PATTERN = re.compile(r"^\s*(?:export\s+)?([^\s=#]+)\s*=")
+
+# Pydantic protects the ``model_`` attribute namespace: a BaseModel/BaseSettings
+# field whose name starts with this prefix either raises at import (``model_dump``
+# -> "conflicts with member ... of protected namespace 'model_'") or silently
+# shadows class machinery (``model_config`` -> the generated env binding is
+# dropped). Such names must be sanitized + aliased exactly like keywords are.
+_PROTECTED_NAMESPACE_PREFIX = "model_"
+
+# Names already bound as attributes/methods on BaseSettings (and its BaseModel
+# base) — ``schema``, ``copy``, ``dict``, ``json``, ``validate`` and the like.
+# A field reusing one emits a "shadows an attribute in parent" warning and
+# overrides real model machinery, so these are treated as unsafe too. Derived
+# from the live class so the set tracks the installed pydantic rather than a
+# hardcoded list (dunders excluded: never valid bare .env-key attribute names).
+_RESERVED_ATTRIBUTES = frozenset(
+    name for name in dir(BaseSettings) if not (name.startswith("__") and name.endswith("__"))
+)
+
+
+def _is_pydantic_reserved(name: str) -> bool:
+    """True when ``name`` collides with pydantic's reserved attribute namespace.
+
+    Covers both the protected ``model_`` prefix and any concrete BaseSettings/
+    BaseModel attribute (``schema``, ``copy``, ``dict``, ``json``, ``validate``,
+    …). Used as a bare field name these either raise at import or silently shadow
+    model internals, so they must be sanitized + aliased like keywords are.
+    """
+    return name.startswith(_PROTECTED_NAMESPACE_PREFIX) or name in _RESERVED_ATTRIBUTES
 
 
 @dataclass
@@ -32,15 +61,20 @@ class SettingsGeneration:
 
 
 def _sanitize_identifier(name: str) -> str:
-    """Turn an arbitrary .env key into a valid, non-keyword Python identifier.
+    """Turn an arbitrary .env key into a valid, non-keyword, non-reserved identifier.
 
     Non-identifier characters become ``_``; a leading digit (or empty result)
     gets a ``field_`` prefix; a Python keyword/soft-keyword gets a ``_`` suffix.
-    The original name is preserved separately as a Pydantic alias so the schema
-    still round-trips against the real environment variable.
+    A name colliding with pydantic's reserved attribute namespace (``model_``
+    prefix, or a BaseSettings/BaseModel attribute such as ``schema``/``dict``) is
+    given a ``field_`` prefix so it cannot raise at import or shadow model
+    internals. The original name is preserved separately as a Pydantic alias so
+    the schema still round-trips against the real environment variable.
     """
     sanitized = re.sub(r"\W", "_", name)
     if not sanitized or sanitized[0].isdigit():
+        sanitized = f"field_{sanitized}"
+    if _is_pydantic_reserved(sanitized):
         sanitized = f"field_{sanitized}"
     while keyword.iskeyword(sanitized) or keyword.issoftkeyword(sanitized):
         sanitized = f"{sanitized}_"
@@ -61,8 +95,14 @@ def _raw_assignment_keys(text: str) -> list[str]:
 
 
 def _needs_sanitizing(name: str) -> bool:
-    """True when ``name`` cannot be used as a bare Python attribute name."""
-    return not name.isidentifier() or keyword.iskeyword(name)
+    """True when ``name`` cannot be used as a bare Settings attribute name.
+
+    Flags non-identifiers, Python keywords, and names colliding with pydantic's
+    reserved attribute namespace (``model_`` prefix or a BaseSettings/BaseModel
+    member) — all of which produce a broken or non-importable module if emitted
+    as a bare field annotation.
+    """
+    return not name.isidentifier() or keyword.iskeyword(name) or _is_pydantic_reserved(name)
 
 
 def _bump_until_unique(name: str, used_names: set[str]) -> str:

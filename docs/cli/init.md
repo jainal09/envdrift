@@ -137,6 +137,16 @@ The generated module is always valid, importable Python:
   class_: str = Field(alias="class")
   ```
 
+- **Pydantic-reserved names get an alias.** A key that is a valid identifier but
+  collides with Pydantic's protected `model_` namespace (e.g. `model_dump`,
+  `model_config`) or with a `BaseSettings`/`BaseModel` attribute (e.g. `schema`,
+  `dict`, `json`, `validate`) is renamed with a `field_` prefix plus a Pydantic
+  `alias`, so it cannot raise at import or shadow model internals:
+
+  ```python
+  field_model_dump: str = Field(alias="model_dump")
+  ```
+
 - **Non-identifier keys are reported.** Keys the parser cannot read because they
   are not identifier-style (a leading digit like `2FA_ENABLED`, or a dash like
   `MY-DASH-VAR`) are skipped and listed in a `[WARN]` line, never silently

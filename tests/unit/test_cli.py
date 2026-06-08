@@ -1271,6 +1271,57 @@ class TestInitCommand:
         assert cfg.class_ == "fromkeyword"
         assert cfg.class__ == "fromcollision"
 
+    def test_init_pydantic_reserved_field_names_produce_importable_module(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """#423: .env keys colliding with pydantic reserved names stay importable.
+
+        Valid, non-keyword identifiers that fall in pydantic's protected ``model_``
+        namespace (``model_dump`` raises at import; ``model_config`` silently
+        shadows the class's own ``model_config``) or reuse a BaseSettings/BaseModel
+        attribute (``schema`` warns and shadows machinery) previously passed through
+        ``_needs_sanitizing`` unsanitized and were emitted as bare annotations. The
+        fix sanitizes + aliases them like keywords so the module imports and each
+        field still binds to its original env var via the alias.
+        """
+        env_file = tmp_path / ".env"
+        # model_dump -> raised ValueError at import before the fix; the others
+        # shadowed real model machinery.
+        env_file.write_text("model_dump=a\nmodel_config=b\nschema=c\nVALID=keep\n")
+        out = tmp_path / "settings.py"
+
+        result = runner.invoke(
+            app, ["init", str(env_file), "--output", str(out), "--class-name", "Cfg"]
+        )
+        assert result.exit_code == 0, result.output
+
+        content = out.read_text()
+        # None of the reserved names may appear as a bare attribute annotation.
+        assert "\n    model_dump: " not in content
+        assert "\n    model_config: str" not in content
+        assert "\n    schema: " not in content
+        # A safe attribute name carries the original key as an alias.
+        assert "field_model_dump" in content
+        assert "alias='model_dump'" in content
+        assert "alias='model_config'" in content
+        assert "alias='schema'" in content
+        # The class's own model_config (SettingsConfigDict) is untouched.
+        assert "model_config = SettingsConfigDict(" in content
+
+        # The generated module must import (no ValueError from the protected
+        # namespace, no SyntaxError) and resolve every reserved key via its alias.
+        monkeypatch.setenv("model_dump", "a")
+        monkeypatch.setenv("model_config", "b")
+        monkeypatch.setenv("schema", "c")
+        spec = importlib.util.spec_from_file_location("gen_reserved_settings", out)
+        assert spec is not None and spec.loader is not None
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        cfg = module.Cfg()
+        assert cfg.field_model_dump == "a"
+        assert cfg.field_model_config == "b"
+        assert cfg.field_schema == "c"
+
 
 class TestHookCommand:
     """Tests for the hook CLI command."""
