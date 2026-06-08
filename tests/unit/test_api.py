@@ -267,6 +267,27 @@ BOOL_FALSE=false
         # The parseable variable is still emitted.
         assert "VALID" in output.read_text()
 
+    def test_init_warnings_as_errors_writes_no_file(self, tmp_path: Path):
+        """#423: under warnings-as-errors, init() must not leave a half-written file.
+
+        The dropped-keys UserWarning is emitted BEFORE the output is written, so a
+        caller running with ``warnings.filterwarnings("error")`` (common in CI/test
+        suites) gets a clean raise and NO output file on disk -- not an incomplete
+        ``settings.py`` plus an exception.
+        """
+        import warnings
+
+        env_file = tmp_path / ".env"
+        env_file.write_text("2FA_ENABLED=true\nVALID=keep\n")
+        output = tmp_path / "settings.py"
+
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", UserWarning)
+            with pytest.raises(UserWarning, match="non-identifier keys"):
+                init(env_file, output, detect_sensitive=False)
+
+        assert not output.exists()
+
     def test_init_no_warning_when_all_keys_parse(self, tmp_path: Path):
         """#423: the API stays warning-free when every key is parseable."""
         import warnings

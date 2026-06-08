@@ -291,18 +291,22 @@ def init(
         print_error(str(exc))
         raise typer.Exit(code=1) from exc
 
+    _write_init_output(result, output, force=force)
+
+
+def _write_init_output(result: SettingsGeneration, output: Path, *, force: bool) -> None:
+    """Warn about dropped keys, guard against clobbering, then write the module."""
     if result.unparsed_keys:
         print_warning(
             "Skipped .env variable(s) the parser cannot read "
             f"(non-identifier keys): {', '.join(result.unparsed_keys)}"
         )
 
-    # Guard against clobbering an existing (possibly hand-edited) file
+    # Guard against clobbering an existing (possibly hand-edited) file.
     if output.exists() and not force:
         print_error(f"Output file already exists: {output} (use --force to overwrite)")
         raise typer.Exit(code=1)
 
-    # Write output
     output.write_text(result.source)
     print_success(f"Generated {output}")
     _print_generation_summary(result)

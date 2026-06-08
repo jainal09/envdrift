@@ -135,8 +135,10 @@ def init(
     output = Path(output)
 
     result = generate_settings_module(env_file, class_name, detect_sensitive)
-    output.write_text(result.source)
 
+    # Warn BEFORE writing: a caller running with warnings-as-errors
+    # (warnings.filterwarnings("error")) must not be left with a half-written
+    # output file -- raising here means nothing is written.
     if result.unparsed_keys:
         warnings.warn(
             "Skipped .env variable(s) the parser cannot read "
@@ -145,4 +147,5 @@ def init(
             stacklevel=2,
         )
 
+    output.write_text(result.source)
     return output
