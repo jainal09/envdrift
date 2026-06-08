@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import keyword
 import re
+import shlex
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Annotated
@@ -305,20 +306,23 @@ def _print_generation_summary(result: SettingsGeneration) -> None:
         )
 
 
-def _print_next_step(output: Path, class_name: str) -> None:
+def _print_next_step(env_file: Path, output: Path, class_name: str) -> None:
     """Point the user at the exact command to validate against the new schema.
 
-    Without this, a new user runs the obvious ``validate --schema settings:Settings``
-    and hits ``No module named 'settings'`` because the schema is in the cwd.
-    ``validate`` defaults ``--service-dir`` to the cwd, so the suggested command
-    works as-is for a schema in the project root. When ``--output`` targets a
-    subdirectory, include ``--service-dir <parent>`` so the suggestion still
-    imports (``output.stem`` alone would drop the directory and fail).
+    Tailored to the actual invocation: includes the env-file argument when it
+    isn't the default ``.env`` (otherwise the suggestion would validate the wrong
+    file), and ``--service-dir <parent>`` when ``--output`` is in a subdirectory
+    (``validate`` defaults ``--service-dir`` to the cwd, so a project-root schema
+    needs no flag; ``output.stem`` alone would drop the directory and fail). Path
+    arguments are shell-quoted so the command is copy/paste-safe with spaces.
     """
-    cmd = f"envdrift validate --schema {output.stem}:{class_name}"
+    cmd = "envdrift validate"
+    if env_file != Path(".env"):
+        cmd += f" {shlex.quote(str(env_file))}"
+    cmd += f" --schema {output.stem}:{class_name}"
     parent = output.parent
     if parent != Path():
-        cmd += f" --service-dir {parent}"
+        cmd += f" --service-dir {shlex.quote(str(parent))}"
     console.print(f"\n[bold]Next:[/bold] validate your .env against it — [cyan]{cmd}[/cyan]")
 
 
@@ -377,7 +381,7 @@ def init(
     result = _generate_or_exit(env_file, class_name, detect_sensitive)
 
     _write_init_output(result, output, force=force)
-    _print_next_step(output, class_name)
+    _print_next_step(env_file, output, class_name)
 
 
 def _write_init_output(result: SettingsGeneration, output: Path, *, force: bool) -> None:

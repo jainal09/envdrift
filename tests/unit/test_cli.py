@@ -1232,6 +1232,17 @@ class TestInitCommand:
         out = " ".join(result.output.split())
         assert "validate --schema settings:Settings --service-dir src" in out
 
+    def test_init_next_step_includes_non_default_env_file(self, tmp_path: Path, monkeypatch):
+        """`init prod.env` must suggest validating prod.env, not the default .env."""
+        monkeypatch.chdir(tmp_path)
+        (tmp_path / "prod.env").write_text("APP_NAME=demo\n")
+
+        result = runner.invoke(app, ["init", "prod.env"])
+
+        assert result.exit_code == 0, result.output
+        out = " ".join(result.output.split())
+        assert "envdrift validate prod.env --schema settings:Settings" in out
+
     def test_init_detects_sensitive_vars(self, tmp_path: Path):
         """Test init --detect-sensitive marks sensitive vars."""
         env_file = tmp_path / ".env"
