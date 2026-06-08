@@ -5,6 +5,13 @@ All notable changes to the EnvDrift Agent will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.2](https://github.com/jainal09/envdrift/compare/agent-v1.1.1...agent-v1.1.2) (2026-06-08)
+
+
+### Bug Fixes
+
+* **agent:** harden watcher, lockcheck, registry, and stop reliability ([#413](https://github.com/jainal09/envdrift/issues/413) cluster J) ([#424](https://github.com/jainal09/envdrift/issues/424)) ([b9f9993](https://github.com/jainal09/envdrift/commit/b9f99939680b61274e60582c49b26caaa1e17297))
+
 ## [1.1.1](https://github.com/jainal09/envdrift/compare/agent-v1.1.0...agent-v1.1.1) (2026-06-07)
 
 
