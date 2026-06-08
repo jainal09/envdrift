@@ -69,6 +69,38 @@ issue** — don't silently leave it. Cite `file:line` and evidence in the issue.
 - The branch may be auto-updated with `main` (a merge commit appears on the
   remote); `git fetch` + rebase before pushing rather than racing it.
 
+## Gotchas / hard-won lessons
+
+These have bitten us in CI or review and aren't obvious from the code alone.
+
+- **release-please force-pushes its release-PR branches.** On every push to
+  `main` it rebases each open `release-please--branches--main--components--*`
+  branch onto the new `main` and **regenerates** the CHANGELOG + manifest from
+  commit subjects — discarding any manual commit you pushed there. To fix a
+  changelog typo, wait until all release PRs merge, then edit the released
+  section in a normal `docs(changelog)` PR (release-please won't rewrite already
+  released sections) and `gh release edit <tag>` the published notes. Corollary:
+  keep internal cluster/sprint labels out of Conventional-Commit subjects —
+  they're copied verbatim into user-facing release notes.
+- **CLI output assertions must be width-independent.** `CliRunner` unit tests
+  that assert a phrase in `result.output` can pass locally and fail in CI: a
+  long pytest `tmp_path` prefix pushes Rich's soft-wrap point into the phrase
+  (`keys match vault` → `keys` + newline + `match vault`) at CI's narrower
+  width. Collapse whitespace first — `" ".join(result.output.split())` — and
+  assert `result.exit_code` explicitly (output-only checks miss failure-mode
+  regressions that still print the expected text).
+- **GitHub push-protection blocks realistic secret literals in fixtures.** A
+  scanner test that embeds a real-looking key as one token gets the push
+  rejected. Build the fixture by concatenation (e.g. `"AKIA" + "IOSF..."`) so
+  the literal never appears whole in the source.
+- **Docs CI runs markdownlint (MD013, 150-char prose).** Wrap long lines and run
+  `make lint-docs` before pushing a `docs/` change; grep all docs for a repeated
+  claim so every copy stays in sync.
+- **A stricter guard/parser breaks pre-existing sibling tests.** When you tighten
+  validation or a parser, grep the whole test tree and run
+  `pytest -m "not integration"` — not just the file you touched — because other
+  suites may assert the old behavior.
+
 ## Local gates (all must pass)
 
 ```bash
