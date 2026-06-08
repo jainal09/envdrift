@@ -100,11 +100,16 @@ class EncryptionConfig:
 
 @dataclass
 class ValidationConfig:
-    """Validation settings."""
+    """Validation settings consumed by ``envdrift validate``.
+
+    ``check_encryption`` seeds the default for the
+    ``--check-encryption/--no-check-encryption`` flag (an explicit flag
+    overrides it). ``strict_extra`` controls whether variables absent from the
+    schema are checked at all (``False`` skips the extra-variable check).
+    """
 
     check_encryption: bool = True
     strict_extra: bool = True
-    secret_patterns: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -427,7 +432,6 @@ class EnvdriftConfig:
         validation = ValidationConfig(
             check_encryption=validation_section.get("check_encryption", True),
             strict_extra=validation_section.get("strict_extra", True),
-            secret_patterns=validation_section.get("secret_patterns", []),
         )
 
         # Build vault config (and its nested sync config)
@@ -601,22 +605,15 @@ schema = "config.settings:ProductionSettings"
 environments = ["development", "staging", "production"]
 
 [validation]
-# NOTE: the [validation] keys below are parsed into the config object but are
-# NOT currently consumed by any command (see docs/reference/configuration.md).
-# `envdrift validate` ignores them; the --check-encryption/--no-check-encryption
-# CLI flag (default on) controls encryption checking, and extra variables are
-# always treated as errors.
-# Parsed but not consumed:
+# Consumed by `envdrift validate` (see docs/reference/configuration.md).
+# Default for the encryption check; the --check-encryption/--no-check-encryption
+# CLI flag overrides this when passed explicitly.
 check_encryption = true
 
-# Parsed but not consumed (extra vars are always treated as errors):
+# When true (default), variables not present in the schema are checked and
+# rejected if the schema sets extra="forbid". Set to false to skip the
+# extra-variable check entirely.
 strict_extra = true
-
-# Parsed but not consumed (no command reads these patterns):
-secret_patterns = [
-    "^STRIPE_",
-    "^TWILIO_",
-]
 
 [encryption]
 # Encryption backend: dotenvx (default) or sops

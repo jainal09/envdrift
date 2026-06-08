@@ -263,7 +263,6 @@ SAMPLE_CONFIG_DICT: dict[str, Any] = {
     "validation": {
         "check_encryption": True,
         "strict_extra": True,
-        "secret_patterns": ["^STRIPE_", "^TWILIO_"],
     },
     "vault": {
         "provider": "azure",

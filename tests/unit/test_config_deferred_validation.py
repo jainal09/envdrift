@@ -290,19 +290,21 @@ secrets_only = true
 class TestExampleConfig:
     """Tests for the in-source EXAMPLE_CONFIG template."""
 
-    def test_validation_keys_documented_as_not_consumed(self):
-        """EXAMPLE_CONFIG must not misrepresent [validation] keys (#413).
+    def test_validation_keys_documented_as_consumed(self):
+        """EXAMPLE_CONFIG documents the [validation] keys as consumed (#413).
 
-        No command reads validation.check_encryption/strict_extra/secret_patterns,
-        so the example comments must say so (matching docs/reference/configuration.md)
-        rather than implying they take effect.
+        ``check_encryption`` and ``strict_extra`` are now read by
+        ``envdrift validate``; ``secret_patterns`` was dropped. The example must
+        reflect that and must not advertise the removed key or the old
+        "not consumed" disclaimer.
         """
-        assert "parsed into the config object but are\n# NOT currently consumed" in EXAMPLE_CONFIG
-        assert "Parsed but not consumed" in EXAMPLE_CONFIG
-        # Guard against the old misleading comments coming back.
-        assert "# Check encryption by default" not in EXAMPLE_CONFIG
-        assert "# Treat extra vars as errors" not in EXAMPLE_CONFIG
-        assert "# Additional secret detection patterns" not in EXAMPLE_CONFIG
+        assert "Consumed by `envdrift validate`" in EXAMPLE_CONFIG
+        assert "check_encryption = true" in EXAMPLE_CONFIG
+        assert "strict_extra = true" in EXAMPLE_CONFIG
+        # The dropped key must not reappear, nor the old "not consumed" wording.
+        assert "secret_patterns" not in EXAMPLE_CONFIG
+        assert "NOT currently consumed" not in EXAMPLE_CONFIG
+        assert "Parsed but not consumed" not in EXAMPLE_CONFIG
 
     def test_example_config_loads_cleanly(self, tmp_path: Path):
         """The shipped EXAMPLE_CONFIG must parse without raising."""
