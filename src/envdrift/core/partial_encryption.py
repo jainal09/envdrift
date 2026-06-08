@@ -8,6 +8,7 @@ This module implements a simple build pattern for partial encryption:
 from __future__ import annotations
 
 import logging
+import re
 import subprocess  # nosec B404
 from pathlib import Path
 from typing import NamedTuple
@@ -18,6 +19,24 @@ from envdrift.integrations.dotenvx import DotenvxError, DotenvxWrapper
 
 logger = logging.getLogger(__name__)
 
+# The dotenvx public-key header is a 4-line "#/" border/comment block:
+#   #/---...[DOTENV_PUBLIC_KEY]---/   (top border, carries the marker)
+#   #/ public-key encryption ... /   (inner comment)
+#   #/ [how it works] ...         /   (inner comment)
+#   #/---...---/                      (bottom border)
+# combine_files strips ONLY this block from the secret file so the boilerplate
+# does not clutter the combined artifact, while keeping the DOTENV_PUBLIC_KEY
+# assignment and any legitimate user "#/" comment line intact. This mirrors the
+# leading four "#/" lines of DotenvxWrapper.DOTENVX_HEADER_BLOCK_PATTERN
+# (integrations/dotenvx.py) but stops before the public-key assignment so that
+# line survives into the combined file.
+_DOTENVX_HEADER_COMMENT_BLOCK = re.compile(
+    r"#/-+\[DOTENV_PUBLIC_KEY\]-+/\n"
+    r"#/[^\n]*/\n"
+    r"#/[^\n]*/\n"
+    r"#/-+/\n",
+)
+
 # Minimum inner width of the warning box. Long file paths expand the box beyond
 # this so the right-hand border always stays aligned (see _build_warning_header).
 _WARNING_BOX_MIN_WIDTH = 50
@@ -25,6 +44,61 @@ _WARNING_BOX_MIN_WIDTH = 50
 # dotenvx writes a public-key assignment into encrypted files. It is not a
 # secret (public keys are public) so it must not be counted as a secret var.
 _DOTENVX_PUBLIC_KEY_PREFIX = "DOTENV_PUBLIC_KEY"
+
+# SOPS appends a flat metadata trailer to a fully-encrypted dotenv file:
+#   sops_version=3.13.1
+#   sops_lastmodified=2021-...
+#   sops_unencrypted_suffix=_unencrypted
+#   sops_age__list_0__map_recipient=age1...   (or sops_kms_*/sops_pgp_*/...)
+#   sops_mac=ENC[AES256_GCM,...]               (the ONLY ciphertext line)
+# Every line except sops_mac= is PLAINTEXT (the version, timestamp, recipient
+# public key, etc.), but none is a real secret — they are SOPS bookkeeping. A
+# genuine SOPS .secret is therefore "fully encrypted" even though most of this
+# trailer is plaintext, so has_plaintext_secret_value() must ignore the trailer
+# instead of flagging it as leftover plaintext secrets (#416).
+#
+# Match the EXACT SOPS metadata key family, not a bare ``sops_`` prefix: a broad
+# prefix match would also exclude a real user variable that merely starts with
+# ``sops_`` (e.g. ``sops_token=AKIA…`` / ``sops_api_key=…``) from the plaintext
+# scan, silently dropping a genuine secret. The flat scalar keys are a fixed set
+# (``sops_version``/``sops_mac``/``sops_lastmodified``/the *_suffix/*_regex
+# toggles/``sops_mac_only_encrypted``/``sops_shamir_threshold``); the key-group
+# providers (age/pgp/kms/gcp_kms/azure_kv/hc_vault) appear as nested
+# ``sops_<provider>__list_N__map_M_<field>`` (or flat ``sops_<provider>_<field>``)
+# entries. Only a key in that family is treated as bookkeeping.
+_SOPS_METADATA_SCALAR_KEYS = frozenset(
+    {
+        "sops_version",
+        "sops_mac",
+        "sops_lastmodified",
+        "sops_unencrypted_suffix",
+        "sops_encrypted_suffix",
+        "sops_unencrypted_regex",
+        "sops_encrypted_regex",
+        "sops_unencrypted_comment_regex",
+        "sops_encrypted_comment_regex",
+        "sops_mac_only_encrypted",
+        "sops_shamir_threshold",
+    }
+)
+# Key-group providers SOPS records (one nested block per recipient). In dotenv
+# output these flatten to ``sops_<provider>__list_N__map_M_<field>`` (or, for a
+# single flat field, ``sops_<provider>_<field>``). Anchor on the provider token
+# so ``sops_age…`` matches but ``sops_agent`` / ``sops_token`` do not.
+_SOPS_METADATA_GROUP_KEY = re.compile(r"^sops_(?:age|pgp|kms|gcp_kms|azure_kv|hc_vault)(?:_|__|$)")
+
+
+def _is_sops_metadata_key(key: str) -> bool:
+    """Return True if ``key`` is a genuine SOPS metadata key, not a user var.
+
+    Matches the EXACT SOPS metadata family — the fixed scalar bookkeeping keys
+    and the nested key-group provider entries (``sops_age*``/``sops_pgp*``/…) —
+    rather than a bare ``sops_`` prefix, so a real user variable that happens to
+    start with ``sops_`` (e.g. ``sops_token``) is NOT misclassified as
+    bookkeeping and stays in the plaintext-secret scan (#416).
+    """
+    return key in _SOPS_METADATA_SCALAR_KEYS or bool(_SOPS_METADATA_GROUP_KEY.match(key))
+
 
 # A dotenvx-encrypted value starts with this prefix; a SOPS-encrypted dotenv
 # value starts with the AES-GCM marker. Detection keys off an actual assigned
@@ -65,11 +139,18 @@ def _build_warning_header(clear_file: str, secret_file: str) -> str:
 def _is_secret_var_line(line: str) -> bool:
     """Return True if ``line`` is a real secret variable assignment.
 
-    Excludes comments and dotenvx's ``DOTENV_PUBLIC_KEY_*`` artifact so the
-    reported secret-var count reflects only the actual secrets.
+    Excludes comments, dotenvx's ``DOTENV_PUBLIC_KEY_*`` artifact and SOPS's
+    metadata trailer (version/timestamp/recipient/mac bookkeeping, not real
+    secrets — see #416) so the reported secret-var count and the plaintext scan
+    reflect only the actual secrets. The SOPS exclusion matches the EXACT
+    metadata key family (``_is_sops_metadata_key``), not a bare ``sops_`` prefix,
+    so a real user variable such as ``sops_token=…`` is still scanned.
     """
     stripped = line.strip()
     if "=" not in stripped or stripped.startswith("#"):
+        return False
+    key = stripped.partition("=")[0].strip()
+    if _is_sops_metadata_key(key):
         return False
     return not stripped.startswith(_DOTENVX_PUBLIC_KEY_PREFIX)
 
@@ -93,17 +174,82 @@ class PartialEncryptionError(Exception):
         return cls(f"Secret file not found: {path}")
 
 
-def _value_is_ciphertext(value: str) -> bool:
-    """Return True if an assigned dotenv VALUE is genuine ciphertext.
+def _is_quote_wrapped(v: str) -> bool:
+    """Return True if ``v`` is wrapped in a single matching pair of quotes.
 
-    Strips a single layer of surrounding quotes first because SOPS emits
-    ``KEY="ENC[AES256_GCM,...]"`` (quoted), while dotenvx emits an unquoted
-    ``KEY=encrypted:...``.
+    Recognises both ``"..."`` and ``'...'`` (the two quote styles dotenv/SOPS
+    emit). A bare ``"`` or unbalanced quotes are not wrapped.
+    """
+    return len(v) >= 2 and v[0] in ('"', "'") and v[-1] == v[0]
+
+
+def _unquote_value(value: str) -> str:
+    """Strip surrounding whitespace and a single layer of matching quotes.
+
+    SOPS emits ``KEY="ENC[AES256_GCM,...]"`` (quoted) while dotenvx emits an
+    unquoted ``KEY=encrypted:...``; quoted empty placeholders appear as
+    ``KEY=""`` / ``KEY=''``. Callers compare the returned bare value against the
+    ciphertext prefixes or test it for emptiness, so both quote styles and
+    surrounding whitespace must be removed first.
     """
     v = value.strip()
-    if len(v) >= 2 and ((v[0] == '"' and v[-1] == '"') or (v[0] == "'" and v[-1] == "'")):
-        v = v[1:-1]
+    if _is_quote_wrapped(v):
+        v = v[1:-1].strip()
+    return v
+
+
+def _value_is_ciphertext(value: str) -> bool:
+    """Return True if an assigned dotenv VALUE is genuine ciphertext."""
+    v = _unquote_value(value)
     return v.startswith(_DOTENVX_CIPHERTEXT_PREFIX) or v.startswith(_SOPS_CIPHERTEXT_PREFIX)
+
+
+def _line_has_plaintext_secret(line: str) -> bool:
+    """Return True if a single ``.secret`` line is a PLAINTEXT secret assignment.
+
+    Comments, blank lines, non-assignments and dotenvx's ``DOTENV_PUBLIC_KEY_*``
+    artifact (a public key is not a secret) are filtered by ``_is_secret_var_line``
+    and return False. Among real secret assignments, empty values
+    (``KEY=`` / ``KEY=""`` / ``KEY=''``) carry no secret to leak, and ciphertext
+    values are already encrypted; only a non-empty plaintext value returns True.
+    """
+    if not _is_secret_var_line(line):
+        return False
+    _, _, value = line.strip().partition("=")
+    # Empty assignment (KEY=, KEY="", KEY='') carries no secret to leak.
+    return bool(_unquote_value(value)) and not _value_is_ciphertext(value)
+
+
+def has_plaintext_secret_value(file_path: Path) -> bool:
+    """Return True if the file still holds at least one PLAINTEXT secret value.
+
+    A "plaintext secret value" is a real variable assignment whose value is not
+    ciphertext — excluding comments, blank lines, dotenvx's
+    ``DOTENV_PUBLIC_KEY_*`` artifact (a public key is not a secret) and SOPS's
+    ``sops_*`` metadata trailer. A genuine SOPS dotenv file carries plaintext
+    bookkeeping lines (``sops_version=``, ``sops_lastmodified=``,
+    ``sops_unencrypted_suffix=``, the recipient public key, …; only ``sops_mac=``
+    is ciphertext); those are not leftover plaintext secrets, so a fully
+    SOPS-encrypted ``.secret`` is correctly treated as fully encrypted (#416).
+
+    This distinguishes a MIXED-STATE file (some values already ``encrypted:``,
+    at least one freshly-added plaintext value) from a fully-encrypted one.
+    ``is_file_encrypted`` returns True on the *first* ciphertext value, so a
+    mixed file looks "already encrypted" to it and the push path would early-
+    return — shipping the new plaintext secret verbatim into the committed
+    ``.secret`` file and the generated combined file. Callers force a re-encrypt
+    when this returns True (``dotenvx encrypt`` is idempotent: it re-encrypts
+    only the plaintext values and leaves existing ciphertext untouched).
+    """
+    if not file_path.exists():
+        return False
+
+    # errors="replace" for the same reason as is_file_encrypted: callers have no
+    # surrounding handler, and a ciphertext marker is ASCII so replacement chars
+    # cannot make a plaintext value look like ciphertext.
+    content = file_path.read_text(encoding="utf-8", errors="replace")
+
+    return any(_line_has_plaintext_secret(raw_line) for raw_line in content.splitlines())
 
 
 def is_file_encrypted(file_path: Path) -> bool:
@@ -159,6 +305,20 @@ def is_file_encrypted(file_path: Path) -> bool:
     return "sops_version" in content and _SOPS_CIPHERTEXT_PREFIX in content
 
 
+def _is_fully_encrypted(file_path: Path) -> bool:
+    """Return True only when the file is FULLY encrypted (push would no-op).
+
+    Fully encrypted means ciphertext is present AND no leftover plaintext secret
+    value remains. ``is_file_encrypted`` trips on the *first* ciphertext value,
+    so a MIXED-STATE file (some values encrypted, one freshly-added plaintext)
+    looks "encrypted" to it alone; pairing it with ``has_plaintext_secret_value``
+    distinguishes a file a real push would re-encrypt from one it would skip.
+    The encrypt paths and the dry-run ``--check`` sync test share this predicate
+    so they agree on what "already pushed" means.
+    """
+    return is_file_encrypted(file_path) and not has_plaintext_secret_value(file_path)
+
+
 def combine_files(
     env_config: PartialEncryptionEnvironmentConfig, *, write: bool = True
 ) -> dict[str, int | bool]:
@@ -195,8 +355,10 @@ def combine_files(
         clear_lines = clear_file.read_text(encoding="utf-8").splitlines()
 
     secret_lines = []
+    secret_file_content = None
     if secret_file.exists():
-        secret_lines = secret_file.read_text(encoding="utf-8").splitlines()
+        secret_file_content = secret_file.read_text(encoding="utf-8")
+        secret_lines = secret_file_content.splitlines()
 
     # Build combined content with warning header
     warning = _build_warning_header(env_config.clear_file, env_config.secret_file)
@@ -211,12 +373,14 @@ def combine_files(
         combined_lines.append("")
 
     # Add encrypted secret section
-    if secret_lines:
-        # Skip dotenvx header comments from secret file to avoid clutter.
-        # The real public-key header is a 4-line block: the border lines start
-        # with "#/---" while the two inner comment lines start with "#/ ". Match
-        # the whole "#/" block so the inner comments don't leak into the output.
-        secret_content = [line for line in secret_lines if not line.strip().startswith("#/")]
+    if secret_lines and secret_file_content is not None:
+        # Strip ONLY the dotenvx public-key header block (the 4-line "#/"
+        # border/comment boilerplate) to avoid clutter. Matching the precise
+        # block — rather than every line starting with "#/" — preserves a
+        # legitimate user comment such as "#/ note about this key" that would
+        # otherwise be silently dropped from the generated combined file.
+        stripped_text = _DOTENVX_HEADER_COMMENT_BLOCK.sub("", secret_file_content)
+        secret_content = stripped_text.splitlines()
         combined_lines.append(f"# From {env_config.secret_file} (encrypted)")
         combined_lines.extend(secret_content)
 
@@ -304,14 +468,20 @@ def encrypt_secret_file(env_config: PartialEncryptionEnvironmentConfig) -> None:
     if not secret_file.exists():
         return
 
-    # Check if already encrypted
-    if is_file_encrypted(secret_file):
-        # Already encrypted (e.g. push run twice) — still lift any stale
+    # Skip re-encryption ONLY when the file is FULLY encrypted: it holds
+    # ciphertext AND no leftover plaintext secret value. A MIXED file (some
+    # values already encrypted, one freshly-added plaintext) must still be
+    # re-encrypted — otherwise the new plaintext secret leaks into the committed
+    # .secret file and the combined file. is_file_encrypted() returns True on
+    # the first ciphertext value, so it alone cannot tell the two apart.
+    if _is_fully_encrypted(secret_file):
+        # Already fully encrypted (e.g. push run twice) — still lift any stale
         # skip-worktree protection so the encrypted diff is visible to git.
         _git_unskip_worktree(secret_file)
         return
 
-    # Encrypt using dotenvx
+    # Encrypt using dotenvx (idempotent: re-encrypts only the plaintext values,
+    # leaving any already-encrypted values untouched).
     dotenvx = DotenvxWrapper()
     try:
         dotenvx.encrypt(secret_file)
@@ -372,9 +542,11 @@ def push_partial_encryption(
         env_config: Environment configuration
         check: When True, run as a dry run — do not encrypt and do not write the
             combined file. ``in_sync`` is True only when BOTH the combined file
-            already matches the source files AND the secret file is encrypted. A
-            plaintext secret file always reports out of sync (a real push would
-            encrypt it), even if the combined file happens to match.
+            already matches the source files AND the secret file is FULLY
+            encrypted. A plaintext or mixed-state secret file (a freshly-added
+            plaintext value alongside existing ciphertext) always reports out of
+            sync — a real push would re-encrypt it — even if the combined file
+            happens to match.
 
     Returns:
         Dict with stats: {"clear_lines": X, "secret_vars": Y, "in_sync": bool}
@@ -385,11 +557,15 @@ def push_partial_encryption(
     if check:
         # Dry run: never mutate the secret file or overwrite the combined file.
         stats = combine_files(env_config, write=False)
-        # A real push would encrypt the secret file first, so an unencrypted secret
-        # on disk means the project is NOT in a pushed state — regardless of whether
-        # the combined-file text happens to line up.
+        # A real push would re-encrypt the secret file first, so a secret that is
+        # not fully encrypted on disk means the project is NOT in a pushed state —
+        # regardless of whether the combined-file text happens to line up. This
+        # mirrors the encrypt-path skip guard (is_file_encrypted AND no leftover
+        # plaintext secret): a mixed-state file (some ciphertext, one freshly
+        # added plaintext value) trips is_file_encrypted but would still be
+        # re-encrypted, so it must report out of sync.
         secret_file = Path(env_config.secret_file)
-        if secret_file.exists() and not is_file_encrypted(secret_file):
+        if secret_file.exists() and not _is_fully_encrypted(secret_file):
             stats["in_sync"] = False
         return stats
 
@@ -447,36 +623,58 @@ def push_secrets_only(
     dotenvx = DotenvxWrapper()
 
     for file in files:
-        if not file.is_file():
+        if not _is_pushable_secret_file(file):
             continue
-        if _is_excluded_env_file(file.name):
-            # Never encrypt companion files (.example/.sample/.template) or the
-            # dotenvx key file (.keys), even if they match the glob pattern (#358).
-            continue
-        if is_file_encrypted(file):
-            if not check:
-                # Already encrypted — lift any stale skip-worktree protection so
-                # the encrypted diff is visible to git.
-                _git_unskip_worktree(file)
+        if _encrypt_secrets_only_file(dotenvx, file, check=check):
+            encrypted += 1
+        else:
             already_encrypted += 1
-            continue
-        if check:
-            # Dry run: this plaintext file would be encrypted by a real push.
-            encrypted += 1
-            continue
-        try:
-            dotenvx.encrypt(file)
-            encrypted += 1
-        except DotenvxError as e:
-            raise PartialEncryptionError.encrypt_failed(file, e) from e
-        # Re-enable git tracking now the file is encrypted again.
-        _git_unskip_worktree(file)
 
     return {
         "encrypted": encrypted,
         "already_encrypted": already_encrypted,
         "in_sync": encrypted == 0,
     }
+
+
+def _is_pushable_secret_file(file: Path) -> bool:
+    """Return True if ``file`` is a real secret file eligible for encryption.
+
+    Skips non-files and companion files (.example/.sample/.template) or the
+    dotenvx key file (.keys), even if they match the glob pattern (#358).
+    """
+    return file.is_file() and not _is_excluded_env_file(file.name)
+
+
+def _encrypt_secrets_only_file(dotenvx: DotenvxWrapper, file: Path, *, check: bool) -> bool:
+    """Encrypt a single secrets-only file in place; return True if it was (re)encrypted.
+
+    A file counts as "already encrypted" only when it is FULLY encrypted:
+    ciphertext present AND no leftover plaintext secret value. A MIXED file
+    (some values encrypted, one freshly-added plaintext) must be re-encrypted,
+    or the new plaintext secret ships verbatim. ``is_file_encrypted`` trips on
+    the first ciphertext value, so it alone treats a mixed file as done —
+    ``has_plaintext_secret_value`` catches the leak.
+
+    Returns False (already-encrypted) without touching ``dotenvx`` when the file
+    is fully encrypted. In ``check`` mode no file is modified.
+    """
+    if _is_fully_encrypted(file):
+        if not check:
+            # Already fully encrypted — lift any stale skip-worktree protection
+            # so the encrypted diff is visible to git.
+            _git_unskip_worktree(file)
+        return False
+    if check:
+        # Dry run: this plaintext / mixed file would be encrypted by a real push.
+        return True
+    try:
+        dotenvx.encrypt(file)
+    except DotenvxError as e:
+        raise PartialEncryptionError.encrypt_failed(file, e) from e
+    # Re-enable git tracking now the file is encrypted again.
+    _git_unskip_worktree(file)
+    return True
 
 
 def pull_secrets_only(env_config: PartialEncryptionEnvironmentConfig) -> dict[str, int]:

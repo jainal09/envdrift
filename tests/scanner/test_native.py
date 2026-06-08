@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 
 import pytest
 
@@ -1314,6 +1314,59 @@ class TestSkipClearFiles:
         # Should be scanned but not flagged as unencrypted
         unencrypted_findings = [f for f in result.findings if f.rule_id == "unencrypted-env-file"]
         assert len(unencrypted_findings) == 0
+
+    def test_path_qualified_clear_file_matches_with_windows_separators(self):
+        """A path-qualified clear_file must match regardless of OS path separator.
+
+        Regression for #413 (cluster K): ``_is_allowed_clear_file`` compared
+        ``str(path)`` (backslashes on Windows) against ``f"/{allowed}"`` (literal
+        forward slash), so a multi-segment ``clear_file`` (e.g. ``config/.env.public``)
+        never matched on Windows and the intentionally-clear file was falsely
+        reported as an unencrypted env-file finding.
+
+        ``PureWindowsPath`` yields backslash separators on every platform, so this
+        test reproduces the Windows path layout deterministically on macOS/Linux CI.
+        """
+        scanner = NativeScanner(allowed_clear_files=["config/.env.public"])
+
+        # Simulate the Windows enumeration: a backslash-separated path string.
+        windows_path = PureWindowsPath(r"C:\repo\config\.env.public")
+        assert "\\" in str(windows_path)  # guard: really backslash-separated
+
+        # The bare-filename branch must not rescue this — the allow entry is
+        # path-qualified, so only the suffix branch can match it.
+        assert scanner._is_allowed_clear_file(windows_path) is True  # type: ignore[arg-type]
+
+        # A different path with the same basename must NOT match (suffix anchored).
+        other = PureWindowsPath(r"C:\repo\other\.env.public")
+        assert scanner._is_allowed_clear_file(other) is False  # type: ignore[arg-type]
+
+    def test_path_qualified_clear_file_matches_with_posix_separators(self):
+        """The POSIX path layout for a path-qualified clear_file still matches."""
+        scanner = NativeScanner(allowed_clear_files=["config/.env.public"])
+
+        match = Path("/repo/config/.env.public")
+        assert scanner._is_allowed_clear_file(match) is True
+
+        no_match = Path("/repo/other/.env.public")
+        assert scanner._is_allowed_clear_file(no_match) is False
+
+    def test_bare_filename_clear_file_matches_by_basename(self):
+        """A bare-filename clear_file matches by basename in any directory.
+
+        Covers the filename-only branch of ``_is_allowed_clear_file``: when the
+        allow entry has no path segment, any file with that basename matches,
+        regardless of the directory (or OS separator) it was enumerated under.
+        """
+        scanner = NativeScanner(allowed_clear_files=[".env.public"])
+
+        # Matches in a nested POSIX directory by basename alone.
+        assert scanner._is_allowed_clear_file(Path("/repo/config/.env.public")) is True
+        # Matches under a Windows-style (backslash) directory layout too.
+        windows_path = PureWindowsPath(r"C:\repo\config\.env.public")
+        assert scanner._is_allowed_clear_file(windows_path) is True  # type: ignore[arg-type]
+        # A different basename does not match.
+        assert scanner._is_allowed_clear_file(Path("/repo/config/.env.secret")) is False
 
 
 # Real, fully-formed GCP service-account JSON (synthetic key material). The
