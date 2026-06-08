@@ -10,6 +10,8 @@ from __future__ import annotations
 
 import re
 
+from envdrift.encryption.sops import SOPSEncryptionBackend
+
 # A dotenvx public key is a secp256k1 *compressed* EC point: a 0x02/0x03 prefix
 # byte followed by 32 bytes (64 hex chars) — 66 hex chars total. It is public by
 # definition (not a secret) but is high-entropy and matches generic patterns, so
@@ -81,18 +83,22 @@ _DOTENVX_VALUE_RE = re.compile(
 # SOPS: a canonical ``ENC[AES256_GCM,...]`` value envelope (dotenv- or YAML-style).
 _SOPS_ENC_RE = re.compile(r"ENC\[AES256_GCM,")
 
-# SOPS metadata block markers, matched per (non-comment) line. These mirror the
-# canonical set in ``envdrift.encryption.sops.SopsBackend.SOPS_METADATA_PATTERNS``
-# so the scanner and the encryption backend agree on what a real SOPS file is. A
-# bare ``^sops[:_]`` prefix was too loose: it matched plaintext dotenv assignments
-# like ``sops_token=...`` / ``sops_enabled=...`` (vars that merely *start with*
-# ``sops_``), misclassifying an unencrypted file as encrypted (#348). SOPS only
-# emits ``sops_version`` / ``sops_mac`` keys in its dotenv metadata trailer.
-_SOPS_METADATA_RES = (
-    re.compile(r"^sops:\s*$"),  # YAML: top-level ``sops:`` mapping key (col 0)
-    re.compile(r'^\s*"sops"\s*:'),  # JSON: ``"sops":`` (allows indent)
-    re.compile(r"^sops_version\s*="),  # dotenv: flat ``sops_version=``
-    re.compile(r"^sops_mac\s*="),  # dotenv: flat ``sops_mac=``
+# SOPS metadata block markers, matched per (non-comment) line. *Derived* from the
+# canonical set on ``envdrift.encryption.sops.SOPSEncryptionBackend`` (the single
+# source of truth) so the scanner and the encryption backend can never silently
+# diverge: a new SOPS format variant added there is honoured here automatically.
+# The canonical patterns are compiled with ``re.MULTILINE`` for whole-content
+# ``.search()``; the scanner instead matches each line with ``.match()``, so we
+# recompile the same source strings without ``re.MULTILINE`` (with per-line input
+# the multiline ``^``/``$`` anchors are equivalent to plain ``.match()`` anchoring,
+# verified by parity test). A bare ``^sops[:_]`` prefix was too loose: it matched
+# plaintext dotenv assignments like ``sops_token=...`` / ``sops_enabled=...`` (vars
+# that merely *start with* ``sops_``), misclassifying an unencrypted file as
+# encrypted (#348). SOPS only emits ``sops_version`` / ``sops_mac`` keys in its
+# dotenv metadata trailer.
+_SOPS_METADATA_RES = tuple(
+    re.compile(pattern.pattern, pattern.flags & ~re.MULTILINE)
+    for pattern in SOPSEncryptionBackend.SOPS_METADATA_PATTERNS
 )
 
 

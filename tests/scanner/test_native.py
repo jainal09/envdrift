@@ -544,6 +544,73 @@ class TestStructureAwareEncryptionDetection:
         assert not [f for f in result.findings if f.rule_id == "unencrypted-env-file"]
 
 
+class TestSopsMetadataPatternParity:
+    """The scanner's per-line SOPS markers are derived from the canonical set.
+
+    ``_native_filters._SOPS_METADATA_RES`` must not hand-copy the SOPS metadata
+    regexes: it derives them from ``SOPSEncryptionBackend.SOPS_METADATA_PATTERNS``
+    (the single source of truth, also aliased by ``core/encryption.py``). This
+    pins that derivation so a future SOPS format variant added to the backend is
+    honoured by the scanner automatically and the two paths can never silently
+    diverge (which would re-classify a genuinely SOPS-encrypted file as plaintext
+    and re-flag its ciphertext).
+    """
+
+    def test_scanner_markers_share_canonical_source_strings(self):
+        """Each scanner marker's regex source equals a canonical backend source."""
+        from envdrift.encryption.sops import SOPSEncryptionBackend
+        from envdrift.scanner._native_filters import _SOPS_METADATA_RES
+
+        canonical_sources = [p.pattern for p in SOPSEncryptionBackend.SOPS_METADATA_PATTERNS]
+        scanner_sources = [p.pattern for p in _SOPS_METADATA_RES]
+
+        # Same source strings, same order — derived, not independently authored.
+        assert scanner_sources == canonical_sources
+        # And the same count, so a new backend pattern can't be dropped on the floor.
+        assert len(_SOPS_METADATA_RES) == len(SOPSEncryptionBackend.SOPS_METADATA_PATTERNS)
+
+    def test_scanner_recognizes_every_canonical_metadata_marker(self):
+        """Every canonical SOPS metadata line the backend recognizes, the scanner does too.
+
+        Parity check: feed each backend pattern a minimal line it is meant to match
+        and assert the scanner's per-line ``_line_is_sops_metadata`` agrees. Without
+        the derivation (hand-copied patterns), adding a backend variant would break
+        this; with it, the scanner stays in lockstep.
+        """
+        from envdrift.encryption.sops import SOPSEncryptionBackend
+        from envdrift.scanner._native_filters import _line_is_sops_metadata
+
+        # One representative line per canonical metadata marker (matched per-line).
+        canonical_marker_lines = [
+            "sops:",  # YAML top-level mapping key
+            '  "sops":',  # JSON key (indented)
+            "sops_version=3.7.0",  # dotenv trailer
+            "sops_mac=ENC[AES256_GCM,data:abc,type:str]",  # dotenv MAC
+        ]
+        # Sanity: the fixture covers every canonical pattern (drift guard).
+        assert len(canonical_marker_lines) == len(SOPSEncryptionBackend.SOPS_METADATA_PATTERNS)
+
+        for line in canonical_marker_lines:
+            assert _line_is_sops_metadata(line), (
+                f"scanner must recognize SOPS marker line: {line!r}"
+            )
+
+    def test_scanner_markers_drop_multiline_flag_for_per_line_match(self):
+        """Scanner patterns are recompiled without re.MULTILINE for ``.match()`` use.
+
+        The canonical patterns carry ``re.MULTILINE`` for whole-content
+        ``.search()``; the scanner matches each line, so the flag must be stripped.
+        """
+        import re
+
+        from envdrift.scanner._native_filters import _SOPS_METADATA_RES
+
+        for pattern in _SOPS_METADATA_RES:
+            assert not (pattern.flags & re.MULTILINE), (
+                f"scanner SOPS marker {pattern.pattern!r} must not carry re.MULTILINE"
+            )
+
+
 class TestUnencryptedSecretFile:
     """Tests for the dedicated plaintext .secret rule (Severity 2 hard block).
 
