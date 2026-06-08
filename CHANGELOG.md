@@ -5,7 +5,7 @@
 
 ### Bug Fixes
 
-* **agent:** harden watcher, lockcheck, registry, and stop reliability ([#413](https://github.com/jainal09/envdrift/issues/413) cluster J) ([#424](https://github.com/jainal09/envdrift/issues/424)) ([b9f9993](https://github.com/jainal09/envdrift/commit/b9f99939680b61274e60582c49b26caaa1e17297))
+* **agent:** harden watcher, lockcheck, registry, and stop reliability ([#413](https://github.com/jainal09/envdrift/issues/413)) ([#424](https://github.com/jainal09/envdrift/issues/424)) ([b9f9993](https://github.com/jainal09/envdrift/commit/b9f99939680b61274e60582c49b26caaa1e17297))
 * **cli:** keep guard/diff machine output clean and unescape TOML in error messages ([#418](https://github.com/jainal09/envdrift/issues/418)) ([cbd2f56](https://github.com/jainal09/envdrift/commit/cbd2f566d14019068657214b52ab246b8902fb0a))
 * **config:** defer guardian/partial validation; harden schema metadata isolation ([#425](https://github.com/jainal09/envdrift/issues/425)) ([f9ccd49](https://github.com/jainal09/envdrift/commit/f9ccd494dbf585eccf31c47d85eb85c5a625820b))
 * **init:** generate safe, importable Python for keyword and non-identifier vars ([#423](https://github.com/jainal09/envdrift/issues/423)) ([e17a103](https://github.com/jainal09/envdrift/commit/e17a1037f6b8132e6f0ba0039e8eb2dea83dbfcc))
