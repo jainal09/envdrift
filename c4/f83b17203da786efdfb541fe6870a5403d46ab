@@ -1,0 +1,23 @@
+tests/unit/test_encrypt_key_protection.py
+  s_dfc6cd6692ed8f::t_ed2f93a473236e 1-69
+src/envdrift/cli_commands/encryption.py
+  s_dfc6cd6692ed8f::t_b36fba3b52d090 61-74,76-78
+  s_dfc6cd6692ed8f::t_e3e326f863cf2f 28
+  s_dfc6cd6692ed8f::t_fe5fd3cb167183 308
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.6",
+  "base_commit_sha": "c4f83b17203da786efdfb541fe6870a5403d46ab",
+  "prompts": {},
+  "sessions": {
+    "s_dfc6cd6692ed8f": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "fd23e738-3512-4420-9290-d985ad979bfd",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Jainal Gosaliya <jainal09gosalia@gmail.com>"
+    }
+  }
+}
