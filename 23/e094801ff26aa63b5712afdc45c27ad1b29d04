@@ -1,0 +1,25 @@
+tests/unit/test_partial_encryption_sops.py
+  s_dfc6cd6692ed8f::t_f85127f406e76d 152-169,175-227
+  s_dfc6cd6692ed8f::t_fa9e5d78cc99b1 170-174
+src/envdrift/core/partial_encryption.py
+  s_dfc6cd6692ed8f::t_fa9e5d78cc99b1 88,101
+  s_dfc6cd6692ed8f::t_899e1b70e0e203 143-147
+  s_dfc6cd6692ed8f::t_a14886829a283c 57-87,89-100
+  s_dfc6cd6692ed8f::t_6b5b9d0050157d 152-153
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.6",
+  "base_commit_sha": "23e094801ff26aa63b5712afdc45c27ad1b29d04",
+  "prompts": {},
+  "sessions": {
+    "s_dfc6cd6692ed8f": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "fd23e738-3512-4420-9290-d985ad979bfd",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Jainal Gosaliya <jainal09gosalia@gmail.com>"
+    }
+  }
+}
