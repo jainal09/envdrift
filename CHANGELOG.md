@@ -1,5 +1,12 @@
 # Changelog
 
+## [10.13.9](https://github.com/jainal09/envdrift/compare/v10.13.8...v10.13.9) (2026-06-08)
+
+
+### Documentation
+
+* **changelog:** strip stray "cluster J" shorthand from release notes ([#428](https://github.com/jainal09/envdrift/issues/428)) ([0999683](https://github.com/jainal09/envdrift/commit/09996832f86b1dad4ffe227b918ef11d4b729298))
+
 ## [10.13.8](https://github.com/jainal09/envdrift/compare/v10.13.7...v10.13.8) (2026-06-08)
 
 
