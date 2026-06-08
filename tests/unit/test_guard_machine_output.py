@@ -170,7 +170,13 @@ def test_guard_human_error_preserves_bracketed_literal(tmp_path):
     result = runner.invoke(app, ["guard", "--native-only", str(missing)])
     assert result.exit_code == 1
     # The bracketed literal must appear verbatim, not be swallowed as markup.
-    assert "[vault.sync].env" in result.stdout
+    # Rich falls back to an 80-col width under the non-tty CliRunner capture and
+    # soft-wraps the path mid-string (inserting newlines), so a long tmp_path can
+    # split the literal across lines -- normalize whitespace before asserting. The
+    # behavior under test is markup-escaping (does "[vault.sync]" survive Rich?),
+    # not line wrapping.
+    normalized = "".join(result.stdout.split())
+    assert "[vault.sync].env" in normalized
 
 
 @pytest.mark.skipif(shutil.which("git") is None, reason="git not installed")
