@@ -11,7 +11,7 @@ from unittest.mock import MagicMock
 import pytest
 
 from envdrift.sync.config import ServiceMapping, SyncConfig
-from envdrift.sync.engine import SyncEngine, SyncMode
+from envdrift.sync.engine import SyncEngine, SyncMode, normalize_vault_key_value
 from envdrift.sync.result import DecryptionTestResult, SyncAction
 from envdrift.vault.base import SecretNotFoundError, SecretValue, VaultClient, VaultError
 
@@ -1347,3 +1347,36 @@ class TestSyncEngineSchemaValidation:
         )
 
         assert engine._validate_schema(mapping) is True
+
+
+class TestNormalizeVaultKeyValue:
+    """Tests for the shared vault-value normalizer used by the engine and
+    ``lock --verify-vault`` so they parse identically (#413)."""
+
+    def test_bare_value_unchanged(self) -> None:
+        assert normalize_vault_key_value("abc123") == ("abc123", None)
+
+    def test_strips_surrounding_whitespace(self) -> None:
+        assert normalize_vault_key_value("  abc123  ") == ("abc123", None)
+
+    def test_strips_double_quotes(self) -> None:
+        assert normalize_vault_key_value('"abc123"') == ("abc123", None)
+
+    def test_strips_single_quotes(self) -> None:
+        assert normalize_vault_key_value("'abc123'") == ("abc123", None)
+
+    def test_strips_prefix_and_returns_suffix(self) -> None:
+        assert normalize_vault_key_value("DOTENV_PRIVATE_KEY_PROD=abc123") == ("abc123", "PROD")
+
+    def test_quotes_come_off_before_prefix(self) -> None:
+        # A quoted full ``KEY=value`` line still has its prefix stripped because
+        # quotes are removed first.
+        assert normalize_vault_key_value('  "DOTENV_PRIVATE_KEY_PROD=abc123"  ') == (
+            "abc123",
+            "PROD",
+        )
+
+    def test_value_without_prefix_keeps_embedded_equals(self) -> None:
+        # No DOTENV_PRIVATE_KEY_ prefix -> the whole (dequoted) value is the key
+        # material, even if it contains '='.
+        assert normalize_vault_key_value("opaque=keymaterial") == ("opaque=keymaterial", None)

@@ -3618,6 +3618,56 @@ class TestLockCommand:
         assert result.exit_code == 1
         assert "hook check failed" in result.output.lower()
 
+    def test_verify_vault_quoted_value_matches_no_false_mismatch(self, monkeypatch, tmp_path: Path):
+        """lock --verify-vault: a quoted vault value matching the local key
+        reports a match, not a false KEY MISMATCH (#413).
+
+        Before the fix the inline parser didn't strip quotes (unlike read_key),
+        so a vault value stored quoted always mismatched the unquoted local key.
+        """
+        secret = "abc" + "123" + "def"
+        service_dir = tmp_path / "svc"
+        service_dir.mkdir()
+        (service_dir / ".env.keys").write_text(f"DOTENV_PRIVATE_KEY_PRODUCTION={secret}\n")
+        (service_dir / ".env.production").write_text("SECRET=encrypted:xyz\n")
+
+        from envdrift.sync.config import ServiceMapping, SyncConfig
+
+        sync_config = SyncConfig(
+            mappings=[
+                ServiceMapping(secret_name="k", folder_path=service_dir, environment="production")
+            ],
+            env_keys_filename=".env.keys",
+        )
+
+        # Vault stores the key QUOTED; local stores it bare.
+        vault_secret = SimpleNamespace(value=f'"{secret}"')
+
+        class _VaultClient:
+            def ensure_authenticated(self) -> None:
+                pass
+
+            def get_secret(self, _name: str):
+                return vault_secret
+
+        monkeypatch.setattr(
+            "envdrift.cli_commands.sync.load_sync_config_and_client",
+            lambda *a, **k: (sync_config, _VaultClient(), "aws", None, None, None),
+        )
+        monkeypatch.setattr(
+            "envdrift.integrations.hook_check.ensure_git_hook_setup", lambda **_k: []
+        )
+        _mock_encryption_backend(monkeypatch)
+
+        config_file = tmp_path / "envdrift.toml"
+        config_file.write_text('[vault]\nprovider = "aws"\n')
+
+        result = runner.invoke(app, ["lock", "--verify-vault", "-c", str(config_file), "-p", "aws"])
+
+        # The quoted vault value normalizes to the same bare key as local.
+        assert "keys match vault" in result.output, result.output
+        assert "KEY MISMATCH" not in result.output
+
     def test_lock_check_mode_exits_when_unencrypted(self, monkeypatch, tmp_path: Path):
         """Check mode should fail when a file needs encryption."""
         service_dir = tmp_path / "service"
