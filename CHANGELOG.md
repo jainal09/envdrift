@@ -1,5 +1,18 @@
 # Changelog
 
+## [10.14.0](https://github.com/jainal09/envdrift/compare/v10.13.9...v10.14.0) (2026-06-08)
+
+
+### Features
+
+* **validate:** honor [validation] config; drop dead secret_patterns ([#431](https://github.com/jainal09/envdrift/issues/431)) ([f16ef35](https://github.com/jainal09/envdrift/commit/f16ef35b27e86a4b97dcc49cd4f5cbd6c05e0d4d))
+
+
+### Bug Fixes
+
+* **sync:** treat empty .env.keys value as present; collision-safe backups ([#432](https://github.com/jainal09/envdrift/issues/432)) ([fd8b101](https://github.com/jainal09/envdrift/commit/fd8b1012c315ceadb63ec4e6abe8f368835688fa))
+* **sync:** unify lock --verify-vault parser; activate already-decrypted profiles ([#433](https://github.com/jainal09/envdrift/issues/433)) ([cc8ed97](https://github.com/jainal09/envdrift/commit/cc8ed973f0913e1bfb7279085cda72911636b9f0))
+
 ## [10.13.9](https://github.com/jainal09/envdrift/compare/v10.13.8...v10.13.9) (2026-06-08)
 
 
