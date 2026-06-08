@@ -1,0 +1,32 @@
+tests/unit/test_sync_engine.py
+  s_dfc6cd6692ed8f::t_aa54867ca7825f 14
+tests/unit/test_cli.py
+  s_dfc6cd6692ed8f::t_a0a5251de74975 3621-3670
+src/envdrift/sync/engine.py
+  s_dfc6cd6692ed8f::t_de07d3c993068c 30-60
+  s_dfc6cd6692ed8f::t_b6f0bf95f405d7 301-309
+src/envdrift/cli_commands/sync.py
+  s_dfc6cd6692ed8f::t_e15bc980e368f3 914-918
+  s_dfc6cd6692ed8f::t_75fc7fa6847c0c 855-862
+  s_dfc6cd6692ed8f::t_5edde8ae3f07e2 1201
+  s_dfc6cd6692ed8f::t_4bf8a004e77a8e 1324-1333,1336
+  s_dfc6cd6692ed8f::t_c45d4c19a5a4b7 40-73
+tests/unit/coverage/test_cov_cli_commands_sync.py
+  s_dfc6cd6692ed8f::t_84cf700a0e4a05 355-390
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.6",
+  "base_commit_sha": "421c0d6c7860eebd95773eea52bc4f2505eea994",
+  "prompts": {},
+  "sessions": {
+    "s_dfc6cd6692ed8f": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "fd23e738-3512-4420-9290-d985ad979bfd",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Jainal Gosaliya <jainal09gosalia@gmail.com>"
+    }
+  }
+}
