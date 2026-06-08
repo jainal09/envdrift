@@ -57,6 +57,93 @@ func TestIsRunning(t *testing.T) {
 	_ = IsRunning()
 }
 
+// supportedGOOS reports whether the current OS has a per-platform daemon handler.
+func supportedGOOS() bool {
+	switch runtime.GOOS {
+	case "darwin", "linux", "windows":
+		return true
+	default:
+		return false
+	}
+}
+
+// assertRoutedToCurrentOS checks that the per-platform dispatch invoked exactly
+// the handler for the running OS (called == runtime.GOOS) on a supported OS, and
+// invoked none (called == "") on an unsupported OS. Shared by the dispatch and
+// dispatchBool routing tests so the routing assertion isn't duplicated.
+func assertRoutedToCurrentOS(t *testing.T, kind, called string) {
+	t.Helper()
+	if supportedGOOS() {
+		if called != runtime.GOOS {
+			t.Errorf("%s invoked %q handler on %s; want the %s handler", kind, called, runtime.GOOS, runtime.GOOS)
+		}
+		return
+	}
+	if called != "" {
+		t.Errorf("%s invoked %q handler on unsupported OS %s; want none", kind, called, runtime.GOOS)
+	}
+}
+
+// TestDispatchRoutesPerPlatform is the #413 regression for the `stop` command:
+// the per-platform dispatch (which Stop/Install/Uninstall all route through)
+// must invoke the handler for the current OS and surface an "unsupported
+// platform" error on any other OS, rather than silently no-op'ing like the old
+// runStop did. We exercise dispatch() with stub handlers instead of calling the
+// real Stop(), so the unit test never runs a destructive service-control command
+// (launchctl unload / systemctl --user stop / schtasks /end) against a live
+// agent on the developer's or CI machine.
+func TestDispatchRoutesPerPlatform(t *testing.T) {
+	var called string
+	mark := func(name string) func() error {
+		return func() error { called = name; return nil }
+	}
+
+	err := dispatch(mark("darwin"), mark("linux"), mark("windows"))
+
+	if supportedGOOS() {
+		if err != nil {
+			t.Fatalf("dispatch on supported OS %s returned error: %v", runtime.GOOS, err)
+		}
+	} else if err == nil || !strings.Contains(err.Error(), "unsupported platform") {
+		t.Errorf("dispatch on %s should report unsupported platform, got %v", runtime.GOOS, err)
+	}
+	assertRoutedToCurrentOS(t, "dispatch", called)
+}
+
+// TestDispatchPropagatesHandlerError proves the chosen handler's error is
+// returned unchanged — so a real stopMacOS/stopLinux/stopWindows failure is
+// surfaced (and can then be wrapped as "failed to stop agent") rather than
+// swallowed. We only assert this on a supported OS, where exactly one handler
+// runs.
+func TestDispatchPropagatesHandlerError(t *testing.T) {
+	if !supportedGOOS() {
+		t.Skipf("no platform handler runs on %s", runtime.GOOS)
+	}
+
+	sentinel := errors.New("boom")
+	fail := func() error { return sentinel }
+	if err := dispatch(fail, fail, fail); !errors.Is(err, sentinel) {
+		t.Errorf("dispatch should return the handler error, got %v", err)
+	}
+}
+
+// TestDispatchBoolRoutesPerPlatform mirrors TestDispatchRoutesPerPlatform for
+// the bool-returning status probes (IsInstalled/IsRunning): the current OS's
+// handler runs and an unsupported OS yields false without invoking any handler.
+func TestDispatchBoolRoutesPerPlatform(t *testing.T) {
+	var called string
+	mark := func(name string) func() bool {
+		return func() bool { called = name; return true }
+	}
+
+	got := dispatchBool(mark("darwin"), mark("linux"), mark("windows"))
+
+	if got != supportedGOOS() {
+		t.Errorf("dispatchBool on %s returned %v; want %v", runtime.GOOS, got, supportedGOOS())
+	}
+	assertRoutedToCurrentOS(t, "dispatchBool", called)
+}
+
 // TestSystemdUnitQuotesExecStart is the #348 G4 regression: a path containing
 // spaces (or special characters) must be double-quoted in ExecStart so systemd
 // treats it as a single argument.

@@ -16,6 +16,22 @@ from envdrift.vault.base import (
 )
 
 
+class FakeBotoCoreError(Exception):
+    """Stand-in for ``botocore.exceptions.BotoCoreError``.
+
+    In the real SDK every transport/connectivity error
+    (``EndpointConnectionError``, ``ConnectTimeoutError``, ``ReadTimeoutError``,
+    ``ConnectionClosedError``, ...) subclasses ``BotoCoreError``, while the
+    API-response ``ClientError`` (which carries ``.response``/an error code) does
+    NOT. Modeling that distinction here lets the tests prove a transport failure
+    is wrapped as a domain ``VaultError`` rather than escaping raw.
+    """
+
+
+class FakeTransportError(FakeBotoCoreError):
+    """Fake transport failure (e.g. EndpointConnectionError) — no ``.response``."""
+
+
 @pytest.fixture
 def mock_client_factory():
     """Create reusable mocked AWS clients for testing."""
@@ -64,6 +80,14 @@ class TestAWSSecretsManagerClient:
             import envdrift.vault.aws as aws_module
 
             importlib.reload(aws_module)
+            # ``botocore.exceptions`` is a MagicMock here, so the reloaded module
+            # captured ``BotoCoreError`` as a MagicMock — not a usable ``except``
+            # type. Swap in a real sentinel exception class (the common base of the
+            # botocore transport errors) so the production ``except BotoCoreError``
+            # clause is a valid, narrowly-scoped catch in these tests. It does NOT
+            # match the plain-``Exception`` fakes used below (FakeClientError /
+            # WeirdError), preserving their distinct error-code / propagate paths.
+            aws_module.BotoCoreError = FakeBotoCoreError
             yield aws_module
 
     def test_init_without_boto3_raises(self):
@@ -752,6 +776,85 @@ class TestAWSSecretsManagerClient:
 
         with pytest.raises(WeirdError):
             client.set_secret("name", "value")
+
+    def test_authenticate_transport_error_wraps_as_vault_error(self, mock_boto3):
+        """Regression #413: a botocore transport/connectivity error during
+        authenticate() (no ``.response``, e.g. EndpointConnectionError) must surface
+        as a domain VaultError, not escape raw to the CLI as an uncaught traceback.
+        """
+
+        class FakeCredentialsError(Exception):
+            pass
+
+        mock_boto3.NoCredentialsError = FakeCredentialsError
+        mock_boto3.PartialCredentialsError = FakeCredentialsError
+
+        with patch("boto3.client") as mock_client:
+            mock_client.side_effect = FakeTransportError("Could not connect to the endpoint URL")
+
+            client = mock_boto3.AWSSecretsManagerClient()
+            with pytest.raises(VaultError) as exc_info:
+                client.authenticate()
+
+        # Mapped into the domain hierarchy, not leaked as the raw botocore type.
+        assert not isinstance(exc_info.value, FakeTransportError)
+
+    def test_get_secret_transport_error_wraps_as_vault_error(
+        self, mock_boto3, patched_boto_clients
+    ):
+        """Regression #413: a transport error during get_secret() (no error code)
+        is wrapped as VaultError instead of leaking the raw botocore exception."""
+        mock_sm_client, _ = patched_boto_clients
+        mock_sm_client.get_secret_value.side_effect = FakeTransportError("connection reset")
+
+        client = mock_boto3.AWSSecretsManagerClient()
+        client.authenticate()
+
+        with pytest.raises(VaultError) as exc_info:
+            client.get_secret("secret")
+        assert not isinstance(exc_info.value, FakeTransportError)
+
+    def test_list_secrets_transport_error_wraps_as_vault_error(
+        self, mock_boto3, patched_boto_clients
+    ):
+        """Regression #413: a transport error during list_secrets() is wrapped."""
+        mock_sm_client, _ = patched_boto_clients
+        mock_sm_client.get_paginator.side_effect = FakeTransportError("read timeout")
+
+        client = mock_boto3.AWSSecretsManagerClient()
+        client.authenticate()
+
+        with pytest.raises(VaultError) as exc_info:
+            client.list_secrets()
+        assert not isinstance(exc_info.value, FakeTransportError)
+
+    def test_put_secret_value_transport_error_wraps_as_vault_error(
+        self, mock_boto3, patched_boto_clients
+    ):
+        """Regression #413: a transport error during _put_secret_value() is wrapped."""
+        mock_sm_client, _ = patched_boto_clients
+        mock_sm_client.put_secret_value.side_effect = FakeTransportError("connect timeout")
+
+        client = mock_boto3.AWSSecretsManagerClient()
+        client.authenticate()
+
+        with pytest.raises(VaultError) as exc_info:
+            client._put_secret_value("name", "value")
+        assert not isinstance(exc_info.value, FakeTransportError)
+
+    def test_set_secret_transport_error_wraps_as_vault_error(
+        self, mock_boto3, patched_boto_clients
+    ):
+        """Regression #413: a transport error during set_secret() is wrapped."""
+        mock_sm_client, _ = patched_boto_clients
+        mock_sm_client.create_secret.side_effect = FakeTransportError("endpoint unreachable")
+
+        client = mock_boto3.AWSSecretsManagerClient()
+        client.authenticate()
+
+        with pytest.raises(VaultError) as exc_info:
+            client.set_secret("name", "value")
+        assert not isinstance(exc_info.value, FakeTransportError)
 
     def test_set_secret_dict(self, mock_boto3, patched_boto_clients):
         """Test set_secret_dict creates secret with JSON-encoded dict."""

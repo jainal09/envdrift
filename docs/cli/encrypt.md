@@ -198,6 +198,14 @@ envdrift shells out to [SOPS](https://github.com/getsops/sops) for encryption:
 1. **Encrypted format**: Values use the `ENC[AES256_GCM,...]` format
 2. **Key storage**: Keys live in your SOPS setup (age, KMS, PGP, etc.)
 3. **Config**: `.sops.yaml` controls which files and keys are used
+4. **Idempotent**: Re-encrypting a file that is already SOPS-encrypted is a
+   clean no-op (exit 0, "already encrypted (no change)"). A pre-commit hook
+   firing twice, a CI re-run, or a documented re-run will not fail.
+5. **Explicit config is validated**: If you pass `--sops-config` (or set
+   `sops_config_file` in `envdrift.toml`) pointing at a path that does not
+   exist, encryption fails with `SOPS config file not found: <path>` rather
+   than silently falling back to an ambient `.sops.yaml` (which could encrypt
+   with the wrong keys).
 
 ## Sensitive Detection
 

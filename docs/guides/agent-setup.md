@@ -65,7 +65,7 @@ make build
 | `envdrift-agent uninstall` | Remove from system startup |
 | `envdrift-agent status` | Check if agent is installed and running |
 | `envdrift-agent start` | Run in foreground (for debugging) |
-| `envdrift-agent stop` | Stop the running agent |
+| `envdrift-agent stop` | Stop the running agent (stays installed; restarts on next boot) |
 | `envdrift-agent config` | Show/create configuration file |
 | `envdrift-agent version` | Print version information |
 

@@ -3,6 +3,7 @@ package lockcheck
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"testing"
@@ -69,6 +70,36 @@ func TestIsFileOpenOpenFile(t *testing.T) {
 	// Note: lsof might not detect our own process's open file
 	// This test is primarily to ensure no panic
 	t.Logf("IsFileOpen result for open file: %v", result)
+}
+
+// TestIsFileOpenUnixMissingLsof is the #413 regression: when lsof is absent
+// from PATH, isFileOpenUnix must conservatively return true (treat the file as
+// open/unknown) so the guardian skips encrypting a file it cannot vouch for,
+// instead of silently bypassing the open-file safety check. On the unfixed code
+// the *exec.Error from a missing binary was collapsed into "not open" (false).
+func TestIsFileOpenUnixMissingLsof(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("isFileOpenUnix is Unix-only")
+	}
+
+	// Point PATH at an empty temp dir so exec.Command("lsof", ...) fails to find
+	// the binary, producing an *exec.Error rather than a clean exit-1.
+	emptyDir := t.TempDir()
+	t.Setenv("PATH", emptyDir)
+
+	// Sanity: lsof really must be unresolvable now.
+	if _, err := exec.LookPath("lsof"); err == nil {
+		t.Skip("lsof still resolvable despite cleared PATH; cannot exercise missing-binary path")
+	}
+
+	tempFile := filepath.Join(emptyDir, ".env.test")
+	if err := os.WriteFile(tempFile, []byte("X=1\n"), 0o644); err != nil {
+		t.Fatalf("write temp file: %v", err)
+	}
+
+	if got := isFileOpenUnix(tempFile); !got {
+		t.Errorf("isFileOpenUnix with lsof absent = false; want true (conservative open/unknown) (#413)")
+	}
 }
 
 func TestGetOpenProcessesNonexistent(t *testing.T) {

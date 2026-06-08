@@ -131,7 +131,7 @@ folder_path = "services/myapp"
 [[vault.sync.mappings]]
 secret_name = "auth-service-key"
 folder_path = "services/auth"
-vault_name = "other-vault"  # Override default
+vault_name = "other-vault"  # Parsed but informational only — does NOT route (see note below)
 environment = "staging"     # Use DOTENV_PRIVATE_KEY_STAGING
 
 [[vault.sync.mappings]]
@@ -143,6 +143,17 @@ env_file = "postgresql.env" # Custom dotenv filename inside folder_path
 
 Place the file in the project root so auto-discovery finds it; pass `-c envdrift.toml` in CI to pin the exact file.
 
+!!! note "`vault_name` / `default_vault_name` do not switch the vault"
+    `vault_name` (per-mapping) and `default_vault_name` are parsed and accepted
+    but are **informational only** — the sync/push engine fetches and pushes
+    every secret from the single vault you configured via `--vault-url` /
+    `[vault.<provider>]` (or `--region` / `--project-id`). A per-mapping
+    `vault_name` does **not** route that secret to a different vault, so
+    `vault-push --all` pushes every mapping to the one configured vault. To use a
+    separate vault, run a separate config. See the `vault_name` row in
+    [configuration.md](../reference/configuration.md) and the note in
+    [env-file-sync.md](../guides/env-file-sync.md#mappings).
+
 ### Legacy Format (pair.txt)
 
 ```text
@@ -150,11 +161,15 @@ Place the file in the project root so auto-discovery finds it; pass `-c envdrift
 myapp-dotenvx-key=services/myapp
 auth-service-key=services/auth
 
-# With explicit vault name
+# With a vault-name prefix (parsed but informational only — does NOT route)
 myvault/api-service-key=services/api
 ```
 
 **Format:** `secret-name=folder-path` or `vault-name/secret-name=folder-path`
+
+The optional `vault-name/` prefix is parsed for backward compatibility but, like
+the TOML `vault_name` field, is **informational only** — the secret is still
+fetched from / pushed to the single configured vault (see the note above).
 
 - Lines starting with `#` are comments
 - Empty lines are ignored

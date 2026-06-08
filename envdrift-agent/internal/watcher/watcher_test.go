@@ -21,54 +21,49 @@ func TestNew(t *testing.T) {
 	}
 }
 
+type baseMatchCase struct {
+	path     string
+	expected bool
+}
+
+// assertBaseMatchCases runs each case against baseMatchesAny with the given
+// pattern set, sub-testing per path. Shared by the pattern- and exclude-match
+// tests so the table-driven loop lives in one place.
+func assertBaseMatchCases(t *testing.T, patterns []string, label string, cases []baseMatchCase) {
+	t.Helper()
+	for _, tt := range cases {
+		t.Run(tt.path, func(t *testing.T) {
+			if got := baseMatchesAny(tt.path, patterns); got != tt.expected {
+				t.Errorf("baseMatchesAny(%q, %s) = %v, expected %v", tt.path, label, got, tt.expected)
+			}
+		})
+	}
+}
+
 func TestMatchesPattern(t *testing.T) {
 	w, _ := New([]string{".env*", "*.env"}, []string{}, false)
 	defer w.Stop()
 
-	tests := []struct {
-		path     string
-		expected bool
-	}{
+	assertBaseMatchCases(t, w.patterns, "patterns", []baseMatchCase{
 		{".env", true},
 		{".env.local", true},
 		{".env.production", true},
 		{"config.env", true},
 		{"README.md", false},
 		{"package.json", false},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.path, func(t *testing.T) {
-			result := w.matchesPattern(tt.path)
-			if result != tt.expected {
-				t.Errorf("matchesPattern(%q) = %v, expected %v", tt.path, result, tt.expected)
-			}
-		})
-	}
+	})
 }
 
 func TestIsExcluded(t *testing.T) {
 	w, _ := New([]string{".env*"}, []string{".env.example", ".env.sample"}, false)
 	defer w.Stop()
 
-	tests := []struct {
-		path     string
-		expected bool
-	}{
+	assertBaseMatchCases(t, w.exclude, "exclude", []baseMatchCase{
 		{".env.example", true},
 		{".env.sample", true},
 		{".env.production", false},
 		{".env", false},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.path, func(t *testing.T) {
-			result := w.isExcluded(tt.path)
-			if result != tt.expected {
-				t.Errorf("isExcluded(%q) = %v, expected %v", tt.path, result, tt.expected)
-			}
-		})
-	}
+	})
 }
 
 func TestExpandPath(t *testing.T) {
@@ -155,15 +150,8 @@ func TestFileEventChange(t *testing.T) {
 		t.Fatalf("Failed to create test file: %v", err)
 	}
 
-	// Wait for event (with timeout)
-	select {
-	case event := <-w.Events():
-		if event.Path != envPath {
-			t.Errorf("Expected path %s, got %s", envPath, event.Path)
-		}
-	case <-time.After(2 * time.Second):
-		t.Error("Timeout waiting for file event")
-	}
+	// Wait for the event for our file (with timeout).
+	drainEvents(t, w, eventWait{want: envPath, timeout: 2 * time.Second, mustArrive: true})
 }
 
 // TestNewSubdirectoryIsWatched is the #348 G2 regression: a directory created
@@ -200,19 +188,176 @@ func TestNewSubdirectoryIsWatched(t *testing.T) {
 		t.Fatalf("Failed to write nested .env: %v", err)
 	}
 
-	deadline := time.After(3 * time.Second)
+	// Unrelated events (e.g. the directory create) are ignored; we wait for the
+	// .env in the subdir created after AddDirectory (#348 G2).
+	drainEvents(t, w, eventWait{want: envPath, timeout: 3 * time.Second, mustArrive: true})
+}
+
+// eventWait configures drainEvents. want is the path whose event ends the wait
+// (empty means "drain until the timeout, expecting nothing"); forbid is a path
+// whose event fails the test if it ever arrives; mustArrive fails the test if
+// the timeout elapses before want is seen.
+type eventWait struct {
+	want       string
+	forbid     string
+	timeout    time.Duration
+	mustArrive bool
+}
+
+// drainEvents reads w.Events, failing the test if cfg.forbid ever fires. It
+// returns when cfg.want arrives, or at the timeout — failing only if
+// cfg.mustArrive is set. Folding both the positive wait and the
+// negative grace-window drain into one loop keeps the fs-event tests below
+// CodeScene's complexity threshold and avoids a duplicated select.
+func drainEvents(t *testing.T, w *Watcher, cfg eventWait) {
+	t.Helper()
+	deadline := time.After(cfg.timeout)
 	for {
 		select {
 		case event := <-w.Events():
-			if event.Path == envPath {
-				return // success
+			if cfg.forbid != "" && event.Path == cfg.forbid {
+				t.Fatalf("unexpected event for forbidden path %q", cfg.forbid)
 			}
-			// Ignore unrelated events (e.g. the directory create itself if
-			// it ever matched); keep waiting for our file.
+			if cfg.want != "" && event.Path == cfg.want {
+				return
+			}
 		case <-deadline:
-			t.Fatalf("no event for .env in subdir created after AddDirectory (G2)")
+			if cfg.mustArrive {
+				t.Fatalf("no event for %q within %s", cfg.want, cfg.timeout)
+			}
+			return
 		}
 	}
+}
+
+// TestAddDirectoryDottedRootIsWatched is the #413 regression: a recursive
+// watcher whose registered ROOT directory name is dotted (e.g. ~/.dotfiles)
+// must still be watched. filepath.Walk visits the root first, so an unconditional
+// "skip hidden dirs" rule SkipDir'd the entire subtree, silently watching
+// nothing and never firing an event for .env files written there.
+func TestAddDirectoryDottedRootIsWatched(t *testing.T) {
+	if testing.Short() {
+		t.Skip("Skipping fs event test in short mode")
+	}
+
+	parent := t.TempDir()
+	// Leaf dir name starts with a dot, like ~/.dotfiles.
+	root := filepath.Join(parent, ".dotfiles")
+	if err := os.Mkdir(root, 0o755); err != nil {
+		t.Fatalf("Failed to create dotted root: %v", err)
+	}
+
+	w, err := New([]string{".env*"}, []string{}, true) // recursive
+	if err != nil {
+		t.Fatalf("Failed to create watcher: %v", err)
+	}
+	defer w.Stop()
+
+	if err := w.AddDirectory(root); err != nil {
+		t.Fatalf("Failed to add dotted directory: %v", err)
+	}
+	w.Start()
+
+	// Writing a .env in the dotted root must fire an event; on the unfixed code
+	// the root was SkipDir'd and no event ever arrives.
+	envPath := filepath.Join(root, ".env.local")
+	if err := os.WriteFile(envPath, []byte("X=1\n"), 0o644); err != nil {
+		t.Fatalf("Failed to write .env in dotted root: %v", err)
+	}
+
+	// success: the dotted root is watched (#413: was SkipDir'd before the fix).
+	drainEvents(t, w, eventWait{want: envPath, timeout: 3 * time.Second, mustArrive: true})
+}
+
+// TestAddDirectorySkipsNestedHidden confirms the fix still skips hidden
+// directories nested BELOW the registered root: a .env inside root/.git must not
+// fire (we don't watch VCS internals), even though the dotted root itself is now
+// watched.
+func TestAddDirectorySkipsNestedHidden(t *testing.T) {
+	if testing.Short() {
+		t.Skip("Skipping fs event test in short mode")
+	}
+
+	root := t.TempDir()
+	hidden := filepath.Join(root, ".git")
+	if err := os.Mkdir(hidden, 0o755); err != nil {
+		t.Fatalf("Failed to create nested hidden dir: %v", err)
+	}
+
+	w, err := New([]string{".env*"}, []string{}, true) // recursive
+	if err != nil {
+		t.Fatalf("Failed to create watcher: %v", err)
+	}
+	defer w.Stop()
+
+	if err := w.AddDirectory(root); err != nil {
+		t.Fatalf("Failed to add directory: %v", err)
+	}
+	w.Start()
+
+	// A .env written in root (not hidden) should fire...
+	rootEnv := filepath.Join(root, ".env.local")
+	if err := os.WriteFile(rootEnv, []byte("X=1\n"), 0o644); err != nil {
+		t.Fatalf("write root .env: %v", err)
+	}
+	// ...while a .env in the nested hidden dir should NOT.
+	hiddenEnv := filepath.Join(hidden, ".env.local")
+	if err := os.WriteFile(hiddenEnv, []byte("Y=2\n"), 0o644); err != nil {
+		t.Fatalf("write hidden .env: %v", err)
+	}
+
+	// The root .env must fire and the hidden one must never fire (even if it
+	// arrives in the same batch, drainEvents fails on it).
+	drainEvents(t, w, eventWait{want: rootEnv, forbid: hiddenEnv, timeout: 2 * time.Second, mustArrive: true})
+	// Keep draining briefly: a hiddenEnv event can lag the rootEnv one, so a bare
+	// "stop on first rootEnv" would miss a hidden-dir watch regression (#413).
+	drainEvents(t, w, eventWait{forbid: hiddenEnv, timeout: 300 * time.Millisecond})
+}
+
+// TestRuntimeCreatedHiddenDirIsNotWatched guards the cubic follow-up: a hidden
+// directory created AFTER Start (e.g. a tool drops a .cache dir) must not become
+// watched. handleEvent re-enters AddDirectory for newly-created dirs; without a
+// hidden-name guard the new dir would be its own (root-exempt) root and a .env
+// written inside it would wrongly fire.
+func TestRuntimeCreatedHiddenDirIsNotWatched(t *testing.T) {
+	if testing.Short() {
+		t.Skip("Skipping fs event test in short mode")
+	}
+
+	root := t.TempDir()
+
+	w, err := New([]string{".env*"}, []string{}, true) // recursive
+	if err != nil {
+		t.Fatalf("Failed to create watcher: %v", err)
+	}
+	defer w.Stop()
+
+	if err := w.AddDirectory(root); err != nil {
+		t.Fatalf("Failed to add directory: %v", err)
+	}
+	w.Start()
+
+	// Create a hidden dir at runtime, give the watcher time to (not) add it,
+	// then write a .env inside it: no event should ever fire for it.
+	hidden := filepath.Join(root, ".cache")
+	if err := os.Mkdir(hidden, 0o755); err != nil {
+		t.Fatalf("Failed to create runtime hidden dir: %v", err)
+	}
+	time.Sleep(200 * time.Millisecond)
+
+	hiddenEnv := filepath.Join(hidden, ".env.local")
+	if err := os.WriteFile(hiddenEnv, []byte("Y=2\n"), 0o644); err != nil {
+		t.Fatalf("write hidden .env: %v", err)
+	}
+	// A control .env in the watched root proves the watcher is live; the hidden
+	// one must never fire.
+	rootEnv := filepath.Join(root, ".env.local")
+	if err := os.WriteFile(rootEnv, []byte("X=1\n"), 0o644); err != nil {
+		t.Fatalf("write root .env: %v", err)
+	}
+
+	drainEvents(t, w, eventWait{want: rootEnv, forbid: hiddenEnv, timeout: 2 * time.Second, mustArrive: true})
+	drainEvents(t, w, eventWait{forbid: hiddenEnv, timeout: 300 * time.Millisecond})
 }
 
 // TestStopClosesEvents is part of the #362 regression: after Stop, run() (the
