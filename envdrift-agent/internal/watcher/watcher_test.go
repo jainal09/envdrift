@@ -39,9 +39,9 @@ func TestMatchesPattern(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.path, func(t *testing.T) {
-			result := w.matchesPattern(tt.path)
+			result := baseMatchesAny(tt.path, w.patterns)
 			if result != tt.expected {
-				t.Errorf("matchesPattern(%q) = %v, expected %v", tt.path, result, tt.expected)
+				t.Errorf("baseMatchesAny(%q, patterns) = %v, expected %v", tt.path, result, tt.expected)
 			}
 		})
 	}
@@ -63,9 +63,9 @@ func TestIsExcluded(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.path, func(t *testing.T) {
-			result := w.isExcluded(tt.path)
+			result := baseMatchesAny(tt.path, w.exclude)
 			if result != tt.expected {
-				t.Errorf("isExcluded(%q) = %v, expected %v", tt.path, result, tt.expected)
+				t.Errorf("baseMatchesAny(%q, exclude) = %v, expected %v", tt.path, result, tt.expected)
 			}
 		})
 	}

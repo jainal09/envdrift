@@ -155,7 +155,7 @@ func (w *Watcher) handleEvent(event fsnotify.Event) {
 	// If a new (non-hidden) directory was created, start watching it recursively
 	// so that .env files created beneath it later are not missed (#348 G2). Do
 	// this before the pattern filter, since a directory name won't match .env*.
-	if w.shouldWatchNewDir(event, path) {
+	if w.shouldWatchNewDir(event) {
 		if info, err := os.Stat(path); err == nil && info.IsDir() {
 			if err := w.AddDirectory(path); err != nil {
 				log.Printf("Watcher add subdir error: %v", err)
@@ -163,13 +163,8 @@ func (w *Watcher) handleEvent(event fsnotify.Event) {
 		}
 	}
 
-	// Check if it matches our patterns
-	if !w.matchesPattern(path) {
-		return
-	}
-
-	// Check if it's excluded
-	if w.isExcluded(path) {
+	// Must match an include pattern and not be excluded.
+	if !baseMatchesAny(path, w.patterns) || baseMatchesAny(path, w.exclude) {
 		return
 	}
 
@@ -195,35 +190,27 @@ func (w *Watcher) handleEvent(event fsnotify.Event) {
 	}
 }
 
-// shouldWatchNewDir reports whether a create event for path should trigger a
-// recursive AddDirectory: only in recursive mode, only for create events, and
-// never for hidden directories. AddDirectory exempts its own (possibly dotted)
-// root from the hidden-dir skip so a registered ~/.dotfiles is watched, but that
-// exemption would also make a runtime-created hidden dir its own root and watch
-// it — so hidden names are filtered out here before re-entering AddDirectory.
-func (w *Watcher) shouldWatchNewDir(event fsnotify.Event, path string) bool {
+// shouldWatchNewDir reports whether the create event should trigger a recursive
+// AddDirectory of event.Name: only in recursive mode, only for create events,
+// and never for hidden directories. AddDirectory exempts its own (possibly
+// dotted) root from the hidden-dir skip so a registered ~/.dotfiles is watched,
+// but that exemption would also make a runtime-created hidden dir its own root
+// and watch it — so hidden names are filtered out here before re-entering
+// AddDirectory.
+func (w *Watcher) shouldWatchNewDir(event fsnotify.Event) bool {
 	if !w.recursive || event.Op&fsnotify.Create == 0 {
 		return false
 	}
-	return !isHiddenName(filepath.Base(path))
+	return !isHiddenName(filepath.Base(event.Name))
 }
 
-func (w *Watcher) matchesPattern(path string) bool {
+// baseMatchesAny reports whether path's base name matches any of the glob
+// patterns. Shared by the include- and exclude-pattern checks so the two no
+// longer duplicate the base/loop/filepath.Match logic.
+func baseMatchesAny(path string, patterns []string) bool {
 	base := filepath.Base(path)
-	for _, pattern := range w.patterns {
-		matched, _ := filepath.Match(pattern, base)
-		if matched {
-			return true
-		}
-	}
-	return false
-}
-
-func (w *Watcher) isExcluded(path string) bool {
-	base := filepath.Base(path)
-	for _, pattern := range w.exclude {
-		matched, _ := filepath.Match(pattern, base)
-		if matched {
+	for _, pattern := range patterns {
+		if matched, _ := filepath.Match(pattern, base); matched {
 			return true
 		}
 	}
