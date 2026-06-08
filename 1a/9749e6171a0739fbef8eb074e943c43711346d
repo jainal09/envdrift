@@ -1,0 +1,24 @@
+envdrift-agent/internal/watcher/watcher_test.go
+  s_dfc6cd6692ed8f::t_99bee7dc442fa6 24-32,34-55,58-65
+envdrift-agent/internal/daemon/daemon_test.go
+  s_dfc6cd6692ed8f::t_6df2fa46b43449 228-260
+envdrift-agent/internal/daemon/daemon.go
+  s_dfc6cd6692ed8f::t_8362621f8bb5e6 349-356,358-360,362-363,365-374,378-384
+  s_dfc6cd6692ed8f::t_25f46c2e40b43c 375-377
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.6",
+  "base_commit_sha": "1a9749e6171a0739fbef8eb074e943c43711346d",
+  "prompts": {},
+  "sessions": {
+    "s_dfc6cd6692ed8f": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "fd23e738-3512-4420-9290-d985ad979bfd",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Jainal Gosaliya <jainal09gosalia@gmail.com>"
+    }
+  }
+}
