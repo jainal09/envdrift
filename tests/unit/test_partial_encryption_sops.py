@@ -149,6 +149,82 @@ def test_has_plaintext_secret_value_sops_with_freshly_added_plaintext_is_true(tm
     assert has_plaintext_secret_value(f) is True
 
 
+def test_has_plaintext_secret_value_user_var_with_sops_prefix_is_scanned(tmp_path: Path):
+    """A user var named ``sops_<x>`` (NOT a real SOPS metadata key) still leaks (#416).
+
+    Regression for the review-bot MEDIUM finding: the SOPS-trailer exclusion was a
+    bare ``startswith("sops_")`` PREFIX match, so a real user variable whose name
+    merely begins with ``sops_`` (``sops_token``, ``sops_api_key``,
+    ``sops_config``, ``sops_agent``) was wrongly excluded from the plaintext scan.
+    In a mixed-state file that value would be reported as fully encrypted and ship
+    verbatim into the committed ``.secret`` — the exact leak class #416 targets.
+
+    The fix matches the EXACT SOPS metadata key family, so these user vars are
+    still flagged. Fails on the prefix-match code (returns False).
+    """
+    from envdrift.core.partial_encryption import has_plaintext_secret_value
+
+    for user_key in ("sops_token", "sops_api_key", "sops_config", "sops_agent", "sops_keys"):
+        f = tmp_path / ".env.secret"
+        f.write_text(
+            "API_KEY="
+            + _sops_ciphertext("oNgtRJRCHtOh669puic=")
+            + "\n"
+            + user_key
+            + "=AKIAIOSFODNN7EXAMPLE-brand-new-plaintext-secret\n",
+            encoding="utf-8",
+        )
+        assert has_plaintext_secret_value(f) is True, (
+            f"user var {user_key} must still be scanned as a plaintext secret"
+        )
+
+
+def test_has_plaintext_secret_value_genuine_sops_metadata_keys_excluded(tmp_path: Path):
+    """Genuine SOPS metadata keys (scalar + nested provider) stay excluded (#416).
+
+    Counterpart to the prefix-match regression: the exact-family matcher must keep
+    ignoring every real SOPS trailer key — the flat scalars and the nested
+    ``sops_<provider>__list_N__map_M_<field>`` recipient entries — so a genuine
+    fully-SOPS-encrypted file is not flagged as holding leftover plaintext.
+    """
+    from envdrift.core.partial_encryption import has_plaintext_secret_value
+
+    f = tmp_path / ".env.secret"
+    f.write_text(
+        "API_KEY=" + _sops_ciphertext("oNgtRJRCHtOh669puic=") + "\n"
+        "sops_version=3.13.1\n"
+        "sops_mac=" + _sops_ciphertext("iBjKMupTM") + "\n"
+        "sops_lastmodified=2026-06-08T14:15:34Z\n"
+        "sops_unencrypted_suffix=_unencrypted\n"
+        "sops_mac_only_encrypted=false\n"
+        "sops_shamir_threshold=2\n"
+        "sops_age__list_0__map_recipient="
+        "age1ql3z7hjy54pw3hyww5ayyfg7zqgvc7w3j2elw8zmrj2kg5sfn9aqmcac8p\n"
+        "sops_age__list_0__map_enc=-----BEGIN-AGE-ENCRYPTED-FILE-----\n"
+        "sops_pgp__list_0__map_fp=85D77543B3D624B63CEA9E6DBC17301B491B3F21\n"
+        "sops_kms__list_0__map_arn=arn:aws:kms:us-east-1:111:key/abc\n",
+        encoding="utf-8",
+    )
+    assert has_plaintext_secret_value(f) is False
+
+
+def test_is_sops_metadata_key_exact_family(tmp_path: Path):
+    """``_is_sops_metadata_key`` matches the family but not lookalike user keys (#416)."""
+    from envdrift.core.partial_encryption import _is_sops_metadata_key
+
+    assert _is_sops_metadata_key("sops_version") is True
+    assert _is_sops_metadata_key("sops_mac") is True
+    assert _is_sops_metadata_key("sops_age__list_0__map_recipient") is True
+    assert _is_sops_metadata_key("sops_pgp__list_0__map_fp") is True
+    assert _is_sops_metadata_key("sops_kms__list_0__map_arn") is True
+    # User vars that merely start with ``sops_`` are NOT metadata.
+    assert _is_sops_metadata_key("sops_token") is False
+    assert _is_sops_metadata_key("sops_api_key") is False
+    assert _is_sops_metadata_key("sops_config") is False
+    assert _is_sops_metadata_key("sops_agent") is False  # not the ``age`` provider
+    assert _is_sops_metadata_key("sops_version_override") is False
+
+
 def test_is_fully_encrypted_true_for_sops_metadata_trailer(tmp_path: Path):
     """_is_fully_encrypted recognises a fully SOPS-encrypted .secret as done (#416).
 

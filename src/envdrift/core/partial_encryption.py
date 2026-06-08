@@ -54,11 +54,51 @@ _DOTENVX_PUBLIC_KEY_PREFIX = "DOTENV_PUBLIC_KEY"
 # Every line except sops_mac= is PLAINTEXT (the version, timestamp, recipient
 # public key, etc.), but none is a real secret — they are SOPS bookkeeping. A
 # genuine SOPS .secret is therefore "fully encrypted" even though most of this
-# trailer is plaintext. The keys all share the canonical ``sops_`` prefix (the
-# same family `SOPSEncryptionBackend.SOPS_METADATA_PATTERNS` and the scanners
-# key off), so excluding that prefix lets has_plaintext_secret_value() ignore
-# the trailer instead of flagging it as leftover plaintext secrets (#416).
-_SOPS_METADATA_KEY_PREFIX = "sops_"
+# trailer is plaintext, so has_plaintext_secret_value() must ignore the trailer
+# instead of flagging it as leftover plaintext secrets (#416).
+#
+# Match the EXACT SOPS metadata key family, not a bare ``sops_`` prefix: a broad
+# prefix match would also exclude a real user variable that merely starts with
+# ``sops_`` (e.g. ``sops_token=AKIA…`` / ``sops_api_key=…``) from the plaintext
+# scan, silently dropping a genuine secret. The flat scalar keys are a fixed set
+# (``sops_version``/``sops_mac``/``sops_lastmodified``/the *_suffix/*_regex
+# toggles/``sops_mac_only_encrypted``/``sops_shamir_threshold``); the key-group
+# providers (age/pgp/kms/gcp_kms/azure_kv/hc_vault) appear as nested
+# ``sops_<provider>__list_N__map_M_<field>`` (or flat ``sops_<provider>_<field>``)
+# entries. Only a key in that family is treated as bookkeeping.
+_SOPS_METADATA_SCALAR_KEYS = frozenset(
+    {
+        "sops_version",
+        "sops_mac",
+        "sops_lastmodified",
+        "sops_unencrypted_suffix",
+        "sops_encrypted_suffix",
+        "sops_unencrypted_regex",
+        "sops_encrypted_regex",
+        "sops_unencrypted_comment_regex",
+        "sops_encrypted_comment_regex",
+        "sops_mac_only_encrypted",
+        "sops_shamir_threshold",
+    }
+)
+# Key-group providers SOPS records (one nested block per recipient). In dotenv
+# output these flatten to ``sops_<provider>__list_N__map_M_<field>`` (or, for a
+# single flat field, ``sops_<provider>_<field>``). Anchor on the provider token
+# so ``sops_age…`` matches but ``sops_agent`` / ``sops_token`` do not.
+_SOPS_METADATA_GROUP_KEY = re.compile(r"^sops_(?:age|pgp|kms|gcp_kms|azure_kv|hc_vault)(?:_|__|$)")
+
+
+def _is_sops_metadata_key(key: str) -> bool:
+    """Return True if ``key`` is a genuine SOPS metadata key, not a user var.
+
+    Matches the EXACT SOPS metadata family — the fixed scalar bookkeeping keys
+    and the nested key-group provider entries (``sops_age*``/``sops_pgp*``/…) —
+    rather than a bare ``sops_`` prefix, so a real user variable that happens to
+    start with ``sops_`` (e.g. ``sops_token``) is NOT misclassified as
+    bookkeeping and stays in the plaintext-secret scan (#416).
+    """
+    return key in _SOPS_METADATA_SCALAR_KEYS or bool(_SOPS_METADATA_GROUP_KEY.match(key))
+
 
 # A dotenvx-encrypted value starts with this prefix; a SOPS-encrypted dotenv
 # value starts with the AES-GCM marker. Detection keys off an actual assigned
@@ -100,14 +140,17 @@ def _is_secret_var_line(line: str) -> bool:
     """Return True if ``line`` is a real secret variable assignment.
 
     Excludes comments, dotenvx's ``DOTENV_PUBLIC_KEY_*`` artifact and SOPS's
-    ``sops_*`` metadata trailer (version/timestamp/recipient/mac bookkeeping, not
-    real secrets — see #416) so the reported secret-var count and the plaintext
-    scan reflect only the actual secrets.
+    metadata trailer (version/timestamp/recipient/mac bookkeeping, not real
+    secrets — see #416) so the reported secret-var count and the plaintext scan
+    reflect only the actual secrets. The SOPS exclusion matches the EXACT
+    metadata key family (``_is_sops_metadata_key``), not a bare ``sops_`` prefix,
+    so a real user variable such as ``sops_token=…`` is still scanned.
     """
     stripped = line.strip()
     if "=" not in stripped or stripped.startswith("#"):
         return False
-    if stripped.startswith(_SOPS_METADATA_KEY_PREFIX):
+    key = stripped.partition("=")[0].strip()
+    if _is_sops_metadata_key(key):
         return False
     return not stripped.startswith(_DOTENVX_PUBLIC_KEY_PREFIX)
 
