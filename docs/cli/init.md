@@ -59,6 +59,22 @@ flag is rarely needed; there is currently no CLI option to turn detection off.
 envdrift init .env --detect-sensitive
 ```
 
+### `--force`, `-f`
+
+Overwrite an existing output file. Without it, `init` refuses to clobber an
+existing (possibly hand-edited) file and errors:
+
+```text
+[ERROR] Output file already exists: settings.py (use --force to overwrite)
+```
+
+Re-run with `--force` (or `-f`) to regenerate over the existing file:
+
+```bash
+envdrift init .env -o settings.py --force
+envdrift init .env -o settings.py -f
+```
+
 ## Examples
 
 ### Basic Generation
@@ -124,6 +140,38 @@ envdrift init .env --output settings.py --class-name AppSettings
 | `true`, `false`             | `bool`        | Yes           |
 | `123`, `8000`               | `int`         | Yes           |
 | `hello`, `postgres://...`   | `str`         | No (required) |
+
+## Variable Names and Identifiers
+
+The generated module is always valid, importable Python:
+
+- **Keyword names get an alias.** A key whose name is a valid identifier but a
+  Python keyword (e.g. `class`, `import`) is emitted under a sanitized attribute
+  name plus a Pydantic `alias` so the field still binds to the original variable:
+
+  ```python
+  class_: str = Field(alias="class")
+  ```
+
+- **Pydantic-reserved names get an alias.** A key that is a valid identifier but
+  collides with Pydantic's protected `model_` namespace (e.g. `model_dump`,
+  `model_config`) or with a `BaseSettings`/`BaseModel` attribute (e.g. `schema`,
+  `dict`, `json`, `validate`) is renamed with a `field_` prefix plus a Pydantic
+  `alias`, so it cannot raise at import or shadow model internals:
+
+  ```python
+  field_model_dump: str = Field(alias="model_dump")
+  ```
+
+- **Non-identifier keys are reported.** Keys the parser cannot read because they
+  are not identifier-style (a leading digit like `2FA_ENABLED`, or a dash like
+  `MY-DASH-VAR`) are skipped and listed in a `[WARN]` line, never silently
+  dropped.
+
+- **Invalid class names fail fast.** A `--class-name` that is not a valid Python
+  identifier (e.g. `123Bad`) or is a keyword (e.g. `class`) errors with a
+  non-zero exit code instead of writing a module that would raise `SyntaxError`
+  on import.
 
 ## Sensitive Detection
 

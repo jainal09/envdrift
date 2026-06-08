@@ -214,17 +214,21 @@ To fix:
 dotenvx is not installed.
 
 Option 1 - Install to ~/.local/bin (recommended):
-  curl -sfS "https://dotenvx.sh?directory=$HOME/.local/bin" | sh -s -- --version=1.70.0
+  curl -sfS "https://dotenvx.sh?directory=$HOME/.local/bin" | sh -s -- --version=<pinned version>
   (Make sure ~/.local/bin is in your PATH)
 
 Option 2 - Install to current directory:
-  curl -sfS "https://dotenvx.sh?directory=." | sh -s -- --version=1.70.0
+  curl -sfS "https://dotenvx.sh?directory=." | sh -s -- --version=<pinned version>
 
 Option 3 - System-wide install (requires sudo):
-  curl -sfS https://dotenvx.sh | sudo sh -s -- --version=1.70.0
+  curl -sfS https://dotenvx.sh | sudo sh -s -- --version=<pinned version>
 
 After installing, run your envdrift command again.
 ```
+
+envdrift substitutes `<pinned version>` with the exact dotenvx version it pins
+(maintained in `src/envdrift/constants.json` and bumped by Renovate), so the
+printed commands always install the version envdrift expects.
 
 ### SOPS Decryption Failed
 

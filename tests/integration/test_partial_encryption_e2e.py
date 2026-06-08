@@ -683,6 +683,81 @@ class TestLockPullLockReEncrypts:
 
 
 # ---------------------------------------------------------------------------
+# #413 (CRITICAL): a MIXED-STATE .secret file (some values already encrypted,
+# one freshly-added plaintext value) must be fully re-encrypted on the next
+# push. The old early-return — triggered by is_file_encrypted() returning True
+# on the first ciphertext value — skipped re-encryption, leaking the new
+# plaintext secret into both the committed .secret file and the combined file.
+# ---------------------------------------------------------------------------
+
+
+class TestMixedStateReEncryption:
+    """A mixed encrypted/plaintext .secret must end fully encrypted, no leak (#413)."""
+
+    def test_combine_push_reencrypts_newly_added_plaintext_real_binary(
+        self,
+        git_repo: Path,
+        integration_pythonpath: str,
+        envdrift_cmd: list[str],
+    ):
+        """push on a mixed .secret encrypts the new var; no plaintext in either file."""
+        work_dir = git_repo
+        _write_combine_config(
+            work_dir,
+            name="production",
+            clear_file=".env.production.clear",
+            secret_file=".env.production.secret",
+            combined_file=".env.production",
+        )
+        (work_dir / ".env.production.clear").write_text("APP_NAME=myapp\n")
+        secret = work_dir / ".env.production.secret"
+        # Build the leaked-secret literal by concatenation so push-protection
+        # never sees a realistic secret in the test source.
+        leak_value = "sk_live_" + "0123456789abcdef" * 2
+        secret.write_text("API_KEY=sk_live_initialvalue\n")
+
+        # First push: encrypt the .secret in place + write the combined file.
+        push1 = _run_envdrift(
+            ["push", "--env", "production"],
+            cwd=work_dir,
+            integration_pythonpath=integration_pythonpath,
+            envdrift_cmd=envdrift_cmd,
+        )
+        assert push1.returncode == 0, _out(push1)
+        assert "encrypted:" in secret.read_text(), secret.read_text()
+
+        # Append a NEW plaintext secret to the now-encrypted .secret -> mixed state.
+        secret.write_text(secret.read_text() + f"NEW_LEAKED_SECRET={leak_value}\n")
+        # Sanity: the file is genuinely mixed (ciphertext + the new plaintext).
+        assert "encrypted:" in secret.read_text()
+        assert leak_value in secret.read_text()
+
+        # Second push: MUST re-encrypt the mixed file (pre-fix: early-returned).
+        push2 = _run_envdrift(
+            ["push", "--env", "production"],
+            cwd=work_dir,
+            integration_pythonpath=integration_pythonpath,
+            envdrift_cmd=envdrift_cmd,
+        )
+        assert push2.returncode == 0, _out(push2)
+
+        # The .secret file must now be FULLY encrypted: no plaintext leak.
+        secret_after = secret.read_text()
+        assert "encrypted:" in secret_after, secret_after
+        assert leak_value not in secret_after, (
+            "newly-added plaintext secret leaked into the committed .secret file"
+        )
+        assert secret_after.count("encrypted:") == 2, secret_after
+
+        # The generated combined file must also carry only ciphertext.
+        combined = (work_dir / ".env.production").read_text()
+        assert leak_value not in combined, (
+            "newly-added plaintext secret leaked into the combined file"
+        )
+        assert combined.count("encrypted:") == 2, combined
+
+
+# ---------------------------------------------------------------------------
 # #358: secrets-only push must encrypt ONLY the real secret file, never the
 # .env.example / .env.sample / .env.template companions or .env.keys.
 # ---------------------------------------------------------------------------

@@ -12,64 +12,69 @@ import (
 	"strings"
 )
 
-// Install installs the agent as a system service for the current operating system.
-// It returns an error if installation fails or if the platform is unsupported.
-func Install() error {
+// dispatch selects the per-platform implementation for the current runtime.GOOS
+// and invokes it, returning a single "unsupported platform" error on any OS that
+// has no darwin/linux/windows handler. Routing every action through one helper
+// keeps Install/Uninstall/Stop from each duplicating the GOOS switch (#413).
+func dispatch(darwin, linux, windows func() error) error {
 	switch runtime.GOOS {
 	case "darwin":
-		return installMacOS()
+		return darwin()
 	case "linux":
-		return installLinux()
+		return linux()
 	case "windows":
-		return installWindows()
+		return windows()
 	default:
 		return fmt.Errorf("unsupported platform: %s", runtime.GOOS)
 	}
+}
+
+// dispatchBool is the bool-returning analogue of dispatch for status probes; an
+// unsupported platform yields false. It lets IsInstalled/IsRunning share the
+// GOOS switch instead of repeating it (#413).
+func dispatchBool(darwin, linux, windows func() bool) bool {
+	switch runtime.GOOS {
+	case "darwin":
+		return darwin()
+	case "linux":
+		return linux()
+	case "windows":
+		return windows()
+	default:
+		return false
+	}
+}
+
+// Install installs the agent as a system service for the current operating system.
+// It returns an error if installation fails or if the platform is unsupported.
+func Install() error {
+	return dispatch(installMacOS, installLinux, installWindows)
 }
 
 // Uninstall removes the EnvDrift Guardian agent from system services on the current platform.
 // It delegates to the platform-specific uninstall implementation and returns an error if the operation fails or the platform is unsupported.
 func Uninstall() error {
-	switch runtime.GOOS {
-	case "darwin":
-		return uninstallMacOS()
-	case "linux":
-		return uninstallLinux()
-	case "windows":
-		return uninstallWindows()
-	default:
-		return fmt.Errorf("unsupported platform: %s", runtime.GOOS)
-	}
+	return dispatch(uninstallMacOS, uninstallLinux, uninstallWindows)
+}
+
+// Stop stops the running agent service without removing its install unit, so a
+// subsequent `install`/boot can start it again. It delegates to the
+// platform-specific stop implementation and returns an error if the operation
+// fails or the platform is unsupported.
+func Stop() error {
+	return dispatch(stopMacOS, stopLinux, stopWindows)
 }
 
 // IsInstalled reports whether the agent is installed as a background service for the current user on the running platform.
 // It returns `true` if the platform-specific service/unit/task is present, `false` otherwise.
 func IsInstalled() bool {
-	switch runtime.GOOS {
-	case "darwin":
-		return isInstalledMacOS()
-	case "linux":
-		return isInstalledLinux()
-	case "windows":
-		return isInstalledWindows()
-	default:
-		return false
-	}
+	return dispatchBool(isInstalledMacOS, isInstalledLinux, isInstalledWindows)
 }
 
 // IsRunning reports whether the agent service is currently running on the host.
 // It returns true when the platform-specific runtime indicates the agent is active and false on unsupported platforms.
 func IsRunning() bool {
-	switch runtime.GOOS {
-	case "darwin":
-		return isRunningMacOS()
-	case "linux":
-		return isRunningLinux()
-	case "windows":
-		return isRunningWindows()
-	default:
-		return false
-	}
+	return dispatchBool(isRunningMacOS, isRunningLinux, isRunningWindows)
 }
 
 // --- macOS LaunchAgent ---
@@ -164,6 +169,20 @@ func uninstallMacOS() error {
 	_ = exec.Command("launchctl", "unload", plistPath).Run()
 
 	return os.Remove(plistPath)
+}
+
+// stopMacOS unloads the EnvDrift Guardian LaunchAgent (so KeepAlive stops
+// respawning it) without removing the plist, leaving the agent installed.
+// It returns an error if the plist path cannot be resolved or launchctl fails.
+func stopMacOS() error {
+	plistPath, err := launchAgentPath()
+	if err != nil {
+		return err
+	}
+	if err := exec.Command("launchctl", "unload", plistPath).Run(); err != nil {
+		return fmt.Errorf("failed to stop agent: %w", err)
+	}
+	return nil
 }
 
 // isInstalledMacOS reports whether the macOS LaunchAgent plist for EnvDrift Guardian exists.
@@ -269,6 +288,16 @@ func uninstallLinux() error {
 	return os.Remove(path)
 }
 
+// stopLinux stops the user systemd service without disabling or removing its
+// unit, so it remains installed and can be started again. It returns an error if
+// `systemctl --user stop` fails.
+func stopLinux() error {
+	if err := exec.Command("systemctl", "--user", "stop", linuxServiceName).Run(); err != nil {
+		return fmt.Errorf("failed to stop agent: %w", err)
+	}
+	return nil
+}
+
 // isInstalledLinux reports whether the systemd user unit file for the daemon exists at the user's systemd configuration path.
 // It returns `true` if the unit file exists and `false` otherwise.
 func isInstalledLinux() bool {
@@ -312,6 +341,33 @@ func installWindows() error {
 // It returns any error encountered while executing the schtasks delete command.
 func uninstallWindows() error {
 	return exec.Command("schtasks", "/delete", "/tn", "EnvDriftGuardian", "/f").Run()
+}
+
+// stopWindows ends the running EnvDriftGuardian scheduled task without deleting
+// it, so the task remains registered and will run again at the next logon.
+//
+// `schtasks /end` exits non-zero when the task has no running instance, so we
+// treat an installed-but-not-running task as a successful no-op (mirroring
+// launchctl unload / systemctl --user stop of an inactive unit). This keeps
+// `stop` from failing when the agent is installed but idle. It returns an error
+// only when the task is running and ending it actually fails.
+func stopWindows() error {
+	// Do NOT gate the stop on isRunningWindows(): that probe runs `schtasks
+	// /query`, which can exit non-zero for transient reasons (Scheduler service
+	// unavailable, permission error). Gating on it would skip `/end` and falsely
+	// report success while the agent keeps running -- the exact failure mode
+	// runStop was fixed to avoid, and which stopMacOS/stopLinux sidestep by using
+	// idempotent commands. Run `/end` unconditionally instead.
+	if err := exec.Command("schtasks", "/end", "/tn", "EnvDriftGuardian").Run(); err != nil {
+		// `/end` exits non-zero when the task is not currently running, which is
+		// success for our purposes. Only surface a failure if the task is
+		// verifiably still running -- so a transient probe failure here cannot
+		// turn a real, un-stopped agent into a false success.
+		if isRunningWindows() {
+			return fmt.Errorf("failed to stop agent: %w", err)
+		}
+	}
+	return nil
 }
 
 // isInstalledWindows reports whether the "EnvDriftGuardian" scheduled task exists on Windows.

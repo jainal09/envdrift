@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import importlib.util
 import json
+import keyword
 import shlex
 import tomllib
 from pathlib import Path
@@ -1152,6 +1154,246 @@ class TestInitCommand:
         # Happy path: an ASCII digit is still inferred as int.
         assert "PORT: int = 8080" in content
 
+    def test_init_keyword_var_name_produces_importable_module(self, tmp_path: Path) -> None:
+        """#413: a .env key that is a Python keyword yields an importable module.
+
+        Previously `class=...` / `import=...` produced raw `class: str` lines —
+        a SyntaxError module that init still wrote with exit 0 and `[OK]`. The
+        fix aliases such fields to a sanitized identifier so the module imports.
+        """
+        env_file = tmp_path / ".env"
+        env_file.write_text("class=foo\nimport=bar\nVALID=baz\n")
+        out = tmp_path / "settings.py"
+
+        result = runner.invoke(
+            app, ["init", str(env_file), "--output", str(out), "--class-name", "Cfg"]
+        )
+        assert result.exit_code == 0, result.output
+
+        content = out.read_text()
+        # The raw keyword name must NOT appear as a bare attribute annotation.
+        assert "\n    class: " not in content
+        assert "\n    import: " not in content
+        # The original name is preserved as a Pydantic alias.
+        assert "alias='class'" in content
+        assert "alias='import'" in content
+
+        # The generated module must be importable (no SyntaxError).
+        spec = importlib.util.spec_from_file_location("gen_kw_settings", out)
+        assert spec is not None and spec.loader is not None
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        assert hasattr(module, "Cfg")
+
+    def test_init_invalid_class_name_errors(self, tmp_path: Path) -> None:
+        """#413: a class name that is not a valid identifier fails nonzero.
+
+        `--class-name=123Bad` previously emitted `class 123Bad(...)` (a
+        SyntaxError module) with exit 0. The fix rejects it before writing.
+        """
+        env_file = tmp_path / ".env"
+        env_file.write_text("FOO=bar\n")
+        out = tmp_path / "settings.py"
+
+        result = runner.invoke(
+            app, ["init", str(env_file), "--output", str(out), "--class-name=123Bad"]
+        )
+        assert result.exit_code != 0
+        assert "invalid class name" in result.output.lower()
+        # No broken module is left behind.
+        assert not out.exists()
+
+    def test_init_keyword_class_name_errors(self, tmp_path: Path) -> None:
+        """#413: a class name that is a Python keyword fails nonzero."""
+        env_file = tmp_path / ".env"
+        env_file.write_text("FOO=bar\n")
+        out = tmp_path / "settings.py"
+
+        result = runner.invoke(
+            app, ["init", str(env_file), "--output", str(out), "--class-name=class"]
+        )
+        assert result.exit_code != 0
+        assert "invalid class name" in result.output.lower()
+        assert not out.exists()
+
+    def test_init_warns_on_non_identifier_keys(self, tmp_path: Path) -> None:
+        """#413: .env keys the parser cannot read are warned about, not dropped.
+
+        `2FA_ENABLED` (leading digit) and `MY-DASH-VAR` (dash) never enter the
+        parsed variable set, so init previously omitted them with no warning.
+        """
+        env_file = tmp_path / ".env"
+        env_file.write_text("2FA_ENABLED=true\nMY-DASH-VAR=x\nVALID=keep\n")
+        out = tmp_path / "settings.py"
+
+        result = runner.invoke(
+            app, ["init", str(env_file), "--output", str(out), "--class-name", "Cfg"]
+        )
+        assert result.exit_code == 0, result.output
+        # Both un-parseable keys are named in the warning output.
+        assert "2FA_ENABLED" in result.output
+        assert "MY-DASH-VAR" in result.output
+        # The parseable variable is still emitted.
+        assert "VALID" in out.read_text()
+
+    def test_sanitize_identifier_produces_valid_non_keyword_names(self) -> None:
+        """#413: the sanitizer always yields a valid, non-keyword identifier."""
+        from envdrift.cli_commands.init_cmd import _sanitize_identifier
+
+        # Keyword -> suffixed identifier.
+        assert _sanitize_identifier("class").isidentifier()
+        assert not keyword.iskeyword(_sanitize_identifier("class"))
+        # Leading digit / non-identifier chars -> prefixed/replaced.
+        assert _sanitize_identifier("2FA").isidentifier()
+        assert _sanitize_identifier("MY-DASH").isidentifier()
+        assert _sanitize_identifier("123").isidentifier()
+        # Soft keyword (`match`) is also avoided.
+        assert not keyword.issoftkeyword(_sanitize_identifier("match"))
+        # Empty-ish input still yields a usable identifier.
+        assert _sanitize_identifier("@").isidentifier()
+
+    def test_init_env_file_path_with_escapes_is_safe_literal(self, tmp_path: Path) -> None:
+        """#423: an env_file path with backslash/quote escapes stays a valid literal.
+
+        A raw `env_file="{path}"` interpolation would let a Windows-style path
+        (`\\n`, `\\t`) or an embedded quote corrupt the generated module. The path
+        is emitted via repr() so it round-trips to the exact original string.
+        """
+        from envdrift.cli_commands.init_cmd import _module_header
+
+        # A POSIX path that still contains escape-prone characters in its name.
+        tricky = tmp_path / 'we"ird\tname'
+        tricky.write_text("FOO=bar\n")
+
+        header = "\n".join(_module_header("Cfg", tricky))
+        # The emitted literal must repr back to the exact path string.
+        assert f"env_file={str(tricky)!r}" in header
+
+        # The generated module must parse cleanly (no SyntaxError from a broken
+        # string literal) and the model_config must hold the exact path.
+        full = "\n".join(_module_header("Cfg", tricky) + ["    FOO: str", ""])
+        ns: dict[str, object] = {}
+        exec(compile(full, "<gen>", "exec"), ns)  # noqa: S102 - generated-module smoke test
+        cfg_cls = ns["Cfg"]
+        assert cfg_cls.model_config["env_file"] == str(tricky)  # type: ignore[index,attr-defined]
+
+    def test_init_aliased_field_keeps_typed_default(self, tmp_path: Path) -> None:
+        """#423: an aliased keyword field with an int/bool value keeps its default.
+
+        `class=8080` must render `Field(alias='class', default=8080)` — the typed
+        default has to survive the Field(...) path, not get dropped to required.
+        """
+        env_file = tmp_path / ".env"
+        env_file.write_text("class=8080\nimport=true\n")
+        out = tmp_path / "settings.py"
+
+        result = runner.invoke(
+            app, ["init", str(env_file), "--output", str(out), "--class-name", "Cfg"]
+        )
+        assert result.exit_code == 0, result.output
+
+        content = out.read_text()
+        assert "alias='class'" in content and "default=8080" in content
+        assert "alias='import'" in content and "default=True" in content
+
+        spec = importlib.util.spec_from_file_location("gen_typed_alias", out)
+        assert spec is not None and spec.loader is not None
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        cfg = module.Cfg()
+        assert cfg.class_ == 8080
+        assert cfg.import_ is True
+
+    def test_init_keyword_collision_keeps_both_env_bindings(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """#423: a key colliding with a keyword's sanitized form keeps its alias.
+
+        `class` sanitizes to `class_`; a literal `class_` key then collides and is
+        bumped to `class__`. Without an alias on the bumped field, pydantic-settings
+        would look up the env var `CLASS__` and silently lose the `class_` value.
+        Both fields must alias back to their original env var names so each binds.
+        """
+        env_file = tmp_path / ".env"
+        env_file.write_text("class=fromkeyword\nclass_=fromcollision\n")
+        out = tmp_path / "settings.py"
+
+        result = runner.invoke(
+            app, ["init", str(env_file), "--output", str(out), "--class-name", "Cfg"]
+        )
+        assert result.exit_code == 0, result.output
+
+        content = out.read_text()
+        # The keyword key keeps its alias to the original `class` env var.
+        assert "alias='class'" in content
+        # The colliding `class_` key, bumped to `class__`, must alias back to
+        # `class_` rather than silently binding to `CLASS__`.
+        assert "class__: " in content
+        assert "alias='class_'" in content
+
+        # Constructing the module resolves both env vars via their aliases — the
+        # `class_` value is not dropped onto a phantom `CLASS__` lookup.
+        monkeypatch.setenv("class", "fromkeyword")
+        monkeypatch.setenv("class_", "fromcollision")
+        spec = importlib.util.spec_from_file_location("gen_collide_settings", out)
+        assert spec is not None and spec.loader is not None
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        cfg = module.Cfg()
+        assert cfg.class_ == "fromkeyword"
+        assert cfg.class__ == "fromcollision"
+
+    def test_init_pydantic_reserved_field_names_produce_importable_module(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """#423: .env keys colliding with pydantic reserved names stay importable.
+
+        Valid, non-keyword identifiers that fall in pydantic's protected ``model_``
+        namespace (``model_dump`` raises at import; ``model_config`` silently
+        shadows the class's own ``model_config``) or reuse a BaseSettings/BaseModel
+        attribute (``schema`` warns and shadows machinery) previously passed through
+        ``_needs_sanitizing`` unsanitized and were emitted as bare annotations. The
+        fix sanitizes + aliases them like keywords so the module imports and each
+        field still binds to its original env var via the alias.
+        """
+        env_file = tmp_path / ".env"
+        # model_dump -> raised ValueError at import before the fix; the others
+        # shadowed real model machinery.
+        env_file.write_text("model_dump=a\nmodel_config=b\nschema=c\nVALID=keep\n")
+        out = tmp_path / "settings.py"
+
+        result = runner.invoke(
+            app, ["init", str(env_file), "--output", str(out), "--class-name", "Cfg"]
+        )
+        assert result.exit_code == 0, result.output
+
+        content = out.read_text()
+        # None of the reserved names may appear as a bare attribute annotation.
+        assert "\n    model_dump: " not in content
+        assert "\n    model_config: str" not in content
+        assert "\n    schema: " not in content
+        # A safe attribute name carries the original key as an alias.
+        assert "field_model_dump" in content
+        assert "alias='model_dump'" in content
+        assert "alias='model_config'" in content
+        assert "alias='schema'" in content
+        # The class's own model_config (SettingsConfigDict) is untouched.
+        assert "model_config = SettingsConfigDict(" in content
+
+        # The generated module must import (no ValueError from the protected
+        # namespace, no SyntaxError) and resolve every reserved key via its alias.
+        monkeypatch.setenv("model_dump", "a")
+        monkeypatch.setenv("model_config", "b")
+        monkeypatch.setenv("schema", "c")
+        spec = importlib.util.spec_from_file_location("gen_reserved_settings", out)
+        assert spec is not None and spec.loader is not None
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        cfg = module.Cfg()
+        assert cfg.field_model_dump == "a"
+        assert cfg.field_model_config == "b"
+        assert cfg.field_schema == "c"
+
 
 class TestHookCommand:
     """Tests for the hook CLI command."""
@@ -2006,6 +2248,61 @@ class TestSyncCommand:
         assert captured["provider"] == "gcp"
         assert captured["kwargs"]["project_id"] == "my-gcp-project"
         assert captured["config"].default_vault_name == "gcp"
+
+    def test_sync_unicode_decode_error_exits_cleanly(self, monkeypatch, tmp_path: Path):
+        """A non-UTF-8 env file during sync exits 1, not a traceback (#413).
+
+        Regression for #413: ``sync --check-decryption`` read env files outside any
+        guard, so a non-UTF-8 file raised ``UnicodeDecodeError`` that escaped the
+        CLI's narrow ``except (VaultError, SyncConfigError, SecretNotFoundError)``.
+        The catch is now broadened to ``OSError``/``UnicodeDecodeError`` so the user
+        gets a clean error and exit code 1 instead of a crash.
+        """
+        config_file = tmp_path / "envdrift.toml"
+        config_file.write_text(
+            dedent(
+                """
+                [vault]
+                provider = "gcp"
+
+                [vault.gcp]
+                project_id = "my-gcp-project"
+
+                [vault.sync]
+                default_vault_name = "gcp"
+
+                [[vault.sync.mappings]]
+                secret_name = "dotenv-key"
+                folder_path = "services/api"
+                """
+            )
+        )
+        monkeypatch.chdir(tmp_path)
+
+        monkeypatch.setattr(
+            "envdrift.vault.get_vault_client",
+            lambda *_a, **_k: SimpleNamespace(ensure_authenticated=lambda: None),
+        )
+        monkeypatch.setattr("envdrift.output.rich.print_service_sync_status", lambda *_, **__: None)
+        monkeypatch.setattr("envdrift.output.rich.print_sync_result", lambda *_, **__: None)
+
+        class DummyEngine:
+            def __init__(self, config, vault_client, mode, prompt_callback, progress_callback):
+                pass
+
+            def sync_all(self):
+                # Simulate the real engine hitting a non-UTF-8 env file.
+                b"\xff\xfe".decode("utf-8")
+                raise AssertionError("decode above should have raised")
+
+        monkeypatch.setattr("envdrift.sync.engine.SyncEngine", DummyEngine)
+
+        result = runner.invoke(app, ["sync", "--check-decryption"])
+
+        assert result.exit_code == 1
+        assert "sync failed" in result.output.lower()
+        # No raw traceback leaked to the user.
+        assert "Traceback" not in result.output
 
     def test_sync_invalid_toml_config_errors(self, monkeypatch, tmp_path: Path):
         """Invalid TOML sync config should raise a SyncConfigError."""
@@ -3088,6 +3385,214 @@ class TestPullCommand:
         assert "DEBUG=true" in content
         assert "API_KEY=decrypted_key" in content
         assert "DB_PASS=decrypted_pass" in content
+
+    @staticmethod
+    def _write_partial_config(config_file: Path, service_dir: Path, paths: dict[str, Path]) -> None:
+        """Write a sync TOML with one ``prod`` partial-encryption environment."""
+        config_file.write_text(
+            dedent(
+                f"""
+                [vault]
+                provider = "aws"
+
+                [vault.sync]
+                [[vault.sync.mappings]]
+                secret_name = "key"
+                folder_path = "{service_dir.as_posix()}"
+                environment = "prod"
+
+                [partial_encryption]
+                enabled = true
+
+                [[partial_encryption.environments]]
+                name = "prod"
+                clear_file = "{paths["clear_file"].as_posix()}"
+                secret_file = "{paths["secret_file"].as_posix()}"
+                combined_file = "{paths["combined_file"].as_posix()}"
+                """
+            ).lstrip()
+        )
+
+    @staticmethod
+    def _stub_merge_pull_seams(monkeypatch, service_dir: Path) -> None:
+        """Stub only the vault/backend/hook seams for ``pull --merge`` tests.
+
+        The gitignore + combined-file writing under test still runs for real.
+        """
+        from envdrift.sync.config import ServiceMapping, SyncConfig
+
+        monkeypatch.setattr(
+            "envdrift.cli_commands.encryption_helpers.resolve_encryption_backend",
+            lambda *_args, **_kwargs: (
+                DummyEncryptionBackend(
+                    name="dotenvx",
+                    installed=True,
+                    has_encrypted_header=lambda _: False,
+                ),
+                EncryptionProvider.DOTENVX,
+                None,
+            ),
+        )
+        monkeypatch.setattr(
+            "envdrift.core.partial_encryption.pull_partial_encryption",
+            lambda _: (False, True),  # (was_decrypted, protected)
+        )
+        sync_config = SyncConfig(
+            mappings=[
+                ServiceMapping(secret_name="key", folder_path=service_dir, environment="prod")
+            ],
+        )
+        monkeypatch.setattr(
+            "envdrift.cli_commands.sync.load_sync_config_and_client",
+            lambda *_args, **_kwargs: (sync_config, SimpleNamespace(), "aws", None, None, None),
+        )
+        monkeypatch.setattr(
+            "envdrift.integrations.hook_check.ensure_git_hook_setup",
+            lambda **_kwargs: [],
+        )
+
+    @classmethod
+    def _setup_merge_pull_env(cls, monkeypatch, tmp_path: Path) -> dict[str, Path]:
+        """Build a real git repo + config for the ``pull --merge`` regression test.
+
+        Returns the clear/secret/combined paths and the config file. Only the
+        vault/backend/hook seams are stubbed; the gitignore + combined-file
+        writing under test runs for real.
+        """
+        import subprocess
+
+        # A real git repo so ensure_gitignore_entries can resolve the git root and
+        # write a real .gitignore (no mock of the behavior under test).
+        subprocess.run(["git", "init"], cwd=str(tmp_path), capture_output=True, check=True)
+
+        service_dir = tmp_path / "service"
+        service_dir.mkdir()
+
+        paths = {
+            "clear_file": service_dir / ".env.prod.clear",
+            "secret_file": service_dir / ".env.prod.secret",
+            "combined_file": service_dir / ".env.prod",
+            "config_file": tmp_path / "envdrift.toml",
+        }
+        paths["clear_file"].write_text("APP_NAME=myapp\n")
+        paths["secret_file"].write_text("API_KEY=decrypted_key\n")
+
+        cls._write_partial_config(paths["config_file"], service_dir, paths)
+        cls._stub_merge_pull_seams(monkeypatch, service_dir)
+        return paths
+
+    def test_pull_merge_gitignores_combined_file(
+        self,
+        monkeypatch,
+        tmp_path: Path,
+    ):
+        """Pull --merge must gitignore the decrypted combined file (#413).
+
+        Regression for #413: the ``--merge`` branch wrote a combined file
+        containing merged clear + DECRYPTED secret values but never added it to
+        ``.gitignore`` (unlike ``push``, which calls ``_ensure_combined_gitignore``
+        first). A routine ``git add .`` then staged plaintext secrets. This test
+        runs the real ``pull --merge`` path against a real git repo and asserts the
+        combined file lands in ``.gitignore``.
+        """
+        import subprocess
+
+        env = self._setup_merge_pull_env(monkeypatch, tmp_path)
+        combined_file = env["combined_file"]
+        config_file = env["config_file"]
+
+        result = runner.invoke(app, ["pull", "-c", str(config_file), "--skip-sync", "--merge"])
+
+        assert result.exit_code == 0, result.output
+        assert combined_file.exists()
+
+        # The decrypted combined artifact must be gitignored, matching `push`.
+        gitignore = tmp_path / ".gitignore"
+        assert gitignore.exists(), ".gitignore was not created for the decrypted combined file"
+        ignored = {line.strip() for line in gitignore.read_text().splitlines() if line.strip()}
+        combined_rel = combined_file.resolve().relative_to(tmp_path.resolve()).as_posix()
+        assert combined_rel in ignored, (
+            f"{combined_rel} not gitignored; .gitignore has: {sorted(ignored)}"
+        )
+
+        # `git status` must NOT see the combined file as untracked-and-stageable.
+        status = subprocess.run(
+            ["git", "status", "--porcelain", "--", combined_rel],
+            cwd=str(tmp_path),
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        assert status.stdout.strip() == "", (
+            f"combined file is still visible to git: {status.stdout!r}"
+        )
+
+    def test_pull_merge_reports_error_on_non_utf8_secret(
+        self,
+        monkeypatch,
+        tmp_path: Path,
+    ):
+        """A non-UTF-8 secret file must surface a partial error, not crash.
+
+        The merge writer reads files as UTF-8; a decrypted secret with invalid
+        bytes raises ``UnicodeDecodeError``. ``pull --merge`` must catch it,
+        record a partial error, and exit 1 cleanly rather than propagating an
+        unhandled exception out of the command.
+        """
+        env = self._setup_merge_pull_env(monkeypatch, tmp_path)
+        # Overwrite the secret file with bytes that are not valid UTF-8 so the
+        # real merge writer (read_text(encoding="utf-8")) raises.
+        env["secret_file"].write_bytes(b"API_KEY=\xff\xfe_not_utf8\n")
+        config_file = env["config_file"]
+
+        result = runner.invoke(app, ["pull", "-c", str(config_file), "--skip-sync", "--merge"])
+
+        assert result.exit_code == 1, result.output
+        assert "merge failed" in result.output.lower()
+        assert "partial encryption" in result.output.lower()
+        # The decrypted combined artifact must not be left half-written.
+        assert not env["combined_file"].exists()
+
+    @staticmethod
+    def test_write_merged_combined_file_handles_missing_inputs(tmp_path: Path):
+        """The merge writer tolerates a missing clear and/or secret file.
+
+        Exercises every existence branch of ``_write_merged_combined_file``:
+        both present, only clear, only secret, and neither. The header lines
+        from the secret file (``#/---`` banner, ``DOTENV_PUBLIC_KEY``) are
+        always stripped.
+        """
+        from envdrift.cli_commands.sync import _write_merged_combined_file
+
+        clear = tmp_path / ".env.clear"
+        secret = tmp_path / ".env.secret"
+        combined = tmp_path / ".env"
+
+        # Both present: clear lines, a blank separator, then stripped secret lines.
+        clear.write_text("APP=web\n")
+        secret.write_text("#/--- banner\nDOTENV_PUBLIC_KEY=abc\nAPI_KEY=k\n")
+        _write_merged_combined_file(clear, secret, combined)
+        body = combined.read_text()
+        assert "APP=web" in body
+        assert "API_KEY=k" in body
+        assert "banner" not in body
+        assert "DOTENV_PUBLIC_KEY" not in body
+
+        # Only the secret file present (clear missing): no separator needed.
+        clear.unlink()
+        _write_merged_combined_file(clear, secret, combined)
+        assert combined.read_text().strip() == "API_KEY=k"
+
+        # Only the clear file present (secret missing).
+        clear.write_text("APP=web\n")
+        secret.unlink()
+        _write_merged_combined_file(clear, secret, combined)
+        assert combined.read_text() == "APP=web\n\n"
+
+        # Neither input present: an empty (single trailing newline) combined file.
+        clear.unlink()
+        _write_merged_combined_file(clear, secret, combined)
+        assert combined.read_text() == "\n"
 
 
 class TestLockCommand:

@@ -74,7 +74,13 @@ type RegistryWatcher struct {
 	registry  *Registry
 	onChange  func(*Registry)
 	done      chan struct{}
+	stopOnce  sync.Once
 	mu        sync.RWMutex
+	// debounceTimer coalesces rapid registry writes; guarded by timerMu so Stop()
+	// can cancel a pending reload that would otherwise fire after shutdown.
+	timerMu       sync.Mutex
+	debounceTimer *time.Timer
+	stopped       bool
 }
 
 // NewRegistryWatcher creates a watcher for the projects.json file.
@@ -120,10 +126,25 @@ func (rw *RegistryWatcher) Start() error {
 	return nil
 }
 
-// Stop stops watching the registry file.
+// Stop stops watching the registry file. It is idempotent and concurrency-safe:
+// the body runs at most once (sync.Once), mirroring Watcher.Stop (#362), so a
+// second or concurrent call can't panic on a double close(rw.done). It also
+// cancels any pending debounce timer and marks the watcher stopped so a reload
+// that the timer already fired can't run onChange after shutdown and re-add
+// project watchers the guardian believes it tore down.
 func (rw *RegistryWatcher) Stop() {
-	close(rw.done)
-	_ = rw.fsWatcher.Close()
+	rw.stopOnce.Do(func() {
+		rw.timerMu.Lock()
+		rw.stopped = true
+		if rw.debounceTimer != nil {
+			rw.debounceTimer.Stop()
+			rw.debounceTimer = nil
+		}
+		rw.timerMu.Unlock()
+
+		close(rw.done)
+		_ = rw.fsWatcher.Close()
+	})
 }
 
 // GetRegistry returns the current registry.
@@ -134,14 +155,10 @@ func (rw *RegistryWatcher) GetRegistry() *Registry {
 }
 
 func (rw *RegistryWatcher) run() {
-	var debounceTimer *time.Timer
-
 	for {
 		select {
 		case <-rw.done:
-			if debounceTimer != nil {
-				debounceTimer.Stop()
-			}
+			// Stop() already cancelled the debounce timer under timerMu.
 			return
 
 		case event, ok := <-rw.fsWatcher.Events:
@@ -154,13 +171,7 @@ func (rw *RegistryWatcher) run() {
 				continue
 			}
 
-			// Debounce rapid changes
-			if debounceTimer != nil {
-				debounceTimer.Stop()
-			}
-			debounceTimer = time.AfterFunc(100*time.Millisecond, func() {
-				rw.reload()
-			})
+			rw.scheduleReload()
 
 		case _, ok := <-rw.fsWatcher.Errors:
 			if !ok {
@@ -170,7 +181,33 @@ func (rw *RegistryWatcher) run() {
 	}
 }
 
+// scheduleReload (re)arms the debounce timer on the struct under timerMu so that
+// Stop() can cancel a pending reload. If the watcher is already stopped, no new
+// timer is armed.
+func (rw *RegistryWatcher) scheduleReload() {
+	rw.timerMu.Lock()
+	defer rw.timerMu.Unlock()
+
+	if rw.stopped {
+		return
+	}
+	if rw.debounceTimer != nil {
+		rw.debounceTimer.Stop()
+	}
+	rw.debounceTimer = time.AfterFunc(100*time.Millisecond, rw.reload)
+}
+
 func (rw *RegistryWatcher) reload() {
+	// A timer can fire concurrently with Stop(): if Stop() already ran, skip the
+	// onChange callback so we don't re-add watchers the guardian has torn down
+	// (leaking fsnotify watchers/FDs and goroutines past shutdown).
+	rw.timerMu.Lock()
+	stopped := rw.stopped
+	rw.timerMu.Unlock()
+	if stopped {
+		return
+	}
+
 	reg, err := Load()
 	if err != nil {
 		return
