@@ -14,6 +14,7 @@ from envdrift.vault.base import (
 
 try:
     from azure.core.exceptions import (
+        AzureError,
         ClientAuthenticationError,
         HttpResponseError,
         ResourceNotFoundError,
@@ -29,6 +30,7 @@ except ImportError:
     ResourceNotFoundError = Exception  # type: ignore[misc, assignment]
     ClientAuthenticationError = Exception  # type: ignore[misc, assignment]
     HttpResponseError = Exception  # type: ignore[misc, assignment]
+    AzureError = Exception  # type: ignore[misc, assignment]
 
 
 def _get_azure_classes() -> tuple[Any, Any]:
@@ -36,6 +38,23 @@ def _get_azure_classes() -> tuple[Any, Any]:
     if not AZURE_AVAILABLE or _DefaultAzureCredential is None or _SecretClient is None:
         raise ImportError("Azure SDK not installed. Install with: pip install envdrift[azure]")
     return _DefaultAzureCredential, _SecretClient
+
+
+def _map_azure_error(e: Exception, *, denied_msg: str) -> Exception:
+    """Translate an Azure SDK exception into a domain error.
+
+    Shared by get/list/set so each delegates instead of repeating the
+    auth-then-HTTP-then-transport catch ladder:
+
+    - ``ClientAuthenticationError`` (mid-session 401, a subclass of
+      ``HttpResponseError``, so it must be checked first) -> ``AuthenticationError``.
+    - ``HttpResponseError`` / any other ``AzureError`` (incl. transport failures
+      like ``ServiceRequestError`` that are *not* ``HttpResponseError``)
+      -> ``VaultError``.
+    """
+    if isinstance(e, ClientAuthenticationError):
+        return AuthenticationError(denied_msg)
+    return VaultError(f"Azure Key Vault error: {e}")
 
 
 class AzureKeyVaultClient(VaultClient):
@@ -110,6 +129,16 @@ class AzureKeyVaultClient(VaultClient):
             self._client = None
             self._credential = None
             raise VaultError(f"Azure Key Vault error: {e}") from e
+        except AzureError as e:
+            # Transport-layer failure that is not an HttpResponseError -- e.g.
+            # ServiceRequestError (DNS/TLS/connectivity). This is a genuine
+            # failure, not a least-privilege List denial, so discard the
+            # half-initialized client and surface it as a VaultError (matching
+            # how get_secret/list_secrets/set_secret map transport errors), rather
+            # than letting the raw SDK exception escape the domain hierarchy.
+            self._client = None
+            self._credential = None
+            raise VaultError(f"Azure Key Vault error: {e}") from e
 
     def is_authenticated(self) -> bool:
         """
@@ -154,8 +183,8 @@ class AzureKeyVaultClient(VaultClient):
             )
         except ResourceNotFoundError as e:
             raise SecretNotFoundError(f"Secret '{name}' not found in vault") from e
-        except HttpResponseError as e:
-            raise VaultError(f"Azure Key Vault error: {e}") from e
+        except AzureError as e:
+            raise _map_azure_error(e, denied_msg=f"Access denied to secret '{name}': {e}") from e
 
     def list_secrets(self, prefix: str = "") -> list[str]:
         """
@@ -176,8 +205,8 @@ class AzureKeyVaultClient(VaultClient):
                 if name and (not prefix or name.startswith(prefix)):
                     secrets.append(name)
             return sorted(secrets)
-        except HttpResponseError as e:
-            raise VaultError(f"Azure Key Vault error: {e}") from e
+        except AzureError as e:
+            raise _map_azure_error(e, denied_msg=f"Access denied to list secrets: {e}") from e
 
     def set_secret(self, name: str, value: str) -> SecretValue:
         """
@@ -198,5 +227,7 @@ class AzureKeyVaultClient(VaultClient):
                     "enabled": secret.properties.enabled,
                 },
             )
-        except HttpResponseError as e:
-            raise VaultError(f"Azure Key Vault error: {e}") from e
+        except AzureError as e:
+            raise _map_azure_error(
+                e, denied_msg=f"Access denied to write secret '{name}': {e}"
+            ) from e
