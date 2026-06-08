@@ -1,0 +1,24 @@
+src/envdrift/cli_commands/guard.py
+  s_dfc6cd6692ed8f::t_e30bdbefc7d7af 380-381
+  s_dfc6cd6692ed8f::t_0e6ce9382d61bb 427-430
+  s_dfc6cd6692ed8f::t_e0034088957268 407
+tests/unit/test_guard_machine_output.py
+  s_dfc6cd6692ed8f::t_6137d23f415bc3 140-228
+  s_dfc6cd6692ed8f::t_34c455e656e502 30-38
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.6",
+  "base_commit_sha": "d1a2c12f63e54883956f7f4814081d0d8a0d9f62",
+  "prompts": {},
+  "sessions": {
+    "s_dfc6cd6692ed8f": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "fd23e738-3512-4420-9290-d985ad979bfd",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Jainal Gosaliya <jainal09gosalia@gmail.com>"
+    }
+  }
+}
