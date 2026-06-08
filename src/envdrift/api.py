@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import warnings
 from pathlib import Path
 
 from envdrift.core.diff import DiffEngine, DiffResult
@@ -117,6 +118,10 @@ def init(
     `import`) are emitted with a sanitized attribute name plus a Pydantic
     ``alias`` so the generated module always imports cleanly.
 
+    Any keys the strict parser cannot read (e.g. ``2FA_ENABLED``, ``MY-DASH-VAR``)
+    are dropped from the generated module; the API surfaces them via a
+    ``UserWarning`` so callers are not left silently with an incomplete file.
+
     Returns:
         Path: The path to the written settings file.
 
@@ -131,4 +136,13 @@ def init(
 
     result = generate_settings_module(env_file, class_name, detect_sensitive)
     output.write_text(result.source)
+
+    if result.unparsed_keys:
+        warnings.warn(
+            "Skipped .env variable(s) the parser cannot read "
+            f"(non-identifier keys): {', '.join(result.unparsed_keys)}",
+            UserWarning,
+            stacklevel=2,
+        )
+
     return output

@@ -245,3 +245,38 @@ BOOL_FALSE=false
             init(env_file, output, class_name="123Bad")
         # No broken module written.
         assert not output.exists()
+
+    def test_init_warns_on_non_identifier_keys(self, tmp_path: Path):
+        """#423: the API surfaces dropped non-identifier keys via a UserWarning.
+
+        Keys the strict parser cannot read (`2FA_ENABLED`, `MY-DASH-VAR`) are
+        omitted from the generated module. The CLI prints a [WARN]; the public API
+        must not silently leave callers with an incomplete file — it warns instead.
+        """
+        env_file = tmp_path / ".env"
+        env_file.write_text("2FA_ENABLED=true\nMY-DASH-VAR=x\nVALID=keep\n")
+        output = tmp_path / "settings.py"
+
+        with pytest.warns(UserWarning, match="non-identifier keys") as record:
+            result = init(env_file, output, detect_sensitive=False)
+
+        assert result == output
+        message = str(record[0].message)
+        assert "2FA_ENABLED" in message
+        assert "MY-DASH-VAR" in message
+        # The parseable variable is still emitted.
+        assert "VALID" in output.read_text()
+
+    def test_init_no_warning_when_all_keys_parse(self, tmp_path: Path):
+        """#423: the API stays warning-free when every key is parseable."""
+        import warnings
+
+        env_file = tmp_path / ".env"
+        env_file.write_text("FOO=bar\nBAZ=qux\n")
+        output = tmp_path / "settings.py"
+
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            result = init(env_file, output, detect_sensitive=False)
+
+        assert result == output

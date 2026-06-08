@@ -1180,6 +1180,72 @@ class TestInitCommand:
         # Empty-ish input still yields a usable identifier.
         assert _sanitize_identifier("@").isidentifier()
 
+    def test_init_aliased_field_keeps_typed_default(self, tmp_path: Path) -> None:
+        """#423: an aliased keyword field with an int/bool value keeps its default.
+
+        `class=8080` must render `Field(alias='class', default=8080)` — the typed
+        default has to survive the Field(...) path, not get dropped to required.
+        """
+        env_file = tmp_path / ".env"
+        env_file.write_text("class=8080\nimport=true\n")
+        out = tmp_path / "settings.py"
+
+        result = runner.invoke(
+            app, ["init", str(env_file), "--output", str(out), "--class-name", "Cfg"]
+        )
+        assert result.exit_code == 0, result.output
+
+        content = out.read_text()
+        assert "alias='class'" in content and "default=8080" in content
+        assert "alias='import'" in content and "default=True" in content
+
+        spec = importlib.util.spec_from_file_location("gen_typed_alias", out)
+        assert spec is not None and spec.loader is not None
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        cfg = module.Cfg()
+        assert cfg.class_ == 8080
+        assert cfg.import_ is True
+
+    def test_init_keyword_collision_keeps_both_env_bindings(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """#423: a key colliding with a keyword's sanitized form keeps its alias.
+
+        `class` sanitizes to `class_`; a literal `class_` key then collides and is
+        bumped to `class__`. Without an alias on the bumped field, pydantic-settings
+        would look up the env var `CLASS__` and silently lose the `class_` value.
+        Both fields must alias back to their original env var names so each binds.
+        """
+        env_file = tmp_path / ".env"
+        env_file.write_text("class=fromkeyword\nclass_=fromcollision\n")
+        out = tmp_path / "settings.py"
+
+        result = runner.invoke(
+            app, ["init", str(env_file), "--output", str(out), "--class-name", "Cfg"]
+        )
+        assert result.exit_code == 0, result.output
+
+        content = out.read_text()
+        # The keyword key keeps its alias to the original `class` env var.
+        assert "alias='class'" in content
+        # The colliding `class_` key, bumped to `class__`, must alias back to
+        # `class_` rather than silently binding to `CLASS__`.
+        assert "class__: " in content
+        assert "alias='class_'" in content
+
+        # Constructing the module resolves both env vars via their aliases — the
+        # `class_` value is not dropped onto a phantom `CLASS__` lookup.
+        monkeypatch.setenv("class", "fromkeyword")
+        monkeypatch.setenv("class_", "fromcollision")
+        spec = importlib.util.spec_from_file_location("gen_collide_settings", out)
+        assert spec is not None and spec.loader is not None
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        cfg = module.Cfg()
+        assert cfg.class_ == "fromkeyword"
+        assert cfg.class__ == "fromcollision"
+
 
 class TestHookCommand:
     """Tests for the hook CLI command."""

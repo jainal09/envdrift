@@ -60,6 +60,96 @@ def _raw_assignment_keys(text: str) -> list[str]:
     return keys
 
 
+def _resolve_field_name(var_name: str, used_names: set[str]) -> tuple[str, str | None]:
+    """Pick a unique, importable attribute name for ``var_name``.
+
+    Returns ``(field_name, alias)`` where ``alias`` is the original env var name
+    whenever the attribute name differs from it (so pydantic-settings still binds
+    to the real variable). ``used_names`` is updated in place with the chosen name.
+
+    The alias is set whenever a rename happens — both when sanitizing a
+    non-identifier/keyword key *and* when bumping a name that collides with an
+    already-used one. Without the collision-case alias, a key like ``class_`` that
+    collapses onto the sanitized form of ``class`` would be renamed to ``class__``
+    and silently lose its binding to the ``class_`` env var.
+    """
+    field_name = var_name
+    alias: str | None = None
+    if not var_name.isidentifier() or keyword.iskeyword(var_name):
+        field_name = _sanitize_identifier(var_name)
+        alias = var_name
+    # Guard against two distinct keys collapsing to the same sanitized name. Any
+    # rename must carry an alias back to the original env var name.
+    if field_name in used_names:
+        alias = alias or var_name
+        while field_name in used_names:
+            field_name = f"{field_name}_"
+    used_names.add(field_name)
+    return field_name, alias
+
+
+def _infer_type(value: str) -> tuple[str, object | None]:
+    """Infer a Python type hint and literal default from a raw .env value.
+
+    Returns ``(type_hint, default)`` where ``default`` is ``None`` for values
+    that should stay required (plain strings). ``str.isdigit()`` is True for some
+    non-ASCII digits that ``int()`` rejects, so the ASCII guard avoids a crash.
+    """
+    if value.lower() in ("true", "false"):
+        return "bool", value.lower() == "true"
+    if value.isascii() and value.isdigit():
+        return "int", int(value)
+    return "str", None
+
+
+def _render_field_line(
+    field_name: str,
+    type_hint: str,
+    default_val: object | None,
+    alias: str | None,
+    is_sensitive: bool,
+) -> str:
+    """Render a single Settings field line for the generated module.
+
+    Reaches for ``Field(...)`` only when metadata is needed (an alias for a
+    non-identifier name or the sensitive marker); the common case stays the plain
+    ``KEY: type`` / ``KEY: type = default`` form.
+    """
+    needs_field = alias is not None or is_sensitive
+    if needs_field:
+        field_args: list[str] = []
+        if alias is not None:
+            field_args.append(f"alias={alias!r}")
+        if default_val is not None:
+            field_args.append(f"default={default_val!r}")
+        if is_sensitive:
+            field_args.append('json_schema_extra={"sensitive": True}')
+        return f"    {field_name}: {type_hint} = Field({', '.join(field_args)})"
+    if default_val is not None:
+        return f"    {field_name}: {type_hint} = {default_val!r}"
+    return f"    {field_name}: {type_hint}"
+
+
+def _module_header(class_name: str, env_file: Path) -> list[str]:
+    """Build the static import/class/model_config preamble for the module."""
+    return [
+        '"""Auto-generated Pydantic Settings class."""',
+        "",
+        "from pydantic import Field",
+        "from pydantic_settings import BaseSettings, SettingsConfigDict",
+        "",
+        "",
+        f"class {class_name}(BaseSettings):",
+        f'    """Settings generated from {env_file}."""',
+        "",
+        "    model_config = SettingsConfigDict(",
+        f'        env_file="{env_file}",',
+        '        extra="forbid",',
+        "    )",
+        "",
+    ]
+
+
 def generate_settings_module(
     env_file: Path,
     class_name: str = "Settings",
@@ -100,73 +190,20 @@ def generate_settings_module(
             if detector.is_name_sensitive(var_name) or detector.is_value_suspicious(env_var.value):
                 sensitive_vars.add(var_name)
 
-    lines = [
-        '"""Auto-generated Pydantic Settings class."""',
-        "",
-        "from pydantic import Field",
-        "from pydantic_settings import BaseSettings, SettingsConfigDict",
-        "",
-        "",
-        f"class {class_name}(BaseSettings):",
-        f'    """Settings generated from {env_file}."""',
-        "",
-        "    model_config = SettingsConfigDict(",
-        f'        env_file="{env_file}",',
-        '        extra="forbid",',
-        "    )",
-        "",
-    ]
+    lines = _module_header(class_name, env_file)
 
     aliased_count = 0
     used_names: set[str] = set()
     for var_name, env_var in sorted(env.variables.items()):
-        is_sensitive = var_name in sensitive_vars
-
-        # A var name that is not a valid identifier (or is a keyword) cannot be a
-        # Python attribute. Emit a sanitized field name plus a Pydantic alias so
-        # the module imports cleanly and still binds to the real env var.
-        field_name = var_name
-        alias = None
-        if not var_name.isidentifier() or keyword.iskeyword(var_name):
-            field_name = _sanitize_identifier(var_name)
-            alias = var_name
-        # Guard against two distinct keys collapsing to the same sanitized name.
-        while field_name in used_names:
-            field_name = f"{field_name}_"
-        used_names.add(field_name)
+        field_name, alias = _resolve_field_name(var_name, used_names)
         if alias is not None:
             aliased_count += 1
-
-        # Try to infer type from value
-        value = env_var.value
-        if value.lower() in ("true", "false"):
-            type_hint = "bool"
-            default_val = value.lower() == "true"
-        elif value.isascii() and value.isdigit():
-            type_hint = "int"
-            default_val = int(value)
-        else:
-            type_hint = "str"
-            default_val = None  # Will be required
-
-        # Only reach for Field(...) when we actually need its metadata (an alias
-        # for a non-identifier name, or the sensitive marker). The common case
-        # stays the plain `KEY: type` / `KEY: type = default` form.
-        needs_field = alias is not None or is_sensitive
-        if needs_field:
-            field_args: list[str] = []
-            if alias is not None:
-                field_args.append(f"alias={alias!r}")
-            if default_val is not None:
-                field_args.append(f"default={default_val!r}")
-            if is_sensitive:
-                field_args.append('json_schema_extra={"sensitive": True}')
-            joined = ", ".join(field_args)
-            lines.append(f"    {field_name}: {type_hint} = Field({joined})")
-        elif default_val is not None:
-            lines.append(f"    {field_name}: {type_hint} = {default_val!r}")
-        else:
-            lines.append(f"    {field_name}: {type_hint}")
+        type_hint, default_val = _infer_type(env_var.value)
+        lines.append(
+            _render_field_line(
+                field_name, type_hint, default_val, alias, var_name in sensitive_vars
+            )
+        )
 
     lines.append("")
 
@@ -244,6 +281,6 @@ def init(
 
     if result.aliased_count:
         console.print(
-            f"[dim]Aliased {result.aliased_count} variable(s) whose name is not a "
-            "valid Python identifier[/dim]"
+            f"[dim]Aliased {result.aliased_count} variable(s) whose attribute name "
+            "differs from the original (non-identifier, keyword, or name collision)[/dim]"
         )

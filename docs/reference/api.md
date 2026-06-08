@@ -105,6 +105,17 @@ print(f"Generated: {output_path}")
 
 **Returns:** `Path` to generated file
 
+**Raises:** `ValueError` if `class_name` is not a valid Python identifier (or is a
+Python keyword), before any file is written.
+
+**Warnings:** `.env` keys the strict parser cannot read (a leading digit like
+`2FA_ENABLED`, or a dash like `MY-DASH-VAR`) are skipped — they would later be
+rejected under `extra="forbid"`. The API emits a `UserWarning` naming the skipped
+keys so callers are not left with a silently incomplete file (the CLI surfaces the
+same information in a `[WARN]` line). Keys that are valid identifiers but Python
+keywords (`class`, `import`) are kept, emitted under a sanitized attribute name
+plus a Pydantic `alias` that binds back to the original variable.
+
 ---
 
 ## Core Classes
