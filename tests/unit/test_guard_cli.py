@@ -146,6 +146,82 @@ def test_guard_uses_config_scanners(tmp_path: Path, monkeypatch):
     assert guard_config.ignore_paths == ["vendor/**"]
 
 
+def test_guard_survives_bad_guardian_idle_timeout(tmp_path: Path, monkeypatch):
+    """A bad [guardian] idle_timeout must not crash 'envdrift guard' (#413).
+
+    guard never reads the agent-only [guardian] section, so a typo there should
+    not be fatal. This exercises the REAL load_config (only ScanEngine is
+    stubbed); before the deferred-validation fix, load_config raised ValueError
+    eagerly and guard died with a traceback.
+    """
+    dummy_result = _build_result([])
+
+    class DummyEngine:
+        def __init__(self, guard_config):
+            self.scanners = []
+
+        def get_scanner_info(self):
+            return []
+
+        def scan(self, paths, on_scanner_complete=None):
+            return dummy_result
+
+        def check_combined_files_security(self):
+            return []
+
+    # Deliberately NOT patching load_config — the real loader must tolerate this.
+    monkeypatch.setattr("envdrift.cli_commands.guard.ScanEngine", DummyEngine)
+
+    (tmp_path / "envdrift.toml").write_text("""
+[guardian]
+idle_timeout = "five minutes"
+""")
+    monkeypatch.chdir(tmp_path)
+
+    result = runner.invoke(app, ["guard", "."])
+
+    assert result.exit_code == 0
+    assert result.exception is None
+    assert "guardian.idle_timeout" not in result.output
+
+
+def test_guard_survives_bad_partial_encryption(tmp_path: Path, monkeypatch):
+    """A bad [[partial_encryption.environments]] must not crash 'envdrift guard' (#413)."""
+    dummy_result = _build_result([])
+
+    class DummyEngine:
+        def __init__(self, guard_config):
+            self.scanners = []
+
+        def get_scanner_info(self):
+            return []
+
+        def scan(self, paths, on_scanner_complete=None):
+            return dummy_result
+
+        def check_combined_files_security(self):
+            return []
+
+    monkeypatch.setattr("envdrift.cli_commands.guard.ScanEngine", DummyEngine)
+
+    (tmp_path / "envdrift.toml").write_text("""
+[partial_encryption]
+enabled = true
+
+[[partial_encryption.environments]]
+name = "production"
+secrets_only = true
+# secrets_dir omitted — invalid, but guard must not care
+""")
+    monkeypatch.chdir(tmp_path)
+
+    result = runner.invoke(app, ["guard", "."])
+
+    assert result.exit_code == 0
+    assert result.exception is None
+    assert "secrets_dir is required" not in result.output
+
+
 def test_guard_passes_custom_env_files_to_engine(tmp_path: Path, monkeypatch):
     """vault.sync env_file mappings should be treated as guard env files."""
     service_dir = tmp_path / "secrets" / "postgresql"
