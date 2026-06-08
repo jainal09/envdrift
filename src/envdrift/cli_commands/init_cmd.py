@@ -294,12 +294,29 @@ def generate_settings_module(
 def _print_generation_summary(result: SettingsGeneration) -> None:
     """Print the dim post-generation summary (sensitive + aliased counts)."""
     if result.sensitive_vars:
-        console.print(f"[dim]Detected {len(result.sensitive_vars)} sensitive variable(s)[/dim]")
+        names = ", ".join(sorted(result.sensitive_vars))
+        console.print(
+            f"[dim]Detected {len(result.sensitive_vars)} sensitive variable(s): {names}[/dim]"
+        )
     if result.aliased_count:
         console.print(
             f"[dim]Aliased {result.aliased_count} variable(s) whose attribute name "
             "differs from the original (non-identifier, keyword, or name collision)[/dim]"
         )
+
+
+def _print_next_step(output: Path, class_name: str) -> None:
+    """Point the user at the exact command to validate against the new schema.
+
+    Without this, a new user runs the obvious ``validate --schema settings:Settings``
+    and hits ``No module named 'settings'`` because the schema is in the cwd.
+    ``validate`` now defaults ``--service-dir`` to the cwd, so this command works
+    as-is from the project directory.
+    """
+    console.print(
+        f"\n[bold]Next:[/bold] validate your .env against it — "
+        f"[cyan]envdrift validate --schema {output.stem}:{class_name}[/cyan]"
+    )
 
 
 def _generate_or_exit(
@@ -357,6 +374,7 @@ def init(
     result = _generate_or_exit(env_file, class_name, detect_sensitive)
 
     _write_init_output(result, output, force=force)
+    _print_next_step(output, class_name)
 
 
 def _write_init_output(result: SettingsGeneration, output: Path, *, force: bool) -> None:

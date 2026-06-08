@@ -1190,6 +1190,33 @@ class TestInitCommand:
         assert "DEBUG" in content
         assert "PORT" in content
 
+    def test_init_prints_next_step_and_names_sensitive(self, tmp_path: Path, monkeypatch):
+        """init names the sensitive vars and prints the exact validate next-step."""
+        monkeypatch.chdir(tmp_path)
+        (tmp_path / ".env").write_text("APP_NAME=demo\nAPI_KEY=sk_live_abc123\n")
+
+        result = runner.invoke(app, ["init"])
+
+        assert result.exit_code == 0, result.output
+        out = " ".join(result.output.split())
+        assert "API_KEY" in out  # the sensitive var is named, not just counted
+        assert "Next:" in out
+        assert "envdrift validate --schema settings:Settings" in out
+
+    def test_init_then_validate_natural_command_works(self, tmp_path: Path, monkeypatch):
+        """First-run flow: init -> the suggested `validate --schema settings:Settings`
+        (no --service-dir) imports the cwd schema and PASSES (dogfood fix)."""
+        monkeypatch.chdir(tmp_path)
+        (tmp_path / ".env").write_text("APP_NAME=demo\nDEBUG=true\n")
+
+        init_result = runner.invoke(app, ["init"])
+        assert init_result.exit_code == 0, init_result.output
+
+        # Exactly what init told the user to run — no --service-dir flag.
+        val_result = runner.invoke(app, ["validate", ".env", "--schema", "settings:Settings"])
+        assert val_result.exit_code == 0, val_result.output
+        assert "PASSED" in val_result.output
+
     def test_init_detects_sensitive_vars(self, tmp_path: Path):
         """Test init --detect-sensitive marks sensitive vars."""
         env_file = tmp_path / ".env"
