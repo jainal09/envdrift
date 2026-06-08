@@ -60,39 +60,40 @@ func (w *Watcher) Events() <-chan FileEvent {
 // AddDirectory adds a directory to watch
 func (w *Watcher) AddDirectory(dir string) error {
 	dir = expandPath(dir)
-
 	if w.recursive {
-		// filepath.Walk visits the root first, so the hidden-dir skip must
-		// exclude the explicitly-registered root: a project whose own leaf dir
-		// is dotted (e.g. ~/.dotfiles) would otherwise SkipDir its entire
-		// subtree and silently watch nothing. Only skip hidden dirs *nested*
-		// below the root.
-		root := filepath.Clean(dir)
-		return filepath.Walk(dir, func(path string, info os.FileInfo, err error) error {
-			if err != nil {
-				return nil // Skip inaccessible directories
-			}
-			if info.IsDir() {
-				// Compare the cleaned path against the cleaned root so a dotted
-				// root passed with a trailing slash or otherwise non-clean form
-				// (e.g. "~/.dotfiles/") still matches and isn't SkipDir'd.
-				if isNestedHiddenDir(filepath.Clean(path), root, info.Name()) {
-					return filepath.SkipDir // Skip nested hidden directories
-				}
-				return w.fsWatcher.Add(path)
-			}
-			return nil
-		})
+		return w.addRecursive(dir)
 	}
-
 	return w.fsWatcher.Add(dir)
 }
 
-// isNestedHiddenDir reports whether the directory at cleanPath is a hidden
-// directory nested below root. The registered root is never treated as nested
-// (so a dotted root like ~/.dotfiles is still watched), and "." is not hidden.
-func isNestedHiddenDir(cleanPath, root, name string) bool {
-	return cleanPath != root && name != "." && strings.HasPrefix(name, ".")
+// addRecursive walks dir and registers every directory except hidden ones
+// nested below the root. filepath.Walk visits the root first, so the hidden-dir
+// skip must exclude the explicitly-registered root: a project whose own leaf dir
+// is dotted (e.g. ~/.dotfiles) would otherwise SkipDir its entire subtree and
+// silently watch nothing. Only hidden dirs *nested* below the root are skipped.
+func (w *Watcher) addRecursive(dir string) error {
+	root := filepath.Clean(dir)
+	return filepath.Walk(dir, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return nil // Skip inaccessible directories
+		}
+		if !info.IsDir() {
+			return nil
+		}
+		// Compare the cleaned path against the cleaned root so a dotted root
+		// passed with a trailing slash or otherwise non-clean form (e.g.
+		// "~/.dotfiles/") still matches the root and isn't SkipDir'd.
+		if filepath.Clean(path) != root && isHiddenName(info.Name()) {
+			return filepath.SkipDir // Skip nested hidden directories
+		}
+		return w.fsWatcher.Add(path)
+	})
+}
+
+// isHiddenName reports whether a directory base name denotes a hidden directory
+// ("." prefix), treating the current-dir entry "." as not hidden.
+func isHiddenName(name string) bool {
+	return name != "." && strings.HasPrefix(name, ".")
 }
 
 // Start begins watching for file changes

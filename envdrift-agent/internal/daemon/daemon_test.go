@@ -57,6 +57,33 @@ func TestIsRunning(t *testing.T) {
 	_ = IsRunning()
 }
 
+// supportedGOOS reports whether the current OS has a per-platform daemon handler.
+func supportedGOOS() bool {
+	switch runtime.GOOS {
+	case "darwin", "linux", "windows":
+		return true
+	default:
+		return false
+	}
+}
+
+// assertRoutedToCurrentOS checks that the per-platform dispatch invoked exactly
+// the handler for the running OS (called == runtime.GOOS) on a supported OS, and
+// invoked none (called == "") on an unsupported OS. Shared by the dispatch and
+// dispatchBool routing tests so the routing assertion isn't duplicated.
+func assertRoutedToCurrentOS(t *testing.T, kind, called string) {
+	t.Helper()
+	if supportedGOOS() {
+		if called != runtime.GOOS {
+			t.Errorf("%s invoked %q handler on %s; want the %s handler", kind, called, runtime.GOOS, runtime.GOOS)
+		}
+		return
+	}
+	if called != "" {
+		t.Errorf("%s invoked %q handler on unsupported OS %s; want none", kind, called, runtime.GOOS)
+	}
+}
+
 // TestDispatchRoutesPerPlatform is the #413 regression for the `stop` command:
 // the per-platform dispatch (which Stop/Install/Uninstall all route through)
 // must invoke the handler for the current OS and surface an "unsupported
@@ -73,22 +100,14 @@ func TestDispatchRoutesPerPlatform(t *testing.T) {
 
 	err := dispatch(mark("darwin"), mark("linux"), mark("windows"))
 
-	switch runtime.GOOS {
-	case "darwin", "linux", "windows":
+	if supportedGOOS() {
 		if err != nil {
 			t.Fatalf("dispatch on supported OS %s returned error: %v", runtime.GOOS, err)
 		}
-		if called != runtime.GOOS {
-			t.Errorf("dispatch invoked %q handler on %s; want the %s handler", called, runtime.GOOS, runtime.GOOS)
-		}
-	default:
-		if err == nil || !strings.Contains(err.Error(), "unsupported platform") {
-			t.Errorf("dispatch on %s should report unsupported platform, got %v", runtime.GOOS, err)
-		}
-		if called != "" {
-			t.Errorf("dispatch invoked %q handler on unsupported OS %s; want none", called, runtime.GOOS)
-		}
+	} else if err == nil || !strings.Contains(err.Error(), "unsupported platform") {
+		t.Errorf("dispatch on %s should report unsupported platform, got %v", runtime.GOOS, err)
 	}
+	assertRoutedToCurrentOS(t, "dispatch", called)
 }
 
 // TestDispatchPropagatesHandlerError proves the chosen handler's error is
@@ -97,9 +116,7 @@ func TestDispatchRoutesPerPlatform(t *testing.T) {
 // swallowed. We only assert this on a supported OS, where exactly one handler
 // runs.
 func TestDispatchPropagatesHandlerError(t *testing.T) {
-	switch runtime.GOOS {
-	case "darwin", "linux", "windows":
-	default:
+	if !supportedGOOS() {
 		t.Skipf("no platform handler runs on %s", runtime.GOOS)
 	}
 
@@ -121,22 +138,10 @@ func TestDispatchBoolRoutesPerPlatform(t *testing.T) {
 
 	got := dispatchBool(mark("darwin"), mark("linux"), mark("windows"))
 
-	switch runtime.GOOS {
-	case "darwin", "linux", "windows":
-		if !got {
-			t.Errorf("dispatchBool on supported OS %s returned false", runtime.GOOS)
-		}
-		if called != runtime.GOOS {
-			t.Errorf("dispatchBool invoked %q handler on %s; want the %s handler", called, runtime.GOOS, runtime.GOOS)
-		}
-	default:
-		if got {
-			t.Errorf("dispatchBool on unsupported OS %s returned true", runtime.GOOS)
-		}
-		if called != "" {
-			t.Errorf("dispatchBool invoked %q handler on unsupported OS %s; want none", called, runtime.GOOS)
-		}
+	if got != supportedGOOS() {
+		t.Errorf("dispatchBool on %s returned %v; want %v", runtime.GOOS, got, supportedGOOS())
 	}
+	assertRoutedToCurrentOS(t, "dispatchBool", called)
 }
 
 // TestSystemdUnitQuotesExecStart is the #348 G4 regression: a path containing

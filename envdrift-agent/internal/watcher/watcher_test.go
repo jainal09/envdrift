@@ -155,15 +155,8 @@ func TestFileEventChange(t *testing.T) {
 		t.Fatalf("Failed to create test file: %v", err)
 	}
 
-	// Wait for event (with timeout)
-	select {
-	case event := <-w.Events():
-		if event.Path != envPath {
-			t.Errorf("Expected path %s, got %s", envPath, event.Path)
-		}
-	case <-time.After(2 * time.Second):
-		t.Error("Timeout waiting for file event")
-	}
+	// Wait for the event for our file (with timeout).
+	drainEvents(t, w, eventWait{want: envPath, timeout: 2 * time.Second, mustArrive: true})
 }
 
 // TestNewSubdirectoryIsWatched is the #348 G2 regression: a directory created
@@ -200,61 +193,43 @@ func TestNewSubdirectoryIsWatched(t *testing.T) {
 		t.Fatalf("Failed to write nested .env: %v", err)
 	}
 
-	deadline := time.After(3 * time.Second)
-	for {
-		select {
-		case event := <-w.Events():
-			if event.Path == envPath {
-				return // success
-			}
-			// Ignore unrelated events (e.g. the directory create itself if
-			// it ever matched); keep waiting for our file.
-		case <-deadline:
-			t.Fatalf("no event for .env in subdir created after AddDirectory (G2)")
-		}
-	}
+	// Unrelated events (e.g. the directory create) are ignored; we wait for the
+	// .env in the subdir created after AddDirectory (#348 G2).
+	drainEvents(t, w, eventWait{want: envPath, timeout: 3 * time.Second, mustArrive: true})
 }
 
-// waitForEvent drains w.Events until an event for wantPath arrives (returning
-// nil) or the deadline elapses. If an event for any path in forbidden arrives
-// first, it fails the test immediately. Extracting this select/for loop keeps
-// the individual fs-event tests below simple (and below CodeScene's complexity
-// threshold) while giving them one consistent, race-free wait.
-func waitForEvent(t *testing.T, w *Watcher, wantPath string, timeout time.Duration, forbidden ...string) {
+// eventWait configures drainEvents. want is the path whose event ends the wait
+// (empty means "drain until the timeout, expecting nothing"); forbid is a path
+// whose event fails the test if it ever arrives; mustArrive fails the test if
+// the timeout elapses before want is seen.
+type eventWait struct {
+	want       string
+	forbid     string
+	timeout    time.Duration
+	mustArrive bool
+}
+
+// drainEvents reads w.Events, failing the test if cfg.forbid ever fires. It
+// returns when cfg.want arrives, or at the timeout — failing only if
+// cfg.mustArrive is set. Folding both the positive wait and the
+// negative grace-window drain into one loop keeps the fs-event tests below
+// CodeScene's complexity threshold and avoids a duplicated select.
+func drainEvents(t *testing.T, w *Watcher, cfg eventWait) {
 	t.Helper()
-	deadline := time.After(timeout)
+	deadline := time.After(cfg.timeout)
 	for {
 		select {
 		case event := <-w.Events():
-			for _, bad := range forbidden {
-				if event.Path == bad {
-					t.Fatalf("unexpected event for forbidden path %q", bad)
-				}
+			if cfg.forbid != "" && event.Path == cfg.forbid {
+				t.Fatalf("unexpected event for forbidden path %q", cfg.forbid)
 			}
-			if event.Path == wantPath {
+			if cfg.want != "" && event.Path == cfg.want {
 				return
 			}
 		case <-deadline:
-			t.Fatalf("no event for %q within %s", wantPath, timeout)
-		}
-	}
-}
-
-// assertNoEvent drains w.Events for the grace window and fails if an event for
-// any forbidden path arrives. Use it after a positive event to confirm a
-// forbidden sibling event does not land shortly afterwards.
-func assertNoEvent(t *testing.T, w *Watcher, grace time.Duration, forbidden ...string) {
-	t.Helper()
-	deadline := time.After(grace)
-	for {
-		select {
-		case event := <-w.Events():
-			for _, bad := range forbidden {
-				if event.Path == bad {
-					t.Fatalf("unexpected event for forbidden path %q", bad)
-				}
+			if cfg.mustArrive {
+				t.Fatalf("no event for %q within %s", cfg.want, cfg.timeout)
 			}
-		case <-deadline:
 			return
 		}
 	}
@@ -296,7 +271,7 @@ func TestAddDirectoryDottedRootIsWatched(t *testing.T) {
 	}
 
 	// success: the dotted root is watched (#413: was SkipDir'd before the fix).
-	waitForEvent(t, w, envPath, 3*time.Second)
+	drainEvents(t, w, eventWait{want: envPath, timeout: 3 * time.Second, mustArrive: true})
 }
 
 // TestAddDirectorySkipsNestedHidden confirms the fix still skips hidden
@@ -337,11 +312,11 @@ func TestAddDirectorySkipsNestedHidden(t *testing.T) {
 	}
 
 	// The root .env must fire and the hidden one must never fire (even if it
-	// arrives in the same batch, waitForEvent fails on it).
-	waitForEvent(t, w, rootEnv, 2*time.Second, hiddenEnv)
+	// arrives in the same batch, drainEvents fails on it).
+	drainEvents(t, w, eventWait{want: rootEnv, forbid: hiddenEnv, timeout: 2 * time.Second, mustArrive: true})
 	// Keep draining briefly: a hiddenEnv event can lag the rootEnv one, so a bare
 	// "stop on first rootEnv" would miss a hidden-dir watch regression (#413).
-	assertNoEvent(t, w, 300*time.Millisecond, hiddenEnv)
+	drainEvents(t, w, eventWait{forbid: hiddenEnv, timeout: 300 * time.Millisecond})
 }
 
 // TestStopClosesEvents is part of the #362 regression: after Stop, run() (the
