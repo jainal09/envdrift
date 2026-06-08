@@ -16,7 +16,11 @@ from envdrift.vault.base import (
 
 try:
     from google.api_core import exceptions as _google_exceptions
-    from google.auth.exceptions import DefaultCredentialsError
+    from google.auth.exceptions import (
+        DefaultCredentialsError,
+        GoogleAuthError,
+        RefreshError,
+    )
     from google.cloud import secretmanager as _secretmanager
 
     GCP_AVAILABLE = True
@@ -25,6 +29,8 @@ except ImportError:
     _secretmanager = None
     _google_exceptions = None
     DefaultCredentialsError = Exception  # type: ignore[misc, assignment]
+    GoogleAuthError = Exception  # type: ignore[misc, assignment]
+    RefreshError = Exception  # type: ignore[misc, assignment]
 
 
 def _get_gcp_modules() -> tuple[Any, Any]:
@@ -35,6 +41,35 @@ def _get_gcp_modules() -> tuple[Any, Any]:
             "Install with: pip install envdrift[gcp]"
         )
     return _secretmanager, _google_exceptions
+
+
+def _map_gcp_error(
+    e: Exception,
+    google_exceptions: Any,
+    *,
+    denied_msg: str,
+    not_found_msg: str | None = None,
+) -> Exception:
+    """Translate a GCP SDK exception into a domain error.
+
+    Shared by get/list/set so each delegates instead of repeating the
+    not-found/permission/API/auth catch ladder:
+
+    - ``NotFound`` -> ``SecretNotFoundError`` (only when ``not_found_msg`` given).
+    - ``PermissionDenied`` / ``Unauthenticated`` (authz/expired-token) and
+      ``RefreshError`` (mid-session refresh failure) -> ``AuthenticationError``.
+    - ``GoogleAPICallError`` and any other ``GoogleAuthError`` (e.g. transport
+      ``TransportError``) -> ``VaultError``.
+
+    ``RefreshError`` is a ``GoogleAuthError`` subclass, so it is checked first.
+    """
+    if not_found_msg is not None and isinstance(e, google_exceptions.NotFound):
+        return SecretNotFoundError(not_found_msg)
+    if isinstance(
+        e, (google_exceptions.PermissionDenied, google_exceptions.Unauthenticated, RefreshError)
+    ):
+        return AuthenticationError(denied_msg)
+    return VaultError(f"GCP Secret Manager error: {e}")
 
 
 # Canonical GCP Secret Manager resource name: projects/<P>/secrets/<S> optionally
@@ -129,11 +164,6 @@ class GCPSecretManagerClient(VaultClient):
                 request={"parent": self._project_path(), "page_size": 1}
             )
             next(iter(secrets_iter), None)
-        except DefaultCredentialsError as e:
-            # No usable credentials at all (no ADC, bad GOOGLE_APPLICATION_CREDENTIALS,
-            # etc.) — a genuine authentication failure.
-            self._client = None
-            raise AuthenticationError(f"GCP authentication failed: {e}") from e
         except google_exceptions.PermissionDenied:
             # The credential authenticated successfully but lacks
             # `secretmanager.secrets.list`. A least-privilege service account that
@@ -142,14 +172,20 @@ class GCPSecretManagerClient(VaultClient):
             # authenticated-but-cannot-list: keep the client. If a specific secret
             # genuinely can't be read, get_secret() surfaces a clear error later.
             pass
-        except google_exceptions.Unauthenticated as e:
-            # The credential itself is invalid/expired — a genuine auth failure,
-            # distinct from PermissionDenied (authenticated, missing list permission).
+        except (
+            DefaultCredentialsError,
+            google_exceptions.GoogleAPICallError,
+            GoogleAuthError,
+        ) as e:
+            # Any other failure invalidates the half-initialized client. Map it
+            # via the shared helper: DefaultCredentialsError (no usable ADC) is a
+            # genuine auth failure, so treat it like the access-denied family.
             self._client = None
-            raise AuthenticationError(f"GCP authentication failed: {e}") from e
-        except google_exceptions.GoogleAPICallError as e:
-            self._client = None
-            raise VaultError(f"GCP Secret Manager error: {e}") from e
+            if isinstance(e, DefaultCredentialsError):
+                raise AuthenticationError(f"GCP authentication failed: {e}") from e
+            raise _map_gcp_error(
+                e, google_exceptions, denied_msg=f"GCP authentication failed: {e}"
+            ) from e
 
     def is_authenticated(self) -> bool:
         return self._client is not None
@@ -184,15 +220,13 @@ class GCPSecretManagerClient(VaultClient):
                 version=version,
                 metadata={"name": response.name},
             )
-        except google_exceptions.NotFound as e:
-            raise SecretNotFoundError(f"Secret '{name}' not found") from e
-        except (
-            google_exceptions.PermissionDenied,
-            google_exceptions.Unauthenticated,
-        ) as e:
-            raise AuthenticationError(f"Access denied to secret '{name}': {e}") from e
-        except google_exceptions.GoogleAPICallError as e:
-            raise VaultError(f"GCP Secret Manager error: {e}") from e
+        except (google_exceptions.GoogleAPICallError, GoogleAuthError) as e:
+            raise _map_gcp_error(
+                e,
+                google_exceptions,
+                denied_msg=f"Access denied to secret '{name}': {e}",
+                not_found_msg=f"Secret '{name}' not found",
+            ) from e
 
     def list_secrets(self, prefix: str = "") -> list[str]:
         """
@@ -211,13 +245,10 @@ class GCPSecretManagerClient(VaultClient):
                 if secret_id and (not prefix or secret_id.startswith(prefix)):
                     secrets.append(secret_id)
             return sorted(secrets)
-        except (
-            google_exceptions.PermissionDenied,
-            google_exceptions.Unauthenticated,
-        ) as e:
-            raise AuthenticationError(f"Access denied to list secrets: {e}") from e
-        except google_exceptions.GoogleAPICallError as e:
-            raise VaultError(f"GCP Secret Manager error: {e}") from e
+        except (google_exceptions.GoogleAPICallError, GoogleAuthError) as e:
+            raise _map_gcp_error(
+                e, google_exceptions, denied_msg=f"Access denied to list secrets: {e}"
+            ) from e
 
     def set_secret(self, name: str, value: str) -> SecretValue:
         """
@@ -255,10 +286,7 @@ class GCPSecretManagerClient(VaultClient):
                 version=version_id,
                 metadata={"name": version.name},
             )
-        except (
-            google_exceptions.PermissionDenied,
-            google_exceptions.Unauthenticated,
-        ) as e:
-            raise AuthenticationError(f"Access denied to write secret '{name}': {e}") from e
-        except google_exceptions.GoogleAPICallError as e:
-            raise VaultError(f"GCP Secret Manager error: {e}") from e
+        except (google_exceptions.GoogleAPICallError, GoogleAuthError) as e:
+            raise _map_gcp_error(
+                e, google_exceptions, denied_msg=f"Access denied to write secret '{name}': {e}"
+            ) from e

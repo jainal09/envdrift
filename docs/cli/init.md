@@ -59,6 +59,22 @@ flag is rarely needed; there is currently no CLI option to turn detection off.
 envdrift init .env --detect-sensitive
 ```
 
+### `--force`, `-f`
+
+Overwrite an existing output file. Without it, `init` refuses to clobber an
+existing (possibly hand-edited) file and errors:
+
+```text
+[ERROR] Output file already exists: settings.py (use --force to overwrite)
+```
+
+Re-run with `--force` (or `-f`) to regenerate over the existing file:
+
+```bash
+envdrift init .env -o settings.py --force
+envdrift init .env -o settings.py -f
+```
+
 ## Examples
 
 ### Basic Generation

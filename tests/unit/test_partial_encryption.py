@@ -14,6 +14,7 @@ from envdrift.config import PartialEncryptionEnvironmentConfig
 from envdrift.core.partial_encryption import (
     PartialEncryptionError,
     combine_files,
+    has_plaintext_secret_value,
     is_file_encrypted,
     pull_secrets_only,
     push_partial_encryption,
@@ -127,6 +128,77 @@ def test_is_file_encrypted_plaintext_value_contains_encrypted_word(tmp_path: Pat
     )
 
     assert is_file_encrypted(note_file) is False
+
+
+# ---------------------------------------------------------------------------
+# #413 (CRITICAL): mixed-state .secret file must NOT be treated as already
+# encrypted. is_file_encrypted() returns True on the first ciphertext value, so
+# a file holding one ciphertext value AND one freshly-added plaintext value
+# looks "done" — encrypt_secret_file / push_secrets_only would early-return and
+# the new plaintext secret would ship verbatim into the committed files.
+# has_plaintext_secret_value() distinguishes the two so re-encryption fires.
+# ---------------------------------------------------------------------------
+
+
+def test_encrypt_secret_file_reencrypts_mixed_state(tmp_path: Path):
+    """encrypt_secret_file MUST re-run dotenvx.encrypt on a mixed-state file (#413).
+
+    Pre-fix: is_file_encrypted() returned True on the first ciphertext value, so
+    encrypt_secret_file early-returned and never encrypted the newly-added
+    plaintext value -> it leaked. This asserts dotenvx.encrypt IS invoked.
+    """
+    from envdrift.core.partial_encryption import encrypt_secret_file
+
+    secret_file = tmp_path / ".env.secret"
+    secret_file.write_text('API_KEY="encrypted:abc..."\nNEW_LEAKED_SECRET=plaintext_leak_value\n')
+    config = PartialEncryptionEnvironmentConfig(
+        name="test", clear_file="", secret_file=str(secret_file), combined_file=""
+    )
+    with patch("envdrift.core.partial_encryption.DotenvxWrapper") as mock_cls:
+        encrypt_secret_file(config)
+    # The early-return is gone: the wrapper must be asked to encrypt the file.
+    mock_cls.return_value.encrypt.assert_called_once_with(secret_file)
+
+
+def test_push_secrets_only_reencrypts_mixed_state(secrets_only_config, secrets_dir):
+    """push_secrets_only re-encrypts a MIXED file rather than skipping it (#413)."""
+    # One file fully encrypted, the other mixed (ciphertext + new plaintext).
+    files = sorted(secrets_dir.iterdir())
+    files[0].write_text('KEY="encrypted:abc123"\n')  # fully encrypted -> skipped
+    files[1].write_text(
+        'KEY="encrypted:abc123"\nNEW_LEAKED_SECRET=plaintext_leak_value\n'  # mixed -> re-encrypt
+    )
+
+    with patch("envdrift.core.partial_encryption.DotenvxWrapper") as mock_dotenvx_cls:
+        instance = mock_dotenvx_cls.return_value
+        result = push_secrets_only(secrets_only_config)
+
+    assert result["encrypted"] == 1  # the mixed file
+    assert result["already_encrypted"] == 1  # the fully-encrypted file
+    encrypted_paths = [call.args[0] for call in instance.encrypt.call_args_list]
+    assert encrypted_paths == [files[1]]
+
+
+def test_combine_files_preserves_user_hash_slash_comment(temp_env_files):
+    """A user comment beginning with '#/' must survive into the combined file (#413).
+
+    The old filter dropped EVERY line whose stripped form started with '#/',
+    silently removing legitimate user comments. combine_files now strips only the
+    dotenvx 4-line public-key header block, so a standalone '#/ note' is kept.
+    """
+    config = temp_env_files["config"]
+    secret_file = temp_env_files["secret_file"]
+    combined_file = temp_env_files["combined_file"]
+
+    secret_file.write_text('#/ my own note about this key\nDB="encrypted:abc..."\n')
+
+    combine_files(config)
+
+    content = combined_file.read_text()
+    marker = f"# From {config.secret_file} (encrypted)"
+    secret_section = content.split(marker, 1)[1]
+    assert "#/ my own note about this key" in secret_section, secret_section
+    assert 'DB="encrypted:abc..."' in secret_section
 
 
 def test_combine_files(temp_env_files):
@@ -391,6 +463,41 @@ def test_push_partial_check_out_of_sync_when_secret_plaintext(tmp_path: Path):
     assert stats["in_sync"] is False
 
 
+def test_push_partial_check_out_of_sync_when_secret_mixed_state(tmp_path: Path):
+    """--check must report out-of-sync for a MIXED-STATE secret file.
+
+    Regression for the greptile P1 on #416: a mixed file (some values already
+    ``encrypted:``, one freshly-added plaintext) trips ``is_file_encrypted`` on
+    the first ciphertext value, so the dry-run path used to leave ``in_sync``
+    True even though a real push would re-encrypt the new plaintext secret. The
+    check path now uses the same fully-encrypted predicate as the push path.
+    """
+    clear_file = tmp_path / ".env.test.clear"
+    secret_file = tmp_path / ".env.test.secret"
+    combined_file = tmp_path / ".env.test"
+    clear_file.write_text("DEBUG=false\n")
+    # Mixed state: one already-encrypted value, one freshly-added plaintext value.
+    secret_file.write_text('OLD_KEY="encrypted:abc..."\nNEW_LEAK=plaintext-value\n')
+
+    config = PartialEncryptionEnvironmentConfig(
+        name="test",
+        clear_file=str(clear_file),
+        secret_file=str(secret_file),
+        combined_file=str(combined_file),
+    )
+
+    # Build the combined file straight from the mixed secret so the combined text
+    # is byte-for-byte in sync — yet a plaintext secret still leaks on disk.
+    combine_files(config)
+    assert is_file_encrypted(secret_file)  # the ciphertext value trips this
+    assert has_plaintext_secret_value(secret_file)  # but a plaintext leak remains
+
+    stats = push_partial_encryption(config, check=True)
+
+    # is_file_encrypted alone would say "in sync"; the plaintext leak forces False.
+    assert stats["in_sync"] is False
+
+
 def test_warning_header_format(temp_env_files):
     """Test that warning header has correct format."""
     config = temp_env_files["config"]
@@ -481,10 +588,13 @@ def test_push_secrets_only_encrypts_plaintext_files(secrets_only_config, secrets
 
 
 def test_push_secrets_only_skips_already_encrypted(secrets_only_config, secrets_dir):
-    """push_secrets_only skips files that are already encrypted."""
-    # Pre-encrypt both files in place so is_file_encrypted returns True
+    """push_secrets_only skips files that are FULLY encrypted (every value ciphertext)."""
+    # Overwrite with all-ciphertext values so the files are fully encrypted (no
+    # leftover plaintext secret value). Appending to the plaintext fixture would
+    # instead leave a MIXED file, which must be re-encrypted (see the dedicated
+    # mixed-state regression test below).
     for f in secrets_dir.iterdir():
-        f.write_text(f.read_text() + 'KEY="encrypted:abc123"\n')
+        f.write_text('KEY="encrypted:abc123"\n')
 
     with patch("envdrift.core.partial_encryption.DotenvxWrapper") as mock_dotenvx_cls:
         instance = mock_dotenvx_cls.return_value
@@ -493,6 +603,46 @@ def test_push_secrets_only_skips_already_encrypted(secrets_only_config, secrets_
     assert result["encrypted"] == 0
     assert result["already_encrypted"] == 2
     instance.encrypt.assert_not_called()
+
+
+def test_push_secrets_only_check_dry_run_counts_plaintext_without_encrypting(
+    secrets_only_config, secrets_dir
+):
+    """check=True is a dry run: plaintext files are counted as 'would-encrypt', untouched."""
+    before = {f: f.read_bytes() for f in secrets_dir.iterdir()}
+
+    with patch("envdrift.core.partial_encryption.DotenvxWrapper") as mock_dotenvx_cls:
+        instance = mock_dotenvx_cls.return_value
+        result = push_secrets_only(secrets_only_config, check=True)
+
+    assert result["encrypted"] == 2  # both plaintext files would be encrypted
+    assert result["already_encrypted"] == 0
+    assert result["in_sync"] is False
+    instance.encrypt.assert_not_called()  # dry run mutates nothing
+    for f, content in before.items():
+        assert f.read_bytes() == content
+
+
+def test_push_secrets_only_check_dry_run_skips_unskip_when_fully_encrypted(
+    secrets_only_config, secrets_dir
+):
+    """check=True on a fully-encrypted file reports in_sync and never touches git."""
+    for f in secrets_dir.iterdir():
+        f.write_text('KEY="encrypted:abc123"\n')
+
+    with (
+        patch("envdrift.core.partial_encryption.DotenvxWrapper") as mock_dotenvx_cls,
+        patch("envdrift.core.partial_encryption._git_unskip_worktree") as mock_unskip,
+    ):
+        instance = mock_dotenvx_cls.return_value
+        result = push_secrets_only(secrets_only_config, check=True)
+
+    assert result["encrypted"] == 0
+    assert result["already_encrypted"] == 2
+    assert result["in_sync"] is True
+    instance.encrypt.assert_not_called()
+    # Dry run must not mutate git skip-worktree state for already-encrypted files.
+    mock_unskip.assert_not_called()
 
 
 def test_push_secrets_only_raises_when_dir_missing(tmp_path: Path):
