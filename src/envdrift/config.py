@@ -185,6 +185,10 @@ def validate_partial_encryption_environments(
     ``ConfigValidationError`` (a ``ValueError`` subclass).
     """
     for env in environments:
+        if not env.name:
+            raise ConfigValidationError(
+                "partial_encryption environment is missing the required 'name' field"
+            )
         if env.secrets_only:
             if not env.secrets_dir:
                 raise ConfigValidationError(
@@ -255,6 +259,127 @@ class PartialEncryptionConfig:
         validate_partial_encryption_environments(self.environments)
 
 
+def _build_vault_config(vault_section: dict[str, Any]) -> VaultConfig:
+    """Build the vault config, including its nested ``[vault.sync]`` section."""
+    sync_section = vault_section.get("sync", {})
+    sync_mappings = [
+        SyncMappingConfig(
+            secret_name=m["secret_name"],
+            folder_path=m["folder_path"],
+            vault_name=m.get("vault_name"),
+            environment=m.get("environment"),  # None = derive from profile
+            env_file=m.get("env_file"),
+            profile=m.get("profile"),
+            activate_to=m.get("activate_to"),
+            ephemeral_keys=m.get("ephemeral_keys"),  # None = inherit from central
+        )
+        for m in sync_section.get("mappings", [])
+    ]
+    sync_config = SyncConfig(
+        mappings=sync_mappings,
+        default_vault_name=sync_section.get("default_vault_name"),
+        env_keys_filename=sync_section.get("env_keys_filename", ".env.keys"),
+        max_workers=normalize_max_workers(sync_section.get("max_workers")),
+        ephemeral_keys=sync_section.get("ephemeral_keys", False),
+    )
+    return VaultConfig(
+        provider=vault_section.get("provider", "azure"),
+        azure_vault_url=vault_section.get("azure", {}).get("vault_url"),
+        aws_region=vault_section.get("aws", {}).get("region", "us-east-1"),
+        hashicorp_url=vault_section.get("hashicorp", {}).get("url"),
+        gcp_project_id=vault_section.get("gcp", {}).get("project_id"),
+        mappings=vault_section.get("mappings", {}),
+        sync=sync_config,
+    )
+
+
+def _build_encryption_config(encryption_section: dict[str, Any]) -> EncryptionConfig:
+    """Build the encryption config from the ``[encryption]`` section."""
+    sops_section = encryption_section.get("sops", {})
+    dotenvx_section = encryption_section.get("dotenvx", {})
+    return EncryptionConfig(
+        backend=encryption_section.get("backend", "dotenvx"),
+        smart_encryption=encryption_section.get("smart_encryption", False),
+        dotenvx_auto_install=dotenvx_section.get("auto_install", False),
+        sops_auto_install=sops_section.get("auto_install", False),
+        sops_config_file=sops_section.get("config_file"),
+        sops_age_key_file=sops_section.get("age_key_file"),
+        sops_age_recipients=sops_section.get("age_recipients"),
+        sops_kms_arn=sops_section.get("kms_arn"),
+        sops_gcp_kms=sops_section.get("gcp_kms"),
+        sops_azure_kv=sops_section.get("azure_kv"),
+    )
+
+
+def _build_partial_encryption_config(
+    partial_encryption_section: dict[str, Any],
+) -> PartialEncryptionConfig:
+    """Build the partial_encryption config from its section.
+
+    Required-field validation (including the ``name`` field) is deferred to
+    ``PartialEncryptionConfig.validate()``, called by the partial-encryption
+    commands that consume this section, so a typo here cannot crash an unrelated
+    command (encrypt/decrypt/guard/pull/sync) that never reads it (#413). We use
+    ``.get("name", "")`` rather than ``env["name"]`` so a missing name surfaces
+    as a clean deferred ``ConfigValidationError``, not an eager ``KeyError``.
+    """
+    environments = [
+        PartialEncryptionEnvironmentConfig(
+            name=env.get("name", ""),
+            clear_file=env.get("clear_file", ""),
+            secret_file=env.get("secret_file", ""),
+            combined_file=env.get("combined_file", ""),
+            secrets_only=env.get("secrets_only", False),
+            secrets_dir=env.get("secrets_dir", ""),
+            pattern=env.get("pattern", ".env*"),
+        )
+        for env in partial_encryption_section.get("environments", [])
+    ]
+    return PartialEncryptionConfig(
+        enabled=partial_encryption_section.get("enabled", False),
+        environments=environments,
+    )
+
+
+def _build_guard_config(guard_section: dict[str, Any]) -> GuardConfig:
+    """Build the guard config from the ``[guard]`` section."""
+    scanners = guard_section.get("scanners", ["native", "gitleaks"])
+    if isinstance(scanners, str):
+        scanners = [scanners]
+    return GuardConfig(
+        scanners=scanners,
+        auto_install=guard_section.get("auto_install", True),
+        include_history=guard_section.get("include_history", False),
+        check_entropy=guard_section.get("check_entropy", False),
+        entropy_threshold=guard_section.get("entropy_threshold", 4.5),
+        fail_on_severity=guard_section.get("fail_on_severity", "high"),
+        skip_clear_files=guard_section.get("skip_clear_files", False),
+        skip_encrypted_files=guard_section.get("skip_encrypted_files", True),
+        skip_duplicate=guard_section.get("skip_duplicate", False),
+        skip_gitignored=guard_section.get("skip_gitignored", False),
+        ignore_paths=guard_section.get("ignore_paths", []),
+        ignore_rules=guard_section.get("ignore_rules", {}),
+        verify_secrets=guard_section.get("verify_secrets", False),
+    )
+
+
+def _build_guardian_config(guardian_section: dict[str, Any]) -> GuardianWatchConfig:
+    """Build the guardian config from the ``[guardian]`` section.
+
+    ``idle_timeout`` validation is deferred to ``GuardianWatchConfig.validate()``,
+    invoked by the agent commands, so a typo in this agent-only knob doesn't
+    crash unrelated commands (encrypt/decrypt/guard/pull/sync) that never read
+    it (#413).
+    """
+    return GuardianWatchConfig(
+        enabled=guardian_section.get("enabled", False),
+        idle_timeout=guardian_section.get("idle_timeout", "5m"),
+        patterns=guardian_section.get("patterns", [".env*"]),
+        exclude=guardian_section.get("exclude", [".env.example", ".env.sample", ".env.keys"]),
+        notify=guardian_section.get("notify", True),
+    )
+
+
 @dataclass
 class EnvdriftConfig:
     """Complete envdrift configuration."""
@@ -305,40 +430,8 @@ class EnvdriftConfig:
             secret_patterns=validation_section.get("secret_patterns", []),
         )
 
-        # Build sync config from vault.sync section
-        sync_section = vault_section.get("sync", {})
-        max_workers = normalize_max_workers(sync_section.get("max_workers"))
-        sync_mappings = [
-            SyncMappingConfig(
-                secret_name=m["secret_name"],
-                folder_path=m["folder_path"],
-                vault_name=m.get("vault_name"),
-                environment=m.get("environment"),  # None = derive from profile
-                env_file=m.get("env_file"),
-                profile=m.get("profile"),
-                activate_to=m.get("activate_to"),
-                ephemeral_keys=m.get("ephemeral_keys"),  # None = inherit from central
-            )
-            for m in sync_section.get("mappings", [])
-        ]
-        sync_config = SyncConfig(
-            mappings=sync_mappings,
-            default_vault_name=sync_section.get("default_vault_name"),
-            env_keys_filename=sync_section.get("env_keys_filename", ".env.keys"),
-            max_workers=max_workers,
-            ephemeral_keys=sync_section.get("ephemeral_keys", False),
-        )
-
-        # Build vault config
-        vault = VaultConfig(
-            provider=vault_section.get("provider", "azure"),
-            azure_vault_url=vault_section.get("azure", {}).get("vault_url"),
-            aws_region=vault_section.get("aws", {}).get("region", "us-east-1"),
-            hashicorp_url=vault_section.get("hashicorp", {}).get("url"),
-            gcp_project_id=vault_section.get("gcp", {}).get("project_id"),
-            mappings=vault_section.get("mappings", {}),
-            sync=sync_config,
-        )
+        # Build vault config (and its nested sync config)
+        vault = _build_vault_config(vault_section)
 
         # Build precommit config
         precommit = PrecommitConfig(
@@ -351,79 +444,6 @@ class EnvdriftConfig:
             precommit_config=git_hook_check_section.get("precommit_config"),
         )
 
-        # Build partial_encryption config. Required-field validation is deferred
-        # to PartialEncryptionConfig.validate(), called by the partial-encryption
-        # commands that consume this section, so a typo here cannot crash an
-        # unrelated command (encrypt/decrypt/guard/pull/sync) that never reads it
-        # (#413).
-        partial_encryption_section = data.get("partial_encryption", {})
-        partial_encryption_envs = [
-            PartialEncryptionEnvironmentConfig(
-                name=env["name"],
-                clear_file=env.get("clear_file", ""),
-                secret_file=env.get("secret_file", ""),
-                combined_file=env.get("combined_file", ""),
-                secrets_only=env.get("secrets_only", False),
-                secrets_dir=env.get("secrets_dir", ""),
-                pattern=env.get("pattern", ".env*"),
-            )
-            for env in partial_encryption_section.get("environments", [])
-        ]
-        partial_encryption = PartialEncryptionConfig(
-            enabled=partial_encryption_section.get("enabled", False),
-            environments=partial_encryption_envs,
-        )
-
-        # Build encryption config
-        sops_section = encryption_section.get("sops", {})
-        dotenvx_section = encryption_section.get("dotenvx", {})
-        encryption = EncryptionConfig(
-            backend=encryption_section.get("backend", "dotenvx"),
-            smart_encryption=encryption_section.get("smart_encryption", False),
-            dotenvx_auto_install=dotenvx_section.get("auto_install", False),
-            sops_auto_install=sops_section.get("auto_install", False),
-            sops_config_file=sops_section.get("config_file"),
-            sops_age_key_file=sops_section.get("age_key_file"),
-            sops_age_recipients=sops_section.get("age_recipients"),
-            sops_kms_arn=sops_section.get("kms_arn"),
-            sops_gcp_kms=sops_section.get("gcp_kms"),
-            sops_azure_kv=sops_section.get("azure_kv"),
-        )
-
-        # Build guard config
-        guard_section = data.get("guard", {})
-        scanners = guard_section.get("scanners", ["native", "gitleaks"])
-        if isinstance(scanners, str):
-            scanners = [scanners]
-        guard = GuardConfig(
-            scanners=scanners,
-            auto_install=guard_section.get("auto_install", True),
-            include_history=guard_section.get("include_history", False),
-            check_entropy=guard_section.get("check_entropy", False),
-            entropy_threshold=guard_section.get("entropy_threshold", 4.5),
-            fail_on_severity=guard_section.get("fail_on_severity", "high"),
-            skip_clear_files=guard_section.get("skip_clear_files", False),
-            skip_encrypted_files=guard_section.get("skip_encrypted_files", True),
-            skip_duplicate=guard_section.get("skip_duplicate", False),
-            skip_gitignored=guard_section.get("skip_gitignored", False),
-            ignore_paths=guard_section.get("ignore_paths", []),
-            ignore_rules=guard_section.get("ignore_rules", {}),
-            verify_secrets=guard_section.get("verify_secrets", False),
-        )
-
-        # Build guardian config (for background agent). idle_timeout validation
-        # is deferred to GuardianWatchConfig.validate(), invoked by the agent
-        # commands, so a typo in this agent-only knob doesn't crash unrelated
-        # commands (encrypt/decrypt/guard/pull/sync) that never read it (#413).
-        guardian_section = data.get("guardian", {})
-        guardian = GuardianWatchConfig(
-            enabled=guardian_section.get("enabled", False),
-            idle_timeout=guardian_section.get("idle_timeout", "5m"),
-            patterns=guardian_section.get("patterns", [".env*"]),
-            exclude=guardian_section.get("exclude", [".env.example", ".env.sample", ".env.keys"]),
-            notify=guardian_section.get("notify", True),
-        )
-
         return cls(
             schema=envdrift_section.get("schema"),
             environments=envdrift_section.get(
@@ -431,12 +451,12 @@ class EnvdriftConfig:
             ),
             validation=validation,
             vault=vault,
-            encryption=encryption,
+            encryption=_build_encryption_config(encryption_section),
             precommit=precommit,
             git_hook_check=git_hook_check,
-            partial_encryption=partial_encryption,
-            guard=guard,
-            guardian=guardian,
+            partial_encryption=_build_partial_encryption_config(data.get("partial_encryption", {})),
+            guard=_build_guard_config(data.get("guard", {})),
+            guardian=_build_guardian_config(data.get("guardian", {})),
             raw=data,
         )
 

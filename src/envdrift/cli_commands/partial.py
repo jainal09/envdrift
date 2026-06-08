@@ -8,7 +8,11 @@ from typing import Annotated
 import typer
 from rich.panel import Panel
 
-from envdrift.config import load_config, validate_partial_encryption_environments
+from envdrift.config import (
+    EnvdriftConfig,
+    load_config,
+    validate_partial_encryption_environments,
+)
 from envdrift.core.partial_encryption import (
     PartialEncryptionError,
     pull_partial_encryption,
@@ -22,6 +26,20 @@ from envdrift.utils import ensure_gitignore_entries
 # dotenvx writes the PRIVATE decryption key here during encryption. It must never
 # be committed, in either combine or secrets-only mode.
 _DOTENVX_KEYS_FILE = ".env.keys"
+
+
+def _validate_partial_config_or_exit(config: EnvdriftConfig) -> None:
+    """Validate partial-encryption environments, exiting cleanly on a bad config.
+
+    Required-field validation is deferred to here (the consuming command) so an
+    unrelated partial_encryption typo never crashes other commands (#413). Both
+    push and pull route through this single helper so they share one call site.
+    """
+    try:
+        validate_partial_encryption_environments(config.partial_encryption.environments)
+    except ValueError as e:
+        print_error(str(e))
+        raise typer.Exit(code=1) from None
 
 
 def _ensure_combined_gitignore(envs_to_process) -> None:
@@ -93,13 +111,7 @@ def push(
         )
         raise typer.Exit(code=1)
 
-    # Required-field validation is deferred to here (the consuming command) so an
-    # unrelated partial_encryption typo never crashes other commands (#413).
-    try:
-        validate_partial_encryption_environments(config.partial_encryption.environments)
-    except ValueError as e:
-        print_error(str(e))
-        raise typer.Exit(code=1) from None
+    _validate_partial_config_or_exit(config)
 
     # Filter environments
     envs_to_process = config.partial_encryption.environments
@@ -271,13 +283,7 @@ def pull_cmd(
         print_error("Partial encryption is not enabled in configuration")
         raise typer.Exit(code=1)
 
-    # Required-field validation is deferred to here (the consuming command) so an
-    # unrelated partial_encryption typo never crashes other commands (#413).
-    try:
-        validate_partial_encryption_environments(config.partial_encryption.environments)
-    except ValueError as e:
-        print_error(str(e))
-        raise typer.Exit(code=1) from None
+    _validate_partial_config_or_exit(config)
 
     # Filter environments
     envs_to_process = config.partial_encryption.environments

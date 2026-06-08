@@ -265,3 +265,48 @@ def test_get_schema_metadata_func_monorepo_isolation(tmp_path: Path) -> None:
                 sys.modules.pop(k, None)
             else:
                 sys.modules[k] = v
+
+
+def test_get_schema_metadata_func_lazy_import_runs_inside_isolation(tmp_path: Path) -> None:
+    """#413: a get_schema_metadata() that lazily imports a sibling resolves correctly.
+
+    get_schema_metadata() is now invoked *inside* the service-dir isolation, so a
+    lazy ``from meta_common import TAG`` inside it resolves against this service's
+    dir — not the caller's restored sys.path. Two services each ship their own
+    ``meta_common.py``; if the call ran after cleanup, svc_b's lazy import would
+    fail (dir already removed from sys.path) or reuse svc_a's cached sibling.
+    """
+    import sys
+
+    svc_a = tmp_path / "svc_a_lazy"
+    svc_b = tmp_path / "svc_b_lazy"
+    for svc, who in ((svc_a, "AAA"), (svc_b, "BBB")):
+        svc.mkdir()
+        (svc / "meta_common.py").write_text(f'TAG = "{who}"\n')
+        # The lazy import happens *when get_schema_metadata() is called*, not at
+        # module import time — so it must run while service_dir is on sys.path.
+        (svc / "schema_meta2.py").write_text(
+            "def get_schema_metadata():\n"
+            "    from meta_common import TAG\n"
+            '    return {"service": TAG}\n'
+        )
+
+    saved = {k: sys.modules.get(k) for k in ("schema_meta2", "meta_common")}
+    before_path = list(sys.path)
+    try:
+        loader = SchemaLoader()
+        meta_a = loader.get_schema_metadata_func("schema_meta2", service_dir=svc_a)
+        meta_b = loader.get_schema_metadata_func("schema_meta2", service_dir=svc_b)
+
+        assert meta_a == {"service": "AAA"}
+        assert meta_b == {"service": "BBB"}, (
+            "svc_b's lazy sibling import resolved against the wrong service "
+            "(saw AAA, expected BBB) — get_schema_metadata ran outside isolation"
+        )
+        assert sys.path == before_path
+    finally:
+        for k, v in saved.items():
+            if v is None:
+                sys.modules.pop(k, None)
+            else:
+                sys.modules[k] = v

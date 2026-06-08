@@ -85,6 +85,56 @@ class SchemaLoadError(Exception):
     pass
 
 
+@contextlib.contextmanager
+def _isolated_import(module_path: str, service_dir: Path | str | None):
+    """Import ``module_path`` with the service dir and module cache isolated.
+
+    Yields the imported module while ``service_dir`` is prepended to ``sys.path``
+    and the module cache is snapshotted, so a same-named module from another
+    service can't leak in or out (#348c/#391/#413). The body runs *inside* the
+    isolated context — any lazy imports a user callable performs (e.g. a
+    ``get_schema_metadata()`` that does ``from common import TAG``) resolve
+    against this service dir, not the restored caller environment. On exit the
+    inserted path entry is removed, every module the import transitively added is
+    evicted, and the previously-cached modules are restored.
+
+    Prepending the service dir at the *front* ensures the right service wins when
+    several expose the same module name; evicting the whole root-package
+    namespace (not just the leaf) is required because a cached parent package
+    pins the first service's directory via ``__path__``, and snapshotting the
+    full keyset catches same-named top-level siblings imported transitively.
+    """
+    root_pkg = module_path.split(".", 1)[0]
+
+    inserted_path: str | None = None
+    if service_dir:
+        inserted_path = str(Path(service_dir).resolve())
+        sys.path.insert(0, inserted_path)
+
+    saved_modules = {
+        name: mod
+        for name, mod in list(sys.modules.items())
+        if name == root_pkg or name.startswith(root_pkg + ".")
+    }
+    for name in saved_modules:
+        del sys.modules[name]
+    before = set(sys.modules)
+
+    try:
+        importlib.invalidate_caches()
+        module = importlib.import_module(module_path)
+        yield module
+    finally:
+        if inserted_path is not None:
+            with contextlib.suppress(ValueError):
+                sys.path.remove(inserted_path)
+        # Drop every module this import (and any nested user import) added, then
+        # restore the modules we evicted so sys.modules is left as we found it.
+        for name in set(sys.modules) - before:
+            del sys.modules[name]
+        sys.modules.update(saved_modules)
+
+
 class SchemaLoader:
     """Load and introspect Pydantic Settings classes."""
 
@@ -110,67 +160,28 @@ class SchemaLoader:
             )
 
         module_path, class_name = dotted_path.rsplit(":", 1)
-        root_pkg = module_path.split(".", 1)[0]
 
-        # Put the service directory at the *front* of sys.path for this import so
-        # the right service wins when multiple services expose the same module
-        # name, and remove it again afterwards (#348c). Leaving stale service
-        # dirs on the path would let a later load resolve a repeated module name
-        # against an earlier service's directory.
-        inserted_path: str | None = None
-        if service_dir:
-            service_dir = Path(service_dir).resolve()
-            inserted_path = str(service_dir)
-            sys.path.insert(0, inserted_path)
-
-        # Isolate the import from the module cache so monorepos with repeated
-        # module names (e.g. two services each exposing `settings.py`) don't
-        # return a stale, previously-cached class (#348c). We evict the target
-        # module *and its whole root-package namespace* (a cached parent package
-        # pins the first service's directory via __path__), import fresh against
-        # the service dir we just prepended, then restore the prior cache.
-        #
-        # Evicting only the root namespace is not enough, though: a schema module
-        # often `import`s a same-named *top-level sibling* (e.g. each service dir
-        # ships its own `common.py` and the settings module does
-        # `from common import TAG`). The first-loaded `common` would stay cached
-        # and the second service would silently reuse it (#391). So we also
-        # snapshot the full sys.modules keyset before importing and evict *every*
-        # module the import transitively added afterwards.
-        saved_modules = {
-            name: mod
-            for name, mod in list(sys.modules.items())
-            if name == root_pkg or name.startswith(root_pkg + ".")
-        }
-        for name in saved_modules:
-            del sys.modules[name]
-        before = set(sys.modules)
-
-        # Set environment variable to signal schema extraction mode
-        # This allows user code to skip Settings instantiation during import
+        # Import under shared service-dir / module-cache isolation (#348c/#391).
+        # Resolve the class *inside* the context so the import is fully isolated;
+        # the returned class keeps its own reference once the context restores
+        # sys.modules. Set ENVDRIFT_SCHEMA_EXTRACTION so user code can skip
+        # Settings instantiation during import.
         os.environ[ENVDRIFT_SCHEMA_EXTRACTION] = "1"
         try:
-            importlib.invalidate_caches()
-            module = importlib.import_module(module_path)
+            with _isolated_import(module_path, service_dir) as module:
+                settings_cls = self._resolve_settings_class(module, module_path, class_name)
         except ImportError as e:
             raise SchemaLoadError(f"Cannot import module '{module_path}': {e}") from e
         finally:
-            # Clean up the environment variable
             os.environ.pop(ENVDRIFT_SCHEMA_EXTRACTION, None)
-            # Remove the service dir we prepended (only the first match, in case
-            # it was already present for another reason).
-            if inserted_path is not None:
-                with contextlib.suppress(ValueError):
-                    sys.path.remove(inserted_path)
-            # Drop every module this import added — including transitively
-            # imported same-named siblings (`common`, etc.) outside the root
-            # namespace — then restore the modules we evicted so we leave
-            # sys.modules as we found it (the returned class keeps its own
-            # reference regardless).
-            for name in set(sys.modules) - before:
-                del sys.modules[name]
-            sys.modules.update(saved_modules)
 
+        return settings_cls
+
+    @staticmethod
+    def _resolve_settings_class(
+        module: Any, module_path: str, class_name: str
+    ) -> type[BaseSettings]:
+        """Resolve and validate the named BaseSettings subclass on ``module``."""
         try:
             settings_cls = getattr(module, class_name)
         except AttributeError as e:
@@ -178,7 +189,6 @@ class SchemaLoader:
                 f"Class '{class_name}' not found in module '{module_path}'"
             ) from e
 
-        # Verify it's a BaseSettings subclass
         if not isinstance(settings_cls, type) or not issubclass(settings_cls, BaseSettings):
             raise SchemaLoadError(f"'{class_name}' is not a Pydantic BaseSettings subclass")
 
@@ -265,46 +275,19 @@ class SchemaLoader:
             dict[str, Any] | None: The dictionary returned by get_schema_metadata() if callable and executed successfully,
             or `None` if the module cannot be imported or the function is absent.
         """
-        # Mirror load()'s sys.path / sys.modules isolation (#348c/#391, #413):
-        # prepend the service dir at the *front* so the right service wins when
-        # several expose the same module name, snapshot the cache, evict every
-        # module this import added, and restore + remove the path entry in
-        # finally. Without this, a stale cached module from another service (or a
-        # leaked sys.path entry) would make two services with same-named config
-        # modules resolve to each other's metadata.
-        root_pkg = module_path.split(".", 1)[0]
-        inserted_path: str | None = None
-        if service_dir:
-            service_dir = Path(service_dir).resolve()
-            inserted_path = str(service_dir)
-            sys.path.insert(0, inserted_path)
-
-        saved_modules = {
-            name: mod
-            for name, mod in list(sys.modules.items())
-            if name == root_pkg or name.startswith(root_pkg + ".")
-        }
-        for name in saved_modules:
-            del sys.modules[name]
-        before = set(sys.modules)
-
+        # Import (and call get_schema_metadata) under the same service-dir /
+        # module-cache isolation load() uses (#348c/#391/#413). The call happens
+        # *inside* the context so any lazy import the user's get_schema_metadata()
+        # performs (e.g. `from common import TAG`) resolves against this service's
+        # dir, not the restored caller environment — and two services with
+        # same-named config modules each see their own metadata.
         try:
-            importlib.invalidate_caches()
-            module = importlib.import_module(module_path)
+            with _isolated_import(module_path, service_dir) as module:
+                func = getattr(module, "get_schema_metadata", None)
+                if callable(func):
+                    return cast(dict[str, Any] | None, func())
         except ImportError:
             return None
-        finally:
-            if inserted_path is not None:
-                with contextlib.suppress(ValueError):
-                    sys.path.remove(inserted_path)
-            for name in set(sys.modules) - before:
-                del sys.modules[name]
-            sys.modules.update(saved_modules)
-
-        func = getattr(module, "get_schema_metadata", None)
-        if callable(func):
-            result = func()
-            return cast(dict[str, Any] | None, result)
 
         return None
 
