@@ -1,0 +1,19 @@
+tests/integration/test_git_hooks_advanced.py
+  s_dfc6cd6692ed8f::t_6b9447b9a46a2e 649-651,654-658
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.6",
+  "base_commit_sha": "05bb88fc2a6ece0a0f4c32510a90ca062f3ff726",
+  "prompts": {},
+  "sessions": {
+    "s_dfc6cd6692ed8f": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "fd23e738-3512-4420-9290-d985ad979bfd",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Jainal Gosaliya <jainal09gosalia@gmail.com>"
+    }
+  }
+}
