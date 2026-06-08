@@ -351,6 +351,7 @@ def guard(
       1 - Critical severity findings detected
       2 - High severity findings detected
       3 - Medium severity findings detected
+      4 - Low severity findings detected
 
     \b
     Examples:
