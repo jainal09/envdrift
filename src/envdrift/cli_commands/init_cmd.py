@@ -60,6 +60,18 @@ def _raw_assignment_keys(text: str) -> list[str]:
     return keys
 
 
+def _needs_sanitizing(name: str) -> bool:
+    """True when ``name`` cannot be used as a bare Python attribute name."""
+    return not name.isidentifier() or keyword.iskeyword(name)
+
+
+def _bump_until_unique(name: str, used_names: set[str]) -> str:
+    """Append ``_`` until ``name`` is absent from ``used_names``."""
+    while name in used_names:
+        name = f"{name}_"
+    return name
+
+
 def _resolve_field_name(var_name: str, used_names: set[str]) -> tuple[str, str | None]:
     """Pick a unique, importable attribute name for ``var_name``.
 
@@ -73,17 +85,11 @@ def _resolve_field_name(var_name: str, used_names: set[str]) -> tuple[str, str |
     collapses onto the sanitized form of ``class`` would be renamed to ``class__``
     and silently lose its binding to the ``class_`` env var.
     """
-    field_name = var_name
-    alias: str | None = None
-    if not var_name.isidentifier() or keyword.iskeyword(var_name):
-        field_name = _sanitize_identifier(var_name)
-        alias = var_name
-    # Guard against two distinct keys collapsing to the same sanitized name. Any
-    # rename must carry an alias back to the original env var name.
-    if field_name in used_names:
-        alias = alias or var_name
-        while field_name in used_names:
-            field_name = f"{field_name}_"
+    sanitize = _needs_sanitizing(var_name)
+    field_name = _sanitize_identifier(var_name) if sanitize else var_name
+    # Any rename (sanitize or collision bump) must alias back to the original key.
+    alias = var_name if sanitize or field_name in used_names else None
+    field_name = _bump_until_unique(field_name, used_names)
     used_names.add(field_name)
     return field_name, alias
 
@@ -102,6 +108,20 @@ def _infer_type(value: str) -> tuple[str, object | None]:
     return "str", None
 
 
+def _field_call_args(
+    default_val: object | None, alias: str | None, is_sensitive: bool
+) -> list[str]:
+    """Assemble the keyword arguments for a generated ``Field(...)`` call."""
+    args: list[str] = []
+    if alias is not None:
+        args.append(f"alias={alias!r}")
+    if default_val is not None:
+        args.append(f"default={default_val!r}")
+    if is_sensitive:
+        args.append('json_schema_extra={"sensitive": True}')
+    return args
+
+
 def _render_field_line(
     field_name: str,
     type_hint: str,
@@ -115,16 +135,9 @@ def _render_field_line(
     non-identifier name or the sensitive marker); the common case stays the plain
     ``KEY: type`` / ``KEY: type = default`` form.
     """
-    needs_field = alias is not None or is_sensitive
-    if needs_field:
-        field_args: list[str] = []
-        if alias is not None:
-            field_args.append(f"alias={alias!r}")
-        if default_val is not None:
-            field_args.append(f"default={default_val!r}")
-        if is_sensitive:
-            field_args.append('json_schema_extra={"sensitive": True}')
-        return f"    {field_name}: {type_hint} = Field({', '.join(field_args)})"
+    if alias is not None or is_sensitive:
+        args = ", ".join(_field_call_args(default_val, alias, is_sensitive))
+        return f"    {field_name}: {type_hint} = Field({args})"
     if default_val is not None:
         return f"    {field_name}: {type_hint} = {default_val!r}"
     return f"    {field_name}: {type_hint}"
@@ -154,6 +167,18 @@ def _module_header(class_name: str, env_file: Path) -> list[str]:
         "    )",
         "",
     ]
+
+
+def _unparsed_keys(env_file: Path, env: EnvFile) -> list[str]:
+    """Return raw .env keys present in the file but rejected by the strict parser.
+
+    The ``EnvParser`` only accepts identifier-style keys, so ``2FA_ENABLED`` or
+    ``MY-DASH-VAR`` never become variables. These are surfaced to the caller to
+    warn about rather than silently drop (``validate`` would later reject them as
+    forbidden extras under ``extra="forbid"``).
+    """
+    raw_keys = _raw_assignment_keys(env_file.read_text(encoding="utf-8"))
+    return [k for k in dict.fromkeys(raw_keys) if k not in env.variables]
 
 
 def _detect_sensitive_vars(env: EnvFile) -> set[str]:
@@ -208,19 +233,11 @@ def generate_settings_module(
     Raises:
         ValueError: If ``class_name`` is not a valid Python identifier.
     """
-    if not class_name.isidentifier() or keyword.iskeyword(class_name):
+    if _needs_sanitizing(class_name):
         raise ValueError(f"Invalid class name: {class_name!r} is not a valid Python identifier")
 
     env = EnvParser().parse(env_file)
-
-    # The strict EnvParser only accepts identifier-style keys, so keys like
-    # `2FA_ENABLED` or `MY-DASH-VAR` never become variables. Record every
-    # assignment present in the raw text but missing from the parsed set so the
-    # caller can warn rather than silently drop it (validate would later flag it
-    # as a forbidden extra under extra="forbid").
-    raw_keys = _raw_assignment_keys(env_file.read_text(encoding="utf-8"))
-    unparsed_keys = [k for k in dict.fromkeys(raw_keys) if k not in env.variables]
-
+    unparsed_keys = _unparsed_keys(env_file, env)
     sensitive_vars = _detect_sensitive_vars(env) if detect_sensitive else set()
 
     field_lines, aliased_count = _render_fields(env, sensitive_vars)
@@ -243,6 +260,24 @@ def _print_generation_summary(result: SettingsGeneration) -> None:
             f"[dim]Aliased {result.aliased_count} variable(s) whose attribute name "
             "differs from the original (non-identifier, keyword, or name collision)[/dim]"
         )
+
+
+def _generate_or_exit(
+    env_file: Path, class_name: str, detect_sensitive: bool
+) -> SettingsGeneration:
+    """Validate the env file exists and render the module, or exit nonzero.
+
+    Surfaces a missing file and an invalid class name (which would produce a
+    SyntaxError module) as clean CLI errors instead of writing a broken file.
+    """
+    if not env_file.exists():
+        print_error(f"ENV file not found: {env_file}")
+        raise typer.Exit(code=1)
+    try:
+        return generate_settings_module(env_file, class_name, detect_sensitive)
+    except ValueError as exc:
+        print_error(str(exc))
+        raise typer.Exit(code=1) from exc
 
 
 def init(
@@ -279,17 +314,7 @@ def init(
         force (bool): If true, overwrite an existing output file; otherwise the
             command errors when the output already exists.
     """
-    if not env_file.exists():
-        print_error(f"ENV file not found: {env_file}")
-        raise typer.Exit(code=1)
-
-    # A class name that is not a valid identifier (or is a keyword) would produce
-    # a module that raises SyntaxError on import. Fail loudly instead of writing.
-    try:
-        result = generate_settings_module(env_file, class_name, detect_sensitive)
-    except ValueError as exc:
-        print_error(str(exc))
-        raise typer.Exit(code=1) from exc
+    result = _generate_or_exit(env_file, class_name, detect_sensitive)
 
     _write_init_output(result, output, force=force)
 

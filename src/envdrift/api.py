@@ -136,9 +136,9 @@ def init(
 
     result = generate_settings_module(env_file, class_name, detect_sensitive)
 
-    # Warn BEFORE writing: a caller running with warnings-as-errors
-    # (warnings.filterwarnings("error")) must not be left with a half-written
-    # output file -- raising here means nothing is written.
+    # Warn *before* writing: a caller running under
+    # ``warnings.filterwarnings("error")`` promotes this to an exception, and we
+    # must not leave a half-written settings.py on disk when that happens.
     if result.unparsed_keys:
         warnings.warn(
             "Skipped .env variable(s) the parser cannot read "
