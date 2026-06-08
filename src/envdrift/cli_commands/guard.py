@@ -377,7 +377,8 @@ def guard(
                 if not paths:
                     _emit_empty_or_prose(json_output, sarif, _NO_STAGED)
                     raise typer.Exit(code=0)
-                console.print(f"[dim]Scanning {len(paths)} staged file(s)...[/dim]")
+                if not json_output and not sarif:
+                    console.print(f"[dim]Scanning {len(paths)} staged file(s)...[/dim]")
             else:
                 _emit_empty_or_prose(json_output, sarif, _NO_STAGED)
                 raise typer.Exit(code=0)
@@ -403,7 +404,7 @@ def guard(
                 capture_output=True,
                 timeout=30,
             )
-            if fetch_result.returncode != 0 and verbose:
+            if fetch_result.returncode != 0 and verbose and not json_output and not sarif:
                 console.print(
                     f"[yellow]Warning:[/yellow] Could not fetch {pr_base}, using local refs"
                 )
@@ -423,9 +424,10 @@ def guard(
                 if not paths:
                     _emit_empty_or_prose(json_output, sarif, _NO_PR_CHANGES)
                     raise typer.Exit(code=0)
-                console.print(
-                    f"[bold]Scanning {len(paths)} file(s) changed since {pr_base}...[/bold]"
-                )
+                if not json_output and not sarif:
+                    console.print(
+                        f"[bold]Scanning {len(paths)} file(s) changed since {pr_base}...[/bold]"
+                    )
             else:
                 _emit_empty_or_prose(json_output, sarif, _NO_PR_CHANGES)
                 raise typer.Exit(code=0)
