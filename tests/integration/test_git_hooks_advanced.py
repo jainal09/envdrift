@@ -646,10 +646,16 @@ def test_hook_blocks_env_keys_commit(git_hook_env):
     pre_commit = work_dir / ".git" / "hooks" / "pre-commit"
     assert pre_commit.exists()
 
-    # Stage .env.keys file
+    # Stage .env.keys file. `encrypt` now also adds .env.keys to .gitignore
+    # (defense in depth), so a plain `git add` is refused — force-add past the
+    # ignore to exercise the pre-commit hook itself.
     env_keys = work_dir / ".env.keys"
     assert env_keys.exists(), ".env.keys should be created by encryption"
-    _run_git(["add", env_keys.name], cwd=work_dir)
+    gitignore = work_dir / ".gitignore"
+    assert gitignore.exists() and ".env.keys" in gitignore.read_text(), (
+        "encrypt should gitignore .env.keys"
+    )
+    _run_git(["add", "-f", env_keys.name], cwd=work_dir)
 
     # Attempt to commit - should fail
     result = _run_git(
