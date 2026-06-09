@@ -102,12 +102,19 @@ def push(
     if not config.partial_encryption.enabled:
         print_error("Partial encryption is not enabled in configuration")
         console.print("\nTo enable partial encryption, add to your envdrift.toml:")
+        # markup=False so the literal `[[partial_encryption.environments]]` TOML
+        # header isn't parsed as Rich markup and collapsed to `[]` — a new user
+        # copying the example would otherwise get invalid TOML.
         console.print(
-            "[cyan][[partial_encryption.environments]][/cyan]\n"
-            '[cyan]name = "production"[/cyan]\n'
-            '[cyan]clear_file = ".env.production.clear"[/cyan]\n'
-            '[cyan]secret_file = ".env.production.secret"[/cyan]\n'
-            '[cyan]combined_file = ".env.production"[/cyan]'
+            "[partial_encryption]\n"
+            "enabled = true\n\n"
+            "[[partial_encryption.environments]]\n"
+            'name = "production"\n'
+            'clear_file = ".env.production.clear"\n'
+            'secret_file = ".env.production.secret"\n'
+            'combined_file = ".env.production"',
+            style="cyan",
+            markup=False,
         )
         raise typer.Exit(code=1)
 
