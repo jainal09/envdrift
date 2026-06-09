@@ -106,13 +106,20 @@ def format_rich(result: AggregatedScanResult, console: Console | None = None) ->
         )
     )
 
-    # Findings table
+    # Findings table. On a narrow terminal drop the secondary Rule and Preview
+    # columns so the essential Sev / Location / Description stay on one readable
+    # line each — five columns can't fit under ~100 cols without Rich squeezing
+    # the severity column down to nothing. Text columns are no_wrap + ellipsis so
+    # a long value truncates with a "…" instead of word-wrapping into fragments.
+    wide = console.width >= 100
     table = Table(show_header=True, header_style="bold", expand=True)
     table.add_column("Sev", width=8, justify="center")
-    table.add_column("Location", style="cyan", no_wrap=True, max_width=40)
-    table.add_column("Rule", style="magenta", max_width=25)
-    table.add_column("Description", overflow="fold")
-    table.add_column("Preview", style="dim", max_width=20)
+    table.add_column("Location", style="cyan", no_wrap=True, max_width=40, overflow="ellipsis")
+    if wide:
+        table.add_column("Rule", style="magenta", no_wrap=True, max_width=20, overflow="ellipsis")
+    table.add_column("Description", ratio=1, no_wrap=True, overflow="ellipsis")
+    if wide:
+        table.add_column("Preview", style="dim", no_wrap=True, max_width=14, overflow="ellipsis")
 
     for finding in sorted(result.unique_findings, key=lambda f: f.severity, reverse=True):
         severity_icon = SEVERITY_ICONS[finding.severity]
@@ -120,13 +127,13 @@ def format_rich(result: AggregatedScanResult, console: Console | None = None) ->
         severity_text = Text(f"[{severity_icon}] {finding.severity.value[:4].upper()}")
         severity_text.stylize(severity_color)
 
-        table.add_row(
-            severity_text,
-            finding.location,
-            finding.rule_id,
-            finding.description,
-            finding.secret_preview or "-",
-        )
+        row: list[str | Text] = [severity_text, finding.location]
+        if wide:
+            row.append(finding.rule_id)
+        row.append(finding.description)
+        if wide:
+            row.append(finding.secret_preview or "-")
+        table.add_row(*row)
 
     console.print(table)
 

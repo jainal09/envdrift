@@ -388,6 +388,49 @@ class TestRichOutput:
         assert "Findings Summary" in output
         assert "Remediation" in output
 
+    def _aws_finding_result(self) -> AggregatedScanResult:
+        findings = [
+            ScanFinding(
+                file_path=Path(".env"),
+                rule_id="aws-access-key-id",
+                rule_description="AWS key",
+                description="AWS key found",
+                severity=FindingSeverity.CRITICAL,
+                scanner="native",
+                secret_preview="AKIA1234",
+            )
+        ]
+        return AggregatedScanResult(
+            results=[ScanResult(scanner_name="native", findings=findings)],
+            total_findings=1,
+            unique_findings=findings,
+            scanners_used=["native"],
+            total_duration_ms=1,
+        )
+
+    def test_format_rich_narrow_terminal_keeps_severity_drops_secondary(self):
+        """Narrow terminal: keep Sev/Location/Description on one line each and drop
+        the Rule/Preview columns, so the severity column isn't squeezed to nothing.
+        """
+        console = Console(record=True, force_terminal=True, width=80)
+        format_rich(self._aws_finding_result(), console)
+        out = console.export_text()
+
+        assert "CRIT" in out  # severity column rendered (not collapsed to width 0)
+        assert "AWS key found" in out  # description present on one line
+        assert "aws-access-key-id" not in out  # Rule column dropped at narrow width
+        assert "AKIA1234" not in out  # Preview column dropped at narrow width
+
+    def test_format_rich_wide_terminal_shows_all_columns(self):
+        """Wide terminal shows the Rule and Preview columns too."""
+        console = Console(record=True, force_terminal=True, width=140)
+        format_rich(self._aws_finding_result(), console)
+        out = console.export_text()
+
+        assert "CRIT" in out
+        assert "aws-access-key-id" in out  # Rule column present
+        assert "AKIA1234" in out  # Preview column present
+
     def test_format_rich_shows_scanner_errors(self):
         """Scanner errors render a dedicated panel."""
         result = AggregatedScanResult(
