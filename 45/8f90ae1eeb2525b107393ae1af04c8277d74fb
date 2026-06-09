@@ -1,0 +1,22 @@
+src/envdrift/cli.py
+  s_dfc6cd6692ed8f::t_4f57362e2609b6 40-43
+tests/unit/test_encryption_backends.py
+  s_dfc6cd6692ed8f::t_fd43bc69fa3ccf 5
+  s_dfc6cd6692ed8f::t_dbebaefb9c55db 842-925
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.6",
+  "base_commit_sha": "458f90ae1eeb2525b107393ae1af04c8277d74fb",
+  "prompts": {},
+  "sessions": {
+    "s_dfc6cd6692ed8f": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "fd23e738-3512-4420-9290-d985ad979bfd",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Jainal Gosaliya <jainal09gosalia@gmail.com>"
+    }
+  }
+}
