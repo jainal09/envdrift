@@ -317,6 +317,8 @@ class TrufflehogInstaller:
                     [str(target_path), "--version"],
                     capture_output=True,
                     text=True,
+                    encoding="utf-8",
+                    errors="replace",
                     timeout=10,
                 )
                 if self.version in result.stdout:
@@ -393,6 +395,8 @@ class TrufflehogScanner(ScannerBackend):
                 [str(binary), "--version"],
                 capture_output=True,
                 text=True,
+                encoding="utf-8",
+                errors="replace",
                 timeout=10,
             )
             # Output format: "trufflehog 3.88.3"
@@ -520,6 +524,8 @@ class TrufflehogScanner(ScannerBackend):
                     args,
                     capture_output=True,
                     text=True,
+                    encoding="utf-8",
+                    errors="replace",
                     timeout=600,  # 10 minute timeout (trufflehog can be slow)
                 )
 

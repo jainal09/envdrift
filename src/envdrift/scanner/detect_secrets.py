@@ -160,6 +160,8 @@ class DetectSecretsInstaller:
                 cmd,
                 capture_output=True,
                 text=True,
+                encoding="utf-8",
+                errors="replace",
                 timeout=120,
             )
 
@@ -181,6 +183,8 @@ class DetectSecretsInstaller:
                 [sys.executable, "-m", "detect_secrets", "--version"],
                 capture_output=True,
                 text=True,
+                encoding="utf-8",
+                errors="replace",
                 timeout=10,
             )
             return result.returncode == 0
@@ -271,6 +275,8 @@ class DetectSecretsScanner(ScannerBackend):
                 [sys.executable, "-m", "detect_secrets", "--version"],
                 capture_output=True,
                 text=True,
+                encoding="utf-8",
+                errors="replace",
                 timeout=10,
             )
             self._installed = result.returncode == 0
@@ -286,6 +292,8 @@ class DetectSecretsScanner(ScannerBackend):
                 [sys.executable, "-m", "detect_secrets", "--version"],
                 capture_output=True,
                 text=True,
+                encoding="utf-8",
+                errors="replace",
                 timeout=10,
             )
             if result.returncode == 0:
@@ -405,6 +413,8 @@ class DetectSecretsScanner(ScannerBackend):
                     args,
                     capture_output=True,
                     text=True,
+                    encoding="utf-8",
+                    errors="replace",
                     timeout=300,  # 5 minute timeout
                     cwd=working_dir,
                 )

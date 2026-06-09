@@ -248,6 +248,8 @@ class TalismanInstaller:
                     [str(target_path), "--version"],
                     capture_output=True,
                     text=True,
+                    encoding="utf-8",
+                    errors="replace",
                     timeout=10,
                 )
                 if self.version in result.stdout or self.version in result.stderr:
@@ -318,6 +320,8 @@ class TalismanScanner(ScannerBackend):
                 [str(binary), "--version"],
                 capture_output=True,
                 text=True,
+                encoding="utf-8",
+                errors="replace",
                 timeout=10,
             )
             # Output format varies, try to extract version
@@ -449,6 +453,8 @@ class TalismanScanner(ScannerBackend):
                         args,
                         capture_output=True,
                         text=True,
+                        encoding="utf-8",
+                        errors="replace",
                         timeout=300,  # 5 minute timeout
                         cwd=str(work_dir),
                     )

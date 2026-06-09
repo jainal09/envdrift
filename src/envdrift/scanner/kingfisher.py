@@ -183,6 +183,8 @@ class KingfisherScanner(ScannerBackend):
                 [str(binary), "--version"],
                 capture_output=True,
                 text=True,
+                encoding="utf-8",
+                errors="replace",
                 timeout=10,
             )
             # Output format: "kingfisher 1.73.0"
@@ -246,6 +248,8 @@ class KingfisherScanner(ScannerBackend):
                 [brew_path, "install", "kingfisher"],
                 capture_output=True,
                 text=True,
+                encoding="utf-8",
+                errors="replace",
                 timeout=120,  # 2 minute timeout
             )
 
@@ -429,6 +433,8 @@ class KingfisherScanner(ScannerBackend):
                     args,
                     capture_output=True,
                     text=True,
+                    encoding="utf-8",
+                    errors="replace",
                     timeout=600,  # 10 minute timeout for thorough scanning
                 )
 

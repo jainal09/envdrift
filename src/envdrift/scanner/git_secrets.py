@@ -155,6 +155,8 @@ class GitSecretsInstaller:
                 ["brew", "install", "git-secrets"],
                 capture_output=True,
                 text=True,
+                encoding="utf-8",
+                errors="replace",
                 timeout=300,
             )
 
@@ -202,6 +204,8 @@ class GitSecretsInstaller:
                     ["git", "clone", "--depth", "1", self.REPO_URL, str(repo_path)],
                     capture_output=True,
                     text=True,
+                    encoding="utf-8",
+                    errors="replace",
                     timeout=120,
                     check=True,
                 )
@@ -215,6 +219,8 @@ class GitSecretsInstaller:
                     ["make", "install", f"PREFIX={target_dir.parent}"],
                     capture_output=True,
                     text=True,
+                    encoding="utf-8",
+                    errors="replace",
                     timeout=60,
                     cwd=repo_path,
                     check=True,
@@ -319,6 +325,8 @@ class GitSecretsScanner(ScannerBackend):
                 ["git", "secrets", "--list"],
                 capture_output=True,
                 text=True,
+                encoding="utf-8",
+                errors="replace",
                 timeout=5,
             )
             # Only check returncode - a successful command means git-secrets is installed
@@ -381,6 +389,8 @@ class GitSecretsScanner(ScannerBackend):
                 [git_secrets_path, *args],
                 capture_output=True,
                 text=True,
+                encoding="utf-8",
+                errors="replace",
                 timeout=300,
                 cwd=cwd,
             )
@@ -390,6 +400,8 @@ class GitSecretsScanner(ScannerBackend):
             ["git", "secrets", *args],
             capture_output=True,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             timeout=300,
             cwd=cwd,
         )

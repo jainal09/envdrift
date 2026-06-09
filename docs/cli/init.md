@@ -150,7 +150,7 @@ The generated module is always valid, importable Python:
   name plus a Pydantic `alias` so the field still binds to the original variable:
 
   ```python
-  class_: str = Field(alias="class")
+  class_: str = Field(alias='class')
   ```
 
 - **Pydantic-reserved names get an alias.** A key that is a valid identifier but
@@ -160,13 +160,27 @@ The generated module is always valid, importable Python:
   `alias`, so it cannot raise at import or shadow model internals:
 
   ```python
-  field_model_dump: str = Field(alias="model_dump")
+  field_model_dump: str = Field(alias='model_dump')
   ```
 
-- **Non-identifier keys are reported.** Keys the parser cannot read because they
-  are not identifier-style (a leading digit like `2FA_ENABLED`, or a dash like
-  `MY-DASH-VAR`) are skipped and listed in a `[WARN]` line, never silently
-  dropped.
+- **Non-identifier keys are aliased, not dropped.** Keys that are not
+  identifier-style (a leading digit like `2FA_ENABLED`, a dash like
+  `MY-DASH-VAR`, a dot, or an emoji) are emitted with a sanitized attribute name
+  plus a Pydantic `alias`, so every key ends up in the schema and still binds to
+  the original environment variable:
+
+  ```python
+  field_2FA_ENABLED: str = Field(alias='2FA_ENABLED')
+  MY_DASH_VAR: str = Field(alias='MY-DASH-VAR')
+  ```
+
+- **Valid non-ASCII identifiers are kept verbatim.** A key that passes
+  `str.isidentifier()` (e.g. `CAFÉ`, `ΑΛΦΑ`) becomes a bare field with no alias.
+
+- **The round-trip holds.** `envdrift validate` parses the `.env` the same way
+  (recovering non-identifier / non-ASCII keys) and matches schema fields by their
+  alias, so `init` → `validate` passes instead of falsely flagging the aliased
+  fields as missing.
 
 - **Invalid class names fail fast.** A `--class-name` that is not a valid Python
   identifier (e.g. `123Bad`) or is a keyword (e.g. `class`) errors with a

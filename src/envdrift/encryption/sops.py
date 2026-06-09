@@ -10,8 +10,8 @@ Encrypted values have the format: ENC[AES256_GCM,data:...,iv:...,tag:...,type:st
 
 from __future__ import annotations
 
+import os
 import re
-import shlex
 import shutil
 import subprocess  # nosec B404
 from pathlib import Path
@@ -226,6 +226,11 @@ class SOPSEncryptionBackend(EncryptionBackend):
                 cmd,
                 capture_output=True,
                 text=True,
+                # SOPS emits UTF-8; decode it as such rather than the platform
+                # locale (cp1252 on Windows would corrupt non-ASCII secret values
+                # or raise UnicodeDecodeError).
+                encoding="utf-8",
+                errors="replace",
                 timeout=120,
                 env=self._build_env(env),
                 cwd=str(cwd) if cwd else None,
@@ -574,13 +579,44 @@ See https://github.com/getsops/sops for full documentation.
         if not self.is_installed():
             raise EncryptionNotFoundError(f"SOPS is not installed.\n{self.install_instructions()}")
 
-        # `sops exec-env [file] [command-to-run]`: no --input-type (type is
-        # inferred from the file extension), and the command is a SINGLE shell
-        # string, not a `-- argv` list. shlex.join safely quotes the argv.
-        args = ["exec-env", str(env_file), shlex.join(command)]
-
-        return self._run(
-            args,
+        # Decrypt to memory and run the command directly as argv, rather than via
+        # `sops exec-env`. sops' exec-env runs the command through a shell, which
+        # makes quoting platform-specific and brittle (on Windows, cmd.exe mangles
+        # a ``python -c "...'...'..."`` string). Decrypting to stdout and invoking
+        # the child with subprocess (no shell) injects the same secrets without
+        # ever writing plaintext to disk, and behaves identically on every OS.
+        decrypt = self._run(
+            ["-d", "--input-type", "dotenv", "--output-type", "dotenv", str(env_file)],
             env=kwargs.get("env"),
             cwd=kwargs.get("cwd"),
         )
+        if decrypt.returncode != 0:
+            raise EncryptionBackendError(f"sops decryption failed: {decrypt.stderr.strip()}")
+
+        from envdrift.core.parser import EnvParser
+
+        secrets = {
+            name: var.value
+            for name, var in EnvParser().parse_string(decrypt.stdout).variables.items()
+        }
+        child_env = dict(os.environ)
+        if kwargs.get("env"):
+            child_env.update(kwargs["env"])
+        child_env.update(secrets)
+
+        # Bound the child so a hung process can't block forever (the previous
+        # sops-exec-env path had _run's 120s timeout; keep a generous default,
+        # overridable via the ``timeout`` kwarg).
+        try:
+            return subprocess.run(  # nosec B603
+                command,
+                env=child_env,
+                cwd=str(kwargs["cwd"]) if kwargs.get("cwd") else None,
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                timeout=kwargs.get("timeout", 300),
+            )
+        except subprocess.TimeoutExpired as e:
+            raise EncryptionBackendError(f"exec-env command timed out: {e}") from e

@@ -191,7 +191,11 @@ def should_skip_reencryption(
     temp_path = Path(tmp_name)
     try:
         try:
-            with os.fdopen(fd, "w") as tmp_fh:
+            # newline="" so text-mode writing does NOT translate "\n" to "\r\n"
+            # on Windows: that would corrupt the encrypted bytes and make the
+            # decrypt below fail, so smart encryption would needlessly re-encrypt
+            # (a new IV/MAC) instead of restoring the identical git version.
+            with os.fdopen(fd, "w", newline="") as tmp_fh:
                 tmp_fh.write(git_content)
 
             # Try to decrypt the git version

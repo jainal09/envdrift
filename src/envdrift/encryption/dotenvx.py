@@ -111,6 +111,30 @@ class DotenvxEncryptionBackend(EncryptionBackend):
                 file_path=env_file,
             )
 
+        # Refuse to "encrypt" a file with no assignments. Handed an empty or
+        # comment-only file, dotenvx scaffolds a placeholder-secrets template
+        # (HELLO, AWS_ACCESS_KEY_ID, ...) into it and still exits 0, so a blind
+        # delegation fabricates secrets the user never wrote and destroys the
+        # original content. ``file_has_assignment`` counts ANY assignment line
+        # (including non-identifier keys like ``X-API-KEY`` the strict parser
+        # rejects) and tolerates non-UTF-8 bytes, so it neither false-refuses a
+        # file of non-identifier secrets nor crashes on a non-UTF-8 file (#443).
+        from envdrift.core.partial_encryption import (
+            file_has_assignment,
+            has_plaintext_secret_value,
+        )
+
+        if not file_has_assignment(env_file):
+            return EncryptionResult(
+                success=False,
+                message=(
+                    f"Nothing to encrypt: {env_file} has no variables. Refusing "
+                    "to run the encryptor, which would otherwise scaffold "
+                    "placeholder secrets into the file."
+                ),
+                file_path=env_file,
+            )
+
         if not self.is_installed():
             raise EncryptionNotFoundError(
                 f"dotenvx is not installed.\n{self.install_instructions()}"
@@ -126,13 +150,30 @@ class DotenvxEncryptionBackend(EncryptionBackend):
                 env=kwargs.get("env"),
                 cwd=kwargs.get("cwd"),
             )
-            return EncryptionResult(
-                success=True,
-                message=f"Encrypted {env_file}",
-                file_path=env_file,
-            )
         except DotenvxError as e:
             raise EncryptionBackendError(f"dotenvx encryption failed: {e}") from e
+
+        # Verify the encryption actually took effect rather than trusting the
+        # exit code. dotenvx can exit 0 *without* encrypting when the private key
+        # is missing or malformed (e.g. .env.keys is a directory, garbage, or a
+        # mismatched key); it only prints a warning to stderr. Re-read the file
+        # and confirm no plaintext value survived (envdrift #443).
+        if has_plaintext_secret_value(env_file):
+            return EncryptionResult(
+                success=False,
+                message=(
+                    f"Encryption did not take effect: {env_file} still contains "
+                    "plaintext values. This usually means the encryption key was "
+                    "missing or invalid."
+                ),
+                file_path=env_file,
+            )
+
+        return EncryptionResult(
+            success=True,
+            message=f"Encrypted {env_file}",
+            file_path=env_file,
+        )
 
     def decrypt(
         self,
@@ -162,6 +203,23 @@ class DotenvxEncryptionBackend(EncryptionBackend):
                 file_path=env_file,
             )
 
+        from envdrift.core.partial_encryption import is_file_encrypted
+
+        # Nothing to decrypt: the file holds no ciphertext value. dotenvx would
+        # still rewrite it (line-ending normalization, header cleanup) and exit 0
+        # — and handed a binary blob it corrupts the file outright — so report an
+        # honest no-op instead of a misleading "[OK] Decrypted" and never invoke
+        # the backend on a file that isn't encrypted. ``is_file_encrypted`` reads
+        # with errors="replace", so a binary/non-UTF-8 file cannot crash here
+        # (envdrift #443).
+        if not is_file_encrypted(env_file):
+            return EncryptionResult(
+                success=True,
+                changed=False,
+                message=f"Nothing to decrypt: {env_file} has no encrypted values.",
+                file_path=env_file,
+            )
+
         if not self.is_installed():
             raise EncryptionNotFoundError(
                 f"dotenvx is not installed.\n{self.install_instructions()}"
@@ -177,13 +235,28 @@ class DotenvxEncryptionBackend(EncryptionBackend):
                 env=kwargs.get("env"),
                 cwd=kwargs.get("cwd"),
             )
-            return EncryptionResult(
-                success=True,
-                message=f"Decrypted {env_file}",
-                file_path=env_file,
-            )
         except DotenvxError as e:
             raise EncryptionBackendError(f"dotenvx decryption failed: {e}") from e
+
+        # Verify the decryption took effect rather than trusting the exit code:
+        # dotenvx can exit 0 while leaving ciphertext in place when the key is
+        # missing or invalid. If any encrypted value survived, report failure.
+        if is_file_encrypted(env_file):
+            return EncryptionResult(
+                success=False,
+                changed=False,
+                message=(
+                    f"Decryption did not take effect: {env_file} still contains "
+                    "encrypted values. The decryption key may be missing or invalid."
+                ),
+                file_path=env_file,
+            )
+
+        return EncryptionResult(
+            success=True,
+            message=f"Decrypted {env_file}",
+            file_path=env_file,
+        )
 
     def detect_encryption_status(self, value: str) -> EncryptionStatus:
         """

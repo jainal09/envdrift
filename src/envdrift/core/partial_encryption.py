@@ -252,6 +252,31 @@ def has_plaintext_secret_value(file_path: Path) -> bool:
     return any(_line_has_plaintext_secret(raw_line) for raw_line in content.splitlines())
 
 
+def file_has_assignment(file_path: Path) -> bool:
+    """Return True if the file contains at least one ``KEY=value`` assignment.
+
+    Deliberately looser than ``EnvParser`` (and robust to non-UTF-8 bytes via
+    ``errors="replace"``): it counts ANY assignment line, including keys the
+    strict parser rejects (a leading digit like ``1PW``, a dash like
+    ``X-API-KEY``, or a non-ASCII identifier). Used to decide whether a file has
+    anything to encrypt — a parser-variable count would miss non-identifier-keyed
+    secrets and wrongly report the file as empty, and ``EnvParser.parse`` would
+    raise ``UnicodeDecodeError`` on a non-UTF-8 file.
+    """
+    if not file_path.exists():
+        return False
+
+    content = file_path.read_text(encoding="utf-8", errors="replace")
+    for raw_line in content.splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#"):
+            continue
+        key, sep, _ = line.partition("=")
+        if sep and key.strip():
+            return True
+    return False
+
+
 def is_file_encrypted(file_path: Path) -> bool:
     """Return True only when the file actually contains CIPHERTEXT.
 
