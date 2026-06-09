@@ -388,6 +388,98 @@ class TestRichOutput:
         assert "Findings Summary" in output
         assert "Remediation" in output
 
+    # A long, realistic description: a revert to overflow="fold" would wrap its
+    # tail onto extra lines (the regression this PR fixes), so the truncation
+    # assertion below would catch it.
+    _LONG_DESCRIPTION = (
+        "Potential AWS Access Key ID detected; rotate this credential immediately "
+        "and remove it from version control history"
+    )
+
+    @classmethod
+    def _aws_finding_result(cls) -> AggregatedScanResult:
+        findings = [
+            ScanFinding(
+                file_path=Path(".env"),
+                rule_id="aws-access-key-id",
+                rule_description="AWS key",
+                description=cls._LONG_DESCRIPTION,
+                severity=FindingSeverity.CRITICAL,
+                scanner="native",
+                secret_preview="AKIA1234",
+            )
+        ]
+        return AggregatedScanResult(
+            results=[ScanResult(scanner_name="native", findings=findings)],
+            total_findings=1,
+            unique_findings=findings,
+            scanners_used=["native"],
+            total_duration_ms=1,
+        )
+
+    def test_format_rich_narrow_terminal_keeps_severity_drops_secondary(self):
+        """Interactive narrow terminal: keep Sev/Location/Description (one line
+        each, ellipsized) and drop the Rule/Preview columns.
+        """
+        console = Console(record=True, force_terminal=True, width=80)
+        format_rich(self._aws_finding_result(), console)
+        out = console.export_text()
+
+        assert "CRIT" in out  # severity column rendered (not collapsed to width 0)
+        # Description on ONE line, ellipsized — its head shows, the tail is
+        # truncated away (a fold-revert would wrap the tail onto a second line).
+        assert "Potential AWS Access Key ID detected" in out
+        assert "…" in out
+        assert "version control history" not in out
+        assert "aws-access-key-id" not in out  # Rule column dropped at narrow width
+        assert "AKIA1234" not in out  # Preview column dropped at narrow width
+
+    def test_format_rich_non_interactive_keeps_all_columns(self):
+        """A non-interactive console (`guard --ci`, piped) keeps all five columns
+        even at the default width 80, so CI logs retain rule_id and the preview.
+        """
+        console = Console(record=True, force_terminal=False, no_color=True, width=80)
+        format_rich(self._aws_finding_result(), console)
+        out = console.export_text()
+
+        assert "aws-access-key-id" in out  # Rule kept for CI triage
+        assert "AKIA1234" in out  # Preview kept
+
+    def test_format_rich_wide_terminal_shows_all_columns(self):
+        """Wide terminal shows the Rule and Preview columns too."""
+        console = Console(record=True, force_terminal=True, width=140)
+        format_rich(self._aws_finding_result(), console)
+        out = console.export_text()
+
+        assert "CRIT" in out
+        assert "aws-access-key-id" in out  # Rule column present
+        assert "AKIA1234" in out  # Preview column present
+
+    def test_build_findings_table_column_count(self):
+        """Interactive narrow drops to 3 columns; interactive wide keeps 5;
+        non-interactive (CI/logs) always keeps all 5 regardless of width."""
+        from envdrift.scanner.output import _build_findings_table
+
+        r = self._aws_finding_result()
+        narrow = _build_findings_table(r, interactive=True, wide=False)
+        wide = _build_findings_table(r, interactive=True, wide=True)
+        ci = _build_findings_table(r, interactive=False, wide=False)
+        assert len(narrow.columns) == 3
+        assert len(wide.columns) == 5
+        assert len(ci.columns) == 5  # non-interactive keeps all columns even when narrow
+
+    def test_format_rich_threshold_99_is_narrow(self):
+        """Width 99 (one below the threshold) drops the secondary Preview column."""
+        console = Console(record=True, force_terminal=True, width=99)
+        format_rich(self._aws_finding_result(), console)
+        assert "AKIA1234" not in console.export_text()
+
+    def test_format_rich_threshold_100_is_wide(self):
+        """Width 100 (exactly the threshold) shows the secondary Preview column."""
+        console = Console(record=True, force_terminal=True, width=100)
+        format_rich(self._aws_finding_result(), console)
+        assert "AKIA1234" in console.export_text()
+
     def test_format_rich_shows_scanner_errors(self):
         """Scanner errors render a dedicated panel."""
         result = AggregatedScanResult(

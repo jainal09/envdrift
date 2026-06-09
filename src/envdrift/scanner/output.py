@@ -44,6 +44,75 @@ SEVERITY_ICONS: dict[FindingSeverity, str] = {
     FindingSeverity.INFO: ".",
 }
 
+# At or above this terminal width the findings table shows all five columns;
+# below it the secondary Rule/Preview columns are dropped so the essential
+# Sev/Location/Description stay on one readable line each.
+_WIDE_TERMINAL_WIDTH = 100
+
+
+def _severity_cell(finding: ScanFinding) -> Text:
+    """Render the styled severity cell, e.g. a red ``[X] CRIT``."""
+    cell = Text(f"[{SEVERITY_ICONS[finding.severity]}] {finding.severity.value[:4].upper()}")
+    cell.stylize(SEVERITY_COLORS[finding.severity])
+    return cell
+
+
+def _build_full_findings_table(findings: list[ScanFinding]) -> Table:
+    """Findings table for non-interactive output (``guard --ci``, piped, hooks).
+
+    Keeps all five columns so the rule id and preview are never *dropped* from CI
+    logs (the regression this guards against). Individual values may still
+    ellipsize or fold at a narrow CI width — use ``--format json`` for the
+    complete values. This is the pre-PR layout, kept verbatim so hook/CI output
+    stays stable.
+    """
+    table = Table(show_header=True, header_style="bold", expand=True)
+    table.add_column("Sev", width=8, justify="center")
+    table.add_column("Location", style="cyan", no_wrap=True, max_width=40)
+    table.add_column("Rule", style="magenta", max_width=25)
+    table.add_column("Description", overflow="fold")
+    table.add_column("Preview", style="dim", max_width=20)
+    for f in findings:
+        table.add_row(
+            _severity_cell(f), f.location, f.rule_id, f.description, f.secret_preview or "-"
+        )
+    return table
+
+
+def _build_compact_findings_table(findings: list[ScanFinding], *, wide: bool) -> Table:
+    """Compact, width-aware findings table for an interactive terminal.
+
+    Text columns are no_wrap + ellipsis (truncate with "…" on one line instead of
+    word-wrapping into fragments), Description is the flexible (ratio=1) column so
+    it absorbs the leftover width without starving the fixed Sev column, and below
+    ~100 cols the secondary Rule/Preview columns drop.
+    """
+    table = Table(show_header=True, header_style="bold", expand=True)
+    table.add_column("Sev", width=8, justify="center")
+    table.add_column("Location", style="cyan", no_wrap=True, max_width=40, overflow="ellipsis")
+    if wide:
+        table.add_column("Rule", style="magenta", no_wrap=True, max_width=20, overflow="ellipsis")
+    table.add_column("Description", ratio=1, no_wrap=True, overflow="ellipsis")
+    if wide:
+        table.add_column("Preview", style="dim", no_wrap=True, max_width=14, overflow="ellipsis")
+    for f in findings:
+        row: list[str | Text] = [_severity_cell(f), f.location]
+        if wide:
+            row.append(f.rule_id)
+        row.append(f.description)
+        if wide:
+            row.append(f.secret_preview or "-")
+        table.add_row(*row)
+    return table
+
+
+def _build_findings_table(result: AggregatedScanResult, *, interactive: bool, wide: bool) -> Table:
+    """Dispatch to the full (non-interactive) or compact (interactive) table."""
+    findings = sorted(result.unique_findings, key=lambda f: f.severity, reverse=True)
+    if not interactive:
+        return _build_full_findings_table(findings)
+    return _build_compact_findings_table(findings, wide=wide)
+
 
 def format_rich(result: AggregatedScanResult, console: Console | None = None) -> None:
     """Format and print results using Rich for terminal output.
@@ -106,29 +175,17 @@ def format_rich(result: AggregatedScanResult, console: Console | None = None) ->
         )
     )
 
-    # Findings table
-    table = Table(show_header=True, header_style="bold", expand=True)
-    table.add_column("Sev", width=8, justify="center")
-    table.add_column("Location", style="cyan", no_wrap=True, max_width=40)
-    table.add_column("Rule", style="magenta", max_width=25)
-    table.add_column("Description", overflow="fold")
-    table.add_column("Preview", style="dim", max_width=20)
-
-    for finding in sorted(result.unique_findings, key=lambda f: f.severity, reverse=True):
-        severity_icon = SEVERITY_ICONS[finding.severity]
-        severity_color = SEVERITY_COLORS[finding.severity]
-        severity_text = Text(f"[{severity_icon}] {finding.severity.value[:4].upper()}")
-        severity_text.stylize(severity_color)
-
-        table.add_row(
-            severity_text,
-            finding.location,
-            finding.rule_id,
-            finding.description,
-            finding.secret_preview or "-",
+    # Findings table. A non-interactive console (`guard --ci`, piped, redirected)
+    # keeps all columns (so CI logs retain the rule id + preview); an interactive
+    # terminal gets the compact, width-aware one (dropping the secondary columns
+    # only when genuinely narrow).
+    console.print(
+        _build_findings_table(
+            result,
+            interactive=console.is_terminal,
+            wide=console.width >= _WIDE_TERMINAL_WIDTH,
         )
-
-    console.print(table)
+    )
 
     # Scan info
     _print_scan_info(result, console)
