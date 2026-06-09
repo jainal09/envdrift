@@ -1,0 +1,21 @@
+tests/unit/test_cli.py
+  s_dfc6cd6692ed8f::t_e907b9ad534904 468-503
+src/envdrift/cli_commands/diff.py
+  s_dfc6cd6692ed8f::t_7297010f8d37b5 61-63
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.6",
+  "base_commit_sha": "51704cf52cbd5c00d179e69d10a186f4fd9003db",
+  "prompts": {},
+  "sessions": {
+    "s_dfc6cd6692ed8f": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "fd23e738-3512-4420-9290-d985ad979bfd",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Jainal Gosaliya <jainal09gosalia@gmail.com>"
+    }
+  }
+}
