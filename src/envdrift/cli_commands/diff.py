@@ -5,12 +5,12 @@ from __future__ import annotations
 import json
 import sys
 from pathlib import Path
-from typing import Annotated
+from typing import Annotated, NoReturn
 
 import typer
 
 from envdrift.core.diff import DiffEngine
-from envdrift.core.parser import EnvParser
+from envdrift.core.parser import EnvFile, EnvParser
 from envdrift.core.schema import SchemaLoader, SchemaLoadError, SchemaMetadata
 from envdrift.output.rich import print_diff_result, print_error, print_warning
 
@@ -32,6 +32,44 @@ def _load_schema_meta(schema: str, service_dir: Path | None, format_: str) -> Sc
         else:
             print_warning(f"Could not load schema: {e}")
         return None
+
+
+def _emit_error(message: str, format_: str) -> NoReturn:
+    """Emit an error honoring the output format, then exit nonzero.
+
+    In ``json`` mode a clean ``{"error": ...}`` object is written to stdout via
+    stdlib ``json`` (no ANSI, always parseable) so a ``--format json`` consumer
+    is never handed Rich prose mid-stream; otherwise a Rich ``[ERROR]`` line is
+    printed. Used for every error path so binary/directory/not-found inputs fail
+    cleanly instead of leaking a traceback or colorized prose (#443).
+    """
+    if format_ == "json":
+        print(json.dumps({"error": message}))
+    else:
+        print_error(message)
+    raise typer.Exit(code=1)
+
+
+def _read_env(path: Path, format_: str) -> EnvFile:
+    """Validate and parse one .env file, surfacing every failure as a clean error.
+
+    Guards the cases the adversarial sweep crashed on: a directory passed where a
+    file is expected (``IsADirectoryError``) and a binary / non-UTF-8 file
+    (``UnicodeDecodeError``) both produced an uncaught traceback. Returns the
+    parsed file or exits nonzero with an actionable message.
+    """
+    if not path.exists():
+        _emit_error(f"ENV file not found: {path}", format_)
+    if not path.is_file():
+        _emit_error(f"Not a file: {path}", format_)
+    try:
+        return EnvParser().parse(path)
+    except FileNotFoundError:
+        _emit_error(f"ENV file not found: {path}", format_)
+    except UnicodeDecodeError:
+        _emit_error(f"Could not read {path} as UTF-8 text (not a valid .env file)", format_)
+    except (IsADirectoryError, PermissionError) as e:
+        _emit_error(f"Could not read {path}: {e}", format_)
 
 
 def diff(
@@ -85,28 +123,15 @@ def diff(
     # CI pipeline that captured stdout expecting JSON).
     format_ = format_.lower()
     if format_ not in {"table", "json"}:
-        print_error(f"Invalid --format '{format_}'. Valid options: table, json")
-        raise typer.Exit(code=1)
+        _emit_error(f"Invalid --format '{format_}'. Valid options: table, json", format_)
 
-    # Check files exist
-    if not env1.exists():
-        print_error(f"ENV file not found: {env1}")
-        raise typer.Exit(code=1)
-    if not env2.exists():
-        print_error(f"ENV file not found: {env2}")
-        raise typer.Exit(code=1)
+    # Validate + parse both files. Clean, format-aware errors for missing,
+    # directory, and binary/non-UTF-8 inputs instead of an uncaught traceback.
+    env_file1 = _read_env(env1, format_)
+    env_file2 = _read_env(env2, format_)
 
     # Load schema if provided
     schema_meta = _load_schema_meta(schema, service_dir, format_) if schema else None
-
-    # Parse env files
-    parser = EnvParser()
-    try:
-        env_file1 = parser.parse(env1)
-        env_file2 = parser.parse(env2)
-    except FileNotFoundError as e:
-        print_error(str(e))
-        raise typer.Exit(code=1) from None
 
     # Diff
     engine = DiffEngine()

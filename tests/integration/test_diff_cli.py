@@ -443,3 +443,68 @@ def test_diff_format_unknown_value_exits_1(tmp_path: Path, integration_pythonpat
     combined = result.stdout + result.stderr
     assert "Invalid --format" in combined
     assert "bogus" in combined
+
+
+class TestDiffRobustErrors:
+    """#443: hostile inputs fail cleanly (no traceback), and ``--format json``
+    stays pure parseable JSON with no ANSI even on the error path."""
+
+    @staticmethod
+    def _env(tmp_path: Path) -> Path:
+        f = tmp_path / "a.env"
+        f.write_text("A=1\n", encoding="utf-8")
+        return f
+
+    def test_directory_argument_errors_cleanly(self, tmp_path, integration_pythonpath):
+        a = self._env(tmp_path)
+        d = tmp_path / "adir"
+        d.mkdir()
+        result = _run_diff([str(a), str(d)], tmp_path, integration_pythonpath)
+        assert result.returncode == 1
+        assert "Traceback" not in result.stderr
+        assert "Not a file" in result.stdout
+
+    def test_binary_file_errors_cleanly(self, tmp_path, integration_pythonpath):
+        a = self._env(tmp_path)
+        b = tmp_path / "bin.env"
+        b.write_bytes(bytes(range(256)))  # includes NUL + non-UTF-8 bytes
+        result = _run_diff([str(a), str(b)], tmp_path, integration_pythonpath)
+        assert result.returncode == 1
+        assert "Traceback" not in result.stderr
+        assert "UTF-8" in result.stdout
+
+    def test_json_error_path_is_clean_json(self, tmp_path, integration_pythonpath):
+        a = self._env(tmp_path)
+        result = _run_diff(
+            [str(a), str(tmp_path / "missing.env"), "--format", "json"],
+            tmp_path,
+            integration_pythonpath,
+        )
+        assert result.returncode == 1
+        assert "Traceback" not in result.stderr
+        # stdout must be a single parseable JSON object, not Rich prose.
+        payload = json.loads(result.stdout)
+        assert "error" in payload
+
+    def test_json_error_has_no_ansi_under_force_color(self, tmp_path, integration_pythonpath):
+        """Even with FORCE_COLOR=1, json error output carries no ANSI escapes."""
+        a = self._env(tmp_path)
+        b = tmp_path / "bin.env"
+        b.write_bytes(bytes(range(256)))
+        env = os.environ.copy()
+        env["PYTHONPATH"] = integration_pythonpath
+        env["FORCE_COLOR"] = "1"
+        env.pop("NO_COLOR", None)
+        result = subprocess.run(
+            [sys.executable, "-m", "envdrift.cli", "diff", str(a), str(b), "--format", "json"],
+            cwd=str(tmp_path),
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        assert result.returncode == 1
+        assert "\x1b" not in result.stdout, (
+            f"ANSI escape leaked into json stdout: {result.stdout!r}"
+        )
+        json.loads(result.stdout)  # still parseable

@@ -53,8 +53,14 @@ envdrift diff .env.dev .env.prod -s config.settings:Settings -d /app/backend
 Output format: `table` (default) or `json`. The value is case-insensitive
 (`JSON` is accepted); any other value exits with code 1 instead of silently
 falling back to the table view. In `json` mode, stdout is always pure JSON —
-diagnostics such as a failed `--schema` load are routed to stderr so a
-`--format json > drift.json` capture stays parseable.
+diagnostics such as a failed `--schema` load are routed to stderr, and **errors
+on the failure path are emitted as a clean `{"error": "…"}` object** (no ANSI,
+no Rich prose, even under `FORCE_COLOR=1`) so a `--format json > drift.json`
+capture stays parseable.
+
+Bad inputs fail cleanly with a non-zero exit, never a traceback: a directory
+where a file is expected reports `Not a file: <path>`, and a binary / non-UTF-8
+file reports `Could not read <path> as UTF-8 text`.
 
 ```bash
 # Human-readable table (default)
