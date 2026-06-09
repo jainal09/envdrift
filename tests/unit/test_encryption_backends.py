@@ -291,11 +291,60 @@ class TestDotenvxEncryptionBackend:
         env_file = tmp_path / ".env"
         env_file.write_text("KEY=encrypted:abc")
 
+        # The mock must model the seam's real effect: a genuine dotenvx decrypt
+        # replaces ciphertext with plaintext. The backend now verifies the on-disk
+        # outcome (envdrift #443), so a no-op mock would correctly read as
+        # "decryption did not take effect". Make the mock honest.
+        def _fake_decrypt(**_kwargs):
+            env_file.write_text("KEY=value")
+
+        mock_wrapper.decrypt.side_effect = _fake_decrypt
+
         backend = DotenvxEncryptionBackend()
         result = backend.decrypt(env_file)
 
         assert result.success is True
+        assert result.changed is True
         assert "Decrypted" in result.message
+
+    def test_decrypt_noop_on_file_with_no_ciphertext(self, tmp_path):
+        """#443: a file with no encrypted values is an honest no-op, not 'Decrypted'.
+
+        The pre-check returns before dotenvx is consulted, so this needs no binary.
+        """
+        env_file = tmp_path / ".env"
+        env_file.write_text("API_KEY=plainvalue\nPORT=8080\n")
+        before = env_file.read_bytes()
+
+        result = DotenvxEncryptionBackend().decrypt(env_file)
+
+        assert result.success is True
+        assert result.changed is False
+        assert "nothing to decrypt" in result.message.lower()
+        assert env_file.read_bytes() == before  # not rewritten
+
+    @patch("envdrift.integrations.dotenvx.DotenvxWrapper")
+    def test_decrypt_reports_failure_when_ciphertext_survives(self, mock_wrapper_class, tmp_path):
+        """#443: dotenvx exiting 0 without decrypting must be caught by the outcome check.
+
+        Models the silent-failure seam: the wrapper "succeeds" but leaves the
+        ciphertext on disk (a missing/invalid key). The backend re-reads the file
+        and reports failure instead of trusting the exit code.
+        """
+        mock_wrapper = MagicMock()
+        mock_wrapper.is_installed.return_value = True
+        mock_wrapper.decrypt.side_effect = lambda **_kwargs: None  # no-op: ciphertext stays
+        mock_wrapper_class.return_value = mock_wrapper
+
+        env_file = tmp_path / ".env"
+        env_file.write_text('API_KEY="encrypted:BExampleCiphertext"')
+
+        result = DotenvxEncryptionBackend().decrypt(env_file)
+
+        assert result.success is False
+        assert result.changed is False
+        assert "did not take effect" in result.message.lower()
+        assert "encrypted:" in env_file.read_text()  # ciphertext untouched, not lost
 
     @patch("envdrift.integrations.dotenvx.DotenvxWrapper")
     def test_encrypt_wraps_dotenvx_error(self, mock_wrapper_class, tmp_path):

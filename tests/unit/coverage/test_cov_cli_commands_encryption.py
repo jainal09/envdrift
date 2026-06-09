@@ -728,5 +728,30 @@ def test_decrypt_not_found_error_exits_nonzero(monkeypatch, tmp_path: Path):
     assert "dotenvx binary missing" in result.output
 
 
+def test_decrypt_noop_reports_nothing_to_decrypt(monkeypatch, tmp_path):
+    """#443: the CLI prints an honest no-op (not 'Decrypted') when changed=False."""
+    env_file = tmp_path / ".env"
+    env_file.write_text("API_KEY=plainvalue\n")
+    _no_hook_errors(monkeypatch)
+    monkeypatch.setattr(f"{ENC_MOD}._load_encryption_config", lambda: (EnvdriftConfig(), None))
+
+    class NoopBackend(DummyEncryptionBackend):
+        def decrypt(self, env_file, **kwargs):  # type: ignore[override]
+            return EncryptionResult(
+                success=True,
+                changed=False,
+                message=f"Nothing to decrypt: {env_file} has no encrypted values.",
+                file_path=Path(env_file),
+            )
+
+    monkeypatch.setattr(f"{ENC_MOD}.get_encryption_backend", lambda *a, **k: NoopBackend())
+
+    result = runner.invoke(app, ["decrypt", str(env_file), "--backend", "dotenvx"])
+
+    assert result.exit_code == 0, result.output
+    # Normalise whitespace: Rich may soft-wrap the long tmp path in the message.
+    assert "nothing to decrypt" in " ".join(result.output.lower().split())
+
+
 if __name__ == "__main__":  # pragma: no cover
     raise SystemExit(pytest.main([__file__, "-q"]))
