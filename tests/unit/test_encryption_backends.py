@@ -299,6 +299,8 @@ class TestDotenvxEncryptionBackend:
         result = backend.encrypt(env_file)
 
         assert result.success is False
+        # Pin the failure to the filename guard, not e.g. the empty-file guard.
+        assert "undecryptable" in result.message.lower()
         # Original plaintext preserved — not encrypted into an unrecoverable file.
         assert env_file.read_text() == "SECRET=keepme\n"
 
@@ -311,6 +313,7 @@ class TestDotenvxEncryptionBackend:
         result = backend.encrypt(env_file)
 
         assert result.success is False
+        assert "undecryptable" in result.message.lower()
         assert env_file.read_text() == "SECRET=keepme\n"
 
     @patch("envdrift.integrations.dotenvx.DotenvxWrapper")
