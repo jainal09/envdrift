@@ -291,10 +291,20 @@ class TestDotenvxEncryptionBackend:
         env_file = tmp_path / ".env"
         env_file.write_text("KEY=encrypted:abc")
 
+        # The mock must model the seam's real effect: a genuine dotenvx decrypt
+        # replaces ciphertext with plaintext. The backend now verifies the on-disk
+        # outcome (envdrift #443), so a no-op mock would correctly read as
+        # "decryption did not take effect". Make the mock honest.
+        def _fake_decrypt(**_kwargs):
+            env_file.write_text("KEY=value")
+
+        mock_wrapper.decrypt.side_effect = _fake_decrypt
+
         backend = DotenvxEncryptionBackend()
         result = backend.decrypt(env_file)
 
         assert result.success is True
+        assert result.changed is True
         assert "Decrypted" in result.message
 
     @patch("envdrift.integrations.dotenvx.DotenvxWrapper")

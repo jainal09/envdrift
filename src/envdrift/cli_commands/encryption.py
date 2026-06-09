@@ -673,7 +673,11 @@ def decrypt_cmd(
 
         result = encryption_backend.decrypt(env_file)
         if result.success:
-            print_success(f"Decrypted {env_file} using {encryption_backend.name}")
+            if result.changed:
+                print_success(f"Decrypted {env_file} using {encryption_backend.name}")
+            else:
+                # Honest no-op: the file had no encrypted values to decrypt.
+                print_warning(result.message)
         else:
             print_error(result.message)
             raise typer.Exit(code=1)

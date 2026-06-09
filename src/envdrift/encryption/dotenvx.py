@@ -203,6 +203,23 @@ class DotenvxEncryptionBackend(EncryptionBackend):
                 file_path=env_file,
             )
 
+        from envdrift.core.partial_encryption import is_file_encrypted
+
+        # Nothing to decrypt: the file holds no ciphertext value. dotenvx would
+        # still rewrite it (line-ending normalization, header cleanup) and exit 0
+        # — and handed a binary blob it corrupts the file outright — so report an
+        # honest no-op instead of a misleading "[OK] Decrypted" and never invoke
+        # the backend on a file that isn't encrypted. ``is_file_encrypted`` reads
+        # with errors="replace", so a binary/non-UTF-8 file cannot crash here
+        # (envdrift #443).
+        if not is_file_encrypted(env_file):
+            return EncryptionResult(
+                success=True,
+                changed=False,
+                message=f"Nothing to decrypt: {env_file} has no encrypted values.",
+                file_path=env_file,
+            )
+
         if not self.is_installed():
             raise EncryptionNotFoundError(
                 f"dotenvx is not installed.\n{self.install_instructions()}"
@@ -218,13 +235,27 @@ class DotenvxEncryptionBackend(EncryptionBackend):
                 env=kwargs.get("env"),
                 cwd=kwargs.get("cwd"),
             )
-            return EncryptionResult(
-                success=True,
-                message=f"Decrypted {env_file}",
-                file_path=env_file,
-            )
         except DotenvxError as e:
             raise EncryptionBackendError(f"dotenvx decryption failed: {e}") from e
+
+        # Verify the decryption took effect rather than trusting the exit code:
+        # dotenvx can exit 0 while leaving ciphertext in place when the key is
+        # missing or invalid. If any encrypted value survived, report failure.
+        if is_file_encrypted(env_file):
+            return EncryptionResult(
+                success=False,
+                message=(
+                    f"Decryption did not take effect: {env_file} still contains "
+                    "encrypted values. The decryption key may be missing or invalid."
+                ),
+                file_path=env_file,
+            )
+
+        return EncryptionResult(
+            success=True,
+            message=f"Decrypted {env_file}",
+            file_path=env_file,
+        )
 
     def detect_encryption_status(self, value: str) -> EncryptionStatus:
         """

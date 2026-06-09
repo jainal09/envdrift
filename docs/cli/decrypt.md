@@ -20,6 +20,14 @@ It can also **verify** that a key stored in your vault can decrypt the file with
 - Viewing encrypted values
 - Migrating to a different encryption system
 
+### Honest no-op on non-encrypted files
+
+If the target file has no encrypted values, `decrypt` reports an honest no-op
+(`Nothing to decrypt: <file> has no encrypted values.`) instead of claiming a
+decryption happened. The file is left byte-for-byte untouched — the backend is
+not invoked at all — so a plaintext file (including one with CRLF line endings)
+or a non-`.env` binary file is never silently rewritten or corrupted.
+
 ## Arguments
 
 | Argument   | Description                     | Default |
