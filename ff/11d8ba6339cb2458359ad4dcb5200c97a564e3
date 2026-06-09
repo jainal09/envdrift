@@ -1,0 +1,21 @@
+.github/scripts/install_test_binaries.py
+  s_dfc6cd6692ed8f::t_6a550baf36cc65 1-60,62-94,96-123,125-141
+.github/workflows/cross-platform-integration.yml
+  s_dfc6cd6692ed8f::t_69d6588dcf6b5c 1-84
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.6",
+  "base_commit_sha": "ff11d8ba6339cb2458359ad4dcb5200c97a564e3",
+  "prompts": {},
+  "sessions": {
+    "s_dfc6cd6692ed8f": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "fd23e738-3512-4420-9290-d985ad979bfd",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Jainal Gosaliya <jainal09gosalia@gmail.com>"
+    }
+  }
+}
