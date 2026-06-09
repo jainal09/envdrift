@@ -1,0 +1,21 @@
+tests/unit/test_encryption_backends.py
+  s_dfc6cd6692ed8f::t_3e6211367eb46c 756-791
+src/envdrift/encryption/sops.py
+  s_dfc6cd6692ed8f::t_1c783f4f4c6b68 618
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.6",
+  "base_commit_sha": "acb45a58141f9d89410cefd5d2cd0991a32d12b8",
+  "prompts": {},
+  "sessions": {
+    "s_dfc6cd6692ed8f": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "fd23e738-3512-4420-9290-d985ad979bfd",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Jainal Gosaliya <jainal09gosalia@gmail.com>"
+    }
+  }
+}
