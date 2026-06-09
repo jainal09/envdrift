@@ -475,7 +475,8 @@ class TestDiffCommand:
         result = runner.invoke(app, ["diff", str(env1), str(adir)])
         assert result.exit_code == 1
         assert result.exception is None or isinstance(result.exception, SystemExit)
-        assert "not a file" in result.output.lower()
+        # stdout+stderr to stay neutral on which stream carries the error.
+        assert "not a file" in (result.stdout + result.stderr).lower()
 
     def test_diff_binary_file_errors_cleanly(self, tmp_path: Path):
         """#443: a binary / non-UTF-8 file -> clean error, not a UnicodeDecodeError."""
@@ -487,7 +488,8 @@ class TestDiffCommand:
         result = runner.invoke(app, ["diff", str(env1), str(binf)])
         assert result.exit_code == 1
         assert result.exception is None or isinstance(result.exception, SystemExit)
-        assert "utf-8" in result.output.lower()
+        # stdout+stderr to stay neutral on which stream carries the error.
+        assert "utf-8" in (result.stdout + result.stderr).lower()
 
     def test_diff_json_error_path_emits_json(self, tmp_path: Path):
         """#443: with --format json, an error is a clean {"error": ...} object, not prose."""
