@@ -416,3 +416,47 @@ EXTRA=extra
         assert result.has_errors is True
         assert result.error_count > 0
         assert result.warning_count >= 0
+
+
+class TestValidatorAliasMatching:
+    """#443: a field with a Pydantic alias is matched against the .env by its
+    alias (the real env-var name), so init's non-identifier-key fields validate
+    instead of false-reporting MISSING (the init→validate round-trip)."""
+
+    @staticmethod
+    def _schema():
+        class Settings(BaseSettings):
+            model_config = SettingsConfigDict(extra="forbid")
+
+            X_API_KEY: str = Field(alias="X-API-KEY")
+            DATABASE_URL: str
+
+        return SchemaLoader().extract_metadata(Settings)
+
+    def test_extract_metadata_captures_alias(self):
+        schema = self._schema()
+        assert schema.fields["X_API_KEY"].alias == "X-API-KEY"
+        assert schema.fields["DATABASE_URL"].alias is None
+
+    def test_aliased_field_present_under_its_alias_validates(self, tmp_path):
+        """The non-identifier key in the .env matches the aliased field."""
+        env_file = tmp_path / ".env"
+        env_file.write_text("DATABASE_URL=postgres://x\nX-API-KEY=secret\n", encoding="utf-8")
+        env = EnvParser().parse(env_file, lenient=True)
+
+        result = Validator().validate(env, self._schema(), check_encryption=False)
+
+        assert result.valid is True, result.missing_required | result.extra_vars
+        assert not result.missing_required
+        # The alias key is the field, not an unknown extra under extra="forbid".
+        assert not result.extra_vars
+
+    def test_aliased_field_absent_is_reported_missing(self, tmp_path):
+        env_file = tmp_path / ".env"
+        env_file.write_text("DATABASE_URL=postgres://x\n", encoding="utf-8")
+        env = EnvParser().parse(env_file, lenient=True)
+
+        result = Validator().validate(env, self._schema(), check_encryption=False)
+
+        assert result.valid is False
+        assert "X_API_KEY" in result.missing_required
