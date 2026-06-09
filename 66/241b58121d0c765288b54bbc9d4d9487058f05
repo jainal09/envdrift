@@ -1,0 +1,25 @@
+src/envdrift/encryption/sops.py
+  s_dfc6cd6692ed8f::t_8d91c6c7c95226 602-616
+.github/scripts/install_test_binaries.py
+  s_dfc6cd6692ed8f::t_d661c84fae7709 81-108
+  s_dfc6cd6692ed8f::t_1ebbbf764165c1 123,129
+.github/workflows/cross-platform-integration.yml
+  s_dfc6cd6692ed8f::t_52c8527e1d0f08 58-59
+  s_dfc6cd6692ed8f::t_b517c8d6572c0f 86
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.6",
+  "base_commit_sha": "66241b58121d0c765288b54bbc9d4d9487058f05",
+  "prompts": {},
+  "sessions": {
+    "s_dfc6cd6692ed8f": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "fd23e738-3512-4420-9290-d985ad979bfd",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Jainal Gosaliya <jainal09gosalia@gmail.com>"
+    }
+  }
+}
