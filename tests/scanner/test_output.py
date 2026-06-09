@@ -456,13 +456,17 @@ class TestRichOutput:
         assert "AKIA1234" in out  # Preview column present
 
     def test_build_findings_table_column_count(self):
-        """Narrow drops to 3 columns (Sev/Location/Description); wide keeps all 5."""
+        """Interactive narrow drops to 3 columns; interactive wide keeps 5;
+        non-interactive (CI/logs) always keeps all 5 regardless of width."""
         from envdrift.scanner.output import _build_findings_table
 
-        narrow = _build_findings_table(self._aws_finding_result(), wide=False)
-        wide = _build_findings_table(self._aws_finding_result(), wide=True)
+        r = self._aws_finding_result()
+        narrow = _build_findings_table(r, interactive=True, wide=False)
+        wide = _build_findings_table(r, interactive=True, wide=True)
+        ci = _build_findings_table(r, interactive=False, wide=False)
         assert len(narrow.columns) == 3
         assert len(wide.columns) == 5
+        assert len(ci.columns) == 5  # non-interactive keeps all columns even when narrow
 
     def test_format_rich_threshold_99_is_narrow(self):
         """Width 99 (one below the threshold) drops the secondary Preview column."""

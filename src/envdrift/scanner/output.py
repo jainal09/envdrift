@@ -50,17 +50,41 @@ SEVERITY_ICONS: dict[FindingSeverity, str] = {
 _WIDE_TERMINAL_WIDTH = 100
 
 
-def _build_findings_table(result: AggregatedScanResult, *, wide: bool) -> Table:
-    """Build the findings table, dropping secondary columns on a narrow terminal.
+def _severity_cell(finding: ScanFinding) -> Text:
+    """Render the styled severity cell, e.g. a red ``[X] CRIT``."""
+    cell = Text(f"[{SEVERITY_ICONS[finding.severity]}] {finding.severity.value[:4].upper()}")
+    cell.stylize(SEVERITY_COLORS[finding.severity])
+    return cell
 
-    Five columns can't fit under ~100 cols without Rich squeezing the severity
-    column to nothing, so on a narrow terminal only Sev/Location/Description are
-    shown. Text columns are no_wrap + ellipsis (truncate with "…" on one line
-    instead of word-wrapping into fragments); Description is the flexible
-    (ratio=1) column so it absorbs the leftover width without starving Sev.
+
+def _build_findings_table(result: AggregatedScanResult, *, interactive: bool, wide: bool) -> Table:
+    """Build the findings table.
+
+    Non-interactive output (``guard --ci``, piped, or redirected) gets the full
+    table — every column, untruncated values — so CI logs keep the rule id, full
+    location, and preview for triage. An interactive terminal gets a compact,
+    width-aware table: text columns are no_wrap + ellipsis (truncate with "…" on
+    one line instead of word-wrapping into fragments), Description is the flexible
+    (ratio=1) column so it absorbs the leftover width without starving the fixed
+    Sev column, and below ~100 cols the secondary Rule/Preview columns drop.
     """
+    findings = sorted(result.unique_findings, key=lambda f: f.severity, reverse=True)
     table = Table(show_header=True, header_style="bold", expand=True)
     table.add_column("Sev", width=8, justify="center")
+
+    if not interactive:
+        # Full, untruncated table for logs/CI.
+        table.add_column("Location", style="cyan", no_wrap=True, max_width=40)
+        table.add_column("Rule", style="magenta", max_width=25)
+        table.add_column("Description", overflow="fold")
+        table.add_column("Preview", style="dim", max_width=20)
+        for f in findings:
+            table.add_row(
+                _severity_cell(f), f.location, f.rule_id, f.description, f.secret_preview or "-"
+            )
+        return table
+
+    # Compact, readable table for an interactive terminal.
     table.add_column("Location", style="cyan", no_wrap=True, max_width=40, overflow="ellipsis")
     if wide:
         table.add_column("Rule", style="magenta", no_wrap=True, max_width=20, overflow="ellipsis")
@@ -68,18 +92,13 @@ def _build_findings_table(result: AggregatedScanResult, *, wide: bool) -> Table:
     if wide:
         table.add_column("Preview", style="dim", no_wrap=True, max_width=14, overflow="ellipsis")
 
-    for finding in sorted(result.unique_findings, key=lambda f: f.severity, reverse=True):
-        severity_text = Text(
-            f"[{SEVERITY_ICONS[finding.severity]}] {finding.severity.value[:4].upper()}"
-        )
-        severity_text.stylize(SEVERITY_COLORS[finding.severity])
-
-        row: list[str | Text] = [severity_text, finding.location]
+    for f in findings:
+        row: list[str | Text] = [_severity_cell(f), f.location]
         if wide:
-            row.append(finding.rule_id)
-        row.append(finding.description)
+            row.append(f.rule_id)
+        row.append(f.description)
         if wide:
-            row.append(finding.secret_preview or "-")
+            row.append(f.secret_preview or "-")
         table.add_row(*row)
 
     return table
@@ -146,12 +165,16 @@ def format_rich(result: AggregatedScanResult, console: Console | None = None) ->
         )
     )
 
-    # Findings table. Only an interactive, genuinely narrow terminal drops the
-    # secondary columns (for readability) — a non-interactive console (`guard
-    # --ci`, piped, or redirected) reports width 80 but must keep all columns so
-    # CI logs retain the rule id and redacted preview for triage.
-    wide = (not console.is_terminal) or console.width >= _WIDE_TERMINAL_WIDTH
-    console.print(_build_findings_table(result, wide=wide))
+    # Findings table. A non-interactive console (`guard --ci`, piped, redirected)
+    # gets the full untruncated table; an interactive terminal gets the compact,
+    # width-aware one (dropping secondary columns only when genuinely narrow).
+    console.print(
+        _build_findings_table(
+            result,
+            interactive=console.is_terminal,
+            wide=console.width >= _WIDE_TERMINAL_WIDTH,
+        )
+    )
 
     # Scan info
     _print_scan_info(result, console)
