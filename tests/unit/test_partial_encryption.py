@@ -1182,6 +1182,31 @@ def test_git_skip_worktree_returns_false_on_nonzero(tmp_path: Path, caplog):
     assert "not in the index" in caplog.text
 
 
+def test_git_skip_worktree_quiet_outside_repo(tmp_path: Path, caplog):
+    """Outside a git repo, _git_skip_worktree returns False but stays quiet
+    (debug, not warning) so push/pull in a non-repo dir don't print git noise."""
+    import logging
+    from subprocess import CompletedProcess
+
+    from envdrift.core.partial_encryption import _git_skip_worktree
+
+    with (
+        patch(
+            "envdrift.core.partial_encryption.subprocess.run",
+            return_value=CompletedProcess(
+                args=[],
+                returncode=128,
+                stdout=b"",
+                stderr=b"fatal: not a git repository (or any of the parent directories): .git",
+            ),
+        ),
+        caplog.at_level(logging.WARNING),
+    ):
+        assert _git_skip_worktree(tmp_path / ".env.secret") is False
+    # The not-a-repo case must not emit a WARNING.
+    assert "update-index" not in caplog.text
+
+
 def test_git_unskip_worktree_returns_false_on_git_missing(tmp_path: Path):
     """_git_unskip_worktree returns False (not raising) when git is unavailable."""
     from envdrift.core.partial_encryption import _git_unskip_worktree

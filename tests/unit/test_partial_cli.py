@@ -193,6 +193,11 @@ def test_push_fails_when_partial_encryption_disabled(monkeypatch):
     result = runner.invoke(app, ["push"])
     assert result.exit_code == 1
     assert "not enabled" in result.output.lower()
+    # The enable hint must be valid, copy-pasteable TOML — the `[[...]]` array
+    # header must render literally, not get eaten by Rich markup into "[]".
+    assert "[[partial_encryption.environments]]" in result.output
+    assert "[partial_encryption]" in result.output
+    assert "\n[]\n" not in result.output
 
 
 def test_pull_fails_when_partial_encryption_disabled(monkeypatch):

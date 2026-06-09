@@ -424,12 +424,19 @@ def _run_git_update_index(flag: str, path: Path) -> bool:
         stderr = result.stderr
         if isinstance(stderr, (bytes, bytearray)):
             stderr = stderr.decode(errors="replace")
+        message = (stderr or "").strip()
+        # Running outside a git repo isn't an error worth surfacing — skip-worktree
+        # is simply not applicable there, so log it at debug like git-unavailable
+        # (otherwise `push`/`pull` in a non-repo dir print scary git noise).
+        if "not a git repository" in message.lower():
+            logger.debug("git update-index %s skipped (not a git repo): %s", flag, path)
+            return False
         logger.warning(
             "git update-index %s failed for %s (exit %s): %s",
             flag,
             path,
             result.returncode,
-            (stderr or "").strip(),
+            message,
         )
         return False
     return True
