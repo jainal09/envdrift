@@ -210,7 +210,8 @@ class Validator:
                                 "but is not marked sensitive in schema"
                             )
 
-        # Basic type validation
+        # Basic type validation (name-based). Produces envdrift's own messages and
+        # skips encrypted/empty values; kept as the source of base-type errors.
         for field_name, field_meta in schema.fields.items():
             env_var = env_by_lower.get(_lookup_key(field_meta))
             if env_var is None:
@@ -219,6 +220,40 @@ class Validator:
             type_error = self._check_type(env_var.value, field_meta.field_type)
             if type_error:
                 result.type_errors[field_name] = type_error
+
+        # Field-constraint validation (ge/le, Literal, min_length, pattern, ...).
+        # The heuristic above only parses base types, so a config the real schema
+        # rejects on a *constraint* used to pass as valid (#443). Instantiate the
+        # live Settings class with the type-valid, non-encrypted, non-empty values
+        # and surface the constraint errors the heuristic cannot see.
+        if schema.model_class is not None:
+            from pydantic import ValidationError
+
+            values: dict[str, str] = {}
+            for field_name, field_meta in schema.fields.items():
+                env_var = env_by_lower.get(_lookup_key(field_meta))
+                if env_var is None:
+                    continue
+                value = env_var.value
+                # Mirror _check_type's skips: ciphertext and empty (= unset).
+                if value == "" or value.startswith(("encrypted:", "ENC[")):
+                    continue
+                values[field_meta.alias or field_name] = value
+
+            try:
+                schema.model_class.model_validate(values)
+            except ValidationError as exc:
+                alias_to_field = {(fm.alias or name): name for name, fm in schema.fields.items()}
+                for err in exc.errors():
+                    # missing/extra are reported via missing_required / extra_vars;
+                    # don't override a base-type message the heuristic already set.
+                    if err.get("type") in ("missing", "extra_forbidden"):
+                        continue
+                    loc = err.get("loc") or ()
+                    key = str(loc[0]) if loc else ""
+                    field_name = alias_to_field.get(key, key)
+                    if field_name in schema.fields and field_name not in result.type_errors:
+                        result.type_errors[field_name] = err.get("msg", "invalid value")
 
         # Determine overall validity
         # Note: unencrypted_secrets are warnings, not errors

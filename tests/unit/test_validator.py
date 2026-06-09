@@ -312,6 +312,35 @@ NEW_FEATURE_FLAG=enabled
         assert result.valid is False
         assert "PORT" in result.type_errors
 
+    def test_validate_enforces_pydantic_field_constraints(self, tmp_path):
+        """#18: field constraints (ge/le/Literal/min_length/pattern) must be enforced.
+
+        validate previously did only name-based type checks and never instantiated
+        the Settings class, so a config the real Pydantic schema REJECTS sailed
+        through as 'Validation PASSED' (exit 0) — a false pass on the CI gate.
+        """
+        from typing import Literal
+
+        from pydantic import Field
+        from pydantic_settings import BaseSettings
+
+        class ConstrainedSettings(BaseSettings):
+            PORT: int = Field(ge=1, le=65535)
+            LOG_LEVEL: Literal["debug", "info", "warning", "error"]
+            APP_NAME: str = Field(min_length=3)
+            VERSION: str = Field(pattern=r"^v\d+\.\d+\.\d+$")
+
+        # Type-correct values that every constraint nonetheless rejects.
+        env_file = tmp_path / ".env"
+        env_file.write_text("PORT=99999\nLOG_LEVEL=trace\nAPP_NAME=ab\nVERSION=not-a-version\n")
+
+        env = EnvParser().parse(env_file)
+        schema = SchemaLoader().extract_metadata(ConstrainedSettings)
+        result = Validator().validate(env, schema, check_encryption=False)
+
+        assert result.valid is False
+        assert set(result.type_errors) >= {"PORT", "LOG_LEVEL", "APP_NAME", "VERSION"}
+
     def test_validate_suspicious_plaintext(self, tmp_path, permissive_settings_class):
         """Warn about plaintext values matching secret patterns."""
         content = """

@@ -51,6 +51,10 @@ class SchemaMetadata:
     module_path: str
     fields: dict[str, FieldMetadata] = field(default_factory=dict)
     extra_policy: str = "ignore"  # "forbid", "ignore", "allow"
+    # The live Settings class, when available, so validation can run the real
+    # Pydantic field-constraint checks (ge/le, Literal, min_length, pattern, ...)
+    # rather than only the name-based type heuristics derived from the metadata.
+    model_class: type[BaseSettings] | None = None
 
     @property
     def required_fields(self) -> list[str]:
@@ -213,6 +217,7 @@ class SchemaLoader:
         schema = SchemaMetadata(
             class_name=settings_cls.__name__,
             module_path=settings_cls.__module__,
+            model_class=settings_cls,
         )
 
         # Determine extra policy from model_config
