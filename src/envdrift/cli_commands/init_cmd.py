@@ -5,6 +5,7 @@ from __future__ import annotations
 import keyword
 import re
 import shlex
+import unicodedata
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Annotated
@@ -86,32 +87,37 @@ def _needs_sanitizing(name: str) -> bool:
     return not name.isidentifier() or keyword.iskeyword(name) or _is_pydantic_reserved(name)
 
 
-def _bump_until_unique(name: str, used_names: set[str]) -> str:
-    """Append ``_`` until ``name`` is absent from ``used_names``."""
-    while name in used_names:
-        name = f"{name}_"
-    return name
+def _nfkc(name: str) -> str:
+    """The form Python stores an identifier as — it NFKC-folds them at compile."""
+    return unicodedata.normalize("NFKC", name)
 
 
-def _resolve_field_name(var_name: str, used_names: set[str]) -> tuple[str, str | None]:
+def _resolve_field_name(var_name: str, used_folded: set[str]) -> tuple[str, str | None]:
     """Pick a unique, importable attribute name for ``var_name``.
 
     Returns ``(field_name, alias)`` where ``alias`` is the original env var name
-    whenever the attribute name differs from it (so pydantic-settings still binds
-    to the real variable). ``used_names`` is updated in place with the chosen name.
+    whenever the attribute Python ends up binding differs from it, so
+    pydantic-settings still binds to the real variable. ``used_folded`` tracks the
+    chosen names by their **NFKC-normalized** form and is updated in place.
 
-    The alias is set whenever a rename happens — both when sanitizing a
-    non-identifier/keyword key *and* when bumping a name that collides with an
-    already-used one. Without the collision-case alias, a key like ``class_`` that
-    collapses onto the sanitized form of ``class`` would be renamed to ``class__``
-    and silently lose its binding to the ``class_`` env var.
+    Python normalizes identifiers with NFKC at compile time, so two distinct keys
+    that fold to the same identifier (NFC ``CAFÉ`` vs NFD ``CAFÉ``; the ligature
+    ``ﬁle`` vs ``file``) would silently collapse to a single attribute on import,
+    dropping one env var. Tracking the *folded* form makes the second one bump to
+    a distinct name; aliasing it — and any key whose folded form differs from the
+    raw key, or that was sanitized — preserves binding to the exact original key.
     """
     sanitize = _needs_sanitizing(var_name)
     field_name = _sanitize_identifier(var_name) if sanitize else var_name
-    # Any rename (sanitize or collision bump) must alias back to the original key.
-    alias = var_name if sanitize or field_name in used_names else None
-    field_name = _bump_until_unique(field_name, used_names)
-    used_names.add(field_name)
+    bumped = False
+    while _nfkc(field_name) in used_folded:
+        field_name = f"{field_name}_"
+        bumped = True
+    used_folded.add(_nfkc(field_name))
+    # Alias whenever the attribute Python actually binds (the NFKC fold of the
+    # written name) is not exactly the original key: a sanitize, a collision bump,
+    # or NFKC folding a bare unicode name (ligature / NFD) all change it.
+    alias = var_name if (sanitize or bumped or _nfkc(field_name) != var_name) else None
     return field_name, alias
 
 
@@ -209,9 +215,9 @@ def _render_fields(values: dict[str, str], sensitive_vars: set[str]) -> tuple[li
     """
     field_lines: list[str] = []
     aliased_count = 0
-    used_names: set[str] = set()
+    used_folded: set[str] = set()
     for var_name, value in sorted(values.items()):
-        field_name, alias = _resolve_field_name(var_name, used_names)
+        field_name, alias = _resolve_field_name(var_name, used_folded)
         if alias is not None:
             aliased_count += 1
         type_hint, default_val = _infer_type(value)

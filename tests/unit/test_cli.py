@@ -1469,6 +1469,39 @@ class TestInitCommand:
         # The emoji key is aliased back to its original name.
         assert {f.alias for f in fields.values() if f.alias == "KEY🔑"} == {"KEY🔑"}
 
+    def test_init_nfkc_colliding_keys_stay_distinct_fields(self, tmp_path: Path) -> None:
+        """#449: keys that NFKC-fold to the same identifier must NOT collapse.
+
+        Python NFKC-normalizes identifiers at compile time, so an NFC vs NFD
+        accented key, and a ligature vs its ASCII expansion, would otherwise merge
+        into a single attribute on import -- silently dropping a var. Each of the
+        four distinct env keys must survive as its own field, bound (by name or
+        alias) to its exact original key. Built with escapes so the byte forms are
+        deterministic regardless of this file's own normalization.
+        """
+        nfc = "CAF\u00c9"  # precomposed E-acute (U+00C9)
+        nfd = "CAFE\u0301"  # E + combining acute (U+0301)
+        lig = "\ufb01le"  # FB01 ligature, NFKC-folds to "file"
+        env_file = tmp_path / ".env"
+        env_file.write_text(f"{nfc}=a\n{nfd}=b\n{lig}=c\nfile=d\n", encoding="utf-8")
+        out = tmp_path / "settings.py"
+
+        result = runner.invoke(
+            app, ["init", str(env_file), "--output", str(out), "--class-name", "Cfg"]
+        )
+        assert result.exit_code == 0, result.output
+
+        spec = importlib.util.spec_from_file_location("gen_nfkc_settings", out)
+        assert spec is not None and spec.loader is not None
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        fields = module.Cfg.model_fields
+        # No collapse: all four distinct keys survive as four distinct fields.
+        assert len(fields) == 4
+        # Each field binds (by alias, else attribute name) to an exact original key.
+        recovered = {(f.alias if f.alias else name) for name, f in fields.items()}
+        assert recovered == {nfc, nfd, lig, "file"}
+
     def test_init_then_validate_round_trip_with_non_identifier_keys(self, tmp_path: Path) -> None:
         """#443: the documented init→validate workflow PASSES for non-identifier keys.
 
