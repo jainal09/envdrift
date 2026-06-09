@@ -131,7 +131,9 @@ class TestGetVenvBinDir:
         monkeypatch.delenv("VIRTUAL_ENV", raising=False)
         monkeypatch.setattr(sys, "path", [str(tmp_path / "site-packages")])
         monkeypatch.chdir(tmp_path)
-        monkeypatch.setenv("HOME", str(tmp_path))
+        # Patch Path.home() directly: Windows resolves it from USERPROFILE, not
+        # HOME, so setting HOME alone would leave the real home on Windows.
+        monkeypatch.setattr(Path, "home", lambda: tmp_path)
         monkeypatch.setattr(platform, "system", lambda: "Linux")
 
         bin_dir = get_venv_bin_dir()

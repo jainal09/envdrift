@@ -15,6 +15,7 @@ from envdrift.config import (
     EXAMPLE_CONFIG,
     EnvdriftConfig,
     GuardianWatchConfig,
+    create_example_config,
     load_config,
 )
 
@@ -268,7 +269,8 @@ class TestPartialEncryptionConfig:
         to PartialEncryptionConfig.validate(), which the partial commands call.
         """
         config_file = tmp_path / "envdrift.toml"
-        config_file.write_text("""
+        config_file.write_text(
+            """
 [partial_encryption]
 enabled = true
 
@@ -276,7 +278,11 @@ enabled = true
 name = "production"
 secrets_only = true
 # secrets_dir intentionally omitted — invalid for secrets_only mode
-""")
+""",
+            # TOML is UTF-8 by spec; the em-dash above must not be written as
+            # cp1252 (Windows default), which tomllib then can't decode.
+            encoding="utf-8",
+        )
 
         # load_config must NOT raise (deferred validation).
         config = load_config(config_file)
@@ -309,9 +315,25 @@ class TestExampleConfig:
     def test_example_config_loads_cleanly(self, tmp_path: Path):
         """The shipped EXAMPLE_CONFIG must parse without raising."""
         config_file = tmp_path / "envdrift.toml"
-        config_file.write_text(EXAMPLE_CONFIG)
+        # EXAMPLE_CONFIG contains a non-ASCII em-dash; write UTF-8 so tomllib
+        # (UTF-8 by spec) can read it back on Windows (default cp1252).
+        config_file.write_text(EXAMPLE_CONFIG, encoding="utf-8")
 
         config = load_config(config_file)
         # guardian/partial sections present but inert; load must not raise.
+        assert config.guardian.idle_timeout == "5m"
+        assert config.partial_encryption.enabled is False
+
+    def test_create_example_config_is_loadable(self, tmp_path: Path):
+        """The config `create_example_config` writes must be readable by load_config.
+
+        Regression: the writer used the platform-default encoding, so on Windows
+        EXAMPLE_CONFIG's non-ASCII em-dash was emitted as cp1252 and load_config
+        (tomllib, UTF-8) then failed with a UnicodeDecodeError — `init-config`
+        produced a config the tool itself could not read. The write is now UTF-8.
+        """
+        config_file = create_example_config(tmp_path / "envdrift.toml")
+
+        config = load_config(config_file)
         assert config.guardian.idle_timeout == "5m"
         assert config.partial_encryption.enabled is False

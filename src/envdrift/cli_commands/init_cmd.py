@@ -178,6 +178,11 @@ def _module_header(class_name: str, env_file: Path) -> list[str]:
     would otherwise be mangled by string-escape interpretation.
     """
     env_file_literal = repr(str(env_file))
+    # The docstring embeds the path inside a triple-quoted string, so its
+    # backslashes must be escaped too: a Windows path (``C:\\Users\\…``) would
+    # otherwise make ``\\U``/``\\x`` look like a string escape and the generated
+    # module would fail to compile ("truncated \\UXXXXXXXX escape").
+    env_file_doc = str(env_file).replace("\\", "\\\\")
     return [
         '"""Auto-generated Pydantic Settings class."""',
         "",
@@ -186,7 +191,7 @@ def _module_header(class_name: str, env_file: Path) -> list[str]:
         "",
         "",
         f"class {class_name}(BaseSettings):",
-        f'    """Settings generated from {env_file}."""',
+        f'    """Settings generated from {env_file_doc}."""',
         "",
         "    model_config = SettingsConfigDict(",
         f"        env_file={env_file_literal},",
