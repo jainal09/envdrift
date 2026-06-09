@@ -1,5 +1,24 @@
 # Changelog
 
+## [10.15.0](https://github.com/jainal09/envdrift/compare/v10.14.0...v10.15.0) (2026-06-09)
+
+
+### Features
+
+* **init:** print validate next-step; validate finds cwd schema by default ([#438](https://github.com/jainal09/envdrift/issues/438)) ([749fe18](https://github.com/jainal09/envdrift/commit/749fe188bbbfeee4333d01b150dd6ca2f78bc7bd))
+
+
+### Bug Fixes
+
+* **encrypt:** gitignore the dotenvx .env.keys after encrypting ([#437](https://github.com/jainal09/envdrift/issues/437)) ([71237de](https://github.com/jainal09/envdrift/commit/71237de2cda948b32c01a15af9b14328d58467a0))
+* **guard:** make the findings table readable at narrow terminal widths ([#439](https://github.com/jainal09/envdrift/issues/439)) ([f4e7942](https://github.com/jainal09/envdrift/commit/f4e794236ba44ad9e0967649a90e0b4ca6eddf13))
+* **push:** valid TOML enable-hint and quiet git noise outside a repo ([#440](https://github.com/jainal09/envdrift/issues/440)) ([733c3f4](https://github.com/jainal09/envdrift/commit/733c3f4ffbc97997bf9658c20f61e85eb1003eff))
+
+
+### Documentation
+
+* **claude:** add "Gotchas / hard-won lessons" section to CLAUDE.md ([#435](https://github.com/jainal09/envdrift/issues/435)) ([0f12151](https://github.com/jainal09/envdrift/commit/0f12151c28246a6e1a772cdb0b86e54bb2fa1aed))
+
 ## [10.14.0](https://github.com/jainal09/envdrift/compare/v10.13.9...v10.14.0) (2026-06-08)
 
 
