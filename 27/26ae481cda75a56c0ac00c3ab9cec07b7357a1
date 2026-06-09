@@ -1,0 +1,25 @@
+src/envdrift/core/schema.py
+  s_dfc6cd6692ed8f::t_ac1bb7b262a14b 220
+  s_dfc6cd6692ed8f::t_1c69579e240849 54-57
+tests/unit/test_validator.py
+  s_dfc6cd6692ed8f::t_bfd267260bd565 315-343
+src/envdrift/core/validator.py
+  s_dfc6cd6692ed8f::t_c866b3586c7e63 229-234,242-247,250-254,256
+  s_dfc6cd6692ed8f::t_76512f354ebdd2 213-214,224-228,235-241,248-249,255
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.6",
+  "base_commit_sha": "2726ae481cda75a56c0ac00c3ab9cec07b7357a1",
+  "prompts": {},
+  "sessions": {
+    "s_dfc6cd6692ed8f": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "fd23e738-3512-4420-9290-d985ad979bfd",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Jainal Gosaliya <jainal09gosalia@gmail.com>"
+    }
+  }
+}
