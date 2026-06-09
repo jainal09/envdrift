@@ -225,8 +225,9 @@ class Validator:
         # The heuristic above only parses base types, so a config the real schema
         # rejects on a *constraint* used to pass as valid (#443). Instantiate the
         # live Settings class with the type-valid, non-encrypted, non-empty values
-        # and surface the constraint errors the heuristic cannot see.
-        if schema.model_class is not None:
+        # and surface the constraint errors the heuristic cannot see. Skipped for
+        # trivially-typed schemas (no constraints), where it would only add cost.
+        if schema.model_class is not None and schema.has_constraints:
             from pydantic import ValidationError
 
             values: dict[str, str] = {}
