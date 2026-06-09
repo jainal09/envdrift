@@ -57,41 +57,41 @@ def _severity_cell(finding: ScanFinding) -> Text:
     return cell
 
 
-def _build_findings_table(result: AggregatedScanResult, *, interactive: bool, wide: bool) -> Table:
-    """Build the findings table.
+def _build_full_findings_table(findings: list[ScanFinding]) -> Table:
+    """Full, untruncated findings table for non-interactive output (CI/logs).
 
-    Non-interactive output (``guard --ci``, piped, or redirected) gets the full
-    table — every column, untruncated values — so CI logs keep the rule id, full
-    location, and preview for triage. An interactive terminal gets a compact,
-    width-aware table: text columns are no_wrap + ellipsis (truncate with "…" on
-    one line instead of word-wrapping into fragments), Description is the flexible
-    (ratio=1) column so it absorbs the leftover width without starving the fixed
-    Sev column, and below ~100 cols the secondary Rule/Preview columns drop.
+    Every column with untruncated values, so CI logs and pre-commit hook errors
+    keep the rule id, full location, and preview for triage.
     """
-    findings = sorted(result.unique_findings, key=lambda f: f.severity, reverse=True)
     table = Table(show_header=True, header_style="bold", expand=True)
     table.add_column("Sev", width=8, justify="center")
+    table.add_column("Location", style="cyan", no_wrap=True, max_width=40)
+    table.add_column("Rule", style="magenta", max_width=25)
+    table.add_column("Description", overflow="fold")
+    table.add_column("Preview", style="dim", max_width=20)
+    for f in findings:
+        table.add_row(
+            _severity_cell(f), f.location, f.rule_id, f.description, f.secret_preview or "-"
+        )
+    return table
 
-    if not interactive:
-        # Full, untruncated table for logs/CI.
-        table.add_column("Location", style="cyan", no_wrap=True, max_width=40)
-        table.add_column("Rule", style="magenta", max_width=25)
-        table.add_column("Description", overflow="fold")
-        table.add_column("Preview", style="dim", max_width=20)
-        for f in findings:
-            table.add_row(
-                _severity_cell(f), f.location, f.rule_id, f.description, f.secret_preview or "-"
-            )
-        return table
 
-    # Compact, readable table for an interactive terminal.
+def _build_compact_findings_table(findings: list[ScanFinding], *, wide: bool) -> Table:
+    """Compact, width-aware findings table for an interactive terminal.
+
+    Text columns are no_wrap + ellipsis (truncate with "…" on one line instead of
+    word-wrapping into fragments), Description is the flexible (ratio=1) column so
+    it absorbs the leftover width without starving the fixed Sev column, and below
+    ~100 cols the secondary Rule/Preview columns drop.
+    """
+    table = Table(show_header=True, header_style="bold", expand=True)
+    table.add_column("Sev", width=8, justify="center")
     table.add_column("Location", style="cyan", no_wrap=True, max_width=40, overflow="ellipsis")
     if wide:
         table.add_column("Rule", style="magenta", no_wrap=True, max_width=20, overflow="ellipsis")
     table.add_column("Description", ratio=1, no_wrap=True, overflow="ellipsis")
     if wide:
         table.add_column("Preview", style="dim", no_wrap=True, max_width=14, overflow="ellipsis")
-
     for f in findings:
         row: list[str | Text] = [_severity_cell(f), f.location]
         if wide:
@@ -100,8 +100,15 @@ def _build_findings_table(result: AggregatedScanResult, *, interactive: bool, wi
         if wide:
             row.append(f.secret_preview or "-")
         table.add_row(*row)
-
     return table
+
+
+def _build_findings_table(result: AggregatedScanResult, *, interactive: bool, wide: bool) -> Table:
+    """Dispatch to the full (non-interactive) or compact (interactive) table."""
+    findings = sorted(result.unique_findings, key=lambda f: f.severity, reverse=True)
+    if not interactive:
+        return _build_full_findings_table(findings)
+    return _build_compact_findings_table(findings, wide=wide)
 
 
 def format_rich(result: AggregatedScanResult, console: Console | None = None) -> None:
