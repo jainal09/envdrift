@@ -184,6 +184,8 @@ def _read_git_path(*args: str) -> Path | None:
             check=True,
             capture_output=True,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             env=env,
         )
     except (OSError, subprocess.CalledProcessError):

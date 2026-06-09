@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import sys
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -722,8 +723,9 @@ class TestSOPSEncryptionBackend:
         assert backend.is_installed() is True
         installer.install.assert_called_once()
 
-    def test_exec_env_builds_command(self, tmp_path, monkeypatch):
-        """exec_env should build SOPS exec-env arguments."""
+    def test_exec_env_decrypts_to_memory_and_injects_into_argv(self, tmp_path, monkeypatch):
+        """exec_env decrypts (sops -d) to memory and runs the command as argv with
+        the secrets injected — no shell, so it is cross-platform-quoting-safe."""
         env_file = tmp_path / ".env"
         env_file.write_text('KEY="ENC[AES256_GCM,data:abc]"')
 
@@ -733,16 +735,23 @@ class TestSOPSEncryptionBackend:
         captured = {}
 
         def fake_run(args, env=None, cwd=None):
+            # sops is invoked to DECRYPT to stdout, not via exec-env.
             captured["args"] = args
-            return MagicMock(returncode=0, stderr="", stdout="")
+            return MagicMock(returncode=0, stderr="", stdout="KEY=secretval\n")
 
         monkeypatch.setattr(backend, "_run", fake_run)
 
-        result = backend.exec_env(env_file, ["echo", "ok"])
+        # The child (a real, quick python subprocess — no external binary) prints
+        # the injected secret, proving exec_env merged it into the environment.
+        result = backend.exec_env(
+            env_file,
+            [sys.executable, "-c", "import os; print(os.environ.get('KEY', ''))"],
+        )
+
+        assert captured["args"][0] == "-d"
+        assert str(env_file) in captured["args"]
         assert result.returncode == 0
-        # `sops exec-env <file> <command-as-single-shell-string>` (no
-        # --input-type; type is inferred from the file extension).
-        assert captured["args"] == ["exec-env", str(env_file), "echo ok"]
+        assert result.stdout.strip() == "secretval"
 
     def test_encrypt_includes_key_options(self, tmp_path, monkeypatch):
         """Encrypt should include provided key options in SOPS args."""

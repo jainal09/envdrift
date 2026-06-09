@@ -377,6 +377,8 @@ def guard(
                 ["git", "rev-parse", "--show-toplevel"],
                 capture_output=True,
                 text=True,
+                encoding="utf-8",
+                errors="replace",
                 timeout=10,
             )
             if toplevel.returncode == 0 and toplevel.stdout.strip():
@@ -392,6 +394,8 @@ def guard(
                 ["git", "diff", "--cached", "--name-only", "--diff-filter=ACMR"],
                 capture_output=True,
                 text=True,
+                encoding="utf-8",
+                errors="replace",
                 timeout=10,
             )
             if result.returncode == 0 and result.stdout.strip():
@@ -445,6 +449,8 @@ def guard(
                 ["git", "diff", "--name-only", "--diff-filter=ACMR", f"{pr_base}...HEAD"],
                 capture_output=True,
                 text=True,
+                encoding="utf-8",
+                errors="replace",
                 timeout=10,
             )
             if result.returncode == 0 and result.stdout.strip():
