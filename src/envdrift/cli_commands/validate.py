@@ -115,10 +115,12 @@ def validate(
         print_error(str(e))
         raise typer.Exit(code=1) from None
 
-    # Parse env file
+    # Parse env file. lenient=True so non-identifier / non-ASCII keys (which init
+    # emits as alias-backed schema fields) are present and can be matched against
+    # the schema by alias — keeping the init→validate round-trip intact.
     parser = EnvParser()
     try:
-        env = parser.parse(env_file)
+        env = parser.parse(env_file, lenient=True)
     except FileNotFoundError as e:
         print_error(str(e))
         raise typer.Exit(code=1) from None

@@ -35,6 +35,10 @@ class EncryptionResult:
     success: bool
     message: str
     file_path: Path | None = None
+    # False when the operation succeeded but made no change (e.g. decrypting a
+    # file that has no encrypted values). Lets callers report an honest no-op
+    # instead of a misleading "Decrypted".
+    changed: bool = True
 
 
 class EncryptionBackend(ABC):

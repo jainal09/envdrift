@@ -372,3 +372,25 @@ BAR=plaintext
         assert env_var.value == payload
         assert env_var.encryption_status == EncryptionStatus.ENCRYPTED
         assert env_var.encryption_backend == "dotenvx"
+
+
+class TestLenientParsing:
+    """#443: parse(lenient=True) recovers non-identifier / non-ASCII keys the
+    strict pattern rejects; the default parse stays strict."""
+
+    CONTENT = "OK_KEY=1\n2FA_ENABLED=x\nX-API-KEY=y\nCAFÉ=z\n"
+
+    def test_strict_default_drops_non_identifier_keys(self, tmp_path):
+        env_file = tmp_path / ".env"
+        env_file.write_text(self.CONTENT, encoding="utf-8")
+        env = EnvParser().parse(env_file)
+        assert set(env.variables) == {"OK_KEY"}
+
+    def test_lenient_recovers_non_identifier_and_unicode_keys(self, tmp_path):
+        env_file = tmp_path / ".env"
+        env_file.write_text(self.CONTENT, encoding="utf-8")
+        env = EnvParser().parse(env_file, lenient=True)
+        assert set(env.variables) == {"OK_KEY", "2FA_ENABLED", "X-API-KEY", "CAFÉ"}
+        # Values are unquoted exactly as strict parsing would.
+        assert env.variables["X-API-KEY"].value == "y"
+        assert env.variables["CAFÉ"].value == "z"

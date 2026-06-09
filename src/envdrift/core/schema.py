@@ -27,6 +27,10 @@ class FieldMetadata:
     description: str | None
     field_type: type
     annotation: str
+    # The Pydantic alias (the real env-var name) when the attribute name differs,
+    # e.g. a field ``X_API_KEY`` with ``Field(alias='X-API-KEY')``. Validation
+    # matches the .env against this when present so a non-identifier key resolves.
+    alias: str | None = None
 
     @property
     def is_optional(self) -> bool:
@@ -249,6 +253,11 @@ class SchemaLoader:
             else:
                 type_str = "Any"
 
+            # The real env-var name when it differs from the attribute name
+            # (validation_alias takes precedence over alias when both are set).
+            field_alias = field_info.validation_alias or field_info.alias
+            field_alias = field_alias if isinstance(field_alias, str) else None
+
             schema.fields[field_name] = FieldMetadata(
                 name=field_name,
                 required=is_required,
@@ -257,6 +266,7 @@ class SchemaLoader:
                 description=description,
                 field_type=annotation if annotation else type(None),
                 annotation=type_str,
+                alias=field_alias,
             )
 
         return schema

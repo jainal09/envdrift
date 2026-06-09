@@ -6,7 +6,7 @@ import re
 from dataclasses import dataclass, field
 
 from envdrift.core.parser import EncryptionStatus, EnvFile
-from envdrift.core.schema import SchemaMetadata
+from envdrift.core.schema import FieldMetadata, SchemaMetadata
 
 
 @dataclass
@@ -126,7 +126,13 @@ class Validator:
         # `api_key` field. Mirror that here by matching names case-insensitively
         # so an UPPERCASE .env against a lowercase schema is not falsely
         # reported as both missing_required and extra_vars (see issue #306).
-        schema_names_lower = {name.lower() for name in schema.fields}
+        # A field is matched against the .env by its alias when it has one (the
+        # real env-var name, e.g. ``X-API-KEY`` for attribute ``X_API_KEY``),
+        # else by its attribute name — mirroring how pydantic-settings binds.
+        def _lookup_key(fm: FieldMetadata) -> str:
+            return (fm.alias or fm.name).lower()
+
+        schema_names_lower = {_lookup_key(fm) for fm in schema.fields.values()}
 
         # One pass over the env vars derives everything case-insensitive matching
         # needs (Pydantic Settings defaults to case_insensitive):
@@ -156,12 +162,12 @@ class Validator:
 
         # Check for missing required variables
         for field_name, field_meta in schema.fields.items():
-            if field_meta.required and field_name.lower() not in env_names_lower:
+            if field_meta.required and _lookup_key(field_meta) not in env_names_lower:
                 result.missing_required.add(field_name)
 
         # Check for missing optional variables (as warning)
         for field_name, field_meta in schema.fields.items():
-            if not field_meta.required and field_name.lower() not in env_names_lower:
+            if not field_meta.required and _lookup_key(field_meta) not in env_names_lower:
                 result.missing_optional.add(field_name)
 
         # Check for extra variables
@@ -178,7 +184,7 @@ class Validator:
         # Check encryption status for sensitive variables
         if check_encryption:
             for field_name, field_meta in schema.fields.items():
-                env_var = env_by_lower.get(field_name.lower())
+                env_var = env_by_lower.get(_lookup_key(field_meta))
                 if env_var is None:
                     continue
 
@@ -206,7 +212,7 @@ class Validator:
 
         # Basic type validation
         for field_name, field_meta in schema.fields.items():
-            env_var = env_by_lower.get(field_name.lower())
+            env_var = env_by_lower.get(_lookup_key(field_meta))
             if env_var is None:
                 continue
 
