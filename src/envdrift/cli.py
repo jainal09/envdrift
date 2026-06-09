@@ -37,7 +37,10 @@ def _force_utf8_output() -> None:
     """
     if sys.platform != "win32":
         return
-    for stream in (sys.stdout, sys.stderr):
+    # Windows-only; the coverage runner is Linux, so this body is unreachable
+    # there. It is really exercised by the Windows job in
+    # cross-platform-integration.yml, hence the pragma rather than a fake test.
+    for stream in (sys.stdout, sys.stderr):  # pragma: no cover
         # A captured stream (pytest) may not be a TextIOWrapper; skip those.
         if isinstance(stream, io.TextIOWrapper):
             with contextlib.suppress(ValueError, OSError):

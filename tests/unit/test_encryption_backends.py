@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import subprocess
 import sys
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -837,6 +838,90 @@ class TestSOPSEncryptionBackend:
 
         assert result.returncode == 0
         assert result.stdout == non_ascii
+
+    def test_exec_env_missing_file_raises(self, tmp_path, monkeypatch):
+        """exec_env rejects a non-existent env file before touching sops."""
+        backend = SOPSEncryptionBackend()
+        monkeypatch.setattr(backend, "is_installed", lambda: True)
+
+        with pytest.raises(EncryptionBackendError, match="File not found"):
+            backend.exec_env(tmp_path / "missing.env", [sys.executable, "-c", "pass"])
+
+    def test_exec_env_not_installed_raises(self, tmp_path, monkeypatch):
+        """exec_env raises EncryptionNotFoundError when sops is absent."""
+        env_file = tmp_path / ".env"
+        env_file.write_text('KEY="ENC[AES256_GCM,data:abc]"', encoding="utf-8")
+
+        backend = SOPSEncryptionBackend()
+        monkeypatch.setattr(backend, "is_installed", lambda: False)
+
+        with pytest.raises(EncryptionNotFoundError):
+            backend.exec_env(env_file, [sys.executable, "-c", "pass"])
+
+    def test_exec_env_decrypt_failure_raises(self, tmp_path, monkeypatch):
+        """A non-zero sops decrypt surfaces its stderr as EncryptionBackendError."""
+        env_file = tmp_path / ".env"
+        env_file.write_text('KEY="ENC[AES256_GCM,data:abc]"', encoding="utf-8")
+
+        backend = SOPSEncryptionBackend()
+        monkeypatch.setattr(backend, "is_installed", lambda: True)
+        monkeypatch.setattr(
+            backend,
+            "_run",
+            lambda args, env=None, cwd=None: MagicMock(
+                returncode=1, stderr="no key for this file", stdout=""
+            ),
+        )
+
+        with pytest.raises(EncryptionBackendError, match="no key for this file"):
+            backend.exec_env(env_file, [sys.executable, "-c", "pass"])
+
+    def test_exec_env_merges_caller_env(self, tmp_path, monkeypatch):
+        """A caller-supplied env var is injected into the child alongside the secrets."""
+        env_file = tmp_path / ".env"
+        env_file.write_text('KEY="ENC[AES256_GCM,data:abc]"', encoding="utf-8")
+
+        backend = SOPSEncryptionBackend()
+        monkeypatch.setattr(backend, "is_installed", lambda: True)
+        monkeypatch.setattr(
+            backend,
+            "_run",
+            lambda args, env=None, cwd=None: MagicMock(
+                returncode=0, stderr="", stdout="KEY=secretval\n"
+            ),
+        )
+
+        result = backend.exec_env(
+            env_file,
+            [sys.executable, "-c", "import os; print(os.environ['EXTRA'])"],
+            env={"EXTRA": "from-caller"},
+        )
+
+        assert result.returncode == 0
+        assert result.stdout.strip() == "from-caller"
+
+    def test_exec_env_timeout_raises(self, tmp_path, monkeypatch):
+        """A child that exceeds the timeout is reported as EncryptionBackendError."""
+        env_file = tmp_path / ".env"
+        env_file.write_text('KEY="ENC[AES256_GCM,data:abc]"', encoding="utf-8")
+
+        backend = SOPSEncryptionBackend()
+        monkeypatch.setattr(backend, "is_installed", lambda: True)
+        monkeypatch.setattr(
+            backend,
+            "_run",
+            lambda args, env=None, cwd=None: MagicMock(
+                returncode=0, stderr="", stdout="KEY=secretval\n"
+            ),
+        )
+
+        def boom(*args, **kwargs):
+            raise subprocess.TimeoutExpired(cmd=args[0] if args else "cmd", timeout=1)
+
+        monkeypatch.setattr("envdrift.encryption.sops.subprocess.run", boom)
+
+        with pytest.raises(EncryptionBackendError, match="timed out"):
+            backend.exec_env(env_file, [sys.executable, "-c", "pass"], timeout=1)
 
     def test_encrypt_includes_key_options(self, tmp_path, monkeypatch):
         """Encrypt should include provided key options in SOPS args."""
