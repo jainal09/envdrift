@@ -248,12 +248,12 @@ def _is_env_file(rel_path: str) -> bool:
 
 
 # Bytes that legitimately appear in text files: printable/high bytes plus the
-# usual whitespace controls. Anything else (NUL, other control bytes) counts as
-# "non-text" when deciding if a file is binary.
-_TEXT_BYTES = frozenset(range(0x20, 0x100)) | set(b"\t\n\r\f\v\b")
+# usual whitespace controls (BS HT LF VT FF CR). Anything else (NUL, other
+# control bytes) counts as "non-text" when deciding if a file is binary.
+_TEXT_BYTES = frozenset(range(0x20, 0x100)) | frozenset({0x08, 0x09, 0x0A, 0x0B, 0x0C, 0x0D})
 
 
-def _looks_binary(raw: bytes, *, sample: int = 8192, threshold: float = 0.30) -> bool:
+def _looks_binary(raw: bytes, *, sample: int = 8192, threshold: float = 0.05) -> bool:
     """Heuristic: is ``raw`` a genuinely-binary blob (vs. text with a stray NUL)?
 
     git treats a file as binary if it finds a NUL in the first 8 KiB. We instead
@@ -261,6 +261,11 @@ def _looks_binary(raw: bytes, *, sample: int = 8192, threshold: float = 0.30) ->
     byte in an otherwise-text ``.env`` file does not cause the scanner to discard
     every finding and let a real plaintext secret slip through (#22). Genuine
     binaries — overwhelmingly non-text — are still skipped to avoid noise.
+
+    The threshold is deliberately low (5 %): a legitimate ``.env``/text file has
+    virtually no non-text bytes, so a small ratio still absorbs a handful of
+    stray NULs while shrinking the window for an attacker who pads a file with
+    control bytes specifically to re-trigger the binary skip and hide a secret.
     """
     chunk = raw[:sample]
     if not chunk:
