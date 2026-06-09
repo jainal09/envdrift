@@ -1,0 +1,81 @@
+name: Cross-Platform Tests
+
+# Runs the NON-integration test suite (pure-Python: path handling, parsing,
+# encoding, CLI rendering) on Linux, macOS and Windows so OS-specific side
+# effects — path separators, line endings, tempfile/permission semantics,
+# default encodings — surface in CI instead of on a user's machine.
+#
+# Scope boundary: container-backed integration tests (the `aws` / `vault` /
+# `azure` markers, served by docker-compose in integration-tests.yml) stay
+# Linux-only — GitHub's macOS runners have no Docker daemon and Windows runners
+# only run Windows containers, so a Linux service stack cannot start there.
+# Binary-backed integration (real dotenvx/sops seam) on macOS/Windows is a
+# planned follow-up once this matrix is green; it needs the binaries installed
+# per-OS from src/envdrift/constants.json.
+#
+# This workflow is intentionally NOT a required status check yet: it is expected
+# to surface pre-existing cross-platform bugs first. Promote it to required in
+# branch protection once the matrix is reliably green.
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - "src/**"
+      - "tests/**"
+      - "pyproject.toml"
+      - "uv.lock"
+      - ".github/workflows/cross-platform.yml"
+  push:
+    branches: [main]
+    paths:
+      - "src/**"
+      - "tests/**"
+      - "pyproject.toml"
+      - "uv.lock"
+      - ".github/workflows/cross-platform.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: cross-platform-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  tests:
+    name: ${{ matrix.os }} · py${{ matrix.python-version }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        # Linux is also covered by ci.yml; including it here keeps the matrix
+        # apples-to-apples so a "passes on Linux, fails on Windows" diff is
+        # obvious from a single workflow.
+        os: [ubuntu-latest, macos-latest, windows-latest]
+        # Endpoints of the supported range (3.11 oldest, 3.14 newest). The full
+        # 3.11–3.14 sweep stays on Linux in publish.yml; cross-OS is the new axis.
+        python-version: ["3.11", "3.14"]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v6
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v8.2.0
+
+      - name: Install dependencies
+        run: uv sync --all-extras
+
+      # bash on every OS (Git Bash on Windows) so the marker expression quotes
+      # identically across runners. Tests themselves run under the native Python
+      # for each OS, so OS-specific behaviour is still exercised.
+      - name: Run non-integration tests
+        shell: bash
+        run: uv run pytest -m "not integration"
