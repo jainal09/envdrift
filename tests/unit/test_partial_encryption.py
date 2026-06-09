@@ -14,12 +14,45 @@ from envdrift.config import PartialEncryptionEnvironmentConfig
 from envdrift.core.partial_encryption import (
     PartialEncryptionError,
     combine_files,
+    file_has_assignment,
     has_plaintext_secret_value,
     is_file_encrypted,
     pull_secrets_only,
     push_partial_encryption,
     push_secrets_only,
 )
+
+
+class TestFileHasAssignment:
+    """``file_has_assignment`` underpins the encrypt empty-guard (#443/#444)."""
+
+    def test_true_for_identifier_keys(self, tmp_path: Path) -> None:
+        f = tmp_path / ".env"
+        f.write_text("FOO=bar\n", encoding="utf-8")
+        assert file_has_assignment(f) is True
+
+    def test_true_for_non_identifier_keys(self, tmp_path: Path) -> None:
+        """Dash/digit keys the strict parser rejects are still real content."""
+        f = tmp_path / ".env"
+        f.write_text("X-API-KEY=secret\n1PASSWORD=hunter2\n", encoding="utf-8")
+        assert file_has_assignment(f) is True
+
+    def test_true_for_non_utf8_file_without_crashing(self, tmp_path: Path) -> None:
+        """A non-UTF-8 byte must not raise UnicodeDecodeError (errors='replace')."""
+        f = tmp_path / ".env"
+        f.write_bytes(b"API_KEY=caf\xe9\n")  # 0xe9 = latin-1 'é', invalid UTF-8
+        assert file_has_assignment(f) is True
+
+    def test_false_for_empty_comment_only_and_blank(self, tmp_path: Path) -> None:
+        empty = tmp_path / "empty.env"
+        empty.write_text("", encoding="utf-8")
+        comments = tmp_path / "comments.env"
+        comments.write_text("# just a comment\n\n   \n", encoding="utf-8")
+        keyless = tmp_path / "keyless.env"
+        keyless.write_text("=novalue\n", encoding="utf-8")  # no key before '='
+        assert file_has_assignment(empty) is False
+        assert file_has_assignment(comments) is False
+        assert file_has_assignment(keyless) is False
 
 
 @pytest.fixture
