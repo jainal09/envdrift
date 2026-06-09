@@ -14,12 +14,12 @@ from pydantic_settings import BaseSettings
 
 from envdrift.core.encryption import EncryptionDetector
 from envdrift.core.parser import EnvFile, EnvParser
-from envdrift.output.rich import console, print_error, print_success, print_warning
+from envdrift.output.rich import console, print_error, print_success
 
-# Matches the left-hand side of any `KEY=value` assignment in a raw .env file,
-# accepting keys the strict EnvParser.LINE_PATTERN rejects (leading digits,
-# dashes, etc.) so init can warn about variables it would otherwise drop.
-_RAW_ASSIGNMENT_PATTERN = re.compile(r"^\s*(?:export\s+)?([^\s=#]+)\s*=")
+# Matches `KEY=value` for ANY key the strict EnvParser.LINE_PATTERN rejects
+# (leading digits, dashes, dots, non-ASCII letters, …) so init can still emit a
+# field for it — sanitized + aliased — instead of silently dropping it.
+_RAW_ASSIGNMENT_PATTERN = re.compile(r"^\s*(?:export\s+)?([^\s=#]+)\s*=(.*)$")
 
 # Pydantic protects the ``model_`` attribute namespace: a BaseModel/BaseSettings
 # field whose name starts with this prefix either raises at import (``model_dump``
@@ -57,8 +57,6 @@ class SettingsGeneration:
     source: str
     sensitive_vars: set[str] = field(default_factory=set)
     aliased_count: int = 0
-    # .env keys present in the raw text but rejected by the strict parser.
-    unparsed_keys: list[str] = field(default_factory=list)
 
 
 def _sanitize_identifier(name: str) -> str:
@@ -82,17 +80,31 @@ def _sanitize_identifier(name: str) -> str:
     return sanitized
 
 
-def _raw_assignment_keys(text: str) -> list[str]:
-    """Extract every assignment key from raw .env text (parser-independent)."""
-    keys: list[str] = []
-    for raw_line in text.splitlines():
+def _unparsed_assignments(env_file: Path, env: EnvFile) -> dict[str, str]:
+    """Return ``name -> value`` for assignment lines the strict parser rejected.
+
+    ``EnvParser`` only accepts identifier-style ASCII keys, so ``2FA_ENABLED``,
+    ``X-API-KEY`` or a non-ASCII identifier such as ``CAFÉ`` never become
+    variables. Those keys are recovered here — values are unquoted with the
+    parser's own helpers so the value handling stays single-source — and fed
+    through the same sanitize/alias path as parsed keys instead of being dropped.
+    Keys the parser already accepted are skipped (they come from ``env``).
+    """
+    parser = EnvParser()
+    extra: dict[str, str] = {}
+    for raw_line in env_file.read_text(encoding="utf-8").splitlines():
         line = raw_line.strip()
         if not line or line.startswith("#"):
             continue
         match = _RAW_ASSIGNMENT_PATTERN.match(line)
-        if match:
-            keys.append(match.group(1))
-    return keys
+        if not match:
+            continue
+        key = match.group(1)
+        if key in env.variables or key in extra:
+            continue
+        value = parser._unquote(parser._strip_inline_comment(match.group(2)).strip())
+        extra[key] = value
+    return extra
 
 
 def _needs_sanitizing(name: str) -> bool:
@@ -210,43 +222,31 @@ def _module_header(class_name: str, env_file: Path) -> list[str]:
     ]
 
 
-def _unparsed_keys(env_file: Path, env: EnvFile) -> list[str]:
-    """Return raw .env keys present in the file but rejected by the strict parser.
-
-    The ``EnvParser`` only accepts identifier-style keys, so ``2FA_ENABLED`` or
-    ``MY-DASH-VAR`` never become variables. These are surfaced to the caller to
-    warn about rather than silently drop (``validate`` would later reject them as
-    forbidden extras under ``extra="forbid"``).
-    """
-    raw_keys = _raw_assignment_keys(env_file.read_text(encoding="utf-8"))
-    return [k for k in dict.fromkeys(raw_keys) if k not in env.variables]
-
-
-def _detect_sensitive_vars(env: EnvFile) -> set[str]:
+def _detect_sensitive_vars(values: dict[str, str]) -> set[str]:
     """Return the set of variable names flagged sensitive by name or value."""
     detector = EncryptionDetector()
     return {
         name
-        for name, var in env.variables.items()
-        if detector.is_name_sensitive(name) or detector.is_value_suspicious(var.value)
+        for name, value in values.items()
+        if detector.is_name_sensitive(name) or detector.is_value_suspicious(value)
     }
 
 
-def _render_fields(env: EnvFile, sensitive_vars: set[str]) -> tuple[list[str], int]:
+def _render_fields(values: dict[str, str], sensitive_vars: set[str]) -> tuple[list[str], int]:
     """Render every Settings field line; return the lines and the alias count.
 
     Walks the variables in sorted order so output is deterministic, resolving each
-    to a unique importable attribute name (with an alias when renamed) and an
-    inferred type/default.
+    to a unique importable attribute name (with an alias when the .env key is a
+    non-identifier, keyword, or collides) and an inferred type/default.
     """
     field_lines: list[str] = []
     aliased_count = 0
     used_names: set[str] = set()
-    for var_name, env_var in sorted(env.variables.items()):
+    for var_name, value in sorted(values.items()):
         field_name, alias = _resolve_field_name(var_name, used_names)
         if alias is not None:
             aliased_count += 1
-        type_hint, default_val = _infer_type(env_var.value)
+        type_hint, default_val = _infer_type(value)
         field_lines.append(
             _render_field_line(
                 field_name, type_hint, default_val, alias, var_name in sensitive_vars
@@ -265,11 +265,13 @@ def generate_settings_module(
     Shared by the ``init`` CLI command and the public ``envdrift.api.init`` so
     both entry points generate the same safe, importable Python.
 
-    Guarantees the emitted module is importable:
+    Guarantees the emitted module is importable AND complete (no key dropped):
       * ``class_name`` is validated as a real (non-keyword) identifier.
-      * Each field whose .env key is not a valid identifier (or is a keyword) is
-        emitted with a sanitized attribute name plus a Pydantic ``alias`` so the
-        schema still binds to the original environment variable.
+      * Every .env key becomes a field. A key the strict parser rejects
+        (leading digit, dash, dot, non-ASCII letter) or that is a Python keyword
+        is emitted with a sanitized attribute name plus a Pydantic ``alias`` so
+        the schema still binds to the original environment variable; a valid
+        non-ASCII identifier (``CAFÉ``) becomes a bare field unchanged.
 
     Raises:
         ValueError: If ``class_name`` is not a valid Python identifier.
@@ -278,17 +280,18 @@ def generate_settings_module(
         raise ValueError(f"Invalid class name: {class_name!r} is not a valid Python identifier")
 
     env = EnvParser().parse(env_file)
-    unparsed_keys = _unparsed_keys(env_file, env)
-    sensitive_vars = _detect_sensitive_vars(env) if detect_sensitive else set()
+    # Every assignment in the file, including keys the strict parser rejected.
+    all_values: dict[str, str] = {name: var.value for name, var in env.variables.items()}
+    all_values.update(_unparsed_assignments(env_file, env))
+    sensitive_vars = _detect_sensitive_vars(all_values) if detect_sensitive else set()
 
-    field_lines, aliased_count = _render_fields(env, sensitive_vars)
+    field_lines, aliased_count = _render_fields(all_values, sensitive_vars)
     lines = [*_module_header(class_name, env_file), *field_lines, ""]
 
     return SettingsGeneration(
         source="\n".join(lines),
         sensitive_vars=sensitive_vars,
         aliased_count=aliased_count,
-        unparsed_keys=unparsed_keys,
     )
 
 
@@ -385,18 +388,14 @@ def init(
 
 
 def _write_init_output(result: SettingsGeneration, output: Path, *, force: bool) -> None:
-    """Warn about dropped keys, guard against clobbering, then write the module."""
-    if result.unparsed_keys:
-        print_warning(
-            "Skipped .env variable(s) the parser cannot read "
-            f"(non-identifier keys): {', '.join(result.unparsed_keys)}"
-        )
-
+    """Guard against clobbering an existing file, then write the module."""
     # Guard against clobbering an existing (possibly hand-edited) file.
     if output.exists() and not force:
         print_error(f"Output file already exists: {output} (use --force to overwrite)")
         raise typer.Exit(code=1)
 
-    output.write_text(result.source)
+    # encoding="utf-8" so a non-ASCII field name/value (e.g. a unicode-identifier
+    # key) round-trips on platforms whose default text encoding is not UTF-8.
+    output.write_text(result.source, encoding="utf-8")
     print_success(f"Generated {output}")
     _print_generation_summary(result)
