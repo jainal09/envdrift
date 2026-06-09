@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import contextlib
+import io
+import sys
 from typing import Annotated
 
 import typer
@@ -20,6 +23,28 @@ from envdrift.cli_commands.sync import lock, pull, sync
 from envdrift.cli_commands.validate import validate
 from envdrift.cli_commands.vault import vault_pull, vault_push
 from envdrift.cli_commands.version import version as version_cmd
+
+
+def _force_utf8_output() -> None:
+    """Make stdout/stderr UTF-8 so the CLI never crashes on Windows.
+
+    Windows defaults stdout/stderr to cp1252, which cannot encode the glyphs
+    envdrift prints (``→``, ``✓``, ``⚠``, the ``⠋`` progress spinner). When output
+    is captured — a pipe, a subprocess, CI — Python raises ``UnicodeEncodeError``
+    and the command dies mid-write. Reconfiguring the streams to UTF-8 (with
+    ``errors="replace"`` as a final safety net) fixes that; Linux/macOS, already
+    UTF-8, are untouched.
+    """
+    if sys.platform != "win32":
+        return
+    for stream in (sys.stdout, sys.stderr):
+        # A captured stream (pytest) may not be a TextIOWrapper; skip those.
+        if isinstance(stream, io.TextIOWrapper):
+            with contextlib.suppress(ValueError, OSError):
+                stream.reconfigure(encoding="utf-8", errors="replace")
+
+
+_force_utf8_output()
 
 
 def _version_callback(value: bool) -> None:
