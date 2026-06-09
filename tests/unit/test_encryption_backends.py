@@ -753,6 +753,42 @@ class TestSOPSEncryptionBackend:
         assert result.returncode == 0
         assert result.stdout.strip() == "secretval"
 
+    def test_exec_env_child_stdout_decoded_as_utf8(self, tmp_path, monkeypatch):
+        """The child's UTF-8 stdout must decode as UTF-8 on every platform.
+
+        Regression for the Windows cp1252 default: without an explicit
+        ``encoding="utf-8"`` on the child ``subprocess.run``, a non-ASCII byte
+        (e.g. the UTF-8 of ``→``) would be mis-decoded as cp1252 mojibake (or
+        raise). The child here writes raw UTF-8 *bytes* directly, so this asserts
+        the PARENT decodes them correctly — the bug this commit fixes."""
+        non_ascii = "café-→-μ"
+        env_file = tmp_path / ".env"
+        env_file.write_text('KEY="ENC[AES256_GCM,data:abc]"')
+
+        backend = SOPSEncryptionBackend()
+        monkeypatch.setattr(backend, "is_installed", lambda: True)
+        monkeypatch.setattr(
+            backend,
+            "_run",
+            lambda args, env=None, cwd=None: MagicMock(
+                returncode=0, stderr="", stdout=f"KEY={non_ascii}\n"
+            ),
+        )
+
+        # Child emits raw UTF-8 bytes (bypassing its own stdout encoding) so the
+        # assertion isolates the parent's decode behaviour.
+        result = backend.exec_env(
+            env_file,
+            [
+                sys.executable,
+                "-c",
+                "import os, sys; sys.stdout.buffer.write(os.environ['KEY'].encode('utf-8'))",
+            ],
+        )
+
+        assert result.returncode == 0
+        assert result.stdout == non_ascii
+
     def test_encrypt_includes_key_options(self, tmp_path, monkeypatch):
         """Encrypt should include provided key options in SOPS args."""
         env_file = tmp_path / ".env"

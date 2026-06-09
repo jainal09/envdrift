@@ -615,6 +615,7 @@ See https://github.com/getsops/sops for full documentation.
                 capture_output=True,
                 text=True,
                 encoding="utf-8",
+                errors="replace",
                 timeout=kwargs.get("timeout", 300),
             )
         except subprocess.TimeoutExpired as e:
