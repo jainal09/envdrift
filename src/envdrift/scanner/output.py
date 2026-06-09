@@ -58,10 +58,13 @@ def _severity_cell(finding: ScanFinding) -> Text:
 
 
 def _build_full_findings_table(findings: list[ScanFinding]) -> Table:
-    """Full, untruncated findings table for non-interactive output (CI/logs).
+    """Findings table for non-interactive output (``guard --ci``, piped, hooks).
 
-    Every column with untruncated values, so CI logs and pre-commit hook errors
-    keep the rule id, full location, and preview for triage.
+    Keeps all five columns so the rule id and preview are never *dropped* from CI
+    logs (the regression this guards against). Individual values may still
+    ellipsize or fold at a narrow CI width — use ``--format json`` for the
+    complete values. This is the pre-PR layout, kept verbatim so hook/CI output
+    stays stable.
     """
     table = Table(show_header=True, header_style="bold", expand=True)
     table.add_column("Sev", width=8, justify="center")
@@ -173,8 +176,9 @@ def format_rich(result: AggregatedScanResult, console: Console | None = None) ->
     )
 
     # Findings table. A non-interactive console (`guard --ci`, piped, redirected)
-    # gets the full untruncated table; an interactive terminal gets the compact,
-    # width-aware one (dropping secondary columns only when genuinely narrow).
+    # keeps all columns (so CI logs retain the rule id + preview); an interactive
+    # terminal gets the compact, width-aware one (dropping the secondary columns
+    # only when genuinely narrow).
     console.print(
         _build_findings_table(
             result,
