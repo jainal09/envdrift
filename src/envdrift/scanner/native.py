@@ -388,6 +388,8 @@ class NativeScanner(ScannerBackend):
                 ["git", "ls-files"],
                 capture_output=True,
                 text=True,
+                encoding="utf-8",
+                errors="replace",
                 cwd=directory,
                 timeout=30,
             )
@@ -410,6 +412,8 @@ class NativeScanner(ScannerBackend):
                 ["git", "ls-files", "--others", "--exclude-standard", "--", _ENV_FILE_PATHSPEC],
                 capture_output=True,
                 text=True,
+                encoding="utf-8",
+                errors="replace",
                 cwd=directory,
                 timeout=30,
             )
@@ -443,6 +447,8 @@ class NativeScanner(ScannerBackend):
                 ],
                 capture_output=True,
                 text=True,
+                encoding="utf-8",
+                errors="replace",
                 cwd=directory,
                 timeout=30,
             )

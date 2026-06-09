@@ -14,6 +14,7 @@ import contextlib
 import os
 import socket
 import subprocess
+import sys
 import time
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -104,6 +105,45 @@ def _deterministic_cli_output(monkeypatch: pytest.MonkeyPatch) -> None:
     """
     monkeypatch.delenv("FORCE_COLOR", raising=False)
     monkeypatch.setenv("NO_COLOR", "1")
+
+
+def _force_utf8_subprocess_kwargs(kwargs: dict) -> None:
+    """Default a text-mode subprocess to UTF-8 decoding (errors='replace')."""
+    if (kwargs.get("text") or kwargs.get("universal_newlines")) and not kwargs.get("encoding"):
+        kwargs["encoding"] = "utf-8"
+        kwargs.setdefault("errors", "replace")
+
+
+@pytest.fixture(autouse=True)
+def _utf8_subprocess_on_windows(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Decode integration subprocess output as UTF-8 on Windows.
+
+    The envdrift CLI emits UTF-8 — it reconfigures its streams so it never
+    crashes on Windows' cp1252 (``cli._force_utf8_output``). But Python's
+    ``text=True`` decodes a child's stdout with the *locale* encoding, which is
+    cp1252 on Windows and raises ``UnicodeDecodeError`` on those UTF-8 bytes in
+    the subprocess reader thread. Default text-mode subprocesses to UTF-8 so the
+    harness reads the tool's real output. No-op off Windows (already UTF-8); the
+    CLI still runs under the default cp1252 locale here, so the tool's own
+    reconfigure fix is genuinely exercised.
+    """
+    if sys.platform != "win32":
+        return
+
+    real_run = subprocess.run
+    real_popen = subprocess.Popen
+
+    def patched_run(*args, **kwargs):  # type: ignore[no-untyped-def]
+        _force_utf8_subprocess_kwargs(kwargs)
+        return real_run(*args, **kwargs)
+
+    class PatchedPopen(real_popen):  # type: ignore[misc]
+        def __init__(self, *args, **kwargs):  # type: ignore[no-untyped-def]
+            _force_utf8_subprocess_kwargs(kwargs)
+            super().__init__(*args, **kwargs)
+
+    monkeypatch.setattr(subprocess, "run", patched_run)
+    monkeypatch.setattr(subprocess, "Popen", PatchedPopen)
 
 
 # --- LocalStack (AWS) Fixtures ---

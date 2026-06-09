@@ -323,6 +323,8 @@ class GitleaksInstaller:
                     [str(target_path), "version"],
                     capture_output=True,
                     text=True,
+                    encoding="utf-8",
+                    errors="replace",
                     timeout=10,
                 )
                 if self.version in result.stdout:
@@ -391,6 +393,8 @@ class GitleaksScanner(ScannerBackend):
                 [str(binary), "version"],
                 capture_output=True,
                 text=True,
+                encoding="utf-8",
+                errors="replace",
                 timeout=10,
             )
             # Output format: "gitleaks version 8.21.2"
@@ -515,6 +519,8 @@ class GitleaksScanner(ScannerBackend):
                     args,
                     capture_output=True,
                     text=True,
+                    encoding="utf-8",
+                    errors="replace",
                     timeout=300,  # 5 minute timeout
                     cwd=str(path) if path.is_dir() else str(path.parent),
                 )

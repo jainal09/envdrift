@@ -274,6 +274,8 @@ def _run_agent_install(binary_path: Path) -> bool:
             [str(binary_path), "install"],
             capture_output=True,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             timeout=30,
         )
         return result.returncode == 0
@@ -331,6 +333,8 @@ def install_agent(
                 [existing, "status"],
                 capture_output=True,
                 text=True,
+                encoding="utf-8",
+                errors="replace",
                 timeout=5,
             )
             # Parse the "Running:" line value precisely; whitespace-fragile
@@ -405,6 +409,8 @@ def install_agent(
             [str(install_path), "--version"],
             capture_output=True,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             timeout=5,
         )
         if result.returncode == 0:
@@ -487,6 +493,8 @@ def check_installation() -> None:
                 [agent_path, "--version"],
                 capture_output=True,
                 text=True,
+                encoding="utf-8",
+                errors="replace",
                 timeout=5,
             )
             if result.returncode == 0:
@@ -500,6 +508,8 @@ def check_installation() -> None:
                 [agent_path, "status"],
                 capture_output=True,
                 text=True,
+                encoding="utf-8",
+                errors="replace",
                 timeout=5,
             )
             if result.returncode == 0 and parse_agent_running_status(result.stdout) is True:

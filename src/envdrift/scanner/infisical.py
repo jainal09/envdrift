@@ -253,6 +253,8 @@ class InfisicalInstaller:
                     [str(target_path), "--version"],
                     capture_output=True,
                     text=True,
+                    encoding="utf-8",
+                    errors="replace",
                     timeout=10,
                 )
                 if self.version in result.stdout:
@@ -322,6 +324,8 @@ class InfisicalScanner(ScannerBackend):
                 [str(binary), "--version"],
                 capture_output=True,
                 text=True,
+                encoding="utf-8",
+                errors="replace",
                 timeout=10,
             )
             # Output format: "infisical version X.Y.Z"
@@ -453,6 +457,8 @@ class InfisicalScanner(ScannerBackend):
                     args,
                     capture_output=True,
                     text=True,
+                    encoding="utf-8",
+                    errors="replace",
                     timeout=300,  # 5 minute timeout
                     cwd=str(work_dir),
                 )

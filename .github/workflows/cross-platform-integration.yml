@@ -1,0 +1,86 @@
+name: Cross-Platform Integration
+
+# Runs the BINARY-BACKED integration tests (real dotenvx / sops / scanners over
+# real .env files and the real CLI) on macOS and Windows, so the encrypt,
+# decrypt, diff, partial-encryption, sops and scanner features get real
+# cross-platform coverage — not just Linux (integration-tests.yml).
+#
+# Container-backed integration (the aws / vault / azure markers, served by
+# docker-compose) stays Linux-only and is excluded here: macOS runners have no
+# Docker daemon and Windows runners only run Windows containers.
+#
+# IMPORTANT: this workflow is intentionally NOT a required status check. It is
+# expected to FAIL initially — a failing test here is a real cross-platform
+# feature bug to fix, not something to skip or xfail. Keeping it non-required
+# means those honest failures surface without blocking the merge queue; promote
+# it to required once it is reliably green (that green is the reliability goal).
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - "src/**"
+      - "tests/**"
+      - "pyproject.toml"
+      - "uv.lock"
+      - ".github/scripts/install_test_binaries.py"
+      - ".github/workflows/cross-platform-integration.yml"
+  push:
+    branches: [main]
+    paths:
+      - "src/**"
+      - "tests/**"
+      - "pyproject.toml"
+      - "uv.lock"
+      - ".github/scripts/install_test_binaries.py"
+      - ".github/workflows/cross-platform-integration.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: cross-platform-integration-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  integration:
+    name: ${{ matrix.os }} integration
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, windows-latest]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v8.2.0
+        with:
+          enable-cache: true
+          cache-suffix: ${{ matrix.os }}-integration
+
+      - name: Install dependencies
+        run: uv sync --all-extras
+
+      # Install dotenvx / sops / scanners from the pinned constants.json URLs and
+      # add them to PATH. Resilient: a tool that fails to install is logged and
+      # its tests then skip for an honest "binary absent" reason.
+      - name: Install external CLI binaries
+        run: uv run python .github/scripts/install_test_binaries.py
+
+      - name: Run binary-backed integration tests (Linux containers excluded)
+        shell: bash
+        run: |
+          uv run pytest tests/integration/ \
+            -m "integration and not aws and not vault and not azure and not gcp" \
+            -p no:cacheprovider --timeout=300 -v

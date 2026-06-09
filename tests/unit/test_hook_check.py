@@ -122,8 +122,8 @@ class TestReadGitPath:
 
         captured = {}
 
-        def fake_run(args, check, capture_output, text, env):
-            captured["env"] = env
+        def fake_run(args, **kwargs):
+            captured["env"] = kwargs.get("env")
             return SimpleNamespace(stdout=str(tmp_path / ".git" / "hooks") + "\n")
 
         monkeypatch.setattr(hook_check.shutil, "which", lambda _name: "/usr/bin/git")

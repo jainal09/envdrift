@@ -519,6 +519,8 @@ class DotenvxInstaller:
                     [str(target_path), "--version"],
                     capture_output=True,
                     text=True,
+                    encoding="utf-8",
+                    errors="replace",
                     timeout=10,
                 )
                 if self.version in result.stdout:
@@ -676,6 +678,8 @@ class DotenvxWrapper:
                 cmd,
                 capture_output=capture_output,
                 text=True,
+                encoding="utf-8",
+                errors="replace",
                 timeout=120,
                 env=env,
                 cwd=str(cwd) if cwd else None,
