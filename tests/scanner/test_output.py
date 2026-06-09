@@ -388,7 +388,8 @@ class TestRichOutput:
         assert "Findings Summary" in output
         assert "Remediation" in output
 
-    def _aws_finding_result(self) -> AggregatedScanResult:
+    @staticmethod
+    def _aws_finding_result() -> AggregatedScanResult:
         findings = [
             ScanFinding(
                 file_path=Path(".env"),
@@ -430,6 +431,27 @@ class TestRichOutput:
         assert "CRIT" in out
         assert "aws-access-key-id" in out  # Rule column present
         assert "AKIA1234" in out  # Preview column present
+
+    def test_build_findings_table_column_count(self):
+        """Narrow drops to 3 columns (Sev/Location/Description); wide keeps all 5."""
+        from envdrift.scanner.output import _build_findings_table
+
+        narrow = _build_findings_table(self._aws_finding_result(), wide=False)
+        wide = _build_findings_table(self._aws_finding_result(), wide=True)
+        assert len(narrow.columns) == 3
+        assert len(wide.columns) == 5
+
+    def test_format_rich_threshold_99_is_narrow(self):
+        """Width 99 (one below the threshold) drops the secondary Preview column."""
+        console = Console(record=True, force_terminal=True, width=99)
+        format_rich(self._aws_finding_result(), console)
+        assert "AKIA1234" not in console.export_text()
+
+    def test_format_rich_threshold_100_is_wide(self):
+        """Width 100 (exactly the threshold) shows the secondary Preview column."""
+        console = Console(record=True, force_terminal=True, width=100)
+        format_rich(self._aws_finding_result(), console)
+        assert "AKIA1234" in console.export_text()
 
     def test_format_rich_shows_scanner_errors(self):
         """Scanner errors render a dedicated panel."""

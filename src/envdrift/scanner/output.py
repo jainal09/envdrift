@@ -44,6 +44,46 @@ SEVERITY_ICONS: dict[FindingSeverity, str] = {
     FindingSeverity.INFO: ".",
 }
 
+# At or above this terminal width the findings table shows all five columns;
+# below it the secondary Rule/Preview columns are dropped so the essential
+# Sev/Location/Description stay on one readable line each.
+_WIDE_TERMINAL_WIDTH = 100
+
+
+def _build_findings_table(result: AggregatedScanResult, *, wide: bool) -> Table:
+    """Build the findings table, dropping secondary columns on a narrow terminal.
+
+    Five columns can't fit under ~100 cols without Rich squeezing the severity
+    column to nothing, so on a narrow terminal only Sev/Location/Description are
+    shown. Text columns are no_wrap + ellipsis (truncate with "…" on one line
+    instead of word-wrapping into fragments); Description is the flexible
+    (ratio=1) column so it absorbs the leftover width without starving Sev.
+    """
+    table = Table(show_header=True, header_style="bold", expand=True)
+    table.add_column("Sev", width=8, justify="center")
+    table.add_column("Location", style="cyan", no_wrap=True, max_width=40, overflow="ellipsis")
+    if wide:
+        table.add_column("Rule", style="magenta", no_wrap=True, max_width=20, overflow="ellipsis")
+    table.add_column("Description", ratio=1, no_wrap=True, overflow="ellipsis")
+    if wide:
+        table.add_column("Preview", style="dim", no_wrap=True, max_width=14, overflow="ellipsis")
+
+    for finding in sorted(result.unique_findings, key=lambda f: f.severity, reverse=True):
+        severity_text = Text(
+            f"[{SEVERITY_ICONS[finding.severity]}] {finding.severity.value[:4].upper()}"
+        )
+        severity_text.stylize(SEVERITY_COLORS[finding.severity])
+
+        row: list[str | Text] = [severity_text, finding.location]
+        if wide:
+            row.append(finding.rule_id)
+        row.append(finding.description)
+        if wide:
+            row.append(finding.secret_preview or "-")
+        table.add_row(*row)
+
+    return table
+
 
 def format_rich(result: AggregatedScanResult, console: Console | None = None) -> None:
     """Format and print results using Rich for terminal output.
@@ -106,36 +146,8 @@ def format_rich(result: AggregatedScanResult, console: Console | None = None) ->
         )
     )
 
-    # Findings table. On a narrow terminal drop the secondary Rule and Preview
-    # columns so the essential Sev / Location / Description stay on one readable
-    # line each — five columns can't fit under ~100 cols without Rich squeezing
-    # the severity column down to nothing. Text columns are no_wrap + ellipsis so
-    # a long value truncates with a "…" instead of word-wrapping into fragments.
-    wide = console.width >= 100
-    table = Table(show_header=True, header_style="bold", expand=True)
-    table.add_column("Sev", width=8, justify="center")
-    table.add_column("Location", style="cyan", no_wrap=True, max_width=40, overflow="ellipsis")
-    if wide:
-        table.add_column("Rule", style="magenta", no_wrap=True, max_width=20, overflow="ellipsis")
-    table.add_column("Description", ratio=1, no_wrap=True, overflow="ellipsis")
-    if wide:
-        table.add_column("Preview", style="dim", no_wrap=True, max_width=14, overflow="ellipsis")
-
-    for finding in sorted(result.unique_findings, key=lambda f: f.severity, reverse=True):
-        severity_icon = SEVERITY_ICONS[finding.severity]
-        severity_color = SEVERITY_COLORS[finding.severity]
-        severity_text = Text(f"[{severity_icon}] {finding.severity.value[:4].upper()}")
-        severity_text.stylize(severity_color)
-
-        row: list[str | Text] = [severity_text, finding.location]
-        if wide:
-            row.append(finding.rule_id)
-        row.append(finding.description)
-        if wide:
-            row.append(finding.secret_preview or "-")
-        table.add_row(*row)
-
-    console.print(table)
+    # Findings table (see _build_findings_table for narrow-terminal handling).
+    console.print(_build_findings_table(result, wide=console.width >= _WIDE_TERMINAL_WIDTH))
 
     # Scan info
     _print_scan_info(result, console)
