@@ -599,11 +599,18 @@ See https://github.com/getsops/sops for full documentation.
             child_env.update(kwargs["env"])
         child_env.update(secrets)
 
-        return subprocess.run(  # nosec B603
-            command,
-            env=child_env,
-            cwd=str(kwargs["cwd"]) if kwargs.get("cwd") else None,
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-        )
+        # Bound the child so a hung process can't block forever (the previous
+        # sops-exec-env path had _run's 120s timeout; keep a generous default,
+        # overridable via the ``timeout`` kwarg).
+        try:
+            return subprocess.run(  # nosec B603
+                command,
+                env=child_env,
+                cwd=str(kwargs["cwd"]) if kwargs.get("cwd") else None,
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                timeout=kwargs.get("timeout", 300),
+            )
+        except subprocess.TimeoutExpired as e:
+            raise EncryptionBackendError(f"exec-env command timed out: {e}") from e

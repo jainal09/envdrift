@@ -55,6 +55,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v6
+        with:
+          persist-credentials: false
 
       - name: Set up Python
         uses: actions/setup-python@v6
@@ -81,4 +83,4 @@ jobs:
         run: |
           uv run pytest tests/integration/ \
             -m "integration and not aws and not vault and not azure and not gcp" \
-            -p no:cacheprovider -v
+            -p no:cacheprovider --timeout=300 -v

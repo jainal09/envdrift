@@ -78,6 +78,34 @@ def _find_binary(root: Path, binary: str) -> Path:
     raise FileNotFoundError(f"{binary!r} not found in extracted archive under {root}")
 
 
+def _is_within(base: Path, target: Path) -> bool:
+    """True if resolved ``target`` stays inside ``base`` (no path traversal)."""
+    try:
+        target.resolve().relative_to(base.resolve())
+    except ValueError:
+        return False
+    return True
+
+
+def _safe_extract_tar(tf: tarfile.TarFile, dest: Path) -> None:
+    """Extract a tar, rejecting any member that escapes ``dest`` (zip/tar-slip)."""
+    for member in tf.getmembers():
+        if member.islnk() or member.issym() or not _is_within(dest, dest / member.name):
+            raise RuntimeError(f"unsafe path in archive: {member.name!r}")
+    try:
+        tf.extractall(dest, filter="data")  # 3.12+: blocks traversal/abs/special
+    except TypeError:  # Python < 3.12 has no filter= kwarg
+        tf.extractall(dest)  # members already validated above
+
+
+def _safe_extract_zip(zf: zipfile.ZipFile, dest: Path) -> None:
+    """Extract a zip, rejecting any member that escapes ``dest``."""
+    for name in zf.namelist():
+        if not _is_within(dest, dest / name):
+            raise RuntimeError(f"unsafe path in archive: {name!r}")
+    zf.extractall(dest)
+
+
 def _install_tool(bindir: Path, binary: str, urls_key: str, version_key: str) -> None:
     urls = CONST[urls_key]
     key = _platform_key(urls)
@@ -92,13 +120,13 @@ def _install_tool(bindir: Path, binary: str, urls_key: str, version_key: str) ->
         _download(url, archive)
         extract_dir = bindir / f"_{binary}_x"
         with tarfile.open(archive) as tf:
-            tf.extractall(extract_dir)
+            _safe_extract_tar(tf, extract_dir)
         dest.write_bytes(_find_binary(extract_dir, binary).read_bytes())
     elif url.endswith(".zip"):
         _download(url, archive)
         extract_dir = bindir / f"_{binary}_x"
         with zipfile.ZipFile(archive) as zf:
-            zf.extractall(extract_dir)
+            _safe_extract_zip(zf, extract_dir)
         dest.write_bytes(_find_binary(extract_dir, binary).read_bytes())
     else:
         # Raw, single-file binary (e.g. sops, talisman).
