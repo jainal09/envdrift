@@ -1,0 +1,20 @@
+src/envdrift/scanner/output.py
+  s_dfc6cd6692ed8f::t_88eb4a302f213f 179-181
+  s_dfc6cd6692ed8f::t_cf87070de859dc 61,63-67
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.6",
+  "base_commit_sha": "e57618d45d6d60ec566e0d7b69f5eb6b2e59ebde",
+  "prompts": {},
+  "sessions": {
+    "s_dfc6cd6692ed8f": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "fd23e738-3512-4420-9290-d985ad979bfd",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Jainal Gosaliya <jainal09gosalia@gmail.com>"
+    }
+  }
+}
