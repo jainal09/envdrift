@@ -58,18 +58,17 @@ def _read_env(path: Path, format_: str) -> EnvFile:
     (``UnicodeDecodeError``) both produced an uncaught traceback. Returns the
     parsed file or exits nonzero with an actionable message.
     """
+    # Typer's Path argument already rejects an unreadable file (Click exits 2
+    # with a clean "is not readable" message), so the remaining cases to guard
+    # are a missing path, a directory, and a readable-but-binary file.
     if not path.exists():
         _emit_error(f"ENV file not found: {path}", format_)
     if not path.is_file():
         _emit_error(f"Not a file: {path}", format_)
     try:
         return EnvParser().parse(path)
-    except FileNotFoundError:
-        _emit_error(f"ENV file not found: {path}", format_)
     except UnicodeDecodeError:
         _emit_error(f"Could not read {path} as UTF-8 text (not a valid .env file)", format_)
-    except (IsADirectoryError, PermissionError) as e:
-        _emit_error(f"Could not read {path}: {e}", format_)
 
 
 def diff(
