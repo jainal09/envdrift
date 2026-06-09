@@ -198,7 +198,9 @@ BOOL_FALSE=false
         """#321: a non-ASCII-digit value (²=U+00B2) is str, not a crashing int()."""
         env_file = tmp_path / ".env"
         # ² (U+00B2) is str.isdigit() -> True but int("²") raises ValueError.
-        env_file.write_text("LEVEL=²\nPORT=8080")
+        # Write UTF-8 explicitly: the default encoding is cp1252 on Windows,
+        # which would emit byte 0xb2 and make the (UTF-8) reader choke.
+        env_file.write_text("LEVEL=²\nPORT=8080", encoding="utf-8")
 
         output = tmp_path / "settings.py"
         # Must not raise ValueError on the Unicode-digit value.

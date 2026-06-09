@@ -1372,7 +1372,9 @@ class TestInitCommand:
         """#321: a Unicode-digit value (²=U+00B2) is inferred str, not a crashing int()."""
         env_file = tmp_path / ".env"
         # ² (U+00B2): str.isdigit() is True but int("²") raises ValueError.
-        env_file.write_text("LEVEL=²\nPORT=8080\n")
+        # Write UTF-8 explicitly: the default encoding is cp1252 on Windows,
+        # which would emit byte 0xb2 and make the (UTF-8) reader choke.
+        env_file.write_text("LEVEL=²\nPORT=8080\n", encoding="utf-8")
         out = tmp_path / "settings.py"
 
         result = runner.invoke(
@@ -1593,9 +1595,10 @@ class TestInitCommand:
         """
         from envdrift.cli_commands.init_cmd import _module_header
 
-        # A POSIX path that still contains escape-prone characters in its name.
+        # A path whose name contains escape-prone characters. It is never written
+        # to disk (a literal `"` is an illegal filename char on Windows, and
+        # `_module_header` only formats the path string), keeping this cross-platform.
         tricky = tmp_path / 'we"ird\tname'
-        tricky.write_text("FOO=bar\n")
 
         header = "\n".join(_module_header("Cfg", tricky))
         # The emitted literal must repr back to the exact path string.

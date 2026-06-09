@@ -744,5 +744,8 @@ def create_example_config(path: Path | None = None) -> Path:
     if path.exists():
         raise FileExistsError(f"Configuration file already exists: {path}")
 
-    path.write_text(EXAMPLE_CONFIG)
+    # TOML is UTF-8 by spec and EXAMPLE_CONFIG contains a non-ASCII em-dash;
+    # write UTF-8 explicitly so the file we generate is readable by tomllib on
+    # Windows too (the default there is cp1252, which load_config can't decode).
+    path.write_text(EXAMPLE_CONFIG, encoding="utf-8")
     return path

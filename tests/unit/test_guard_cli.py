@@ -204,7 +204,8 @@ def test_guard_survives_bad_partial_encryption(tmp_path: Path, monkeypatch):
 
     monkeypatch.setattr("envdrift.cli_commands.guard.ScanEngine", DummyEngine)
 
-    (tmp_path / "envdrift.toml").write_text("""
+    (tmp_path / "envdrift.toml").write_text(
+        """
 [partial_encryption]
 enabled = true
 
@@ -212,7 +213,10 @@ enabled = true
 name = "production"
 secrets_only = true
 # secrets_dir omitted — invalid, but guard must not care
-""")
+""",
+        # TOML is UTF-8 by spec; don't let the em-dash become cp1252 on Windows.
+        encoding="utf-8",
+    )
     monkeypatch.chdir(tmp_path)
 
     result = runner.invoke(app, ["guard", "."])

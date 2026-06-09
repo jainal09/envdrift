@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import stat
+import sys
 from pathlib import Path
 from unittest.mock import patch
 
@@ -48,7 +49,9 @@ def test_install_downloads_binary(monkeypatch, tmp_path: Path):
 
     assert binary_path.exists()
     assert binary_path.name == "sops"
-    assert binary_path.stat().st_mode & stat.S_IEXEC
+    # The chmod +x is POSIX-only; Windows has no executable bit to assert.
+    if sys.platform != "win32":
+        assert binary_path.stat().st_mode & stat.S_IEXEC
 
 
 def test_install_unsupported_platform():

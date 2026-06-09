@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import subprocess
+import sys
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -879,6 +880,12 @@ class TestGitSecretsParseOutputBranches:
         findings = scanner._parse_output(output, Path("/repo"))
         assert len(findings) == 1
 
+    @pytest.mark.skipif(
+        sys.platform == "win32",
+        reason="POSIX-absolute path data: '/absolute/path' is not absolute on "
+        "Windows (no drive), and a Windows-absolute path's drive-colon collides "
+        "with the ':' field separator — a distinct parsing concern, not this branch.",
+    )
     def test_parse_output_absolute_file_path_used_directly(self) -> None:
         """Test _create_finding uses an absolute path as-is without prepending base_path."""
         scanner = GitSecretsScanner(auto_install=False)

@@ -230,13 +230,18 @@ class TestPartialEncryptionPaths:
         from envdrift.cli_commands.sync import _load_partial_encryption_paths
 
         cfg = tmp_path / "envdrift.toml"
+        # TOML literal strings (single quotes) so Windows backslash paths are not
+        # parsed as escapes (C:\Users -> invalid \U).
+        clear_file = tmp_path / ".env.clear"
+        secret_file = tmp_path / ".env.secret"
+        combined_file = tmp_path / ".env"
         cfg.write_text(
             "[partial_encryption]\nenabled = true\n"
             "[[partial_encryption.environments]]\n"
             'name = "prod"\n'
-            f'clear_file = "{tmp_path / ".env.clear"}"\n'
-            f'secret_file = "{tmp_path / ".env.secret"}"\n'
-            f'combined_file = "{tmp_path / ".env"}"\n'
+            f"clear_file = '{clear_file}'\n"
+            f"secret_file = '{secret_file}'\n"
+            f"combined_file = '{combined_file}'\n"
         )
         clear, secret, combined = _load_partial_encryption_paths(cfg)
         assert (tmp_path / ".env.clear").resolve() in clear
@@ -247,12 +252,15 @@ class TestPartialEncryptionPaths:
         from envdrift.cli_commands.sync import _load_partial_encryption_paths
 
         cfg = tmp_path / "envdrift.toml"
+        # TOML literal string (single quotes) so a Windows backslash path is not
+        # parsed as an escape (C:\Users -> invalid \U).
+        secrets_dir = tmp_path / "secrets"
         cfg.write_text(
             "[partial_encryption]\nenabled = true\n"
             "[[partial_encryption.environments]]\n"
             'name = "prod"\n'
             "secrets_only = true\n"
-            f'secrets_dir = "{tmp_path / "secrets"}"\n'
+            f"secrets_dir = '{secrets_dir}'\n"
         )
         clear, secret, combined = _load_partial_encryption_paths(cfg)
         # secrets-only env contributes nothing
@@ -1057,22 +1065,26 @@ class TestLockInteractivePrompt:
 # --------------------------------------------------------------------------
 def _write_partial_config(tmp_path, secret_file, combined_file, *, secrets_only=False):
     cfg = tmp_path / "envdrift.toml"
+    # Emit paths as TOML *literal* strings (single quotes): a Windows path's
+    # backslashes must not be parsed as escapes (``C:\\Users`` -> invalid ``\\U``).
+    secrets_dir = tmp_path / "secrets"
+    clear_file = tmp_path / ".env.clear"
     if secrets_only:
         cfg.write_text(
             "[partial_encryption]\nenabled = true\n"
             "[[partial_encryption.environments]]\n"
             'name = "prod"\n'
             "secrets_only = true\n"
-            f'secrets_dir = "{tmp_path / "secrets"}"\n'
+            f"secrets_dir = '{secrets_dir}'\n"
         )
     else:
         cfg.write_text(
             "[partial_encryption]\nenabled = true\n"
             "[[partial_encryption.environments]]\n"
             'name = "prod"\n'
-            f'clear_file = "{tmp_path / ".env.clear"}"\n'
-            f'secret_file = "{secret_file}"\n'
-            f'combined_file = "{combined_file}"\n'
+            f"clear_file = '{clear_file}'\n"
+            f"secret_file = '{secret_file}'\n"
+            f"combined_file = '{combined_file}'\n"
         )
     return cfg
 

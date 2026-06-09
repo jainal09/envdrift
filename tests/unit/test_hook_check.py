@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import sys
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -301,6 +302,11 @@ class TestCheckDirectHooks:
         assert result["pre-commit"] is False
         assert result["pre-push"] is False
 
+    @pytest.mark.skipif(
+        sys.platform == "win32",
+        reason="POSIX exec-bit semantics: Windows has no executable bit and "
+        "os.access(X_OK) is always true, so 'skip non-executable hook' cannot hold.",
+    )
     def test_non_executable_hooks_are_skipped(self, tmp_path: Path):
         hooks_dir = tmp_path / "hooks"
         hooks_dir.mkdir()
