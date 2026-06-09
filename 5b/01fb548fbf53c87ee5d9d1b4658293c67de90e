@@ -1,0 +1,22 @@
+tests/unit/test_hook_check.py
+  s_dfc6cd6692ed8f::t_a1f03d63ac5285 125-126
+tests/unit/test_encryption_backends.py
+  s_dfc6cd6692ed8f::t_a0c1f266b6c96a 726-728,738,740,744-752,754
+  s_dfc6cd6692ed8f::t_d274539915f7e4 5
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.6",
+  "base_commit_sha": "5b01fb548fbf53c87ee5d9d1b4658293c67de90e",
+  "prompts": {},
+  "sessions": {
+    "s_dfc6cd6692ed8f": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "fd23e738-3512-4420-9290-d985ad979bfd",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Jainal Gosaliya <jainal09gosalia@gmail.com>"
+    }
+  }
+}
