@@ -1,0 +1,20 @@
+docs/cli/init.md
+  s_dfc6cd6692ed8f::t_095c04d3c31869 163
+  s_dfc6cd6692ed8f::t_649561ee71d7cb 153
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.6",
+  "base_commit_sha": "99e0f4189872ec4a1c9cf79f930c9f18b044787e",
+  "prompts": {},
+  "sessions": {
+    "s_dfc6cd6692ed8f": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "fd23e738-3512-4420-9290-d985ad979bfd",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Jainal Gosaliya <jainal09gosalia@gmail.com>"
+    }
+  }
+}
