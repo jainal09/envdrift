@@ -13,13 +13,8 @@ import typer
 from pydantic_settings import BaseSettings
 
 from envdrift.core.encryption import EncryptionDetector
-from envdrift.core.parser import EnvFile, EnvParser
+from envdrift.core.parser import EnvParser
 from envdrift.output.rich import console, print_error, print_success
-
-# Matches `KEY=value` for ANY key the strict EnvParser.LINE_PATTERN rejects
-# (leading digits, dashes, dots, non-ASCII letters, …) so init can still emit a
-# field for it — sanitized + aliased — instead of silently dropping it.
-_RAW_ASSIGNMENT_PATTERN = re.compile(r"^\s*(?:export\s+)?([^\s=#]+)\s*=(.*)$")
 
 # Pydantic protects the ``model_`` attribute namespace: a BaseModel/BaseSettings
 # field whose name starts with this prefix either raises at import (``model_dump``
@@ -78,32 +73,6 @@ def _sanitize_identifier(name: str) -> str:
     while keyword.iskeyword(sanitized) or keyword.issoftkeyword(sanitized):
         sanitized = f"{sanitized}_"
     return sanitized
-
-
-def _unparsed_assignments(env_file: Path, env: EnvFile) -> dict[str, str]:
-    """Return ``name -> value`` for assignment lines the strict parser rejected.
-
-    ``EnvParser`` only accepts identifier-style ASCII keys, so ``2FA_ENABLED``,
-    ``X-API-KEY`` or a non-ASCII identifier such as ``CAFÉ`` never become
-    variables. Those keys are recovered here — values are unquoted with the
-    parser's own helpers so the value handling stays single-source — and fed
-    through the same sanitize/alias path as parsed keys instead of being dropped.
-    Keys the parser already accepted are skipped (they come from ``env``).
-    """
-    parser = EnvParser()
-    extra: dict[str, str] = {}
-    for raw_line in env_file.read_text(encoding="utf-8").splitlines():
-        line = raw_line.strip()
-        if not line or line.startswith("#"):
-            continue
-        match = _RAW_ASSIGNMENT_PATTERN.match(line)
-        if not match:
-            continue
-        key = match.group(1)
-        if key in env.variables or key in extra:
-            continue
-        extra[key] = parser.value_from_raw(match.group(2))
-    return extra
 
 
 def _needs_sanitizing(name: str) -> bool:
@@ -278,10 +247,11 @@ def generate_settings_module(
     if _needs_sanitizing(class_name):
         raise ValueError(f"Invalid class name: {class_name!r} is not a valid Python identifier")
 
-    env = EnvParser().parse(env_file)
-    # Every assignment in the file, including keys the strict parser rejected.
+    # lenient=True so non-identifier / non-ASCII keys are recovered and emitted
+    # (sanitized + aliased) rather than dropped; ``validate`` parses the same way
+    # so the round-trip holds.
+    env = EnvParser().parse(env_file, lenient=True)
     all_values: dict[str, str] = {name: var.value for name, var in env.variables.items()}
-    all_values.update(_unparsed_assignments(env_file, env))
     sensitive_vars = _detect_sensitive_vars(all_values) if detect_sensitive else set()
 
     field_lines, aliased_count = _render_fields(all_values, sensitive_vars)

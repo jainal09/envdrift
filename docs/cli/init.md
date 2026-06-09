@@ -177,6 +177,11 @@ The generated module is always valid, importable Python:
 - **Valid non-ASCII identifiers are kept verbatim.** A key that passes
   `str.isidentifier()` (e.g. `CAFÉ`, `ΑΛΦΑ`) becomes a bare field with no alias.
 
+- **The round-trip holds.** `envdrift validate` parses the `.env` the same way
+  (recovering non-identifier / non-ASCII keys) and matches schema fields by their
+  alias, so `init` → `validate` passes instead of falsely flagging the aliased
+  fields as missing.
+
 - **Invalid class names fail fast.** A `--class-name` that is not a valid Python
   identifier (e.g. `123Bad`) or is a keyword (e.g. `class`) errors with a
   non-zero exit code instead of writing a module that would raise `SyntaxError`

@@ -1469,6 +1469,34 @@ class TestInitCommand:
         # The emoji key is aliased back to its original name.
         assert {f.alias for f in fields.values() if f.alias == "KEY🔑"} == {"KEY🔑"}
 
+    def test_init_then_validate_round_trip_with_non_identifier_keys(self, tmp_path: Path) -> None:
+        """#443: the documented init→validate workflow PASSES for non-identifier keys.
+
+        init aliases ``X-API-KEY`` / ``2FA_ENABLED`` and keeps ``CAFÉ``; validate
+        parses the same .env leniently and matches by alias, so it validates
+        cleanly instead of falsely reporting the aliased fields as MISSING (the
+        regression this combined init+validate change fixes).
+        """
+        env_file = tmp_path / ".env"
+        env_file.write_text(
+            "DATABASE_URL=postgres://x\n2FA_ENABLED=true\nX-API-KEY=abc123\nCAFÉ=yes\n",
+            encoding="utf-8",
+        )
+        out = tmp_path / "settings.py"
+
+        init_res = runner.invoke(
+            app, ["init", str(env_file), "--output", str(out), "--class-name", "Cfg"]
+        )
+        assert init_res.exit_code == 0, init_res.output
+
+        val_res = runner.invoke(
+            app,
+            ["validate", str(env_file), "--schema", "settings:Cfg", "--service-dir", str(tmp_path)],
+        )
+        assert val_res.exit_code == 0, val_res.output
+        # Width-independent: Rich may wrap the long tmp path before the verdict.
+        assert "passed" in " ".join(val_res.output.lower().split())
+
     def test_sanitize_identifier_produces_valid_non_keyword_names(self) -> None:
         """#413: the sanitizer always yields a valid, non-keyword identifier."""
         from envdrift.cli_commands.init_cmd import _sanitize_identifier

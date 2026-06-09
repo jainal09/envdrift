@@ -146,12 +146,23 @@ class EnvParser:
     # (a value beginning with `#`). Leading/trailing whitespace is stripped after.
     LINE_PATTERN = re.compile(r"^(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=(.*)$")
 
-    def parse(self, path: Path | str) -> EnvFile:
+    # Lenient variant for ``lenient=True``: accepts ANY key the strict pattern
+    # rejects (leading digit ``1PW``, dash ``X-API-KEY``, dot, non-ASCII letter
+    # ``CAFÉ``). ``init`` and ``validate`` use it so a non-identifier key is
+    # represented end-to-end (in the generated schema *and* matched against the
+    # .env), keeping the init→validate round-trip intact. Other callers keep the
+    # strict pattern so their behaviour is unchanged.
+    LENIENT_LINE_PATTERN = re.compile(r"^(?:export\s+)?([^\s=#]+)\s*=(.*)$")
+
+    def parse(self, path: Path | str, *, lenient: bool = False) -> EnvFile:
         """
         Parse a .env file and produce an EnvFile representing its parsed contents.
 
         Parameters:
             path (Path | str): Filesystem path to the .env file.
+            lenient (bool): When True, also recover keys the strict pattern
+                rejects (non-identifier / non-ASCII), so the parsed variable set
+                matches every assignment in the file.
 
         Returns:
             EnvFile: Parsed file containing variables and comments.
@@ -165,23 +176,26 @@ class EnvParser:
             raise FileNotFoundError(f"ENV file not found: {path}")
 
         content = path.read_text(encoding="utf-8")
-        env_file = self.parse_string(content)
+        env_file = self.parse_string(content, lenient=lenient)
         env_file.path = path
 
         return env_file
 
-    def parse_string(self, content: str) -> EnvFile:
+    def parse_string(self, content: str, *, lenient: bool = False) -> EnvFile:
         """
         Parse .env formatted text, extracting variables (with detected encryption status) and comments.
 
         Parameters:
             content (str): The complete text content of a .env file to parse.
+            lenient (bool): When True, accept non-identifier / non-ASCII keys too
+                (see ``LENIENT_LINE_PATTERN``).
 
         Returns:
             EnvFile: An EnvFile populated with parsed EnvVar entries keyed by variable name and a list of comment lines.
         """
         env_file = EnvFile(path=Path())
         lines = content.splitlines()
+        pattern = self.LENIENT_LINE_PATTERN if lenient else self.LINE_PATTERN
 
         for line_num, line in enumerate(lines, start=1):
             original_line = line
@@ -197,7 +211,7 @@ class EnvParser:
                 continue
 
             # Parse KEY=value
-            match = self.LINE_PATTERN.match(line)
+            match = pattern.match(line)
             if not match:
                 continue
 
