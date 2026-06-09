@@ -1,0 +1,21 @@
+tests/unit/coverage/test_cov_cli_commands_sync.py
+  s_dfc6cd6692ed8f::t_2b7855e8ab3099 1068-1071,1078,1085-1087
+  s_dfc6cd6692ed8f::t_985a429f17ec9c 255-257,263
+  s_dfc6cd6692ed8f::t_7b283b43f72e16 233-237,242-244
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.6",
+  "base_commit_sha": "7b22315e677022d193ffd796d767bd4117443d14",
+  "prompts": {},
+  "sessions": {
+    "s_dfc6cd6692ed8f": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "fd23e738-3512-4420-9290-d985ad979bfd",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": null
+    }
+  }
+}
