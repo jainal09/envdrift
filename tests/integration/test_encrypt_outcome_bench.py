@@ -84,6 +84,28 @@ def test_encrypt_comment_only_file_refuses_instead_of_noop_ok(tmp_path: Path) ->
     assert not (tmp_path / ".env.keys").exists()
 
 
+def test_encrypt_file_of_only_non_identifier_keys_is_not_refused(
+    tmp_path: Path, dotenvx_on_path: None
+) -> None:
+    """#444 review regression: non-identifier keys are content, not emptiness.
+
+    A file whose only keys are non-identifier (``X-API-KEY``, ``1PASSWORD``) parses
+    to zero *strict-parser* variables, so an EnvParser-based empty-guard would
+    wrongly refuse it and leave real secrets unencrypted. The guard counts raw
+    assignments instead, so this file is encrypted normally.
+    """
+    env_file = tmp_path / ".env"
+    env_file.write_text("X-API-KEY=supersecret123\n1PASSWORD=hunter2\n", encoding="utf-8")
+
+    result = DotenvxEncryptionBackend().encrypt(env_file, cwd=tmp_path)
+
+    assert result.success is True, result.message
+    on_disk = env_file.read_text()
+    assert "encrypted:" in on_disk
+    assert "supersecret123" not in on_disk
+    assert "hunter2" not in on_disk
+
+
 # --- Silent crypto-seam failure must be reported, not reported as success ------
 # dotenvx exits 0 but leaves plaintext when the key is broken; the backend must
 # verify the on-disk outcome and report failure (#4, #5, #6, #7).

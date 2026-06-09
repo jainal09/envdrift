@@ -111,15 +111,20 @@ class DotenvxEncryptionBackend(EncryptionBackend):
                 file_path=env_file,
             )
 
-        # Refuse to "encrypt" a file with no variables. Handed an empty or
+        # Refuse to "encrypt" a file with no assignments. Handed an empty or
         # comment-only file, dotenvx scaffolds a placeholder-secrets template
         # (HELLO, AWS_ACCESS_KEY_ID, ...) into it and still exits 0, so a blind
         # delegation fabricates secrets the user never wrote and destroys the
-        # original content. Detect zero parseable variables up front and decline
-        # rather than letting that happen (envdrift #443).
-        from envdrift.core.parser import EnvParser
+        # original content. ``file_has_assignment`` counts ANY assignment line
+        # (including non-identifier keys like ``X-API-KEY`` the strict parser
+        # rejects) and tolerates non-UTF-8 bytes, so it neither false-refuses a
+        # file of non-identifier secrets nor crashes on a non-UTF-8 file (#443).
+        from envdrift.core.partial_encryption import (
+            file_has_assignment,
+            has_plaintext_secret_value,
+        )
 
-        if not EnvParser().parse(env_file).variables:
+        if not file_has_assignment(env_file):
             return EncryptionResult(
                 success=False,
                 message=(
@@ -135,7 +140,6 @@ class DotenvxEncryptionBackend(EncryptionBackend):
                 f"dotenvx is not installed.\n{self.install_instructions()}"
             )
 
-        from envdrift.core.partial_encryption import has_plaintext_secret_value
         from envdrift.integrations.dotenvx import DotenvxError
 
         try:
