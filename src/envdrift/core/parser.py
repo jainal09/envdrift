@@ -202,14 +202,7 @@ class EnvParser:
                 continue
 
             key = match.group(1)
-            # Strip an inline comment from the RAW value first — the whitespace
-            # context distinguishes `K= # c` (comment) from `K=#FF0000` (a value
-            # that begins with `#`) — then strip surrounding whitespace + quotes.
-            value = self._strip_inline_comment(match.group(2))
-            value = value.strip()
-
-            # Remove surrounding quotes
-            value = self._unquote(value)
+            value = self.value_from_raw(match.group(2))
 
             # Determine encryption status and backend
             encryption_status, encryption_backend = self._detect_encryption_status(value)
@@ -226,6 +219,19 @@ class EnvParser:
             env_file.variables[key] = env_var
 
         return env_file
+
+    def value_from_raw(self, raw_value: str) -> str:
+        """Normalize the raw RHS of a ``KEY=value`` line to its final value.
+
+        Strips an unquoted inline comment, then surrounding whitespace, then a
+        single matching pair of surrounding quotes — the same transformation
+        ``parse`` applies. Public so callers that recover assignments the strict
+        ``LINE_PATTERN`` rejects (e.g. ``init`` for non-identifier keys) reuse
+        this canonical handling instead of the private helpers. The whitespace
+        context matters, so pass the RAW value (the regex's ``=`` group),
+        unstripped: ``K= # c`` is a comment but ``K=#FF0000`` is a value.
+        """
+        return self._unquote(self._strip_inline_comment(raw_value).strip())
 
     def _strip_inline_comment(self, value: str) -> str:
         """Strip an unquoted trailing ` #...` comment from a (raw) value.

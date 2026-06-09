@@ -102,8 +102,7 @@ def _unparsed_assignments(env_file: Path, env: EnvFile) -> dict[str, str]:
         key = match.group(1)
         if key in env.variables or key in extra:
             continue
-        value = parser._unquote(parser._strip_inline_comment(match.group(2)).strip())
-        extra[key] = value
+        extra[key] = parser.value_from_raw(match.group(2))
     return extra
 
 

@@ -170,8 +170,8 @@ The generated module is always valid, importable Python:
   the original environment variable:
 
   ```python
-  field_2FA_ENABLED: str = Field(alias="2FA_ENABLED")
-  MY_DASH_VAR: str = Field(alias="MY-DASH-VAR")
+  field_2FA_ENABLED: str = Field(alias='2FA_ENABLED')
+  MY_DASH_VAR: str = Field(alias='MY-DASH-VAR')
   ```
 
 - **Valid non-ASCII identifiers are kept verbatim.** A key that passes
