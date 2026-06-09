@@ -1,0 +1,41 @@
+src/envdrift/cli_commands/init_cmd.py
+  s_dfc6cd6692ed8f::t_831c3f1297205b 16
+  s_dfc6cd6692ed8f::t_f8b9b657d8dc53 250-253
+src/envdrift/core/validator.py
+  s_dfc6cd6692ed8f::t_1614f6d046e0a6 215
+  s_dfc6cd6692ed8f::t_0e95ee6f241930 9
+  s_dfc6cd6692ed8f::t_10dd16c2417901 129-135
+  s_dfc6cd6692ed8f::t_224d4b9cd9025e 165,170
+  s_dfc6cd6692ed8f::t_21ae61213119f2 187
+tests/unit/test_validator.py
+  s_dfc6cd6692ed8f::t_9cfe67593146be 419-462
+src/envdrift/core/parser.py
+  s_dfc6cd6692ed8f::t_81e6078a1e6d56 149-157,163-165,179,184,190-191,198,214
+tests/unit/test_parser.py
+  s_dfc6cd6692ed8f::t_36588dd0ee36e5 375-396
+tests/unit/test_cli.py
+  s_dfc6cd6692ed8f::t_daad04e3ac3cb8 1472-1499
+src/envdrift/core/schema.py
+  s_dfc6cd6692ed8f::t_e91f6d5eb5dd19 30-33
+  s_dfc6cd6692ed8f::t_46fcd6c068c5d6 256-260,269
+docs/cli/init.md
+  s_dfc6cd6692ed8f::t_975c70a6d73029 180-184
+src/envdrift/cli_commands/validate.py
+  s_dfc6cd6692ed8f::t_920998b810459e 118-120,123
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.6",
+  "base_commit_sha": "3884d31a6259d2a67414f090c70ceb4550e315be",
+  "prompts": {},
+  "sessions": {
+    "s_dfc6cd6692ed8f": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "fd23e738-3512-4420-9290-d985ad979bfd",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Jainal Gosaliya <jainal09gosalia@gmail.com>"
+    }
+  }
+}
