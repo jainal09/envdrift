@@ -1411,25 +1411,124 @@ class TestInitCommand:
         assert "invalid class name" in result.output.lower()
         assert not out.exists()
 
-    def test_init_warns_on_non_identifier_keys(self, tmp_path: Path) -> None:
-        """#413: .env keys the parser cannot read are warned about, not dropped.
+    def test_init_aliases_non_identifier_keys(self, tmp_path: Path) -> None:
+        """#443: .env keys the parser cannot read are aliased in, not dropped.
 
         `2FA_ENABLED` (leading digit) and `MY-DASH-VAR` (dash) never enter the
-        parsed variable set, so init previously omitted them with no warning.
+        strict parser's variable set, so init used to omit them and warn. They are
+        now emitted with a sanitized attribute name plus a Pydantic ``alias`` so the
+        schema stays complete and the module still imports.
         """
         env_file = tmp_path / ".env"
-        env_file.write_text("2FA_ENABLED=true\nMY-DASH-VAR=x\nVALID=keep\n")
+        env_file.write_text("2FA_ENABLED=true\nMY-DASH-VAR=x\nVALID=keep\n", encoding="utf-8")
         out = tmp_path / "settings.py"
 
         result = runner.invoke(
             app, ["init", str(env_file), "--output", str(out), "--class-name", "Cfg"]
         )
         assert result.exit_code == 0, result.output
-        # Both un-parseable keys are named in the warning output.
-        assert "2FA_ENABLED" in result.output
-        assert "MY-DASH-VAR" in result.output
-        # The parseable variable is still emitted.
-        assert "VALID" in out.read_text()
+        content = out.read_text(encoding="utf-8")
+        # Both keys are aliased into the schema rather than dropped/warned.
+        assert "alias='2FA_ENABLED'" in content
+        assert "alias='MY-DASH-VAR'" in content
+        assert "VALID" in content
+
+        # The generated module must still import (no SyntaxError from raw names).
+        spec = importlib.util.spec_from_file_location("gen_alias_settings", out)
+        assert spec is not None and spec.loader is not None
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        aliases = {f.alias for f in module.Cfg.model_fields.values() if f.alias}
+        assert {"2FA_ENABLED", "MY-DASH-VAR"} <= aliases
+
+    def test_init_unicode_identifier_keys_become_bare_fields(self, tmp_path: Path) -> None:
+        """#443: valid non-ASCII identifiers are real fields; only true non-identifiers alias.
+
+        ``CAFÉ`` / ``ΑΛΦΑ`` pass ``str.isidentifier()`` and must become bare
+        attributes (no alias); an emoji key ``KEY🔑`` is not an identifier and is
+        sanitized + aliased like any other non-identifier key.
+        """
+        env_file = tmp_path / ".env"
+        # Greek capital letters are intentional (testing non-ASCII identifiers).
+        env_file.write_text("CAFÉ=a\nΑΛΦΑ=b\nKEY🔑=c\n", encoding="utf-8")  # noqa: RUF001
+        out = tmp_path / "settings.py"
+
+        result = runner.invoke(
+            app, ["init", str(env_file), "--output", str(out), "--class-name", "Cfg"]
+        )
+        assert result.exit_code == 0, result.output
+
+        spec = importlib.util.spec_from_file_location("gen_unicode_settings", out)
+        assert spec is not None and spec.loader is not None
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        fields = module.Cfg.model_fields
+        # Unicode-letter identifiers are kept verbatim (no alias).
+        assert "CAFÉ" in fields and fields["CAFÉ"].alias is None
+        assert "ΑΛΦΑ" in fields and fields["ΑΛΦΑ"].alias is None
+        # The emoji key is aliased back to its original name.
+        assert {f.alias for f in fields.values() if f.alias == "KEY🔑"} == {"KEY🔑"}
+
+    def test_init_nfkc_colliding_keys_stay_distinct_fields(self, tmp_path: Path) -> None:
+        """#449: keys that NFKC-fold to the same identifier must NOT collapse.
+
+        Python NFKC-normalizes identifiers at compile time, so an NFC vs NFD
+        accented key, and a ligature vs its ASCII expansion, would otherwise merge
+        into a single attribute on import -- silently dropping a var. Each of the
+        four distinct env keys must survive as its own field, bound (by name or
+        alias) to its exact original key. Built with escapes so the byte forms are
+        deterministic regardless of this file's own normalization.
+        """
+        nfc = "CAF\u00c9"  # precomposed E-acute (U+00C9)
+        nfd = "CAFE\u0301"  # E + combining acute (U+0301)
+        lig = "\ufb01le"  # FB01 ligature, NFKC-folds to "file"
+        env_file = tmp_path / ".env"
+        env_file.write_text(f"{nfc}=a\n{nfd}=b\n{lig}=c\nfile=d\n", encoding="utf-8")
+        out = tmp_path / "settings.py"
+
+        result = runner.invoke(
+            app, ["init", str(env_file), "--output", str(out), "--class-name", "Cfg"]
+        )
+        assert result.exit_code == 0, result.output
+
+        spec = importlib.util.spec_from_file_location("gen_nfkc_settings", out)
+        assert spec is not None and spec.loader is not None
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        fields = module.Cfg.model_fields
+        # No collapse: all four distinct keys survive as four distinct fields.
+        assert len(fields) == 4
+        # Each field binds (by alias, else attribute name) to an exact original key.
+        recovered = {(f.alias if f.alias else name) for name, f in fields.items()}
+        assert recovered == {nfc, nfd, lig, "file"}
+
+    def test_init_then_validate_round_trip_with_non_identifier_keys(self, tmp_path: Path) -> None:
+        """#443: the documented init→validate workflow PASSES for non-identifier keys.
+
+        init aliases ``X-API-KEY`` / ``2FA_ENABLED`` and keeps ``CAFÉ``; validate
+        parses the same .env leniently and matches by alias, so it validates
+        cleanly instead of falsely reporting the aliased fields as MISSING (the
+        regression this combined init+validate change fixes).
+        """
+        env_file = tmp_path / ".env"
+        env_file.write_text(
+            "DATABASE_URL=postgres://x\n2FA_ENABLED=true\nX-API-KEY=abc123\nCAFÉ=yes\n",
+            encoding="utf-8",
+        )
+        out = tmp_path / "settings.py"
+
+        init_res = runner.invoke(
+            app, ["init", str(env_file), "--output", str(out), "--class-name", "Cfg"]
+        )
+        assert init_res.exit_code == 0, init_res.output
+
+        val_res = runner.invoke(
+            app,
+            ["validate", str(env_file), "--schema", "settings:Cfg", "--service-dir", str(tmp_path)],
+        )
+        assert val_res.exit_code == 0, val_res.output
+        # Width-independent: Rich may wrap the long tmp path before the verdict.
+        assert "passed" in " ".join(val_res.output.lower().split())
 
     def test_sanitize_identifier_produces_valid_non_keyword_names(self) -> None:
         """#413: the sanitizer always yields a valid, non-keyword identifier."""

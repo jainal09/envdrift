@@ -246,47 +246,55 @@ BOOL_FALSE=false
         # No broken module written.
         assert not output.exists()
 
-    def test_init_warns_on_non_identifier_keys(self, tmp_path: Path):
-        """#423: the API surfaces dropped non-identifier keys via a UserWarning.
+    def test_init_aliases_non_identifier_keys(self, tmp_path: Path):
+        """#443: non-identifier keys are aliased into the schema, not dropped.
 
-        Keys the strict parser cannot read (`2FA_ENABLED`, `MY-DASH-VAR`) are
-        omitted from the generated module. The CLI prints a [WARN]; the public API
-        must not silently leave callers with an incomplete file — it warns instead.
-        """
-        env_file = tmp_path / ".env"
-        env_file.write_text("2FA_ENABLED=true\nMY-DASH-VAR=x\nVALID=keep\n")
-        output = tmp_path / "settings.py"
-
-        with pytest.warns(UserWarning, match="non-identifier keys") as record:
-            result = init(env_file, output, detect_sensitive=False)
-
-        assert result == output
-        message = str(record[0].message)
-        assert "2FA_ENABLED" in message
-        assert "MY-DASH-VAR" in message
-        # The parseable variable is still emitted.
-        assert "VALID" in output.read_text()
-
-    def test_init_warnings_as_errors_writes_no_file(self, tmp_path: Path):
-        """#423: under warnings-as-errors, init() must not leave a half-written file.
-
-        The dropped-keys UserWarning is emitted BEFORE the output is written, so a
-        caller running with ``warnings.filterwarnings("error")`` (common in CI/test
-        suites) gets a clean raise and NO output file on disk -- not an incomplete
-        ``settings.py`` plus an exception.
+        Keys the strict parser rejects (`2FA_ENABLED`, `MY-DASH-VAR`) used to be
+        omitted from the generated module (the API warned about the loss). They are
+        now emitted with a sanitized attribute name plus a Pydantic ``alias`` so the
+        schema stays complete and binds to the real variables — no warning needed.
         """
         import warnings
 
         env_file = tmp_path / ".env"
-        env_file.write_text("2FA_ENABLED=true\nVALID=keep\n")
+        env_file.write_text("2FA_ENABLED=true\nMY-DASH-VAR=x\nVALID=keep\n", encoding="utf-8")
         output = tmp_path / "settings.py"
 
         with warnings.catch_warnings():
-            warnings.simplefilter("error", UserWarning)
-            with pytest.raises(UserWarning, match="non-identifier keys"):
-                init(env_file, output, detect_sensitive=False)
+            warnings.simplefilter("error")  # any spurious warning fails the test
+            result = init(env_file, output, detect_sensitive=False)
 
-        assert not output.exists()
+        assert result == output
+        content = output.read_text(encoding="utf-8")
+        # Every key is represented, with aliases back to the original names.
+        assert "alias='2FA_ENABLED'" in content
+        assert "alias='MY-DASH-VAR'" in content
+        assert "VALID" in content
+        # The raw non-identifier names never appear as bare attribute annotations.
+        assert "\n    2FA_ENABLED:" not in content
+        assert "\n    MY-DASH-VAR:" not in content
+
+    def test_init_non_identifier_keys_keep_module_importable(self, tmp_path: Path):
+        """#443: a module with aliased non-identifier keys imports cleanly.
+
+        Previously these keys were dropped (and the API emitted a UserWarning); now
+        they are aliased in, so the generated module must both contain them and
+        import without a SyntaxError.
+        """
+        import importlib.util
+
+        env_file = tmp_path / ".env"
+        env_file.write_text("2FA_ENABLED=true\nMY-DASH-VAR=x\nVALID=keep\n", encoding="utf-8")
+        output = tmp_path / "settings.py"
+
+        init(env_file, output, class_name="Cfg", detect_sensitive=False)
+
+        spec = importlib.util.spec_from_file_location("gen_alias_api_settings", output)
+        assert spec is not None and spec.loader is not None
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        aliases = {f.alias for f in module.Cfg.model_fields.values() if f.alias}
+        assert {"2FA_ENABLED", "MY-DASH-VAR"} <= aliases
 
     def test_init_no_warning_when_all_keys_parse(self, tmp_path: Path):
         """#423: the API stays warning-free when every key is parseable."""

@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import warnings
 from pathlib import Path
 
 from envdrift.core.diff import DiffEngine, DiffResult
@@ -113,14 +112,11 @@ def init(
         class_name (str): Name to use for the generated Settings class.
         detect_sensitive (bool): If True, attempt to detect sensitive variables and mark them in the generated fields.
 
-    Non-identifier .env keys (leading digits, dashes) are skipped by the strict
-    parser; keys that are valid identifiers but Python keywords (`class`,
-    `import`) are emitted with a sanitized attribute name plus a Pydantic
-    ``alias`` so the generated module always imports cleanly.
-
-    Any keys the strict parser cannot read (e.g. ``2FA_ENABLED``, ``MY-DASH-VAR``)
-    are dropped from the generated module; the API surfaces them via a
-    ``UserWarning`` so callers are not left silently with an incomplete file.
+    Every .env key becomes a field. Keys the strict parser rejects (leading
+    digits, dashes, dots) and Python keywords (`class`, `import`) are emitted
+    with a sanitized attribute name plus a Pydantic ``alias`` so the generated
+    module always imports cleanly while still binding to the original variable;
+    a valid non-ASCII identifier (``CAFÉ``) is emitted unchanged.
 
     Returns:
         Path: The path to the written settings file.
@@ -136,16 +132,7 @@ def init(
 
     result = generate_settings_module(env_file, class_name, detect_sensitive)
 
-    # Warn *before* writing: a caller running under
-    # ``warnings.filterwarnings("error")`` promotes this to an exception, and we
-    # must not leave a half-written settings.py on disk when that happens.
-    if result.unparsed_keys:
-        warnings.warn(
-            "Skipped .env variable(s) the parser cannot read "
-            f"(non-identifier keys): {', '.join(result.unparsed_keys)}",
-            UserWarning,
-            stacklevel=2,
-        )
-
-    output.write_text(result.source)
+    # encoding="utf-8" so a non-ASCII field name/value round-trips on platforms
+    # whose default text encoding is not UTF-8.
+    output.write_text(result.source, encoding="utf-8")
     return output
