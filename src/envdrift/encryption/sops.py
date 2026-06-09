@@ -14,6 +14,7 @@ import re
 import shlex
 import shutil
 import subprocess  # nosec B404
+import sys
 from pathlib import Path
 from threading import Lock
 
@@ -576,8 +577,14 @@ See https://github.com/getsops/sops for full documentation.
 
         # `sops exec-env [file] [command-to-run]`: no --input-type (type is
         # inferred from the file extension), and the command is a SINGLE shell
-        # string, not a `-- argv` list. shlex.join safely quotes the argv.
-        args = ["exec-env", str(env_file), shlex.join(command)]
+        # string, not a `-- argv` list. Quote the argv for the shell sops runs it
+        # through — POSIX (shlex.join) on Unix, but cmd.exe on Windows, where
+        # POSIX single-quoting is invalid and raises "filename syntax incorrect".
+        if sys.platform == "win32":
+            command_str = subprocess.list2cmdline(command)
+        else:
+            command_str = shlex.join(command)
+        args = ["exec-env", str(env_file), command_str]
 
         return self._run(
             args,
