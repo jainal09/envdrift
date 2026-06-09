@@ -1,0 +1,20 @@
+tests/unit/test_encryption_backends.py
+  s_dfc6cd6692ed8f::t_4f5ac509b0ddff 316
+  s_dfc6cd6692ed8f::t_cc1ea2ccf80c47 302-303
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.6",
+  "base_commit_sha": "cc825ad1cb1638f4182109de5b59ce9bf1370cfe",
+  "prompts": {},
+  "sessions": {
+    "s_dfc6cd6692ed8f": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "fd23e738-3512-4420-9290-d985ad979bfd",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Jainal Gosaliya <jainal09gosalia@gmail.com>"
+    }
+  }
+}
