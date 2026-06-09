@@ -146,8 +146,12 @@ def format_rich(result: AggregatedScanResult, console: Console | None = None) ->
         )
     )
 
-    # Findings table (see _build_findings_table for narrow-terminal handling).
-    console.print(_build_findings_table(result, wide=console.width >= _WIDE_TERMINAL_WIDTH))
+    # Findings table. Only an interactive, genuinely narrow terminal drops the
+    # secondary columns (for readability) — a non-interactive console (`guard
+    # --ci`, piped, or redirected) reports width 80 but must keep all columns so
+    # CI logs retain the rule id and redacted preview for triage.
+    wide = (not console.is_terminal) or console.width >= _WIDE_TERMINAL_WIDTH
+    console.print(_build_findings_table(result, wide=wide))
 
     # Scan info
     _print_scan_info(result, console)

@@ -388,14 +388,22 @@ class TestRichOutput:
         assert "Findings Summary" in output
         assert "Remediation" in output
 
-    @staticmethod
-    def _aws_finding_result() -> AggregatedScanResult:
+    # A long, realistic description: a revert to overflow="fold" would wrap its
+    # tail onto extra lines (the regression this PR fixes), so the truncation
+    # assertion below would catch it.
+    _LONG_DESCRIPTION = (
+        "Potential AWS Access Key ID detected; rotate this credential immediately "
+        "and remove it from version control history"
+    )
+
+    @classmethod
+    def _aws_finding_result(cls) -> AggregatedScanResult:
         findings = [
             ScanFinding(
                 file_path=Path(".env"),
                 rule_id="aws-access-key-id",
                 rule_description="AWS key",
-                description="AWS key found",
+                description=cls._LONG_DESCRIPTION,
                 severity=FindingSeverity.CRITICAL,
                 scanner="native",
                 secret_preview="AKIA1234",
@@ -410,17 +418,32 @@ class TestRichOutput:
         )
 
     def test_format_rich_narrow_terminal_keeps_severity_drops_secondary(self):
-        """Narrow terminal: keep Sev/Location/Description on one line each and drop
-        the Rule/Preview columns, so the severity column isn't squeezed to nothing.
+        """Interactive narrow terminal: keep Sev/Location/Description (one line
+        each, ellipsized) and drop the Rule/Preview columns.
         """
         console = Console(record=True, force_terminal=True, width=80)
         format_rich(self._aws_finding_result(), console)
         out = console.export_text()
 
         assert "CRIT" in out  # severity column rendered (not collapsed to width 0)
-        assert "AWS key found" in out  # description present on one line
+        # Description on ONE line, ellipsized — its head shows, the tail is
+        # truncated away (a fold-revert would wrap the tail onto a second line).
+        assert "Potential AWS Access Key ID detected" in out
+        assert "…" in out
+        assert "version control history" not in out
         assert "aws-access-key-id" not in out  # Rule column dropped at narrow width
         assert "AKIA1234" not in out  # Preview column dropped at narrow width
+
+    def test_format_rich_non_interactive_keeps_all_columns(self):
+        """A non-interactive console (`guard --ci`, piped) keeps all five columns
+        even at the default width 80, so CI logs retain rule_id and the preview.
+        """
+        console = Console(record=True, force_terminal=False, no_color=True, width=80)
+        format_rich(self._aws_finding_result(), console)
+        out = console.export_text()
+
+        assert "aws-access-key-id" in out  # Rule kept for CI triage
+        assert "AKIA1234" in out  # Preview kept
 
     def test_format_rich_wide_terminal_shows_all_columns(self):
         """Wide terminal shows the Rule and Preview columns too."""
