@@ -341,6 +341,37 @@ NEW_FEATURE_FLAG=enabled
         assert result.valid is False
         assert set(result.type_errors) >= {"PORT", "LOG_LEVEL", "APP_NAME", "VERSION"}
 
+    def test_validate_runs_custom_validator_on_plain_field(self, tmp_path):
+        """A custom @field_validator on a plain-typed field is still enforced.
+
+        The field is a bare ``str`` (no constraint metadata), so the only
+        validation is the custom validator — has_constraints must flag it so the
+        real model_validate pass runs and surfaces the rejection.
+        """
+        from pydantic import field_validator
+        from pydantic_settings import BaseSettings
+
+        class Settings(BaseSettings):
+            NAME: str
+
+            @field_validator("NAME")
+            @classmethod
+            def _no_spaces(cls, v: str) -> str:
+                if " " in v:
+                    raise ValueError("must not contain spaces")
+                return v
+
+        env_file = tmp_path / ".env"
+        env_file.write_text("NAME=has spaces\n")
+
+        env = EnvParser().parse(env_file)
+        schema = SchemaLoader().extract_metadata(Settings)
+        assert schema.has_constraints is True  # custom validator detected
+
+        result = Validator().validate(env, schema, check_encryption=False)
+        assert result.valid is False
+        assert "NAME" in result.type_errors
+
     def test_validate_suspicious_plaintext(self, tmp_path, permissive_settings_class):
         """Warn about plaintext values matching secret patterns."""
         content = """
