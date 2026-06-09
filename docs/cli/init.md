@@ -150,7 +150,7 @@ The generated module is always valid, importable Python:
   name plus a Pydantic `alias` so the field still binds to the original variable:
 
   ```python
-  class_: str = Field(alias="class")
+  class_: str = Field(alias='class')
   ```
 
 - **Pydantic-reserved names get an alias.** A key that is a valid identifier but
@@ -160,7 +160,7 @@ The generated module is always valid, importable Python:
   `alias`, so it cannot raise at import or shadow model internals:
 
   ```python
-  field_model_dump: str = Field(alias="model_dump")
+  field_model_dump: str = Field(alias='model_dump')
   ```
 
 - **Non-identifier keys are aliased, not dropped.** Keys that are not
