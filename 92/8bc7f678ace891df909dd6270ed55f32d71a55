@@ -1,0 +1,20 @@
+src/envdrift/encryption/sops.py
+  s_dfc6cd6692ed8f::t_cec10dd9fa4b8c 13
+  s_dfc6cd6692ed8f::t_f3eb580762e9d3 577-584,588-608
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.6",
+  "base_commit_sha": "928bc7f678ace891df909dd6270ed55f32d71a55",
+  "prompts": {},
+  "sessions": {
+    "s_dfc6cd6692ed8f": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "fd23e738-3512-4420-9290-d985ad979bfd",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Jainal Gosaliya <jainal09gosalia@gmail.com>"
+    }
+  }
+}
