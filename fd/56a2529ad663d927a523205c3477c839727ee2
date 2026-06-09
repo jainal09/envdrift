@@ -1,0 +1,25 @@
+tests/unit/test_encryption_backends.py
+  s_dfc6cd6692ed8f::t_a6a67eff4d4f03 249-257
+tests/integration/test_encrypt_outcome_bench.py
+  s_dfc6cd6692ed8f::t_0168ba19e710cc 1-162
+src/envdrift/encryption/dotenvx.py
+  s_dfc6cd6692ed8f::t_004eaf34839ef6 114-132,138,149-157,159-164,167-172
+docs/cli/encrypt.md
+  s_dfc6cd6692ed8f::t_98fe7f6d757f4d 24-36
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.6",
+  "base_commit_sha": "fd56a2529ad663d927a523205c3477c839727ee2",
+  "prompts": {},
+  "sessions": {
+    "s_dfc6cd6692ed8f": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "fd23e738-3512-4420-9290-d985ad979bfd",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Jainal Gosaliya <jainal09gosalia@gmail.com>"
+    }
+  }
+}
