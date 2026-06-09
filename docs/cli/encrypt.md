@@ -21,6 +21,19 @@ The `encrypt` command works with [dotenvx](https://dotenvx.com/) or
 
 If `--backend` is omitted, envdrift uses the configured backend (envdrift.toml/pyproject.toml) or defaults to dotenvx.
 
+### Safety guarantees
+
+The `encrypt` command verifies its own outcome rather than trusting the backend's
+exit code (dotenvx can exit `0` without encrypting):
+
+- **Refuses content-free files.** An empty, blank-line-only, or comment-only file
+  has no variables to encrypt, so the command declines with a non-zero exit
+  instead of letting dotenvx scaffold a placeholder-secrets template into it.
+- **Reports silent encryption failures.** When the key is missing or malformed
+  (a `.env.keys` that is a directory, garbage, or a mismatched key), the file is
+  re-read after the call; if any plaintext value survives, the command fails
+  loudly instead of printing `[OK]`.
+
 ## Arguments
 
 | Argument   | Description           | Default |
