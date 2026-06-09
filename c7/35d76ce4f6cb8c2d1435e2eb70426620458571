@@ -1,0 +1,32 @@
+docs/cli/decrypt.md
+  s_dfc6cd6692ed8f::t_808fa3527e1811 31,24
+  s_dfc6cd6692ed8f::t_5387ccd895f995 23,25-30
+tests/unit/coverage/test_cov_cli_commands_encryption.py
+  s_dfc6cd6692ed8f::t_a4b8279d6d4534 731-755
+src/envdrift/cli_commands/encryption.py
+  s_dfc6cd6692ed8f::t_ec09ef403cd1db 496-497,498-513
+  s_dfc6cd6692ed8f::t_6213b4db0bbb54 20-24
+  s_dfc6cd6692ed8f::t_a6afb2c0a1262a 695
+src/envdrift/encryption/dotenvx.py
+  s_dfc6cd6692ed8f::t_273beb55c53bd8 206-222,238-244,246,248-251,254-259
+  s_dfc6cd6692ed8f::t_b281935da1d69e 247
+tests/unit/test_encryption_backends.py
+  s_dfc6cd6692ed8f::t_dfe80f65dbe119 294-302,307
+  s_dfc6cd6692ed8f::t_a2f60a3406caa2 309-348
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.6",
+  "base_commit_sha": "c735d76ce4f6cb8c2d1435e2eb70426620458571",
+  "prompts": {},
+  "sessions": {
+    "s_dfc6cd6692ed8f": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "fd23e738-3512-4420-9290-d985ad979bfd",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Jainal Gosaliya <jainal09gosalia@gmail.com>"
+    }
+  }
+}

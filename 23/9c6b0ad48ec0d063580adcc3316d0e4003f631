@@ -1,0 +1,33 @@
+src/envdrift/cli_commands/encryption.py
+  s_dfc6cd6692ed8f::t_ec09ef403cd1db 492-493
+tests/integration/test_decrypt_outcome_bench.py
+  s_dfc6cd6692ed8f::t_b3d0da6562e68b 1-22,24-102,104-105,112-119,122,124
+  s_dfc6cd6692ed8f::t_9e883e437fa516 23
+  s_dfc6cd6692ed8f::t_ff59037f2ed892 103,106-111,120-121,123
+src/envdrift/encryption/dotenvx.py
+  s_dfc6cd6692ed8f::t_273beb55c53bd8 206-222,238-244,246-250,253-258
+docs/cli/decrypt.md
+  s_dfc6cd6692ed8f::t_5387ccd895f995 24
+  s_dfc6cd6692ed8f::t_808fa3527e1811 30
+tests/unit/test_encryption_backends.py
+  s_dfc6cd6692ed8f::t_dfe80f65dbe119 294-302,307
+  s_dfc6cd6692ed8f::t_a2f60a3406caa2 309
+src/envdrift/encryption/base.py
+  s_dfc6cd6692ed8f::t_e03843f7be7017 38-41
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.6",
+  "base_commit_sha": "239c6b0ad48ec0d063580adcc3316d0e4003f631",
+  "prompts": {},
+  "sessions": {
+    "s_dfc6cd6692ed8f": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "fd23e738-3512-4420-9290-d985ad979bfd",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Jainal Gosaliya <jainal09gosalia@gmail.com>"
+    }
+  }
+}
