@@ -244,6 +244,7 @@ class DotenvxEncryptionBackend(EncryptionBackend):
         if is_file_encrypted(env_file):
             return EncryptionResult(
                 success=False,
+                changed=False,
                 message=(
                     f"Decryption did not take effect: {env_file} still contains "
                     "encrypted values. The decryption key may be missing or invalid."

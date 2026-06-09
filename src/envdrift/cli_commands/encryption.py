@@ -17,7 +17,11 @@ from envdrift.core.encryption import EncryptionDetector
 from envdrift.core.parser import EnvParser
 from envdrift.core.schema import SchemaLoader, SchemaLoadError
 from envdrift.encryption import EncryptionProvider, get_encryption_backend
-from envdrift.encryption.base import EncryptionBackendError, EncryptionNotFoundError
+from envdrift.encryption.base import (
+    EncryptionBackendError,
+    EncryptionNotFoundError,
+    EncryptionResult,
+)
 from envdrift.output.rich import (
     console,
     print_encryption_report,
@@ -491,6 +495,22 @@ def _verify_decryption_with_vault(
         return False
 
 
+def _report_decrypt_result(result: EncryptionResult, env_file: Path, backend_name: str) -> None:
+    """Print a decrypt outcome and exit nonzero on failure.
+
+    Distinguishes a real decryption from an honest no-op (``changed=False`` — e.g.
+    a file with no encrypted values) so the message is accurate instead of a
+    misleading "Decrypted".
+    """
+    if not result.success:
+        print_error(result.message)
+        raise typer.Exit(code=1)
+    if result.changed:
+        print_success(f"Decrypted {env_file} using {backend_name}")
+    else:
+        print_warning(result.message)
+
+
 def decrypt_cmd(
     env_file: Annotated[Path, typer.Argument(help="Path to encrypted .env file")] = Path(".env"),
     backend: Annotated[
@@ -672,15 +692,7 @@ def decrypt_cmd(
             raise typer.Exit(code=1)
 
         result = encryption_backend.decrypt(env_file)
-        if result.success:
-            if result.changed:
-                print_success(f"Decrypted {env_file} using {encryption_backend.name}")
-            else:
-                # Honest no-op: the file had no encrypted values to decrypt.
-                print_warning(result.message)
-        else:
-            print_error(result.message)
-            raise typer.Exit(code=1)
+        _report_decrypt_result(result, env_file, encryption_backend.name)
 
     except EncryptionNotFoundError as e:
         print_error(str(e))
