@@ -226,6 +226,11 @@ class SOPSEncryptionBackend(EncryptionBackend):
                 cmd,
                 capture_output=True,
                 text=True,
+                # SOPS emits UTF-8; decode it as such rather than the platform
+                # locale (cp1252 on Windows would corrupt non-ASCII secret values
+                # or raise UnicodeDecodeError).
+                encoding="utf-8",
+                errors="replace",
                 timeout=120,
                 env=self._build_env(env),
                 cwd=str(cwd) if cwd else None,
