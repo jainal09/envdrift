@@ -10,11 +10,10 @@ Encrypted values have the format: ENC[AES256_GCM,data:...,iv:...,tag:...,type:st
 
 from __future__ import annotations
 
+import os
 import re
-import shlex
 import shutil
 import subprocess  # nosec B404
-import sys
 from pathlib import Path
 from threading import Lock
 
@@ -575,19 +574,36 @@ See https://github.com/getsops/sops for full documentation.
         if not self.is_installed():
             raise EncryptionNotFoundError(f"SOPS is not installed.\n{self.install_instructions()}")
 
-        # `sops exec-env [file] [command-to-run]`: no --input-type (type is
-        # inferred from the file extension), and the command is a SINGLE shell
-        # string, not a `-- argv` list. Quote the argv for the shell sops runs it
-        # through — POSIX (shlex.join) on Unix, but cmd.exe on Windows, where
-        # POSIX single-quoting is invalid and raises "filename syntax incorrect".
-        if sys.platform == "win32":
-            command_str = subprocess.list2cmdline(command)
-        else:
-            command_str = shlex.join(command)
-        args = ["exec-env", str(env_file), command_str]
-
-        return self._run(
-            args,
+        # Decrypt to memory and run the command directly as argv, rather than via
+        # `sops exec-env`. sops' exec-env runs the command through a shell, which
+        # makes quoting platform-specific and brittle (on Windows, cmd.exe mangles
+        # a ``python -c "...'...'..."`` string). Decrypting to stdout and invoking
+        # the child with subprocess (no shell) injects the same secrets without
+        # ever writing plaintext to disk, and behaves identically on every OS.
+        decrypt = self._run(
+            ["-d", "--input-type", "dotenv", "--output-type", "dotenv", str(env_file)],
             env=kwargs.get("env"),
             cwd=kwargs.get("cwd"),
+        )
+        if decrypt.returncode != 0:
+            raise EncryptionBackendError(f"sops decryption failed: {decrypt.stderr.strip()}")
+
+        from envdrift.core.parser import EnvParser
+
+        secrets = {
+            name: var.value
+            for name, var in EnvParser().parse_string(decrypt.stdout).variables.items()
+        }
+        child_env = dict(os.environ)
+        if kwargs.get("env"):
+            child_env.update(kwargs["env"])
+        child_env.update(secrets)
+
+        return subprocess.run(  # nosec B603
+            command,
+            env=child_env,
+            cwd=str(kwargs["cwd"]) if kwargs.get("cwd") else None,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
         )
