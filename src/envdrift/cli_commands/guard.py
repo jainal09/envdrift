@@ -498,9 +498,12 @@ def guard(
     try:
         fail_severity = FindingSeverity(fail_on_value.lower())
     except ValueError as e:
-        console.print(
-            f"[red]Error:[/red] Invalid severity '{fail_on_value}'. "
-            f"Valid options: critical, high, medium, low"
+        # Route through _emit_error so --json/--sarif get a clean error document
+        # instead of Rich-markup human prose contaminating machine stdout (#28).
+        _emit_error(
+            json_output,
+            sarif,
+            f"Invalid severity '{fail_on_value}'. Valid options: critical, high, medium, low",
         )
         raise typer.Exit(code=1) from e
 
