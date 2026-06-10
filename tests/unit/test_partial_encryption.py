@@ -14,6 +14,7 @@ from envdrift.config import PartialEncryptionEnvironmentConfig
 from envdrift.core.partial_encryption import (
     PartialEncryptionError,
     combine_files,
+    encrypt_secret_file,
     file_has_assignment,
     has_plaintext_secret_value,
     is_file_encrypted,
@@ -180,8 +181,6 @@ def test_encrypt_secret_file_reencrypts_mixed_state(tmp_path: Path):
     encrypt_secret_file early-returned and never encrypted the newly-added
     plaintext value -> it leaked. This asserts dotenvx.encrypt IS invoked.
     """
-    from envdrift.core.partial_encryption import encrypt_secret_file
-
     secret_file = tmp_path / ".env.secret"
     secret_file.write_text('API_KEY="encrypted:abc..."\nNEW_LEAKED_SECRET=plaintext_leak_value\n')
     config = PartialEncryptionEnvironmentConfig(
@@ -698,6 +697,78 @@ def test_push_secrets_only_raises_on_encrypt_failure(secrets_only_config, secret
         mock_dotenvx_cls.return_value.encrypt.side_effect = DotenvxError("boom")
         with pytest.raises(PartialEncryptionError, match="Failed to encrypt"):
             push_secrets_only(secrets_only_config)
+
+
+# ---------------------------------------------------------------------------
+# Secret-lockout guard reaches the partial-encryption paths too (#467)
+#
+# #457 added the [A-Za-z0-9._-] filename guard to DotenvxEncryptionBackend, but
+# the partial-encryption push/lock paths (encrypt_secret_file /
+# push_secrets_only) reach dotenvx through DotenvxWrapper directly, NOT the
+# guarded backend. A space- or non-ASCII-named secret file therefore still hit
+# the exact permanent lockout #457 set out to fix: dotenvx derives an invalid
+# DOTENV_PRIVATE_KEY_<SLUG> from the filename, encrypts the value (exit 0), and
+# the file is then undecryptable while the plaintext is destroyed.
+#
+# These drive the REAL wrapper guard (no DotenvxWrapper mock — the guard IS the
+# behavior under test) and assert refusal with the plaintext preserved. The
+# guard fires before dotenvx is invoked, so the tests need no dotenvx binary.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("entry_point", "filename"),
+    [
+        ("push_secrets_only", "my secret.env"),  # space -> invalid dotenvx key slug
+        ("encrypt_secret_file", "café.env.secret"),  # non-ASCII -> invalid key slug
+    ],
+)
+def test_partial_encryption_refuses_unsafe_filename_preserves_plaintext(
+    tmp_path: Path, entry_point: str, filename: str
+):
+    """#467: a space/non-ASCII secret filename is refused, not silently locked out.
+
+    Both partial-encryption entry points (``push_secrets_only`` for secrets-only,
+    ``encrypt_secret_file`` for combine mode) reach dotenvx through
+    ``DotenvxWrapper``, NOT the guarded backend. dotenvx derives
+    ``DOTENV_PRIVATE_KEY_<SLUG>`` from the filename; a space or non-ASCII char
+    yields an invalid key name, so the value encrypts (exit 0) but is then
+    permanently undecryptable and the plaintext is destroyed — silent secret
+    lockout. The wrapper guard must refuse pre-flight, leaving the file
+    byte-for-byte intact. No ``DotenvxWrapper`` mock: the real guard IS the
+    behavior under test, and it fires before the binary is invoked, so the test
+    needs no dotenvx binary. Both entry points fail RED on ``main`` (DID NOT
+    RAISE; the file is silently encrypted and the plaintext destroyed).
+    """
+    secrets_dir = tmp_path / "secrets"
+    secrets_dir.mkdir()
+    target = secrets_dir / filename
+    target.write_text("PASSWORD=keepme123\n", encoding="utf-8")
+    before = target.read_bytes()
+
+    if entry_point == "push_secrets_only":
+        config = PartialEncryptionEnvironmentConfig(
+            name="prod",
+            secrets_only=True,
+            secrets_dir=str(secrets_dir),
+            pattern="*.env*",
+        )
+        with pytest.raises(PartialEncryptionError, match="Failed to encrypt"):
+            push_secrets_only(config)
+    else:
+        config = PartialEncryptionEnvironmentConfig(
+            name="prod",
+            clear_file="",
+            secret_file=str(target),
+            combined_file="",
+        )
+        with pytest.raises(PartialEncryptionError, match="Failed to encrypt"):
+            encrypt_secret_file(config)
+
+    # The original plaintext survives byte-for-byte — never encrypted into an
+    # unrecoverable file (pre-fix this destroyed it and raised nothing).
+    assert target.read_bytes() == before
+    assert b"encrypted:" not in target.read_bytes()
 
 
 def test_pull_secrets_only_decrypts_encrypted_files(secrets_only_config, secrets_dir):
