@@ -5439,3 +5439,17 @@ class TestReadSeamGuards:
         )
         assert result.exit_code != 0
         assert "UTF-8" in result.output
+
+    def test_encrypt_check_on_directory_is_clean_error(self, tmp_path: Path) -> None:
+        a_dir = tmp_path / "adir"
+        a_dir.mkdir()
+        result = runner.invoke(app, ["encrypt", "--check", str(a_dir)])
+        assert result.exit_code != 0
+        assert "Not a file" in result.output
+
+    def test_encrypt_check_on_non_utf8_is_clean_error(self, tmp_path: Path) -> None:
+        bad = tmp_path / ".env.bad"
+        bad.write_bytes(b"FOO=p\xff\xc3ss\n")
+        result = runner.invoke(app, ["encrypt", "--check", str(bad)])
+        assert result.exit_code != 0
+        assert "UTF-8" in result.output
