@@ -302,7 +302,14 @@ class EncryptionDetector:
         if not path.exists():
             return None
 
-        content = path.read_text(encoding="utf-8")
+        try:
+            content = path.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError):
+            # Not readable as UTF-8 text (binary blob, directory, ...): it is not a
+            # dotenvx/sops-encrypted file, so no backend is detected. Returning
+            # None (rather than crashing) lets decrypt auto-detect fall back to a
+            # clean per-backend message instead of a raw traceback (#13).
+            return None
         return self.detect_backend(content)
 
     def is_file_encrypted(self, path: Path) -> bool:
@@ -318,7 +325,11 @@ class EncryptionDetector:
         if not path.exists():
             return False
 
-        content = path.read_text(encoding="utf-8")
+        try:
+            content = path.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError):
+            # A non-UTF-8/binary file or a directory holds no encryption markers.
+            return False
         return self.has_encrypted_header(content)
 
     def is_value_encrypted(self, value: str) -> bool:

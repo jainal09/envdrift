@@ -175,7 +175,20 @@ class EnvParser:
         if not path.exists():
             raise FileNotFoundError(f"ENV file not found: {path}")
 
-        content = path.read_text(encoding="utf-8")
+        # A directory passed where a file is expected used to fall through to
+        # read_text and surface an uncaught IsADirectoryError traceback across
+        # init/encrypt/decrypt/validate; raise a clean, typed error instead (#25).
+        if not path.is_file():
+            raise IsADirectoryError(f"Not a file: {path}")
+
+        # A binary / non-UTF-8 file raised a raw UnicodeDecodeError traceback;
+        # convert it to a clean ValueError with an actionable message (#24).
+        try:
+            content = path.read_text(encoding="utf-8")
+        except UnicodeDecodeError as exc:
+            raise ValueError(
+                f"Could not read {path} as UTF-8 text (not a valid .env file)"
+            ) from exc
         env_file = self.parse_string(content, lenient=lenient)
         env_file.path = path
 
