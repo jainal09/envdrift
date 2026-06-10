@@ -1273,15 +1273,38 @@ class TestScanSingleFile:
         assert len(result.findings) >= 2
 
     def test_scan_binary_file_skipped(self, scanner: NativeScanner, tmp_path: Path):
-        """Test that binary files are skipped."""
-        binary_file = tmp_path / "binary.dat"
-        binary_file.write_bytes(b"\x00\x01\x02\x03" + b"AKIAIOSFODNN7EXAMPLE")
+        """A genuinely-binary file is skipped (don't scan compiled blobs as text).
+
+        The payload is overwhelmingly non-text bytes, and it embeds a *non-
+        allowlisted* AWS key, so a 0-finding result proves the file was SKIPPED —
+        not merely that the key was allowlisted. A lone stray NUL in an otherwise
+        text file is the opposite case (see the next test) and must NOT be skipped.
+        """
+        binary_file = tmp_path / "blob.dat"
+        real_key = "AKIA" + "ZZ7QF4N3XW2KLMNP"
+        binary_file.write_bytes(bytes(range(8)) * 512 + b"AWS_ACCESS_KEY_ID=" + real_key.encode())
 
         result = scanner.scan([binary_file])
 
-        # Binary file should be scanned but no findings from pattern matching
-        # because we skip files with null bytes
-        assert len(result.findings) == 0
+        assert len(result.findings) == 0  # genuinely binary -> skipped
+
+    def test_text_file_with_stray_nul_byte_still_detects_secret(
+        self, scanner: NativeScanner, tmp_path: Path
+    ):
+        """#22: a single NUL byte must not hide secrets in an otherwise-text file.
+
+        A stray (or maliciously injected) NUL used to make ``_scan_file`` discard
+        ALL findings, so a real plaintext AWS key slipped through guard with a
+        clean ``[OK]`` / exit 0 — a security-critical false negative.
+        """
+        env_file = tmp_path / ".env"
+        real_key = "AKIA" + "ZZ7QF4N3XW2KLMNP"  # not the allowlisted AWS doc example
+        env_file.write_bytes(b"FOO=bar\x00baz\nAWS_ACCESS_KEY_ID=" + real_key.encode() + b"\n")
+
+        result = scanner.scan([env_file])
+
+        rule_ids = {f.rule_id for f in result.findings}
+        assert any("aws" in r.lower() for r in rule_ids), f"AWS key hidden by NUL byte: {rule_ids}"
 
 
 class TestSkipClearFiles:
