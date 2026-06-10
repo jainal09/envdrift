@@ -2208,6 +2208,21 @@ class TestSyncCommand:
         assert missing_provider.exit_code == 1
         assert "--provider" in missing_provider.output
 
+    def test_sync_mapping_missing_secret_name_is_clean_error(self, tmp_path: Path, monkeypatch):
+        """#32: a sync mapping missing secret_name surfaces a clean error, not a
+        raw KeyError traceback (covers sync's new except ValueError branch)."""
+        monkeypatch.chdir(tmp_path)
+        cfg = tmp_path / "envdrift.toml"
+        cfg.write_text(
+            '[vault]\nprovider = "azure"\n\n[[vault.sync.mappings]]\nfolder_path = "services/app"\n'
+        )
+
+        result = runner.invoke(app, ["sync", "--config", str(cfg)])
+
+        assert result.exit_code != 0
+        assert "secret_name" in result.output
+        assert "Traceback" not in result.output
+
     def test_sync_hook_check_errors_exit(self, monkeypatch, tmp_path: Path):
         """Sync should stop early when hook checks fail."""
         config_file = tmp_path / "envdrift.toml"
