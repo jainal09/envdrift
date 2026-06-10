@@ -51,7 +51,11 @@ def test_decrypt_sops_binary_blob_does_not_crash(tmp_path: Path, sops_on_path: N
     the blob; the point is it fails *cleanly* and leaves the file intact.
     """
     env_file = tmp_path / ".env"
-    blob = bytes(range(256)) * 4  # NUL + non-UTF-8 bytes
+    # The *invalid* first line (no '=') must carry non-UTF-8 bytes so sops echoes
+    # them back on stderr ("invalid dotenv input line: \xff\xfe..."). That is the
+    # exact path the #14 fix guards: sops._run decoding that non-UTF-8 stderr. An
+    # all-valid-UTF-8 blob (e.g. bytes(range(256))) would NOT exercise it.
+    blob = b"\xff\xfe\x80\x81\xc0\xc1notavalidline\n"
     env_file.write_bytes(blob)
 
     backend = SOPSEncryptionBackend()
