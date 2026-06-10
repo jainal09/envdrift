@@ -175,8 +175,11 @@ The generated module is always valid, importable Python:
   ```
 
 - **Valid non-ASCII identifiers are kept verbatim.** A key that passes
-  `str.isidentifier()` and does not start with `_` (e.g. `CAFÉ`, `ΑΛΦΑ`) becomes
-  a bare field with no alias.
+  `str.isidentifier()`, does not start with `_`, and is already NFKC-normalized
+  (e.g. `CAFÉ`, `ΑΛΦΑ`) becomes a bare field with no alias. Python folds
+  identifiers with NFKC at compile time, so a key whose folded form differs from
+  the raw key — an NFD-composed `CAFÉ` or the ligature `ﬁle` — is aliased
+  instead, preserving the exact original variable name.
 
 - **Leading-underscore keys are aliased, not kept bare.** A key like `_PRIVATE`
   passes `str.isidentifier()`, but Pydantic rejects field names with a leading

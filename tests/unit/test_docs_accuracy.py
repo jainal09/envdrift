@@ -139,6 +139,39 @@ def test_init_md_documents_leading_underscore_aliasing() -> None:
     )
 
 
+def test_init_md_qualifies_nfkc_aliasing() -> None:
+    """init.md's 'kept verbatim' bullet must carve out non-NFKC keys too (#469).
+
+    Python folds identifiers with NFKC at compile time, so ``_resolve_field_name``
+    aliases any key whose NFKC fold differs from the raw key (an NFD-composed
+    ``CAFÉ``, the ligature ``ﬁle``) even though it passes ``str.isidentifier()``
+    and has no leading underscore. The doc's case analysis must not send such a
+    key to the bare-field bullet. Ground truth is the REAL resolver.
+    """
+    import unicodedata
+
+    from envdrift.cli_commands.init_cmd import _resolve_field_name
+
+    nfc_cafe = unicodedata.normalize("NFC", "CAFÉ")
+    nfd_cafe = unicodedata.normalize("NFD", "CAFÉ")
+    ligature = "ﬁle"  # "ﬁle" — NFKC-folds to "file"
+
+    # Real behavior: NFC stays bare; NFD/ligature keys are aliased.
+    assert _resolve_field_name(nfc_cafe, set()) == (nfc_cafe, None)
+    assert _resolve_field_name(nfd_cafe, set()) == (nfd_cafe, nfd_cafe)
+    assert _resolve_field_name(ligature, set()) == (ligature, ligature)
+
+    text = _read("init.md")
+    assert "NFKC-normalized" in text, (
+        "init.md's 'kept verbatim' bullet must require the key to be "
+        "NFKC-normalized — an NFD/ligature key is aliased (#469)."
+    )
+    assert "NFKC at compile time" in text, (
+        "init.md must explain WHY (Python NFKC-folds identifiers at compile "
+        "time), as _resolve_field_name's docstring does (#469)."
+    )
+
+
 def test_sync_md_does_not_claim_vault_name_routes() -> None:
     """sync.md must not claim vault_name overrides/routes to another vault (#413).
 
