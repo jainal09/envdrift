@@ -15,6 +15,11 @@ from pydantic_settings import BaseSettings
 # Environment variable to signal schema extraction mode
 ENVDRIFT_SCHEMA_EXTRACTION = "ENVDRIFT_SCHEMA_EXTRACTION"
 
+# Field types whose validation is fully covered by the name-based type check, so
+# a schema using only these (with no constraints/validators) needs no real
+# model_validate pass.
+_PLAIN_SCALARS = (str, int, float, bool)
+
 
 @dataclass
 class FieldMetadata:
@@ -51,6 +56,15 @@ class SchemaMetadata:
     module_path: str
     fields: dict[str, FieldMetadata] = field(default_factory=dict)
     extra_policy: str = "ignore"  # "forbid", "ignore", "allow"
+    # The live Settings class, when available, so validation can run the real
+    # Pydantic field-constraint checks (ge/le, Literal, min_length, pattern, ...)
+    # rather than only the name-based type heuristics derived from the metadata.
+    model_class: type[BaseSettings] | None = None
+    # True when at least one field carries validation beyond a plain scalar type
+    # (a constraint, a Literal/special/nested type, or a custom validator). Lets
+    # the validator skip the (relatively expensive) real model_validate pass for
+    # trivially-typed schemas, where the name-based type check already suffices.
+    has_constraints: bool = False
 
     @property
     def required_fields(self) -> list[str]:
@@ -213,6 +227,7 @@ class SchemaLoader:
         schema = SchemaMetadata(
             class_name=settings_cls.__name__,
             module_path=settings_cls.__module__,
+            model_class=settings_cls,
         )
 
         # Determine extra policy from model_config
@@ -224,6 +239,13 @@ class SchemaLoader:
             extra = getattr(model_config, "extra", "ignore")
 
         schema.extra_policy = extra if extra else "ignore"
+
+        # Track whether any field needs real Pydantic validation (a constraint, a
+        # non-plain-scalar type such as Literal/EmailStr/a nested model, or a
+        # custom validator). A model with only plain str/int/float/bool fields is
+        # fully covered by the name-based type check, so the validator can skip
+        # the expensive model_validate pass for it.
+        has_constraints = False
 
         # Extract field metadata
         for field_name, field_info in settings_cls.model_fields.items():
@@ -245,6 +267,14 @@ class SchemaLoader:
 
             # Get type annotation as string
             annotation = field_info.annotation
+
+            # Does this field carry validation beyond a plain scalar type?
+            # field_info.metadata holds constraint markers (Ge/Le/MinLen/Pattern/
+            # ...); a non-plain annotation (Literal, Optional, a special pydantic
+            # type, a nested model) also needs the real validator.
+            if field_info.metadata or annotation not in _PLAIN_SCALARS:
+                has_constraints = True
+
             if annotation is not None:
                 if hasattr(annotation, "__name__"):
                     type_str = annotation.__name__
@@ -269,6 +299,17 @@ class SchemaLoader:
                 alias=field_alias,
             )
 
+        # A custom @field_validator / @model_validator can reject otherwise
+        # plainly-typed values, so it too requires the real validator.
+        decorators = getattr(settings_cls, "__pydantic_decorators__", None)
+        if decorators is not None and (
+            getattr(decorators, "field_validators", None)
+            or getattr(decorators, "model_validators", None)
+            or getattr(decorators, "validators", None)
+        ):
+            has_constraints = True
+
+        schema.has_constraints = has_constraints
         return schema
 
     def get_schema_metadata_func(
