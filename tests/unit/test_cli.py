@@ -5461,7 +5461,7 @@ class TestErrorPathHardening:
         out_dir = tmp_path / "outdir"
         out_dir.mkdir()
         result = runner.invoke(app, ["init", str(env), "-o", str(out_dir), "--force"])
-        assert result.exit_code != 0
+        assert result.exit_code == 1
         assert "Could not write" in result.output
         assert "Traceback" not in result.output
 
@@ -5471,7 +5471,7 @@ class TestErrorPathHardening:
         result = runner.invoke(
             app, ["guard", str(env), "--native-only", "--json", "--fail-on", "bogus"]
         )
-        assert result.exit_code != 0
+        assert result.exit_code == 1
         # stdout must be a clean JSON error doc, not Rich/human prose (#28).
         doc = json.loads(result.output)
         assert "error" in doc and "bogus" in doc["error"]
