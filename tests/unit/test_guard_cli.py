@@ -1103,8 +1103,10 @@ def test_guard_json_and_sarif_warns_about_precedence(tmp_path: Path):
 
     result = runner.invoke(app, ["guard", str(env), "--native-only", "--json", "--sarif"])
 
-    # The warning goes to stderr; CliRunner may merge it into output (older Click)
-    # or keep it separate (newer) — check both so the test is version-robust.
+    # The warning is written to stderr. Depending on the CliRunner configuration,
+    # stderr is either merged into result.output or exposed separately via
+    # result.stderr (which can raise if it was not captured separately); check
+    # both so the assertion holds regardless.
     combined = result.output
     try:
         combined += result.stderr or ""
