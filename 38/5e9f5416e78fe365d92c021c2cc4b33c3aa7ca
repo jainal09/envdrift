@@ -1,0 +1,19 @@
+tests/unit/test_cli.py
+  s_dfc6cd6692ed8f::t_20979d0b0c0a2a 1742-1746,1757,1760
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.6",
+  "base_commit_sha": "385e9f5416e78fe365d92c021c2cc4b33c3aa7ca",
+  "prompts": {},
+  "sessions": {
+    "s_dfc6cd6692ed8f": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "fd23e738-3512-4420-9290-d985ad979bfd",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Jainal Gosaliya <jainal09gosalia@gmail.com>"
+    }
+  }
+}
