@@ -58,16 +58,20 @@ class SettingsGeneration:
 def _sanitize_identifier(name: str) -> str:
     """Turn an arbitrary .env key into a valid, non-keyword, non-reserved identifier.
 
-    Non-identifier characters become ``_``; a leading digit (or empty result)
-    gets a ``field_`` prefix; a Python keyword/soft-keyword gets a ``_`` suffix.
-    A name colliding with pydantic's reserved attribute namespace (``model_``
-    prefix, or a BaseSettings/BaseModel attribute such as ``schema``/``dict``) is
-    given a ``field_`` prefix so it cannot raise at import or shadow model
-    internals. The original name is preserved separately as a Pydantic alias so
-    the schema still round-trips against the real environment variable.
+    Non-identifier characters become ``_``; a leading digit, a leading underscore,
+    or an empty result gets a ``field_`` prefix; a Python keyword/soft-keyword
+    gets a ``_`` suffix. A leading underscore arises when a key starts with a
+    non-word character (e.g. ``.dotstart`` -> ``_dotstart``, ``🔑EMOJI`` ->
+    ``_EMOJI``); Pydantic rejects such field names ("Fields must not use names
+    with leading underscores"), so they need the prefix too. A name colliding
+    with pydantic's reserved attribute namespace (``model_`` prefix, or a
+    BaseSettings/BaseModel attribute such as ``schema``/``dict``) is given a
+    ``field_`` prefix so it cannot raise at import or shadow model internals. The
+    original name is preserved separately as a Pydantic alias so the schema still
+    round-trips against the real environment variable.
     """
     sanitized = re.sub(r"\W", "_", name)
-    if not sanitized or sanitized[0].isdigit():
+    if not sanitized or sanitized[0].isdigit() or sanitized.startswith("_"):
         sanitized = f"field_{sanitized}"
     if _is_pydantic_reserved(sanitized):
         sanitized = f"field_{sanitized}"
