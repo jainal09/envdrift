@@ -55,11 +55,11 @@ def test_decrypt_sops_binary_blob_does_not_crash(tmp_path: Path, sops_on_path: N
     env_file.write_bytes(blob)
 
     backend = SOPSEncryptionBackend()
-    try:
-        result = backend.decrypt(env_file, cwd=tmp_path)
-        assert result.success is False
-    except EncryptionBackendError:
-        pass  # a clean, typed failure is the acceptable outcome
+    # sops rejects the blob; the point is it surfaces a clean, typed
+    # EncryptionBackendError — not a UnicodeDecodeError from decoding sops'
+    # non-UTF-8 stderr (which would fail this pytest.raises and flag the bug).
+    with pytest.raises(EncryptionBackendError):
+        backend.decrypt(env_file, cwd=tmp_path)
     # No silent corruption: the blob is byte-for-byte intact.
     assert env_file.read_bytes() == blob
 
