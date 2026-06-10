@@ -1,0 +1,20 @@
+tests/unit/test_guard_cli.py
+  s_dfc6cd6692ed8f::t_c7174bf78a8095 1109,1111-1116
+  s_dfc6cd6692ed8f::t_8ee1e8201f6fec 1098-1100,1102-1103,1110
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.6",
+  "base_commit_sha": "2b7f588bd593d4b3c296f6788ce304ea40651e81",
+  "prompts": {},
+  "sessions": {
+    "s_dfc6cd6692ed8f": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "fd23e738-3512-4420-9290-d985ad979bfd",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Jainal Gosaliya <jainal09gosalia@gmail.com>"
+    }
+  }
+}
