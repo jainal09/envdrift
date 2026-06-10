@@ -5395,3 +5395,31 @@ class TestDetectEnvFile:
         assert detection.path is not None
         assert detection.path.name == ".env"
         assert detection.environment == "production"
+
+
+class TestErrorPathHardening:
+    """#26/#28: an unwritable init output and an invalid guard --fail-on are clean
+    errors, not a PermissionError traceback / machine-output contamination."""
+
+    def test_init_unwritable_output_is_clean_error(self, tmp_path: Path) -> None:
+        env = tmp_path / ".env"
+        env.write_text("API_KEY=abc\n")
+        # A directory as the output path makes write_text raise OSError — the same
+        # branch a read-only file hits, reliably and regardless of euid/platform.
+        out_dir = tmp_path / "outdir"
+        out_dir.mkdir()
+        result = runner.invoke(app, ["init", str(env), "-o", str(out_dir), "--force"])
+        assert result.exit_code != 0
+        assert "Could not write" in result.output
+        assert "Traceback" not in result.output
+
+    def test_guard_invalid_fail_on_json_is_clean_error_doc(self, tmp_path: Path) -> None:
+        env = tmp_path / ".env"
+        env.write_text("API_KEY=sk-test\n")
+        result = runner.invoke(
+            app, ["guard", str(env), "--native-only", "--json", "--fail-on", "bogus"]
+        )
+        assert result.exit_code != 0
+        # stdout must be a clean JSON error doc, not Rich/human prose (#28).
+        doc = json.loads(result.output)
+        assert "error" in doc and "bogus" in doc["error"]
