@@ -1,0 +1,34 @@
+src/envdrift/core/encryption.py
+  s_dfc6cd6692ed8f::t_b5581e17e4962e 328-332
+  s_dfc6cd6692ed8f::t_8000767576c959 305-312
+tests/unit/test_encryption.py
+  s_dfc6cd6692ed8f::t_746dd0abf6d19b 147-166
+src/envdrift/cli_commands/init_cmd.py
+  s_dfc6cd6692ed8f::t_4cdac1356f8b0c 325-327
+src/envdrift/cli_commands/diff.py
+  s_dfc6cd6692ed8f::t_3c88b9aaff08bb 70-72
+src/envdrift/core/parser.py
+  s_dfc6cd6692ed8f::t_62f7ef52a0aa53 178-191
+src/envdrift/cli_commands/encryption.py
+  s_dfc6cd6692ed8f::t_65aa532a14d962 246-252
+src/envdrift/cli_commands/validate.py
+  s_dfc6cd6692ed8f::t_4945baabb0f8cf 124-126
+tests/unit/test_parser.py
+  s_dfc6cd6692ed8f::t_6ffda7bd4cf4d3 141-163
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.6",
+  "base_commit_sha": "b8005b025fc131ab005d0133f0814b9245a497ee",
+  "prompts": {},
+  "sessions": {
+    "s_dfc6cd6692ed8f": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "fd23e738-3512-4420-9290-d985ad979bfd",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Jainal Gosaliya <jainal09gosalia@gmail.com>"
+    }
+  }
+}
