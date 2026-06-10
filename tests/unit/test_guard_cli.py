@@ -1090,3 +1090,24 @@ def test_guard_skip_gitignored_default_is_false(tmp_path: Path, monkeypatch):
     assert result.exit_code == 0
     assert created_configs
     assert created_configs[0].skip_gitignored is False
+
+
+def test_guard_json_and_sarif_warns_about_precedence(tmp_path: Path):
+    """#31: passing --json and --sarif together is no longer silent.
+
+    SARIF takes precedence; guard now warns on stderr that --json is ignored,
+    while keeping the SARIF stdout clean.
+    """
+    env = tmp_path / ".env"
+    env.write_text("API_KEY=sk-test123\n")
+
+    result = runner.invoke(app, ["guard", str(env), "--native-only", "--json", "--sarif"])
+
+    # The warning goes to stderr; CliRunner may merge it into output (older Click)
+    # or keep it separate (newer) — check both so the test is version-robust.
+    combined = result.output
+    try:
+        combined += result.stderr or ""
+    except (ValueError, AttributeError):
+        pass
+    assert "--json is ignored" in combined
