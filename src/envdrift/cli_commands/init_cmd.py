@@ -389,6 +389,12 @@ def _write_init_output(result: SettingsGeneration, output: Path, *, force: bool)
 
     # encoding="utf-8" so a non-ASCII field name/value (e.g. a unicode-identifier
     # key) round-trips on platforms whose default text encoding is not UTF-8.
-    output.write_text(result.source, encoding="utf-8")
+    try:
+        output.write_text(result.source, encoding="utf-8")
+    except OSError as exc:
+        # A read-only / unwritable output path used to dump a raw PermissionError
+        # traceback; surface it as a clean error instead (#443 #26).
+        print_error(f"Could not write {output}: {exc}")
+        raise typer.Exit(code=1) from exc
     print_success(f"Generated {output}")
     _print_generation_summary(result)
