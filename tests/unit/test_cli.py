@@ -5395,3 +5395,47 @@ class TestDetectEnvFile:
         assert detection.path is not None
         assert detection.path.name == ".env"
         assert detection.environment == "production"
+
+
+class TestReadSeamGuards:
+    """#24/#25: init/encrypt/validate surface a directory or a non-UTF-8 file as a
+    clean error, not an uncaught IsADirectoryError / UnicodeDecodeError traceback."""
+
+    def test_init_on_directory_is_clean_error(self, tmp_path: Path) -> None:
+        a_dir = tmp_path / "adir"
+        a_dir.mkdir()
+        result = runner.invoke(app, ["init", str(a_dir), "-o", str(tmp_path / "o.py")])
+        assert result.exit_code != 0
+        assert "Not a file" in result.output
+        assert result.exc_info is None or not isinstance(result.exception, IsADirectoryError)
+
+    def test_init_on_non_utf8_is_clean_error(self, tmp_path: Path) -> None:
+        bad = tmp_path / ".env.bad"
+        bad.write_bytes(b"API_KEY=secret\nPASSWORD=p\xff\xc3ss\n")
+        result = runner.invoke(app, ["init", str(bad), "-o", str(tmp_path / "o.py")])
+        assert result.exit_code != 0
+        assert "UTF-8" in result.output
+
+    def test_validate_on_directory_is_clean_error(self, tmp_path: Path) -> None:
+        env = tmp_path / ".env"
+        env.write_text("FOO=bar\n")
+        runner.invoke(app, ["init", str(env), "-o", str(tmp_path / "s.py"), "--class-name", "Cfg"])
+        a_dir = tmp_path / "adir"
+        a_dir.mkdir()
+        result = runner.invoke(
+            app, ["validate", str(a_dir), "--schema", "s:Cfg", "-d", str(tmp_path)]
+        )
+        assert result.exit_code != 0
+        assert "Not a file" in result.output
+
+    def test_validate_on_non_utf8_is_clean_error(self, tmp_path: Path) -> None:
+        env = tmp_path / ".env"
+        env.write_text("FOO=bar\n")
+        runner.invoke(app, ["init", str(env), "-o", str(tmp_path / "s.py"), "--class-name", "Cfg"])
+        bad = tmp_path / ".env.bad"
+        bad.write_bytes(b"FOO=p\xff\xc3ss\n")
+        result = runner.invoke(
+            app, ["validate", str(bad), "--schema", "s:Cfg", "-d", str(tmp_path)]
+        )
+        assert result.exit_code != 0
+        assert "UTF-8" in result.output

@@ -67,7 +67,9 @@ def _read_env(path: Path, format_: str) -> EnvFile:
         _emit_error(f"Not a file: {path}", format_)
     try:
         return EnvParser().parse(path)
-    except UnicodeDecodeError:
+    except (UnicodeDecodeError, ValueError):
+        # EnvParser now converts a non-UTF-8 read into a clean ValueError; keep
+        # catching the raw UnicodeDecodeError too for belt-and-suspenders.
         _emit_error(f"Could not read {path} as UTF-8 text (not a valid .env file)", format_)
 
 

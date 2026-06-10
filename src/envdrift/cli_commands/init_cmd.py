@@ -322,7 +322,9 @@ def _generate_or_exit(
         raise typer.Exit(code=1)
     try:
         return generate_settings_module(env_file, class_name, detect_sensitive)
-    except ValueError as exc:
+    except (IsADirectoryError, ValueError) as exc:
+        # IsADirectoryError: a directory passed instead of a file; ValueError: an
+        # invalid class name or a non-UTF-8 / binary env file (#24, #25).
         print_error(str(exc))
         raise typer.Exit(code=1) from exc
 

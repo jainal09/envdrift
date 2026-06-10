@@ -144,6 +144,26 @@ BAZ=qux
         nonexistent = tmp_path / ".env.nonexistent"
         assert detector.is_file_encrypted(nonexistent) is False
 
+    def test_detection_on_non_utf8_and_directory_does_not_crash(self, tmp_path):
+        """#13: a binary/non-UTF-8 file or a directory has no encryption markers.
+
+        ``detect_backend_for_file`` used to read the file as UTF-8 with no guard,
+        so decrypt's auto-detect crashed with an uncaught UnicodeDecodeError on a
+        binary blob. It (and ``is_file_encrypted``) must return None/False
+        gracefully instead.
+        """
+        detector = EncryptionDetector()
+
+        blob = tmp_path / "blob.env"
+        blob.write_bytes(b"\x00\x01\x02\xff\xfe\xfd\x80\x81\x82\xc0\xc1")
+        assert detector.detect_backend_for_file(blob) is None
+        assert detector.is_file_encrypted(blob) is False
+
+        a_dir = tmp_path / "adir"
+        a_dir.mkdir()
+        assert detector.detect_backend_for_file(a_dir) is None
+        assert detector.is_file_encrypted(a_dir) is False
+
     def test_encryption_ratio(self, tmp_path):
         """Test encryption ratio calculation."""
         # 2 encrypted, 2 plaintext = 50%
