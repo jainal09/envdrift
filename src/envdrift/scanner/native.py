@@ -247,6 +247,33 @@ def _is_env_file(rel_path: str) -> bool:
     return file_name == ".env" or file_name.startswith(".env.")
 
 
+# Bytes that legitimately appear in text files: printable/high bytes plus the
+# usual whitespace controls (BS HT LF VT FF CR). Anything else (NUL, other
+# control bytes) counts as "non-text" when deciding if a file is binary.
+_TEXT_BYTES = frozenset(range(0x20, 0x100)) | frozenset({0x08, 0x09, 0x0A, 0x0B, 0x0C, 0x0D})
+
+
+def _looks_binary(raw: bytes, *, sample: int = 8192, threshold: float = 0.05) -> bool:
+    """Heuristic: is ``raw`` a genuinely-binary blob (vs. text with a stray NUL)?
+
+    git treats a file as binary if it finds a NUL in the first 8 KiB. We instead
+    require a *ratio* of non-text bytes, so a lone (or maliciously injected) NUL
+    byte in an otherwise-text ``.env`` file does not cause the scanner to discard
+    every finding and let a real plaintext secret slip through (#22). Genuine
+    binaries — overwhelmingly non-text — are still skipped to avoid noise.
+
+    The threshold is deliberately low (5 %): a legitimate ``.env``/text file has
+    virtually no non-text bytes, so a small ratio still absorbs a handful of
+    stray NULs while shrinking the window for an attacker who pads a file with
+    control bytes specifically to re-trigger the binary skip and hide a secret.
+    """
+    chunk = raw[:sample]
+    if not chunk:
+        return False
+    nontext = sum(1 for b in chunk if b not in _TEXT_BYTES)
+    return nontext / len(chunk) > threshold
+
+
 class NativeScanner(ScannerBackend):
     """Built-in scanner with zero external dependencies.
 
@@ -584,18 +611,27 @@ class NativeScanner(ScannerBackend):
         if is_clear_file and self._skip_clear_files:
             return findings
 
-        # Try to read file content
+        # Read raw bytes so the binary check sees the true content: read_text with
+        # errors="ignore" silently drops the very non-text bytes that identify a
+        # binary file, which would defeat the heuristic below.
         try:
-            content = file_path.read_text(encoding="utf-8", errors="ignore")
-        except (OSError, UnicodeDecodeError):
+            raw = file_path.read_bytes()
+        except OSError:
             return findings
+
+        # Skip genuinely-binary files (compiled blobs etc.) to avoid noise — but a
+        # single stray NUL must NOT hide secrets in an otherwise-text file. The old
+        # "any NUL in the first 8 KiB -> discard ALL findings" rule let an attacker
+        # evade guard by injecting one NUL byte, leaving a real plaintext key
+        # undetected with a clean [OK] (#22).
+        if _looks_binary(raw):
+            return findings
+
+        # Neutralize any stray NULs so they can't break pattern matching downstream.
+        content = raw.decode("utf-8", errors="ignore").replace("\x00", "")
 
         # Skip empty files
         if not content.strip():
-            return findings
-
-        # Skip binary files (heuristic: check for null bytes)
-        if "\x00" in content[:8192]:
             return findings
 
         # Private-key file (.env.keys) handling.
