@@ -312,6 +312,135 @@ NEW_FEATURE_FLAG=enabled
         assert result.valid is False
         assert "PORT" in result.type_errors
 
+    def test_validate_enforces_pydantic_field_constraints(self, tmp_path):
+        """#18: field constraints (ge/le/Literal/min_length/pattern) must be enforced.
+
+        validate previously did only name-based type checks and never instantiated
+        the Settings class, so a config the real Pydantic schema REJECTS sailed
+        through as 'Validation PASSED' (exit 0) — a false pass on the CI gate.
+        """
+        from typing import Literal
+
+        from pydantic import Field
+        from pydantic_settings import BaseSettings
+
+        class ConstrainedSettings(BaseSettings):
+            PORT: int = Field(ge=1, le=65535)
+            LOG_LEVEL: Literal["debug", "info", "warning", "error"]
+            APP_NAME: str = Field(min_length=3)
+            VERSION: str = Field(pattern=r"^v\d+\.\d+\.\d+$")
+
+        # Type-correct values that every constraint nonetheless rejects.
+        env_file = tmp_path / ".env"
+        env_file.write_text("PORT=99999\nLOG_LEVEL=trace\nAPP_NAME=ab\nVERSION=not-a-version\n")
+
+        env = EnvParser().parse(env_file)
+        schema = SchemaLoader().extract_metadata(ConstrainedSettings)
+        result = Validator().validate(env, schema, check_encryption=False)
+
+        assert result.valid is False
+        assert set(result.type_errors) >= {"PORT", "LOG_LEVEL", "APP_NAME", "VERSION"}
+
+    def test_validate_runs_custom_validator_on_plain_field(self, tmp_path):
+        """A custom @field_validator on a plain-typed field is still enforced.
+
+        The field is a bare ``str`` (no constraint metadata), so the only
+        validation is the custom validator — has_constraints must flag it so the
+        real model_validate pass runs and surfaces the rejection.
+        """
+        from pydantic import field_validator
+        from pydantic_settings import BaseSettings
+
+        class Settings(BaseSettings):
+            NAME: str
+
+            @field_validator("NAME")
+            @classmethod
+            def _no_spaces(cls, v: str) -> str:
+                if " " in v:
+                    raise ValueError("must not contain spaces")
+                return v
+
+        env_file = tmp_path / ".env"
+        env_file.write_text("NAME=has spaces\n")
+
+        env = EnvParser().parse(env_file)
+        schema = SchemaLoader().extract_metadata(Settings)
+        assert schema.has_constraints is True  # custom validator detected
+
+        result = Validator().validate(env, schema, check_encryption=False)
+        assert result.valid is False
+        assert "NAME" in result.type_errors
+
+    def test_validate_constraint_pass_skips_missing_encrypted_and_empty(self, tmp_path):
+        """The constraint pass skips fields the env omits, encrypts, or leaves
+        empty, and never double-reports a missing required field as a type error.
+        """
+        from pydantic import Field
+        from pydantic_settings import BaseSettings
+
+        class Settings(BaseSettings):
+            PORT: int = Field(ge=1, le=65535)  # present + valid
+            SECRET: str = Field(min_length=10)  # encrypted -> can't constraint-check
+            NOTES: str = Field(min_length=5)  # empty -> unset
+            REQUIRED_MISSING: str = Field(min_length=3)  # absent from env
+
+        env_file = tmp_path / ".env"
+        env_file.write_text("PORT=8080\nSECRET=encrypted:abc\nNOTES=\n")
+
+        env = EnvParser().parse(env_file)
+        schema = SchemaLoader().extract_metadata(Settings)
+        result = Validator().validate(env, schema, check_encryption=False)
+
+        # Absent required field is reported as missing, not a min_length type error.
+        assert "REQUIRED_MISSING" in result.missing_required
+        assert "REQUIRED_MISSING" not in result.type_errors
+        # Encrypted + empty values are not flagged by the constraint pass.
+        assert "SECRET" not in result.type_errors
+        assert "NOTES" not in result.type_errors
+
+    def test_validate_constraint_pass_keeps_base_type_message(self, tmp_path):
+        """A field failing both the base-type check and Pydantic keeps the
+        base-type message — the constraint pass must not override it.
+        """
+        from pydantic import Field
+        from pydantic_settings import BaseSettings
+
+        class Settings(BaseSettings):
+            PORT: int = Field(ge=1, le=65535)
+
+        env_file = tmp_path / ".env"
+        env_file.write_text("PORT=not_a_number\n")
+
+        env = EnvParser().parse(env_file)
+        schema = SchemaLoader().extract_metadata(Settings)
+        result = Validator().validate(env, schema, check_encryption=False)
+
+        assert "PORT" in result.type_errors
+        assert "Expected integer" in result.type_errors["PORT"]
+
+    def test_validate_does_not_false_fail_on_complex_typed_field(self, tmp_path):
+        """#443 review: a valid config with a complex (list) field must not be
+        rejected. pydantic-settings parses such fields from JSON in its env source;
+        the constraint pass skips them rather than reject the raw string.
+        """
+        from pydantic import Field
+        from pydantic_settings import BaseSettings
+
+        class Settings(BaseSettings):
+            TAGS: list[str]
+            PORT: int = Field(ge=1, le=65535)  # a constraint -> has_constraints True
+
+        env_file = tmp_path / ".env"
+        env_file.write_text('TAGS=["a","b","c"]\nPORT=8080\n')
+
+        env = EnvParser().parse(env_file)
+        schema = SchemaLoader().extract_metadata(Settings)
+        result = Validator().validate(env, schema, check_encryption=False)
+
+        assert result.valid is True
+        assert "TAGS" not in result.type_errors
+
     def test_validate_suspicious_plaintext(self, tmp_path, permissive_settings_class):
         """Warn about plaintext values matching secret patterns."""
         content = """

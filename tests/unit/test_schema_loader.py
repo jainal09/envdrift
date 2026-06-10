@@ -106,6 +106,31 @@ def test_load_non_settings_class(tmp_path, monkeypatch):
         loader.load("not_settings:NotSettings")
 
 
+@pytest.mark.parametrize(
+    "body",
+    [
+        'raise RuntimeError("boom at import time")',
+        "undefined_name_at_module_level",  # NameError
+        "def broken(:\n    pass",  # SyntaxError
+    ],
+)
+def test_load_non_import_error_at_import_is_clean(tmp_path, monkeypatch, body):
+    """#21: a non-ImportError raised while importing the schema module
+    (RuntimeError / NameError / SyntaxError) is wrapped as SchemaLoadError, not
+    surfaced as a raw traceback."""
+    module_path = tmp_path / "bad_schema.py"
+    module_path.write_text(
+        "from pydantic_settings import BaseSettings\n"
+        f"{body}\n"
+        "class Settings(BaseSettings):\n    API_KEY: str\n"
+    )
+    monkeypatch.syspath_prepend(tmp_path)
+
+    loader = SchemaLoader()
+    with pytest.raises(SchemaLoadError):
+        loader.load("bad_schema:Settings")
+
+
 def test_extract_metadata_with_config_object_and_typing():
     """extract_metadata should handle config objects and typing annotations."""
 

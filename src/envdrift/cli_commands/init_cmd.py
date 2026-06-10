@@ -58,16 +58,20 @@ class SettingsGeneration:
 def _sanitize_identifier(name: str) -> str:
     """Turn an arbitrary .env key into a valid, non-keyword, non-reserved identifier.
 
-    Non-identifier characters become ``_``; a leading digit (or empty result)
-    gets a ``field_`` prefix; a Python keyword/soft-keyword gets a ``_`` suffix.
-    A name colliding with pydantic's reserved attribute namespace (``model_``
-    prefix, or a BaseSettings/BaseModel attribute such as ``schema``/``dict``) is
-    given a ``field_`` prefix so it cannot raise at import or shadow model
-    internals. The original name is preserved separately as a Pydantic alias so
-    the schema still round-trips against the real environment variable.
+    Non-identifier characters become ``_``; a leading digit, a leading underscore,
+    or an empty result gets a ``field_`` prefix; a Python keyword/soft-keyword
+    gets a ``_`` suffix. A leading underscore arises when a key starts with a
+    non-word character (e.g. ``.dotstart`` -> ``_dotstart``, ``🔑EMOJI`` ->
+    ``_EMOJI``); Pydantic rejects such field names ("Fields must not use names
+    with leading underscores"), so they need the prefix too. A name colliding
+    with pydantic's reserved attribute namespace (``model_`` prefix, or a
+    BaseSettings/BaseModel attribute such as ``schema``/``dict``) is given a
+    ``field_`` prefix so it cannot raise at import or shadow model internals. The
+    original name is preserved separately as a Pydantic alias so the schema still
+    round-trips against the real environment variable.
     """
     sanitized = re.sub(r"\W", "_", name)
-    if not sanitized or sanitized[0].isdigit():
+    if not sanitized or sanitized[0].isdigit() or sanitized.startswith("_"):
         sanitized = f"field_{sanitized}"
     if _is_pydantic_reserved(sanitized):
         sanitized = f"field_{sanitized}"
@@ -79,12 +83,19 @@ def _sanitize_identifier(name: str) -> str:
 def _needs_sanitizing(name: str) -> bool:
     """True when ``name`` cannot be used as a bare Settings attribute name.
 
-    Flags non-identifiers, Python keywords, and names colliding with pydantic's
-    reserved attribute namespace (``model_`` prefix or a BaseSettings/BaseModel
-    member) — all of which produce a broken or non-importable module if emitted
-    as a bare field annotation.
+    Flags non-identifiers, a leading underscore (a valid Python identifier but
+    one Pydantic rejects — "Fields must not use names with leading underscores"),
+    Python keywords, and names colliding with pydantic's reserved attribute
+    namespace (``model_`` prefix or a BaseSettings/BaseModel member) — all of
+    which produce a broken or non-importable module if emitted as a bare field
+    annotation.
     """
-    return not name.isidentifier() or keyword.iskeyword(name) or _is_pydantic_reserved(name)
+    return (
+        not name.isidentifier()
+        or name.startswith("_")
+        or keyword.iskeyword(name)
+        or _is_pydantic_reserved(name)
+    )
 
 
 def _nfkc(name: str) -> str:
@@ -322,7 +333,9 @@ def _generate_or_exit(
         raise typer.Exit(code=1)
     try:
         return generate_settings_module(env_file, class_name, detect_sensitive)
-    except ValueError as exc:
+    except (IsADirectoryError, ValueError) as exc:
+        # IsADirectoryError: a directory passed instead of a file; ValueError: an
+        # invalid class name or a non-UTF-8 / binary env file (#24, #25).
         print_error(str(exc))
         raise typer.Exit(code=1) from exc
 
