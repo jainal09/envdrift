@@ -115,6 +115,29 @@ PROBLEMATIC_FILENAME_PATTERNS = [
     r"^\.env\.local$",
 ]
 
+# Only filenames matching this round-trip through dotenvx's key-name derivation.
+# dotenvx builds the DOTENV_PRIVATE_KEY_<SLUG> env-var name from the filename, so
+# a space or non-ASCII character yields an invalid name and a file that encrypts
+# (exit 0) yet is permanently undecryptable — see is_dotenvx_safe_filename.
+_DOTENVX_SAFE_FILENAME_RE = re.compile(r"[A-Za-z0-9._-]+")
+
+
+def is_dotenvx_safe_filename(name: str) -> bool:
+    """Return True if ``name`` survives dotenvx's ``DOTENV_*_<SLUG>`` key derivation.
+
+    dotenvx derives the public/private-key env-var names from the filename, so
+    only ``[A-Za-z0-9._-]`` characters round-trip into a usable key name. A space
+    or non-ASCII character produces an invalid name (e.g.
+    ``DOTENV_PRIVATE_KEY_MY SECRET``): the value still encrypts and dotenvx exits
+    0, but the file is then permanently undecryptable and the original plaintext
+    is destroyed — a silent secret lockout (#443/#457, #467). Both the guarded
+    ``DotenvxEncryptionBackend`` and the ``DotenvxWrapper.encrypt`` seam used by
+    the partial-encryption push/lock paths share this single predicate so the two
+    cannot drift.
+    """
+    return bool(_DOTENVX_SAFE_FILENAME_RE.fullmatch(name))
+
+
 _PUBLIC_KEY_NAME_RE = re.compile(r"\bDOTENV_PUBLIC_KEY_[A-Za-z0-9_-]+=")
 _PRIVATE_KEY_LINE_RE = re.compile(r"^DOTENV_PRIVATE_KEY_[A-Za-z0-9_-]+=(.*)$")
 
@@ -783,6 +806,37 @@ class DotenvxWrapper:
                     f"before encryption. See: https://github.com/dotenvx/dotenvx/issues/724"
                 )
 
+    @staticmethod
+    def _validate_encryptable_filename(file_path: Path) -> None:
+        """Refuse a filename dotenvx would turn into an invalid private-key name.
+
+        dotenvx derives ``DOTENV_PRIVATE_KEY_<SLUG>`` from the filename; a space or
+        non-ASCII character yields an invalid name, so the value encrypts and
+        dotenvx exits 0 — but the file is then permanently undecryptable and the
+        original plaintext is destroyed (a silent secret lockout). This guard runs
+        on every platform (the lockout is not Windows-specific) and before dotenvx
+        is invoked, so the plaintext is preserved.
+
+        The guarded ``DotenvxEncryptionBackend`` already performs this check, but
+        the partial-encryption push/lock paths (``encrypt_secret_file`` /
+        ``_encrypt_secrets_only_file``) reach dotenvx through this wrapper directly,
+        so the guard must live here too or those paths silently lock the secret out
+        (#443/#457, #467). Both share the ``is_dotenvx_safe_filename`` predicate.
+
+        Parameters:
+            file_path (Path): Path to the file to validate.
+
+        Raises:
+            DotenvxFilenameError: If the filename is not a safe dotenvx key slug.
+        """
+        if not is_dotenvx_safe_filename(file_path.name):
+            raise DotenvxFilenameError(
+                f"Refusing to encrypt '{file_path.name}': its filename contains "
+                "characters dotenvx cannot turn into a valid key name, which would "
+                "leave the file permanently undecryptable. Rename it to use only "
+                "letters, digits, '.', '-' and '_'."
+            )
+
     # Regex pattern for dotenvx public key header blocks
     DOTENVX_HEADER_BLOCK_PATTERN: ClassVar[re.Pattern[str]] = re.compile(
         r"#/---+\[DOTENV_PUBLIC_KEY\]---+/\n"
@@ -898,6 +952,13 @@ class DotenvxWrapper:
         env_file = Path(env_file)
         if not env_file.exists():
             raise DotenvxError(f"File not found: {env_file}")
+
+        # Refuse a filename dotenvx can't turn into a valid key name BEFORE
+        # invoking it, on every platform, so the plaintext is preserved. dotenvx
+        # would otherwise encrypt the value, exit 0, and leave the file
+        # permanently undecryptable. The partial-encryption push/lock paths use
+        # this wrapper directly, not the guarded backend (#443/#457, #467).
+        self._validate_encryptable_filename(env_file)
 
         # Validate filename for known dotenvx bugs (Windows-specific)
         if platform.system() == "Windows":

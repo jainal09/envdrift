@@ -15,7 +15,7 @@ from typing import NamedTuple
 
 from envdrift.config import PartialEncryptionEnvironmentConfig
 from envdrift.env_files import _is_excluded_env_file
-from envdrift.integrations.dotenvx import DotenvxError, DotenvxWrapper
+from envdrift.integrations.dotenvx import DotenvxError, DotenvxFilenameError, DotenvxWrapper
 
 logger = logging.getLogger(__name__)
 
@@ -517,7 +517,10 @@ def encrypt_secret_file(env_config: PartialEncryptionEnvironmentConfig) -> None:
     dotenvx = DotenvxWrapper()
     try:
         dotenvx.encrypt(secret_file)
-    except DotenvxError as e:
+    except (DotenvxError, DotenvxFilenameError) as e:
+        # DotenvxFilenameError: the wrapper refused a name dotenvx would turn
+        # into an invalid key (silent lockout) BEFORE encrypting, so the
+        # plaintext is intact — surface a clean error, not a raw traceback (#467).
         raise PartialEncryptionError.encrypt_failed(secret_file, e) from e
 
     # Re-enable git tracking now the file is encrypted again
@@ -702,7 +705,10 @@ def _encrypt_secrets_only_file(dotenvx: DotenvxWrapper, file: Path, *, check: bo
         return True
     try:
         dotenvx.encrypt(file)
-    except DotenvxError as e:
+    except (DotenvxError, DotenvxFilenameError) as e:
+        # DotenvxFilenameError: a secrets_dir file whose name dotenvx can't turn
+        # into a valid key slug (e.g. "my secret.env", "café.env") is refused
+        # pre-flight with the plaintext preserved — surface it cleanly (#467).
         raise PartialEncryptionError.encrypt_failed(file, e) from e
     # Re-enable git tracking now the file is encrypted again.
     _git_unskip_worktree(file)
