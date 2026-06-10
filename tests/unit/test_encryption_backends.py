@@ -283,6 +283,39 @@ class TestDotenvxEncryptionBackend:
         assert result.success is False
         assert "not found" in result.message
 
+    def test_encrypt_filename_with_space_refused_preserves_plaintext(self, tmp_path):
+        """#23: a filename dotenvx can't turn into a valid key name must be refused.
+
+        ``my secrets.env`` makes dotenvx derive a private-key variable name with a
+        space (``DOTENV_PRIVATE_KEY_MY SECRETS...``): the value encrypts and exits
+        0, but the file is then permanently undecryptable and the original
+        plaintext is destroyed — silent secret lockout. The backend must refuse
+        pre-flight and leave the file byte-for-byte untouched.
+        """
+        env_file = tmp_path / "my secrets.env"
+        env_file.write_text("SECRET=keepme\n")
+
+        backend = DotenvxEncryptionBackend()
+        result = backend.encrypt(env_file)
+
+        assert result.success is False
+        # Pin the failure to the filename guard, not e.g. the empty-file guard.
+        assert "undecryptable" in result.message.lower()
+        # Original plaintext preserved — not encrypted into an unrecoverable file.
+        assert env_file.read_text() == "SECRET=keepme\n"
+
+    def test_encrypt_unicode_filename_refused(self, tmp_path):
+        """#23: a non-ASCII filename also yields an invalid dotenvx key name."""
+        env_file = tmp_path / "café.env"
+        env_file.write_text("SECRET=keepme\n")
+
+        backend = DotenvxEncryptionBackend()
+        result = backend.encrypt(env_file)
+
+        assert result.success is False
+        assert "undecryptable" in result.message.lower()
+        assert env_file.read_text() == "SECRET=keepme\n"
+
     @patch("envdrift.integrations.dotenvx.DotenvxWrapper")
     def test_decrypt_success(self, mock_wrapper_class, tmp_path):
         """Test successful decryption."""

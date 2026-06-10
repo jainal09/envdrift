@@ -267,6 +267,15 @@ class PartialEncryptionConfig:
 def _build_vault_config(vault_section: dict[str, Any]) -> VaultConfig:
     """Build the vault config, including its nested ``[vault.sync]`` section."""
     sync_section = vault_section.get("sync", {})
+    for m in sync_section.get("mappings", []):
+        missing = [k for k in ("secret_name", "folder_path") if k not in m]
+        if missing:
+            # Raw subscripts used to raise an uncaught KeyError traceback when a
+            # mapping omitted a required key (#443 #32).
+            raise ValueError(
+                f"[[vault.sync.mappings]] entry is missing required key(s) "
+                f"{', '.join(missing)}: {m!r}"
+            )
     sync_mappings = [
         SyncMappingConfig(
             secret_name=m["secret_name"],
@@ -351,6 +360,12 @@ def _build_guard_config(guard_section: dict[str, Any]) -> GuardConfig:
     scanners = guard_section.get("scanners", ["native", "gitleaks"])
     if isinstance(scanners, str):
         scanners = [scanners]
+    elif not isinstance(scanners, list) or not all(isinstance(s, str) for s in scanners):
+        # A non-iterable / non-string-list (e.g. ``scanners = 123``) used to crash
+        # guard with an uncaught TypeError when iterated (#443 #29).
+        raise ValueError(
+            f"[guard] scanners must be a string or a list of strings, got {scanners!r}"
+        )
     return GuardConfig(
         scanners=scanners,
         auto_install=guard_section.get("auto_install", True),
@@ -528,6 +543,10 @@ def load_config(path: Path | str | None = None) -> EnvdriftConfig:
         path = Path(path)
         if not path.exists():
             raise ConfigNotFoundError(f"Configuration file not found: {path}")
+        if not path.is_file():
+            # A directory (or other non-file) passed as --config used to reach
+            # open() and raise an uncaught IsADirectoryError traceback (#443 #30).
+            raise ConfigNotFoundError(f"Configuration path is not a file: {path}")
     else:
         path = find_config()
         if path is None:

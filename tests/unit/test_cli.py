@@ -1729,6 +1729,43 @@ class TestInitCommand:
         assert cfg.field_model_config == "b"
         assert cfg.field_schema == "c"
 
+    def test_init_underscore_prefixed_key_produces_importable_module(self, tmp_path: Path) -> None:
+        """#16: keys whose sanitized name starts with '_' stay importable.
+
+        A dot/emoji-prefixed key (``.dotstart``, ``🔑EMOJI``) sanitizes to a
+        leading-underscore name (``_dotstart``, ``_EMOJI``), which Pydantic
+        rejects at import ("Fields must not use names with leading underscores").
+        init exited 0 / [OK] while emitting an unimportable module; the sanitizer
+        must prefix these like leading-digit keys so the schema imports.
+        """
+        env_file = tmp_path / ".env"
+        # `.dotstart`/`🔑EMOJI` sanitize to a leading underscore; `_PRIVATE` already
+        # starts with one natively — both must be prefixed so the module imports.
+        env_file.write_text(
+            ".dotstart=x\n🔑EMOJI=emojivalue\n_PRIVATE=secret\nNORMAL=ok\n", encoding="utf-8"
+        )
+        out = tmp_path / "settings.py"
+
+        result = runner.invoke(
+            app, ["init", str(env_file), "--output", str(out), "--class-name", "Cfg"]
+        )
+        assert result.exit_code == 0, result.output
+
+        content = out.read_text(encoding="utf-8")
+        # No field annotation may start with an underscore.
+        assert "\n    _" not in content
+        # The original keys survive as aliases (sanitized-to- and natively-leading _).
+        assert "alias='.dotstart'" in content
+        assert "alias='🔑EMOJI'" in content
+        assert "alias='_PRIVATE'" in content
+
+        # The generated module must import (raised NameError before the fix).
+        spec = importlib.util.spec_from_file_location("gen_underscore_settings", out)
+        assert spec is not None and spec.loader is not None
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        assert hasattr(module, "Cfg")
+
 
 class TestHookCommand:
     """Tests for the hook CLI command."""
@@ -2170,6 +2207,21 @@ class TestSyncCommand:
         missing_provider = runner.invoke(app, ["sync", "-c", str(config_file)])
         assert missing_provider.exit_code == 1
         assert "--provider" in missing_provider.output
+
+    def test_sync_mapping_missing_secret_name_is_clean_error(self, tmp_path: Path, monkeypatch):
+        """#32: a sync mapping missing secret_name surfaces a clean error, not a
+        raw KeyError traceback (covers sync's new except ValueError branch)."""
+        monkeypatch.chdir(tmp_path)
+        cfg = tmp_path / "envdrift.toml"
+        cfg.write_text(
+            '[vault]\nprovider = "azure"\n\n[[vault.sync.mappings]]\nfolder_path = "services/app"\n'
+        )
+
+        result = runner.invoke(app, ["sync", "--config", str(cfg)])
+
+        assert result.exit_code != 0
+        assert "secret_name" in result.output
+        assert "Traceback" not in result.output
 
     def test_sync_hook_check_errors_exit(self, monkeypatch, tmp_path: Path):
         """Sync should stop early when hook checks fail."""
@@ -5395,3 +5447,61 @@ class TestDetectEnvFile:
         assert detection.path is not None
         assert detection.path.name == ".env"
         assert detection.environment == "production"
+
+
+class TestReadSeamGuards:
+    """#24/#25: init/encrypt/validate surface a directory or a non-UTF-8 file as a
+    clean error, not an uncaught IsADirectoryError / UnicodeDecodeError traceback."""
+
+    def test_init_on_directory_is_clean_error(self, tmp_path: Path) -> None:
+        a_dir = tmp_path / "adir"
+        a_dir.mkdir()
+        result = runner.invoke(app, ["init", str(a_dir), "-o", str(tmp_path / "o.py")])
+        assert result.exit_code != 0
+        assert "Not a file" in result.output
+        assert result.exc_info is None or not isinstance(result.exception, IsADirectoryError)
+
+    def test_init_on_non_utf8_is_clean_error(self, tmp_path: Path) -> None:
+        bad = tmp_path / ".env.bad"
+        bad.write_bytes(b"API_KEY=secret\nPASSWORD=p\xff\xc3ss\n")
+        result = runner.invoke(app, ["init", str(bad), "-o", str(tmp_path / "o.py")])
+        assert result.exit_code != 0
+        assert "UTF-8" in result.output
+
+    def test_validate_on_directory_is_clean_error(self, tmp_path: Path) -> None:
+        env = tmp_path / ".env"
+        env.write_text("FOO=bar\n")
+        runner.invoke(app, ["init", str(env), "-o", str(tmp_path / "s.py"), "--class-name", "Cfg"])
+        a_dir = tmp_path / "adir"
+        a_dir.mkdir()
+        result = runner.invoke(
+            app, ["validate", str(a_dir), "--schema", "s:Cfg", "-d", str(tmp_path)]
+        )
+        assert result.exit_code != 0
+        assert "Not a file" in result.output
+
+    def test_validate_on_non_utf8_is_clean_error(self, tmp_path: Path) -> None:
+        env = tmp_path / ".env"
+        env.write_text("FOO=bar\n")
+        runner.invoke(app, ["init", str(env), "-o", str(tmp_path / "s.py"), "--class-name", "Cfg"])
+        bad = tmp_path / ".env.bad"
+        bad.write_bytes(b"FOO=p\xff\xc3ss\n")
+        result = runner.invoke(
+            app, ["validate", str(bad), "--schema", "s:Cfg", "-d", str(tmp_path)]
+        )
+        assert result.exit_code != 0
+        assert "UTF-8" in result.output
+
+    def test_encrypt_check_on_directory_is_clean_error(self, tmp_path: Path) -> None:
+        a_dir = tmp_path / "adir"
+        a_dir.mkdir()
+        result = runner.invoke(app, ["encrypt", "--check", str(a_dir)])
+        assert result.exit_code != 0
+        assert "Not a file" in result.output
+
+    def test_encrypt_check_on_non_utf8_is_clean_error(self, tmp_path: Path) -> None:
+        bad = tmp_path / ".env.bad"
+        bad.write_bytes(b"FOO=p\xff\xc3ss\n")
+        result = runner.invoke(app, ["encrypt", "--check", str(bad)])
+        assert result.exit_code != 0
+        assert "UTF-8" in result.output

@@ -125,6 +125,12 @@ def load_sync_config_and_client(
         except tomllib.TOMLDecodeError as e:
             print_error(f"TOML syntax error in {config_path}: {e}")
             raise typer.Exit(code=1) from None
+        except ValueError as e:
+            # A malformed section (e.g. a sync mapping missing secret_name) now
+            # raises a clean ValueError from load_config instead of a raw
+            # KeyError traceback (#443 #32).
+            print_error(f"Invalid config in {config_path}: {e}")
+            raise typer.Exit(code=1) from None
         except ConfigNotFoundError:
             pass
     elif config_file is None:
