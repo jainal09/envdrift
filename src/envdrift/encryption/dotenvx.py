@@ -135,6 +135,27 @@ class DotenvxEncryptionBackend(EncryptionBackend):
                 file_path=env_file,
             )
 
+        # Refuse a filename dotenvx would turn into an invalid private-key
+        # variable name. dotenvx derives the DOTENV_PRIVATE_KEY_<SLUG> env-var
+        # name from the filename; a space or non-ASCII character produces an
+        # invalid name (e.g. "DOTENV_PRIVATE_KEY_MY SECRETS..."), so the value
+        # encrypts and dotenvx exits 0 — but the file is then permanently
+        # undecryptable: the original plaintext is destroyed and the secret is
+        # locked out for good, and the plaintext-survival check below cannot
+        # catch it (the value *is* encrypted, only the key name is unusable).
+        # Only [A-Za-z0-9._-] filenames round-trip safely (#443).
+        if not re.fullmatch(r"[A-Za-z0-9._-]+", env_file.name):
+            return EncryptionResult(
+                success=False,
+                message=(
+                    f"Refusing to encrypt {env_file}: its filename contains "
+                    "characters dotenvx cannot turn into a valid key name, which "
+                    "would leave the file permanently undecryptable. Rename it to "
+                    "use only letters, digits, '.', '-' and '_'."
+                ),
+                file_path=env_file,
+            )
+
         if not self.is_installed():
             raise EncryptionNotFoundError(
                 f"dotenvx is not installed.\n{self.install_instructions()}"

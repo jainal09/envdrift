@@ -121,7 +121,9 @@ def validate(
     parser = EnvParser()
     try:
         env = parser.parse(env_file, lenient=True)
-    except FileNotFoundError as e:
+    except (FileNotFoundError, IsADirectoryError, ValueError) as e:
+        # IsADirectoryError: a directory passed where a file is expected;
+        # ValueError: a non-UTF-8 / binary file. Surface both cleanly (#24, #25).
         print_error(str(e))
         raise typer.Exit(code=1) from None
 

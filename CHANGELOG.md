@@ -1,5 +1,15 @@
 # Changelog
 
+## [10.15.1](https://github.com/jainal09/envdrift/compare/v10.15.0...v10.15.1) (2026-06-09)
+
+
+### Bug Fixes
+
+* **decrypt:** honest no-op on non-encrypted files, never corrupt them ([#447](https://github.com/jainal09/envdrift/issues/447)) ([580a2e4](https://github.com/jainal09/envdrift/commit/580a2e4674566a15d65ca1a50499e3bbbfdec802))
+* **diff:** clean errors for directory/binary inputs and json error path ([#450](https://github.com/jainal09/envdrift/issues/450)) ([0298cbd](https://github.com/jainal09/envdrift/commit/0298cbd39e7b75f314eb229fcc05723a34403f48))
+* **encrypt:** verify on-disk outcome and refuse content-free files ([#444](https://github.com/jainal09/envdrift/issues/444)) ([0a82183](https://github.com/jainal09/envdrift/commit/0a821830337833b993760ebc202b43982c4be2b8))
+* **init/validate:** handle non-identifier & Unicode env keys end-to-end ([#449](https://github.com/jainal09/envdrift/issues/449)) ([25d6428](https://github.com/jainal09/envdrift/commit/25d6428c9cbddf3559bdfd7c47fab9415d68a3cb))
+
 ## [10.15.0](https://github.com/jainal09/envdrift/compare/v10.14.0...v10.15.0) (2026-06-09)
 
 
