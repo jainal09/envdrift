@@ -1,0 +1,21 @@
+docs/cli/init.md
+  s_dfc6cd6692ed8f::t_0b8e60cc39a8c4 178-182
+tests/unit/test_docs_accuracy.py
+  s_dfc6cd6692ed8f::t_78e04df574ea9f 142-174
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.6",
+  "base_commit_sha": "822bddd55f88589189b2a5bfb70521b1311f47b7",
+  "prompts": {},
+  "sessions": {
+    "s_dfc6cd6692ed8f": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "fd23e738-3512-4420-9290-d985ad979bfd",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Jainal Gosaliya <jainal09gosalia@gmail.com>"
+    }
+  }
+}
