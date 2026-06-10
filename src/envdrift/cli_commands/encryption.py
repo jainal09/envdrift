@@ -243,7 +243,13 @@ def encrypt_cmd(
 
     # Parse env file
     parser = EnvParser()
-    env = parser.parse(env_file)
+    try:
+        env = parser.parse(env_file)
+    except (IsADirectoryError, ValueError) as e:
+        # A directory passed instead of a file, or a non-UTF-8 / binary file —
+        # surface cleanly instead of an uncaught traceback (#24, #25).
+        print_error(str(e))
+        raise typer.Exit(code=1) from None
 
     # Analyze encryption
     detector = EncryptionDetector()

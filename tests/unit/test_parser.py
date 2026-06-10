@@ -138,6 +138,29 @@ BAZ=qux
         with pytest.raises(FileNotFoundError):
             parser.parse(tmp_path / "nonexistent.env")
 
+    def test_parse_directory_raises_clean_error(self, tmp_path):
+        """#25: a directory where a file is expected raises a clean, typed error.
+
+        It used to fall through to read_text and surface an uncaught
+        IsADirectoryError traceback from init/encrypt/decrypt/validate.
+        """
+        a_dir = tmp_path / "adir"
+        a_dir.mkdir()
+        parser = EnvParser()
+
+        with pytest.raises(IsADirectoryError, match="Not a file"):
+            parser.parse(a_dir)
+
+    def test_parse_non_utf8_raises_value_error_not_traceback(self, tmp_path):
+        """#24: a non-UTF-8 file raises a clean ValueError, not a raw
+        UnicodeDecodeError traceback."""
+        bad = tmp_path / ".env.bad"
+        bad.write_bytes(b"API_KEY=secret\nPASSWORD=p\xff\xc3ss\n")
+        parser = EnvParser()
+
+        with pytest.raises(ValueError, match="UTF-8"):
+            parser.parse(bad)
+
     def test_env_file_is_encrypted_property(self, tmp_path):
         """Test EnvFile.is_encrypted property."""
         encrypted_content = 'FOO="encrypted:BDQE123..."'
