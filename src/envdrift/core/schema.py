@@ -174,8 +174,15 @@ class SchemaLoader:
         try:
             with _isolated_import(module_path, service_dir) as module:
                 settings_cls = self._resolve_settings_class(module, module_path, class_name)
+        except SchemaLoadError:
+            raise  # already a clean error (missing class / not a BaseSettings)
         except ImportError as e:
             raise SchemaLoadError(f"Cannot import module '{module_path}': {e}") from e
+        except Exception as e:
+            # Any other error raised *while importing the schema module*
+            # (SyntaxError, NameError, RuntimeError, ...) used to escape as a raw
+            # traceback; surface it as a clean schema-load error (#443 #21).
+            raise SchemaLoadError(f"Error importing schema module '{module_path}': {e}") from e
         finally:
             os.environ.pop(ENVDRIFT_SCHEMA_EXTRACTION, None)
 

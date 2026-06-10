@@ -258,6 +258,32 @@ class TestLoadConfig:
             load_config(tmp_path / "nonexistent.toml")
         assert "not found" in str(exc_info.value)
 
+    def test_load_config_directory_raises_clean_error(self, tmp_path: Path):
+        """#30: a directory passed as --config raises ConfigNotFoundError, not a
+        raw IsADirectoryError traceback when open() is reached."""
+        a_dir = tmp_path / "somedir"
+        a_dir.mkdir()
+        with pytest.raises(ConfigNotFoundError, match="not a file"):
+            load_config(a_dir)
+
+    def test_load_config_non_iterable_scanners_raises_clean_error(self, tmp_path: Path):
+        """#29: a non-list/str [guard] scanners value raises a clean ValueError
+        instead of crashing later with a TypeError when iterated."""
+        cfg = tmp_path / "envdrift.toml"
+        cfg.write_text("[guard]\nscanners = 123\n")
+        with pytest.raises(ValueError, match="scanners"):
+            load_config(cfg)
+
+    def test_load_config_sync_mapping_missing_key_raises_clean_error(self, tmp_path: Path):
+        """#32: a sync mapping missing secret_name/folder_path raises a clean
+        ValueError instead of a raw KeyError traceback."""
+        cfg = tmp_path / "envdrift.toml"
+        cfg.write_text(
+            '[vault]\nprovider = "azure"\n\n[[vault.sync.mappings]]\nfolder_path = "services/app"\n'
+        )
+        with pytest.raises(ValueError, match="secret_name"):
+            load_config(cfg)
+
     def test_load_config_default_when_not_found(self, tmp_path: Path, monkeypatch):
         """Test load_config returns default config when no file found."""
         monkeypatch.chdir(tmp_path)
