@@ -22,6 +22,7 @@ import pytest
 
 from envdrift.encryption.base import EncryptionBackendError
 from envdrift.encryption.dotenvx import DotenvxEncryptionBackend
+from envdrift.encryption.sops import SOPSEncryptionBackend
 
 # Mark all tests in this module
 pytestmark = [pytest.mark.integration]
@@ -32,6 +33,39 @@ def dotenvx_on_path() -> None:
     """Skip the test if the real ``dotenvx`` binary is not installed."""
     if shutil.which("dotenvx") is None:
         pytest.skip("dotenvx binary not found on PATH")
+
+
+@pytest.fixture
+def sops_on_path() -> None:
+    """Skip the test if the real ``sops`` binary is not installed."""
+    if shutil.which("sops") is None:
+        pytest.skip("sops binary not found on PATH")
+
+
+def test_decrypt_sops_binary_blob_does_not_crash(tmp_path: Path, sops_on_path: None) -> None:
+    """#14: decrypting a binary blob with the SOPS backend must not raise an
+    uncaught UnicodeDecodeError while decoding sops' (non-UTF-8) stderr.
+
+    sops._run reads the subprocess with encoding='utf-8', errors='replace', so a
+    non-UTF-8 stderr byte degrades to U+FFFD instead of crashing. sops rejects
+    the blob; the point is it fails *cleanly* and leaves the file intact.
+    """
+    env_file = tmp_path / ".env"
+    # The *invalid* first line (no '=') must carry non-UTF-8 bytes so sops echoes
+    # them back on stderr ("invalid dotenv input line: \xff\xfe..."). That is the
+    # exact path the #14 fix guards: sops._run decoding that non-UTF-8 stderr. An
+    # all-valid-UTF-8 blob (e.g. bytes(range(256))) would NOT exercise it.
+    blob = b"\xff\xfe\x80\x81\xc0\xc1notavalidline\n"
+    env_file.write_bytes(blob)
+
+    backend = SOPSEncryptionBackend()
+    # sops rejects the blob; the point is it surfaces a clean, typed
+    # EncryptionBackendError — not a UnicodeDecodeError from decoding sops'
+    # non-UTF-8 stderr (which would fail this pytest.raises and flag the bug).
+    with pytest.raises(EncryptionBackendError):
+        backend.decrypt(env_file, cwd=tmp_path)
+    # No silent corruption: the blob is byte-for-byte intact.
+    assert env_file.read_bytes() == blob
 
 
 # --- A non-encrypted file is an honest no-op, never mutated --------------------
