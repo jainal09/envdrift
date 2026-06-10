@@ -14,6 +14,7 @@ from envdrift.encryption.base import (
     EncryptionResult,
     EncryptionStatus,
 )
+from envdrift.integrations.dotenvx import is_dotenvx_safe_filename
 
 
 class DotenvxEncryptionBackend(EncryptionBackend):
@@ -146,8 +147,6 @@ class DotenvxEncryptionBackend(EncryptionBackend):
         # Only [A-Za-z0-9._-] filenames round-trip safely (#443). The same
         # predicate guards DotenvxWrapper.encrypt so the partial-encryption paths
         # that bypass this backend are covered too (#467).
-        from envdrift.integrations.dotenvx import is_dotenvx_safe_filename
-
         if not is_dotenvx_safe_filename(env_file.name):
             return EncryptionResult(
                 success=False,
