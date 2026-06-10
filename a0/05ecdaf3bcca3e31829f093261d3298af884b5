@@ -1,0 +1,21 @@
+tests/unit/test_docs_accuracy.py
+  s_dfc6cd6692ed8f::t_b695b73ca43c76 112-141
+docs/cli/init.md
+  s_dfc6cd6692ed8f::t_e0a3ad3543658d 178-189
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.6",
+  "base_commit_sha": "a005ecdaf3bcca3e31829f093261d3298af884b5",
+  "prompts": {},
+  "sessions": {
+    "s_dfc6cd6692ed8f": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "fd23e738-3512-4420-9290-d985ad979bfd",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Jainal Gosaliya <jainal09gosalia@gmail.com>"
+    }
+  }
+}
