@@ -1739,7 +1739,11 @@ class TestInitCommand:
         must prefix these like leading-digit keys so the schema imports.
         """
         env_file = tmp_path / ".env"
-        env_file.write_text(".dotstart=x\n🔑EMOJI=emojivalue\nNORMAL=ok\n", encoding="utf-8")
+        # `.dotstart`/`🔑EMOJI` sanitize to a leading underscore; `_PRIVATE` already
+        # starts with one natively — both must be prefixed so the module imports.
+        env_file.write_text(
+            ".dotstart=x\n🔑EMOJI=emojivalue\n_PRIVATE=secret\nNORMAL=ok\n", encoding="utf-8"
+        )
         out = tmp_path / "settings.py"
 
         result = runner.invoke(
@@ -1750,9 +1754,10 @@ class TestInitCommand:
         content = out.read_text(encoding="utf-8")
         # No field annotation may start with an underscore.
         assert "\n    _" not in content
-        # The original keys survive as aliases.
+        # The original keys survive as aliases (sanitized-to- and natively-leading _).
         assert "alias='.dotstart'" in content
         assert "alias='🔑EMOJI'" in content
+        assert "alias='_PRIVATE'" in content
 
         # The generated module must import (raised NameError before the fix).
         spec = importlib.util.spec_from_file_location("gen_underscore_settings", out)
