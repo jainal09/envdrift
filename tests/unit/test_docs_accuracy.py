@@ -109,6 +109,36 @@ def test_init_md_documents_force_option() -> None:
     assert "use --force to overwrite" in text
 
 
+def test_init_md_documents_leading_underscore_aliasing() -> None:
+    """init.md must document leading-underscore keys as aliased, not bare (#467/#460).
+
+    #460 made ``init`` sanitize a key that natively starts with ``_`` (e.g.
+    ``_PRIVATE``) because Pydantic rejects field names with a leading underscore.
+    Such a key passes ``str.isidentifier()``, so the old blanket claim ("a key
+    that passes ``str.isidentifier()`` becomes a bare field with no alias") was
+    wrong for it. Pin the doc to the REAL sanitizer output so it can't drift back.
+    """
+    from envdrift.cli_commands.init_cmd import _sanitize_identifier
+
+    text = _read("init.md")
+
+    # Ground truth from the real sanitizer: a leading-underscore key is aliased,
+    # while a valid non-ASCII identifier (CAFÉ) stays bare.
+    assert _sanitize_identifier("_PRIVATE") == "field__PRIVATE"
+    assert _sanitize_identifier("CAFÉ") == "CAFÉ"
+
+    # The doc must show that exact aliasing, matching the generated field line.
+    assert "field__PRIVATE: str = Field(alias='_PRIVATE')" in text, (
+        "init.md must document that a leading-underscore key like _PRIVATE is "
+        "aliased (field__PRIVATE), not emitted as a bare field (#467/#460)."
+    )
+    # The 'kept verbatim' claim must now carve out leading-underscore keys rather
+    # than make a blanket isidentifier() statement.
+    assert "does not start with `_`" in text, (
+        "init.md's 'kept verbatim' claim must exclude leading-underscore keys (#467)."
+    )
+
+
 def test_sync_md_does_not_claim_vault_name_routes() -> None:
     """sync.md must not claim vault_name overrides/routes to another vault (#413).
 

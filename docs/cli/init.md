@@ -175,7 +175,18 @@ The generated module is always valid, importable Python:
   ```
 
 - **Valid non-ASCII identifiers are kept verbatim.** A key that passes
-  `str.isidentifier()` (e.g. `CAFÉ`, `ΑΛΦΑ`) becomes a bare field with no alias.
+  `str.isidentifier()` and does not start with `_` (e.g. `CAFÉ`, `ΑΛΦΑ`) becomes
+  a bare field with no alias.
+
+- **Leading-underscore keys are aliased, not kept bare.** A key like `_PRIVATE`
+  passes `str.isidentifier()`, but Pydantic rejects field names with a leading
+  underscore ("Fields must not use names with leading underscores"), so the key
+  is emitted with a sanitized attribute name plus an `alias` — exactly like the
+  non-identifier and reserved-name cases above:
+
+  ```python
+  field__PRIVATE: str = Field(alias='_PRIVATE')
+  ```
 
 - **The round-trip holds.** `envdrift validate` parses the `.env` the same way
   (recovering non-identifier / non-ASCII keys) and matches schema fields by their
