@@ -83,12 +83,19 @@ def _sanitize_identifier(name: str) -> str:
 def _needs_sanitizing(name: str) -> bool:
     """True when ``name`` cannot be used as a bare Settings attribute name.
 
-    Flags non-identifiers, Python keywords, and names colliding with pydantic's
-    reserved attribute namespace (``model_`` prefix or a BaseSettings/BaseModel
-    member) — all of which produce a broken or non-importable module if emitted
-    as a bare field annotation.
+    Flags non-identifiers, a leading underscore (a valid Python identifier but
+    one Pydantic rejects — "Fields must not use names with leading underscores"),
+    Python keywords, and names colliding with pydantic's reserved attribute
+    namespace (``model_`` prefix or a BaseSettings/BaseModel member) — all of
+    which produce a broken or non-importable module if emitted as a bare field
+    annotation.
     """
-    return not name.isidentifier() or keyword.iskeyword(name) or _is_pydantic_reserved(name)
+    return (
+        not name.isidentifier()
+        or name.startswith("_")
+        or keyword.iskeyword(name)
+        or _is_pydantic_reserved(name)
+    )
 
 
 def _nfkc(name: str) -> str:
