@@ -4,9 +4,31 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field
+from typing import Literal, Union, get_args, get_origin
 
 from envdrift.core.parser import EncryptionStatus, EnvFile
 from envdrift.core.schema import FieldMetadata, SchemaMetadata
+
+_COERCIBLE_SCALARS = (str, int, float, bool)
+
+
+def _is_string_coercible(tp: object) -> bool:
+    """True if model_validate can validate a *raw env string* against ``tp``.
+
+    Pydantic-settings parses complex types (``list``/``dict``/nested models) from
+    their env string via JSON in its env source; ``model_validate`` of the raw
+    string does not, so feeding it such a field would wrongly reject a config the
+    real schema accepts. Only scalars, ``Literal``, and Optionals of those accept
+    a string directly, so only those are checked via model_validate.
+    """
+    if tp in _COERCIBLE_SCALARS:
+        return True
+    origin = get_origin(tp)
+    if origin is Literal:
+        return True
+    if origin is Union:  # Optional[X] / X | None
+        return all(arg is type(None) or _is_string_coercible(arg) for arg in get_args(tp))
+    return False
 
 
 @dataclass
@@ -239,6 +261,12 @@ class Validator:
                 # Mirror _check_type's skips: ciphertext and empty (= unset).
                 if value == "" or value.startswith(("encrypted:", "ENC[")):
                     continue
+                # Only feed fields whose raw env string model_validate can check.
+                # Complex types (list/dict/nested) are JSON-parsed by the env source
+                # at runtime, which model_validate of the raw string does not do, so
+                # including them would wrongly reject a valid config (#443 review).
+                if not _is_string_coercible(field_meta.field_type):
+                    continue
                 values[field_meta.alias or field_name] = value
 
             try:
@@ -255,6 +283,11 @@ class Validator:
                     field_name = alias_to_field.get(key, key)
                     if field_name in schema.fields and field_name not in result.type_errors:
                         result.type_errors[field_name] = err.get("msg", "invalid value")
+            except Exception:
+                # A model-level @model_validator / model_post_init can raise a
+                # non-ValidationError; the base-type check already ran, so a
+                # constraint-pass failure must not crash validate (#443 review).
+                pass
 
         # Determine overall validity
         # Note: unencrypted_secrets are warnings, not errors

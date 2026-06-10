@@ -419,6 +419,28 @@ NEW_FEATURE_FLAG=enabled
         assert "PORT" in result.type_errors
         assert "Expected integer" in result.type_errors["PORT"]
 
+    def test_validate_does_not_false_fail_on_complex_typed_field(self, tmp_path):
+        """#443 review: a valid config with a complex (list) field must not be
+        rejected. pydantic-settings parses such fields from JSON in its env source;
+        the constraint pass skips them rather than reject the raw string.
+        """
+        from pydantic import Field
+        from pydantic_settings import BaseSettings
+
+        class Settings(BaseSettings):
+            TAGS: list[str]
+            PORT: int = Field(ge=1, le=65535)  # a constraint -> has_constraints True
+
+        env_file = tmp_path / ".env"
+        env_file.write_text('TAGS=["a","b","c"]\nPORT=8080\n')
+
+        env = EnvParser().parse(env_file)
+        schema = SchemaLoader().extract_metadata(Settings)
+        result = Validator().validate(env, schema, check_encryption=False)
+
+        assert result.valid is True
+        assert "TAGS" not in result.type_errors
+
     def test_validate_suspicious_plaintext(self, tmp_path, permissive_settings_class):
         """Warn about plaintext values matching secret patterns."""
         content = """
