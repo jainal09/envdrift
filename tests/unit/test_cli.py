@@ -1729,6 +1729,43 @@ class TestInitCommand:
         assert cfg.field_model_config == "b"
         assert cfg.field_schema == "c"
 
+    def test_init_underscore_prefixed_key_produces_importable_module(self, tmp_path: Path) -> None:
+        """#16: keys whose sanitized name starts with '_' stay importable.
+
+        A dot/emoji-prefixed key (``.dotstart``, ``🔑EMOJI``) sanitizes to a
+        leading-underscore name (``_dotstart``, ``_EMOJI``), which Pydantic
+        rejects at import ("Fields must not use names with leading underscores").
+        init exited 0 / [OK] while emitting an unimportable module; the sanitizer
+        must prefix these like leading-digit keys so the schema imports.
+        """
+        env_file = tmp_path / ".env"
+        # `.dotstart`/`🔑EMOJI` sanitize to a leading underscore; `_PRIVATE` already
+        # starts with one natively — both must be prefixed so the module imports.
+        env_file.write_text(
+            ".dotstart=x\n🔑EMOJI=emojivalue\n_PRIVATE=secret\nNORMAL=ok\n", encoding="utf-8"
+        )
+        out = tmp_path / "settings.py"
+
+        result = runner.invoke(
+            app, ["init", str(env_file), "--output", str(out), "--class-name", "Cfg"]
+        )
+        assert result.exit_code == 0, result.output
+
+        content = out.read_text(encoding="utf-8")
+        # No field annotation may start with an underscore.
+        assert "\n    _" not in content
+        # The original keys survive as aliases (sanitized-to- and natively-leading _).
+        assert "alias='.dotstart'" in content
+        assert "alias='🔑EMOJI'" in content
+        assert "alias='_PRIVATE'" in content
+
+        # The generated module must import (raised NameError before the fix).
+        spec = importlib.util.spec_from_file_location("gen_underscore_settings", out)
+        assert spec is not None and spec.loader is not None
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        assert hasattr(module, "Cfg")
+
 
 class TestHookCommand:
     """Tests for the hook CLI command."""
