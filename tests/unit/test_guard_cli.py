@@ -1090,3 +1090,27 @@ def test_guard_skip_gitignored_default_is_false(tmp_path: Path, monkeypatch):
     assert result.exit_code == 0
     assert created_configs
     assert created_configs[0].skip_gitignored is False
+
+
+def test_guard_json_and_sarif_warns_about_precedence(tmp_path: Path):
+    """#31: passing --json and --sarif together is no longer silent.
+
+    SARIF takes precedence; the precedence warning goes to stderr ONLY, so a
+    --json/--sarif consumer still gets a clean, parseable document on stdout —
+    that separation is the whole point of the fix.
+    """
+    import json
+
+    env = tmp_path / ".env"
+    env.write_text("API_KEY=sk-test123\n")
+
+    result = runner.invoke(app, ["guard", str(env), "--native-only", "--json", "--sarif"])
+
+    # The precedence warning lands on stderr.
+    assert "--json is ignored" in result.stderr
+    # stdout (the captured output with the stderr portion removed) is a clean,
+    # parseable SARIF document — the warning must NOT leak into it.
+    stdout = result.output.replace(result.stderr, "")
+    assert "--json is ignored" not in stdout
+    sarif = json.loads(stdout)
+    assert "runs" in sarif

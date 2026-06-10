@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import json
 import os
+import sys
 import time as time_module
 import tomllib
 from pathlib import Path
@@ -363,6 +364,15 @@ def guard(
       envdrift guard ./src ./config      # Scan specific directories
     """
     import subprocess  # nosec B404
+
+    if sarif and json_output:
+        # SARIF takes precedence over JSON; warn on stderr so the choice is not
+        # silent, without contaminating the (SARIF) stdout (#443 #31).
+        print(
+            "[WARN] --json is ignored because --sarif was also passed "
+            "(SARIF output takes precedence).",
+            file=sys.stderr,
+        )
 
     def _git_toplevel() -> Path:
         """Return the git repository root, falling back to cwd if unavailable.
