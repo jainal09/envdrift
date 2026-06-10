@@ -372,6 +372,53 @@ NEW_FEATURE_FLAG=enabled
         assert result.valid is False
         assert "NAME" in result.type_errors
 
+    def test_validate_constraint_pass_skips_missing_encrypted_and_empty(self, tmp_path):
+        """The constraint pass skips fields the env omits, encrypts, or leaves
+        empty, and never double-reports a missing required field as a type error.
+        """
+        from pydantic import Field
+        from pydantic_settings import BaseSettings
+
+        class Settings(BaseSettings):
+            PORT: int = Field(ge=1, le=65535)  # present + valid
+            SECRET: str = Field(min_length=10)  # encrypted -> can't constraint-check
+            NOTES: str = Field(min_length=5)  # empty -> unset
+            REQUIRED_MISSING: str = Field(min_length=3)  # absent from env
+
+        env_file = tmp_path / ".env"
+        env_file.write_text("PORT=8080\nSECRET=encrypted:abc\nNOTES=\n")
+
+        env = EnvParser().parse(env_file)
+        schema = SchemaLoader().extract_metadata(Settings)
+        result = Validator().validate(env, schema, check_encryption=False)
+
+        # Absent required field is reported as missing, not a min_length type error.
+        assert "REQUIRED_MISSING" in result.missing_required
+        assert "REQUIRED_MISSING" not in result.type_errors
+        # Encrypted + empty values are not flagged by the constraint pass.
+        assert "SECRET" not in result.type_errors
+        assert "NOTES" not in result.type_errors
+
+    def test_validate_constraint_pass_keeps_base_type_message(self, tmp_path):
+        """A field failing both the base-type check and Pydantic keeps the
+        base-type message — the constraint pass must not override it.
+        """
+        from pydantic import Field
+        from pydantic_settings import BaseSettings
+
+        class Settings(BaseSettings):
+            PORT: int = Field(ge=1, le=65535)
+
+        env_file = tmp_path / ".env"
+        env_file.write_text("PORT=not_a_number\n")
+
+        env = EnvParser().parse(env_file)
+        schema = SchemaLoader().extract_metadata(Settings)
+        result = Validator().validate(env, schema, check_encryption=False)
+
+        assert "PORT" in result.type_errors
+        assert "Expected integer" in result.type_errors["PORT"]
+
     def test_validate_suspicious_plaintext(self, tmp_path, permissive_settings_class):
         """Warn about plaintext values matching secret patterns."""
         content = """
