@@ -1,5 +1,29 @@
 # Changelog
 
+## [10.16.0](https://github.com/jainal09/envdrift/compare/v10.15.1...v10.16.0) (2026-06-11)
+
+
+### Features
+
+* **guard:** warn when --json and --sarif are both passed ([#465](https://github.com/jainal09/envdrift/issues/465)) ([ec1613e](https://github.com/jainal09/envdrift/commit/ec1613e6f9219edc24764c93ffcd28ae1951cec8))
+
+
+### Bug Fixes
+
+* **config:** surface config/schema-load failures as clean errors, not tracebacks ([#462](https://github.com/jainal09/envdrift/issues/462)) ([c266eee](https://github.com/jainal09/envdrift/commit/c266eeefd70e8e977bf147cb9381bb1d7ea3b7e9))
+* **encrypt:** refuse a filename dotenvx can't turn into a valid key (prevents secret lockout) ([#457](https://github.com/jainal09/envdrift/issues/457)) ([6a60a63](https://github.com/jainal09/envdrift/commit/6a60a63651e0c369dc2e76b9a02cc6c730590d6b))
+* **guard,init:** clean errors for invalid --fail-on (json) and an unwritable init output ([#463](https://github.com/jainal09/envdrift/issues/463)) ([0c5ae5c](https://github.com/jainal09/envdrift/commit/0c5ae5cd775dc2a55bee19fac55f125d252e363e))
+* **init:** prefix leading-underscore sanitized keys so the generated schema imports ([#460](https://github.com/jainal09/envdrift/issues/460)) ([ab127ad](https://github.com/jainal09/envdrift/commit/ab127ad6ab066eeee4d2f142f224f693e15085e5))
+* **parser:** guard the shared read seam against directory and non-UTF-8 inputs ([#461](https://github.com/jainal09/envdrift/issues/461)) ([156297d](https://github.com/jainal09/envdrift/commit/156297df729bb638bbd63f3e9d9460cac4044b44))
+* **partial-encryption:** refuse filenames dotenvx can't turn into a valid key ([#467](https://github.com/jainal09/envdrift/issues/467)) ([#468](https://github.com/jainal09/envdrift/issues/468)) ([cb68c97](https://github.com/jainal09/envdrift/commit/cb68c97729d6f1868dd868e888e7213f404713bf))
+* **scanner:** don't discard all findings on a NUL byte (real secrets slip through guard) ([#456](https://github.com/jainal09/envdrift/issues/456)) ([9780d24](https://github.com/jainal09/envdrift/commit/9780d246f050fa3ee03f0e7d0fbd666da123a8e8))
+* **validate:** enforce Pydantic field constraints so a rejected config can't pass ([#459](https://github.com/jainal09/envdrift/issues/459)) ([3918fcb](https://github.com/jainal09/envdrift/commit/3918fcbefe81f03fc549e8ac78db1884277c8abd))
+
+
+### Documentation
+
+* **init:** leading-underscore keys are aliased, not kept bare ([#467](https://github.com/jainal09/envdrift/issues/467)) ([#469](https://github.com/jainal09/envdrift/issues/469)) ([212dbc4](https://github.com/jainal09/envdrift/commit/212dbc4c8573bba031fce41a9f44f3b902b226f9))
+
 ## [10.15.1](https://github.com/jainal09/envdrift/compare/v10.15.0...v10.15.1) (2026-06-09)
 
 
