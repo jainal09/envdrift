@@ -33,6 +33,17 @@ Type validation mirrors what the real app does at startup:
   and the sensitive-name warning, so encrypted files validate cleanly against an
   `extra="forbid"` schema.
 
+The file itself is parsed with python-dotenv's quoting rules — the parser
+pydantic-settings uses — so the variables envdrift judges are exactly the ones
+the real app loads:
+
+- A value opened with `"` or `'` continues across physical lines until the
+  matching close quote (multiline PEM certificates and keys parse as one
+  value); interior `KEY=value`-looking lines are part of the value, never
+  separate variables.
+- Inside quoted values the python-dotenv escape sequences are decoded (`\n`,
+  `\t`, `\"`, `\\`, ... in double quotes; `\\` and `\'` in single quotes).
+
 ## Arguments
 
 | Argument   | Description                       | Default |
