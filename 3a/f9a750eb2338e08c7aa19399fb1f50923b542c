@@ -1,0 +1,27 @@
+tests/integration/test_lock_encryption_state.py
+  s_a0bbd64ba4e4dd::t_73028534bc7e89 5,18-22,24-27,35,37,50-53,97-99,101-154,166-171,180,187,199,201,204,209-215,219,221,223,230,234-299,303,305-306,309,316,318-319,323,335-354,357,367,372-373,375-376,385,390,404,410,424,430-431,436,443,456,460,462
+src/envdrift/core/partial_encryption.py
+  s_a0bbd64ba4e4dd::t_87bc582b84a2a8 333,341-344,349-351
+docs/cli/lock.md
+  s_a0bbd64ba4e4dd::t_d1223b7a42207a 115-124
+src/envdrift/cli_commands/sync.py
+  s_a0bbd64ba4e4dd::t_f80aafbad6a411 1121-1122
+  s_a0bbd64ba4e4dd::t_f7961c1d434228 1576-1587,1589-1590,1592-1606,1608-1610,1634-1640,1643-1653
+  s_a0bbd64ba4e4dd::t_ce52821d581a13 1090-1120,1123-1134
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.6",
+  "base_commit_sha": "3af9a750eb2338e08c7aa19399fb1f50923b542c",
+  "prompts": {},
+  "sessions": {
+    "s_a0bbd64ba4e4dd": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "c1e5b2e5-0fec-4bf5-b8e6-20cdb3a76855",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Jainal Gosaliya <jainal09gosalia@gmail.com>"
+    }
+  }
+}
