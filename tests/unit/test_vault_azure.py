@@ -621,3 +621,73 @@ class TestAzureKeyVaultClient:
             with pytest.raises(VaultError) as exc_info:
                 client.set_secret("some-secret", "value")
         assert not isinstance(exc_info.value, FakeServiceRequestError)
+
+    # --- ENVDRIFT_AZURE_VERIFY_CHALLENGE_RESOURCE (#484) -------------------
+
+    def _authenticate_and_capture_client_cls(self, mock_azure):
+        """authenticate() against mocked SDK classes; return the SecretClient cls mock."""
+        secret_client = MagicMock()
+        secret_client.list_properties_of_secrets.return_value = iter([])
+        with (
+            patch.object(mock_azure, "_DefaultAzureCredential", return_value=MagicMock()),
+            patch.object(mock_azure, "_SecretClient", return_value=secret_client) as client_cls,
+        ):
+            client = mock_azure.AzureKeyVaultClient(vault_url="https://test.vault.azure.net")
+            client.authenticate()
+        return client_cls
+
+    def test_authenticate_verifies_challenge_resource_by_default(
+        self, mock_azure, monkeypatch: pytest.MonkeyPatch
+    ):
+        """With the env var unset, SecretClient gets verify_challenge_resource=True."""
+        monkeypatch.delenv(mock_azure.VERIFY_CHALLENGE_RESOURCE_ENV, raising=False)
+        client_cls = self._authenticate_and_capture_client_cls(mock_azure)
+        assert client_cls.call_args.kwargs["verify_challenge_resource"] is True
+
+    @pytest.mark.parametrize("raw", ["", "   "])
+    def test_blank_verify_challenge_resource_defaults_to_enabled(
+        self, mock_azure, monkeypatch: pytest.MonkeyPatch, raw: str
+    ):
+        """Empty/whitespace values behave like unset (verification stays ON)."""
+        monkeypatch.setenv(mock_azure.VERIFY_CHALLENGE_RESOURCE_ENV, raw)
+        client_cls = self._authenticate_and_capture_client_cls(mock_azure)
+        assert client_cls.call_args.kwargs["verify_challenge_resource"] is True
+
+    @pytest.mark.parametrize("raw", ["1", "true", "YES", "On", " 1 "])
+    def test_truthy_verify_challenge_resource_keeps_verification(
+        self, mock_azure, monkeypatch: pytest.MonkeyPatch, raw: str
+    ):
+        """Explicit truthy values keep verification ON (case/space-insensitive)."""
+        monkeypatch.setenv(mock_azure.VERIFY_CHALLENGE_RESOURCE_ENV, raw)
+        client_cls = self._authenticate_and_capture_client_cls(mock_azure)
+        assert client_cls.call_args.kwargs["verify_challenge_resource"] is True
+
+    @pytest.mark.parametrize("raw", ["0", "false", "NO", "Off", " 0 "])
+    def test_falsy_verify_challenge_resource_disables_verification(
+        self, mock_azure, monkeypatch: pytest.MonkeyPatch, raw: str
+    ):
+        """Falsy values disable the check so emulators (Lowkey, #484) work."""
+        monkeypatch.setenv(mock_azure.VERIFY_CHALLENGE_RESOURCE_ENV, raw)
+        client_cls = self._authenticate_and_capture_client_cls(mock_azure)
+        assert client_cls.call_args.kwargs["verify_challenge_resource"] is False
+
+    def test_malformed_verify_challenge_resource_fails_loudly(
+        self, mock_azure, monkeypatch: pytest.MonkeyPatch
+    ):
+        """A malformed value raises ValueError before any SDK object is built.
+
+        Config errors must fail loudly instead of being coerced to either
+        behavior; the client must stay unauthenticated so a later call
+        re-attempts after the env var is fixed.
+        """
+        monkeypatch.setenv(mock_azure.VERIFY_CHALLENGE_RESOURCE_ENV, "maybe")
+        with (
+            patch.object(mock_azure, "_DefaultAzureCredential") as cred_cls,
+            patch.object(mock_azure, "_SecretClient") as client_cls,
+        ):
+            client = mock_azure.AzureKeyVaultClient(vault_url="https://test.vault.azure.net")
+            with pytest.raises(ValueError, match=mock_azure.VERIFY_CHALLENGE_RESOURCE_ENV):
+                client.authenticate()
+            cred_cls.assert_not_called()
+            client_cls.assert_not_called()
+        assert client.is_authenticated() is False

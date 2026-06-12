@@ -552,6 +552,7 @@ Some settings can be overridden with environment variables:
 | `AZURE_CLIENT_ID` | Azure service principal client ID |
 | `AZURE_CLIENT_SECRET` | Azure service principal secret |
 | `AZURE_TENANT_ID` | Azure tenant ID |
+| `ENVDRIFT_AZURE_VERIFY_CHALLENGE_RESOURCE` | Set to `0`/`false` to disable the Key Vault challenge-resource check (required for emulators such as Lowkey Vault, whose challenge resource is not `*.vault.azure.net`). Defaults to enabled; malformed values fail loudly |
 | `AWS_ACCESS_KEY_ID` | AWS access key |
 | `AWS_SECRET_ACCESS_KEY` | AWS secret key |
 | `GOOGLE_APPLICATION_CREDENTIALS` | Path to GCP service account key |

@@ -83,9 +83,17 @@ jobs:
           --health-start-period=5s
 
       lowkey-vault:
-        image: nagyesta/lowkey-vault:7.2.26
+        # Keep in sync with tests/docker-compose.test.yml. 7.3.0+ is required:
+        # older images reject the api-version (2025-07-01) sent by the
+        # azure-keyvault-secrets SDK with HTTP 400.
+        image: nagyesta/lowkey-vault:7.3.0
         ports:
           - 8443:8443
+          # HTTP port serving the built-in managed-identity token stub
+          # (GET /metadata/identity/oauth2/token). DefaultAzureCredential in
+          # the envdrift CLI gets its dummy token here via
+          # AZURE_POD_IDENTITY_AUTHORITY_HOST (see tests/integration/conftest.py).
+          - 8080:8080
         env:
           LOWKEY_VAULT_NAMES: envdrift-test-vault
         options: >-
@@ -211,7 +219,23 @@ jobs:
             echo "ERROR: Lowkey Vault failed to become ready within timeout"
             exit 1
           fi
-          
+
+          echo "Checking Lowkey Vault token endpoint..."
+          LOWKEY_TOKEN_READY=false
+          for i in {1..30}; do
+            if curl -sf "http://localhost:8080/metadata/identity/oauth2/token?resource=https%3A%2F%2Fvault.azure.net&api-version=2018-02-01" > /dev/null 2>&1; then
+              echo "Lowkey Vault token endpoint is ready!"
+              LOWKEY_TOKEN_READY=true
+              break
+            fi
+            echo "Waiting for Lowkey Vault token endpoint... ($i/30)"
+            sleep 2
+          done
+          if [ "$LOWKEY_TOKEN_READY" != "true" ]; then
+            echo "ERROR: Lowkey Vault token endpoint failed to become ready within timeout"
+            exit 1
+          fi
+
           echo "All services ready!"
 
       - name: Run integration tests
@@ -225,11 +249,11 @@ jobs:
           # HashiCorp Vault configuration
           VAULT_ADDR: http://localhost:8200
           VAULT_TOKEN: test-root-token
-          # Azure (Lowkey Vault) configuration
+          # Azure (Lowkey Vault) configuration. TLS trust, the managed-identity
+          # token stub and challenge-resource settings are wired per-fixture in
+          # tests/integration/conftest.py (azure_test_env): the empty-CA-bundle
+          # trick previously set here is ignored by the Azure SDK (#484).
           AZURE_KEYVAULT_URL: https://localhost:8443
-          CURL_CA_BUNDLE: ""
-          REQUESTS_CA_BUNDLE: ""
-          AZURE_CLI_DISABLE_CONNECTION_VERIFICATION: "1"
         run: |
           uv run pytest tests/integration/ \
             -v \
