@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"testing"
 )
 
@@ -208,15 +209,8 @@ func TestParsePIDs(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			got := parsePIDs(tc.output)
-			if len(got) != len(tc.want) {
-				t.Fatalf("parsePIDs(%q) = %v, want %v", tc.output, got, tc.want)
-			}
-			for i := range tc.want {
-				if got[i] != tc.want[i] {
-					t.Errorf("parsePIDs(%q) = %v, want %v", tc.output, got, tc.want)
-					break
-				}
+			if got := parsePIDs(tc.output); !slices.Equal(got, tc.want) {
+				t.Errorf("parsePIDs(%q) = %v, want %v", tc.output, got, tc.want)
 			}
 		})
 	}

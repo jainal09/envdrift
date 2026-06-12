@@ -56,22 +56,30 @@ func IsFileOpen(path string) bool {
 func isFileOpenUnix(path string) bool {
 	pids, err := openPIDs(path)
 	if err != nil {
-		if errors.Is(err, errLockToolUnavailable) {
-			// lsof binary missing (or not executable): we cannot tell whether the
-			// file is open, so assume it is and warn once.
-			lsofMissingOnce.Do(func() {
-				log.Printf("lockcheck: lsof unavailable (%v); treating files as open to avoid encrypting in-use files", err)
-			})
-			return true
-		}
+		return lsofErrorMeansOpen(err, path)
+	}
+	return hasForeignPID(pids, os.Getpid())
+}
 
-		// Any other error (signal, timeout, unexpected exit code) is ambiguous;
-		// treat the file as open/unknown so we don't rewrite it underneath a user.
-		log.Printf("lockcheck: lsof failed for %s (%v); treating file as open", path, err)
+// lsofErrorMeansOpen turns an openPIDs failure into the conservative verdict:
+// when we cannot determine whether the file is open we treat it as open, so the
+// guardian never rewrites a file out from under a process that has it open.
+func lsofErrorMeansOpen(err error, path string) bool {
+	if errors.Is(err, errLockToolUnavailable) {
+		// lsof binary missing (or not executable): cannot tell, warn once.
+		lsofMissingOnce.Do(func() {
+			log.Printf("lockcheck: lsof unavailable (%v); treating files as open to avoid encrypting in-use files", err)
+		})
 		return true
 	}
+	// Any other error (signal, timeout, unexpected exit code) is ambiguous.
+	log.Printf("lockcheck: lsof failed for %s (%v); treating file as open", path, err)
+	return true
+}
 
-	self := os.Getpid()
+// hasForeignPID reports whether any PID other than self has the file open; the
+// guardian's own kqueue/fsnotify descriptor (self) must not count as "in use".
+func hasForeignPID(pids []int, self int) bool {
 	for _, pid := range pids {
 		if pid != self {
 			return true
