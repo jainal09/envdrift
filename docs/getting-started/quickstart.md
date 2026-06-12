@@ -148,6 +148,10 @@ API_KEY="encrypted:BD9XKwm..."
 DEBUG=false
 ```
 
+The `DOTENV_PUBLIC_KEY*` line is a dotenvx artifact (a public key, not a
+secret). `envdrift validate` knows about it, so the encrypted file still
+validates cleanly against your generated schema — even with `extra="forbid"`.
+
 ## Add to CI/CD
 
 Validate environments in your pipeline:

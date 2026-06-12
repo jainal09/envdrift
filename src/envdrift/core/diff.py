@@ -10,8 +10,7 @@ from enum import Enum
 from pathlib import Path
 from typing import Any
 
-from pydantic import TypeAdapter, ValidationError
-
+from envdrift.core.env_semantics import coerce_env_value
 from envdrift.core.parser import EnvFile
 from envdrift.core.schema import FieldMetadata, SchemaMetadata
 
@@ -162,7 +161,6 @@ class DiffEngine:
 
         all_vars = env1_vars | env2_vars
         sensitive_fields = set(schema.sensitive_fields) if schema else set()
-        adapter_cache: dict[Any, TypeAdapter[Any]] = {}
 
         for var_name in sorted(all_vars):
             in_env1 = var_name in env1_vars
@@ -190,7 +188,7 @@ class DiffEngine:
                 diff_type = DiffType.ADDED
             elif in_env1 and not in_env2:
                 diff_type = DiffType.REMOVED
-            elif not self._values_equal(value1, value2, field_meta, normalize, adapter_cache):
+            elif not self._values_equal(value1, value2, field_meta, normalize):
                 diff_type = DiffType.CHANGED
             else:
                 diff_type = DiffType.UNCHANGED
@@ -217,7 +215,6 @@ class DiffEngine:
         value2: str | None,
         field_meta: FieldMetadata | None,
         normalize: bool,
-        adapter_cache: dict[Any, TypeAdapter[Any]],
     ) -> bool:
         """Compare two parsed env values, optionally with schema/universal normalization."""
         if not normalize:
@@ -226,32 +223,31 @@ class DiffEngine:
         if value1 is None or value2 is None:
             return value1 == value2
 
-        # Schema-aware coercion via Pydantic, when the field's type carries
-        # meaningful semantics (skip `Any` / `None` — those just round-trip the
-        # raw string and would defeat the universal layer below). We use
-        # `validate_strings` rather than `validate_python` because env values
-        # arrive as raw strings: that's the Pydantic v2 API for env-source
-        # inputs and it parses JSON for list/dict/etc. types correctly.
-        # On success-and-equal we short-circuit; otherwise we fall through to
-        # the universal layer so `str` fields still benefit from whitespace
-        # and bool normalization.
+        # Schema-aware coercion through the shared pydantic-settings semantics
+        # (the same module validate uses, so the two commands agree — #472).
+        # Equal coerced values are equal; a value that coerces on one side but
+        # crashes the real app on the other is drift, full stop — the universal
+        # bool-alias fallback below must not overrule the schema (it used to
+        # call `1` == `true` for an int field). When both sides fail coercion,
+        # or both coerce but compare unequal (str round-trips), fall through so
+        # whitespace/JSON normalization still applies — but a typed double
+        # failure skips the bool-alias step: under a non-bool schema those
+        # aliases are just two invalid strings.
+        typed_coercion_failed = False
         if (
             field_meta is not None
             and field_meta.field_type is not None
             and field_meta.field_type is not Any
         ):
-            try:
-                adapter = adapter_cache.get(field_meta.field_type)
-                if adapter is None:
-                    adapter = TypeAdapter(field_meta.field_type)
-                    adapter_cache[field_meta.field_type] = adapter
-                coerced1 = adapter.validate_strings(value1)
-                coerced2 = adapter.validate_strings(value2)
-            except (ValidationError, TypeError, ValueError):
-                pass
-            else:
-                if coerced1 == coerced2:
+            coerced1 = coerce_env_value(field_meta.field_type, value1)
+            coerced2 = coerce_env_value(field_meta.field_type, value2)
+            if coerced1.status == "ok" and coerced2.status == "ok":
+                if coerced1.value == coerced2.value:
                     return True
+            elif coerced1.status == "fail" and coerced2.status == "fail":
+                typed_coercion_failed = True
+            elif "fail" in (coerced1.status, coerced2.status):
+                return False  # one side loads, the other crashes at startup
 
         # Universal normalization fallback (also runs for `str` / `Any` /
         # unknown-field cases): strip, then bool-alias truthiness, then
@@ -261,7 +257,7 @@ class DiffEngine:
         if stripped1 == stripped2:
             return True
 
-        if _BOOL_RE.match(stripped1) and _BOOL_RE.match(stripped2):
+        if not typed_coercion_failed and _BOOL_RE.match(stripped1) and _BOOL_RE.match(stripped2):
             return (stripped1.lower() in _BOOL_TRUTHY) == (stripped2.lower() in _BOOL_TRUTHY)
 
         if self._looks_like_json_collection(stripped1) and self._looks_like_json_collection(

@@ -65,6 +65,11 @@ class SchemaMetadata:
     # the validator skip the (relatively expensive) real model_validate pass for
     # trivially-typed schemas, where the name-based type check already suffices.
     has_constraints: bool = False
+    # Mirrors SettingsConfigDict(env_ignore_empty=...): when True the env source
+    # drops empty values (the field is unset), so validation must skip them too;
+    # when False (the pydantic-settings default) the model sees the empty string
+    # and e.g. ``PORT=`` crashes an int field at startup (#472).
+    env_ignore_empty: bool = False
 
     @property
     def required_fields(self) -> list[str]:
@@ -246,6 +251,14 @@ class SchemaLoader:
             extra = getattr(model_config, "extra", "ignore")
 
         schema.extra_policy = extra if extra else "ignore"
+
+        # env_ignore_empty changes what the env source does with empty values
+        # (drop vs pass through), which changes what validation must check (#472).
+        if isinstance(model_config, dict):
+            ignore_empty = model_config.get("env_ignore_empty", False)
+        else:
+            ignore_empty = getattr(model_config, "env_ignore_empty", False)
+        schema.env_ignore_empty = bool(ignore_empty)
 
         # Track whether any field needs real Pydantic validation (a constraint, a
         # non-plain-scalar type such as Literal/EmailStr/a nested model, or a
