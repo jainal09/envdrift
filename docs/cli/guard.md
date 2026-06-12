@@ -191,6 +191,14 @@ instead keys solely on the secret value, so each unique secret appears once rega
 of where or by which scanner it was found — that is the mode that collapses the same
 secret across scanners.
 
+Trivy reports matches with the secret already redacted to asterisks, so envdrift
+recovers the raw value from the scanned file before hashing — two *distinct* secrets
+that share a variable name and length stay distinct under `--skip-duplicate`, and a
+secret found by both trivy and another scanner still collapses to one finding. When
+the raw value cannot be recovered (for example the file changed mid-scan, or the
+finding spans multiple lines), the finding keeps a location-qualified hash that never
+collapses with any other finding.
+
 ### `--skip-encrypted` / `--no-skip-encrypted`
 
 Skip findings from files that contain dotenvx or SOPS encryption markers. Enabled by

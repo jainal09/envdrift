@@ -809,7 +809,8 @@ class ScanEngine:
         66, which is never true after redaction, so the filter was dead on real
         data (#370). The native scanner now drops these keys at detection by
         value shape; this central filter salvages cross-scanner coverage
-        (gitleaks/trufflehog/native, all of which hash with ``hash_secret``) by
+        (gitleaks/trufflehog/native — and trivy once it recovers the raw value
+        from the file (#479) — all of which hash with ``hash_secret``) by
         matching each finding's ``secret_hash`` against the hash of the public
         key declared in its own file's ``DOTENV_PUBLIC_KEY*`` line.
 
