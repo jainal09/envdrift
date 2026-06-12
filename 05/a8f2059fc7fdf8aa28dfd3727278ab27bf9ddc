@@ -1,0 +1,50 @@
+tests/integration/test_guard_cli_e2e.py
+  s_a0bbd64ba4e4dd::t_0181cc65c7de7d 18
+docs/cli/guard.md
+  s_a0bbd64ba4e4dd::t_36589c956e409c 144-147
+  s_a0bbd64ba4e4dd::t_afb01ba46c1fa8 296-300,309-312
+src/envdrift/scanner/native.py
+  s_a0bbd64ba4e4dd::t_b3f8fb603cd25e 339-343
+src/envdrift/scanner/base.py
+  s_a0bbd64ba4e4dd::t_0df857e31768b8 268-274
+docs/guides/guard.md
+  s_a0bbd64ba4e4dd::t_df1715d138349e 291-293
+src/envdrift/cli_commands/guard.py
+  s_a0bbd64ba4e4dd::t_fbf781f6771dfc 157-163,165-289
+  s_a0bbd64ba4e4dd::t_00e2c822274fbc 535-540,552-560,562-564,567-584
+  s_a0bbd64ba4e4dd::t_d1fd4d2916ea56 607-611,621-635,639-642
+  s_a0bbd64ba4e4dd::t_5854bb65ebffc9 747-759
+  s_a0bbd64ba4e4dd::t_b0a8e4fc1ff46f 911-932
+  s_a0bbd64ba4e4dd::t_658fac043d445c 27,31,46
+  s_a0bbd64ba4e4dd::t_81b1ae244363e5 813-827
+  s_a0bbd64ba4e4dd::t_a425466851146c 164
+src/envdrift/scanner/engine.py
+  s_a0bbd64ba4e4dd::t_20dcdcea4d941b 433-443
+tests/unit/test_guard_cli.py
+  s_a0bbd64ba4e4dd::t_3eaf73038bbda6 958-1074
+  s_a0bbd64ba4e4dd::t_cb9340ae7953c8 1184-1190,1193-1194,1196-1197,1201-1202,1208,1210-1214
+  s_a0bbd64ba4e4dd::t_e06e1e3866ab4b 692-693,700-702,711-712,714-715
+  s_a0bbd64ba4e4dd::t_f2ebeeb715a41f 810-895,897,899-902,904-957
+  s_a0bbd64ba4e4dd::t_c7d7a081866ce8 629-631,639-641,652-654,656-657
+  s_a0bbd64ba4e4dd::t_4fe88020e04d2b 896,898,903
+  s_a0bbd64ba4e4dd::t_582d2e0be08941 527-532,537,541-542,555-556,562-563,567-571,577-579,582,585-590
+  s_a0bbd64ba4e4dd::t_5adbd461d5b2e1 56-60
+  s_a0bbd64ba4e4dd::t_e550b4318dc9c5 288-292,307,310
+  s_a0bbd64ba4e4dd::t_28a9d284fa809f 713
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.6",
+  "base_commit_sha": "05a8f2059fc7fdf8aa28dfd3727278ab27bf9ddc",
+  "prompts": {},
+  "sessions": {
+    "s_a0bbd64ba4e4dd": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "c1e5b2e5-0fec-4bf5-b8e6-20cdb3a76855",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Jainal Gosaliya <jainal09gosalia@gmail.com>"
+    }
+  }
+}
