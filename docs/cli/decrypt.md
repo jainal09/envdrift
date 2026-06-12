@@ -29,6 +29,16 @@ byte-for-byte untouched — dotenvx is not invoked at all — so a plaintext fil
 (including one with CRLF line endings) or a non-`.env` binary file is never
 silently rewritten or corrupted.
 
+### Refuses the key store and companion files
+
+`envdrift decrypt .env.keys` (or any `.keys`/`.example`/`.sample`/`.template`
+target) is refused by name with a non-zero exit: the dotenvx private-key store
+and plaintext companion files are never encrypted by envdrift in the first
+place (`envdrift encrypt` refuses them too), so "decrypting" one is always a
+mistake rather than a no-op worth reporting as success. Leading-dash filenames
+(e.g. `-dash.env`) are passed to dotenvx as `./-dash.env` so they decrypt
+normally via `envdrift decrypt -- -dash.env`.
+
 ## Arguments
 
 | Argument   | Description                     | Default |

@@ -18,11 +18,15 @@ from pathlib import Path
 # target across runs. Not persisted.
 _REDACTION_SALT = secrets.token_bytes(16)
 
-# dotenvx header format
-DOTENVX_HEADER = """#/------------------!DOTENV_PRIVATE_KEYS!-------------------\\#
-#/ private decryption keys. DO NOT commit to source control \\#
-#/ [how it works](https://dotenvx.com/encryption) \\#
-#/----------------------------------------------------------\\#"""
+# dotenvx .env.keys header — byte-identical to the header dotenvx itself writes
+# (#474): box lines end in "/" (not "\#") and the link line keeps dotenvx's
+# padding so the box edges align. EnvKeysFile claims dotenvx format
+# preservation, so a later dotenvx append must not introduce a second,
+# visibly different header style.
+DOTENVX_HEADER = """#/------------------!DOTENV_PRIVATE_KEYS!-------------------/
+#/ private decryption keys. DO NOT commit to source control /
+#/     [how it works](https://dotenvx.com/encryption)       /
+#/----------------------------------------------------------/"""
 
 
 class EnvKeysFile:
@@ -100,8 +104,10 @@ class EnvKeysFile:
 
             atomic_write(self.path, new_content)
         else:
-            # Create new file with header
-            content = f"{DOTENVX_HEADER}\n# .env.{environment}\n{key_name}={value}\n"
+            # Create new file with header. dotenvx leaves a blank line between
+            # the header block and the first "# .env.<environment>" comment —
+            # reproduce its layout byte-for-byte (#474).
+            content = f"{DOTENVX_HEADER}\n\n# .env.{environment}\n{key_name}={value}\n"
             atomic_write(self.path, content)
 
     def has_dotenvx_header(self) -> bool:

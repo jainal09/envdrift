@@ -62,6 +62,36 @@ def _resolve_config_path(config_path: Path | None, value: Path | str | None) -> 
     return path
 
 
+def _refuse_companion_target(env_file: Path, action: str) -> None:
+    """Refuse encrypt/decrypt on a companion file, by name, for every backend.
+
+    ``envdrift encrypt .env.keys`` would encrypt the dotenvx private-key store
+    itself: the keys become ciphertext under a brand-new keypair whose private
+    half is never persisted, permanently locking out every encrypted file in
+    the project — previously under a clean ``[OK]``/exit 0 (#474). The other
+    companion suffixes (``.example``/``.sample``/``.template``) exist to be
+    read as plaintext, so encrypting (or "decrypting") one is always a
+    mistake. Reuses the canonical predicate that already excludes these names
+    from push/pull.
+    """
+    from envdrift.env_files import _is_excluded_env_file
+
+    if not _is_excluded_env_file(env_file.name):
+        return
+    if env_file.name.endswith(".keys"):
+        print_error(
+            f"Refusing to {action} {env_file}: it is the dotenvx private-key "
+            "store and must stay plaintext. Encrypting it would permanently "
+            "lock out every file encrypted with its keys."
+        )
+    else:
+        print_error(
+            f"Refusing to {action} {env_file}: it is a plaintext companion "
+            "file (.example/.sample/.template), not a secret store."
+        )
+    raise typer.Exit(code=1)
+
+
 def _protect_private_keys(env_file: Path) -> None:
     """Ensure the dotenvx ``.env.keys`` private-key file is gitignored.
 
@@ -183,6 +213,8 @@ def encrypt_cmd(
     if not env_file.exists():
         print_error(f"ENV file not found: {env_file}")
         raise typer.Exit(code=1)
+
+    _refuse_companion_target(env_file, "encrypt")
 
     if verify_vault or vault_provider or vault_url or vault_region or vault_secret:
         print_error("Vault verification moved to `envdrift decrypt --verify-vault ...`")
@@ -598,6 +630,8 @@ def decrypt_cmd(
     if not env_file.exists():
         print_error(f"ENV file not found: {env_file}")
         raise typer.Exit(code=1)
+
+    _refuse_companion_target(env_file, "decrypt")
 
     envdrift_config, config_path = _load_encryption_config()
     encryption_config = getattr(envdrift_config, "encryption", None)
