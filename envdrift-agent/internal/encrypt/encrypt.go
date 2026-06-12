@@ -4,6 +4,7 @@ package encrypt
 
 import (
 	"bufio"
+	"context"
 	"errors"
 	"os"
 	"os/exec"
@@ -152,7 +153,16 @@ func Encrypt(path string) error {
 
 // EncryptSilent encrypts silently without stdout/stderr.
 func EncryptSilent(path string) error {
-	cmd, err := buildEncryptCommand(path)
+	return EncryptSilentContext(context.Background(), path)
+}
+
+// EncryptSilentContext encrypts silently without stdout/stderr, bounded by
+// ctx: when ctx is cancelled or times out, the `envdrift encrypt` subprocess
+// is killed and Run returns instead of blocking forever. Pre-#494 the
+// subprocess had no context or timeout, so one hung child wedged the
+// guardian's entire control loop (shutdown and event processing included).
+func EncryptSilentContext(ctx context.Context, path string) error {
+	cmd, err := buildEncryptCommandContext(ctx, path)
 	if err != nil {
 		return err
 	}
@@ -165,13 +175,20 @@ func IsEnvdriftAvailable() bool {
 	return err == nil
 }
 
-// buildEncryptCommand builds the `envdrift encrypt <file>` command.
+// buildEncryptCommand builds the `envdrift encrypt <file>` command without a
+// cancellation context (used by the plain Encrypt/EncryptSilent paths).
+func buildEncryptCommand(path string) (*exec.Cmd, error) {
+	return buildEncryptCommandContext(context.Background(), path)
+}
+
+// buildEncryptCommandContext builds the `envdrift encrypt <file>` command,
+// bound to ctx so cancellation kills the subprocess (#494).
 //
 // `encrypt` is the CLI's per-file encryption path: it takes a positional
 // ENV_FILE argument. The pre-#481 code invoked `envdrift lock <file>`, but
 // `lock` takes no positional argument — every invocation exited 2 with
 // "Got unexpected extra argument(s)" and no file was ever encrypted.
-func buildEncryptCommand(path string) (*exec.Cmd, error) {
+func buildEncryptCommandContext(ctx context.Context, path string) (*exec.Cmd, error) {
 	dir := filepath.Dir(path)
 	fileName := filepath.Base(path)
 
@@ -184,9 +201,9 @@ func buildEncryptCommand(path string) (*exec.Cmd, error) {
 	if isPython {
 		// A Python interpreter must be invoked as `python -m envdrift ...`
 		// rather than directly (#348 G1).
-		cmd = exec.Command(envdrift, "-m", "envdrift", "encrypt", fileName)
+		cmd = exec.CommandContext(ctx, envdrift, "-m", "envdrift", "encrypt", fileName)
 	} else {
-		cmd = exec.Command(envdrift, "encrypt", fileName)
+		cmd = exec.CommandContext(ctx, envdrift, "encrypt", fileName)
 	}
 	cmd.Dir = dir
 	return cmd, nil

@@ -74,9 +74,18 @@ watch = ["~/projects"]
 recursive = true
 ```
 
+The global `guardian.idle_timeout`, `patterns`, `exclude` and `notify` values
+act as the defaults for every registered project; a project's own `[guardian]`
+section overrides them per key. The global `guardian.enabled` is the agent's
+master switch only — it never opts a project in (each project must set
+`enabled = true` itself).
+
 The list of registered projects is kept separately in `~/.envdrift/projects.json`
 (see [Central Registry Architecture](#central-registry-architecture)), not in
-`guardian.toml`.
+`guardian.toml`. A corrupt `projects.json` is not fatal: the agent logs the
+parse error, preserves the file at `projects.json.bak`, and continues with an
+empty registry at startup (or the last-good registry at runtime) instead of
+crash-looping under launchd/systemd.
 
 ### New CLI Commands
 

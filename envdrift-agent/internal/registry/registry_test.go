@@ -1,9 +1,12 @@
 package registry
 
 import (
+	"bytes"
 	"encoding/json"
+	"log"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -248,5 +251,108 @@ func TestRegistryWatcher_NoOnChangeAfterStop(t *testing.T) {
 
 	if n := atomic.LoadInt32(&afterStopFire); n != 0 {
 		t.Fatalf("onChange fired %d time(s) after Stop() (#413: leaked reload past shutdown)", n)
+	}
+}
+
+// captureLog redirects the stdlib logger into a buffer for the duration of the
+// test. The tests below drive registry code synchronously (no watcher
+// goroutines are started), so reading the buffer afterwards does not race.
+func captureLog(t *testing.T) *bytes.Buffer {
+	t.Helper()
+	var buf bytes.Buffer
+	prev := log.Writer()
+	log.SetOutput(&buf)
+	t.Cleanup(func() { log.SetOutput(prev) })
+	return &buf
+}
+
+// TestNewRegistryWatcher_CorruptRegistryRecovers is the #494 startup-path
+// regression: a corrupt/truncated ~/.envdrift/projects.json made
+// NewRegistryWatcher fail, guardian.Start return an error, and the process
+// exit 1 — which launchd KeepAlive / systemd Restart=always turned into a
+// perpetual crash-respawn loop. The watcher must instead log the parse error
+// loudly, preserve the corrupt file at projects.json.bak, and continue with an
+// empty registry.
+func TestNewRegistryWatcher_CorruptRegistryRecovers(t *testing.T) {
+	tmpDir := t.TempDir()
+	t.Setenv("HOME", tmpDir)
+	t.Setenv("USERPROFILE", tmpDir)
+
+	corrupt := []byte(`{"projects": [{"path": `)
+	if err := os.MkdirAll(filepath.Dir(RegistryPath()), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(RegistryPath(), corrupt, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	logBuf := captureLog(t)
+
+	rw, err := NewRegistryWatcher(func(*Registry) {})
+	if err != nil {
+		t.Fatalf("NewRegistryWatcher must not fail on a corrupt registry (crash-respawn loop, #494): %v", err)
+	}
+	defer rw.Stop()
+
+	reg := rw.GetRegistry()
+	if reg == nil || len(reg.Projects) != 0 {
+		t.Fatalf("expected an empty registry after corruption recovery, got %+v", reg)
+	}
+
+	// The recovery must be loud, not silent.
+	if out := logBuf.String(); !strings.Contains(out, "empty registry") {
+		t.Errorf("corruption recovery was silent; want a log line mentioning the empty-registry fallback, got: %q", out)
+	}
+
+	// The corrupt file must be preserved for the user to inspect/repair.
+	backup, err := os.ReadFile(RegistryPath() + ".bak")
+	if err != nil {
+		t.Fatalf("corrupt registry was not preserved at projects.json.bak (#494): %v", err)
+	}
+	if string(backup) != string(corrupt) {
+		t.Errorf("backup content mismatch: got %q, want %q", backup, corrupt)
+	}
+}
+
+// TestRegistryWatcher_ReloadCorruptKeepsLastGoodAndLogs is the #494
+// runtime-path regression: when projects.json becomes corrupt while the agent
+// is running, reload() previously returned silently before any log statement —
+// the agent kept watching a stale project set with zero diagnostics. The
+// last-good registry must be kept AND the parse error must be logged.
+func TestRegistryWatcher_ReloadCorruptKeepsLastGoodAndLogs(t *testing.T) {
+	tmpDir := t.TempDir()
+	t.Setenv("HOME", tmpDir)
+	t.Setenv("USERPROFILE", tmpDir)
+
+	writeRegistry(t, "/some/project")
+
+	var onChangeCount int32
+	rw, err := NewRegistryWatcher(func(*Registry) {
+		atomic.AddInt32(&onChangeCount, 1)
+	})
+	if err != nil {
+		t.Fatalf("NewRegistryWatcher: %v", err)
+	}
+
+	// Corrupt the registry, then drive the debounce callback directly (what the
+	// fsnotify path invokes); no watcher goroutine is needed.
+	if err := os.WriteFile(RegistryPath(), []byte(`{"projects": [{`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	logBuf := captureLog(t)
+	rw.reload()
+
+	reg := rw.GetRegistry()
+	if len(reg.Projects) != 1 || reg.Projects[0].Path != "/some/project" {
+		t.Fatalf("last-good registry was not kept after a corrupt reload: %+v", reg)
+	}
+	if n := atomic.LoadInt32(&onChangeCount); n != 0 {
+		t.Fatalf("onChange fired %d time(s) for a corrupt reload; want 0", n)
+	}
+
+	// Pre-fix this path was completely silent (#494).
+	if out := logBuf.String(); !strings.Contains(out, "last-good") {
+		t.Errorf("corrupt runtime reload was silent; want a log line mentioning the kept last-good registry, got: %q", out)
 	}
 }
