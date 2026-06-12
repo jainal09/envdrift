@@ -1167,3 +1167,119 @@ class TestPullMergeWritesCombinedSecurely:
         # Atomic write: no half-written temp artifacts left next to the secrets.
         leftovers = list(service_dir.glob("*.envdrift-tmp"))
         assert leftovers == [], f"temp files left behind: {leftovers}"
+
+
+# ---------------------------------------------------------------------------
+# Secret-lockout filename guard reaches the partial-encryption CLI paths (#467)
+# ---------------------------------------------------------------------------
+
+
+class TestUnsafeFilenameLockoutGuard:
+    """#467: ``envdrift push`` refuses filenames dotenvx cannot key — end to end.
+
+    dotenvx derives ``DOTENV_PRIVATE_KEY_<SLUG>`` from the filename. A space or
+    non-ASCII character yields an invalid env-var name: the value encrypts and
+    dotenvx exits 0, but the file is then permanently undecryptable and the
+    plaintext is destroyed — a silent secret lockout. #457 guarded the bare
+    ``encrypt`` backend; the partial-encryption push/lock paths reach dotenvx
+    through ``DotenvxWrapper`` instead, so they needed the same guard (#467).
+
+    These drive the REAL ``envdrift push`` CLI as a subprocess with the real
+    dotenvx binary available (module skip-gate above) and assert the refusal
+    happens BEFORE dotenvx runs: non-zero exit, clean error message, plaintext
+    preserved byte-for-byte, and no ``.env.keys`` ever created. Both fail RED on
+    the pre-#468 code (push exits 0, the file is encrypted under an unusable
+    key, and the plaintext is gone).
+    """
+
+    def test_push_secrets_only_refuses_space_filename_real_cli(
+        self,
+        git_repo: Path,
+        integration_pythonpath: str,
+        envdrift_cmd: list[str],
+    ):
+        """Secrets-only push: a space-named file is refused with plaintext intact."""
+        work_dir = git_repo
+        secrets = work_dir / "secrets"
+        secrets.mkdir()
+        # Custom pattern: the default ".env*" glob would never match this name,
+        # silently masking the guard. "*.env*" mirrors a real user pattern.
+        (work_dir / "envdrift.toml").write_text(
+            "[partial_encryption]\n"
+            "enabled = true\n\n"
+            "[[partial_encryption.environments]]\n"
+            'name = "prod"\n'
+            "secrets_only = true\n"
+            'secrets_dir = "secrets"\n'
+            'pattern = "*.env*"\n',
+            encoding="utf-8",
+        )
+
+        bad = secrets / "my secret.env"
+        # Credential-like fixture built by concatenation (push-protection safe).
+        bad.write_text("PASSWORD=keep" + "me123\n", encoding="utf-8")
+        before = bad.read_bytes()
+
+        result = _run_envdrift(
+            ["push"],
+            cwd=work_dir,
+            integration_pythonpath=integration_pythonpath,
+            envdrift_cmd=envdrift_cmd,
+        )
+
+        out = " ".join(_out(result).split())
+        assert result.returncode == 1, out
+        assert "Refusing to encrypt" in out, out
+        assert "my secret.env" in out, out
+        assert "Errors: 1" in out, out
+        # The guard fired pre-flight: plaintext byte-for-byte intact, never
+        # encrypted into an unrecoverable file.
+        assert bad.read_bytes() == before, "plaintext was modified"
+        assert b"encrypted:" not in bad.read_bytes()
+        # dotenvx never ran, so no private-key file was ever written.
+        assert not (secrets / ".env.keys").exists(), "dotenvx was invoked despite the guard"
+        assert not (work_dir / ".env.keys").exists(), "dotenvx was invoked despite the guard"
+
+    def test_push_combine_refuses_non_ascii_secret_filename_real_cli(
+        self,
+        git_repo: Path,
+        integration_pythonpath: str,
+        envdrift_cmd: list[str],
+    ):
+        """Combine push: a non-ASCII .secret filename is refused, nothing generated."""
+        work_dir = git_repo
+        clear = work_dir / ".env.prod.clear"
+        secret = work_dir / "café.env.secret"  # non-ASCII -> invalid dotenvx key slug
+        combined = work_dir / ".env.prod"
+        _write_combine_config(
+            work_dir,
+            name="prod",
+            clear_file=clear.name,
+            secret_file=secret.name,
+            combined_file=combined.name,
+        )
+
+        clear.write_text("APP_NAME=myapp\n", encoding="utf-8")
+        secret.write_text("API_KEY=top" + "secret42\n", encoding="utf-8")
+        before = secret.read_bytes()
+
+        result = _run_envdrift(
+            ["push"],
+            cwd=work_dir,
+            integration_pythonpath=integration_pythonpath,
+            envdrift_cmd=envdrift_cmd,
+        )
+
+        out = " ".join(_out(result).split())
+        assert result.returncode == 1, out
+        # Assert on the ASCII core of the message so console encoding quirks
+        # around the non-ASCII filename can never flake the test.
+        assert "Refusing to encrypt" in out, out
+        assert "Errors: 1" in out, out
+        # Plaintext preserved byte-for-byte; no lockout occurred.
+        assert secret.read_bytes() == before, "plaintext was modified"
+        assert b"encrypted:" not in secret.read_bytes()
+        # The failed environment must not generate the combined artifact, and
+        # dotenvx must never have run (no private-key file).
+        assert not combined.exists(), "combined file generated despite the refusal"
+        assert not (work_dir / ".env.keys").exists(), "dotenvx was invoked despite the guard"

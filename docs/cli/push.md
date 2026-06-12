@@ -50,6 +50,12 @@ fails (exit 1, no success banner) rather than report a false success:
 - **Empty secret files are refused.** A `.secret` (or secrets-only) file with no
   variable assignments is rejected with "Nothing to encrypt" instead of being handed
   to dotenvx, which would scaffold placeholder secrets into it.
+- **Filenames dotenvx cannot turn into a valid key name are refused.** dotenvx
+  derives the `DOTENV_PRIVATE_KEY_<NAME>` entry from the filename, so a secret file
+  whose name contains a space or non-ASCII character (e.g. `my secret.env`,
+  `café.env.secret`) would encrypt cleanly yet be permanently undecryptable. `push`
+  refuses such names before invoking dotenvx, leaving the plaintext intact — rename
+  the file to use only letters, digits, `.`, `-` and `_`.
 - **The combined file is never replaced with an empty scaffold.** If *both* the
   `clear_file` and the `secret_file` are missing (deleted by mistake, or a path typo
   in `envdrift.toml`), `push` errors out and leaves the existing combined file
