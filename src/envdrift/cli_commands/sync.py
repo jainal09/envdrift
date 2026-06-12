@@ -399,7 +399,12 @@ def _write_merged_combined_file(clear_file: Path, secret_file: Path, combined_fi
             and not line.strip().startswith("DOTENV_PUBLIC_KEY")
         )
 
-    combined_file.write_text("\n".join(combined_lines) + "\n", encoding="utf-8")
+    # The merged file holds DECRYPTED secret values, so write it exactly like
+    # the .env.keys private key: 0600 for a fresh file, fchmod on the fd,
+    # atomic rename — never a bare write_text at the process umask (#471).
+    from envdrift.sync.operations import atomic_write
+
+    atomic_write(combined_file, "\n".join(combined_lines) + "\n")
 
 
 def sync(

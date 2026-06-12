@@ -188,7 +188,10 @@ def atomic_write(path: Path, content: str, permissions: int = 0o600) -> None:
     # and leaking the temp file) or leak it. ``fchmod`` and ``fsync`` operate on
     # the same fd via ``fileno()`` while the wrapper still owns it.
     try:
-        with os.fdopen(fd, "w") as tmp_file:
+        # encoding="utf-8" explicitly: the combined/merged env files written
+        # through this helper can carry non-ASCII user values, which must not
+        # depend on the platform locale (cp1252 on Windows would corrupt them).
+        with os.fdopen(fd, "w", encoding="utf-8") as tmp_file:
             # ``os.fchmod`` applies to the fd we own, never a symlink target. It
             # is absent on Windows, where permission bits are largely a no-op.
             if hasattr(os, "fchmod"):

@@ -16,6 +16,7 @@ from typing import NamedTuple
 from envdrift.config import PartialEncryptionEnvironmentConfig
 from envdrift.env_files import _is_excluded_env_file
 from envdrift.integrations.dotenvx import DotenvxError, DotenvxFilenameError, DotenvxWrapper
+from envdrift.sync.operations import atomic_write
 
 logger = logging.getLogger(__name__)
 
@@ -172,6 +173,47 @@ class PartialEncryptionError(Exception):
     def file_not_found(cls, path: Path) -> PartialEncryptionError:
         """Create error for missing file."""
         return cls(f"Secret file not found: {path}")
+
+    @classmethod
+    def nothing_to_encrypt(cls, path: Path) -> PartialEncryptionError:
+        """Create error for a secret file with no variable assignments (#471).
+
+        Handed an empty or comment-only file, dotenvx scaffolds its
+        placeholder-secrets template (HELLO, AWS_ACCESS_KEY_ID, ...) into it and
+        exits 0, so a blind delegation would fabricate ~13 secrets the user
+        never wrote and report them as encrypted.
+        """
+        return cls(
+            f"Nothing to encrypt: {path} has no variables. Refusing to run the "
+            "encryptor, which would otherwise scaffold placeholder secrets "
+            "into the file."
+        )
+
+    @classmethod
+    def encryption_did_not_take_effect(cls, path: Path) -> PartialEncryptionError:
+        """Create error for an encrypt run that left plaintext behind (#471).
+
+        dotenvx exits 0 *without* encrypting when it cannot write or use the
+        private key (e.g. ``.env.keys`` is read-only, a directory, or garbage) —
+        it only prints a warning. The exit code alone must never be trusted.
+        """
+        return cls(
+            f"Encryption did not take effect: {path} still contains plaintext "
+            "values. This usually means the encryption key was missing or "
+            "invalid (e.g. an unwritable or malformed .env.keys)."
+        )
+
+    @classmethod
+    def sources_missing(
+        cls, clear_file: Path, secret_file: Path, combined_file: Path
+    ) -> PartialEncryptionError:
+        """Create error for a combine with BOTH source files absent (#471)."""
+        return cls(
+            f"Neither clear file ({clear_file}) nor secret file ({secret_file}) "
+            f"exists; refusing to overwrite {combined_file} with an empty "
+            "scaffold. Restore the source files or fix the paths in "
+            "envdrift.toml."
+        )
 
 
 def _is_quote_wrapped(v: str) -> bool:
@@ -374,6 +416,16 @@ def combine_files(
     secret_file = Path(env_config.secret_file)
     combined_file = Path(env_config.combined_file)
 
+    # Refuse to fabricate an empty scaffold when BOTH source files are missing
+    # (deleted by mistake, or a clear_file/secret_file typo in envdrift.toml).
+    # The combined file may be the only remaining copy of the runtime env;
+    # pre-#471 push silently replaced it with a header-only scaffold under the
+    # "[OK] Push complete!" banner. Erroring here is symmetric with
+    # pull-partial's "Secret file not found". A single missing source is still
+    # tolerated (clear-only and secret-only environments are valid).
+    if not clear_file.exists() and not secret_file.exists():
+        raise PartialEncryptionError.sources_missing(clear_file, secret_file, combined_file)
+
     # Read files
     clear_lines = []
     if clear_file.exists():
@@ -415,7 +467,11 @@ def combine_files(
     in_sync = existing == new_content
 
     if write:
-        combined_file.write_text(new_content, encoding="utf-8")
+        # The combined file carries the encrypted secret section here, and the
+        # same artifact holds DECRYPTED values after `pull --merge` — so write
+        # it like .env.keys: 0600 for a fresh file, fchmod on the fd, atomic
+        # rename. Never a bare write_text at the process umask (#471).
+        atomic_write(combined_file, new_content)
         in_sync = True
 
     # Count real secret variables (excludes comments and dotenvx public-key line)
@@ -512,6 +568,14 @@ def encrypt_secret_file(env_config: PartialEncryptionEnvironmentConfig) -> None:
         _git_unskip_worktree(secret_file)
         return
 
+    # Refuse a file with no variable assignments BEFORE invoking dotenvx:
+    # handed an empty/comment-only file, dotenvx scaffolds its placeholder
+    # template (HELLO, AWS_ACCESS_KEY_ID, OPENAI_API_KEY, ...) and exits 0, so
+    # push would fabricate ~13 secrets the user never wrote and count them as
+    # encrypted. Same guard as the bare-encrypt backend (#443, #471).
+    if not file_has_assignment(secret_file):
+        raise PartialEncryptionError.nothing_to_encrypt(secret_file)
+
     # Encrypt using dotenvx (idempotent: re-encrypts only the plaintext values,
     # leaving any already-encrypted values untouched).
     dotenvx = DotenvxWrapper()
@@ -522,6 +586,15 @@ def encrypt_secret_file(env_config: PartialEncryptionEnvironmentConfig) -> None:
         # into an invalid key (silent lockout) BEFORE encrypting, so the
         # plaintext is intact — surface a clean error, not a raw traceback (#467).
         raise PartialEncryptionError.encrypt_failed(secret_file, e) from e
+
+    # Verify the encryption actually took effect rather than trusting the exit
+    # code: dotenvx exits 0 *without* encrypting when it cannot write or use
+    # the private key (.env.keys read-only / a directory / garbage) — the
+    # #443-era read-back the guarded encrypt backend already performs. Checked
+    # BEFORE lifting the git skip-worktree protection so a still-plaintext
+    # file stays protected from a routine `git add .` (#471).
+    if has_plaintext_secret_value(secret_file):
+        raise PartialEncryptionError.encryption_did_not_take_effect(secret_file)
 
     # Re-enable git tracking now the file is encrypted again
     _git_unskip_worktree(secret_file)
@@ -700,6 +773,12 @@ def _encrypt_secrets_only_file(dotenvx: DotenvxWrapper, file: Path, *, check: bo
             # so the encrypted diff is visible to git.
             _git_unskip_worktree(file)
         return False
+    # Refuse a file with no variable assignments BEFORE invoking dotenvx (and
+    # before counting it as would-encrypt in check mode): dotenvx scaffolds
+    # placeholder secrets into an empty file and exits 0 (#443, #471). The same
+    # guard as encrypt_secret_file / the bare-encrypt backend.
+    if not file_has_assignment(file):
+        raise PartialEncryptionError.nothing_to_encrypt(file)
     if check:
         # Dry run: this plaintext / mixed file would be encrypted by a real push.
         return True
@@ -710,6 +789,11 @@ def _encrypt_secrets_only_file(dotenvx: DotenvxWrapper, file: Path, *, check: bo
         # into a valid key slug (e.g. "my secret.env", "café.env") is refused
         # pre-flight with the plaintext preserved — surface it cleanly (#467).
         raise PartialEncryptionError.encrypt_failed(file, e) from e
+    # Verify the encryption actually took effect (dotenvx exits 0 without
+    # encrypting when .env.keys is unwritable/invalid) BEFORE lifting the git
+    # skip-worktree protection, so a still-plaintext file stays protected (#471).
+    if has_plaintext_secret_value(file):
+        raise PartialEncryptionError.encryption_did_not_take_effect(file)
     # Re-enable git tracking now the file is encrypted again.
     _git_unskip_worktree(file)
     return True
