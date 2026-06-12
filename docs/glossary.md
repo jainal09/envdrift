@@ -192,8 +192,8 @@ envdrift supports configuration via TOML files. Configuration is auto-discovered
 Example configuration:
 
 ```toml
-[tool.envdrift]
-schema = "config.settings:ProductionSettings"
+[tool.envdrift.validation]
+check_encryption = true
 
 [tool.envdrift.vault]
 provider = "azure"
