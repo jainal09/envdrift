@@ -1,0 +1,46 @@
+tests/unit/test_download_integrity.py
+  s_a0bbd64ba4e4dd::t_8aa6e4ddc86f65 1-62,64-154,156-232,234-601,603-637
+src/envdrift/install_integrity.py
+  s_a0bbd64ba4e4dd::t_0aea59c273b0cf 1-119
+src/envdrift/integrations/dotenvx.py
+  s_a0bbd64ba4e4dd::t_8a8a95bd978e91 426-436
+  s_a0bbd64ba4e4dd::t_13120454cccfc7 470-477
+  s_a0bbd64ba4e4dd::t_4fb28238086d21 28-29
+  s_a0bbd64ba4e4dd::t_87c51d611c8e59 65-75,79-80
+src/envdrift/cli_commands/install.py
+  s_a0bbd64ba4e4dd::t_336aa1882d49d1 29-34
+  s_a0bbd64ba4e4dd::t_4a2a449c424869 153,158,161-163,165-167,170-173,175-191
+  s_a0bbd64ba4e4dd::t_2a9272bf133814 307-313
+  s_a0bbd64ba4e4dd::t_d03cd7b1eabd79 380-413,415-419
+src/envdrift/scanner/talisman.py
+  s_a0bbd64ba4e4dd::t_1f59d3a53f88bf 214,216-219,225,233-234,236-258
+src/envdrift/scanner/trufflehog.py
+  s_a0bbd64ba4e4dd::t_741f5ebfb46011 61-65
+  s_a0bbd64ba4e4dd::t_0b53955b0c79c3 229-233,235-238,244,260-265
+  s_a0bbd64ba4e4dd::t_dc92aad7989dca 31
+tests/unit/coverage/test_cov_cli_commands_install.py
+  s_a0bbd64ba4e4dd::t_c34eac321f644e 118-119,128,130-131,141
+  s_a0bbd64ba4e4dd::t_775da5d227f601 220-221,223-225,247-250
+src/envdrift/integrations/sops.py
+  s_a0bbd64ba4e4dd::t_f21a21ce0ece22 11
+  s_a0bbd64ba4e4dd::t_fa91cac42215ce 73-77,79-85,95-96
+  s_a0bbd64ba4e4dd::t_c1f78d39db9d3e 35-38,41
+tests/unit/test_install_cli.py
+  s_a0bbd64ba4e4dd::t_0d6e1d19cf1a16 275-278
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.6",
+  "base_commit_sha": "abf459e5ee073690a476ec8135f01541085e33e1",
+  "prompts": {},
+  "sessions": {
+    "s_a0bbd64ba4e4dd": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "c1e5b2e5-0fec-4bf5-b8e6-20cdb3a76855",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Jainal Gosaliya <jainal09gosalia@gmail.com>"
+    }
+  }
+}
