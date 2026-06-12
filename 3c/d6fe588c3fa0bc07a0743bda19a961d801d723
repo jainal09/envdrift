@@ -1,0 +1,53 @@
+docs/cli/sync.md
+  s_a0bbd64ba4e4dd::t_b269fb005dc63e 357-361
+  s_a0bbd64ba4e4dd::t_b88bd0d6fc2f9f 89-98
+tests/integration/test_aws_integration.py
+  s_a0bbd64ba4e4dd::t_31718dec50acde 1189-1194,1203
+  s_a0bbd64ba4e4dd::t_b23764f65dbda6 1181
+  s_a0bbd64ba4e4dd::t_305981c53f1a72 1248-1249
+src/envdrift/cli_commands/sync.py
+  s_a0bbd64ba4e4dd::t_f784a8a6691f99 1164-1168
+  s_a0bbd64ba4e4dd::t_3aa59a7878bcc6 542-546
+  s_a0bbd64ba4e4dd::t_e98a9a5f57876d 464-465
+  s_a0bbd64ba4e4dd::t_3bf353bbee587a 1304,1307-1312,1323-1328,1330,1338-1339,1341-1345,1355-1357,1359-1364,1399-1406,1408,1415,1419-1424,1426-1428
+tests/unit/test_cli.py
+  s_a0bbd64ba4e4dd::t_2e7eef3003262d 2342-2402
+tests/unit/coverage/test_cov_sync_engine.py
+  s_a0bbd64ba4e4dd::t_b508f0ea760d21 351,354-359,367,377-380
+  s_a0bbd64ba4e4dd::t_819e69a6266ebf 406,409
+tests/integration/test_vault_verify_flows.py
+  s_a0bbd64ba4e4dd::t_c6db84e2ba20a4 518-522,526
+  s_a0bbd64ba4e4dd::t_1f2896a36673de 1-107,111,114-517,523-525,527-606
+  s_a0bbd64ba4e4dd::t_843127408449ce 108-110,112-113
+tests/unit/coverage/test_cov_cli_commands_encryption.py
+  s_a0bbd64ba4e4dd::t_80aad63dfed59e 388-463
+src/envdrift/sync/engine.py
+  s_a0bbd64ba4e4dd::t_5797f3dae904e3 6,10
+  s_a0bbd64ba4e4dd::t_7b8ca854c529da 346,348-355,358-362,387,389,394,396-412,414-416,419-447,449,451-454
+tests/unit/coverage/test_cov_cli_commands_sync.py
+  s_a0bbd64ba4e4dd::t_ac437a00a25880 766,769-835,841-842,844,849-852,855,858,867,872-874,892,896
+docs/cli/lock.md
+  s_a0bbd64ba4e4dd::t_ecbde60eb0f06f 409
+  s_a0bbd64ba4e4dd::t_131df3a3d9ed2b 298-312
+  s_a0bbd64ba4e4dd::t_c975fea57888af 96-105
+docs/cli/decrypt.md
+  s_a0bbd64ba4e4dd::t_eb2edf79698b4d 90-96
+src/envdrift/cli_commands/encryption.py
+  s_a0bbd64ba4e4dd::t_3d27879763f904 417-437
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.6",
+  "base_commit_sha": "3cd6fe588c3fa0bc07a0743bda19a961d801d723",
+  "prompts": {},
+  "sessions": {
+    "s_a0bbd64ba4e4dd": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "c1e5b2e5-0fec-4bf5-b8e6-20cdb3a76855",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Jainal Gosaliya <jainal09gosalia@gmail.com>"
+    }
+  }
+}
