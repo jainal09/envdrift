@@ -1504,3 +1504,61 @@ class TestCombinedFilesSecurity:
         assert any(".env.staging" in w for w in warnings)
         assert any(".env.dev" in w for w in warnings)
         assert not any(".env.production" in w for w in warnings)
+
+
+class TestDefaultGlobalIgnoreScoping:
+    """#477: built-in config/lock-file ignores only suppress noisy rules."""
+
+    @staticmethod
+    def _native_only_engine(**kwargs) -> ScanEngine:
+        config = GuardConfig(
+            use_native=True,
+            use_gitleaks=False,
+            auto_install=False,
+            **kwargs,
+        )
+        return ScanEngine(config)
+
+    def test_distinctive_secret_in_pyproject_surfaces(self, tmp_path: Path):
+        """A GitHub PAT in pyproject.toml survives the default global ignore."""
+        token = "ghp_" + "0123456789" + "abcdefghijklmnopqrstuvwxyz"
+        (tmp_path / "pyproject.toml").write_text(f'[tool.demo]\nrepo_token = "{token}"\n')
+
+        engine = self._native_only_engine()
+        result = engine.scan([tmp_path])
+
+        pat_findings = [f for f in result.unique_findings if f.rule_id == "github-pat"]
+        assert any(f.file_path.name == "pyproject.toml" for f in pat_findings)
+
+    def test_noisy_finding_in_pyproject_still_suppressed(self, tmp_path: Path):
+        """The keyword-driven generic-secret match in pyproject.toml stays hidden."""
+        secret = "Zx9Kq2Wm7" + "Lp4Rt8Nv6" + "Bs3Yd1Hf5Gj0Qc"
+        (tmp_path / "pyproject.toml").write_text(f'[tool.demo]\npassword = "{secret}"\n')
+
+        engine = self._native_only_engine()
+        result = engine.scan([tmp_path])
+
+        assert not any(
+            f.file_path.name == "pyproject.toml" and f.rule_id == "generic-secret"
+            for f in result.unique_findings
+        )
+
+    def test_distinctive_secret_in_lock_file_surfaces(self, tmp_path: Path):
+        token = "ghp_" + "0123456789" + "abcdefghijklmnopqrstuvwxyz"
+        (tmp_path / "package-lock.json").write_text(f'{{"token": "{token}"}}\n')
+
+        engine = self._native_only_engine()
+        result = engine.scan([tmp_path])
+
+        pat_findings = [f for f in result.unique_findings if f.rule_id == "github-pat"]
+        assert any(f.file_path.name == "package-lock.json" for f in pat_findings)
+
+    def test_user_ignore_paths_fully_suppress(self, tmp_path: Path):
+        """Explicit user ignore_paths still drop every finding in the path."""
+        token = "ghp_" + "0123456789" + "abcdefghijklmnopqrstuvwxyz"
+        (tmp_path / "pyproject.toml").write_text(f'[tool.demo]\nrepo_token = "{token}"\n')
+
+        engine = self._native_only_engine(ignore_paths=["pyproject.toml"])
+        result = engine.scan([tmp_path])
+
+        assert not any(f.file_path.name == "pyproject.toml" for f in result.unique_findings)

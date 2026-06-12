@@ -41,6 +41,22 @@ IGNORE_PATTERN = re.compile(
 )
 
 
+# Rule-id markers identifying *noisy*, low-confidence detections: keyword- and
+# entropy-driven rules that routinely false-positive on config/build/lock files
+# ("secret"/"token" keywords, integrity hashes). Matched as case-insensitive
+# substrings so scanner-namespaced ids are covered too (native generic-secret /
+# high-entropy-string, gitleaks-generic-api-key, detect-secrets keyword/entropy
+# detectors, ...). Distinctive-prefix detections (ghp_, AKIA, pypi-, ...) never
+# match and are therefore never suppressed by noisy-scoped path ignores (#477).
+NOISY_RULE_ID_MARKERS = ("generic", "entropy", "keyword")
+
+
+def is_noisy_rule(rule_id: str) -> bool:
+    """Whether ``rule_id`` is a noisy keyword/entropy-style detection."""
+    rule = rule_id.lower()
+    return any(marker in rule for marker in NOISY_RULE_ID_MARKERS)
+
+
 @dataclass
 class IgnoreConfig:
     """Configuration for ignore rules.
@@ -48,10 +64,15 @@ class IgnoreConfig:
     Attributes:
         ignore_paths: Global path patterns to ignore completely.
         ignore_rules: Rule ID -> list of path patterns where that rule is ignored.
+        noisy_rule_paths: Path patterns where only noisy keyword/entropy rules
+            (see :func:`is_noisy_rule`) are ignored. Used for the engine's
+            built-in config/lock-file defaults so they can never swallow a
+            high-confidence distinctive-prefix finding (#477).
     """
 
     ignore_paths: list[str] = field(default_factory=list)
     ignore_rules: dict[str, list[str]] = field(default_factory=dict)
+    noisy_rule_paths: list[str] = field(default_factory=list)
 
     @classmethod
     def from_dict(cls, config: dict) -> IgnoreConfig:
@@ -114,7 +135,8 @@ class IgnoreFilter:
         Checks in order:
         1. Inline ignore comments in the source file
         2. Rule+path combinations from config
-        3. Global path ignores from config
+        3. Noisy-rule path ignores (built-in config/lock-file defaults)
+        4. Global path ignores from config
 
         Args:
             finding: The finding to check.
@@ -134,7 +156,15 @@ class IgnoreFilter:
         if self._matches_rule_path_ignore(rule_id, file_path):
             return True
 
-        # Check 3: Global path ignores (already handled by scanner, but double-check)
+        # Check 3: Noisy-rule path ignores — suppress only low-confidence
+        # keyword/entropy detections in these paths; a distinctive-prefix
+        # CRITICAL token in pyproject.toml / a lock file must still surface (#477)
+        if is_noisy_rule(rule_id) and self._matches_path_patterns(
+            file_path, self.config.noisy_rule_paths
+        ):
+            return True
+
+        # Check 4: Global path ignores (already handled by scanner, but double-check)
         return bool(self._matches_global_ignore(file_path))
 
     def _has_inline_ignore(self, file_path: Path, line_number: int, rule_id: str) -> bool:
@@ -231,9 +261,19 @@ class IgnoreFilter:
         Returns:
             True if path should be globally ignored.
         """
+        return self._matches_path_patterns(file_path, self.config.ignore_paths)
+
+    @staticmethod
+    def _matches_path_patterns(file_path: Path, patterns: list[str]) -> bool:
+        """Whether ``file_path`` matches any glob in ``patterns``.
+
+        Tries the full path first, then every path suffix (so ``pyproject.toml``
+        matches ``/repo/sub/pyproject.toml`` and ``**/tests/**`` matches at any
+        depth), mirroring the historical global-ignore semantics.
+        """
         path_str = str(file_path)
 
-        for pattern in self.config.ignore_paths:
+        for pattern in patterns:
             if fnmatch.fnmatch(path_str, pattern):
                 return True
             for i in range(len(file_path.parts)):

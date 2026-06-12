@@ -4,10 +4,28 @@ Use `envdrift guard` as a last line of defense against plaintext secrets.
 
 ## What guard checks
 
-- Unencrypted `.env` files missing dotenvx or SOPS markers
+- Unencrypted env files missing dotenvx or SOPS markers
 - Common secret patterns in source and config files
 - High-entropy strings (optional)
 - Git history for previously committed secrets (optional)
+
+### Which files count as env files
+
+The native scanner applies the unencrypted-file policy and the entropy scan to every
+file whose name matches an env-file shape:
+
+- `.env` and `.env.<environment>` — including `.env.local` and `.env.test`, the
+  canonical real-secrets files for Next.js/Vite/CRA local development
+- `<name>.env` (e.g. `production.env`, `database.env`) — the `docker --env-file`,
+  direnv, and CI convention
+- Custom env files declared in `vault.sync` mappings
+
+Only the template names `.env.example`, `.env.sample`, and `.env.template` are skipped
+by default, since they hold placeholder values by convention.
+
+Env files are scanned regardless of text encoding: UTF-8, UTF-16 (the Windows Notepad
+and PowerShell "Unicode" default), and UTF-32 — with or without a BOM — are decoded
+before pattern matching instead of being misclassified as binary and skipped.
 
 ## Quick start
 
@@ -171,7 +189,25 @@ The ignore system applies in this order:
 
 1. **Inline comments** - Checked first, most specific
 2. **Rule+path ignores** - From `[guard.ignore_rules]` in TOML
-3. **Global path ignores** - From `ignore_paths` in TOML
+3. **Built-in noisy-rule defaults** - Keyword/entropy rules only, in config/lock files
+4. **Global path ignores** - From `ignore_paths` in TOML
+
+### Built-in default ignores
+
+Config and lock files (`pyproject.toml`, `envdrift.toml`, `mkdocs.yml`, `*.lock`,
+`package-lock.json`, `*-lock.json`, `*.sum`, ...) routinely contain "secret"/"token"
+keywords and high-entropy integrity hashes that false-positive the keyword- and
+entropy-driven rules. Guard suppresses **only those noisy rules** (rule ids containing
+`generic`, `entropy`, or `keyword` — across every scanner) in these files.
+
+High-confidence, distinctive-prefix detections are **never** suppressed by the
+defaults: a GitHub PAT (`ghp_...`), AWS access key (`AKIA...`), or PyPI token committed
+inside `pyproject.toml` or a lock file is still reported. To skip such a file entirely,
+add it to `ignore_paths` yourself — explicit user ignores always suppress everything.
+
+Directory-scoped defaults (`bin/**`, `dist/**`, `vendor/**`, `node_modules/**`, ...)
+apply consistently however the scan path is spelled: `envdrift guard`, `envdrift
+guard .`, and a symlinked path all produce the same result set.
 
 ### Finding Rule IDs
 
