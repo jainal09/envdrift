@@ -927,7 +927,7 @@ class TestLockCanonicalEncryptionState:
 
         result = runner.invoke(app, ["lock", "--check"])
         assert result.exit_code == 1, result.output
-        assert "would be encrypted" in result.output
+        assert "would re-encrypt (plaintext values remain)" in result.output
         assert backend.encrypt_calls == []
 
     @patch("envdrift.cli_commands.encryption_helpers.resolve_encryption_backend")

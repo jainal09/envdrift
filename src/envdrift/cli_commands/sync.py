@@ -1087,6 +1087,51 @@ def pull(
     print_success("Setup complete! Your environment files are ready to use.")
 
 
+def _find_stale_private_key_name(env_keys_file: Path, expected_key_name: str) -> str | None:
+    """Return the old ``DOTENV_PRIVATE_KEY_*`` name when it mismatches the env.
+
+    Handles the renamed-file case (e.g. ``.env.local`` -> ``.env.localenv``)
+    where ``.env.keys`` still carries the key under the old name: the expected
+    key is absent but another private key is present. Returns ``None`` when the
+    expected key exists (or the keys file is missing/empty).
+    """
+    if not env_keys_file.exists():
+        return None
+    from envdrift.sync.operations import EnvKeysFile
+
+    if EnvKeysFile(env_keys_file).read_key(expected_key_name):
+        return None
+    for line in env_keys_file.read_text().splitlines():
+        if line.startswith("DOTENV_PRIVATE_KEY_") and "=" in line:
+            old_key_name = line.split("=")[0].strip()
+            if old_key_name != expected_key_name:
+                return old_key_name
+    return None
+
+
+def _rekey_dotenvx_file(
+    env_file: Path,
+    encryption_backend: Any,
+    sops_encrypt_kwargs: dict[str, Any],
+) -> tuple[bool, str]:
+    """Decrypt + re-encrypt ``env_file`` so dotenvx generates the expected key.
+
+    Returns ``(ok, error_message)``; ``error_message`` is empty on success.
+    """
+    from envdrift.encryption import EncryptionBackendError, EncryptionNotFoundError
+
+    try:
+        decrypt_result = encryption_backend.decrypt(env_file.resolve(), **sops_encrypt_kwargs)
+        if not decrypt_result.success:
+            return False, f"decrypt failed: {decrypt_result.message}"
+        result = encryption_backend.encrypt(env_file.resolve(), **sops_encrypt_kwargs)
+        if not result.success:
+            return False, f"re-encrypt failed: {result.message}"
+    except (EncryptionNotFoundError, EncryptionBackendError) as e:
+        return False, f"rekey error: {e}"
+    return True, ""
+
+
 def lock(
     config_file: Annotated[
         Path | None,
@@ -1528,47 +1573,41 @@ def lock(
                 skipped_count += 1
                 continue
         else:
-            if backend_provider == EncryptionProvider.DOTENVX:
-                # Canonical encryption-state predicate (#470): the file is fully
-                # encrypted only when no plaintext secret value remains.
-                # has_plaintext_secret_value ignores comments and the plaintext
-                # DOTENV_PUBLIC_KEY_* header, so a small fully-encrypted file is
-                # no longer mis-flagged as partial (the old N/(N+1) ratio), and
-                # a mixed file holding one freshly added plaintext secret is
-                # never blessed "already encrypted" (the old >=90% ratio).
-                if has_plaintext_secret_value(env_file):
-                    # Mixed state: ciphertext present but at least one plaintext
-                    # secret remains - re-encrypt to cover the new values.
+            # Canonical encryption-state predicate (#470), backend-agnostic: the
+            # file is fully encrypted only when no plaintext secret value
+            # remains. has_plaintext_secret_value ignores comments, the
+            # plaintext DOTENV_PUBLIC_KEY_* header and SOPS's sops_* metadata
+            # trailer, so a small fully-encrypted file is no longer mis-flagged
+            # as partial (the old N/(N+1) ratio), and a mixed file holding one
+            # freshly added plaintext secret is never blessed "already
+            # encrypted" (the old >=90% ratio) — for dotenvx AND SOPS alike.
+            if has_plaintext_secret_value(env_file):
+                warnings.append(f"{env_file}: partially encrypted, plaintext values remain")
+                if check_only:
+                    # Dry run (--check): report only — never the active voice.
                     console.print(
-                        f"  [yellow]~[/yellow] {env_file} "
-                        "[dim]- partially encrypted (plaintext values remain), "
-                        "re-encrypting...[/dim]"
+                        f"  [cyan]?[/cyan] {env_file} "
+                        "[dim]- would re-encrypt (plaintext values remain)[/dim]"
                     )
-                    warnings.append(f"{env_file}: partially encrypted, plaintext values remain")
-                else:
-                    # Fully encrypted. Check if the key name matches the expected
-                    # environment - this handles the case where a file was renamed
-                    # (e.g., .env.local -> .env.localenv) but the .env.keys still
-                    # has the old key name.
+                    encrypted_count += 1
+                    continue
+                # Mixed state: ciphertext present but at least one plaintext
+                # secret remains - re-encrypt to cover the new values.
+                console.print(
+                    f"  [yellow]~[/yellow] {env_file} "
+                    "[dim]- partially encrypted (plaintext values remain), "
+                    "re-encrypting...[/dim]"
+                )
+            else:
+                if backend_provider == EncryptionProvider.DOTENVX:
+                    # Fully encrypted. Check if the key name matches the
+                    # expected environment - this handles the case where a file
+                    # was renamed (e.g., .env.local -> .env.localenv) but the
+                    # .env.keys still has the old key name.
                     expected_key_name = f"DOTENV_PRIVATE_KEY_{effective_env.upper()}"
-                    needs_rekey = False
-                    old_key_name = None
+                    old_key_name = _find_stale_private_key_name(env_keys_file, expected_key_name)
 
-                    if env_keys_file.exists():
-                        from envdrift.sync.operations import EnvKeysFile
-
-                        keys_file = EnvKeysFile(env_keys_file)
-                        if not keys_file.read_key(expected_key_name):
-                            # Expected key not found, check for any other key
-                            keys_content = env_keys_file.read_text()
-                            for line in keys_content.splitlines():
-                                if line.startswith("DOTENV_PRIVATE_KEY_") and "=" in line:
-                                    old_key_name = line.split("=")[0].strip()
-                                    if old_key_name != expected_key_name:
-                                        needs_rekey = True
-                                        break
-
-                    if needs_rekey and old_key_name:
+                    if old_key_name:
                         if check_only:
                             # Dry run: report the intended re-key without
                             # touching the env file or .env.keys on disk (#303).
@@ -1592,56 +1631,27 @@ def lock(
                             f"{env_file}: key name mismatch, re-encrypting to generate "
                             f"{expected_key_name}"
                         )
-                        # Decrypt first, then re-encrypt
-                        try:
-                            decrypt_result = encryption_backend.decrypt(
-                                env_file.resolve(), **sops_encrypt_kwargs
-                            )
-                            if not decrypt_result.success:
-                                console.print(
-                                    f"  [red]![/red] {env_file} "
-                                    f"[red]- decrypt failed: {decrypt_result.message}[/red]"
-                                )
-                                errors.append(f"{env_file}: decrypt for rekey failed")
-                                error_count += 1
-                                continue
-                            # Now re-encrypt (will generate new key with correct name)
-                            result = encryption_backend.encrypt(
-                                env_file.resolve(), **sops_encrypt_kwargs
-                            )
-                            if not result.success:
-                                console.print(
-                                    f"  [red]![/red] {env_file} "
-                                    f"[red]- re-encrypt failed: {result.message}[/red]"
-                                )
-                                errors.append(f"{env_file}: re-encryption for rekey failed")
-                                error_count += 1
-                                continue
-                            _normalize_mapped_dotenvx_metadata(
-                                env_file,
-                                env_keys_file,
-                                effective_env,
-                                backend_provider,
-                            )
-                            console.print(
-                                f"  [green]+[/green] {env_file} [dim]- re-encrypted with new key[/dim]"
-                            )
-                            encrypted_count += 1
-                            continue
-                        except (EncryptionNotFoundError, EncryptionBackendError) as e:
-                            console.print(
-                                f"  [red]![/red] {env_file} [red]- rekey error: {e}[/red]"
-                            )
-                            errors.append(f"{env_file}: rekey failed - {e}")
+                        # Decrypt first, then re-encrypt (generates the new key)
+                        rekey_ok, rekey_error = _rekey_dotenvx_file(
+                            env_file, encryption_backend, sops_encrypt_kwargs
+                        )
+                        if not rekey_ok:
+                            console.print(f"  [red]![/red] {env_file} [red]- {rekey_error}[/red]")
+                            errors.append(f"{env_file}: {rekey_error}")
                             error_count += 1
                             continue
+                        _normalize_mapped_dotenvx_metadata(
+                            env_file,
+                            env_keys_file,
+                            effective_env,
+                            backend_provider,
+                        )
+                        console.print(
+                            f"  [green]+[/green] {env_file} [dim]- re-encrypted with new key[/dim]"
+                        )
+                        encrypted_count += 1
+                        continue
 
-                    console.print(
-                        f"  [dim]=[/dim] {env_file} [dim]- skipped (already encrypted)[/dim]"
-                    )
-                    already_encrypted_count += 1
-                    continue
-            else:
                 console.print(f"  [dim]=[/dim] {env_file} [dim]- skipped (already encrypted)[/dim]")
                 already_encrypted_count += 1
                 continue
@@ -1777,7 +1787,7 @@ def lock(
         from envdrift.config import load_config as load_envdrift_config
         from envdrift.core.partial_encryption import (
             PartialEncryptionError,
-            _is_fully_encrypted,
+            is_fully_encrypted,
             push_secrets_only,
         )
 
@@ -1819,13 +1829,13 @@ def lock(
                         combined_file = Path(env_config.combined_file)
 
                         # Encrypt the .secret file unless it is FULLY encrypted.
-                        # _is_fully_encrypted is the same predicate `envdrift push`
+                        # is_fully_encrypted is the same predicate `envdrift push`
                         # uses: ciphertext present AND no leftover plaintext secret
                         # value. The old any-ciphertext check skipped a MIXED
                         # .secret (one encrypted value + one fresh plaintext) and
                         # shipped the new secret in cleartext (#470).
                         if secret_file.exists():
-                            if not _is_fully_encrypted(secret_file):
+                            if not is_fully_encrypted(secret_file):
                                 if check_only:
                                     console.print(
                                         f"  [cyan]?[/cyan] {secret_file} "
