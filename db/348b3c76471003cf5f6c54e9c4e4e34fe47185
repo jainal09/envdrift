@@ -1,0 +1,35 @@
+docs/concepts/how-it-works.md
+  s_a0bbd64ba4e4dd::t_606acbb04e8d1e 27-33
+tests/integration/test_parser_edge_cases_cli.py
+  s_a0bbd64ba4e4dd::t_bf845a4ce28b4c 1-9,12-25,27-104,106,108,111-112,114-120,122,124-128,130,132-134,136-140,142,144-145,148-150,152-159,161-165,167,169-170,172-176,178,180,183-184,186-193,195-196,198-201,203,205-207,209-212,214,216-218,223,226,233-234,236-242,244-248,250,252-256,258-262,264,266-267
+  s_a0bbd64ba4e4dd::t_0c7c17685177bc 10-11,105,107,109-110,113,121,123,129,131,135,141,143,146-147,151,160,166,168,171,177,179,181-182,185,194,197,202,204,208,213,215,219,225,227,231-232,235,243,249,251,257,263,265
+  s_a0bbd64ba4e4dd::t_5ed2f573b2d49c 220-222,224,228-230
+src/envdrift/core/parser.py
+  s_a0bbd64ba4e4dd::t_50d84f8b27af75 137-143
+  s_a0bbd64ba4e4dd::t_77a535e277baff 11
+  s_a0bbd64ba4e4dd::t_3a3cc3bdd9a1af 297-302
+  s_a0bbd64ba4e4dd::t_9651ae8bebd0e9 255-256,258
+  s_a0bbd64ba4e4dd::t_44ac484e3428fb 433-452,456-467,470,474-477
+  s_a0bbd64ba4e4dd::t_a2cb87fb8a4f2e 184-198
+  s_a0bbd64ba4e4dd::t_e031665e392c08 228-229,232
+tests/unit/test_parser_edge_cases.py
+  s_a0bbd64ba4e4dd::t_4d04662bb49e5c 396
+  s_a0bbd64ba4e4dd::t_4015e9c535792f 1-156,186-212,214-217,219-225,227-269,271-293,295-341,343-382,384-395,398-406
+  s_a0bbd64ba4e4dd::t_7e0cb918c698e9 157-185
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.6",
+  "base_commit_sha": "db348b3c76471003cf5f6c54e9c4e4e34fe47185",
+  "prompts": {},
+  "sessions": {
+    "s_a0bbd64ba4e4dd": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "c1e5b2e5-0fec-4bf5-b8e6-20cdb3a76855",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Jainal Gosaliya <jainal09gosalia@gmail.com>"
+    }
+  }
+}
