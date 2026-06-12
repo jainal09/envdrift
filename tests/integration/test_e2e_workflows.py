@@ -17,6 +17,7 @@ import contextlib
 import os
 import shutil
 import subprocess
+import sys
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -34,6 +35,7 @@ pytestmark = [pytest.mark.integration]
 class TestPullDecryptWorkflow:
     """Test complete pull-to-decrypt workflows."""
 
+    @pytest.mark.aws
     def test_e2e_pull_decrypt_workflow(
         self,
         localstack_endpoint: str,
@@ -125,6 +127,7 @@ folder_path = "."
 class TestLockPushWorkflow:
     """Test complete lock-to-push workflows."""
 
+    @pytest.mark.aws
     def test_e2e_lock_push_workflow(
         self,
         localstack_endpoint: str,
@@ -190,6 +193,7 @@ folder_path = "."
 class TestMonorepoMultiService:
     """Test multi-service monorepo scenarios."""
 
+    @pytest.mark.aws
     def test_e2e_monorepo_multi_service(
         self,
         localstack_endpoint: str,
@@ -675,3 +679,62 @@ class TestLockCheckIsReadOnly:
         assert keys_file.read_bytes() == keys_before, (
             f"lock --check rewrote .env.keys (#303 normalize path)\n{result.stdout}"
         )
+
+
+class TestContainerMarkerContract:
+    """#453: container-backed tests must be excluded by marker, not fixture luck.
+
+    ``cross-platform-integration.yml`` deselects container tests on macOS/Windows
+    runners (no Docker there) with ``-m "integration and not aws and not vault and
+    not azure and not gcp"``. A LocalStack-consuming test without ``@pytest.mark.aws``
+    is *selected* by that expression and only escapes failure because the
+    ``localstack_endpoint`` fixture ``pytest.skip()``s when the port is closed.
+    This meta-test makes the marker — not fixture luck — the enforced contract.
+    """
+
+    # The CI selector used on Docker-less runners (cross-platform-integration.yml).
+    _SELECTOR = "integration and not aws and not vault and not azure and not gcp"
+
+    def test_cross_platform_selector_excludes_localstack_e2e_tests(self) -> None:
+        """The Docker-less CI marker expression deselects the LocalStack e2e tests."""
+        module = Path(__file__).resolve()
+        repo_root = module.parents[2]
+        result = subprocess.run(
+            [
+                sys.executable,
+                "-m",
+                "pytest",
+                "--collect-only",
+                "-q",
+                "--no-cov",
+                "-p",
+                "no:cacheprovider",
+                "-m",
+                self._SELECTOR,
+                str(module),
+            ],
+            cwd=str(repo_root),
+            env={**os.environ, "PYTHONIOENCODING": "utf-8"},
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=120,
+        )
+        assert result.returncode == 0, result.stdout + result.stderr
+
+        localstack_backed = [
+            "test_e2e_pull_decrypt_workflow",
+            "test_e2e_lock_push_workflow",
+            "test_e2e_monorepo_multi_service",
+        ]
+        for name in localstack_backed:
+            assert name not in result.stdout, (
+                f"{name} consumes LocalStack fixtures but is selected by the "
+                f"Docker-less CI marker expression — it is missing "
+                f"@pytest.mark.aws (#453)\n{result.stdout}"
+            )
+
+        # Control: the Docker-free e2e tests must still be selected, proving the
+        # expression excludes by marker rather than deselecting everything.
+        assert "test_e2e_ci_mode_noninteractive" in result.stdout, result.stdout
