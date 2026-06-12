@@ -272,6 +272,10 @@ class TestInstallAgentCommand:
     def test_successful_installation(self, tmp_path: Path):
         """Test successful installation flow."""
         binary_path = tmp_path / "envdrift-agent"
+        # _download_binary is mocked, so pre-create the staging file the
+        # verified-install flow moves onto the final path (#490).
+        staging_path = tmp_path / "envdrift-agent.download"
+        staging_path.write_bytes(b"bin")
 
         # Mock subprocess to return success for version check and install
         version_result = MagicMock()

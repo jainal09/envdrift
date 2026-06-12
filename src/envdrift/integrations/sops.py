@@ -8,6 +8,7 @@ import stat
 import urllib.request
 from pathlib import Path
 
+from envdrift.install_integrity import verify_download
 from envdrift.integrations.dotenvx import get_platform_info, get_venv_bin_dir
 
 
@@ -31,7 +32,13 @@ def _get_download_url_templates() -> dict[str, str]:
     return _load_constants()["sops_download_urls"]
 
 
+def _get_checksums_url_template() -> str:
+    return _load_constants().get("sops_checksums_url", "")
+
+
 SOPS_VERSION = _get_sops_version()
+
+SOPS_CHECKSUMS_URL_TEMPLATE = _get_checksums_url_template()
 
 _URL_TEMPLATES = _get_download_url_templates()
 SOPS_DOWNLOAD_URLS = {
@@ -63,7 +70,19 @@ class SopsInstaller:
             raise SopsInstallError(f"Unsupported platform: {system} {machine}")
         return template.format(version=self.version)
 
+    def get_checksums_url(self) -> str:
+        """Get the URL of the upstream-published checksums file for this version."""
+        template = SOPS_CHECKSUMS_URL_TEMPLATE
+        return template.format(version=self.version) if template else ""
+
     def install(self, target_path: Path | None = None) -> Path:
+        """Download, verify, and install the SOPS binary.
+
+        The downloaded binary's SHA256 is checked against the upstream
+        checksums file BEFORE it replaces the target path; verification fails
+        closed, so a tampered or unverifiable download never replaces a
+        previously working binary (#490).
+        """
         if target_path is None:
             target_path = get_sops_path()
 
@@ -73,6 +92,8 @@ class SopsInstaller:
 
         try:
             urllib.request.urlretrieve(url, tmp_path)  # nosec B310
+            # Verify against the published checksums before installing.
+            verify_download(tmp_path, url.split("/")[-1], self.get_checksums_url(), "sops")
             if platform.system() != "Windows":
                 st = tmp_path.stat()
                 tmp_path.chmod(st.st_mode | stat.S_IEXEC)

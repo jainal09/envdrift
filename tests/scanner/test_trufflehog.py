@@ -26,6 +26,7 @@ from envdrift.scanner.trufflehog import (
     get_trufflehog_path,
     get_venv_bin_dir,
 )
+from tests.helpers import write_checksums_for
 
 
 def _create_tar_gz(tmp_path: Path, binary_name: str) -> Path:
@@ -249,6 +250,10 @@ class TestTrufflehogInstaller:
         monkeypatch.setattr(
             installer, "get_download_url", lambda: "https://example.com/trufflehog.tar.gz"
         )
+        checksums_url = write_checksums_for(
+            archive_path, tmp_path / "checksums-tar-gz.txt", "trufflehog.tar.gz"
+        )
+        monkeypatch.setattr(installer, "get_checksums_url", lambda: checksums_url)
         monkeypatch.setattr(platform, "system", lambda: "Linux")
 
         def fake_urlretrieve(_url: str, filename: str):
@@ -272,6 +277,10 @@ class TestTrufflehogInstaller:
         monkeypatch.setattr(
             installer, "get_download_url", lambda: "https://example.com/trufflehog.zip"
         )
+        checksums_url = write_checksums_for(
+            archive_path, tmp_path / "checksums-zip.txt", "trufflehog.zip"
+        )
+        monkeypatch.setattr(installer, "get_checksums_url", lambda: checksums_url)
         monkeypatch.setattr(platform, "system", lambda: "Windows")
 
         def fake_urlretrieve(_url: str, filename: str):

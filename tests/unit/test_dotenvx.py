@@ -408,6 +408,30 @@ class TestDownloadUrls:
         assert ("Windows", "AMD64") in DOWNLOAD_URLS
 
 
+def _urlopen_serving(archive_bytes: bytes, artifact_name: str):
+    """Build a urlopen side_effect serving the archive plus matching checksums.
+
+    The fail-closed download verification (#490) fetches the checksums URL via
+    the same (mocked) urlopen, so dispatch by URL: checksum requests get a
+    sha256sum-style line matching the served archive, everything else gets the
+    archive bytes.
+    """
+    import hashlib
+
+    checksums = f"{hashlib.sha256(archive_bytes).hexdigest()}  {artifact_name}\n".encode()
+
+    def fake_urlopen(url, timeout=None):
+        cm = MagicMock()
+        response = MagicMock()
+        url_text = url if isinstance(url, str) else getattr(url, "full_url", str(url))
+        response.read.return_value = checksums if "checksums" in url_text else archive_bytes
+        cm.__enter__.return_value = response
+        cm.__exit__.return_value = False
+        return cm
+
+    return fake_urlopen
+
+
 class TestDotenvxInstallerExtended:
     """Extended tests for DotenvxInstaller class."""
 
@@ -434,12 +458,12 @@ class TestDotenvxInstallerExtended:
             tar.addfile(tarinfo, io.BytesIO(data))
         archive_bytes = buffer.getvalue()
 
-        # urlopen is used as a context manager whose response.read() yields bytes.
-        mock_response = MagicMock()
-        mock_response.read.return_value = archive_bytes
-        mock_urlopen.return_value.__enter__.return_value = mock_response
-
+        # urlopen serves the archive and, for the verification fetch (#490),
+        # a checksums file matching the served bytes.
         installer = DotenvxInstaller()
+        artifact_name = installer.get_download_url().split("/")[-1]
+        mock_urlopen.side_effect = _urlopen_serving(archive_bytes, artifact_name)
+
         installer.download_and_extract(target)
 
         assert target.exists()
@@ -464,12 +488,12 @@ class TestDotenvxInstallerExtended:
             zf.writestr("dotenvx.exe", b"mock dotenvx binary")
         archive_bytes = buffer.getvalue()
 
-        # urlopen is used as a context manager whose response.read() yields bytes.
-        mock_response = MagicMock()
-        mock_response.read.return_value = archive_bytes
-        mock_urlopen.return_value.__enter__.return_value = mock_response
-
+        # urlopen serves the archive and, for the verification fetch (#490),
+        # a checksums file matching the served bytes.
         installer = DotenvxInstaller()
+        artifact_name = installer.get_download_url().split("/")[-1]
+        mock_urlopen.side_effect = _urlopen_serving(archive_bytes, artifact_name)
+
         installer.download_and_extract(target)
 
         assert target.exists()
@@ -523,10 +547,9 @@ class TestDotenvxInstallerExtended:
         with patch.object(
             DotenvxInstaller, "get_download_url", return_value="https://example.com/dotenvx.unknown"
         ):
-            # Download succeeds; the format check fires before extraction.
-            mock_response = MagicMock()
-            mock_response.read.return_value = b"irrelevant"
-            mock_urlopen.return_value.__enter__.return_value = mock_response
+            # Download and verification succeed; the format check fires
+            # before extraction.
+            mock_urlopen.side_effect = _urlopen_serving(b"irrelevant", "dotenvx.unknown")
 
             installer = DotenvxInstaller()
 

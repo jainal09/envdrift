@@ -20,6 +20,7 @@ from envdrift.scanner.talisman import (
     get_platform_info,
     get_talisman_path,
 )
+from tests.helpers import write_checksums_for
 
 
 class TestPlatformDetection:
@@ -647,15 +648,25 @@ class TestTalismanInstallerInstall:
     ):
         """Test successful installation."""
 
+        checksums_path = tmp_path / "stub-checksums.txt"
+
         def fake_download(url: str, dest: str) -> None:
             # Create a fake binary file
             Path(dest).write_bytes(b"fake binary content")
+            write_checksums_for(Path(dest), checksums_path, url.rsplit("/", 1)[-1])
 
         mock_urlretrieve.side_effect = fake_download
 
-        with patch(
-            "envdrift.scanner.talisman.get_talisman_path",
-            return_value=tmp_path / "talisman",
+        with (
+            patch(
+                "envdrift.scanner.talisman.get_talisman_path",
+                return_value=tmp_path / "talisman",
+            ),
+            patch.object(
+                TalismanInstaller,
+                "get_checksums_url",
+                lambda self: checksums_path.resolve().as_uri(),
+            ),
         ):
             installer = TalismanInstaller()
             result = installer.install()

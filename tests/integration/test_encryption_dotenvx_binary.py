@@ -19,6 +19,7 @@ import zipfile
 from pathlib import Path
 
 import pytest
+from tests.helpers import write_checksums_for
 
 from envdrift.integrations import dotenvx as dotenvx_mod
 from envdrift.integrations.dotenvx import (
@@ -146,6 +147,14 @@ def test_extract_archive_missing_binary_raises_install_error(
         DotenvxInstaller,
         "get_download_url",
         lambda self: archive.as_uri(),
+    )
+    # Serve a matching checksums file so the fail-closed verification (#490)
+    # passes and the missing-binary check is what fires.
+    checksums_url = write_checksums_for(archive, tmp_path / "checksums.txt", "dotenvx.tar.gz")
+    monkeypatch.setattr(
+        DotenvxInstaller,
+        "get_checksums_url",
+        lambda self: checksums_url,
     )
 
     target = tmp_path / "out" / "dotenvx"
