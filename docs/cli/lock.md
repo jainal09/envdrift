@@ -93,6 +93,16 @@ Verify that local `.env.keys` match vault secrets before encrypting.
 
 This helps detect key drift where a developer may have re-encrypted with a new key that doesn't match the team's shared vault key.
 
+Verification is strict: a mapping that **cannot** be verified — missing
+`.env.keys`, a missing key entry, a missing or empty vault secret, or a vault
+access error — fails the same way a key mismatch does. When any mapping fails
+verification, `lock` exits 1 **before** encrypting anything (even with
+`--force`, which only skips prompts). This prevents the encryption step from
+silently minting a fresh local-only key that the rest of the team cannot
+decrypt with the vault key. Repair with `envdrift lock --sync-keys` (fetch
+keys from vault) or `envdrift vault-push` (publish local keys), or rerun
+without `--verify-vault` to encrypt without verification.
+
 ```bash
 envdrift lock --verify-vault
 ```
@@ -285,7 +295,21 @@ Step 1: Verifying keys with vault...
   ✓ services/myapp - keys match vault
   ✗ services/auth - KEY MISMATCH: local key differs from vault!
 
-ERROR: Found 1 key mismatch(es). Run with --sync-keys to update local keys, or --force to encrypt anyway.
+ERROR: Vault key verification failed for 1 mapping(s). Nothing was encrypted.
+Run 'envdrift lock --sync-keys' to sync keys from vault, or rerun without
+--verify-vault to skip verification.
+```
+
+An unverifiable mapping fails the same way (exit 1, nothing encrypted):
+
+```text
+Step 1: Verifying keys with vault...
+
+  ✗ services/auth - cannot verify: .env.keys not found
+
+ERROR: Vault key verification failed for 1 mapping(s). Nothing was encrypted.
+Run 'envdrift lock --sync-keys' to sync keys from vault, or rerun without
+--verify-vault to skip verification.
 ```
 
 ### With Key Sync
@@ -382,6 +406,7 @@ The `lock` command catches many edge cases and provides helpful warnings and err
 |:-----|:------------------------------------------------------------------------------------------|
 | 0    | Success (all files encrypted or verified)                                                  |
 | 1    | Error (key mismatch, encryption failure, or vault error)                                   |
+| 1    | `--verify-vault`: a mapping failed or could not be verified (nothing is encrypted)         |
 | 1    | `--check`: one or more files still need encryption                                         |
 | 1    | `--all`: a skipped secrets-only environment still holds plaintext (run `envdrift push`)    |
 

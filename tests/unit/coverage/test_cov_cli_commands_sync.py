@@ -763,27 +763,76 @@ class TestLockCommand:
         assert "KEY MISMATCH" in result.output
 
     @patch("envdrift.cli_commands.encryption_helpers.resolve_encryption_backend")
-    def test_lock_verify_vault_missing_keys_file_warns(
+    def test_lock_verify_vault_key_mismatch_with_force_still_refuses(
         self, mock_resolve, tmp_path, loaded_config, no_git_hook
     ):
+        """#473: --force means "don't prompt", not "encrypt past a failed verification"."""
         backend = DummyEncryptionBackend()
         mock_resolve.return_value = (backend, EncryptionProvider.DOTENVX, None)
-        (tmp_path / ".env.production").write_text(
-            "#/---BEGIN DOTENV ENCRYPTED---/\nSECRET=encrypted:abc\n"
+        (tmp_path / ".env.production").write_text("SECRET=plaintext\n")
+        (tmp_path / ".env.keys").write_text("DOTENV_PRIVATE_KEY_PRODUCTION=localkey\n")
+
+        client = MagicMock()
+        client.get_secret.return_value = SecretValue(
+            name="s", value="DOTENV_PRIVATE_KEY_PRODUCTION=differentkey"
         )
-        # no .env.keys present -> warning branch
+        mapping = ServiceMapping(secret_name="s", folder_path=tmp_path, environment="production")
+        loaded_config(_sync_config([mapping]), client)
+
+        result = runner.invoke(app, ["lock", "--verify-vault", "--force"])
+        assert result.exit_code == 1
+        assert "KEY MISMATCH" in result.output
+        # The hard stop happens BEFORE Step 2: nothing was encrypted.
+        assert backend.encrypt_calls == []
+        assert "SECRET=plaintext" in (tmp_path / ".env.production").read_text()
+
+    @patch("envdrift.cli_commands.encryption_helpers.resolve_encryption_backend")
+    def test_lock_verify_vault_missing_keys_file_fails(
+        self, mock_resolve, tmp_path, loaded_config, no_git_hook
+    ):
+        """#473: missing .env.keys is "cannot verify" -> hard error, no key mint."""
+        backend = DummyEncryptionBackend()
+        mock_resolve.return_value = (backend, EncryptionProvider.DOTENVX, None)
+        # A plaintext file that Step 2 would encrypt with a freshly minted key.
+        (tmp_path / ".env.production").write_text("SECRET=plaintext\n")
+        # no .env.keys present -> cannot verify
         client = MagicMock()
         mapping = ServiceMapping(secret_name="s", folder_path=tmp_path, environment="production")
         loaded_config(_sync_config([mapping]), client)
 
         result = runner.invoke(app, ["lock", "--verify-vault", "--force"])
-        assert result.exit_code == 0, result.output
-        assert ".env.keys not found" in result.output
+        assert result.exit_code == 1, result.output
+        out = " ".join(result.output.split())
+        assert "cannot verify" in out
+        assert "--sync-keys" in out
+        # Step 2 never ran: no fresh local-only key was minted, nothing encrypted.
+        assert backend.encrypt_calls == []
+        assert not (tmp_path / ".env.keys").exists()
 
     @patch("envdrift.cli_commands.encryption_helpers.resolve_encryption_backend")
-    def test_lock_verify_vault_secret_not_found_warns(
+    def test_lock_verify_vault_missing_key_entry_fails(
         self, mock_resolve, tmp_path, loaded_config, no_git_hook
     ):
+        """#473: a .env.keys without the expected key entry is "cannot verify"."""
+        backend = DummyEncryptionBackend()
+        mock_resolve.return_value = (backend, EncryptionProvider.DOTENVX, None)
+        (tmp_path / ".env.production").write_text("SECRET=plaintext\n")
+        (tmp_path / ".env.keys").write_text("DOTENV_PRIVATE_KEY_STAGING=otherkey\n")
+
+        client = MagicMock()
+        mapping = ServiceMapping(secret_name="s", folder_path=tmp_path, environment="production")
+        loaded_config(_sync_config([mapping]), client)
+
+        result = runner.invoke(app, ["lock", "--verify-vault", "--force"])
+        assert result.exit_code == 1, result.output
+        assert "cannot verify" in " ".join(result.output.split())
+        assert backend.encrypt_calls == []
+
+    @patch("envdrift.cli_commands.encryption_helpers.resolve_encryption_backend")
+    def test_lock_verify_vault_secret_not_found_fails(
+        self, mock_resolve, tmp_path, loaded_config, no_git_hook
+    ):
+        """#473: a missing vault secret is "cannot verify" -> hard error."""
         backend = DummyEncryptionBackend()
         mock_resolve.return_value = (backend, EncryptionProvider.DOTENVX, None)
         (tmp_path / ".env.production").write_text(
@@ -797,8 +846,32 @@ class TestLockCommand:
         loaded_config(_sync_config([mapping]), client)
 
         result = runner.invoke(app, ["lock", "--verify-vault", "--force"])
-        assert result.exit_code == 0, result.output
-        assert "vault secret 's' not found" in result.output
+        out = " ".join(result.output.split())
+        assert result.exit_code == 1, result.output
+        assert "vault secret 's' not found" in out
+        assert backend.encrypt_calls == []
+
+    @patch("envdrift.cli_commands.encryption_helpers.resolve_encryption_backend")
+    def test_lock_verify_vault_empty_secret_fails(
+        self, mock_resolve, tmp_path, loaded_config, no_git_hook
+    ):
+        """#473: an empty vault secret is "cannot verify" -> hard error."""
+        backend = DummyEncryptionBackend()
+        mock_resolve.return_value = (backend, EncryptionProvider.DOTENVX, None)
+        (tmp_path / ".env.production").write_text(
+            "#/---BEGIN DOTENV ENCRYPTED---/\nSECRET=encrypted:abc\n"
+        )
+        (tmp_path / ".env.keys").write_text("DOTENV_PRIVATE_KEY_PRODUCTION=localkey\n")
+
+        client = MagicMock()
+        client.get_secret.return_value = SecretValue(name="s", value="")
+        mapping = ServiceMapping(secret_name="s", folder_path=tmp_path, environment="production")
+        loaded_config(_sync_config([mapping]), client)
+
+        result = runner.invoke(app, ["lock", "--verify-vault", "--force"])
+        assert result.exit_code == 1, result.output
+        assert "is empty" in " ".join(result.output.split())
+        assert backend.encrypt_calls == []
 
     @patch("envdrift.cli_commands.encryption_helpers.resolve_encryption_backend")
     def test_lock_verify_vault_error_records_error(
@@ -816,10 +889,11 @@ class TestLockCommand:
         mapping = ServiceMapping(secret_name="s", folder_path=tmp_path, environment="production")
         loaded_config(_sync_config([mapping]), client)
 
-        # vault error -> recorded as error -> overall exit 1
+        # vault error -> verification failure -> exit 1 before Step 2 (#473)
         result = runner.invoke(app, ["lock", "--verify-vault", "--force"])
         assert result.exit_code == 1
         assert "vault access failed" in result.output
+        assert backend.encrypt_calls == []
 
     @patch("envdrift.cli_commands.encryption_helpers.resolve_encryption_backend")
     def test_lock_sync_keys_runs_engine(
