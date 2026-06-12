@@ -450,23 +450,8 @@ func TestLoadAllProjectConfigs_LogsDroppedProjectOnLoadError(t *testing.T) {
 	if runtime.GOOS == "windows" || os.Geteuid() == 0 {
 		t.Skip("chmod-000 unreadability is not enforced on Windows or for root")
 	}
-	parent := t.TempDir()
-	project := filepath.Join(parent, "child")
-	if err := os.MkdirAll(project, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	// An ancestor envdrift.toml that exists but cannot be read: discovery from
-	// the child walks up, hits it, and returns a real error.
-	ancestor := filepath.Join(parent, "envdrift.toml")
-	writeFile(t, ancestor, "\n[guardian]\nenabled = true\n")
-	if err := os.Chmod(ancestor, 0o000); err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = os.Chmod(ancestor, 0o600) })
-
-	var logbuf bytes.Buffer
-	log.SetOutput(&logbuf)
-	t.Cleanup(func() { log.SetOutput(os.Stderr) })
+	project := projectUnderUnreadableAncestor(t)
+	logbuf := captureLog(t)
 
 	configs, err := LoadAllProjectConfigs([]string{project})
 	if err != nil {
@@ -479,4 +464,33 @@ func TestLoadAllProjectConfigs_LogsDroppedProjectOnLoadError(t *testing.T) {
 	if !strings.Contains(out, "Skipping project") || !strings.Contains(out, project) {
 		t.Errorf("dropped project was not logged; log output:\n%s", out)
 	}
+}
+
+// projectUnderUnreadableAncestor returns a child project path whose discovery
+// walk hits an existing-but-unreadable ancestor envdrift.toml (a real load
+// error), cleaning the permissions up afterwards.
+func projectUnderUnreadableAncestor(t *testing.T) string {
+	t.Helper()
+	parent := t.TempDir()
+	project := filepath.Join(parent, "child")
+	if err := os.MkdirAll(project, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	ancestor := filepath.Join(parent, "envdrift.toml")
+	writeFile(t, ancestor, "\n[guardian]\nenabled = true\n")
+	if err := os.Chmod(ancestor, 0o000); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(ancestor, 0o600) })
+	return project
+}
+
+// captureLog redirects the standard logger into a buffer for the duration of
+// the test and restores stderr afterwards.
+func captureLog(t *testing.T) *bytes.Buffer {
+	t.Helper()
+	var buf bytes.Buffer
+	log.SetOutput(&buf)
+	t.Cleanup(func() { log.SetOutput(os.Stderr) })
+	return &buf
 }
