@@ -1,0 +1,86 @@
+envdrift-vscode/src/utils.ts
+  s_a0bbd64ba4e4dd::t_24e3a8fc662a1b 126-130,133-138
+  s_a0bbd64ba4e4dd::t_cb5f178845dcea 39-54,60-62,65-74,77-78
+  s_a0bbd64ba4e4dd::t_3ac0282682a0dd 90-97,104-105,109,111-125,131-132,139-140
+  s_a0bbd64ba4e4dd::t_0e66795ce75e47 98-103,106-108,110
+  s_a0bbd64ba4e4dd::t_d0c1c47abcb83c 81-84
+envdrift-vscode/src/agentStatus.ts
+  s_a0bbd64ba4e4dd::t_8ed13f041fc8df 2-7,9,87-90,92,99-102,104
+envdrift-vscode/src/test/unit/agentStatusParse.test.ts
+  s_a0bbd64ba4e4dd::t_5f785c1d648381 1-61
+envdrift-vscode/src/config.ts
+  s_a0bbd64ba4e4dd::t_79a5a4bfcc669d 2
+  s_a0bbd64ba4e4dd::t_cf4cae9b3341ca 30-32,36-43
+envdrift-vscode/src/test/unit/encryptCore.test.ts
+  s_a0bbd64ba4e4dd::t_70494f74120513 1-138
+envdrift-vscode/src/encryption.ts
+  s_a0bbd64ba4e4dd::t_bff95dfb96168a 129-132,136-142
+  s_a0bbd64ba4e4dd::t_998dbbfb82d67d 1-6,8,10,14-19,93-94,101,103-106,133,149
+envdrift-vscode/src/logger.ts
+  s_a0bbd64ba4e4dd::t_8a938e399186ba 1-44
+envdrift-vscode/src/fileWatcher.ts
+  s_a0bbd64ba4e4dd::t_e9f1bc74134b74 79,81,85,91-93
+  s_a0bbd64ba4e4dd::t_8b682da8d293a7 156-157,161,165
+  s_a0bbd64ba4e4dd::t_f38988bd432704 5
+  s_a0bbd64ba4e4dd::t_32315a1e2096a8 15
+envdrift-vscode/src/extension.ts
+  s_a0bbd64ba4e4dd::t_e872d41e4bd46c 23-26
+  s_a0bbd64ba4e4dd::t_89c6d00b55d25c 5
+  s_a0bbd64ba4e4dd::t_8beb8daf382752 43-47,55-58,62-63
+  s_a0bbd64ba4e4dd::t_f5935c8d364043 267
+tests/test_vscode_cli_contract.py
+  s_a0bbd64ba4e4dd::t_48c765eb6ba3ef 1-96,104-274
+  s_a0bbd64ba4e4dd::t_704fbdf55e2c9b 97-103
+envdrift-vscode/src/statusBar.ts
+  s_a0bbd64ba4e4dd::t_00118b806851eb 109-110,112
+envdrift-vscode/src/test/suite/extension.test.ts
+  s_a0bbd64ba4e4dd::t_2d2668099756d5 25-31
+src/envdrift/__main__.py
+  s_a0bbd64ba4e4dd::t_7c707b2e022f40 1-11
+envdrift-vscode/src/test/unit/shim.ts
+  s_a0bbd64ba4e4dd::t_a9a8154bbc19ca 1-114
+envdrift-vscode/src/test/unit/configScope.test.ts
+  s_a0bbd64ba4e4dd::t_fb331955712161 1-42
+envdrift-vscode/src/test/unit/encryptedPredicate.test.ts
+  s_a0bbd64ba4e4dd::t_ead3e99b7b4c4a 69-80
+  s_a0bbd64ba4e4dd::t_09a1b6e6f4d643 1-68,81
+envdrift-vscode/package.json
+  s_a0bbd64ba4e4dd::t_1adba1e4e8f6e3 68-70
+  s_a0bbd64ba4e4dd::t_fb8464573e515a 34
+envdrift-vscode/README.md
+  s_a0bbd64ba4e4dd::t_9a1e94bae614f4 51
+  s_a0bbd64ba4e4dd::t_c7e0ef91e0ad79 65-66,70
+envdrift-vscode/src/test/unit/agentCore.test.ts
+  s_a0bbd64ba4e4dd::t_79e96be551b3f7 1-118
+docs/guides/vscode-extension.md
+  s_a0bbd64ba4e4dd::t_6f66faa28b3aa8 117
+  s_a0bbd64ba4e4dd::t_5f2b19008777b2 130-133
+  s_a0bbd64ba4e4dd::t_11b90d25006554 99
+  s_a0bbd64ba4e4dd::t_5efa8986240c9f 239-240,246-247,249
+  s_a0bbd64ba4e4dd::t_ef039015fec300 225-227
+  s_a0bbd64ba4e4dd::t_28426921793a83 148-149,153-155,160-166,168-170
+  s_a0bbd64ba4e4dd::t_f54cdbb3d7ee7d 241
+envdrift-vscode/src/agentCore.ts
+  s_a0bbd64ba4e4dd::t_9e50aae00a9f06 39-42,44-47,51,59,63-64
+  s_a0bbd64ba4e4dd::t_27b1e3b4699388 85-90,92-94
+  s_a0bbd64ba4e4dd::t_5688a4f02330db 109-115,119
+  s_a0bbd64ba4e4dd::t_847b9e63998150 1-38,43,48-50,52-58,60-62,65-84,91,95-108,116-118,120-147
+docs/agent-spec.md
+  s_a0bbd64ba4e4dd::t_851794ff2ebc7c 510-513
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.6",
+  "base_commit_sha": "5b734b38495e343b59f8de6b536933164bd7ac96",
+  "prompts": {},
+  "sessions": {
+    "s_a0bbd64ba4e4dd": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "c1e5b2e5-0fec-4bf5-b8e6-20cdb3a76855",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Jainal Gosaliya <jainal09gosalia@gmail.com>"
+    }
+  }
+}
