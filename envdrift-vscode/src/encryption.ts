@@ -1,8 +1,21 @@
-import * as vscode from 'vscode';
+/**
+ * Encryption core — locates the envdrift CLI and encrypts files with it.
+ * Free of VS Code API imports so it can be unit tested with the real
+ * subprocess machinery; the argv it spawns is validated against the real
+ * CLI in tests/test_vscode_cli_contract.py.
+ */
 import * as cp from 'child_process';
+import * as fs from 'fs';
 import * as path from 'path';
+import { isContentEncrypted } from './utils';
 
 const ENCRYPTION_TIMEOUT_MS = 30000; // 30 second timeout
+
+/**
+ * Optional sink for diagnostic messages (wired to the EnvDrift output
+ * channel by the extension; no-op in unit tests).
+ */
+export type LogSink = (message: string) => void;
 
 /**
  * Find envdrift CLI and return executable info
@@ -77,40 +90,20 @@ async function testPythonModule(python: string, module: string): Promise<boolean
  */
 export async function isEncrypted(filePath: string): Promise<boolean> {
     try {
-        const document = await vscode.workspace.openTextDocument(filePath);
-        const content = document.getText();
-
-        // Check for dotenvx encryption markers
-        const lines = content.split('\n');
-        for (const line of lines) {
-            const trimmed = line.trim();
-            // Skip empty lines
-            if (!trimmed) {
-                continue;
-            }
-            // Check for DOTENV_PUBLIC_KEY header (indicates encrypted file)
-            if (trimmed.startsWith('#') && trimmed.includes('DOTENV_PUBLIC_KEY')) {
-                return true;
-            }
-            // Skip other comments
-            if (trimmed.startsWith('#')) {
-                continue;
-            }
-            // dotenvx uses "encrypted:" prefix in values
-            if (/=.*encrypted:/i.test(trimmed)) {
-                return true;
-            }
-        }
-        return false;
+        const content = await fs.promises.readFile(filePath, { encoding: 'utf8' });
+        return isContentEncrypted(content);
     } catch {
         return false;
     }
 }
 
 /**
- * Encrypt a .env file using envdrift lock
+ * Encrypt a .env file using the envdrift CLI
  */
-export async function encryptFile(filePath: string): Promise<{ success: boolean; message: string }> {
+export async function encryptFile(
+    filePath: string,
+    log: LogSink = () => undefined
+): Promise<{ success: boolean; message: string }> {
     // Check if already encrypted
     if (await isEncrypted(filePath)) {
         return {
@@ -133,15 +126,27 @@ export async function encryptFile(filePath: string): Promise<{ success: boolean;
     const fileName = path.basename(filePath);
 
     try {
-        // Use spawn with args array to prevent command injection
-        const args = [...envdriftInfo.args, 'lock', fileName];
+        // Use spawn with args array to prevent command injection.
+        // Per-file encryption is `envdrift encrypt <file>` — `lock` accepts
+        // no positional argument and always exited 2 here (#482).
+        const args = [...envdriftInfo.args, 'encrypt', fileName];
+        log(`Running: ${envdriftInfo.executable} ${args.join(' ')} (cwd: ${cwd})`);
         await spawnWithTimeout(envdriftInfo.executable, args, cwd, ENCRYPTION_TIMEOUT_MS);
+
+        // Verify the post-condition instead of trusting the exit code: never
+        // report success while the file is still plaintext.
+        if (!(await isEncrypted(filePath))) {
+            const message = `Encryption command succeeded but ${fileName} is still not encrypted`;
+            log(message);
+            return { success: false, message };
+        }
 
         return {
             success: true,
             message: `Encrypted: ${fileName}`,
         };
     } catch (error) {
+        log(`Encryption failed for ${fileName}: ${error}`);
         return {
             success: false,
             message: `Encryption failed: ${error}`,

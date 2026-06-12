@@ -31,6 +31,7 @@
     "onCommand:envdrift.disable",
     "onCommand:envdrift.encryptNow",
     "onCommand:envdrift.showStatus",
+    "onCommand:envdrift.showLogs",
     "onCommand:envdrift.startAgent",
     "onCommand:envdrift.stopAgent",
     "onCommand:envdrift.refreshAgentStatus"
@@ -62,6 +63,10 @@
       {
         "command": "envdrift.showStatus",
         "title": "EnvDrift: Show Status"
+      },
+      {
+        "command": "envdrift.showLogs",
+        "title": "EnvDrift: Show Logs"
       },
       {
         "command": "envdrift.startAgent",
