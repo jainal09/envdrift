@@ -220,7 +220,9 @@ function Find-Python {
 # Create / reuse virtual environment
 # -------------------------------------------------------------------
 function Initialize-Venv {
-    $venvPython = Join-Path $VenvDir "Scripts" "python.exe"
+    # Two-arg Join-Path nesting: the 3-argument form is PowerShell 6+ only and
+    # breaks the documented `irm | iex` flow on Windows PowerShell 5.1 (#483).
+    $venvPython = Join-Path (Join-Path $VenvDir "Scripts") "python.exe"
 
     if ((Test-Path $VenvDir) -and (Test-Path $venvPython)) {
         Write-Info "Reusing existing venv at $VenvDir"
@@ -235,10 +237,15 @@ function Initialize-Venv {
     }
 
     $script:VenvPython = $venvPython
-    $script:VenvPip = Join-Path $VenvDir "Scripts" "pip.exe"
+    $script:VenvPip = Join-Path (Join-Path $VenvDir "Scripts") "pip.exe"
 
-    # Upgrade pip silently
+    # Upgrade pip silently (best-effort). Keep $ErrorActionPreference relaxed
+    # around the redirection: under Windows PowerShell 5.1 with 'Stop', any
+    # native stderr line combined with 2>$null becomes a terminating
+    # NativeCommandError (fixed only in PowerShell 7.2+).
+    $ErrorActionPreference = "Continue"
     & $script:VenvPython -m pip install --upgrade pip 2>$null | Out-Null
+    $ErrorActionPreference = "Stop"
 }
 
 # -------------------------------------------------------------------
@@ -264,13 +271,17 @@ function Install-Envdrift {
 function New-Wrappers {
     New-Item -ItemType Directory -Path $BinDir -Force | Out-Null
 
-    $venvEnvdrift = Join-Path $VenvDir "Scripts" "envdrift.exe"
+    $venvEnvdrift = Join-Path (Join-Path $VenvDir "Scripts") "envdrift.exe"
 
-    # CMD wrapper (UTF8 to support non-ASCII paths)
+    # CMD wrapper. cmd.exe reads batch files in the legacy OEM codepage, so an
+    # absolute install path with non-ASCII characters (e.g. C:\Users\Jose with
+    # an accented e) cannot be stored portably. Resolve the venv relative to
+    # this wrapper at runtime instead (%~dp0 = <install dir>\bin\): the file
+    # stays pure ASCII and works for any user-profile path (#483).
     $cmdWrapper = Join-Path $BinDir "envdrift.cmd"
     @"
 @echo off
-"$venvEnvdrift" %*
+"%~dp0..\venv\Scripts\envdrift.exe" %*
 "@ | Set-Content -Path $cmdWrapper -Encoding ASCII
     Write-Ok "Created CMD wrapper at $cmdWrapper"
 
