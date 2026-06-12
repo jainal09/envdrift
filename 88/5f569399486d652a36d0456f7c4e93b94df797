@@ -1,0 +1,51 @@
+src/envdrift/vault/gcp.py
+  s_a0bbd64ba4e4dd::t_dd0da5327b65cd 210,217-220,226
+src/envdrift/cli_commands/vault.py
+  s_a0bbd64ba4e4dd::t_75f0be8e93969f 576
+  s_a0bbd64ba4e4dd::t_dc479692bb7cbe 602-623
+docs/cli/vault-pull.md
+  s_a0bbd64ba4e4dd::t_89a1636d167684 86-103
+src/envdrift/vault/hashicorp.py
+  s_a0bbd64ba4e4dd::t_9223fa396facd3 16
+  s_a0bbd64ba4e4dd::t_f043adb246f431 35-41,47-54
+src/envdrift/sync/engine.py
+  s_a0bbd64ba4e4dd::t_76825756b15fac 24-33
+  s_a0bbd64ba4e4dd::t_4383f43fcf24ff 273-276,280-283
+src/envdrift/vault/aws.py
+  s_a0bbd64ba4e4dd::t_69cfa7c8ae95ad 206-209
+tests/unit/test_vault_keymaterial.py
+  s_a0bbd64ba4e4dd::t_9804cbfd886e57 1-120,126-184
+  s_a0bbd64ba4e4dd::t_b9f5518d2c6066 121-125
+tests/unit/test_cli_vault_pull.py
+  s_a0bbd64ba4e4dd::t_c792861f78a182 932-937
+tests/unit/test_vault_gcp.py
+  s_a0bbd64ba4e4dd::t_1b7a35d2996c44 433-435
+tests/integration/test_hashicorp_integration.py
+  s_a0bbd64ba4e4dd::t_d11dcdad804e6d 1167-1168
+src/envdrift/cli_commands/sync.py
+  s_a0bbd64ba4e4dd::t_7d834f62bb70e2 1341-1346
+tests/unit/test_vault_aws.py
+  s_a0bbd64ba4e4dd::t_c58aaecf202d77 195-197
+  s_a0bbd64ba4e4dd::t_828b2d079176ee 601-603
+docs/guides/env-file-sync.md
+  s_a0bbd64ba4e4dd::t_32a5e6993fbc1b 254-264
+src/envdrift/vault/keymaterial.py
+  s_a0bbd64ba4e4dd::t_9b948856123ace 97-99
+  s_a0bbd64ba4e4dd::t_460c99481a7b82 1-96,100-232
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.6",
+  "base_commit_sha": "885f569399486d652a36d0456f7c4e93b94df797",
+  "prompts": {},
+  "sessions": {
+    "s_a0bbd64ba4e4dd": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "c1e5b2e5-0fec-4bf5-b8e6-20cdb3a76855",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Jainal Gosaliya <jainal09gosalia@gmail.com>"
+    }
+  }
+}
