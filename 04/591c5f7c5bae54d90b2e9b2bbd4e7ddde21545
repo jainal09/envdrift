@@ -1,0 +1,28 @@
+tests/unit/test_packaging_floors.py
+  s_a0bbd64ba4e4dd::t_60db044077d790 1-6,14-21,26-28,30-33,37
+  s_a0bbd64ba4e4dd::t_c8b6f4cd9c43c9 7,9-13,22-25,29,34-36
+tests/helpers.py
+  s_a0bbd64ba4e4dd::t_d2f2ec89f0b01d 5-6,12-41
+tests/integration/test_packaging_floors.py
+  s_a0bbd64ba4e4dd::t_8dbd04c72e99f9 1-7,11-124
+  s_a0bbd64ba4e4dd::t_0c4cb8666b0757 9-10
+pyproject.toml
+  s_a0bbd64ba4e4dd::t_2824a20c08f1f4 52-55
+  s_a0bbd64ba4e4dd::t_0458ae025a6e4f 51
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.6",
+  "base_commit_sha": "04591c5f7c5bae54d90b2e9b2bbd4e7ddde21545",
+  "prompts": {},
+  "sessions": {
+    "s_a0bbd64ba4e4dd": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "c1e5b2e5-0fec-4bf5-b8e6-20cdb3a76855",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Jainal Gosaliya <jainal09gosalia@gmail.com>"
+    }
+  }
+}
