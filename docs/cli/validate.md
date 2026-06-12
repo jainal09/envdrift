@@ -43,6 +43,16 @@ the real app loads:
   separate variables.
 - Inside quoted values the python-dotenv escape sequences are decoded (`\n`,
   `\t`, `\"`, `\\`, ... in double quotes; `\\` and `\'` in single quotes).
+- `${VAR}` and `${VAR:-default}` references are expanded the way
+  `dotenv_values` does: a name defined earlier in the same file wins over
+  `os.environ`, and an unset name falls back to the default (or `""`), so
+  `PORT=${OFFSET}234` is judged as the value the app receives.
+- An inline `# comment` (preceded by whitespace) is stripped from unquoted values even when the value
+  contains a stray quote character (`MSG=user's data # comment` is
+  `user's data`).
+- Physical lines end at `\n` / `\r\n` / `\r` only; other Unicode line
+  boundaries (U+2028, form feed, ...) are value content, and a leading UTF-8
+  BOM is ignored instead of becoming part of the first key.
 
 ## Arguments
 
