@@ -1,0 +1,23 @@
+docs/cli/push.md
+  s_a0bbd64ba4e4dd::t_00ac27c80e8ca4 53-58
+docs/cli/encrypt.md
+  s_a0bbd64ba4e4dd::t_22c04d52f95a59 32-36
+tests/unit/test_docs_accuracy.py
+  s_a0bbd64ba4e4dd::t_f5175287b4797b 198-226
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.6",
+  "base_commit_sha": "c0ce6236bbcafd38272968f132877ca19136eafe",
+  "prompts": {},
+  "sessions": {
+    "s_a0bbd64ba4e4dd": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "c1e5b2e5-0fec-4bf5-b8e6-20cdb3a76855",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Jainal Gosaliya <jainal09gosalia@gmail.com>"
+    }
+  }
+}
