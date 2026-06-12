@@ -1,0 +1,34 @@
+tests/docker-compose.test.yml
+  s_a0bbd64ba4e4dd::t_612e95bb329641 50
+  s_a0bbd64ba4e4dd::t_0bf7878e555ed9 11
+  s_a0bbd64ba4e4dd::t_020226a7faa978 26
+.github/workflows/integration-tests.yml
+  s_a0bbd64ba4e4dd::t_ed8d13587e5667 62
+  s_a0bbd64ba4e4dd::t_b049f3127ea2ae 47
+  s_a0bbd64ba4e4dd::t_faa979fdd92128 85
+renovate.json
+  s_a0bbd64ba4e4dd::t_a636e64bf0cf2a 111-122,125
+tests/unit/test_dev_stack_hygiene.py
+  s_a0bbd64ba4e4dd::t_1cfc60417c2e8f 1-62,67-146,148-196
+  s_a0bbd64ba4e4dd::t_17332ed58aaf01 63-66
+  s_a0bbd64ba4e4dd::t_2faf12be80dd6b 147
+docs/specs/integration-tests-spec.md
+  s_a0bbd64ba4e4dd::t_ca28808f7b4e9b 34-35,38
+  s_a0bbd64ba4e4dd::t_5ddc0c123165b6 109-110,113
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.6",
+  "base_commit_sha": "8d57a1ccb00f10dfe9d86cea5aecb47fc9c0e2b9",
+  "prompts": {},
+  "sessions": {
+    "s_a0bbd64ba4e4dd": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "c1e5b2e5-0fec-4bf5-b8e6-20cdb3a76855",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Jainal Gosaliya <jainal09gosalia@gmail.com>"
+    }
+  }
+}
