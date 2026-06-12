@@ -108,9 +108,21 @@
         "major-version-bump"
       ],
       "automerge": false
+    },
+    {
+      "description": "Bump the integration test stack images in tests/docker-compose.test.yml and .github/workflows/integration-tests.yml together (#500, #332); tests/unit/test_dev_stack_hygiene.py fails CI if they diverge.",
+      "matchDatasources": [
+        "docker"
+      ],
+      "matchPackageNames": [
+        "localstack/localstack",
+        "hashicorp/vault",
+        "nagyesta/lowkey-vault"
+      ],
+      "groupName": "integration test stack images"
     }
   ],
-  "prBodyTemplate": "{{{table}}}\n\n---\n\n🤖 **Auto-generated version bump PR**\n\nThis PR was automatically created by Renovate to update dependency versions.\n\n- **Minor/Patch updates**: Requires review and approval\n- **Major updates**: Requires manual review and approval",
+  "prBodyTemplate": "{{{table}}}\n\n---\n\n🤖 **Auto-generated version bump PR**\n\nThis PR was automatically created by Renovate to update dependency versions.\n\n- **Minor/Patch updates**: auto-merged by the `automerge-version-bump` workflow once all required CI checks pass — no human review\n- **Major updates**: require manual review and approval; never auto-merged",
   "schedule": [
     "every weekend"
   ]
