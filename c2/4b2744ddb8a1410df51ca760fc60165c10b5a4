@@ -1,0 +1,53 @@
+tests/unit/test_hook_install_regression.py
+  s_a0bbd64ba4e4dd::t_9d62b96af66360 1-239,241-471
+  s_a0bbd64ba4e4dd::t_5cb1c62c2e9080 240
+src/envdrift/integrations/precommit.py
+  s_a0bbd64ba4e4dd::t_43141c7b095fb9 85
+  s_a0bbd64ba4e4dd::t_216fdf3c4c6a04 6,8-25,35,49-84,86-120,159-284,289-293,300,304-305,307,321-323,325-326,328-331,333,335-342,344,348-370,375-378,388,396-419,427-430,435-437,448-450,453-454,471,484,494-497
+src/envdrift/integrations/hook_check.py
+  s_a0bbd64ba4e4dd::t_6faed429bce493 344-350,354
+src/envdrift/cli_commands/encryption.py
+  s_a0bbd64ba4e4dd::t_25fd13258ef3db 84-87
+  s_a0bbd64ba4e4dd::t_5f8153fec4cad3 163,172-176,178,186,190-195
+  s_a0bbd64ba4e4dd::t_4958fa08582661 258-266,268-285
+  s_a0bbd64ba4e4dd::t_2ac2a7b20a4a80 327-345
+src/envdrift/cli_commands/validate.py
+  s_a0bbd64ba4e4dd::t_ced24828354c33 104-105,110-114
+  s_a0bbd64ba4e4dd::t_6c5f19019c670a 133,135-157,159-164,166-167,170
+  s_a0bbd64ba4e4dd::t_915b750ee89e37 45-48
+  s_a0bbd64ba4e4dd::t_2bb39cab355b30 74,76,78-82,86-87
+docs/cli/validate.md
+  s_a0bbd64ba4e4dd::t_92b45b9db86273 3,8,20-24,27-29
+docs/cli/encrypt.md
+  s_a0bbd64ba4e4dd::t_d4c690d8aa36e9 37-42,45-47
+  s_a0bbd64ba4e4dd::t_dc5d41f5b8e632 8
+src/envdrift/cli_commands/hook.py
+  s_a0bbd64ba4e4dd::t_45fdf248d1984a 26-28,35-36,39,41,49-56,58-59,61,63-67,69-73
+tests/integration/test_hook_generated_config.py
+  s_a0bbd64ba4e4dd::t_490d40202a6541 1-261
+tests/unit/test_precommit.py
+  s_a0bbd64ba4e4dd::t_fae7a553790328 147,162-164,166-167,178-179,195-197,200-201
+  s_a0bbd64ba4e4dd::t_1718053dfd0d51 308,317
+  s_a0bbd64ba4e4dd::t_5366b9dd175fe8 231-232
+  s_a0bbd64ba4e4dd::t_b551f04c610e3a 48,50-51,53-55
+docs/cli/hook.md
+  s_a0bbd64ba4e4dd::t_5efa128503cfa9 113-119
+  s_a0bbd64ba4e4dd::t_4f3a3b31a4e524 171-174
+  s_a0bbd64ba4e4dd::t_39d61c4e1b93de 55-57,59,62-69,71,76,83-84,91,94-97
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.6",
+  "base_commit_sha": "c24b2744ddb8a1410df51ca760fc60165c10b5a4",
+  "prompts": {},
+  "sessions": {
+    "s_a0bbd64ba4e4dd": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "c1e5b2e5-0fec-4bf5-b8e6-20cdb3a76855",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Jainal Gosaliya <jainal09gosalia@gmail.com>"
+    }
+  }
+}
