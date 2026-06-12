@@ -24,9 +24,13 @@ class Settings(BaseSettings):
 When you run `envdrift validate`, it:
 
 1. Loads your Pydantic Settings class
-2. Parses the `.env` file with python-dotenv's quoting rules (quoted values
-   may span multiple lines, e.g. PEM certificates), so envdrift sees exactly
-   the variables pydantic-settings would load
+2. Parses the `.env` file with python-dotenv's semantics, so envdrift sees
+   exactly the variables pydantic-settings would load: quoted values may span
+   multiple lines (e.g. PEM certificates) and have their escape sequences
+   (`\n`, `\t`, ...) decoded, `${VAR}` / `${VAR:-default}` references are
+   expanded (values defined earlier in the file win over `os.environ`),
+   inline `#` comments are stripped from unquoted values, lines split on
+   `\n` / `\r\n` / `\r` only, and a leading UTF-8 BOM is ignored
 3. Checks for missing required fields
 4. Validates types (string to int/bool conversion)
 5. Optionally checks for extra undefined variables
