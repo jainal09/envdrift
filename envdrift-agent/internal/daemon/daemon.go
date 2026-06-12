@@ -121,10 +121,39 @@ func installMacOS() error {
 	return exec.Command("launchctl", "load", plistPath).Run()
 }
 
+// agentLogPath returns the rotating log file the installed service passes via
+// --log-file: <home>/.envdrift/logs/agent.log.
+func agentLogPath() (string, error) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(home, ".envdrift", "logs", "agent.log"), nil
+}
+
 // buildLaunchdPlist returns the launchd plist XML for the EnvDrift guardian,
-// running execPath with the "start" argument. The exec path is XML-escaped so
-// special characters (&, <, >) in the path produce valid XML (#348 G5).
+// running execPath with the "start" argument. Every argument is XML-escaped so
+// special characters (&, <, >) in paths produce valid XML (#348 G5).
+//
+// launchd's StandardOutPath cannot rotate, so the guardian's periodic logging
+// previously grew /tmp/envdrift-agent.log without bound (#494). The service
+// now runs with --log-file pointing at ~/.envdrift/logs/agent.log, where the
+// agent's own RotatingWriter enforces a size cap; the /tmp Standard*Path files
+// only receive the brief startup prints and crash output.
 func buildLaunchdPlist(execPath string) string {
+	args := []string{execPath, "start"}
+	if logPath, err := agentLogPath(); err == nil {
+		args = append(args, "--log-file", logPath)
+	}
+
+	var argXML strings.Builder
+	for i, arg := range args {
+		if i > 0 {
+			argXML.WriteString("\n")
+		}
+		argXML.WriteString("        <string>" + xmlEscape(arg) + "</string>")
+	}
+
 	return fmt.Sprintf(`<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
@@ -133,8 +162,7 @@ func buildLaunchdPlist(execPath string) string {
     <string>com.envdrift.guardian</string>
     <key>ProgramArguments</key>
     <array>
-        <string>%s</string>
-        <string>start</string>
+%s
     </array>
     <key>RunAtLoad</key>
     <true/>
@@ -145,7 +173,7 @@ func buildLaunchdPlist(execPath string) string {
     <key>StandardErrorPath</key>
     <string>/tmp/envdrift-agent.err</string>
 </dict>
-</plist>`, xmlEscape(execPath))
+</plist>`, argXML.String())
 }
 
 // xmlEscape escapes s for safe inclusion in a plist <string> element (#348 G5).

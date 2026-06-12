@@ -225,3 +225,35 @@ func TestLaunchdPlistEscapesExecPath(t *testing.T) {
 		}
 	}
 }
+
+// TestLaunchdPlistPassesRotatingLogFile is the #494 regression for the
+// unbounded /tmp/envdrift-agent.log: launchd's StandardOutPath cannot rotate,
+// so the plist must run the agent with --log-file pointing at the rotating log
+// under ~/.envdrift/logs/, where the agent's own logging enforces a size cap.
+func TestLaunchdPlistPassesRotatingLogFile(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+
+	plist := buildLaunchdPlist("/usr/local/bin/envdrift-agent")
+
+	if !strings.Contains(plist, "<string>--log-file</string>") {
+		t.Fatalf("plist does not pass --log-file: the launchd log grows unbounded (#494)\n%s", plist)
+	}
+	logPath := filepath.Join(home, ".envdrift", "logs", "agent.log")
+	if !strings.Contains(plist, "<string>"+xmlEscape(logPath)+"</string>") {
+		t.Errorf("plist missing rotating log path %q:\n%s", logPath, plist)
+	}
+
+	// The document must still parse as XML.
+	dec := xml.NewDecoder(strings.NewReader(plist))
+	for {
+		_, err := dec.Token()
+		if errors.Is(err, io.EOF) {
+			break
+		}
+		if err != nil {
+			t.Fatalf("plist is not valid XML: %v", err)
+		}
+	}
+}

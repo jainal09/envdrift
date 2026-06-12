@@ -2,6 +2,7 @@
 package encrypt
 
 import (
+	"context"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -9,6 +10,7 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestIsEncrypted(t *testing.T) {
@@ -350,5 +352,60 @@ func TestEncryptEndToEnd_RealCLI(t *testing.T) {
 	}
 	if !encrypted {
 		t.Errorf("IsEncrypted = false after a successful real encrypt; content:\n%s", content)
+	}
+}
+
+// TestEncryptSilentContext_KillsHungSubprocess is the encrypt-package half of
+// the #494 wedge fix: a hung `envdrift encrypt` subprocess must be killed when
+// the context expires instead of blocking the caller until the child exits
+// (pre-fix EncryptSilent used exec.Command with no context or timeout). A real
+// subprocess is used at the process boundary: a fake envdrift that sleeps far
+// longer than the context deadline.
+func TestEncryptSilentContext_KillsHungSubprocess(t *testing.T) {
+	if testing.Short() {
+		t.Skip("Skipping subprocess test in short mode")
+	}
+
+	dir := t.TempDir()
+	writeFakeExe(t, dir, "envdrift", `sleep 30`)
+	t.Setenv("PATH", dir)
+
+	envPath := filepath.Join(t.TempDir(), ".env")
+	if err := os.WriteFile(envPath, []byte("A=1\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+
+	start := time.Now()
+	err := EncryptSilentContext(ctx, envPath)
+	elapsed := time.Since(start)
+
+	if err == nil {
+		t.Fatal("EncryptSilentContext must report an error when the context kills the subprocess")
+	}
+	if elapsed > 5*time.Second {
+		t.Fatalf("EncryptSilentContext blocked %v on a hung subprocess; the context must kill it (#494)", elapsed)
+	}
+}
+
+// TestEncryptSilentContext_SucceedsWithinDeadline pins the happy path: a fast
+// subprocess under a generous deadline completes without error.
+func TestEncryptSilentContext_SucceedsWithinDeadline(t *testing.T) {
+	dir := t.TempDir()
+	writeFakeExe(t, dir, "envdrift", `exit 0`)
+	t.Setenv("PATH", dir)
+
+	envPath := filepath.Join(t.TempDir(), ".env")
+	if err := os.WriteFile(envPath, []byte("A=1\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	if err := EncryptSilentContext(ctx, envPath); err != nil {
+		t.Fatalf("EncryptSilentContext: %v", err)
 	}
 }

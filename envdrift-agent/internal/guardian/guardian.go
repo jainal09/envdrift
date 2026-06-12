@@ -3,10 +3,12 @@ package guardian
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"os"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/jainal09/envdrift-agent/internal/config"
@@ -19,6 +21,11 @@ import (
 )
 
 var errNoEnvdrift = fmt.Errorf("envdrift not found. Install it: pip install envdrift")
+
+// defaultEncryptTimeout bounds a single `envdrift encrypt` subprocess. A child
+// that hangs past it is killed and retried on a later idle check, so one stuck
+// encryption can never stall the other projects indefinitely (#494).
+const defaultEncryptTimeout = 2 * time.Minute
 
 // ProjectWatcher manages watching a single project with its own config.
 type ProjectWatcher struct {
@@ -100,7 +107,12 @@ type Guardian struct {
 	projects        map[string]*ProjectWatcher // path -> watcher
 	registryWatcher *registry.RegistryWatcher
 	checkTick       time.Duration
+	encryptTimeout  time.Duration
 	mu              sync.RWMutex
+	// checking marks an idle-check worker in flight so ticks never pile up
+	// overlapping workers; checkWG lets shutdown wait for that worker (#494).
+	checking atomic.Bool
+	checkWG  sync.WaitGroup
 	// These are set during Start() for use by onRegistryChange
 	ctx    context.Context
 	events chan projectEvent
@@ -109,12 +121,39 @@ type Guardian struct {
 // New creates a Guardian configured with cfg.
 func New(cfg *config.Config) (*Guardian, error) {
 	g := &Guardian{
-		globalConfig: cfg,
-		projects:     make(map[string]*ProjectWatcher),
-		checkTick:    30 * time.Second,
+		globalConfig:   cfg,
+		projects:       make(map[string]*ProjectWatcher),
+		checkTick:      30 * time.Second,
+		encryptTimeout: defaultEncryptTimeout,
 	}
 
 	return g, nil
+}
+
+// projectDefaults derives the per-project default GuardianConfig from the
+// global ~/.envdrift/guardian.toml settings (#494): idle_timeout, patterns,
+// exclude and notify act as the documented defaults for every registered
+// project and are overridden by the project's own [guardian] section.
+// Enabled is deliberately NOT inherited — watching stays per-project opt-in;
+// the global guardian.enabled is the agent's master switch, checked in Start().
+func (g *Guardian) projectDefaults() *project.GuardianConfig {
+	d := project.DefaultGuardianConfig()
+	if g.globalConfig == nil {
+		return d
+	}
+
+	gc := g.globalConfig.Guardian
+	if gc.IdleTimeout > 0 {
+		d.IdleTimeout = gc.IdleTimeout
+	}
+	if len(gc.Patterns) > 0 {
+		d.Patterns = append([]string(nil), gc.Patterns...)
+	}
+	if len(gc.Exclude) > 0 {
+		d.Exclude = append([]string(nil), gc.Exclude...)
+	}
+	d.Notify = gc.Notify
+	return d
 }
 
 // Start begins the guardian loop.
@@ -170,6 +209,10 @@ func (g *Guardian) Start(ctx context.Context) error {
 			log.Println("Guardian shutting down...")
 			g.stopAllProjects()
 			g.registryWatcher.Stop()
+			// Wait for an in-flight idle check: its encrypt subprocess is
+			// killed via the cancelled context, so this returns promptly and
+			// Start's return means the guardian is fully stopped (#494).
+			g.checkWG.Wait()
 			return nil
 
 		case event := <-events:
@@ -184,9 +227,27 @@ func (g *Guardian) Start(ctx context.Context) error {
 
 		case <-ticker.C:
 			// Check for idle files in all projects
-			g.checkIdleFiles()
+			g.startIdleCheck(ctx)
 		}
 	}
+}
+
+// startIdleCheck runs checkIdleFiles on a worker goroutine so a slow or hung
+// `envdrift encrypt` subprocess can never wedge the Start() select loop:
+// ctx.Done() (the SIGINT/SIGTERM path) and file-event processing stay
+// responsive while encryption is in flight (#494). At most one check runs at
+// a time; a tick that fires while the previous check is still running is
+// skipped rather than queued.
+func (g *Guardian) startIdleCheck(ctx context.Context) {
+	if !g.checking.CompareAndSwap(false, true) {
+		return
+	}
+	g.checkWG.Add(1)
+	go func() {
+		defer g.checkWG.Done()
+		defer g.checking.Store(false)
+		g.checkIdleFiles(ctx)
+	}()
 }
 
 // publishContext stores ctx and a fresh aggregated events channel on the
@@ -245,8 +306,9 @@ func (g *Guardian) loadProjects(reg *registry.Registry) {
 	projectPaths := reg.GetProjectPaths()
 	log.Printf("Loading %d registered projects", len(projectPaths))
 
-	// Load project configs
-	configs, err := project.LoadAllProjectConfigs(projectPaths)
+	// Load project configs, with the global guardian.toml values as the
+	// per-project defaults (#494).
+	configs, err := project.LoadAllProjectConfigsWithDefaults(projectPaths, g.projectDefaults())
 	if err != nil {
 		log.Printf("Error loading project configs: %v", err)
 		return
@@ -289,7 +351,7 @@ func (g *Guardian) onRegistryChange(reg *registry.Registry) {
 
 	log.Println("Registry changed, reloading projects...")
 
-	enabledPaths := loadEnabledConfigs(reg.GetProjectPaths())
+	enabledPaths := g.loadEnabledConfigs(reg.GetProjectPaths())
 
 	g.mu.Lock()
 	defer g.mu.Unlock()
@@ -328,10 +390,11 @@ func (g *Guardian) ctxDone() bool {
 	}
 }
 
-// loadEnabledConfigs loads the guardian config for each registered path and
-// returns the enabled ones keyed by project path.
-func loadEnabledConfigs(paths []string) map[string]*project.GuardianConfig {
-	configs, _ := project.LoadAllProjectConfigs(paths)
+// loadEnabledConfigs loads the guardian config for each registered path —
+// applying the global guardian.toml values as per-project defaults (#494) —
+// and returns the enabled ones keyed by project path.
+func (g *Guardian) loadEnabledConfigs(paths []string) map[string]*project.GuardianConfig {
+	configs, _ := project.LoadAllProjectConfigsWithDefaults(paths, g.projectDefaults())
 	enabledPaths := make(map[string]*project.GuardianConfig, len(configs))
 	for _, pc := range configs {
 		enabledPaths[pc.Path] = pc.Guardian
@@ -392,8 +455,11 @@ func (g *Guardian) stopAllProjects() {
 	g.projects = make(map[string]*ProjectWatcher)
 }
 
-// checkIdleFiles looks for files that haven't been modified in a while.
-func (g *Guardian) checkIdleFiles() {
+// checkIdleFiles looks for files that haven't been modified in a while and
+// encrypts them. It runs on a worker goroutine (see startIdleCheck) and bails
+// out as soon as ctx is cancelled; each encrypt subprocess is bounded by both
+// ctx and g.encryptTimeout so a hung child can never wedge the agent (#494).
+func (g *Guardian) checkIdleFiles(ctx context.Context) {
 	g.mu.RLock()
 	projects := make(map[string]*ProjectWatcher)
 	for k, v := range g.projects {
@@ -405,6 +471,11 @@ func (g *Guardian) checkIdleFiles() {
 		idleFiles := pw.GetIdleFiles()
 
 		for _, path := range idleFiles {
+			// Shutting down: leave the remaining files for the next run.
+			if ctx.Err() != nil {
+				return
+			}
+
 			// Check if file exists
 			if _, err := os.Stat(path); os.IsNotExist(err) {
 				pw.RemoveFile(path)
@@ -428,22 +499,47 @@ func (g *Guardian) checkIdleFiles() {
 				continue
 			}
 
-			log.Printf("[%s] Encrypting idle file: %s", projectPath, path)
-			if err := encrypt.EncryptSilent(path); err != nil {
-				log.Printf("[%s] Error encrypting %s: %v", projectPath, path, err)
-				if pw.config.Notify {
-					_ = notify.Error("Failed to encrypt: " + path)
-				}
-				continue
+			if !g.encryptIdleFile(ctx, projectPath, pw, path) {
+				return
 			}
-
-			log.Printf("[%s] Successfully encrypted: %s", projectPath, path)
-			if pw.config.Notify {
-				_ = notify.Encrypted(path)
-			}
-
-			// Remove from tracking
-			pw.RemoveFile(path)
 		}
 	}
+}
+
+// encryptIdleFile runs one context-bounded `envdrift encrypt` for path and
+// handles logging/notification. It returns false when the guardian is
+// shutting down (the caller must stop), true otherwise.
+func (g *Guardian) encryptIdleFile(ctx context.Context, projectPath string, pw *ProjectWatcher, path string) bool {
+	log.Printf("[%s] Encrypting idle file: %s", projectPath, path)
+
+	encCtx, cancel := context.WithTimeout(ctx, g.encryptTimeout)
+	err := encrypt.EncryptSilentContext(encCtx, path)
+	timedOut := errors.Is(encCtx.Err(), context.DeadlineExceeded)
+	cancel()
+
+	if err != nil {
+		// Our own shutdown killed the subprocess; not an error worth noise.
+		if ctx.Err() != nil {
+			return false
+		}
+		if timedOut {
+			log.Printf("[%s] Encrypting %s timed out after %v (subprocess killed); will retry on a later check",
+				projectPath, path, g.encryptTimeout)
+		} else {
+			log.Printf("[%s] Error encrypting %s: %v", projectPath, path, err)
+		}
+		if pw.config.Notify {
+			_ = notify.Error("Failed to encrypt: " + path)
+		}
+		return true
+	}
+
+	log.Printf("[%s] Successfully encrypted: %s", projectPath, path)
+	if pw.config.Notify {
+		_ = notify.Encrypted(path)
+	}
+
+	// Remove from tracking
+	pw.RemoveFile(path)
+	return true
 }

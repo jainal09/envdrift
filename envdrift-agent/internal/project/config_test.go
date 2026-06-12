@@ -3,6 +3,7 @@ package project
 import (
 	"os"
 	"path/filepath"
+	"reflect"
 	"testing"
 	"time"
 )
@@ -451,5 +452,152 @@ enabled = false
 
 	if configs[0].Path != proj1 {
 		t.Errorf("Expected path %s, got %s", proj1, configs[0].Path)
+	}
+}
+
+// TestLoadProjectConfigWithDefaults_AppliesAndOverrides is the project-level
+// half of #494: caller-supplied defaults (built from the global
+// ~/.envdrift/guardian.toml) must fill every key the project's [guardian]
+// section does not set, and project-set keys must win.
+func TestLoadProjectConfigWithDefaults_AppliesAndOverrides(t *testing.T) {
+	defaults := &GuardianConfig{
+		Enabled:     false,
+		IdleTimeout: 42 * time.Second,
+		Patterns:    []string{"*.secret"},
+		Exclude:     []string{".env.staging"},
+		Notify:      false,
+	}
+
+	t.Run("no config file: defaults returned as-is", func(t *testing.T) {
+		cfg, err := LoadProjectConfigWithDefaults(t.TempDir(), defaults)
+		if err != nil {
+			t.Fatalf("LoadProjectConfigWithDefaults: %v", err)
+		}
+		if cfg.IdleTimeout != 42*time.Second || !reflect.DeepEqual(cfg.Patterns, []string{"*.secret"}) ||
+			!reflect.DeepEqual(cfg.Exclude, []string{".env.staging"}) || cfg.Notify || cfg.Enabled {
+			t.Errorf("defaults not applied: %+v", cfg)
+		}
+	})
+
+	t.Run("opt-in only project inherits defaults", func(t *testing.T) {
+		dir := t.TempDir()
+		if err := os.WriteFile(filepath.Join(dir, "envdrift.toml"),
+			[]byte("[guardian]\nenabled = true\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		cfg, err := LoadProjectConfigWithDefaults(dir, defaults)
+		if err != nil {
+			t.Fatalf("LoadProjectConfigWithDefaults: %v", err)
+		}
+		if !cfg.Enabled {
+			t.Error("project enabled=true lost")
+		}
+		if cfg.IdleTimeout != 42*time.Second {
+			t.Errorf("IdleTimeout = %v, want the 42s default", cfg.IdleTimeout)
+		}
+		if !reflect.DeepEqual(cfg.Patterns, []string{"*.secret"}) {
+			t.Errorf("Patterns = %v, want the [*.secret] default", cfg.Patterns)
+		}
+		if cfg.Notify {
+			t.Error("Notify = true, want the false default")
+		}
+	})
+
+	t.Run("project keys override defaults", func(t *testing.T) {
+		dir := t.TempDir()
+		toml := "[guardian]\nenabled = true\nidle_timeout = \"9m\"\nnotify = true\n"
+		if err := os.WriteFile(filepath.Join(dir, "envdrift.toml"), []byte(toml), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		cfg, err := LoadProjectConfigWithDefaults(dir, defaults)
+		if err != nil {
+			t.Fatalf("LoadProjectConfigWithDefaults: %v", err)
+		}
+		if cfg.IdleTimeout != 9*time.Minute || !cfg.Notify {
+			t.Errorf("project overrides lost: %+v", cfg)
+		}
+		// Unset keys still come from the defaults.
+		if !reflect.DeepEqual(cfg.Exclude, []string{".env.staging"}) {
+			t.Errorf("Exclude = %v, want the default", cfg.Exclude)
+		}
+	})
+
+	t.Run("nil defaults fall back to package defaults", func(t *testing.T) {
+		cfg, err := LoadProjectConfigWithDefaults(t.TempDir(), nil)
+		if err != nil {
+			t.Fatalf("LoadProjectConfigWithDefaults: %v", err)
+		}
+		if cfg.IdleTimeout != DefaultIdleTimeout || !reflect.DeepEqual(cfg.Patterns, DefaultPatterns) {
+			t.Errorf("nil defaults must mean DefaultGuardianConfig, got %+v", cfg)
+		}
+	})
+}
+
+// TestLoadProjectConfigWithDefaults_DoesNotMutateDefaults guards the clone:
+// per-project parsing (including the vault env_file pattern append) must never
+// write through to the shared defaults value the guardian reuses for every
+// project.
+func TestLoadProjectConfigWithDefaults_DoesNotMutateDefaults(t *testing.T) {
+	defaults := &GuardianConfig{
+		Enabled:     false,
+		IdleTimeout: 42 * time.Second,
+		Patterns:    []string{"*.secret"},
+		Exclude:     []string{".env.staging"},
+		Notify:      false,
+	}
+
+	dir := t.TempDir()
+	toml := `[guardian]
+enabled = true
+
+[[vault.sync.mappings]]
+env_file = "postgresql.env"
+`
+	if err := os.WriteFile(filepath.Join(dir, "envdrift.toml"), []byte(toml), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := LoadProjectConfigWithDefaults(dir, defaults)
+	if err != nil {
+		t.Fatalf("LoadProjectConfigWithDefaults: %v", err)
+	}
+	if !reflect.DeepEqual(cfg.Patterns, []string{"*.secret", "postgresql.env"}) {
+		t.Errorf("vault env_file not appended to inherited patterns: %v", cfg.Patterns)
+	}
+
+	if !reflect.DeepEqual(defaults.Patterns, []string{"*.secret"}) {
+		t.Errorf("defaults.Patterns mutated by project load: %v", defaults.Patterns)
+	}
+	if !reflect.DeepEqual(defaults.Exclude, []string{".env.staging"}) {
+		t.Errorf("defaults.Exclude mutated by project load: %v", defaults.Exclude)
+	}
+}
+
+// TestLoadAllProjectConfigsWithDefaults mirrors TestLoadAllProjectConfigs for
+// the defaults-aware variant: disabled/unconfigured projects are excluded and
+// enabled ones carry the supplied defaults.
+func TestLoadAllProjectConfigsWithDefaults(t *testing.T) {
+	defaults := &GuardianConfig{
+		IdleTimeout: 42 * time.Second,
+		Patterns:    []string{"*.secret"},
+		Exclude:     []string{".env.staging"},
+	}
+
+	enabled := t.TempDir()
+	if err := os.WriteFile(filepath.Join(enabled, "envdrift.toml"),
+		[]byte("[guardian]\nenabled = true\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	unconfigured := t.TempDir() // no config at all -> stays opted out
+
+	configs, err := LoadAllProjectConfigsWithDefaults([]string{enabled, unconfigured}, defaults)
+	if err != nil {
+		t.Fatalf("LoadAllProjectConfigsWithDefaults: %v", err)
+	}
+	if len(configs) != 1 || configs[0].Path != enabled {
+		t.Fatalf("want only the enabled project, got %+v", configs)
+	}
+	if configs[0].Guardian.IdleTimeout != 42*time.Second {
+		t.Errorf("defaults not applied through LoadAll: %+v", configs[0].Guardian)
 	}
 }
