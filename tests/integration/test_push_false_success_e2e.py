@@ -37,7 +37,6 @@ def _run_envdrift(
     cwd: Path,
     integration_pythonpath: str,
     envdrift_cmd: list[str],
-    timeout: int = 60,
 ) -> subprocess.CompletedProcess[str]:
     """Run the real envdrift CLI as a subprocess and capture its output."""
     env = os.environ.copy()
@@ -48,27 +47,25 @@ def _run_envdrift(
         env=env,
         capture_output=True,
         text=True,
-        timeout=timeout,
+        timeout=60,
     )
 
 
-def _write_combine_config(
-    work_dir: Path,
-    *,
-    name: str,
-    clear_file: str,
-    secret_file: str,
-    combined_file: str,
-) -> None:
-    """Write a combine-mode envdrift.toml for one environment."""
+def _write_combine_config(work_dir: Path, *, name: str = "production") -> None:
+    """Write a combine-mode envdrift.toml using the standard ``.env.<name>`` layout.
+
+    clear/secret/combined paths follow the conventional ``.env.<name>.clear`` /
+    ``.env.<name>.secret`` / ``.env.<name>`` naming, so only the environment
+    name varies between tests.
+    """
     (work_dir / "envdrift.toml").write_text(
         "[partial_encryption]\n"
         "enabled = true\n\n"
         "[[partial_encryption.environments]]\n"
         f'name = "{name}"\n'
-        f'clear_file = "{clear_file}"\n'
-        f'secret_file = "{secret_file}"\n'
-        f'combined_file = "{combined_file}"\n'
+        f'clear_file = ".env.{name}.clear"\n'
+        f'secret_file = ".env.{name}.secret"\n'
+        f'combined_file = ".env.{name}"\n'
     )
 
 
@@ -122,13 +119,7 @@ class TestPushFailsWhenEncryptionDoesNotTakeEffect:
         success banner, keep the plaintext source intact, and must NOT generate a
         combined file carrying the plaintext secret."""
         work_dir = git_repo
-        _write_combine_config(
-            work_dir,
-            name="production",
-            clear_file=".env.production.clear",
-            secret_file=".env.production.secret",
-            combined_file=".env.production",
-        )
+        _write_combine_config(work_dir)
         (work_dir / ".env.production.clear").write_text("DEBUG=false\n", encoding="utf-8")
         secret = work_dir / ".env.production.secret"
         # Built by concatenation so push-protection never sees a realistic secret.
@@ -169,13 +160,7 @@ class TestPushFailsWhenEncryptionDoesNotTakeEffect:
     ):
         """A read-only .env.keys file (the issue's exact repro) also fails the push."""
         work_dir = git_repo
-        _write_combine_config(
-            work_dir,
-            name="production",
-            clear_file=".env.production.clear",
-            secret_file=".env.production.secret",
-            combined_file=".env.production",
-        )
+        _write_combine_config(work_dir)
         (work_dir / ".env.production.clear").write_text("DEBUG=false\n", encoding="utf-8")
         secret = work_dir / ".env.production.secret"
         leak_value = "leakme-" + "readonly-" + "secret"
@@ -210,13 +195,7 @@ class TestPushRefusesWhenBothSourcesMissing:
         envdrift_cmd: list[str],
     ):
         work_dir = git_repo
-        _write_combine_config(
-            work_dir,
-            name="production",
-            clear_file=".env.production.clear",
-            secret_file=".env.production.secret",
-            combined_file=".env.production",
-        )
+        _write_combine_config(work_dir)
         clear = work_dir / ".env.production.clear"
         secret = work_dir / ".env.production.secret"
         clear.write_text("DEBUG=false\n", encoding="utf-8")
@@ -268,13 +247,7 @@ class TestPushRefusesEmptySecretFile:
         envdrift_cmd: list[str],
     ):
         work_dir = git_repo
-        _write_combine_config(
-            work_dir,
-            name="production",
-            clear_file=".env.production.clear",
-            secret_file=".env.production.secret",
-            combined_file=".env.production",
-        )
+        _write_combine_config(work_dir)
         (work_dir / ".env.production.clear").write_text("DEBUG=false\n", encoding="utf-8")
         secret = work_dir / ".env.production.secret"
         secret.write_text("", encoding="utf-8")
