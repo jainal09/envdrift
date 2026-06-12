@@ -1,0 +1,48 @@
+tests/unit/test_cli.py
+  s_a0bbd64ba4e4dd::t_4d08219e13ae45 3991-4024,4026-4030
+  s_a0bbd64ba4e4dd::t_f63c27f7530cd7 9
+src/envdrift/cli_commands/sync.py
+  s_a0bbd64ba4e4dd::t_205d20cf8c6b50 402-407
+tests/integration/test_partial_encryption_e2e.py
+  s_a0bbd64ba4e4dd::t_c64adf89878019 25,27
+src/envdrift/core/partial_encryption.py
+  s_a0bbd64ba4e4dd::t_047e379590db2c 19
+  s_a0bbd64ba4e4dd::t_3c12aeb7ddb2b1 177-217
+  s_a0bbd64ba4e4dd::t_0f31c008a2a5ab 776-781,792-796
+  s_a0bbd64ba4e4dd::t_fb882f63e6678a 571-578,590-597
+  s_a0bbd64ba4e4dd::t_cda2ae9864df23 470-474
+  s_a0bbd64ba4e4dd::t_58ef80876ecccb 419-428
+docs/guides/partial-encryption.md
+  s_a0bbd64ba4e4dd::t_69ff80c80c0a54 117-131
+src/envdrift/sync/operations.py
+  s_a0bbd64ba4e4dd::t_e7b2b7a072c272 191-194
+docs/cli/push.md
+  s_a0bbd64ba4e4dd::t_76904abaf16af9 42-60
+tests/unit/test_partial_encryption.py
+  s_a0bbd64ba4e4dd::t_14eecb886cf9ae 621-622
+  s_a0bbd64ba4e4dd::t_844ec4a762d12b 887-888
+  s_a0bbd64ba4e4dd::t_f44ec8f57a2c08 1105,1108-1110
+  s_a0bbd64ba4e4dd::t_652cd92e54b337 906-907
+  s_a0bbd64ba4e4dd::t_564675271401f7 1247-1248
+  s_a0bbd64ba4e4dd::t_fc7e74de4aa464 1222,1225-1227
+  s_a0bbd64ba4e4dd::t_5793011c16a379 190-192,196,210-211
+  s_a0bbd64ba4e4dd::t_135a6e73c40f01 1021-1023
+docs/cli/pull.md
+  s_a0bbd64ba4e4dd::t_9e588487d46aa1 116-118
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.6",
+  "base_commit_sha": "56e946b66963a72eb7fa38e2a7b2785de4828465",
+  "prompts": {},
+  "sessions": {
+    "s_a0bbd64ba4e4dd": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "c1e5b2e5-0fec-4bf5-b8e6-20cdb3a76855",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Jainal Gosaliya <jainal09gosalia@gmail.com>"
+    }
+  }
+}
