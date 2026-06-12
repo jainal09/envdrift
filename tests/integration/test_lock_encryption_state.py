@@ -32,6 +32,7 @@ from __future__ import annotations
 import os
 import shutil
 import subprocess
+import sys
 import textwrap
 from pathlib import Path
 from typing import NamedTuple
@@ -333,13 +334,14 @@ class TestLockEncryptCheckParity:
     """Item 2 of #470 (verifier note): lock --check and encrypt --check must agree."""
 
     @pytest.mark.parametrize(
-        ("mixed", "expected_rc", "label"),
+        ("mixed", "expected_rc"),
         [
-            pytest.param(True, 1, "mixed file with a fresh plaintext secret", id="mixed"),
-            pytest.param(False, 0, "fully-encrypted file", id="fully-encrypted"),
+            pytest.param(True, 1, id="mixed"),
+            pytest.param(False, 0, id="fully-encrypted"),
         ],
     )
-    def test_gates_agree(self, project: Path, cli: Cli, mixed: bool, expected_rc: int, label: str):
+    def test_gates_agree(self, project: Path, cli: Cli, mixed: bool, expected_rc: int):
+        label = "mixed file with a fresh plaintext secret" if mixed else "fully-encrypted file"
         if mixed:
             _make_mixed_env_file(cli, project)
         else:
@@ -414,6 +416,133 @@ class TestLockAllMixedSecretFile:
         )
         # Dry run: nothing was modified or deleted.
         assert secret_file.read_bytes() == before
+        assert combined_file.exists()
+
+
+class TestLockAllPartialLifecycle:
+    """PR #507 review (CodeRabbit, major): lock --all must honor the partial lifecycle.
+
+    The ``.secret`` branch used to call the encryption backend directly, so it
+    (a) never cleared the skip-worktree bit a ``pull-partial`` leaves behind —
+    hiding the re-encrypted diff from ``git status``/``git add`` — and
+    (b) deleted the combined file even when encryption FAILED, destroying the
+    one remaining runtime artifact while the plaintext ``.secret`` lingered.
+    """
+
+    def _git(self, args: list[str], cwd: Path) -> subprocess.CompletedProcess[str]:
+        return subprocess.run(
+            ["git", "-c", "user.email=t@t.t", "-c", "user.name=t", *args],
+            cwd=cwd,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            timeout=60,
+        )
+
+    @pytest.fixture
+    def git_partial_project(self, tmp_path: Path, cli: Cli) -> tuple[Path, Path]:
+        """A git repo with a combine-mode partial env, .secret committed and tracked."""
+        if shutil.which("git") is None:
+            pytest.skip("git not installed")
+        (tmp_path / "envdrift.toml").write_text(CONFIG_COMBINE_PARTIAL, encoding="utf-8")
+        (tmp_path / "svc").mkdir()
+        cli.write_and_encrypt(
+            tmp_path, "svc/.env.production", ["API_KEY=s1", "DB_PASS=s2", "TOKEN=s3"]
+        )
+        secret_file = cli.write_and_encrypt(
+            tmp_path, "partial/.env.production.secret", ["API_KEY=oldvalue1"]
+        )
+        assert self._git(["init", "-q"], tmp_path).returncode == 0
+        assert self._git(["add", "-A"], tmp_path).returncode == 0
+        assert self._git(["commit", "-qm", "init"], tmp_path).returncode == 0
+        return tmp_path, secret_file
+
+    def test_lock_all_clears_skip_worktree_after_reencrypt(
+        self, git_partial_project: tuple[Path, Path], cli: Cli
+    ):
+        """After lock --all re-encrypts, the pull-partial skip-worktree bit is lifted."""
+        project, secret_file = git_partial_project
+        rel = secret_file.relative_to(project).as_posix()
+        # Simulate the state pull-partial leaves: file protected from git.
+        assert self._git(["update-index", "--skip-worktree", rel], project).returncode == 0
+        _append_plaintext(secret_file, "NEW_SECRET=" + LEAKED_VALUE)
+
+        result = cli.run(["lock", "--all", "--force"], project)
+
+        assert result.returncode == 0, f"lock --all failed:\n{result.stdout}\n{result.stderr}"
+        assert LEAKED_VALUE not in secret_file.read_text(encoding="utf-8")
+        flags = self._git(["ls-files", "-v", rel], project).stdout.strip()
+        # 'S' marks skip-worktree; a re-encrypted file must be visible to git again.
+        assert flags.startswith("H"), (
+            f"skip-worktree bit not lifted after lock --all re-encrypt: {flags!r}"
+        )
+
+    @pytest.mark.skipif(
+        sys.platform == "win32" or not hasattr(os, "geteuid") or os.geteuid() == 0,
+        reason="read-only file write is not enforced on Windows or for root",
+    )
+    def test_lock_all_keeps_combined_file_when_encryption_fails(
+        self, git_partial_project: tuple[Path, Path], cli: Cli
+    ):
+        """A failed .secret encryption must NOT delete the combined artifact.
+
+        A read-only ``.secret`` makes dotenvx fail to write the re-encrypted
+        content (it already has the public key, so the keys file is irrelevant):
+        it leaves the new value plaintext, the post-encrypt read-back trips,
+        ``encrypt_secret_file`` raises, and the combined file — the one remaining
+        runtime artifact — must be kept rather than deleted.
+        """
+        project, secret_file = git_partial_project
+        _append_plaintext(secret_file, "NEW_SECRET=" + LEAKED_VALUE)
+        combined_file = project / "partial" / ".env.production"
+        combined_file.write_text("APP_NAME=myapp\nAPI_KEY=oldvalue1\n", encoding="utf-8")
+        secret_file.chmod(0o400)
+        try:
+            result = cli.run(["lock", "--all", "--force"], project)
+        finally:
+            secret_file.chmod(0o600)
+
+        assert result.returncode == 1, (
+            f"lock --all exited 0 despite a failed .secret encryption:\n{result.stdout}"
+        )
+        assert combined_file.exists(), (
+            "lock --all deleted the combined file although the .secret encryption failed"
+        )
+        assert LEAKED_VALUE in secret_file.read_text(encoding="utf-8"), (
+            "the plaintext secret was lost despite the reported failure"
+        )
+        norm = _norm(result).lower()
+        assert "kept (encryption failed)" in norm
+        assert "ready to commit" not in norm
+
+    @pytest.mark.skipif(
+        sys.platform == "win32" or not hasattr(os, "geteuid") or os.geteuid() == 0,
+        reason="chmod-000 unreadability is not enforced on Windows or for root",
+    )
+    def test_lock_all_unreadable_secret_is_an_error_not_a_warning(
+        self, git_partial_project: tuple[Path, Path], cli: Cli
+    ):
+        """An OSError mid-step must fail lock, not melt into a config warning.
+
+        Pre-fix, ANY OSError in the partial step was swallowed by the
+        config-load catch-all as "[WARN] Could not load partial encryption
+        config" and lock still printed the green banner with exit 0.
+        """
+        project, secret_file = git_partial_project
+        combined_file = project / "partial" / ".env.production"
+        combined_file.write_text("APP_NAME=myapp\n", encoding="utf-8")
+        secret_file.chmod(0o000)
+        try:
+            result = cli.run(["lock", "--all", "--force"], project)
+        finally:
+            secret_file.chmod(0o600)
+
+        assert result.returncode == 1, (
+            f"lock --all exited 0 with an unprocessable partial step:\n{result.stdout}"
+        )
+        norm = _norm(result).lower()
+        assert "partial encryption step failed" in norm
+        assert "ready to commit" not in norm
         assert combined_file.exists()
 
 
