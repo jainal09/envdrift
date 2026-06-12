@@ -288,7 +288,9 @@ exempt from the "unencrypted-env-file" check.
 
 ## Tips
 
-- `--history` requires a git repository and can be slower on large histories.
+- `--history` requires a git repository plus an active history-capable scanner (gitleaks, trufflehog,
+  kingfisher, git-secrets, talisman, or infisical) — guard errors out rather than silently skipping
+  history — and can be slower on large histories.
 - `skip_clear_files` skips `.clear` files entirely (default: false, they ARE scanned).
 - `ignore_paths` applies globally to all scanners.
 - `ignore_rules` provides fine-grained control per rule per path pattern.

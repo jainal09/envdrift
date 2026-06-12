@@ -141,7 +141,10 @@ envdrift guard --infisical
 
 ### `--history`, `-H`
 
-Include git history in the scan. Requires a git repository.
+Include git history in the scan. Requires a git repository and at least one active history-capable
+scanner (gitleaks, trufflehog, kingfisher, git-secrets, talisman, or infisical). If none of the
+active scanners can scan git history (for example `--history --native-only`), guard exits with an
+error instead of silently skipping the history.
 
 ```bash
 envdrift guard --history
@@ -290,6 +293,11 @@ envdrift guard --config ./envdrift.toml
 
 Scan only git staged files. Useful for pre-commit hooks.
 
+The scan reads the staged *index* content (`git show :<path>`), not the working-tree copies, so a
+secret that is staged but already edited away (or deleted) in the working tree is still caught
+before the commit ships it. Findings are reported against the real repository paths. Running
+`--staged` outside a git repository is an error (exit 1).
+
 ```bash
 envdrift guard --staged
 ```
@@ -297,6 +305,11 @@ envdrift guard --staged
 ### `--pr-base`
 
 Scan only files changed since the specified base branch. Useful for CI/CD PR checks.
+
+If the base ref cannot be resolved (typo, or a shallow CI clone that never fetched it), guard exits
+with an error instead of treating the failed diff as "no changed files" — a misconfigured base must
+never pass the secret gate green. A failed `git fetch` of the base is reported as a warning on
+stderr.
 
 ```bash
 envdrift guard --pr-base origin/main
