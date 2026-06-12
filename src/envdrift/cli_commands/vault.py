@@ -290,6 +290,17 @@ def vault_push(
         for mapping in sync_config.mappings:
             try:
                 detection = resolve_mapping_env_file(mapping)
+                if detection.status == "folder_not_found":
+                    # A missing mapping folder is a broken config (typo'd
+                    # folder_path), not a "No .env file found" skip: reporting
+                    # it as a skip with Errors: 0 let a key-backup CI job go
+                    # green having pushed nothing (#488).
+                    print_error(
+                        f"Error processing {mapping.folder_path}: folder does not "
+                        "exist (check folder_path in your sync config)"
+                    )
+                    error_count += 1
+                    continue
                 env_file = (
                     detection.path
                     if detection.path is not None

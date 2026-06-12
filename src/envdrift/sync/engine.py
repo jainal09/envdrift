@@ -130,11 +130,38 @@ class SyncEngine:
         """Sync a single service."""
         try:
             detection = resolve_mapping_env_file(mapping)
+            if detection.status == "folder_not_found":
+                # A mapping whose folder does not exist is a broken config (a
+                # typo'd folder_path), not a benign "env file not created yet"
+                # skip. Reporting it as SKIPPED let `sync --ci` / `pull` exit 0
+                # ("All services synced successfully") while doing nothing (#488).
+                return ServiceSyncResult(
+                    secret_name=mapping.secret_name,
+                    folder_path=mapping.folder_path,
+                    action=SyncAction.ERROR,
+                    message="Mapping folder does not exist",
+                    error=(
+                        f"Mapping folder does not exist: {mapping.folder_path} "
+                        "(check folder_path in your sync config)"
+                    ),
+                )
             if (
                 detection.status != "found"
                 or detection.path is None
                 or detection.environment is None
             ):
+                if detection.status == "multiple_found":
+                    # Distinct, truthful skip reason: the folder has several
+                    # candidate env files and the mapping is ambiguous (#488).
+                    return ServiceSyncResult(
+                        secret_name=mapping.secret_name,
+                        folder_path=mapping.folder_path,
+                        action=SyncAction.SKIPPED,
+                        message=(
+                            "Multiple env files found - skipping "
+                            "(set environment or env_file in the mapping)"
+                        ),
+                    )
                 if detection.path is not None:
                     expected = detection.path
                 elif mapping.env_file is not None:
