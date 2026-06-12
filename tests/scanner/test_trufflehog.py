@@ -738,7 +738,8 @@ class TestExceptionClasses:
         assert isinstance(error, Exception)
 
 
-# Mark integration tests that require actual trufflehog installation
+# Real-binary tests: integration lane only, skip-gated on the binary (#497)
+@pytest.mark.integration
 @pytest.mark.skipif(
     not TrufflehogScanner(auto_install=False).is_installed(),
     reason="trufflehog not installed",
