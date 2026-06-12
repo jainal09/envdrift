@@ -5471,7 +5471,8 @@ class TestErrorPathHardening:
         result = runner.invoke(
             app, ["guard", str(env), "--native-only", "--json", "--fail-on", "bogus"]
         )
-        assert result.exit_code == 1
+        # Operational errors exit 6, distinct from the severity codes (#478).
+        assert result.exit_code == 6
         # stdout must be a clean JSON error doc, not Rich/human prose (#28).
         doc = json.loads(result.output)
         assert "error" in doc and "bogus" in doc["error"]

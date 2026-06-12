@@ -13,7 +13,7 @@ Coverage (highest value first):
 - BUG    test_staged_secret_dropped_when_run_from_subdirectory (P0)
 - HP-17  test_allowed_clear_file_exempt_from_unencrypted_but_secrets_still_scanned (P0)
 - HP-10  test_entropy_flag_enables_high_entropy_detection (P1)
-- BP-01  test_path_not_found_exits_one (P1)
+- BP-01  test_path_not_found_exits_operational_code (P1)
 - EC-21  test_skip_clear_overrides_allowed_clear_files_allowlist (P1)
 """
 
@@ -394,14 +394,14 @@ def test_entropy_flag_enables_high_entropy_detection(git_repo: Path) -> None:
     assert on_cli.returncode == 3, f"expected 3, got {on_cli.returncode}\n{on_cli.stdout}"
 
 
-# --- BP-01 (P1): scanning a nonexistent path exits 1 ----------------------------
+# --- BP-01 (P1): scanning a nonexistent path exits 6 (operational error) --------
 
 
-def test_path_not_found_exits_one(git_repo: Path) -> None:
-    """Scanning a path that does not exist exits 1 with a 'Path not found' message."""
+def test_path_not_found_exits_operational_code(git_repo: Path) -> None:
+    """A nonexistent path exits 6 (operational error, distinct from critical's 1, #478)."""
     work_dir = git_repo
     result = _run_envdrift(["guard", "--native-only", "./does_not_exist.py"], cwd=work_dir)
-    assert result.returncode == 1, f"expected 1, got {result.returncode}\n{result.stdout}"
+    assert result.returncode == 6, f"expected 6, got {result.returncode}\n{result.stdout}"
     assert "Path not found" in (result.stdout + result.stderr)
 
 

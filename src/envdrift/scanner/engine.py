@@ -17,6 +17,12 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from envdrift.config import (
+    coerce_check_entropy,
+    coerce_entropy_threshold,
+    normalize_ignore_paths,
+    normalize_ignore_rules,
+)
 from envdrift.env_files import resolve_custom_env_file
 from envdrift.scanner.base import (
     AggregatedScanResult,
@@ -57,7 +63,9 @@ class GuardConfig:
         use_infisical: Enable Infisical scanner (140+ secret types).
         auto_install: Auto-install missing external scanners.
         include_git_history: Scan git history for secrets.
-        check_entropy: Enable entropy-based secret detection.
+        check_entropy: Tri-state entropy knob — None (unset) scans env files
+            only (default), True scans all files, False disables entropy
+            detection entirely, env files included (#478).
         entropy_threshold: Minimum entropy to flag as potential secret.
         skip_clear_files: Skip .clear files from scanning entirely.
         skip_encrypted_files: Skip findings from files with dotenvx/SOPS encryption markers.
@@ -82,7 +90,7 @@ class GuardConfig:
     use_infisical: bool = False
     auto_install: bool = True
     include_git_history: bool = False
-    check_entropy: bool = False
+    check_entropy: bool | None = None  # None = entropy on env files only (default)
     entropy_threshold: float = 4.5
     skip_clear_files: bool = False
     skip_encrypted_files: bool = True  # Default True - skip findings from encrypted files
@@ -146,14 +154,17 @@ class GuardConfig:
             use_infisical="infisical" in scanners,
             auto_install=guard_config.get("auto_install", True),
             include_git_history=guard_config.get("include_history", False),
-            check_entropy=guard_config.get("check_entropy", False),
-            entropy_threshold=guard_config.get("entropy_threshold", 4.5),
+            # Same wrong-shape validation as the CLI config layer, so SDK
+            # callers get a clean ValueError here instead of a scanner crash
+            # mid-scan (#478).
+            check_entropy=coerce_check_entropy(guard_config.get("check_entropy")),
+            entropy_threshold=coerce_entropy_threshold(guard_config.get("entropy_threshold", 4.5)),
             skip_clear_files=guard_config.get("skip_clear_files", False),
             skip_encrypted_files=guard_config.get("skip_encrypted_files", True),
             skip_duplicate=guard_config.get("skip_duplicate", False),
             skip_gitignored=guard_config.get("skip_gitignored", False),
-            ignore_paths=guard_config.get("ignore_paths", []),
-            ignore_rules=guard_config.get("ignore_rules", {}),
+            ignore_paths=normalize_ignore_paths(guard_config.get("ignore_paths")),
+            ignore_rules=normalize_ignore_rules(guard_config.get("ignore_rules")),
             fail_on_severity=fail_severity,
             allowed_clear_files=allowed_clear_files,
             combined_files=combined_files,
@@ -261,9 +272,13 @@ class ScanEngine:
         # the built-in config/lock-file defaults are scoped to noisy
         # keyword/entropy rules only, so they can never swallow a
         # high-confidence distinctive-prefix finding (#477).
+        # Wrong-shaped ignore config raises a clean ValueError HERE, at engine
+        # construction, instead of an uncaught TypeError mid-scan on the first
+        # run that has findings (#478). The CLI/config layer already validates,
+        # so this guards direct SDK construction of GuardConfig.
         ignore_config = IgnoreConfig(
-            ignore_paths=list(self.config.ignore_paths),
-            ignore_rules=self.config.ignore_rules,
+            ignore_paths=normalize_ignore_paths(self.config.ignore_paths),
+            ignore_rules=normalize_ignore_rules(self.config.ignore_rules),
             noisy_rule_paths=list(self.DEFAULT_GLOBAL_IGNORE_PATHS),
         )
         self._ignore_filter = IgnoreFilter(ignore_config)
