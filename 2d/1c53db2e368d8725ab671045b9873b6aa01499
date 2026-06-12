@@ -1,0 +1,32 @@
+docs/cli/guard.md
+  s_a0bbd64ba4e4dd::t_36a35ae75132f7 266-274
+tests/scanner/test_output.py
+  s_a0bbd64ba4e4dd::t_2adc200694ce40 504-715
+tests/integration/test_guard_sarif_correctness_e2e.py
+  s_a0bbd64ba4e4dd::t_abea0db61e9f29 1-227
+src/envdrift/scanner/output.py
+  s_a0bbd64ba4e4dd::t_bf04fe51d798e4 396,398-421,425
+  s_a0bbd64ba4e4dd::t_8a59a71e15f677 463,466
+  s_a0bbd64ba4e4dd::t_4538856a209ce2 436-441
+  s_a0bbd64ba4e4dd::t_d1868454f45126 302-342,348-363,371,376,378-384,386-388
+  s_a0bbd64ba4e4dd::t_06760cc098b5f2 479
+  s_a0bbd64ba4e4dd::t_5a929ed26d34c3 12,20,28,31-40
+docs/specs/guard-command-spec.md
+  s_a0bbd64ba4e4dd::t_d64ae21d9af0fb 937
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.6",
+  "base_commit_sha": "2d1c53db2e368d8725ab671045b9873b6aa01499",
+  "prompts": {},
+  "sessions": {
+    "s_a0bbd64ba4e4dd": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "c1e5b2e5-0fec-4bf5-b8e6-20cdb3a76855",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Jainal Gosaliya <jainal09gosalia@gmail.com>"
+    }
+  }
+}
