@@ -3,7 +3,9 @@ package encrypt
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"strings"
 	"testing"
@@ -64,6 +66,64 @@ func TestIsEncrypted(t *testing.T) {
 			content:  "this line says encrypted: nope",
 			expected: false,
 		},
+		{
+			// #481 regression: one encrypted value must NOT mark a mixed-state
+			// file as fully encrypted — a plaintext secret added to an
+			// already-encrypted file would be dropped from tracking and never
+			// re-encrypted.
+			name: "mixed state: encrypted values plus fresh plaintext secret",
+			content: "DOTENV_PUBLIC_KEY=\"03a5b1c2\"\n" +
+				"DATABASE_URL=\"encrypted:abc123\"\n" +
+				"NEW_SECRET=super-plaintext\n",
+			expected: false,
+		},
+		{
+			// The dotenvx public key (and its env-suffixed variants) is stored
+			// plaintext by design; it must not flag a fully encrypted file as
+			// mixed-state.
+			name: "fully encrypted dotenvx file with public-key header",
+			content: "#/---- DOTENV_PUBLIC_KEY ----/\n" +
+				"DOTENV_PUBLIC_KEY=\"03a5b1c2\"\n" +
+				"DOTENV_PUBLIC_KEY_PRODUCTION=\"03d4e5f6\"\n" +
+				"DATABASE_URL=\"encrypted:abc123\"\n" +
+				"API_KEY=\"encrypted:xyz789\"\n",
+			expected: true,
+		},
+		{
+			// Empty assignments carry no secret and must not count as plaintext.
+			name: "encrypted file with empty assignments",
+			content: "EMPTY=\nQUOTED_EMPTY=\"\"\n" +
+				"SECRET=\"encrypted:abc123\"\n",
+			expected: true,
+		},
+		{
+			// A public-key line alone is not ciphertext: a decrypted dotenvx
+			// file keeps DOTENV_PUBLIC_KEY while its values revert to plaintext.
+			name: "decrypted dotenvx file (public key plus plaintext values)",
+			content: "DOTENV_PUBLIC_KEY=\"03a5b1c2\"\n" +
+				"DATABASE_URL=\"postgres://localhost:5432/db\"\n",
+			expected: false,
+		},
+		{
+			// A fully SOPS-encrypted dotenv file: ciphertext values plus the
+			// plaintext metadata trailer SOPS always writes. The metadata keys
+			// are bookkeeping, not secrets (mirrors the CLI, see #416).
+			name: "fully encrypted SOPS dotenv file with metadata trailer",
+			content: "DATABASE_URL=\"ENC[AES256_GCM,data:abc,iv:def,tag:ghi,type:str]\"\n" +
+				"sops_version=3.9.0\n" +
+				"sops_lastmodified=2026-01-01T00:00:00Z\n" +
+				"sops_mac=ENC[AES256_GCM,data:mac,type:str]\n" +
+				"sops_age__list_0__map_recipient=age1example\n",
+			expected: true,
+		},
+		{
+			// A user variable that merely starts with sops_ is a real secret,
+			// not SOPS bookkeeping: it must keep the file in mixed state.
+			name: "sops_-prefixed user variable stays a plaintext secret",
+			content: "DATABASE_URL=\"ENC[AES256_GCM,data:abc,type:str]\"\n" +
+				"sops_token=AKIA-very-plaintext\n",
+			expected: false,
+		},
 	}
 
 	for _, tt := range tests {
@@ -116,7 +176,7 @@ func writeFakeExe(t *testing.T, dir, name, script string) string {
 
 // TestBuildEncryptCommand_PythonUsesModuleFlag is the #348 G1 regression: when
 // findEnvdrift resolves to a python interpreter, buildEncryptCommand must emit
-// `python -m envdrift lock <file>`, not `python lock <file>`.
+// `python -m envdrift encrypt <file>`, not `python encrypt <file>`.
 func TestBuildEncryptCommand_PythonUsesModuleFlag(t *testing.T) {
 	dir := t.TempDir()
 	// Fake python that succeeds only for `-m envdrift --version` so findEnvdrift
@@ -147,9 +207,10 @@ exit 1
 	if !strings.Contains(joined, "-m envdrift") {
 		t.Errorf("python invocation missing `-m envdrift`: %v", cmd.Args)
 	}
-	// Tail must be `... -m envdrift lock .env`.
+	// Tail must be `... -m envdrift encrypt .env`: `encrypt` is the CLI's
+	// per-file path (positional ENV_FILE); `lock` rejects positionals (#481).
 	tail := cmd.Args[len(cmd.Args)-4:]
-	want := []string{"-m", "envdrift", "lock", ".env"}
+	want := []string{"-m", "envdrift", "encrypt", ".env"}
 	for i := range want {
 		if tail[i] != want[i] {
 			t.Errorf("args tail = %v, want %v (full: %v)", tail, want, cmd.Args)
@@ -159,7 +220,7 @@ exit 1
 }
 
 // TestBuildEncryptCommand_BinaryNoModuleFlag asserts that a standalone envdrift
-// binary is invoked directly as `envdrift lock <file>` (no `-m envdrift`).
+// binary is invoked directly as `envdrift encrypt <file>` (no `-m envdrift`).
 func TestBuildEncryptCommand_BinaryNoModuleFlag(t *testing.T) {
 	dir := t.TempDir()
 	bin := writeFakeExe(t, dir, "envdrift", `exit 0`)
@@ -178,7 +239,7 @@ func TestBuildEncryptCommand_BinaryNoModuleFlag(t *testing.T) {
 	if cmd.Path != bin {
 		t.Errorf("cmd.Path = %q, want %q", cmd.Path, bin)
 	}
-	wantArgs := []string{bin, "lock", ".env"}
+	wantArgs := []string{bin, "encrypt", ".env"}
 	if len(cmd.Args) != len(wantArgs) {
 		t.Fatalf("args = %v, want %v", cmd.Args, wantArgs)
 	}
@@ -187,5 +248,107 @@ func TestBuildEncryptCommand_BinaryNoModuleFlag(t *testing.T) {
 			t.Errorf("args = %v, want %v", cmd.Args, wantArgs)
 			break
 		}
+	}
+}
+
+// findRealEnvdrift returns the path of a real envdrift CLI, skipping the test
+// when none is on PATH (e.g. the cross-OS Go CI matrix, which has no Python).
+func findRealEnvdrift(t *testing.T) string {
+	t.Helper()
+	p, err := exec.LookPath("envdrift")
+	if err != nil {
+		t.Skip("envdrift CLI not on PATH; skipping real-CLI test")
+	}
+	return p
+}
+
+// ansiEscapes matches the CSI/OSC escape sequences Rich may emit in help text.
+var ansiEscapes = regexp.MustCompile(`\x1b\[[0-9;]*[A-Za-z]|\x1b\][^\x07]*\x07`)
+
+// TestBuildEncryptCommand_MatchesRealCLIContract validates the argv that
+// buildEncryptCommand emits against the REAL CLI contract, not a hardcoded
+// expectation: the chosen subcommand's --help must document a positional
+// ENV_FILE argument. The pre-#481 agent ran `envdrift lock <file>`, but `lock`
+// takes no positional — every invocation exited 2 ("Got unexpected extra
+// argument(s)") and no agent user ever got a file encrypted. If a future CLI
+// release drops the positional file argument from the subcommand the agent
+// uses, this test breaks loudly instead of the agent failing silently.
+func TestBuildEncryptCommand_MatchesRealCLIContract(t *testing.T) {
+	bin := findRealEnvdrift(t)
+
+	envPath := filepath.Join(t.TempDir(), ".env")
+	if err := os.WriteFile(envPath, []byte("A=1\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	cmd, err := buildEncryptCommand(envPath)
+	if err != nil {
+		t.Fatalf("buildEncryptCommand: %v", err)
+	}
+	// envdrift is on PATH, so the direct-binary form must be chosen:
+	// [<envdrift> <subcommand> <file>].
+	if len(cmd.Args) != 3 {
+		t.Fatalf("expected [envdrift <subcommand> <file>], got %v", cmd.Args)
+	}
+	subcommand := cmd.Args[1]
+
+	help := exec.Command(bin, subcommand, "--help")
+	// Force un-colorized help so the contract assertion is not ANSI-dependent.
+	help.Env = append(os.Environ(), "NO_COLOR=1", "FORCE_COLOR=0", "TERM=dumb", "COLUMNS=200")
+	out, err := help.CombinedOutput()
+	if err != nil {
+		t.Fatalf("`envdrift %s --help` failed: %v\n%s", subcommand, err, out)
+	}
+
+	plain := ansiEscapes.ReplaceAllString(string(out), "")
+	if !strings.Contains(plain, "ENV_FILE") {
+		t.Errorf("`envdrift %s` does not accept a positional ENV_FILE argument — "+
+			"the agent's encrypt argv violates the real CLI contract (#481).\n--help output:\n%s",
+			subcommand, plain)
+	}
+}
+
+// TestEncryptEndToEnd_RealCLI drives the agent's encrypt step end-to-end
+// against the real `envdrift` binary: a plaintext .env must come back fully
+// encrypted (IsEncrypted == true). On the pre-#481 argv (`envdrift lock
+// <file>`) the CLI exits 2 and the file stays plaintext. Skips when envdrift
+// or its dotenvx backend is unavailable.
+func TestEncryptEndToEnd_RealCLI(t *testing.T) {
+	findRealEnvdrift(t)
+	if _, err := exec.LookPath("dotenvx"); err != nil {
+		t.Skip("dotenvx not on PATH; skipping end-to-end encrypt test")
+	}
+
+	dir := t.TempDir()
+	envPath := filepath.Join(dir, ".env")
+	if err := os.WriteFile(envPath, []byte("SECRET=plaintext-value\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := EncryptSilent(envPath); err != nil {
+		// Re-run with captured output for diagnostics; EncryptSilent discards it.
+		cmd, buildErr := buildEncryptCommand(envPath)
+		var retry []byte
+		if buildErr == nil {
+			retry, _ = cmd.CombinedOutput()
+		}
+		t.Fatalf("EncryptSilent(%q) failed against the real CLI: %v\nretry output:\n%s",
+			envPath, err, retry)
+	}
+
+	content, err := os.ReadFile(envPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(content), "encrypted:") {
+		t.Fatalf("file was not encrypted; content:\n%s", content)
+	}
+
+	encrypted, err := IsEncrypted(envPath)
+	if err != nil {
+		t.Fatalf("IsEncrypted: %v", err)
+	}
+	if !encrypted {
+		t.Errorf("IsEncrypted = false after a successful real encrypt; content:\n%s", content)
 	}
 }

@@ -101,7 +101,7 @@ recursive = true
 2. **Tracks** last modification time for each file
 3. **Checks** if file is idle (not modified for `idle_timeout`)
 4. **Verifies** file is not open by another process
-5. **Encrypts** using `envdrift lock` (respects `envdrift.toml`)
+5. **Encrypts** using `envdrift encrypt <file>` (respects `envdrift.toml`)
 6. **Notifies** (optional) via desktop notification
 
 Project-level `vault.sync.mappings.env_file` names are added to the effective

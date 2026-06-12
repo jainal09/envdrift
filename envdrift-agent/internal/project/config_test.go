@@ -211,6 +211,209 @@ env_file = "service.env"
 	}
 }
 
+// writeFile is a tiny helper for the discovery tests below.
+func writeFile(t *testing.T, path, content string) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// TestLoadProjectConfig_PyprojectGuardian is the #481 regression: a project
+// whose guardian config lives in pyproject.toml [tool.envdrift.guardian] was
+// registered successfully by the CLI (find_config blesses pyproject.toml) but
+// silently never watched — the agent read only <path>/envdrift.toml.
+func TestLoadProjectConfig_PyprojectGuardian(t *testing.T) {
+	tmpDir := t.TempDir()
+	writeFile(t, filepath.Join(tmpDir, "pyproject.toml"), `
+[project]
+name = "demo"
+
+[tool.envdrift.guardian]
+enabled = true
+idle_timeout = "10m"
+patterns = [".env*", ".secret*"]
+notify = false
+`)
+
+	cfg, err := LoadProjectConfig(tmpDir)
+	if err != nil {
+		t.Fatalf("LoadProjectConfig() error = %v", err)
+	}
+
+	if !cfg.Enabled {
+		t.Error("Enabled = false: pyproject.toml [tool.envdrift.guardian] was ignored (#481)")
+	}
+	if cfg.IdleTimeout != 10*time.Minute {
+		t.Errorf("IdleTimeout = %v, want 10m", cfg.IdleTimeout)
+	}
+	if len(cfg.Patterns) != 2 {
+		t.Errorf("Patterns = %v, want 2 entries", cfg.Patterns)
+	}
+	if cfg.Notify {
+		t.Error("Notify = true, want false")
+	}
+}
+
+// TestLoadProjectConfig_ParentDirEnvdriftToml is the #481 regression for the
+// parent-dir half of the discovery contract: the CLI's find_config walks up to
+// the filesystem root, so a project registered from a subdirectory of a repo
+// with a root envdrift.toml was blessed at register time but never watched.
+func TestLoadProjectConfig_ParentDirEnvdriftToml(t *testing.T) {
+	parent := t.TempDir()
+	project := filepath.Join(parent, "services", "api")
+	if err := os.MkdirAll(project, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, filepath.Join(parent, "envdrift.toml"), `
+[guardian]
+enabled = true
+idle_timeout = "3m"
+`)
+
+	cfg, err := LoadProjectConfig(project)
+	if err != nil {
+		t.Fatalf("LoadProjectConfig() error = %v", err)
+	}
+
+	if !cfg.Enabled {
+		t.Error("Enabled = false: parent-dir envdrift.toml was ignored (#481)")
+	}
+	if cfg.IdleTimeout != 3*time.Minute {
+		t.Errorf("IdleTimeout = %v, want 3m", cfg.IdleTimeout)
+	}
+}
+
+// TestLoadProjectConfig_EnvdriftTomlWinsOverPyproject: within one directory,
+// envdrift.toml takes precedence over pyproject.toml (find_config order).
+func TestLoadProjectConfig_EnvdriftTomlWinsOverPyproject(t *testing.T) {
+	tmpDir := t.TempDir()
+	writeFile(t, filepath.Join(tmpDir, "envdrift.toml"), `
+[guardian]
+enabled = true
+idle_timeout = "7m"
+`)
+	writeFile(t, filepath.Join(tmpDir, "pyproject.toml"), `
+[tool.envdrift.guardian]
+enabled = true
+idle_timeout = "9m"
+`)
+
+	cfg, err := LoadProjectConfig(tmpDir)
+	if err != nil {
+		t.Fatalf("LoadProjectConfig() error = %v", err)
+	}
+	if cfg.IdleTimeout != 7*time.Minute {
+		t.Errorf("IdleTimeout = %v, want 7m (envdrift.toml must win over pyproject.toml)", cfg.IdleTimeout)
+	}
+}
+
+// TestLoadProjectConfig_PyprojectWinsOverParentEnvdriftToml: a same-dir
+// pyproject.toml with [tool.envdrift] beats a parent-dir envdrift.toml — the
+// walk checks both files per level before moving up (find_config order).
+func TestLoadProjectConfig_PyprojectWinsOverParentEnvdriftToml(t *testing.T) {
+	parent := t.TempDir()
+	project := filepath.Join(parent, "child")
+	if err := os.MkdirAll(project, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, filepath.Join(parent, "envdrift.toml"), `
+[guardian]
+enabled = true
+idle_timeout = "3m"
+`)
+	writeFile(t, filepath.Join(project, "pyproject.toml"), `
+[tool.envdrift.guardian]
+enabled = true
+idle_timeout = "9m"
+`)
+
+	cfg, err := LoadProjectConfig(project)
+	if err != nil {
+		t.Fatalf("LoadProjectConfig() error = %v", err)
+	}
+	if cfg.IdleTimeout != 9*time.Minute {
+		t.Errorf("IdleTimeout = %v, want 9m (same-dir pyproject.toml must win over parent envdrift.toml)",
+			cfg.IdleTimeout)
+	}
+}
+
+// TestLoadProjectConfig_PyprojectWithoutEnvdriftSkipped: a pyproject.toml with
+// no [tool.envdrift] table does not stop the walk.
+func TestLoadProjectConfig_PyprojectWithoutEnvdriftSkipped(t *testing.T) {
+	parent := t.TempDir()
+	project := filepath.Join(parent, "child")
+	if err := os.MkdirAll(project, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, filepath.Join(project, "pyproject.toml"), `
+[project]
+name = "demo"
+`)
+	writeFile(t, filepath.Join(parent, "envdrift.toml"), `
+[guardian]
+enabled = true
+`)
+
+	cfg, err := LoadProjectConfig(project)
+	if err != nil {
+		t.Fatalf("LoadProjectConfig() error = %v", err)
+	}
+	if !cfg.Enabled {
+		t.Error("Enabled = false: walk stopped at a pyproject.toml without [tool.envdrift]")
+	}
+}
+
+// TestLoadProjectConfig_MalformedPyprojectSkipped: a malformed pyproject.toml
+// is skipped (matching the CLI's find_config), not a fatal error.
+func TestLoadProjectConfig_MalformedPyprojectSkipped(t *testing.T) {
+	parent := t.TempDir()
+	project := filepath.Join(parent, "child")
+	if err := os.MkdirAll(project, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, filepath.Join(project, "pyproject.toml"), "this is { not TOML\n")
+	writeFile(t, filepath.Join(parent, "envdrift.toml"), `
+[guardian]
+enabled = true
+`)
+
+	cfg, err := LoadProjectConfig(project)
+	if err != nil {
+		t.Fatalf("LoadProjectConfig() error = %v", err)
+	}
+	if !cfg.Enabled {
+		t.Error("Enabled = false: malformed pyproject.toml aborted discovery instead of being skipped")
+	}
+}
+
+// TestLoadProjectConfig_PyprojectVaultMappings: vault sync env_file patterns
+// are honored from pyproject.toml too, like envdrift.toml.
+func TestLoadProjectConfig_PyprojectVaultMappings(t *testing.T) {
+	tmpDir := t.TempDir()
+	writeFile(t, filepath.Join(tmpDir, "pyproject.toml"), `
+[tool.envdrift.guardian]
+enabled = true
+
+[[tool.envdrift.vault.sync.mappings]]
+folder_path = "secrets/postgresql"
+environment = "production"
+secret_name = "postgresql-key"
+env_file = "postgresql.env"
+`)
+
+	cfg, err := LoadProjectConfig(tmpDir)
+	if err != nil {
+		t.Fatalf("LoadProjectConfig() error = %v", err)
+	}
+	if !patternListMatches(cfg.Patterns, "postgresql.env") {
+		t.Errorf("vault env_file pattern from pyproject.toml not appended: %v", cfg.Patterns)
+	}
+}
+
 func TestLoadAllProjectConfigs(t *testing.T) {
 	// Create two project directories
 	proj1 := t.TempDir()

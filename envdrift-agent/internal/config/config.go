@@ -2,11 +2,14 @@
 package config
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"time"
 
 	"github.com/pelletier/go-toml/v2"
+
+	"github.com/jainal09/envdrift-agent/internal/project"
 )
 
 // Config holds the agent configuration
@@ -28,6 +31,46 @@ type GuardianConfig struct {
 type DirectoriesConfig struct {
 	Watch     []string `toml:"watch"`
 	Recursive bool     `toml:"recursive"`
+}
+
+// rawConfig mirrors Config for TOML decoding. idle_timeout is accepted as
+// either the documented duration string ("5m") or the raw nanosecond integer
+// that pre-#481 Save wrote; before this, the documented form crashed the agent
+// at startup ("toml: cannot decode TOML string into struct field ... of type
+// time.Duration"), which under launchd KeepAlive / systemd Restart=always
+// became a perpetual crash-respawn loop. Absent fields stay nil/empty so
+// defaults survive partial configs.
+type rawConfig struct {
+	Guardian    rawGuardianConfig    `toml:"guardian"`
+	Directories rawDirectoriesConfig `toml:"directories"`
+}
+
+type rawGuardianConfig struct {
+	Enabled     *bool    `toml:"enabled"`
+	IdleTimeout any      `toml:"idle_timeout"`
+	Patterns    []string `toml:"patterns"`
+	Exclude     []string `toml:"exclude"`
+	Notify      *bool    `toml:"notify"`
+}
+
+type rawDirectoriesConfig struct {
+	Watch     []string `toml:"watch"`
+	Recursive *bool    `toml:"recursive"`
+}
+
+// savedConfig is the shape Save serializes: idle_timeout goes out as the
+// documented duration string, never as raw nanoseconds.
+type savedConfig struct {
+	Guardian    savedGuardianConfig `toml:"guardian"`
+	Directories DirectoriesConfig   `toml:"directories"`
+}
+
+type savedGuardianConfig struct {
+	Enabled     bool     `toml:"enabled"`
+	IdleTimeout string   `toml:"idle_timeout"`
+	Patterns    []string `toml:"patterns"`
+	Exclude     []string `toml:"exclude"`
+	Notify      bool     `toml:"notify"`
 }
 
 // DefaultConfig returns a *Config populated with sensible defaults for the Guardian and Directories sections.
@@ -77,15 +120,76 @@ func Load() (*Config, error) {
 	}
 
 	cfg := DefaultConfig()
-	if err := toml.Unmarshal(data, cfg); err != nil {
+	var raw rawConfig
+	if err := toml.Unmarshal(data, &raw); err != nil {
 		return nil, err
+	}
+
+	if raw.Guardian.Enabled != nil {
+		cfg.Guardian.Enabled = *raw.Guardian.Enabled
+	}
+	if raw.Guardian.IdleTimeout != nil {
+		d, err := decodeIdleTimeout(raw.Guardian.IdleTimeout)
+		if err != nil {
+			return nil, fmt.Errorf("%s: guardian.idle_timeout: %w", configPath, err)
+		}
+		cfg.Guardian.IdleTimeout = d
+	}
+	if len(raw.Guardian.Patterns) > 0 {
+		cfg.Guardian.Patterns = raw.Guardian.Patterns
+	}
+	if len(raw.Guardian.Exclude) > 0 {
+		cfg.Guardian.Exclude = raw.Guardian.Exclude
+	}
+	if raw.Guardian.Notify != nil {
+		cfg.Guardian.Notify = *raw.Guardian.Notify
+	}
+	if len(raw.Directories.Watch) > 0 {
+		cfg.Directories.Watch = raw.Directories.Watch
+	}
+	if raw.Directories.Recursive != nil {
+		cfg.Directories.Recursive = *raw.Directories.Recursive
 	}
 
 	return cfg, nil
 }
 
-// Save writes cfg to the default config file path as TOML.
-// It ensures the parent directory exists, marshals cfg to TOML, and writes the file with permissions 0644.
+// decodeIdleTimeout converts a TOML idle_timeout value into a time.Duration.
+// The documented form is a duration string ("30s", "5m", "1h", "2d" — parsed
+// by the same project.ParseIdleTimeout the per-project config uses); a bare
+// integer is the legacy raw-nanosecond form pre-#481 Save wrote and stays
+// loadable so existing config files don't start crashing the agent.
+func decodeIdleTimeout(v any) (time.Duration, error) {
+	switch tv := v.(type) {
+	case string:
+		return project.ParseIdleTimeout(tv)
+	case int64:
+		return time.Duration(tv), nil
+	default:
+		return 0, fmt.Errorf("unsupported value %v (type %T); use a duration string like \"5m\"", v, v)
+	}
+}
+
+// FormatIdleTimeout renders a duration in the documented guardian.toml form: a
+// compact single-unit duration string ("30s", "5m", "2h") when a whole unit
+// fits, otherwise Go's default representation (which Load also accepts).
+func FormatIdleTimeout(d time.Duration) string {
+	switch {
+	case d%time.Hour == 0:
+		return fmt.Sprintf("%dh", d/time.Hour)
+	case d%time.Minute == 0:
+		return fmt.Sprintf("%dm", d/time.Minute)
+	case d%time.Second == 0:
+		return fmt.Sprintf("%ds", d/time.Second)
+	default:
+		return d.String()
+	}
+}
+
+// Save writes cfg to the default config file path as TOML, serializing
+// idle_timeout in the documented duration-string form ("5m") — pre-#481 it
+// wrote time.Duration's raw nanoseconds (idle_timeout = 300000000000).
+// It ensures the parent directory exists and writes the file with permissions 0644.
 // It returns an error if directory creation, marshaling, or writing fails.
 func Save(cfg *Config) error {
 	configPath := ConfigPath()
@@ -95,7 +199,18 @@ func Save(cfg *Config) error {
 		return err
 	}
 
-	data, err := toml.Marshal(cfg)
+	out := savedConfig{
+		Guardian: savedGuardianConfig{
+			Enabled:     cfg.Guardian.Enabled,
+			IdleTimeout: FormatIdleTimeout(cfg.Guardian.IdleTimeout),
+			Patterns:    cfg.Guardian.Patterns,
+			Exclude:     cfg.Guardian.Exclude,
+			Notify:      cfg.Guardian.Notify,
+		},
+		Directories: cfg.Directories,
+	}
+
+	data, err := toml.Marshal(out)
 	if err != nil {
 		return err
 	}
