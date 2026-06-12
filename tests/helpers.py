@@ -2,10 +2,43 @@
 
 from __future__ import annotations
 
+import re
+import tomllib
 from collections.abc import Callable
 from pathlib import Path
 
 from envdrift.encryption.base import EncryptionResult
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
+
+_REQUIREMENT_NAME_RE = re.compile(r"^\s*([A-Za-z0-9][A-Za-z0-9._-]*)")
+_FLOOR_RE = re.compile(r">=\s*([0-9]+(?:\.[0-9]+)*)")
+
+
+def declared_dependency_floor(package: str) -> str:
+    """Return the ``>=`` floor declared for *package* in ``pyproject.toml``.
+
+    Reads ``[project] dependencies`` dynamically so tests never hardcode a
+    version that Renovate (or a maintainer) later bumps. Raises ``AssertionError``
+    if the package is missing or declares no lower bound — a silent absence
+    would let a broken floor regress unnoticed (see issue #496).
+    """
+    pyproject = tomllib.loads((REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+    for requirement in pyproject["project"]["dependencies"]:
+        name_match = _REQUIREMENT_NAME_RE.match(requirement)
+        if name_match is None or name_match.group(1).lower() != package.lower():
+            continue
+        floor_match = _FLOOR_RE.search(requirement)
+        assert floor_match is not None, (
+            f"dependency {requirement!r} declares no '>=' floor in pyproject.toml"
+        )
+        return floor_match.group(1)
+    raise AssertionError(f"{package!r} not found in [project] dependencies of pyproject.toml")
+
+
+def version_tuple(version: str) -> tuple[int, ...]:
+    """Parse a release version string like ``0.13`` into an int tuple."""
+    return tuple(int(part) for part in version.split("."))
 
 
 class DummyEncryptionBackend:
