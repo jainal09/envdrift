@@ -1,0 +1,29 @@
+src/envdrift/scanner/trivy.py
+  s_a0bbd64ba4e4dd::t_021418053fe391 573
+  s_a0bbd64ba4e4dd::t_f353b83f3eeb59 597-637,639,641-670
+  s_a0bbd64ba4e4dd::t_bdc2a514e82750 555-572
+tests/scanner/test_trivy.py
+  s_a0bbd64ba4e4dd::t_340cdd6e125c4e 710-857,859,862,877-878,880-929
+  s_a0bbd64ba4e4dd::t_6f7b83bbdb365a 14
+  s_a0bbd64ba4e4dd::t_454234b54b635b 858,860-861,863-876,879
+src/envdrift/scanner/engine.py
+  s_a0bbd64ba4e4dd::t_b9b00725e0df8a 812-813
+docs/cli/guard.md
+  s_a0bbd64ba4e4dd::t_e212ec8886e8fe 194-201
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.6",
+  "base_commit_sha": "4faf3911e76e7c86dda3aeda35c5181c1b5cd578",
+  "prompts": {},
+  "sessions": {
+    "s_a0bbd64ba4e4dd": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "c1e5b2e5-0fec-4bf5-b8e6-20cdb3a76855",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Jainal Gosaliya <jainal09gosalia@gmail.com>"
+    }
+  }
+}
