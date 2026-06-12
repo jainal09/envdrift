@@ -1,0 +1,44 @@
+src/envdrift/cli_commands/agent.py
+  s_a0bbd64ba4e4dd::t_dd056f01c629b5 262-268
+  s_a0bbd64ba4e4dd::t_e5a63ed6405f41 280
+  s_a0bbd64ba4e4dd::t_8a77af71234018 216-222
+  s_a0bbd64ba4e4dd::t_f24a233e167669 348-349,351
+  s_a0bbd64ba4e4dd::t_8dad0b05cf6178 28-29
+  s_a0bbd64ba4e4dd::t_02b4b18529bf80 127-151
+tests/integration/test_cli_e2e.py
+  s_a0bbd64ba4e4dd::t_019e6252e4a5f0 306,313-314,321-322,324,327-330,336-337,343-346,349-447
+  s_a0bbd64ba4e4dd::t_9772b199ff834d 347-348
+src/envdrift/agent/registry.py
+  s_a0bbd64ba4e4dd::t_2541486497888d 14-23,30,32-33,37-73,86-88,91,99-121,129-133,139-140,147,150,164-170,172-178,187-194,196,207-260,285-293,295-301,303-308,312,320-322,331-333,338-340,342-354,359-360,367-369,373-374,376-383,426-434,473-475,500-502
+  s_a0bbd64ba4e4dd::t_6398571fe1fed9 294
+src/envdrift/agent/__init__.py
+  s_a0bbd64ba4e4dd::t_e09e4033178ed4 11-12,22-23
+tests/unit/test_agent_registry_robustness.py
+  s_a0bbd64ba4e4dd::t_9ef6ce79e93206 1-168,208-252,254-282
+  s_a0bbd64ba4e4dd::t_c4f190a198b4af 169-207
+  s_a0bbd64ba4e4dd::t_24c3dae4857f1e 253
+tests/unit/test_agent_cli.py
+  s_a0bbd64ba4e4dd::t_46936ec6327cbb 541-556
+  s_a0bbd64ba4e4dd::t_fd72effabbac61 540,557-580
+  s_a0bbd64ba4e4dd::t_105fddaca2cd7c 468-470
+docs/agent-spec.md
+  s_a0bbd64ba4e4dd::t_aecbe9b3b92c2b 178-185
+docs/guides/agent-setup.md
+  s_a0bbd64ba4e4dd::t_a7d31bf721adac 170-185
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.6",
+  "base_commit_sha": "fe5b34bff12d27d958803a6f978372f270050a26",
+  "prompts": {},
+  "sessions": {
+    "s_a0bbd64ba4e4dd": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "c1e5b2e5-0fec-4bf5-b8e6-20cdb3a76855",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Jainal Gosaliya <jainal09gosalia@gmail.com>"
+    }
+  }
+}
