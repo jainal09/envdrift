@@ -2339,6 +2339,67 @@ class TestSyncCommand:
 
         assert result.exit_code == 1
 
+    def test_sync_check_decryption_failure_exits_nonzero_without_ci(
+        self, monkeypatch, tmp_path: Path
+    ):
+        """#473: a requested --check-decryption that FAILED must exit 1 even without --ci.
+
+        The deep-review verifier reproduced "Decryption: FAILED / Failed: 1"
+        with overall exit 0 — an untruthful verdict scripts silently miss.
+        """
+        from envdrift.sync.result import (
+            DecryptionTestResult,
+            ServiceSyncResult,
+            SyncAction,
+            SyncResult,
+        )
+
+        config_file = tmp_path / "pair.txt"
+        config_file.write_text("secret=service")
+
+        monkeypatch.setattr("envdrift.vault.get_vault_client", lambda *_, **__: SimpleNamespace())
+        monkeypatch.setattr("envdrift.output.rich.print_service_sync_status", lambda *_, **__: None)
+        monkeypatch.setattr("envdrift.output.rich.print_sync_result", lambda *_, **__: None)
+
+        failed_check = SyncResult(
+            services=[
+                ServiceSyncResult(
+                    secret_name="secret",
+                    folder_path=tmp_path / "service",
+                    action=SyncAction.SKIPPED,
+                    message="up to date",
+                    decryption_result=DecryptionTestResult.FAILED,
+                )
+            ]
+        )
+
+        class FailedCheckEngine:
+            def __init__(self, *_args, **_kwargs):
+                """Test stub returning a sync result with a failed decryption test."""
+
+            def sync_all(self):
+                return failed_check
+
+        monkeypatch.setattr("envdrift.sync.engine.SyncEngine", FailedCheckEngine)
+
+        common_args = [
+            "sync",
+            "-c",
+            str(config_file),
+            "-p",
+            "hashicorp",
+            "--vault-url",
+            "http://localhost:8200",
+        ]
+
+        # Without --check-decryption the (stubbed) failed test is not an
+        # explicitly requested check, so the historic exit contract holds.
+        result = runner.invoke(app, common_args)
+        assert result.exit_code == 0
+
+        result = runner.invoke(app, [*common_args, "--check-decryption"])
+        assert result.exit_code == 1
+
     def test_sync_autodiscovery_uses_config_defaults(self, monkeypatch, tmp_path: Path):
         """Auto-discovered envdrift.toml should supply provider, vault URL, and mappings."""
 

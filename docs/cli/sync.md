@@ -86,7 +86,16 @@ Force update all mismatches without prompting.
 
 After syncing, verify that the keys can decrypt `.env` files.
 
-This tests actual decryption using dotenvx to ensure keys are valid.
+This tests actual decryption using dotenvx to ensure keys are valid. The check
+is **non-destructive**: the encrypted file and the synced keys file are copied
+into a throwaway temp directory and dotenvx decrypts the copy there, so the
+working-tree file is never decrypted or rewritten (its bytes are identical
+before and after, whether the check passes or fails). Stray
+`DOTENV_PRIVATE_KEY*` variables in your shell are ignored so the verdict
+reflects the synced `.env.keys`, and mappings with relative `folder_path`
+values (the usual monorepo layout) verify correctly from the project root.
+
+If any decryption test fails, `sync` exits 1 — with or without `--ci`.
 
 ### `--validate-schema`
 
@@ -345,10 +354,11 @@ All services synced successfully
 
 ## Exit Codes
 
-| Code | Meaning                                               |
-| :--- | :---------------------------------------------------- |
-| 0    | Success (all synced, no errors)                       |
-| 1    | Error (vault error, sync failure, decryption failure) |
+| Code | Meaning                                                                  |
+| :--- | :------------------------------------------------------------------------ |
+| 0    | Success (all synced, no errors)                                            |
+| 1    | Error (vault error, sync failure, decryption failure)                      |
+| 1    | `--check-decryption`: any decryption test failed (even without `--ci`)     |
 
 ## Authentication
 

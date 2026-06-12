@@ -461,7 +461,8 @@ def sync(
 
     Loads sync configuration and a vault client, fetches DOTENV_PRIVATE_KEY_* secrets for configured mappings, and writes/updates local key files; optionally verifies keys, forces updates, checks decryption, and runs schema validation after sync. In interactive mode the command may prompt before updating individual services; --force, --verify, and --ci disable prompts.
 
-    Exits with code 1 on vault or sync configuration errors, and when run with --ci if any sync errors occurred.
+    Exits with code 1 on vault or sync configuration errors, when run with --ci if any sync
+    errors occurred, and whenever a --check-decryption test fails (even without --ci).
     """
     from envdrift.output.rich import print_service_sync_status, print_sync_result
     from envdrift.sync.config import SyncConfigError
@@ -537,6 +538,11 @@ def sync(
 
     # Exit with appropriate code
     if ci and result.has_errors:
+        raise typer.Exit(code=1)
+    # An explicitly requested decryption check that failed must fail the run
+    # even without --ci: printing "Decryption: FAILED" and exiting 0 is an
+    # untruthful verdict that scripts and pre-commit hooks silently miss (#473).
+    if check_decryption and result.decryption_failed > 0:
         raise typer.Exit(code=1)
 
 
@@ -1155,7 +1161,11 @@ def lock(
     3. No plaintext secrets are accidentally committed
 
     Workflow:
-    - With --verify-vault: Check if local .env.keys match vault secrets
+    - With --verify-vault: Check if local .env.keys match vault secrets.
+      Any mapping that cannot be verified (missing .env.keys, missing key
+      entry, missing/empty vault secret, vault error) or that mismatches is
+      a hard failure: nothing is encrypted and the exit code is 1, even with
+      --force. Use --sync-keys to repair, or drop --verify-vault to skip.
     - With --sync-keys: Fetch keys from vault to ensure consistency
     - With --all: Also encrypt partial encryption .secret files and delete combined files
     - Then: Encrypt all .env files that are currently decrypted
@@ -1291,9 +1301,15 @@ def lock(
                     print_error("Cannot proceed with encryption due to key sync errors")
                     raise typer.Exit(code=1)
         else:
-            # Just verify (compare local keys with vault)
+            # Just verify (compare local keys with vault).
             from envdrift.sync.operations import EnvKeysFile
 
+            # Truthful verdicts (#473): a state we CANNOT verify (missing
+            # .env.keys, missing key entry, missing/empty vault secret, vault
+            # access failure) is a verification failure, not a warning.
+            # Continuing would let Step 2 mint a fresh local-only keypair and
+            # bless the result "ready to commit" — and a teammate syncing the
+            # team key from vault could no longer decrypt the committed file.
             verification_issues = 0
 
             for mapping in filtered_mappings:
@@ -1304,10 +1320,14 @@ def lock(
                 # Check if local key exists
                 if not env_keys_file.exists():
                     console.print(
-                        f"  [yellow]![/yellow] {mapping.folder_path} "
-                        f"[yellow]- warning: .env.keys not found[/yellow]"
+                        f"  [red]✗[/red] {mapping.folder_path} "
+                        f"[red]- cannot verify: {env_keys_file.name} not found[/red]"
                     )
-                    warnings.append(f"{mapping.folder_path}: .env.keys file missing")
+                    errors.append(
+                        f"{mapping.folder_path}: cannot verify - {env_keys_file.name} missing "
+                        f"(run 'envdrift lock --sync-keys' to fetch keys from vault)"
+                    )
+                    verification_issues += 1
                     continue
 
                 local_keys = EnvKeysFile(env_keys_file)
@@ -1315,10 +1335,14 @@ def lock(
 
                 if not local_key:
                     console.print(
-                        f"  [yellow]![/yellow] {mapping.folder_path} "
-                        f"[yellow]- warning: {key_name} not found in .env.keys[/yellow]"
+                        f"  [red]✗[/red] {mapping.folder_path} "
+                        f"[red]- cannot verify: {key_name} not found in {env_keys_file.name}[/red]"
                     )
-                    warnings.append(f"{mapping.folder_path}: {key_name} missing from .env.keys")
+                    errors.append(
+                        f"{mapping.folder_path}: cannot verify - {key_name} missing from "
+                        f"{env_keys_file.name} (run 'envdrift lock --sync-keys' to fetch it)"
+                    )
+                    verification_issues += 1
                     continue
 
                 # Fetch key from vault for comparison
@@ -1328,10 +1352,16 @@ def lock(
 
                     if not vault_secret or not vault_secret.value:
                         console.print(
-                            f"  [yellow]![/yellow] {mapping.folder_path} "
-                            f"[yellow]- warning: vault secret '{mapping.secret_name}' is empty[/yellow]"
+                            f"  [red]✗[/red] {mapping.folder_path} "
+                            f"[red]- cannot verify: vault secret "
+                            f"'{mapping.secret_name}' is empty[/red]"
                         )
-                        warnings.append(f"{mapping.folder_path}: vault secret is empty")
+                        errors.append(
+                            f"{mapping.folder_path}: cannot verify - vault secret "
+                            f"'{mapping.secret_name}' is empty "
+                            f"(push the key with 'envdrift vault-push')"
+                        )
+                        verification_issues += 1
                         continue
 
                     vault_value = vault_secret.value
@@ -1366,23 +1396,36 @@ def lock(
 
                 except SecretNotFoundError:
                     console.print(
-                        f"  [yellow]![/yellow] {mapping.folder_path} "
-                        f"[yellow]- warning: vault secret '{mapping.secret_name}' not found[/yellow]"
+                        f"  [red]✗[/red] {mapping.folder_path} "
+                        f"[red]- cannot verify: vault secret "
+                        f"'{mapping.secret_name}' not found[/red]"
                     )
-                    warnings.append(f"{mapping.folder_path}: vault secret not found")
+                    errors.append(
+                        f"{mapping.folder_path}: cannot verify - vault secret "
+                        f"'{mapping.secret_name}' not found "
+                        f"(push the key with 'envdrift vault-push')"
+                    )
+                    verification_issues += 1
                 except VaultError as e:
                     console.print(
                         f"  [red]![/red] {mapping.folder_path} "
                         f"[red]- error: vault access failed: {e}[/red]"
                     )
                     errors.append(f"{mapping.folder_path}: vault error - {e}")
+                    verification_issues += 1
 
             console.print()
 
-            if verification_issues > 0 and not force:
+            if verification_issues > 0:
+                # Hard stop BEFORE Step 2, even with --force: --force means
+                # "don't prompt", not "encrypt with keys that failed (or
+                # escaped) verification". Encrypting now could mint a fresh
+                # local-only key or commit a file the team's vault key cannot
+                # decrypt (#473).
                 print_error(
-                    f"Found {verification_issues} key mismatch(es). "
-                    "Run with --sync-keys to update local keys, or --force to encrypt anyway."
+                    f"Vault key verification failed for {verification_issues} mapping(s). "
+                    "Nothing was encrypted. Run 'envdrift lock --sync-keys' to sync keys "
+                    "from vault, or rerun without --verify-vault to skip verification."
                 )
                 raise typer.Exit(code=1)
 
