@@ -1,0 +1,42 @@
+src/envdrift/cli_commands/encryption.py
+  s_a0bbd64ba4e4dd::t_8d4ba06a396ca3 284-296
+  s_a0bbd64ba4e4dd::t_3f6c8fbe1355d2 83-96
+  s_a0bbd64ba4e4dd::t_f8eb86eaeccc3f 343-348
+src/envdrift/encryption/sops.py
+  s_a0bbd64ba4e4dd::t_0770db779fa75e 173-181,184-185,187,190-192
+  s_a0bbd64ba4e4dd::t_97a90884f101af 124-128,137-149
+  s_a0bbd64ba4e4dd::t_0c9fe6809ba491 80
+  s_a0bbd64ba4e4dd::t_ccef99442725ed 361-367,372,375-380,382-390,393-493
+tests/unit/test_encryption_sops.py
+  s_a0bbd64ba4e4dd::t_b306bde7d55eaf 152
+  s_a0bbd64ba4e4dd::t_ee09e930b494e5 124-130
+  s_a0bbd64ba4e4dd::t_63a89ca8c7d30d 132
+src/envdrift/integrations/sops.py
+  s_a0bbd64ba4e4dd::t_8917552ccb2558 79-86,94
+  s_a0bbd64ba4e4dd::t_cb055ddc63a15e 11-15
+src/envdrift/cli_commands/encryption_helpers.py
+  s_a0bbd64ba4e4dd::t_3468ce6544c55c 122-128
+  s_a0bbd64ba4e4dd::t_9caf71e790e082 129
+docs/guides/sops.md
+  s_a0bbd64ba4e4dd::t_59d943dec96afc 122-148
+  s_a0bbd64ba4e4dd::t_0530af2759842c 59-61
+tests/unit/test_sops_installer.py
+  s_a0bbd64ba4e4dd::t_17f772871dfb70 31-35,37-41,44-52,54,59,62,65-70,74
+  s_a0bbd64ba4e4dd::t_cb5c4ca9dfb69e 99-102,104,108-112,114-120
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.6",
+  "base_commit_sha": "d07076ae92b391465cec88b61142e0cb78e312fc",
+  "prompts": {},
+  "sessions": {
+    "s_a0bbd64ba4e4dd": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "c1e5b2e5-0fec-4bf5-b8e6-20cdb3a76855",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Jainal Gosaliya <jainal09gosalia@gmail.com>"
+    }
+  }
+}
