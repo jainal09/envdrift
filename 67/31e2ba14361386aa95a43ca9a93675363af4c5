@@ -1,0 +1,43 @@
+docs/agent-spec.md
+  s_a0bbd64ba4e4dd::t_2e2372ed438c20 255-257
+  s_a0bbd64ba4e4dd::t_3beee1e75b9419 761
+  s_a0bbd64ba4e4dd::t_d8654035c4969d 290-291,295,298-300
+  s_a0bbd64ba4e4dd::t_dc6d44cdceb123 314-315,317
+.github/workflows/vscode-ci.yml
+  s_a0bbd64ba4e4dd::t_27abe8e28753ad 124-126,128
+tests/unit/test_release_workflows.py
+  s_a0bbd64ba4e4dd::t_66670e00c4187a 1-48,52-54,56-59,61-63,65-116,118-144,146-229
+  s_a0bbd64ba4e4dd::t_92d191549e039f 49-51,55,60,64
+.github/workflows/vscode-release.yml
+  s_a0bbd64ba4e4dd::t_7ff84ceb55ddf2 21-29
+  s_a0bbd64ba4e4dd::t_4275f08f05a592 123
+  s_a0bbd64ba4e4dd::t_5b911ac2776373 70-77,79-81,83
+  s_a0bbd64ba4e4dd::t_09a57fe10efca2 4-6,10
+  s_a0bbd64ba4e4dd::t_e460781aaa9bf5 166-168
+  s_a0bbd64ba4e4dd::t_1363c223f463bb 199-203,216
+.github/workflows/agent-release.yml
+  s_a0bbd64ba4e4dd::t_0c1009ddd78ba3 21-30
+  s_a0bbd64ba4e4dd::t_84ee3e8f11d821 4-6,10
+  s_a0bbd64ba4e4dd::t_8dd1b627003ec4 157
+.github/workflows/codspeed.yml
+  s_a0bbd64ba4e4dd::t_d321a387626090 28
+  s_a0bbd64ba4e4dd::t_599d71953ed16d 33-34,36
+.github/workflows/release-please.yml
+  s_a0bbd64ba4e4dd::t_b966c5fc265308 13-18,23,29-35
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.6",
+  "base_commit_sha": "6731e2ba14361386aa95a43ca9a93675363af4c5",
+  "prompts": {},
+  "sessions": {
+    "s_a0bbd64ba4e4dd": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "c1e5b2e5-0fec-4bf5-b8e6-20cdb3a76855",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Jainal Gosaliya <jainal09gosalia@gmail.com>"
+    }
+  }
+}
