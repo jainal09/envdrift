@@ -1404,3 +1404,112 @@ class TestNormalizeVaultKeyValue:
         vault_key, suffix = normalize_vault_key_value(vault_value)
         assert vault_key == local == "abc123"
         assert suffix == "PRODUCTION"
+
+
+class _MetadataVaultClient(_StoredVaultClient):
+    """Real in-process client whose secrets carry provider metadata (e.g. the
+    base64 marker AWS/GCP set for binary payloads)."""
+
+    def __init__(self, store: dict[str, str], metadata: dict) -> None:
+        super().__init__(store)
+        self._metadata = metadata
+
+    def get_secret(self, name: str) -> SecretValue:
+        secret = super().get_secret(name)
+        return SecretValue(name=secret.name, value=secret.value, metadata=dict(self._metadata))
+
+
+class TestSyncEngineKeyMaterialShapes:
+    """Regression tests for #480: the engine never installs JSON documents,
+    multi-line blobs, or binary payloads into .env.keys under a success action."""
+
+    @staticmethod
+    def _make_service(tmp_path: Path) -> tuple[SyncConfig, Path]:
+        service_dir = tmp_path / "service1"
+        service_dir.mkdir()
+        (service_dir / ".env.production").write_text("DB_URL=encrypted:xyz\n", encoding="utf-8")
+        config = SyncConfig(
+            mappings=[
+                ServiceMapping(
+                    secret_name="test-key",
+                    folder_path=service_dir,
+                    environment="production",
+                ),
+            ],
+        )
+        return config, service_dir
+
+    def test_json_document_without_key_field_errors_not_created(self, tmp_path: Path) -> None:
+        """A KV-v2 dict JSON-encoded by the provider must not be installed as the
+        private key; the mapping fails with an error naming the shape."""
+        config, service_dir = self._make_service(tmp_path)
+        client = _StoredVaultClient({"test-key": '{"username": "admin", "password": "p"}'})
+
+        result = SyncEngine(config=config, vault_client=client).sync_all()
+
+        assert result.services[0].action == SyncAction.ERROR
+        assert "JSON" in (result.services[0].error or "")
+        assert not (service_dir / ".env.keys").exists()
+
+    def test_json_document_with_key_field_installs_bare_key(self, tmp_path: Path) -> None:
+        """A KV secret stored under its own DOTENV_PRIVATE_KEY_<ENV> field name
+        (vault kv put secret/x DOTENV_PRIVATE_KEY_PRODUCTION=<hex>) converges."""
+        config, service_dir = self._make_service(tmp_path)
+        client = _StoredVaultClient(
+            {"test-key": '{"DOTENV_PRIVATE_KEY_PRODUCTION": "abc123secret"}'}
+        )
+
+        engine = SyncEngine(config=config, vault_client=client)
+        result = engine.sync_all()
+
+        assert result.services[0].action == SyncAction.CREATED
+        lines = (service_dir / ".env.keys").read_text(encoding="utf-8").splitlines()
+        assert "DOTENV_PRIVATE_KEY_PRODUCTION=abc123secret" in lines
+
+        # Second run converges: values match, nothing rewritten.
+        second = SyncEngine(config=config, vault_client=client).sync_all()
+        assert second.services[0].action == SyncAction.SKIPPED
+
+    def test_multiline_keys_blob_extracts_key_and_converges(self, tmp_path: Path) -> None:
+        """A secret holding whole .env.keys file content (header + key line) must
+        converge instead of being installed verbatim and re-updated forever."""
+        blob = (
+            "#/------------------!DOTENV_PRIVATE_KEYS!-------------------/\n"
+            "# .env.production\n"
+            'DOTENV_PRIVATE_KEY_PRODUCTION="abc123secret"\n'
+        )
+        config, service_dir = self._make_service(tmp_path)
+        client = _StoredVaultClient({"test-key": blob})
+
+        result = SyncEngine(config=config, vault_client=client).sync_all()
+        assert result.services[0].action == SyncAction.CREATED
+        lines = (service_dir / ".env.keys").read_text(encoding="utf-8").splitlines()
+        assert "DOTENV_PRIVATE_KEY_PRODUCTION=abc123secret" in lines
+
+        # Second run reports a match (no UPDATED + .backup on every run).
+        second = SyncEngine(config=config, vault_client=client).sync_all()
+        assert second.services[0].action == SyncAction.SKIPPED
+        backups = list(service_dir.glob(".env.keys.backup*")) + list(service_dir.glob("*.backup"))
+        assert backups == []
+
+    def test_multiline_blob_without_key_line_errors(self, tmp_path: Path) -> None:
+        config, service_dir = self._make_service(tmp_path)
+        client = _StoredVaultClient({"test-key": "# comment\nFOO=bar\nBAZ=qux\n"})
+
+        result = SyncEngine(config=config, vault_client=client).sync_all()
+
+        assert result.services[0].action == SyncAction.ERROR
+        assert "multi-line" in (result.services[0].error or "")
+        assert not (service_dir / ".env.keys").exists()
+
+    def test_binary_marked_secret_errors(self, tmp_path: Path) -> None:
+        """A provider-marked binary payload (metadata encoding=base64) is rejected
+        instead of installing the silently-transformed base64 text."""
+        config, service_dir = self._make_service(tmp_path)
+        client = _MetadataVaultClient({"test-key": "//4="}, {"encoding": "base64"})
+
+        result = SyncEngine(config=config, vault_client=client).sync_all()
+
+        assert result.services[0].action == SyncAction.ERROR
+        assert "binary" in (result.services[0].error or "").lower()
+        assert not (service_dir / ".env.keys").exists()

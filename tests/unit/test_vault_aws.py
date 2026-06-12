@@ -192,6 +192,9 @@ class TestAWSSecretsManagerClient:
 
         secret = client.get_secret("binary-secret")
         assert secret.value == "binary-data"
+        # UTF-8-decodable bytes are returned faithfully; no base64 transform, so
+        # no marker (#480).
+        assert secret.metadata.get("encoding") != "base64"
 
     def test_list_secrets(self, mock_boto3, patched_boto_clients):
         """Test listing secrets."""
@@ -595,6 +598,9 @@ class TestAWSSecretsManagerClient:
         assert result.name == "binary-secret"
         assert result.value == "//4="  # base64 encoding of b"\xff\xfe"
         assert result.version == "v1"
+        # #480: the base64 transformation is marked so dotenvx key flows can
+        # reject the payload instead of installing it as key material.
+        assert result.metadata.get("encoding") == "base64"
 
     def test_get_secret_missing_both_value_keys_raises_vault_error(
         self, mock_boto3, patched_boto_clients

@@ -1338,9 +1338,12 @@ def lock(
 
                     # Parse the vault value identically to the sync engine /
                     # read_key (strip whitespace + surrounding quotes + a
-                    # DOTENV_PRIVATE_KEY_*= prefix) so a quoted or prefixed vault
-                    # value isn't reported as a false KEY MISMATCH (#413).
-                    vault_key, vault_suffix = normalize_vault_key_value(vault_value)
+                    # DOTENV_PRIVATE_KEY_*= prefix; extract from JSON documents /
+                    # multi-line keys blobs) so a quoted, prefixed, or
+                    # document-shaped vault value isn't reported as a false KEY
+                    # MISMATCH (#413, #480). Unusable shapes raise
+                    # KeyMaterialError (a VaultError) and are reported below.
+                    vault_key, vault_suffix = normalize_vault_key_value(vault_value, effective_env)
                     # A key labeled for a different environment is a genuine
                     # mismatch, not a parse artifact.
                     suffix_ok = (
