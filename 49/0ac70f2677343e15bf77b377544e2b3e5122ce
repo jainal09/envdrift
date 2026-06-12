@@ -1,0 +1,38 @@
+tests/unit/test_parser_multiline.py
+  s_a0bbd64ba4e4dd::t_f01ebc4f3fddef 1-109,112-128,150-201,211-229,231-270
+  s_a0bbd64ba4e4dd::t_1a85145bba7e3c 110-111
+  s_a0bbd64ba4e4dd::t_f63d0022cfb84e 129-149
+  s_a0bbd64ba4e4dd::t_f85befc9d90ca4 202-210
+src/envdrift/core/parser.py
+  s_a0bbd64ba4e4dd::t_6cfd7d8cd14782 285-297,299-301,304-314,317,319,347-368,370-378,382,384-396
+  s_a0bbd64ba4e4dd::t_7ceb520aeec2f7 315-316,318,320-346
+  s_a0bbd64ba4e4dd::t_80dcec841ba306 10
+  s_a0bbd64ba4e4dd::t_38309cdfdaa5a0 167-175
+  s_a0bbd64ba4e4dd::t_2ef4a04cff4dba 379
+  s_a0bbd64ba4e4dd::t_b6fa77e89a1e6d 232-237,254-266,276
+  s_a0bbd64ba4e4dd::t_158f1531e90c2b 369,380-381,383
+  s_a0bbd64ba4e4dd::t_b0949343c38147 161-166
+  s_a0bbd64ba4e4dd::t_a65ad84f26fdd5 128-135
+docs/cli/validate.md
+  s_a0bbd64ba4e4dd::t_fed7dba6132592 36-46
+docs/concepts/how-it-works.md
+  s_a0bbd64ba4e4dd::t_a99683f7bb6380 27-29
+tests/integration/test_multiline_parsing_cli.py
+  s_a0bbd64ba4e4dd::t_77c4aefb103f5d 1-177,179-186
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.6",
+  "base_commit_sha": "490ac70f2677343e15bf77b377544e2b3e5122ce",
+  "prompts": {},
+  "sessions": {
+    "s_a0bbd64ba4e4dd": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "c1e5b2e5-0fec-4bf5-b8e6-20cdb3a76855",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Jainal Gosaliya <jainal09gosalia@gmail.com>"
+    }
+  }
+}
