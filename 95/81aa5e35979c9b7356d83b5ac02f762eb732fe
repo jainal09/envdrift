@@ -1,0 +1,28 @@
+docs/cli/decrypt.md
+  s_a0bbd64ba4e4dd::t_b714b5a531484c 188-193
+src/envdrift/integrations/hook_check.py
+  s_a0bbd64ba4e4dd::t_07b7d577dda3ef 128-131,138-140
+tests/integration/test_verify_vault_byte_exact.py
+  s_a0bbd64ba4e4dd::t_e1849a5a0b67c0 1-243,245-250
+tests/unit/test_hook_check.py
+  s_a0bbd64ba4e4dd::t_57fd70c29b1e9b 6
+src/envdrift/cli_commands/encryption.py
+  s_a0bbd64ba4e4dd::t_01a3042cc80a89 360
+  s_a0bbd64ba4e4dd::t_5f6da02f595d22 447-452
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.6",
+  "base_commit_sha": "9581aa5e35979c9b7356d83b5ac02f762eb732fe",
+  "prompts": {},
+  "sessions": {
+    "s_a0bbd64ba4e4dd": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "c1e5b2e5-0fec-4bf5-b8e6-20cdb3a76855",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Jainal Gosaliya <jainal09gosalia@gmail.com>"
+    }
+  }
+}
