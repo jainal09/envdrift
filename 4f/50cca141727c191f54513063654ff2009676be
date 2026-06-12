@@ -1,0 +1,37 @@
+src/envdrift/vault/azure.py
+  s_a0bbd64ba4e4dd::t_76742caa9da5fb 142-153
+src/envdrift/sync/engine.py
+  s_a0bbd64ba4e4dd::t_ee359e06cf4f73 163-169,174,176
+src/envdrift/output/rich.py
+  s_a0bbd64ba4e4dd::t_ce55f3efa24d84 343-347,354-355,358-359
+  s_a0bbd64ba4e4dd::t_6d572a84363bd4 405-409
+src/envdrift/cli_commands/encryption.py
+  s_a0bbd64ba4e4dd::t_9af1978e46d4a4 487-491
+tests/unit/test_rich_output.py
+  s_a0bbd64ba4e4dd::t_3059ee76904346 322
+tests/unit/test_cli_vault_pull.py
+  s_a0bbd64ba4e4dd::t_432bc3d06310dd 5-6,9
+src/envdrift/vault/aws.py
+  s_a0bbd64ba4e4dd::t_551babbf87b23d 230-236
+src/envdrift/cli_commands/vault.py
+  s_a0bbd64ba4e4dd::t_452ad645d59401 613-621
+  s_a0bbd64ba4e4dd::t_835ca8e8f4c7f8 460-468
+  s_a0bbd64ba4e4dd::t_bb71e51e33312a 652-655,658-662
+  s_a0bbd64ba4e4dd::t_032f7705de3cce 586-596
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.6",
+  "base_commit_sha": "4f50cca141727c191f54513063654ff2009676be",
+  "prompts": {},
+  "sessions": {
+    "s_a0bbd64ba4e4dd": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "c1e5b2e5-0fec-4bf5-b8e6-20cdb3a76855",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Jainal Gosaliya <jainal09gosalia@gmail.com>"
+    }
+  }
+}
