@@ -1,0 +1,45 @@
+docs/guides/env-file-sync.md
+  s_a0bbd64ba4e4dd::t_8f7759b8650d1d 603-608,611
+docs/guides/monorepo-setup.md
+  s_a0bbd64ba4e4dd::t_b05c9490825a66 323-324,327,329-331
+docs/reference/configuration.md
+  s_a0bbd64ba4e4dd::t_73687e54380a54 24-25
+  s_a0bbd64ba4e4dd::t_2e1fb81a5eedf5 43-44
+src/envdrift/__main__.py
+  s_a0bbd64ba4e4dd::t_77b3bd8750393a 1-13
+docs/glossary.md
+  s_a0bbd64ba4e4dd::t_5f48b2b1c2f075 195-196
+docs/support/faq.md
+  s_a0bbd64ba4e4dd::t_36945fedca207d 283-287,290,292
+tests/integration/test_docs_recipes.py
+  s_a0bbd64ba4e4dd::t_2116972767f6af 137-143,145,154-155,159-167,171-173
+  s_a0bbd64ba4e4dd::t_23331e047d3636 1-67,76-136,144,146-153,156-158,168-170,174-257
+  s_a0bbd64ba4e4dd::t_00b31bb2a8dd5f 68-75
+tests/unit/test_main_module.py
+  s_a0bbd64ba4e4dd::t_17799d37e4e901 72-74,81-89
+  s_a0bbd64ba4e4dd::t_131b91cf5b62ef 1-71,75-80
+tests/unit/test_docs_accuracy.py
+  s_a0bbd64ba4e4dd::t_e6ca829ebcab74 228
+  s_a0bbd64ba4e4dd::t_ccd272e3530b89 44,51-52
+  s_a0bbd64ba4e4dd::t_d480da3670cad0 217-227,229-396
+  s_a0bbd64ba4e4dd::t_76c177ffd581c2 15-28
+docs/reference/api.md
+  s_a0bbd64ba4e4dd::t_ab9a3a3eb730e8 112-121
+  s_a0bbd64ba4e4dd::t_fe209ca6977881 111
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.6",
+  "base_commit_sha": "761d3a1f7b71f631962e561f64a2c7a43819aea8",
+  "prompts": {},
+  "sessions": {
+    "s_a0bbd64ba4e4dd": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "c1e5b2e5-0fec-4bf5-b8e6-20cdb3a76855",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Jainal Gosaliya <jainal09gosalia@gmail.com>"
+    }
+  }
+}
