@@ -168,7 +168,8 @@ Most commands follow consistent exit code conventions:
 | 1 | Validation failure, encryption error, or configuration issue |
 | 2 | Missing required arguments or invalid options |
 
-`guard` is the exception: it uses a severity-based scheme where `0` = no blocking findings, `1` = critical,
-`2` = high, and `3` = medium severity findings detected.
+`guard` is the exception: it uses a severity-based scheme — `0` = no blocking findings, `1` = critical,
+`2` = high, `3` = medium, `4` = low severity findings — plus `5` when a selected scanner ran but failed
+(scan incomplete) and `6` for operational errors (bad config, invalid path or flags).
 
 For CI/CD pipelines, use the `--ci` flag to ensure proper exit codes on validation failures.

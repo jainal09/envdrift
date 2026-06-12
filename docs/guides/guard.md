@@ -6,13 +6,15 @@ Use `envdrift guard` as a last line of defense against plaintext secrets.
 
 - Unencrypted env files missing dotenvx or SOPS markers
 - Common secret patterns in source and config files
-- High-entropy strings (optional)
+- High-entropy strings (env files by default; all files with `--entropy`,
+  off with `--no-entropy` / `check_entropy = false`)
 - Git history for previously committed secrets (optional)
 
 ### Which files count as env files
 
-The native scanner applies the unencrypted-file policy and the entropy scan to every
-file whose name matches an env-file shape:
+The native scanner applies the unencrypted-file policy — and, unless entropy
+detection is disabled (`check_entropy = false` / `--no-entropy`), the entropy
+scan — to every file whose name matches an env-file shape:
 
 - `.env` and `.env.<environment>` — including `.env.local` and `.env.test`, the
   canonical real-secrets files for Next.js/Vite/CRA local development
@@ -118,7 +120,7 @@ Guard configuration lives under `[guard]`:
 [guard]
 auto_install = true
 include_history = false
-check_entropy = true
+check_entropy = true   # true = all files, false = off everywhere, unset = env files only
 entropy_threshold = 4.5
 fail_on_severity = "high"
 ignore_paths = ["tests/**", "*.test.py"]

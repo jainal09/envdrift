@@ -41,7 +41,11 @@ from rich.text import Text
 
 from envdrift.config import ConfigNotFoundError, EnvdriftConfig, load_config
 from envdrift.env_files import resolve_custom_env_file
-from envdrift.scanner.base import AggregatedScanResult, FindingSeverity
+from envdrift.scanner.base import (
+    EXIT_OPERATIONAL_ERROR,
+    AggregatedScanResult,
+    FindingSeverity,
+)
 from envdrift.scanner.engine import GuardConfig, ScanEngine
 from envdrift.scanner.output import (
     format_json,
@@ -95,15 +99,16 @@ def _load_guard_config(config_file: Path | None, json_output: bool, sarif: bool)
     ``load_config`` can raise ``ConfigNotFoundError`` (explicit --config that
     doesn't exist), ``tomllib.TOMLDecodeError`` (malformed TOML), or
     ``ValueError`` (eager config validation). All three are turned into a
-    structured error document (json/sarif) or error prose plus ``Exit(1)`` so a
-    Rich traceback never contaminates machine output (#413). Mirrors sync.py /
-    encryption_helpers.py.
+    structured error document (json/sarif) or error prose plus the operational
+    exit code 6 (#478) so a Rich traceback never contaminates machine output
+    (#413) and an exit-code-only pipeline can tell a config failure from a
+    critical finding. Mirrors sync.py / encryption_helpers.py.
     """
     try:
         return load_config(config_file)
     except (ConfigNotFoundError, tomllib.TOMLDecodeError, ValueError) as exc:
         _emit_error(json_output, sarif, f"Could not load config: {exc}")
-        raise typer.Exit(code=1) from None
+        raise typer.Exit(code=EXIT_OPERATIONAL_ERROR) from None
 
 
 def _emit_error(json_output: bool, sarif: bool, message: str) -> None:
@@ -248,13 +253,14 @@ def guard(
         ),
     ] = False,
     entropy: Annotated[
-        bool,
+        bool | None,
         typer.Option(
-            "--entropy",
+            "--entropy/--no-entropy",
             "-e",
-            help="Enable entropy-based detection for random secrets",
+            help="Entropy detection: --entropy scans all files, --no-entropy disables it "
+            "entirely (default: env files only)",
         ),
-    ] = False,
+    ] = None,
     skip_clear: Annotated[
         bool | None,
         typer.Option(
@@ -353,6 +359,8 @@ def guard(
       2 - High severity findings detected
       3 - Medium severity findings detected
       4 - Low severity findings detected
+      5 - Scan incomplete: a selected scanner failed to run
+      6 - Operational error (bad config, invalid path or flags)
 
     \b
     Examples:
@@ -428,10 +436,10 @@ def guard(
                 raise typer.Exit(code=0)
         except subprocess.TimeoutExpired as err:
             console.print("[red]Error:[/red] Git command timed out")
-            raise typer.Exit(code=1) from err
+            raise typer.Exit(code=EXIT_OPERATIONAL_ERROR) from err
         except FileNotFoundError as err:
             console.print("[red]Error:[/red] Git not found. --staged requires git.")
-            raise typer.Exit(code=1) from err
+            raise typer.Exit(code=EXIT_OPERATIONAL_ERROR) from err
 
     # Handle --pr-base flag (CI mode for PRs)
     elif pr_base:
@@ -482,10 +490,10 @@ def guard(
                 raise typer.Exit(code=0)
         except subprocess.TimeoutExpired as err:
             console.print("[red]Error:[/red] Git command timed out")
-            raise typer.Exit(code=1) from err
+            raise typer.Exit(code=EXIT_OPERATIONAL_ERROR) from err
         except FileNotFoundError as err:
             console.print("[red]Error:[/red] Git not found. --pr-base requires git.")
-            raise typer.Exit(code=1) from err
+            raise typer.Exit(code=EXIT_OPERATIONAL_ERROR) from err
 
     # Default behavior: use provided paths or current directory
     else:
@@ -496,7 +504,7 @@ def guard(
         for path in paths:
             if not path.exists():
                 _emit_error(json_output, sarif, f"Path not found: {path}")
-                raise typer.Exit(code=1)
+                raise typer.Exit(code=EXIT_OPERATIONAL_ERROR)
 
     # Load configuration from envdrift.toml (a bad/missing --config exits
     # cleanly via _load_guard_config instead of a Rich traceback; see #413).
@@ -515,7 +523,7 @@ def guard(
             sarif,
             f"Invalid severity '{fail_on_value}'. Valid options: critical, high, medium, low",
         )
-        raise typer.Exit(code=1) from e
+        raise typer.Exit(code=EXIT_OPERATIONAL_ERROR) from e
 
     # Determine which scanners to use
     # CLI flags override config file settings when provided
@@ -570,7 +578,7 @@ def guard(
                 )
             except ValueError as e:
                 console.print(f"[red]Error:[/red] Invalid env_file for {mapping.folder_path}: {e}")
-                raise typer.Exit(code=1) from e
+                raise typer.Exit(code=EXIT_OPERATIONAL_ERROR) from e
 
     # Determine skip_clear_files (CLI overrides config)
     skip_clear_final = skip_clear if skip_clear is not None else guard_cfg.skip_clear_files
@@ -603,7 +611,10 @@ def guard(
         use_infisical=use_infisical_final,
         auto_install=auto_install,
         include_git_history=history or guard_cfg.include_history,
-        check_entropy=entropy or guard_cfg.check_entropy,
+        # Tri-state: an explicit --entropy/--no-entropy wins; otherwise the
+        # config knob (true/false/unset) decides. Unset means the native
+        # scanner's default of entropy on env files only (#478).
+        check_entropy=entropy if entropy is not None else guard_cfg.check_entropy,
         entropy_threshold=guard_cfg.entropy_threshold,
         skip_clear_files=skip_clear_final,
         skip_encrypted_files=skip_encrypted_final,
@@ -622,8 +633,14 @@ def guard(
     if ci or _machine_mode(json_output, sarif):
         output_console = Console(force_terminal=False, no_color=True)
 
-    # Create scan engine
-    engine = ScanEngine(config)
+    # Create scan engine. Wrong-shaped guard config (e.g. ignore_rules built
+    # programmatically as a list) raises a clean ValueError at construction;
+    # surface it as an operational error instead of a Rich traceback (#478).
+    try:
+        engine = ScanEngine(config)
+    except ValueError as exc:
+        _emit_error(json_output, sarif, f"Invalid guard configuration: {exc}")
+        raise typer.Exit(code=EXIT_OPERATIONAL_ERROR) from None
 
     # Check combined files security (should be in .gitignore)
     # Only check if partial_encryption is enabled and not in JSON/SARIF mode
@@ -722,50 +739,22 @@ def guard(
         live = None
         result = engine.scan(paths)
 
+    # One source of truth for the verdict (#478): compute the effective exit
+    # code BEFORE rendering, so the machine-readable documents carry the exact
+    # code the process returns. In CI mode the --fail-on threshold applies
+    # (severity-derived codes keep CRITICAL=1/HIGH=2/MEDIUM=3/LOW=4 distinct,
+    # #413); in any mode a run that would otherwise pass while a selected
+    # scanner RAN AND FAILED exits 5 (scan incomplete) instead of the
+    # all-clear 0.
+    exit_code = result.effective_exit_code(fail_severity if ci else None)
+
     # Output results
     if sarif:
-        print(format_sarif(result))
+        print(format_sarif(result, exit_code=exit_code))
     elif json_output:
-        print(format_json(result))
+        print(format_json(result, exit_code=exit_code))
     else:
         format_rich(result, output_console)
-
-    # Determine exit code
-    exit_code = result.exit_code
-
-    # In CI mode, only fail if severity >= fail_on threshold
-    if ci:
-        # Map severity levels to which severities they include
-        threshold_severities: dict[FindingSeverity, set[FindingSeverity]] = {
-            FindingSeverity.CRITICAL: {FindingSeverity.CRITICAL},
-            FindingSeverity.HIGH: {FindingSeverity.CRITICAL, FindingSeverity.HIGH},
-            FindingSeverity.MEDIUM: {
-                FindingSeverity.CRITICAL,
-                FindingSeverity.HIGH,
-                FindingSeverity.MEDIUM,
-            },
-            FindingSeverity.LOW: {
-                FindingSeverity.CRITICAL,
-                FindingSeverity.HIGH,
-                FindingSeverity.MEDIUM,
-                FindingSeverity.LOW,
-            },
-        }
-
-        blocking_severities = threshold_severities.get(
-            fail_severity,
-            {FindingSeverity.CRITICAL, FindingSeverity.HIGH},
-        )
-
-        has_blocking = any(f.severity in blocking_severities for f in result.unique_findings)
-
-        # Fail CI iff a finding meets the threshold, using the severity-derived
-        # code so each severity stays distinguishable (CRITICAL=1/HIGH=2/MEDIUM=3/
-        # LOW=4). ``result.exit_code`` is already nonzero for any finding, so a
-        # blocking LOW (``--fail-on low`` with LOW-only findings) now fails CI with
-        # its own code 4 instead of silently passing or colliding with HIGH's 2
-        # (#413). No blocking finding => clean exit 0.
-        exit_code = result.exit_code if has_blocking else 0
 
     if exit_code != 0:
         raise typer.Exit(code=exit_code)

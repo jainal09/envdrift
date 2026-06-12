@@ -81,14 +81,19 @@ Exit codes are per-command. Most commands use:
 | 0    | Success                                                       |
 | 1    | Validation failed, file not found, or other error             |
 
-The [guard](guard.md) command uses severity-based exit codes instead:
+The [guard](guard.md) command uses severity-based exit codes instead, plus
+dedicated codes for an incomplete scan and operational errors (see
+[guard exit codes](guard.md#exit-codes)):
 
-| Code | Meaning                          |
-| ---- | -------------------------------- |
-| 0    | No findings                      |
-| 1    | Critical severity findings       |
-| 2    | High severity findings           |
-| 3    | Medium severity findings         |
+| Code | Meaning                                                  |
+| ---- | -------------------------------------------------------- |
+| 0    | No blocking findings                                     |
+| 1    | Critical severity findings                               |
+| 2    | High severity findings                                   |
+| 3    | Medium severity findings                                 |
+| 4    | Low severity findings (policy violations)                |
+| 5    | Scan incomplete: a selected scanner ran but failed       |
+| 6    | Operational error (bad config, invalid path or flags)    |
 
 ## Environment Variables
 
