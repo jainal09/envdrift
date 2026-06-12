@@ -227,7 +227,13 @@ class AWSSecretsManagerClient(VaultClient):
             raise _map_aws_error(
                 e,
                 error_msg=f"Failed to get secret {name}",
-                not_found=("ResourceNotFoundException", f"Secret not found: {name}"),
+                # Name the region that was searched (#487): the client silently
+                # defaults to us-east-1, so a region-free not-found message
+                # makes the classic wrong-region mistake undiagnosable.
+                not_found=(
+                    "ResourceNotFoundException",
+                    f"Secret not found: {name} (region {self.region})",
+                ),
                 access_denied=(_ACCESS_DENIED_CODES, f"Access denied for secret: {name}"),
             ) from e
 

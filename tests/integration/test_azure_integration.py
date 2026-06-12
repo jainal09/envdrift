@@ -970,3 +970,117 @@ class TestAzureVaultRoundTrip:
                 pytest.fail(f"Unexpected vault-pull result: rc={result.returncode}\n{combined}")
         finally:
             _delete_secret(session, endpoint, secret_name)
+
+
+# --- #487: challenge-resource ValueError must map into the VaultError hierarchy
+
+
+@pytest.fixture
+def lowkey_ca_bundle(lowkey_vault_endpoint: str, tmp_path: Path) -> Path:
+    """Trust Lowkey's self-signed TLS certificate for this test.
+
+    With TLS failing, the SDK raises a transport ``ServiceRequestError`` long
+    before the Key Vault challenge policy runs. Trusting the live server's
+    certificate lets the request reach challenge validation — where the SDK
+    raises the raw ``ValueError`` of #487 (any vault behind a proxy / custom
+    domain / emulator triggers it).
+    """
+    import ssl
+    from urllib.parse import urlsplit
+
+    parts = urlsplit(lowkey_vault_endpoint)
+    try:
+        cert = ssl.get_server_certificate((parts.hostname or "localhost", parts.port or 443))
+    except OSError as e:  # pragma: no cover - environment-dependent
+        pytest.skip(f"cannot fetch Lowkey TLS certificate: {e}")
+    pem = tmp_path / "lowkey-ca.pem"
+    pem.write_text(cert, encoding="utf-8")
+    return pem
+
+
+class TestAzureChallengeResourceErrorMapping:
+    """#487: SDK exceptions outside the AzureError hierarchy must not escape raw."""
+
+    def test_authenticate_maps_challenge_value_error_into_vault_hierarchy(
+        self,
+        lowkey_vault_endpoint: str,
+        lowkey_ca_bundle: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        """authenticate() against Lowkey surfaces VaultError, never raw ValueError.
+
+        Drives the real Azure SDK against the live Lowkey emulator: the
+        challenge policy's resource verification raises
+        ``ValueError: The challenge resource ... does not match the requested
+        domain`` — pre-#487 this escaped ``authenticate()`` raw and the CLI
+        dumped a Rich traceback.
+        """
+        pytest.importorskip("azure.keyvault.secrets")
+
+        from envdrift.vault.azure import AzureKeyVaultClient
+        from envdrift.vault.base import VaultError
+
+        monkeypatch.setenv("REQUESTS_CA_BUNDLE", str(lowkey_ca_bundle))
+        monkeypatch.setenv("SSL_CERT_FILE", str(lowkey_ca_bundle))
+
+        client = AzureKeyVaultClient(vault_url=lowkey_vault_endpoint)
+        # Catch ONLY VaultError: a leaked raw ValueError propagates and FAILS
+        # this test (exactly the #487 regression).
+        try:
+            client.authenticate()
+        except VaultError as e:
+            if "challenge resource" not in str(e).lower():
+                pytest.skip(f"did not reach challenge validation: {e}")
+            # Mapped correctly; the half-initialized client must be discarded.
+            assert client.is_authenticated() is False
+        else:
+            pytest.skip("authenticate() unexpectedly succeeded against Lowkey")
+
+    def test_cli_sync_verify_challenge_error_is_clean_not_traceback(
+        self,
+        lowkey_vault_endpoint: str,
+        lowkey_ca_bundle: Path,
+        azure_test_env: dict,
+        work_dir: Path,
+        integration_pythonpath: str,
+        envdrift_cmd: list[str],
+    ):
+        """`sync --verify` prints one clean [ERROR] line for the challenge failure."""
+        (work_dir / "envdrift.toml").write_text(
+            f"""\
+[vault]
+provider = "azure"
+
+[vault.azure]
+vault_url = "{lowkey_vault_endpoint}"
+
+[[vault.sync.mappings]]
+secret_name = "dotenv-key-production"
+folder_path = "."
+environment = "production"
+""",
+            encoding="utf-8",
+        )
+        (work_dir / ".env.production").write_text('SECRET="encrypted:abc"\n', encoding="utf-8")
+
+        env = azure_test_env.copy()
+        env["PYTHONPATH"] = integration_pythonpath
+        env["REQUESTS_CA_BUNDLE"] = str(lowkey_ca_bundle)
+        env["SSL_CERT_FILE"] = str(lowkey_ca_bundle)
+
+        result = subprocess.run(
+            [*envdrift_cmd, "sync", "--verify"],
+            cwd=work_dir,
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+
+        combined = " ".join((result.stdout + result.stderr).split())
+        _assert_dispatched(combined)
+        if "challenge resource" not in combined.lower():
+            pytest.skip(f"did not reach challenge validation: {combined[:300]}")
+        assert result.returncode == 1, combined
+        assert "Traceback" not in combined, combined
+        assert "Sync failed" in combined, combined

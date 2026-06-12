@@ -457,7 +457,15 @@ def vault_push(
 
         env_keys = EnvKeysFile(env_keys_path)
         key_name = f"DOTENV_PRIVATE_KEY_{env.upper()}"
-        key_value = env_keys.read_key(key_name)
+        # Same OSError/ValueError boundary as --all mode: .env.keys may be a
+        # directory (IsADirectoryError) or hold non-UTF-8 bytes
+        # (UnicodeDecodeError); both must surface as a clean one-line error,
+        # not a raw Rich traceback (#487).
+        try:
+            key_value = env_keys.read_key(key_name)
+        except (OSError, ValueError) as e:
+            print_error(f"Cannot read {env_keys_path}: {e}")
+            raise typer.Exit(code=1) from None
 
         if not key_value:
             print_error(f"Key '{key_name}' not found in {env_keys_path}")
@@ -575,6 +583,17 @@ def vault_pull(
     from envdrift.vault.base import SecretNotFoundError
     from envdrift.vault.keymaterial import KeyMaterialError, extract_key_material
 
+    # Validate the target folder before any vault round-trip (#487): a typo'd
+    # or non-directory FOLDER must fail fast with a clean error instead of
+    # being silently created (or crashing with a raw OSError traceback) after
+    # the secret was already fetched.
+    if not folder.exists():
+        print_error(f"Folder not found: {folder}")
+        raise typer.Exit(code=1)
+    if not folder.is_dir():
+        print_error(f"Not a directory: {folder}")
+        raise typer.Exit(code=1)
+
     # Resolve effective provider settings + build an authenticated client
     # (shared with vault-push single-service mode).
     (
@@ -591,7 +610,15 @@ def vault_pull(
     try:
         secret = client.get_secret(secret_name)
     except SecretNotFoundError:
-        print_error(f"Secret '{secret_name}' not found in {effective_provider} vault")
+        # Name the AWS region that was searched (#487): with --region omitted
+        # the CLI silently defaults to us-east-1, making the classic
+        # wrong-region mistake undiagnosable from a region-free message.
+        region_note = ""
+        if effective_provider == "aws":
+            client_region = getattr(client, "region", None)
+            if client_region:
+                region_note = f" (region {client_region})"
+        print_error(f"Secret '{secret_name}' not found in {effective_provider} vault{region_note}")
         raise typer.Exit(code=1) from None
     except VaultError as e:
         print_error(f"Failed to fetch secret: {e}")
@@ -622,10 +649,17 @@ def vault_pull(
         )
         raise typer.Exit(code=1)
 
-    # Write the key into <folder>/.env.keys
+    # Write the key into <folder>/.env.keys. Same OSError/ValueError boundary
+    # as vault-push (#487): the destination may be unwritable
+    # (PermissionError), a directory (IsADirectoryError), or an existing
+    # non-UTF-8 file (UnicodeDecodeError on the preserve-content read).
     env_keys_path = folder / ".env.keys"
     env_keys = EnvKeysFile(env_keys_path)
-    env_keys.write_key(key_name, key_value, environment=env)
+    try:
+        env_keys.write_key(key_name, key_value, environment=env)
+    except (OSError, ValueError) as e:
+        print_error(f"Cannot write {env_keys_path}: {e}")
+        raise typer.Exit(code=1) from None
 
     print_success(f"Pulled '{secret_name}' -> {key_name} written to {env_keys_path}")
 
