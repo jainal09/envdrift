@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import subprocess
-import sys
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -880,19 +879,47 @@ class TestGitSecretsParseOutputBranches:
         findings = scanner._parse_output(output, Path("/repo"))
         assert len(findings) == 1
 
-    @pytest.mark.skipif(
-        sys.platform == "win32",
-        reason="POSIX-absolute path data: '/absolute/path' is not absolute on "
-        "Windows (no drive), and a Windows-absolute path's drive-colon collides "
-        "with the ':' field separator — a distinct parsing concern, not this branch.",
-    )
-    def test_parse_output_absolute_file_path_used_directly(self) -> None:
-        """Test _create_finding uses an absolute path as-is without prepending base_path."""
+    def test_parse_output_absolute_file_path_used_directly(self, tmp_path: Path) -> None:
+        """Test _create_finding uses an absolute path as-is without prepending base_path.
+
+        Regression for #445: the original fixture hardcoded '/absolute/path', which
+        ``Path.is_absolute()`` rejects on Windows (no drive), so the path was resolved
+        against ``base_path`` and the assertion failed there. ``tmp_path`` is natively
+        absolute on every OS (drive-letter form on Windows), so this branch is now
+        exercised by the whole cross-platform matrix instead of being skip-gated.
+        """
         scanner = GitSecretsScanner(auto_install=False)
-        output = "/absolute/path/secrets.env:3:token=abcdef\n"
-        findings = scanner._parse_output(output, Path("/repo"))
+        abs_file = tmp_path / "secrets.env"
+        output = f"{abs_file}:3:token=abcdef\n"
+        findings = scanner._parse_output(output, tmp_path / "repo")
         assert len(findings) == 1
-        assert findings[0].file_path == Path("/absolute/path/secrets.env")
+        assert findings[0].file_path == abs_file
+        assert findings[0].line_number == 3
+
+    def test_parse_output_windows_drive_path_does_not_split_on_drive_colon(self) -> None:
+        """A Windows drive-letter path's ':' must not break field splitting (#445).
+
+        The scan pattern's non-greedy file group splits on the earliest ``:<digits>:``
+        boundary; ``C:\\`` is followed by a backslash, not digits, so the drive colon
+        can never be mistaken for the separator. String-level parsing is OS-independent,
+        so this guards the Windows format on every matrix leg.
+        """
+        scanner = GitSecretsScanner(auto_install=False)
+        output = "C:\\repo\\secrets.env:3:token=abcdef\n"
+        findings = scanner._parse_output(output, Path("base"))
+        assert len(findings) == 1
+        assert findings[0].line_number == 3
+        assert str(findings[0].file_path).endswith("secrets.env")
+
+    def test_parse_output_history_line_with_windows_drive_path(self) -> None:
+        """History format keeps commit/path/line fields with a drive-letter path (#445)."""
+        scanner = GitSecretsScanner(auto_install=False)
+        output = "abc1234:C:\\repo\\secrets.env:10:secret=value123\n"
+        findings = scanner._parse_output(output, Path("base"))
+        assert len(findings) == 1
+        assert findings[0].commit_sha == "abc1234"
+        assert findings[0].line_number == 10
+        assert str(findings[0].file_path).endswith("secrets.env")
 
     def test_parse_output_unmatched_line_produces_no_finding(self) -> None:
         """Test _parse_output produces no finding for lines that match no pattern."""
