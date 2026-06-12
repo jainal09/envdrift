@@ -106,8 +106,10 @@ export async function toggleEnabled(): Promise<void> {
     await setEnabled(newState);
     updateStatusBar();
 
+    // Toast the EFFECTIVE state after the write, not the requested one (#482).
+    const effective = getConfig().enabled;
     vscode.window.showInformationMessage(
-        `EnvDrift: Auto-encryption ${newState ? 'enabled' : 'disabled'}`
+        `EnvDrift: Auto-encryption ${effective ? 'enabled' : 'disabled'}`
     );
 }
 

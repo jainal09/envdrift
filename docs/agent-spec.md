@@ -507,9 +507,10 @@ export async function stopAgent(): Promise<boolean>;
 
 Extension communicates via CLI commands:
 
-1. **Status check**: `envdrift-agent status`
-2. **Version**: `envdrift-agent --version`
-3. **Start**: `envdrift-agent start`
+1. **Status check**: `envdrift-agent status` (parses the `Running:` boolean)
+2. **Version**: `envdrift-agent version`
+3. **Start**: `envdrift-agent install` (idempotent; starts the platform
+   service — `start` runs the guardian in the foreground and is debug-only)
 4. **Stop**: `envdrift-agent stop`
 
 ---

@@ -31,6 +31,7 @@
     "onCommand:envdrift.disable",
     "onCommand:envdrift.encryptNow",
     "onCommand:envdrift.showStatus",
+    "onCommand:envdrift.showLogs",
     "onCommand:envdrift.startAgent",
     "onCommand:envdrift.stopAgent",
     "onCommand:envdrift.refreshAgentStatus"
@@ -62,6 +63,10 @@
       {
         "command": "envdrift.showStatus",
         "title": "EnvDrift: Show Status"
+      },
+      {
+        "command": "envdrift.showLogs",
+        "title": "EnvDrift: Show Logs"
       },
       {
         "command": "envdrift.startAgent",
@@ -129,6 +134,7 @@
   },
   "devDependencies": {
     "@eslint/js": "^10.0.0",
+    "@types/cross-spawn": "^6.0.6",
     "@types/glob": "^9.0.0",
     "@types/mocha": "^10.0.0",
     "@types/node": "^24.0.0",
@@ -141,5 +147,8 @@
     "sinon": "^22.0.0",
     "typescript": "^6.0.0",
     "typescript-eslint": "^8.0.0"
+  },
+  "dependencies": {
+    "cross-spawn": "^7.0.6"
   }
 }
