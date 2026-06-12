@@ -1,0 +1,54 @@
+docs/cli/decrypt.md
+  s_a0bbd64ba4e4dd::t_9cb456bd319882 32-41
+src/envdrift/encryption/dotenvx.py
+  s_a0bbd64ba4e4dd::t_1849de77ece45b 115-135
+src/envdrift/integrations/dotenvx.py
+  s_a0bbd64ba4e4dd::t_792eddd3be577b 1002-1006
+  s_a0bbd64ba4e4dd::t_543deb009a2455 1131
+  s_a0bbd64ba4e4dd::t_93cdf0a3a08612 1100
+  s_a0bbd64ba4e4dd::t_92ff9e3e14ad8e 1028-1030,1032
+  s_a0bbd64ba4e4dd::t_e8febb58903624 861-885
+  s_a0bbd64ba4e4dd::t_f729f05227e1f1 151-154,158
+  s_a0bbd64ba4e4dd::t_7ef2db1a89551e 1114
+  s_a0bbd64ba4e4dd::t_67dbcae0771bca 1073-1075,1077
+  s_a0bbd64ba4e4dd::t_3aa16b52be482f 141-150,155-157,159-161
+tests/unit/test_cli_companion_guard.py
+  s_a0bbd64ba4e4dd::t_3ab36fa8b1c893 1-95
+tests/unit/test_encryption_backends.py
+  s_a0bbd64ba4e4dd::t_060a005d7f91f4 319-355
+tests/unit/test_integration_dotenvx.py
+  s_a0bbd64ba4e4dd::t_d7a95147d744d2 124
+  s_a0bbd64ba4e4dd::t_76ace8fcd184a8 3-4,7
+  s_a0bbd64ba4e4dd::t_cae895eaac9de6 147,149
+  s_a0bbd64ba4e4dd::t_784ab9f819f922 87-88,97
+  s_a0bbd64ba4e4dd::t_fe895119c5defa 57-86,89-96,98-123,125-146,148,150-152
+docs/cli/encrypt.md
+  s_a0bbd64ba4e4dd::t_77c34e0c120a97 32-41
+tests/unit/test_sync_operations.py
+  s_a0bbd64ba4e4dd::t_86bb5cc7673105 29-60
+src/envdrift/cli_commands/encryption.py
+  s_a0bbd64ba4e4dd::t_cf3806c0548de4 65-94
+  s_a0bbd64ba4e4dd::t_41aa6b46df6e8f 634-635
+  s_a0bbd64ba4e4dd::t_0f35cf2e14ebea 217-218
+tests/integration/test_dotenvx_footguns.py
+  s_a0bbd64ba4e4dd::t_9adce39de859e3 1-196
+src/envdrift/sync/operations.py
+  s_a0bbd64ba4e4dd::t_568c8913c33ad1 107-110
+  s_a0bbd64ba4e4dd::t_b7610b708c6ee7 21-29
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.6",
+  "base_commit_sha": "840bb469b20de01f4e3f08ebc074e87e7a4f9a3b",
+  "prompts": {},
+  "sessions": {
+    "s_a0bbd64ba4e4dd": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "c1e5b2e5-0fec-4bf5-b8e6-20cdb3a76855",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Jainal Gosaliya <jainal09gosalia@gmail.com>"
+    }
+  }
+}
