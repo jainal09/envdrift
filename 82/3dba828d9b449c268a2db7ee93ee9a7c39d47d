@@ -1,0 +1,69 @@
+src/envdrift/cli_commands/encryption_helpers.py
+  s_a0bbd64ba4e4dd::t_b2acd8c5cfffad 13
+  s_a0bbd64ba4e4dd::t_3128257b52945e 45-49,59
+tests/unit/test_config_fail_loudly.py
+  s_a0bbd64ba4e4dd::t_62a134edc71f83 1-65,73-247,254-315,317-491
+  s_a0bbd64ba4e4dd::t_ae23caf2e45cb6 248-253
+  s_a0bbd64ba4e4dd::t_816a02133eea98 66-72
+src/envdrift/integrations/hook_check.py
+  s_a0bbd64ba4e4dd::t_8d81f7735c8543 12
+  s_a0bbd64ba4e4dd::t_d5cde28e757996 170-173
+tests/unit/test_cli.py
+  s_a0bbd64ba4e4dd::t_03c8a5d2c8d074 2445-2451,2457,2460-2461,2463,2476-2479
+  s_a0bbd64ba4e4dd::t_703d961393dba7 2717-2718,2721,2737-2739
+  s_a0bbd64ba4e4dd::t_573a15e9b2a133 1174-1176,1178-1179,1181-1183,1185-1186,1188-1189
+tests/unit/test_encryption_helpers.py
+  s_a0bbd64ba4e4dd::t_52d5c97785c4f1 111-118
+  s_a0bbd64ba4e4dd::t_64b85a232ddd90 93-103,105,107-108
+src/envdrift/config.py
+  s_a0bbd64ba4e4dd::t_e4e54c29ead99e 5,7
+  s_a0bbd64ba4e4dd::t_915ea716f95dec 536-539,544
+  s_a0bbd64ba4e4dd::t_3b64ab966b54bd 603-604
+  s_a0bbd64ba4e4dd::t_11ab04d2f6d322 499-515
+  s_a0bbd64ba4e4dd::t_2421560f6c33ba 678
+  s_a0bbd64ba4e4dd::t_a1045567eb4be0 570-572,588-602,605-614
+  s_a0bbd64ba4e4dd::t_92a83509456e23 281-288
+  s_a0bbd64ba4e4dd::t_3fa710c1628026 617-643,645-677,679-763,768-769
+  s_a0bbd64ba4e4dd::t_08963cf4facabe 644
+src/envdrift/cli_commands/vault.py
+  s_a0bbd64ba4e4dd::t_971d16be881e25 25-27,32,35-44
+  s_a0bbd64ba4e4dd::t_4c9350b906f6e3 258-259,264-268
+  s_a0bbd64ba4e4dd::t_448a9eae51845c 666-667,670-674
+src/envdrift/cli_commands/sync.py
+  s_a0bbd64ba4e4dd::t_7af2d4e85bad45 1417-1421
+  s_a0bbd64ba4e4dd::t_ec85c10ed407b3 775-779
+  s_a0bbd64ba4e4dd::t_b1fa3ab4abd725 1889
+  s_a0bbd64ba4e4dd::t_99bce9dfb140c2 757-758
+  s_a0bbd64ba4e4dd::t_9756c4c2c61124 123-126,138-143
+  s_a0bbd64ba4e4dd::t_864df478c416d4 970,977
+  s_a0bbd64ba4e4dd::t_819708d2fb3df7 1399-1400
+  s_a0bbd64ba4e4dd::t_4507d20bff9c70 325,336
+  s_a0bbd64ba4e4dd::t_6857d4e37d6b06 1790
+  s_a0bbd64ba4e4dd::t_f12f0351f03bd7 105
+tests/unit/coverage/test_cov_cli_commands_encryption.py
+  s_a0bbd64ba4e4dd::t_3598862089f7ca 50-51,53-57,59,61-63,65-66,68-69
+tests/integration/test_config_fail_loudly_cli.py
+  s_a0bbd64ba4e4dd::t_7f9d33c7fb6523 151-153,155-156
+  s_a0bbd64ba4e4dd::t_3aa0920256816d 1-53,55-150,154,157-186,188-189
+  s_a0bbd64ba4e4dd::t_4d9e9d39f48118 187
+docs/reference/configuration.md
+  s_a0bbd64ba4e4dd::t_657557965d5020 19-50
+src/envdrift/cli_commands/encryption.py
+  s_a0bbd64ba4e4dd::t_09e9427fd00f51 37-43,51-57
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.6",
+  "base_commit_sha": "823dba828d9b449c268a2db7ee93ee9a7c39d47d",
+  "prompts": {},
+  "sessions": {
+    "s_a0bbd64ba4e4dd": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "c1e5b2e5-0fec-4bf5-b8e6-20cdb3a76855",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Jainal Gosaliya <jainal09gosalia@gmail.com>"
+    }
+  }
+}
