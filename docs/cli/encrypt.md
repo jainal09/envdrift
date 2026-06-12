@@ -29,6 +29,11 @@ exit code (dotenvx can exit `0` without encrypting):
 - **Refuses content-free files.** An empty, blank-line-only, or comment-only file
   has no variables to encrypt, so the command declines with a non-zero exit
   instead of letting dotenvx scaffold a placeholder-secrets template into it.
+- **Refuses filenames dotenvx cannot turn into a valid key name.** dotenvx derives
+  `DOTENV_PRIVATE_KEY_<NAME>` from the filename, so a name with a space or
+  non-ASCII character (e.g. `my secrets.env`, `café.env`) encrypts cleanly yet is
+  permanently undecryptable. The command refuses such names up front with the
+  plaintext intact — rename the file to use only letters, digits, `.`, `-` and `_`.
 - **Reports silent encryption failures.** When the key is missing or malformed
   (a `.env.keys` that is a directory, garbage, or a mismatched key), the file is
   re-read after the call; if any plaintext value survives, the command fails
