@@ -1,0 +1,31 @@
+tests/integration/test_lock_encryption_state.py
+  s_a0bbd64ba4e4dd::t_d9a3d94ba2588f 422-479,484-486,495-498,505-509,513-515,547-548
+  s_a0bbd64ba4e4dd::t_889fa50e73c665 337,339-340,343-344
+  s_a0bbd64ba4e4dd::t_8f3e8789223dc9 480-483,489-493,499-503
+  s_a0bbd64ba4e4dd::t_34695234a468af 487-488,494,504,510-512
+  s_a0bbd64ba4e4dd::t_1e4978bda46103 516-546
+tests/unit/coverage/test_cov_cli_commands_sync.py
+  s_a0bbd64ba4e4dd::t_7c5976abb0e70e 1169,1191-1195,1198,1200-1227
+src/envdrift/cli_commands/sync.py
+  s_a0bbd64ba4e4dd::t_8d6e455e71ce16 1931-1937
+  s_a0bbd64ba4e4dd::t_69d366e742c735 1790
+  s_a0bbd64ba4e4dd::t_ab582c2cbd5ebf 1839-1844,1857-1860,1862,1864,1872-1876,1888-1892,1895,1897-1898,1901-1918,1920-1925
+tests/unit/test_cli.py
+  s_a0bbd64ba4e4dd::t_a8c96ff7e7d7fb 4295-4302,4304,4308,4310-4311
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.6",
+  "base_commit_sha": "8b1da8b1e9237a5b0d3eba3731ae94b67477b98e",
+  "prompts": {},
+  "sessions": {
+    "s_a0bbd64ba4e4dd": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "c1e5b2e5-0fec-4bf5-b8e6-20cdb3a76855",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Jainal Gosaliya <jainal09gosalia@gmail.com>"
+    }
+  }
+}
