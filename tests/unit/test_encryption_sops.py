@@ -121,11 +121,15 @@ def test_encrypt_already_encrypted_is_idempotent_noop(tmp_path, monkeypatch):
     code would raise ``EncryptionBackendError`` -> exit 1 on the second run.
     """
     env_file = tmp_path / ".env"
-    # A genuine SOPS-encrypted dotenv carries ENC[AES256_GCM, values plus a
-    # flat ``sops_version=`` metadata marker.
-    env_file.write_text(
-        "DB_PASSWORD=ENC[AES256_GCM,data:abc,iv:def,tag:ghi,type:str]\nsops_version=3.13.1\n"
+    # A genuine SOPS-encrypted dotenv carries ENC[AES256_GCM, values plus flat
+    # ``sops_*`` metadata, including the recipient it was encrypted to (#475:
+    # the no-op only holds when the requested recipient is already present).
+    content = (
+        "DB_PASSWORD=ENC[AES256_GCM,data:abc,iv:def,tag:ghi,type:str]\n"
+        "sops_age__list_0__map_recipient=age1abc\n"
+        "sops_version=3.13.1\n"
     )
+    env_file.write_text(content, encoding="utf-8")
 
     backend = SOPSEncryptionBackend()
     monkeypatch.setattr(backend, "is_installed", lambda: True)
@@ -145,9 +149,7 @@ def test_encrypt_already_encrypted_is_idempotent_noop(tmp_path, monkeypatch):
     assert result.file_path == env_file
     assert ran["called"] is False
     # The encrypted file is left byte-for-byte unchanged.
-    assert env_file.read_text() == (
-        "DB_PASSWORD=ENC[AES256_GCM,data:abc,iv:def,tag:ghi,type:str]\nsops_version=3.13.1\n"
-    )
+    assert env_file.read_text(encoding="utf-8") == content
 
 
 def test_encrypt_plaintext_still_runs_sops(tmp_path, monkeypatch):
@@ -428,3 +430,231 @@ def test_encrypt_missing_config_raises_before_idempotency_noop(tmp_path, monkeyp
 
     with pytest.raises(EncryptionBackendError, match="SOPS config file not found"):
         backend.encrypt(env_file, age_recipients="age1abc")
+
+
+# --------------------------------------------------------------------------- #
+# #475: truthful results for already-encrypted files, env precedence, install
+# --------------------------------------------------------------------------- #
+
+# A genuinely SOPS-encrypted dotenv body as the real binary writes it (flat
+# ``sops_*`` metadata keys, age recipient recorded, default unencrypted suffix).
+_ENCRYPTED_DOTENV = (
+    "DB_PASSWORD=ENC[AES256_GCM,data:abc,iv:def,tag:ghi,type:str]\n"
+    "sops_age__list_0__map_recipient=age1abc\n"
+    "sops_lastmodified=2026-06-01T00:00:00Z\n"
+    "sops_mac=ENC[AES256_GCM,data:mac,iv:def,tag:ghi,type:str]\n"
+    "sops_unencrypted_suffix=_unencrypted\n"
+    "sops_version=3.13.1\n"
+)
+
+
+def _backend_that_must_not_run_sops(monkeypatch) -> SOPSEncryptionBackend:
+    """Backend whose ``_run`` seam asserts sops is never invoked.
+
+    Only discovery seams are patched (``is_installed``/``_run``); the verification
+    logic under test runs for real against the file content.
+    """
+    backend = SOPSEncryptionBackend()
+    monkeypatch.setattr(backend, "is_installed", lambda: True)
+
+    def fail_run(*args, **kwargs):
+        raise AssertionError("sops must not run for a metadata-bearing in-place target")
+
+    monkeypatch.setattr(backend, "_run", fail_run)
+    return backend
+
+
+def test_encrypt_metadata_file_with_surviving_plaintext_fails(tmp_path, monkeypatch):
+    """Regression for #475: a SOPS-metadata-bearing file that still contains a
+    plaintext value must NOT be blessed as ``already encrypted`` — sops itself
+    refuses such a file (exit 203) and the value is unprotected on disk."""
+    env_file = tmp_path / ".env"
+    content = "NEW_SECRET=plaintextleak999\n" + _ENCRYPTED_DOTENV
+    env_file.write_text(content, encoding="utf-8")
+
+    backend = _backend_that_must_not_run_sops(monkeypatch)
+    result = backend.encrypt(env_file, age_recipients="age1abc")
+
+    assert result.success is False
+    assert "NEW_SECRET" in result.message
+    assert "plaintext" in result.message.lower()
+    # The file is left untouched (no partial mutation).
+    assert env_file.read_text(encoding="utf-8") == content
+
+
+def test_encrypt_metadata_file_unencrypted_suffix_values_are_clean_noop(tmp_path, monkeypatch):
+    """Keys carrying the recorded ``sops_unencrypted_suffix`` are intentionally
+    plaintext; they must not trip the surviving-plaintext failure."""
+    env_file = tmp_path / ".env"
+    env_file.write_text(
+        "FEATURE_FLAG_unencrypted=on\n" + _ENCRYPTED_DOTENV,
+        encoding="utf-8",
+    )
+
+    backend = _backend_that_must_not_run_sops(monkeypatch)
+    result = backend.encrypt(env_file, age_recipients="age1abc")
+
+    assert result.success is True
+    assert result.changed is False
+    assert "already encrypted" in result.message.lower()
+
+
+def test_encrypt_selective_encryption_metadata_skips_plaintext_check(tmp_path, monkeypatch):
+    """Files encrypted with ``encrypted_regex``-style selective rules keep
+    intentional plaintext; the check cannot infer intent and must stay silent."""
+    env_file = tmp_path / ".env"
+    env_file.write_text(
+        "PUBLIC_URL=https://example.com\n"
+        "DB_PASSWORD=ENC[AES256_GCM,data:abc,iv:def,tag:ghi,type:str]\n"
+        "sops_age__list_0__map_recipient=age1abc\n"
+        "sops_encrypted_regex=^(DB_).*\n"
+        "sops_version=3.13.1\n",
+        encoding="utf-8",
+    )
+
+    backend = _backend_that_must_not_run_sops(monkeypatch)
+    result = backend.encrypt(env_file, age_recipients="age1abc")
+
+    assert result.success is True
+    assert result.changed is False
+
+
+def test_encrypt_already_encrypted_missing_requested_recipient_fails(tmp_path, monkeypatch):
+    """Regression for #475: requesting ``--age <new key>`` on an already-encrypted
+    file must not silently no-op with ``[OK] Encrypted`` — that is a false access
+    grant (the new recipient cannot decrypt). It must fail and point at
+    ``sops rotate --add-age`` / ``sops updatekeys``."""
+    env_file = tmp_path / ".env"
+    env_file.write_text(_ENCRYPTED_DOTENV, encoding="utf-8")
+
+    backend = _backend_that_must_not_run_sops(monkeypatch)
+    result = backend.encrypt(env_file, age_recipients="age1newteammate")
+
+    assert result.success is False
+    assert "age1newteammate" in result.message
+    assert "rotate" in result.message or "updatekeys" in result.message
+    # Metadata untouched: the new recipient was NOT silently dropped into success.
+    assert env_file.read_text(encoding="utf-8") == _ENCRYPTED_DOTENV
+
+
+def test_encrypt_already_encrypted_mixed_recipient_list_reports_only_missing(tmp_path, monkeypatch):
+    """A comma-separated ``--age`` list reports only the recipients that are
+    genuinely absent from the metadata."""
+    env_file = tmp_path / ".env"
+    env_file.write_text(_ENCRYPTED_DOTENV, encoding="utf-8")
+
+    backend = _backend_that_must_not_run_sops(monkeypatch)
+    result = backend.encrypt(env_file, age_recipients="age1abc, age1missing")
+
+    assert result.success is False
+    assert "age1missing" in result.message
+    assert "age1abc," not in result.message
+
+
+def test_encrypt_already_encrypted_missing_kms_arn_fails(tmp_path, monkeypatch):
+    """The recipient check covers --kms as well: a requested KMS ARN absent from
+    the metadata is an error, not a silent no-op."""
+    env_file = tmp_path / ".env"
+    env_file.write_text(_ENCRYPTED_DOTENV, encoding="utf-8")
+
+    backend = _backend_that_must_not_run_sops(monkeypatch)
+    arn = "arn:aws:kms:us-east-1:123456789012:key/aaaa-bbbb"
+    result = backend.encrypt(env_file, kms_arn=arn)
+
+    assert result.success is False
+    assert arn in result.message
+
+
+def test_encrypt_already_encrypted_with_requested_recipient_is_noop_changed_false(
+    tmp_path, monkeypatch
+):
+    """The idempotent re-run (recipients already present, nothing plaintext) stays
+    a clean success, and now reports ``changed=False`` so the CLI can print an
+    honest "no change" instead of "Encrypted"."""
+    env_file = tmp_path / ".env"
+    env_file.write_text(_ENCRYPTED_DOTENV, encoding="utf-8")
+
+    backend = _backend_that_must_not_run_sops(monkeypatch)
+    result = backend.encrypt(env_file, age_recipients="age1abc")
+
+    assert result.success is True
+    assert result.changed is False
+    assert "already encrypted" in result.message.lower()
+    assert env_file.read_text(encoding="utf-8") == _ENCRYPTED_DOTENV
+
+
+def test_build_env_explicit_age_key_file_overrides_ambient_env(tmp_path, monkeypatch):
+    """Regression for #475: an explicit ``--age-key-file``/TOML ``age_key_file``
+    must override an ambient ``SOPS_AGE_KEY_FILE`` — the documented setup exports
+    the env var, which made the explicit flag dead."""
+    ambient = tmp_path / "wrong.txt"
+    explicit = tmp_path / "good.txt"
+    monkeypatch.setenv("SOPS_AGE_KEY_FILE", str(ambient))
+
+    backend = SOPSEncryptionBackend(age_key_file=explicit)
+    env = backend._build_env()
+
+    assert env["SOPS_AGE_KEY_FILE"] == str(explicit)
+
+
+def test_build_env_explicit_age_key_overrides_ambient_env(monkeypatch):
+    """Same precedence defect for SOPS_AGE_KEY: explicit config wins."""
+    # Key material is concatenated so no realistic secret literal is committed.
+    ambient_key = "AGE-SECRET-KEY-" + "AMBIENT"
+    explicit_key = "AGE-SECRET-KEY-" + "EXPLICIT"
+    monkeypatch.setenv("SOPS_AGE_KEY", ambient_key)
+
+    backend = SOPSEncryptionBackend(age_key=explicit_key)
+    env = backend._build_env()
+
+    assert env["SOPS_AGE_KEY"] == explicit_key
+
+
+def test_build_env_per_call_env_still_wins_over_config(tmp_path):
+    """An explicit per-call ``env`` dict is the most specific request and keeps
+    precedence over the constructor config."""
+    backend = SOPSEncryptionBackend(age_key_file=tmp_path / "cfg.txt")
+    per_call = str(tmp_path / "call.txt")
+
+    env = backend._build_env({"SOPS_AGE_KEY_FILE": per_call})
+
+    assert env["SOPS_AGE_KEY_FILE"] == per_call
+
+
+def test_encrypt_surfaces_auto_install_failure_cause(tmp_path, monkeypatch):
+    """Regression for #475: when auto-install fails, the not-installed error must
+    surface the cause instead of recommending the auto_install that just failed.
+    The download URL points at a real refused local port (fail-fast, no mock of
+    the installer logic)."""
+    import socket
+
+    from envdrift.encryption.base import EncryptionNotFoundError
+
+    # Grab a port that is guaranteed closed: bind, read it back, close.
+    probe = socket.socket()
+    probe.bind(("127.0.0.1", 0))
+    refused_port = probe.getsockname()[1]
+    probe.close()
+
+    monkeypatch.setattr(
+        "envdrift.integrations.sops.get_sops_path",
+        lambda: tmp_path / "missing-venv" / "sops",
+    )
+    monkeypatch.setattr("shutil.which", lambda _name: None)
+    monkeypatch.setattr(
+        "envdrift.integrations.sops.SopsInstaller._get_download_url",
+        lambda self: f"http://127.0.0.1:{refused_port}/sops",
+    )
+
+    env_file = tmp_path / ".env"
+    env_file.write_text("FOO=bar\n", encoding="utf-8")
+
+    backend = SOPSEncryptionBackend(auto_install=True)
+    with pytest.raises(EncryptionNotFoundError) as exc:
+        backend.encrypt(env_file)
+
+    message = str(exc.value)
+    assert "auto-install failed" in message.lower()
+    # The recorded cause is exposed for CLI callers that pre-check is_installed().
+    assert backend.install_error
+    assert backend.install_error in message

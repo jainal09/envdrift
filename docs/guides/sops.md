@@ -56,7 +56,9 @@ pip install envdrift          # SOPS support needs no extra envdrift extras
 
 You also need the `sops` binary on PATH. Either install it yourself
 (`brew install sops`, or see the [SOPS releases](https://github.com/getsops/sops/releases))
-or let envdrift fetch it by setting `auto_install = true` (below).
+or let envdrift fetch it by setting `auto_install = true` (below). The auto-install
+download is bounded by a 60-second timeout, and a failed attempt reports its cause
+(e.g. the unreachable URL) alongside the manual install instructions.
 
 ## Configuration
 
@@ -116,6 +118,33 @@ Flags differ by direction (both override config):
   the data key using your credentials (`az login`, KMS access, or the age key).
 
 See [`encrypt`](../cli/encrypt.md) and [`decrypt`](../cli/decrypt.md).
+
+## Re-running `encrypt` on an already-encrypted file
+
+`envdrift encrypt` verifies the post-state instead of trusting the SOPS metadata header:
+
+- **Fully encrypted, recipients unchanged** — a clean no-op: exit 0 with
+  `already encrypted (no change)` (not a misleading `Encrypted` banner).
+- **A plaintext value survives** (e.g. a line appended after encryption) — the command
+  **fails** and names the offending key(s). SOPS itself refuses to re-encrypt a file
+  that already carries metadata, so the value would otherwise leak silently. Recover
+  with `sops edit <file>`, or move the plaintext line aside, `envdrift decrypt`,
+  re-add it, then `envdrift encrypt`. `envdrift lock` applies the same check and will
+  not report "ready to commit" over surviving plaintext.
+- **A requested recipient is missing** — `encrypt --age <new key>` (or `--kms` /
+  `--gcp-kms` / `--azure-kv`) on an already-encrypted file **fails** instead of
+  silently ignoring the flag (which would leave the new recipient unable to decrypt).
+  Add recipients with `sops rotate --add-age <key> -i --input-type dotenv
+  --output-type dotenv <file>`, or `sops updatekeys` after editing `.sops.yaml`.
+- **Encrypted by the other backend** — `encrypt` refuses to double-encrypt a
+  dotenvx-encrypted file with SOPS (and vice versa); decrypt with the original
+  backend first.
+
+## Key resolution precedence
+
+An explicit `--age-key-file` flag or TOML `age_key_file` (`age_key` likewise)
+**overrides** an ambient `SOPS_AGE_KEY_FILE`/`SOPS_AGE_KEY` environment variable.
+Exporting the env var for day-to-day work never disables an explicitly supplied key.
 
 ## Azure Key Vault walkthrough (verified end-to-end)
 

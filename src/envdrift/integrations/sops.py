@@ -8,7 +8,11 @@ import stat
 import urllib.request
 from pathlib import Path
 
-from envdrift.integrations.dotenvx import get_platform_info, get_venv_bin_dir
+from envdrift.integrations.dotenvx import (
+    DOWNLOAD_TIMEOUT_SECONDS,
+    get_platform_info,
+    get_venv_bin_dir,
+)
 
 
 class SopsInstallError(Exception):
@@ -72,7 +76,14 @@ class SopsInstaller:
         tmp_path = target_path.with_suffix(target_path.suffix + ".download")
 
         try:
-            urllib.request.urlretrieve(url, tmp_path)  # nosec B310
+            # Bounded download (mirrors the dotenvx installer fix, #311): the
+            # urlopen timeout caps connect and every socket read, so a server
+            # that accepts the connection and then stalls cannot hang
+            # auto-install forever. urlretrieve has no timeout parameter (#475).
+            with urllib.request.urlopen(  # nosec B310
+                url, timeout=DOWNLOAD_TIMEOUT_SECONDS
+            ) as response:
+                tmp_path.write_bytes(response.read())
             if platform.system() != "Windows":
                 st = tmp_path.stat()
                 tmp_path.chmod(st.st_mode | stat.S_IEXEC)
@@ -80,6 +91,6 @@ class SopsInstaller:
         except Exception as e:  # nosec B110
             if tmp_path.exists():
                 tmp_path.unlink()
-            raise SopsInstallError(f"Failed to install SOPS: {e}") from e
+            raise SopsInstallError(f"Failed to install SOPS from {url}: {e}") from e
 
         return target_path

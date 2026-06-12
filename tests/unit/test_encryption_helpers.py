@@ -201,3 +201,40 @@ def test_is_encrypted_content_sops_uses_header():
         ),
     )
     assert is_encrypted_content(EncryptionProvider.SOPS, backend_no_header, "any") is False
+
+
+def test_is_encrypted_content_sops_metadata_with_surviving_plaintext_is_false():
+    """Regression for #475: a SOPS-metadata-bearing file that still carries a
+    plaintext value is NOT "encrypted" — blessing it lets ``lock`` report
+    "ready to commit" while a secret leaks in plaintext."""
+    from envdrift.encryption.sops import SOPSEncryptionBackend
+
+    backend = SOPSEncryptionBackend()
+    content = (
+        "NEW_SECRET=plaintextleak999\n"
+        "DB_PASSWORD=ENC[AES256_GCM,data:abc,iv:def,tag:ghi,type:str]\n"
+        "sops_age__list_0__map_recipient=age1abc\n"
+        "sops_unencrypted_suffix=_unencrypted\n"
+        "sops_version=3.13.1\n"
+    )
+
+    assert is_encrypted_content(EncryptionProvider.SOPS, backend, content) is False
+
+
+def test_is_encrypted_content_sops_fully_encrypted_is_true():
+    """A genuinely fully-encrypted SOPS dotenv (including intentionally-plaintext
+    ``*_unencrypted`` keys and empty values) still counts as encrypted."""
+    from envdrift.encryption.sops import SOPSEncryptionBackend
+
+    backend = SOPSEncryptionBackend()
+    content = (
+        "DB_PASSWORD=ENC[AES256_GCM,data:abc,iv:def,tag:ghi,type:str]\n"
+        "FEATURE_FLAG_unencrypted=on\n"
+        "EMPTY_VALUE=\n"
+        "sops_age__list_0__map_recipient=age1abc\n"
+        "sops_mac=ENC[AES256_GCM,data:mac,iv:def,tag:ghi,type:str]\n"
+        "sops_unencrypted_suffix=_unencrypted\n"
+        "sops_version=3.13.1\n"
+    )
+
+    assert is_encrypted_content(EncryptionProvider.SOPS, backend, content) is True
