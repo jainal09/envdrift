@@ -1,0 +1,52 @@
+envdrift-vscode/src/utils.ts
+  s_a0bbd64ba4e4dd::t_9a0252417b52f8 47-85,97-100
+tests/test_vscode_cli_contract.py
+  s_a0bbd64ba4e4dd::t_a64c78a3cc40be 89-90
+  s_a0bbd64ba4e4dd::t_b79b6d2738d187 114,126-134
+  s_a0bbd64ba4e4dd::t_5474e7afe8a231 123-125
+  s_a0bbd64ba4e4dd::t_f3193539bfd8a9 18,31-44,49-52,55-56
+  s_a0bbd64ba4e4dd::t_8f056a4caf712d 147
+  s_a0bbd64ba4e4dd::t_ade9107dff0264 166
+  s_a0bbd64ba4e4dd::t_9147e5c09c0669 267-273,286-301
+envdrift-vscode/src/test/unit/agentStatusParse.test.ts
+  s_a0bbd64ba4e4dd::t_e5f0b37fcad3b7 2-3,9-13,15-20
+envdrift-vscode/src/agentCore.ts
+  s_a0bbd64ba4e4dd::t_0a4bdb63b0a38c 29-30,35
+  s_a0bbd64ba4e4dd::t_0c6e278a158174 46-47,66-69
+  s_a0bbd64ba4e4dd::t_f04f57dc2bd329 113,115,118-120,133,135,138-140
+envdrift-vscode/src/test/unit/fixtures/agent-status-stopped.txt
+  s_a0bbd64ba4e4dd::t_dd5346c8f904dd 1-4
+envdrift-vscode/src/encryption.ts
+  s_a0bbd64ba4e4dd::t_1561278b822d0e 173
+  s_a0bbd64ba4e4dd::t_fe972422f0c1b3 57
+  s_a0bbd64ba4e4dd::t_b65f3a75979081 6-11,13
+  s_a0bbd64ba4e4dd::t_4e7ecde34ab194 78
+envdrift-vscode/src/test/unit/agentCore.test.ts
+  s_a0bbd64ba4e4dd::t_7dd16cce52d274 101-104,113
+  s_a0bbd64ba4e4dd::t_16e8c0d6309904 69-77
+envdrift-vscode/src/test/unit/fixtures/agent-status-running.txt
+  s_a0bbd64ba4e4dd::t_7a84ccbb580040 1-4
+envdrift-vscode/src/logger.ts
+  s_a0bbd64ba4e4dd::t_062909fa603da8 11,14-15,18,27-29,32-34,39,42-44,52
+src/envdrift/__main__.py
+  s_a0bbd64ba4e4dd::t_5f8396d1ad965d 10
+envdrift-vscode/src/agentStatus.ts
+  s_a0bbd64ba4e4dd::t_c442bb49803324 89-91,103-105
+  s_a0bbd64ba4e4dd::t_c30f1bd1f1527a 48,50-57,62-66
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.6",
+  "base_commit_sha": "507d8a6c4bd78757e65d13126a746601ada4eb34",
+  "prompts": {},
+  "sessions": {
+    "s_a0bbd64ba4e4dd": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "c1e5b2e5-0fec-4bf5-b8e6-20cdb3a76855",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Jainal Gosaliya <jainal09gosalia@gmail.com>"
+    }
+  }
+}
