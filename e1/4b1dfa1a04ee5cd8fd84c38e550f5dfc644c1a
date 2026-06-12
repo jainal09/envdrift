@@ -1,0 +1,46 @@
+docs/reference/testing.md
+  s_a0bbd64ba4e4dd::t_0de5d37a576905 123-134
+tests/scanner/test_infisical.py
+  s_a0bbd64ba4e4dd::t_98fbfd911c67ce 755-756
+tests/unit/test_vault_aws.py
+  s_a0bbd64ba4e4dd::t_ad0ff46be4e128 101-112
+  s_a0bbd64ba4e4dd::t_551d6f75af2f91 69,71-94
+tests/unit/test_vault_hashicorp.py
+  s_a0bbd64ba4e4dd::t_3a39047197099a 30-44
+tests/integration/test_ephemeral_keys.py
+  s_a0bbd64ba4e4dd::t_f6ae0db0a8b265 15-18
+tests/scanner/test_trivy.py
+  s_a0bbd64ba4e4dd::t_cad206cef41f1e 709-710
+tests/integration/test_kingfisher_scanner.py
+  s_a0bbd64ba4e4dd::t_4d6536a68075f3 16-23
+tests/unit/test_vault_azure.py
+  s_a0bbd64ba4e4dd::t_febd20b567b0f4 77-98
+tests/scanner/test_talisman.py
+  s_a0bbd64ba4e4dd::t_e07b1fe2aa777a 712-713
+tests/unit/test_vault_gcp.py
+  s_a0bbd64ba4e4dd::t_702b8ef35ca22b 102-123
+tests/unit/test_suite_hygiene.py
+  s_a0bbd64ba4e4dd::t_40e3a07c86abe4 1-54,56-235,237-280
+tests/integration/test_aws_integration.py
+  s_a0bbd64ba4e4dd::t_764005d030ccc0 523-532,538,540-554,556-569
+tests/scanner/test_gitleaks.py
+  s_a0bbd64ba4e4dd::t_b750e216fdc567 712-713
+tests/scanner/test_trufflehog.py
+  s_a0bbd64ba4e4dd::t_a641f5f4770d3b 741-742
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.6",
+  "base_commit_sha": "e14b1dfa1a04ee5cd8fd84c38e550f5dfc644c1a",
+  "prompts": {},
+  "sessions": {
+    "s_a0bbd64ba4e4dd": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "c1e5b2e5-0fec-4bf5-b8e6-20cdb3a76855",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Jainal Gosaliya <jainal09gosalia@gmail.com>"
+    }
+  }
+}
