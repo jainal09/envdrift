@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import subprocess
 import sys
 from pathlib import Path
 from types import SimpleNamespace
@@ -468,3 +469,79 @@ class TestCheckGitHookSetup:
 
         assert errors == []
         assert captured["auto_fix"] is False
+
+
+class TestHookFileByteExactness:
+    """Regression tests for #454: hook scripts are written as UTF-8 with LF.
+
+    ``_ensure_hook_file`` used locale-default ``read_text``/``write_text``,
+    which on Windows decodes existing hooks with cp1252 (mangling or raising on
+    UTF-8 content) and writes CRLF line endings into a ``#!/bin/sh`` script.
+    """
+
+    # UTF-8 content whose encoding includes a byte undefined in cp1252
+    # (0x8D in 配 = E9 85 8D), so a locale decode cannot silently round-trip.
+    NON_ASCII_LINE = "# café ☕ 配置 — user hook"
+
+    def test_new_hook_files_are_utf8_lf_bytes(self, tmp_path: Path):
+        hooks_dir = tmp_path / "hooks"
+
+        install_direct_hooks(hooks_dir)
+
+        for name in ("pre-commit", "pre-push"):
+            data = (hooks_dir / name).read_bytes()
+            assert data.startswith(b"#!/bin/sh\n")
+            # CRLF in a sh script breaks the shebang/exit handling on Windows.
+            assert b"\r" not in data
+            data.decode("utf-8")  # must be well-formed UTF-8
+
+    def test_existing_non_ascii_hook_preserved_byte_exact(self, tmp_path: Path):
+        hooks_dir = tmp_path / "hooks"
+        hooks_dir.mkdir()
+        user_line = self.NON_ASCII_LINE.encode("utf-8")
+        (hooks_dir / "pre-commit").write_bytes(b"#!/bin/sh\n" + user_line + b"\nexit 0\n")
+
+        install_direct_hooks(hooks_dir)
+
+        data = (hooks_dir / "pre-commit").read_bytes()
+        assert user_line in data  # UTF-8 user content survives unmangled
+        assert hook_check._ENVDRIFT_HOOK_MARKER.encode("utf-8") in data
+        assert b"\r" not in data
+
+    def test_hook_update_is_locale_independent(self, tmp_path: Path):
+        """install_direct_hooks works under a non-UTF-8 locale encoding (#454).
+
+        Runs the real function in a subprocess with UTF-8 mode off and an
+        ASCII locale (POSIX) / the legacy ANSI code page (Windows). Pre-fix
+        the locale-default ``read_text`` raised UnicodeDecodeError on the
+        existing UTF-8 hook.
+        """
+        hooks_dir = tmp_path / "hooks"
+        hooks_dir.mkdir()
+        user_line = self.NON_ASCII_LINE.encode("utf-8")
+        (hooks_dir / "pre-commit").write_bytes(b"#!/bin/sh\n" + user_line + b"\nexit 0\n")
+
+        env = os.environ.copy()
+        env.update({"PYTHONUTF8": "0", "PYTHONIOENCODING": "utf-8"})
+        if sys.platform != "win32":
+            env.update({"LC_ALL": "C", "LANG": "C", "PYTHONCOERCECLOCALE": "0"})
+        script = (
+            "import sys; from pathlib import Path; "
+            "from envdrift.integrations.hook_check import install_direct_hooks; "
+            "install_direct_hooks(Path(sys.argv[1]))"
+        )
+
+        result = subprocess.run(
+            [sys.executable, "-c", script, str(hooks_dir)],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            env=env,
+            timeout=60,
+        )
+
+        assert result.returncode == 0, f"stderr={result.stderr}"
+        data = (hooks_dir / "pre-commit").read_bytes()
+        assert user_line in data
+        assert hook_check._ENVDRIFT_HOOK_MARKER.encode("utf-8") in data
+        assert b"\r" not in data
