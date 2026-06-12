@@ -9,6 +9,7 @@ This module provides multiple output formats for scan results:
 from __future__ import annotations
 
 import json
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from rich.console import Console
@@ -16,6 +17,7 @@ from rich.panel import Panel
 from rich.table import Table
 from rich.text import Text
 
+from envdrift import __version__
 from envdrift.scanner.base import (
     EXIT_OPERATIONAL_ERROR,
     FINDINGS_EXIT_CODES,
@@ -23,9 +25,19 @@ from envdrift.scanner.base import (
     FindingSeverity,
     ScanFinding,
 )
+from envdrift.utils.git import get_git_root
 
 if TYPE_CHECKING:
-    pass
+    from pathlib import PurePath
+
+# The real project repository, reported as the SARIF driver's informationUri
+# (Code Scanning displays it on every alert — #489).
+_REPOSITORY_URL = "https://github.com/jainal09/envdrift"
+
+# Truncation length for the secret content hash embedded in SARIF
+# fingerprints: 16 hex chars (64 bits) is plenty to keep two distinct secrets
+# on the same line distinct, without disclosing the full SHA-256 digest.
+_FINGERPRINT_HASH_LENGTH = 16
 
 
 # Color mapping for severity levels
@@ -287,11 +299,67 @@ def _sarif_rule(finding: ScanFinding) -> dict[str, Any]:
     }
 
 
-def _sarif_result(finding: ScanFinding) -> dict[str, Any]:
+def _sarif_source_root() -> Path:
+    """Resolve the ``%SRCROOT%`` base directory for SARIF artifact URIs.
+
+    Artifact URIs are emitted relative to the enclosing git repository root
+    (``git rev-parse --show-toplevel``) so alerts map to repo files no matter
+    which directory guard was invoked from; outside a git repo the invocation
+    cwd is the source root.
+    """
+    root = get_git_root(Path.cwd()) or Path.cwd()
+    return root.resolve()
+
+
+def _sarif_artifact_location(file_path: PurePath, srcroot: PurePath) -> dict[str, Any]:
+    """Build a SARIF ``artifactLocation`` with a portable URI.
+
+    Both arguments must be absolute. A path under ``srcroot`` becomes a
+    srcroot-relative URI with forward slashes — on Windows too, per SARIF
+    2.1.0 §3.4.4 — tagged ``uriBaseId: %SRCROOT%``. A path outside the source
+    root cannot be expressed relative to it, so it falls back to an absolute
+    ``file://`` URI with no base id (an absolute URI under a base id is
+    contradictory and Code Scanning drops such alerts — #489).
+    """
+    try:
+        relative = file_path.relative_to(srcroot)
+    except ValueError:
+        return {"uri": file_path.as_uri()}
+    return {"uri": relative.as_posix(), "uriBaseId": "%SRCROOT%"}
+
+
+def _resolved_finding_path(file_path: Path) -> Path:
+    """Absolutize a finding path against the invocation cwd.
+
+    Scanners report paths relative to the cwd guard ran in, so they must be
+    anchored there (then resolved, collapsing symlinks like macOS ``/tmp``)
+    before relativizing against the source root.
+    """
+    path = file_path if file_path.is_absolute() else Path.cwd() / file_path
+    return path.resolve()
+
+
+def _sarif_result(finding: ScanFinding, srcroot: Path) -> dict[str, Any]:
     """Build the SARIF ``results`` entry for a finding (location + fingerprints)."""
     region: dict[str, Any] = {"startLine": finding.line_number or 1}
     if finding.column_number:
         region["startColumn"] = finding.column_number
+
+    artifact_location = _sarif_artifact_location(_resolved_finding_path(finding.file_path), srcroot)
+
+    # The fingerprint must uniquely identify each finding: two DISTINCT
+    # secrets on the same line carry different columns and content hashes, so
+    # both alerts survive Code Scanning's fingerprint-based dedup (#489 /
+    # #348). The truncated SHA-256 of the secret value is stable across runs
+    # and never embeds the matched text itself.
+    fingerprint_parts = [
+        artifact_location["uri"],
+        str(finding.line_number or 0),
+        str(finding.column_number or 0),
+        finding.rule_id,
+    ]
+    if finding.secret_hash:
+        fingerprint_parts.append(finding.secret_hash[:_FINGERPRINT_HASH_LENGTH])
 
     sarif_result: dict[str, Any] = {
         "ruleId": finding.rule_id,
@@ -300,18 +368,24 @@ def _sarif_result(finding: ScanFinding) -> dict[str, Any]:
         "locations": [
             {
                 "physicalLocation": {
-                    "artifactLocation": {
-                        "uri": str(finding.file_path),
-                        "uriBaseId": "%SRCROOT%",
-                    },
+                    "artifactLocation": artifact_location,
                     "region": region,
                 }
             }
         ],
-        "fingerprints": {"primary": f"{finding.file_path}:{finding.line_number}:{finding.rule_id}"},
+        "fingerprints": {"primary": ":".join(fingerprint_parts)},
     }
+    if finding.secret_hash:
+        # Hash-based, never the redacted preview: redaction collapses the
+        # middle of similar secrets, so previews of distinct secrets can be
+        # identical and would merge their alerts (#489).
+        sarif_result["partialFingerprints"] = {
+            "secretHash/v1": finding.secret_hash[:_FINGERPRINT_HASH_LENGTH]
+        }
     if finding.secret_preview:
-        sarif_result["partialFingerprints"] = {"secretPreview": finding.secret_preview}
+        # Keep the human-readable redacted preview, but as a property — it
+        # must not participate in alert deduplication.
+        sarif_result["properties"] = {"secretPreview": finding.secret_preview}
     return sarif_result
 
 
@@ -319,25 +393,36 @@ def _sarif_document(
     rules: list[dict[str, Any]],
     results: list[dict[str, Any]],
     invocation: dict[str, Any],
+    srcroot: Path | None = None,
 ) -> str:
-    """Wrap rules/results/invocation in the shared SARIF 2.1.0 run envelope."""
+    """Wrap rules/results/invocation in the shared SARIF 2.1.0 run envelope.
+
+    The driver block carries the real package version and repository URL —
+    Code Scanning displays them on every alert (#489). When ``srcroot`` is
+    given, the run declares it as the ``%SRCROOT%`` base via
+    ``originalUriBaseIds`` (SARIF 2.1.0 §3.14.14, base URIs end with a slash).
+    """
+    run: dict[str, Any] = {
+        "tool": {
+            "driver": {
+                "name": "envdrift guard",
+                "version": __version__,
+                "informationUri": _REPOSITORY_URL,
+                "rules": rules,
+            }
+        },
+        "results": results,
+        "invocations": [invocation],
+    }
+    if srcroot is not None:
+        srcroot_uri = srcroot.as_uri()
+        if not srcroot_uri.endswith("/"):
+            srcroot_uri += "/"
+        run["originalUriBaseIds"] = {"SRCROOT": {"uri": srcroot_uri}}
     sarif = {
         "$schema": "https://json.schemastore.org/sarif-2.1.0.json",
         "version": "2.1.0",
-        "runs": [
-            {
-                "tool": {
-                    "driver": {
-                        "name": "envdrift guard",
-                        "version": "0.1.0",
-                        "informationUri": "https://github.com/your-org/envdrift",
-                        "rules": rules,
-                    }
-                },
-                "results": results,
-                "invocations": [invocation],
-            }
-        ],
+        "runs": [run],
     }
     return json.dumps(sarif, indent=2)
 
@@ -347,6 +432,12 @@ def format_sarif(result: AggregatedScanResult, exit_code: int | None = None) -> 
 
     SARIF (Static Analysis Results Interchange Format) is an OASIS standard
     for the output of static analysis tools.
+
+    Artifact URIs are emitted relative to the enclosing git repository root
+    (declared as ``%SRCROOT%`` in ``originalUriBaseIds``) regardless of the
+    invocation cwd, and each result's fingerprint folds in the rule id,
+    column and a truncated content hash so two distinct secrets on one line
+    stay distinct alerts (#489).
 
     The invocation object carries the run's verdict so it can never contradict
     the process exit (#478): ``exitCode`` is the effective exit code passed by
@@ -369,9 +460,10 @@ def format_sarif(result: AggregatedScanResult, exit_code: int | None = None) -> 
     for finding in result.unique_findings:
         rules_by_id.setdefault(finding.rule_id, _sarif_rule(finding))
 
+    srcroot = _sarif_source_root()
     return _sarif_document(
         rules=list(rules_by_id.values()),
-        results=[_sarif_result(f) for f in result.unique_findings],
+        results=[_sarif_result(f, srcroot) for f in result.unique_findings],
         invocation={
             "executionSuccessful": not result.has_errors,
             "exitCode": effective,
@@ -384,6 +476,7 @@ def format_sarif(result: AggregatedScanResult, exit_code: int | None = None) -> 
                 if r.error
             ],
         },
+        srcroot=srcroot,
     )
 
 

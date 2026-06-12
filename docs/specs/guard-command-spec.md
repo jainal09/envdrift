@@ -934,7 +934,7 @@ def format_sarif(result: AggregatedScanResult) -> str:
             "tool": {
                 "driver": {
                     "name": "envdrift guard",
-                    "informationUri": "https://github.com/your-org/envdrift",
+                    "informationUri": "https://github.com/jainal09/envdrift",
                     "rules": [],
                 }
             },
