@@ -5,11 +5,11 @@ from __future__ import annotations
 import os
 import shutil
 import subprocess  # nosec B404
-import tomllib
 from collections.abc import Iterable
 from pathlib import Path
 
 from envdrift.config import (
+    ConfigLoadError,
     ConfigNotFoundError,
     EnvdriftConfig,
     GitHookCheckConfig,
@@ -167,7 +167,10 @@ def _load_config_for_hook_check(
         from envdrift.config import load_config
 
         return load_config(config_path), config_path
-    except (ConfigNotFoundError, tomllib.TOMLDecodeError, OSError):
+    except (ConfigNotFoundError, ConfigLoadError, OSError):
+        # Hook checking is best-effort: the commands that consume the config
+        # (encrypt/decrypt/sync/pull/lock) already fail loudly on a broken
+        # config before reaching this gate (#491).
         return None, config_path
 
 

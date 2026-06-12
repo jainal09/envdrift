@@ -20,7 +20,7 @@ from envdrift.cli_commands.encryption import (
     _resolve_config_path,
     _verify_decryption_with_vault,
 )
-from envdrift.config import ConfigNotFoundError, EncryptionConfig, EnvdriftConfig
+from envdrift.config import EncryptionConfig, EnvdriftConfig
 from envdrift.core.schema import SchemaLoadError
 from envdrift.encryption.base import (
     EncryptionNotFoundError,
@@ -47,25 +47,26 @@ def _no_hook_errors(monkeypatch):
 # --------------------------------------------------------------------------
 
 
-def test_load_encryption_config_handles_config_not_found(monkeypatch, tmp_path: Path):
-    """A ConfigNotFoundError during load should warn and return defaults."""
-    cfg_path = tmp_path / "envdrift.toml"
-    cfg_path.write_text("[encryption]\n")
+def test_load_encryption_config_errors_when_config_vanishes(monkeypatch, tmp_path: Path):
+    """A ConfigNotFoundError during load (find/load TOCTOU race) aborts cleanly.
 
-    warnings: list[str] = []
-    monkeypatch.setattr(f"{ENC_MOD}.print_warning", lambda msg: warnings.append(str(msg)))
+    Pre-#491 this warned and silently continued with default settings; an
+    existing-but-unloadable config must now exit 1. The race is real here: the
+    discovered path never exists, so the real load_config raises.
+    """
+    import typer
+
+    cfg_path = tmp_path / "envdrift.toml"  # never created
+
+    errors: list[str] = []
+    monkeypatch.setattr(f"{ENC_MOD}.print_error", lambda msg: errors.append(str(msg)))
     monkeypatch.setattr("envdrift.config.find_config", lambda *a, **k: cfg_path)
 
-    def _raise(_path):
-        raise ConfigNotFoundError("no config here")
+    with pytest.raises(typer.Exit) as exc_info:
+        _load_encryption_config()
 
-    monkeypatch.setattr("envdrift.config.load_config", _raise)
-
-    config, returned_path = _load_encryption_config()
-
-    assert isinstance(config, EnvdriftConfig)
-    assert returned_path is None
-    assert any("no config here" in w for w in warnings)
+    assert exc_info.value.exit_code == 1
+    assert any("not found" in e for e in errors)
 
 
 def test_load_encryption_config_no_config_file(monkeypatch):

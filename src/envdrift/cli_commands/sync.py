@@ -102,9 +102,7 @@ def load_sync_config_and_client(
     Raises:
         typer.Exit: Exits with a non-zero code if no valid sync configuration can be found, required provider options are missing, the config file is invalid or unreadable, or the vault client cannot be created.
     """
-    import tomllib
-
-    from envdrift.config import ConfigNotFoundError, find_config, load_config
+    from envdrift.config import ConfigLoadError, ConfigNotFoundError, find_config, load_config
     from envdrift.sync.config import ServiceMapping, SyncConfig, SyncConfigError
     from envdrift.vault import get_vault_client
 
@@ -122,14 +120,10 @@ def load_sync_config_and_client(
         config_path = config_file
         try:
             envdrift_config = load_config(config_path)
-        except tomllib.TOMLDecodeError as e:
-            print_error(f"TOML syntax error in {config_path}: {e}")
-            raise typer.Exit(code=1) from None
-        except ValueError as e:
-            # A malformed section (e.g. a sync mapping missing secret_name) now
-            # raises a clean ValueError from load_config instead of a raw
-            # KeyError traceback (#443 #32).
-            print_error(f"Invalid config in {config_path}: {e}")
+        except ConfigLoadError as e:
+            # The loader's message is already the clean one-liner (TOML syntax
+            # error / unreadable file / invalid section) (#443 #32, #491).
+            print_error(str(e))
             raise typer.Exit(code=1) from None
         except ConfigNotFoundError:
             pass
@@ -141,8 +135,12 @@ def load_sync_config_and_client(
                 envdrift_config = load_config(config_path)
             except ConfigNotFoundError:
                 pass
-            except tomllib.TOMLDecodeError as e:
-                print_warning(f"TOML syntax error in {config_path}: {e}")
+            except ConfigLoadError as e:
+                # A discovered-but-broken config used to be a mere warning and
+                # the command continued with defaults, silently changing
+                # behavior; fail loudly instead (#491).
+                print_error(str(e))
+                raise typer.Exit(code=1) from None
 
     vault_config = getattr(envdrift_config, "vault", None)
 
@@ -324,7 +322,7 @@ def _find_config_path(config_file: Path | None) -> Path | None:
 def _load_partial_encryption_paths(
     config_file: Path | None,
 ) -> tuple[set[Path], set[Path], set[Path]]:
-    from envdrift.config import ConfigNotFoundError, load_config
+    from envdrift.config import ConfigLoadError, ConfigNotFoundError, load_config
 
     config_path = _find_config_path(config_file)
 
@@ -335,7 +333,7 @@ def _load_partial_encryption_paths(
         config = load_config(config_path)
     except ConfigNotFoundError:
         return set(), set(), set()
-    except (OSError, AttributeError, KeyError) as exc:
+    except (ConfigLoadError, OSError) as exc:
         print_warning(f"Unable to read config for partial encryption: {exc}")
         return set(), set(), set()
 
@@ -756,6 +754,8 @@ def pull(
     console.print("[bold cyan]Step 2:[/bold cyan] Decrypting environment files...")
     console.print()
 
+    from envdrift.config import ConfigLoadError, ConfigNotFoundError
+
     try:
         from envdrift.cli_commands import encryption_helpers
         from envdrift.encryption import (
@@ -772,6 +772,11 @@ def pull(
             print_error(f"{encryption_backend.name} is not installed")
             console.print(encryption_backend.install_instructions())
             raise typer.Exit(code=1)
+    except (ConfigNotFoundError, ConfigLoadError) as e:
+        # resolve_encryption_backend no longer falls back to dotenvx on a
+        # broken config (#491); surface the loader's message verbatim.
+        print_error(str(e))
+        raise typer.Exit(code=1) from None
     except ValueError as e:
         print_error(f"Unsupported encryption backend: {e}")
         raise typer.Exit(code=1) from None
@@ -962,14 +967,14 @@ def pull(
     config_path = _find_config_path(config_file)
     partial_config = None
     if config_path:
-        from envdrift.config import ConfigNotFoundError
+        from envdrift.config import ConfigLoadError, ConfigNotFoundError
         from envdrift.config import load_config as load_envdrift_config
 
         try:
             partial_config = load_envdrift_config(config_path)
         except ConfigNotFoundError:
             partial_config = None
-        except (OSError, AttributeError, KeyError) as exc:
+        except (ConfigLoadError, OSError) as exc:
             print_warning(f"Unable to read config for partial encryption: {exc}")
             partial_config = None
 
@@ -1391,6 +1396,8 @@ def lock(
     console.print(f"[bold cyan]{step_num}:[/bold cyan] Encrypting environment files...")
     console.print()
 
+    from envdrift.config import ConfigLoadError, ConfigNotFoundError
+
     try:
         from envdrift.cli_commands import encryption_helpers
         from envdrift.encryption import (
@@ -1407,6 +1414,11 @@ def lock(
             print_error(f"{encryption_backend.name} is not installed")
             console.print(encryption_backend.install_instructions())
             raise typer.Exit(code=1)
+    except (ConfigNotFoundError, ConfigLoadError) as e:
+        # resolve_encryption_backend no longer falls back to dotenvx on a
+        # broken config (#491); surface the loader's message verbatim.
+        print_error(str(e))
+        raise typer.Exit(code=1) from None
     except ValueError as e:
         print_error(f"Unsupported encryption backend: {e}")
         raise typer.Exit(code=1) from None
@@ -1775,7 +1787,7 @@ def lock(
         console.print()
 
         # Load partial encryption config using shared helper
-        from envdrift.config import ConfigNotFoundError
+        from envdrift.config import ConfigLoadError, ConfigNotFoundError
         from envdrift.config import load_config as load_envdrift_config
 
         config_path = _find_config_path(config_file)
@@ -1874,7 +1886,7 @@ def lock(
                     console.print("  [dim]Partial encryption not enabled in config[/dim]")
             except ConfigNotFoundError:
                 print_warning("Could not find partial encryption config")
-            except (OSError, AttributeError, KeyError) as e:
+            except (ConfigLoadError, OSError) as e:
                 print_warning(f"Could not load partial encryption config: {e}")
 
     # === SUMMARY ===
