@@ -1,0 +1,39 @@
+envdrift-agent/internal/lockcheck/lockcheck.go
+  s_a0bbd64ba4e4dd::t_00de879c88f535 59-62,64-72,75-78,80-82
+envdrift-agent/internal/project/config.go
+  s_a0bbd64ba4e4dd::t_eee863390058bc 283-287
+  s_a0bbd64ba4e4dd::t_4e3842da5d79b9 5
+envdrift-agent/internal/encrypt/encrypt_test.go
+  s_a0bbd64ba4e4dd::t_d8ee554042babd 356,375-385
+envdrift-agent/internal/lockcheck/lockcheck_test.go
+  s_a0bbd64ba4e4dd::t_ae4eb495af18a9 11
+  s_a0bbd64ba4e4dd::t_7a1432f9bdad20 212-213
+envdrift-agent/internal/project/config_test.go
+  s_a0bbd64ba4e4dd::t_bbe8f9216390cf 444-482
+  s_a0bbd64ba4e4dd::t_bb1f26ac270be8 348-368,370-377
+  s_a0bbd64ba4e4dd::t_1b779bd5a47a9a 4-5,8-9
+envdrift-agent/internal/encrypt/encrypt.go
+  s_a0bbd64ba4e4dd::t_4fed9e74bc39c9 141,147-154
+  s_a0bbd64ba4e4dd::t_2c008c7e4a90de 24-30,33
+envdrift-agent/internal/config/config.go
+  s_a0bbd64ba4e4dd::t_36f9b9ca27c0f6 48-52,54-58,62-63
+  s_a0bbd64ba4e4dd::t_8609e6a5370a8c 133-134,136-149,151,153,155-156,158-159,161-162,164-171,173-174
+envdrift-agent/internal/config/config_test.go
+  s_a0bbd64ba4e4dd::t_24f26c472d147a 195-230,232,238-245,249-251,253,257,259-263
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.6",
+  "base_commit_sha": "6fce261444c3538cfe531ec23a180e79035fc7e7",
+  "prompts": {},
+  "sessions": {
+    "s_a0bbd64ba4e4dd": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "c1e5b2e5-0fec-4bf5-b8e6-20cdb3a76855",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Jainal Gosaliya <jainal09gosalia@gmail.com>"
+    }
+  }
+}
