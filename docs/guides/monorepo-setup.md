@@ -320,11 +320,15 @@ secret_name = "shared-key"
 folder_path = "."  # Root of monorepo
 ```
 
-Then reference it from each service:
+Then reference it from each service — symlink the shared file into place, or
+point dotenvx at it explicitly with `-fk/--env-keys-file`:
 
 ```bash
-# Set DOTENV_KEYS_PATH or create symlinks
+# Option A: symlink the shared keys file into each service
 ln -s ../../.env.keys services/api/.env.keys
+
+# Option B: pass the keys file explicitly when decrypting
+dotenvx decrypt -f services/api/.env.production --env-keys-file .env.keys
 ```
 
 ### Makefile for Convenience
