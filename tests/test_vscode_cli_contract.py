@@ -149,7 +149,9 @@ class TestEnvdriftCliContract:
         )
         assert result.returncode == 0, result.stderr
         usage = _plain(result.stdout)
-        assert f"Usage: envdrift {sub} [OPTIONS] [ENV_FILE]" in usage, (
+        # click renders the program name as `envdrift.EXE` on Windows.
+        pattern = rf"Usage: envdrift(?:\.[Ee][Xx][Ee])? {re.escape(sub)} \[OPTIONS\] \[ENV_FILE\]"
+        assert re.search(pattern, usage), (
             f"`envdrift {sub}` does not take a positional env file — the extension's "
             f"per-file spawn `envdrift {sub} <file>` cannot work. Usage: {usage[:200]}"
         )
