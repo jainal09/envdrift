@@ -1,5 +1,12 @@
 # Changelog
 
+## [10.16.1](https://github.com/jainal09/envdrift/compare/v10.16.0...v10.16.1) (2026-06-12)
+
+
+### Bug Fixes
+
+* **lock:** use canonical encryption predicates so lock never blesses plaintext ([#470](https://github.com/jainal09/envdrift/issues/470)) ([#507](https://github.com/jainal09/envdrift/issues/507)) ([9658ada](https://github.com/jainal09/envdrift/commit/9658ada7e5446a07dbf8d2a5bdf558a2c22c4446))
+
 ## [10.16.0](https://github.com/jainal09/envdrift/compare/v10.15.1...v10.16.0) (2026-06-11)
 
 
