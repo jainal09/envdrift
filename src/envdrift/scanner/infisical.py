@@ -23,6 +23,7 @@ import zipfile
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, ClassVar
 
+from envdrift.install_integrity import ChecksumVerificationError, verify_download
 from envdrift.scanner.base import (
     FindingSeverity,
     ScanFinding,
@@ -56,6 +57,11 @@ def _get_infisical_version() -> str:
 def _get_infisical_download_urls() -> dict[str, str]:
     """Get download URL templates from constants."""
     return _load_constants().get("infisical_download_urls", {})
+
+
+def _get_infisical_checksums_url() -> str:
+    """Get the upstream checksums file URL template from constants."""
+    return _load_constants().get("infisical_checksums_url", "")
 
 
 # Severity mapping - Infisical doesn't have built-in severity, so we map by rule type
@@ -166,6 +172,11 @@ class InfisicalInstaller:
             ext=ext,
         )
 
+    def get_checksums_url(self) -> str:
+        """Get the URL of the upstream-published checksums file for this version."""
+        template = _get_infisical_checksums_url()
+        return template.format(version=self.version) if template else ""
+
     def download_and_extract(self, target_path: Path) -> None:
         """Download and extract infisical to the target path.
 
@@ -188,6 +199,13 @@ class InfisicalInstaller:
                 urllib.request.urlretrieve(url, archive_path)  # nosec B310
             except Exception as e:
                 raise InfisicalInstallError(f"Download failed: {e}") from e
+
+            # Verify against the published checksums before extracting anything.
+            self.progress("Verifying checksum...")
+            try:
+                verify_download(archive_path, archive_name, self.get_checksums_url(), "infisical")
+            except ChecksumVerificationError as e:
+                raise InfisicalInstallError(str(e)) from e
 
             self.progress("Extracting...")
 

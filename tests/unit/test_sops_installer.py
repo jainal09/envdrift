@@ -10,6 +10,7 @@ from unittest.mock import patch
 import pytest
 
 from envdrift.integrations.sops import SopsInstaller, SopsInstallError, get_sops_path
+from tests.helpers import write_checksums_for
 
 
 def test_get_sops_path_uses_venv_bin(monkeypatch, tmp_path: Path):
@@ -34,14 +35,21 @@ def test_install_downloads_binary(monkeypatch, tmp_path: Path):
     monkeypatch.setattr("envdrift.integrations.sops.get_venv_bin_dir", lambda: target_dir)
     monkeypatch.setattr("platform.system", lambda: "Linux")
 
-    def fake_urlretrieve(_url: str, filename: str):
+    checksums_path = tmp_path / "stub-checksums.txt"
+
+    def fake_urlretrieve(url: str, filename: str):
         Path(filename).write_text("binary")
+        write_checksums_for(Path(filename), checksums_path, url.rsplit("/", 1)[-1])
         return filename, None
 
     monkeypatch.setattr("envdrift.integrations.sops.urllib.request.urlretrieve", fake_urlretrieve)
     monkeypatch.setattr(
         "envdrift.integrations.sops.SopsInstaller._get_download_url",
         lambda _self: "https://example.com/sops",
+    )
+    monkeypatch.setattr(
+        "envdrift.integrations.sops.SopsInstaller.get_checksums_url",
+        lambda _self: checksums_path.resolve().as_uri(),
     )
 
     installer = SopsInstaller(version="0.0.0")

@@ -26,6 +26,12 @@ from rich.console import Console
 from rich.progress import Progress, SpinnerColumn, TextColumn
 
 from envdrift.cli_commands.agent_utils import parse_agent_running_status
+from envdrift.install_integrity import (
+    ChecksumVerificationError,
+    fetch_checksums,
+    sha256_file,
+    verification_disabled,
+)
 
 console = Console()
 
@@ -144,60 +150,45 @@ def _get_install_path() -> Path:
 
 
 def _verify_checksum(file_path: Path, platform_name: str, checksum_url: str) -> bool:
-    """Verify the SHA256 checksum of a downloaded binary.
+    """Verify the SHA256 checksum of a downloaded binary (fail closed, #490).
 
     Args:
         file_path: Path to the downloaded file
         platform_name: Platform identifier (e.g., 'darwin-arm64')
+        checksum_url: URL of the release checksums.txt
 
     Returns:
-        True if checksum matches or verification not available, False if mismatch
+        True only when the published checksum was fetched and matches; False
+        when the checksums file is unreachable, lacks this platform's entry,
+        or the digest mismatches. Callers must abort the install on False.
     """
-    import hashlib
+    binary_name = f"envdrift-agent-{platform_name}"
+    if platform_name.startswith("windows"):
+        binary_name += ".exe"
 
     try:
-        # Download checksums file
-        with urllib.request.urlopen(checksum_url, timeout=30) as response:  # nosec B310
-            checksums_content = response.read().decode("utf-8")
+        checksums = fetch_checksums(checksum_url)
+    except ChecksumVerificationError as e:
+        console.print(f"[red]{e}[/red]")
+        return False
 
-        # Parse checksums (format: "sha256  filename")
-        expected_checksum = None
-        binary_name = f"envdrift-agent-{platform_name}"
-        if platform_name.startswith("windows"):
-            binary_name += ".exe"
+    expected_checksum = checksums.get(binary_name)
+    if not expected_checksum:
+        console.print(
+            f"[red]No checksum entry for {binary_name} in {checksum_url} — "
+            "refusing to install an unverified binary[/red]"
+        )
+        return False
 
-        for line in checksums_content.strip().split("\n"):
-            parts = line.split()
-            # Use exact filename match (not substring) to prevent false positives
-            if len(parts) >= 2 and parts[-1].strip() == binary_name:
-                expected_checksum = parts[0].lower()
-                break
+    actual_checksum = sha256_file(file_path)
+    if actual_checksum != expected_checksum:
+        console.print("[red]Checksum mismatch![/red]")
+        console.print(f"  Expected: {expected_checksum}")
+        console.print(f"  Actual:   {actual_checksum}")
+        return False
 
-        if not expected_checksum:
-            # Checksums file doesn't contain this platform - skip verification
-            console.print("[dim]Checksum verification: not available for this release[/dim]")
-            return True
-
-        # Calculate actual checksum
-        sha256 = hashlib.sha256()
-        with open(file_path, "rb") as f:
-            for chunk in iter(lambda: f.read(8192), b""):
-                sha256.update(chunk)
-        actual_checksum = sha256.hexdigest().lower()
-
-        if actual_checksum != expected_checksum:
-            console.print("[red]Checksum mismatch![/red]")
-            console.print(f"  Expected: {expected_checksum}")
-            console.print(f"  Actual:   {actual_checksum}")
-            return False
-
-        console.print("[dim]Checksum verified ✓[/dim]")
-        return True
-
-    except (urllib.error.URLError, OSError) as e:
-        # Can't verify checksum - proceed with warning
-        console.print(f"[yellow]Warning: Could not verify checksum: {e}[/yellow]")
-        return True
+    console.print("[dim]Checksum verified ✓[/dim]")
+    return True
 
 
 def _download_binary(url: str, dest: Path, progress: Progress) -> bool:
@@ -313,6 +304,13 @@ def install_agent(
             help="Skip registering current project with agent",
         ),
     ] = False,
+    insecure_skip_checksum: Annotated[
+        bool,
+        typer.Option(
+            "--insecure-skip-checksum",
+            help="Skip SHA256 verification of the downloaded binary (unsafe)",
+        ),
+    ] = False,
 ) -> None:
     """Install the envdrift background agent.
 
@@ -379,27 +377,46 @@ def install_agent(
     if plat.startswith("windows"):
         download_url += ".exe"
 
-    # Download and install
-    with Progress(
-        SpinnerColumn(),
-        TextColumn("[progress.description]{task.description}"),
-        console=console,
-    ) as progress:
-        success = _download_binary(download_url, install_path, progress)
+    # Download to a staging path next to the final location, verify the
+    # checksum, and only then move the binary into place. A tampered or
+    # unverifiable download must never replace a previously working agent (#490).
+    staging_path = install_path.parent / (install_path.name + ".download")
+    try:
+        with Progress(
+            SpinnerColumn(),
+            TextColumn("[progress.description]{task.description}"),
+            console=console,
+        ) as progress:
+            success = _download_binary(download_url, staging_path, progress)
 
-    if not success:
-        console.print("\n[red]✗[/red] Failed to download agent binary")
-        console.print(f"  URL: {download_url}")
-        console.print("\n  You can download manually from:")
-        console.print("  https://github.com/jainal09/envdrift/releases")
-        raise typer.Exit(1)
+        if not success:
+            console.print("\n[red]✗[/red] Failed to download agent binary")
+            console.print(f"  URL: {download_url}")
+            console.print("\n  You can download manually from:")
+            console.print("  https://github.com/jainal09/envdrift/releases")
+            raise typer.Exit(1)
 
-    # Verify checksum
-    if not _verify_checksum(install_path, plat, _checksum_url):
-        console.print("\n[red]✗[/red] Checksum verification failed - binary may be corrupted")
-        console.print("  Removing downloaded file for security")
-        install_path.unlink(missing_ok=True)
-        raise typer.Exit(1)
+        # Verify checksum (fail closed) before the binary reaches install_path.
+        if insecure_skip_checksum or verification_disabled():
+            console.print(
+                "[yellow]⚠ Skipping checksum verification (--insecure-skip-checksum) — "
+                "installing an unverified binary[/yellow]"
+            )
+        elif not _verify_checksum(staging_path, plat, _checksum_url):
+            console.print("\n[red]✗[/red] Checksum verification failed — refusing to install")
+            console.print(
+                "  The downloaded file was removed; any previously installed agent is untouched."
+            )
+            console.print("  Use [bold]--insecure-skip-checksum[/bold] to override (unsafe).")
+            raise typer.Exit(1)
+
+        try:
+            staging_path.replace(install_path)
+        except OSError as e:
+            console.print(f"\n[red]✗[/red] Failed to move verified binary into place: {e}")
+            raise typer.Exit(1) from e
+    finally:
+        staging_path.unlink(missing_ok=True)
 
     console.print(f"[green]✓[/green] Installed agent to: {install_path}")
 

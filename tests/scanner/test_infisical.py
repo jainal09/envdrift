@@ -20,6 +20,7 @@ from envdrift.scanner.infisical import (
     get_infisical_path,
     get_platform_info,
 )
+from tests.helpers import write_checksums_for
 
 
 class TestPlatformDetection:
@@ -687,16 +688,24 @@ class TestInfisicalInstallerInstall:
         target_path.parent.mkdir(parents=True, exist_ok=True)
         mock_get_path.return_value = target_path
 
+        checksums_path = tmp_path / "stub-checksums.txt"
+
         def fake_download(url: str, dest: str) -> None:
             with tarfile.open(dest, "w:gz") as tar:
                 info = tarfile.TarInfo(name="infisical")
                 info.size = 4
                 tar.addfile(info, io.BytesIO(b"fake"))
+            write_checksums_for(Path(dest), checksums_path, url.rsplit("/", 1)[-1])
 
         mock_urlretrieve.side_effect = fake_download
 
         installer = InfisicalInstaller()
-        result = installer.install()
+        with patch.object(
+            InfisicalInstaller,
+            "get_checksums_url",
+            lambda self: checksums_path.resolve().as_uri(),
+        ):
+            result = installer.install()
 
         assert result == target_path
         assert target_path.exists()
@@ -738,17 +747,26 @@ class TestInfisicalInstallerInstall:
         import tarfile
 
         mock_get_path.return_value = tmp_path / "infisical"
+        checksums_path = tmp_path / "stub-checksums.txt"
 
         def fake_download(url: str, dest: str) -> None:
             with tarfile.open(dest, "w:gz") as tar:
                 info = tarfile.TarInfo(name="other_file.txt")
                 info.size = 4
                 tar.addfile(info, io.BytesIO(b"test"))
+            write_checksums_for(Path(dest), checksums_path, url.rsplit("/", 1)[-1])
 
         mock_urlretrieve.side_effect = fake_download
 
         installer = InfisicalInstaller()
-        with pytest.raises(InfisicalInstallError, match="not found in archive"):
+        with (
+            patch.object(
+                InfisicalInstaller,
+                "get_checksums_url",
+                lambda self: checksums_path.resolve().as_uri(),
+            ),
+            pytest.raises(InfisicalInstallError, match="not found in archive"),
+        ):
             installer.install()
 
 

@@ -72,3 +72,20 @@ class DummyEncryptionBackend:
         self.decrypt_calls.clear()
         self.encrypt_kwargs.clear()
         self.decrypt_kwargs.clear()
+
+
+def write_checksums_for(
+    artifact: Path, checksums_path: Path, artifact_name: str | None = None
+) -> str:
+    """Write a sha256sum-style checksums file for ``artifact``; return a file:// URL.
+
+    Installer tests point ``get_checksums_url`` at the returned URL so the
+    fail-closed download verification (#490) succeeds against locally created
+    fixture archives/binaries.
+    """
+    import hashlib
+
+    name = artifact_name or artifact.name
+    digest = hashlib.sha256(artifact.read_bytes()).hexdigest()
+    checksums_path.write_text(f"{digest}  {name}\n", encoding="utf-8")
+    return checksums_path.resolve().as_uri()
