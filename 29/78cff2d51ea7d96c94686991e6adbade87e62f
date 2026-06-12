@@ -1,0 +1,64 @@
+envdrift-agent/internal/project/config_test.go
+  s_a0bbd64ba4e4dd::t_f23df04bf9ddc2 214-416
+envdrift-agent/internal/config/config_test.go
+  s_a0bbd64ba4e4dd::t_63172aa4f339ad 8,11-12
+  s_a0bbd64ba4e4dd::t_0cd4dc82fb663c 148-294
+docs/agent-spec.md
+  s_a0bbd64ba4e4dd::t_52b594e076ff69 339-342
+  s_a0bbd64ba4e4dd::t_b6b3a24a3cf262 352
+envdrift-agent/internal/project/config.go
+  s_a0bbd64ba4e4dd::t_609013a5590c8b 64-81,83-89,91-105,107-110,114-118,124-129,132-142,145-152
+  s_a0bbd64ba4e4dd::t_686418615e8852 111-113,119-122
+docs/guides/agent-setup.md
+  s_a0bbd64ba4e4dd::t_0ab22adf0b186c 252
+  s_a0bbd64ba4e4dd::t_61c702f95c722d 115,120-125
+  s_a0bbd64ba4e4dd::t_2f01bb1952d1d6 14
+  s_a0bbd64ba4e4dd::t_35aff8571b2b67 150-151,155-160
+  s_a0bbd64ba4e4dd::t_0a1c739559a1c9 209-212
+  s_a0bbd64ba4e4dd::t_0b36b65dfa3907 222-227
+tests/unit/test_main_module.py
+  s_a0bbd64ba4e4dd::t_09089f2e7f68a2 1-30
+  s_a0bbd64ba4e4dd::t_41987d8bb753e9 31
+envdrift-agent/internal/config/config.go
+  s_a0bbd64ba4e4dd::t_18cfc61d2b7151 36-75
+  s_a0bbd64ba4e4dd::t_0c20dd09578e59 189-192,202-213
+  s_a0bbd64ba4e4dd::t_28a4c87f52b054 5,11-12
+  s_a0bbd64ba4e4dd::t_3563716c1399a3 123-124,128-153,157-186
+envdrift-agent/README.md
+  s_a0bbd64ba4e4dd::t_a429547e5980f9 104
+envdrift-agent/internal/encrypt/encrypt.go
+  s_a0bbd64ba4e4dd::t_4cf82962e0e8a7 1,11,18-64,76,83-84,89-102,104-127,129-130,132-139,142,168-173,187,189
+envdrift-agent/internal/lockcheck/lockcheck.go
+  s_a0bbd64ba4e4dd::t_a21fa60da535b0 44-55,57,59,63,74-129
+  s_a0bbd64ba4e4dd::t_d04a17bae4e3b3 7,9,12,20-27
+envdrift-agent/internal/encrypt/encrypt_test.go
+  s_a0bbd64ba4e4dd::t_fd97e36fcc27fe 210-211,213
+  s_a0bbd64ba4e4dd::t_e1d3cc9136566a 69-126
+  s_a0bbd64ba4e4dd::t_700e7a6f572da4 6,8
+  s_a0bbd64ba4e4dd::t_bb75f5274b7d5a 179
+  s_a0bbd64ba4e4dd::t_03dcd0a2a1e07f 223
+  s_a0bbd64ba4e4dd::t_457cf2fb5af884 242
+  s_a0bbd64ba4e4dd::t_f331600d3741a1 253-354
+src/envdrift/__main__.py
+  s_a0bbd64ba4e4dd::t_80bc30fd8d149e 1-11
+envdrift-agent/internal/lockcheck/lockcheck_test.go
+  s_a0bbd64ba4e4dd::t_a45264ba349d58 5-6
+  s_a0bbd64ba4e4dd::t_c232c9a905df3b 49-54,56-59,62-63,66-68,70,72,80-84
+  s_a0bbd64ba4e4dd::t_cc454c24d78e97 117-224
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.6",
+  "base_commit_sha": "2978cff2d51ea7d96c94686991e6adbade87e62f",
+  "prompts": {},
+  "sessions": {
+    "s_a0bbd64ba4e4dd": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "c1e5b2e5-0fec-4bf5-b8e6-20cdb3a76855",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Jainal Gosaliya <jainal09gosalia@gmail.com>"
+    }
+  }
+}
