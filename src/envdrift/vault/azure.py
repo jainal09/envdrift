@@ -139,6 +139,18 @@ class AzureKeyVaultClient(VaultClient):
             self._client = None
             self._credential = None
             raise VaultError(f"Azure Key Vault error: {e}") from e
+        except Exception as e:
+            # The SDK also raises OUTSIDE the AzureError hierarchy -- e.g. the
+            # challenge policy's resource verification raises a plain
+            # ``ValueError`` ("The challenge resource ... does not match the
+            # requested domain") for any Key Vault behind a proxy, custom
+            # domain, or emulator. The base-class contract is that
+            # authenticate() failures surface as VaultError, so map anything
+            # unexpected instead of letting raw SDK exceptions escape to the
+            # CLI as Rich tracebacks (#487).
+            self._client = None
+            self._credential = None
+            raise VaultError(f"Azure Key Vault error: {e}") from e
 
     def is_authenticated(self) -> bool:
         """

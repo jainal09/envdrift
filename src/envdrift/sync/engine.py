@@ -160,12 +160,20 @@ class SyncEngine:
             if local_value is None:
                 # Key doesn't exist - create
                 if self.mode.verify_only:
+                    # Populate ``error`` with a diagnosable reason (#487): the
+                    # renderer prints ``error``, and a file that exists but
+                    # lacks the key is a different problem than a missing file.
+                    if env_keys_file.exists():
+                        reason = f"{effective_key_name} missing from {env_keys_path}"
+                    else:
+                        reason = f"Key file does not exist: {env_keys_path}"
                     return ServiceSyncResult(
                         secret_name=mapping.secret_name,
                         folder_path=mapping.folder_path,
                         action=SyncAction.ERROR,
-                        message="Key file does not exist",
+                        message=reason,
                         vault_value_preview=vault_preview,
+                        error=reason,
                     )
 
                 env_keys_file.write_key(effective_key_name, vault_value, effective_environment)

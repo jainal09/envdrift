@@ -1641,3 +1641,113 @@ class TestAWSKeyMaterialNormalization:
             assert secret.metadata.get("encoding") == "base64"
         finally:
             _force_delete(aws_secrets_client, name)
+
+
+# --- #487: not-found errors must name the region; ephemeral rows are not errors
+
+
+class TestAWSNotFoundNamesRegion:
+    """#487: AWS not-found errors name the region that was searched."""
+
+    def test_get_secret_not_found_error_names_region(self, aws_client_configured) -> None:
+        """The client-level SecretNotFoundError message includes the region."""
+        from envdrift.vault.base import SecretNotFoundError
+
+        with pytest.raises(SecretNotFoundError) as exc_info:
+            aws_client_configured.get_secret("envdrift-test/no-such-secret-487")
+
+        assert "(region us-east-1)" in str(exc_info.value), str(exc_info.value)
+
+    def test_cli_vault_pull_not_found_names_region(
+        self,
+        work_dir: Path,
+        aws_test_env: dict[str, str],
+        integration_pythonpath: str,
+        envdrift_cmd: list[str],
+    ) -> None:
+        """vault-pull against a missing secret prints the searched region (#487)."""
+        env = aws_test_env.copy()
+        env["PYTHONPATH"] = integration_pythonpath
+
+        result = subprocess.run(
+            [
+                *envdrift_cmd,
+                "vault-pull",
+                ".",
+                "envdrift-test/no-such-secret-487",
+                "--env",
+                "production",
+                "--no-decrypt",
+                "-p",
+                "aws",
+                "--region",
+                "us-east-1",
+            ],
+            cwd=work_dir,
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+
+        combined = " ".join((result.stdout + result.stderr).split())
+        assert result.returncode == 1, combined
+        assert "not found in aws vault (region us-east-1)" in combined, combined
+
+
+class TestAWSEphemeralRendering:
+    """#487: successful ephemeral syncs must not render as red error rows."""
+
+    def test_ephemeral_pull_renders_ephemeral_row_not_error(
+        self,
+        work_dir: Path,
+        aws_test_env: dict[str, str],
+        aws_secrets_client,
+        integration_pythonpath: str,
+        envdrift_cmd: list[str],
+    ) -> None:
+        """`pull --force` with ephemeral_keys renders an ephemeral row + summary (#487)."""
+        if not _dotenvx_available():
+            pytest.skip("dotenvx binary required")
+
+        secret_name = "envdrift-test/ephemeral-render-487"
+        svc = work_dir / "svc"
+        svc.mkdir()
+        priv = _make_encrypted_project(svc, "production")
+        _create_secret(
+            aws_secrets_client,
+            Name=secret_name,
+            SecretString=f"DOTENV_PRIVATE_KEY_PRODUCTION={priv}",
+        )
+
+        (work_dir / "envdrift.toml").write_text(
+            '[encryption]\nbackend = "dotenvx"\n'
+            '[vault]\nprovider = "aws"\nregion = "us-east-1"\n'
+            "[vault.sync]\nephemeral_keys = true\n"
+            "[[vault.sync.mappings]]\n"
+            f'secret_name = "{secret_name}"\nfolder_path = "svc"\nenvironment = "production"\n',
+            encoding="utf-8",
+        )
+
+        env = aws_test_env.copy()
+        env["PYTHONPATH"] = integration_pythonpath
+        try:
+            result = subprocess.run(
+                [*envdrift_cmd, "pull", "--force", "--config", "envdrift.toml"],
+                cwd=work_dir,
+                env=env,
+                capture_output=True,
+                text=True,
+                timeout=90,
+            )
+            combined = " ".join((result.stdout + result.stderr).split())
+            assert result.returncode == 0, combined
+            # Pre-#487 every ephemeral service rendered "x svc - error" while the
+            # summary said Errors: 0 / success — contradictory output.
+            assert "- error" not in combined, combined
+            assert "ephemeral" in combined.lower(), combined
+            assert "Ephemeral: 1" in combined, combined
+            assert "All services synced successfully" in combined, combined
+            assert not (svc / ".env.keys").exists()
+        finally:
+            _force_delete(aws_secrets_client, secret_name)

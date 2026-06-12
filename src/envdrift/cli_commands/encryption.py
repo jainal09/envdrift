@@ -484,7 +484,11 @@ def _verify_decryption_with_vault(
                 return False
 
     except SecretNotFoundError:
-        print_error(f"Secret '{secret_name}' not found in vault")
+        # Name the AWS region that was searched (#487): the client silently
+        # defaults to us-east-1 (mirrors the vault_kwargs construction above),
+        # so a region-free message makes the wrong-region mistake undiagnosable.
+        region_note = f" (region {region or 'us-east-1'})" if provider == "aws" else ""
+        print_error(f"Secret '{secret_name}' not found in vault{region_note}")
         return False
     except VaultError as e:
         print_error(f"Vault error: {e}")
