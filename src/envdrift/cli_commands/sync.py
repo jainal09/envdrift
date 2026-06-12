@@ -14,6 +14,7 @@ from rich.panel import Panel
 
 from envdrift.env_files import resolve_mapping_env_file
 from envdrift.output.rich import console, print_error, print_success, print_warning
+from envdrift.sync.operations import atomic_write
 from envdrift.utils import normalize_max_workers
 from envdrift.vault.base import SecretNotFoundError, VaultError
 
@@ -401,10 +402,9 @@ def _write_merged_combined_file(clear_file: Path, secret_file: Path, combined_fi
 
     # The merged file holds DECRYPTED secret values, so write it exactly like
     # the .env.keys private key: 0600 for a fresh file, fchmod on the fd,
-    # atomic rename — never a bare write_text at the process umask (#471).
-    from envdrift.sync.operations import atomic_write
-
-    atomic_write(combined_file, "\n".join(combined_lines) + "\n")
+    # atomic rename — never a bare write_text at the process umask (#471). The
+    # 0o600 cap also tightens combined files a pre-fix write_text left 0o644.
+    atomic_write(combined_file, "\n".join(combined_lines) + "\n", max_permissions=0o600)
 
 
 def sync(
