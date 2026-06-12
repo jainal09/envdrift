@@ -1,0 +1,39 @@
+src/envdrift/cli_commands/vault.py
+  s_a0bbd64ba4e4dd::t_426f8021e41a43 293-303
+tests/unit/test_cli_vault_push.py
+  s_a0bbd64ba4e4dd::t_2accc07363dbd4 475-517
+tests/integration/test_sync_config_validation.py
+  s_a0bbd64ba4e4dd::t_db43b4ec9a2caf 1-375,381-401
+  s_a0bbd64ba4e4dd::t_d33a2db472773d 376-380
+tests/unit/test_sync_engine.py
+  s_a0bbd64ba4e4dd::t_b7f4316b874381 143-193
+  s_a0bbd64ba4e4dd::t_6ee07ee068dd11 446-450,453-455,460
+src/envdrift/cli_commands/sync.py
+  s_a0bbd64ba4e4dd::t_002e94500ad3b1 219-221,224-225,227
+  s_a0bbd64ba4e4dd::t_1d3931c4456aed 814-823,828,831,848-859,861-866
+  s_a0bbd64ba4e4dd::t_8c08282a000b26 1175
+  s_a0bbd64ba4e4dd::t_d4e65329ca482d 1514-1527,1533,1537
+  s_a0bbd64ba4e4dd::t_c08ce9fb9cb234 614-615
+  s_a0bbd64ba4e4dd::t_d2c4f57edab263 599
+  s_a0bbd64ba4e4dd::t_a426de4d782335 1652-1674
+  s_a0bbd64ba4e4dd::t_38068fa449b2c4 1200-1201
+  s_a0bbd64ba4e4dd::t_388766ad34c0c5 1570-1582,1584-1590
+src/envdrift/sync/engine.py
+  s_a0bbd64ba4e4dd::t_b508b4415bfb9b 133-147,153-164
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.6",
+  "base_commit_sha": "6fb5a0b85a01abe57ab9486420ce53f5a54cd958",
+  "prompts": {},
+  "sessions": {
+    "s_a0bbd64ba4e4dd": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "c1e5b2e5-0fec-4bf5-b8e6-20cdb3a76855",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Jainal Gosaliya <jainal09gosalia@gmail.com>"
+    }
+  }
+}
