@@ -472,6 +472,51 @@ class TestVaultPushAll:
 
     @patch("envdrift.cli_commands.encryption_helpers.resolve_encryption_backend")
     @patch("envdrift.cli_commands.sync.load_sync_config_and_client")
+    def test_push_all_missing_mapping_folder_is_error(
+        self,
+        mock_loader,
+        mock_resolve_backend,
+        tmp_path,
+    ):
+        """#488: a typo'd/nonexistent folder_path must be a per-mapping ERROR.
+
+        Previously it was reported as "Skipped ...: No .env file found" (the
+        wrong reason) with "Errors: 0" and exit 0 — a key-backup CI job went
+        green having pushed nothing.
+        """
+        mock_client = MagicMock()
+        mock_client.get_secret.side_effect = SecretNotFoundError("missing")
+        mock_loader.return_value = (
+            SyncConfig(
+                mappings=[
+                    ServiceMapping(
+                        secret_name="my-secret",
+                        folder_path=tmp_path / "servces" / "api",  # typo'd, never created
+                        environment="production",
+                    )
+                ]
+            ),
+            mock_client,
+            "azure",
+            None,
+            None,
+            None,
+        )
+        dummy_backend = DummyEncryptionBackend()
+        mock_resolve_backend.return_value = (dummy_backend, EncryptionProvider.DOTENVX, None)
+
+        result = runner.invoke(app, ["vault-push", "--all"])
+        output = " ".join(result.output.split())
+
+        assert result.exit_code == 1, result.output
+        assert "does not exist" in output
+        assert "folder_path" in output
+        assert "No .env file found" not in output
+        assert "Errors: 1" in output
+        mock_client.set_secret.assert_not_called()
+
+    @patch("envdrift.cli_commands.encryption_helpers.resolve_encryption_backend")
+    @patch("envdrift.cli_commands.sync.load_sync_config_and_client")
     def test_push_all_error_handling(
         self,
         mock_loader,

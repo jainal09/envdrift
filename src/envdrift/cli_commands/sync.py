@@ -216,11 +216,15 @@ def load_sync_config_and_client(
             print_warning(f"Could not load sync config from {config_path}: {e}")
 
     if sync_config is None or not sync_config.mappings:
+        # envdrift.toml is the PRIMARY documented config mechanism (README /
+        # quickstart lead with it) — omitting it here steered users debugging a
+        # missing config away from the recommended setup (#488).
         print_error(
             "No sync configuration found. Provide one of:\n"
+            "  [vault.sync] section in envdrift.toml (auto-discovered)\n"
+            "  [tool.envdrift.vault.sync] section in pyproject.toml\n"
             "  --config <file.toml>  TOML config with [vault.sync] section\n"
-            "  --config <pair.txt>   Legacy format: secret=folder\n"
-            "  [tool.envdrift.vault.sync] section in pyproject.toml"
+            "  --config <pair.txt>   Legacy format: secret=folder"
         )
         raise typer.Exit(code=1)
 
@@ -592,7 +596,7 @@ def pull(
         ),
     ] = False,
 ) -> None:
-    """
+    r"""
     Pull keys from vault and decrypt all env files (one-command developer setup).
 
     Reads your TOML configuration, fetches encryption keys from your cloud vault,
@@ -607,8 +611,8 @@ def pull(
       and copies the decrypted file to the activate_to path if configured
 
     Configuration is read from:
-    - pyproject.toml [tool.envdrift.vault.sync] section
-    - envdrift.toml [vault.sync] section
+    - pyproject.toml \[tool.envdrift.vault.sync] section
+    - envdrift.toml \[vault.sync] section
     - Explicit --config file
 
     Examples:
@@ -807,14 +811,24 @@ def pull(
         )
 
         if detection.status != "found" or detection.path is None:
-            if detection.status == "multiple_found":
+            if detection.status == "folder_not_found":
+                # A missing mapping folder is a broken config (typo'd
+                # folder_path), not a benign skip — it must fail the run (#488).
+                console.print(
+                    f"  [red]![/red] {mapping.folder_path} "
+                    f"[red]- error: folder does not exist "
+                    f"(check folder_path in your sync config)[/red]"
+                )
+                error_count += 1
+            elif detection.status == "multiple_found":
                 console.print(
                     f"  [yellow]?[/yellow] {mapping.folder_path} "
                     f"[yellow]- skipped (multiple .env.* files, specify environment)[/yellow]"
                 )
+                skipped_count += 1
             else:
                 console.print(f"  [dim]=[/dim] {env_file} [dim]- skipped (not found)[/dim]")
-            skipped_count += 1
+                skipped_count += 1
             continue
 
         resolved_env_file = env_file.resolve()
@@ -831,15 +845,25 @@ def pull(
             skipped_count += 1
             continue
 
-        _normalize_mapped_dotenvx_metadata(
-            env_file,
-            mapping.folder_path / (sync_config.env_keys_filename or ".env.keys"),
-            effective_env,
-            backend_provider,
-        )
+        # Reading/normalizing the env file can raise for a non-UTF-8 file
+        # (UnicodeDecodeError is a ValueError) or an unreadable one (OSError).
+        # Neither must escape as a raw traceback that also aborts the remaining
+        # mappings — it is a clean per-file error, same boundary as
+        # vault-push --all (#488).
+        try:
+            _normalize_mapped_dotenvx_metadata(
+                env_file,
+                mapping.folder_path / (sync_config.env_keys_filename or ".env.keys"),
+                effective_env,
+                backend_provider,
+            )
 
-        # Check if file is encrypted
-        content = env_file.read_text()
+            # Check if file is encrypted
+            content = env_file.read_text(encoding="utf-8")
+        except (OSError, ValueError) as e:
+            console.print(f"  [red]![/red] {env_file} [red]- error reading file: {e}[/red]")
+            error_count += 1
+            continue
         if not encryption_helpers.is_encrypted_content(
             backend_provider, encryption_backend, content
         ):
@@ -1148,7 +1172,7 @@ def lock(
         ),
     ] = False,
 ) -> None:
-    """
+    r"""
     Verify keys and encrypt all env files (opposite of pull - prepares for commit).
 
     The lock command ensures your environment files are properly encrypted before
@@ -1173,8 +1197,8 @@ def lock(
     Use --profile to filter mappings for a specific environment.
 
     Configuration is read from:
-    - pyproject.toml [tool.envdrift.vault.sync] section
-    - envdrift.toml [vault.sync] section
+    - pyproject.toml \[tool.envdrift.vault.sync] section
+    - envdrift.toml \[vault.sync] section
     - Explicit --config file
 
     Examples:
@@ -1487,16 +1511,30 @@ def lock(
 
         # Check if env file exists
         if detection.status != "found" or detection.path is None:
-            if detection.status == "multiple_found":
+            if detection.status == "folder_not_found":
+                # A missing mapping folder is a broken config (typo'd
+                # folder_path), not a benign skip — it must fail the run (#488).
+                console.print(
+                    f"  [red]![/red] {mapping.folder_path} "
+                    f"[red]- error: folder does not exist "
+                    f"(check folder_path in your sync config)[/red]"
+                )
+                errors.append(
+                    f"{mapping.folder_path}: folder does not exist "
+                    "(check folder_path in your sync config)"
+                )
+                error_count += 1
+            elif detection.status == "multiple_found":
                 console.print(
                     f"  [yellow]?[/yellow] {mapping.folder_path} "
                     f"[yellow]- skipped (multiple .env.* files, specify environment)[/yellow]"
                 )
                 warnings.append(f"{mapping.folder_path}: multiple .env files found")
+                skipped_count += 1
             else:
                 console.print(f"  [dim]=[/dim] {env_file} [dim]- skipped (not found)[/dim]")
                 warnings.append(f"{env_file}: file not found")
-            skipped_count += 1
+                skipped_count += 1
             continue
 
         resolved_env_file = env_file.resolve()
@@ -1529,16 +1567,27 @@ def lock(
             )
             warnings.append(f"{env_file}: no .env.keys file found, new key will be generated")
 
-        _normalize_mapped_dotenvx_metadata(
-            env_file,
-            env_keys_file,
-            effective_env,
-            backend_provider,
-            check_only=check_only,
-        )
+        # Reading/normalizing the env file can raise for a non-UTF-8 file
+        # (UnicodeDecodeError is a ValueError) or an unreadable one (OSError).
+        # Neither must escape as a raw traceback that also aborts the remaining
+        # mappings — it is a clean per-file error, same boundary as
+        # vault-push --all (#488).
+        try:
+            _normalize_mapped_dotenvx_metadata(
+                env_file,
+                env_keys_file,
+                effective_env,
+                backend_provider,
+                check_only=check_only,
+            )
 
-        # Check if file is already encrypted
-        content = env_file.read_text()
+            # Check if file is already encrypted
+            content = env_file.read_text(encoding="utf-8")
+        except (OSError, ValueError) as e:
+            console.print(f"  [red]![/red] {env_file} [red]- error reading file: {e}[/red]")
+            errors.append(f"{env_file}: read failed - {e}")
+            error_count += 1
+            continue
         if not encryption_helpers.is_encrypted_content(
             backend_provider, encryption_backend, content
         ):
@@ -1600,16 +1649,29 @@ def lock(
                     if env_keys_file.exists():
                         from envdrift.sync.operations import EnvKeysFile
 
-                        keys_file = EnvKeysFile(env_keys_file)
-                        if not keys_file.read_key(expected_key_name):
-                            # Expected key not found, check for any other key
-                            keys_content = env_keys_file.read_text()
-                            for line in keys_content.splitlines():
-                                if line.startswith("DOTENV_PRIVATE_KEY_") and "=" in line:
-                                    old_key_name = line.split("=")[0].strip()
-                                    if old_key_name != expected_key_name:
-                                        needs_rekey = True
-                                        break
+                        # The keys file is read twice here (read_key + the raw
+                        # scan); a non-UTF-8 or unreadable .env.keys must be a
+                        # clean per-file error, not a raw UnicodeDecodeError
+                        # traceback that aborts the remaining mappings (#488).
+                        try:
+                            keys_file = EnvKeysFile(env_keys_file)
+                            if not keys_file.read_key(expected_key_name):
+                                # Expected key not found, check for any other key
+                                keys_content = env_keys_file.read_text(encoding="utf-8")
+                                for line in keys_content.splitlines():
+                                    if line.startswith("DOTENV_PRIVATE_KEY_") and "=" in line:
+                                        old_key_name = line.split("=")[0].strip()
+                                        if old_key_name != expected_key_name:
+                                            needs_rekey = True
+                                            break
+                        except (OSError, ValueError) as e:
+                            console.print(
+                                f"  [red]![/red] {env_keys_file} "
+                                f"[red]- error reading keys file: {e}[/red]"
+                            )
+                            errors.append(f"{env_keys_file}: read failed - {e}")
+                            error_count += 1
+                            continue
 
                     if needs_rekey and old_key_name:
                         if check_only:

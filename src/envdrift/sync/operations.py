@@ -45,7 +45,7 @@ class EnvKeysFile:
         if not self.path.exists():
             return None
 
-        content = self.path.read_text()
+        content = self.path.read_text(encoding="utf-8")
         # ``(.*)`` (not ``(.+)``) so a present-but-empty value (``KEY=``) returns
         # "" rather than None. None means "key absent"; conflating the two made
         # an empty vault secret re-sync forever as CREATED and report a false
@@ -72,7 +72,7 @@ class EnvKeysFile:
         Creates the file with proper header if it doesn't exist.
         """
         if self.path.exists():
-            content = self.path.read_text()
+            content = self.path.read_text(encoding="utf-8")
             lines = content.splitlines()
 
             # Check if key already exists
@@ -108,7 +108,7 @@ class EnvKeysFile:
         """Check if file has the dotenvx header."""
         if not self.path.exists():
             return False
-        content = self.path.read_text()
+        content = self.path.read_text(encoding="utf-8")
         return "DOTENV_PRIVATE_KEYS" in content
 
     def create_backup(self) -> Path:

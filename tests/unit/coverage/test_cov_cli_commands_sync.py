@@ -1405,3 +1405,165 @@ class TestLockPartialEncryptionAll:
         normalized = " ".join(result.output.split())
         assert "Secrets-only environments skipped: 1" in normalized
         assert "ready to commit" in normalized
+
+
+# --------------------------------------------------------------------------
+# Issue #488 - config discovery and mapping validation
+# --------------------------------------------------------------------------
+class TestNoConfigErrorGuidance:
+    """#488: the no-config error must list envdrift.toml, the primary mechanism."""
+
+    def test_no_sync_config_error_mentions_envdrift_toml(self, monkeypatch, tmp_path):
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.setattr("envdrift.config.find_config", lambda: None)
+        result = runner.invoke(app, ["pull"])
+        out = " ".join(result.output.split())
+        assert result.exit_code == 1
+        # All three config mechanisms must be listed, with their literal
+        # section names (print_error escapes Rich markup).
+        assert "envdrift.toml" in out
+        assert "[vault.sync]" in out
+        assert "[tool.envdrift.vault.sync]" in out
+
+
+class TestHelpShowsTomlSectionNames:
+    """#488: pull/lock --help must show the literal TOML section names.
+
+    Rich interpreted ``[tool.envdrift.vault.sync]`` / ``[vault.sync]`` as
+    markup tags and silently deleted them, leaving "pyproject.toml  section".
+    """
+
+    @pytest.mark.parametrize("command", ["pull", "lock"])
+    def test_help_shows_section_names(self, command):
+        result = runner.invoke(app, [command, "--help"])
+        out = " ".join(result.output.split())
+        assert result.exit_code == 0
+        assert "pyproject.toml [tool.envdrift.vault.sync] section" in out
+        assert "envdrift.toml [vault.sync] section" in out
+
+
+class TestMissingMappingFolderIsError:
+    """#488: a nonexistent mapping folder_path is a loud per-mapping error."""
+
+    @patch("envdrift.cli_commands.encryption_helpers.resolve_encryption_backend")
+    def test_pull_missing_mapping_folder_is_error(
+        self, mock_resolve, tmp_path, loaded_config, no_git_hook
+    ):
+        backend = DummyEncryptionBackend()
+        mock_resolve.return_value = (backend, EncryptionProvider.DOTENVX, None)
+        missing = tmp_path / "servces" / "api"  # typo'd folder, never created
+        mapping = ServiceMapping(secret_name="s", folder_path=missing, environment="production")
+        loaded_config(_sync_config([mapping]))
+
+        result = runner.invoke(app, ["pull", "--skip-sync"])
+        out = " ".join(result.output.split())
+        assert result.exit_code == 1, result.output
+        assert "does not exist" in out
+        assert "folder_path" in out
+        assert "skipped (not found)" not in out
+        assert "Setup complete" not in out
+
+    @patch("envdrift.cli_commands.encryption_helpers.resolve_encryption_backend")
+    def test_lock_missing_mapping_folder_is_error(
+        self, mock_resolve, tmp_path, loaded_config, no_git_hook
+    ):
+        backend = DummyEncryptionBackend()
+        mock_resolve.return_value = (backend, EncryptionProvider.DOTENVX, None)
+        missing = tmp_path / "servces" / "api"
+        mapping = ServiceMapping(secret_name="s", folder_path=missing, environment="production")
+        loaded_config(_sync_config([mapping]))
+
+        result = runner.invoke(app, ["lock", "--force"])
+        out = " ".join(result.output.split())
+        assert result.exit_code == 1, result.output
+        assert "does not exist" in out
+        assert "folder_path" in out
+        assert "skipped (not found)" not in out
+
+    @patch("envdrift.cli_commands.encryption_helpers.resolve_encryption_backend")
+    def test_pull_existing_folder_without_env_file_still_skips(
+        self, mock_resolve, tmp_path, loaded_config, no_git_hook
+    ):
+        """An existing folder whose env file is not created yet stays a skip."""
+        backend = DummyEncryptionBackend()
+        mock_resolve.return_value = (backend, EncryptionProvider.DOTENVX, None)
+        folder = tmp_path / "svc"
+        folder.mkdir()
+        mapping = ServiceMapping(secret_name="s", folder_path=folder, environment="production")
+        loaded_config(_sync_config([mapping]))
+
+        result = runner.invoke(app, ["pull", "--skip-sync"])
+        out = " ".join(result.output.split())
+        assert result.exit_code == 0, result.output
+        assert "skipped (not found)" in out
+
+
+class TestNonUtf8MappedFilesCleanError:
+    """#488: non-UTF-8 mapped files are clean per-file errors, not tracebacks."""
+
+    @patch("envdrift.cli_commands.encryption_helpers.resolve_encryption_backend")
+    def test_pull_non_utf8_env_file_clean_error(
+        self, mock_resolve, tmp_path, loaded_config, no_git_hook
+    ):
+        backend = DummyEncryptionBackend()
+        mock_resolve.return_value = (backend, EncryptionProvider.DOTENVX, None)
+        folder = tmp_path / "svc"
+        folder.mkdir()
+        (folder / ".env.production").write_bytes(b"X=caf\xe9\n")
+        mapping = ServiceMapping(secret_name="s", folder_path=folder, environment="production")
+        loaded_config(_sync_config([mapping]))
+
+        result = runner.invoke(app, ["pull", "--skip-sync"])
+        out = " ".join(result.output.split())
+        assert not isinstance(result.exception, UnicodeDecodeError), (
+            "pull crashed with a raw UnicodeDecodeError on a non-UTF-8 env file"
+        )
+        assert result.exit_code == 1, result.output
+        assert "error" in out.lower()
+        assert "Errors: 1" in out
+
+    @patch("envdrift.cli_commands.encryption_helpers.resolve_encryption_backend")
+    def test_lock_non_utf8_env_file_clean_error(
+        self, mock_resolve, tmp_path, loaded_config, no_git_hook
+    ):
+        backend = DummyEncryptionBackend()
+        mock_resolve.return_value = (backend, EncryptionProvider.DOTENVX, None)
+        folder = tmp_path / "svc"
+        folder.mkdir()
+        (folder / ".env.production").write_bytes(b"X=caf\xe9\n")
+        (folder / ".env.keys").write_text("DOTENV_PRIVATE_KEY_PRODUCTION=k\n")
+        mapping = ServiceMapping(secret_name="s", folder_path=folder, environment="production")
+        loaded_config(_sync_config([mapping]))
+
+        result = runner.invoke(app, ["lock", "--force"])
+        out = " ".join(result.output.split())
+        assert not isinstance(result.exception, UnicodeDecodeError), (
+            "lock crashed with a raw UnicodeDecodeError on a non-UTF-8 env file"
+        )
+        assert result.exit_code == 1, result.output
+        assert "Errors: 1" in out
+        assert backend.encrypt_calls == []
+
+    @patch("envdrift.cli_commands.encryption_helpers.resolve_encryption_backend")
+    def test_lock_non_utf8_env_keys_file_clean_error(
+        self, mock_resolve, tmp_path, loaded_config, no_git_hook
+    ):
+        """The rekey check reads .env.keys; a non-UTF-8 keys file must not crash."""
+        backend = DummyEncryptionBackend()
+        mock_resolve.return_value = (backend, EncryptionProvider.DOTENVX, None)
+        folder = tmp_path / "svc"
+        folder.mkdir()
+        (folder / ".env.production").write_text(
+            "#/---BEGIN DOTENV ENCRYPTED---/\nSECRET=encrypted:abc\n"
+        )
+        (folder / ".env.keys").write_bytes(b"DOTENV_PRIVATE_KEY_PRODUCTION=caf\xe9\n")
+        mapping = ServiceMapping(secret_name="s", folder_path=folder, environment="production")
+        loaded_config(_sync_config([mapping]))
+
+        result = runner.invoke(app, ["lock", "--force"])
+        out = " ".join(result.output.split())
+        assert not isinstance(result.exception, UnicodeDecodeError), (
+            "lock crashed with a raw UnicodeDecodeError on a non-UTF-8 .env.keys"
+        )
+        assert result.exit_code == 1, result.output
+        assert "Errors: 1" in out
