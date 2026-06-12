@@ -66,6 +66,15 @@ suite('agentCore against a PATH-shimmed envdrift-agent (#482)', function () {
             `expected stopped, got ${status.status} (${status.error ?? 'no error'})`
         );
         assert.strictEqual(status.version, '9.9.9-test');
+
+        // One `version` probe serves both the installed check and the
+        // version lookup — a status poll must not spawn the binary twice.
+        const spawned = shim.calls().map((argv) => argv[0]);
+        assert.deepStrictEqual(
+            spawned,
+            ['version', 'status'],
+            `expected exactly one version probe and one status call, got: ${spawned.join(', ')}`
+        );
     });
 
     test('detects a running agent as running', async () => {
@@ -89,6 +98,10 @@ suite('agentCore against a PATH-shimmed envdrift-agent (#482)', function () {
             'must not exec the foreground-only `start` command under a timeout'
         );
 
+        // The result carries the verified post-action status so the UI layer
+        // can render it without spawning another status check.
+        assert.strictEqual(result.status.status, 'running');
+
         const status = await checkAgentStatus();
         assert.strictEqual(status.status, 'running');
     });
@@ -97,6 +110,7 @@ suite('agentCore against a PATH-shimmed envdrift-agent (#482)', function () {
         writeShimState(shim, { running: true });
         const result = await stopAgentCore();
         assert.strictEqual(result.ok, true, `stop failed: ${result.error ?? 'unknown'}`);
+        assert.strictEqual(result.status.status, 'stopped');
 
         const status = await checkAgentStatus();
         assert.strictEqual(status.status, 'stopped');

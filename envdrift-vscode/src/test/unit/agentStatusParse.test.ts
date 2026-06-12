@@ -1,27 +1,23 @@
 import * as assert from 'assert';
+import * as fs from 'fs';
+import * as path from 'path';
 import { parseAgentStatusOutput } from '../../utils';
 
 // Regression tests for issue #482: the status parser mapped
 // installed-but-STOPPED to "running" because /\brunning\b/ matches the
 // literal "Running:" label, and the "stopped"/"not running" strings it
-// looked for never occur in the agent's real output. These fixtures are
-// verbatim captures of `envdrift-agent status` (the shape is re-verified
-// against the real binary in tests/test_vscode_cli_contract.py).
-const STOPPED_OUTPUT = [
-    'Installed: true',
-    'Running:   false',
-    'Config:    /home/user/.envdrift/guardian.toml',
-    'envdrift:  true',
-    '',
-].join('\n');
+// looked for never occur in the agent's real output. The fixtures are
+// verbatim captures of `envdrift-agent status`, shared with
+// tests/test_vscode_cli_contract.py, which asserts their line shape still
+// matches the real binary's output — so the parser inputs cannot drift.
+const FIXTURES_DIR = path.resolve(__dirname, '../../../src/test/unit/fixtures');
 
-const RUNNING_OUTPUT = [
-    'Installed: true',
-    'Running:   true',
-    'Config:    /home/user/.envdrift/guardian.toml',
-    'envdrift:  true',
-    '',
-].join('\n');
+function fixture(name: string): string {
+    return fs.readFileSync(path.join(FIXTURES_DIR, name), { encoding: 'utf8' });
+}
+
+const STOPPED_OUTPUT = fixture('agent-status-stopped.txt');
+const RUNNING_OUTPUT = fixture('agent-status-running.txt');
 
 suite('parseAgentStatusOutput reads the Running: boolean (#482)', () => {
     test('verbatim installed-but-stopped output parses as stopped', () => {

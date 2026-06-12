@@ -7,5 +7,5 @@ Without this module that fallback could never succeed (#482).
 
 from envdrift.cli import app
 
-if __name__ == "__main__":  # pragma: no cover - exercised via subprocess contract test
+if __name__ == "__main__":
     app()

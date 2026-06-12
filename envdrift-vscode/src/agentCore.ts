@@ -26,11 +26,13 @@ export interface AgentStatusInfo {
 }
 
 /**
- * Result of a start/stop action
+ * Result of a start/stop action, including the verified post-action status
+ * (so callers can render it without spawning another status check).
  */
 export interface AgentActionResult {
     ok: boolean;
     error?: string;
+    status: AgentStatusInfo;
 }
 
 // Timeout for agent subprocess calls (prevents polling hangs on a stuck binary)
@@ -41,22 +43,11 @@ export const AGENT_EXEC_TIMEOUT_MS = 10000;
 export const AGENT_INSTALL_TIMEOUT_MS = 30000;
 
 /**
- * Check if the envdrift-agent binary is available.
+ * Get the agent version (e.g. "1.2.3" from "envdrift-agent 1.2.3"), or
+ * undefined when the binary is absent.
  *
  * The agent is a cobra CLI with a `version` subcommand and no `--version`
  * flag — probing the flag made every check return "not_installed" (#482).
- */
-async function isAgentInstalled(): Promise<boolean> {
-    try {
-        await execAsync('envdrift-agent version', { timeout: AGENT_EXEC_TIMEOUT_MS });
-        return true;
-    } catch {
-        return false;
-    }
-}
-
-/**
- * Get the agent version (e.g. "1.2.3" from "envdrift-agent 1.2.3")
  */
 async function getAgentVersion(): Promise<string | undefined> {
     try {
@@ -72,9 +63,10 @@ async function getAgentVersion(): Promise<string | undefined> {
  */
 export async function checkAgentStatus(): Promise<AgentStatusInfo> {
     try {
-        // First check if agent is installed
-        const installed = await isAgentInstalled();
-        if (!installed) {
+        // One probe does double duty: `version` failing means the binary is
+        // not installed; succeeding yields the version for the status info.
+        const version = await getAgentVersion();
+        if (version === undefined) {
             return { status: 'not_installed' };
         }
 
@@ -90,7 +82,6 @@ export async function checkAgentStatus(): Promise<AgentStatusInfo> {
             };
         }
 
-        const version = await getAgentVersion();
         return { status: parsed, version };
     } catch (error) {
         const errorMessage = error instanceof Error ? error.message : String(error);
@@ -119,12 +110,14 @@ export async function startAgentCore(): Promise<AgentActionResult> {
         await execAsync('envdrift-agent install', { timeout: AGENT_INSTALL_TIMEOUT_MS });
         const status = await checkAgentStatus();
         if (status.status === 'running') {
-            return { ok: true };
+            return { ok: true, status };
         }
-        return { ok: false, error: `agent is ${status.status} after start` };
+        return { ok: false, error: `agent is ${status.status} after start`, status };
     } catch (error) {
         const errorMessage = error instanceof Error ? error.message : String(error);
-        return { ok: false, error: errorMessage };
+        // The command failed mid-flight; verify the actual state instead of
+        // guessing one.
+        return { ok: false, error: errorMessage, status: await checkAgentStatus() };
     }
 }
 
@@ -137,11 +130,13 @@ export async function stopAgentCore(): Promise<AgentActionResult> {
         await execAsync('envdrift-agent stop', { timeout: AGENT_EXEC_TIMEOUT_MS });
         const status = await checkAgentStatus();
         if (status.status === 'stopped') {
-            return { ok: true };
+            return { ok: true, status };
         }
-        return { ok: false, error: `agent is ${status.status} after stop` };
+        return { ok: false, error: `agent is ${status.status} after stop`, status };
     } catch (error) {
         const errorMessage = error instanceof Error ? error.message : String(error);
-        return { ok: false, error: errorMessage };
+        // The command failed mid-flight; verify the actual state instead of
+        // guessing one.
+        return { ok: false, error: errorMessage, status: await checkAgentStatus() };
     }
 }

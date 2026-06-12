@@ -3,8 +3,14 @@
  * Free of VS Code API imports so it can be unit tested with the real
  * subprocess machinery; the argv it spawns is validated against the real
  * CLI in tests/test_vscode_cli_contract.py.
+ *
+ * Spawning goes through cross-spawn: plain child_process.spawn cannot
+ * resolve or execute `.cmd`/`.bat` shims on Windows (CreateProcess only
+ * finds `.exe`/`.com`), which would leave the `python -m envdrift` fallback
+ * dead for pyenv-win/npm-style shims while keeping argv arrays (no shell,
+ * no injection).
  */
-import * as cp from 'child_process';
+import spawn from 'cross-spawn';
 import * as fs from 'fs';
 import * as path from 'path';
 import { isContentEncrypted } from './utils';
@@ -48,7 +54,7 @@ export async function findEnvdrift(): Promise<{ executable: string; args: string
  */
 async function commandExists(cmd: string): Promise<boolean> {
     return new Promise((resolve) => {
-        const proc = cp.spawn(cmd, ['--version'], { stdio: 'ignore' });
+        const proc = spawn(cmd, ['--version'], { stdio: 'ignore' });
         const timeout = setTimeout(() => {
             proc.kill('SIGTERM');
             resolve(false);
@@ -69,7 +75,7 @@ async function commandExists(cmd: string): Promise<boolean> {
  */
 async function testPythonModule(python: string, module: string): Promise<boolean> {
     return new Promise((resolve) => {
-        const proc = cp.spawn(python, ['-m', module, '--version'], { stdio: 'ignore' });
+        const proc = spawn(python, ['-m', module, '--version'], { stdio: 'ignore' });
         const timeout = setTimeout(() => {
             proc.kill('SIGTERM');
             resolve(false);
@@ -164,7 +170,7 @@ function spawnWithTimeout(
     timeoutMs: number
 ): Promise<string> {
     return new Promise((resolve, reject) => {
-        const proc = cp.spawn(command, args, { cwd, stdio: 'pipe' });
+        const proc = spawn(command, args, { cwd, stdio: 'pipe' });
         let stdout = '';
         let stderr = '';
 

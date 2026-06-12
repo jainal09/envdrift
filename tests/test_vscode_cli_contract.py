@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import os
 import re
+import runpy
 import shutil
 import subprocess
 import sys
@@ -27,15 +28,32 @@ VSCODE_DIR = REPO_ROOT / "envdrift-vscode"
 VSCODE_SRC = VSCODE_DIR / "src"
 AGENT_DIR = REPO_ROOT / "envdrift-agent"
 
+# CSI sequences (colors/styles) and OSC sequences (terminal hyperlinks).
+_ANSI_ESCAPES = re.compile(r"\x1b\[[0-9;?]*[ -/]*[@-~]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)")
+
+
+def _plain(text: str) -> str:
+    """Normalize CLI output: strip ANSI escapes, collapse whitespace.
+
+    Typer's help renderer forces rich styling whenever ``GITHUB_ACTIONS``,
+    ``FORCE_COLOR`` or ``PY_COLORS`` is set, and ``NO_COLOR`` only drops
+    colors — bold/dim codes still land inside phrases like ``Usage:`` on CI.
+    Assertions must always compare plain text.
+    """
+    return " ".join(_ANSI_ESCAPES.sub("", text).split())
+
 
 def _clean_env(**overrides: str) -> dict[str, str]:
     """Subprocess env: a copy of os.environ with colorization disabled.
 
-    CI exports ``FORCE_COLOR=1`` (which overrides ``NO_COLOR`` in Rich); strip
-    it and pin a wide terminal so help output is stable and grep-able.
+    CI exports ``FORCE_COLOR=1`` and ``GITHUB_ACTIONS=true``; either one makes
+    Typer/Rich force terminal styling even into a pipe (``FORCE_COLOR`` also
+    overrides ``NO_COLOR`` in Rich). Strip them all and pin a wide terminal so
+    help output is stable and grep-able.
     """
     env = os.environ.copy()
-    env.pop("FORCE_COLOR", None)
+    for var in ("FORCE_COLOR", "GITHUB_ACTIONS", "PY_COLORS"):
+        env.pop(var, None)
     env["NO_COLOR"] = "1"
     env["COLUMNS"] = "200"
     env.update(overrides)
@@ -68,7 +86,8 @@ def _extension_agent_commands() -> set[str]:
     commands: set[str] = set()
     for source in _extension_sources():
         for match in re.finditer(
-            r"execAsync\(\s*'envdrift-agent ([^']+)'", source.read_text(encoding="utf-8")
+            r"execAsync\(\s*['\"]envdrift-agent ([^'\"]+)['\"]",
+            source.read_text(encoding="utf-8"),
         ):
             commands.add(match.group(1).split()[0])
     assert commands, "no envdrift-agent invocations found in extension source"
@@ -88,11 +107,13 @@ class TestEnvdriftCliContract:
             [sys.executable, "-m", "envdrift", "--version"],
             capture_output=True,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             env=_clean_env(),
             timeout=60,
         )
         assert result.returncode == 0, result.stderr
-        assert "envdrift" in result.stdout.lower()
+        assert "envdrift" in _plain(result.stdout).lower()
 
     def test_dunder_main_exposes_cli_app(self) -> None:
         """``envdrift.__main__`` exists and points at the real Typer app."""
@@ -101,6 +122,19 @@ class TestEnvdriftCliContract:
 
         assert dunder_main.app is app
 
+    # runpy warns (benignly) when envdrift.__main__ is already in sys.modules
+    # from the import-identity test above; the re-execution is the point here.
+    @pytest.mark.filterwarnings("ignore:.*envdrift.__main__.*:RuntimeWarning")
+    def test_dunder_main_runs_the_cli_in_process(
+        self, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """Executing ``envdrift.__main__`` as ``__main__`` invokes the Typer app."""
+        monkeypatch.setattr(sys, "argv", ["envdrift", "--version"])
+        with pytest.raises(SystemExit) as excinfo:
+            runpy.run_module("envdrift", run_name="__main__", alter_sys=False)
+        assert excinfo.value.code == 0
+        assert "envdrift" in _plain(capsys.readouterr().out).lower()
+
     def test_encrypt_subcommand_takes_positional_env_file(self) -> None:
         """The subcommand the extension spawns accepts a positional ENV_FILE."""
         sub = _extension_envdrift_subcommand()
@@ -108,11 +142,13 @@ class TestEnvdriftCliContract:
             [*_envdrift_cmd(), sub, "--help"],
             capture_output=True,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             env=_clean_env(),
             timeout=60,
         )
         assert result.returncode == 0, result.stderr
-        usage = " ".join(result.stdout.split())
+        usage = _plain(result.stdout)
         assert f"Usage: envdrift {sub} [OPTIONS] [ENV_FILE]" in usage, (
             f"`envdrift {sub}` does not take a positional env file — the extension's "
             f"per-file spawn `envdrift {sub} <file>` cannot work. Usage: {usage[:200]}"
@@ -126,12 +162,14 @@ class TestEnvdriftCliContract:
             [*_envdrift_cmd(), "lock", ".env.production"],
             capture_output=True,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             cwd=tmp_path,
             env=_clean_env(),
             timeout=60,
         )
         assert result.returncode == 2
-        combined = " ".join((result.stdout + result.stderr).split()).lower()
+        combined = _plain(result.stdout + result.stderr).lower()
         assert "unexpected extra argument" in combined
         assert env_file.read_text(encoding="utf-8") == "API_KEY=plain_test_value\n"
 
@@ -193,6 +231,8 @@ class TestAgentCliContract:
             [go, "build", "-o", str(binary), "./cmd/envdrift-agent"],
             capture_output=True,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             cwd=AGENT_DIR,
             env=os.environ.copy(),
             timeout=300,
@@ -205,6 +245,8 @@ class TestAgentCliContract:
             [str(agent_binary), "--help"],
             capture_output=True,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             env=_clean_env(),
             timeout=60,
         )
@@ -223,6 +265,8 @@ class TestAgentCliContract:
             [str(agent_binary), "version"],
             capture_output=True,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             env=_clean_env(),
             timeout=60,
         )
@@ -232,18 +276,43 @@ class TestAgentCliContract:
     def test_agent_status_output_matches_extension_parser(
         self, agent_binary: Path, tmp_path: Path
     ) -> None:
-        """The real `status` output keeps the line shape the extension parses."""
+        """The real `status` output keeps the line shape the extension parses.
+
+        The mocha suite drives ``parseAgentStatusOutput`` against the fixture
+        captures in ``envdrift-vscode/src/test/unit/fixtures``; this test pins
+        those fixtures to the real binary's output shape, closing the loop so
+        the parser is effectively tested against reality.
+        """
         env = _clean_env(HOME=str(tmp_path), USERPROFILE=str(tmp_path))
         result = subprocess.run(
             [str(agent_binary), "status"],
             capture_output=True,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             env=env,
             timeout=60,
         )
         assert result.returncode == 0, result.stderr
         assert re.search(r"^Installed:\s+(true|false)\s*$", result.stdout, re.M), result.stdout
         assert re.search(r"^Running:\s+(true|false)\s*$", result.stdout, re.M), result.stdout
+
+        def labels(text: str) -> list[str]:
+            return [line.split(":", 1)[0] for line in text.splitlines() if ":" in line]
+
+        fixtures_dir = VSCODE_SRC / "test" / "unit" / "fixtures"
+        for name, expected_running in (
+            ("agent-status-stopped.txt", "false"),
+            ("agent-status-running.txt", "true"),
+        ):
+            fixture = (fixtures_dir / name).read_text(encoding="utf-8")
+            assert labels(fixture) == labels(result.stdout), (
+                f"{name} drifted from the real `envdrift-agent status` output; "
+                f"update the fixture so the extension parser is tested against "
+                f"reality.\nfixture:\n{fixture}\nreal:\n{result.stdout}"
+            )
+            match = re.search(r"^Running:\s+(true|false)\s*$", fixture, re.M)
+            assert match and match.group(1) == expected_running, fixture
 
 
 @pytest.mark.integration
@@ -262,6 +331,8 @@ class TestEncryptEndToEndContract:
             [*_envdrift_cmd(), sub, ".env.production"],
             capture_output=True,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             cwd=tmp_path,
             env=_clean_env(),
             timeout=120,

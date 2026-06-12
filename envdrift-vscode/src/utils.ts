@@ -44,6 +44,55 @@ export function isExcluded(fileName: string, exclude: string[]): boolean {
 const DOTENVX_PUBLIC_KEY_NAME = /^DOTENV_PUBLIC_KEY(_[A-Za-z0-9_]+)?$/;
 
 /**
+ * One parsed `NAME=value` line of a .env file.
+ */
+interface EnvAssignment {
+    name: string;
+    value: string;
+}
+
+/**
+ * Parse one .env line into a `NAME=value` assignment. Returns null for
+ * blank lines, comments (a comment mentioning DOTENV_PUBLIC_KEY is not
+ * evidence of encryption) and non-assignment lines. Strips the surrounding
+ * quotes dotenvx writes around values.
+ */
+function parseEnvAssignment(line: string): EnvAssignment | null {
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.startsWith('#')) {
+        return null;
+    }
+    const eq = trimmed.indexOf('=');
+    if (eq < 0) {
+        return null;
+    }
+    const name = trimmed.slice(0, eq).trim();
+    const value = trimmed
+        .slice(eq + 1)
+        .trim()
+        .replace(/^["']/, '')
+        .replace(/["']$/, '');
+    return { name, value };
+}
+
+/**
+ * Does one parsed assignment prove the file is encrypted?
+ * - a real DOTENV_PUBLIC_KEY assignment (with a value) marks the file;
+ * - dotenvx encrypted values start with `encrypted:`;
+ * - SOPS encrypted values start with the canonical envelope (parity with
+ *   the CLI's SOPS_ENCRYPTED_PATTERN; the [encryption] backend in
+ *   envdrift.toml may be sops).
+ */
+function isEncryptedAssignment(assignment: EnvAssignment): boolean {
+    const { name, value } = assignment;
+    return (
+        (DOTENVX_PUBLIC_KEY_NAME.test(name) && value.length > 0) ||
+        value.toLowerCase().startsWith('encrypted:') ||
+        value.startsWith('ENC[AES256_GCM,')
+    );
+}
+
+/**
  * Check if content appears to be encrypted (dotenvx format).
  *
  * Matches dotenvx's real on-disk format only — `encrypted:` anchored as the
@@ -54,38 +103,10 @@ const DOTENVX_PUBLIC_KEY_NAME = /^DOTENV_PUBLIC_KEY(_[A-Za-z0-9_]+)?$/;
  * DOTENV_PUBLIC_KEY, silently skipping encryption of real secrets (#482).
  */
 export function isContentEncrypted(content: string): boolean {
-    const lines = content.split('\n');
-    for (const line of lines) {
-        const trimmed = line.trim();
-        // Skip empty lines and comments — a comment mentioning
-        // DOTENV_PUBLIC_KEY is not evidence of encryption.
-        if (!trimmed || trimmed.startsWith('#')) {
-            continue;
-        }
-        const eq = trimmed.indexOf('=');
-        if (eq < 0) {
-            continue;
-        }
-        const name = trimmed.slice(0, eq).trim();
-        let value = trimmed.slice(eq + 1).trim();
-        // Strip the surrounding quotes dotenvx writes.
-        value = value.replace(/^["']/, '').replace(/["']$/, '');
-        // A real DOTENV_PUBLIC_KEY assignment (with a value) marks the file.
-        if (DOTENVX_PUBLIC_KEY_NAME.test(name) && value.length > 0) {
-            return true;
-        }
-        // dotenvx encrypted values start with "encrypted:".
-        if (value.toLowerCase().startsWith('encrypted:')) {
-            return true;
-        }
-        // SOPS encrypted values start with the canonical envelope (parity
-        // with the CLI's SOPS_ENCRYPTED_PATTERN; the [encryption] backend in
-        // envdrift.toml may be sops).
-        if (value.startsWith('ENC[AES256_GCM,')) {
-            return true;
-        }
-    }
-    return false;
+    return content.split('\n').some((line) => {
+        const assignment = parseEnvAssignment(line);
+        return assignment !== null && isEncryptedAssignment(assignment);
+    });
 }
 
 /**
