@@ -1,0 +1,36 @@
+src/envdrift/cli_commands/sync.py
+  s_a0bbd64ba4e4dd::t_db1eaa86f88e8c 1952-1963,1965-1968,1971,1973-1974
+  s_a0bbd64ba4e4dd::t_f28183a54e2897 1764-1767,1778-1782,1800-1816,1821-1826,1828
+  s_a0bbd64ba4e4dd::t_7fa42b35418414 1532-1574,1576-1578,1581-1582,1584-1600,1602-1603,1605-1606,1608-1612,1614-1615,1617,1620-1637
+  s_a0bbd64ba4e4dd::t_4d1b2d865a1b8e 1414-1416
+  s_a0bbd64ba4e4dd::t_d531f8d01d3bcd 1922-1923
+docs/cli/lock.md
+  s_a0bbd64ba4e4dd::t_0386d3cd93b16d 114-122
+  s_a0bbd64ba4e4dd::t_dc777ce4d6d91f 367
+  s_a0bbd64ba4e4dd::t_be1d00c65e2440 137-142
+  s_a0bbd64ba4e4dd::t_029f3a88aa3a29 381-386
+tests/unit/coverage/test_cov_cli_commands_sync.py
+  s_a0bbd64ba4e4dd::t_b8f2bba861344d 1272-1333
+  s_a0bbd64ba4e4dd::t_0e3419c0e48645 1217-1219,1222
+  s_a0bbd64ba4e4dd::t_7214667b4616bf 882-953
+docs/guides/partial-encryption.md
+  s_a0bbd64ba4e4dd::t_33c5d3f1c23ae7 369-370,375-378
+tests/integration/test_lock_encryption_state.py
+  s_a0bbd64ba4e4dd::t_6d6c1789120388 1-439
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.6",
+  "base_commit_sha": "2fdeabdce5495c123c9eefeb1597deb952b3868c",
+  "prompts": {},
+  "sessions": {
+    "s_a0bbd64ba4e4dd": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "c1e5b2e5-0fec-4bf5-b8e6-20cdb3a76855",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Jainal Gosaliya <jainal09gosalia@gmail.com>"
+    }
+  }
+}
