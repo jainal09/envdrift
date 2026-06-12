@@ -1,0 +1,52 @@
+envdrift-agent/internal/logging/rotate.go
+  s_a0bbd64ba4e4dd::t_a299f1b4d1f993 1-138
+envdrift-agent/internal/project/config.go
+  s_a0bbd64ba4e4dd::t_1a4206fd5ab7ca 303-309,313
+  s_a0bbd64ba4e4dd::t_4c551fdf0870ca 182-194
+  s_a0bbd64ba4e4dd::t_77e4e1e46a91b0 83-98,104,107
+envdrift-agent/internal/logging/rotate_test.go
+  s_a0bbd64ba4e4dd::t_e5977f7e0b0b2c 1-179
+envdrift-agent/internal/guardian/guardian_idlecheck_test.go
+  s_a0bbd64ba4e4dd::t_c06d3c44ec04b1 1-223
+envdrift-agent/internal/guardian/guardian.go
+  s_a0bbd64ba4e4dd::t_33681143b6d947 458-462,474-478,502-503,505-507,509-518,520-529,531-534,536-544
+  s_a0bbd64ba4e4dd::t_08d306360235e1 354
+  s_a0bbd64ba4e4dd::t_fb550449f3590e 393-397
+  s_a0bbd64ba4e4dd::t_16a15f440dd3dc 309-311
+  s_a0bbd64ba4e4dd::t_a133a07dc9790d 212-215,230,235-250
+  s_a0bbd64ba4e4dd::t_1054c495699b66 110,112-115,124-127,133-156
+  s_a0bbd64ba4e4dd::t_122ed325e3901d 6,11,25-28
+envdrift-agent/internal/guardian/guardian_wedge_test.go
+  s_a0bbd64ba4e4dd::t_20ab523e64f324 11
+  s_a0bbd64ba4e4dd::t_4ad8c0e3111744 9
+  s_a0bbd64ba4e4dd::t_581da412fd3fea 35-40,42-44,49-52,59-66
+  s_a0bbd64ba4e4dd::t_24cace992fb136 1-8,10,12-34,41,45-48,53-58,67-255
+envdrift-agent/internal/registry/registry.go
+  s_a0bbd64ba4e4dd::t_cea1ee6b627226 242-249
+  s_a0bbd64ba4e4dd::t_9006a0904069a6 89-94,103,111-136
+  s_a0bbd64ba4e4dd::t_5dd51ce27aaa16 6
+envdrift-agent/internal/encrypt/encrypt.go
+  s_a0bbd64ba4e4dd::t_afe69796182779 7
+  s_a0bbd64ba4e4dd::t_a4741cf3498208 156-165
+  s_a0bbd64ba4e4dd::t_9e22671ea66286 178-185,191,204,206
+envdrift-agent/internal/guardian/guardian_defaults_test.go
+  s_a0bbd64ba4e4dd::t_1a4bdc5a6a585a 1-141
+envdrift-agent/internal/daemon/daemon.go
+  s_a0bbd64ba4e4dd::t_eb95411a80edea 124-133,135-142,144-156,165,176
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.6",
+  "base_commit_sha": "77558509cfebc82b5f29ad57465a422b9e1986cc",
+  "prompts": {},
+  "sessions": {
+    "s_a0bbd64ba4e4dd": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "c1e5b2e5-0fec-4bf5-b8e6-20cdb3a76855",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Jainal Gosaliya <jainal09gosalia@gmail.com>"
+    }
+  }
+}
