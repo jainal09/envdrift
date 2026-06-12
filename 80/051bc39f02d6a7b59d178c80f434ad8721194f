@@ -1,0 +1,33 @@
+.github/workflows/installer-e2e.yml
+  s_a0bbd64ba4e4dd::t_ae304e3948f5ae 111-122
+  s_a0bbd64ba4e4dd::t_0c770c4fb34a52 66,72-74,77
+docs/getting-started/installation.md
+  s_a0bbd64ba4e4dd::t_fdab0bfa629f6e 35-37
+install.ps1
+  s_a0bbd64ba4e4dd::t_8f2c7f12cb2768 240
+  s_a0bbd64ba4e4dd::t_3fda10d08f90c7 277-280
+  s_a0bbd64ba4e4dd::t_4ba9c4dd26b9e1 274,276,284
+  s_a0bbd64ba4e4dd::t_5f6e9018742aa2 242-246,248
+  s_a0bbd64ba4e4dd::t_5e0cbde6240f7e 223-225
+tests/unit/test_install_ps1.py
+  s_a0bbd64ba4e4dd::t_3f859c34f7601d 285-287
+  s_a0bbd64ba4e4dd::t_c1f74066e201d3 1-169,171-185,204-284
+  s_a0bbd64ba4e4dd::t_c6cc3f52750d07 170
+  s_a0bbd64ba4e4dd::t_a9befea5ef53bf 186-203
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.6",
+  "base_commit_sha": "80051bc39f02d6a7b59d178c80f434ad8721194f",
+  "prompts": {},
+  "sessions": {
+    "s_a0bbd64ba4e4dd": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "c1e5b2e5-0fec-4bf5-b8e6-20cdb3a76855",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Jainal Gosaliya <jainal09gosalia@gmail.com>"
+    }
+  }
+}
