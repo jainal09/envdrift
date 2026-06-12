@@ -1,0 +1,55 @@
+tests/unit/coverage/test_cov_core_validator.py
+  s_a0bbd64ba4e4dd::t_cd55c156aace3c 129-131,141-150
+  s_a0bbd64ba4e4dd::t_a1099af449872d 213-215,225-234
+tests/unit/test_env_semantics.py
+  s_a0bbd64ba4e4dd::t_7072c374e5746d 1-92
+src/envdrift/core/env_semantics.py
+  s_a0bbd64ba4e4dd::t_fe7583a2946844 1-157
+tests/integration/test_validate_parity_cli.py
+  s_a0bbd64ba4e4dd::t_562fd48b5ce6d9 1-26,28-148,151-304
+docs/cli/validate.md
+  s_a0bbd64ba4e4dd::t_e8bce2c5657793 253-256
+  s_a0bbd64ba4e4dd::t_72c876049ae9aa 16,20-34
+docs/cli/diff.md
+  s_a0bbd64ba4e4dd::t_0ea9e179923cdf 106-117
+docs/guides/migrating.md
+  s_a0bbd64ba4e4dd::t_db74e9831b896a 183-185,189,197-198
+docs/getting-started/quickstart.md
+  s_a0bbd64ba4e4dd::t_af5fad5ba25432 151-154
+src/envdrift/core/schema.py
+  s_a0bbd64ba4e4dd::t_a2ef8ce7d627f5 68-72
+  s_a0bbd64ba4e4dd::t_969cbe2a1473d9 255-262
+tests/unit/test_validator.py
+  s_a0bbd64ba4e4dd::t_ffd60d315e3275 405-423,425-446
+  s_a0bbd64ba4e4dd::t_12f9d06e5fd2fd 375-379,387,400,402-403
+src/envdrift/core/diff.py
+  s_a0bbd64ba4e4dd::t_d5c6a3c7b69f48 13
+  s_a0bbd64ba4e4dd::t_f3056dc1245313 191
+  s_a0bbd64ba4e4dd::t_e6c96d5aa6ef8a 226-236,242-245,247-250,260
+tests/unit/test_validate_diff_pydantic_parity.py
+  s_a0bbd64ba4e4dd::t_9c8d278041f73d 1-22,24-241,244-376,378-406,408,425-426,429-433,435-436
+  s_a0bbd64ba4e4dd::t_8c0c0c01bffeaa 23
+  s_a0bbd64ba4e4dd::t_55466f5cbb67ec 407,409-412,414-424,427-428,434
+src/envdrift/core/validator.py
+  s_a0bbd64ba4e4dd::t_5bed3d931b1708 5,8,10-11
+  s_a0bbd64ba4e4dd::t_e40d05f319ae06 336-342,346,349-350,352,361-363,365-367,369-374
+  s_a0bbd64ba4e4dd::t_f740415eaef090 177-180,182-186
+  s_a0bbd64ba4e4dd::t_8f77d6df8be2ce 228-233,238-239,246,248-252,256,262,264,266-278
+  s_a0bbd64ba4e4dd::t_8f7fff3497c723 207-209,212-213
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.6",
+  "base_commit_sha": "2e573b8ac9aba149993ab85881071740b31a24b3",
+  "prompts": {},
+  "sessions": {
+    "s_a0bbd64ba4e4dd": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "c1e5b2e5-0fec-4bf5-b8e6-20cdb3a76855",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Jainal Gosaliya <jainal09gosalia@gmail.com>"
+    }
+  }
+}
