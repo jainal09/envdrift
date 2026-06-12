@@ -25,6 +25,8 @@ from rich.console import Console
 from rich.table import Table
 
 from envdrift.agent.registry import (
+    ProjectRegistry,
+    RegistryLockError,
     get_registry,
     list_projects,
     register_project,
@@ -122,6 +124,31 @@ def _get_agent_status() -> tuple[str, str | None]:
         return "error", None
 
 
+def _warn_registry_corruption(registry: ProjectRegistry) -> None:
+    """Surface a corrupt-registry recovery to the user instead of hiding it (#492).
+
+    Pre-#492 a corrupt ``projects.json`` was silently treated as empty (and
+    silently replaced on the next write), so registrations vanished behind a
+    clean success message. This prints exactly what happened and where the
+    corrupt original went.
+    """
+    notice = registry.corruption
+    if notice is None:
+        return
+    console.print(f"[yellow]⚠[/yellow] Registry file was corrupt: {registry.path}")
+    console.print(f"  ({notice.detail})")
+    if notice.backup_path is not None:
+        console.print(f"  The corrupt file was backed up to: {notice.backup_path}")
+        console.print("  Previously registered projects were discarded — re-register them.")
+    elif notice.backup_failed:
+        console.print("  The corrupt file could not be backed up; its contents were replaced.")
+    else:
+        console.print(
+            "  Treating it as empty. The file is untouched and will be backed up "
+            "to a .corrupt-<timestamp> file by the next register/unregister."
+        )
+
+
 def _format_timestamp(iso_timestamp: str) -> str:
     """Format an ISO timestamp for display."""
     try:
@@ -186,7 +213,13 @@ def register(
     has_config = config_path is not None
 
     # Register the project
-    success, message = register_project(project_path)
+    try:
+        success, message = register_project(project_path)
+    except RegistryLockError as exc:
+        console.print(f"[red]✗[/red] Could not lock the agent registry: {exc}")
+        raise typer.Exit(1) from exc
+
+    _warn_registry_corruption(get_registry())
 
     if success:
         console.print(f"[green]✓[/green] {message}")
@@ -226,7 +259,13 @@ def unregister(
     agent will stop watching it.
     """
     project_path = _normalize_project_path(path)
-    success, message = unregister_project(project_path)
+    try:
+        success, message = unregister_project(project_path)
+    except RegistryLockError as exc:
+        console.print(f"[red]✗[/red] Could not lock the agent registry: {exc}")
+        raise typer.Exit(1) from exc
+
+    _warn_registry_corruption(get_registry())
 
     if success:
         console.print(f"[green]✓[/green] {message}")
@@ -238,6 +277,7 @@ def unregister(
 def list_registered() -> None:
     """List all projects registered with the agent."""
     projects = list_projects()
+    _warn_registry_corruption(get_registry())
 
     if not projects:
         console.print("[dim]No projects registered.[/dim]")
@@ -305,8 +345,10 @@ def status() -> None:
     # Registry info
     registry = get_registry()
     projects = registry.projects
+    console.print()
+    _warn_registry_corruption(registry)
 
-    console.print(f"\n[bold]Registered Projects:[/bold] {len(projects)}")
+    console.print(f"[bold]Registered Projects:[/bold] {len(projects)}")
     if projects:
         for project in projects[:5]:  # Show first 5
             console.print(f"   • {project.path}")
