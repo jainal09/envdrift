@@ -1,0 +1,47 @@
+tests/integration/test_guard_native_gaps_e2e.py
+  s_a0bbd64ba4e4dd::t_2216e950958820 1-249,251-309
+tests/unit/test_guard_machine_output.py
+  s_a0bbd64ba4e4dd::t_0a76770c34115a 44,46-48,50,52,57,59
+  s_a0bbd64ba4e4dd::t_310ab1d7da1205 30,33-36
+src/envdrift/scanner/ignores.py
+  s_a0bbd64ba4e4dd::t_edf023d9753bc7 264-273,276
+  s_a0bbd64ba4e4dd::t_6de6d32a154347 44-59,67-70,75
+  s_a0bbd64ba4e4dd::t_c4a3a61f3ad57c 138-139,159-167
+docs/guides/guard.md
+  s_a0bbd64ba4e4dd::t_7ab9fb05cbb126 7,12-28
+  s_a0bbd64ba4e4dd::t_534ad1a19acd99 192-210
+docs/cli/guard.md
+  s_a0bbd64ba4e4dd::t_9fd14a4324808a 436-446
+  s_a0bbd64ba4e4dd::t_f921e023cb4485 16,22-27
+src/envdrift/scanner/engine.py
+  s_a0bbd64ba4e4dd::t_ddc6a33ed33b1c 228-235,242-244
+  s_a0bbd64ba4e4dd::t_c949b0f20fd6e9 259-263,265,267
+src/envdrift/scanner/native.py
+  s_a0bbd64ba4e4dd::t_03ee854e7bbfb3 13
+  s_a0bbd64ba4e4dd::t_434e56800d6754 502
+  s_a0bbd64ba4e4dd::t_ead1a61f0f3a46 232-238,242-247,249
+  s_a0bbd64ba4e4dd::t_ef6208437dcb96 279-328,330-339
+  s_a0bbd64ba4e4dd::t_36f9567d38f55b 536
+  s_a0bbd64ba4e4dd::t_138d098ffea0e0 152-154
+  s_a0bbd64ba4e4dd::t_646b2ec1b9da54 639-645,647-648
+  s_a0bbd64ba4e4dd::t_66a47f4731b015 63-69,71
+  s_a0bbd64ba4e4dd::t_456d5fc1ab2c46 329
+  s_a0bbd64ba4e4dd::t_74706d3d5b11de 691-706,709
+  s_a0bbd64ba4e4dd::t_4c532c9573ed94 805-808,813,815
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.6",
+  "base_commit_sha": "a82158785491695197fade180b5110b7a7026788",
+  "prompts": {},
+  "sessions": {
+    "s_a0bbd64ba4e4dd": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "c1e5b2e5-0fec-4bf5-b8e6-20cdb3a76855",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Jainal Gosaliya <jainal09gosalia@gmail.com>"
+    }
+  }
+}
