@@ -1,0 +1,47 @@
+src/envdrift/vault/azure.py
+  s_a0bbd64ba4e4dd::t_c86d65610bb5be 37-70
+  s_a0bbd64ba4e4dd::t_d0e3e01495d339 5
+  s_a0bbd64ba4e4dd::t_123b4506643ad3 126-127,130,136-139
+docs/reference/configuration.md
+  s_a0bbd64ba4e4dd::t_d6e31914f0bb99 555
+docs/reference/testing.md
+  s_a0bbd64ba4e4dd::t_921000b2d639b5 210-212
+  s_a0bbd64ba4e4dd::t_66d0b957aba768 224-225
+.github/workflows/integration-tests.yml
+  s_a0bbd64ba4e4dd::t_2721d78d0ba913 86-89
+  s_a0bbd64ba4e4dd::t_7a561ae37de230 222-238
+  s_a0bbd64ba4e4dd::t_1c6d0fcb327a2d 92-96
+  s_a0bbd64ba4e4dd::t_d753293f06cb83 252-255
+tests/docker-compose.test.yml
+  s_a0bbd64ba4e4dd::t_10a8cda3c968aa 56-60
+  s_a0bbd64ba4e4dd::t_f84cf1495aebfc 50-53
+tests/integration/test_azure_integration.py
+  s_a0bbd64ba4e4dd::t_5c8b545c8d25f2 3-22,155-158,183,185-186,198-201,211-212,215,227-231,234-239,247,250,254,276-315,319,321,328,330,332-335,337-342,344-347,349-357,367-382,385,388-389,391,398,400,402-405,408-411,413-419,422-433,435-437,440-443,460,463,466-468,482-483,487-488,490-493,511,540,609,643-646,663,669-670,693-694,696-702,717,739-740,742-747,762,791,793-796,811,836,838-839,854,885,887-888,903,933-967,969-1003
+  s_a0bbd64ba4e4dd::t_24966634a14f49 359-364
+  s_a0bbd64ba4e4dd::t_af590ad8eee618 168,170,176
+  s_a0bbd64ba4e4dd::t_c03d479248a10c 206,209,216
+  s_a0bbd64ba4e4dd::t_e111ecf9c1ed1a 59-119
+  s_a0bbd64ba4e4dd::t_a56dd568df6eee 124-136,141-142
+  s_a0bbd64ba4e4dd::t_1af28ba22cd149 29
+docs/specs/integration-tests-spec.md
+  s_a0bbd64ba4e4dd::t_8166600f1a7751 111,113-114,119,121-127,132,134-135
+tests/integration/conftest.py
+  s_a0bbd64ba4e4dd::t_1ee7dc248c00ee 31-34
+  s_a0bbd64ba4e4dd::t_1fb747a9b7f270 305-369,374-377
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.6",
+  "base_commit_sha": "48cb82f19b50d7d6de87f6b0484b332041548105",
+  "prompts": {},
+  "sessions": {
+    "s_a0bbd64ba4e4dd": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "c1e5b2e5-0fec-4bf5-b8e6-20cdb3a76855",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Jainal Gosaliya <jainal09gosalia@gmail.com>"
+    }
+  }
+}
