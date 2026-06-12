@@ -928,11 +928,17 @@ class ScanEngine:
                 continue
 
             try:
+                # Explicit UTF-8: ``text=True`` alone decodes (and encodes the
+                # stdin paths) with the platform locale codec — cp1252 on Windows
+                # — which mis-handles non-ASCII filenames (#453). ``-z`` already
+                # makes git print paths verbatim (no core.quotepath quoting).
                 result = subprocess.run(  # nosec B603, B607
                     ["git", "check-ignore", "--stdin", "-z"],
                     input="\0".join(rel_paths) + "\0",
                     capture_output=True,
                     text=True,
+                    encoding="utf-8",
+                    errors="replace",
                     timeout=30,
                     cwd=str(root),
                 )
@@ -998,12 +1004,19 @@ class ScanEngine:
             return warnings
 
         try:
-            # Use batched stdin approach for consistency with _filter_gitignored_files
+            # Use batched stdin approach for consistency with _filter_gitignored_files.
+            # Explicit UTF-8: ``text=True`` alone uses the platform locale codec
+            # (cp1252 on Windows), which mis-handles non-ASCII filenames (#453).
+            # ``core.quotepath=false`` makes git echo non-ASCII paths verbatim
+            # instead of C-quoted ("\347..." octal escapes), so the stdout lines
+            # compare equal to the configured combined-file names.
             result = subprocess.run(  # nosec B603, B607
-                ["git", "check-ignore", "--stdin"],
+                ["git", "-c", "core.quotepath=false", "check-ignore", "--stdin"],
                 input="\n".join(self.config.combined_files),
                 capture_output=True,
                 text=True,
+                encoding="utf-8",
+                errors="replace",
                 timeout=30,
                 cwd=str(git_root),
             )

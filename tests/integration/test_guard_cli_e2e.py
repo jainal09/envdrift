@@ -440,3 +440,146 @@ def test_skip_clear_overrides_allowed_clear_files_allowlist(git_repo: Path) -> N
     )
     assert skipped["findings"] == []
     assert skipped["exit_code"] == 0
+
+
+# --- #453: git check-ignore subprocess pipes must be UTF-8, not the locale ------
+
+# Forces the subprocess text-mode codec away from UTF-8 in the child CLI process.
+# On POSIX, ``LC_ALL=C`` makes ``locale.getpreferredencoding(False)`` US-ASCII
+# (Windows ignores LC_ALL and natively uses its ANSI code page, e.g. cp1252).
+# ``PYTHONUTF8=0`` pins UTF-8 mode off (PEP 540 auto-enables it for the C locale)
+# and ``PYTHONCOERCECLOCALE=0`` stops glibc coercion to C.UTF-8 (PEP 538).
+# ``PYTHONIOENCODING`` keeps the CLI's *own* stdout/stderr UTF-8 so printing JSON
+# or Rich output never trips over the locale — only the pipe codec used for
+# ``git check-ignore`` (the behavior under test) is left to the locale default.
+_NON_UTF8_LOCALE_ENV = {
+    "LC_ALL": "C",
+    "LANG": "C",
+    "PYTHONUTF8": "0",
+    "PYTHONCOERCECLOCALE": "0",
+    "PYTHONIOENCODING": "utf-8",
+}
+
+# 'sécrets-café.env' / '秘密.combined.env'. The accented name is inside cp1252
+# (mis-encodes silently on Windows); the CJK one is outside it (raises on encode).
+_ACCENTED_ENV_NAME = "sécrets-café.env"
+_CJK_COMBINED_NAME = "秘密.combined.env"
+
+
+def _non_ascii_gitignore_repo(work_dir: Path) -> None:
+    """Repo with an exact-named gitignored non-ASCII env file plus a tracked leak."""
+    (work_dir / ".gitignore").write_text(_ACCENTED_ENV_NAME + "\n", encoding="utf-8")
+    (work_dir / _ACCENTED_ENV_NAME).write_text(
+        f'AWS_SECRET_ACCESS_KEY="{_AWS_SECRET}"\n', encoding="utf-8"
+    )
+    (work_dir / "leak.py").write_text(f'aws_secret_access_key = "{_AWS_SECRET}"\n')
+    _run_git(["add", ".gitignore", "leak.py"], cwd=work_dir)
+
+
+def test_skip_gitignored_filters_non_ascii_gitignored_path(git_repo: Path) -> None:
+    """#453: a gitignored non-ASCII filename is filtered on every platform.
+
+    ``_filter_gitignored_files`` feeds finding paths to ``git check-ignore --stdin
+    -z`` over a text pipe. Before the fix the pipe used the platform locale codec
+    (``text=True`` with no ``encoding=``), so on Windows (cp1252) the UTF-8
+    filename was mis-encoded, the exact ``.gitignore`` entry no longer matched,
+    and the finding from the gitignored file leaked into the results.
+    """
+    work_dir = git_repo
+    _non_ascii_gitignore_repo(work_dir)
+
+    # Sanity baseline: without --skip-gitignored the non-ASCII file IS reported,
+    # proving the fixture actually produces a finding for the filter to remove.
+    baseline = _guard_json(
+        _run_envdrift(
+            ["guard", "--native-only", "--json", _ACCENTED_ENV_NAME, "leak.py"],
+            cwd=work_dir,
+            env={"PYTHONUTF8": "0"},
+        )
+    )
+    baseline_files = [f["file_path"] for f in baseline["findings"]]
+    assert any(_ACCENTED_ENV_NAME in f for f in baseline_files), baseline_files
+
+    result = _run_envdrift(
+        ["guard", "--native-only", "--skip-gitignored", "--json", _ACCENTED_ENV_NAME, "leak.py"],
+        cwd=work_dir,
+        env={"PYTHONUTF8": "0"},
+    )
+    payload = _guard_json(result)
+    files = [f["file_path"] for f in payload["findings"]]
+    assert any("leak.py" in f for f in files), files
+    assert not any(_ACCENTED_ENV_NAME in f for f in files), (
+        f"gitignored non-ASCII file leaked into findings: {files}"
+    )
+    # The tracked leak.py CRITICAL finding still fails the run.
+    assert result.returncode == 1, f"expected 1, got {result.returncode}\n{result.stdout}"
+
+
+@pytest.mark.skipif(
+    sys.platform == "win32",
+    reason="LC_ALL does not affect the Windows ANSI code page; cp1252 is covered "
+    "by test_skip_gitignored_filters_non_ascii_gitignored_path",
+)
+def test_skip_gitignored_survives_non_utf8_locale(git_repo: Path) -> None:
+    """#453: ``--skip-gitignored`` must not abort under a non-UTF-8 locale.
+
+    Before the fix the check-ignore pipe inherited the C locale's US-ASCII codec
+    and raised ``UnicodeEncodeError`` on the non-ASCII path, killing the whole
+    scan with a traceback instead of emitting JSON.
+    """
+    work_dir = git_repo
+    _non_ascii_gitignore_repo(work_dir)
+
+    result = _run_envdrift(
+        ["guard", "--native-only", "--skip-gitignored", "--json", _ACCENTED_ENV_NAME, "leak.py"],
+        cwd=work_dir,
+        env=_NON_UTF8_LOCALE_ENV,
+    )
+    assert "Traceback" not in result.stderr, result.stderr
+    payload = _guard_json(result)  # pre-fix: crash means no JSON on stdout
+    files = [f["file_path"] for f in payload["findings"]]
+    assert any("leak.py" in f for f in files), files
+    assert result.returncode == 1, f"expected 1, got {result.returncode}\n{result.stdout}"
+
+
+def test_combined_file_gitignore_check_handles_non_ascii_name(git_repo: Path) -> None:
+    """#453: ``check_combined_files_security`` must match non-ASCII combined files.
+
+    The newline variant of ``git check-ignore`` (combined-files security check)
+    both used the platform locale codec and let git C-quote non-ASCII paths in
+    its output (octal escapes per ``core.quotepath``). A gitignored CJK combined
+    file therefore either crashed the run (``UnicodeEncodeError`` under cp1252 or
+    a C locale) or was wrongly reported as NOT gitignored.
+    """
+    work_dir = git_repo
+    (work_dir / ".gitignore").write_text(_CJK_COMBINED_NAME + "\n", encoding="utf-8")
+    (work_dir / "envdrift.toml").write_text(
+        "[partial_encryption]\n"
+        "enabled = true\n\n"
+        "[[partial_encryption.environments]]\n"
+        'name = "production"\n'
+        'clear_file = ".env.production.clear"\n'
+        'secret_file = ".env.production.secret"\n'
+        f'combined_file = "{_CJK_COMBINED_NAME}"\n\n'
+        "[[partial_encryption.environments]]\n"
+        'name = "staging"\n'
+        'clear_file = ".env.staging.clear"\n'
+        'secret_file = ".env.staging.secret"\n'
+        'combined_file = "unprotected.combined.env"\n',
+        encoding="utf-8",
+    )
+    _run_git(["add", ".gitignore"], cwd=work_dir)
+
+    env = dict(_NON_UTF8_LOCALE_ENV)
+    env["COLUMNS"] = "200"  # keep Rich from wrapping the warning mid-filename
+    result = _run_envdrift(["guard", "--native-only", "."], cwd=work_dir, env=env)
+    out = " ".join((result.stdout + result.stderr).split())
+
+    assert "Traceback" not in result.stderr, result.stderr
+    assert result.returncode == 0, f"expected 0, got {result.returncode}\n{out}"
+    # Control: the NOT-gitignored combined file must be flagged, proving the
+    # security check actually ran and matched against git's answer.
+    assert "SECURITY WARNING" in out, out
+    assert "unprotected.combined.env" in out, out
+    # The gitignored CJK combined file must NOT be flagged.
+    assert _CJK_COMBINED_NAME not in out, out
