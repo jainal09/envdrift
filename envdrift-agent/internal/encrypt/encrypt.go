@@ -21,11 +21,16 @@ var ErrEnvdriftNotFound = errors.New("envdrift not found. Install it: pip instal
 // CLI's rules in src/envdrift/core/partial_encryption.py).
 const dotenvxPublicKeyPrefix = "DOTENV_PUBLIC_KEY"
 
-// Ciphertext prefixes of an assigned dotenv VALUE: dotenvx writes
-// `KEY="encrypted:..."`, SOPS writes `KEY=ENC[AES256_GCM,...]`.
+// Ciphertext markers of an assigned dotenv VALUE: dotenvx writes
+// `KEY="encrypted:..."`, SOPS writes `KEY=ENC[<algo>,...]`. Match the SOPS tag
+// on the generic `ENC[` opener rather than a single cipher suite: SOPS emits
+// AES256_GCM by default but also supports AES256_SIV / AES256_CTR (and may add
+// more), all of which start `ENC[`. Pinning to `ENC[AES256_GCM,` mislabeled
+// those as plaintext, so the guardian re-ran `envdrift encrypt` on an
+// already-encrypted file every cycle.
 const (
 	dotenvxCiphertextPrefix = "encrypted:"
-	sopsCiphertextPrefix    = "ENC[AES256_GCM,"
+	sopsCiphertextPrefix    = "ENC["
 )
 
 // sopsMetadataScalarKeys is the fixed set of flat SOPS bookkeeping keys that a
@@ -133,10 +138,20 @@ func isSOPSMetadataKey(key string) bool {
 // quotes, the two styles dotenv/SOPS emit (`"..."` and `'...'`).
 func unquoteValue(value string) string {
 	v := strings.TrimSpace(value)
-	if len(v) >= 2 && (v[0] == '"' || v[0] == '\'') && v[len(v)-1] == v[0] {
+	if isWrappedInMatchingQuotes(v) {
 		v = strings.TrimSpace(v[1 : len(v)-1])
 	}
 	return v
+}
+
+// isWrappedInMatchingQuotes reports whether v opens and closes with the same
+// single- or double-quote character (a complete quoted token of length >= 2).
+func isWrappedInMatchingQuotes(v string) bool {
+	if len(v) < 2 {
+		return false
+	}
+	q := v[0]
+	return (q == '"' || q == '\'') && v[len(v)-1] == q
 }
 
 // Encrypt encrypts a .env file using the envdrift CLI.

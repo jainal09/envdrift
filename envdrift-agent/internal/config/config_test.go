@@ -192,34 +192,75 @@ func TestLoadDocumentedDurationString(t *testing.T) {
 	}
 }
 
-// TestLoadExtendedDurationUnits: the "2d" day suffix the per-project parser
-// accepts must work in the global config too.
-func TestLoadExtendedDurationUnits(t *testing.T) {
+// TestLoadIdleTimeoutForms covers the accepted idle_timeout encodings: the
+// "2d" day suffix the per-project parser accepts must work in the global
+// config too, and configs written by the pre-#481 Save hold raw nanoseconds
+// (idle_timeout = 300000000000) which must keep loading so the fix doesn't
+// introduce its own crash loop.
+func TestLoadIdleTimeoutForms(t *testing.T) {
+	cases := []struct {
+		name    string
+		tomlVal string
+		want    time.Duration
+	}{
+		{"extended day unit", "\"2d\"", 48 * time.Hour},
+		{"legacy nanosecond integer", "300000000000", 5 * time.Minute},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			setTempHome(t)
+			writeGuardianToml(t, "[guardian]\nidle_timeout = "+tc.tomlVal+"\n")
+
+			cfg, err := Load()
+			if err != nil {
+				t.Fatalf("Load() error: %v", err)
+			}
+			if cfg.Guardian.IdleTimeout != tc.want {
+				t.Errorf("IdleTimeout = %v, want %v", cfg.Guardian.IdleTimeout, tc.want)
+			}
+		})
+	}
+}
+
+// TestLoadExplicitEmptySlicesClearDefaults is the #504-review regression: an
+// explicit empty array (patterns = [], exclude = [], watch = []) must clear the
+// default, not be silently ignored. The old []string + len() > 0 check could
+// not tell an absent key from a deliberately-empty one, so a user clearing a
+// list kept getting the built-in defaults back.
+func TestLoadExplicitEmptySlicesClearDefaults(t *testing.T) {
 	setTempHome(t)
-	writeGuardianToml(t, "[guardian]\nidle_timeout = \"2d\"\n")
+	writeGuardianToml(t, "[guardian]\npatterns = []\nexclude = []\n\n[directories]\nwatch = []\n")
 
 	cfg, err := Load()
 	if err != nil {
 		t.Fatalf("Load() error: %v", err)
 	}
-	if cfg.Guardian.IdleTimeout != 48*time.Hour {
-		t.Errorf("IdleTimeout = %v, want 48h", cfg.Guardian.IdleTimeout)
+	if len(cfg.Guardian.Patterns) != 0 {
+		t.Errorf("explicit patterns = [] was ignored: %v", cfg.Guardian.Patterns)
+	}
+	if len(cfg.Guardian.Exclude) != 0 {
+		t.Errorf("explicit exclude = [] was ignored: %v", cfg.Guardian.Exclude)
+	}
+	if len(cfg.Directories.Watch) != 0 {
+		t.Errorf("explicit watch = [] was ignored: %v", cfg.Directories.Watch)
 	}
 }
 
-// TestLoadLegacyNanosecondInteger: configs written by the pre-#481 Save hold
-// raw nanoseconds (idle_timeout = 300000000000); they must keep loading so the
-// fix doesn't introduce its own crash loop.
-func TestLoadLegacyNanosecondInteger(t *testing.T) {
+// TestLoadAbsentSlicesKeepDefaults guards the other half of the nil-vs-empty
+// distinction: an absent key keeps the default.
+func TestLoadAbsentSlicesKeepDefaults(t *testing.T) {
 	setTempHome(t)
-	writeGuardianToml(t, "[guardian]\nidle_timeout = 300000000000\n")
+	writeGuardianToml(t, "[guardian]\nenabled = true\n")
 
 	cfg, err := Load()
 	if err != nil {
-		t.Fatalf("Load() rejected the legacy nanosecond-integer form: %v", err)
+		t.Fatalf("Load() error: %v", err)
 	}
-	if cfg.Guardian.IdleTimeout != 5*time.Minute {
-		t.Errorf("IdleTimeout = %v, want 5m", cfg.Guardian.IdleTimeout)
+	if len(cfg.Guardian.Patterns) == 0 || cfg.Guardian.Patterns[0] != ".env*" {
+		t.Errorf("absent patterns lost its default: %v", cfg.Guardian.Patterns)
+	}
+	if len(cfg.Guardian.Exclude) == 0 {
+		t.Error("absent exclude lost its default")
 	}
 }
 

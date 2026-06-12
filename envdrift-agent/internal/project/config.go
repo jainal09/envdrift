@@ -2,6 +2,7 @@
 package project
 
 import (
+	"log"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -279,7 +280,11 @@ func LoadAllProjectConfigs(projectPaths []string) ([]*ProjectConfig, error) {
 	for _, path := range projectPaths {
 		cfg, err := LoadProjectConfig(path)
 		if err != nil {
-			// Log but continue with other projects
+			// A real load error (an unreadable/malformed envdrift.toml in this
+			// project or an ancestor) means the project is NOT being watched —
+			// surface it instead of dropping it silently. "No config found" is
+			// not an error here: LoadProjectConfig returns a disabled default.
+			log.Printf("Skipping project %s: cannot load config: %v", path, err)
 			continue
 		}
 
