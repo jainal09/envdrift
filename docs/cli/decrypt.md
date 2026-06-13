@@ -49,7 +49,8 @@ envdrift decrypt .env.production --backend sops
 ### SOPS Options
 
 - `--sops-config` Path to `.sops.yaml`
-- `--age-key-file` Age private key file for decryption (sets `SOPS_AGE_KEY_FILE`)
+- `--age-key-file` Age private key file for decryption (sets `SOPS_AGE_KEY_FILE`;
+  the explicit flag overrides an ambient `SOPS_AGE_KEY_FILE` export)
 
 ## Examples
 

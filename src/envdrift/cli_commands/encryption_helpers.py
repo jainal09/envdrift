@@ -119,8 +119,14 @@ def is_encrypted_content(
     # positives from comments or other text containing "encrypted:".
     if provider == EncryptionProvider.DOTENVX:
         return bool(re.search(r"=\s*encrypted:", content, re.IGNORECASE))
-    # For other providers (like SOPS), the header is sufficient
-    return bool(backend.has_encrypted_header(content))
+    # For SOPS, a metadata header alone is not proof (#475): a value appended
+    # after encryption stays plaintext while the header still matches, and
+    # blessing it would let `lock` report "ready to commit" on a leaking file.
+    # Require the header AND no surviving plaintext values.
+    if not backend.has_encrypted_header(content):
+        return False
+    has_plaintext = getattr(backend, "has_plaintext_values", None)
+    return not (callable(has_plaintext) and has_plaintext(content))
 
 
 def should_skip_reencryption(
