@@ -63,15 +63,18 @@ jobs:
           test ! -d ~/.envdrift/bin
 
   test-windows:
-    name: Windows / Python ${{ matrix.python-version }}
+    name: Windows / ${{ matrix.shell }} / Python ${{ matrix.python-version }}
     runs-on: windows-latest
     strategy:
       fail-fast: false
       matrix:
         python-version: ["3.11", "3.13"]
+        # powershell = Windows PowerShell 5.1, the OS default that the documented
+        # `irm | iex` one-liner actually runs in (#483); pwsh = PowerShell 7.
+        shell: [pwsh, powershell]
     defaults:
       run:
-        shell: pwsh
+        shell: ${{ matrix.shell }}
     steps:
       - uses: actions/checkout@v6
 
@@ -104,6 +107,18 @@ jobs:
       - name: Verify help command
         run: |
           & "$HOME\.envdrift\bin\envdrift.ps1" --help
+
+      - name: Verify CMD wrapper
+        run: |
+          $wrapper = Join-Path (Join-Path (Join-Path $HOME ".envdrift") "bin") "envdrift.cmd"
+          $text = (& cmd.exe /d /c $wrapper version) | Out-String
+          Write-Host $text
+          if ($LASTEXITCODE -ne 0) {
+            throw "envdrift.cmd exited with $LASTEXITCODE"
+          }
+          if ($text -notmatch "envdrift") {
+            throw "cmd wrapper output does not contain 'envdrift'"
+          }
 
       - name: Idempotency – re-run installer
         run: |
