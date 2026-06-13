@@ -81,7 +81,10 @@ def _protect_private_keys(env_file: Path) -> None:
 
 
 def encrypt_cmd(
-    env_file: Annotated[Path, typer.Argument(help="Path to .env file")] = Path(".env"),
+    env_files: Annotated[
+        list[Path] | None,
+        typer.Argument(help="Path(s) to .env file(s) (default: .env)"),
+    ] = None,
     check: Annotated[
         bool, typer.Option("--check", help="Only check encryption status, don't encrypt")
     ] = False,
@@ -157,7 +160,7 @@ def encrypt_cmd(
     ] = None,
 ) -> None:
     """
-    Check encryption status of an .env file or encrypt it.
+    Check encryption status of one or more .env files or encrypt them.
 
     Supports multiple encryption backends:
     - dotenvx (default or config): Uses dotenvx CLI for encryption
@@ -166,10 +169,13 @@ def encrypt_cmd(
     If --backend is not provided, envdrift uses the backend from config
     (envdrift.toml/pyproject.toml) or falls back to dotenvx.
 
-    When run with --check, prints an encryption report and exits with code 1
-    if the detector recommends blocking a commit.
+    When run with --check, prints an encryption report per file and exits with
+    code 1 if the detector recommends blocking a commit for any of them.
+    Accepting multiple files keeps the command usable as a pre-commit
+    ``pass_filenames: true`` hook entry, where every matched staged file is
+    appended to one invocation (#493).
 
-    When run without --check, attempts to perform encryption using the
+    When run without --check, attempts to encrypt each file using the
     specified backend; if the tool is not available, prints installation
     instructions and exits.
 
@@ -177,11 +183,16 @@ def encrypt_cmd(
         envdrift encrypt                     # Encrypt with dotenvx (default)
         envdrift encrypt --backend sops      # Encrypt with SOPS
         envdrift encrypt --check             # Check encryption status only
+        envdrift encrypt --check .env.production .env.staging  # Check several files
         envdrift encrypt -b sops --age AGE_PUBLIC_KEY  # SOPS with age key
         envdrift encrypt --sops-config .sops.yaml  # SOPS with explicit config
     """
-    if not env_file.exists():
-        print_error(f"ENV file not found: {env_file}")
+    files = list(env_files) if env_files else [Path(".env")]
+
+    missing_files = [env_file for env_file in files if not env_file.exists()]
+    if missing_files:
+        for env_file in missing_files:
+            print_error(f"ENV file not found: {env_file}")
         raise typer.Exit(code=1)
 
     if verify_vault or vault_provider or vault_url or vault_region or vault_secret:
@@ -241,30 +252,37 @@ def encrypt_cmd(
         except SchemaLoadError as e:
             print_warning(f"Could not load schema: {e}")
 
-    # Parse env file
     parser = EnvParser()
-    try:
-        env = parser.parse(env_file)
-    except (IsADirectoryError, ValueError) as e:
-        # A directory passed instead of a file, or a non-UTF-8 / binary file —
-        # surface cleanly instead of an uncaught traceback (#24, #25).
-        print_error(str(e))
-        raise typer.Exit(code=1) from None
-
-    # Analyze encryption
     detector = EncryptionDetector()
-    report = detector.analyze(env, schema_meta)
-    detected_backend = detector.detect_backend_for_file(env_file)
-    if detected_backend:
-        report.detected_backend = detected_backend
-    elif report.detected_backend is None:
-        report.detected_backend = backend_enum.value
+
+    def _analyze_file(env_file: Path):
+        """Parse and analyze one env file, exiting cleanly on unreadable input."""
+        try:
+            env = parser.parse(env_file)
+        except (IsADirectoryError, ValueError) as e:
+            # A directory passed instead of a file, or a non-UTF-8 / binary file —
+            # surface cleanly instead of an uncaught traceback (#24, #25).
+            print_error(str(e))
+            raise typer.Exit(code=1) from None
+
+        report = detector.analyze(env, schema_meta)
+        detected_backend = detector.detect_backend_for_file(env_file)
+        if detected_backend:
+            report.detected_backend = detected_backend
+        elif report.detected_backend is None:
+            report.detected_backend = backend_enum.value
+        return report
 
     if check:
-        # Just report status
-        print_encryption_report(report)
+        # Report status per file; block if any file would block a commit.
+        should_block = False
+        for env_file in files:
+            report = _analyze_file(env_file)
+            print_encryption_report(report)
+            if detector.should_block_commit(report):
+                should_block = True
 
-        if detector.should_block_commit(report):
+        if should_block:
             raise typer.Exit(code=1)
     else:
         # Attempt encryption using the selected backend
@@ -305,20 +323,26 @@ def encrypt_cmd(
             from envdrift.cli_commands.encryption_helpers import should_skip_reencryption
 
             smart_enabled = encryption_config.smart_encryption if encryption_config else False
-            should_skip, skip_reason = should_skip_reencryption(
-                env_file, encryption_backend, enabled=smart_enabled
-            )
-            if should_skip:
-                print_success(f"Skipped re-encryption of {env_file} ({skip_reason})")
-                return
 
-            result = encryption_backend.encrypt(env_file, **encrypt_kwargs)
-            if result.success:
-                print_success(f"Encrypted {env_file} using {encryption_backend.name}")
-                _protect_private_keys(env_file)
-            else:
-                print_error(result.message)
-                raise typer.Exit(code=1)
+            for env_file in files:
+                # Surface unreadable input (directory / binary file) cleanly
+                # before invoking the backend.
+                _analyze_file(env_file)
+
+                should_skip, skip_reason = should_skip_reencryption(
+                    env_file, encryption_backend, enabled=smart_enabled
+                )
+                if should_skip:
+                    print_success(f"Skipped re-encryption of {env_file} ({skip_reason})")
+                    continue
+
+                result = encryption_backend.encrypt(env_file, **encrypt_kwargs)
+                if result.success:
+                    print_success(f"Encrypted {env_file} using {encryption_backend.name}")
+                    _protect_private_keys(env_file)
+                else:
+                    print_error(result.message)
+                    raise typer.Exit(code=1)
 
         except EncryptionNotFoundError as e:
             print_error(str(e))
