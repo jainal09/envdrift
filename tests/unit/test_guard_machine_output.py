@@ -27,11 +27,13 @@ def _init_empty_git_repo(path) -> None:
     subprocess.run(["git", "config", "user.name", "Test"], cwd=path, check=True)
 
 
-def _stage_clean_file(path, name: str = "clean.env") -> None:
+def _stage_clean_file(path, name: str = "clean.cfg") -> None:
     """Write a secret-free file under ``path`` and ``git add`` it (staged)."""
     target = path / name
-    # No secret-shaped values: guard must finish with an empty-findings doc so
-    # the assertion isolates the success-path *progress* leak, not findings.
+    # No secret-shaped values, and NOT an env-file naming shape (a plaintext
+    # ``*.env`` is itself a HIGH unencrypted-env-file finding, #477): guard
+    # must finish with an empty-findings doc so the assertion isolates the
+    # success-path *progress* leak, not findings.
     target.write_text("HELLO=world\n")
     subprocess.run(["git", "add", name], cwd=path, check=True)
 
@@ -39,21 +41,22 @@ def _stage_clean_file(path, name: str = "clean.env") -> None:
 def _commit_pr_base_history(path) -> str:
     """Build a two-commit history with one changed file; return the base SHA.
 
-    ``<base_sha>...HEAD`` then yields exactly one changed ``.env`` file, so the
+    ``<base_sha>...HEAD`` then yields exactly one changed file, so the
     ``--pr-base`` success path (files present to scan) is exercised against a
-    real git history. The changed file is secret-free so guard finishes with an
-    empty-findings doc and the assertion isolates the progress-prose leak.
+    real git history. The changed file is secret-free and not env-file-shaped
+    (a plaintext ``*.env`` is itself a HIGH finding, #477) so guard finishes
+    with an empty-findings doc and the assertion isolates the progress-prose leak.
     """
-    base = path / "base.env"
+    base = path / "base.cfg"
     base.write_text("BASE=1\n")
-    subprocess.run(["git", "add", "base.env"], cwd=path, check=True)
+    subprocess.run(["git", "add", "base.cfg"], cwd=path, check=True)
     subprocess.run(["git", "commit", "-q", "-m", "base"], cwd=path, check=True)
     base_sha = subprocess.run(
         ["git", "rev-parse", "HEAD"], cwd=path, capture_output=True, text=True, check=True
     ).stdout.strip()
-    changed = path / "changed.env"
+    changed = path / "changed.cfg"
     changed.write_text("HELLO=world\n")
-    subprocess.run(["git", "add", "changed.env"], cwd=path, check=True)
+    subprocess.run(["git", "add", "changed.cfg"], cwd=path, check=True)
     subprocess.run(["git", "commit", "-q", "-m", "change"], cwd=path, check=True)
     return base_sha
 
