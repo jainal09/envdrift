@@ -1,0 +1,28 @@
+tests/scanner/test_native.py
+  s_a0bbd64ba4e4dd::t_d95c26b1e6e86b 1996-2012
+  s_a0bbd64ba4e4dd::t_e2a484f721f74e 2046,2049-2055,2058-2076
+src/envdrift/scanner/native.py
+  s_a0bbd64ba4e4dd::t_6f03b0fcc41d45 735
+  s_a0bbd64ba4e4dd::t_03eb671f7e5dd1 323-324,326-332,335,338
+  s_a0bbd64ba4e4dd::t_a23be09c2d6838 656-659,661-679
+  s_a0bbd64ba4e4dd::t_a33faa3552f4d8 249-251
+  s_a0bbd64ba4e4dd::t_03c83458b60cf7 681-689,694,710,716-718
+docs/guides/guard.md
+  s_a0bbd64ba4e4dd::t_3dd314425ac895 26-30
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.6",
+  "base_commit_sha": "77567a2a0a49f4c981fbcf596ed919487606b8f6",
+  "prompts": {},
+  "sessions": {
+    "s_a0bbd64ba4e4dd": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "c1e5b2e5-0fec-4bf5-b8e6-20cdb3a76855",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Jainal Gosaliya <jainal09gosalia@gmail.com>"
+    }
+  }
+}
