@@ -11,6 +11,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from envdrift.scanner.base import FindingSeverity
+from envdrift.scanner.patterns import hash_secret, redact_secret
 from envdrift.scanner.trivy import (
     TrivyInstaller,
     TrivyInstallError,
@@ -704,6 +705,226 @@ class TestTrivyInstallerInstall:
         installer = TrivyInstaller()
         with pytest.raises(TrivyInstallError, match="not found in archive"):
             installer.install()
+
+
+# Distinct same-shape GitHub PATs (same variable name, same length) so their
+# trivy-redacted Match lines are byte-identical. Assembled from fragments so the
+# full secret pattern never appears as a contiguous literal in source (GitHub
+# push protection).
+_TOKEN_A = "ghp_" + "016C7eX9bQ2vYwN3" + "kLmZpRtUaScDfGhJkL01"
+_TOKEN_B = "ghp_" + "92RkXwQ7tBn4MvCs" + "1LhJd8PfYg5WzEuA63To"
+
+
+class TestRedactedMatchHashing:
+    """Regression tests for #479 — trivy emits ``Match`` pre-redacted.
+
+    Real trivy output never contains the raw secret: ``Secret`` is null and the
+    matched span inside ``Match`` is replaced by a same-length run of ``*``.
+    Hashing that redacted line as if it were the secret makes two distinct
+    secrets of the same shape collide, and the engine's ``--skip-duplicate``
+    dedup (keyed on ``secret_hash``) silently drops one. The adapter must
+    recover the raw value from the scanned file when possible, and otherwise
+    fall back to a location-qualified hash that can never collapse distinct
+    findings.
+    """
+
+    @pytest.fixture
+    def scanner(self) -> TrivyScanner:
+        """TrivyScanner with auto-install disabled (parsing-only tests)."""
+        return TrivyScanner(auto_install=False)
+
+    @staticmethod
+    def _trivy_secret(
+        match: str,
+        start_line: int = 1,
+        end_line: int | None = None,
+        rule: str = "github-pat",
+    ) -> dict[str, Any]:
+        """Build a secret dict shaped exactly like real ``trivy fs`` JSON output."""
+        return {
+            "RuleID": rule,
+            "Category": "GitHub",
+            "Severity": "CRITICAL",
+            "Title": "GitHub Personal Access Token",
+            "StartLine": start_line,
+            "EndLine": end_line if end_line is not None else start_line,
+            "Match": match,
+        }
+
+    @staticmethod
+    def _masked_line(token: str, prefix: str = "TOKEN=") -> str:
+        """The Match line trivy emits: raw line with the secret as ``*`` run."""
+        return prefix + "*" * len(token)
+
+    def test_distinct_secrets_with_identical_redacted_match_hash_differently(
+        self, scanner: TrivyScanner, tmp_path: Path
+    ):
+        """#479: identical Match lines for distinct secrets must NOT share a hash."""
+        assert len(_TOKEN_A) == len(_TOKEN_B)
+        (tmp_path / "a.txt").write_text(f"TOKEN={_TOKEN_A}\n", encoding="utf-8")
+        (tmp_path / "b.txt").write_text(f"TOKEN={_TOKEN_B}\n", encoding="utf-8")
+        masked = self._masked_line(_TOKEN_A)
+
+        finding_a = scanner._parse_secret(self._trivy_secret(masked), "a.txt", tmp_path)
+        finding_b = scanner._parse_secret(self._trivy_secret(masked), "b.txt", tmp_path)
+
+        assert finding_a is not None and finding_b is not None
+        assert finding_a.secret_hash and finding_b.secret_hash
+        assert finding_a.secret_hash != finding_b.secret_hash, (
+            "distinct secrets sharing a redacted Match collapsed to one hash (#479)"
+        )
+
+    def test_recovered_hash_and_preview_use_raw_secret_value(
+        self, scanner: TrivyScanner, tmp_path: Path
+    ):
+        """The raw value is recovered from the file for hash + preview."""
+        (tmp_path / "creds.txt").write_text(
+            f"# header\nexport TOKEN={_TOKEN_A}  # prod\n", encoding="utf-8"
+        )
+        masked = f"export TOKEN={'*' * len(_TOKEN_A)}  # prod"
+
+        finding = scanner._parse_secret(
+            self._trivy_secret(masked, start_line=2), "creds.txt", tmp_path
+        )
+
+        assert finding is not None
+        assert finding.secret_hash == hash_secret(_TOKEN_A)
+        assert finding.secret_preview == redact_secret(_TOKEN_A)
+        assert _TOKEN_A not in finding.secret_preview
+
+    def test_redacted_match_line_is_never_hashed_as_the_secret(
+        self, scanner: TrivyScanner, tmp_path: Path
+    ):
+        """Neither recovery nor fallback may equal hash_secret(redacted Match)."""
+        (tmp_path / "a.txt").write_text(f"TOKEN={_TOKEN_A}\n", encoding="utf-8")
+        masked = self._masked_line(_TOKEN_A)
+
+        recovered = scanner._parse_secret(self._trivy_secret(masked), "a.txt", tmp_path)
+        fallback = scanner._parse_secret(self._trivy_secret(masked), "missing.txt", tmp_path)
+
+        assert recovered is not None and fallback is not None
+        assert recovered.secret_hash != hash_secret(masked)
+        assert fallback.secret_hash != hash_secret(masked)
+
+    def test_fallback_hash_is_location_qualified_when_file_is_missing(
+        self, scanner: TrivyScanner, tmp_path: Path
+    ):
+        """Unrecoverable findings at different locations keep distinct hashes."""
+        masked = self._masked_line(_TOKEN_A)
+
+        finding_a = scanner._parse_secret(self._trivy_secret(masked), "gone-a.txt", tmp_path)
+        finding_b = scanner._parse_secret(self._trivy_secret(masked), "gone-b.txt", tmp_path)
+        finding_a_line9 = scanner._parse_secret(
+            self._trivy_secret(masked, start_line=9), "gone-a.txt", tmp_path
+        )
+
+        assert finding_a is not None and finding_b is not None and finding_a_line9 is not None
+        hashes = {finding_a.secret_hash, finding_b.secret_hash, finding_a_line9.secret_hash}
+        assert all(hashes), "fallback findings must still carry a non-empty hash"
+        assert len(hashes) == 3, "file and line must qualify the fallback hash"
+
+    def test_fallback_hash_is_stable_for_the_same_finding(
+        self, scanner: TrivyScanner, tmp_path: Path
+    ):
+        """Re-parsing the same unrecoverable finding yields the same hash."""
+        masked = self._masked_line(_TOKEN_A)
+        secret = self._trivy_secret(masked, start_line=3)
+
+        first = scanner._parse_secret(secret, "gone.txt", tmp_path)
+        second = scanner._parse_secret(secret, "gone.txt", tmp_path)
+
+        assert first is not None and second is not None
+        assert first.secret_hash == second.secret_hash
+
+    def test_fallback_when_file_line_no_longer_aligns_with_match(
+        self, scanner: TrivyScanner, tmp_path: Path
+    ):
+        """A changed/shorter line must not be mistaken for the secret."""
+        (tmp_path / "a.txt").write_text("TOKEN=rotated\n", encoding="utf-8")
+        masked = self._masked_line(_TOKEN_A)
+
+        finding = scanner._parse_secret(self._trivy_secret(masked), "a.txt", tmp_path)
+
+        assert finding is not None
+        assert finding.secret_hash
+        assert finding.secret_hash != hash_secret("rotated")
+        assert finding.secret_hash != hash_secret(masked)
+
+    def test_recovery_rejects_diff_span_that_is_not_all_asterisks(
+        self, scanner: TrivyScanner, tmp_path: Path
+    ):
+        """Same-length but non-masked divergence must not be 'recovered'."""
+        (tmp_path / "a.txt").write_text("TOKEN=abcdef\n", encoding="utf-8")
+        # No * at all in the Match -> recovery is not even attempted.
+        finding = scanner._parse_secret(self._trivy_secret("TOKEN=zzzzzz"), "a.txt", tmp_path)
+        # * present but the differing span is not a pure * run -> rejected.
+        finding_mixed = scanner._parse_secret(self._trivy_secret("TOKEN=*zzzz*"), "a.txt", tmp_path)
+
+        assert finding is not None and finding_mixed is not None
+        assert finding.secret_hash and finding_mixed.secret_hash
+        assert finding.secret_hash != hash_secret("abcdef")
+        assert finding_mixed.secret_hash != hash_secret("abcdef")
+
+    def test_fallback_when_start_line_is_beyond_end_of_file(
+        self, scanner: TrivyScanner, tmp_path: Path
+    ):
+        """A StartLine past EOF (file truncated since the scan) falls back."""
+        (tmp_path / "a.txt").write_text("only one line\n", encoding="utf-8")
+        masked = self._masked_line(_TOKEN_A)
+
+        finding = scanner._parse_secret(self._trivy_secret(masked, start_line=5), "a.txt", tmp_path)
+
+        assert finding is not None
+        assert finding.secret_hash
+        assert finding.secret_hash != hash_secret(masked)
+
+    def test_multi_line_secret_falls_back_to_location_hash(
+        self, scanner: TrivyScanner, tmp_path: Path
+    ):
+        """Multi-line findings (StartLine != EndLine) never hash a partial span."""
+        (tmp_path / "key.pem").write_text(
+            "-----BEGIN PRIVATE KEY-----\nabc\n-----END PRIVATE KEY-----\n",
+            encoding="utf-8",
+        )
+        masked = "-----BEGIN PRIVATE KEY-----"
+        finding_a = scanner._parse_secret(
+            self._trivy_secret(masked, start_line=1, end_line=3, rule="private-key"),
+            "key.pem",
+            tmp_path,
+        )
+        finding_b = scanner._parse_secret(
+            self._trivy_secret(masked, start_line=1, end_line=3, rule="private-key"),
+            "other.pem",
+            tmp_path,
+        )
+
+        assert finding_a is not None and finding_b is not None
+        assert finding_a.secret_hash and finding_b.secret_hash
+        assert finding_a.secret_hash != finding_b.secret_hash
+
+    def test_recovery_works_with_crlf_line_endings(self, scanner: TrivyScanner, tmp_path: Path):
+        """CRLF files (Windows) still recover the raw value at the right line."""
+        crlf = f"# header\r\nTOKEN={_TOKEN_A}\r\n"
+        (tmp_path / "win.txt").write_bytes(crlf.encode("utf-8"))
+        masked = self._masked_line(_TOKEN_A)
+
+        finding = scanner._parse_secret(
+            self._trivy_secret(masked, start_line=2), "win.txt", tmp_path
+        )
+
+        assert finding is not None
+        assert finding.secret_hash == hash_secret(_TOKEN_A)
+
+    def test_empty_match_still_yields_empty_hash_and_preview(
+        self, scanner: TrivyScanner, tmp_path: Path
+    ):
+        """No Match at all keeps the historical empty hash/preview behavior."""
+        secret = self._trivy_secret("", start_line=1)
+        finding = scanner._parse_secret(secret, "a.txt", tmp_path)
+
+        assert finding is not None
+        assert finding.secret_hash == ""
+        assert finding.secret_preview == ""
 
 
 # Mark integration tests that require actual trivy installation

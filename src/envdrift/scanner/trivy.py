@@ -547,15 +547,30 @@ class TrivyScanner(ScannerBackend):
                 else:
                     file_path = base_path / file_path
 
-            # Get the secret match and redact it
-            matched = secret.get("Match", "")
-            redacted = redact_secret(matched) if matched else ""
-            secret_hash = hash_secret(matched) if matched else ""
-
             # Map rule ID
             rule_id: str = secret.get("RuleID", "unknown")
             category: str = secret.get("Category", "Secret")
             title: str = secret.get("Title", rule_id)
+
+            # Trivy emits ``Match`` with the secret already redacted to a
+            # same-length ``*`` run (``Secret`` is never populated), so the
+            # Match line must never be hashed as if it were the secret: two
+            # distinct secrets of the same shape would collide and the
+            # engine's ``--skip-duplicate`` dedup would silently drop one
+            # (#479). Recover the raw value from the scanned file when the
+            # redacted line still aligns; otherwise fall back to a
+            # location-qualified hash that cannot collapse distinct findings.
+            matched = secret.get("Match", "")
+            raw_secret = self._recover_secret_value(file_path, secret)
+            if raw_secret is not None:
+                redacted = redact_secret(raw_secret)
+                secret_hash = hash_secret(raw_secret)
+            elif matched:
+                redacted = redact_secret(matched)
+                secret_hash = self._location_qualified_hash(file_path, secret, rule_id, matched)
+            else:
+                redacted = ""
+                secret_hash = ""  # nosec B105 - empty placeholder, not a password
 
             # Map severity
             severity_str = secret.get("Severity", "HIGH")
@@ -579,3 +594,77 @@ class TrivyScanner(ScannerBackend):
             )
         except Exception:
             return None
+
+    @staticmethod
+    def _recover_secret_value(file_path: Path, secret: dict[str, Any]) -> str | None:
+        """Recover the raw secret value that trivy redacted in ``Match``.
+
+        Trivy replaces the matched secret inside ``Match`` with a same-length
+        run of ``*``. Re-read the flagged line from the scanned file and align
+        it with ``Match``: the longest common prefix and suffix bound the
+        masked span, and the corresponding span of the raw line is the secret.
+
+        Returns ``None`` whenever the alignment cannot be validated --
+        multi-line findings, truncated matches, a file that changed since the
+        scan or cannot be read -- in which case the caller falls back to a
+        location-qualified hash instead.
+        """
+        match = secret.get("Match") or ""
+        start_line = secret.get("StartLine")
+        end_line = secret.get("EndLine", start_line)
+        if (
+            not match
+            or "*" not in match
+            or not isinstance(start_line, int)
+            or start_line < 1
+            or (isinstance(end_line, int) and end_line != start_line)
+        ):
+            return None
+        try:
+            text = file_path.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            return None
+        lines = text.splitlines()
+        if start_line > len(lines):
+            return None
+        raw_line = lines[start_line - 1]
+        length = len(match)
+        if len(raw_line) != length or raw_line == match:
+            return None
+        prefix = 0
+        while prefix < length and raw_line[prefix] == match[prefix]:
+            prefix += 1
+        suffix = 0
+        while (
+            suffix < length - prefix and raw_line[length - 1 - suffix] == match[length - 1 - suffix]
+        ):
+            suffix += 1
+        masked_span = match[prefix : length - suffix]
+        candidate = raw_line[prefix : length - suffix]
+        if not candidate or set(masked_span) != {"*"}:
+            return None
+        return candidate
+
+    @staticmethod
+    def _location_qualified_hash(
+        file_path: Path, secret: dict[str, Any], rule_id: str, matched: str
+    ) -> str:
+        """Hash for findings whose raw secret value could not be recovered.
+
+        The redacted ``Match`` line alone is identical for two distinct
+        secrets of the same shape, so it must be qualified with the finding's
+        file, line span and rule: distinct findings then can never collapse
+        under the engine's hash-keyed ``--skip-duplicate`` dedup, while
+        re-scans of the same finding stay stable. The constant prefix and
+        NUL separators keep this synthetic key from ever colliding with a
+        real secret's ``hash_secret`` value.
+        """
+        parts = (
+            "envdrift-trivy-redacted",
+            str(file_path),
+            str(secret.get("StartLine") or 0),
+            str(secret.get("EndLine") or 0),
+            rule_id,
+            matched,
+        )
+        return hash_secret("\x00".join(parts))
