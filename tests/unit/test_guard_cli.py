@@ -53,6 +53,11 @@ def _patch_guard_dependencies(monkeypatch, config: EnvdriftConfig, result: Aggre
     info_calls: list[bool] = []
 
     class DummyScanner:
+        # History-capable so flag-plumbing tests that pass --history keep
+        # exercising their target behavior (guard refuses --history when no
+        # active scanner supports git history, #476).
+        supports_git_history = True
+
         def __init__(self, name: str):
             self.name = name
 
@@ -280,7 +285,11 @@ def test_guard_rejects_custom_env_files_outside_folder(tmp_path: Path, monkeypat
 
 
 def test_guard_pr_base_fetch_warns_on_failure(tmp_path: Path, monkeypatch):
-    """Fetch failures in PR mode should emit a warning when verbose."""
+    """Fetch failures in PR mode emit a warning even without --verbose (#476).
+
+    The warning used to be verbose-gated (and swallowed entirely in machine
+    modes), hiding the usual root cause of an unresolvable base ref.
+    """
     config = EnvdriftConfig()
     dummy_result = _build_result([])
     _patch_guard_dependencies(monkeypatch, config, dummy_result)
@@ -295,9 +304,10 @@ def test_guard_pr_base_fetch_warns_on_failure(tmp_path: Path, monkeypatch):
 
     monkeypatch.setattr(subprocess, "run", fake_run)
 
-    result = runner.invoke(app, ["guard", "--pr-base", "origin/", "--verbose"])
+    result = runner.invoke(app, ["guard", "--pr-base", "origin/"])
     assert result.exit_code == 0
     assert "warning" in result.output.lower()
+    assert "could not fetch" in result.output.lower()
 
 
 def test_guard_pr_base_strips_only_leading_origin_prefix(tmp_path: Path, monkeypatch):
@@ -514,14 +524,22 @@ def test_guard_staged_with_no_staged_files(tmp_path: Path, monkeypatch):
 
 
 def test_guard_staged_scans_only_staged_files(tmp_path: Path, monkeypatch):
-    """--staged only scans git staged files."""
+    """--staged scans the staged *index blobs*, not the working-tree copies (#476).
+
+    The two staged names are materialized from ``git show :<path>`` into a
+    temporary mirror; the scanner must receive exactly those mirror copies
+    (carrying the index content), never the working-tree files.
+    """
     import subprocess
 
     config = EnvdriftConfig()
     scan_paths: list[list[Path]] = []
+    scanned_contents: dict[str, str] = {}
     dummy_result = _build_result([])
 
     class DummyScanner:
+        supports_git_history = True
+
         def __init__(self, name: str):
             self.name = name
 
@@ -534,28 +552,42 @@ def test_guard_staged_scans_only_staged_files(tmp_path: Path, monkeypatch):
 
         def scan(self, paths, on_scanner_complete=None):
             scan_paths.append(paths)
+            # The mirror is cleaned up right after the scan; capture now.
+            scanned_contents.update({p.name: p.read_text(encoding="utf-8") for p in paths})
             return dummy_result
 
     monkeypatch.setattr("envdrift.cli_commands.guard.load_config", lambda _p=None: config)
     monkeypatch.setattr("envdrift.cli_commands.guard.ScanEngine", DummyEngine)
 
-    # Mock git diff --cached to return staged files
+    # Mock git: diff --cached lists two staged files; show :<path> returns the
+    # index blob (which differs from the working-tree copies on disk).
     def mock_run(cmd, *args, **kwargs):
         if "diff" in cmd and "--cached" in cmd:
             return subprocess.CompletedProcess(cmd, 0, stdout="file1.py\nfile2.env\n", stderr="")
+        if "show" in cmd:
+            rel = cmd[-1].removeprefix(":")
+            return subprocess.CompletedProcess(
+                cmd, 0, stdout=f"STAGED {rel}\n".encode(), stderr=b""
+            )
         return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
 
     monkeypatch.setattr("subprocess.run", mock_run)
 
     monkeypatch.chdir(tmp_path)
-    # Create the staged files
-    Path("file1.py").write_text("# test")
-    Path("file2.env").write_text("SECRET=value")
+    # Working-tree copies hold DIFFERENT content than the staged blobs.
+    Path("file1.py").write_text("# worktree only", encoding="utf-8")
+    Path("file2.env").write_text("SECRET=worktree-only", encoding="utf-8")
 
     result = runner.invoke(app, ["guard", "--staged"])
-    assert result.exit_code == 0
+    assert result.exit_code == 0, result.output
     assert scan_paths  # Verify scan was called
     assert len(scan_paths[0]) == 2  # Two staged files
+    # The scanned files are mirror copies of the index blobs, not the worktree.
+    assert all(tmp_path not in p.parents for p in scan_paths[0]), scan_paths[0]
+    assert scanned_contents == {
+        "file1.py": "STAGED file1.py\n",
+        "file2.env": "STAGED file2.env\n",
+    }
 
 
 def test_guard_staged_resolves_repo_relative_paths_against_toplevel(tmp_path: Path, monkeypatch):
@@ -594,7 +626,9 @@ def test_guard_staged_resolves_repo_relative_paths_against_toplevel(tmp_path: Pa
     repo_root = tmp_path
     sub_dir = repo_root / "sub"
     sub_dir.mkdir()
-    (sub_dir / "leak.env").write_text("SECRET=value")
+    (sub_dir / "leak.env").write_text("SECRET=worktree")
+
+    show_cwds: list[str] = []
 
     def mock_run(cmd, *args, **kwargs):
         if "rev-parse" in cmd and "--show-toplevel" in cmd:
@@ -602,6 +636,9 @@ def test_guard_staged_resolves_repo_relative_paths_against_toplevel(tmp_path: Pa
         if "diff" in cmd and "--cached" in cmd:
             # git reports the path relative to the repo root, not the cwd.
             return subprocess.CompletedProcess(cmd, 0, stdout="sub/leak.env\n", stderr="")
+        if "show" in cmd:
+            show_cwds.append(kwargs.get("cwd", ""))
+            return subprocess.CompletedProcess(cmd, 0, stdout=b"SECRET=staged\n", stderr=b"")
         return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
 
     monkeypatch.setattr("subprocess.run", mock_run)
@@ -612,11 +649,12 @@ def test_guard_staged_resolves_repo_relative_paths_against_toplevel(tmp_path: Pa
     assert result.exit_code == 0, result.output
     assert "no staged files" not in result.output.lower(), result.output
     assert scan_paths
-    # The repo-relative "sub/leak.env" is resolved against the repo root for the
-    # existence check, then handed to the scanner as a cwd-relative path (we run
-    # from sub/, so it is just "leak.env"). It must resolve to the same file.
+    # The repo-relative "sub/leak.env" is read from the index with cwd at the
+    # git toplevel (not the subdir cwd) and mirrored under the same relative
+    # layout, so the staged file is never dropped when run from a subdirectory.
     assert len(scan_paths[0]) == 1
-    assert (Path.cwd() / scan_paths[0][0]).resolve() == (repo_root / "sub" / "leak.env").resolve()
+    assert show_cwds == [str(repo_root)]
+    assert scan_paths[0][0].parts[-2:] == ("sub", "leak.env")
 
 
 def _patch_dummy_engine(monkeypatch, config, scan_paths):
@@ -651,12 +689,17 @@ def test_guard_staged_git_toplevel_falls_back_to_cwd(tmp_path: Path, monkeypatch
     _patch_dummy_engine(monkeypatch, EnvdriftConfig(), scan_paths)
     (tmp_path / "leak.env").write_text("SECRET=value")
 
+    show_cwds: list[str] = []
+
     def mock_run(cmd, *args, **kwargs):
         if "rev-parse" in cmd and "--show-toplevel" in cmd:
             # Exercise the except (subprocess.TimeoutExpired, FileNotFoundError) path.
             raise FileNotFoundError("git not found")
         if "diff" in cmd and "--cached" in cmd:
             return subprocess.CompletedProcess(cmd, 0, stdout="leak.env\n", stderr="")
+        if "show" in cmd:
+            show_cwds.append(kwargs.get("cwd", ""))
+            return subprocess.CompletedProcess(cmd, 0, stdout=b"SECRET=staged\n", stderr=b"")
         return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
 
     monkeypatch.setattr("subprocess.run", mock_run)
@@ -665,7 +708,11 @@ def test_guard_staged_git_toplevel_falls_back_to_cwd(tmp_path: Path, monkeypatch
     result = runner.invoke(app, ["guard", "--staged"])
     assert result.exit_code == 0, result.output
     assert scan_paths
-    assert (Path.cwd() / scan_paths[0][0]).resolve() == (tmp_path / "leak.env").resolve()
+    # The index blob is read with cwd falling back to the process cwd, and the
+    # staged file is still mirrored and scanned (not dropped).
+    assert [Path(c).resolve() for c in show_cwds] == [tmp_path.resolve()]
+    assert len(scan_paths[0]) == 1
+    assert scan_paths[0][0].name == "leak.env"
 
 
 def test_guard_pr_base_no_changed_files(tmp_path: Path, monkeypatch):
@@ -758,6 +805,271 @@ def test_guard_pr_base_with_no_changed_files(tmp_path: Path, monkeypatch):
     result = runner.invoke(app, ["guard", "--pr-base", "origin/main"])
     assert result.exit_code == 0
     assert "no changed files" in result.output.lower()
+
+
+def test_guard_pr_base_unresolvable_ref_errors(tmp_path: Path, monkeypatch):
+    """A failing ``git diff <base>...HEAD`` is an error, not "no changes" (#476).
+
+    git exits 128 for an unknown revision; guard must exit 1 with an error that
+    names the base ref instead of passing green with "No changed files to scan".
+    """
+    import subprocess
+
+    config = EnvdriftConfig()
+    _patch_guard_dependencies(monkeypatch, config, _build_result([]))
+
+    def mock_run(cmd, *args, **kwargs):
+        if "diff" in cmd:
+            return subprocess.CompletedProcess(
+                cmd,
+                128,
+                stdout="",
+                stderr="fatal: ambiguous argument 'nope...HEAD': unknown revision\n",
+            )
+        return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+
+    monkeypatch.setattr("subprocess.run", mock_run)
+    monkeypatch.chdir(tmp_path)
+
+    result = runner.invoke(app, ["guard", "--pr-base", "nope"])
+    out = " ".join(result.output.split())
+    assert result.exit_code == 1, out
+    assert "Error" in out, out
+    assert "'nope'" in out, out
+    assert "unknown revision" in out, out
+    assert "no changed files" not in out.lower(), out
+
+
+def test_guard_pr_base_unresolvable_ref_errors_json(tmp_path: Path, monkeypatch):
+    """--json gets a clean ``{"error": ...}`` document for a bad --pr-base (#476)."""
+    import json as json_module
+    import subprocess
+
+    config = EnvdriftConfig()
+    _patch_guard_dependencies(monkeypatch, config, _build_result([]))
+
+    def mock_run(cmd, *args, **kwargs):
+        if "diff" in cmd:
+            return subprocess.CompletedProcess(
+                cmd, 128, stdout="", stderr="fatal: bad revision 'nope...HEAD'\n"
+            )
+        return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+
+    monkeypatch.setattr("subprocess.run", mock_run)
+    monkeypatch.chdir(tmp_path)
+
+    result = runner.invoke(app, ["guard", "--pr-base", "nope", "--json"])
+    assert result.exit_code == 1
+    payload = json_module.loads(result.stdout)
+    assert "error" in payload
+    assert "'nope'" in payload["error"]
+
+
+def test_guard_staged_git_diff_failure_errors(tmp_path: Path, monkeypatch):
+    """A failing ``git diff --cached`` is an error, not "no staged files" (#476)."""
+    import subprocess
+
+    config = EnvdriftConfig()
+    _patch_guard_dependencies(monkeypatch, config, _build_result([]))
+
+    def mock_run(cmd, *args, **kwargs):
+        if "diff" in cmd and "--cached" in cmd:
+            return subprocess.CompletedProcess(
+                cmd, 128, stdout="", stderr="fatal: not a git repository\n"
+            )
+        return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+
+    monkeypatch.setattr("subprocess.run", mock_run)
+    monkeypatch.chdir(tmp_path)
+
+    result = runner.invoke(app, ["guard", "--staged"])
+    out = " ".join(result.output.split())
+    assert result.exit_code == 1, out
+    assert "Error" in out, out
+    assert "not a git repository" in out, out
+    assert "no staged files" not in out.lower(), out
+
+
+def test_guard_history_without_capable_scanner_errors(tmp_path: Path, monkeypatch):
+    """--history with no history-capable scanner active exits 1 loudly (#476)."""
+    config = EnvdriftConfig()
+    _patch_guard_dependencies(monkeypatch, config, _build_result([]))
+
+    # Simulate a scanner set with no git-history support (e.g. --native-only).
+    class NoHistoryScanner:
+        supports_git_history = False
+        name = "native"
+
+    class NoHistoryEngine:
+        def __init__(self, guard_config):
+            self.scanners = [NoHistoryScanner()]
+
+        def get_scanner_info(self):
+            return []
+
+        def scan(self, paths, on_scanner_complete=None):
+            raise AssertionError("scan must not run when --history is unsatisfiable")
+
+        def check_combined_files_security(self):
+            return []
+
+    monkeypatch.setattr("envdrift.cli_commands.guard.ScanEngine", NoHistoryEngine)
+
+    result = runner.invoke(app, ["guard", str(tmp_path), "--history"])
+    out = " ".join(result.output.split())
+    assert result.exit_code == 1, out
+    assert "history" in out.lower(), out
+    assert "gitleaks" in out.lower(), out
+
+
+def test_guard_history_without_capable_scanner_errors_json(tmp_path: Path, monkeypatch):
+    """--history refusal stays a clean ``{"error": ...}`` under --json (#476)."""
+    import json as json_module
+
+    config = EnvdriftConfig()
+    _patch_guard_dependencies(monkeypatch, config, _build_result([]))
+
+    class NoHistoryScanner:
+        supports_git_history = False
+        name = "native"
+
+    class NoHistoryEngine:
+        def __init__(self, guard_config):
+            self.scanners = [NoHistoryScanner()]
+
+        def get_scanner_info(self):
+            return []
+
+        def scan(self, paths, on_scanner_complete=None):
+            raise AssertionError("scan must not run when --history is unsatisfiable")
+
+        def check_combined_files_security(self):
+            return []
+
+    monkeypatch.setattr("envdrift.cli_commands.guard.ScanEngine", NoHistoryEngine)
+
+    result = runner.invoke(app, ["guard", str(tmp_path), "--history", "--json"])
+    assert result.exit_code == 1
+    payload = json_module.loads(result.stdout)
+    assert "error" in payload
+    assert "history" in payload["error"].lower()
+
+
+def test_guard_staged_unreadable_blob_skipped_with_warning(tmp_path: Path, monkeypatch):
+    """A staged entry whose index blob can't be read is skipped LOUDLY (#476).
+
+    E.g. a submodule (gitlink) entry has no blob to content-scan: it must be
+    skipped with a stderr warning while the readable entries are still scanned.
+    """
+    import subprocess
+
+    scan_paths: list[list[Path]] = []
+    _patch_dummy_engine(monkeypatch, EnvdriftConfig(), scan_paths)
+
+    def mock_run(cmd, *args, **kwargs):
+        if "diff" in cmd and "--cached" in cmd:
+            return subprocess.CompletedProcess(cmd, 0, stdout="submodule\ngood.py\n", stderr="")
+        if "show" in cmd:
+            if cmd[-1] == ":submodule":
+                return subprocess.CompletedProcess(
+                    cmd, 128, stdout=b"", stderr=b"fatal: bad object\n"
+                )
+            return subprocess.CompletedProcess(cmd, 0, stdout=b"x = 1\n", stderr=b"")
+        return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+
+    monkeypatch.setattr("subprocess.run", mock_run)
+    monkeypatch.chdir(tmp_path)
+
+    result = runner.invoke(app, ["guard", "--staged"])
+    out = " ".join(result.output.split())
+    assert result.exit_code == 0, out
+    assert "warning" in out.lower(), out
+    assert "submodule" in out, out
+    assert scan_paths
+    assert [p.name for p in scan_paths[0]] == ["good.py"]
+
+
+def test_guard_staged_all_blobs_unreadable_errors(tmp_path: Path, monkeypatch):
+    """--staged with NO readable index blob is an error, not a green pass (#476)."""
+    import subprocess
+
+    scan_paths: list[list[Path]] = []
+    _patch_dummy_engine(monkeypatch, EnvdriftConfig(), scan_paths)
+
+    def mock_run(cmd, *args, **kwargs):
+        if "diff" in cmd and "--cached" in cmd:
+            return subprocess.CompletedProcess(cmd, 0, stdout="submodule\n", stderr="")
+        if "show" in cmd:
+            return subprocess.CompletedProcess(cmd, 128, stdout=b"", stderr=b"fatal: bad object\n")
+        return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+
+    monkeypatch.setattr("subprocess.run", mock_run)
+    monkeypatch.chdir(tmp_path)
+
+    result = runner.invoke(app, ["guard", "--staged"])
+    out = " ".join(result.output.split())
+    assert result.exit_code == 1, out
+    assert "Error" in out, out
+    assert "could not read any staged file content" in out, out
+    assert not scan_paths
+
+
+def test_git_index_mirror_failure_warns(tmp_path: Path, monkeypatch, capsys):
+    """_git_index_mirror degrades to a stderr warning when git fails (#476).
+
+    Failure only weakens git-state rules (committed-private-key); the content
+    scan itself must proceed, so the helper warns instead of raising.
+    """
+    from envdrift.cli_commands.guard import _git_index_mirror
+
+    def mock_run(cmd, *args, **kwargs):
+        raise FileNotFoundError("git not found")
+
+    monkeypatch.setattr("subprocess.run", mock_run)
+
+    _git_index_mirror(tmp_path)  # must not raise
+
+    err = capsys.readouterr().err
+    assert "Warning" in err
+    assert "staged-file mirror" in err
+
+
+def test_remap_finding_paths_rewrites_mirror_paths(tmp_path: Path):
+    """_remap_finding_paths rewrites mirror finding paths to display paths (#476)."""
+    from envdrift.cli_commands.guard import _remap_finding_paths
+    from envdrift.scanner.base import ScanResult
+
+    mirror_file = tmp_path / "sub" / "app.env"
+    mirror_file.parent.mkdir(parents=True)
+    mirror_file.write_text("x=1\n", encoding="utf-8")
+    display = Path("sub") / "app.env"
+
+    finding = _make_finding(FindingSeverity.CRITICAL)
+    mirror_finding = ScanFinding(
+        file_path=mirror_file,
+        line_number=1,
+        rule_id="test-rule",
+        rule_description="Test Rule",
+        description="Test finding",
+        severity=FindingSeverity.CRITICAL,
+        scanner="native",
+    )
+    result = AggregatedScanResult(
+        results=[ScanResult(scanner_name="native", findings=[mirror_finding, finding])],
+        total_findings=2,
+        unique_findings=[mirror_finding, finding],
+        scanners_used=["native"],
+        total_duration_ms=5,
+    )
+
+    remapped = _remap_finding_paths(result, {mirror_file.resolve(): display})
+
+    assert remapped.unique_findings[0].file_path == display
+    # A finding outside the mirror map is left untouched.
+    assert remapped.unique_findings[1].file_path == finding.file_path
+    assert remapped.results[0].findings[0].file_path == display
+    assert remapped.total_findings == 2
+    assert remapped.scanners_used == ["native"]
 
 
 def test_guard_pr_base_scans_diff_files(tmp_path: Path, monkeypatch):
@@ -869,25 +1181,37 @@ def test_guard_pr_base_timeout(tmp_path: Path, monkeypatch):
 
 
 def test_guard_staged_files_not_exist(tmp_path: Path, monkeypatch):
-    """--staged handles staged files that no longer exist on disk."""
+    """--staged scans a staged file even when it no longer exists on disk (#476).
+
+    The commit ships the staged index blob, so a ``git add file; rm file``
+    sequence must still be scanned. The old collection resolved staged names to
+    worktree paths and dropped missing ones, reporting "no staged files" with
+    exit 0 — a silent pass over a real about-to-be-committed secret.
+    """
     import subprocess
 
-    config = EnvdriftConfig()
-    _patch_guard_dependencies(monkeypatch, config, _build_result([]))
+    scan_paths: list[list[Path]] = []
+    _patch_dummy_engine(monkeypatch, EnvdriftConfig(), scan_paths)
 
-    # Mock git to return files that don't exist
+    # Mock git: the staged name has no working-tree copy, but its index blob
+    # is still readable via ``git show :deleted_file.py``.
     def mock_run(cmd, *args, **kwargs):
         if "diff" in cmd and "--cached" in cmd:
             return subprocess.CompletedProcess(cmd, 0, stdout="deleted_file.py\n", stderr="")
+        if "show" in cmd:
+            return subprocess.CompletedProcess(cmd, 0, stdout=b"SECRET=staged\n", stderr=b"")
         return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
 
     monkeypatch.setattr("subprocess.run", mock_run)
 
     monkeypatch.chdir(tmp_path)
-    # Don't create the file - it should show "no staged files"
+    # The file is intentionally absent from the working tree.
     result = runner.invoke(app, ["guard", "--staged"])
-    assert result.exit_code == 0
-    assert "no staged files" in result.output.lower()
+    assert result.exit_code == 0, result.output
+    assert "no staged files" not in result.output.lower(), result.output
+    assert scan_paths
+    assert len(scan_paths[0]) == 1
+    assert scan_paths[0][0].name == "deleted_file.py"
 
 
 def test_guard_with_partial_encryption_config(tmp_path: Path, monkeypatch):
