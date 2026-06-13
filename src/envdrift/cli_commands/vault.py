@@ -573,6 +573,7 @@ def vault_pull(
     from envdrift.sync.operations import EnvKeysFile
     from envdrift.vault import VaultError
     from envdrift.vault.base import SecretNotFoundError
+    from envdrift.vault.keymaterial import KeyMaterialError, extract_key_material
 
     # Resolve effective provider settings + build an authenticated client
     # (shared with vault-push single-service mode).
@@ -598,23 +599,28 @@ def vault_pull(
 
     key_name = f"DOTENV_PRIVATE_KEY_{env.upper()}"
 
-    # Parse the stored value. vault-push stores it as "DOTENV_PRIVATE_KEY_<ENV>=<value>",
-    # but accept a bare value too (no KEY_NAME= prefix).
-    raw_value = secret.value
-    if "=" in raw_value and raw_value.startswith("DOTENV_PRIVATE_KEY_"):
-        stored_key_name, key_value = raw_value.split("=", 1)
-        # Fail fast on env-prefix mismatch: e.g. pulling --env production a secret
-        # that was pushed --env staging would otherwise silently store the staging
-        # key under the production name and fail later with an opaque crypto error.
-        if stored_key_name != key_name:
-            print_error(
-                f"Secret holds '{stored_key_name}' but --env {env} expects '{key_name}'. "
-                f"Re-run with --env matching the environment the secret was pushed for "
-                f"(or push the secret under the correct environment)."
-            )
-            raise typer.Exit(code=1)
-    else:
-        key_value = raw_value
+    # Normalize + shape-validate the stored value through the shared parser used
+    # by the sync engine and lock --verify-vault (#356, #480): quoted/whitespace-
+    # wrapped values, JSON key/value documents, and multi-line .env.keys blobs
+    # are reduced to the bare key; binary payloads and unusable shapes fail
+    # loudly here instead of corrupting .env.keys under a success banner.
+    try:
+        key_value, stored_suffix = extract_key_material(secret, env)
+    except KeyMaterialError as e:
+        print_error(f"Cannot install secret as a dotenvx key: {e}")
+        raise typer.Exit(code=1) from None
+
+    # Fail fast on env-prefix mismatch: e.g. pulling --env production a secret
+    # that was pushed --env staging would otherwise silently store the staging
+    # key under the production name and fail later with an opaque crypto error.
+    if stored_suffix is not None and stored_suffix.upper() != env.upper():
+        print_error(
+            f"Secret holds 'DOTENV_PRIVATE_KEY_{stored_suffix.upper()}' but --env {env} "
+            f"expects '{key_name}'. "
+            f"Re-run with --env matching the environment the secret was pushed for "
+            f"(or push the secret under the correct environment)."
+        )
+        raise typer.Exit(code=1)
 
     # Write the key into <folder>/.env.keys
     env_keys_path = folder / ".env.keys"

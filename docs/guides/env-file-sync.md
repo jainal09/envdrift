@@ -251,6 +251,17 @@ to repeat any of it.
       | gcloud secrets versions add myapp-dotenvx-key --data-file=-
     ```
 
+> **Accepted secret shapes:** `sync`/`pull` normalize the stored value before
+> installing it, so a bare key, a full `DOTENV_PRIVATE_KEY_<ENV>=<key>` line
+> (quoted or not), a JSON key/value document holding a
+> `DOTENV_PRIVATE_KEY_<ENV>` field (the AWS console's native shape, or
+> `vault kv put secret/x DOTENV_PRIVATE_KEY_PRODUCTION=<key>`), and a whole
+> `.env.keys` file blob (e.g. `az keyvault secret set --file .env.keys`) all
+> converge to the same bare key. Shapes that cannot be reduced to a single key
+> token — JSON documents without a usable key field, multi-line documents
+> without a key line, or binary payloads — fail the mapping with an error
+> naming the layout instead of writing a corrupted `.env.keys`.
+
 ### 4. Sync keys locally
 
 Auto-discovery finds `envdrift.toml` (or `[tool.envdrift]` in `pyproject.toml`)

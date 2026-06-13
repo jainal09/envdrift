@@ -625,3 +625,66 @@ class TestEnsureAuthenticated:
 
         with pytest.raises((AuthenticationError, VaultError)):
             client.ensure_authenticated()
+
+
+class TestCoerceSecretValueKeyMaterial:
+    """Regression tests for #480: a KV-v2 secret that stores the dotenvx key under
+    its own DOTENV_PRIVATE_KEY_<ENV> field (vault kv put secret/x
+    DOTENV_PRIVATE_KEY_PRODUCTION=<hex>) must surface that field as a key line,
+    not a JSON-encoded dict that gets installed verbatim into .env.keys."""
+
+    @patch("envdrift.vault.hashicorp._hvac")
+    def _get_secret_for(self, mock_hvac_module, secret_data):
+        mock_client = MagicMock()
+        mock_client.is_authenticated.return_value = True
+        mock_client.secrets.kv.v2.read_secret_version.return_value = {
+            "data": {"data": secret_data, "metadata": {"version": 1}}
+        }
+        mock_hvac_module.Client.return_value = mock_client
+
+        from envdrift.vault.hashicorp import HashiCorpVaultClient
+
+        client = HashiCorpVaultClient(url="http://localhost:8200", token="valid-token")
+        client.authenticate()
+        return client.get_secret("my-secret")
+
+    def test_single_dotenv_field_returns_key_line(self):
+        secret = self._get_secret_for(
+            secret_data={"DOTENV_PRIVATE_KEY_PRODUCTION": "kv-field-key-abc"}
+        )
+        assert secret.value == "DOTENV_PRIVATE_KEY_PRODUCTION=kv-field-key-abc"
+
+    def test_dotenv_field_among_other_fields_still_extracted(self):
+        secret = self._get_secret_for(
+            secret_data={
+                "DOTENV_PRIVATE_KEY_PRODUCTION": "kv-field-key-abc",
+                "comment": "rotated 2026-06",
+            }
+        )
+        assert secret.value == "DOTENV_PRIVATE_KEY_PRODUCTION=kv-field-key-abc"
+
+    def test_multiple_dotenv_fields_fall_back_to_json(self):
+        """Ambiguous payloads stay JSON so the downstream normalizer can select
+        the field matching the target environment (or fail loudly)."""
+        import json as _json
+
+        secret = self._get_secret_for(
+            secret_data={
+                "DOTENV_PRIVATE_KEY_PRODUCTION": "prod-key",
+                "DOTENV_PRIVATE_KEY_STAGING": "staging-key",
+            }
+        )
+        assert _json.loads(secret.value) == {
+            "DOTENV_PRIVATE_KEY_PRODUCTION": "prod-key",
+            "DOTENV_PRIVATE_KEY_STAGING": "staging-key",
+        }
+
+    def test_single_value_key_still_returned_as_is(self):
+        secret = self._get_secret_for(secret_data={"value": "plain-key-material"})
+        assert secret.value == "plain-key-material"
+
+    def test_non_dotenv_multikey_payload_still_json(self):
+        import json as _json
+
+        secret = self._get_secret_for(secret_data={"API_KEY": "a", "API_SECRET": "b"})
+        assert _json.loads(secret.value) == {"API_KEY": "a", "API_SECRET": "b"}
