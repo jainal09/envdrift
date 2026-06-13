@@ -29,6 +29,16 @@ exit code (dotenvx can exit `0` without encrypting):
 - **Refuses content-free files.** An empty, blank-line-only, or comment-only file
   has no variables to encrypt, so the command declines with a non-zero exit
   instead of letting dotenvx scaffold a placeholder-secrets template into it.
+- **Refuses the key store and companion files.** `envdrift encrypt .env.keys`
+  would encrypt the dotenvx private-key store itself — the keys become
+  ciphertext under a brand-new keypair whose private half is never saved,
+  permanently locking out every encrypted file in the project — so the command
+  refuses any `.keys`/`.example`/`.sample`/`.template` target by name, for
+  every backend.
+- **Handles leading-dash filenames.** A file like `-dash.env` is passed to
+  dotenvx as `./-dash.env` so its CLI cannot misparse the name as flags
+  (which previously fabricated a different file full of placeholder secrets).
+  Use `envdrift encrypt -- -dash.env` so envdrift's own CLI accepts the name.
 - **Reports silent encryption failures.** When the key is missing or malformed
   (a `.env.keys` that is a directory, garbage, or a mismatched key), the file is
   re-read after the call; if any plaintext value survives, the command fails

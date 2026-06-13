@@ -112,6 +112,27 @@ class DotenvxEncryptionBackend(EncryptionBackend):
                 file_path=env_file,
             )
 
+        # Refuse companion files by name — most critically the dotenvx
+        # private-key store itself. ``encrypt .env.keys`` rewrites every
+        # DOTENV_PRIVATE_KEY* value as ciphertext under a brand-new keypair
+        # whose private half is never persisted, permanently locking out every
+        # file encrypted with those keys — previously under a clean exit 0
+        # (#474). Reuses the canonical predicate that already excludes these
+        # names from push/pull.
+        from envdrift.env_files import _is_excluded_env_file
+
+        if _is_excluded_env_file(env_file.name):
+            return EncryptionResult(
+                success=False,
+                message=(
+                    f"Refusing to encrypt {env_file}: it is a companion file "
+                    "(.keys/.example/.sample/.template), not an env file. "
+                    "Encrypting the dotenvx private-key store would permanently "
+                    "lock out every file encrypted with its keys."
+                ),
+                file_path=env_file,
+            )
+
         # Refuse to "encrypt" a file with no assignments. Handed an empty or
         # comment-only file, dotenvx scaffolds a placeholder-secrets template
         # (HELLO, AWS_ACCESS_KEY_ID, ...) into it and still exits 0, so a blind

@@ -26,6 +26,38 @@ def _fake_private_key(seed: str) -> str:
     return (seed * 64)[:64]
 
 
+class TestDotenvxHeaderFormat:
+    """#474: the header constant must match what dotenvx itself writes."""
+
+    def test_header_lines_match_dotenvx_box_style(self) -> None:
+        """Every header line is a ``#/ ... /`` box line — never ``\\#``.
+
+        envdrift previously wrote header lines ending in ``\\#`` (and dropped
+        dotenvx's padding), so a later dotenvx append produced a .env.keys with
+        two visibly different header styles despite the ``EnvKeysFile``
+        format-preservation contract.
+        """
+        lines = DOTENVX_HEADER.splitlines()
+        assert len(lines) == 4
+        for line in lines:
+            assert line.startswith("#/"), line
+            assert line.endswith("/"), line
+            assert "\\" not in line, line
+        # dotenvx pads the link line so the box edges align.
+        assert lines[2] == "#/     [how it works](https://dotenvx.com/encryption)       /"
+
+    def test_write_key_new_file_blank_line_after_header(self, tmp_path: Path) -> None:
+        """A fresh .env.keys reproduces dotenvx's blank line after the header."""
+        env_keys = tmp_path / ".env.keys"
+
+        EnvKeysFile(env_keys).write_key("DOTENV_PRIVATE_KEY_PRODUCTION", _fake_private_key("a"))
+
+        lines = env_keys.read_text(encoding="utf-8").splitlines()
+        assert lines[:4] == DOTENVX_HEADER.splitlines()
+        assert lines[4] == ""
+        assert lines[5] == "# .env.production"
+
+
 class TestEnvKeysFile:
     """Tests for .env.keys file operations."""
 

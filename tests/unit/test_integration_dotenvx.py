@@ -1,6 +1,10 @@
 """Tests for DotenvxWrapper integration."""
 
+import os
+from pathlib import Path
 from unittest.mock import MagicMock, patch
+
+import pytest
 
 from envdrift.integrations.dotenvx import DotenvxWrapper, normalize_dotenvx_metadata
 
@@ -47,6 +51,103 @@ def test_dotenvx_set_success(tmp_path):
         wrapper.set(env_file, "KEY", "value")
 
         mock_run.assert_called_once_with(["set", "-f", str(env_file), "KEY", "value"])
+
+
+# ---------------------------------------------------------------------------
+# Key-file and leading-dash filename foot-guns (#474)
+# ---------------------------------------------------------------------------
+
+
+def test_wrapper_encrypt_refuses_env_keys_store(tmp_path):
+    """#474: the wrapper refuses to encrypt the dotenvx private-key store.
+
+    The partial-encryption push/lock paths reach dotenvx through the wrapper
+    directly (not the guarded backend), so the guard must live here too —
+    otherwise ``encrypt -f .env.keys`` rewrites the private keys as ciphertext
+    under a never-persisted keypair and permanently locks the project out.
+    Fires pre-flight: no dotenvx binary is needed and the file stays untouched.
+    """
+    from envdrift.integrations.dotenvx import DotenvxFilenameError
+
+    keys_file = tmp_path / ".env.keys"
+    keys_content = "DOTENV_PRIVATE_KEY=" + "0" * 64 + "\n"
+    keys_file.write_text(keys_content, encoding="utf-8")
+
+    wrapper = DotenvxWrapper(auto_install=False)
+    with pytest.raises(DotenvxFilenameError, match="private-key store"):
+        wrapper.encrypt(keys_file)
+
+    assert keys_file.read_text(encoding="utf-8") == keys_content
+
+
+def test_dash_safe_path_prefixes_leading_dash():
+    """#474: a leading-dash path is made unambiguous for dotenvx argv."""
+    from envdrift.integrations.dotenvx import _dash_safe_path
+
+    assert _dash_safe_path("-dash.env") == f".{os.sep}-dash.env"
+    assert _dash_safe_path(Path("-dash.env")) == f".{os.sep}-dash.env"
+
+
+def test_dash_safe_path_passes_through_normal_paths(tmp_path):
+    """#474: normal relative and absolute paths are passed through unchanged."""
+    from envdrift.integrations.dotenvx import _dash_safe_path
+
+    assert _dash_safe_path(".env") == ".env"
+    assert _dash_safe_path(tmp_path / ".env") == str(tmp_path / ".env")
+    nested = str(Path("sub") / "-dash.env")
+    assert _dash_safe_path(nested) == nested
+
+
+def test_encrypt_passes_dash_proof_path_to_dotenvx(tmp_path, monkeypatch):
+    """#474: ``encrypt -f -dash.env`` argv must be dash-proofed.
+
+    dotenvx's commander CLI parses a bare ``-dash.env`` value as bundled flags,
+    fabricating a different file (``-ash.env``) full of placeholder secrets and
+    a junk ``.env.keys`` entry. The wrapper must hand dotenvx an unambiguous
+    ``./``-prefixed path instead.
+    """
+    monkeypatch.chdir(tmp_path)
+    dash_file = Path("-dash.env")
+    dash_file.write_text("API_KEY=abc123\n", encoding="utf-8")
+
+    wrapper = DotenvxWrapper(auto_install=False)
+    with patch.object(wrapper, "_run") as mock_run:
+        mock_result = MagicMock()
+        mock_result.returncode = 0
+        mock_result.stdout = ""
+        mock_result.stderr = ""
+        mock_run.return_value = mock_result
+
+        wrapper.encrypt(dash_file)
+
+    args = mock_run.call_args[0][0]
+    assert args == ["encrypt", "-f", f".{os.sep}-dash.env"]
+
+
+def test_decrypt_passes_dash_proof_path_to_dotenvx(tmp_path, monkeypatch):
+    """#474: ``decrypt -f -dash.env`` argv must be dash-proofed too."""
+    monkeypatch.chdir(tmp_path)
+    dash_file = Path("-dash.env")
+    dash_file.write_text("API_KEY=encrypted:abc\n", encoding="utf-8")
+
+    wrapper = DotenvxWrapper(auto_install=False)
+    with patch.object(wrapper, "_run") as mock_run:
+        mock_result = MagicMock()
+        mock_result.returncode = 0
+        mock_result.stdout = ""
+        mock_result.stderr = ""
+        mock_run.return_value = mock_result
+
+        wrapper.decrypt(dash_file, env_keys_file=Path("-dash.env.keys"))
+
+    args = mock_run.call_args[0][0]
+    assert args == [
+        "decrypt",
+        "-f",
+        f".{os.sep}-dash.env",
+        "-fk",
+        f".{os.sep}-dash.env.keys",
+    ]
 
 
 # ---------------------------------------------------------------------------
