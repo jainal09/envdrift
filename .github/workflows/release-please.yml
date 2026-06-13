@@ -10,41 +10,26 @@ permissions:
   contents: write
   pull-requests: write
 
+# Serialize runs so overlapping pushes to main can't race release PRs or tag
+# pushes (#495). Queue rather than cancel so a release in flight completes.
+concurrency:
+  group: release-please
+  cancel-in-progress: false
+
 jobs:
   release-please:
     runs-on: ubuntu-latest
-    outputs:
-      # Python package outputs
-      release_created: ${{ steps.release.outputs.release_created }}
-      tag_name: ${{ steps.release.outputs.tag_name }}
-      # Agent outputs
-      agent--release_created: ${{ steps.release.outputs['envdrift-agent--release_created'] }}
-      agent--tag_name: ${{ steps.release.outputs['envdrift-agent--tag_name'] }}
-      # VS Code outputs
-      vscode--release_created: ${{ steps.release.outputs['envdrift-vscode--release_created'] }}
-      vscode--tag_name: ${{ steps.release.outputs['envdrift-vscode--tag_name'] }}
     steps:
-      - uses: googleapis/release-please-action@v5
-        id: release
+      - uses: googleapis/release-please-action@45996ed1f6d02564a971a2fa1b5860e934307cf7 # v5.0.0
         with:
           token: ${{ secrets.RELEASE_PLEASE_TOKEN }}
           config-file: release-please-config.json
           manifest-file: .release-please-manifest.json
 
-  # Trigger agent release workflow when agent is released
-  release-agent:
-    needs: release-please
-    if: ${{ needs.release-please.outputs['agent--release_created'] == 'true' }}
-    uses: ./.github/workflows/agent-release.yml
-    with:
-      tag_name: ${{ needs.release-please.outputs['agent--tag_name'] }}
-    secrets: inherit
-
-  # Trigger VS Code release workflow when vscode is released
-  release-vscode:
-    needs: release-please
-    if: ${{ needs.release-please.outputs['vscode--release_created'] == 'true' }}
-    uses: ./.github/workflows/vscode-release.yml
-    with:
-      tag_name: ${{ needs.release-please.outputs['vscode--tag_name'] }}
-    secrets: inherit
+  # NOTE: agent-release.yml and vscode-release.yml are deliberately NOT called
+  # from here. RELEASE_PLEASE_TOKEN is a PAT, so the agent-v* / vscode-v* tags
+  # it pushes already fire those workflows' `push: tags` triggers on their own.
+  # Calling them here as reusable workflows ran every release TWICE
+  # concurrently, racing binaries and checksums.txt on the same GitHub release
+  # (#495). Keep exactly one trigger path per tag — enforced by
+  # tests/unit/test_release_workflows.py.
