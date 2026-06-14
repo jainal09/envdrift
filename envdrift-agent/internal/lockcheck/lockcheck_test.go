@@ -2,10 +2,13 @@
 package lockcheck
 
 import (
+	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"testing"
 )
 
@@ -44,18 +47,30 @@ func TestIsFileOpenClosedFile(t *testing.T) {
 	}
 }
 
-func TestIsFileOpenOpenFile(t *testing.T) {
+// TestIsFileOpenIgnoresOwnProcess is the core #481 regression, run against the
+// REAL lsof: a file held open only by the agent's own process must NOT count
+// as "still open". On macOS the fsnotify/kqueue watcher keeps an fd open on
+// every watched file, so the pre-#481 code (no self-PID filter) reported every
+// watched file permanently busy and never encrypted anything.
+func TestIsFileOpenIgnoresOwnProcess(t *testing.T) {
 	if runtime.GOOS == "windows" {
-		t.Skip("File locking behaves differently on Windows")
+		t.Skip("isFileOpenUnix is Unix-only")
+	}
+	if _, err := exec.LookPath("lsof"); err != nil {
+		t.Skip("lsof not on PATH; cannot exercise the real PID lister")
 	}
 
-	// Create a temp file and keep it open
+	// Create a temp file and keep it open from THIS process, like the kqueue
+	// watcher does.
 	tempDir := t.TempDir()
 	filePath := filepath.Join(tempDir, ".env.test")
-
-	f, err := os.Create(filePath)
-	if err != nil {
+	if err := os.WriteFile(filePath, []byte("TEST=value\n"), 0o644); err != nil {
 		t.Fatalf("Failed to create test file: %v", err)
+	}
+
+	f, err := os.Open(filePath)
+	if err != nil {
+		t.Fatalf("Failed to open test file: %v", err)
 	}
 	defer func() {
 		if err := f.Close(); err != nil {
@@ -63,13 +78,11 @@ func TestIsFileOpenOpenFile(t *testing.T) {
 		}
 	}()
 
-	_, _ = f.WriteString("TEST=value\n")
-
-	// File should be open (our process has it open)
-	result := IsFileOpen(filePath)
-	// Note: lsof might not detect our own process's open file
-	// This test is primarily to ensure no panic
-	t.Logf("IsFileOpen result for open file: %v", result)
+	if IsFileOpen(filePath) {
+		t.Errorf("IsFileOpen = true for a file held open only by our own process; "+
+			"want false — the agent must not block on its own watcher fds (#481). lsof PIDs: %v",
+			GetOpenProcesses(filePath))
+	}
 }
 
 // TestIsFileOpenUnixMissingLsof is the #413 regression: when lsof is absent
@@ -99,6 +112,107 @@ func TestIsFileOpenUnixMissingLsof(t *testing.T) {
 
 	if got := isFileOpenUnix(tempFile); !got {
 		t.Errorf("isFileOpenUnix with lsof absent = false; want true (conservative open/unknown) (#413)")
+	}
+}
+
+// withFakePIDLister swaps the openPIDs process-lister seam for the duration of
+// a test, so the self-PID-exclusion logic is unit-testable on every platform
+// (the lsof-backed lister is Unix-only).
+func withFakePIDLister(t *testing.T, fake func(string) ([]int, error)) {
+	t.Helper()
+	orig := openPIDs
+	openPIDs = fake
+	t.Cleanup(func() { openPIDs = orig })
+}
+
+// TestIsFileOpenUnixExcludesSelfPID: only the agent's own PID holds the file —
+// it must not count as open (#481).
+func TestIsFileOpenUnixExcludesSelfPID(t *testing.T) {
+	withFakePIDLister(t, func(string) ([]int, error) {
+		return []int{os.Getpid()}, nil
+	})
+
+	if isFileOpenUnix("/some/.env") {
+		t.Error("isFileOpenUnix = true when only our own PID holds the file; want false (#481)")
+	}
+}
+
+// TestIsFileOpenUnixOtherProcessBlocks: any OTHER process's handle still counts
+// as open, with or without our own PID in the list.
+func TestIsFileOpenUnixOtherProcessBlocks(t *testing.T) {
+	cases := []struct {
+		name string
+		pids []int
+	}{
+		{"other process only", []int{1}},
+		{"own PID plus other process", []int{os.Getpid(), 1}},
+		{"unparseable lsof entry counts as other process", []int{-1}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			withFakePIDLister(t, func(string) ([]int, error) {
+				return tc.pids, nil
+			})
+
+			if !isFileOpenUnix("/some/.env") {
+				t.Errorf("isFileOpenUnix = false with PIDs %v; want true", tc.pids)
+			}
+		})
+	}
+}
+
+// TestIsFileOpenUnixNoProcesses: an empty PID list means not open.
+func TestIsFileOpenUnixNoProcesses(t *testing.T) {
+	withFakePIDLister(t, func(string) ([]int, error) {
+		return nil, nil
+	})
+
+	if isFileOpenUnix("/some/.env") {
+		t.Error("isFileOpenUnix = true with no PIDs; want false")
+	}
+}
+
+// TestIsFileOpenUnixListerErrors: a missing tool or any ambiguous lister error
+// must stay conservative (treat the file as open/unknown), as before #481.
+func TestIsFileOpenUnixListerErrors(t *testing.T) {
+	cases := []struct {
+		name string
+		err  error
+	}{
+		{"lock tool unavailable", fmt.Errorf("%w: lsof gone", errLockToolUnavailable)},
+		{"ambiguous failure", errors.New("lsof exploded")},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			withFakePIDLister(t, func(string) ([]int, error) {
+				return nil, tc.err
+			})
+
+			if !isFileOpenUnix("/some/.env") {
+				t.Errorf("isFileOpenUnix = false on lister error %v; want conservative true", tc.err)
+			}
+		})
+	}
+}
+
+func TestParsePIDs(t *testing.T) {
+	cases := []struct {
+		name   string
+		output string
+		want   []int
+	}{
+		{"empty", "", nil},
+		{"single pid", "123\n", []int{123}},
+		{"multiple pids with blank lines", "123\n\n456\n", []int{123, 456}},
+		{"whitespace-padded pid", "  789  \n", []int{789}},
+		{"unparseable line becomes -1", "123\nnot-a-pid\n", []int{123, -1}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := parsePIDs(tc.output); !slices.Equal(got, tc.want) {
+				t.Errorf("parsePIDs(%q) = %v, want %v", tc.output, got, tc.want)
+			}
+		})
 	}
 }
 

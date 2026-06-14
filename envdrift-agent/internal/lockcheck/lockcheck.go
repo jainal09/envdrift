@@ -4,15 +4,27 @@ package lockcheck
 import (
 	"bytes"
 	"errors"
+	"fmt"
 	"log"
+	"os"
 	"os/exec"
 	"runtime"
+	"strconv"
 	"strings"
 	"sync"
 )
 
 // lsofMissingOnce ensures the "lsof unavailable" warning is logged at most once.
 var lsofMissingOnce sync.Once
+
+// errLockToolUnavailable marks "the lock-detection tool is missing from PATH":
+// the caller cannot tell whether the file is open and must assume it is.
+var errLockToolUnavailable = errors.New("lock-detection tool unavailable")
+
+// openPIDs lists the PIDs of processes that currently hold a file open. It is
+// a package-level seam so tests can inject a fake process lister on every
+// platform; production code uses lsofOpenPIDs.
+var openPIDs = lsofOpenPIDs
 
 // IsFileOpen checks if a file is currently open by any process.
 // IsFileOpen reports whether the file at path is currently open by any process.
@@ -29,44 +41,100 @@ func IsFileOpen(path string) bool {
 	}
 }
 
-// isFileOpenUnix reports whether the file at path is open by any process on Unix-like systems.
-// It invokes `lsof` for the path. lsof exits 0 (with output) when the file is open and exits 1
-// when it is not. A clean exit-1 (*exec.ExitError) is the only "not open" signal; any other
-// failure — most importantly lsof being absent from PATH (*exec.Error) — is treated as
-// "open/unknown" (returns true) so the caller conservatively skips encrypting a file it cannot
-// vouch for, instead of silently bypassing the open-file safety check on minimal hosts.
+// isFileOpenUnix reports whether the file at path is open by ANOTHER process on
+// Unix-like systems.
+//
+// The agent's own PID is excluded: on macOS the fsnotify/kqueue watcher holds
+// an open fd on every watched file, so before #481 the agent always saw its own
+// descriptor, reported every file as permanently "still open", and never
+// encrypted anything. Only other processes' handles count.
+//
+// Error handling stays conservative: when the PID lister tool is missing
+// (errLockToolUnavailable) or fails in any ambiguous way, the file is treated
+// as open/unknown (returns true) so the caller skips encrypting a file it
+// cannot vouch for, instead of silently bypassing the open-file safety check.
 func isFileOpenUnix(path string) bool {
-	// lsof exits with 0 if file is open, 1 if not
-	cmd := exec.Command("lsof", "--", path)
+	pids, err := openPIDs(path)
+	if err != nil {
+		return lsofErrorMeansOpen(err, path)
+	}
+	return hasForeignPID(pids, os.Getpid())
+}
+
+// lsofErrorMeansOpen turns an openPIDs failure into the conservative verdict:
+// when we cannot determine whether the file is open we treat it as open, so the
+// guardian never rewrites a file out from under a process that has it open.
+func lsofErrorMeansOpen(err error, path string) bool {
+	if errors.Is(err, errLockToolUnavailable) {
+		// lsof binary missing (or not executable): cannot tell, warn once.
+		lsofMissingOnce.Do(func() {
+			log.Printf("lockcheck: lsof unavailable (%v); treating files as open to avoid encrypting in-use files", err)
+		})
+		return true
+	}
+	// Any other error (signal, timeout, unexpected exit code) is ambiguous.
+	log.Printf("lockcheck: lsof failed for %s (%v); treating file as open", path, err)
+	return true
+}
+
+// hasForeignPID reports whether any PID other than self has the file open; the
+// guardian's own kqueue/fsnotify descriptor (self) must not count as "in use".
+func hasForeignPID(pids []int, self int) bool {
+	for _, pid := range pids {
+		if pid != self {
+			return true
+		}
+	}
+	return false
+}
+
+// lsofOpenPIDs returns the PIDs of processes that hold path open, via
+// `lsof -t -- <path>` (terse mode: one PID per line). lsof exits 0 with output
+// when the file is open and exits 1 when it is not; a clean exit-1
+// (*exec.ExitError) is the only "not open" signal. A missing/unexecutable lsof
+// binary (*exec.Error) is reported as errLockToolUnavailable; any other failure
+// is returned as-is for the caller to treat as ambiguous.
+func lsofOpenPIDs(path string) ([]int, error) {
+	cmd := exec.Command("lsof", "-t", "--", path)
 	var stdout bytes.Buffer
 	cmd.Stdout = &stdout
 
-	err := cmd.Run()
-	if err != nil {
+	if err := cmd.Run(); err != nil {
 		var execErr *exec.Error
 		if errors.As(err, &execErr) {
-			// lsof binary missing (or not executable): we cannot tell whether the
-			// file is open, so assume it is and warn once.
-			lsofMissingOnce.Do(func() {
-				log.Printf("lockcheck: lsof unavailable (%v); treating files as open to avoid encrypting in-use files", execErr)
-			})
-			return true
+			return nil, fmt.Errorf("%w: %v", errLockToolUnavailable, execErr)
 		}
 
 		var exitErr *exec.ExitError
 		if errors.As(err, &exitErr) && exitErr.ExitCode() == 1 {
-			// Clean exit-1: lsof ran and reported the file is not open.
-			return false
+			// Clean exit-1: lsof ran and reported no process has the file open.
+			return nil, nil
 		}
 
-		// Any other error (signal, timeout, unexpected exit code) is ambiguous;
-		// treat the file as open/unknown so we don't rewrite it underneath a user.
-		log.Printf("lockcheck: lsof failed for %s (%v); treating file as open", path, err)
-		return true
+		return nil, err
 	}
 
-	// If we got output, file is open
-	return strings.TrimSpace(stdout.String()) != ""
+	return parsePIDs(stdout.String()), nil
+}
+
+// parsePIDs parses `lsof -t` output (one PID per line) into a PID slice. A
+// line that is not a valid PID is recorded as -1: we cannot prove it is the
+// agent's own PID, so it conservatively counts as another process.
+func parsePIDs(output string) []int {
+	var pids []int
+	for _, line := range strings.Split(output, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		pid, err := strconv.Atoi(line)
+		if err != nil {
+			pids = append(pids, -1)
+			continue
+		}
+		pids = append(pids, pid)
+	}
+	return pids
 }
 
 // isFileOpenWindows uses handle.exe to check if file is open

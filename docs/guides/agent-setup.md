@@ -11,7 +11,7 @@ The agent runs silently in the background and:
 - **Watches** directories for `.env` file modifications
 - **Detects** when files are idle (not being edited)
 - **Verifies** files aren't open by other processes
-- **Encrypts** using `envdrift lock` (respects your `envdrift.toml`)
+- **Encrypts** using `envdrift encrypt <file>` (respects your `envdrift.toml`)
 - **Notifies** you via desktop notifications (optional)
 
 ## Prerequisites
@@ -112,12 +112,17 @@ though the global default is `.env*`.
 
 ### Duration Format
 
-The `idle_timeout` accepts Go duration strings:
+The `idle_timeout` accepts duration strings:
 
 - `"30s"` - 30 seconds
 - `"5m"` - 5 minutes
 - `"1h"` - 1 hour
-- `"1h30m"` - 1 hour 30 minutes
+- `"2d"` - 2 days
+- `"1h30m"` - 1 hour 30 minutes (any Go duration string works)
+
+Configs written by older agent versions stored `idle_timeout` as a raw
+nanosecond integer; those files still load, and the agent rewrites the value
+in the documented string form the next time it saves the config.
 
 ## Selecting which projects to watch
 
@@ -142,10 +147,17 @@ envdrift agent register
   enabled = true
 ```
 
-Registration alone is not enough: the agent only watches a project whose own
-`envdrift.toml` has the guardian turned on. The per-project default is
+Registration alone is not enough: the agent only watches a project whose
+config has the guardian turned on. The per-project default is
 `enabled = false`, so add the `[guardian]` section shown above to each project
 you want auto-encrypted.
+
+The agent discovers a project's config the same way the CLI does: it walks up
+from the project directory toward the filesystem root and uses the first
+`envdrift.toml` it finds, or the first `pyproject.toml` containing a
+`[tool.envdrift]` table (use `[tool.envdrift.guardian]` for the guardian
+section there). A project registered via `pyproject.toml` or a parent-dir
+`envdrift.toml` is therefore watched too.
 
 List the registered projects at any time:
 
@@ -194,10 +206,10 @@ Use `envdrift agent unregister [PATH]` to stop watching a project and
                     └────────┬────────┘
                              │ not locked?
                              ▼
-                    ┌─────────────────┐
-                    │ Encrypt         │
-                    │ (envdrift lock) │
-                    └────────┬────────┘
+                    ┌─────────────────────┐
+                    │ Encrypt             │
+                    │ (envdrift encrypt)  │
+                    └────────┬────────────┘
                              │
                              ▼
                     ┌─────────────────┐
@@ -207,9 +219,12 @@ Use `envdrift agent unregister [PATH]` to stop watching a project and
 ```
 
 1. **Watcher** - Uses `fsnotify` to detect file changes matching patterns
-2. **Guardian** - Tracks last modification time, checks for idle timeout
-3. **Lock Check** - Verifies file isn't open (`lsof` on Unix, `handle.exe` on Windows)
-4. **Encrypt** - Calls `envdrift lock` which respects your `envdrift.toml`
+2. **Guardian** - Tracks last modification time, checks for idle timeout. A file
+   counts as encrypted only when **every** value is ciphertext — a plaintext
+   secret added to an already-encrypted file is re-encrypted, not dropped
+3. **Lock Check** - Verifies file isn't open by **another** process (`lsof` on
+   Unix, `handle.exe` on Windows); the agent's own watcher handles are ignored
+4. **Encrypt** - Calls `envdrift encrypt <file>` which respects your `envdrift.toml`
 5. **Notify** - Shows desktop notification if enabled
 
 ## Platform Details
@@ -234,7 +249,7 @@ Use `envdrift agent unregister [PATH]` to stop watching a project and
 
 ## Integration with envdrift.toml
 
-The agent calls `envdrift lock`, which means it respects all settings in your project's `envdrift.toml`:
+The agent calls `envdrift encrypt <file>`, which means it respects all settings in your project's `envdrift.toml`:
 
 - **Partial encryption** - Only secrets are encrypted
 - **Vault integration** - Keys are pushed to vault if configured
