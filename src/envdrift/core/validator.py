@@ -103,6 +103,10 @@ class Validator:
         re.compile(r"eyJ[A-Za-z0-9_-]+\.eyJ"),  # JWT tokens
     ]
 
+    # Pydantic v2 lax bool parsing aliases (accepted from env strings)
+    _BOOL_TRUE = frozenset({'true', '1', 'yes', 'y', 'on', 't', 'True', 'TRUE', '1', 'yes', 'Yes', 'YES', 'on', 'On', 'ON', 't', 'T', 'y', 'Y'})
+    _BOOL_FALSE = frozenset({'false', '0', 'no', 'n', 'off', 'f', 'False', 'FALSE', '0', 'no', 'No', 'NO', 'off', 'Off', 'OFF', 'f', 'F', 'n', 'N'})
+
     # Variable names that suggest sensitive content
     SENSITIVE_VAR_PATTERNS = [
         re.compile(r".*_KEY$", re.IGNORECASE),
