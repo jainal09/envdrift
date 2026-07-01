@@ -1,0 +1,11 @@
+// renovate.json
+{
+  "extends": ["config:base"],
+  "packageRules": [
+    {
+      "match": "hashicorp/vault",
+      "version": "^1.21",
+      "prBodyTemplate": "Minor/Patch updates: Auto-merged on green CI"
+    }
+  ]
+}

@@ -1,0 +1,25 @@
+# integration-tests.yml
+name: Integration Tests
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v2
+
+      - name: Build and test
+        run: |
+          docker-compose up -d
+          docker-compose exec localstack /bin/bash -c "aws sts get-caller-identity"
+          docker-compose exec lowkey-vault /bin/bash -c "vault login -method=userpass username=myuser password=mypassword"
+
+      - name: Keep-in-sync
+        run: |
+          docker-compose exec localstack /bin/bash -c "echo 'keep-in-sync' > /etc/localstack/keep-in-sync"
+          docker-compose exec lowkey-vault /bin/bash -c "echo 'keep-in-sync' > /etc/lowkey-vault/keep-in-sync"

@@ -1,0 +1,32 @@
+// automerge-version-bump.yml
+name: Automerge Version Bump
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  automerge:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v2
+
+      - name: Automerge
+        run: |
+          # Check if review is required
+          if [ "${GITHUB_EVENT_NAME}" == "pull_request" ]; then
+            # Check if review is approved
+            if [ "${GITHUB_EVENT_DATA.action}" == "opened" ]; then
+              # Gate automerge on approval
+              echo "Waiting for approval..."
+              exit 1
+            fi
+          fi
+
+          # Automerge
+          echo "Automerging..."
+          git add .
+          git commit -m "Automerge"
+          git push

@@ -1,0 +1,37 @@
+# tests/docker-compose.test.yml
+version: '3'
+
+services:
+  localstack:
+    image: localstack/localstack:4.14
+    ports:
+      - "4566:4566"
+    environment:
+      - AWS_ACCESS_KEY_ID=foo
+      - AWS_SECRET_ACCESS_KEY=bar
+      - DEFAULT_REGION=us-east-1
+      - SERVICES=aws-lambda,cloudformation,cloudwatch,dynamodb,dynamodb-local,kinesis,kinesis-video,kms,logs,lambda,ses,sqs,s3
+      - DEBUG=true
+      - DATA_DIR=/tmp/localstack/data
+      - LAMBDA_EXECUTOR=docker
+      - LAMBDA_RUNTIME_DIR=/tmp/localstack/lambda
+      - LAMBDA_VPC_ID=vpc-12345678
+      - LAMBDA_VPC_SUBNET_ID=subnet-12345678
+      - LAMBDA_VPC_SECURITY_GROUP_ID=sg-12345678
+      - LAMBDA_FUNCTION_HANDLER=index.handler
+      - LAMBDA_FUNCTION_NAME=my-lambda-function
+      - LAMBDA_ROLE_ARN=arn:aws:iam::123456789012:role/lambda-execution-role
+    labels:
+      - keep-in-sync
+
+  lowkey-vault:
+    image: lowkey/vault:7.2.26
+    ports:
+      - "8200:8200"
+    environment:
+      - VAULT_ADDR=http://localhost:8200
+      - VAULT_FORMAT=json
+      - VAULT_SKIP_VERIFY=true
+      - VAULT_TOKEN=example
+    labels:
+      - keep-in-sync
