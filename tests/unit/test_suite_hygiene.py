@@ -21,12 +21,14 @@ tree -- nothing about the behavior under test is mocked.
 
 from __future__ import annotations
 
+import ast
 import os
 import re
 import subprocess
 import sys
 import textwrap
 from pathlib import Path
+from typing import TypeGuard
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 TESTS_DIR = REPO_ROOT / "tests"
@@ -120,21 +122,14 @@ def test_scanner_binary_integration_classes_run_in_integration_lane() -> None:
     )
 
 
-def test_vault_unit_tests_restore_real_provider_modules() -> None:
-    """After the vault mock-SDK unit tests run, the real provider modules are intact.
-
-    Regression for #497: four unit test modules ``importlib.reload()``-ed
-    ``envdrift.vault.<provider>`` under MagicMock SDKs without restoring,
-    leaving (e.g.) a HashiCorp client whose ``authenticate()`` succeeds
-    against a closed port for the rest of the process.
-
-    The checker script runs the four vault unit-test files with the real
-    pytest in-process, then asserts each provider module is bound to the real
-    SDK again -- including the behavioral symptom from the issue: a client
-    pointed at a closed port must fail to authenticate.
+# Checker script for test_vault_unit_tests_restore_real_provider_modules.
+# It runs the four vault unit-test files with the real pytest *in the same
+# process* as the assertions that follow -- deliberately: the contamination
+# from #497 is only observable through a shared ``sys.modules`` (the Publish
+# workflow runs the whole suite in one process), so a subprocess-isolated
+# inner run would always see fresh modules and could never fail.
+_VAULT_RESTORE_CHECKER_SCRIPT = textwrap.dedent(
     """
-    script = textwrap.dedent(
-        """
         import importlib.util
         import sys
 
@@ -231,10 +226,24 @@ def test_vault_unit_tests_restore_real_provider_modules() -> None:
             sys.exit(1)
         print("all vault provider modules restored")
         """
-    )
+)
 
+
+def test_vault_unit_tests_restore_real_provider_modules() -> None:
+    """After the vault mock-SDK unit tests run, the real provider modules are intact.
+
+    Regression for #497: four unit test modules ``importlib.reload()``-ed
+    ``envdrift.vault.<provider>`` under MagicMock SDKs without restoring,
+    leaving (e.g.) a HashiCorp client whose ``authenticate()`` succeeds
+    against a closed port for the rest of the process.
+
+    The checker script runs the four vault unit-test files with the real
+    pytest in-process, then asserts each provider module is bound to the real
+    SDK again -- including the behavioral symptom from the issue: a client
+    pointed at a closed port must fail to authenticate.
+    """
     result = subprocess.run(
-        [sys.executable, "-c", script],
+        [sys.executable, "-c", _VAULT_RESTORE_CHECKER_SCRIPT],
         cwd=REPO_ROOT,
         env=_subprocess_env(),
         capture_output=True,
@@ -248,33 +257,114 @@ def test_vault_unit_tests_restore_real_provider_modules() -> None:
     )
 
 
+_ISSUE_REF_RE = re.compile(r"#\d+")
+
+
+def _is_pytest_mark_skip(node: ast.AST) -> TypeGuard[ast.Attribute]:
+    """True for a ``pytest.mark.skip`` attribute node (``skipif`` never matches)."""
+    return (
+        isinstance(node, ast.Attribute)
+        and node.attr == "skip"
+        and isinstance(node.value, ast.Attribute)
+        and node.value.attr == "mark"
+        and isinstance(node.value.value, ast.Name)
+        and node.value.value.id == "pytest"
+    )
+
+
+def _skip_call_references_issue(call: ast.Call) -> bool:
+    """True if any string argument of the skip call (e.g. ``reason``) cites ``#NNN``."""
+    values = [*call.args, *(kw.value for kw in call.keywords)]
+    return any(
+        isinstance(value, ast.Constant)
+        and isinstance(value.value, str)
+        and _ISSUE_REF_RE.search(value.value)
+        for value in values
+    )
+
+
+def _bare_skip_offenders(path: Path) -> list[int]:
+    """Line numbers of ``pytest.mark.skip`` uses lacking a tracking-issue reference.
+
+    Walks the AST, so comments and docstrings that merely mention
+    ``pytest.mark.skip`` never match -- only real decorator/call sites do.
+    """
+    tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+    skip_calls = [
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call) and _is_pytest_mark_skip(node.func)
+    ]
+    called_skip_funcs = {id(call.func) for call in skip_calls}
+    offenders = [call.lineno for call in skip_calls if not _skip_call_references_issue(call)]
+    # A bare ``@pytest.mark.skip`` (no call, so no reason at all) always offends.
+    offenders += [
+        node.lineno
+        for node in ast.walk(tree)
+        if _is_pytest_mark_skip(node) and id(node) not in called_skip_funcs
+    ]
+    return sorted(offenders)
+
+
 def test_no_unconditional_skip_without_issue_reference() -> None:
     """Every unconditional ``pytest.mark.skip`` must reference a tracking issue.
 
     Regression for #497: the only non-default-region AWS client test was
     permanently dead behind a bare ``@pytest.mark.skip`` with no issue
     reference. ``skipif`` gates (environment-conditional) are fine; a flat
-    ``skip`` hides a test on every environment forever, so it must point at
-    the issue that tracks re-enabling it.
+    ``skip`` hides a test on every environment forever, so it must cite the
+    issue that tracks re-enabling it in one of its string arguments.
     """
-    # ``skip`` not followed by ``if`` -- matches both ``@pytest.mark.skip`` and
-    # ``pytest.mark.skip(reason=...)`` while ignoring ``skipif`` gates.
-    skip_re = re.compile(r"pytest\.mark\.skip(?!if)")
-    issue_ref_re = re.compile(r"#\d+")
-    this_file = Path(__file__).resolve()
-
-    offenders: list[str] = []
-    for path in sorted(TESTS_DIR.rglob("*.py")):
-        if path.resolve() == this_file:
-            continue
-        text = path.read_text(encoding="utf-8")
-        for match in skip_re.finditer(text):
-            window = text[match.start() : match.start() + 300]
-            if not issue_ref_re.search(window):
-                line = text.count("\n", 0, match.start()) + 1
-                offenders.append(f"{path.relative_to(REPO_ROOT)}:{line}")
+    offenders = [
+        f"{path.relative_to(REPO_ROOT)}:{line}"
+        for path in sorted(TESTS_DIR.rglob("*.py"))
+        for line in _bare_skip_offenders(path)
+    ]
 
     assert offenders == [], (
         "Unconditional pytest.mark.skip without a tracking-issue reference "
         f"(fix the test or cite the issue in the reason): {offenders}"
     )
+
+
+def test_bare_skip_scan_matches_code_not_comments_or_docstrings(tmp_path: Path) -> None:
+    """The skip scan flags real skip sites only, never prose mentioning the rule.
+
+    Regression for the text-search implementation, which flagged the literal
+    string ``pytest.mark.skip`` anywhere in a file -- so a comment or
+    docstring documenting this very rule (with no ``#NNN`` within 300
+    characters) failed the hygiene check spuriously.
+    """
+    sample = tmp_path / "test_sample.py"
+    sample.write_text(
+        textwrap.dedent(
+            '''
+            """Docstring that mentions pytest.mark.skip without an issue."""
+            import pytest
+
+            # comment: pytest.mark.skip is banned without an issue reference
+
+            @pytest.mark.skip
+            def test_bare_decorator(): ...
+
+            @pytest.mark.skip(reason="dead until reworked")
+            def test_reason_without_issue(): ...
+
+            @pytest.mark.skip(reason="tracked in #123")
+            def test_reason_with_issue(): ...
+
+            @pytest.mark.skipif(True, reason="conditional gates are fine")
+            def test_skipif(): ...
+
+            @pytest.mark.parametrize(
+                "value",
+                [pytest.param(1, marks=pytest.mark.skip(reason="see #456"))],
+            )
+            def test_param(value): ...
+            '''
+        ),
+        encoding="utf-8",
+    )
+
+    # Only the bare decorator (line 7) and the issue-less reason (line 10).
+    assert _bare_skip_offenders(sample) == [7, 10]
