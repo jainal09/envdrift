@@ -1258,7 +1258,8 @@ def lock(
 
     # === FILTER MAPPINGS BY PROFILE ===
     from envdrift.sync.config import SyncConfig as SyncConfigClass
-    from envdrift.sync.engine import SyncEngine, SyncMode, normalize_vault_key_value
+    from envdrift.sync.engine import SyncEngine, SyncMode
+    from envdrift.vault.keymaterial import KeyMaterialError, extract_key_material
 
     filtered_mappings = sync_config.filter_by_profile(profile)
 
@@ -1379,16 +1380,15 @@ def lock(
                         warnings.append(f"{mapping.folder_path}: vault secret is empty")
                         continue
 
-                    vault_value = vault_secret.value
-
-                    # Parse the vault value identically to the sync engine /
-                    # read_key (strip whitespace + surrounding quotes + a
+                    # Parse the vault secret identically to the sync engine /
+                    # vault-pull (strip whitespace + surrounding quotes + a
                     # DOTENV_PRIVATE_KEY_*= prefix; extract from JSON documents /
-                    # multi-line keys blobs) so a quoted, prefixed, or
-                    # document-shaped vault value isn't reported as a false KEY
-                    # MISMATCH (#413, #480). Unusable shapes raise
-                    # KeyMaterialError (a VaultError) and are reported below.
-                    vault_key, vault_suffix = normalize_vault_key_value(vault_value, effective_env)
+                    # multi-line keys blobs; reject provider-marked binary
+                    # payloads) so a quoted, prefixed, or document-shaped vault
+                    # value isn't reported as a false KEY MISMATCH (#413, #480).
+                    # Unusable shapes raise KeyMaterialError, counted below as a
+                    # verification issue so encryption never starts on them.
+                    vault_key, vault_suffix = extract_key_material(vault_secret, effective_env)
                     # A key labeled for a different environment is a genuine
                     # mismatch, not a parse artifact.
                     suffix_ok = (
@@ -1418,6 +1418,17 @@ def lock(
                         f"[yellow]- warning: vault secret '{mapping.secret_name}' not found[/yellow]"
                     )
                     warnings.append(f"{mapping.folder_path}: vault secret not found")
+                except KeyMaterialError as e:
+                    # A secret-shape problem, not a connectivity problem: count
+                    # it as a verification issue so the fail-fast gate below
+                    # stops before any file is encrypted (matching the KEY
+                    # MISMATCH behavior), instead of mislabeling it "vault
+                    # access failed" and encrypting first (#480).
+                    console.print(
+                        f"  [red]✗[/red] {mapping.folder_path} [red]- KEY UNUSABLE: {e}[/red]"
+                    )
+                    errors.append(f"{mapping.folder_path}: vault key material unusable - {e}")
+                    verification_issues += 1
                 except VaultError as e:
                     console.print(
                         f"  [red]![/red] {mapping.folder_path} "

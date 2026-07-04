@@ -25,7 +25,7 @@ from envdrift.config import EnvdriftConfig
 from envdrift.encryption import EncryptionProvider
 from envdrift.encryption.base import EncryptionBackendError, EncryptionResult
 from envdrift.integrations.dotenvx import DotenvxError
-from envdrift.vault import VaultError
+from envdrift.vault import SecretValue, VaultError
 from tests.helpers import DummyEncryptionBackend
 
 runner = CliRunner()
@@ -4033,8 +4033,10 @@ class TestLockCommand:
             env_keys_filename=".env.keys",
         )
 
-        # Vault stores the key QUOTED; local stores it bare.
-        vault_secret = SimpleNamespace(value=f'"{secret}"')
+        # Vault stores the key QUOTED; local stores it bare. A real SecretValue
+        # (not a bare namespace) so the verify path's extract_key_material sees
+        # the metadata attribute every provider's secret carries.
+        vault_secret = SecretValue(name="k", value=f'"{secret}"')
 
         class _VaultClient:
             def ensure_authenticated(self) -> None:
@@ -4479,9 +4481,9 @@ class TestLockCommand:
                     _name: Ignored; present to match the expected secret-retrieval signature.
 
                 Returns:
-                    SimpleNamespace: An object with a `value` attribute set to "DOTENV_PRIVATE_KEY_PRODUCTION=remote".
+                    SecretValue: A secret whose value is "DOTENV_PRIVATE_KEY_PRODUCTION=remote".
                 """
-                return SimpleNamespace(value="DOTENV_PRIVATE_KEY_PRODUCTION=remote")
+                return SecretValue(name="k", value="DOTENV_PRIVATE_KEY_PRODUCTION=remote")
 
         monkeypatch.setattr("envdrift.vault.get_vault_client", lambda *_, **__: DummyVault())
 

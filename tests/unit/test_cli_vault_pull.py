@@ -963,6 +963,49 @@ class TestVaultPullKeyMaterialNormalization:
         assert not (tmp_path / ".env.keys").exists()
 
     @patch("envdrift.vault.get_vault_client")
+    def test_empty_value_key_line_fails_loudly(self, mock_get_client, tmp_path):
+        """A secret of exactly 'DOTENV_PRIVATE_KEY_PRODUCTION=' (e.g. pushed via
+        `vault kv put ... DOTENV_PRIVATE_KEY_PRODUCTION=$KEY` with $KEY unset)
+        must fail, not be written back as a doubled-prefix .env.keys line."""
+        mock_get_client.return_value = _make_client("DOTENV_PRIVATE_KEY_PRODUCTION=")
+
+        result = self._pull(tmp_path)
+
+        assert result.exit_code == 1, result.output
+        assert "empty" in " ".join(result.output.split()).lower()
+        assert not (tmp_path / ".env.keys").exists()
+
+    @patch("envdrift.vault.get_vault_client")
+    def test_json_field_carrying_full_line_writes_bare_key(self, mock_get_client, tmp_path):
+        """A JSON field value holding the whole 'DOTENV_PRIVATE_KEY_X=<key>' line
+        (a copy-pasted .env.keys line in the console value box) is reduced to
+        the bare key — never written with a doubled prefix."""
+        mock_get_client.return_value = _make_client(
+            '{"DOTENV_PRIVATE_KEY_PRODUCTION": "DOTENV_PRIVATE_KEY_PRODUCTION=abc123secret"}'
+        )
+
+        result = self._pull(tmp_path)
+
+        assert result.exit_code == 0, result.output
+        lines = (tmp_path / ".env.keys").read_text(encoding="utf-8").splitlines()
+        assert "DOTENV_PRIVATE_KEY_PRODUCTION=abc123secret" in lines
+        assert not any("DOTENV_PRIVATE_KEY_PRODUCTION=DOTENV_PRIVATE_KEY" in line for line in lines)
+
+    @patch("envdrift.vault.get_vault_client")
+    def test_pretty_printed_json_document_extracts_key(self, mock_get_client, tmp_path):
+        """Pretty-printed JSON (embedded newlines) must reach the JSON handler,
+        not the keys-blob handler that cannot see the key field."""
+        mock_get_client.return_value = _make_client(
+            '{\n  "DOTENV_PRIVATE_KEY_PRODUCTION": "abc123secret"\n}\n'
+        )
+
+        result = self._pull(tmp_path)
+
+        assert result.exit_code == 0, result.output
+        lines = (tmp_path / ".env.keys").read_text(encoding="utf-8").splitlines()
+        assert "DOTENV_PRIVATE_KEY_PRODUCTION=abc123secret" in lines
+
+    @patch("envdrift.vault.get_vault_client")
     def test_json_blob_with_mismatched_env_field_still_fails_env_check(
         self, mock_get_client, tmp_path
     ):
