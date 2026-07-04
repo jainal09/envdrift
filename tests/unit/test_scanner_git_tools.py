@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import subprocess
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -909,17 +910,36 @@ class TestGitSecretsParseOutputBranches:
         findings = scanner._parse_output(output, Path("base"))
         assert len(findings) == 1
         assert findings[0].line_number == 3
-        assert str(findings[0].file_path).endswith("secrets.env")
+        # The path's semantics differ by platform: only Windows treats a
+        # drive-letter path as absolute (used as-is); on POSIX it is a relative
+        # single component (backslashes aren't separators) resolved against
+        # base_path under the CWD. This test only guards field splitting; the
+        # absolute-path branch itself is covered by
+        # test_parse_output_absolute_file_path_used_directly above.
+        if os.name == "nt":
+            assert findings[0].file_path == Path("C:\\repo\\secrets.env")
+        else:
+            assert findings[0].file_path == (Path("base") / "C:\\repo\\secrets.env").resolve()
 
     def test_parse_output_history_line_with_windows_drive_path(self) -> None:
-        """History format keeps commit/path/line fields with a drive-letter path (#445)."""
+        """History format keeps commit/path/line fields with a drive-letter path (#445).
+
+        The SHA group ``[a-f0-9]{7,40}`` stops at the first ``:`` (not a hex
+        char), and cannot swallow the drive letter ``C`` beyond it (uppercase,
+        also not in the class) — so ``abc1234`` is captured exactly and the
+        drive colon is left for the non-greedy file group to handle.
+        """
         scanner = GitSecretsScanner(auto_install=False)
         output = "abc1234:C:\\repo\\secrets.env:10:secret=value123\n"
         findings = scanner._parse_output(output, Path("base"))
         assert len(findings) == 1
         assert findings[0].commit_sha == "abc1234"
         assert findings[0].line_number == 10
-        assert str(findings[0].file_path).endswith("secrets.env")
+        # Same platform split as the scan-format test above.
+        if os.name == "nt":
+            assert findings[0].file_path == Path("C:\\repo\\secrets.env")
+        else:
+            assert findings[0].file_path == (Path("base") / "C:\\repo\\secrets.env").resolve()
 
     def test_parse_output_unmatched_line_produces_no_finding(self) -> None:
         """Test _parse_output produces no finding for lines that match no pattern."""
