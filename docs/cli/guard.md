@@ -195,9 +195,13 @@ Trivy reports matches with the secret already redacted to asterisks, so envdrift
 recovers the raw value from the scanned file before hashing — two *distinct* secrets
 that share a variable name and length stay distinct under `--skip-duplicate`, and a
 secret found by both trivy and another scanner still collapses to one finding. When
-the raw value cannot be recovered (for example the file changed mid-scan, or the
-finding spans multiple lines), the finding keeps a location-qualified hash that never
-collapses with any other finding.
+the raw value cannot be recovered (for example the file changed mid-scan, the finding
+spans multiple lines, or several secrets share one line so the mask boundary is
+ambiguous), each finding instead keeps a synthetic hash qualified by its file, line
+span, rule and a per-location occurrence index. Distinct findings therefore never
+share a fallback hash — even the byte-identical findings trivy emits for two distinct
+same-rule secrets on one line — but an unrecovered finding also cannot collapse with
+the same secret reported by another scanner.
 
 ### `--skip-encrypted` / `--no-skip-encrypted`
 

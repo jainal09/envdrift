@@ -507,6 +507,13 @@ class TrivyScanner(ScannerBackend):
         findings: list[ScanFinding] = []
         files_scanned = 0
 
+        # Shared per-parse state: occurrence counts so byte-identical
+        # unrecoverable findings (two distinct same-rule secrets on ONE line
+        # produce identical trivy dicts) never share a fallback hash, and a
+        # line cache so n findings in one file cost one read instead of n.
+        fallback_counts: dict[tuple[str, str, str, str, str], int] = {}
+        line_cache: dict[Path, list[str] | None] = {}
+
         # Trivy output structure: { "Results": [...] }
         results = scan_data.get("Results", [])
 
@@ -518,14 +525,25 @@ class TrivyScanner(ScannerBackend):
             # Get secrets from result
             secrets = result.get("Secrets", [])
             for secret in secrets:
-                finding = self._parse_secret(secret, target, base_path)
+                finding = self._parse_secret(
+                    secret,
+                    target,
+                    base_path,
+                    fallback_counts=fallback_counts,
+                    line_cache=line_cache,
+                )
                 if finding:
                     findings.append(finding)
 
         return findings, files_scanned
 
     def _parse_secret(
-        self, secret: dict[str, Any], target: str, base_path: Path
+        self,
+        secret: dict[str, Any],
+        target: str,
+        base_path: Path,
+        fallback_counts: dict[tuple[str, str, str, str, str], int] | None = None,
+        line_cache: dict[Path, list[str] | None] | None = None,
     ) -> ScanFinding | None:
         """Parse a single trivy secret into a ScanFinding.
 
@@ -533,6 +551,12 @@ class TrivyScanner(ScannerBackend):
             secret: Secret data from trivy output.
             target: Target file path.
             base_path: Base path for resolving relative paths.
+            fallback_counts: Per-parse occurrence counter keyed on the
+                fallback-hash identity (file, line span, rule, ``Match``) so
+                N byte-identical unrecoverable findings keep N distinct
+                hashes. ``None`` (direct call) behaves as a fresh counter.
+            line_cache: Per-parse cache of file lines shared across findings
+                for :meth:`_recover_secret_value`.
 
         Returns:
             ScanFinding or None if parsing fails.
@@ -561,13 +585,25 @@ class TrivyScanner(ScannerBackend):
             # redacted line still aligns; otherwise fall back to a
             # location-qualified hash that cannot collapse distinct findings.
             matched = secret.get("Match", "")
-            raw_secret = self._recover_secret_value(file_path, secret)
+            raw_secret = self._recover_secret_value(file_path, secret, line_cache)
             if raw_secret is not None:
                 redacted = redact_secret(raw_secret)
                 secret_hash = hash_secret(raw_secret)
             elif matched:
                 redacted = redact_secret(matched)
-                secret_hash = self._location_qualified_hash(file_path, secret, rule_id, matched)
+                key = (
+                    str(file_path),
+                    str(secret.get("StartLine") or 0),
+                    str(secret.get("EndLine") or 0),
+                    rule_id,
+                    matched,
+                )
+                occurrence = 0 if fallback_counts is None else fallback_counts.get(key, 0)
+                if fallback_counts is not None:
+                    fallback_counts[key] = occurrence + 1
+                secret_hash = self._location_qualified_hash(
+                    file_path, secret, rule_id, matched, occurrence
+                )
             else:
                 redacted = ""
                 secret_hash = ""  # nosec B105 - empty placeholder, not a password
@@ -596,7 +632,11 @@ class TrivyScanner(ScannerBackend):
             return None
 
     @staticmethod
-    def _recover_secret_value(file_path: Path, secret: dict[str, Any]) -> str | None:
+    def _recover_secret_value(
+        file_path: Path,
+        secret: dict[str, Any],
+        line_cache: dict[Path, list[str] | None] | None = None,
+    ) -> str | None:
         """Recover the raw secret value that trivy redacted in ``Match``.
 
         Trivy replaces the matched secret inside ``Match`` with a same-length
@@ -605,9 +645,18 @@ class TrivyScanner(ScannerBackend):
         masked span, and the corresponding span of the raw line is the secret.
 
         Returns ``None`` whenever the alignment cannot be validated --
-        multi-line findings, truncated matches, a file that changed since the
-        scan or cannot be read -- in which case the caller falls back to a
-        location-qualified hash instead.
+        multi-line findings (including an explicit ``EndLine: null``),
+        truncated matches, a mask boundary made ambiguous by literal ``*``
+        characters, a file that changed since the scan or cannot be read --
+        in which case the caller falls back to a location-qualified hash
+        instead.
+
+        Args:
+            file_path: The scanned file the finding points at.
+            secret: Secret data from trivy output.
+            line_cache: Optional shared cache of ``splitlines()`` results
+                (``None`` for unreadable files) so several findings in one
+                file cost a single read.
         """
         match = secret.get("Match") or ""
         start_line = secret.get("StartLine")
@@ -617,15 +666,22 @@ class TrivyScanner(ScannerBackend):
             or "*" not in match
             or not isinstance(start_line, int)
             or start_line < 1
-            or (isinstance(end_line, int) and end_line != start_line)
+            # An explicit ``EndLine: null`` leaves the span unknown -- treat
+            # it as multi-line rather than assuming it equals StartLine.
+            or not isinstance(end_line, int)
+            or end_line != start_line
         ):
             return None
-        try:
-            text = file_path.read_text(encoding="utf-8", errors="replace")
-        except OSError:
-            return None
-        lines = text.splitlines()
-        if start_line > len(lines):
+        if line_cache is not None and file_path in line_cache:
+            lines = line_cache[file_path]
+        else:
+            try:
+                lines = file_path.read_text(encoding="utf-8", errors="replace").splitlines()
+            except OSError:
+                lines = None
+            if line_cache is not None:
+                line_cache[file_path] = lines
+        if lines is None or start_line > len(lines):
             return None
         raw_line = lines[start_line - 1]
         length = len(match)
@@ -639,6 +695,15 @@ class TrivyScanner(ScannerBackend):
             suffix < length - prefix and raw_line[length - 1 - suffix] == match[length - 1 - suffix]
         ):
             suffix += 1
+        # A ``*`` immediately before/after the differing span is ambiguous:
+        # it may be unmasked context or a masked secret character that
+        # happens to be ``*`` (a secret with literal leading/trailing ``*``),
+        # in which case the scan walked INTO the masked span and the
+        # candidate below would be a silently truncated secret. Fall back.
+        if (prefix > 0 and match[prefix - 1] == "*") or (
+            suffix > 0 and match[length - suffix] == "*"
+        ):
+            return None
         masked_span = match[prefix : length - suffix]
         candidate = raw_line[prefix : length - suffix]
         if not candidate or set(masked_span) != {"*"}:
@@ -647,17 +712,19 @@ class TrivyScanner(ScannerBackend):
 
     @staticmethod
     def _location_qualified_hash(
-        file_path: Path, secret: dict[str, Any], rule_id: str, matched: str
+        file_path: Path, secret: dict[str, Any], rule_id: str, matched: str, occurrence: int
     ) -> str:
         """Hash for findings whose raw secret value could not be recovered.
 
         The redacted ``Match`` line alone is identical for two distinct
         secrets of the same shape, so it must be qualified with the finding's
-        file, line span and rule: distinct findings then can never collapse
-        under the engine's hash-keyed ``--skip-duplicate`` dedup, while
-        re-scans of the same finding stay stable. The constant prefix and
-        NUL separators keep this synthetic key from ever colliding with a
-        real secret's ``hash_secret`` value.
+        file, line span, rule and per-location occurrence index (two distinct
+        same-rule secrets on ONE line produce byte-identical trivy dicts):
+        distinct findings then can never collapse under the engine's
+        hash-keyed ``--skip-duplicate`` dedup, while re-scans of the same
+        finding stay stable because trivy reports findings in a deterministic
+        order. The constant prefix and NUL separators keep this synthetic key
+        from ever colliding with a real secret's ``hash_secret`` value.
         """
         parts = (
             "envdrift-trivy-redacted",
@@ -666,5 +733,6 @@ class TrivyScanner(ScannerBackend):
             str(secret.get("EndLine") or 0),
             rule_id,
             matched,
+            str(occurrence),
         )
         return hash_secret("\x00".join(parts))

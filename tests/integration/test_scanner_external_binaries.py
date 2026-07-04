@@ -436,10 +436,18 @@ def test_trivy_distinct_secrets_survive_skip_duplicate_cli(tmp_path):
         env=env,
         capture_output=True,
         text=True,
+        timeout=300,
     )
 
     out = proc.stdout
-    payload = _json.loads(out[out.index("{") : out.rindex("}") + 1])
+    # ``--json`` stdout is contractually a single clean JSON document (no
+    # ANSI, no prose) -- parse it strictly so any stray output fails loudly.
+    try:
+        payload = _json.loads(out)
+    except _json.JSONDecodeError as exc:  # pragma: no cover - failure path
+        pytest.fail(
+            f"guard --json stdout is not clean JSON: {exc}\nstdout:\n{out}\nstderr:\n{proc.stderr}"
+        )
     trivy_files = {
         Path(f["file_path"]).name for f in payload["findings"] if f["scanner"] == "trivy"
     }
@@ -509,4 +517,31 @@ def test_trivy_finding_collapses_with_native_for_same_secret_under_skip_duplicat
     masked_line_hash = hash_secret("GITHUB_TOKEN=" + "*" * len(GITHUB_TOKEN))
     assert all(f.secret_hash != masked_line_hash for f in result.unique_findings), (
         "a finding still hashes the redacted Match line as if it were the secret"
+    )
+
+
+@requires_trivy
+def test_trivy_two_distinct_secrets_on_one_line_keep_distinct_hashes(tmp_path):
+    """#479 same-line case: two distinct same-rule secrets on ONE line.
+
+    Trivy censors ALL secret spans in the line before building each finding's
+    ``Match``, so the two findings it emits are byte-identical dicts. Recovery
+    is rejected (the differing span contains the unmasked separator), and the
+    fallback hash must carry an occurrence index so the two real secrets do
+    not collapse into one under ``--skip-duplicate``.
+    """
+    (tmp_path / "creds.env").write_text(
+        f"T1={GITHUB_TOKEN} T2={GITHUB_TOKEN_B}\n", encoding="utf-8"
+    )
+
+    scanner = TrivyScanner(auto_install=False)
+    result = scanner.scan([tmp_path])
+
+    assert result.error is None, f"unexpected error: {result.error}"
+    pats = [f for f in result.findings if f.rule_id == "trivy-github-pat"]
+    assert len(pats) == 2, f"trivy must report both same-line secrets, got: {result.findings}"
+    hashes = {f.secret_hash for f in pats}
+    assert all(hashes), "fallback findings must still carry a non-empty hash"
+    assert len(hashes) == 2, (
+        "two distinct same-line secrets collapsed to one hash (#479 same-line case)"
     )
