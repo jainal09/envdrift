@@ -7,6 +7,7 @@ import subprocess
 import sys
 from pathlib import Path
 from types import SimpleNamespace
+from typing import Any
 
 import pytest
 
@@ -122,7 +123,7 @@ class TestReadGitPath:
         monkeypatch.setenv("GIT_INDEX_FILE", str(index_file))
         monkeypatch.setenv("GIT_COMMON_DIR", str(common_dir))
 
-        captured = {}
+        captured: dict[str, Any] = {}
 
         def fake_run(args, **kwargs):
             captured["env"] = kwargs.get("env")
@@ -505,6 +506,27 @@ class TestHookFileByteExactness:
 
         data = (hooks_dir / "pre-commit").read_bytes()
         assert user_line in data  # UTF-8 user content survives unmangled
+        assert hook_check._ENVDRIFT_HOOK_MARKER.encode("utf-8") in data
+        assert b"\r" not in data
+
+    def test_existing_non_utf8_hook_preserved_byte_exact(self, tmp_path: Path):
+        """A hook containing invalid-UTF-8 bytes must not crash the install.
+
+        A hook written by another Windows tool in the ANSI code page (cp1252
+        ``é`` is the single byte 0xE9, invalid as UTF-8) made the strict UTF-8
+        ``read_text`` raise UnicodeDecodeError — uncaught through
+        ``ensure_git_hook_setup(auto_fix=True)``, whose guard only catches
+        OSError — crashing ``envdrift encrypt``/``decrypt``/``sync``.
+        """
+        hooks_dir = tmp_path / "hooks"
+        hooks_dir.mkdir()
+        user_line = b"# caf\xe9 user hook"  # 0xE9 is not valid UTF-8
+        (hooks_dir / "pre-commit").write_bytes(b"#!/bin/sh\n" + user_line + b"\nexit 0\n")
+
+        install_direct_hooks(hooks_dir)
+
+        data = (hooks_dir / "pre-commit").read_bytes()
+        assert user_line in data  # non-UTF-8 user bytes survive byte-exact
         assert hook_check._ENVDRIFT_HOOK_MARKER.encode("utf-8") in data
         assert b"\r" not in data
 
