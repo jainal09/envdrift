@@ -109,7 +109,7 @@ jobs:
 
       - name: Install dependencies
         run: |
-          uv sync --all-extras
+          uv sync --all-extras --locked
           # Install optional integration test dependencies
           uv pip install boto3 hvac
 
@@ -300,7 +300,7 @@ jobs:
 
       - name: Install dependencies
         run: |
-          uv sync --all-extras
+          uv sync --all-extras --locked
           uv pip install boto3 hvac google-cloud-secret-manager azure-keyvault-secrets azure-identity
 
       - name: Run GCP tests (if configured)
