@@ -674,11 +674,13 @@ class TestAzureKeyVaultClient:
     def test_malformed_verify_challenge_resource_fails_loudly(
         self, mock_azure, monkeypatch: pytest.MonkeyPatch
     ):
-        """A malformed value raises ValueError before any SDK object is built.
+        """A malformed value raises AuthenticationError before any SDK object is built.
 
         Config errors must fail loudly instead of being coerced to either
-        behavior; the client must stay unauthenticated so a later call
-        re-attempts after the env var is fixed.
+        behavior, but through the domain hierarchy (AuthenticationError, chained
+        to the underlying ValueError) so CLI callers catching VaultError show a
+        clean message rather than a raw traceback. The client must stay
+        unauthenticated so a later call re-attempts after the env var is fixed.
         """
         monkeypatch.setenv(mock_azure.VERIFY_CHALLENGE_RESOURCE_ENV, "maybe")
         with (
@@ -686,8 +688,11 @@ class TestAzureKeyVaultClient:
             patch.object(mock_azure, "_SecretClient") as client_cls,
         ):
             client = mock_azure.AzureKeyVaultClient(vault_url="https://test.vault.azure.net")
-            with pytest.raises(ValueError, match=mock_azure.VERIFY_CHALLENGE_RESOURCE_ENV):
+            with pytest.raises(
+                AuthenticationError, match=mock_azure.VERIFY_CHALLENGE_RESOURCE_ENV
+            ) as exc_info:
                 client.authenticate()
+            assert isinstance(exc_info.value.__cause__, ValueError)
             cred_cls.assert_not_called()
             client_cls.assert_not_called()
         assert client.is_authenticated() is False

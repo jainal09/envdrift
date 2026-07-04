@@ -87,9 +87,15 @@ def _put_secret(session, endpoint: str, name: str, value: str):
 
     response = _do()
     if response.status_code == 409:
-        session.post(
+        recover = session.post(
             f"{endpoint}/deletedsecrets/{name}/recover",
             params={"api-version": "7.4"},
+        )
+        # A failed recover would make the retried PUT 409 again and surface as
+        # a confusing seed assertion; fail here with the real cause instead.
+        assert recover.status_code in (200, 201), (
+            f"Recovering soft-deleted secret '{name}' failed: "
+            f"HTTP {recover.status_code} {recover.text[:200]}"
         )
         response = _do()
     return response
@@ -115,6 +121,63 @@ def _delete_secret(session, endpoint: str, name: str) -> None:
             f"{endpoint}/secrets/{name}",
             params={"api-version": "7.4"},
         )
+
+
+class _StubResponse:
+    def __init__(self, status_code: int, text: str = ""):
+        self.status_code = status_code
+        self.text = text
+
+
+class _StubSession:
+    """Scripted requests.Session stand-in for the seeding helpers.
+
+    Needs no container: it replays canned responses so ``_put_secret``'s
+    409 -> recover -> retry control flow can be pinned down, including the
+    recovery-failure path.
+    """
+
+    def __init__(self, put_responses: list[_StubResponse], recover_response: _StubResponse):
+        self._puts = list(put_responses)
+        self._recover = recover_response
+        self.put_calls = 0
+        self.recover_calls = 0
+
+    def put(self, url: str, **kwargs) -> _StubResponse:
+        self.put_calls += 1
+        return self._puts.pop(0)
+
+    def post(self, url: str, **kwargs) -> _StubResponse:
+        self.recover_calls += 1
+        return self._recover
+
+
+class TestPutSecretRecovery:
+    """``_put_secret``'s soft-delete recovery must fail loudly, not confusingly.
+
+    Regression for a #522 review finding: the recover POST response used to be
+    discarded, so a failed recover made the retried PUT 409 again and the seed
+    assertion blamed the PUT instead of the recovery.
+    """
+
+    def test_failed_recover_surfaces_recovery_error(self):
+        session = _StubSession(
+            put_responses=[_StubResponse(409, "conflict")],
+            recover_response=_StubResponse(403, "recovery forbidden"),
+        )
+        with pytest.raises(AssertionError, match="Recovering soft-deleted secret 'residue'"):
+            _put_secret(session, "https://localhost:8443", "residue", "v")
+        assert session.put_calls == 1  # no blind PUT retry after a failed recover
+
+    def test_successful_recover_retries_put(self):
+        session = _StubSession(
+            put_responses=[_StubResponse(409, "conflict"), _StubResponse(200)],
+            recover_response=_StubResponse(200),
+        )
+        response = _put_secret(session, "https://localhost:8443", "residue", "v")
+        assert response.status_code == 200
+        assert session.recover_calls == 1
+        assert session.put_calls == 2
 
 
 # --- Fixtures ---

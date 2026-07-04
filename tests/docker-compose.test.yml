@@ -61,7 +61,19 @@ services:
     environment:
       - LOWKEY_VAULT_NAMES=envdrift-test-vault
     healthcheck:
-      test: ["CMD", "curl", "-f", "-k", "https://localhost:8443/ping"]
+      # The 7.3.x image is BusyBox-based and ships wget but NOT curl; a curl
+      # healthcheck can never pass, so `docker compose up --wait`
+      # (make test-integration-up) would fail with the container "unhealthy".
+      test:
+        [
+          "CMD",
+          "wget",
+          "-q",
+          "-O",
+          "/dev/null",
+          "--no-check-certificate",
+          "https://localhost:8443/ping",
+        ]
       interval: 5s
       timeout: 5s
       retries: 10

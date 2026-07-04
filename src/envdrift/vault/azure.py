@@ -123,11 +123,18 @@ class AzureKeyVaultClient(VaultClient):
         Authenticate to Azure Key Vault using DefaultAzureCredential and initialize the SecretClient.
 
         On success sets self._credential to the created credential and self._client to a ready SecretClient.
-        Raises AuthenticationError if credential acquisition fails, VaultError for HTTP-related Key Vault
-        errors, and ValueError when ENVDRIFT_AZURE_VERIFY_CHALLENGE_RESOURCE holds a malformed value.
+        Raises AuthenticationError if credential acquisition fails or when
+        ENVDRIFT_AZURE_VERIFY_CHALLENGE_RESOURCE holds a malformed value, and VaultError for HTTP-related
+        Key Vault errors.
         """
         credential_cls, client_cls = _get_azure_classes()
-        verify_challenge_resource = _verify_challenge_resource()
+        try:
+            verify_challenge_resource = _verify_challenge_resource()
+        except ValueError as e:
+            # Surface the config error through the domain hierarchy so CLI
+            # callers that catch VaultError/AuthenticationError show a clean
+            # message instead of a raw ValueError traceback.
+            raise AuthenticationError(str(e)) from e
         try:
             self._credential = credential_cls()
             self._client = client_cls(

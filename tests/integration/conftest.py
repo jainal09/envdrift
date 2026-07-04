@@ -318,8 +318,10 @@ def lowkey_vault_ca_bundle(
     from urllib.parse import urlparse
 
     parsed = urlparse(lowkey_vault_endpoint)
+    # Bounded wall-clock: without a timeout a container that accepts TCP but
+    # stalls mid-TLS-handshake would hang the whole session fixture.
     pem = ssl.get_server_certificate(
-        (parsed.hostname or "localhost", parsed.port or LOWKEY_VAULT_PORT)
+        (parsed.hostname or "localhost", parsed.port or LOWKEY_VAULT_PORT), timeout=10
     )
     path = tmp_path_factory.mktemp("lowkey-vault-tls") / "lowkey-vault-ca.pem"
     path.write_text(pem, encoding="utf-8")
