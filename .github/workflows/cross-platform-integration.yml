@@ -70,7 +70,7 @@ jobs:
           cache-suffix: ${{ matrix.os }}-integration
 
       - name: Install dependencies
-        run: uv sync --all-extras
+        run: uv sync --all-extras --locked
 
       # Install dotenvx / sops / scanners from the pinned constants.json URLs and
       # add them to PATH. Resilient: a tool that fails to install is logged and
