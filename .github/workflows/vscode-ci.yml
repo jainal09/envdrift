@@ -121,11 +121,11 @@ jobs:
       - name: Compile TypeScript
         run: npm run compile
 
-      - name: Install vsce
-        run: npm install -g @vscode/vsce
-
+      # Use the lockfile-pinned @vscode/vsce devDependency (installed by
+      # `npm ci` above) so CI validates packaging with the exact tool the
+      # release workflow ships with (#495).
       - name: Package extension
-        run: vsce package --no-dependencies
+        run: ./node_modules/.bin/vsce package --no-dependencies
 
       - name: Upload VSIX artifact
         uses: actions/upload-artifact@v7
