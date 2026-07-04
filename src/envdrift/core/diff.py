@@ -239,8 +239,8 @@ class DiffEngine:
             and field_meta.field_type is not None
             and field_meta.field_type is not Any
         ):
-            coerced1 = coerce_env_value(field_meta.field_type, value1)
-            coerced2 = coerce_env_value(field_meta.field_type, value2)
+            coerced1 = coerce_env_value(field_meta.field_type, value1, field_meta.type_metadata)
+            coerced2 = coerce_env_value(field_meta.field_type, value2, field_meta.type_metadata)
             if coerced1.status == "ok" and coerced2.status == "ok":
                 if coerced1.value == coerced2.value:
                     return True

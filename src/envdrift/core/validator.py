@@ -238,7 +238,9 @@ class Validator:
             if env_var.value == "" and schema.env_ignore_empty:
                 continue
 
-            type_error = self._check_type(env_var.value, field_meta.field_type)
+            type_error = self._check_type(
+                env_var.value, field_meta.field_type, field_meta.type_metadata
+            )
             if type_error:
                 result.type_errors[field_name] = type_error
 
@@ -263,7 +265,9 @@ class Validator:
                     continue
                 if value == "" and schema.env_ignore_empty:
                     continue
-                is_complex, allow_parse_failure = field_complexity(field_meta.field_type)
+                is_complex, allow_parse_failure = field_complexity(
+                    field_meta.field_type, field_meta.type_metadata
+                )
                 if is_complex:
                     # Mirror the env source: JSON-decode complex values; a union
                     # with a complex member falls back to the raw string. Plain
@@ -331,7 +335,9 @@ class Validator:
                 return True
         return False
 
-    def _check_type(self, value: str, expected_type: type) -> str | None:
+    def _check_type(
+        self, value: str, expected_type: type, metadata: tuple[Any, ...] = ()
+    ) -> str | None:
         """
         Validate a plaintext .env value the way pydantic-settings would (#472).
 
@@ -344,6 +350,8 @@ class Validator:
         Parameters:
             value (str): The raw value read from a .env file.
             expected_type (type): The field's annotation (e.g., int, bool, list[str]).
+            metadata (tuple): The field's ``FieldInfo.metadata`` (e.g. a
+                ``pydantic.Json`` marker, which makes the field non-complex).
 
         Returns:
             str | None: An error message describing the mismatch, or `None` if the
@@ -358,7 +366,7 @@ class Validator:
         if value.startswith("encrypted:") or value.startswith("ENC["):
             return None
 
-        coerced = coerce_env_value(expected_type, value)
+        coerced = coerce_env_value(expected_type, value, metadata)
         if coerced.status != "fail":
             return None
 

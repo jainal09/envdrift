@@ -36,6 +36,11 @@ class FieldMetadata:
     # e.g. a field ``X_API_KEY`` with ``Field(alias='X-API-KEY')``. Validation
     # matches the .env against this when present so a non-identifier key resolves.
     alias: str | None = None
+    # The field's ``FieldInfo.metadata`` — pydantic strips ``Annotated[...]``
+    # extras (constraint markers, ``pydantic.Json``, ...) into it, and the
+    # env-source complexity/coercion decision needs it: a ``Json`` marker makes
+    # the field non-complex, so the raw string must pass through untouched.
+    type_metadata: tuple[Any, ...] = ()
 
     @property
     def is_optional(self) -> bool:
@@ -317,6 +322,7 @@ class SchemaLoader:
                 field_type=annotation if annotation else type(None),
                 annotation=type_str,
                 alias=field_alias,
+                type_metadata=tuple(field_info.metadata),
             )
 
         # A custom @field_validator / @model_validator can reject otherwise
