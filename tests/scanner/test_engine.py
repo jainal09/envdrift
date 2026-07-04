@@ -1362,9 +1362,12 @@ class TestCombinedFilesSecurity:
         )
         engine = ScanEngine(config)
 
-        # Mock subprocess.run to return the file as gitignored (batched stdin approach)
+        # Mock subprocess.run to return the file as gitignored (batched --stdin -z
+        # approach: check-ignore output is NUL-terminated, not newline-terminated)
         def mock_run(cmd, **kwargs):
-            return subprocess.CompletedProcess(cmd, 0, stdout=".env.production\n", stderr="")
+            if "check-ignore" in cmd:
+                return subprocess.CompletedProcess(cmd, 0, stdout=".env.production\0", stderr="")
+            return subprocess.CompletedProcess(cmd, 0, stdout="/repo\n", stderr="")
 
         monkeypatch.setattr(subprocess, "run", mock_run)
 
@@ -1492,9 +1495,12 @@ class TestCombinedFilesSecurity:
         )
         engine = ScanEngine(config)
 
-        # Mock subprocess.run - only .env.production is gitignored
+        # Mock subprocess.run - only .env.production is gitignored (NUL-terminated
+        # check-ignore -z output)
         def mock_run(cmd, **kwargs):
-            return subprocess.CompletedProcess(cmd, 0, stdout=".env.production\n", stderr="")
+            if "check-ignore" in cmd:
+                return subprocess.CompletedProcess(cmd, 0, stdout=".env.production\0", stderr="")
+            return subprocess.CompletedProcess(cmd, 0, stdout="/repo\n", stderr="")
 
         monkeypatch.setattr(subprocess, "run", mock_run)
 

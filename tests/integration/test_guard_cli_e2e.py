@@ -545,11 +545,14 @@ def test_skip_gitignored_survives_non_utf8_locale(git_repo: Path) -> None:
 def test_combined_file_gitignore_check_handles_non_ascii_name(git_repo: Path) -> None:
     """#453: ``check_combined_files_security`` must match non-ASCII combined files.
 
-    The newline variant of ``git check-ignore`` (combined-files security check)
-    both used the platform locale codec and let git C-quote non-ASCII paths in
-    its output (octal escapes per ``core.quotepath``). A gitignored CJK combined
-    file therefore either crashed the run (``UnicodeEncodeError`` under cp1252 or
-    a C locale) or was wrongly reported as NOT gitignored.
+    The combined-files security check originally fed newline-joined paths to
+    ``git check-ignore`` over a locale-codec text pipe, which broke three ways:
+    the platform locale codec crashed on (cp1252) or mangled (C locale) non-ASCII
+    names, git C-quoted non-ASCII output (octal escapes per ``core.quotepath``) so
+    stdout never compared equal, and on Windows the text-mode pipe translated each
+    written ``\\n`` to ``\\r\\n`` so git matched ``name\\r`` against .gitignore and
+    reported every gitignored file as unprotected. The fix uses the NUL-separated
+    ``--stdin -z`` pipe with explicit UTF-8, which avoids all three.
     """
     work_dir = git_repo
     (work_dir / ".gitignore").write_text(_CJK_COMBINED_NAME + "\n", encoding="utf-8")

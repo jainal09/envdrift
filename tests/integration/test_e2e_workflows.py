@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import contextlib
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -692,8 +693,20 @@ class TestContainerMarkerContract:
     This meta-test makes the marker — not fixture luck — the enforced contract.
     """
 
-    # The CI selector used on Docker-less runners (cross-platform-integration.yml).
-    _SELECTOR = "integration and not aws and not vault and not azure and not gcp"
+    @staticmethod
+    def _ci_selector(repo_root: Path) -> str:
+        """The ``-m`` expression actually used by the Docker-less CI workflow.
+
+        Parsed from the workflow file (not duplicated here) so this meta-test
+        keeps verifying the real CI selector even if the expression changes.
+        """
+        workflow = repo_root / ".github" / "workflows" / "cross-platform-integration.yml"
+        selectors = set(re.findall(r'-m "([^"]+)"', workflow.read_text(encoding="utf-8")))
+        assert len(selectors) == 1, (
+            f"expected exactly one distinct -m marker expression in {workflow.name}, "
+            f"got {sorted(selectors)} — update this meta-test to match the workflow"
+        )
+        return selectors.pop()
 
     def test_cross_platform_selector_excludes_localstack_e2e_tests(self) -> None:
         """The Docker-less CI marker expression deselects the LocalStack e2e tests."""
@@ -710,7 +723,7 @@ class TestContainerMarkerContract:
                 "-p",
                 "no:cacheprovider",
                 "-m",
-                self._SELECTOR,
+                self._ci_selector(repo_root),
                 str(module),
             ],
             cwd=str(repo_root),
@@ -723,10 +736,12 @@ class TestContainerMarkerContract:
         )
         assert result.returncode == 0, result.stdout + result.stderr
 
+        # Derived from the real test functions (not string literals) so a rename
+        # or move breaks this meta-test loudly instead of passing vacuously.
         localstack_backed = [
-            "test_e2e_pull_decrypt_workflow",
-            "test_e2e_lock_push_workflow",
-            "test_e2e_monorepo_multi_service",
+            TestPullDecryptWorkflow.test_e2e_pull_decrypt_workflow.__name__,
+            TestLockPushWorkflow.test_e2e_lock_push_workflow.__name__,
+            TestMonorepoMultiService.test_e2e_monorepo_multi_service.__name__,
         ]
         for name in localstack_backed:
             assert name not in result.stdout, (
@@ -737,4 +752,5 @@ class TestContainerMarkerContract:
 
         # Control: the Docker-free e2e tests must still be selected, proving the
         # expression excludes by marker rather than deselecting everything.
-        assert "test_e2e_ci_mode_noninteractive" in result.stdout, result.stdout
+        control = TestCIModeNonInteractive.test_e2e_ci_mode_noninteractive.__name__
+        assert control in result.stdout, result.stdout

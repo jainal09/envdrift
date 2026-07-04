@@ -1004,15 +1004,18 @@ class ScanEngine:
             return warnings
 
         try:
-            # Use batched stdin approach for consistency with _filter_gitignored_files.
-            # Explicit UTF-8: ``text=True`` alone uses the platform locale codec
-            # (cp1252 on Windows), which mis-handles non-ASCII filenames (#453).
-            # ``core.quotepath=false`` makes git echo non-ASCII paths verbatim
-            # instead of C-quoted ("\347..." octal escapes), so the stdout lines
-            # compare equal to the configured combined-file names.
+            # Use the same batched ``--stdin -z`` NUL-separated pipe as
+            # _filter_gitignored_files. Explicit UTF-8: ``text=True`` alone uses
+            # the platform locale codec (cp1252 on Windows), which mis-handles
+            # non-ASCII filenames (#453). NUL separators (not newlines) are
+            # required for correctness, not just consistency: Windows text-mode
+            # pipes translate every written ``\n`` to ``\r\n``, so git would see
+            # ``name\r`` and never match the .gitignore entry. ``-z`` also makes
+            # git print paths verbatim (no core.quotepath C-quoting), so stdout
+            # compares equal to the configured combined-file names.
             result = subprocess.run(  # nosec B603, B607
-                ["git", "-c", "core.quotepath=false", "check-ignore", "--stdin"],
-                input="\n".join(self.config.combined_files),
+                ["git", "check-ignore", "--stdin", "-z"],
+                input="\0".join(self.config.combined_files) + "\0",
                 capture_output=True,
                 text=True,
                 encoding="utf-8",
@@ -1033,7 +1036,7 @@ class ScanEngine:
                 )
                 return warnings
 
-            gitignored = set(result.stdout.strip().split("\n")) if result.stdout.strip() else set()
+            gitignored = {p for p in result.stdout.split("\0") if p}
 
             for combined_file in self.config.combined_files:
                 if combined_file not in gitignored:
