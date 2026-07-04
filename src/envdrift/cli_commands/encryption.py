@@ -258,7 +258,10 @@ def encrypt_cmd(
     def _analyze_file(env_file: Path):
         """Parse and analyze one env file, exiting cleanly on unreadable input."""
         try:
-            env = parser.parse(env_file)
+            # lenient=True so --check analyzes every KEY=value assignment dotenvx
+            # would encrypt — a strict parse silently skips non-identifier keys
+            # (e.g. MY-AWS-KEY) and would miss plaintext secrets in them.
+            env = parser.parse(env_file, lenient=True)
         except (IsADirectoryError, ValueError) as e:
             # A directory passed instead of a file, or a non-UTF-8 / binary file —
             # surface cleanly instead of an uncaught traceback (#24, #25).

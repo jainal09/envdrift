@@ -188,6 +188,17 @@ def _require_yaml() -> Any:
     return yaml
 
 
+def _read_config_text(config_path: Path) -> str:
+    """Read a pre-commit config without raising ``UnicodeDecodeError``.
+
+    Invalid UTF-8 bytes are mapped to lone surrogates (``surrogateescape``),
+    which PyYAML rejects as non-printable — so a binary / mis-encoded file
+    surfaces as a clean ``Could not parse …`` error downstream instead of a
+    raw traceback (#512 review).
+    """
+    return config_path.read_text(encoding="utf-8", errors="surrogateescape")
+
+
 def _parse_precommit_config(yaml_mod: Any, content: str, config_path: Path) -> dict[str, Any]:
     """Parse a pre-commit config, raising :class:`PrecommitConfigError` on bad input."""
     try:
@@ -350,7 +361,7 @@ def install_hooks(
         config_path.write_text(_fresh_config_text(_active_hook_ids()), encoding="utf-8")
         return True
 
-    content = config_path.read_text(encoding="utf-8")
+    content = _read_config_text(config_path)
     config = _parse_precommit_config(yaml_mod, content, config_path)
 
     existing = _existing_envdrift_hook_ids(config)
@@ -466,7 +477,7 @@ def uninstall_hooks(config_path: Path | None = None) -> bool:
     if config_path is None or not config_path.exists():
         return False
 
-    content = config_path.read_text(encoding="utf-8")
+    content = _read_config_text(config_path)
 
     marker_text = _marker_uninstall_text(yaml_mod, content, config_path)
     if marker_text is not None:
@@ -521,7 +532,7 @@ def verify_hooks_installed(config_path: Path | None = None) -> dict[str, bool]:
         return empty_result
 
     try:
-        content = config_path.read_text(encoding="utf-8")
+        content = _read_config_text(config_path)
         config = yaml.safe_load(content) or {}
     except (OSError, yaml.YAMLError):
         return empty_result

@@ -306,6 +306,45 @@ class TestInstallFailsCleanly:
         config_file.write_text("- just\n- a list\n", encoding="utf-8")
         assert uninstall_hooks(config_path=config_file) is False
 
+    def test_install_hooks_raises_clean_error_on_non_utf8_config(self, tmp_path: Path):
+        """Invalid UTF-8 raises PrecommitConfigError, not UnicodeDecodeError (#512 review)."""
+        from envdrift.integrations.precommit import PrecommitConfigError
+
+        raw = b"repos:\n  - repo: local\x80\xff\n"
+        config_file = tmp_path / ".pre-commit-config.yaml"
+        config_file.write_bytes(raw)
+
+        with pytest.raises(PrecommitConfigError, match=r"[Cc]ould not parse"):
+            install_hooks(config_path=config_file)
+        assert config_file.read_bytes() == raw
+
+    def test_uninstall_and_verify_survive_non_utf8_config(self, tmp_path: Path):
+        raw = b"repos:\n  - repo: local\x80\xff\n"
+        config_file = tmp_path / ".pre-commit-config.yaml"
+        config_file.write_bytes(raw)
+
+        assert uninstall_hooks(config_path=config_file) is False
+        assert config_file.read_bytes() == raw
+        result = verify_hooks_installed(config_path=config_file)
+        assert result == dict.fromkeys(result, False)
+
+    def test_hook_install_cli_non_utf8_yaml_exits_1_without_traceback(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        monkeypatch.chdir(tmp_path)
+        raw = b"repos:\n  - repo: local\x80\xff\n"
+        (tmp_path / ".pre-commit-config.yaml").write_bytes(raw)
+
+        result = runner.invoke(app, ["hook", "--install"])
+
+        assert result.exit_code == 1
+        assert result.exception is None or isinstance(result.exception, SystemExit), (
+            f"hook --install leaked {type(result.exception).__name__}: {result.exception}"
+        )
+        assert "Traceback" not in result.output
+        assert "could not parse" in _normalized(result.output).lower()
+        assert (tmp_path / ".pre-commit-config.yaml").read_bytes() == raw
+
     def test_uninstall_hooks_handles_null_repos_without_markers(self, tmp_path: Path):
         """Legacy (marker-less) uninstall on `repos:` null must not raise TypeError.
 
@@ -528,3 +567,27 @@ class TestMultiFileCliArguments:
         out = _normalized(result.output)
         assert result.exit_code == 1, out
         assert "not found" in out.lower()
+
+
+class TestEncryptCheckSeesAllDotenvxLines:
+    """`encrypt --check` must analyze every assignment dotenvx would encrypt.
+
+    A strict parse silently skips keys that are not Python identifiers, so a
+    plaintext secret in a dotenvx-valid line like ``MY-AWS-KEY=…`` passed the
+    hook check while ``encrypt`` would happily process it (#512 review).
+    """
+
+    def test_check_blocks_secret_under_non_identifier_key(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        monkeypatch.chdir(tmp_path)
+        # AWS-style key built by concatenation so the literal never appears
+        # whole in the source (GitHub push protection).
+        secret = "AKIA" + "IOSFODNN7EXAMPLE"
+        (tmp_path / ".env.production").write_text(f"MY-AWS-KEY={secret}\n", encoding="utf-8")
+
+        result = runner.invoke(app, ["encrypt", "--check", ".env.production"])
+
+        out = _normalized(result.output)
+        assert result.exit_code == 1, out
+        assert "MY-AWS-KEY" in out
