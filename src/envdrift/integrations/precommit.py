@@ -77,13 +77,35 @@ def _active_hook_ids() -> list[str]:
     return [str(hook["id"]) for hook in HOOK_ENTRY["hooks"]]
 
 
+def _render_scalar(value: Any) -> str:
+    """Render one scalar value for a YAML mapping line.
+
+    Strings that would not survive as plain scalars — a leading indicator
+    character, leading/trailing whitespace, or a ``": "`` / ``" #"`` sequence —
+    are emitted single-quoted, so a future ``HOOK_ENTRY`` value can never
+    render as silently malformed YAML (over-quoting is always valid).
+    """
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    text = str(value)
+    needs_quoting = (
+        not text
+        or text != text.strip()
+        or text[0] in "-?:,[]{}#&*!|>'\"%@`"
+        or ": " in text
+        or " #" in text
+    )
+    if needs_quoting:
+        return "'" + text.replace("'", "''") + "'"
+    return text
+
+
 def _render_hook_lines(hook: dict[str, Any]) -> list[str]:
     """Render one hook mapping as YAML sequence-item lines (zero indent)."""
     lines: list[str] = []
     prefix = "- "
     for key, value in hook.items():
-        text = ("true" if value else "false") if isinstance(value, bool) else str(value)
-        lines.append(f"{prefix}{key}: {text}")
+        lines.append(f"{prefix}{key}: {_render_scalar(value)}")
         prefix = "  "
     return lines
 
@@ -216,7 +238,7 @@ def _fresh_config_text(hook_ids: list[str]) -> str:
     return "repos:\n" + _render_repo_block(hook_ids, "  ")
 
 
-def _block_sequence_indent(content: str, repos_value: Any) -> str:
+def _block_sequence_indent(repos_value: Any) -> str:
     """Indent (dash column) of an existing block-style repos sequence."""
     return " " * repos_value.start_mark.column
 
@@ -231,28 +253,43 @@ def _insert_lines(content: str, line_index: int, block: str) -> str:
     return "".join(lines[:line_index]) + block + "".join(lines[line_index:])
 
 
-def _insert_hook_block(
-    yaml_mod: Any, content: str, config: dict[str, Any], hook_ids: list[str], config_path: Path
+def _find_repos_node(yaml_mod: Any, content: str) -> tuple[Any, Any]:
+    """Locate the ``repos`` key/value nodes in ``content``, or ``(None, None)``."""
+    node = yaml_mod.compose(content, Loader=yaml_mod.SafeLoader)
+    for key_node, value_node in getattr(node, "value", None) or []:
+        if getattr(key_node, "value", None) == "repos":
+            return key_node, value_node
+    return None, None
+
+
+def _replace_empty_flow_repos(
+    content: str, repos_value: Any, hook_ids: list[str], indent: str, config_path: Path
 ) -> str:
+    """Replace an empty flow-style ``repos: []`` with a block-style list."""
+    if repos_value.value:
+        raise PrecommitConfigError(
+            f"{config_path} uses a flow-style 'repos' list; "
+            "add the envdrift hooks manually (see `envdrift hook --config`)"
+        )
+    block = _render_repo_block(hook_ids, indent)
+    start = repos_value.start_mark.index
+    end = repos_value.end_mark.index
+    return content[:start] + "\n" + block.rstrip("\n") + content[end:]
+
+
+def _insert_hook_block(yaml_mod: Any, content: str, hook_ids: list[str], config_path: Path) -> str:
     """Insert the envdrift repo block into ``content`` without rewriting the rest.
 
     The insertion is a targeted text edit: existing comments, ordering and
     formatting are preserved byte for byte (#493).
     """
-    if "repos" not in config:
+    repos_key, repos_value = _find_repos_node(yaml_mod, content)
+
+    if repos_key is None:
+        # No `repos` key yet — append a fresh repos section at the end.
         if content and not content.endswith("\n"):
             content += "\n"
         return content + _fresh_config_text(hook_ids)
-
-    node = yaml_mod.compose(content, Loader=yaml_mod.SafeLoader)
-    repos_key = None
-    repos_value = None
-    for key_node, value_node in node.value:
-        if getattr(key_node, "value", None) == "repos":
-            repos_key, repos_value = key_node, value_node
-            break
-    if repos_key is None or repos_value is None:  # pragma: no cover - parse guard
-        raise PrecommitConfigError(f"Could not locate the 'repos' key in {config_path}")
 
     key_indent = " " * (repos_key.start_mark.column + 2)
 
@@ -265,19 +302,10 @@ def _insert_hook_block(
         raise PrecommitConfigError(f"{config_path} has a 'repos' key that is not a list")
 
     if repos_value.flow_style:
-        if repos_value.value:
-            raise PrecommitConfigError(
-                f"{config_path} uses a flow-style 'repos' list; "
-                "add the envdrift hooks manually (see `envdrift hook --config`)"
-            )
-        # `repos: []` — replace the empty flow list with a block-style list.
-        block = _render_repo_block(hook_ids, key_indent)
-        start = repos_value.start_mark.index
-        end = repos_value.end_mark.index
-        return content[:start] + "\n" + block.rstrip("\n") + content[end:]
+        return _replace_empty_flow_repos(content, repos_value, hook_ids, key_indent, config_path)
 
     # Block-style sequence: append after its last item, before the next key.
-    indent = _block_sequence_indent(content, repos_value)
+    indent = _block_sequence_indent(repos_value)
     block = _render_repo_block(hook_ids, indent)
     return _insert_lines(content, repos_value.end_mark.line, block)
 
@@ -330,7 +358,7 @@ def install_hooks(
     if not missing:
         return False
 
-    new_content = _insert_hook_block(yaml_mod, content, config, missing, config_path)
+    new_content = _insert_hook_block(yaml_mod, content, missing, config_path)
 
     # Verify the post-condition before touching the file: the result must
     # still parse and actually contain the hooks we set out to add.
@@ -368,6 +396,51 @@ def _remove_marker_blocks(content: str) -> tuple[str, bool]:
     return "".join(kept), removed
 
 
+def _marker_uninstall_text(yaml_mod: Any, content: str, config_path: Path) -> str | None:
+    """New file text if removing marker blocks alone uninstalls every envdrift hook.
+
+    Returns ``None`` when the marker path does not apply: no blocks were
+    removed, the remainder no longer parses, or marker-less envdrift hooks
+    remain (the caller then falls back to the legacy rewrite).
+    """
+    new_content, removed_blocks = _remove_marker_blocks(content)
+    if not removed_blocks:
+        return None
+    try:
+        remaining = _parse_precommit_config(yaml_mod, new_content, config_path)
+    except PrecommitConfigError:
+        return None
+    if _existing_envdrift_hook_ids(remaining):
+        return None
+    if "repos" in remaining and remaining.get("repos") is None:
+        # Removing our block emptied the list; keep the file meaningful.
+        new_content = "".join(
+            "repos: []\n" if line.rstrip("\r\n").rstrip() == "repos:" else line
+            for line in new_content.splitlines(keepends=True)
+        )
+    return new_content
+
+
+def _strip_legacy_hooks(config: dict[str, Any]) -> bool:
+    """Drop marker-less envdrift hooks from a parsed config in place."""
+    modified = False
+    # `repos:` may carry an explicit null — treat it like a missing key.
+    for repo in config.get("repos") or []:
+        if not (isinstance(repo, dict) and repo.get("repo") == "local"):
+            continue
+        hooks = repo.get("hooks") or []
+        if not isinstance(hooks, list):
+            continue
+        repo["hooks"] = [
+            hook
+            for hook in hooks
+            if not (isinstance(hook, dict) and str(hook.get("id", "")).startswith("envdrift-"))
+        ]
+        if len(repo["hooks"]) != len(hooks):
+            modified = True
+    return modified
+
+
 def uninstall_hooks(config_path: Path | None = None) -> bool:
     """
     Remove any envdrift hooks from a .pre-commit-config.yaml file.
@@ -395,21 +468,10 @@ def uninstall_hooks(config_path: Path | None = None) -> bool:
 
     content = config_path.read_text(encoding="utf-8")
 
-    new_content, removed_blocks = _remove_marker_blocks(content)
-    if removed_blocks:
-        try:
-            remaining = _parse_precommit_config(yaml_mod, new_content, config_path)
-        except PrecommitConfigError:
-            remaining = None
-        if remaining is not None and not _existing_envdrift_hook_ids(remaining):
-            if "repos" in remaining and remaining.get("repos") is None:
-                # Removing our block emptied the list; keep the file meaningful.
-                new_content = "".join(
-                    "repos: []\n" if line.rstrip("\r\n").rstrip() == "repos:" else line
-                    for line in new_content.splitlines(keepends=True)
-                )
-            config_path.write_text(new_content, encoding="utf-8")
-            return True
+    marker_text = _marker_uninstall_text(yaml_mod, content, config_path)
+    if marker_text is not None:
+        config_path.write_text(marker_text, encoding="utf-8")
+        return True
 
     # Legacy path: envdrift hooks installed without markers. This re-serializes
     # the file, which loses comments, but only runs for pre-#493 installs.
@@ -418,42 +480,20 @@ def uninstall_hooks(config_path: Path | None = None) -> bool:
     except PrecommitConfigError:
         return False
 
-    if "repos" not in config:
+    if not _strip_legacy_hooks(config):
         return False
 
-    modified = False
+    # Remove empty local repos
+    config["repos"] = [
+        repo
+        for repo in config["repos"]
+        if not (isinstance(repo, dict) and repo.get("repo") == "local" and not repo.get("hooks"))
+    ]
 
-    for repo in config["repos"]:
-        if isinstance(repo, dict) and repo.get("repo") == "local":
-            hooks = repo.get("hooks") or []
-            if not isinstance(hooks, list):
-                continue
-            original_count = len(hooks)
+    with open(config_path, "w", encoding="utf-8") as f:
+        yaml_mod.dump(config, f, default_flow_style=False, sort_keys=False)
 
-            # Remove envdrift hooks
-            repo["hooks"] = [
-                hook
-                for hook in hooks
-                if not (isinstance(hook, dict) and str(hook.get("id", "")).startswith("envdrift-"))
-            ]
-
-            if len(repo["hooks"]) != original_count:
-                modified = True
-
-    if modified:
-        # Remove empty local repos
-        config["repos"] = [
-            repo
-            for repo in config["repos"]
-            if not (
-                isinstance(repo, dict) and repo.get("repo") == "local" and not repo.get("hooks")
-            )
-        ]
-
-        with open(config_path, "w", encoding="utf-8") as f:
-            yaml_mod.dump(config, f, default_flow_style=False, sort_keys=False)
-
-    return modified
+    return True
 
 
 def verify_hooks_installed(config_path: Path | None = None) -> dict[str, bool]:

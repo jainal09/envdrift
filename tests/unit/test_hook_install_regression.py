@@ -306,6 +306,65 @@ class TestInstallFailsCleanly:
         config_file.write_text("- just\n- a list\n", encoding="utf-8")
         assert uninstall_hooks(config_path=config_file) is False
 
+    def test_uninstall_hooks_handles_null_repos_without_markers(self, tmp_path: Path):
+        """Legacy (marker-less) uninstall on `repos:` null must not raise TypeError.
+
+        `_parse_precommit_config` lets an explicit `repos: null` through, so the
+        legacy rewrite path used to iterate over None (PR #512 review).
+        """
+        original = "# hand-crafted config\nrepos:\n"
+        config_file = tmp_path / ".pre-commit-config.yaml"
+        config_file.write_text(original, encoding="utf-8")
+
+        assert uninstall_hooks(config_path=config_file) is False
+        assert config_file.read_text(encoding="utf-8") == original
+
+    def test_uninstall_hooks_removes_legacy_marker_less_hooks(self, tmp_path: Path):
+        """Pre-#493 installs (no markers) still uninstall via the rewrite path."""
+        legacy = textwrap.dedent(
+            """\
+            repos:
+              - repo: local
+                hooks:
+                  - id: envdrift-encryption
+                    entry: envdrift encrypt --check
+                  - id: other-hook
+                    entry: echo test
+            """
+        )
+        config_file = tmp_path / ".pre-commit-config.yaml"
+        config_file.write_text(legacy, encoding="utf-8")
+
+        assert uninstall_hooks(config_path=config_file) is True
+
+        config = yaml.safe_load(config_file.read_text(encoding="utf-8"))
+        hook_ids = [hook.get("id") for repo in config["repos"] for hook in repo.get("hooks") or []]
+        assert "envdrift-encryption" not in hook_ids
+        assert "other-hook" in hook_ids
+
+
+class TestRenderedYamlQuoting:
+    """Rendered hook lines must stay valid YAML even for tricky scalar values."""
+
+    def test_render_hook_lines_quote_unsafe_scalars(self):
+        """Values with `: `, ` #`, or a leading indicator must round-trip (PR #512 review)."""
+        from envdrift.integrations.precommit import _render_hook_lines
+
+        hook = {
+            "id": "envdrift-example",
+            "name": "note: a colon-space clause",
+            "entry": "envdrift validate --ci # not a comment",
+            "files": "- leading indicator",
+            "description": "it's quoted ' correctly",
+            "pass_filenames": True,
+        }
+        parsed = yaml.safe_load("\n".join(_render_hook_lines(hook)))
+        assert parsed == [hook]
+
+    def test_current_template_values_stay_plain(self):
+        """Today's HOOK_ENTRY values are safe plain scalars — no quoting noise."""
+        assert "'" not in HOOK_CONFIG
+
 
 class TestHookInstallCliMessages:
     """The CLI reports what actually happened (truthful results)."""
