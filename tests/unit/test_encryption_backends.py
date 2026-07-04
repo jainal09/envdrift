@@ -353,6 +353,43 @@ class TestDotenvxEncryptionBackend:
         assert "refusing" in result.message.lower()
         assert example.read_text() == "API_KEY=placeholder\n"
 
+    def test_encrypt_refuses_env_keys_case_variant(self, tmp_path):
+        """#474: the backend name guard is case-insensitive.
+
+        On macOS/Windows default case-insensitive filesystems ``.env.KEYS``
+        resolves to the real ``.env.keys``, so a case-sensitive suffix check
+        reproduced the exact lockout the guard exists to prevent.
+        """
+        keys_file = tmp_path / ".env.KEYS"
+        keys_content = "DOTENV_PRIVATE_KEY=" + "0" * 64 + "\n"
+        keys_file.write_text(keys_content)
+
+        backend = DotenvxEncryptionBackend()
+        result = backend.encrypt(keys_file)
+
+        assert result.success is False
+        assert "refusing" in result.message.lower()
+        assert keys_file.read_text() == keys_content
+
+    def test_encrypt_surfaces_renamed_key_store_refusal_cleanly(self, tmp_path):
+        """#474: a renamed key store fails as EncryptionBackendError, not a crash.
+
+        ``mv .env.keys prodkeys.env`` defeats the backend's name-based guard;
+        the wrapper's content sniff then raises DotenvxFilenameError, which the
+        backend must convert into a clean EncryptionBackendError (the CLI
+        prints those and exits 1) instead of an uncaught traceback.
+        """
+        renamed = tmp_path / "prodkeys.env"
+        content = "DOTENV_PRIVATE_KEY=" + "0" * 64 + "\n"
+        renamed.write_text(content)
+
+        backend = DotenvxEncryptionBackend()
+        with patch.object(backend, "is_installed", return_value=True):
+            with pytest.raises(EncryptionBackendError, match="DOTENV_PRIVATE_KEY"):
+                backend.encrypt(renamed)
+
+        assert renamed.read_text() == content
+
     @patch("envdrift.integrations.dotenvx.DotenvxWrapper")
     def test_decrypt_success(self, mock_wrapper_class, tmp_path):
         """Test successful decryption."""

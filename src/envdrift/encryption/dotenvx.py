@@ -185,7 +185,7 @@ class DotenvxEncryptionBackend(EncryptionBackend):
                 f"dotenvx is not installed.\n{self.install_instructions()}"
             )
 
-        from envdrift.integrations.dotenvx import DotenvxError
+        from envdrift.integrations.dotenvx import DotenvxError, DotenvxFilenameError
 
         try:
             wrapper = self._get_wrapper()
@@ -195,7 +195,11 @@ class DotenvxEncryptionBackend(EncryptionBackend):
                 env=kwargs.get("env"),
                 cwd=kwargs.get("cwd"),
             )
-        except DotenvxError as e:
+        except (DotenvxError, DotenvxFilenameError) as e:
+            # DotenvxFilenameError: the wrapper refused pre-flight (e.g. a
+            # renamed private-key store caught by its content sniff, which
+            # name-based checks above cannot see) with the file untouched —
+            # surface it cleanly instead of an uncaught traceback (#474).
             raise EncryptionBackendError(f"dotenvx encryption failed: {e}") from e
 
         # Verify the encryption actually took effect rather than trusting the

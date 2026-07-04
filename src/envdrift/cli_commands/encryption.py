@@ -78,11 +78,15 @@ def _refuse_companion_target(env_file: Path, action: str) -> None:
 
     if not _is_excluded_env_file(env_file.name):
         return
-    if env_file.name.endswith(".keys"):
+    if env_file.name.casefold().endswith(".keys"):
+        consequence = (
+            "Encrypting it would permanently lock out every file encrypted with its keys."
+            if action == "encrypt"
+            else "It is already plaintext; there is nothing to decrypt."
+        )
         print_error(
             f"Refusing to {action} {env_file}: it is the dotenvx private-key "
-            "store and must stay plaintext. Encrypting it would permanently "
-            "lock out every file encrypted with its keys."
+            f"store and must stay plaintext. {consequence}"
         )
     else:
         print_error(

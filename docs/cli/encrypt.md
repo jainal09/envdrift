@@ -34,7 +34,10 @@ exit code (dotenvx can exit `0` without encrypting):
   ciphertext under a brand-new keypair whose private half is never saved,
   permanently locking out every encrypted file in the project — so the command
   refuses any `.keys`/`.example`/`.sample`/`.template` target by name, for
-  every backend.
+  every backend. The name match is case-insensitive (`.env.KEYS` names the
+  same file on macOS/Windows default filesystems), and a renamed or symlinked
+  key store (`mv .env.keys prodkeys.env`) is still refused by content: a file
+  carrying `DOTENV_PRIVATE_KEY*` entries is never encrypted.
 - **Handles leading-dash filenames.** A file like `-dash.env` is passed to
   dotenvx as `./-dash.env` so its CLI cannot misparse the name as flags
   (which previously fabricated a different file full of placeholder secrets).

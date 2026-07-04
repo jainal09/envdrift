@@ -32,7 +32,8 @@ silently rewritten or corrupted.
 ### Refuses the key store and companion files
 
 `envdrift decrypt .env.keys` (or any `.keys`/`.example`/`.sample`/`.template`
-target) is refused by name with a non-zero exit: the dotenvx private-key store
+target) is refused by name — case-insensitively, so `.env.KEYS` counts —
+with a non-zero exit: the dotenvx private-key store
 and plaintext companion files are never encrypted by envdrift in the first
 place (`envdrift encrypt` refuses them too), so "decrypting" one is always a
 mistake rather than a no-op worth reporting as success. Leading-dash filenames

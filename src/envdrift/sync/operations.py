@@ -19,13 +19,17 @@ from pathlib import Path
 _REDACTION_SALT = secrets.token_bytes(16)
 
 # dotenvx .env.keys header — byte-identical to the header dotenvx itself writes
-# (#474): box lines end in "/" (not "\#") and the link line keeps dotenvx's
-# padding so the box edges align. EnvKeysFile claims dotenvx format
-# preservation, so a later dotenvx append must not introduce a second,
-# visibly different header style.
+# (#474): box lines end in "/" (not "\#"), the link and armor lines keep
+# dotenvx's padding so the box edges align, and the "ARMORED KEYS" line matches
+# the pinned dotenvx (see constants.json). EnvKeysFile claims dotenvx format
+# preservation, so a later dotenvx append must not introduce a second, visibly
+# different header style. The integration test derives the expected block from
+# the real pinned binary's output, so a dotenvx bump that changes the header
+# fails CI pointing here.
 DOTENVX_HEADER = """#/------------------!DOTENV_PRIVATE_KEYS!-------------------/
 #/ private decryption keys. DO NOT commit to source control /
 #/     [how it works](https://dotenvx.com/encryption)       /
+#/          ⛨ ARMORED KEYS: `dotenvx armor up`              /
 #/----------------------------------------------------------/"""
 
 

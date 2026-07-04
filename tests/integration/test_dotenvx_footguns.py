@@ -21,6 +21,7 @@ Tests skip (rather than fail) when the ``dotenvx`` binary is not installed.
 from __future__ import annotations
 
 import os
+import re
 import shutil
 import subprocess  # nosec B404
 import sys
@@ -122,7 +123,74 @@ def test_decrypt_cli_refuses_env_keys_store(
 
     assert result.returncode == 1, f"must refuse to decrypt the key store: {output}"
     assert "refusing" in output.lower(), output
+    # The refusal must not blame the opposing action ("Encrypting it would...").
+    assert "Encrypting" not in output, output
     assert keys_file.read_text(encoding="utf-8") == keys_before
+
+
+def test_encrypt_cli_refuses_env_keys_case_variant(
+    tmp_path: Path,
+    integration_pythonpath: str,
+    dotenvx_on_path: str,
+) -> None:
+    """#474: ``envdrift encrypt .env.KEYS`` is refused case-insensitively.
+
+    On the default case-insensitive filesystems of macOS (APFS) and Windows
+    (NTFS), ``.env.KEYS`` resolves to the real ``.env.keys``, so a
+    case-sensitive suffix guard reproduced the exact irreversible lockout the
+    guard exists to prevent. The refusal is by (casefolded) name, so it must
+    hold on case-sensitive filesystems too.
+    """
+    work = tmp_path / "proj"
+    work.mkdir()
+    keys_file = work / ".env.KEYS"
+    keys_content = "# .env\nDOTENV_PRIVATE_KEY=" + "b" * 64 + "\n"
+    keys_file.write_text(keys_content, encoding="utf-8")
+
+    result = _run_envdrift(["encrypt", ".env.KEYS"], cwd=work, pythonpath=integration_pythonpath)
+    output = _flat(result.stdout + result.stderr)
+
+    assert result.returncode == 1, f"must refuse the case-variant key store: {output}"
+    assert "refusing" in output.lower(), output
+    assert keys_file.read_text(encoding="utf-8") == keys_content
+
+
+def test_encrypt_cli_refuses_renamed_key_store(
+    tmp_path: Path,
+    integration_pythonpath: str,
+    dotenvx_on_path: str,
+) -> None:
+    """#474: a renamed key store is refused by its DOTENV_PRIVATE_KEY content.
+
+    ``mv .env.keys prodkeys.env && envdrift encrypt prodkeys.env`` passes every
+    name-based guard, yet encrypting it causes the same project-wide lockout:
+    the private keys become ciphertext under a never-persisted keypair. The
+    wrapper's content sniff must refuse it, cleanly, with the file untouched.
+    """
+    work = tmp_path / "proj"
+    work.mkdir()
+    (work / ".env").write_text("API_KEY=topvalue123\n", encoding="utf-8")
+
+    encrypted = _run_envdrift(["encrypt", ".env"], cwd=work, pythonpath=integration_pythonpath)
+    assert encrypted.returncode == 0, encrypted.stdout + encrypted.stderr
+
+    renamed = work / "prodkeys.env"
+    (work / ".env.keys").rename(renamed)
+    keys_before = renamed.read_text(encoding="utf-8")
+
+    result = _run_envdrift(["encrypt", "prodkeys.env"], cwd=work, pythonpath=integration_pythonpath)
+    output = _flat(result.stdout + result.stderr)
+
+    assert result.returncode == 1, f"must refuse the renamed key store: {output}"
+    assert "refusing" in output.lower(), output
+    assert "DOTENV_PRIVATE_KEY" in output, output
+    assert renamed.read_text(encoding="utf-8") == keys_before
+
+    # The real post-condition: the keys still decrypt the project's .env.
+    renamed.rename(work / ".env.keys")
+    decrypted = _run_envdrift(["decrypt", ".env"], cwd=work, pythonpath=integration_pythonpath)
+    assert decrypted.returncode == 0, decrypted.stdout + decrypted.stderr
+    assert "API_KEY=topvalue123" in (work / ".env").read_text(encoding="utf-8")
 
 
 def test_encrypt_leading_dash_filename_roundtrips(
@@ -173,6 +241,11 @@ def test_envdrift_written_env_keys_header_matches_dotenvx(
     ``.env.keys`` headers previously ended each line in ``\\#`` (and dropped the
     padding) where dotenvx writes ``/`` — so a later dotenvx append produced a
     file with two visibly different header styles.
+
+    The expected header block is derived from the real pinned binary's output
+    (opening box line through the closing ``#/---/`` line), never from a
+    hardcoded line count: dotenvx grew a fifth "ARMORED KEYS" line between
+    releases, and a fixed ``[:4]`` slice silently compared the wrong lines.
     """
     from envdrift.integrations.dotenvx import DotenvxWrapper
     from envdrift.sync.operations import DOTENVX_HEADER, EnvKeysFile
@@ -185,12 +258,22 @@ def test_envdrift_written_env_keys_header_matches_dotenvx(
     DotenvxWrapper(auto_install=False).encrypt(env_file, cwd=real_dir)
     real_lines = (real_dir / ".env.keys").read_text(encoding="utf-8").splitlines()
 
-    # The constant matches the real binary's four header lines byte-for-byte.
-    assert DOTENVX_HEADER.splitlines() == real_lines[:4]
+    # Locate the header block in the real binary's output: it opens with the
+    # !DOTENV_PRIVATE_KEYS! box line and runs through the closing box line.
+    assert real_lines[0].startswith("#/") and "DOTENV_PRIVATE_KEYS" in real_lines[0], real_lines[0]
+    closing = next(
+        i for i, line in enumerate(real_lines[1:], start=1) if re.fullmatch(r"#/-+/", line)
+    )
+    real_header = real_lines[: closing + 1]
+
+    # The constant matches the real binary's header block byte-for-byte. If a
+    # dotenvx bump changes the header, update DOTENVX_HEADER (sync/operations.py).
+    assert DOTENVX_HEADER.splitlines() == real_header
 
     # An envdrift-written .env.keys reproduces the same header block, including
     # the blank separator line dotenvx leaves after it.
+    assert real_lines[closing + 1] == ""
     ours = tmp_path / "ours" / ".env.keys"
     EnvKeysFile(ours).write_key("DOTENV_PRIVATE_KEY_PRODUCTION", "0" * 64)
     ours_lines = ours.read_text(encoding="utf-8").splitlines()
-    assert ours_lines[:5] == real_lines[:5]
+    assert ours_lines[: closing + 2] == real_lines[: closing + 2]

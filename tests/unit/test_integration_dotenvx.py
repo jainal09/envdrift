@@ -80,6 +80,87 @@ def test_wrapper_encrypt_refuses_env_keys_store(tmp_path):
     assert keys_file.read_text(encoding="utf-8") == keys_content
 
 
+@pytest.mark.parametrize("name", [".env.KEYS", ".env.Keys", "service.ENV.KEYS"])
+def test_wrapper_encrypt_refuses_env_keys_store_case_insensitively(tmp_path, name):
+    """#474: the ``.keys`` name guard must be case-insensitive.
+
+    On the default case-insensitive filesystems of macOS (APFS) and Windows
+    (NTFS), ``.env.KEYS`` resolves to the real ``.env.keys``, so a
+    case-sensitive ``endswith(".keys")`` let the key store be encrypted anyway
+    — the exact irreversible lockout the guard exists to prevent.
+    """
+    from envdrift.integrations.dotenvx import DotenvxFilenameError
+
+    keys_file = tmp_path / name
+    keys_content = "DOTENV_PRIVATE_KEY=" + "0" * 64 + "\n"
+    keys_file.write_text(keys_content, encoding="utf-8")
+
+    wrapper = DotenvxWrapper(auto_install=False)
+    with pytest.raises(DotenvxFilenameError, match="private-key store"):
+        wrapper.encrypt(keys_file)
+
+    assert keys_file.read_text(encoding="utf-8") == keys_content
+
+
+@pytest.mark.parametrize(
+    "key_line",
+    [
+        "DOTENV_PRIVATE_KEY=" + "0" * 64,  # bare form, as written for plain .env
+        "DOTENV_PRIVATE_KEY_PRODUCTION=" + "0" * 64,  # environment-suffixed form
+    ],
+)
+def test_wrapper_encrypt_refuses_renamed_key_store_by_content(tmp_path, key_line):
+    """#474: a renamed key store is refused by its DOTENV_PRIVATE_KEY content.
+
+    ``mv .env.keys prodkeys.env`` defeats every name-based guard, but
+    encrypting the file still rewrites the private keys as ciphertext under a
+    never-persisted keypair — the same project-wide lockout. The wrapper
+    sniffs the content pre-flight and leaves the file untouched.
+    """
+    from envdrift.integrations.dotenvx import DotenvxFilenameError
+
+    renamed = tmp_path / "prodkeys.env"
+    content = f"# .env\n{key_line}\n"
+    renamed.write_text(content, encoding="utf-8")
+
+    wrapper = DotenvxWrapper(auto_install=False)
+    with pytest.raises(DotenvxFilenameError, match="DOTENV_PRIVATE_KEY"):
+        wrapper.encrypt(renamed)
+
+    assert renamed.read_text(encoding="utf-8") == content
+
+
+def test_wrapper_encrypt_allows_public_key_and_plain_assignments(tmp_path):
+    """#474: the content sniff never false-positives on a legitimate target.
+
+    Encrypt targets legitimately carry ``DOTENV_PUBLIC_KEY*`` lines (dotenvx
+    writes them into the encrypted file) and arbitrary variables — including
+    names that merely mention the private key, or an empty
+    ``DOTENV_PRIVATE_KEY*=`` placeholder. Only a real non-empty
+    ``DOTENV_PRIVATE_KEY*=<value>`` assignment marks the key store.
+    """
+    env_file = tmp_path / ".env"
+    env_file.write_text(
+        "DOTENV_PUBLIC_KEY=" + "02" + "a" * 64 + "\n"
+        "API_KEY=abc123\n"
+        "MENTIONS_DOTENV_PRIVATE_KEY_IN_NAME=ok\n"
+        "DOTENV_PRIVATE_KEY_EMPTY_PLACEHOLDER=\n",
+        encoding="utf-8",
+    )
+
+    wrapper = DotenvxWrapper(auto_install=False)
+    with patch.object(wrapper, "_run") as mock_run:
+        mock_result = MagicMock()
+        mock_result.returncode = 0
+        mock_result.stdout = ""
+        mock_result.stderr = ""
+        mock_run.return_value = mock_result
+
+        wrapper.encrypt(env_file)
+
+    assert mock_run.call_args[0][0] == ["encrypt", "-f", str(env_file)]
+
+
 def test_dash_safe_path_prefixes_leading_dash():
     """#474: a leading-dash path is made unambiguous for dotenvx argv."""
     from envdrift.integrations.dotenvx import _dash_safe_path

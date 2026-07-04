@@ -81,6 +81,29 @@ class TestEncryptRefusesCompanionFiles:
         assert "Refusing to encrypt" in output, output
         assert example.read_text(encoding="utf-8") == "API_KEY=placeholder\n"
 
+    def test_encrypt_env_keys_case_variant_refused(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """#474: ``encrypt .env.KEYS`` is refused case-insensitively.
+
+        On macOS/Windows default case-insensitive filesystems ``.env.KEYS``
+        resolves to the real ``.env.keys``, so a case-sensitive suffix check
+        let the key store be encrypted anyway — the exact lockout the guard
+        exists to prevent.
+        """
+        monkeypatch.chdir(tmp_path)
+        keys = tmp_path / ".env.KEYS"
+        content = "# .env\nDOTENV_PRIVATE_KEY=" + _fake_private_key("c") + "\n"
+        keys.write_text(content, encoding="utf-8")
+
+        result = runner.invoke(app, ["encrypt", ".env.KEYS"])
+
+        output = _flat(result.output)
+        assert result.exit_code == 1, output
+        assert "Refusing to encrypt" in output, output
+        assert "private-key store" in output, output
+        assert keys.read_text(encoding="utf-8") == content
+
 
 class TestDecryptRefusesCompanionFiles:
     def test_decrypt_env_keys_refused(self, keys_file: Path) -> None:
@@ -92,4 +115,24 @@ class TestDecryptRefusesCompanionFiles:
         output = _flat(result.output)
         assert result.exit_code == 1, output
         assert "Refusing to decrypt" in output, output
+        # The refusal explains the decrypt case — it must not blame the
+        # opposing action ("Encrypting it would permanently lock out...").
+        assert "Encrypting" not in output, output
+        assert "nothing to decrypt" in output, output
         assert keys_file.read_text(encoding="utf-8") == before
+
+    def test_decrypt_env_keys_case_variant_refused(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """#474: ``decrypt .env.KEYS`` is refused case-insensitively too."""
+        monkeypatch.chdir(tmp_path)
+        keys = tmp_path / ".env.KEYS"
+        content = "# .env\nDOTENV_PRIVATE_KEY=" + _fake_private_key("d") + "\n"
+        keys.write_text(content, encoding="utf-8")
+
+        result = runner.invoke(app, ["decrypt", ".env.KEYS"])
+
+        output = _flat(result.output)
+        assert result.exit_code == 1, output
+        assert "Refusing to decrypt" in output, output
+        assert keys.read_text(encoding="utf-8") == content

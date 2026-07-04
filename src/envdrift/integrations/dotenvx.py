@@ -162,6 +162,15 @@ def _dash_safe_path(path: Path | str) -> str:
 _PUBLIC_KEY_NAME_RE = re.compile(r"\bDOTENV_PUBLIC_KEY_[A-Za-z0-9_-]+=")
 _PRIVATE_KEY_LINE_RE = re.compile(r"^DOTENV_PRIVATE_KEY_[A-Za-z0-9_-]+=(.*)$")
 
+# A private-key assignment as dotenvx writes it into ``.env.keys``: bare
+# ``DOTENV_PRIVATE_KEY=`` (for a plain ``.env``) or ``DOTENV_PRIVATE_KEY_<SLUG>=``,
+# with a non-empty value. A legitimate encrypt target only ever carries
+# ``DOTENV_PUBLIC_KEY*`` lines, so a match identifies a (possibly renamed or
+# symlinked) private-key store (#474).
+_PRIVATE_KEY_ASSIGNMENT_RE = re.compile(
+    r"^DOTENV_PRIVATE_KEY(?:_[A-Za-z0-9_-]+)?=.*\S", re.MULTILINE
+)
+
 
 def dotenvx_filename_needs_normalization(env_file: Path | str, environment: str) -> bool:
     """Return True when a dotenvx file's metadata must be normalized to canonical.
@@ -870,17 +879,40 @@ class DotenvxWrapper:
         paths reach dotenvx through this wrapper directly, so the guard must
         live here too (#474).
 
+        Two checks, both case-insensitive-filesystem safe:
+
+        - **Name**: casefolded ``.keys`` suffix, so ``.env.KEYS`` (the same
+          file as ``.env.keys`` on macOS/Windows default filesystems) cannot
+          slip past a case-sensitive comparison.
+        - **Content**: a renamed or symlinked key store (``mv .env.keys
+          prodkeys.env``) passes any name check, so refuse any file carrying a
+          ``DOTENV_PRIVATE_KEY*=`` assignment. A legitimate encrypt target only
+          ever carries ``DOTENV_PUBLIC_KEY*`` lines, so there are no false
+          positives; an unreadable file is left for dotenvx itself to reject.
+
         Parameters:
             file_path (Path): Path to the file to validate.
 
         Raises:
-            DotenvxFilenameError: If the filename names a ``.keys`` key store.
+            DotenvxFilenameError: If the file names or contains a private-key
+                store.
         """
-        if file_path.name.endswith(".keys"):
+        if file_path.name.casefold().endswith(".keys"):
             raise DotenvxFilenameError(
                 f"Refusing to encrypt '{file_path.name}': it is the dotenvx "
                 "private-key store. Encrypting it would permanently lock out "
                 "every file encrypted with its keys."
+            )
+        try:
+            content = file_path.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            return
+        if _PRIVATE_KEY_ASSIGNMENT_RE.search(content):
+            raise DotenvxFilenameError(
+                f"Refusing to encrypt '{file_path.name}': it contains "
+                "DOTENV_PRIVATE_KEY entries, so it is the dotenvx private-key "
+                "store (possibly renamed). Encrypting it would permanently "
+                "lock out every file encrypted with its keys."
             )
 
     # Regex pattern for dotenvx public key header blocks

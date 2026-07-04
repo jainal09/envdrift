@@ -38,13 +38,14 @@ class TestDotenvxHeaderFormat:
         format-preservation contract.
         """
         lines = DOTENVX_HEADER.splitlines()
-        assert len(lines) == 4
+        assert len(lines) == 5
         for line in lines:
             assert line.startswith("#/"), line
             assert line.endswith("/"), line
             assert "\\" not in line, line
-        # dotenvx pads the link line so the box edges align.
+        # dotenvx pads the link and armor lines so the box edges align.
         assert lines[2] == "#/     [how it works](https://dotenvx.com/encryption)       /"
+        assert "ARMORED KEYS" in lines[3]
 
     def test_write_key_new_file_blank_line_after_header(self, tmp_path: Path) -> None:
         """A fresh .env.keys reproduces dotenvx's blank line after the header."""
@@ -53,9 +54,10 @@ class TestDotenvxHeaderFormat:
         EnvKeysFile(env_keys).write_key("DOTENV_PRIVATE_KEY_PRODUCTION", _fake_private_key("a"))
 
         lines = env_keys.read_text(encoding="utf-8").splitlines()
-        assert lines[:4] == DOTENVX_HEADER.splitlines()
-        assert lines[4] == ""
-        assert lines[5] == "# .env.production"
+        header_lines = DOTENVX_HEADER.splitlines()
+        assert lines[: len(header_lines)] == header_lines
+        assert lines[len(header_lines)] == ""
+        assert lines[len(header_lines) + 1] == "# .env.production"
 
 
 class TestEnvKeysFile:
