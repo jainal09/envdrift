@@ -1213,3 +1213,115 @@ def test_sops_lock_fails_on_surviving_plaintext(integration_env):
     )
     assert "plaintext" in relock_out.lower()
     assert "ready to commit" not in relock_out.lower()
+
+
+def _write_sops_vault_sync_toml(work_dir: Path, *, age_recipients: str) -> None:
+    """envdrift.toml with SOPS encryption plus the [vault.sync] section that
+    `lock`/`pull` require (dummy vault, never contacted with --force/--skip-sync)."""
+    (work_dir / "envdrift.toml").write_text(
+        textwrap.dedent(
+            f"""\
+            [encryption]
+            backend = "sops"
+
+            [encryption.sops]
+            auto_install = true
+            config_file = ".sops.yaml"
+            age_key_file = "age.key"
+            age_recipients = "{age_recipients}"
+
+            [vault]
+            provider = "azure"
+
+            [vault.azure]
+            vault_url = "https://dummy.vault.azure.net/"
+
+            [vault.sync]
+            default_vault_name = "dummy"
+
+            [[vault.sync.mappings]]
+            secret_name = "unused-for-sops"
+            folder_path = "."
+            environment = "production"
+            """
+        ),
+        encoding="utf-8",
+    )
+
+
+@pytest.mark.integration
+def test_sops_pull_fails_loudly_on_surviving_plaintext(integration_env):
+    """Regression for #475 (decrypt direction): `envdrift pull` over a mixed SOPS
+    file (metadata + a plaintext value appended after encryption) must fail
+    loudly via sops, not print "skipped (not encrypted)" and exit 0 while the
+    file's values are still ciphertext."""
+    work_dir = integration_env["base_dir"] / "sops-475-pull-mixed"
+    work_dir.mkdir()
+    env = integration_env["env"].copy()
+    _scrub_cloud_credentials(env)
+
+    env_file = work_dir / ".env.production"
+    env_file.write_text("API_KEY=topsecret\n", encoding="utf-8")
+    _write_sops_age_setup(work_dir, path_regex=r"\.env\.production$")
+    _write_sops_vault_sync_toml(work_dir, age_recipients=AGE_PUBLIC_KEY)
+
+    _run_envdrift(["lock", "--force"], cwd=work_dir, env=env)
+    assert "ENC[" in env_file.read_text(encoding="utf-8")
+
+    # A teammate appends a plaintext secret after the lock.
+    with env_file.open("a", encoding="utf-8") as fh:
+        fh.write("NEW_SECRET=plaintextleak999\n")
+    mixed_snapshot = env_file.read_text(encoding="utf-8")
+
+    pulled = _run_envdrift(["pull", "--skip-sync"], cwd=work_dir, env=env, check=False)
+    pulled_out = " ".join((pulled.stdout + pulled.stderr).split())
+
+    assert pulled.returncode != 0, (
+        f"pull silently skipped a mixed SOPS file:\n{pulled.stdout}\n{pulled.stderr}"
+    )
+    # The old behavior printed the factually wrong "skipped (not encrypted)".
+    assert "skipped (not encrypted)" not in pulled_out
+    assert "error" in pulled_out.lower()
+    # The mixed file is left as-is: still ciphertext + the plaintext leak,
+    # never half-decrypted.
+    assert env_file.read_text(encoding="utf-8") == mixed_snapshot
+
+
+@pytest.mark.integration
+def test_sops_lock_fails_on_missing_requested_recipient(integration_env):
+    """Regression for #475 (lock direction): adding a recipient to
+    ``age_recipients`` in envdrift.toml and re-running `envdrift lock` must fail
+    loudly while the file's SOPS metadata does not include the new key —
+    "ready to commit" would mean the new teammate silently never got access."""
+    work_dir = integration_env["base_dir"] / "sops-475-lock-recipient"
+    work_dir.mkdir()
+    env = integration_env["env"].copy()
+    _scrub_cloud_credentials(env)
+
+    env_file = work_dir / ".env.production"
+    env_file.write_text("API_KEY=topsecret\n", encoding="utf-8")
+    _write_sops_age_setup(work_dir, path_regex=r"\.env\.production$")
+    _write_sops_vault_sync_toml(work_dir, age_recipients=AGE_PUBLIC_KEY)
+
+    _run_envdrift(["lock", "--force"], cwd=work_dir, env=env)
+    locked = env_file.read_text(encoding="utf-8")
+    assert "ENC[" in locked
+
+    # The team adds a new recipient in envdrift.toml (the documented flow); the
+    # file's metadata still only records the original key. Valid-format age key,
+    # never used to decrypt anything.
+    new_recipient = "age1ql3z7hjy54pw3hyww5ayyfg7zqgvc7w3j2elw8zmrj2kg5sfn9aqmcac8p"
+    _write_sops_vault_sync_toml(work_dir, age_recipients=f"{AGE_PUBLIC_KEY},{new_recipient}")
+
+    relock = _run_envdrift(["lock", "--force"], cwd=work_dir, env=env, check=False)
+    relock_out = " ".join((relock.stdout + relock.stderr).split())
+
+    assert relock.returncode != 0, (
+        f"lock blessed a file whose metadata is missing a requested recipient:\n"
+        f"{relock.stdout}\n{relock.stderr}"
+    )
+    assert "recipient" in relock_out.lower()
+    assert new_recipient in relock_out
+    assert "ready to commit" not in relock_out.lower()
+    # Metadata untouched: lock must not silently rewrite the encrypted file.
+    assert env_file.read_text(encoding="utf-8") == locked

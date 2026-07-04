@@ -134,6 +134,11 @@ See [`encrypt`](../cli/encrypt.md) and [`decrypt`](../cli/decrypt.md).
 - **A requested recipient is missing** — `encrypt --age <new key>` (or `--kms` /
   `--gcp-kms` / `--azure-kv`) on an already-encrypted file **fails** instead of
   silently ignoring the flag (which would leave the new recipient unable to decrypt).
+  Matching is exact: a key that is merely a prefix of a recorded recipient, or an
+  Azure Key Vault URL whose components only appear inside unrelated metadata, does
+  not count as present. `envdrift lock` runs the same check against the recipients
+  configured in `envdrift.toml`, so adding a key to `age_recipients` and re-running
+  `lock` fails loudly until the file's metadata actually includes it.
   Add recipients with `sops rotate --add-age <key> -i --input-type dotenv
   --output-type dotenv <file>`, or `sops updatekeys` after editing `.sops.yaml`.
 - **Encrypted by the other backend** — `encrypt` refuses to double-encrypt a
@@ -243,6 +248,10 @@ Consequences for SOPS:
   works for SOPS once the config above exists. Plain `envdrift pull`, however, runs
   the key-sync step, looks for a dotenvx secret, and **fails** for SOPS — use
   `envdrift pull --skip-sync` to go straight to decryption.
+- `pull` hands a **mixed** SOPS file (metadata plus a plaintext value appended after
+  encryption) to sops instead of skipping it as "not encrypted": the run fails loudly
+  (sops reports the integrity error) rather than exiting 0 with the values still
+  ciphertext.
 
 **Recommendation:** for SOPS, use `envdrift encrypt` / `envdrift decrypt`. They need
 no vault scaffolding and are the intended SOPS workflow. Only reach for `lock`/`pull`

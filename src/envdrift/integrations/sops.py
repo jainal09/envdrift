@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import platform
+import shutil
 import stat
 import urllib.request
 from pathlib import Path
@@ -80,10 +81,16 @@ class SopsInstaller:
             # urlopen timeout caps connect and every socket read, so a server
             # that accepts the connection and then stalls cannot hang
             # auto-install forever. urlretrieve has no timeout parameter (#475).
-            with urllib.request.urlopen(  # nosec B310
-                url, timeout=DOWNLOAD_TIMEOUT_SECONDS
-            ) as response:
-                tmp_path.write_bytes(response.read())
+            # Stream in chunks rather than response.read(): buffering the whole
+            # binary would double peak memory, and each chunked read still gets
+            # the same per-read socket timeout.
+            with (
+                urllib.request.urlopen(  # nosec B310
+                    url, timeout=DOWNLOAD_TIMEOUT_SECONDS
+                ) as response,
+                tmp_path.open("wb") as tmp_file,
+            ):
+                shutil.copyfileobj(response, tmp_file)
             if platform.system() != "Windows":
                 st = tmp_path.stat()
                 tmp_path.chmod(st.st_mode | stat.S_IEXEC)

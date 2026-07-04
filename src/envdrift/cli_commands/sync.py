@@ -832,9 +832,13 @@ def pull(
             backend_provider,
         )
 
-        # Check if file is encrypted
+        # Check if the file carries this backend's ciphertext. Decrypt direction,
+        # so use the lenient predicate (#475): a mixed SOPS file (metadata block
+        # + surviving plaintext value) must still be handed to sops for a loud
+        # outcome, not silently skipped as "not encrypted" (and even
+        # profile-activated) while its values are still ciphertext.
         content = env_file.read_text()
-        if not encryption_helpers.is_encrypted_content(
+        if not encryption_helpers.should_attempt_decryption(
             backend_provider, encryption_backend, content
         ):
             detected_provider = detect_encryption_provider(env_file)
@@ -1650,6 +1654,37 @@ def lock(
                             f"  [green]+[/green] {env_file} [dim]- re-encrypted with new key[/dim]"
                         )
                         encrypted_count += 1
+                        continue
+
+                # A fully-encrypted SOPS file skips backend.encrypt(), so the
+                # recipient check inside it never runs — verify here that every
+                # recipient configured in envdrift.toml is recorded in the
+                # file's metadata. Otherwise `lock` would print "ready to
+                # commit" while a newly added teammate silently never got
+                # access (#475) — and disagree with `envdrift encrypt`, which
+                # fails loudly on the same file + config.
+                if backend_provider == EncryptionProvider.SOPS and sops_encrypt_kwargs:
+                    from envdrift.encryption.sops import SOPSEncryptionBackend
+
+                    missing = (
+                        encryption_backend.missing_recipients(content, **sops_encrypt_kwargs)
+                        if isinstance(encryption_backend, SOPSEncryptionBackend)
+                        else []
+                    )
+                    if missing:
+                        recipients = ", ".join(missing)
+                        console.print(
+                            f"  [red]![/red] {env_file} "
+                            f"[red]- encrypted, but SOPS metadata is missing requested "
+                            f"recipient(s): {recipients}[/red]"
+                        )
+                        errors.append(
+                            f"{env_file}: SOPS metadata is missing requested "
+                            f"recipient(s): {recipients} - re-running encrypt cannot add "
+                            f"recipients; use `sops rotate --add-age <recipient>` or "
+                            f"`sops updatekeys`, or decrypt and re-encrypt"
+                        )
+                        error_count += 1
                         continue
 
                 console.print(f"  [dim]=[/dim] {env_file} [dim]- skipped (already encrypted)[/dim]")

@@ -129,6 +129,26 @@ def is_encrypted_content(
     return not (callable(has_plaintext) and has_plaintext(content))
 
 
+def should_attempt_decryption(
+    provider: EncryptionProvider,
+    backend: EncryptionBackend,
+    content: str,
+) -> bool:
+    """Decrypt-direction predicate: does ``content`` carry this backend's ciphertext?
+
+    Deliberately more lenient than :func:`is_encrypted_content`, which asserts a
+    fully encrypted post-state (#475). In the decrypt direction a mixed SOPS file
+    (metadata block + surviving plaintext value) must still be handed to sops so
+    the outcome is loud — sops refuses it (MAC mismatch) unless the file's own
+    ``sops_mac_only_encrypted`` metadata makes the mix legitimate — instead of
+    ``pull`` silently skipping it as "not encrypted" (and even activating it as
+    the working profile) while its values are still ciphertext.
+    """
+    if provider == EncryptionProvider.DOTENVX:
+        return bool(re.search(r"=\s*encrypted:", content, re.IGNORECASE))
+    return bool(backend.has_encrypted_header(content))
+
+
 def should_skip_reencryption(
     env_file: Path,
     backend: EncryptionBackend,

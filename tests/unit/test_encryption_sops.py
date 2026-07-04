@@ -658,3 +658,108 @@ def test_encrypt_surfaces_auto_install_failure_cause(tmp_path, monkeypatch):
     # The recorded cause is exposed for CLI callers that pre-check is_installed().
     assert backend.install_error
     assert backend.install_error in message
+
+
+def test_encrypt_metadata_file_with_sops_named_plaintext_secret_fails(tmp_path, monkeypatch):
+    """Regression for the bug-#416 class resurfacing in #475: a real user secret
+    merely NAMED ``sops_token`` must not be misclassified as SOPS bookkeeping by
+    a bare ``sops_`` prefix match — that would bless the plaintext leak as
+    "already encrypted (no change)"."""
+    env_file = tmp_path / ".env"
+    # Secret-looking value built by concatenation so the literal never appears
+    # whole in the source (GitHub push-protection).
+    leaked = "AKIA" + "IOSFODNN7EXAMPLE"
+    content = f"sops_token={leaked}\n" + _ENCRYPTED_DOTENV
+    env_file.write_text(content, encoding="utf-8")
+
+    backend = _backend_that_must_not_run_sops(monkeypatch)
+    result = backend.encrypt(env_file, age_recipients="age1abc")
+
+    assert result.success is False
+    assert "sops_token" in result.message
+    assert "plaintext" in result.message.lower()
+    assert env_file.read_text(encoding="utf-8") == content
+
+
+def test_has_plaintext_values_flags_sops_named_secret_but_not_metadata():
+    """``has_plaintext_values`` uses the canonical exact SOPS-metadata-key family:
+    genuine bookkeeping keys are skipped, but a user variable that merely starts
+    with ``sops_`` is a plaintext secret."""
+    backend = SOPSEncryptionBackend()
+
+    # Pure metadata + encrypted values: clean.
+    assert backend.has_plaintext_values(_ENCRYPTED_DOTENV) is False
+    # A plaintext user secret named sops_token is NOT bookkeeping.
+    assert backend.has_plaintext_values("sops_token=hunter2\n" + _ENCRYPTED_DOTENV) is True
+    # Same for sops_api_key (group-key prefix 'sops_a…' must not fuzzy-match age).
+    assert backend.has_plaintext_values("sops_api_key=hunter2\n" + _ENCRYPTED_DOTENV) is True
+
+
+def test_encrypt_already_encrypted_rejects_recipient_prefix_of_recorded_key(tmp_path, monkeypatch):
+    """Regression for #475: recipient matching is exact and line-anchored. A
+    requested key that is a strict PREFIX of the recorded recipient previously
+    passed the bare substring scan and silently no-opped."""
+    env_file = tmp_path / ".env"
+    env_file.write_text(_ENCRYPTED_DOTENV, encoding="utf-8")
+
+    backend = _backend_that_must_not_run_sops(monkeypatch)
+    # Recorded recipient is age1abc; request its prefix.
+    result = backend.encrypt(env_file, age_recipients="age1ab")
+
+    assert result.success is False
+    assert "age1ab" in result.message
+    assert env_file.read_text(encoding="utf-8") == _ENCRYPTED_DOTENV
+
+
+# Azure KV metadata as the real binary records it: the key URL is split across
+# vault_url/name/version entries (never stored as one URL).
+_AZURE_KV_ENCRYPTED_DOTENV = (
+    "DB_PASSWORD=ENC[AES256_GCM,data:abc,iv:def,tag:ghi,type:str]\n"
+    "sops_azure_kv__list_0__map_vault_url=https://myvault.vault.azure.net\n"
+    "sops_azure_kv__list_0__map_name=mykey\n"
+    "sops_azure_kv__list_0__map_version=abc123\n"
+    "sops_lastmodified=2026-06-01T00:00:00Z\n"
+    "sops_mac=ENC[AES256_GCM,data:mac,iv:def,tag:ghi,type:str]\n"
+    "sops_unencrypted_suffix=_unencrypted\n"
+    "sops_version=3.13.1\n"
+)
+
+
+def test_encrypt_already_encrypted_azure_kv_wrong_version_fails(tmp_path, monkeypatch):
+    """Regression for #475: a short Azure KV URL component (key version ``1``)
+    must not be declared present just because unrelated metadata digits contain
+    a ``1`` (``sops_version=3.13.1``) — the recorded key version is abc123."""
+    env_file = tmp_path / ".env"
+    env_file.write_text(_AZURE_KV_ENCRYPTED_DOTENV, encoding="utf-8")
+
+    backend = _backend_that_must_not_run_sops(monkeypatch)
+    requested = "https://myvault.vault.azure.net/keys/mykey/1"
+    result = backend.encrypt(env_file, azure_kv=requested)
+
+    assert result.success is False
+    assert requested in result.message
+
+
+def test_encrypt_already_encrypted_azure_kv_exact_components_noop(tmp_path, monkeypatch):
+    """The decomposed Azure KV URL still matches when every component is recorded
+    exactly, keeping the idempotent re-run a clean no-op."""
+    env_file = tmp_path / ".env"
+    env_file.write_text(_AZURE_KV_ENCRYPTED_DOTENV, encoding="utf-8")
+
+    backend = _backend_that_must_not_run_sops(monkeypatch)
+    result = backend.encrypt(env_file, azure_kv="https://myvault.vault.azure.net/keys/mykey/abc123")
+
+    assert result.success is True
+    assert result.changed is False
+
+
+def test_missing_recipients_public_wrapper_matches_internal_check():
+    """``missing_recipients`` (used by lock's already-encrypted branch) reports
+    exactly the recipients absent from the metadata."""
+    backend = SOPSEncryptionBackend()
+
+    missing = backend.missing_recipients(
+        _ENCRYPTED_DOTENV, age_recipients="age1abc,age1newteammate"
+    )
+
+    assert missing == ["age1newteammate"]

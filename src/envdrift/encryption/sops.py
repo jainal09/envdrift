@@ -439,6 +439,11 @@ class SOPSEncryptionBackend(EncryptionBackend):
         (``encrypted_suffix`` / ``encrypted_regex`` / ``unencrypted_regex``) are
         skipped entirely because plaintext is then by design. Empty values are
         not plaintext (sops keeps them empty).
+
+        Metadata is excluded via the canonical exact-family matcher
+        (``_is_sops_metadata_key``), NOT a bare ``sops_`` prefix: a prefix match
+        would also skip a real user secret merely named ``sops_token=…`` /
+        ``sops_api_key=…``, silently blessing a plaintext leak (#416, #475).
         """
         if self._SELECTIVE_ENCRYPTION_METADATA.search(content):
             return []
@@ -446,10 +451,11 @@ class SOPSEncryptionBackend(EncryptionBackend):
         unencrypted_suffix = suffix_match.group(1).strip() if suffix_match else "_unencrypted"
 
         from envdrift.core.parser import EnvParser
+        from envdrift.core.partial_encryption import _is_sops_metadata_key
 
         plaintext: list[str] = []
         for name, var in EnvParser().parse_string(content, lenient=True).variables.items():
-            if name.startswith("sops_"):
+            if _is_sops_metadata_key(name):
                 continue
             if unencrypted_suffix and name.endswith(unencrypted_suffix):
                 continue
@@ -475,21 +481,53 @@ class SOPSEncryptionBackend(EncryptionBackend):
             if not self._recipient_in_metadata(content, recipient)
         ]
 
+    def missing_recipients(self, content: str, **kwargs) -> list[str]:
+        """Explicitly requested recipients absent from ``content``'s SOPS metadata.
+
+        Public entry point for callers like ``lock`` that skip ``encrypt()`` for
+        an already-encrypted file but must still verify that every configured
+        recipient (``age_recipients``/``kms_arn``/``gcp_kms``/``azure_kv``) is
+        recorded in the metadata — otherwise "skipped (already encrypted)" would
+        silently ignore a recipient newly added to envdrift.toml (#475).
+        """
+        return self._missing_requested_recipients(content, kwargs)
+
+    @staticmethod
+    def _metadata_line_has_value(content: str, value: str) -> bool:
+        """Exact, line-anchored match of ``value`` as a SOPS metadata entry value.
+
+        Requiring a whole ``sops_*=<value>`` line kills the two false-positive
+        classes of a bare substring scan (#475): a requested recipient that is a
+        prefix of a longer recorded key, and a short Azure KV URL component
+        (e.g. key version ``1``) matching unrelated metadata digits such as
+        ``sops_version=3.13.2``.
+        """
+        return bool(
+            re.search(
+                rf"^sops_\w+\s*=\s*{re.escape(value)}\s*$",
+                content,
+                re.MULTILINE,
+            )
+        )
+
     @staticmethod
     def _recipient_in_metadata(content: str, recipient: str) -> bool:
-        """Check whether ``recipient`` appears in the file's SOPS metadata.
+        """Check whether ``recipient`` is recorded in the file's SOPS metadata.
 
-        age keys, KMS ARNs and GCP resource IDs are stored verbatim in the flat
-        dotenv metadata, so a substring check is exact. Azure Key Vault URLs are
-        stored split across ``vault_url``/``name``/``version`` keys, so the URL is
-        decomposed and each component checked.
+        age keys, KMS ARNs and GCP resource IDs are stored verbatim as one flat
+        dotenv metadata value, so an exact line-anchored match is authoritative.
+        Azure Key Vault URLs are stored split across ``vault_url``/``name``/
+        ``version`` keys, so the URL is decomposed and each component matched
+        exactly against its own metadata line.
         """
-        if recipient in content:
+        if SOPSEncryptionBackend._metadata_line_has_value(content, recipient):
             return True
         if "/keys/" in recipient:
             base, _, rest = recipient.partition("/keys/")
             parts = [base, *(part for part in rest.split("/") if part)]
-            return all(part in content for part in parts)
+            return all(
+                SOPSEncryptionBackend._metadata_line_has_value(content, part) for part in parts
+            )
         return False
 
     @staticmethod
@@ -661,9 +699,11 @@ class SOPSEncryptionBackend(EncryptionBackend):
         """Return installation instructions for SOPS."""
         from envdrift.integrations.sops import SOPS_VERSION
 
+        # No "SOPS is not installed." lead-in here: every caller
+        # (_not_installed_message, the CLI's _report_not_installed) prints its
+        # own lead sentence, so repeating it made the message say "not
+        # installed" twice in consecutive lines.
         return f"""
-SOPS is not installed.
-
 Installation options:
 
 macOS (Homebrew):
