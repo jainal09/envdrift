@@ -27,16 +27,22 @@ def mock_hvac_module():
         Client=MagicMock(),
     )
 
-    with patch.dict(
-        "sys.modules",
-        {"hvac": hvac_module, "hvac.exceptions": hvac_exceptions},
-    ):
-        import importlib
+    import importlib
 
-        import envdrift.vault.hashicorp as hashicorp_module
+    import envdrift.vault.hashicorp as hashicorp_module
 
+    try:
+        with patch.dict(
+            "sys.modules",
+            {"hvac": hvac_module, "hvac.exceptions": hvac_exceptions},
+        ):
+            importlib.reload(hashicorp_module)
+            yield hashicorp_module
+    finally:
+        # patch.dict has restored sys.modules by now; reload once more so the
+        # module re-binds the REAL hvac (or its genuine unavailable state)
+        # instead of leaving the stub poisoning later tests in-process (#497).
         importlib.reload(hashicorp_module)
-        yield hashicorp_module
 
 
 class TestHashiCorpVaultImport:
