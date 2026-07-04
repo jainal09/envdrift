@@ -164,9 +164,16 @@ class Validator:
                     f"value from {kept!r} is used, {dropped} ignored"
                 )
 
-        # Check for missing required variables
+        # Check for missing required variables. With env_ignore_empty=True the
+        # real env source drops empty values entirely, so a required field
+        # assigned ``FIELD=`` is missing at startup exactly as if the line were
+        # absent (#517 review) — the empty-value skips below must not turn that
+        # crash into a false PASS.
         for field_name, field_meta in schema.fields.items():
-            if field_meta.required and _lookup_key(field_meta) not in env_names_lower:
+            if not field_meta.required:
+                continue
+            env_var = env_by_lower.get(_lookup_key(field_meta))
+            if env_var is None or (env_var.value == "" and schema.env_ignore_empty):
                 result.missing_required.add(field_name)
 
         # Check for missing optional variables (as warning)

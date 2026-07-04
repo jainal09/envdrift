@@ -162,6 +162,22 @@ class TestEmptyValueParity:
         assert result.type_errors == {}
         assert result.valid is True
 
+    def test_env_ignore_empty_true_required_empty_is_missing(self, monkeypatch, tmp_path):
+        """#517 review (cubic P1): with env_ignore_empty=True the source drops
+        the empty value, so a *required* field assigned ``PORT=`` is missing at
+        startup - validate must fail it as missing, not skip the field."""
+
+        class Settings(BaseSettings):
+            model_config = SettingsConfigDict(env_ignore_empty=True)
+
+            PORT: int
+
+        result, real_ok = _validate(monkeypatch, tmp_path, Settings, "PORT=\n")
+
+        assert real_ok is False  # the real app crashes: missing input
+        assert "PORT" in result.missing_required
+        assert result.valid is False
+
 
 class TestComplexTypeParity:
     """#472 finding 3: complex fields are JSON-decoded by the real env source."""

@@ -1216,10 +1216,13 @@ class TestValidateRealEdgeCases:
             env_text="""
                 PORT=
             """,
-            extra_args=["--no-check-encryption"],
+            extra_args=["--no-check-encryption", "--ci"],
         )
 
         combined = " ".join((result.stdout + result.stderr).split())
+        assert result.returncode == 1, (
+            f"Empty value on a required int field must exit 1. Output: {combined}"
+        )
         assert "Traceback" not in result.stderr
         assert "FAILED" in combined, f"Should report FAILED. Output: {combined}"
         assert "Expected integer" in combined, (
