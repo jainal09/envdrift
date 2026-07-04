@@ -22,9 +22,11 @@ permissions:
 # only trigger; this per-tag group is a backstop so a re-run or duplicate
 # trigger queues instead of racing .vsix uploads / Marketplace publishes for
 # the same tag. Queue (don't cancel) so an in-flight release isn't killed
-# mid-upload.
+# mid-upload. Fixed prefix, not `github.workflow`: a called workflow sees the
+# *caller's* name there, which would put a workflow_call run for the same tag
+# in a different group than a tag push.
 concurrency:
-  group: ${{ github.workflow }}-${{ inputs.tag_name || github.ref_name }}
+  group: release-vscode-${{ inputs.tag_name || github.ref_name }}
   cancel-in-progress: false
 
 defaults:
