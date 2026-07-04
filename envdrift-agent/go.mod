@@ -5,7 +5,7 @@ go 1.23
 require (
 	github.com/fsnotify/fsnotify v1.10.1
 	github.com/gen2brain/beeep v0.11.2
-	github.com/pelletier/go-toml/v2 v2.3.1
+	github.com/pelletier/go-toml/v2 v2.4.2
 	github.com/spf13/cobra v1.10.2
 )
 
