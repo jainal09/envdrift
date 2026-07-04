@@ -83,7 +83,7 @@ jobs:
           --health-start-period=5s
 
       lowkey-vault:
-        image: nagyesta/lowkey-vault:7.2.26
+        image: nagyesta/lowkey-vault:7.3.0
         ports:
           - 8443:8443
         env:
@@ -97,7 +97,7 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
 
       - name: Set up Python ${{ matrix.python-version }}
         uses: actions/setup-python@v6
@@ -108,10 +108,7 @@ jobs:
         uses: astral-sh/setup-uv@v8.2.0
 
       - name: Install dependencies
-        run: |
-          uv sync --all-extras
-          # Install optional integration test dependencies
-          uv pip install boto3 hvac
+        run: uv sync --all-extras --locked
 
       - name: Install dotenvx
         run: |
@@ -257,7 +254,7 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
 
       - name: Download coverage artifacts
         uses: actions/download-artifact@v8
@@ -288,7 +285,7 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
 
       - name: Set up Python 3.14
         uses: actions/setup-python@v6
@@ -299,9 +296,7 @@ jobs:
         uses: astral-sh/setup-uv@v8.2.0
 
       - name: Install dependencies
-        run: |
-          uv sync --all-extras
-          uv pip install boto3 hvac google-cloud-secret-manager azure-keyvault-secrets azure-identity
+        run: uv sync --all-extras --locked
 
       - name: Run GCP tests (if configured)
         if: env.ENVDRIFT_TEST_GCP == '1'
