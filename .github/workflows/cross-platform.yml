@@ -60,7 +60,7 @@ jobs:
         python-version: ["3.11", "3.14"]
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
 
       - name: Set up Python ${{ matrix.python-version }}
         uses: actions/setup-python@v6
@@ -76,7 +76,7 @@ jobs:
           cache-suffix: ${{ matrix.os }}-py${{ matrix.python-version }}
 
       - name: Install dependencies
-        run: uv sync --all-extras
+        run: uv sync --all-extras --locked
 
       # bash on every OS (Git Bash on Windows) so the marker expression quotes
       # identically across runners. Tests themselves run under the native Python

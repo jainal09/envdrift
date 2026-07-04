@@ -74,23 +74,29 @@ class TestAzureKeyVaultClient:
     @pytest.fixture
     def mock_azure(self):
         """Mock Azure SDK."""
-        with patch.dict(
-            "sys.modules",
-            {
-                "azure": MagicMock(),
-                "azure.core": MagicMock(),
-                "azure.core.exceptions": MagicMock(),
-                "azure.identity": MagicMock(),
-                "azure.keyvault": MagicMock(),
-                "azure.keyvault.secrets": MagicMock(),
-            },
-        ):
-            import importlib
+        import importlib
 
-            import envdrift.vault.azure as azure_module
+        import envdrift.vault.azure as azure_module
 
+        try:
+            with patch.dict(
+                "sys.modules",
+                {
+                    "azure": MagicMock(),
+                    "azure.core": MagicMock(),
+                    "azure.core.exceptions": MagicMock(),
+                    "azure.identity": MagicMock(),
+                    "azure.keyvault": MagicMock(),
+                    "azure.keyvault.secrets": MagicMock(),
+                },
+            ):
+                importlib.reload(azure_module)
+                yield azure_module
+        finally:
+            # patch.dict has restored sys.modules by now; reload once more so the
+            # module re-binds the REAL Azure SDK (or its genuine unavailable state)
+            # instead of leaving MagicMocks poisoning later tests in-process (#497).
             importlib.reload(azure_module)
-            yield azure_module
 
     @contextmanager
     def _patched_client(
