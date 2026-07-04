@@ -6,6 +6,7 @@ import importlib.util
 import json
 import keyword
 import shlex
+import shutil
 import tomllib
 from pathlib import Path
 from textwrap import dedent
@@ -45,6 +46,21 @@ def _mock_sync_engine_success(monkeypatch):
     monkeypatch.setattr("envdrift.output.rich.print_service_sync_status", lambda *_, **__: None)
     monkeypatch.setattr("envdrift.output.rich.print_sync_result", lambda *_, **__: None)
     return DummyEngine
+
+
+def _fake_dotenvx_on_path(monkeypatch):
+    """Make shutil.which report dotenvx as installed; other lookups stay real.
+
+    Keeps the ``sync --check-decryption`` gate tests deterministic on hosts
+    without the real dotenvx binary.
+    """
+    real_which = shutil.which
+    monkeypatch.setattr(
+        "shutil.which",
+        lambda cmd, *args, **kwargs: (
+            "/usr/bin/dotenvx" if cmd == "dotenvx" else real_which(cmd, *args, **kwargs)
+        ),
+    )
 
 
 def _mock_encryption_backend(
@@ -2053,7 +2069,12 @@ class TestVaultVerification:
         assert captured["kwargs"]["project_id"] == "my-gcp-project"
 
     def test_verify_vault_aws_with_raw_secret(self, monkeypatch, tmp_path: Path):
-        """Vault verification should accept raw secrets and derive key name."""
+        """Vault verification should accept raw secrets and derive key name.
+
+        For a plain ``.env`` file dotenvx expects the suffix-less
+        ``DOTENV_PRIVATE_KEY`` variable; the old ``env_file.stem`` derivation
+        wrongly defaulted to ``DOTENV_PRIVATE_KEY_PRODUCTION`` (#473).
+        """
 
         env_file = tmp_path / ".env"
         env_file.write_text("SECRET=encrypted")
@@ -2110,14 +2131,14 @@ class TestVaultVerification:
                 Parameters:
                     env_path (Path): Path to the environment file to be decrypted; must exist.
                     env_keys_file (Path|None): Optional path to the keys file (not used by the stub).
-                    env (Mapping|None): Environment mapping; the stub reads `DOTENV_PRIVATE_KEY_PRODUCTION` from this mapping.
+                    env (Mapping|None): Environment mapping; the stub reads `DOTENV_PRIVATE_KEY` from this mapping.
                     cwd (str|Path|None): Working directory passed to the stub; recorded for inspection.
 
                 Raises:
                     AssertionError: If `env_path` does not exist.
                 """
                 assert env is not None
-                captured["env_var"] = env.get("DOTENV_PRIVATE_KEY_PRODUCTION")
+                captured["env_var"] = env.get("DOTENV_PRIVATE_KEY")
                 captured["cwd"] = cwd
                 assert env_path.exists()
 
@@ -2357,6 +2378,9 @@ class TestSyncCommand:
         config_file = tmp_path / "pair.txt"
         config_file.write_text("secret=service")
 
+        # The up-front --check-decryption gate needs dotenvx present; fake it
+        # so this test exercises the FAILED-result gate on dotenvx-less hosts.
+        _fake_dotenvx_on_path(monkeypatch)
         monkeypatch.setattr("envdrift.vault.get_vault_client", lambda *_, **__: SimpleNamespace())
         monkeypatch.setattr("envdrift.output.rich.print_service_sync_status", lambda *_, **__: None)
         monkeypatch.setattr("envdrift.output.rich.print_sync_result", lambda *_, **__: None)
@@ -2399,6 +2423,29 @@ class TestSyncCommand:
 
         result = runner.invoke(app, [*common_args, "--check-decryption"])
         assert result.exit_code == 1
+
+    def test_sync_check_decryption_without_dotenvx_exits_nonzero(self, monkeypatch):
+        """#473: --check-decryption with dotenvx absent must fail loudly, not exit 0.
+
+        Without dotenvx the engine degrades every per-service test to SKIPPED,
+        so the run exited 0 having verified nothing - the same
+        cannot-verify-downgraded-to-success class the rest of #473 fixes.
+        `decrypt --verify-vault` already fails loudly for the identical state.
+        """
+        real_which = shutil.which
+        monkeypatch.setattr(
+            "shutil.which",
+            lambda cmd, *args, **kwargs: (
+                None if cmd == "dotenvx" else real_which(cmd, *args, **kwargs)
+            ),
+        )
+
+        result = runner.invoke(app, ["sync", "--check-decryption"])
+
+        assert result.exit_code == 1
+        out = " ".join(result.output.split())
+        assert "dotenvx is not installed" in out
+        assert "cannot verify decryption" in out
 
     def test_sync_autodiscovery_uses_config_defaults(self, monkeypatch, tmp_path: Path):
         """Auto-discovered envdrift.toml should supply provider, vault URL, and mappings."""
@@ -2727,6 +2774,9 @@ class TestSyncCommand:
         )
         monkeypatch.chdir(tmp_path)
 
+        # The up-front --check-decryption gate needs dotenvx present; fake it
+        # so this test still reaches the engine on dotenvx-less hosts.
+        _fake_dotenvx_on_path(monkeypatch)
         monkeypatch.setattr(
             "envdrift.vault.get_vault_client",
             lambda *_a, **_k: SimpleNamespace(ensure_authenticated=lambda: None),

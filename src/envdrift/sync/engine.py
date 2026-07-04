@@ -450,7 +450,11 @@ class SyncEngine:
         except Exception:
             # Timeout, copy failure, vanished temp dir, … — the check could not
             # prove the key works, so it is a failed test; the live file was
-            # never modified, so there is nothing to restore.
+            # never modified, so there is nothing to restore. Log the cause so
+            # an infrastructure failure is distinguishable from a wrong key.
+            logger.warning(
+                "Decryption check for %s failed unexpectedly", target_file, exc_info=True
+            )
             return DecryptionTestResult.FAILED
 
     def _validate_schema(self, mapping: ServiceMapping) -> bool:

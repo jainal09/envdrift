@@ -95,7 +95,10 @@ before and after, whether the check passes or fails). Stray
 reflects the synced `.env.keys`, and mappings with relative `folder_path`
 values (the usual monorepo layout) verify correctly from the project root.
 
-If any decryption test fails, `sync` exits 1 — with or without `--ci`.
+If any decryption test fails, `sync` exits 1 — with or without `--ci`. The
+check also refuses to run when dotenvx is not installed: skipping every test
+would verify nothing, so `sync` reports the missing binary and exits 1
+instead of silently succeeding.
 
 ### `--validate-schema`
 
@@ -359,6 +362,7 @@ All services synced successfully
 | 0    | Success (all synced, no errors)                                            |
 | 1    | Error (vault error, sync failure, decryption failure)                      |
 | 1    | `--check-decryption`: any decryption test failed (even without `--ci`)     |
+| 1    | `--check-decryption`: dotenvx is not installed (nothing can be verified)    |
 
 ## Authentication
 

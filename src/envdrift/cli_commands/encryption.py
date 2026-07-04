@@ -328,6 +328,24 @@ def encrypt_cmd(
             raise typer.Exit(code=1) from None
 
 
+def _private_key_var_name_for(env_file: Path) -> str:
+    """Derive dotenvx's private-key variable name from the env file name.
+
+    ``.env`` -> ``DOTENV_PRIVATE_KEY``; ``.env.<env>`` ->
+    ``DOTENV_PRIVATE_KEY_<ENV>`` (dots become underscores, uppercased) — the
+    same derivation dotenvx itself applies. ``Path.stem`` strips only the
+    LAST suffix, so the previous ``env_file.stem`` was always ``".env"`` for
+    ``.env.<env>`` files and every raw vault value collapsed to the
+    PRODUCTION default, false-failing a CORRECT bare key for any other
+    environment (#473).
+    """
+    env_name = env_file.name.removeprefix(".env").replace(".", "_").upper()
+    env_name = env_name.lstrip("_")
+    if not env_name:
+        return "DOTENV_PRIVATE_KEY"
+    return f"DOTENV_PRIVATE_KEY_{env_name}"
+
+
 def _verify_decryption_with_vault(
     env_file: Path,
     provider: str,
@@ -436,13 +454,9 @@ def _verify_decryption_with_vault(
             actual_private_key, _ = normalize_vault_key_value(remainder)
             key_var_name = "DOTENV_PRIVATE_KEY"
         else:
-            # Key is just the raw value, construct variable name from env file
-            env_name = env_file.stem.replace(".env", "").replace(".", "_").upper()
-            if env_name.startswith("_"):
-                env_name = env_name[1:]
-            if not env_name:
-                env_name = "PRODUCTION"  # Default
-            key_var_name = f"DOTENV_PRIVATE_KEY_{env_name}"
+            # Key is just the raw value: derive the variable name from the
+            # env file name exactly like dotenvx does (#473).
+            key_var_name = _private_key_var_name_for(env_file)
 
         # Build a clean environment so dotenvx cannot fall back to stray keys
         dotenvx_env = {

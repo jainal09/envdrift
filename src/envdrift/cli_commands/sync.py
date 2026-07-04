@@ -462,10 +462,20 @@ def sync(
     Loads sync configuration and a vault client, fetches DOTENV_PRIVATE_KEY_* secrets for configured mappings, and writes/updates local key files; optionally verifies keys, forces updates, checks decryption, and runs schema validation after sync. In interactive mode the command may prompt before updating individual services; --force, --verify, and --ci disable prompts.
 
     Exits with code 1 on vault or sync configuration errors, when run with --ci if any sync
-    errors occurred, and whenever a --check-decryption test fails (even without --ci).
+    errors occurred, whenever a --check-decryption test fails (even without --ci), and when
+    --check-decryption is requested but dotenvx is not installed (nothing can be verified).
     """
     from envdrift.output.rich import print_service_sync_status, print_sync_result
     from envdrift.sync.config import SyncConfigError
+
+    # An explicitly requested decryption check must be able to actually run.
+    # Without dotenvx the engine degrades every per-service test to SKIPPED,
+    # so the run would exit 0 having verified nothing — the same
+    # cannot-verify-downgraded-to-success class as #473. Mirror
+    # `decrypt --verify-vault`, which fails loudly for the identical state.
+    if check_decryption and shutil.which("dotenvx") is None:
+        print_error("dotenvx is not installed - cannot verify decryption")
+        raise typer.Exit(code=1)
 
     sync_config, vault_client, effective_provider, _, _, _ = load_sync_config_and_client(
         config_file=config_file,
@@ -1341,10 +1351,17 @@ def lock(
             print_sync_result(sync_result)
 
             if sync_result.has_errors:
-                errors.append("Key synchronization had errors")
-                if not force:
-                    print_error("Cannot proceed with encryption due to key sync errors")
-                    raise typer.Exit(code=1)
+                # Hard stop BEFORE Step 2, even with --force: --force means
+                # "don't prompt", not "encrypt past a failed key sync". A
+                # mapping whose vault key could not be fetched would reach
+                # Step 2 with no .env.keys entry and dotenvx would mint a
+                # fresh local-only keypair — the exact lockout of #473.
+                print_error(
+                    "Cannot proceed with encryption due to key sync errors. "
+                    "Nothing was encrypted. Fix the vault secrets (or publish "
+                    "local keys with 'envdrift vault-push') and rerun."
+                )
+                raise typer.Exit(code=1)
         else:
             # Just verify (compare local keys with vault).
             from envdrift.sync.operations import EnvKeysFile

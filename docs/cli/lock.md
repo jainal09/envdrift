@@ -113,6 +113,11 @@ Sync keys from vault before encrypting. This implies `--verify-vault`.
 
 Use this to ensure your local keys are up-to-date with vault before encrypting.
 
+The same hard-failure contract applies: when any mapping's key fails to sync
+(missing vault secret, vault error), `lock` exits 1 **before** encrypting
+anything — even with `--force`. Encrypting past a failed sync would mint a
+fresh local-only key for the very mapping whose vault key is unavailable.
+
 ```bash
 envdrift lock --sync-keys
 ```

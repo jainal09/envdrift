@@ -915,6 +915,45 @@ class TestLockCommand:
         assert "Verifying keys with vault" in result.output
 
     @patch("envdrift.cli_commands.encryption_helpers.resolve_encryption_backend")
+    def test_lock_sync_keys_error_with_force_still_refuses(
+        self, mock_resolve, monkeypatch, tmp_path, loaded_config, no_git_hook
+    ):
+        """#473: --sync-keys --force must hard-stop on key-sync errors, before Step 2.
+
+        The old gate exempted --force from the exit, so Step 2 revisited the
+        very mapping whose vault secret failed to sync, found plaintext, and
+        dotenvx minted a fresh local-only keypair - the exact lockout class
+        the verify-only branch already refuses.
+        """
+        backend = DummyEncryptionBackend()
+        mock_resolve.return_value = (backend, EncryptionProvider.DOTENVX, None)
+        (tmp_path / ".env.production").write_text("SECRET=plaintext\n")
+        # No .env.keys on disk: a proceeding Step 2 would mint a fresh key.
+        mapping = ServiceMapping(secret_name="s", folder_path=tmp_path, environment="production")
+        loaded_config(_sync_config([mapping]))
+        failed_sync = SyncResult(
+            services=[
+                ServiceSyncResult(
+                    secret_name="s",
+                    folder_path=tmp_path,
+                    action=SyncAction.ERROR,
+                    message="Secret not found in vault",
+                )
+            ]
+        )
+        _patch_engine(monkeypatch, failed_sync)
+
+        result = runner.invoke(app, ["lock", "--sync-keys", "--force"])
+        out = " ".join(result.output.split())
+        assert result.exit_code == 1, result.output
+        assert "Nothing was encrypted" in out
+        # The hard stop happened BEFORE Step 2: nothing was encrypted, no
+        # fresh local-only key was minted, the plaintext file is untouched.
+        assert backend.encrypt_calls == []
+        assert not (tmp_path / ".env.keys").exists()
+        assert (tmp_path / ".env.production").read_text() == "SECRET=plaintext\n"
+
+    @patch("envdrift.cli_commands.encryption_helpers.resolve_encryption_backend")
     def test_lock_sync_keys_failure_raises_exits(
         self, mock_resolve, monkeypatch, tmp_path, loaded_config, no_git_hook
     ):
