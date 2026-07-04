@@ -108,10 +108,7 @@ jobs:
         uses: astral-sh/setup-uv@v8.2.0
 
       - name: Install dependencies
-        run: |
-          uv sync --all-extras --locked
-          # Install optional integration test dependencies
-          uv pip install boto3 hvac
+        run: uv sync --all-extras --locked
 
       - name: Install dotenvx
         run: |
@@ -299,9 +296,7 @@ jobs:
         uses: astral-sh/setup-uv@v8.2.0
 
       - name: Install dependencies
-        run: |
-          uv sync --all-extras --locked
-          uv pip install boto3 hvac google-cloud-secret-manager azure-keyvault-secrets azure-identity
+        run: uv sync --all-extras --locked
 
       - name: Run GCP tests (if configured)
         if: env.ENVDRIFT_TEST_GCP == '1'
