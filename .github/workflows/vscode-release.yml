@@ -39,7 +39,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
 
       - name: Set up Node.js
         uses: actions/setup-node@v6
@@ -98,7 +98,7 @@ jobs:
       tag: ${{ steps.version.outputs.TAG }}
     steps:
       - name: Checkout code
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
 
       - name: Get version from tag
         id: version
@@ -175,7 +175,7 @@ jobs:
     if: ${{ !contains(needs.release.outputs.tag, '-rc') && !contains(needs.release.outputs.tag, '-beta') && !contains(needs.release.outputs.tag, '-alpha') }}
     steps:
       - name: Checkout code
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
 
       - name: Set up Node.js
         uses: actions/setup-node@v6
