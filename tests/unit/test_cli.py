@@ -4353,12 +4353,25 @@ class TestLockCommand:
         encrypted: list[Path] = []
         _mock_encryption_backend(monkeypatch, encrypted_paths=encrypted)
 
+        # The .secret now goes through the partial-encryption lifecycle seam
+        # (encrypt_secret_file), aligned with `envdrift push` (#507 review),
+        # rather than the raw backend. Patch that seam to record + simulate it.
+        partial_encrypted: list[Path] = []
+
+        def _fake_encrypt_secret(env_config):
+            partial_encrypted.append(Path(env_config.secret_file))
+
+        monkeypatch.setattr(
+            "envdrift.core.partial_encryption.encrypt_secret_file", _fake_encrypt_secret
+        )
+
         result = runner.invoke(app, ["lock", "-c", str(config_file), "--force", "--all"])
 
         assert result.exit_code == 0
-        # Both the main env file and the secret file should be encrypted
+        # The main env file goes through the resolved backend...
         assert env_file.resolve() in [p.resolve() for p in encrypted]
-        assert secret_file.resolve() in [p.resolve() for p in encrypted]
+        # ...and the .secret through the partial-encryption lifecycle seam.
+        assert secret_file.resolve() in [p.resolve() for p in partial_encrypted]
         # Combined file should be deleted
         assert not env_file.exists()
         assert "combined files deleted" in result.output.lower()

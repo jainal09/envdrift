@@ -1001,7 +1001,7 @@ class TestLockCanonicalEncryptionState:
 
         result = runner.invoke(app, ["lock", "--check"])
         assert result.exit_code == 1, result.output
-        assert "would be encrypted" in result.output
+        assert "would re-encrypt (plaintext values remain)" in result.output
         assert backend.encrypt_calls == []
 
     @patch("envdrift.cli_commands.encryption_helpers.resolve_encryption_backend")
@@ -1237,9 +1237,10 @@ def _write_partial_config(tmp_path, secret_file, combined_file, *, secrets_only=
 
 
 class TestLockPartialEncryptionAll:
+    @patch("envdrift.core.partial_encryption.encrypt_secret_file")
     @patch("envdrift.cli_commands.encryption_helpers.resolve_encryption_backend")
     def test_all_encrypts_secret_and_deletes_combined(
-        self, mock_resolve, tmp_path, loaded_config, no_git_hook
+        self, mock_resolve, mock_encrypt_secret, tmp_path, loaded_config, no_git_hook
     ):
         backend = DummyEncryptionBackend()
         mock_resolve.return_value = (backend, EncryptionProvider.DOTENVX, None)
@@ -1261,11 +1262,43 @@ class TestLockPartialEncryptionAll:
         result = runner.invoke(app, ["lock", "--force", "--all", "--config", str(cfg)])
         assert result.exit_code == 0, result.output
         assert "Processing partial encryption files" in result.output
-        # secret file was encrypted
-        assert secret_file.resolve() in backend.encrypt_calls
-        # combined file was deleted
+        # The .secret was encrypted through the partial-encryption lifecycle seam
+        # (encrypt_secret_file: read-back verification + skip-worktree handling),
+        # NOT the raw backend.encrypt — this is the #507-review alignment with push.
+        assert mock_encrypt_secret.call_count == 1
+        # combined file was deleted (the .secret reached a good encrypted state)
         assert not combined_file.exists()
         assert "deleted (combined file)" in result.output
+
+    @patch("envdrift.core.partial_encryption.encrypt_secret_file")
+    @patch("envdrift.cli_commands.encryption_helpers.resolve_encryption_backend")
+    def test_all_keeps_combined_when_secret_encryption_fails(
+        self, mock_resolve, mock_encrypt_secret, tmp_path, loaded_config, no_git_hook
+    ):
+        """#507 review: a failed .secret encryption must keep the combined file."""
+        from envdrift.core.partial_encryption import PartialEncryptionError
+
+        backend = DummyEncryptionBackend()
+        mock_resolve.return_value = (backend, EncryptionProvider.DOTENVX, None)
+        mock_encrypt_secret.side_effect = PartialEncryptionError("did not take effect")
+
+        secret_file = tmp_path / ".env.secret"
+        secret_file.write_text("API_KEY=plain\n")
+        combined_file = tmp_path / ".env"
+        combined_file.write_text("API_KEY=plain\nPUBLIC=ok\n")
+        cfg = _write_partial_config(tmp_path, secret_file, combined_file)
+
+        (tmp_path / ".env.production").write_text(
+            "#/---BEGIN DOTENV ENCRYPTED---/\nSECRET=encrypted:abc\n"
+        )
+        (tmp_path / ".env.keys").write_text("DOTENV_PRIVATE_KEY_PRODUCTION=k\n")
+        mapping = ServiceMapping(secret_name="s", folder_path=tmp_path, environment="production")
+        loaded_config(_sync_config([mapping]))
+
+        result = runner.invoke(app, ["lock", "--force", "--all", "--config", str(cfg)])
+        assert result.exit_code == 1, result.output
+        assert combined_file.exists(), "combined file deleted despite failed encryption"
+        assert "kept (encryption failed)" in result.output
 
     @patch("envdrift.cli_commands.encryption_helpers.resolve_encryption_backend")
     def test_all_check_only_reports_would_actions(
