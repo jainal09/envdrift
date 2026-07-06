@@ -6,7 +6,8 @@ Two hygiene properties the repo must keep true:
   containers must pin the *same* image tags, so local runs exercise the same
   backends CI does (#332 established this once; CI-only Renovate bumps
   re-diverged localstack 4.0 vs 4.14 and lowkey-vault 7.1.32 vs 7.2.26).
-  Every image line carries a keep-in-sync pointer at its counterpart file, and
+  Every stack image line carries a keep-in-sync pointer at its counterpart
+  file, and
   ``renovate.json`` groups the stack images so one Renovate PR moves both
   files together.
 - The Renovate PR body template must describe the merge policy the repo
@@ -49,8 +50,17 @@ def _compose_images() -> dict[str, str]:
 
 def _ci_service_images() -> dict[str, str]:
     workflow = yaml.safe_load(_INTEGRATION_WORKFLOW_PATH.read_text(encoding="utf-8"))
-    services = workflow["jobs"]["integration-tests"]["services"]
-    return {name: svc["image"] for name, svc in services.items()}
+    jobs = workflow["jobs"]
+    job = jobs.get("integration-tests")
+    assert job is not None, (
+        "integration-tests.yml no longer defines an 'integration-tests' job "
+        f"(found: {sorted(jobs)}) — update _ci_service_images() in this file (#500)."
+    )
+    return {name: svc["image"] for name, svc in job["services"].items()}
+
+
+def _is_stack_image(image: str) -> bool:
+    return image.rpartition(":")[0] in _STACK_IMAGES
 
 
 def _renovate_config() -> dict[str, Any]:
@@ -74,11 +84,16 @@ def test_compose_stack_pins_same_images_as_ci_service_containers() -> None:
         assert service in ci, (
             f"integration-tests.yml lost the {service!r} service container (#500)."
         )
-    mismatched = {
-        service: {"compose": compose[service], "ci": ci[service]}
-        for service in sorted(set(compose) & set(ci))
-        if compose[service] != ci[service]
-    }
+    # Compare over the *union* of service names so a stack image added to only
+    # one file is a failure, not a silent skip; services running a non-stack
+    # image (e.g. a future dev-only helper) need no CI counterpart.
+    mismatched: dict[str, dict[str, str | None]] = {}
+    for service in sorted(set(compose) | set(ci)):
+        images = (compose.get(service), ci.get(service))
+        if not any(image and _is_stack_image(image) for image in images):
+            continue
+        if images[0] != images[1]:
+            mismatched[service] = {"compose": images[0], "ci": images[1]}
     assert not mismatched, (
         "Local compose stack diverged from CI service containers (#500, "
         f"previously #332) — bump both together: {mismatched}"
@@ -105,11 +120,13 @@ def test_stack_images_pin_explicit_version_tags() -> None:
 
 
 def test_every_stack_image_line_carries_keep_in_sync_pointer() -> None:
-    """Each image line names its counterpart file in a comment (#500).
+    """Each stack image line names its counterpart file in a comment (#500).
 
     Pre-fix only the CI vault entry carried a keep-in-sync comment; the other
     five image lines gave a human editor (or a reviewer of a Renovate diff)
-    no hint that a second copy of the pin exists.
+    no hint that a second copy of the pin exists. Only lines pinning one of
+    the ``_STACK_IMAGES`` need the pointer — a dev-only service running some
+    other image has no counterpart to stay in sync with.
     """
     missing: list[str] = []
     for path, counterpart in (
@@ -119,6 +136,8 @@ def test_every_stack_image_line_carries_keep_in_sync_pointer() -> None:
         lines = path.read_text(encoding="utf-8").splitlines()
         for index, line in enumerate(lines):
             if not _IMAGE_LINE.match(line):
+                continue
+            if not any(repository in line for repository in _STACK_IMAGES):
                 continue
             previous = lines[index - 1] if index else ""
             if counterpart not in line and counterpart not in previous:
