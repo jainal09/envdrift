@@ -11,6 +11,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
+from urllib.parse import quote
 
 from rich.console import Console
 from rich.panel import Panel
@@ -33,6 +34,12 @@ if TYPE_CHECKING:
 # The real project repository, reported as the SARIF driver's informationUri
 # (Code Scanning displays it on every alert — #489).
 _REPOSITORY_URL = "https://github.com/jainal09/envdrift"
+
+# Symbolic name of the source-root URI base. SARIF 2.1.0 resolves a result's
+# ``uriBaseId`` by EXACT string lookup in ``originalUriBaseIds`` (§3.4.4 /
+# §3.14.14 — bare names, no percent signs), so the emitting and declaring
+# sides must share this one constant or consumers cannot resolve the URIs.
+_SRCROOT_BASE_ID = "SRCROOT"
 
 # Truncation length for the secret content hash embedded in SARIF
 # fingerprints: 16 hex chars (64 bits) is plenty to keep two distinct secrets
@@ -300,7 +307,7 @@ def _sarif_rule(finding: ScanFinding) -> dict[str, Any]:
 
 
 def _sarif_source_root() -> Path:
-    """Resolve the ``%SRCROOT%`` base directory for SARIF artifact URIs.
+    """Resolve the ``SRCROOT`` base directory for SARIF artifact URIs.
 
     Artifact URIs are emitted relative to the enclosing git repository root
     (``git rev-parse --show-toplevel``) so alerts map to repo files no matter
@@ -316,16 +323,19 @@ def _sarif_artifact_location(file_path: PurePath, srcroot: PurePath) -> dict[str
 
     Both arguments must be absolute. A path under ``srcroot`` becomes a
     srcroot-relative URI with forward slashes — on Windows too, per SARIF
-    2.1.0 §3.4.4 — tagged ``uriBaseId: %SRCROOT%``. A path outside the source
-    root cannot be expressed relative to it, so it falls back to an absolute
-    ``file://`` URI with no base id (an absolute URI under a base id is
-    contradictory and Code Scanning drops such alerts — #489).
+    2.1.0 §3.4.4 — tagged with ``uriBaseId: SRCROOT``, percent-encoded so a
+    space, ``#`` or non-ASCII character still yields a valid RFC 3986
+    URI-reference (§3.4.3), matching the ``as_uri()`` fallback's encoding. A
+    path outside the source root cannot be expressed relative to it, so it
+    falls back to an absolute ``file://`` URI with no base id (an absolute
+    URI under a base id is contradictory and Code Scanning drops such
+    alerts — #489).
     """
     try:
         relative = file_path.relative_to(srcroot)
     except ValueError:
         return {"uri": file_path.as_uri()}
-    return {"uri": relative.as_posix(), "uriBaseId": "%SRCROOT%"}
+    return {"uri": quote(relative.as_posix()), "uriBaseId": _SRCROOT_BASE_ID}
 
 
 def _resolved_finding_path(file_path: Path) -> Path:
@@ -399,8 +409,9 @@ def _sarif_document(
 
     The driver block carries the real package version and repository URL —
     Code Scanning displays them on every alert (#489). When ``srcroot`` is
-    given, the run declares it as the ``%SRCROOT%`` base via
-    ``originalUriBaseIds`` (SARIF 2.1.0 §3.14.14, base URIs end with a slash).
+    given, the run declares it as the ``SRCROOT`` base via
+    ``originalUriBaseIds`` (SARIF 2.1.0 §3.14.14, base URIs end with a slash)
+    under the exact key every ``uriBaseId`` references.
     """
     run: dict[str, Any] = {
         "tool": {
@@ -418,7 +429,7 @@ def _sarif_document(
         srcroot_uri = srcroot.as_uri()
         if not srcroot_uri.endswith("/"):
             srcroot_uri += "/"
-        run["originalUriBaseIds"] = {"SRCROOT": {"uri": srcroot_uri}}
+        run["originalUriBaseIds"] = {_SRCROOT_BASE_ID: {"uri": srcroot_uri}}
     sarif = {
         "$schema": "https://json.schemastore.org/sarif-2.1.0.json",
         "version": "2.1.0",
@@ -434,7 +445,7 @@ def format_sarif(result: AggregatedScanResult, exit_code: int | None = None) -> 
     for the output of static analysis tools.
 
     Artifact URIs are emitted relative to the enclosing git repository root
-    (declared as ``%SRCROOT%`` in ``originalUriBaseIds``) regardless of the
+    (declared as ``SRCROOT`` in ``originalUriBaseIds``) regardless of the
     invocation cwd, and each result's fingerprint folds in the rule id,
     column and a truncated content hash so two distinct secrets on one line
     stay distinct alerts (#489).

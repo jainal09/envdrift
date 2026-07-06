@@ -517,7 +517,7 @@ def _aggregate(findings: list[ScanFinding]) -> AggregatedScanResult:
 class TestSarifPortability:
     """Regression tests for #489 — portable SARIF for Code Scanning uploads.
 
-    Three defects: absolute filesystem URIs under ``%SRCROOT%`` (alerts cannot
+    Three defects: absolute filesystem URIs under ``SRCROOT`` (alerts cannot
     map to repo files), colliding fingerprints for two distinct same-line
     secrets (Code Scanning merges them), and placeholder driver metadata.
     """
@@ -624,8 +624,9 @@ class TestSarifPortability:
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ):
         """An absolute finding path under the source root must emit a relative
-        URI with ``uriBaseId: %SRCROOT%`` and declare the base in
-        ``originalUriBaseIds`` (SARIF 2.1.0 §3.4.4 / §3.14.14)."""
+        URI with ``uriBaseId: SRCROOT`` and declare the base in
+        ``originalUriBaseIds`` under the exact same key (SARIF 2.1.0 §3.4.4 /
+        §3.14.14 — resolution is by exact string lookup)."""
         monkeypatch.chdir(tmp_path)
         finding = ScanFinding(
             file_path=tmp_path / "configs" / ".env",
@@ -641,7 +642,11 @@ class TestSarifPortability:
         run = data["runs"][0]
         location = run["results"][0]["locations"][0]["physicalLocation"]["artifactLocation"]
         assert location["uri"] == "configs/.env"
-        assert location["uriBaseId"] == "%SRCROOT%"
+        assert location["uriBaseId"] == "SRCROOT"
+        # Regression (#533 review): the uriBaseId must be resolvable by exact
+        # key lookup in originalUriBaseIds — "%SRCROOT%" vs "SRCROOT" drift
+        # left the base undeclared for strict consumers.
+        assert location["uriBaseId"] in run["originalUriBaseIds"]
         srcroot_uri = run["originalUriBaseIds"]["SRCROOT"]["uri"]
         assert srcroot_uri == tmp_path.resolve().as_uri() + "/"
 
@@ -700,8 +705,12 @@ class TestSarifPortability:
         location = _sarif_artifact_location(
             PureWindowsPath(r"C:\repo\configs\.env"), PureWindowsPath(r"C:\repo")
         )
-        assert location == {"uri": "configs/.env", "uriBaseId": "%SRCROOT%"}
+        assert location == {"uri": "configs/.env", "uriBaseId": "SRCROOT"}
 
+    # PurePath.as_uri() is deprecated on 3.14+ (use Path.as_uri()); production
+    # always passes a concrete Path — only this Windows-shape test drives the
+    # fallback with a PureWindowsPath, which cannot be a concrete Path on CI.
+    @pytest.mark.filterwarnings("ignore:pathlib.PurePath.as_uri:DeprecationWarning")
     def test_windows_path_outside_srcroot_is_absolute_file_uri(self):
         """A Windows path outside the source root falls back to a file:// URI."""
         from pathlib import PureWindowsPath
@@ -713,3 +722,115 @@ class TestSarifPortability:
         )
         assert location["uri"] == "file:///D:/elsewhere/.env"
         assert "uriBaseId" not in location
+
+    def test_path_with_space_and_hash_is_percent_encoded(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        """A repo path with a space or ``#`` must be RFC 3986 percent-encoded
+        (SARIF 2.1.0 §3.4.3) — a raw space is an invalid URI-reference and a
+        raw ``#`` truncates the path at the fragment when parsed."""
+        monkeypatch.chdir(tmp_path)
+        finding = ScanFinding(
+            file_path=tmp_path / "My Project#1" / ".env",
+            line_number=1,
+            rule_id="aws-access-key-id",
+            rule_description="AWS Access Key ID",
+            description="AWS key detected",
+            severity=FindingSeverity.CRITICAL,
+            scanner="native",
+        )
+        data = json.loads(format_sarif(_aggregate([finding])))
+
+        location = data["runs"][0]["results"][0]["locations"][0]["physicalLocation"]
+        assert location["artifactLocation"]["uri"] == "My%20Project%231/.env"
+
+    def test_non_ascii_path_is_percent_encoded_as_utf8(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        """Non-ASCII path segments are percent-encoded as UTF-8 octets,
+        matching the encoding ``Path.as_uri()`` uses on the fallback branch."""
+        monkeypatch.chdir(tmp_path)
+        finding = ScanFinding(
+            file_path=tmp_path / "sécrets" / ".env",
+            line_number=1,
+            rule_id="aws-access-key-id",
+            rule_description="AWS Access Key ID",
+            description="AWS key detected",
+            severity=FindingSeverity.CRITICAL,
+            scanner="native",
+        )
+        data = json.loads(format_sarif(_aggregate([finding])))
+
+        location = data["runs"][0]["results"][0]["locations"][0]["physicalLocation"]
+        assert location["artifactLocation"]["uri"] == "s%C3%A9crets/.env"
+
+    def test_unreserved_path_is_not_over_encoded(self):
+        """A plain path must pass through unchanged — encoding is applied only
+        where RFC 3986 requires it, keeping existing fingerprints stable."""
+        from pathlib import PurePosixPath
+
+        from envdrift.scanner.output import _sarif_artifact_location
+
+        location = _sarif_artifact_location(
+            PurePosixPath("/repo/configs/.env"), PurePosixPath("/repo")
+        )
+        assert location == {"uri": "configs/.env", "uriBaseId": "SRCROOT"}
+
+
+def _validate_against_sarif_schema(document: dict) -> None:
+    """Validate a SARIF document against the official 2.1.0 JSON schema."""
+    jsonschema = pytest.importorskip("jsonschema")
+    schema_path = Path(__file__).parents[1] / "fixtures" / "sarif-schema-2.1.0.json"
+    schema = json.loads(schema_path.read_text(encoding="utf-8"))
+    jsonschema.validate(instance=document, schema=schema)
+
+
+class TestSarifSchemaConformance:
+    """The emitted documents must validate against the official SARIF 2.1.0
+    schema (oasis-tcs/sarif-spec), vendored at tests/fixtures/."""
+
+    def test_full_document_validates_against_official_schema(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        """A run with findings (hash, preview, encoded URI), a failed scanner
+        notification and a declared SRCROOT base must be schema-valid."""
+        monkeypatch.chdir(tmp_path)
+        findings = [
+            ScanFinding(
+                file_path=tmp_path / "My Project" / ".env",
+                line_number=1,
+                column_number=5,
+                rule_id="aws-access-key-id",
+                rule_description="AWS Access Key ID",
+                description="AWS key detected",
+                severity=FindingSeverity.CRITICAL,
+                scanner="native",
+                secret_preview="AKIA************MPLE",
+                secret_hash="a" * 64,
+            ),
+            ScanFinding(
+                file_path=Path("configs/.env"),
+                line_number=2,
+                rule_id="unencrypted-env-file",
+                rule_description="Unencrypted .env File",
+                description="File is not encrypted",
+                severity=FindingSeverity.HIGH,
+                scanner="native",
+            ),
+        ]
+        result = AggregatedScanResult(
+            results=[
+                ScanResult(scanner_name="native", findings=findings),
+                ScanResult(scanner_name="gitleaks", error="binary exploded"),
+            ],
+            total_findings=len(findings),
+            unique_findings=findings,
+            scanners_used=["native", "gitleaks"],
+            total_duration_ms=1,
+        )
+
+        _validate_against_sarif_schema(json.loads(format_sarif(result, exit_code=1)))
+
+    def test_error_document_validates_against_official_schema(self):
+        """The error-path document must be schema-valid too."""
+        _validate_against_sarif_schema(json.loads(format_sarif_error("Could not load config")))

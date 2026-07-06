@@ -5,7 +5,7 @@ scratch git repository, reproducing the exact issue repros:
 
 - The docs' default invocation (``envdrift guard --sarif`` with no path arg)
   must emit artifact URIs **relative to the git repository root** with
-  ``uriBaseId: %SRCROOT%`` — not absolute filesystem paths — so GitHub/GitLab
+  ``uriBaseId: SRCROOT`` — not absolute filesystem paths — so GitHub/GitLab
   Code Scanning can map every alert to a repo file. The URIs must be identical
   whether guard runs from the repo root or a subdirectory.
 - Two DISTINCT secrets on the same line must keep distinct fingerprints so
@@ -111,7 +111,7 @@ class TestSarifRelativeUris:
         for location in locations:
             uri = location["uri"]
             assert uri == "configs/.env", f"expected a repo-root-relative URI, got {uri!r}"
-            assert location["uriBaseId"] == "%SRCROOT%"
+            assert location["uriBaseId"] == "SRCROOT"
 
     def test_invocation_from_subdirectory_keeps_repo_root_relative_uris(
         self, scratch_repo: Path
@@ -128,20 +128,64 @@ class TestSarifRelativeUris:
                 "URI must stay repo-root-relative when guard runs from a subdirectory, "
                 f"got {location['uri']!r}"
             )
-            assert location["uriBaseId"] == "%SRCROOT%"
+            assert location["uriBaseId"] == "SRCROOT"
 
     def test_srcroot_base_id_is_declared_in_original_uri_base_ids(self, scratch_repo: Path) -> None:
-        """%SRCROOT% must be defined by an ``originalUriBaseIds`` entry per SARIF 2.1.0."""
+        """``SRCROOT`` must be declared by an ``originalUriBaseIds`` entry whose key
+        exactly matches every emitted ``uriBaseId`` (SARIF 2.1.0 §3.4.4 resolves
+        by exact string — regression for the "%SRCROOT%"/"SRCROOT" drift)."""
         result = _run_envdrift(_SARIF_ARGS, cwd=scratch_repo)
         assert result.returncode == 1, result.stderr
         sarif = _parse_sarif(result)
 
         base_ids = sarif["runs"][0]["originalUriBaseIds"]
+        for location in _artifact_uris(sarif):
+            assert location["uriBaseId"] in base_ids, (
+                f"uriBaseId {location['uriBaseId']!r} is not resolvable in "
+                f"originalUriBaseIds keys {sorted(base_ids)}"
+            )
         srcroot = base_ids["SRCROOT"]["uri"]
         assert srcroot.startswith("file://")
         assert srcroot.endswith("/"), "SARIF base URIs must end with a slash"
         # The declared base must actually be the scratch repo root.
         assert srcroot == scratch_repo.resolve().as_uri() + "/"
+
+    def test_path_with_space_emits_percent_encoded_uri(self, scratch_repo: Path) -> None:
+        """A finding in a space-containing directory must yield an RFC 3986
+        percent-encoded ``artifactLocation.uri`` (SARIF 2.1.0 §3.4.3)."""
+        spaced = scratch_repo / "sub dir"
+        spaced.mkdir()
+        (spaced / ".env").write_text(f"TOKEN={_AWS_KEY_ONE}\n", encoding="utf-8")
+
+        result = _run_envdrift(_SARIF_ARGS, cwd=scratch_repo)
+        assert result.returncode == 1, result.stderr
+        sarif = _parse_sarif(result)
+
+        uris = {location["uri"] for location in _artifact_uris(sarif)}
+        assert "sub%20dir/.env" in uris, f"expected a percent-encoded URI, got {sorted(uris)}"
+        assert not any(" " in uri for uri in uris), "raw spaces are invalid in URI-references"
+
+    @pytest.mark.xfail(
+        strict=False,
+        reason="native discovery drops non-ASCII paths: git ls-files quotepath output "
+        "is not unquoted (see #576)",
+    )
+    def test_non_ascii_path_is_discovered_and_percent_encoded(self, scratch_repo: Path) -> None:
+        """A finding in a non-ASCII directory must be discovered and emitted as a
+        UTF-8 percent-encoded URI. The emitter side is unit-tested and correct;
+        discovery currently drops the file before it ever reaches SARIF (#576)."""
+        non_ascii = scratch_repo / "sécrets"
+        non_ascii.mkdir()
+        (non_ascii / ".env").write_text(f"TOKEN={_AWS_KEY_TWO}\n", encoding="utf-8")
+
+        result = _run_envdrift(_SARIF_ARGS, cwd=scratch_repo)
+        assert result.returncode == 1, result.stderr
+        sarif = _parse_sarif(result)
+
+        uris = {location["uri"] for location in _artifact_uris(sarif)}
+        assert "s%C3%A9crets/.env" in uris, (
+            f"finding in a non-ASCII directory was not reported, got {sorted(uris)}"
+        )
 
 
 class TestSarifFingerprints:
@@ -225,3 +269,16 @@ class TestSarifStructure:
         invocation = run["invocations"][0]
         assert invocation["executionSuccessful"] is True
         assert invocation["exitCode"] == result.returncode
+
+    def test_cli_sarif_output_validates_against_official_schema(self, scratch_repo: Path) -> None:
+        """The document the real CLI prints must validate against the official
+        SARIF 2.1.0 JSON schema (oasis-tcs/sarif-spec, vendored fixture) —
+        what a strict consumer or ``github/codeql-action/upload-sarif`` sees."""
+        jsonschema = pytest.importorskip("jsonschema")
+        schema_path = REPO_ROOT / "tests" / "fixtures" / "sarif-schema-2.1.0.json"
+        schema = json.loads(schema_path.read_text(encoding="utf-8"))
+
+        result = _run_envdrift(_SARIF_ARGS, cwd=scratch_repo)
+        assert result.returncode == 1, result.stderr
+
+        jsonschema.validate(instance=_parse_sarif(result), schema=schema)
