@@ -348,13 +348,21 @@ def ensure_git_hook_setup(
             return ["Pre-commit config path could not be resolved."]
 
         if auto_fix:
+            # Two try blocks (not one) because pyrefly flags PrecommitConfigError
+            # as possibly-unbound in a merged `except` clause when the import and
+            # the call share a try.
             try:
-                from envdrift.integrations.precommit import install_hooks
-
+                from envdrift.integrations.precommit import (
+                    PrecommitConfigError,
+                    install_hooks,
+                )
+            except ImportError as e:
+                return [str(e)]
+            try:
                 install_hooks(config_path=precommit_path, create_if_missing=True)
             except ImportError as e:
                 return [str(e)]
-            except OSError as e:
+            except (PrecommitConfigError, OSError) as e:
                 return [f"Failed to update pre-commit config: {e}"]
         elif not precommit_path.exists():
             return [f"Pre-commit config not found: {precommit_path}"]
