@@ -58,11 +58,12 @@ def _run_envdrift(
 
 
 def _guard_json(result: subprocess.CompletedProcess) -> dict:
-    """Parse the JSON document printed by ``guard --json``."""
-    out = result.stdout
-    start = out.index("{")
-    end = out.rindex("}") + 1
-    return json.loads(out[start:end])
+    """Parse the JSON document printed by ``guard --json``.
+
+    Parses the whole stdout strictly: the contract is that ``--json`` stdout
+    IS the document, and ``json.JSONDecodeError`` shows what was printed.
+    """
+    return json.loads(result.stdout)
 
 
 def _rule_ids(payload: dict) -> set[str]:
@@ -301,3 +302,38 @@ def test_operational_error_exit_distinct_from_critical(tmp_path: Path) -> None:
     )
     payload = json.loads(result.stdout)
     assert "Could not load config" in payload["error"]
+
+
+def test_non_string_fail_on_severity_is_clean_config_error(tmp_path: Path) -> None:
+    """Review repro: ``fail_on_severity = 123`` used to AttributeError past the
+    CLI's ``except ValueError`` — Rich traceback, empty ``--json`` stdout, exit 1."""
+    (tmp_path / ".env").write_text("API_KEY=plainvalue123\n", encoding="utf-8")
+    (tmp_path / "envdrift.toml").write_text("[guard]\nfail_on_severity = 123\n", encoding="utf-8")
+
+    result = _run_envdrift(
+        ["guard", "--json", "--native-only", "--no-auto-install", "."], cwd=tmp_path
+    )
+    assert result.returncode == 6, (
+        f"expected operational-error exit 6, got {result.returncode}\n"
+        f"{result.stdout}\n{result.stderr}"
+    )
+    payload = json.loads(result.stdout)  # stdout must be a clean JSON document
+    assert "fail_on_severity" in payload["error"]
+    assert "Traceback" not in result.stdout
+    assert "Traceback" not in result.stderr
+
+
+def test_git_not_found_staged_json_stdout_is_parseable(tmp_path: Path) -> None:
+    """Review repro: ``--staged --json`` with no git on PATH exited 6 with prose
+    (``Error: Git not found...``) on stdout instead of a JSON error document."""
+    result = _run_envdrift(
+        ["guard", "--staged", "--json", "--native-only"],
+        cwd=tmp_path,
+        env={"PATH": str(tmp_path / "empty-bin")},  # nothing resolves ``git``
+    )
+    assert result.returncode == 6, (
+        f"expected operational-error exit 6, got {result.returncode}\n"
+        f"{result.stdout}\n{result.stderr}"
+    )
+    payload = json.loads(result.stdout)
+    assert "Git not found" in payload["error"]

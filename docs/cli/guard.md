@@ -413,6 +413,12 @@ The machine-readable verdict fields always match the process exit code: the
 invocation's `exitCode`/`executionSuccessful` are computed from the same
 threshold-adjusted result the process returns.
 
+Operational-error paths keep machine output parseable too — including a bad
+or wrong-typed `[guard]` config value and git failures under
+`--staged`/`--pr-base`. With `--json`, stdout is a `{"error": "..."}`
+document; with `--sarif`, a schema-valid run with
+`executionSuccessful: false` and the error as a tool notification.
+
 ## Configuration
 
 Guard settings live under `[guard]` in `envdrift.toml` or

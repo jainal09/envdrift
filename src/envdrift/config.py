@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 import re
 import tomllib
 from dataclasses import dataclass, field
@@ -174,18 +175,25 @@ def coerce_entropy_threshold(value: Any) -> float:
     config layer untouched and crash the native scanner mid-scan, which was
     swallowed as a non-fatal scanner error and turned the whole guard run into
     a green false PASS (#478). Coerce numeric strings, reject everything else
-    with a clean ``ValueError`` at config-load time.
+    with a clean ``ValueError`` at config-load time. Non-finite values
+    (``nan``/``inf``, quoted or bare TOML floats) are rejected too: they parse
+    as floats but make every ``entropy >= threshold`` comparison False,
+    silently disabling the entropy gate — the same failure class.
     """
     if isinstance(value, bool):
         raise ValueError(f"[guard] entropy_threshold must be a number, got {value!r}")
     if isinstance(value, (int, float)):
-        return float(value)
-    if isinstance(value, str):
+        result = float(value)
+    elif isinstance(value, str):
         try:
-            return float(value.strip())
+            result = float(value.strip())
         except ValueError:
             raise ValueError(f"[guard] entropy_threshold must be a number, got {value!r}") from None
-    raise ValueError(f"[guard] entropy_threshold must be a number, got {value!r}")
+    else:
+        raise ValueError(f"[guard] entropy_threshold must be a number, got {value!r}")
+    if not math.isfinite(result):
+        raise ValueError(f"[guard] entropy_threshold must be a finite number, got {value!r}")
+    return result
 
 
 def coerce_check_entropy(value: Any) -> bool | None:
@@ -193,6 +201,21 @@ def coerce_check_entropy(value: Any) -> bool | None:
     if value is None or isinstance(value, bool):
         return value
     raise ValueError(f"[guard] check_entropy must be a boolean, got {value!r}")
+
+
+def coerce_fail_on_severity(value: Any) -> str:
+    """Validate that ``[guard] fail_on_severity`` is a string at config load.
+
+    A non-string value (``fail_on_severity = 123``) used to escape the guard
+    CLI's ``except ValueError`` as an ``AttributeError`` on ``.lower()`` — a
+    Rich traceback, empty ``--json`` stdout, and exit 1 colliding with
+    critical's code (#478). Reject non-strings with a clean ``ValueError``;
+    severity-name membership stays validated downstream (the guard CLI, which
+    also covers the ``--fail-on`` flag, and ``GuardConfig.from_dict``).
+    """
+    if isinstance(value, str):
+        return value
+    raise ValueError(f"[guard] fail_on_severity must be a severity string, got {value!r}")
 
 
 def normalize_ignore_rules(value: Any) -> dict[str, list[str]]:
@@ -458,7 +481,7 @@ def _build_guard_config(guard_section: dict[str, Any]) -> GuardConfig:
         # green false PASS or an uncaught traceback (#478).
         check_entropy=coerce_check_entropy(guard_section.get("check_entropy")),
         entropy_threshold=coerce_entropy_threshold(guard_section.get("entropy_threshold", 4.5)),
-        fail_on_severity=guard_section.get("fail_on_severity", "high"),
+        fail_on_severity=coerce_fail_on_severity(guard_section.get("fail_on_severity", "high")),
         skip_clear_files=guard_section.get("skip_clear_files", False),
         skip_encrypted_files=guard_section.get("skip_encrypted_files", True),
         skip_duplicate=guard_section.get("skip_duplicate", False),
