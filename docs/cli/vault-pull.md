@@ -204,10 +204,10 @@ a raw traceback. AWS not-found errors name the region that was searched (the
 client defaults to `us-east-1` when `--region` is omitted):
 
 ```text
-Error: Secret 'myapp-key' not found in azure vault
-Error: Secret 'myapp-key' not found in aws vault (region us-east-1)
-Error: Folder not found: ./services/typo
-Error: Cannot write services/myapp/.env.keys: [Errno 13] Permission denied: ...
+[ERROR] Secret 'myapp-key' not found in azure vault
+[ERROR] Secret 'myapp-key' not found in aws vault (region us-east-1)
+[ERROR] Folder not found: ./services/typo
+[ERROR] Cannot write services/myapp/.env.keys: [Errno 13] Permission denied: ...
 ```
 
 `FOLDER` must be an existing directory; it is validated before the secret is

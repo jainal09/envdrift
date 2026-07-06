@@ -1163,6 +1163,11 @@ environment = "production"
         env["PYTHONPATH"] = integration_pythonpath
         env["REQUESTS_CA_BUNDLE"] = str(lowkey_ca_bundle)
         env["SSL_CERT_FILE"] = str(lowkey_ca_bundle)
+        # azure_test_env disables challenge-resource verification so the other
+        # Lowkey tests can authenticate; re-enable it here ON PURPOSE -- this
+        # test exists to drive the SDK's challenge ValueError through the CLI
+        # (with it disabled, auth succeeds and the skip below always fires).
+        env["ENVDRIFT_AZURE_VERIFY_CHALLENGE_RESOURCE"] = "1"
 
         result = subprocess.run(
             [*envdrift_cmd, "sync", "--verify"],
