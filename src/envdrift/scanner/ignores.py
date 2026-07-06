@@ -79,7 +79,8 @@ class IgnoreConfig:
         """Create from TOML config dict.
 
         Args:
-            config: The full config dict (expects guard.ignore_paths, guard.ignore_rules).
+            config: The full config dict (expects guard.ignore_paths,
+                guard.ignore_rules, guard.noisy_rule_paths).
 
         Returns:
             IgnoreConfig instance.
@@ -88,6 +89,7 @@ class IgnoreConfig:
         return cls(
             ignore_paths=guard.get("ignore_paths", []),
             ignore_rules=guard.get("ignore_rules", {}),
+            noisy_rule_paths=guard.get("noisy_rule_paths", []),
         )
 
 

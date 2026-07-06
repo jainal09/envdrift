@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import dataclasses
 from pathlib import Path
 
 import pytest
@@ -140,6 +141,22 @@ class TestIgnoreConfig:
         config = IgnoreConfig.from_dict({"other": "value"})
         assert config.ignore_paths == []
         assert config.ignore_rules == {}
+
+    def test_from_dict_round_trips_noisy_rule_paths(self):
+        """#477 regression: from_dict must not drop noisy_rule_paths.
+
+        from_dict used to read only ignore_paths/ignore_rules, silently
+        discarding a configured noisy_rule_paths list; every field must
+        survive a full dict -> IgnoreConfig -> dict round trip.
+        """
+        guard = {
+            "ignore_paths": ["**/tests/**"],
+            "ignore_rules": {"ftp-password": ["**/*.json"]},
+            "noisy_rule_paths": ["pyproject.toml", "*.lock"],
+        }
+        config = IgnoreConfig.from_dict({"guard": guard})
+        assert config.noisy_rule_paths == ["pyproject.toml", "*.lock"]
+        assert dataclasses.asdict(config) == guard
 
 
 class TestIgnoreFilter:
