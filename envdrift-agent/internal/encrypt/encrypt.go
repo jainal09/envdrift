@@ -134,12 +134,37 @@ func isSOPSMetadataKey(key string) bool {
 	return sopsMetadataGroupKey.MatchString(key)
 }
 
-// unquoteValue strips surrounding whitespace and a single layer of matching
-// quotes, the two styles dotenv/SOPS emit (`"..."` and `'...'`).
+// unquoteValue strips surrounding whitespace, an inline `# comment` trailing a
+// quoted token, and a single layer of matching quotes, the two styles
+// dotenv/SOPS emit (`"..."` and `'...'`).
 func unquoteValue(value string) string {
-	v := strings.TrimSpace(value)
+	v := stripCommentAfterQuotedValue(strings.TrimSpace(value))
 	if isWrappedInMatchingQuotes(v) {
 		v = strings.TrimSpace(v[1 : len(v)-1])
+	}
+	return v
+}
+
+// stripCommentAfterQuotedValue drops an inline `# comment` that follows a
+// closed quoted token: dotenv allows `KEY="value" # note`, and the trailing
+// comment defeated the matching-quotes check, so quoted ciphertext with an
+// inline comment was misclassified as plaintext and the guardian re-ran
+// encrypt on the already-encrypted file every idle cycle. Only a comment (or
+// nothing) may follow the closing quote — any other trailing token leaves the
+// value untouched, so a malformed line still counts as plaintext (the safe
+// direction: the worst case is a redundant, idempotent re-encrypt).
+func stripCommentAfterQuotedValue(v string) string {
+	if len(v) < 2 || (v[0] != '"' && v[0] != '\'') {
+		return v
+	}
+	end := strings.IndexByte(v[1:], v[0])
+	if end < 0 {
+		return v
+	}
+	closing := 1 + end
+	rest := strings.TrimSpace(v[closing+1:])
+	if rest == "" || strings.HasPrefix(rest, "#") {
+		return v[:closing+1]
 	}
 	return v
 }

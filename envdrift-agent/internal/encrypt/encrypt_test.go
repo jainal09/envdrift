@@ -131,6 +131,37 @@ func TestIsEncrypted(t *testing.T) {
 				"DATABASE_URL=\"postgres://localhost:5432/db\"\n",
 			expected: false,
 		},
+		{
+			// #504 cubic review regression: an inline `# comment` after the
+			// closing quote defeated the matching-quotes check, so quoted
+			// ciphertext was misclassified as plaintext and the guardian
+			// re-encrypted the already-encrypted file every idle cycle.
+			name:     "quoted ciphertext with inline comment",
+			content:  "SECRET=\"encrypted:abc123\" # rotated 2026-06\n",
+			expected: true,
+		},
+		{
+			// The comment strip must not turn plaintext into ciphertext: a
+			// quoted plaintext value with an inline comment stays plaintext.
+			name:     "quoted plaintext with inline comment",
+			content:  "SECRET=\"hunter2\" # TODO rotate\n",
+			expected: false,
+		},
+		{
+			// Only a comment (or nothing) may follow the closing quote; any
+			// other trailing token is malformed and stays plaintext — the safe
+			// direction (worst case is an idempotent re-encrypt).
+			name:     "quoted ciphertext followed by non-comment token",
+			content:  "SECRET=\"encrypted:abc123\" trailing-junk\n",
+			expected: false,
+		},
+		{
+			// A quoted empty placeholder with an inline comment carries no
+			// secret, mirroring the bare `KEY=\"\"` case above.
+			name:     "empty quoted assignment with inline comment",
+			content:  "EMPTY=\"\" # placeholder\nSECRET=\"encrypted:abc123\"\n",
+			expected: true,
+		},
 	})
 }
 
@@ -168,6 +199,13 @@ func TestIsEncryptedSOPS(t *testing.T) {
 		{
 			name:     "fully encrypted SOPS file using AES256_CTR",
 			content:  "API_KEY=\"ENC[AES256_CTR,data:xyz,type:str]\"\n",
+			expected: true,
+		},
+		{
+			// #504 cubic review regression, SOPS flavor: an inline comment
+			// after the quoted ENC[...] token must not flip it to plaintext.
+			name:     "quoted SOPS ciphertext with inline comment",
+			content:  "API_KEY=\"ENC[AES256_GCM,data:xyz,type:str]\" # managed by sops\n",
 			expected: true,
 		},
 	})
