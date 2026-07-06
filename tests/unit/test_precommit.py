@@ -45,14 +45,14 @@ class TestHookEntry:
         """Test HOOK_ENTRY has correct structure."""
         assert HOOK_ENTRY["repo"] == "local"
         assert "hooks" in HOOK_ENTRY
-        assert len(HOOK_ENTRY["hooks"]) == 3
+        assert len(HOOK_ENTRY["hooks"]) == 2
 
-    def test_validate_hook_entry(self):
-        """Test envdrift-validate hook entry."""
+    def test_validate_hook_is_not_an_active_entry(self):
+        """The validate hook requires --schema, so it must not install as active (#493)."""
         hooks = cast(list[dict[str, Any]], HOOK_ENTRY["hooks"])
-        validate_hook = next(h for h in hooks if h["id"] == "envdrift-validate")
-        assert validate_hook["language"] == "system"
-        assert "validate" in validate_hook["entry"]
+        assert all(h["id"] != "envdrift-validate" for h in hooks)
+        # It ships as a commented example in the template instead.
+        assert "# - id: envdrift-validate" in HOOK_CONFIG
 
     def test_encryption_hook_entry(self):
         """Test envdrift-encryption hook entry."""
@@ -144,7 +144,7 @@ class TestInstallHooks:
         assert "local" in repo_ids
 
     def test_adds_to_existing_local_repo(self, tmp_path: Path):
-        """Test adds hooks to existing local repo."""
+        """Existing local hooks are kept; envdrift hooks land in their own local repo."""
 
         config_file = tmp_path / ".pre-commit-config.yaml"
         existing_config = {
@@ -159,10 +159,12 @@ class TestInstallHooks:
         with open(config_file) as f:
             updated_config = yaml.safe_load(f)
 
-        local_repo = next(r for r in updated_config["repos"] if r["repo"] == "local")
-        hook_ids = [h["id"] for h in local_repo["hooks"]]
+        hook_ids = [
+            h["id"] for r in updated_config["repos"] if r["repo"] == "local" for h in r["hooks"]
+        ]
         assert "custom-hook" in hook_ids
-        assert "envdrift-validate" in hook_ids
+        assert "envdrift-encryption" in hook_ids
+        assert "envdrift-guard" in hook_ids
 
     def test_adds_missing_envdrift_hook(self, tmp_path: Path):
         """Test adds missing envdrift hooks when some already exist."""
@@ -173,8 +175,8 @@ class TestInstallHooks:
                     "repo": "local",
                     "hooks": [
                         {
-                            "id": "envdrift-validate",
-                            "entry": "envdrift validate --ci",
+                            "id": "envdrift-encryption",
+                            "entry": "envdrift encrypt --check",
                             "language": "system",
                         }
                     ],
@@ -190,11 +192,13 @@ class TestInstallHooks:
         with open(config_file) as f:
             updated_config = yaml.safe_load(f)
 
-        local_repo = next(r for r in updated_config["repos"] if r["repo"] == "local")
-        hook_ids = [h["id"] for h in local_repo["hooks"]]
-        assert "envdrift-validate" in hook_ids
+        hook_ids = [
+            h["id"] for r in updated_config["repos"] if r["repo"] == "local" for h in r["hooks"]
+        ]
         assert "envdrift-encryption" in hook_ids
         assert "envdrift-guard" in hook_ids
+        # The pre-existing hook is not duplicated.
+        assert hook_ids.count("envdrift-encryption") == 1
 
     def test_raises_when_config_not_found_and_no_create(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -224,8 +228,8 @@ class TestInstallHooks:
                 if hook.get("id", "").startswith("envdrift-"):
                     envdrift_hooks.append(hook)
 
-        # Should only have 3 hooks (validate, encryption, guard), not 6
-        assert len(envdrift_hooks) == 3
+        # Should only have 2 active hooks (encryption, guard), not 4
+        assert len(envdrift_hooks) == 2
 
 
 class TestUninstallHooks:
@@ -281,7 +285,6 @@ class TestVerifyHooksInstalled:
 
         result = verify_hooks_installed(config_path=config_file)
 
-        assert result["envdrift-validate"] is True
         assert result["envdrift-encryption"] is True
         assert result["envdrift-guard"] is True
 
@@ -291,7 +294,6 @@ class TestVerifyHooksInstalled:
 
         result = verify_hooks_installed()
 
-        assert result["envdrift-validate"] is False
         assert result["envdrift-encryption"] is False
         assert result["envdrift-guard"] is False
 
@@ -303,7 +305,7 @@ class TestVerifyHooksInstalled:
             "repos": [
                 {
                     "repo": "local",
-                    "hooks": [{"id": "envdrift-validate", "entry": "envdrift validate"}],
+                    "hooks": [{"id": "envdrift-encryption", "entry": "envdrift encrypt --check"}],
                 }
             ]
         }
@@ -312,8 +314,7 @@ class TestVerifyHooksInstalled:
 
         result = verify_hooks_installed(config_path=config_file)
 
-        assert result["envdrift-validate"] is True
-        assert result["envdrift-encryption"] is False
+        assert result["envdrift-encryption"] is True
         assert result["envdrift-guard"] is False
 
     def test_malformed_yaml_reports_all_hooks_absent(self, tmp_path: Path):
