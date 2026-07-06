@@ -383,6 +383,7 @@ The `lock` command catches many edge cases and provides helpful warnings and err
 | Error               | Meaning                                                |
 |:--------------------|:-------------------------------------------------------|
 | `KEY MISMATCH`      | Local key differs from vault key - potential key drift |
+| `KEY UNUSABLE`      | The vault secret's key material is malformed or unusable - fix the vault secret shape |
 | `vault error`       | Failed to access or authenticate with the vault        |
 | `encryption failed` | The configured backend (dotenvx or SOPS) failed to encrypt the file |
 | `Key sync failed`   | Could not sync keys from vault                         |
