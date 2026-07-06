@@ -186,10 +186,12 @@ steps:
 - `envdrift encrypt <file>` to re-encrypt with the vault key
 
 !!! note "`--verify-vault` only verifies — it does not fetch the key"
-    This is a **read-only CI check**: it fetches the vault key, tests decryption in
-    a throwaway temp dir, and discards everything (the original file is *not*
-    decrypted and no `.env.keys` is written). To actually fetch a key onto a
-    machine and decrypt for use, see [`vault-pull`](vault-pull.md).
+    This is a **read-only CI check**: it fetches the vault key, tests decryption
+    against a byte-for-byte copy of the file in a throwaway temp dir, and discards
+    everything (the original file is *not* decrypted and no `.env.keys` is
+    written). The copy preserves the file exactly — encoding and line endings
+    included — on every platform. To actually fetch a key onto a machine and
+    decrypt for use, see [`vault-pull`](vault-pull.md).
 
 ## Error Handling
 
