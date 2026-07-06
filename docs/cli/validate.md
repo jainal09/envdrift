@@ -1,11 +1,11 @@
 # envdrift validate
 
-Validate an .env file against a Pydantic Settings schema.
+Validate one or more .env files against a Pydantic Settings schema.
 
 ## Synopsis
 
 ```bash
-envdrift validate [ENV_FILE] --schema SCHEMA [OPTIONS]
+envdrift validate [ENV_FILE]... --schema SCHEMA [OPTIONS]
 ```
 
 ## Description
@@ -33,11 +33,16 @@ Type validation mirrors what the real app does at startup:
   and the sensitive-name warning, so encrypted files validate cleanly against an
   `extra="forbid"` schema.
 
+Multiple env files can be validated in one invocation (each gets its own report;
+with `--ci` the exit code is 1 if any file fails). This keeps the command usable
+as a pre-commit `pass_filenames: true` hook, where every matched staged file is
+appended to a single command line.
+
 ## Arguments
 
-| Argument   | Description                       | Default |
-| :--------- | :-------------------------------- | :------ |
-| `ENV_FILE` | Path to the .env file to validate | `.env`  |
+| Argument        | Description                                      | Default |
+| :-------------- | :----------------------------------------------- | :------ |
+| `ENV_FILE`...   | Path(s) to the .env file(s) to validate          | `.env`  |
 
 ## Options
 
