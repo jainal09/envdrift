@@ -162,7 +162,7 @@ class TestEnvKeysFile:
         file = EnvKeysFile(env_keys)
         file.write_key("DOTENV_PRIVATE_KEY_PRODUCTION", "abc123")
 
-        content = env_keys.read_text()
+        content = env_keys.read_text(encoding="utf-8")
         assert "DOTENV_PRIVATE_KEYS" in content
         assert "DOTENV_PRIVATE_KEY_PRODUCTION=abc123" in content
         assert "# .env.production" in content
@@ -170,12 +170,14 @@ class TestEnvKeysFile:
     def test_write_key_preserves_header(self, tmp_path: Path) -> None:
         """Test writing key preserves existing header."""
         env_keys = tmp_path / ".env.keys"
-        env_keys.write_text(f"{DOTENVX_HEADER}\nDOTENV_PRIVATE_KEY_STAGING=old\n")
+        # The header contains "⛨" — pin utf-8 or the test's own setup dies
+        # with UnicodeEncodeError under Windows' cp1252 default codec.
+        env_keys.write_text(f"{DOTENVX_HEADER}\nDOTENV_PRIVATE_KEY_STAGING=old\n", encoding="utf-8")
 
         file = EnvKeysFile(env_keys)
         file.write_key("DOTENV_PRIVATE_KEY_PRODUCTION", "abc123")
 
-        content = env_keys.read_text()
+        content = env_keys.read_text(encoding="utf-8")
         assert "DOTENV_PRIVATE_KEYS" in content
         assert "DOTENV_PRIVATE_KEY_STAGING=old" in content
         assert "DOTENV_PRIVATE_KEY_PRODUCTION=abc123" in content
@@ -199,14 +201,15 @@ class TestEnvKeysFile:
         file = EnvKeysFile(env_keys)
         file.write_key("DOTENV_PRIVATE_KEY_STAGING", "abc123", environment="staging")
 
-        content = env_keys.read_text()
+        content = env_keys.read_text(encoding="utf-8")
         assert "# .env.staging" in content
         assert "DOTENV_PRIVATE_KEY_STAGING=abc123" in content
 
     def test_has_dotenvx_header_true(self, tmp_path: Path) -> None:
         """Test has_dotenvx_header returns True when header present."""
         env_keys = tmp_path / ".env.keys"
-        env_keys.write_text(f"{DOTENVX_HEADER}\nKEY=value\n")
+        # Pin utf-8: the header's "⛨" is unencodable under Windows cp1252.
+        env_keys.write_text(f"{DOTENVX_HEADER}\nKEY=value\n", encoding="utf-8")
 
         file = EnvKeysFile(env_keys)
 
@@ -661,8 +664,12 @@ def test_write_key_writes_utf8_header_under_ascii_locale(tmp_path: Path) -> None
     result = _run_under_ascii_locale(body)
 
     assert result.returncode == 0, result.stdout + result.stderr
-    # The bytes on disk are real UTF-8 with the full dotenvx header.
+    # The bytes on disk are real UTF-8 with the full dotenvx header, LF-only on
+    # every platform: dotenvx (Node.js) writes .env.keys with LF byte-exactly,
+    # and its Windows parser is known to choke on CRLF — atomic_write pins
+    # ``newline="\n"`` so Windows text mode cannot translate to CRLF.
     content = keys_path.read_bytes().decode("utf-8")
+    assert "\r" not in content
     assert content.startswith(DOTENVX_HEADER)
     assert "DOTENV_PRIVATE_KEY_PRODUCTION=" + "0" * 64 in content
 

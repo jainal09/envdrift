@@ -206,9 +206,13 @@ def atomic_write(path: Path, content: str, permissions: int = 0o600) -> None:
         # Pin UTF-8: ``os.fdopen`` in text mode otherwise uses the platform
         # default codec, and content can be non-ASCII (the dotenvx .env.keys
         # header contains "⛨") — under a non-UTF-8 locale (Windows cp1252,
-        # LC_ALL=C) the write would raise UnicodeEncodeError. dotenvx itself
-        # (Node.js) writes these files as UTF-8, so match it (#474).
-        with os.fdopen(fd, "w", encoding="utf-8") as tmp_file:
+        # LC_ALL=C) the write would raise UnicodeEncodeError. Pin LF newlines
+        # too: Windows text mode would otherwise translate "\n" to "\r\n", but
+        # dotenvx (Node.js) writes these files byte-exactly with LF on every
+        # platform, and its Windows parser is known to fail on CRLF ("Input
+        # string must contain hex characters" — the reason
+        # DotenvxWrapper._normalize_line_endings exists). Match dotenvx (#474).
+        with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as tmp_file:
             # ``os.fchmod`` applies to the fd we own, never a symlink target. It
             # is absent on Windows, where permission bits are largely a no-op.
             if hasattr(os, "fchmod"):
