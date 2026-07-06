@@ -1,24 +1,32 @@
 """Azure Key Vault integration tests.
 
-Tests the AzureKeyVaultClient against Lowkey Vault emulator.
-Requires: docker-compose -f tests/docker-compose.test.yml up -d
+Drives the real envdrift CLI and the Lowkey Vault emulator end to end.
+Requires: docker compose -f tests/docker-compose.test.yml up -d
 
-Test categories:
-- Direct client operations (get/set/list secrets)
-- CLI sync commands
-- CLI vault-push commands
-- Error handling (missing secrets)
+Regression #484: this lane previously skipped every test that touched the real
+backend (the seeding fixture sent no Authorization bearer, so Lowkey 401'd
+every seed, and the CLI subprocess could not pass Lowkey's self-signed TLS)
+while the suite stayed green. Real-backend tests now FAIL loudly instead of
+skipping when the running emulator cannot be driven; the only allowed skip is
+"the container is not running at all" (``lowkey_vault_endpoint``'s port gate).
 
-Note: Lowkey Vault requires special handling:
-- Uses self-signed certificates (SSL verification disabled)
-- Uses a simplified auth mechanism for testing
+How the lane drives Lowkey Vault:
+
+- TLS: the live container certificate is exported by the
+  ``lowkey_vault_ca_bundle`` conftest fixture and trusted explicitly —
+  verification is never disabled.
+- REST seeding: Lowkey accepts any bearer token, so the seeding session sends
+  a static dummy bearer (without one, Lowkey rejects every request as 401).
+- CLI auth: ``DefaultAzureCredential``'s IMDS managed-identity flow fetches a
+  dummy token from Lowkey's built-in token stub (HTTP, port 8080) via
+  ``AZURE_POD_IDENTITY_AUTHORITY_HOST`` (see ``azure_test_env`` in conftest).
 """
 
 from __future__ import annotations
 
 import contextlib
 import subprocess
-import sys
+import uuid
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -48,25 +56,153 @@ pytestmark = [
 ]
 
 
+# --- REST helpers (seed / verify / cleanup against the Lowkey API) ---------
+
+
+def _unique_name(prefix: str) -> str:
+    """Return a per-run unique secret name.
+
+    Lowkey implements Key Vault soft-delete with a non-purgeable recovery
+    level, so a name deleted by a previous run blocks re-creation (409).
+    Unique names keep runs independent of earlier residue.
+    """
+    return f"{prefix}-{uuid.uuid4().hex[:8]}"
+
+
+def _put_secret(session, endpoint: str, name: str, value: str):
+    """PUT a secret value, transparently recovering a soft-deleted name.
+
+    Key Vault (and Lowkey, faithfully) rejects re-creating a soft-deleted
+    secret with 409 until it is recovered/purged. This vault's recovery level
+    forbids purging, so on 409 we recover the name and PUT a new version.
+    """
+
+    def _do():
+        return session.put(
+            f"{endpoint}/secrets/{name}",
+            json={"value": value},
+            headers={"Content-Type": "application/json"},
+            params={"api-version": "7.4"},
+        )
+
+    response = _do()
+    if response.status_code == 409:
+        recover = session.post(
+            f"{endpoint}/deletedsecrets/{name}/recover",
+            params={"api-version": "7.4"},
+        )
+        # A failed recover would make the retried PUT 409 again and surface as
+        # a confusing seed assertion; fail here with the real cause instead.
+        assert recover.status_code in (200, 201), (
+            f"Recovering soft-deleted secret '{name}' failed: "
+            f"HTTP {recover.status_code} {recover.text[:200]}"
+        )
+        response = _do()
+    return response
+
+
+def _seed_secret(session, endpoint: str, name: str, value: str) -> None:
+    """Seed a secret directly via the Lowkey REST API.
+
+    Asserts (never skips) on failure: a rejected seed means the running
+    backend cannot be driven, which must fail the lane (#484).
+    """
+    put = _put_secret(session, endpoint, name, value)
+    assert put.status_code in (200, 201), (
+        f"Seeding '{name}' against the running Lowkey Vault failed: "
+        f"HTTP {put.status_code} {put.text[:200]}"
+    )
+
+
+def _delete_secret(session, endpoint: str, name: str) -> None:
+    """Best-effort REST cleanup of a seeded secret (soft-delete)."""
+    with contextlib.suppress(Exception):
+        session.delete(
+            f"{endpoint}/secrets/{name}",
+            params={"api-version": "7.4"},
+        )
+
+
+class _StubResponse:
+    def __init__(self, status_code: int, text: str = ""):
+        self.status_code = status_code
+        self.text = text
+
+
+class _StubSession:
+    """Scripted requests.Session stand-in for the seeding helpers.
+
+    Needs no container: it replays canned responses so ``_put_secret``'s
+    409 -> recover -> retry control flow can be pinned down, including the
+    recovery-failure path.
+    """
+
+    def __init__(self, put_responses: list[_StubResponse], recover_response: _StubResponse):
+        self._puts = list(put_responses)
+        self._recover = recover_response
+        self.put_calls = 0
+        self.recover_calls = 0
+
+    def put(self, url: str, **kwargs) -> _StubResponse:
+        self.put_calls += 1
+        return self._puts.pop(0)
+
+    def post(self, url: str, **kwargs) -> _StubResponse:
+        self.recover_calls += 1
+        return self._recover
+
+
+class TestPutSecretRecovery:
+    """``_put_secret``'s soft-delete recovery must fail loudly, not confusingly.
+
+    Regression for a #522 review finding: the recover POST response used to be
+    discarded, so a failed recover made the retried PUT 409 again and the seed
+    assertion blamed the PUT instead of the recovery.
+    """
+
+    def test_failed_recover_surfaces_recovery_error(self):
+        session = _StubSession(
+            put_responses=[_StubResponse(409, "conflict")],
+            recover_response=_StubResponse(403, "recovery forbidden"),
+        )
+        with pytest.raises(AssertionError, match="Recovering soft-deleted secret 'residue'"):
+            _put_secret(session, "https://localhost:8443", "residue", "v")
+        assert session.put_calls == 1  # no blind PUT retry after a failed recover
+
+    def test_successful_recover_retries_put(self):
+        session = _StubSession(
+            put_responses=[_StubResponse(409, "conflict"), _StubResponse(200)],
+            recover_response=_StubResponse(200),
+        )
+        response = _put_secret(session, "https://localhost:8443", "residue", "v")
+        assert response.status_code == 200
+        assert session.recover_calls == 1
+        assert session.put_calls == 2
+
+
 # --- Fixtures ---
 
 
 @pytest.fixture(scope="module")
-def lowkey_vault_client(lowkey_vault_endpoint: str):
-    """Create a requests session for Lowkey Vault API.
+def lowkey_vault_client(lowkey_vault_endpoint: str, lowkey_vault_ca_bundle: Path):
+    """Create an authenticated requests session for the Lowkey Vault API.
 
-    Lowkey Vault provides a REST API compatible with Azure Key Vault.
-    We use requests directly since the Azure SDK requires real Azure auth.
+    Lowkey Vault provides a REST API compatible with Azure Key Vault. We use
+    requests directly for seeding/verification so the tests can observe the
+    vault independently of the envdrift CLI under test.
+
+    - TLS: trusts the live container's exported certificate (verification
+      stays ON — never disabled).
+    - Auth: Lowkey accepts any bearer token; without one it rejects every
+      request as 401, which used to turn the whole lane into silent skips
+      (#484). The dummy bearer is not a credential (built by concatenation to
+      stay clear of secret-literal push protection).
     """
     import requests
 
     session = requests.Session()
-    session.verify = False  # Lowkey Vault uses self-signed certs
-
-    # Suppress SSL warnings for cleaner test output
-    import urllib3
-
-    urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+    session.verify = str(lowkey_vault_ca_bundle)
+    session.headers["Authorization"] = "Bearer " + "lowkey-vault-" + "integration-tests"
 
     return session, lowkey_vault_endpoint
 
@@ -79,10 +215,12 @@ def populated_azure_secrets(lowkey_vault_client) -> Generator[dict[str, str], No
     - dotenv-key-production: DOTENV_PRIVATE_KEY_PRODUCTION
     - dotenv-key-staging: DOTENV_PRIVATE_KEY_STAGING
     - api-key-shared: API_KEY value
+
+    A failed seed FAILS the lane (it never skips): a backend that rejects the
+    seeding requests previously turned every azure test into a silent skip
+    while the suite stayed green (#484).
     """
     session, endpoint = lowkey_vault_client
-
-    base_url = f"{endpoint}/secrets"
 
     secrets = {
         "dotenv-key-production": "DOTENV_PRIVATE_KEY_PRODUCTION=prod-key-abc123",
@@ -90,85 +228,55 @@ def populated_azure_secrets(lowkey_vault_client) -> Generator[dict[str, str], No
         "api-key-shared": "API_KEY=secret123",
     }
 
-    # Create secrets via REST API
+    # Create secrets via REST API (a failed seed fails the lane, see #484)
     for name, value in secrets.items():
-        try:
-            response = session.put(
-                f"{base_url}/{name}",
-                json={"value": value},
-                headers={"Content-Type": "application/json"},
-                params={"api-version": "7.4"},
-            )
-            # Lowkey Vault may return various status codes
-            if response.status_code not in (200, 201, 204):
-                pytest.skip(f"Failed to create secret {name}: {response.status_code}")
-        except Exception as e:
-            pytest.skip(f"Cannot connect to Lowkey Vault: {e}")
+        _seed_secret(session, endpoint, name, value)
 
     yield secrets
 
     # Cleanup - delete secrets
     for name in secrets:
-        with contextlib.suppress(Exception):
-            session.delete(
-                f"{base_url}/{name}",
-                params={"api-version": "7.4"},
-            )
+        _delete_secret(session, endpoint, name)
 
 
 # --- Direct Client Tests ---
 
 
 class TestAzureClientDirect:
-    """Test AzureKeyVaultClient direct operations.
+    """Exercise Lowkey Vault's Azure-compatible REST API directly.
 
-    Note: These tests use mocked Azure credentials since Lowkey Vault
-    doesn't fully support the Azure SDK's DefaultAzureCredential.
-    We test the client logic by mocking the underlying SecretClient.
+    These drive the same HTTP API the Azure SDK uses, via an authenticated
+    ``requests`` session (Lowkey accepts any bearer token).
     """
 
     def test_azure_get_secret(self, lowkey_vault_client, populated_azure_secrets):
         """Test retrieving a secret from Azure Key Vault."""
         session, endpoint = lowkey_vault_client
 
-        # Use REST API directly since Azure SDK requires real credentials
         response = session.get(
             f"{endpoint}/secrets/dotenv-key-production",
             params={"api-version": "7.4"},
         )
 
-        if response.status_code == 200:
-            data = response.json()
-            assert "value" in data
-            assert "DOTENV_PRIVATE_KEY_PRODUCTION" in data["value"]
-        else:
-            # Lowkey Vault may have different behavior
-            pytest.skip(f"Lowkey Vault returned {response.status_code}")
+        assert response.status_code == 200, response.text
+        data = response.json()
+        assert "value" in data
+        assert "DOTENV_PRIVATE_KEY_PRODUCTION" in data["value"]
 
     def test_azure_set_secret(self, lowkey_vault_client):
         """Test creating/updating a secret in Azure Key Vault."""
         session, endpoint = lowkey_vault_client
+        secret_name = _unique_name("test-new-secret")
 
         # Create a new secret
-        response = session.put(
-            f"{endpoint}/secrets/test-new-secret",
-            json={"value": "my-secret-value"},
-            headers={"Content-Type": "application/json"},
-            params={"api-version": "7.4"},
-        )
+        response = _put_secret(session, endpoint, secret_name, "my-secret-value")
 
-        if response.status_code in (200, 201):
+        try:
+            assert response.status_code in (200, 201), response.text
             data = response.json()
             assert data.get("value") == "my-secret-value"
-
-            # Cleanup
-            with contextlib.suppress(Exception):
-                session.delete(
-                    f"{endpoint}/secrets/test-new-secret",
-                    params={"api-version": "7.4"},
-                )
-        else:
-            pytest.skip(f"Lowkey Vault returned {response.status_code}")
+        finally:
+            _delete_secret(session, endpoint, secret_name)
 
     def test_azure_list_secrets(self, lowkey_vault_client, populated_azure_secrets):
         """Test listing secrets in Azure Key Vault."""
@@ -179,15 +287,19 @@ class TestAzureClientDirect:
             params={"api-version": "7.4"},
         )
 
-        if response.status_code == 200:
-            data = response.json()
-            # Response should contain list of secrets
-            assert "value" in data or isinstance(data, list)
-        else:
-            pytest.skip(f"Lowkey Vault returned {response.status_code}")
+        assert response.status_code == 200, response.text
+        data = response.json()
+        assert "value" in data, data
+        listed = {item.get("id", "") for item in data["value"]}
+        assert any("dotenv-key-production" in secret_id for secret_id in listed), data
 
     def test_azure_secret_not_found(self, lowkey_vault_client):
-        """Test graceful handling of missing secrets."""
+        """Test graceful handling of missing secrets.
+
+        404 only: the pre-#484 version also accepted 401, which let this test
+        "pass" against a vault that was rejecting every request as
+        unauthenticated.
+        """
         session, endpoint = lowkey_vault_client
 
         response = session.get(
@@ -195,16 +307,14 @@ class TestAzureClientDirect:
             params={"api-version": "7.4"},
         )
 
-        # Should return error for missing secrets
-        # Lowkey Vault 7.x may return 401 (unauthorized) or 404 (not found)
-        assert response.status_code in (401, 404, 400)
+        assert response.status_code == 404, response.text
 
 
-# --- Azure SDK Client Tests (with mocked credentials) ---
+# --- Azure SDK Client Tests (no backend required) ---
 
 
 class TestAzureSDKClient:
-    """Test AzureKeyVaultClient with mocked Azure credentials."""
+    """Test AzureKeyVaultClient constructor behaviour (no vault calls)."""
 
     def test_azure_client_initialization(self):
         """Test that AzureKeyVaultClient can be initialized."""
@@ -226,203 +336,8 @@ class TestAzureSDKClient:
         assert client.is_authenticated() is False
 
 
-# --- CLI Sync Command Tests ---
-
-
-class TestAzureSyncCommand:
-    """Test CLI sync commands with Azure Key Vault."""
-
-    def test_azure_sync_pull_secret(
-        self,
-        lowkey_vault_endpoint: str,
-        azure_test_env: dict,
-        lowkey_vault_client,
-        populated_azure_secrets: dict,
-        work_dir: Path,
-        integration_pythonpath: str,
-    ):
-        """Test pulling a secret from Azure Key Vault via CLI."""
-        # Create pyproject.toml with azure vault config
-        pyproject = work_dir / "pyproject.toml"
-        pyproject.write_text(f'''
-[tool.envdrift]
-vault_backend = "azure"
-vault_url = "{lowkey_vault_endpoint}"
-vault_key_path = "dotenv-key-production"
-''')
-
-        # Create empty .env.keys file
-        env_keys = work_dir / ".env.keys"
-        env_keys.write_text("")
-
-        # Run envdrift pull
-        env = azure_test_env.copy()
-        env["PYTHONPATH"] = integration_pythonpath
-        # Disable SSL verification for Lowkey Vault
-        env["CURL_CA_BUNDLE"] = ""
-        env["REQUESTS_CA_BUNDLE"] = ""
-
-        result = subprocess.run(
-            [sys.executable, "-m", "envdrift", "pull"],
-            cwd=work_dir,
-            env=env,
-            capture_output=True,
-            text=True,
-            timeout=30,
-        )
-
-        # Check that pull attempted - may fail due to auth but shouldn't crash
-        assert result.returncode in (0, 1)
-
-
-# --- CLI Vault Push Command Tests ---
-
-
-class TestAzureVaultPush:
-    """Test CLI vault-push commands with Azure Key Vault."""
-
-    def test_azure_vault_push_secret(
-        self,
-        lowkey_vault_endpoint: str,
-        azure_test_env: dict,
-        lowkey_vault_client,
-        work_dir: Path,
-        integration_pythonpath: str,
-    ):
-        """Test pushing a secret to Azure Key Vault via CLI."""
-        # Create pyproject.toml with azure vault config
-        pyproject = work_dir / "pyproject.toml"
-        pyproject.write_text(f'''
-[tool.envdrift]
-vault_backend = "azure"
-vault_url = "{lowkey_vault_endpoint}"
-vault_key_path = "test-pushed-secret"
-''')
-
-        # Create .env.keys file with content to push
-        env_keys = work_dir / ".env.keys"
-        env_keys.write_text("DOTENV_PRIVATE_KEY=test-key-from-push\n")
-
-        # Run envdrift vault-push
-        env = azure_test_env.copy()
-        env["PYTHONPATH"] = integration_pythonpath
-        env["CURL_CA_BUNDLE"] = ""
-        env["REQUESTS_CA_BUNDLE"] = ""
-
-        result = subprocess.run(
-            [sys.executable, "-m", "envdrift", "vault-push"],
-            cwd=work_dir,
-            env=env,
-            capture_output=True,
-            text=True,
-            timeout=30,
-        )
-
-        # Check result - may fail due to auth but shouldn't crash
-        assert result.returncode in (0, 1)
-
-        # Cleanup if secret was created
-        session, endpoint = lowkey_vault_client
-        with contextlib.suppress(Exception):
-            session.delete(
-                f"{endpoint}/secrets/test-pushed-secret",
-                params={"api-version": "7.4"},
-            )
-
-
-class TestAzureVaultPull:
-    """Test CLI vault-pull commands with Azure Key Vault."""
-
-    def test_azure_vault_pull_round_trip(
-        self,
-        lowkey_vault_endpoint: str,
-        azure_test_env: dict,
-        lowkey_vault_client,
-        work_dir: Path,
-        integration_pythonpath: str,
-        envdrift_cmd: list[str],
-    ):
-        """Seed a secret directly, then fetch it back via `envdrift vault-pull`."""
-        session, endpoint = lowkey_vault_client
-        secret_name = "test-pull-secret"
-        stored_value = "DOTENV_PRIVATE_KEY_PRODUCTION=pulledkey123"
-
-        # Seed the secret directly via the vault REST API
-        put = session.put(
-            f"{endpoint}/secrets/{secret_name}",
-            json={"value": stored_value},
-            headers={"Content-Type": "application/json"},
-            params={"api-version": "7.4"},
-        )
-        if put.status_code not in (200, 201):
-            pytest.skip(f"Lowkey Vault returned {put.status_code} on seed")
-
-        try:
-            env = azure_test_env.copy()
-            env["PYTHONPATH"] = integration_pythonpath
-            env["CURL_CA_BUNDLE"] = ""
-            env["REQUESTS_CA_BUNDLE"] = ""
-
-            # Use the real console-script entrypoint (there is no envdrift.__main__,
-            # so `python -m envdrift` would exit before dispatching). --no-decrypt:
-            # we only assert the key is written back.
-            result = subprocess.run(
-                [
-                    *envdrift_cmd,
-                    "vault-pull",
-                    str(work_dir),
-                    secret_name,
-                    "--env",
-                    "production",
-                    "--no-decrypt",
-                    "-p",
-                    "azure",
-                    "--vault-url",
-                    lowkey_vault_endpoint,
-                ],
-                cwd=work_dir,
-                env=env,
-                capture_output=True,
-                text=True,
-                timeout=30,
-            )
-
-            combined = result.stdout + result.stderr
-            # The CLI must actually dispatch — a missing entrypoint / import error
-            # would make this test vacuous, so fail loudly on those.
-            assert "No module named" not in combined, combined
-            assert "is a package and cannot be directly executed" not in combined, combined
-
-            if result.returncode == 0:
-                # Real success: the seeded key was fetched and written.
-                keys_content = (work_dir / ".env.keys").read_text()
-                assert "DOTENV_PRIVATE_KEY_PRODUCTION=pulledkey123" in keys_content
-            else:
-                # DefaultAzureCredential can't authenticate against Lowkey Vault in
-                # CI; skip visibly rather than passing vacuously. Still confirms the
-                # command ran far enough to attempt the vault call.
-                assert "vault" in combined.lower() or "credential" in combined.lower(), combined
-                pytest.skip(
-                    f"vault-pull could not authenticate against Lowkey Vault: {combined[:200]}"
-                )
-        finally:
-            with contextlib.suppress(Exception):
-                session.delete(
-                    f"{endpoint}/secrets/{secret_name}",
-                    params={"api-version": "7.4"},
-                )
-
-
 # ---------------------------------------------------------------------------
-# Additional coverage: vault-push / vault-pull CLI behaviour and the real
-# Azure vault factory / client.  Authored from the test_azure_integration.py
-# package plan.  All tests are GREEN-OR-GATED:
-#   * path/argument validation tests fail fast inside the CLI (before any
-#     vault auth) and are deterministic PASS on this machine and in CI;
-#   * round-trip tests talk to the live Lowkey emulator and SKIP visibly when
-#     DefaultAzureCredential cannot authenticate against it.
-# Secret names are prefixed with the test name so concurrent / repeat runs
-# never collide, and every seeded secret is REST-deleted in a finally block.
+# CLI helpers
 # ---------------------------------------------------------------------------
 
 
@@ -438,13 +353,12 @@ def _run_cli(
 
     Uses the installed console entrypoint (``envdrift_cmd``) rather than
     ``python -m envdrift`` because there is no ``envdrift.__main__`` and the
-    package cannot be executed directly.
+    package cannot be executed directly. ``env`` is expected to be (a copy of)
+    ``azure_test_env``, which carries the Lowkey CA bundle and the
+    managed-identity token-stub configuration.
     """
     run_env = env.copy()
     run_env["PYTHONPATH"] = integration_pythonpath
-    # Lowkey Vault uses self-signed certs.
-    run_env["CURL_CA_BUNDLE"] = ""
-    run_env["REQUESTS_CA_BUNDLE"] = ""
     return subprocess.run(
         [*envdrift_cmd, *args],
         cwd=cwd,
@@ -461,52 +375,185 @@ def _assert_dispatched(combined: str) -> None:
     assert "is a package and cannot be directly executed" not in combined, combined
 
 
-def _seed_secret(session, endpoint: str, name: str, value: str) -> None:
-    """Seed a secret directly via the Lowkey REST API or skip on failure."""
-    put = session.put(
-        f"{endpoint}/secrets/{name}",
-        json={"value": value},
-        headers={"Content-Type": "application/json"},
-        params={"api-version": "7.4"},
-    )
-    if put.status_code not in (200, 201):
-        pytest.skip(f"Lowkey Vault returned {put.status_code} on seed of {name}")
+# --- CLI sync `pull` (config-driven, real backend) --------------------------
 
 
-def _delete_secret(session, endpoint: str, name: str) -> None:
-    """Best-effort REST cleanup of a seeded secret."""
-    with contextlib.suppress(Exception):
-        session.delete(
-            f"{endpoint}/secrets/{name}",
-            params={"api-version": "7.4"},
+class TestAzureSyncCommand:
+    """The config-driven `envdrift pull` command against the real backend."""
+
+    def test_pull_syncs_key_from_azure_vault(
+        self,
+        lowkey_vault_endpoint: str,
+        azure_test_env: dict,
+        lowkey_vault_client,
+        work_dir: Path,
+        integration_pythonpath: str,
+        envdrift_cmd: list[str],
+    ):
+        """`envdrift pull` reads [vault.sync], fetches the seeded secret and writes .env.keys.
+
+        Replaces a pre-#484 test that ran ``python -m envdrift`` (which cannot
+        dispatch) and accepted ``returncode in (0, 1)``, i.e. asserted nothing.
+        """
+        session, endpoint = lowkey_vault_client
+        secret_name = _unique_name("test-sync-pull-azure")
+        _seed_secret(
+            session,
+            endpoint,
+            secret_name,
+            "DOTENV_PRIVATE_KEY_PRODUCTION=syncpullkey123",
         )
 
+        (work_dir / "envdrift.toml").write_text(
+            f"""\
+[vault]
+provider = "azure"
 
-def _looks_like_auth_failure(combined: str) -> bool:
-    """Heuristic: did the command fail specifically because of AUTHENTICATION?
+[vault.azure]
+vault_url = "{lowkey_vault_endpoint}"
 
-    Matches concrete auth signatures only. A blanket ``"vault"`` match would also
-    swallow non-auth regressions (``--vault-url`` handling bugs, Lowkey 4xx/5xx,
-    generic CLI errors that merely mention the vault), turning real failures into
-    skips. Keep this to explicit authentication signals.
-    """
-    low = combined.lower()
-    auth_signatures = (
-        "authentication failed",
-        "failed to authenticate",
-        "could not authenticate",
-        "unable to authenticate",
-        "authenticationerror",
-        "invalid credential",
-        "credential",
-        "defaultazurecredential",
-        "unauthorized",
-        "access denied",
-        "forbidden",
-        " 401",
-        " 403",
-    )
-    return any(sig in low for sig in auth_signatures)
+[[vault.sync.mappings]]
+secret_name = "{secret_name}"
+folder_path = "."
+environment = "production"
+""",
+            encoding="utf-8",
+        )
+        # The sync engine only processes mappings whose env file exists; a
+        # minimal dotenvx-style encrypted file makes the mapping eligible
+        # (mirrors the AWS lane's `pull` fixture).
+        (work_dir / ".env.production").write_text(
+            'DOTENV_PUBLIC_KEY_PRODUCTION="034a5e"\nDATABASE_URL="encrypted:abc123"\n',
+            encoding="utf-8",
+        )
+
+        try:
+            result = _run_cli(
+                envdrift_cmd,
+                ["pull"],
+                cwd=work_dir,
+                env=azure_test_env,
+                integration_pythonpath=integration_pythonpath,
+            )
+            combined = result.stdout + result.stderr
+            _assert_dispatched(combined)
+            assert result.returncode == 0, combined
+
+            keys_content = (work_dir / ".env.keys").read_text(encoding="utf-8")
+            assert "DOTENV_PRIVATE_KEY_PRODUCTION=syncpullkey123" in keys_content
+        finally:
+            _delete_secret(session, endpoint, secret_name)
+
+
+# --- CLI vault-push / vault-pull resolving the vault from config ------------
+
+
+class TestAzureVaultConfigResolution:
+    """vault-push/vault-pull resolve provider + vault_url from envdrift.toml."""
+
+    def test_vault_push_uses_vault_url_from_config(
+        self,
+        lowkey_vault_endpoint: str,
+        azure_test_env: dict,
+        lowkey_vault_client,
+        work_dir: Path,
+        integration_pythonpath: str,
+        envdrift_cmd: list[str],
+    ):
+        """vault-push with no -p/--vault-url flags reads [vault]/[vault.azure] config.
+
+        Replaces a pre-#484 test that ran ``python -m envdrift`` (which cannot
+        dispatch) and accepted ``returncode in (0, 1)``, i.e. asserted nothing.
+        """
+        session, endpoint = lowkey_vault_client
+        secret_name = _unique_name("test-push-from-config")
+
+        (work_dir / "envdrift.toml").write_text(
+            f"""\
+[vault]
+provider = "azure"
+
+[vault.azure]
+vault_url = "{lowkey_vault_endpoint}"
+""",
+            encoding="utf-8",
+        )
+        (work_dir / ".env.keys").write_text(
+            "DOTENV_PRIVATE_KEY_PRODUCTION=configpushkey123\n", encoding="utf-8"
+        )
+
+        try:
+            result = _run_cli(
+                envdrift_cmd,
+                ["vault-push", str(work_dir), secret_name, "--env", "production"],
+                cwd=work_dir,
+                env=azure_test_env,
+                integration_pythonpath=integration_pythonpath,
+            )
+            combined = result.stdout + result.stderr
+            _assert_dispatched(combined)
+            assert result.returncode == 0, combined
+            assert "Pushed" in combined, combined
+
+            # REST-verify the stored value round-tripped verbatim.
+            resp = session.get(
+                f"{endpoint}/secrets/{secret_name}",
+                params={"api-version": "7.4"},
+            )
+            assert resp.status_code == 200, resp.text
+            assert resp.json().get("value") == "DOTENV_PRIVATE_KEY_PRODUCTION=configpushkey123"
+        finally:
+            _delete_secret(session, endpoint, secret_name)
+
+
+class TestAzureVaultPull:
+    """Test CLI vault-pull commands with Azure Key Vault."""
+
+    def test_azure_vault_pull_round_trip(
+        self,
+        lowkey_vault_endpoint: str,
+        azure_test_env: dict,
+        lowkey_vault_client,
+        work_dir: Path,
+        integration_pythonpath: str,
+        envdrift_cmd: list[str],
+    ):
+        """Seed a secret directly, then fetch it back via `envdrift vault-pull`."""
+        session, endpoint = lowkey_vault_client
+        secret_name = _unique_name("test-pull-secret")
+        stored_value = "DOTENV_PRIVATE_KEY_PRODUCTION=pulledkey123"
+
+        _seed_secret(session, endpoint, secret_name, stored_value)
+
+        try:
+            # --no-decrypt: we only assert the key is written back.
+            result = _run_cli(
+                envdrift_cmd,
+                [
+                    "vault-pull",
+                    str(work_dir),
+                    secret_name,
+                    "--env",
+                    "production",
+                    "--no-decrypt",
+                    "-p",
+                    "azure",
+                    "--vault-url",
+                    lowkey_vault_endpoint,
+                ],
+                cwd=work_dir,
+                env=azure_test_env,
+                integration_pythonpath=integration_pythonpath,
+            )
+
+            combined = result.stdout + result.stderr
+            _assert_dispatched(combined)
+            assert result.returncode == 0, combined
+
+            keys_content = (work_dir / ".env.keys").read_text(encoding="utf-8")
+            assert "DOTENV_PRIVATE_KEY_PRODUCTION=pulledkey123" in keys_content
+        finally:
+            _delete_secret(session, endpoint, secret_name)
 
 
 # --- CLI argument / path validation (deterministic, no vault auth) ---------
@@ -524,7 +571,7 @@ class TestAzureVaultArgValidation:
     ):
         """BP-09: single-service push with no --provider and no config exits 1."""
         env_keys = work_dir / ".env.keys"
-        env_keys.write_text("DOTENV_PRIVATE_KEY_PRODUCTION=somekey\n")
+        env_keys.write_text("DOTENV_PRIVATE_KEY_PRODUCTION=somekey\n", encoding="utf-8")
 
         result = _run_cli(
             envdrift_cmd,
@@ -553,7 +600,7 @@ class TestAzureVaultArgValidation:
     ):
         """BP-08: -p azure without --vault-url and no config exits 1."""
         env_keys = work_dir / ".env.keys"
-        env_keys.write_text("DOTENV_PRIVATE_KEY_PRODUCTION=somekey\n")
+        env_keys.write_text("DOTENV_PRIVATE_KEY_PRODUCTION=somekey\n", encoding="utf-8")
 
         # azure_test_env sets AZURE_KEYVAULT_URL but the CLI only reads --vault-url
         # / config for the *effective* vault url, so this still trips the guard.
@@ -622,6 +669,7 @@ class TestAzureVaultFactory:
             "MSI_ENDPOINT",
             "IDENTITY_ENDPOINT",
             "AZURE_FEDERATED_TOKEN_FILE",
+            "AZURE_POD_IDENTITY_AUTHORITY_HOST",
         ):
             monkeypatch.delenv(var, raising=False)
         # Force the managed-identity / IMDS and CLI probes to fail fast.
@@ -655,7 +703,10 @@ class TestAzureVaultFactory:
             pytest.skip("authenticate() unexpectedly succeeded (ambient Azure credentials)")
 
 
-# --- Round-trip against the live Lowkey emulator (GREEN-OR-GATED) ----------
+# --- Round-trip against the live Lowkey emulator ----------------------------
+# These previously skipped on any auth failure, which (combined with the
+# broken fixture auth/TLS) made the whole class green-by-skip (#484). They now
+# assert success outright: when the container is up, the CLI must round-trip.
 
 
 class TestAzureVaultRoundTrip:
@@ -672,13 +723,14 @@ class TestAzureVaultRoundTrip:
     ):
         """HP-06: single-service push reads .env.keys and set_secret against Lowkey."""
         session, endpoint = lowkey_vault_client
-        secret_name = "test-push-single-roundtrip"
+        secret_name = _unique_name("test-push-single-roundtrip")
 
         env_keys = work_dir / ".env.keys"
         env_keys.write_text(
             "#/ DOTENV_PRIVATE_KEYS /\n"
             "# .env.production\n"
-            "DOTENV_PRIVATE_KEY_PRODUCTION=prodkey-xyz\n"
+            "DOTENV_PRIVATE_KEY_PRODUCTION=prodkey-xyz\n",
+            encoding="utf-8",
         )
 
         try:
@@ -701,19 +753,16 @@ class TestAzureVaultRoundTrip:
             )
             combined = result.stdout + result.stderr
             _assert_dispatched(combined)
+            assert result.returncode == 0, combined
+            assert "Pushed" in combined, combined
 
-            if result.returncode == 0:
-                assert "Pushed" in combined, combined
-                # REST-verify the stored value round-tripped verbatim.
-                resp = session.get(
-                    f"{endpoint}/secrets/{secret_name}",
-                    params={"api-version": "7.4"},
-                )
-                assert resp.status_code == 200, resp.text
-                assert resp.json().get("value") == "DOTENV_PRIVATE_KEY_PRODUCTION=prodkey-xyz"
-            else:
-                assert _looks_like_auth_failure(combined), combined
-                pytest.skip(f"vault-push could not authenticate against Lowkey: {combined[:200]}")
+            # REST-verify the stored value round-tripped verbatim.
+            resp = session.get(
+                f"{endpoint}/secrets/{secret_name}",
+                params={"api-version": "7.4"},
+            )
+            assert resp.status_code == 200, resp.text
+            assert resp.json().get("value") == "DOTENV_PRIVATE_KEY_PRODUCTION=prodkey-xyz"
         finally:
             _delete_secret(session, endpoint, secret_name)
 
@@ -728,7 +777,7 @@ class TestAzureVaultRoundTrip:
     ):
         """HP-07: vault-push --direct stores a raw key=value verbatim in Lowkey."""
         session, endpoint = lowkey_vault_client
-        secret_name = "test-direct-roundtrip"
+        secret_name = _unique_name("test-direct-roundtrip")
         raw_value = "DOTENV_PRIVATE_KEY_SOAK=abc123"
 
         try:
@@ -750,20 +799,15 @@ class TestAzureVaultRoundTrip:
             )
             combined = result.stdout + result.stderr
             _assert_dispatched(combined)
+            assert result.returncode == 0, combined
+            assert "Pushed" in combined, combined
 
-            if result.returncode == 0:
-                assert "Pushed" in combined, combined
-                resp = session.get(
-                    f"{endpoint}/secrets/{secret_name}",
-                    params={"api-version": "7.4"},
-                )
-                assert resp.status_code == 200, resp.text
-                assert resp.json().get("value") == raw_value
-            else:
-                assert _looks_like_auth_failure(combined), combined
-                pytest.skip(
-                    f"vault-push --direct could not authenticate against Lowkey: {combined[:200]}"
-                )
+            resp = session.get(
+                f"{endpoint}/secrets/{secret_name}",
+                params={"api-version": "7.4"},
+            )
+            assert resp.status_code == 200, resp.text
+            assert resp.json().get("value") == raw_value
         finally:
             _delete_secret(session, endpoint, secret_name)
 
@@ -778,7 +822,7 @@ class TestAzureVaultRoundTrip:
     ):
         """HP-09: vault-pull --no-decrypt writes only .env.keys, never .env.production."""
         session, endpoint = lowkey_vault_client
-        secret_name = "test-pull-nodecrypt-keyonly"
+        secret_name = _unique_name("test-pull-nodecrypt-keyonly")
         _seed_secret(
             session,
             endpoint,
@@ -807,15 +851,12 @@ class TestAzureVaultRoundTrip:
             )
             combined = result.stdout + result.stderr
             _assert_dispatched(combined)
+            assert result.returncode == 0, combined
 
-            if result.returncode == 0:
-                keys_content = (work_dir / ".env.keys").read_text()
-                assert "DOTENV_PRIVATE_KEY_PRODUCTION=pulledkey123" in keys_content
-                # --no-decrypt must never touch the .env.production file.
-                assert not (work_dir / ".env.production").exists()
-            else:
-                assert _looks_like_auth_failure(combined), combined
-                pytest.skip(f"vault-pull could not authenticate against Lowkey: {combined[:200]}")
+            keys_content = (work_dir / ".env.keys").read_text(encoding="utf-8")
+            assert "DOTENV_PRIVATE_KEY_PRODUCTION=pulledkey123" in keys_content
+            # --no-decrypt must never touch the .env.production file.
+            assert not (work_dir / ".env.production").exists()
         finally:
             _delete_secret(session, endpoint, secret_name)
 
@@ -830,7 +871,7 @@ class TestAzureVaultRoundTrip:
     ):
         """HP-17: bare value (no KEY= prefix) written under DOTENV_PRIVATE_KEY_PRODUCTION."""
         session, endpoint = lowkey_vault_client
-        secret_name = "test-pull-bare-value"
+        secret_name = _unique_name("test-pull-bare-value")
         # Stored WITHOUT a DOTENV_PRIVATE_KEY_ prefix -> taken verbatim as the value.
         _seed_secret(session, endpoint, secret_name, "barekeyvalue123")
 
@@ -855,13 +896,10 @@ class TestAzureVaultRoundTrip:
             )
             combined = result.stdout + result.stderr
             _assert_dispatched(combined)
+            assert result.returncode == 0, combined
 
-            if result.returncode == 0:
-                keys_content = (work_dir / ".env.keys").read_text()
-                assert "DOTENV_PRIVATE_KEY_PRODUCTION=barekeyvalue123" in keys_content
-            else:
-                assert _looks_like_auth_failure(combined), combined
-                pytest.skip(f"vault-pull could not authenticate against Lowkey: {combined[:200]}")
+            keys_content = (work_dir / ".env.keys").read_text(encoding="utf-8")
+            assert "DOTENV_PRIVATE_KEY_PRODUCTION=barekeyvalue123" in keys_content
         finally:
             _delete_secret(session, endpoint, secret_name)
 
@@ -876,7 +914,7 @@ class TestAzureVaultRoundTrip:
     ):
         """EC-08: 'DOTENV_PRIVATE_KEY_PRODUCTION=YWJj==/def==' split on the FIRST '=' only."""
         session, endpoint = lowkey_vault_client
-        secret_name = "test-pull-equals-split"
+        secret_name = _unique_name("test-pull-equals-split")
         # The value itself contains '=' characters; only the first one separates
         # the key name from the value.
         _seed_secret(
@@ -907,13 +945,10 @@ class TestAzureVaultRoundTrip:
             )
             combined = result.stdout + result.stderr
             _assert_dispatched(combined)
+            assert result.returncode == 0, combined
 
-            if result.returncode == 0:
-                keys_content = (work_dir / ".env.keys").read_text()
-                assert "DOTENV_PRIVATE_KEY_PRODUCTION=YWJj==/def==" in keys_content, keys_content
-            else:
-                assert _looks_like_auth_failure(combined), combined
-                pytest.skip(f"vault-pull could not authenticate against Lowkey: {combined[:200]}")
+            keys_content = (work_dir / ".env.keys").read_text(encoding="utf-8")
+            assert "DOTENV_PRIVATE_KEY_PRODUCTION=YWJj==/def==" in keys_content, keys_content
         finally:
             _delete_secret(session, endpoint, secret_name)
 
@@ -928,7 +963,7 @@ class TestAzureVaultRoundTrip:
     ):
         """BP-14: secret stored as STAGING but pulled --env production trips the mismatch guard."""
         session, endpoint = lowkey_vault_client
-        secret_name = "test-pull-prefix-mismatch"
+        secret_name = _unique_name("test-pull-prefix-mismatch")
         _seed_secret(
             session,
             endpoint,
@@ -958,15 +993,76 @@ class TestAzureVaultRoundTrip:
             combined = result.stdout + result.stderr
             _assert_dispatched(combined)
 
-            if result.returncode == 1 and "expects" in combined:
-                # The mismatch guard fired: it names the expected production key.
-                assert "DOTENV_PRIVATE_KEY_PRODUCTION" in combined, combined
-                # And it must NOT have written the staging key under production.
-                if (work_dir / ".env.keys").exists():
-                    assert "stagingkey" not in (work_dir / ".env.keys").read_text()
-            elif _looks_like_auth_failure(combined):
-                pytest.skip(f"vault-pull could not authenticate against Lowkey: {combined[:200]}")
-            else:
-                pytest.fail(f"Unexpected vault-pull result: rc={result.returncode}\n{combined}")
+            # The mismatch guard must fire: exit 1 naming the expected key.
+            assert result.returncode == 1, combined
+            assert "expects" in combined, combined
+            assert "DOTENV_PRIVATE_KEY_PRODUCTION" in combined, combined
+            # And it must NOT have written the staging key under production.
+            if (work_dir / ".env.keys").exists():
+                assert "stagingkey" not in (work_dir / ".env.keys").read_text(encoding="utf-8")
+        finally:
+            _delete_secret(session, endpoint, secret_name)
+
+
+# --- Lane sentinel (#484) ---------------------------------------------------
+
+
+class TestAzureLaneSentinel:
+    """Guard against the azure lane ever going green-by-skip again (#484).
+
+    Every fixture this test uses may skip ONLY when the Lowkey container is
+    not running at all (the ``lowkey_vault_endpoint`` port gate). Once the
+    container is up, this test tolerates no auth/TLS/seeding failure: a lane
+    where every real-backend test silently skips can no longer report green,
+    because this test fails instead.
+    """
+
+    def test_azure_real_backend_round_trip_must_run(
+        self,
+        lowkey_vault_endpoint: str,
+        azure_test_env: dict,
+        lowkey_vault_client,
+        work_dir: Path,
+        integration_pythonpath: str,
+        envdrift_cmd: list[str],
+    ):
+        """Seed via authenticated REST, read back via the real CLI, zero tolerance."""
+        session, endpoint = lowkey_vault_client
+        secret_name = _unique_name("test-484-sentinel")
+        stored_value = "DOTENV_PRIVATE_KEY_PRODUCTION=sentinel-key-484"
+
+        # 1. The seeding path must be authenticated (Lowkey 401s without a bearer).
+        _seed_secret(session, endpoint, secret_name, stored_value)
+
+        try:
+            # 2. The CLI subprocess must trust Lowkey's TLS and obtain a token.
+            result = _run_cli(
+                envdrift_cmd,
+                [
+                    "vault-pull",
+                    str(work_dir),
+                    secret_name,
+                    "--env",
+                    "production",
+                    "--no-decrypt",
+                    "-p",
+                    "azure",
+                    "--vault-url",
+                    lowkey_vault_endpoint,
+                ],
+                cwd=work_dir,
+                env=azure_test_env,
+                integration_pythonpath=integration_pythonpath,
+            )
+            combined = result.stdout + result.stderr
+            _assert_dispatched(combined)
+            assert result.returncode == 0, (
+                "The azure integration lane could not drive the RUNNING Lowkey "
+                f"backend — this is the #484 green-by-skip regression:\n{combined}"
+            )
+
+            # 3. The round trip must be verbatim.
+            keys_content = (work_dir / ".env.keys").read_text(encoding="utf-8")
+            assert "DOTENV_PRIVATE_KEY_PRODUCTION=sentinel-key-484" in keys_content
         finally:
             _delete_secret(session, endpoint, secret_name)
