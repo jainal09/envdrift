@@ -180,17 +180,22 @@ settings = Settings()
 
 ### List Parsing
 
-Pydantic parses comma-separated values automatically:
+pydantic-settings parses list fields from **JSON**, not comma-separated strings
+(a comma-separated value raises `SettingsError` at startup, and
+`envdrift validate` flags it the same way):
 
 ```bash
 # .env
-ALLOWED_HOSTS=localhost,example.com
+ALLOWED_HOSTS=["localhost","example.com"]
 ```
 
 ```python
 class Settings(BaseSettings):
     ALLOWED_HOSTS: list[str]  # Parses to ["localhost", "example.com"]
 ```
+
+To keep a comma-separated value, type the field as `str` and split it yourself
+(e.g. with a `@field_validator`).
 
 ## From django-environ
 

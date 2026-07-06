@@ -25,9 +25,11 @@ scan — to every file whose name matches an env-file shape:
 Only the template names `.env.example`, `.env.sample`, and `.env.template` are skipped
 by default, since they hold placeholder values by convention.
 
-Env files are scanned regardless of text encoding: UTF-8, UTF-16 (the Windows Notepad
-and PowerShell "Unicode" default), and UTF-32 — with or without a BOM — are decoded
-before pattern matching instead of being misclassified as binary and skipped.
+Env files are scanned regardless of text encoding instead of being misclassified as
+binary and skipped: UTF-8, and UTF-16 (the Windows Notepad and PowerShell "Unicode"
+default) whether or not it carries a BOM, are decoded before pattern matching. A
+BOM-prefixed UTF-32 file is also decoded; BOM-less UTF-32 (which has no reliable byte
+signature to detect) is the one encoding still treated as binary.
 
 ## Quick start
 
