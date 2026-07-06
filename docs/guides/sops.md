@@ -56,7 +56,9 @@ pip install envdrift          # SOPS support needs no extra envdrift extras
 
 You also need the `sops` binary on PATH. Either install it yourself
 (`brew install sops`, or see the [SOPS releases](https://github.com/getsops/sops/releases))
-or let envdrift fetch it by setting `auto_install = true` (below).
+or let envdrift fetch it by setting `auto_install = true` (below). The auto-install
+download is bounded by a 60-second timeout, and a failed attempt reports its cause
+(e.g. the unreachable URL) alongside the manual install instructions.
 
 ## Configuration
 
@@ -116,6 +118,39 @@ Flags differ by direction (both override config):
   the data key using your credentials (`az login`, KMS access, or the age key).
 
 See [`encrypt`](../cli/encrypt.md) and [`decrypt`](../cli/decrypt.md).
+
+## Re-running `encrypt` on an already-encrypted file
+
+`envdrift encrypt` verifies the post-state instead of trusting the SOPS metadata header:
+
+- **Fully encrypted, recipients unchanged** — a clean no-op: exit 0 with
+  `already encrypted (no change)` (not a misleading `Encrypted` banner).
+- **A plaintext value survives** (e.g. a line appended after encryption) — the command
+  **fails** and names the offending key(s). SOPS itself refuses to re-encrypt a file
+  that already carries metadata, so the value would otherwise leak silently. Recover
+  with `sops edit <file>`, or move the plaintext line aside, `envdrift decrypt`,
+  re-add it, then `envdrift encrypt`. `envdrift lock` applies the same check and will
+  not report "ready to commit" over surviving plaintext.
+- **A requested recipient is missing** — `encrypt --age <new key>` (or `--kms` /
+  `--gcp-kms` / `--azure-kv`) on an already-encrypted file **fails** instead of
+  silently ignoring the flag (which would leave the new recipient unable to decrypt).
+  Matching is exact: a key that is merely a prefix of a recorded recipient, or an
+  Azure Key Vault URL whose components only appear inside unrelated metadata, does
+  not count as present. `envdrift lock` runs the same check against the recipients
+  configured in `envdrift.toml`, so adding a key to `age_recipients` and re-running
+  `lock` fails loudly until the file's metadata actually includes it.
+  Add recipients with `sops rotate --add-age <key> -i --input-type dotenv
+  --output-type dotenv <file>`, or `sops updatekeys` after editing `.sops.yaml`.
+- **Encrypted by the other backend** — `encrypt` refuses to double-encrypt a
+  dotenvx-encrypted file with SOPS (and vice versa); decrypt with the original
+  backend first.
+
+## Key resolution precedence
+
+An explicit `--age-key-file` flag or TOML `age_key_file` **overrides** an ambient
+`SOPS_AGE_KEY_FILE` environment variable. Exporting the env var for day-to-day work
+never disables an explicitly supplied key. (An inline `age_key` — a programmatic
+backend parameter, not a TOML key — likewise outranks an ambient `SOPS_AGE_KEY`.)
 
 ## Azure Key Vault walkthrough (verified end-to-end)
 
@@ -214,6 +249,10 @@ Consequences for SOPS:
   works for SOPS once the config above exists. Plain `envdrift pull`, however, runs
   the key-sync step, looks for a dotenvx secret, and **fails** for SOPS — use
   `envdrift pull --skip-sync` to go straight to decryption.
+- `pull` hands a **mixed** SOPS file (metadata plus a plaintext value appended after
+  encryption) to sops instead of skipping it as "not encrypted": the run fails loudly
+  (sops reports the integrity error) rather than exiting 0 with the values still
+  ciphertext.
 
 **Recommendation:** for SOPS, use `envdrift encrypt` / `envdrift decrypt`. They need
 no vault scaffolding and are the intended SOPS workflow. Only reach for `lock`/`pull`
