@@ -23,9 +23,11 @@ permissions:
 # trigger queues instead of racing binary + checksums.txt uploads for the same
 # tag (a checksums.txt from build A paired with a binary from build B makes
 # the fail-closed installers abort). Queue (don't cancel) so an in-flight
-# release isn't killed mid-upload.
+# release isn't killed mid-upload. Fixed prefix, not `github.workflow`: a
+# called workflow sees the *caller's* name there, which would put a
+# workflow_call run for the same tag in a different group than a tag push.
 concurrency:
-  group: ${{ github.workflow }}-${{ inputs.tag_name || github.ref_name }}
+  group: release-agent-${{ inputs.tag_name || github.ref_name }}
   cancel-in-progress: false
 
 defaults:
@@ -63,7 +65,7 @@ jobs:
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
 
       - name: Set up Go
         uses: actions/setup-go@v6
@@ -110,7 +112,7 @@ jobs:
     needs: build
     steps:
       - name: Checkout code
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
 
       - name: Download all artifacts
         uses: actions/download-artifact@v8
@@ -154,7 +156,7 @@ jobs:
           echo "TAG=$TAG" >> $GITHUB_OUTPUT
 
       - name: Create GitHub Release
-        uses: softprops/action-gh-release@b4309332981a82ec1c5618f44dd2e27cc8bfbfda # v3.0.0
+        uses: softprops/action-gh-release@718ea10b132b3b2eba29c1007bb80653f286566b # v3.0.1
         with:
           tag_name: ${{ steps.version.outputs.TAG }}
           name: Agent v${{ steps.version.outputs.VERSION }}

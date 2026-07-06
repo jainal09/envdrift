@@ -134,7 +134,7 @@
     "@types/node": "^24.0.0",
     "@types/sinon": "^21.0.0",
     "@types/vscode": "^1.85.0",
-    "@vscode/test-electron": "^2.4.0",
+    "@vscode/test-electron": "^3.0.0",
     "@vscode/vsce": "^3.9.2",
     "eslint": "^10.0.0",
     "glob": "^13.0.0",

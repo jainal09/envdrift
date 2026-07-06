@@ -120,6 +120,18 @@ Available markers:
 | `gcp` | Requires GCP credentials (skipped by default) |
 | `slow` | Tests that take >10 seconds |
 
+### Suite Hygiene Rules
+
+`tests/unit/test_suite_hygiene.py` enforces the lane contract (see [#497](https://github.com/jainal09/envdrift/issues/497)):
+
+- Every file under `tests/integration/` carries `pytest.mark.integration` — the `-m` selectors decide lanes, not directory layout.
+- Real-binary `Test*Integration` classes (e.g. in `tests/scanner/`) are marked `integration` and skip-gate on the binary, so each
+  runs in exactly one lane.
+- Mock-SDK fixtures that `importlib.reload()` a vault provider module must reload it again on teardown so the real SDK bindings are
+  restored for later tests in the same process. Never reload the `envdrift.vault` package module itself.
+- No unconditional `pytest.mark.skip` without a tracking-issue reference (`#NNN`) in the reason — use a conditional `skipif` gate
+  or fix the test.
+
 ## CI Pipelines
 
 ### Main CI (`ci.yml`)
@@ -207,7 +219,9 @@ class TestMyFeature:
 | `vault_test_env` | session | Environment variables for Vault |
 | `vault_client` | session | hvac client |
 | `lowkey_vault_endpoint` | session | Azure emulator URL |
-| `azure_test_env` | session | Environment variables for Azure |
+| `lowkey_vault_ca_bundle` | session | Exported Lowkey TLS certificate (verification stays on) |
+| `lowkey_token_endpoint` | session | Lowkey managed-identity token stub URL (fails loudly if unpublished) |
+| `azure_test_env` | session | Environment variables for Azure (CA bundle, token stub, challenge-resource opt-out) |
 
 ## Test Infrastructure
 
@@ -219,7 +233,8 @@ The `tests/docker-compose.test.yml` provides:
 |---------|------|---------|
 | LocalStack | 4566 | AWS Secrets Manager emulator |
 | Vault | 8200 | HashiCorp Vault (dev mode) |
-| Lowkey Vault | 8443 | Azure Key Vault emulator |
+| Lowkey Vault | 8443 | Azure Key Vault emulator (HTTPS, self-signed cert) |
+| Lowkey Vault | 8080 | Managed-identity token stub used by `DefaultAzureCredential` (HTTP) |
 
 ### Health Checks
 

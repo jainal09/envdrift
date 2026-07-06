@@ -22,9 +22,11 @@ permissions:
 # only trigger; this per-tag group is a backstop so a re-run or duplicate
 # trigger queues instead of racing .vsix uploads / Marketplace publishes for
 # the same tag. Queue (don't cancel) so an in-flight release isn't killed
-# mid-upload.
+# mid-upload. Fixed prefix, not `github.workflow`: a called workflow sees the
+# *caller's* name there, which would put a workflow_call run for the same tag
+# in a different group than a tag push.
 concurrency:
-  group: ${{ github.workflow }}-${{ inputs.tag_name || github.ref_name }}
+  group: release-vscode-${{ inputs.tag_name || github.ref_name }}
   cancel-in-progress: false
 
 defaults:
@@ -37,7 +39,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
 
       - name: Set up Node.js
         uses: actions/setup-node@v6
@@ -96,7 +98,7 @@ jobs:
       tag: ${{ steps.version.outputs.TAG }}
     steps:
       - name: Checkout code
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
 
       - name: Get version from tag
         id: version
@@ -120,7 +122,7 @@ jobs:
           path: release
 
       - name: Create GitHub Release
-        uses: softprops/action-gh-release@b4309332981a82ec1c5618f44dd2e27cc8bfbfda # v3.0.0
+        uses: softprops/action-gh-release@718ea10b132b3b2eba29c1007bb80653f286566b # v3.0.1
         with:
           tag_name: ${{ steps.version.outputs.TAG }}
           name: VS Code Extension v${{ steps.version.outputs.VERSION }}
@@ -173,7 +175,7 @@ jobs:
     if: ${{ !contains(needs.release.outputs.tag, '-rc') && !contains(needs.release.outputs.tag, '-beta') && !contains(needs.release.outputs.tag, '-alpha') }}
     steps:
       - name: Checkout code
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
 
       - name: Set up Node.js
         uses: actions/setup-node@v6

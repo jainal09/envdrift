@@ -120,6 +120,23 @@ def test_vsce_is_a_lockfile_pinned_devdependency() -> None:
     )
 
 
+def _assert_vsce_invocations_pinned(name: str, job_name: str, runs: list[str]) -> None:
+    """Assert one job's vsce runs use the lockfile-pinned local bin (#495)."""
+    vsce_runs = [r for r in runs if "vsce" in r]
+    for run in vsce_runs:
+        assert "npm install -g" not in run and "npx vsce" not in run, (
+            f"{name}:{job_name} fetches vsce ad-hoc ({run.strip()!r}); "
+            "use the lockfile-pinned node_modules/.bin/vsce (#495)."
+        )
+    assert any("node_modules/.bin/vsce" in r for r in vsce_runs), (
+        f"{name}:{job_name} must invoke the local node_modules/.bin/vsce (#495)."
+    )
+    assert any(r.strip() == "npm ci" for r in runs), (
+        f"{name}:{job_name} invokes vsce without running `npm ci` "
+        "first; the local bin must come from the lockfile (#495)."
+    )
+
+
 def test_vscode_workflows_never_fetch_vsce_ad_hoc() -> None:
     """Every vsce invocation must resolve the local lockfile-pinned bin (#495).
 
@@ -133,46 +150,40 @@ def test_vscode_workflows_never_fetch_vsce_ad_hoc() -> None:
         workflow = _load_workflow(name)
         for job_name, job in workflow["jobs"].items():
             runs = [step.get("run", "") for step in job.get("steps", [])]
-            vsce_runs = [r for r in runs if "vsce" in r]
-            if not vsce_runs:
-                continue
-            for run in vsce_runs:
-                assert "npm install -g" not in run and "npx vsce" not in run, (
-                    f"{name}:{job_name} fetches vsce ad-hoc ({run.strip()!r}); "
-                    "use the lockfile-pinned node_modules/.bin/vsce (#495)."
-                )
-            assert any("node_modules/.bin/vsce" in r for r in vsce_runs), (
-                f"{name}:{job_name} must invoke the local node_modules/.bin/vsce (#495)."
-            )
-            assert any(r.strip() == "npm ci" for r in runs), (
-                f"{name}:{job_name} invokes vsce without running `npm ci` "
-                "first; the local bin must come from the lockfile (#495)."
-            )
+            if any("vsce" in r for r in runs):
+                _assert_vsce_invocations_pinned(name, job_name, runs)
 
 
 def test_release_tags_have_exactly_one_trigger_path() -> None:
-    """A tag-push release workflow must not also be called by release-please.
+    """A tag-push release workflow must not also be invoked via workflow_call.
 
     Pre-fix every agent/vscode release ran TWICE concurrently: once from the
     PAT tag push and once via ``workflow_call`` from release-please.yml. Two
     jobs raced uploading binaries and checksums.txt to the same GitHub
     release, so checksums.txt from build A could pair with a binary from
-    build B and the fail-closed installers would abort (#495).
+    build B and the fail-closed installers would abort (#495). Scan *every*
+    workflow for callers — not just release-please.yml — so a future caller
+    can't quietly reopen the race.
     """
-    release_please = _load_workflow("release-please.yml")
-    for job_name, job in release_please["jobs"].items():
-        called = job.get("uses")
-        if not called:
-            continue
-        called_file = called.split("@", 1)[0].rsplit("/", 1)[-1]
-        called_workflow = _load_workflow(called_file)
-        push = _triggers(called_workflow).get("push") or {}
-        assert not push.get("tags"), (
-            f"release-please.yml:{job_name} calls {called_file}, which is "
-            "also triggered by its own `push: tags` — every release would "
-            "run twice and race the release assets (#495). Keep exactly one "
-            "trigger path per tag."
-        )
+    for caller_path in sorted(_WORKFLOWS.glob("*.yml")) + sorted(_WORKFLOWS.glob("*.yaml")):
+        caller = yaml.safe_load(caller_path.read_text(encoding="utf-8"))
+        for job_name, job in (caller.get("jobs") or {}).items():
+            called = job.get("uses")
+            if not called:
+                continue
+            called_file = called.split("@", 1)[0].rsplit("/", 1)[-1]
+            if not (_WORKFLOWS / called_file).is_file():
+                # Reusable workflow from another repository — no local
+                # push-tags trigger to double-fire.
+                continue
+            called_workflow = _load_workflow(called_file)
+            push = _triggers(called_workflow).get("push") or {}
+            assert not push.get("tags"), (
+                f"{caller_path.name}:{job_name} calls {called_file}, which is "
+                "also triggered by its own `push: tags` — every release would "
+                "run twice and race the release assets (#495). Keep exactly one "
+                "trigger path per tag."
+            )
 
 
 def test_release_workflows_define_per_tag_concurrency() -> None:
