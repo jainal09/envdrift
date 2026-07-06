@@ -178,10 +178,12 @@ The CLI guards the registry file against races and corruption:
   10 seconds the command fails with exit code 1 instead of corrupting state.
 - **A corrupt registry is never silently wiped.** If `projects.json` is
   truncated or malformed, read commands (`list`, `status`) warn and treat it as
-  empty without touching the file. The next `register`/`unregister` moves the
-  corrupt original aside to `projects.json.corrupt-<timestamp>` (and tells you
-  where) before writing a fresh registry, so prior registrations can be
-  recovered by hand and re-registered.
+  empty without touching the file. The next `register` moves the corrupt
+  original aside to `projects.json.corrupt-<timestamp>` (and tells you where)
+  before writing a fresh registry, so prior registrations can be recovered by
+  hand and re-registered. An `unregister` never performs this backup: a corrupt
+  registry loads as empty, so there is nothing to remove and the file is left
+  untouched.
 
 ## How It Works
 

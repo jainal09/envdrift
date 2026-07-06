@@ -519,10 +519,14 @@ class TestAgentRegistryCorruptionCli:
         out = self._normalize(result.stdout)
         assert "not registered" in out.lower()
         assert "corrupt" in out.lower()
+        # The hint must name only `register` — an unregister miss never saves,
+        # so it can never perform the backup (#506 review).
+        assert "by the next register." in out
         assert registry_path.read_text(encoding="utf-8") == corrupt
 
-    def test_register_lock_held_exits_one_with_clean_error(self, tmp_path: Path):
-        """A held registry lock fails register with a clean message, not a hang."""
+    @pytest.mark.parametrize("command", ["register", "unregister"])
+    def test_lock_held_exits_one_with_clean_error(self, tmp_path: Path, command: str):
+        """A held registry lock fails the write command cleanly, not with a hang."""
         registry_path = tmp_path / ".envdrift" / "projects.json"
         registry_module._registry = registry_module.ProjectRegistry(registry_path, lock_timeout=0.3)
         holder = registry_module.ProjectRegistry(registry_path)
@@ -531,26 +535,10 @@ class TestAgentRegistryCorruptionCli:
         project_dir.mkdir()
 
         with holder._exclusive_lock():
-            result = runner.invoke(app, ["agent", "register", str(project_dir)])
+            result = runner.invoke(app, ["agent", command, str(project_dir)])
 
         assert result.exit_code == 1, result.output
         assert result.exception is None or isinstance(result.exception, SystemExit)
-        out = self._normalize(result.stdout)
-        assert "lock" in out.lower()
-
-    def test_unregister_lock_held_exits_one_with_clean_error(self, tmp_path: Path):
-        """A held registry lock fails unregister with a clean message, not a hang."""
-        registry_path = tmp_path / ".envdrift" / "projects.json"
-        registry_module._registry = registry_module.ProjectRegistry(registry_path, lock_timeout=0.3)
-        holder = registry_module.ProjectRegistry(registry_path)
-
-        project_dir = tmp_path / "myproject"
-        project_dir.mkdir()
-
-        with holder._exclusive_lock():
-            result = runner.invoke(app, ["agent", "unregister", str(project_dir)])
-
-        assert result.exit_code == 1, result.output
         out = self._normalize(result.stdout)
         assert "lock" in out.lower()
 

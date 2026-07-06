@@ -15,8 +15,13 @@ behavior under test is mocked.
 
 from __future__ import annotations
 
+import errno
 import json
+import subprocess
+import sys
 import threading
+import time
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
@@ -205,6 +210,95 @@ class TestCorruptRegistryPreservation:
         assert notice.backup_failed is True
         assert _corrupt_backups(registry_path) == []
 
+    def test_second_save_after_failed_backup_keeps_valid_registry(
+        self, registry_path: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        """Regression (#506 review): ``backup_failed`` must block re-entry.
+
+        After a failed backup rename the corruption notice stays set with
+        ``backup_path=None``. A second ``save()`` on the same instance without
+        an intervening ``load()`` must not pass the guard again and move the
+        freshly written *valid* registry aside as a ``.corrupt-*`` file.
+        """
+        registry_path.parent.mkdir(parents=True, exist_ok=True)
+        registry_path.write_text("{ not json", encoding="utf-8")
+
+        original_replace = Path.replace
+
+        def failing_backup_replace(self: Path, target):
+            if ".corrupt-" in str(target):
+                raise OSError("simulated rename failure")
+            return original_replace(self, target)
+
+        monkeypatch.setattr(Path, "replace", failing_backup_replace)
+
+        registry = registry_module.ProjectRegistry(registry_path)
+        registry.load()
+        registry.save()  # backup attempt fails; a fresh valid registry is written
+
+        notice = registry.corruption
+        assert notice is not None
+        assert notice.backup_failed is True
+
+        monkeypatch.undo()  # renames work again: a buggy re-entry would now succeed
+        registry.save()
+
+        assert registry_path.exists(), "second save moved the valid registry aside"
+        assert _read_registry_file(registry_path) == {"projects": []}
+        assert _corrupt_backups(registry_path) == []
+
+    def test_two_consecutive_corruptions_keep_both_backups(
+        self, registry_path: Path, tmp_path: Path
+    ):
+        """Each corruption event gets its own backup; earlier backups survive."""
+        proj_a = tmp_path / "projA"
+        proj_a.mkdir()
+        proj_b = tmp_path / "projB"
+        proj_b.mkdir()
+
+        registry_path.parent.mkdir(parents=True, exist_ok=True)
+        first_corrupt = "{ first corruption"
+        registry_path.write_text(first_corrupt, encoding="utf-8")
+        assert registry_module.ProjectRegistry(registry_path).register(proj_a) is True
+
+        second_corrupt = "{ second corruption"
+        registry_path.write_text(second_corrupt, encoding="utf-8")
+        assert registry_module.ProjectRegistry(registry_path).register(proj_b) is True
+
+        backups = _corrupt_backups(registry_path)
+        assert len(backups) == 2, "second corruption backup clobbered the first"
+        contents = {backup.read_text(encoding="utf-8") for backup in backups}
+        assert contents == {first_corrupt, second_corrupt}
+        data = _read_registry_file(registry_path)
+        assert [p["path"] for p in data["projects"]] == [str(proj_b.resolve())]
+
+    def test_same_tick_backup_names_do_not_collide(
+        self, registry_path: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        """Two backups in the same clock tick get distinct suffixed names.
+
+        Only the clock is frozen here (environment, like the rename-failure
+        simulation above); the collision-avoidance logic runs for real.
+        """
+        registry_path.parent.mkdir(parents=True, exist_ok=True)
+        frozen = datetime(2026, 1, 1, tzinfo=UTC)
+
+        class _FrozenDatetime:
+            @staticmethod
+            def now(tz=None):
+                return frozen
+
+        monkeypatch.setattr(registry_module, "datetime", _FrozenDatetime)
+        registry = registry_module.ProjectRegistry(registry_path)
+
+        first = registry._next_backup_path()
+        first.touch()
+        second = registry._next_backup_path()
+
+        assert second != first, "same-tick backup path collides with the existing backup"
+        assert second.name.startswith(first.name)
+        assert not second.exists()
+
 
 class TestRegistryLocking:
     """#492: register/unregister must serialize via an exclusive file lock."""
@@ -280,3 +374,142 @@ class TestRegistryLocking:
 
         # Once released, the same registration succeeds.
         assert contender.register(project) is True
+
+    @staticmethod
+    def _real_lock_syscall():
+        """Return the platform lock syscall the registry uses."""
+        if sys.platform == "win32":
+            return registry_module.msvcrt.locking
+        return registry_module.fcntl.flock
+
+    @classmethod
+    def _patch_lock_syscall(cls, monkeypatch: pytest.MonkeyPatch, fake) -> None:
+        """Inject an environment fault into the platform lock syscall."""
+        if sys.platform == "win32":
+            monkeypatch.setattr(registry_module.msvcrt, "locking", fake)
+        else:
+            monkeypatch.setattr(registry_module.fcntl, "flock", fake)
+
+    def test_transient_lock_oserror_retries_then_succeeds(
+        self, registry_path: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        """Regression (#506 review): a brief I/O blip must not fail the write.
+
+        E.g. an antivirus scan briefly touching the lock file: the first two
+        lock attempts fail with a non-contention OSError, then the real
+        syscall takes over and the registration succeeds.
+        """
+        project = tmp_path / "proj"
+        project.mkdir()
+
+        real_lock = self._real_lock_syscall()
+        calls = {"count": 0}
+
+        def flaky_lock(*args):
+            calls["count"] += 1
+            if calls["count"] <= 2:
+                raise OSError(errno.EIO, "simulated transient I/O error")
+            return real_lock(*args)
+
+        self._patch_lock_syscall(monkeypatch, flaky_lock)
+
+        registry = registry_module.ProjectRegistry(registry_path)
+        assert registry.register(project) is True
+        assert calls["count"] >= 3, "lock must have been retried past the transient errors"
+
+    def test_persistent_lock_io_error_raises_original_error_fast(
+        self, registry_path: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        """Regression (#506 review): EBADF/EIO surface as-is, not as a timeout.
+
+        Pre-fix, every OSError was retried for the full lock timeout and then
+        misreported as a misleading RegistryLockError timeout.
+        """
+        project = tmp_path / "proj"
+        project.mkdir()
+
+        def broken_lock(*args):
+            raise OSError(errno.EBADF, "simulated persistent I/O error")
+
+        self._patch_lock_syscall(monkeypatch, broken_lock)
+
+        registry = registry_module.ProjectRegistry(registry_path, lock_timeout=5.0)
+
+        start = time.monotonic()
+        with pytest.raises(OSError) as excinfo:
+            registry.register(project)
+        elapsed = time.monotonic() - start
+
+        assert excinfo.value.errno == errno.EBADF
+        assert elapsed < 2.5, "must give up after bounded retries, not the full lock timeout"
+
+
+_HAMMER_WORKER = """\
+import sys
+from pathlib import Path
+
+from envdrift.agent.registry import ProjectRegistry
+
+registry_path = Path(sys.argv[1])
+worker = int(sys.argv[2])
+iterations = int(sys.argv[3])
+base = Path(sys.argv[4])
+
+registry = ProjectRegistry(registry_path)
+for i in range(iterations):
+    assert registry.register(base / f"proj-{worker}-{i}") is True, (worker, i)
+for i in range(1, iterations, 2):
+    assert registry.unregister(base / f"proj-{worker}-{i}") is True, (worker, i)
+"""
+
+
+class TestRegistryMultiprocessBattle:
+    """The PR's core claim, hammered by real concurrent OS processes.
+
+    Threads share the CPython file-lock state; only separate processes prove
+    the inter-process ``projects.json.lock`` actually serializes writers.
+    """
+
+    def test_concurrent_processes_lose_no_writes(self, registry_path: Path, tmp_path: Path):
+        """4 real processes x (6 registers + 3 unregisters): exact final state.
+
+        Any lost update, torn write, or lock failure shows up as a worker
+        assert (nonzero exit), invalid JSON, or a final set mismatch. Bounded
+        iterations keep the test deterministic and fast (well under 10s).
+        """
+        workers, iterations = 4, 6
+        base = tmp_path / "projects"
+        base.mkdir()
+
+        procs = [
+            subprocess.Popen(
+                [
+                    sys.executable,
+                    "-c",
+                    _HAMMER_WORKER,
+                    str(registry_path),
+                    str(worker),
+                    str(iterations),
+                    str(base),
+                ],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+            )
+            for worker in range(workers)
+        ]
+        for proc in procs:
+            _, stderr = proc.communicate(timeout=30)
+            assert proc.returncode == 0, stderr.decode(errors="replace")
+
+        # Valid JSON (no torn/interleaved writes) ...
+        data = _read_registry_file(registry_path)
+        paths = [entry["path"] for entry in data["projects"]]
+        # ... no duplicated entries ...
+        assert len(paths) == len(set(paths)), "duplicate registry entries"
+        # ... and exactly the even-indexed survivors from every worker.
+        expected = {
+            str((base / f"proj-{worker}-{i}").resolve())
+            for worker in range(workers)
+            for i in range(0, iterations, 2)
+        }
+        assert set(paths) == expected, "concurrent writes were lost or resurrected"

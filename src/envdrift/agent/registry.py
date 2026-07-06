@@ -25,6 +25,7 @@ Robustness guarantees (#492):
 
 from __future__ import annotations
 
+import errno
 import json
 import os
 import sys
@@ -49,6 +50,16 @@ DEFAULT_LOCK_TIMEOUT = 10.0
 
 #: Poll interval while waiting for the registry lock.
 _LOCK_POLL_INTERVAL = 0.05
+
+#: Errno values that mean "another process holds the lock": ``fcntl.flock``
+#: raises EWOULDBLOCK/EAGAIN on POSIX; ``msvcrt.locking`` raises EACCES on
+#: Windows (also seen transiently there when antivirus scanners touch the file).
+_LOCK_CONTENTION_ERRNOS = frozenset({errno.EWOULDBLOCK, errno.EAGAIN, errno.EACCES})
+
+#: How many non-contention OSErrors to retry before re-raising the original
+#: error. Absorbs transient I/O blips without misreporting a persistent
+#: failure (EBADF/EINVAL/EIO) as a lock timeout.
+_TRANSIENT_LOCK_ERROR_RETRIES = 3
 
 
 class RegistryLockError(RuntimeError):
@@ -96,6 +107,19 @@ class ProjectEntry:
         return asdict(self)
 
 
+def _parse_registry_entry(item: Any) -> ProjectEntry:
+    """Validate a single raw project entry and convert it.
+
+    Raises:
+        ValueError: If the entry is not a dict carrying a string ``path``.
+    """
+    if not isinstance(item, dict):
+        raise ValueError(f"project entries must be objects, got {type(item).__name__}")
+    if not isinstance(item.get("path"), str):
+        raise ValueError("project entry is missing a string 'path'")
+    return ProjectEntry.from_dict(item)
+
+
 def _parse_registry_document(data: Any) -> list[ProjectEntry]:
     """Validate the loaded JSON document shape and convert it to entries.
 
@@ -109,14 +133,7 @@ def _parse_registry_document(data: Any) -> list[ProjectEntry]:
     raw_projects = data.get("projects", [])
     if not isinstance(raw_projects, list):
         raise ValueError(f"'projects' must be a list, got {type(raw_projects).__name__}")
-    entries: list[ProjectEntry] = []
-    for item in raw_projects:
-        if not isinstance(item, dict):
-            raise ValueError(f"project entries must be objects, got {type(item).__name__}")
-        if not isinstance(item.get("path"), str):
-            raise ValueError("project entry is missing a string 'path'")
-        entries.append(ProjectEntry.from_dict(item))
-    return entries
+    return [_parse_registry_entry(item) for item in raw_projects]
 
 
 class ProjectRegistry:
@@ -210,8 +227,17 @@ class ProjectRegistry:
         return self._path.with_name(self._path.name + ".lock")
 
     def _acquire_lock(self, fd: int) -> None:
-        """Acquire an exclusive lock on ``fd``, polling until the timeout."""
+        """Acquire an exclusive lock on ``fd``, polling until the timeout.
+
+        Lock contention (:data:`_LOCK_CONTENTION_ERRNOS`) is retried until
+        ``lock_timeout`` elapses, then reported as :class:`RegistryLockError`.
+        Any other OSError is a real I/O failure, not contention: it is retried
+        a bounded number of times (transient blips, e.g. a virus scanner
+        briefly holding the file) and then re-raised as-is instead of being
+        misreported as a lock timeout.
+        """
         deadline = time.monotonic() + self._lock_timeout
+        transient_errors = 0
         while True:
             try:
                 if sys.platform == "win32":
@@ -219,8 +245,12 @@ class ProjectRegistry:
                 else:
                     fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
                 return
-            except OSError:
-                if time.monotonic() >= deadline:
+            except OSError as exc:
+                if exc.errno not in _LOCK_CONTENTION_ERRNOS:
+                    transient_errors += 1
+                    if transient_errors > _TRANSIENT_LOCK_ERROR_RETRIES:
+                        raise
+                elif time.monotonic() >= deadline:
                     raise RegistryLockError(
                         f"timed out after {self._lock_timeout:g}s waiting for the "
                         f"registry lock: {self._lock_path} (is another envdrift "
@@ -282,14 +312,36 @@ class ProjectRegistry:
         with suppress(OSError):
             self._path.chmod(0o600)
 
+    def _next_backup_path(self) -> Path:
+        """Return an unused ``projects.json.corrupt-<timestamp>`` sibling path.
+
+        Timestamps carry microseconds, so collisions are rare — but a second
+        corruption event in the same clock tick must never clobber the earlier
+        backup, so a numeric suffix disambiguates.
+        """
+        timestamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%S%f")
+        candidate = self._path.with_name(f"{self._path.name}.corrupt-{timestamp}")
+        counter = 1
+        while candidate.exists():
+            counter += 1
+            candidate = self._path.with_name(f"{self._path.name}.corrupt-{timestamp}-{counter}")
+        return candidate
+
     def _backup_corrupt_file(self) -> None:
         """Move a corrupt registry aside before a save replaces it (#492)."""
-        if self._corruption is None or self._corruption.backup_path is not None:
+        if (
+            self._corruption is None
+            # Re-entry guard: once a backup was made (or its rename failed),
+            # never attempt another for the same corruption notice — a second
+            # save() without an intervening load() would otherwise move the
+            # freshly written *valid* registry aside as if it were corrupt.
+            or self._corruption.backup_path is not None
+            or self._corruption.backup_failed
+        ):
             return
         if not self._path.exists():
             return
-        timestamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%S%f")
-        backup_path = self._path.with_name(f"{self._path.name}.corrupt-{timestamp}")
+        backup_path = self._next_backup_path()
         try:
             self._path.replace(backup_path)
         except OSError:

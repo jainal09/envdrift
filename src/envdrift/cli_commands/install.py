@@ -25,7 +25,7 @@ import typer
 from rich.console import Console
 from rich.progress import Progress, SpinnerColumn, TextColumn
 
-from envdrift.cli_commands.agent_utils import parse_agent_running_status
+from envdrift.cli_commands.agent_utils import parse_agent_running_status, warn_registry_corruption
 
 console = Console()
 
@@ -437,9 +437,18 @@ def install_agent(
         if find_config() is not None:
             console.print("\n[bold]Registering current project...[/bold]")
             # Use our own registry instead of calling the binary
-            from envdrift.agent.registry import register_project
+            from envdrift.agent.registry import RegistryLockError, get_registry, register_project
 
-            success, message = register_project()
+            try:
+                success, message = register_project()
+            except RegistryLockError as exc:
+                console.print(f"[red]✗[/red] Could not lock the agent registry: {exc}")
+                console.print(
+                    "  The agent binary was installed; run "
+                    "[bold]envdrift agent register[/bold] to register this project."
+                )
+                raise typer.Exit(1) from exc
+            warn_registry_corruption(get_registry(), console)
             if success:
                 console.print(f"[green]✓[/green] {message}")
             else:
