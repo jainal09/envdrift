@@ -5,7 +5,7 @@ Check or perform encryption on .env files using dotenvx or SOPS.
 ## Synopsis
 
 ```bash
-envdrift encrypt [ENV_FILE] [OPTIONS]
+envdrift encrypt [ENV_FILE]... [OPTIONS]
 ```
 
 ## Description
@@ -29,16 +29,35 @@ exit code (dotenvx can exit `0` without encrypting):
 - **Refuses content-free files.** An empty, blank-line-only, or comment-only file
   has no variables to encrypt, so the command declines with a non-zero exit
   instead of letting dotenvx scaffold a placeholder-secrets template into it.
+- **Refuses the key store and companion files.** `envdrift encrypt .env.keys`
+  would encrypt the dotenvx private-key store itself — the keys become
+  ciphertext under a brand-new keypair whose private half is never saved,
+  permanently locking out every encrypted file in the project — so the command
+  refuses any `.keys`/`.example`/`.sample`/`.template` target by name, for
+  every backend. The name match is case-insensitive (`.env.KEYS` names the
+  same file on macOS/Windows default filesystems), and a renamed or symlinked
+  key store (`mv .env.keys prodkeys.env`) is still refused by content: a file
+  carrying `DOTENV_PRIVATE_KEY*` entries is never encrypted.
+- **Handles leading-dash filenames.** A file like `-dash.env` is passed to
+  dotenvx as `./-dash.env` so its CLI cannot misparse the name as flags
+  (which previously fabricated a different file full of placeholder secrets).
+  Use `envdrift encrypt -- -dash.env` so envdrift's own CLI accepts the name.
 - **Reports silent encryption failures.** When the key is missing or malformed
   (a `.env.keys` that is a directory, garbage, or a mismatched key), the file is
   re-read after the call; if any plaintext value survives, the command fails
   loudly instead of printing `[OK]`.
 
+Multiple env files can be passed in one invocation. With `--check`, each file gets
+its own report and the exit code is 1 if any file should block a commit — this keeps
+the command usable as a pre-commit `pass_filenames: true` hook, where every matched
+staged file is appended to a single command line. Without `--check`, each file is
+encrypted in turn.
+
 ## Arguments
 
-| Argument   | Description           | Default |
-| :--------- | :-------------------- | :------ |
-| `ENV_FILE` | Path to the .env file | `.env`  |
+| Argument      | Description                    | Default |
+| :------------ | :----------------------------- | :------ |
+| `ENV_FILE`... | Path(s) to the .env file(s)    | `.env`  |
 
 ## Options
 

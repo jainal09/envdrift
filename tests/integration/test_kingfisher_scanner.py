@@ -13,11 +13,14 @@ import pytest
 
 from envdrift.scanner.kingfisher import KingfisherScanner
 
-# Skip all tests if Kingfisher is not installed
-pytestmark = pytest.mark.skipif(
-    shutil.which("kingfisher") is None,
-    reason="Kingfisher not installed (install with: brew install kingfisher)",
-)
+# Real-binary tests: integration lane only; skip all if Kingfisher is not installed
+pytestmark = [
+    pytest.mark.integration,
+    pytest.mark.skipif(
+        shutil.which("kingfisher") is None,
+        reason="Kingfisher not installed (install with: brew install kingfisher)",
+    ),
+]
 
 
 class TestKingfisherIntegration:
