@@ -524,6 +524,30 @@ class SOPSEncryptionBackend(EncryptionBackend):
                 return True
         return False
 
+    # One azure_kv metadata record per recipient key. sops' dotenv store
+    # flattens each record to ``sops_azure_kv__list_N__map_<field>=...``
+    # (verified against the real binary; two recipients render as list_0 and
+    # list_1); the flat ``sops_azure_kv_<field>`` single-record form is
+    # accepted defensively.
+    _AZURE_KV_RECORD_KEY = re.compile(
+        r"^sops_azure_kv(?:__list_(?P<idx>\d+)__map_|_)(?P<field>\w+)$"
+    )
+
+    @staticmethod
+    def _azure_kv_records(content: str) -> list[dict[str, str]]:
+        """Parse the azure_kv metadata records (one dict per recipient key)."""
+        records: dict[str, dict[str, str]] = {}
+        for raw_line in content.splitlines():
+            key, sep, raw_value = raw_line.partition("=")
+            if not sep:
+                continue
+            match = SOPSEncryptionBackend._AZURE_KV_RECORD_KEY.match(key.strip())
+            if not match:
+                continue
+            idx = match.group("idx") if match.group("idx") is not None else "flat"
+            records.setdefault(idx, {})[match.group("field")] = raw_value.strip()
+        return list(records.values())
+
     @staticmethod
     def _recipient_in_metadata(content: str, recipient: str) -> bool:
         """Check whether ``recipient`` is recorded in the file's SOPS metadata.
@@ -531,16 +555,27 @@ class SOPSEncryptionBackend(EncryptionBackend):
         age keys, KMS ARNs and GCP resource IDs are stored verbatim as one flat
         dotenv metadata value, so an exact line-anchored match is authoritative.
         Azure Key Vault URLs are stored split across ``vault_url``/``name``/
-        ``version`` keys, so the URL is decomposed and each component matched
-        exactly against its own metadata line.
+        ``version`` fields of ONE record per recipient, so the URL is decomposed
+        and every component must match its own field within a SINGLE record —
+        matching components across different records (vault host from any, key
+        name from record 0, version from record 1) would declare a
+        never-registered key "present" on any file encrypted to two keys of the
+        same vault.
         """
         if SOPSEncryptionBackend._metadata_line_has_value(content, recipient):
             return True
         if "/keys/" in recipient:
             base, _, rest = recipient.partition("/keys/")
-            parts = [base, *(part for part in rest.split("/") if part)]
-            return all(
-                SOPSEncryptionBackend._metadata_line_has_value(content, part) for part in parts
+            parts = [part for part in rest.split("/") if part]
+            if not parts or len(parts) > 2:
+                return False
+            name = parts[0]
+            version = parts[1] if len(parts) == 2 else None
+            return any(
+                record.get("vault_url") == base
+                and record.get("name") == name
+                and (version is None or record.get("version") == version)
+                for record in SOPSEncryptionBackend._azure_kv_records(content)
             )
         return False
 

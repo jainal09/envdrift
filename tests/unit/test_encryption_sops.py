@@ -822,3 +822,57 @@ def test_has_metadata_block_public_wrapper():
     assert (
         backend.has_metadata_block("API_KEY=ENC[AES256_GCM,data:x,iv:y,tag:z,type:str]\n") is False
     )
+
+
+# Two azure_kv records exactly as the real binary flattens them (one
+# ``sops_azure_kv__list_N__map_<field>`` record per recipient key; the list_0 /
+# list_1 indexing was verified against sops 3.13.x output).
+_AZURE_KV_TWO_RECORD_DOTENV = (
+    "DB_PASSWORD=ENC[AES256_GCM,data:abc,iv:def,tag:ghi,type:str]\n"
+    "sops_azure_kv__list_0__map_vault_url=https://myvault.vault.azure.net\n"
+    "sops_azure_kv__list_0__map_name=keyA\n"
+    "sops_azure_kv__list_0__map_version=ver1\n"
+    "sops_azure_kv__list_1__map_vault_url=https://myvault.vault.azure.net\n"
+    "sops_azure_kv__list_1__map_name=keyB\n"
+    "sops_azure_kv__list_1__map_version=ver2\n"
+    "sops_lastmodified=2026-06-01T00:00:00Z\n"
+    "sops_mac=ENC[AES256_GCM,data:mac,iv:def,tag:ghi,type:str]\n"
+    "sops_unencrypted_suffix=_unencrypted\n"
+    "sops_version=3.13.1\n"
+)
+
+
+def test_recipient_check_azure_kv_cross_record_mix_is_missing(tmp_path, monkeypatch):
+    """Regression: Azure KV recipient matching is record-coherent. On a file
+    encrypted to keyA/ver1 and keyB/ver2, the never-registered keyA/ver2 must
+    NOT be declared present just because each component matches in a DIFFERENT
+    record (vault host from either, keyA from record 0, ver2 from record 1)."""
+    env_file = tmp_path / ".env"
+    env_file.write_text(_AZURE_KV_TWO_RECORD_DOTENV, encoding="utf-8")
+
+    backend = _backend_that_must_not_run_sops(monkeypatch)
+    never_registered = "https://myvault.vault.azure.net/keys/keyA/ver2"
+    result = backend.encrypt(env_file, azure_kv=never_registered)
+
+    assert result.success is False
+    assert never_registered in result.message
+    assert env_file.read_text(encoding="utf-8") == _AZURE_KV_TWO_RECORD_DOTENV
+
+
+def test_recipient_check_azure_kv_registered_keys_still_match(tmp_path, monkeypatch):
+    """Both genuinely registered keys keep matching within their own record,
+    so the idempotent re-run stays a clean no-op."""
+    env_file = tmp_path / ".env"
+    env_file.write_text(_AZURE_KV_TWO_RECORD_DOTENV, encoding="utf-8")
+
+    backend = _backend_that_must_not_run_sops(monkeypatch)
+    result = backend.encrypt(
+        env_file,
+        azure_kv=(
+            "https://myvault.vault.azure.net/keys/keyA/ver1,"
+            "https://myvault.vault.azure.net/keys/keyB/ver2"
+        ),
+    )
+
+    assert result.success is True
+    assert result.changed is False
