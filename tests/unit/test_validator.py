@@ -372,9 +372,11 @@ NEW_FEATURE_FLAG=enabled
         assert result.valid is False
         assert "NAME" in result.type_errors
 
-    def test_validate_constraint_pass_skips_missing_encrypted_and_empty(self, tmp_path):
-        """The constraint pass skips fields the env omits, encrypts, or leaves
-        empty, and never double-reports a missing required field as a type error.
+    def test_validate_constraint_pass_skips_missing_and_encrypted(self, tmp_path):
+        """The constraint pass skips fields the env omits or encrypts, never
+        double-reports a missing required field as a type error, and — per #472 —
+        validates a present-but-empty value as the empty string pydantic-settings
+        will actually see (so an empty min_length field fails like the real app).
         """
         from pydantic import Field
         from pydantic_settings import BaseSettings
@@ -382,7 +384,7 @@ NEW_FEATURE_FLAG=enabled
         class Settings(BaseSettings):
             PORT: int = Field(ge=1, le=65535)  # present + valid
             SECRET: str = Field(min_length=10)  # encrypted -> can't constraint-check
-            NOTES: str = Field(min_length=5)  # empty -> unset
+            NOTES: str = Field(min_length=5)  # empty -> '' fails min_length (#472)
             REQUIRED_MISSING: str = Field(min_length=3)  # absent from env
 
         env_file = tmp_path / ".env"
@@ -395,9 +397,53 @@ NEW_FEATURE_FLAG=enabled
         # Absent required field is reported as missing, not a min_length type error.
         assert "REQUIRED_MISSING" in result.missing_required
         assert "REQUIRED_MISSING" not in result.type_errors
-        # Encrypted + empty values are not flagged by the constraint pass.
+        # Encrypted values are not flagged by the constraint pass.
         assert "SECRET" not in result.type_errors
+        # The real app sees NOTES='' and raises string_too_short at startup.
+        assert "NOTES" in result.type_errors
+
+    def test_constraint_pass_skips_empty_when_env_ignore_empty(self, tmp_path):
+        """With env_ignore_empty=True the env source drops '' (the field is
+        unset), so the constraint pass must not feed it to the model (#472)."""
+        from pydantic import Field
+        from pydantic_settings import BaseSettings, SettingsConfigDict
+
+        class Settings(BaseSettings):
+            model_config = SettingsConfigDict(env_ignore_empty=True)
+
+            NOTES: str = Field("default-note", min_length=5)
+
+        env_file = tmp_path / ".env"
+        env_file.write_text("NOTES=\n", encoding="utf-8")
+
+        env = EnvParser().parse(env_file)
+        schema = SchemaLoader().extract_metadata(Settings)
+        result = Validator().validate(env, schema, check_encryption=False)
+
+        # The real app starts (the default is used); validate must agree.
         assert "NOTES" not in result.type_errors
+        assert result.valid is True
+
+    def test_constraint_pass_survives_non_validation_error(self, tmp_path):
+        """A model_post_init raising a non-ValidationError must not crash
+        validate — the constraint pass swallows it (#443 review)."""
+        from pydantic import Field
+        from pydantic_settings import BaseSettings
+
+        class Settings(BaseSettings):
+            PORT: int = Field(ge=1)
+
+            def model_post_init(self, __context: object) -> None:
+                raise RuntimeError("boom")
+
+        env_file = tmp_path / ".env"
+        env_file.write_text("PORT=8080\n", encoding="utf-8")
+
+        env = EnvParser().parse(env_file)
+        schema = SchemaLoader().extract_metadata(Settings)
+        result = Validator().validate(env, schema, check_encryption=False)
+
+        assert result.valid is True
 
     def test_validate_constraint_pass_keeps_base_type_message(self, tmp_path):
         """A field failing both the base-type check and Pydantic keeps the
