@@ -620,6 +620,40 @@ class TestPullCommand:
 # --------------------------------------------------------------------------
 # lock command
 # --------------------------------------------------------------------------
+class TestVerifyIssueSummary:
+    """The verify-vault gate summary names mismatched vs unusable keys
+    separately, each with a remedy that can actually fix it."""
+
+    def test_mismatch_only_keeps_documented_wording(self):
+        from envdrift.cli_commands.sync import _verify_issue_summary
+
+        # Byte-identical to the message documented in docs/cli/lock.md.
+        assert _verify_issue_summary(1, 0) == (
+            "Found 1 key mismatch(es). "
+            "Run with --sync-keys to update local keys, or --force to encrypt anyway."
+        )
+
+    def test_unusable_only_points_at_the_vault_secret(self):
+        from envdrift.cli_commands.sync import _verify_issue_summary
+
+        summary = _verify_issue_summary(0, 2)
+        assert summary == (
+            "Found 2 unusable vault key(s). "
+            "Fix the vault secret shapes named above, or use --force to encrypt anyway."
+        )
+        assert "mismatch" not in summary
+        assert "--sync-keys" not in summary
+
+    def test_mixed_names_both_with_both_remedies(self):
+        from envdrift.cli_commands.sync import _verify_issue_summary
+
+        summary = _verify_issue_summary(1, 1)
+        assert "1 key mismatch(es) and 1 unusable vault key(s)" in summary
+        assert "Fix the vault secret shapes named above" in summary
+        assert "--sync-keys" in summary
+        assert "--force" in summary
+
+
 class TestLockCommand:
     def test_lock_no_mappings_for_profile_exits(self, loaded_config, no_git_hook):
         loaded_config(_sync_config([]))
@@ -879,6 +913,11 @@ class TestLockCommand:
         assert "KEY UNUSABLE" in normalized
         assert "JSON" in normalized
         assert "vault access failed" not in normalized
+        # The summary names the unusable secret for what it is — not a "key
+        # mismatch" steering the user to --sync-keys, which would raise the
+        # same KeyMaterialError instead of fixing anything.
+        assert "1 unusable vault key(s)" in normalized
+        assert "key mismatch" not in normalized
         # The fail-fast gate fired before Step 2: nothing was encrypted.
         assert "Encrypting environment files" not in normalized
         assert backend.encrypt_calls == []

@@ -294,6 +294,11 @@ Step 1: Verifying keys with vault...
 ERROR: Found 1 key mismatch(es). Run with --sync-keys to update local keys, or --force to encrypt anyway.
 ```
 
+A vault secret that cannot be parsed as key material at all (a JSON document without a usable
+key field, a multi-line blob with no key line, a binary payload) is reported as
+`KEY UNUSABLE` with the shape problem, and the summary counts it as an *unusable vault key*
+rather than a key mismatch — fix the secret in the vault; `--sync-keys` cannot install it.
+
 ### With Key Sync
 
 ```text

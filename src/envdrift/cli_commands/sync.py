@@ -1132,6 +1132,32 @@ def _rekey_dotenvx_file(
     return True, ""
 
 
+def _verify_issue_summary(mismatches: int, unusable: int) -> str:
+    """Summary line for the ``lock --verify-vault`` fail-fast gate.
+
+    Mismatched and unusable keys get named separately with their own remedy:
+    ``--sync-keys`` only fixes a mismatch, while an unusable (malformed) vault
+    secret must be fixed in the vault itself — the sync engine raises the same
+    ``KeyMaterialError`` — so labeling both "key mismatch(es)" steered users
+    toward syncing keys that could never install (#480 review follow-up).
+    """
+    found: list[str] = []
+    if mismatches:
+        found.append(f"{mismatches} key mismatch(es)")
+    if unusable:
+        found.append(f"{unusable} unusable vault key(s)")
+    if not unusable:
+        remedy = "Run with --sync-keys to update local keys, or --force to encrypt anyway."
+    elif mismatches:
+        remedy = (
+            "Fix the vault secret shapes named above, run with --sync-keys to update "
+            "mismatched local keys, or use --force to encrypt anyway."
+        )
+    else:
+        remedy = "Fix the vault secret shapes named above, or use --force to encrypt anyway."
+    return f"Found {' and '.join(found)}. {remedy}"
+
+
 def lock(
     config_file: Annotated[
         Path | None,
@@ -1341,6 +1367,7 @@ def lock(
             from envdrift.sync.operations import EnvKeysFile
 
             verification_issues = 0
+            unusable_keys = 0
 
             for mapping in filtered_mappings:
                 effective_env = mapping.effective_environment
@@ -1429,6 +1456,7 @@ def lock(
                     )
                     errors.append(f"{mapping.folder_path}: vault key material unusable - {e}")
                     verification_issues += 1
+                    unusable_keys += 1
                 except VaultError as e:
                     console.print(
                         f"  [red]![/red] {mapping.folder_path} "
@@ -1440,8 +1468,7 @@ def lock(
 
             if verification_issues > 0 and not force:
                 print_error(
-                    f"Found {verification_issues} key mismatch(es). "
-                    "Run with --sync-keys to update local keys, or --force to encrypt anyway."
+                    _verify_issue_summary(verification_issues - unusable_keys, unusable_keys)
                 )
                 raise typer.Exit(code=1)
 
