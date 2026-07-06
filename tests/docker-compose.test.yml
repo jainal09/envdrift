@@ -47,13 +47,33 @@ services:
       start_period: 5s
 
   lowkey-vault:
-    image: nagyesta/lowkey-vault:7.1.32  # Pin to v7.x for stability
+    # Keep in sync with .github/workflows/integration-tests.yml. 7.3.0+ is
+    # required: older images reject the api-version (2025-07-01) sent by the
+    # azure-keyvault-secrets SDK with HTTP 400.
+    image: nagyesta/lowkey-vault:7.3.0
     ports:
       - "8443:8443"
+      # HTTP port serving the built-in managed-identity token stub
+      # (GET /metadata/identity/oauth2/token). DefaultAzureCredential in the
+      # envdrift CLI gets its dummy token here via
+      # AZURE_POD_IDENTITY_AUTHORITY_HOST (see tests/integration/conftest.py).
+      - "8080:8080"
     environment:
       - LOWKEY_VAULT_NAMES=envdrift-test-vault
     healthcheck:
-      test: ["CMD", "curl", "-f", "-k", "https://localhost:8443/ping"]
+      # The 7.3.x image is BusyBox-based and ships wget but NOT curl; a curl
+      # healthcheck can never pass, so `docker compose up --wait`
+      # (make test-integration-up) would fail with the container "unhealthy".
+      test:
+        [
+          "CMD",
+          "wget",
+          "-q",
+          "-O",
+          "/dev/null",
+          "--no-check-certificate",
+          "https://localhost:8443/ping",
+        ]
       interval: 5s
       timeout: 5s
       retries: 10

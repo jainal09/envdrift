@@ -66,48 +66,50 @@ class TestAWSSecretsManagerClient:
     @pytest.fixture
     def mock_boto3(self):
         """Mock boto3 and its exceptions."""
-        with patch.dict(
-            "sys.modules",
-            {
-                "boto3": MagicMock(),
-                "botocore": MagicMock(),
-                "botocore.exceptions": MagicMock(),
-            },
-        ):
-            # Need to import after patching
-            import importlib
+        import envdrift.vault.aws as aws_module
 
-            import envdrift.vault.aws as aws_module
-
+        try:
+            with patch.dict(
+                "sys.modules",
+                {
+                    "boto3": MagicMock(),
+                    "botocore": MagicMock(),
+                    "botocore.exceptions": MagicMock(),
+                },
+            ):
+                # Need to reload after patching
+                importlib.reload(aws_module)
+                # ``botocore.exceptions`` is a MagicMock here, so the reloaded module
+                # captured ``BotoCoreError`` as a MagicMock — not a usable ``except``
+                # type. Swap in a real sentinel exception class (the common base of the
+                # botocore transport errors) so the production ``except BotoCoreError``
+                # clause is a valid, narrowly-scoped catch in these tests. It does NOT
+                # match the plain-``Exception`` fakes used below (FakeClientError /
+                # WeirdError), preserving their distinct error-code / propagate paths.
+                aws_module.BotoCoreError = FakeBotoCoreError
+                yield aws_module
+        finally:
+            # patch.dict has restored sys.modules by now; reload once more so the
+            # module re-binds the REAL boto3 (or its genuine unavailable state)
+            # instead of leaving MagicMocks poisoning later tests in-process (#497).
             importlib.reload(aws_module)
-            # ``botocore.exceptions`` is a MagicMock here, so the reloaded module
-            # captured ``BotoCoreError`` as a MagicMock — not a usable ``except``
-            # type. Swap in a real sentinel exception class (the common base of the
-            # botocore transport errors) so the production ``except BotoCoreError``
-            # clause is a valid, narrowly-scoped catch in these tests. It does NOT
-            # match the plain-``Exception`` fakes used below (FakeClientError /
-            # WeirdError), preserving their distinct error-code / propagate paths.
-            aws_module.BotoCoreError = FakeBotoCoreError
-            yield aws_module
 
     def test_init_without_boto3_raises(self):
         """Client init should raise when boto3 is unavailable."""
-
-        with patch.dict(
-            sys.modules, {"boto3": None, "botocore": None, "botocore.exceptions": None}
-        ):
-            import envdrift.vault.aws as aws_module
-
-            importlib.reload(aws_module)
-
-            assert aws_module.AWS_AVAILABLE is False
-            with pytest.raises(ImportError):
-                aws_module.AWSSecretsManagerClient()
-
-        # Restore module after the negative check
         import envdrift.vault.aws as aws_module
 
-        importlib.reload(aws_module)
+        try:
+            with patch.dict(
+                sys.modules, {"boto3": None, "botocore": None, "botocore.exceptions": None}
+            ):
+                importlib.reload(aws_module)
+
+                assert aws_module.AWS_AVAILABLE is False
+                with pytest.raises(ImportError):
+                    aws_module.AWSSecretsManagerClient()
+        finally:
+            # Restore module after the negative check, even if an assert fails.
+            importlib.reload(aws_module)
 
     def test_init_sets_region(self, mock_boto3):
         """Test client initializes with region."""
