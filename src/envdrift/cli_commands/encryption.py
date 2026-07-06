@@ -114,6 +114,20 @@ def _protect_private_keys(env_file: Path) -> None:
         )
 
 
+def _report_not_installed(encryption_backend) -> None:
+    """Print the not-installed error, surfacing any auto-install failure cause.
+
+    When a backend recorded why its auto-install attempt failed (#475), telling
+    the user only "X is not installed" plus instructions recommending
+    ``auto_install`` (which just failed) hides the actionable cause.
+    """
+    install_error = getattr(encryption_backend, "install_error", None)
+    if isinstance(install_error, str) and install_error:
+        print_error(f"{encryption_backend.name} auto-install failed: {install_error}")
+    print_error(f"{encryption_backend.name} is not installed")
+    console.print(encryption_backend.install_instructions())
+
+
 def encrypt_cmd(
     env_files: Annotated[
         list[Path] | None,
@@ -329,6 +343,27 @@ def encrypt_cmd(
         if should_block:
             raise typer.Exit(code=1)
     else:
+        # Analyze every target before touching any backend: unreadable input and
+        # cross-backend double encryption are refused up front (#475), and the
+        # refusal must not depend on the selected backend being installed.
+        # report.detected_backend (not the file-level header scan alone) also
+        # carries value-level detection, so a file whose header was stripped but
+        # whose values are still another backend's ciphertext is refused too.
+        # For a plaintext file it equals the selected backend, so encryption
+        # proceeds.
+        for env_file in files:
+            report = _analyze_file(env_file)
+            report_backend = report.detected_backend
+            if report_backend and report_backend != backend_enum.value:
+                print_error(
+                    f"{env_file} is already encrypted with {report_backend}, but the "
+                    f"{backend_enum.value} backend was selected. Double-encrypting would nest "
+                    f"ciphertexts and break decryption. Decrypt it first with "
+                    f"`envdrift decrypt {env_file} --backend {report_backend}` or re-run with "
+                    f"`--backend {report_backend}`."
+                )
+                raise typer.Exit(code=1)
+
         # Attempt encryption using the selected backend
         try:
             backend_config: dict[str, object] = {}
@@ -345,8 +380,7 @@ def encrypt_cmd(
             encryption_backend = get_encryption_backend(backend_enum, **backend_config)
 
             if not encryption_backend.is_installed():
-                print_error(f"{encryption_backend.name} is not installed")
-                console.print(encryption_backend.install_instructions())
+                _report_not_installed(encryption_backend)
                 raise typer.Exit(code=1)
 
             # Build kwargs for SOPS-specific options
@@ -369,10 +403,6 @@ def encrypt_cmd(
             smart_enabled = encryption_config.smart_encryption if encryption_config else False
 
             for env_file in files:
-                # Surface unreadable input (directory / binary file) cleanly
-                # before invoking the backend.
-                _analyze_file(env_file)
-
                 should_skip, skip_reason = should_skip_reencryption(
                     env_file, encryption_backend, enabled=smart_enabled
                 )
@@ -382,7 +412,12 @@ def encrypt_cmd(
 
                 result = encryption_backend.encrypt(env_file, **encrypt_kwargs)
                 if result.success:
-                    print_success(f"Encrypted {env_file} using {encryption_backend.name}")
+                    if result.changed:
+                        print_success(f"Encrypted {env_file} using {encryption_backend.name}")
+                    else:
+                        # Honest no-op (e.g. already encrypted): surface the backend's
+                        # message instead of an unconditional "Encrypted" banner (#475).
+                        print_warning(result.message)
                     _protect_private_keys(env_file)
                 else:
                     print_error(result.message)
@@ -768,8 +803,7 @@ def decrypt_cmd(
         encryption_backend = get_encryption_backend(backend_enum, **backend_config)
 
         if not encryption_backend.is_installed():
-            print_error(f"{encryption_backend.name} is not installed")
-            console.print(encryption_backend.install_instructions())
+            _report_not_installed(encryption_backend)
             raise typer.Exit(code=1)
 
         result = encryption_backend.decrypt(env_file)
