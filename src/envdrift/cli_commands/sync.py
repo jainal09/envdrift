@@ -1101,7 +1101,9 @@ def _find_stale_private_key_name(env_keys_file: Path, expected_key_name: str) ->
 
     if EnvKeysFile(env_keys_file).read_key(expected_key_name):
         return None
-    for line in env_keys_file.read_text().splitlines():
+    # UTF-8 like dotenvx itself: the .env.keys header contains a non-ASCII
+    # character, so the locale codec (cp1252, LC_ALL=C) cannot decode it (#474).
+    for line in env_keys_file.read_text(encoding="utf-8").splitlines():
         if line.startswith("DOTENV_PRIVATE_KEY_") and "=" in line:
             old_key_name = line.split("=")[0].strip()
             if old_key_name != expected_key_name:
