@@ -6,6 +6,7 @@ import os
 import sys
 from pathlib import Path
 from types import SimpleNamespace
+from typing import Any
 
 import pytest
 
@@ -121,7 +122,7 @@ class TestReadGitPath:
         monkeypatch.setenv("GIT_INDEX_FILE", str(index_file))
         monkeypatch.setenv("GIT_COMMON_DIR", str(common_dir))
 
-        captured = {}
+        captured: dict[str, Any] = {}
 
         def fake_run(args, **kwargs):
             captured["env"] = kwargs.get("env")
