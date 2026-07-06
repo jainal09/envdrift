@@ -190,32 +190,39 @@ def _materialize_staged_index(
     display_paths: dict[Path, Path] = {}
     cwd = Path.cwd()
 
-    for rel in staged_files:
-        # ``:<path>`` reads the staged blob; <path> is repo-root-relative
-        # regardless of cwd, but run from the repo root for unambiguity.
-        show = subprocess.run(  # nosec B603, B607
-            ["git", "show", f":{rel}"],
-            capture_output=True,
-            timeout=30,
-            cwd=str(repo_root),
-        )
-        if show.returncode != 0:
-            # E.g. a submodule (gitlink) entry: there is no blob to
-            # content-scan. Skip it loudly, never silently.
-            detail = show.stderr.decode("utf-8", errors="replace").strip()
-            _warn_stderr(
-                f"skipping staged entry '{rel}' — could not read its index blob"
-                + (f" ({detail})" if detail else "")
+    try:
+        for rel in staged_files:
+            # ``:<path>`` reads the staged blob; <path> is repo-root-relative
+            # regardless of cwd, but run from the repo root for unambiguity.
+            show = subprocess.run(  # nosec B603, B607
+                ["git", "show", f":{rel}"],
+                capture_output=True,
+                timeout=30,
+                cwd=str(repo_root),
             )
-            continue
-        dest = mirror_root / Path(rel)
-        dest.parent.mkdir(parents=True, exist_ok=True)
-        dest.write_bytes(show.stdout)
-        scan_paths.append(dest)
-        display_paths[dest.resolve()] = Path(os.path.relpath(repo_root / rel, cwd))
+            if show.returncode != 0:
+                # E.g. a submodule (gitlink) entry: there is no blob to
+                # content-scan. Skip it loudly, never silently.
+                detail = show.stderr.decode("utf-8", errors="replace").strip()
+                _warn_stderr(
+                    f"skipping staged entry '{rel}' — could not read its index blob"
+                    + (f" ({detail})" if detail else "")
+                )
+                continue
+            dest = mirror_root / Path(rel)
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            dest.write_bytes(show.stdout)
+            scan_paths.append(dest)
+            display_paths[dest.resolve()] = Path(os.path.relpath(repo_root / rel, cwd))
 
-    if scan_paths:
-        _git_index_mirror(mirror_root)
+        if scan_paths:
+            _git_index_mirror(mirror_root)
+    except BaseException:
+        # The caller can only clean up a *returned* handle: if we raise
+        # mid-mirror (disk full, git timeout, ...) the temp dir holding staged
+        # secret content must not linger until a GC finalizer runs.
+        tmpdir.cleanup()
+        raise
 
     return tmpdir, scan_paths, display_paths
 
@@ -235,6 +242,12 @@ def _git_index_mirror(mirror_root: Path) -> None:
     env = os.environ.copy()
     for key in ("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_COMMON_DIR"):
         env.pop(key, None)
+    # An injected global/system git config (core.hooksPath, init.templateDir,
+    # core.fsmonitor, ...) must not shape the throwaway mirror repo either.
+    # Point both at the null device — merely unsetting them would fall back to
+    # the real ~/.gitconfig / system config.
+    env["GIT_CONFIG_GLOBAL"] = os.devnull
+    env["GIT_CONFIG_SYSTEM"] = os.devnull
     try:
         for args in (
             ["git", "init", "--quiet", str(mirror_root)],
@@ -275,15 +288,15 @@ def _remap_finding_paths(
             return finding
         return dataclasses.replace(finding, file_path=display)
 
-    return AggregatedScanResult(
+    # dataclasses.replace carries every unlisted field forward, so a future
+    # AggregatedScanResult field can never be silently dropped here.
+    return dataclasses.replace(
+        result,
         results=[
             dataclasses.replace(scan, findings=[remap(f) for f in scan.findings])
             for scan in result.results
         ],
-        total_findings=result.total_findings,
         unique_findings=[remap(f) for f in result.unique_findings],
-        scanners_used=result.scanners_used,
-        total_duration_ms=result.total_duration_ms,
     )
 
 

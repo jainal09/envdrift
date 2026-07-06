@@ -396,6 +396,21 @@ class ScanEngine:
             except ImportError:
                 logger.debug("Infisical scanner not available - module not found")
 
+    def _warn_if_history_unsupported(self) -> None:
+        """Warn when a history request cannot be satisfied by any active scanner.
+
+        A history request no active scanner can satisfy must not masquerade as
+        coverage: warn so SDK callers see the gap. The guard CLI refuses the
+        combination outright before reaching this point (#476).
+        """
+        if self.config.include_git_history and not any(
+            s.supports_git_history for s in self.scanners
+        ):
+            logger.warning(
+                "include_git_history requested but no active scanner supports git "
+                "history; git history will NOT be scanned"
+            )
+
     def scan(
         self,
         paths: list[Path],
@@ -430,16 +445,7 @@ class ScanEngine:
                 total_duration_ms=int((time.time() - start_time) * 1000),
             )
 
-        # A history request no active scanner can satisfy must not masquerade as
-        # coverage: warn so SDK callers see the gap. The guard CLI refuses the
-        # combination outright before reaching this point (#476).
-        if self.config.include_git_history and not any(
-            s.supports_git_history for s in self.scanners
-        ):
-            logger.warning(
-                "include_git_history requested but no active scanner supports git "
-                "history; git history will NOT be scanned"
-            )
+        self._warn_if_history_unsupported()
 
         # Run scanners in parallel using ThreadPoolExecutor
         # Use at most 4 workers to avoid overwhelming the system

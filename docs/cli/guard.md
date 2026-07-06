@@ -390,6 +390,11 @@ Each severity has its own code so a pipeline branching on a specific exit code
 (`if [ $? -eq 2 ]`) can tell them apart — a LOW-only result never collides with
 HIGH's code 2.
 
+Collection errors also exit `1`, reported as an error message instead of findings: an
+unresolvable `--pr-base` ref, `--staged` outside a git repository, or `--history` with no
+active history-capable scanner. These misconfigurations previously passed with exit 0; a
+broken secret gate now fails loudly instead of green.
+
 With `--ci`, the `--fail-on` threshold controls what counts as blocking. A
 finding at or above the threshold fails CI with the severity-derived code above;
 anything below the threshold exits 0.

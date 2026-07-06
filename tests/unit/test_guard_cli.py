@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import os
+import shutil
 import subprocess
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
 from typer.testing import CliRunner
 
 from envdrift.cli import app
@@ -1014,6 +1017,84 @@ def test_guard_staged_all_blobs_unreadable_errors(tmp_path: Path, monkeypatch):
     assert not scan_paths
 
 
+def test_materialize_staged_index_cleans_up_tmpdir_on_error(tmp_path: Path, monkeypatch):
+    """A mid-mirror failure must remove the staged temp dir, not leak it.
+
+    The caller can only clean up a *returned* TemporaryDirectory handle; if
+    e.g. writing a blob fails (disk full) the helper itself must delete the
+    directory holding staged secret content before re-raising (#514 review).
+    Holding a reference to the handle keeps CPython's refcount finalizer from
+    masking a missing explicit cleanup.
+    """
+    import tempfile
+
+    from envdrift.cli_commands.guard import _materialize_staged_index
+
+    def mock_run(cmd, *args, **kwargs):
+        if "show" in cmd:
+            return subprocess.CompletedProcess(cmd, 0, stdout=b"KEY=value\n", stderr=b"")
+        return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+
+    monkeypatch.setattr("subprocess.run", mock_run)
+
+    real_tmpdir_cls = tempfile.TemporaryDirectory
+    created: list[tempfile.TemporaryDirectory] = []
+
+    def recording_tmpdir(*args, **kwargs):
+        handle = real_tmpdir_cls(*args, **kwargs)
+        created.append(handle)
+        return handle
+
+    monkeypatch.setattr(tempfile, "TemporaryDirectory", recording_tmpdir)
+
+    def failing_write_bytes(self: Path, data: bytes) -> int:
+        raise OSError("No space left on device")
+
+    monkeypatch.setattr(Path, "write_bytes", failing_write_bytes)
+
+    with pytest.raises(OSError, match="No space left"):
+        _materialize_staged_index(["app.env"], tmp_path)
+
+    assert len(created) == 1
+    assert not Path(created[0].name).exists()
+
+
+def test_git_index_mirror_ignores_injected_git_config(tmp_path: Path, monkeypatch, capsys):
+    """_git_index_mirror must not honor injected global/system git config.
+
+    A CI-set GIT_CONFIG_GLOBAL (here: a malformed file that makes every git
+    command die with "fatal: bad config") must be neutralized in the mirror
+    env, so the throwaway index is still built (#514 review).
+    """
+    if shutil.which("git") is None:
+        pytest.skip("git binary not available")
+
+    from envdrift.cli_commands.guard import _git_index_mirror
+
+    bad_config = tmp_path / "broken-gitconfig"
+    bad_config.write_text("[core\n", encoding="utf-8")  # malformed on purpose
+    monkeypatch.setenv("GIT_CONFIG_GLOBAL", str(bad_config))
+
+    mirror = tmp_path / "mirror"
+    mirror.mkdir()
+    (mirror / "app.env").write_text("KEY=value\n", encoding="utf-8")
+
+    _git_index_mirror(mirror)
+
+    err = capsys.readouterr().err
+    assert "Warning" not in err, err
+    ls = subprocess.run(
+        ["git", "-C", str(mirror), "ls-files"],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        timeout=30,
+        env={**os.environ, "GIT_CONFIG_GLOBAL": os.devnull, "GIT_CONFIG_SYSTEM": os.devnull},
+    )
+    assert "app.env" in ls.stdout, ls.stderr
+
+
 def test_git_index_mirror_failure_warns(tmp_path: Path, monkeypatch, capsys):
     """_git_index_mirror degrades to a stderr warning when git fails (#476).
 
@@ -1068,8 +1149,10 @@ def test_remap_finding_paths_rewrites_mirror_paths(tmp_path: Path):
     # A finding outside the mirror map is left untouched.
     assert remapped.unique_findings[1].file_path == finding.file_path
     assert remapped.results[0].findings[0].file_path == display
+    # Non-finding fields ride through dataclasses.replace untouched.
     assert remapped.total_findings == 2
     assert remapped.scanners_used == ["native"]
+    assert remapped.total_duration_ms == 5
 
 
 def test_guard_pr_base_scans_diff_files(tmp_path: Path, monkeypatch):
