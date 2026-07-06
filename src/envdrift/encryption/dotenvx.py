@@ -112,6 +112,27 @@ class DotenvxEncryptionBackend(EncryptionBackend):
                 file_path=env_file,
             )
 
+        # Refuse companion files by name — most critically the dotenvx
+        # private-key store itself. ``encrypt .env.keys`` rewrites every
+        # DOTENV_PRIVATE_KEY* value as ciphertext under a brand-new keypair
+        # whose private half is never persisted, permanently locking out every
+        # file encrypted with those keys — previously under a clean exit 0
+        # (#474). Reuses the canonical predicate that already excludes these
+        # names from push/pull.
+        from envdrift.env_files import _is_excluded_env_file
+
+        if _is_excluded_env_file(env_file.name):
+            return EncryptionResult(
+                success=False,
+                message=(
+                    f"Refusing to encrypt {env_file}: it is a companion file "
+                    "(.keys/.example/.sample/.template), not an env file. "
+                    "Encrypting the dotenvx private-key store would permanently "
+                    "lock out every file encrypted with its keys."
+                ),
+                file_path=env_file,
+            )
+
         # Refuse to "encrypt" a file with no assignments. Handed an empty or
         # comment-only file, dotenvx scaffolds a placeholder-secrets template
         # (HELLO, AWS_ACCESS_KEY_ID, ...) into it and still exits 0, so a blind
@@ -164,7 +185,7 @@ class DotenvxEncryptionBackend(EncryptionBackend):
                 f"dotenvx is not installed.\n{self.install_instructions()}"
             )
 
-        from envdrift.integrations.dotenvx import DotenvxError
+        from envdrift.integrations.dotenvx import DotenvxError, DotenvxFilenameError
 
         try:
             wrapper = self._get_wrapper()
@@ -174,7 +195,11 @@ class DotenvxEncryptionBackend(EncryptionBackend):
                 env=kwargs.get("env"),
                 cwd=kwargs.get("cwd"),
             )
-        except DotenvxError as e:
+        except (DotenvxError, DotenvxFilenameError) as e:
+            # DotenvxFilenameError: the wrapper refused pre-flight (e.g. a
+            # renamed private-key store caught by its content sniff, which
+            # name-based checks above cannot see) with the file untouched —
+            # surface it cleanly instead of an uncaught traceback (#474).
             raise EncryptionBackendError(f"dotenvx encryption failed: {e}") from e
 
         # Verify the encryption actually took effect rather than trusting the
