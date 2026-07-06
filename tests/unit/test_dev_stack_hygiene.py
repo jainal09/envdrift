@@ -4,12 +4,13 @@ Two hygiene properties the repo must keep true:
 
 - ``tests/docker-compose.test.yml`` and the ``integration-tests.yml`` service
   containers must pin the *same* image tags, so local runs exercise the same
-  backends CI does (#332 established this once; CI-only Renovate bumps
-  re-diverged localstack 4.0 vs 4.14 and lowkey-vault 7.1.32 vs 7.2.26).
-  Every stack image line carries a keep-in-sync pointer at its counterpart
-  file, and
-  ``renovate.json`` groups the stack images so one Renovate PR moves both
-  files together.
+  backends CI does. #332 established this once; CI-only Renovate bumps then
+  re-diverged the stacks again (when #500 was filed the compose file ran
+  localstack 4.0 against CI's 4.14; lowkey-vault had drifted the same way
+  until #522/#543 re-aligned it at 7.3.0). Every stack image line carries a
+  keep-in-sync pointer at its counterpart file, and ``renovate.json`` keeps
+  the compose file Renovate-visible and groups the stack images so one
+  Renovate PR moves both files together.
 - The Renovate PR body template must describe the merge policy the repo
   actually enforces: ``automerge-version-bump.yml`` squash-merges minor/patch
   bumps with zero human review, so the template must not claim
@@ -43,9 +44,22 @@ _STACK_IMAGES = frozenset({"localstack/localstack", "hashicorp/vault", "nagyesta
 _IMAGE_LINE = re.compile(r"^\s*-?\s*image:\s")
 
 
+def _service_images(services: dict[str, Any]) -> dict[str, str]:
+    """Map service name -> image, skipping services without an ``image`` key.
+
+    A ``build:``-only service defines no image pin, so there is nothing for
+    the hygiene checks to compare; it must not crash them either.
+    """
+    return {
+        name: svc["image"]
+        for name, svc in services.items()
+        if isinstance(svc, dict) and "image" in svc
+    }
+
+
 def _compose_images() -> dict[str, str]:
     compose = yaml.safe_load(_COMPOSE_PATH.read_text(encoding="utf-8"))
-    return {name: svc["image"] for name, svc in compose["services"].items()}
+    return _service_images(compose["services"])
 
 
 def _ci_service_images() -> dict[str, str]:
@@ -56,24 +70,55 @@ def _ci_service_images() -> dict[str, str]:
         "integration-tests.yml no longer defines an 'integration-tests' job "
         f"(found: {sorted(jobs)}) — update _ci_service_images() in this file (#500)."
     )
-    return {name: svc["image"] for name, svc in job["services"].items()}
+    return _service_images(job["services"])
 
 
 def _is_stack_image(image: str) -> bool:
     return image.rpartition(":")[0] in _STACK_IMAGES
 
 
+def _carries_sync_pointer(lines: list[str], index: int, counterpart: str) -> bool:
+    """True if ``lines[index]`` or the comment block directly above it names ``counterpart``."""
+    block = [lines[index]]
+    for candidate in reversed(lines[:index]):
+        if not candidate.lstrip().startswith("#"):
+            break
+        block.append(candidate)
+    return any(counterpart in line for line in block)
+
+
 def _renovate_config() -> dict[str, Any]:
     return json.loads(_RENOVATE_PATH.read_text(encoding="utf-8"))
+
+
+def test_service_images_skips_build_only_services() -> None:
+    """A ``build:``-only service must be skipped, not crash the scan (#500)."""
+    services = {
+        "helper": {"build": "."},
+        "localstack": {"image": "localstack/localstack:4.14"},
+    }
+    assert _service_images(services) == {"localstack": "localstack/localstack:4.14"}
+
+
+def test_sync_pointer_found_in_comment_block_above_image_line() -> None:
+    """The pointer counts anywhere in the comment block above the pin (#500)."""
+    lines = [
+        "  lowkey-vault:",
+        "    # Keep in sync with integration-tests.yml.",
+        "    # 7.3.0+ is required by the SDK api-version.",
+        "    image: nagyesta/lowkey-vault:7.3.0",
+    ]
+    assert _carries_sync_pointer(lines, 3, "integration-tests.yml")
+    assert not _carries_sync_pointer(lines, 3, "docker-compose.test.yml")
 
 
 def test_compose_stack_pins_same_images_as_ci_service_containers() -> None:
     """Local compose images must equal the CI service-container images (#500).
 
-    Pre-fix the local stack ran localstack 4.0 (fourteen minors behind CI's
-    4.14) and lowkey-vault 7.1.32 (vs CI's 7.2.26), so a locally-green
-    integration run proved nothing about the backends CI exercises (#332
-    fixed this once; it re-diverged).
+    When #500 was filed the local stack ran localstack 4.0 — fourteen minors
+    behind CI's 4.14 — so a locally-green integration run proved nothing
+    about the backends CI exercises. #332 fixed the same drift once; CI-only
+    Renovate bumps re-created it.
     """
     compose = _compose_images()
     ci = _ci_service_images()
@@ -100,12 +145,15 @@ def test_compose_stack_pins_same_images_as_ci_service_containers() -> None:
     )
 
 
-def test_stack_images_pin_explicit_version_tags() -> None:
-    """Every stack image pins an explicit non-latest tag (#500).
+def test_every_image_pins_an_explicit_version_tag() -> None:
+    """Every image in both files pins an explicit non-latest tag (#500).
 
-    Tag parity is only meaningful while both sides pin explicit versions; an
-    untagged or ``:latest`` image would let local and CI silently resolve to
-    different backends while the parity check still passes.
+    Deliberately broader than the ``_STACK_IMAGES`` scope the other checks
+    use: tag parity is only meaningful with explicit pins, and *any* unpinned
+    image — stack backend or future dev-only helper — makes the local stack
+    non-reproducible. Unlike the keep-in-sync scan, every service can satisfy
+    this by simply pinning a tag, so the broad scope cannot force a spurious
+    failure on a service that has no counterpart file.
     """
     for source, images in (
         ("tests/docker-compose.test.yml", _compose_images()),
@@ -126,7 +174,8 @@ def test_every_stack_image_line_carries_keep_in_sync_pointer() -> None:
     five image lines gave a human editor (or a reviewer of a Renovate diff)
     no hint that a second copy of the pin exists. Only lines pinning one of
     the ``_STACK_IMAGES`` need the pointer — a dev-only service running some
-    other image has no counterpart to stay in sync with.
+    other image has no counterpart to stay in sync with. The pointer may sit
+    inline or anywhere in the comment block directly above the image line.
     """
     missing: list[str] = []
     for path, counterpart in (
@@ -139,12 +188,36 @@ def test_every_stack_image_line_carries_keep_in_sync_pointer() -> None:
                 continue
             if not any(repository in line for repository in _STACK_IMAGES):
                 continue
-            previous = lines[index - 1] if index else ""
-            if counterpart not in line and counterpart not in previous:
+            if not _carries_sync_pointer(lines, index, counterpart):
                 missing.append(f"{path.name}:{index + 1}: {line.strip()}")
     assert not missing, (
         "Every stack image line must carry a keep-in-sync comment naming the "
         f"counterpart file (#500): {missing}"
+    )
+
+
+def test_renovate_ignore_paths_keep_the_compose_file_visible() -> None:
+    """Renovate must extract deps from tests/docker-compose.test.yml (#500).
+
+    The repo extends ``config:recommended``, which pulls in
+    ``:ignoreModulesAndTests`` and its ``ignorePaths`` entry ``**/tests/**``
+    — skipping every package file under tests/ *before* dependency
+    extraction. The only local copy of the stack pins lives there, so without
+    a repo-level ``ignorePaths`` override Renovate would bump the CI workflow
+    but never the compose file, and the parity test above would fail on every
+    stack bump instead of producing one auto-mergeable grouped PR.
+    """
+    ignore_paths = _renovate_config().get("ignorePaths")
+    assert ignore_paths is not None, (
+        "renovate.json must override ignorePaths: config:recommended's "
+        ":ignoreModulesAndTests preset ignores **/tests/**, hiding "
+        "tests/docker-compose.test.yml from Renovate entirely (#500)."
+    )
+    offending = [pattern for pattern in ignore_paths if "tests/**" in pattern]
+    assert not offending, (
+        f"renovate.json ignorePaths {offending} would hide "
+        "tests/docker-compose.test.yml from Renovate — the compose stack pins "
+        "must stay Renovate-visible (#500)."
     )
 
 
