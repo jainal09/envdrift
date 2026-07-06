@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import subprocess
 from pathlib import Path
 from textwrap import dedent
@@ -535,7 +536,6 @@ class TestSyncEngineDecryptionTest:
         assert result == DecryptionTestResult.PASSED
         # Exactly one decrypt; the old roundtrip's re-encrypt stage is gone.
         assert len(calls) == 1
-        assert "encrypt" not in calls[0]["cmd"] or "decrypt" in calls[0]["cmd"]
         assert calls[0]["cmd"][1] == "decrypt"
         # dotenvx gets the file NAME with cwd set to the isolated temp dir —
         # never the live path, never the mapping folder as cwd.
@@ -657,7 +657,11 @@ class TestSyncEngineDecryptionTest:
         assert not env_file.with_suffix(".backup_decryption_test").exists()
 
     def test_decryption_test_timeout_returns_failed_file_untouched(
-        self, mock_vault_client: MagicMock, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+        self,
+        mock_vault_client: MagicMock,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        caplog: pytest.LogCaptureFixture,
     ) -> None:
         """Timeouts are FAILED; the live file is untouched (no restore needed)."""
         mapping = ServiceMapping(
@@ -677,10 +681,17 @@ class TestSyncEngineDecryptionTest:
         engine = SyncEngine(
             config=SyncConfig(mappings=[mapping]), vault_client=mock_vault_client, mode=SyncMode()
         )
-        result = engine._test_decryption(mapping)
+        with caplog.at_level(logging.WARNING, logger="envdrift.sync.engine"):
+            result = engine._test_decryption(mapping)
 
         assert result == DecryptionTestResult.FAILED
         assert env_file.read_text(encoding="utf-8") == original
+        # The unexpected-failure cause is logged so an infrastructure failure
+        # is distinguishable from a genuine wrong-key FAILED in post-incident
+        # diagnosis (it is not silently swallowed).
+        assert any(
+            "failed unexpectedly" in record.message and record.exc_info for record in caplog.records
+        )
 
     def test_decryption_test_copy_failure_returns_failed(
         self, mock_vault_client: MagicMock, tmp_path: Path, monkeypatch: pytest.MonkeyPatch

@@ -113,6 +113,11 @@ Sync keys from vault before encrypting. This implies `--verify-vault`.
 
 Use this to ensure your local keys are up-to-date with vault before encrypting.
 
+The same hard-failure contract applies: when any mapping's key fails to sync
+(missing vault secret, vault error), `lock` exits 1 **before** encrypting
+anything — even with `--force`. Encrypting past a failed sync would mint a
+fresh local-only key for the very mapping whose vault key is unavailable.
+
 ```bash
 envdrift lock --sync-keys
 ```
@@ -122,10 +127,16 @@ envdrift lock --sync-keys
 Check encryption status only (dry run). Reports what would be encrypted without making changes.
 
 A file counts as encrypted only when **no plaintext value remains** — the same predicate
-`envdrift push` and `envdrift encrypt --check` use. A mixed file holding even one freshly
-added plaintext secret fails the check, no matter how many other values are already
-ciphertext. The plaintext `DOTENV_PUBLIC_KEY_*` header line is ignored, so fully-encrypted
-files pass regardless of how few variables they hold.
+`envdrift push` uses, applied to every backend (dotenvx and SOPS alike). A mixed file
+holding even one freshly added plaintext secret fails the check, no matter how many other
+values are already ciphertext. The plaintext `DOTENV_PUBLIC_KEY_*` header line and SOPS's
+`sops_*` metadata trailer are ignored, so fully-encrypted files pass regardless of how few
+variables they hold.
+
+`lock --check` is deliberately **stricter** than `envdrift encrypt --check`: the latter
+flags only values that look like secrets (sensitive names, suspicious values, or
+schema-marked fields), while `lock --check` fails on *any* plaintext value left in a file
+that is supposed to be fully encrypted.
 
 Exits 1 when any file still needs encryption (including, with `--all`,
 partial-encryption `.secret` files); exits 0 only when everything is encrypted.
