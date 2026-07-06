@@ -20,13 +20,18 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
-from pydantic import Field, create_model
+from pydantic import Field, Json, RootModel, create_model
 from pydantic_settings import BaseSettings, SettingsConfigDict
+from typing_extensions import TypeAliasType
 
 from envdrift.core.diff import DiffEngine
 from envdrift.core.parser import EnvParser
 from envdrift.core.schema import SchemaLoader
 from envdrift.core.validator import ValidationResult, Validator
+
+# `type Hosts = list[str]` is 3.12+ syntax; TypeAliasType is what it compiles
+# to, and typing_extensions provides it on every supported Python.
+Hosts = TypeAliasType("Hosts", list[str])
 
 
 def _real_app_starts(settings_cls: type[BaseSettings], env_path: Path) -> bool:
@@ -156,6 +161,22 @@ class TestEmptyValueParity:
         assert real_ok is True
         assert result.type_errors == {}
         assert result.valid is True
+
+    def test_env_ignore_empty_true_required_empty_is_missing(self, monkeypatch, tmp_path):
+        """#517 review (cubic P1): with env_ignore_empty=True the source drops
+        the empty value, so a *required* field assigned ``PORT=`` is missing at
+        startup - validate must fail it as missing, not skip the field."""
+
+        class Settings(BaseSettings):
+            model_config = SettingsConfigDict(env_ignore_empty=True)
+
+            PORT: int
+
+        result, real_ok = _validate(monkeypatch, tmp_path, Settings, "PORT=\n")
+
+        assert real_ok is False  # the real app crashes: missing input
+        assert "PORT" in result.missing_required
+        assert result.valid is False
 
 
 class TestComplexTypeParity:
@@ -318,6 +339,32 @@ class TestDiffSchemaIntBoolParity:
         assert validate_result.valid is True
 
 
+class TestJsonFieldDiffParity:
+    """#517 review: Json[...] field metadata must flow through diff too."""
+
+    @staticmethod
+    def _json_settings():
+        class Settings(BaseSettings):
+            model_config = SettingsConfigDict(extra="ignore")
+
+            TAGS: Json[list[str]]
+
+        return Settings
+
+    def test_json_field_equivalent_json_is_not_drift(self, tmp_path):
+        result = TestDiffSchemaIntBoolParity._diff(
+            tmp_path, 'TAGS=["a","b"]\n', 'TAGS=["a", "b"]\n', self._json_settings()
+        )
+        assert result.changed_count == 0
+
+    def test_json_field_one_sided_garbage_is_drift(self, tmp_path):
+        """'nonsense' crashes the real app (Json decode); valid JSON loads."""
+        result = TestDiffSchemaIntBoolParity._diff(
+            tmp_path, 'TAGS=["a","b"]\n', "TAGS=nonsense\n", self._json_settings()
+        )
+        assert result.changed_count == 1
+
+
 class TestDotenvxArtifactExemption:
     """#472 finding 6: DOTENV_PUBLIC_KEY* must not fail the quickstart loop."""
 
@@ -422,6 +469,17 @@ class TestFullMatrixParity:
             (dict[str, int], "oops"),
             (int | None, ""),
             (int | None, "42"),
+            # #517 review regressions: a Json marker makes the field
+            # non-complex (raw string passes through; Json decodes it),
+            # PEP 695 aliases resolve to their value, and RootModel is judged
+            # by its root annotation. All three used to false-FAIL here.
+            (Json[list[str]], '["a","b"]'),
+            (Json[list[str]], "nonsense"),
+            (Hosts, '["a","b"]'),
+            (Hosts, "a,b"),
+            (RootModel[str], "plain"),
+            (RootModel[list[str]], '["a","b"]'),
+            (RootModel[list[str]], "a,b"),
         ],
     )
     def test_verdict_matches_real_pydantic_settings(self, monkeypatch, tmp_path, tp, raw):
