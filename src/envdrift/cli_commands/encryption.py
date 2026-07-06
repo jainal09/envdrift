@@ -384,6 +384,7 @@ def _verify_decryption_with_vault(
         bool: `True` if the vault key successfully decrypts a temporary copy of `env_file`, `False` otherwise.
     """
     import os
+    import shutil
     import tempfile
 
     from envdrift.vault import get_vault_client
@@ -470,8 +471,12 @@ def _verify_decryption_with_vault(
             temp_dir_path = Path(temp_dir)
             tmp_path = temp_dir_path / env_file.name  # Preserve filename for key naming
 
-            # Copy env file into isolated directory; inject vault key via environment
-            tmp_path.write_text(env_file.read_text())
+            # Copy the env file into the isolated directory byte-for-byte; the
+            # vault key is injected via the environment. A text-mode copy
+            # (read_text/write_text) would decode with the platform-default
+            # encoding (cp1252 on Windows) and translate newlines, so the temp
+            # copy would not be byte-identical to the original (#454).
+            shutil.copyfile(env_file, tmp_path)
 
             try:
                 dotenvx.decrypt(

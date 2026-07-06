@@ -1,11 +1,13 @@
 name: Release Agent
 
 on:
-  # Manual trigger via tag push
+  # The only release path: agent-v* tags pushed by release-please's PAT (or
+  # manually). release-please.yml must NOT also call this workflow — that ran
+  # every release twice (#495).
   push:
     tags:
       - 'agent-v*'
-  # Called by release-please
+  # Reusable-workflow interface kept for ad-hoc reuse; unused by release-please.
   workflow_call:
     inputs:
       tag_name:
@@ -15,6 +17,18 @@ on:
 
 permissions:
   contents: write
+
+# One release pipeline per tag (#495): the release-please PAT tag push is the
+# only trigger; this per-tag group is a backstop so a re-run or duplicate
+# trigger queues instead of racing binary + checksums.txt uploads for the same
+# tag (a checksums.txt from build A paired with a binary from build B makes
+# the fail-closed installers abort). Queue (don't cancel) so an in-flight
+# release isn't killed mid-upload. Fixed prefix, not `github.workflow`: a
+# called workflow sees the *caller's* name there, which would put a
+# workflow_call run for the same tag in a different group than a tag push.
+concurrency:
+  group: release-agent-${{ inputs.tag_name || github.ref_name }}
+  cancel-in-progress: false
 
 defaults:
   run:
@@ -142,7 +156,7 @@ jobs:
           echo "TAG=$TAG" >> $GITHUB_OUTPUT
 
       - name: Create GitHub Release
-        uses: softprops/action-gh-release@v3
+        uses: softprops/action-gh-release@718ea10b132b3b2eba29c1007bb80653f286566b # v3.0.1
         with:
           tag_name: ${{ steps.version.outputs.TAG }}
           name: Agent v${{ steps.version.outputs.VERSION }}
