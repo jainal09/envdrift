@@ -266,6 +266,19 @@ class PartialEncryptionConfig:
         validate_partial_encryption_environments(self.environments)
 
 
+# Mapping keys that must hold strings when present. Shared shape with
+# envdrift.sync.config.SyncConfig.from_toml (the explicit --config path).
+_MAPPING_STR_KEYS = (
+    "secret_name",
+    "folder_path",
+    "vault_name",
+    "environment",
+    "env_file",
+    "profile",
+    "activate_to",
+)
+
+
 def _build_vault_config(vault_section: dict[str, Any]) -> VaultConfig:
     """Build the vault config, including its nested ``[vault.sync]`` section."""
     sync_section = vault_section.get("sync", {})
@@ -278,14 +291,17 @@ def _build_vault_config(vault_section: dict[str, Any]) -> VaultConfig:
                 f"[[vault.sync.mappings]] entry is missing required key(s) "
                 f"{', '.join(missing)}: {m!r}"
             )
-        for required_str in ("secret_name", "folder_path"):
-            if not isinstance(m[required_str], str):
-                # A wrong-typed value (e.g. ``folder_path = 456``) used to crash
-                # much later inside Path() with a raw TypeError traceback (#491).
-                raise ValueError(
-                    f"[[vault.sync.mappings]] {required_str} must be a string, "
-                    f"got {m[required_str]!r}"
-                )
+        # TOML type surprises (folder_path = 123, secret_name = true, ...)
+        # used to escape as a raw TypeError traceback from Path()/str use
+        # downstream — validate loudly here instead (#488).
+        wrong_type = [
+            k for k in _MAPPING_STR_KEYS if m.get(k) is not None and not isinstance(m[k], str)
+        ]
+        if wrong_type:
+            raise ValueError(
+                f"[[vault.sync.mappings]] entry has non-string value(s) for "
+                f"{', '.join(wrong_type)}: {m!r}"
+            )
     sync_mappings = [
         SyncMappingConfig(
             secret_name=m["secret_name"],
@@ -597,10 +613,18 @@ def load_config(path: Path | str | None = None) -> EnvdriftConfig:
 
     # A pyproject.toml without [tool.envdrift] holds nothing envdrift consumes;
     # skip the unknown-key pass so [project]/[build-system] don't trigger noise.
-    check_unknown_keys = True
+    # For pyproject files the pass runs on the original [tool.envdrift] table —
+    # not the restructured dict — so a typo'd section like [tool.envdrift.gaurd]
+    # is reported where the user wrote it, with a did-you-mean hint drawn from
+    # the real section names (#491).
+    unknown_key_data: dict[str, Any] | None = data
+    unknown_key_spec: dict[str, Any] | None = None
+    unknown_key_section = ""
     try:
         if path.name == "pyproject.toml":
-            check_unknown_keys = bool(data.get("tool", {}).get("envdrift"))
+            unknown_key_data = data.get("tool", {}).get("envdrift") or None
+            unknown_key_spec = _PYPROJECT_KEY_SPEC
+            unknown_key_section = "tool.envdrift"
             data = _restructure_pyproject(data)
         config = EnvdriftConfig.from_dict(data)
     except (ValueError, TypeError, AttributeError, KeyError) as e:
@@ -608,8 +632,8 @@ def load_config(path: Path | str | None = None) -> EnvdriftConfig:
         # raw AttributeError/TypeError tracebacks from pull/lock/sync (#491).
         raise ConfigLoadError(path, f"Invalid config in {path}: {e}") from e
 
-    if check_unknown_keys:
-        _emit_unknown_key_warnings(path, data)
+    if unknown_key_data:
+        _emit_unknown_key_warnings(path, unknown_key_data, unknown_key_spec, unknown_key_section)
 
     return config
 
@@ -749,13 +773,18 @@ def find_unknown_config_keys(
 _emitted_unknown_key_warnings: set[tuple[str, str]] = set()
 
 
-def _emit_unknown_key_warnings(path: Path, data: dict[str, Any]) -> None:
+def _emit_unknown_key_warnings(
+    path: Path,
+    data: dict[str, Any],
+    spec: dict[str, Any] | None = None,
+    section: str = "",
+) -> None:
     """Print unknown-key findings to stderr, once per process per finding.
 
     stderr (not the Rich stdout console) so machine-readable stdout — guard
     ``--json``/``--sarif``, ``diff --format json`` — stays parseable (#491).
     """
-    for finding in find_unknown_config_keys(data):
+    for finding in find_unknown_config_keys(data, spec, section):
         dedupe_key = (str(path), finding)
         if dedupe_key in _emitted_unknown_key_warnings:
             continue
@@ -767,6 +796,14 @@ def _emit_unknown_key_warnings(path: Path, data: dict[str, Any]) -> None:
 # be hoisted to the root for from_dict (everything else stays under "envdrift").
 # Derived from the key spec so a new section cannot drift out of sync.
 _PYPROJECT_TOPLEVEL_SECTIONS = tuple(k for k in _CONFIG_KEY_SPEC if k != "envdrift")
+
+# In pyproject.toml everything lives on one [tool.envdrift] table: the core keys
+# sit directly on it and every other section nests beneath it, so the unknown-key
+# pass needs both merged into one spec (#491).
+_PYPROJECT_KEY_SPEC: dict[str, Any] = {
+    **{k: v for k, v in _CONFIG_KEY_SPEC.items() if k != "envdrift"},
+    **_CONFIG_KEY_SPEC["envdrift"],
+}
 
 
 def _restructure_pyproject(data: dict[str, Any]) -> dict[str, Any]:

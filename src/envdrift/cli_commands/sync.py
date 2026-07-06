@@ -333,7 +333,8 @@ def _load_partial_encryption_paths(
         config = load_config(config_path)
     except ConfigNotFoundError:
         return set(), set(), set()
-    except (ConfigLoadError, OSError) as exc:
+    except ConfigLoadError as exc:
+        # load_config converts every OSError into ConfigLoadError (#491).
         print_warning(f"Unable to read config for partial encryption: {exc}")
         return set(), set(), set()
 
@@ -974,7 +975,8 @@ def pull(
             partial_config = load_envdrift_config(config_path)
         except ConfigNotFoundError:
             partial_config = None
-        except (ConfigLoadError, OSError) as exc:
+        except ConfigLoadError as exc:
+            # load_config converts every OSError into ConfigLoadError (#491).
             print_warning(f"Unable to read config for partial encryption: {exc}")
             partial_config = None
 

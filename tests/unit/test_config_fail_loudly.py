@@ -125,6 +125,47 @@ class TestLoadConfigFailsLoudly:
         with pytest.raises(ConfigLoadError, match="secret_name"):
             load_config(cfg)
 
+    def test_mapping_env_file_and_activate_to_wrong_type_raise_config_load_error(
+        self, tmp_path: Path
+    ):
+        """``env_file = 456`` / ``activate_to = 789`` used to crash later inside
+        Path() with a raw TypeError traceback (#491 review; same class as #488)."""
+        from envdrift.config import ConfigLoadError, load_config
+
+        cfg = tmp_path / "envdrift.toml"
+        cfg.write_text(
+            dedent(
+                """\
+                [[vault.sync.mappings]]
+                secret_name = "k"
+                folder_path = "."
+                env_file = 456
+                activate_to = 789
+                """
+            ),
+            encoding="utf-8",
+        )
+        with pytest.raises(ConfigLoadError, match="env_file, activate_to"):
+            load_config(cfg)
+
+    def test_sync_config_from_toml_env_file_wrong_type_clean_error(self):
+        """The explicit --config layer must reject non-string mapping values too,
+        as a SyncConfigError, not a TypeError from Path() (#491 review, #488)."""
+        from envdrift.sync.config import SyncConfig, SyncConfigError
+
+        with pytest.raises(SyncConfigError, match="env_file"):
+            SyncConfig.from_toml(
+                {"mappings": [{"secret_name": "k", "folder_path": ".", "env_file": 456}]}
+            )
+
+    def test_sync_config_from_toml_activate_to_wrong_type_clean_error(self):
+        from envdrift.sync.config import SyncConfig, SyncConfigError
+
+        with pytest.raises(SyncConfigError, match="activate_to"):
+            SyncConfig.from_toml(
+                {"mappings": [{"secret_name": "k", "folder_path": ".", "activate_to": 789}]}
+            )
+
     @pytest.mark.skipif(
         sys.platform == "win32" or (hasattr(os, "geteuid") and os.geteuid() == 0),
         reason="POSIX permission bits; root bypasses chmod 000",
@@ -283,6 +324,50 @@ class TestUnknownKeyWarnings:
         load_config(cfg)
         err = capsys.readouterr().err
         assert "fail_on_severty" in err
+
+    def test_pyproject_typoed_section_warns_with_real_location_and_hint(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ):
+        """A typo'd [tool.envdrift.gaurd] must be reported where the user wrote
+        it — not as a mystery key ``in [envdrift]`` — with a did-you-mean for
+        the real section name (#491 review)."""
+        from envdrift.config import load_config
+
+        cfg = tmp_path / "pyproject.toml"
+        cfg.write_text(
+            dedent(
+                """\
+                [tool.envdrift.gaurd]
+                check_entropy = true
+                """
+            ),
+            encoding="utf-8",
+        )
+        load_config(cfg)
+        err = capsys.readouterr().err
+        assert "unknown config key 'gaurd' in [tool.envdrift]" in err
+        assert "did you mean 'guard'" in err
+
+    def test_pyproject_nested_unknown_key_names_full_section(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ):
+        """Nested findings name the section as written in pyproject.toml."""
+        from envdrift.config import load_config
+
+        cfg = tmp_path / "pyproject.toml"
+        cfg.write_text(
+            dedent(
+                """\
+                [tool.envdrift.vault.sync]
+                ephemerl_keys = true
+                """
+            ),
+            encoding="utf-8",
+        )
+        load_config(cfg)
+        err = capsys.readouterr().err
+        assert "in [tool.envdrift.vault.sync]" in err
+        assert "did you mean 'ephemeral_keys'" in err
 
     def test_plain_pyproject_does_not_warn(
         self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
@@ -475,6 +560,24 @@ class TestSyncFamilyCleanErrors:
         assert result.exit_code == 1, result.output
         assert isinstance(result.exception, SystemExit)
         assert "folder_path" in _flat(result.output)
+
+    def test_pull_mapping_env_file_wrong_type_clean_error(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        """``env_file = 456`` used to escape pull as a raw TypeError traceback
+        from Path() (#491 review; same class as #488)."""
+        (tmp_path / "envdrift.toml").write_text(
+            '[vault]\nprovider = "aws"\n\n'
+            '[[vault.sync.mappings]]\nsecret_name = "k"\nfolder_path = "."\nenv_file = 456\n',
+            encoding="utf-8",
+        )
+        monkeypatch.chdir(tmp_path)
+
+        result = runner.invoke(app, ["pull"])
+
+        assert result.exit_code == 1, result.output
+        assert isinstance(result.exception, SystemExit)
+        assert "env_file" in _flat(result.output)
 
     def test_lock_autodiscovered_malformed_config_hard_errors(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch

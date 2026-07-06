@@ -33,7 +33,8 @@ non-zero instead of silently continuing with default settings. This covers:
   permissions problem).
 - **Wrong-typed or invalid sections** — `Invalid config in <path>: …` (for
   example `vault = "a string"`, a `[[vault.sync.mappings]]` entry missing
-  `secret_name`/`folder_path`, or a non-string `folder_path`).
+  `secret_name`/`folder_path`, or a non-string mapping value such as
+  `folder_path = 456` or `env_file = 456`).
 
 Keys that envdrift does not consume produce a warning on **stderr** (stdout
 stays clean for `--json`/`--sarif`/`--format json` consumers), with a
@@ -47,6 +48,10 @@ This catches typos that would otherwise silently revert an option — including
 security posture knobs like `[guard] fail_on_severity` or `[vault.sync]
 ephemeral_keys` — to its default. Tables whose keys are user-defined by design
 (`[vault.mappings]`, `[guard.ignore_rules]`, `[precommit.schemas]`) are exempt.
+
+In `pyproject.toml`, findings name the section as you wrote it — a typo'd
+`[tool.envdrift.gaurd]` warns with
+`unknown config key 'gaurd' in [tool.envdrift] (did you mean 'guard'?)`.
 
 ## File Formats
 
