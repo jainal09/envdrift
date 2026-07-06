@@ -5,7 +5,7 @@ Check or perform encryption on .env files using dotenvx or SOPS.
 ## Synopsis
 
 ```bash
-envdrift encrypt [ENV_FILE] [OPTIONS]
+envdrift encrypt [ENV_FILE]... [OPTIONS]
 ```
 
 ## Description
@@ -34,11 +34,17 @@ exit code (dotenvx can exit `0` without encrypting):
   re-read after the call; if any plaintext value survives, the command fails
   loudly instead of printing `[OK]`.
 
+Multiple env files can be passed in one invocation. With `--check`, each file gets
+its own report and the exit code is 1 if any file should block a commit — this keeps
+the command usable as a pre-commit `pass_filenames: true` hook, where every matched
+staged file is appended to a single command line. Without `--check`, each file is
+encrypted in turn.
+
 ## Arguments
 
-| Argument   | Description           | Default |
-| :--------- | :-------------------- | :------ |
-| `ENV_FILE` | Path to the .env file | `.env`  |
+| Argument      | Description                    | Default |
+| :------------ | :----------------------------- | :------ |
+| `ENV_FILE`... | Path(s) to the .env file(s)    | `.env`  |
 
 ## Options
 
