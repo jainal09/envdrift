@@ -246,7 +246,9 @@ def _is_env_file(rel_path: str) -> bool:
     by ``docker --env-file``, direnv and many CI systems (#477).
     """
     file_name = Path(rel_path).name
-    return file_name == ".env" or file_name.startswith(".env.") or file_name.endswith(".env")
+    # `.env` itself is covered by endswith(".env"); the dotted form (.env.local)
+    # by startswith(".env."); trailing-suffix (production.env) by endswith.
+    return file_name.startswith(".env.") or file_name.endswith(".env")
 
 
 # Bytes that legitimately appear in text files: printable/high bytes plus the
@@ -318,22 +320,22 @@ def _decode_unicode_text(raw: bytes) -> str | None:
     ``Out-File``; its ~50% NUL bytes would otherwise trip the binary-ratio
     heuristic and the scanner would silently skip a human-readable env file full
     of plaintext secrets (#477). Returns the decoded text, or ``None`` when the
-    bytes carry no BOM / recognizable UTF-16 stride or a strict decode fails —
-    the caller then falls back to the binary check + lenient UTF-8 decode used
-    for ordinary files.
+    bytes carry no BOM / recognizable UTF-16 stride — the caller then falls back
+    to the binary check + lenient UTF-8 decode used for ordinary files.
     """
+    # A clear BOM or a clean UTF-16 NUL stride POSITIVELY identifies the bytes as
+    # text, so decode with errors="replace": a single bad/truncated code unit
+    # (a half-written Notepad file, a lone surrogate, or the trailing odd byte
+    # the stride sniff deliberately tolerates) must not send us back to
+    # _looks_binary — which is True for any ~50%-NUL UTF-16 content — and
+    # silently skip a file full of plaintext secrets, the exact pre-#477 gap
+    # this decode path exists to close (#505 review).
     for bom, encoding in _BOM_CODECS:
         if raw.startswith(bom):
-            try:
-                return raw.decode(encoding)
-            except UnicodeDecodeError:
-                return None
+            return raw.decode(encoding, errors="replace")
     stride_encoding = _sniff_utf16_stride(raw)
     if stride_encoding is not None:
-        try:
-            return raw.decode(stride_encoding)
-        except UnicodeDecodeError:
-            return None
+        return raw.decode(stride_encoding, errors="replace")
     return None
 
 
@@ -661,18 +663,68 @@ class NativeScanner(ScannerBackend):
         path_str = str(relative_path)
         name = file_path.name
 
-        for pattern in self._ignore_patterns:
-            # Match against full relative path
-            if fnmatch.fnmatch(path_str, pattern):
-                return True
-            # Match against filename only
-            if fnmatch.fnmatch(name, pattern):
-                return True
-            # Match against path parts
-            if any(fnmatch.fnmatch(part, pattern) for part in relative_path.parts):
-                return True
+        return any(
+            self._pattern_matches(pattern, path_str, name, relative_path.parts)
+            for pattern in self._ignore_patterns
+        )
 
-        return False
+    @staticmethod
+    def _pattern_matches(pattern: str, path_str: str, name: str, parts: tuple[str, ...]) -> bool:
+        """Whether one ignore pattern matches a file, path-aware.
+
+        A path-shaped pattern (one containing ``/`` such as ``bin/**``) is matched
+        against the full relative path. A basename-shaped pattern (``*.pyc``,
+        ``[!.]*.test``) is matched ONLY against the file name or a single path
+        part — never the whole path. ``fnmatch``'s ``*`` crosses ``/``, so a
+        whole-path match would let ``[!.]*.test`` swallow a nested ``.env.test``:
+        the ``[!.]`` anchor only constrains the first character of the entire
+        string (the top directory's letter), not the filename's leading dot, so a
+        tracked ``apps/web/.env.test`` full of live secrets was silently ignored
+        (#505 review).
+        """
+        if "/" in pattern:
+            return fnmatch.fnmatch(path_str, pattern)
+        if fnmatch.fnmatch(name, pattern):
+            return True
+        return any(fnmatch.fnmatch(part, pattern) for part in parts)
+
+    @staticmethod
+    def _read_scannable_content(file_path: Path) -> str | None:
+        """Read ``file_path`` and return its text content, or ``None`` to skip it.
+
+        Reads raw bytes (so the binary check sees the true content: ``read_text``
+        with ``errors="ignore"`` would silently drop the very non-text bytes that
+        identify a binary file), decodes demonstrably-Unicode text first, and
+        neutralizes stray NULs. Returns ``None`` for an unreadable file, a genuine
+        binary blob, or an empty/whitespace-only file.
+        """
+        try:
+            raw = file_path.read_bytes()
+        except OSError:
+            return None
+
+        # Decode demonstrably-Unicode text before the binary heuristic can see it
+        # (#477): a UTF-16 env file is ~50% NUL bytes, which the ratio check would
+        # misclassify as a compiled blob and skip wholesale — silently passing a
+        # human-readable file full of plaintext secrets. A BOM or a clean 2-byte
+        # NUL stride identifies the bytes as text, so decode through the right
+        # codec first.
+        content = _decode_unicode_text(raw)
+        if content is None:
+            # Skip genuinely-binary files (compiled blobs etc.) to avoid noise —
+            # but a single stray NUL must NOT hide secrets in an otherwise-text
+            # file. The old "any NUL in the first 8 KiB -> discard ALL findings"
+            # rule let an attacker evade guard by injecting one NUL byte, leaving
+            # a real plaintext key undetected with a clean [OK] (#22).
+            if _looks_binary(raw):
+                return None
+            content = raw.decode("utf-8", errors="ignore")
+
+        # Neutralize any stray NULs so they can't break pattern matching downstream.
+        content = content.replace("\x00", "")
+        if not content.strip():
+            return None
+        return content
 
     def _scan_file(self, file_path: Path) -> list[ScanFinding]:
         """Scan a single file for secrets.
@@ -690,36 +742,8 @@ class NativeScanner(ScannerBackend):
         if is_clear_file and self._skip_clear_files:
             return findings
 
-        # Read raw bytes so the binary check sees the true content: read_text with
-        # errors="ignore" silently drops the very non-text bytes that identify a
-        # binary file, which would defeat the heuristic below.
-        try:
-            raw = file_path.read_bytes()
-        except OSError:
-            return findings
-
-        # Decode demonstrably-Unicode text before the binary heuristic can see it
-        # (#477): a UTF-16 env file is ~50% NUL bytes, which the ratio check would
-        # misclassify as a compiled blob and skip wholesale — silently passing a
-        # human-readable file full of plaintext secrets. A BOM or a clean 2-byte
-        # NUL stride identifies the bytes as text, so decode through the right
-        # codec first.
-        content = _decode_unicode_text(raw)
+        content = self._read_scannable_content(file_path)
         if content is None:
-            # Skip genuinely-binary files (compiled blobs etc.) to avoid noise —
-            # but a single stray NUL must NOT hide secrets in an otherwise-text
-            # file. The old "any NUL in the first 8 KiB -> discard ALL findings"
-            # rule let an attacker evade guard by injecting one NUL byte, leaving
-            # a real plaintext key undetected with a clean [OK] (#22).
-            if _looks_binary(raw):
-                return findings
-            content = raw.decode("utf-8", errors="ignore")
-
-        # Neutralize any stray NULs so they can't break pattern matching downstream.
-        content = content.replace("\x00", "")
-
-        # Skip empty files
-        if not content.strip():
             return findings
 
         # Private-key file (.env.keys) handling.

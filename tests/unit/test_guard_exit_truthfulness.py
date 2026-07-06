@@ -309,6 +309,68 @@ class TestEntropyThresholdValidation:
         assert "entropy_threshold" in payload["error"]
         assert "Traceback" not in result.output
 
+    @pytest.mark.parametrize(
+        "raw",
+        ['"nan"', '"inf"', '"-inf"', '"1e400"', "nan", "inf"],
+        ids=["quoted-nan", "quoted-inf", "quoted-neg-inf", "quoted-1e400", "bare-nan", "bare-inf"],
+    )
+    def test_non_finite_threshold_is_clean_config_error(
+        self, tmp_path: Path, monkeypatch, raw: str
+    ):
+        """#478 review: nan/inf parse as floats but make every ``entropy >=
+        threshold`` comparison False, silently disabling the entropy gate."""
+        (tmp_path / ".env").write_text(f"TOKEN={_HEX_TOKEN}\n", encoding="utf-8")
+        (tmp_path / "envdrift.toml").write_text(
+            f'[guard]\nscanners = ["native"]\ncheck_entropy = true\nentropy_threshold = {raw}\n',
+            encoding="utf-8",
+        )
+        monkeypatch.chdir(tmp_path)
+        result = runner.invoke(app, ["guard", "--json", "--no-auto-install", "."])
+        assert result.exit_code == 6, (
+            f"expected operational-error exit 6, got {result.exit_code}\n{result.output}"
+        )
+        payload = json.loads(result.stdout)
+        assert "entropy_threshold" in payload["error"]
+        assert "finite" in payload["error"]
+
+
+# --- 4b. fail_on_severity is type-validated at config load ----------------------
+
+
+class TestFailOnSeverityValidation:
+    """#478 review: a non-string ``fail_on_severity`` crashed past the CLI's
+    ``except ValueError``.
+
+    ``fail_on_severity = 123`` raised ``AttributeError: 'int' object has no
+    attribute 'lower'`` — a Rich traceback, empty ``--json`` stdout, and exit 1
+    colliding with critical's code: the exact bug triad this feature eliminates
+    for the other guard knobs.
+    """
+
+    def test_non_string_fail_on_severity_is_clean_json_error(self, tmp_path: Path, monkeypatch):
+        (tmp_path / ".env").write_text("API_KEY=plainvalue123\n", encoding="utf-8")
+        (tmp_path / "envdrift.toml").write_text(
+            "[guard]\nfail_on_severity = 123\n", encoding="utf-8"
+        )
+        monkeypatch.chdir(tmp_path)
+        result = runner.invoke(app, ["guard", "--json", "--native-only", "--no-auto-install", "."])
+        assert result.exit_code == 6, (
+            f"expected operational-error exit 6, got {result.exit_code}\n{result.output}"
+        )
+        payload = json.loads(result.stdout)  # stdout must be a clean JSON document
+        assert "fail_on_severity" in payload["error"]
+        assert "Traceback" not in result.output
+
+    def test_non_string_fail_on_severity_human_mode(self, tmp_path: Path, monkeypatch):
+        (tmp_path / "envdrift.toml").write_text(
+            "[guard]\nfail_on_severity = 123\n", encoding="utf-8"
+        )
+        monkeypatch.chdir(tmp_path)
+        result = runner.invoke(app, ["guard", "--native-only", "--no-auto-install", "."])
+        assert result.exit_code == 6
+        assert "fail_on_severity" in " ".join(result.output.split())
+        assert "Traceback" not in result.output
+
 
 # --- 5. check_entropy=false / --no-entropy actually disable entropy -------------
 
@@ -400,6 +462,64 @@ class TestOperationalErrorExitCode:
         invocation = payload["runs"][0]["invocations"][0]
         assert invocation["executionSuccessful"] is False
         assert invocation["exitCode"] == 6
+
+
+# --- 6b. git/env_file failures keep --json/--sarif stdout parseable --------------
+
+
+class TestGitDiscoveryErrorMachineOutput:
+    """#478 review: git timeout/not-found under ``--staged``/``--pr-base`` (and an
+    invalid ``env_file`` mapping) exited 6 via prose on stdout, so ``--json``/
+    ``--sarif`` consumers got a parse failure instead of an error document."""
+
+    def test_git_not_found_staged_json_is_parseable(self, tmp_path: Path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        # A real missing-git environment: nothing on PATH resolves ``git``.
+        monkeypatch.setenv("PATH", str(tmp_path / "empty-bin"))
+        result = runner.invoke(app, ["guard", "--staged", "--json", "--native-only"])
+        assert result.exit_code == 6
+        payload = json.loads(result.stdout)  # stdout must be a clean JSON document
+        assert "Git not found" in payload["error"]
+
+    def test_git_not_found_staged_sarif_is_parseable(self, tmp_path: Path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.setenv("PATH", str(tmp_path / "empty-bin"))
+        result = runner.invoke(app, ["guard", "--staged", "--sarif", "--native-only"])
+        assert result.exit_code == 6
+        invocation = json.loads(result.stdout)["runs"][0]["invocations"][0]
+        assert invocation["executionSuccessful"] is False
+        assert invocation["exitCode"] == 6
+
+    def test_git_timeout_pr_base_json_is_parseable(self, tmp_path: Path, monkeypatch):
+        import subprocess
+
+        def raise_timeout(cmd, *_args, **kwargs):
+            # Inject the timeout (test input); the behavior under test is the
+            # CLI's error emission, not git itself.
+            raise subprocess.TimeoutExpired(cmd=cmd, timeout=kwargs.get("timeout", 10))
+
+        monkeypatch.setattr(subprocess, "run", raise_timeout)
+        monkeypatch.chdir(tmp_path)
+        result = runner.invoke(
+            app, ["guard", "--pr-base", "origin/main", "--json", "--native-only"]
+        )
+        assert result.exit_code == 6
+        payload = json.loads(result.stdout)
+        assert "timed out" in payload["error"]
+
+    def test_invalid_env_file_mapping_json_is_parseable(self, tmp_path: Path, monkeypatch):
+        (tmp_path / "envdrift.toml").write_text(
+            "[[vault.sync.mappings]]\n"
+            'secret_name = "s"\n'
+            'folder_path = "."\n'
+            'env_file = "../escape.env"\n',
+            encoding="utf-8",
+        )
+        monkeypatch.chdir(tmp_path)
+        result = runner.invoke(app, ["guard", "--json", "--native-only", "--no-auto-install", "."])
+        assert result.exit_code == 6
+        payload = json.loads(result.stdout)
+        assert "Invalid env_file" in payload["error"]
 
 
 # --- pure exit-semantics unit coverage on the single source of truth ------------

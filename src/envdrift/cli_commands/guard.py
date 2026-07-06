@@ -435,10 +435,12 @@ def guard(
                 _emit_empty_or_prose(json_output, sarif, _NO_STAGED)
                 raise typer.Exit(code=0)
         except subprocess.TimeoutExpired as err:
-            console.print("[red]Error:[/red] Git command timed out")
+            # Route through _emit_error so --json/--sarif stdout stays a
+            # parseable document on git failures too (#478 review).
+            _emit_error(json_output, sarif, "Git command timed out")
             raise typer.Exit(code=EXIT_OPERATIONAL_ERROR) from err
         except FileNotFoundError as err:
-            console.print("[red]Error:[/red] Git not found. --staged requires git.")
+            _emit_error(json_output, sarif, "Git not found. --staged requires git.")
             raise typer.Exit(code=EXIT_OPERATIONAL_ERROR) from err
 
     # Handle --pr-base flag (CI mode for PRs)
@@ -489,10 +491,11 @@ def guard(
                 _emit_empty_or_prose(json_output, sarif, _NO_PR_CHANGES)
                 raise typer.Exit(code=0)
         except subprocess.TimeoutExpired as err:
-            console.print("[red]Error:[/red] Git command timed out")
+            # Same machine-output contract as the --staged branch (#478 review).
+            _emit_error(json_output, sarif, "Git command timed out")
             raise typer.Exit(code=EXIT_OPERATIONAL_ERROR) from err
         except FileNotFoundError as err:
-            console.print("[red]Error:[/red] Git not found. --pr-base requires git.")
+            _emit_error(json_output, sarif, "Git not found. --pr-base requires git.")
             raise typer.Exit(code=EXIT_OPERATIONAL_ERROR) from err
 
     # Default behavior: use provided paths or current directory
@@ -577,7 +580,9 @@ def guard(
                     )
                 )
             except ValueError as e:
-                console.print(f"[red]Error:[/red] Invalid env_file for {mapping.folder_path}: {e}")
+                # Same machine-output contract as the other operational-error
+                # paths: --json/--sarif stdout stays parseable (#478 review).
+                _emit_error(json_output, sarif, f"Invalid env_file for {mapping.folder_path}: {e}")
                 raise typer.Exit(code=EXIT_OPERATIONAL_ERROR) from e
 
     # Determine skip_clear_files (CLI overrides config)

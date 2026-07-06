@@ -20,6 +20,7 @@ from typing import TYPE_CHECKING
 from envdrift.config import (
     coerce_check_entropy,
     coerce_entropy_threshold,
+    coerce_fail_on_severity,
     normalize_ignore_paths,
     normalize_ignore_rules,
 )
@@ -110,7 +111,7 @@ class GuardConfig:
         """
         Construct a GuardConfig from a parsed configuration dictionary (for example, from envdrift.toml).
 
-        Parses the "guard" section to enable scanner flags, normalization of the "scanners" entry (accepts a string or list; defaults to ["native", "gitleaks"]), and reads other guard settings such as auto_install, include_history, entropy checks, ignore paths/rules, and skip_clear_files. Interprets "fail_on_severity" case-insensitively and falls back to FindingSeverity.HIGH on invalid values.
+        Parses the "guard" section to enable scanner flags, normalization of the "scanners" entry (accepts a string or list; defaults to ["native", "gitleaks"]), and reads other guard settings such as auto_install, include_history, entropy checks, ignore paths/rules, and skip_clear_files. Interprets "fail_on_severity" case-insensitively, raising ValueError on non-string values and falling back to FindingSeverity.HIGH on unknown severity names.
 
         Also reads partial-encryption awareness fields so SDK callers get the same
         false-positive/false-negative protection as the CLI: ``allowed_clear_files``
@@ -131,8 +132,10 @@ class GuardConfig:
         if isinstance(scanners, str):
             scanners = [scanners]
 
-        # Parse severity
-        fail_on = guard_config.get("fail_on_severity", "high")
+        # Parse severity. A non-string raises a clean ValueError like the
+        # other knobs (it used to escape as AttributeError on .lower(), #478);
+        # an invalid severity *name* keeps the documented fallback to HIGH.
+        fail_on = coerce_fail_on_severity(guard_config.get("fail_on_severity", "high"))
         try:
             fail_severity = FindingSeverity(fail_on.lower())
         except ValueError:

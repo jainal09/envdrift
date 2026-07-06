@@ -293,12 +293,21 @@ def test_relative_path_invocation_applies_directory_ignores(tmp_path: Path) -> N
         (tmp_path / sub / "secrets.conf").write_text(f"TOKEN={_GHP_TOKEN}\n", encoding="utf-8")
     _commit_all(tmp_path)
 
-    no_arg = _guard_json(
-        _run_envdrift(["guard", "--native-only", "--no-auto-install", "--json"], cwd=tmp_path)
+    no_arg_result = _run_envdrift(
+        ["guard", "--native-only", "--no-auto-install", "--json"], cwd=tmp_path
     )
-    rel_arg = _guard_json(
-        _run_envdrift(["guard", "--native-only", "--no-auto-install", "--json", "."], cwd=tmp_path)
+    rel_arg_result = _run_envdrift(
+        ["guard", "--native-only", "--no-auto-install", "--json", "."], cwd=tmp_path
     )
+    # The non-ignored config/secrets.conf PAT is CRITICAL, so both spellings
+    # must fail with exit 1 — findings parity alone would let a failure-mode
+    # regression slip through as long as the JSON stayed parseable.
+    assert no_arg_result.returncode == rel_arg_result.returncode == 1, (
+        f"exit codes diverged or lost failure: no-arg={no_arg_result.returncode} "
+        f"rel-arg={rel_arg_result.returncode}\n{no_arg_result.stderr}\n{rel_arg_result.stderr}"
+    )
+    no_arg = _guard_json(no_arg_result)
+    rel_arg = _guard_json(rel_arg_result)
 
     rel_parts = _finding_rel_parts(rel_arg)
     assert "config/secrets.conf" in rel_parts  # sanity: non-ignored dir is scanned

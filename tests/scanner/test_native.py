@@ -1993,6 +1993,23 @@ class TestRealSecretEnvNamesScanned:
 
         assert result.files_scanned == 0
 
+    def test_should_ignore_does_not_swallow_nested_env_test(self, scanner: NativeScanner):
+        """#505: ``[!.]*.test`` must not ignore a NESTED ``.env.test`` via full-path match.
+
+        ``fnmatch``'s ``*`` crosses ``/`` and the ``[!.]`` anchor only constrains the
+        first character of the whole string, so matching the basename pattern against
+        the full relative path let ``apps/web/.env.test`` (full of live secrets) be
+        ignored while a top-level ``.env.test`` was correctly scanned.
+        """
+        base = Path("/repo")
+        # Go test binaries stay ignored at any depth (basename match).
+        assert scanner._should_ignore(Path("/repo/pkg.test"), base) is True
+        assert scanner._should_ignore(Path("/repo/apps/web/pkg.test"), base) is True
+        # Env files are never swallowed — top-level (already worked) or nested (the bug).
+        assert scanner._should_ignore(Path("/repo/.env.test"), base) is False
+        assert scanner._should_ignore(Path("/repo/apps/web/.env.test"), base) is False
+        assert scanner._should_ignore(Path("/repo/config/.env.test"), base) is False
+
 
 class TestUnicodeEncodedFiles:
     """#477: UTF-16/UTF-32/UTF-8-BOM env files are decoded, not skipped as binary."""
@@ -2026,14 +2043,37 @@ class TestUnicodeEncodedFiles:
 
         assert len(result.findings) == 0
 
-    def test_truncated_utf16_bom_falls_back_to_binary_check(
+    def test_truncated_utf16_bom_is_still_decoded_not_skipped(
         self, scanner: NativeScanner, tmp_path: Path
     ):
-        """A UTF-16 BOM followed by an odd byte count fails strict decode safely."""
+        """#505: a BOM'd UTF-16 file with a bad/odd code unit is decoded, not skipped.
+
+        Pre-fix the strict decode raised on the odd trailing byte, _decode_unicode_text
+        returned None, and _looks_binary (True for ~50%-NUL UTF-16) made the scanner
+        skip the whole file. With errors="replace" the BOM-identified text is decoded —
+        the readable prefix survives — so a secret before the truncation is found.
+        """
         from envdrift.scanner.native import _decode_unicode_text
 
-        raw = b"\xff\xfe" + b"A\x00B\x00C"  # odd payload -> strict utf-16 decode fails
-        assert _decode_unicode_text(raw) is None
+        raw = b"\xff\xfe" + b"A\x00B\x00C"  # odd payload: last unit is truncated
+        decoded = _decode_unicode_text(raw)
+        assert decoded is not None, "BOM'd UTF-16 with a bad code unit was discarded"
+        assert decoded.startswith("AB")
+
+    def test_odd_length_utf16_env_file_secret_detected(
+        self, scanner: NativeScanner, tmp_path: Path
+    ):
+        """#505: a UTF-16 env file whose byte length is odd is still scanned end to end."""
+        env_file = tmp_path / ".env"
+        body = f"AWS_ACCESS_KEY_ID={self._KEY}\n"
+        # BOM-less UTF-16-LE payload plus a single stray byte -> odd total length,
+        # which strict utf-16 decode rejects but the stride sniff tolerates.
+        env_file.write_bytes(body.encode("utf-16-le") + b"\x00")
+
+        result = scanner.scan([env_file])
+
+        rule_ids = {f.rule_id for f in result.findings}
+        assert any("aws" in r for r in rule_ids), f"odd-length UTF-16 file skipped: {rule_ids}"
 
     def test_stride_sniff_rejects_short_and_balanced_input(self):
         from envdrift.scanner.native import _sniff_utf16_stride
