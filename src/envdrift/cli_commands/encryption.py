@@ -302,24 +302,26 @@ def encrypt_cmd(
         if should_block:
             raise typer.Exit(code=1)
     else:
-        # Refuse cross-backend double encryption (#475): silently nesting one
-        # backend's ciphertext inside another (e.g. SOPS over dotenvx) bricks
-        # `decrypt` auto-detection and blames a "missing or invalid" key.
+        # Analyze every target before touching any backend: unreadable input and
+        # cross-backend double encryption are refused up front (#475), and the
+        # refusal must not depend on the selected backend being installed.
         # report.detected_backend (not the file-level header scan alone) also
-        # carries value-level detection, so a file whose header was stripped
-        # but whose values are still another backend's ciphertext is refused
-        # too. For a plaintext file it equals the selected backend (fallback
-        # above), so encryption proceeds.
-        report_backend = report.detected_backend
-        if report_backend and report_backend != backend_enum.value:
-            print_error(
-                f"{env_file} is already encrypted with {report_backend}, but the "
-                f"{backend_enum.value} backend was selected. Double-encrypting would nest "
-                f"ciphertexts and break decryption. Decrypt it first with "
-                f"`envdrift decrypt {env_file} --backend {report_backend}` or re-run with "
-                f"`--backend {report_backend}`."
-            )
-            raise typer.Exit(code=1)
+        # carries value-level detection, so a file whose header was stripped but
+        # whose values are still another backend's ciphertext is refused too.
+        # For a plaintext file it equals the selected backend, so encryption
+        # proceeds.
+        for env_file in files:
+            report = _analyze_file(env_file)
+            report_backend = report.detected_backend
+            if report_backend and report_backend != backend_enum.value:
+                print_error(
+                    f"{env_file} is already encrypted with {report_backend}, but the "
+                    f"{backend_enum.value} backend was selected. Double-encrypting would nest "
+                    f"ciphertexts and break decryption. Decrypt it first with "
+                    f"`envdrift decrypt {env_file} --backend {report_backend}` or re-run with "
+                    f"`--backend {report_backend}`."
+                )
+                raise typer.Exit(code=1)
 
         # Attempt encryption using the selected backend
         try:
@@ -360,10 +362,6 @@ def encrypt_cmd(
             smart_enabled = encryption_config.smart_encryption if encryption_config else False
 
             for env_file in files:
-                # Surface unreadable input (directory / binary file) cleanly
-                # before invoking the backend.
-                _analyze_file(env_file)
-
                 should_skip, skip_reason = should_skip_reencryption(
                     env_file, encryption_backend, enabled=smart_enabled
                 )
