@@ -229,7 +229,12 @@ def encrypt_cmd(
             print_error(f"ENV file not found: {env_file}")
         raise typer.Exit(code=1)
 
-    _refuse_companion_target(env_file, "encrypt")
+    # Refuse companion targets (.keys/.example/.sample/.template) across ALL
+    # requested files — the default single [.env] and every multi-file target —
+    # before touching any of them, so one companion in a batch aborts the whole
+    # invocation with nothing encrypted (#474).
+    for env_file in files:
+        _refuse_companion_target(env_file, "encrypt")
 
     if verify_vault or vault_provider or vault_url or vault_region or vault_secret:
         print_error("Vault verification moved to `envdrift decrypt --verify-vault ...`")

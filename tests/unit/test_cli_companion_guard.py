@@ -104,6 +104,34 @@ class TestEncryptRefusesCompanionFiles:
         assert "private-key store" in output, output
         assert keys.read_text(encoding="utf-8") == content
 
+    def test_encrypt_multi_file_batch_with_companion_aborts_whole_batch(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """#474: a companion anywhere in a multi-file batch aborts everything.
+
+        ``encrypt`` accepts several files (#493); the guard must run over ALL
+        of them — not a stale single ``env_file`` variable — before any file
+        is touched, so ``encrypt second.env .env.keys`` refuses with the
+        plaintext sibling untouched rather than half-encrypting the batch (or
+        crashing with UnboundLocalError, as a bad merge of the two features
+        once did).
+        """
+        monkeypatch.chdir(tmp_path)
+        sibling = tmp_path / "second.env"
+        sibling.write_text("API_KEY=plaintext123\n", encoding="utf-8")
+        keys = tmp_path / ".env.keys"
+        keys_content = "# .env\nDOTENV_PRIVATE_KEY=" + _fake_private_key("e") + "\n"
+        keys.write_text(keys_content, encoding="utf-8")
+
+        result = runner.invoke(app, ["encrypt", "second.env", ".env.keys"])
+
+        output = _flat(result.output)
+        assert result.exit_code == 1, output
+        assert "Refusing to encrypt" in output, output
+        # Nothing in the batch was encrypted — the guard fires pre-flight.
+        assert sibling.read_text(encoding="utf-8") == "API_KEY=plaintext123\n"
+        assert keys.read_text(encoding="utf-8") == keys_content
+
 
 class TestDecryptRefusesCompanionFiles:
     def test_decrypt_env_keys_refused(self, keys_file: Path) -> None:
