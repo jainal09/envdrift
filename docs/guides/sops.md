@@ -147,9 +147,10 @@ See [`encrypt`](../cli/encrypt.md) and [`decrypt`](../cli/decrypt.md).
 
 ## Key resolution precedence
 
-An explicit `--age-key-file` flag or TOML `age_key_file` (`age_key` likewise)
-**overrides** an ambient `SOPS_AGE_KEY_FILE`/`SOPS_AGE_KEY` environment variable.
-Exporting the env var for day-to-day work never disables an explicitly supplied key.
+An explicit `--age-key-file` flag or TOML `age_key_file` **overrides** an ambient
+`SOPS_AGE_KEY_FILE` environment variable. Exporting the env var for day-to-day work
+never disables an explicitly supplied key. (An inline `age_key` — a programmatic
+backend parameter, not a TOML key — likewise outranks an ambient `SOPS_AGE_KEY`.)
 
 ## Azure Key Vault walkthrough (verified end-to-end)
 

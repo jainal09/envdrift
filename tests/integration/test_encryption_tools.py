@@ -1053,20 +1053,26 @@ def test_lock_custom_filename_decrypt_roundtrip(integration_env):
 # --------------------------------------------------------------------------- #
 
 
+def _sops_encryption_section(age_recipients: str) -> str:
+    """The [encryption]/[encryption.sops] TOML block shared by the sops helpers,
+    so the two config writers cannot drift as the schema evolves."""
+    return textwrap.dedent(
+        f"""\
+        [encryption]
+        backend = "sops"
+
+        [encryption.sops]
+        auto_install = true
+        config_file = ".sops.yaml"
+        age_key_file = "age.key"
+        age_recipients = "{age_recipients}"
+        """
+    )
+
+
 def _write_sops_toml(work_dir: Path) -> None:
     (work_dir / "envdrift.toml").write_text(
-        textwrap.dedent(
-            f"""\
-            [encryption]
-            backend = "sops"
-
-            [encryption.sops]
-            auto_install = true
-            config_file = ".sops.yaml"
-            age_key_file = "age.key"
-            age_recipients = "{AGE_PUBLIC_KEY}"
-            """
-        ),
+        _sops_encryption_section(AGE_PUBLIC_KEY),
         encoding="utf-8",
     )
 
@@ -1219,16 +1225,9 @@ def _write_sops_vault_sync_toml(work_dir: Path, *, age_recipients: str) -> None:
     """envdrift.toml with SOPS encryption plus the [vault.sync] section that
     `lock`/`pull` require (dummy vault, never contacted with --force/--skip-sync)."""
     (work_dir / "envdrift.toml").write_text(
-        textwrap.dedent(
-            f"""\
-            [encryption]
-            backend = "sops"
-
-            [encryption.sops]
-            auto_install = true
-            config_file = ".sops.yaml"
-            age_key_file = "age.key"
-            age_recipients = "{age_recipients}"
+        _sops_encryption_section(age_recipients)
+        + textwrap.dedent(
+            """\
 
             [vault]
             provider = "azure"

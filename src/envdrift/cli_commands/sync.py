@@ -18,6 +18,7 @@ from envdrift.utils import normalize_max_workers
 from envdrift.vault.base import SecretNotFoundError, VaultError
 
 if TYPE_CHECKING:
+    from envdrift.encryption import EncryptionProvider
     from envdrift.sync.config import ServiceMapping, SyncConfig
 
 
@@ -1136,6 +1137,31 @@ def _rekey_dotenvx_file(
     return True, ""
 
 
+def _sops_missing_recipients(
+    encryption_backend: Any,
+    backend_provider: EncryptionProvider,
+    sops_encrypt_kwargs: dict[str, Any],
+    content: str,
+) -> list[str]:
+    """Recipients configured in envdrift.toml but absent from ``content``'s metadata.
+
+    A fully-encrypted SOPS file skips ``backend.encrypt()`` in ``lock``, so the
+    recipient check inside it never runs — this helper lets lock's
+    already-encrypted branch verify the configured recipients anyway (#475).
+    Returns an empty list for non-SOPS providers, an empty recipient config, or
+    a backend that does not expose the check.
+    """
+    from envdrift.encryption import EncryptionProvider
+
+    if backend_provider != EncryptionProvider.SOPS or not sops_encrypt_kwargs:
+        return []
+    from envdrift.encryption.sops import SOPSEncryptionBackend
+
+    if not isinstance(encryption_backend, SOPSEncryptionBackend):
+        return []
+    return encryption_backend.missing_recipients(content, **sops_encrypt_kwargs)
+
+
 def lock(
     config_file: Annotated[
         Path | None,
@@ -1656,36 +1682,29 @@ def lock(
                         encrypted_count += 1
                         continue
 
-                # A fully-encrypted SOPS file skips backend.encrypt(), so the
-                # recipient check inside it never runs — verify here that every
-                # recipient configured in envdrift.toml is recorded in the
-                # file's metadata. Otherwise `lock` would print "ready to
-                # commit" while a newly added teammate silently never got
-                # access (#475) — and disagree with `envdrift encrypt`, which
-                # fails loudly on the same file + config.
-                if backend_provider == EncryptionProvider.SOPS and sops_encrypt_kwargs:
-                    from envdrift.encryption.sops import SOPSEncryptionBackend
-
-                    missing = (
-                        encryption_backend.missing_recipients(content, **sops_encrypt_kwargs)
-                        if isinstance(encryption_backend, SOPSEncryptionBackend)
-                        else []
+                # Verify that every recipient configured in envdrift.toml is
+                # recorded in the file's metadata. Otherwise `lock` would print
+                # "ready to commit" while a newly added teammate silently never
+                # got access (#475) — and disagree with `envdrift encrypt`,
+                # which fails loudly on the same file + config.
+                missing = _sops_missing_recipients(
+                    encryption_backend, backend_provider, sops_encrypt_kwargs, content
+                )
+                if missing:
+                    recipients = ", ".join(missing)
+                    console.print(
+                        f"  [red]![/red] {env_file} "
+                        f"[red]- encrypted, but SOPS metadata is missing requested "
+                        f"recipient(s): {recipients}[/red]"
                     )
-                    if missing:
-                        recipients = ", ".join(missing)
-                        console.print(
-                            f"  [red]![/red] {env_file} "
-                            f"[red]- encrypted, but SOPS metadata is missing requested "
-                            f"recipient(s): {recipients}[/red]"
-                        )
-                        errors.append(
-                            f"{env_file}: SOPS metadata is missing requested "
-                            f"recipient(s): {recipients} - re-running encrypt cannot add "
-                            f"recipients; use `sops rotate --add-age <recipient>` or "
-                            f"`sops updatekeys`, or decrypt and re-encrypt"
-                        )
-                        error_count += 1
-                        continue
+                    errors.append(
+                        f"{env_file}: SOPS metadata is missing requested "
+                        f"recipient(s): {recipients} - re-running encrypt cannot add "
+                        f"recipients; use `sops rotate --add-age <recipient>` or "
+                        f"`sops updatekeys`, or decrypt and re-encrypt"
+                    )
+                    error_count += 1
+                    continue
 
                 console.print(f"  [dim]=[/dim] {env_file} [dim]- skipped (already encrypted)[/dim]")
                 already_encrypted_count += 1

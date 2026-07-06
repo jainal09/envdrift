@@ -5593,6 +5593,26 @@ class TestEncryptTruthfulness475:
         assert "dotenvx" in out
         assert env_file.read_text(encoding="utf-8") == original
 
+    def test_encrypt_refuses_header_stripped_dotenvx_file_with_sops_backend(
+        self, monkeypatch, tmp_path: Path
+    ):
+        """Value-level detection backs the cross-backend guard: a dotenvx file
+        whose header lines were stripped (no banner, no DOTENV_PUBLIC_KEY) but
+        whose values are still ``encrypted:`` ciphertext must be refused with
+        ``--backend sops`` — the file-level header scan alone would miss it and
+        sops would nest ciphertexts."""
+        monkeypatch.chdir(tmp_path)
+        env_file = tmp_path / ".env"
+        original = 'API_KEY="encrypted:BDqDBJaENb1cDe"\n'
+        env_file.write_text(original, encoding="utf-8")
+
+        result = runner.invoke(app, ["encrypt", str(env_file), "--backend", "sops"])
+
+        assert result.exit_code == 1
+        out = " ".join(result.output.split())
+        assert "dotenvx" in out
+        assert env_file.read_text(encoding="utf-8") == original
+
     def test_encrypt_noop_result_message_is_not_discarded(self, monkeypatch, tmp_path: Path):
         """A successful no-change result prints the backend's honest message
         instead of an unconditional "Encrypted ... using ..." banner (#475)."""

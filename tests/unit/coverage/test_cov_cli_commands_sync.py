@@ -1376,8 +1376,9 @@ class TestLockSopsRecipientCheck:
     new teammate silently never got access.
 
     Uses the real SOPSEncryptionBackend (the checks are pure string logic and
-    must fail before any sops subprocess would run); only config plumbing is
-    stubbed.
+    must fail before any sops subprocess would run); only config plumbing and
+    the binary-discovery seam (is_installed / _run) are stubbed — the CI unit
+    job has no sops binary, and none must be needed.
     """
 
     # Fully-encrypted SOPS dotenv as the real binary writes it, recipient age1abc.
@@ -1391,19 +1392,24 @@ class TestLockSopsRecipientCheck:
     )
 
     @staticmethod
-    def _sops_setup(age_recipients: str):
+    def _sops_setup(monkeypatch, age_recipients: str):
         from envdrift.config import EncryptionConfig
         from envdrift.encryption.sops import SOPSEncryptionBackend
 
-        return SOPSEncryptionBackend(), EncryptionConfig(
-            backend="sops", sops_age_recipients=age_recipients
-        )
+        backend = SOPSEncryptionBackend()
+        monkeypatch.setattr(backend, "is_installed", lambda: True)
+
+        def fail_run(*args, **kwargs):
+            raise AssertionError("sops must not run for the recipient check")
+
+        monkeypatch.setattr(backend, "_run", fail_run)
+        return backend, EncryptionConfig(backend="sops", sops_age_recipients=age_recipients)
 
     @patch("envdrift.cli_commands.encryption_helpers.resolve_encryption_backend")
     def test_lock_sops_missing_recipient_fails_loudly(
-        self, mock_resolve, tmp_path, loaded_config, no_git_hook
+        self, mock_resolve, tmp_path, loaded_config, no_git_hook, monkeypatch
     ):
-        backend, enc_config = self._sops_setup("age1abc,age1newteammate")
+        backend, enc_config = self._sops_setup(monkeypatch, "age1abc,age1newteammate")
         mock_resolve.return_value = (backend, EncryptionProvider.SOPS, enc_config)
         (tmp_path / ".env.production").write_text(self._SOPS_ENCRYPTED)
         mapping = ServiceMapping(secret_name="s", folder_path=tmp_path, environment="production")
@@ -1421,9 +1427,9 @@ class TestLockSopsRecipientCheck:
 
     @patch("envdrift.cli_commands.encryption_helpers.resolve_encryption_backend")
     def test_lock_sops_all_recipients_present_skips_cleanly(
-        self, mock_resolve, tmp_path, loaded_config, no_git_hook
+        self, mock_resolve, tmp_path, loaded_config, no_git_hook, monkeypatch
     ):
-        backend, enc_config = self._sops_setup("age1abc")
+        backend, enc_config = self._sops_setup(monkeypatch, "age1abc")
         mock_resolve.return_value = (backend, EncryptionProvider.SOPS, enc_config)
         (tmp_path / ".env.production").write_text(self._SOPS_ENCRYPTED)
         mapping = ServiceMapping(secret_name="s", folder_path=tmp_path, environment="production")

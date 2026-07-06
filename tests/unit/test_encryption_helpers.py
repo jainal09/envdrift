@@ -203,10 +203,11 @@ def test_is_encrypted_content_sops_uses_header():
     assert is_encrypted_content(EncryptionProvider.SOPS, backend_no_header, "any") is False
 
 
-def test_is_encrypted_content_sops_metadata_with_surviving_plaintext_is_false():
-    """Regression for #475: a SOPS-metadata-bearing file that still carries a
-    plaintext value is NOT "encrypted" — blessing it lets ``lock`` report
-    "ready to commit" while a secret leaks in plaintext."""
+def test_is_encrypted_content_sops_mixed_file_stays_backend_managed():
+    """A SOPS-metadata-bearing file with a surviving plaintext value IS still
+    backend-managed content: `lock` must route it to the precise mixed-state
+    handling ("plaintext values remain", #470) and the backend's encrypt()
+    refuses to bless it (#475) — not to the generic "not encrypted" path."""
     from envdrift.encryption.sops import SOPSEncryptionBackend
 
     backend = SOPSEncryptionBackend()
@@ -218,7 +219,10 @@ def test_is_encrypted_content_sops_metadata_with_surviving_plaintext_is_false():
         "sops_version=3.13.1\n"
     )
 
-    assert is_encrypted_content(EncryptionProvider.SOPS, backend, content) is False
+    assert is_encrypted_content(EncryptionProvider.SOPS, backend, content) is True
+    # The surviving plaintext is still visible to the post-state checks that
+    # keep the mixed file loud downstream.
+    assert backend.has_plaintext_values(content) is True
 
 
 def test_is_encrypted_content_sops_fully_encrypted_is_true():
@@ -257,9 +261,7 @@ def test_should_attempt_decryption_sops_mixed_file_is_true():
         "sops_version=3.13.1\n"
     )
 
-    # The strict encrypt-direction predicate refuses to bless the mixed file...
-    assert is_encrypted_content(EncryptionProvider.SOPS, backend, mixed) is False
-    # ...but the decrypt-direction predicate still routes it to sops.
+    # The decrypt-direction predicate routes the mixed file to sops.
     assert should_attempt_decryption(EncryptionProvider.SOPS, backend, mixed) is True
 
     # A file with no SOPS markers at all genuinely has nothing to decrypt.
@@ -285,3 +287,29 @@ def test_should_attempt_decryption_dotenvx_matches_encrypted_values_only():
         should_attempt_decryption(EncryptionProvider.DOTENVX, backend, decrypted_with_header)
         is False
     )
+
+
+def test_sops_bare_enc_token_without_metadata_is_neither_encrypted_nor_decryptable():
+    """A plaintext file that merely mentions ``ENC[AES256_GCM,`` in a value
+    carries no SOPS metadata block: `lock` must not bless it as encrypted (it
+    would be undecryptable) and `pull` must skip it cleanly instead of handing
+    it to sops for an avoidable decrypt failure."""
+    from envdrift.cli_commands.encryption_helpers import should_attempt_decryption
+    from envdrift.encryption.sops import SOPSEncryptionBackend
+
+    backend = SOPSEncryptionBackend()
+    stray_token = "API_KEY=ENC[AES256_GCM,data:x,iv:y,tag:z,type:str]\nOTHER=plain\n"
+
+    assert is_encrypted_content(EncryptionProvider.SOPS, backend, stray_token) is False
+    assert should_attempt_decryption(EncryptionProvider.SOPS, backend, stray_token) is False
+
+    # With the genuine metadata block the same predicates engage: fully
+    # encrypted content is blessed, and mixed content stays decryptable-loud.
+    encrypted = (
+        "DB_PASSWORD=ENC[AES256_GCM,data:abc,iv:def,tag:ghi,type:str]\n"
+        "sops_age__list_0__map_recipient=age1abc\n"
+        "sops_unencrypted_suffix=_unencrypted\n"
+        "sops_version=3.13.1\n"
+    )
+    assert is_encrypted_content(EncryptionProvider.SOPS, backend, encrypted) is True
+    assert should_attempt_decryption(EncryptionProvider.SOPS, backend, encrypted) is True

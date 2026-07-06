@@ -424,9 +424,11 @@ class SOPSEncryptionBackend(EncryptionBackend):
     def has_plaintext_values(self, content: str) -> bool:
         """Return True iff dotenv ``content`` carries surviving plaintext values.
 
-        Used by callers (e.g. ``lock``) that must not equate "has a SOPS header"
-        with "fully encrypted" (#475): a value appended after encryption stays
-        plaintext while the header still matches.
+        For callers that must not equate "has a SOPS metadata block" with "fully
+        encrypted" (#475): a value appended after encryption stays plaintext
+        while the block still matches. Honors the file's own metadata (see
+        :meth:`_plaintext_keys`), unlike the coarser line scan in
+        ``core.partial_encryption.has_plaintext_secret_value``.
         """
         return bool(self._plaintext_keys(content))
 
@@ -441,25 +443,31 @@ class SOPSEncryptionBackend(EncryptionBackend):
         not plaintext (sops keeps them empty).
 
         Metadata is excluded via the canonical exact-family matcher
-        (``_is_sops_metadata_key``), NOT a bare ``sops_`` prefix: a prefix match
-        would also skip a real user secret merely named ``sops_token=…`` /
-        ``sops_api_key=…``, silently blessing a plaintext leak (#416, #475).
+        (``_is_sops_metadata_key``, applied inside ``_line_has_plaintext_secret``),
+        NOT a bare ``sops_`` prefix: a prefix match would also skip a real user
+        secret merely named ``sops_token=…`` / ``sops_api_key=…``, silently
+        blessing a plaintext leak (#416, #475).
+
+        Scans line-by-line rather than the parser's deduplicated variables dict:
+        with duplicate keys the dict keeps only the last assignment, so a later
+        encrypted duplicate would hide an earlier surviving plaintext line and
+        the leak would be blessed as "already encrypted".
         """
         if self._SELECTIVE_ENCRYPTION_METADATA.search(content):
             return []
         suffix_match = self._UNENCRYPTED_SUFFIX_METADATA.search(content)
         unencrypted_suffix = suffix_match.group(1).strip() if suffix_match else "_unencrypted"
 
-        from envdrift.core.parser import EnvParser
-        from envdrift.core.partial_encryption import _is_sops_metadata_key
+        from envdrift.core.partial_encryption import _line_has_plaintext_secret
 
         plaintext: list[str] = []
-        for name, var in EnvParser().parse_string(content, lenient=True).variables.items():
-            if _is_sops_metadata_key(name):
+        for raw_line in content.splitlines():
+            if not _line_has_plaintext_secret(raw_line):
                 continue
+            name = raw_line.strip().partition("=")[0].strip()
             if unencrypted_suffix and name.endswith(unencrypted_suffix):
                 continue
-            if self.detect_encryption_status(var.value) is EncryptionStatus.PLAINTEXT:
+            if name not in plaintext:
                 plaintext.append(name)
         return plaintext
 
@@ -494,21 +502,27 @@ class SOPSEncryptionBackend(EncryptionBackend):
 
     @staticmethod
     def _metadata_line_has_value(content: str, value: str) -> bool:
-        """Exact, line-anchored match of ``value`` as a SOPS metadata entry value.
+        """Exact match of ``value`` against a SOPS *key-group* metadata entry.
 
-        Requiring a whole ``sops_*=<value>`` line kills the two false-positive
-        classes of a bare substring scan (#475): a requested recipient that is a
-        prefix of a longer recorded key, and a short Azure KV URL component
-        (e.g. key version ``1``) matching unrelated metadata digits such as
-        ``sops_version=3.13.2``.
+        Only the recipient-carrying key-group family counts (``sops_age*`` /
+        ``sops_pgp*`` / ``sops_kms*`` / ``sops_gcp_kms*`` / ``sops_azure_kv*`` /
+        ``sops_hc_vault*``, via the canonical ``_SOPS_METADATA_GROUP_KEY``):
+        recipients are never recorded in scalar bookkeeping, so an unrelated
+        scalar value (``sops_shamir_threshold=1``) must not satisfy a short
+        component like an Azure key version ``1``. Whole-line equality kills the
+        substring false-positive classes of #475: a requested recipient that is
+        a prefix of a longer recorded key never matches, and neither do digits
+        inside ``sops_version=3.13.2``.
         """
-        return bool(
-            re.search(
-                rf"^sops_\w+\s*=\s*{re.escape(value)}\s*$",
-                content,
-                re.MULTILINE,
-            )
-        )
+        from envdrift.core.partial_encryption import _SOPS_METADATA_GROUP_KEY
+
+        for raw_line in content.splitlines():
+            key, sep, raw_value = raw_line.partition("=")
+            if not sep or not _SOPS_METADATA_GROUP_KEY.match(key.strip()):
+                continue
+            if raw_value.strip() == value:
+                return True
+        return False
 
     @staticmethod
     def _recipient_in_metadata(content: str, recipient: str) -> bool:
@@ -681,6 +695,17 @@ class SOPSEncryptionBackend(EncryptionBackend):
         if "ENC[AES256_GCM," in content:
             return True
 
+        return self._has_sops_metadata_block(content)
+
+    def has_metadata_block(self, content: str) -> bool:
+        """Public alias of :meth:`_has_sops_metadata_block` for CLI-layer checks.
+
+        Callers deciding whether a file is genuinely SOPS-managed (``lock``'s
+        post-state check, ``pull``'s decrypt gate) must key off the metadata
+        block — a bare ``ENC[AES256_GCM,`` token can appear verbatim in a
+        plaintext value or comment, and a file without the metadata block is not
+        decryptable by sops anyway.
+        """
         return self._has_sops_metadata_block(content)
 
     def _has_sops_metadata_block(self, content: str) -> bool:

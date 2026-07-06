@@ -284,13 +284,19 @@ def encrypt_cmd(
         # Refuse cross-backend double encryption (#475): silently nesting one
         # backend's ciphertext inside another (e.g. SOPS over dotenvx) bricks
         # `decrypt` auto-detection and blames a "missing or invalid" key.
-        if detected_backend and detected_backend != backend_enum.value:
+        # report.detected_backend (not the file-level header scan alone) also
+        # carries value-level detection, so a file whose header was stripped
+        # but whose values are still another backend's ciphertext is refused
+        # too. For a plaintext file it equals the selected backend (fallback
+        # above), so encryption proceeds.
+        report_backend = report.detected_backend
+        if report_backend and report_backend != backend_enum.value:
             print_error(
-                f"{env_file} is already encrypted with {detected_backend}, but the "
+                f"{env_file} is already encrypted with {report_backend}, but the "
                 f"{backend_enum.value} backend was selected. Double-encrypting would nest "
                 f"ciphertexts and break decryption. Decrypt it first with "
-                f"`envdrift decrypt {env_file} --backend {detected_backend}` or re-run with "
-                f"`--backend {detected_backend}`."
+                f"`envdrift decrypt {env_file} --backend {report_backend}` or re-run with "
+                f"`--backend {report_backend}`."
             )
             raise typer.Exit(code=1)
 

@@ -763,3 +763,62 @@ def test_missing_recipients_public_wrapper_matches_internal_check():
     )
 
     assert missing == ["age1newteammate"]
+
+
+def test_encrypt_flags_plaintext_duplicate_hidden_by_later_encrypted_line(tmp_path, monkeypatch):
+    """Regression: the surviving-plaintext scan is line-based, not dict-based.
+    With duplicate keys the parser's variables dict keeps only the LAST
+    assignment, so an earlier plaintext duplicate of an encrypted key would be
+    hidden and the leak blessed as "already encrypted (no change)"."""
+    env_file = tmp_path / ".env"
+    content = (
+        "DB_PASSWORD=plaintextleak999\n"  # earlier plaintext duplicate (the leak)
+        + _ENCRYPTED_DOTENV  # later DB_PASSWORD=ENC[...] + metadata
+    )
+    env_file.write_text(content, encoding="utf-8")
+
+    backend = _backend_that_must_not_run_sops(monkeypatch)
+    result = backend.encrypt(env_file, age_recipients="age1abc")
+
+    assert result.success is False
+    assert "DB_PASSWORD" in result.message
+    assert "plaintext" in result.message.lower()
+    assert env_file.read_text(encoding="utf-8") == content
+
+
+def test_recipient_check_ignores_scalar_metadata_values(tmp_path, monkeypatch):
+    """Regression: only the recipient-carrying key-group family satisfies the
+    recipient check. A scalar bookkeeping value equal to a short Azure KV URL
+    component (sops_shamir_threshold=1 vs key version "1") must not declare the
+    recipient present."""
+    env_file = tmp_path / ".env"
+    env_file.write_text(
+        "DB_PASSWORD=ENC[AES256_GCM,data:abc,iv:def,tag:ghi,type:str]\n"
+        "sops_azure_kv__list_0__map_vault_url=https://myvault.vault.azure.net\n"
+        "sops_azure_kv__list_0__map_name=mykey\n"
+        "sops_azure_kv__list_0__map_version=abc123\n"
+        "sops_shamir_threshold=1\n"
+        "sops_unencrypted_suffix=_unencrypted\n"
+        "sops_version=3.13.1\n",
+        encoding="utf-8",
+    )
+
+    backend = _backend_that_must_not_run_sops(monkeypatch)
+    requested = "https://myvault.vault.azure.net/keys/mykey/1"
+    result = backend.encrypt(env_file, azure_kv=requested)
+
+    assert result.success is False
+    assert requested in result.message
+
+
+def test_has_metadata_block_public_wrapper():
+    """``has_metadata_block`` (used by the CLI-layer encrypted/decryptable
+    checks) keys off the genuine metadata block, not a bare ENC token."""
+    backend = SOPSEncryptionBackend()
+
+    assert backend.has_metadata_block(_ENCRYPTED_DOTENV) is True
+    # A bare ENC token in a value carries no metadata block: sops can neither
+    # re-encrypt-refuse nor decrypt such a file.
+    assert (
+        backend.has_metadata_block("API_KEY=ENC[AES256_GCM,data:x,iv:y,tag:z,type:str]\n") is False
+    )
