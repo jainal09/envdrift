@@ -111,6 +111,21 @@ envdrift lock --sync-keys
 
 Check encryption status only (dry run). Reports what would be encrypted without making changes.
 
+A file counts as encrypted only when **no plaintext value remains** — the same predicate
+`envdrift push` uses, applied to every backend (dotenvx and SOPS alike). A mixed file
+holding even one freshly added plaintext secret fails the check, no matter how many other
+values are already ciphertext. The plaintext `DOTENV_PUBLIC_KEY_*` header line and SOPS's
+`sops_*` metadata trailer are ignored, so fully-encrypted files pass regardless of how few
+variables they hold.
+
+`lock --check` is deliberately **stricter** than `envdrift encrypt --check`: the latter
+flags only values that look like secrets (sensitive names, suspicious values, or
+schema-marked fields), while `lock --check` fails on *any* plaintext value left in a file
+that is supposed to be fully encrypted.
+
+Exits 1 when any file still needs encryption (including, with `--all`,
+partial-encryption `.secret` files); exits 0 only when everything is encrypted.
+
 ```bash
 envdrift lock --check
 ```
@@ -125,10 +140,12 @@ Include partial encryption files in the locking process. When set:
 
 This is useful when you want to lock everything and clean up generated files before committing.
 
-> **Secrets-only environments are skipped.** Combine-mode handling does not apply to
-> environments configured with `secrets_only = true` — they have no combined file and
-> are encrypted in place with `envdrift push`. `lock --all` reports them as skipped and
-> leaves them untouched.
+> **Secrets-only environments are skipped — but still checked.** Combine-mode handling
+> does not apply to environments configured with `secrets_only = true` — they have no
+> combined file and are encrypted in place with `envdrift push`. `lock --all` reports
+> them as skipped and leaves them untouched. If a skipped environment still holds
+> plaintext secrets, the final summary says so and `lock --all` exits 1 instead of
+> printing the green "ready to commit" banner — run `envdrift push` to encrypt them.
 
 ```bash
 # Lock everything including partial encryption files
@@ -277,6 +294,11 @@ Step 1: Verifying keys with vault...
 ERROR: Found 1 key mismatch(es). Run with --sync-keys to update local keys, or --force to encrypt anyway.
 ```
 
+A vault secret that cannot be parsed as key material at all (a JSON document without a usable
+key field, a multi-line blob with no key line, a binary payload) is reported as
+`KEY UNUSABLE` with the shape problem, and the summary counts it as an *unusable vault key*
+rather than a key mismatch — fix the secret in the vault; `--sync-keys` cannot install it.
+
 ### With Key Sync
 
 ```text
@@ -353,7 +375,7 @@ The `lock` command catches many edge cases and provides helpful warnings and err
 | `vault secret not found`                   | The secret doesn't exist in the vault                                |
 | `multiple .env files found`                | Multiple `.env.*` files exist; specify the environment explicitly      |
 | `file not found`                           | The expected `.env.<environment>` file doesn't exist                   |
-| `partially encrypted (N%)`                 | The file is only partially encrypted; will re-encrypt                 |
+| `partially encrypted (plaintext values remain)` | The file mixes ciphertext with plaintext values; will re-encrypt |
 | `partial encryption combined file, use --all to include` | File is a generated combined file; use `--all` to include |
 
 ### Errors
@@ -367,10 +389,12 @@ The `lock` command catches many edge cases and provides helpful warnings and err
 
 ## Exit Codes
 
-| Code | Meaning                                                  |
-|:-----|:---------------------------------------------------------|
-| 0    | Success (all files encrypted or verified)                  |
-| 1    | Error (key mismatch, encryption failure, or vault error) |
+| Code | Meaning                                                                                  |
+|:-----|:------------------------------------------------------------------------------------------|
+| 0    | Success (all files encrypted or verified)                                                  |
+| 1    | Error (key mismatch, encryption failure, or vault error)                                   |
+| 1    | `--check`: one or more files still need encryption                                         |
+| 1    | `--all`: a skipped secrets-only environment still holds plaintext (run `envdrift push`)    |
 
 ## Configuration File Format
 

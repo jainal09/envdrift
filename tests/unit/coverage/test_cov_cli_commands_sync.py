@@ -620,6 +620,40 @@ class TestPullCommand:
 # --------------------------------------------------------------------------
 # lock command
 # --------------------------------------------------------------------------
+class TestVerifyIssueSummary:
+    """The verify-vault gate summary names mismatched vs unusable keys
+    separately, each with a remedy that can actually fix it."""
+
+    def test_mismatch_only_keeps_documented_wording(self):
+        from envdrift.cli_commands.sync import _verify_issue_summary
+
+        # Byte-identical to the message documented in docs/cli/lock.md.
+        assert _verify_issue_summary(1, 0) == (
+            "Found 1 key mismatch(es). "
+            "Run with --sync-keys to update local keys, or --force to encrypt anyway."
+        )
+
+    def test_unusable_only_points_at_the_vault_secret(self):
+        from envdrift.cli_commands.sync import _verify_issue_summary
+
+        summary = _verify_issue_summary(0, 2)
+        assert summary == (
+            "Found 2 unusable vault key(s). "
+            "Fix the vault secret shapes named above, or use --force to encrypt anyway."
+        )
+        assert "mismatch" not in summary
+        assert "--sync-keys" not in summary
+
+    def test_mixed_names_both_with_both_remedies(self):
+        from envdrift.cli_commands.sync import _verify_issue_summary
+
+        summary = _verify_issue_summary(1, 1)
+        assert "1 key mismatch(es) and 1 unusable vault key(s)" in summary
+        assert "Fix the vault secret shapes named above" in summary
+        assert "--sync-keys" in summary
+        assert "--force" in summary
+
+
 class TestLockCommand:
     def test_lock_no_mappings_for_profile_exits(self, loaded_config, no_git_hook):
         loaded_config(_sync_config([]))
@@ -822,6 +856,99 @@ class TestLockCommand:
         assert "vault access failed" in result.output
 
     @patch("envdrift.cli_commands.encryption_helpers.resolve_encryption_backend")
+    def test_lock_verify_vault_json_document_env_aware_match(
+        self, mock_resolve, tmp_path, loaded_config, no_git_hook
+    ):
+        """A JSON key/value document secret is parsed env-aware: the field for
+        this environment is extracted and compared, instead of the raw JSON
+        string false-mismatching the local key forever (#480)."""
+        backend = DummyEncryptionBackend()
+        mock_resolve.return_value = (backend, EncryptionProvider.DOTENVX, None)
+        (tmp_path / ".env.production").write_text(
+            "#/---BEGIN DOTENV ENCRYPTED---/\nSECRET=encrypted:abc\n"
+        )
+        (tmp_path / ".env.keys").write_text("DOTENV_PRIVATE_KEY_PRODUCTION=matchme\n")
+
+        client = MagicMock()
+        client.get_secret.return_value = SecretValue(
+            name="s",
+            value=(
+                '{"DOTENV_PRIVATE_KEY_STAGING": "otherkey", '
+                '"DOTENV_PRIVATE_KEY_PRODUCTION": "matchme"}'
+            ),
+        )
+        mapping = ServiceMapping(secret_name="s", folder_path=tmp_path, environment="production")
+        loaded_config(_sync_config([mapping]), client)
+
+        result = runner.invoke(app, ["lock", "--verify-vault", "--force"])
+        normalized = " ".join(result.output.split())
+        assert result.exit_code == 0, result.output
+        assert "keys match vault" in normalized
+        assert "KEY MISMATCH" not in normalized
+
+    @patch("envdrift.cli_commands.encryption_helpers.resolve_encryption_backend")
+    def test_lock_verify_vault_unusable_secret_stops_before_encrypt(
+        self, mock_resolve, tmp_path, loaded_config, no_git_hook
+    ):
+        """A secret shape that cannot be key material (KeyMaterialError) counts
+        as a verification issue: lock exits 1 *before* encrypting anything and
+        names the shape problem — it is not mislabeled 'vault access failed'
+        with encryption proceeding first (#480)."""
+        backend = DummyEncryptionBackend()
+        mock_resolve.return_value = (backend, EncryptionProvider.DOTENVX, None)
+        # Plaintext file: encryption WOULD run if the fail-fast gate is skipped.
+        (tmp_path / ".env.production").write_text("PLAIN=val\n")
+        (tmp_path / ".env.keys").write_text("DOTENV_PRIVATE_KEY_PRODUCTION=localkey\n")
+
+        client = MagicMock()
+        client.get_secret.return_value = SecretValue(
+            name="s", value='{"username": "admin", "password": "hunter2"}'
+        )
+        mapping = ServiceMapping(secret_name="s", folder_path=tmp_path, environment="production")
+        loaded_config(_sync_config([mapping]), client)
+
+        result = runner.invoke(app, ["lock", "--verify-vault"])
+        normalized = " ".join(result.output.split())
+        assert result.exit_code == 1
+        assert "KEY UNUSABLE" in normalized
+        assert "JSON" in normalized
+        assert "vault access failed" not in normalized
+        # The summary names the unusable secret for what it is — not a "key
+        # mismatch" steering the user to --sync-keys, which would raise the
+        # same KeyMaterialError instead of fixing anything.
+        assert "1 unusable vault key(s)" in normalized
+        assert "key mismatch" not in normalized
+        # The fail-fast gate fired before Step 2: nothing was encrypted.
+        assert "Encrypting environment files" not in normalized
+        assert backend.encrypt_calls == []
+
+    @patch("envdrift.cli_commands.encryption_helpers.resolve_encryption_backend")
+    def test_lock_verify_vault_binary_secret_rejected(
+        self, mock_resolve, tmp_path, loaded_config, no_git_hook
+    ):
+        """A provider-marked binary payload (metadata encoding=base64) is
+        rejected by the verify path too — the raw-string comparison used to
+        bypass the binary check entirely."""
+        backend = DummyEncryptionBackend()
+        mock_resolve.return_value = (backend, EncryptionProvider.DOTENVX, None)
+        (tmp_path / ".env.production").write_text("PLAIN=val\n")
+        (tmp_path / ".env.keys").write_text("DOTENV_PRIVATE_KEY_PRODUCTION=localkey\n")
+
+        client = MagicMock()
+        client.get_secret.return_value = SecretValue(
+            name="s", value="//4=", metadata={"encoding": "base64"}
+        )
+        mapping = ServiceMapping(secret_name="s", folder_path=tmp_path, environment="production")
+        loaded_config(_sync_config([mapping]), client)
+
+        result = runner.invoke(app, ["lock", "--verify-vault"])
+        normalized = " ".join(result.output.split())
+        assert result.exit_code == 1
+        assert "KEY UNUSABLE" in normalized
+        assert "binary" in normalized
+        assert backend.encrypt_calls == []
+
+    @patch("envdrift.cli_commands.encryption_helpers.resolve_encryption_backend")
     def test_lock_sync_keys_runs_engine(
         self, mock_resolve, monkeypatch, tmp_path, loaded_config, no_git_hook
     ):
@@ -875,6 +1002,79 @@ class TestLockCommand:
         assert result.exit_code == 0, result.output
         assert "partially encrypted" in result.output
         # re-encryption attempted
+        assert (tmp_path / ".env.production").resolve() in backend.encrypt_calls
+
+
+# --------------------------------------------------------------------------
+# lock command - canonical encryption-state predicates (#470)
+# --------------------------------------------------------------------------
+class TestLockCanonicalEncryptionState:
+    """Regressions for #470: lock shares the push paths' encryption predicates.
+
+    The old inline >=90%-ciphertext-line ratio cut both ways: a mixed file with
+    one fresh plaintext secret was blessed "already encrypted" (false PASS),
+    while a fully-encrypted file with fewer than 9 variables was forever
+    "partially encrypted" because the plaintext DOTENV_PUBLIC_KEY_* header
+    counted in the ratio denominator (false FAIL).
+    """
+
+    @patch("envdrift.cli_commands.encryption_helpers.resolve_encryption_backend")
+    def test_lock_check_passes_small_fully_encrypted_file_with_header(
+        self, mock_resolve, tmp_path, loaded_config, no_git_hook
+    ):
+        """A fully-encrypted 3-var file is not 'partially encrypted (75%)'."""
+        backend = DummyEncryptionBackend()
+        mock_resolve.return_value = (backend, EncryptionProvider.DOTENVX, None)
+        (tmp_path / ".env.production").write_text(
+            'DOTENV_PUBLIC_KEY_PRODUCTION="pub"\n'
+            "API_KEY=encrypted:aaa\nDB_PASS=encrypted:bbb\nTOKEN=encrypted:ccc\n"
+        )
+        (tmp_path / ".env.keys").write_text("DOTENV_PRIVATE_KEY_PRODUCTION=k\n")
+        mapping = ServiceMapping(secret_name="s", folder_path=tmp_path, environment="production")
+        loaded_config(_sync_config([mapping]))
+
+        result = runner.invoke(app, ["lock", "--check"])
+        assert result.exit_code == 0, result.output
+        assert "All files are already encrypted" in result.output
+
+    @patch("envdrift.cli_commands.encryption_helpers.resolve_encryption_backend")
+    def test_lock_check_fails_mixed_file_above_old_ratio(
+        self, mock_resolve, tmp_path, loaded_config, no_git_hook
+    ):
+        """>=90% ciphertext lines no longer bless a fresh plaintext secret."""
+        backend = DummyEncryptionBackend()
+        mock_resolve.return_value = (backend, EncryptionProvider.DOTENVX, None)
+        lines = ['DOTENV_PUBLIC_KEY_PRODUCTION="pub"']
+        lines += [f"SECRET_{i}=encrypted:cipher{i}" for i in range(1, 19)]
+        lines += ["NEW_SECRET=plaintext-added-later"]
+        (tmp_path / ".env.production").write_text("\n".join(lines) + "\n")
+        (tmp_path / ".env.keys").write_text("DOTENV_PRIVATE_KEY_PRODUCTION=k\n")
+        mapping = ServiceMapping(secret_name="s", folder_path=tmp_path, environment="production")
+        loaded_config(_sync_config([mapping]))
+
+        result = runner.invoke(app, ["lock", "--check"])
+        assert result.exit_code == 1, result.output
+        assert "would re-encrypt (plaintext values remain)" in result.output
+        assert backend.encrypt_calls == []
+
+    @patch("envdrift.cli_commands.encryption_helpers.resolve_encryption_backend")
+    def test_lock_force_reencrypts_mixed_file_above_old_ratio(
+        self, mock_resolve, tmp_path, loaded_config, no_git_hook
+    ):
+        """lock --force re-encrypts the mixed file instead of skipping it."""
+        backend = DummyEncryptionBackend()
+        mock_resolve.return_value = (backend, EncryptionProvider.DOTENVX, None)
+        lines = ['DOTENV_PUBLIC_KEY_PRODUCTION="pub"']
+        lines += [f"SECRET_{i}=encrypted:cipher{i}" for i in range(1, 19)]
+        lines += ["NEW_SECRET=plaintext-added-later"]
+        (tmp_path / ".env.production").write_text("\n".join(lines) + "\n")
+        (tmp_path / ".env.keys").write_text("DOTENV_PRIVATE_KEY_PRODUCTION=k\n")
+        mapping = ServiceMapping(secret_name="s", folder_path=tmp_path, environment="production")
+        loaded_config(_sync_config([mapping]))
+
+        result = runner.invoke(app, ["lock", "--force"])
+        assert result.exit_code == 0, result.output
+        assert "partially encrypted" in result.output
         assert (tmp_path / ".env.production").resolve() in backend.encrypt_calls
 
 
@@ -1090,9 +1290,10 @@ def _write_partial_config(tmp_path, secret_file, combined_file, *, secrets_only=
 
 
 class TestLockPartialEncryptionAll:
+    @patch("envdrift.core.partial_encryption.encrypt_secret_file")
     @patch("envdrift.cli_commands.encryption_helpers.resolve_encryption_backend")
     def test_all_encrypts_secret_and_deletes_combined(
-        self, mock_resolve, tmp_path, loaded_config, no_git_hook
+        self, mock_resolve, mock_encrypt_secret, tmp_path, loaded_config, no_git_hook
     ):
         backend = DummyEncryptionBackend()
         mock_resolve.return_value = (backend, EncryptionProvider.DOTENVX, None)
@@ -1114,11 +1315,43 @@ class TestLockPartialEncryptionAll:
         result = runner.invoke(app, ["lock", "--force", "--all", "--config", str(cfg)])
         assert result.exit_code == 0, result.output
         assert "Processing partial encryption files" in result.output
-        # secret file was encrypted
-        assert secret_file.resolve() in backend.encrypt_calls
-        # combined file was deleted
+        # The .secret was encrypted through the partial-encryption lifecycle seam
+        # (encrypt_secret_file: read-back verification + skip-worktree handling),
+        # NOT the raw backend.encrypt — this is the #507-review alignment with push.
+        assert mock_encrypt_secret.call_count == 1
+        # combined file was deleted (the .secret reached a good encrypted state)
         assert not combined_file.exists()
         assert "deleted (combined file)" in result.output
+
+    @patch("envdrift.core.partial_encryption.encrypt_secret_file")
+    @patch("envdrift.cli_commands.encryption_helpers.resolve_encryption_backend")
+    def test_all_keeps_combined_when_secret_encryption_fails(
+        self, mock_resolve, mock_encrypt_secret, tmp_path, loaded_config, no_git_hook
+    ):
+        """#507 review: a failed .secret encryption must keep the combined file."""
+        from envdrift.core.partial_encryption import PartialEncryptionError
+
+        backend = DummyEncryptionBackend()
+        mock_resolve.return_value = (backend, EncryptionProvider.DOTENVX, None)
+        mock_encrypt_secret.side_effect = PartialEncryptionError("did not take effect")
+
+        secret_file = tmp_path / ".env.secret"
+        secret_file.write_text("API_KEY=plain\n")
+        combined_file = tmp_path / ".env"
+        combined_file.write_text("API_KEY=plain\nPUBLIC=ok\n")
+        cfg = _write_partial_config(tmp_path, secret_file, combined_file)
+
+        (tmp_path / ".env.production").write_text(
+            "#/---BEGIN DOTENV ENCRYPTED---/\nSECRET=encrypted:abc\n"
+        )
+        (tmp_path / ".env.keys").write_text("DOTENV_PRIVATE_KEY_PRODUCTION=k\n")
+        mapping = ServiceMapping(secret_name="s", folder_path=tmp_path, environment="production")
+        loaded_config(_sync_config([mapping]))
+
+        result = runner.invoke(app, ["lock", "--force", "--all", "--config", str(cfg)])
+        assert result.exit_code == 1, result.output
+        assert combined_file.exists(), "combined file deleted despite failed encryption"
+        assert "kept (encryption failed)" in result.output
 
     @patch("envdrift.cli_commands.encryption_helpers.resolve_encryption_backend")
     def test_all_check_only_reports_would_actions(
@@ -1141,9 +1374,12 @@ class TestLockPartialEncryptionAll:
         loaded_config(_sync_config([mapping]))
 
         result = runner.invoke(app, ["lock", "--check", "--all", "--config", str(cfg)])
-        assert result.exit_code == 0, result.output
+        # The plaintext .secret would be encrypted by a real run, so the dry run
+        # reports pending work and fails the gate (#470) - it must not exit 0.
+        assert result.exit_code == 1, result.output
         assert "would be encrypted" in result.output
         assert "would be deleted" in result.output
+        assert "need encryption" in result.output
         # check mode must not touch the filesystem
         assert combined_file.exists()
         assert backend.encrypt_calls == []
@@ -1193,3 +1429,65 @@ class TestLockPartialEncryptionAll:
         result = runner.invoke(app, ["lock", "--force", "--all", "--config", str(cfg)])
         assert result.exit_code == 0, result.output
         assert "secrets-only, managed by 'envdrift push'" in result.output
+        # The secrets_dir does not exist, so the plaintext check cannot run;
+        # that is surfaced as a warning, not silently swallowed (#470).
+        normalized = " ".join(result.output.split())
+        assert "could not be checked" in normalized
+
+    @patch("envdrift.cli_commands.encryption_helpers.resolve_encryption_backend")
+    def test_all_secrets_only_pending_plaintext_fails(
+        self, mock_resolve, tmp_path, loaded_config, no_git_hook
+    ):
+        """#470: a skipped secrets-only env that still holds plaintext fails the lock.
+
+        The old code printed the unconditional "ready to commit" banner and
+        exited 0 while a plaintext secret sat on disk in the skipped env.
+        """
+        backend = DummyEncryptionBackend()
+        mock_resolve.return_value = (backend, EncryptionProvider.DOTENVX, None)
+        cfg = _write_partial_config(tmp_path, None, None, secrets_only=True)
+        secrets_dir = tmp_path / "secrets"
+        secrets_dir.mkdir()
+        (secrets_dir / ".env.api").write_text("API_TOKEN=plain\n")
+
+        (tmp_path / ".env.production").write_text(
+            "#/---BEGIN DOTENV ENCRYPTED---/\nSECRET=encrypted:abc\n"
+        )
+        (tmp_path / ".env.keys").write_text("DOTENV_PRIVATE_KEY_PRODUCTION=k\n")
+        mapping = ServiceMapping(secret_name="s", folder_path=tmp_path, environment="production")
+        loaded_config(_sync_config([mapping]))
+
+        result = runner.invoke(app, ["lock", "--force", "--all", "--config", str(cfg)])
+        assert result.exit_code == 1, result.output
+        normalized = " ".join(result.output.split())
+        assert "Secrets-only environments skipped: 1" in normalized
+        assert "envdrift push" in normalized
+        assert "ready to commit" not in normalized
+        # lock --all does not own secrets-only files; push does. Untouched.
+        assert (secrets_dir / ".env.api").read_text() == "API_TOKEN=plain\n"
+        assert backend.encrypt_calls == []
+
+    @patch("envdrift.cli_commands.encryption_helpers.resolve_encryption_backend")
+    def test_all_secrets_only_fully_encrypted_passes(
+        self, mock_resolve, tmp_path, loaded_config, no_git_hook
+    ):
+        """#470: a fully-encrypted secrets-only env is a benign, reported skip."""
+        backend = DummyEncryptionBackend()
+        mock_resolve.return_value = (backend, EncryptionProvider.DOTENVX, None)
+        cfg = _write_partial_config(tmp_path, None, None, secrets_only=True)
+        secrets_dir = tmp_path / "secrets"
+        secrets_dir.mkdir()
+        (secrets_dir / ".env.api").write_text("API_TOKEN=encrypted:abc\n")
+
+        (tmp_path / ".env.production").write_text(
+            "#/---BEGIN DOTENV ENCRYPTED---/\nSECRET=encrypted:abc\n"
+        )
+        (tmp_path / ".env.keys").write_text("DOTENV_PRIVATE_KEY_PRODUCTION=k\n")
+        mapping = ServiceMapping(secret_name="s", folder_path=tmp_path, environment="production")
+        loaded_config(_sync_config([mapping]))
+
+        result = runner.invoke(app, ["lock", "--force", "--all", "--config", str(cfg)])
+        assert result.exit_code == 0, result.output
+        normalized = " ".join(result.output.split())
+        assert "Secrets-only environments skipped: 1" in normalized
+        assert "ready to commit" in normalized

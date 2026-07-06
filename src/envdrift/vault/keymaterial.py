@@ -34,8 +34,12 @@ from envdrift.vault.base import SecretValue, VaultError
 DOTENV_PRIVATE_KEY_NAME_RE = re.compile(r"DOTENV_PRIVATE_KEY_([A-Za-z0-9_]+)")
 
 # Match a `DOTENV_PRIVATE_KEY_<SUFFIX>=<value>` line, capturing the environment
-# suffix and the bare value.
-_DOTENV_PRIVATE_KEY_LINE_RE = re.compile(r"^DOTENV_PRIVATE_KEY_([A-Za-z0-9_]+)=(.+)$")
+# suffix and the bare value. The value part is `(.*)` — not `(.+)` — so an
+# empty-value line (`vault kv put ... DOTENV_PRIVATE_KEY_X=$KEY` with `$KEY`
+# unset) parses to an empty value that validate_key_material rejects loudly,
+# instead of falling through as an "opaque" value and being written back as a
+# doubled `DOTENV_PRIVATE_KEY_X=DOTENV_PRIVATE_KEY_X=` line (#480).
+_DOTENV_PRIVATE_KEY_LINE_RE = re.compile(r"^DOTENV_PRIVATE_KEY_([A-Za-z0-9_]+)=(.*)$")
 
 
 class KeyMaterialError(VaultError):
@@ -54,6 +58,25 @@ def _strip_one_quote_layer(value: str) -> str:
 def _normalize_inner(value: str) -> str:
     """Strip whitespace plus one quote layer from a post-``=`` / field value."""
     return _strip_one_quote_layer(value.strip())
+
+
+def _normalize_field_value(suffix: str, val: str) -> str:
+    """Normalize a JSON field value stored under a ``DOTENV_PRIVATE_KEY_<suffix>`` name.
+
+    Beyond the whitespace/quote strip, a value that redundantly carries the
+    full ``DOTENV_PRIVATE_KEY_<suffix>=`` line (a whole ``.env.keys`` line
+    copy-pasted into the console value box) is reduced to its bare key —
+    without this the doubled-prefix line was written to ``.env.keys`` under
+    exit 0 (#480). The prefix is only stripped when its suffix matches the
+    field name; a conflicting label is left intact so the final shape check
+    rejects it loudly instead of silently installing a key stored for a
+    different environment.
+    """
+    inner = _normalize_inner(val)
+    line_match = _DOTENV_PRIVATE_KEY_LINE_RE.match(inner)
+    if line_match and line_match.group(1).upper() == suffix.upper():
+        return _normalize_inner(line_match.group(2))
+    return inner
 
 
 def _extract_from_keys_blob(text: str, expected_environment: str | None) -> tuple[str, str | None]:
@@ -107,8 +130,12 @@ def _extract_from_json_document(
     try:
         document = json.loads(text)
     except json.JSONDecodeError:
-        # Not actually JSON: treat as an opaque single-line value. The final
-        # validate_key_material shape check rejects it in key flows.
+        # Not actually JSON. A multi-line value is still a candidate keys blob
+        # (a document whose first line merely starts with "{"/"["); a
+        # single-line one is an opaque value the final validate_key_material
+        # shape check rejects in key flows.
+        if "\n" in text:
+            return _extract_from_keys_blob(text, expected_environment)
         return text, None
 
     if not isinstance(document, dict):
@@ -121,7 +148,7 @@ def _extract_from_json_document(
     for key, val in document.items():
         match = DOTENV_PRIVATE_KEY_NAME_RE.fullmatch(key)
         if match and isinstance(val, str):
-            fields.append((match.group(1), _normalize_inner(val)))
+            fields.append((match.group(1), _normalize_field_value(match.group(1), val)))
 
     if expected_environment is not None:
         wanted = expected_environment.upper()
@@ -168,13 +195,16 @@ def normalize_vault_key_value(
     off before the prefix, so a quoted full ``"DOTENV_PRIVATE_KEY_PROD=abc"``
     line still has its prefix stripped. The caller decides what to do with a
     suffix that does not match the target environment (the engine and
-    ``vault-pull`` raise; verify reports a mismatch).
+    ``vault-pull`` raise; verify reports a mismatch). The ``{``/``[`` check
+    runs before the newline check so pretty-printed JSON reaches the JSON
+    handler (keys blobs never start with a bracket; a bracket-led non-JSON
+    multi-line value still falls back to the blob handler).
     """
     value = _strip_one_quote_layer(raw.strip())
-    if "\n" in value:
-        return _extract_from_keys_blob(value, expected_environment)
     if value[:1] in ("{", "["):
         return _extract_from_json_document(value, expected_environment)
+    if "\n" in value:
+        return _extract_from_keys_blob(value, expected_environment)
     match = _DOTENV_PRIVATE_KEY_LINE_RE.match(value)
     if match:
         return _normalize_inner(match.group(2)), match.group(1)
@@ -197,6 +227,14 @@ def validate_key_material(value: str, *, secret_name: str | None = None) -> str:
         raise KeyMaterialError(
             f"{label} still contains whitespace after normalization and does not "
             f"look like a dotenvx private key"
+        )
+    if _DOTENV_PRIVATE_KEY_LINE_RE.match(value):
+        # A prefix-carrying artifact is never a key token: writing it produces
+        # the doubled DOTENV_PRIVATE_KEY_X=DOTENV_PRIVATE_KEY_X=... line #480
+        # exists to eliminate. Backstop for any shape normalization missed.
+        raise KeyMaterialError(
+            f"{label} still carries a DOTENV_PRIVATE_KEY_<ENV>= prefix after "
+            f"normalization and does not look like a bare dotenvx private key"
         )
     if value[0] in ("{", "["):
         raise KeyMaterialError(

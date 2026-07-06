@@ -517,25 +517,56 @@ class TestAWSRegionHandling:
         secret = aws_client_configured.get_secret("envdrift-test/single-key")
         assert secret.value == "ec1234567890abcdef"
 
-    @pytest.mark.skip(reason="LocalStack region handling is flaky in CI")
     def test_client_with_different_region(
         self, localstack_endpoint: str, populated_secrets: dict[str, str], monkeypatch
     ) -> None:
-        """Test creating client with different region."""
+        """A client pinned to another region sees only that region's secrets.
+
+        Secrets Manager namespaces secrets per region (LocalStack mirrors real
+        AWS), so the old version of this test — create in us-east-1, read from
+        eu-west-1 — could never pass and sat behind an unconditional skip
+        labelled "flaky in CI" (#497). The deterministic contract: a secret
+        created in eu-west-1 is readable by an eu-west-1 client, while the
+        us-east-1 fixture secrets are NOT visible from eu-west-1.
+        """
+        boto3 = pytest.importorskip("boto3")
         monkeypatch.setenv("AWS_ENDPOINT_URL", localstack_endpoint)
         monkeypatch.setenv("AWS_ACCESS_KEY_ID", "test")
         monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "test")
 
         from envdrift.vault.aws import AWSSecretsManagerClient
+        from envdrift.vault.base import SecretNotFoundError
 
-        # LocalStack accepts any region
-        client = AWSSecretsManagerClient(region="eu-west-1")
-        client.authenticate()
+        secret_name = "envdrift-test/eu-west-1-region-key"
+        eu_boto_client = boto3.client(
+            "secretsmanager",
+            endpoint_url=localstack_endpoint,
+            region_name="eu-west-1",
+            aws_access_key_id="test",
+            aws_secret_access_key="test",
+        )
+        try:
+            try:
+                eu_boto_client.create_secret(Name=secret_name, SecretString="eu-west-1-value")
+            except eu_boto_client.exceptions.ResourceExistsException:
+                eu_boto_client.put_secret_value(
+                    SecretId=secret_name, SecretString="eu-west-1-value"
+                )
 
-        assert client.region == "eu-west-1"
-        # Should still work with LocalStack
-        secret = client.get_secret("envdrift-test/single-key")
-        assert secret.value == "ec1234567890abcdef"
+            client = AWSSecretsManagerClient(region="eu-west-1")
+            client.authenticate()
+            assert client.region == "eu-west-1"
+
+            # The eu-west-1 secret is readable through the envdrift client.
+            secret = client.get_secret(secret_name)
+            assert secret.value == "eu-west-1-value"
+
+            # Region isolation: the us-east-1 fixture secret is not visible here.
+            with pytest.raises(SecretNotFoundError):
+                client.get_secret("envdrift-test/single-key")
+        finally:
+            with contextlib.suppress(Exception):
+                eu_boto_client.delete_secret(SecretId=secret_name, ForceDeleteWithoutRecovery=True)
 
 
 # ---------------------------------------------------------------------------

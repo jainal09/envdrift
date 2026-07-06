@@ -9,6 +9,8 @@ behavior to mock.
 
 from __future__ import annotations
 
+import json
+
 import pytest
 
 from envdrift.vault.base import SecretValue, VaultError
@@ -47,6 +49,13 @@ class TestNormalizeSingleLine:
 
     def test_opaque_value_with_equals_is_untouched(self):
         assert normalize_vault_key_value("opaque=keymaterial") == ("opaque=keymaterial", None)
+
+    def test_empty_value_key_line_yields_empty_value(self):
+        # `vault kv put ... DOTENV_PRIVATE_KEY_PRODUCTION=$KEY` with $KEY unset:
+        # the line must parse (empty value + suffix) so validate_key_material
+        # rejects it, not fall through as an "opaque" value that gets written
+        # back as a doubled DOTENV_PRIVATE_KEY prefix (#480).
+        assert normalize_vault_key_value("DOTENV_PRIVATE_KEY_PRODUCTION=") == ("", "PRODUCTION")
 
 
 class TestNormalizeJsonDocument:
@@ -89,6 +98,39 @@ class TestNormalizeJsonDocument:
         value, suffix = normalize_vault_key_value("{broken")
         assert value == "{broken"
         assert suffix is None
+
+    def test_pretty_printed_json_extracts_key(self):
+        # Pretty-printed JSON (json.dumps(..., indent=2) / `az keyvault secret
+        # set --file doc.json`) contains newlines; it must reach the JSON
+        # handler, not be misrouted to the keys-blob handler and fail with a
+        # misleading "no DOTENV_PRIVATE_KEY line" error.
+        raw = json.dumps({"DOTENV_PRIVATE_KEY_PRODUCTION": FAKE_KEY}, indent=2)
+        assert normalize_vault_key_value(raw, "production") == (FAKE_KEY, "PRODUCTION")
+
+    def test_multiline_non_json_starting_with_brace_falls_back_to_blob(self):
+        # A multi-line non-JSON value whose first line starts with "{" still
+        # reaches the keys-blob handler after the JSON parse fails.
+        raw = "{\n" + f"DOTENV_PRIVATE_KEY_PRODUCTION={FAKE_KEY}\n" + "}\n"
+        assert normalize_vault_key_value(raw, "production") == (FAKE_KEY, "PRODUCTION")
+
+    def test_field_value_carrying_full_line_is_prefix_stripped(self):
+        # A whole .env.keys line copy-pasted into the console value box: the
+        # redundant DOTENV_PRIVATE_KEY_<ENV>= prefix must come off, or the
+        # doubled-prefix line is written to .env.keys under exit 0 (#480).
+        raw = json.dumps(
+            {"DOTENV_PRIVATE_KEY_PRODUCTION": f"DOTENV_PRIVATE_KEY_PRODUCTION={FAKE_KEY}"}
+        )
+        assert normalize_vault_key_value(raw, "production") == (FAKE_KEY, "PRODUCTION")
+
+    def test_field_value_with_conflicting_prefix_is_not_stripped(self):
+        # A field value labeled for a *different* environment is left intact
+        # (validate_key_material rejects it) rather than silently installed.
+        raw = json.dumps({"DOTENV_PRIVATE_KEY_PRODUCTION": "DOTENV_PRIVATE_KEY_STAGING=abc123"})
+        value, suffix = normalize_vault_key_value(raw, "production")
+        assert value == "DOTENV_PRIVATE_KEY_STAGING=abc123"
+        assert suffix == "PRODUCTION"
+        with pytest.raises(KeyMaterialError, match="prefix"):
+            validate_key_material(value, secret_name="s")
 
 
 class TestNormalizeMultilineBlob:
@@ -156,6 +198,12 @@ class TestValidateKeyMaterial:
         with pytest.raises(KeyMaterialError, match="JSON"):
             validate_key_material("{broken", secret_name="s")
 
+    def test_rejects_prefix_carrying_value(self):
+        # Backstop for the #480 corruption class: a value still shaped like a
+        # DOTENV_PRIVATE_KEY_<ENV>=... line is never bare key material.
+        with pytest.raises(KeyMaterialError, match="prefix"):
+            validate_key_material(f"DOTENV_PRIVATE_KEY_PRODUCTION={FAKE_KEY}", secret_name="s")
+
     def test_error_does_not_leak_value(self):
         with pytest.raises(KeyMaterialError) as exc_info:
             validate_key_material("super secret material", secret_name="s")
@@ -172,6 +220,20 @@ class TestExtractKeyMaterial:
     def test_base64_marked_binary_secret_rejected(self):
         secret = SecretValue(name="bin-secret", value="//4=", metadata={"encoding": "base64"})
         with pytest.raises(KeyMaterialError, match="binary"):
+            extract_key_material(secret, "production")
+
+    def test_empty_value_key_line_rejected(self):
+        # End-to-end for the #480 residual: this exact secret value used to be
+        # installed verbatim, corrupting .env.keys with
+        # DOTENV_PRIVATE_KEY_PRODUCTION=DOTENV_PRIVATE_KEY_PRODUCTION=.
+        secret = SecretValue(name="s", value="DOTENV_PRIVATE_KEY_PRODUCTION=")
+        with pytest.raises(KeyMaterialError, match="empty"):
+            extract_key_material(secret, "production")
+
+    def test_json_field_with_conflicting_embedded_prefix_rejected(self):
+        raw = json.dumps({"DOTENV_PRIVATE_KEY_PRODUCTION": "DOTENV_PRIVATE_KEY_STAGING=abc123"})
+        secret = SecretValue(name="s", value=raw)
+        with pytest.raises(KeyMaterialError, match="prefix"):
             extract_key_material(secret, "production")
 
     def test_errors_name_the_secret(self):
