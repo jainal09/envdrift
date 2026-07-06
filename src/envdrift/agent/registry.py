@@ -226,36 +226,52 @@ class ProjectRegistry:
         """Return the sidecar lock file path (projects.json.lock)."""
         return self._path.with_name(self._path.name + ".lock")
 
+    @staticmethod
+    def _try_lock(fd: int) -> None:
+        """Attempt one non-blocking exclusive lock on ``fd`` (raises OSError)."""
+        if sys.platform == "win32":
+            msvcrt.locking(fd, msvcrt.LK_NBLCK, 1)
+        else:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+
+    def _handle_lock_error(self, exc: OSError, deadline: float, transient_errors: int) -> int:
+        """Decide whether to keep polling after a failed lock attempt.
+
+        Returns the updated transient-error count when polling should
+        continue; raises when it should stop.
+        """
+        if exc.errno not in _LOCK_CONTENTION_ERRNOS:
+            # A real I/O failure, not contention: allow a few retries for
+            # transient blips (e.g. a virus scanner briefly holding the file),
+            # then re-raise as-is instead of misreporting a lock timeout.
+            transient_errors += 1
+            if transient_errors > _TRANSIENT_LOCK_ERROR_RETRIES:
+                raise exc
+            return transient_errors
+        if time.monotonic() >= deadline:
+            raise RegistryLockError(
+                f"timed out after {self._lock_timeout:g}s waiting for the "
+                f"registry lock: {self._lock_path} (is another envdrift "
+                "process stuck?)"
+            ) from None
+        return transient_errors
+
     def _acquire_lock(self, fd: int) -> None:
         """Acquire an exclusive lock on ``fd``, polling until the timeout.
 
         Lock contention (:data:`_LOCK_CONTENTION_ERRNOS`) is retried until
         ``lock_timeout`` elapses, then reported as :class:`RegistryLockError`.
-        Any other OSError is a real I/O failure, not contention: it is retried
-        a bounded number of times (transient blips, e.g. a virus scanner
-        briefly holding the file) and then re-raised as-is instead of being
-        misreported as a lock timeout.
+        Any other OSError is retried :data:`_TRANSIENT_LOCK_ERROR_RETRIES`
+        times and then re-raised as-is.
         """
         deadline = time.monotonic() + self._lock_timeout
         transient_errors = 0
         while True:
             try:
-                if sys.platform == "win32":
-                    msvcrt.locking(fd, msvcrt.LK_NBLCK, 1)
-                else:
-                    fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                self._try_lock(fd)
                 return
             except OSError as exc:
-                if exc.errno not in _LOCK_CONTENTION_ERRNOS:
-                    transient_errors += 1
-                    if transient_errors > _TRANSIENT_LOCK_ERROR_RETRIES:
-                        raise
-                elif time.monotonic() >= deadline:
-                    raise RegistryLockError(
-                        f"timed out after {self._lock_timeout:g}s waiting for the "
-                        f"registry lock: {self._lock_path} (is another envdrift "
-                        "process stuck?)"
-                    ) from None
+                transient_errors = self._handle_lock_error(exc, deadline, transient_errors)
                 time.sleep(_LOCK_POLL_INTERVAL)
 
     @staticmethod
@@ -329,17 +345,15 @@ class ProjectRegistry:
 
     def _backup_corrupt_file(self) -> None:
         """Move a corrupt registry aside before a save replaces it (#492)."""
-        if (
-            self._corruption is None
-            # Re-entry guard: once a backup was made (or its rename failed),
-            # never attempt another for the same corruption notice — a second
-            # save() without an intervening load() would otherwise move the
-            # freshly written *valid* registry aside as if it were corrupt.
-            or self._corruption.backup_path is not None
-            or self._corruption.backup_failed
-        ):
+        notice = self._corruption
+        if notice is None or not self._path.exists():
             return
-        if not self._path.exists():
+        # Re-entry guard: once a backup was made (or its rename failed), never
+        # attempt another for the same corruption notice — a second save()
+        # without an intervening load() would otherwise move the freshly
+        # written *valid* registry aside as if it were corrupt.
+        backup_already_attempted = notice.backup_path is not None or notice.backup_failed
+        if backup_already_attempted:
             return
         backup_path = self._next_backup_path()
         try:
@@ -347,9 +361,9 @@ class ProjectRegistry:
         except OSError:
             # The save still proceeds; record that the corrupt bytes are gone
             # so the CLI reports the truth instead of a phantom backup.
-            self._corruption.backup_failed = True
+            notice.backup_failed = True
             return
-        self._corruption.backup_path = backup_path
+        notice.backup_path = backup_path
 
     def save(self) -> None:
         """Save the registry to disk.
