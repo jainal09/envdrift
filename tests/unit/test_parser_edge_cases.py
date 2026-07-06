@@ -7,8 +7,10 @@ actually loads — in five edge cases:
 - ``${VAR}`` references were never expanded, so ``validate`` type-checked the
   literal and failed configs the real loader accepts.
 - A mid-token apostrophe in an unquoted value (``user's data # comment``)
-  toggled quote state inside ``_strip_inline_comment`` and disabled
-  inline-comment stripping for the rest of the line.
+  toggled quote state in the old comment-stripping scan and disabled
+  inline-comment stripping for the rest of the line; and a value that was
+  only whitespace + ``# comment`` was zeroed to ``""`` where python-dotenv
+  loads the whole ``# comment`` text (#537).
 - Double-quoted escape sequences (``\\n``, ``\\t``, ...) — fixed by the #458
   quoted-value lexer; pinned here with the original #486 repros.
 - Unicode line boundaries (U+2028, form feed, NEL, ...) inside a value split
@@ -26,7 +28,7 @@ from __future__ import annotations
 import pytest
 from dotenv import dotenv_values
 
-from envdrift.core.parser import EnvParser
+from envdrift.core.parser import EncryptionStatus, EnvParser
 
 
 def _values(env_file) -> dict[str, str]:
@@ -114,6 +116,37 @@ class TestInterpolation:
 
         assert result.variables["B_REF"].value == "line1\nxline2"
 
+    def test_environ_lookup_is_case_sensitive(self, monkeypatch):
+        """python-dotenv snapshots ``os.environ`` into a plain dict and looks
+        names up case-SENSITIVELY, so a mixed-case ``${name}`` misses even on
+        Windows (where ``os.environ.get`` itself is case-insensitive because
+        ``os._Environ`` upper-cases keys). The parser must resolve through a
+        dict snapshot, not ``os.environ.get``, or ``${path}``-style references
+        expand here but not in pydantic-settings (#486 review)."""
+        monkeypatch.setenv("ENVDRIFT_REF_CASE", "set-upper")
+
+        result = EnvParser().parse_string(
+            "A=${envdrift_ref_case:-fell-back}\nB=${ENVDRIFT_REF_CASE}\n"
+        )
+
+        assert result.variables["A"].value == "fell-back"
+        assert result.variables["B"].value == "set-upper"
+
+    def test_alias_of_encrypted_value_inherits_encrypted_status(self):
+        """Deliberate semantics (#486 review): ``B=${A}`` with ``A`` encrypted
+        resolves to the ciphertext string and is classified ENCRYPTED. The
+        file stores only the reference — no plaintext secret on disk — and
+        classifying it PLAINTEXT would make encrypt/lock re-encrypt the
+        literal ``${A}`` on every run."""
+        content = 'A="encrypted:BDqDBibm4wsYqMpCjTQ46bkAqI4Kd"\nB=${A}\n'
+
+        result = EnvParser().parse_string(content)
+
+        alias = result.variables["B"]
+        assert alias.value.startswith("encrypted:")
+        assert alias.encryption_status == EncryptionStatus.ENCRYPTED
+        assert alias.encryption_backend == "dotenvx"
+
 
 class TestInlineCommentQuoteState:
     """#486: a mid-token quote in an unquoted value never opens a quote
@@ -154,34 +187,85 @@ class TestInlineCommentQuoteState:
 
         assert result.variables["GREETING"].value == "hi # there"
 
-    def test_malformed_quoted_value_keeps_quote_aware_scan(self):
-        """A value that OPENS with a quote but does not close cleanly takes
-        the legacy fallback (#458), where the quote-aware scan still protects
-        a ``#`` inside the quoted span."""
-        result = EnvParser().parse_string('K="a # b" trailing\n')
+    @pytest.mark.parametrize(
+        "content",
+        [
+            pytest.param('K="a # b" trailing\n', id="junk-after-close-quote"),
+            pytest.param('K="a" junk # comment\n', id="junk-then-comment"),
+            pytest.param('K="open # tail\n', id="unterminated-quote"),
+            pytest.param('K="a \\" # b" x\n', id="escaped-quote-then-junk"),
+        ],
+    )
+    def test_malformed_quoted_binding_is_dropped(self, content):
+        """A binding that OPENS with a quote but does not terminate cleanly is
+        dropped whole, exactly like python-dotenv (#458 rewrite). Ground truth
+        (python-dotenv 1.2.2): ``dotenv_values`` returns ``{}`` for every one
+        of these shapes — its quoted-value lexer commits to the quote branch
+        and the error path registers nothing."""
+        result = EnvParser().parse_string(content)
 
-        assert result.variables["K"].value == '"a # b" trailing'
+        assert "K" not in result.variables
 
-    def test_malformed_quoted_value_comment_after_close_is_stripped(self):
-        """In the legacy fallback a whitespace-preceded ``#`` AFTER the
-        quoted span still starts a comment."""
-        result = EnvParser().parse_string('K="a" junk # comment\n')
 
-        assert result.variables["K"].value == '"a" junk'
+class TestValueFromRawDirectCallers:
+    """``value_from_raw`` is public API: ``parse_string`` drops malformed
+    quoted bindings before ever calling it (dotenv parity), but a direct
+    caller passing one gets the legacy best-effort value — quote-aware
+    comment strip, then strip, then one pair of surrounding quotes."""
 
-    def test_unterminated_quote_protects_hash_inside(self):
-        """An unterminated quote keeps the scan in quote state, so the ``#``
-        is part of the (legacy, per-line) value."""
-        result = EnvParser().parse_string('K="open # tail\n')
+    @pytest.mark.parametrize(
+        ("raw", "expected"),
+        [
+            pytest.param('"a # b" trailing', '"a # b" trailing', id="hash-inside-quotes-kept"),
+            pytest.param('"a" junk # comment', '"a" junk', id="comment-after-quoted-span-cut"),
+            pytest.param('"open # tail', '"open # tail', id="unterminated-quote-protects-hash"),
+            pytest.param('"a \\" # b" x', '"a \\" # b" x', id="escaped-quote-does-not-toggle"),
+            pytest.param('"a" x "b"', 'a" x "b', id="surrounding-quote-pair-stripped"),
+        ],
+    )
+    def test_malformed_quoted_value_best_effort(self, raw, expected):
+        assert EnvParser().value_from_raw(raw) == expected
 
-        assert result.variables["K"].value == '"open # tail'
 
-    def test_escaped_quote_in_malformed_value_does_not_toggle_state(self):
-        """``\\"`` inside the legacy scan is an escape, not a close quote, so
-        the following ``#`` stays protected."""
-        result = EnvParser().parse_string('K="a \\" # b" x\n')
+class TestUnquotedLeadingCommentValue:
+    """#537: an unquoted value that STARTS with ``#`` after the post-``=``
+    whitespace is value content, never a comment.
 
-        assert result.variables["K"].value == '"a \\" # b" x'
+    python-dotenv's ``_equal_sign`` lexer (``=[^\\S\\r\\n]*``) consumes the
+    whitespace after ``=`` before the value is lexed, so the ``#`` has no
+    preceding whitespace inside the value and the comment rule
+    (``\\s+#.*``) never strips it. Ground truth (python-dotenv 1.2.2)::
+
+        dotenv_values("K= # c\\nEMPTY=  # just a comment\\n")
+        == {'K': '# c', 'EMPTY': '# just a comment'}
+    """
+
+    def test_issue_repro_whole_trailing_text_is_the_value(self):
+        result = EnvParser().parse_string("K= # c\nEMPTY=  # just a comment\n")
+
+        assert _values(result) == {"K": "# c", "EMPTY": "# just a comment"}
+
+    def test_status_is_plaintext_not_empty(self):
+        """The real loader receives ``'# c'`` — a non-empty value — so the
+        variable must not be classified EMPTY (validate/encrypt semantics)."""
+        result = EnvParser().parse_string("K= # c\n")
+
+        assert result.variables["K"].encryption_status == EncryptionStatus.PLAINTEXT
+
+    def test_tab_and_space_mix_before_hash(self):
+        """``K= \\t # c # d``: dotenv_values yields ``'# c'`` — the leading
+        whitespace is consumed, then the SECOND (whitespace-preceded) ``#``
+        starts the comment."""
+        result = EnvParser().parse_string("K= \t # c # d\n")
+
+        assert result.variables["K"].value == "# c"
+
+    def test_value_then_comment_still_stripped(self):
+        """``K= v # c`` is ``'v'`` (dotenv_values) — consuming the post-``=``
+        whitespace must not break ordinary inline comments."""
+        result = EnvParser().parse_string("K= v # c\n")
+
+        assert result.variables["K"].value == "v"
 
 
 class TestQuotedEscapeDecoding:
@@ -293,6 +377,50 @@ class TestUtf8Bom:
 
         assert result.variables["A"].value == "x\ufeffy"
 
+    def test_leading_bom_is_recorded_on_the_env_file(self, tmp_path):
+        """The stripped BOM is recorded so ``validate`` can warn: the real
+        loader (plain UTF-8 ``dotenv_values``) still sees the BOM-prefixed
+        key, so silence here would be a false green (#486 review)."""
+        bom = tmp_path / "bom.env"
+        plain = tmp_path / "plain.env"
+        bom.write_bytes(self.BOM_CONTENT)
+        plain.write_bytes(self.BOM_CONTENT[3:])
+
+        parser = EnvParser()
+
+        assert parser.parse(bom).leading_bom is True
+        assert parser.parse(plain).leading_bom is False
+
+    def test_bom_inside_a_value_does_not_set_the_flag(self, tmp_path):
+        env_path = tmp_path / ".env"
+        env_path.write_bytes(b"A=x\xef\xbb\xbfy\n")
+
+        assert EnvParser().parse(env_path).leading_bom is False
+
+    def test_validator_warns_on_leading_bom(self, tmp_path):
+        """A BOM file otherwise valid must PASS with a warning naming the BOM
+        (pydantic-settings would fail the required field at startup)."""
+        from envdrift.core.schema import SchemaLoader
+        from envdrift.core.validator import Validator
+
+        schema_file = tmp_path / "sc.py"
+        schema_file.write_text(
+            "from pydantic_settings import BaseSettings\n\n"
+            "class Settings(BaseSettings):\n    API_KEY: str\n",
+            encoding="utf-8",
+        )
+        env_path = tmp_path / "bom.env"
+        env_path.write_bytes(self.BOM_CONTENT)
+
+        settings_cls = SchemaLoader().load("sc:Settings", tmp_path)
+        schema_meta = SchemaLoader().extract_metadata(settings_cls)
+        env = EnvParser().parse(env_path, lenient=True)
+
+        result = Validator().validate(env, schema_meta, check_encryption=False)
+
+        assert result.valid
+        assert any("UTF-8 BOM" in w for w in result.warnings)
+
 
 class TestPythonDotenvParity:
     """Byte-for-byte parity with the real python-dotenv / pydantic-settings."""
@@ -310,9 +438,12 @@ class TestPythonDotenvParity:
         "B_REF",
         "C_REF",
         "ENVDRIFT_PARITY_UNSET",
+        "a_ref",
         "FWD",
         "LATER",
         "EMPTY_NAME",
+        "K",
+        "EMPTY",
     )
 
     @pytest.fixture(autouse=True)
@@ -334,8 +465,17 @@ class TestPythonDotenvParity:
             ),
             pytest.param("FWD=${LATER}\nLATER=set-later\n", id="interpolation-forward-ref"),
             pytest.param("EMPTY_NAME=${}\n", id="interpolation-empty-name"),
+            pytest.param(
+                "A_REF=set\nB_REF=${a_ref:-fell-back}\n",
+                id="interpolation-mixed-case-name",
+            ),
             pytest.param("A_REF=x\nB_REF=$A_REF\n", id="unbraced-dollar-literal"),
             pytest.param("MSG=user's data # comment\n", id="apostrophe-inline-comment"),
+            pytest.param(
+                "K= # c\nEMPTY=  # just a comment\n",
+                id="leading-hash-after-equals-is-the-value",
+            ),
+            pytest.param("K= \t # c # d\nMSG= v # c\n", id="post-equals-whitespace-comment"),
             pytest.param("MSG=it's O'Brien's # note\n", id="multi-apostrophe-comment"),
             pytest.param('MSG=a "b # c" d\n', id="mid-value-quote-comment"),
             pytest.param('MSG="tab\\there"\nTOKEN="abc\\ndef"\n', id="double-quoted-escapes"),
@@ -399,9 +539,14 @@ class TestPythonDotenvParity:
     def test_bom_divergence_from_python_dotenv_is_deliberate(self, tmp_path):
         """python-dotenv (and pydantic-settings) keep ``\\ufeffAPI_KEY`` as
         the key; envdrift strips the encoding artifact instead (#486) so its
-        reports name the variable the user actually wrote."""
+        reports name the variable the user actually wrote. The divergence is
+        not silent: ``EnvFile.leading_bom`` is set and ``validate`` warns
+        (see ``TestUtf8Bom.test_validator_warns_on_leading_bom``)."""
         env_path = tmp_path / "bom.env"
         env_path.write_bytes(b"\xef\xbb\xbfAPI_KEY=abc123\n")
 
-        assert _values(EnvParser().parse(env_path)) == {"API_KEY": "abc123"}
+        parsed = EnvParser().parse(env_path)
+
+        assert _values(parsed) == {"API_KEY": "abc123"}
+        assert parsed.leading_bom is True
         assert dict(dotenv_values(env_path)) == {"\ufeffAPI_KEY": "abc123"}

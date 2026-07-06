@@ -233,9 +233,12 @@ class TestUnicodeLineBoundaries:
 class TestUtf8Bom:
     """#486: a UTF-8 BOM is stripped — no invisible phantom first key."""
 
-    def test_validate_bom_file_passes_and_is_intelligible(self, tmp_path, integration_env):
+    def test_validate_bom_file_passes_with_a_bom_warning(self, tmp_path, integration_env):
         """The BOM key used to make validate list API_KEY both MISSING and
-        EXTRA (the BOM renders invisibly) and exit 1."""
+        EXTRA (the BOM renders invisibly) and exit 1. It now passes with an
+        explicit warning: pydantic-settings reads plain UTF-8, so the app
+        still sees the BOM-prefixed key (dotenv_values 1.2.2 loads
+        ``{'\\ufeffAPI_KEY': 'abc123'}``) — silence would be a false green."""
         _write_schema(
             tmp_path,
             """
@@ -254,6 +257,7 @@ class TestUtf8Bom:
         assert "Validation PASSED" in out
         assert "MISSING" not in out
         assert "EXTRA" not in out
+        assert "UTF-8 BOM" in out
 
     def test_diff_bom_twin_reports_no_drift(self, tmp_path, integration_env):
         """Issue repro: the BOM file and its BOM-less twin parse identically;

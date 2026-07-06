@@ -61,6 +61,11 @@ class EnvFile:
     path: Path
     variables: dict[str, EnvVar] = field(default_factory=dict)
     comments: list[str] = field(default_factory=list)
+    # True when the source text began with a UTF-8 BOM (U+FEFF). The parser
+    # strips it so reports name the variable the user wrote — but
+    # pydantic-settings reads .env files as plain UTF-8 and would see a
+    # ``U+FEFF``-prefixed first key, so `validate` surfaces a warning (#486).
+    leading_bom: bool = False
 
     @property
     def is_encrypted(self) -> bool:
@@ -140,9 +145,16 @@ class EnvParser:
       like python-dotenv's default ``interpolate=True``: earlier values in the
       same file win over ``os.environ``; an unset name yields the default or
       ``""``.
+    - Unquoted values follow python-dotenv's ``parse_unquoted_value`` rule
+      (#486/#537): the whitespace right after ``=`` is consumed first, then
+      the value is cut at the first whitespace-preceded ``#`` — so ``K= # c``
+      is the value ``# c``, and a stray quote mid-token never opens a quote
+      context.
     - Physical lines end at ``\\n`` / ``\\r\\n`` / ``\\r`` only; other Unicode
       line boundaries (U+2028, form feed, ...) are value content (#486).
-    - A leading UTF-8 BOM is an encoding artifact and is stripped (#486).
+    - A leading UTF-8 BOM is an encoding artifact: it is stripped from the
+      first key and recorded on ``EnvFile.leading_bom`` so ``validate`` can
+      warn (pydantic-settings reads plain UTF-8 and keeps the BOM) (#486).
     """
 
     # dotenvx encrypted value pattern
@@ -156,8 +168,8 @@ class EnvParser:
 
     # Pattern to match KEY=value lines (optionally prefixed with `export `)
     # Note: no `\s*` after `=` — leading value whitespace is captured in group(2)
-    # so _strip_inline_comment can distinguish `K= # c` (comment) from `K=#v`
-    # (a value beginning with `#`). Leading/trailing whitespace is stripped after.
+    # so the unquoted-value rule can consume it exactly like python-dotenv's
+    # `_equal_sign` lexer (`=[^\S\r\n]*`) before the value starts (#537).
     LINE_PATTERN = re.compile(r"^(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=(.*)$")
 
     # Lenient variant for ``lenient=True``: accepts ANY key the strict pattern
@@ -206,11 +218,13 @@ class EnvParser:
 
     # python-dotenv's `${name}` / `${name:-default}` interpolation pattern
     # (dotenv/variables.py `_posix_variable`), expanded by `_interpolate` (#486).
-    POSIX_VARIABLE_PATTERN = re.compile(r"\$\{(?P<name>[^\}:]*)(?::-(?P<default>[^\}]*))?\}")
+    POSIX_VARIABLE_PATTERN = re.compile(r"\$\{(?P<name>[^}:]*)(?::-(?P<default>[^}]*))?\}")
 
     # python-dotenv's unquoted-value comment rule (dotenv/parser.py
-    # `parse_unquoted_value`): the first whitespace-preceded `#` starts the
-    # comment — a quote character mid-token never opens a quote context (#486).
+    # `parse_unquoted_value`): applied AFTER the post-`=` whitespace is
+    # consumed, the first whitespace-preceded `#` starts the comment. A `#`
+    # that begins the value (`K= # c`, `K=#FF0000`) is value content, and a
+    # quote character mid-token never opens a quote context (#486/#537).
     UNQUOTED_COMMENT_PATTERN = re.compile(r"\s+#.*")
 
     def parse(self, path: Path | str, *, lenient: bool = False) -> EnvFile:
@@ -242,11 +256,10 @@ class EnvParser:
 
         # A binary / non-UTF-8 file raised a raw UnicodeDecodeError traceback;
         # convert it to a clean ValueError with an actionable message (#24).
-        # utf-8-sig: a UTF-8 BOM is an encoding artifact (Notepad/PowerShell),
-        # not part of the first key — keeping it produced an invisible phantom
-        # `\ufeffNAME` variable and self-contradictory MISSING+EXTRA output (#486).
+        # Plain utf-8 (not utf-8-sig) so a leading BOM reaches parse_string,
+        # which strips it AND records it on EnvFile.leading_bom (#486).
         try:
-            content = path.read_text(encoding="utf-8-sig")
+            content = path.read_text(encoding="utf-8")
         except UnicodeDecodeError as exc:
             raise ValueError(
                 f"Could not read {path} as UTF-8 text (not a valid .env file)"
@@ -269,9 +282,14 @@ class EnvParser:
             EnvFile: An EnvFile populated with parsed EnvVar entries keyed by variable name and a list of comment lines.
         """
         env_file = EnvFile(path=Path())
-        # Strip a leading UTF-8 BOM so callers that read the file themselves
-        # (plain `utf-8`) parse identically to `parse()` (#486).
-        content = content.removeprefix("\ufeff")
+        # A leading UTF-8 BOM is an encoding artifact (Notepad/PowerShell), not
+        # part of the first key — keeping it produced an invisible phantom
+        # ``U+FEFF``-prefixed ``NAME`` variable and self-contradictory MISSING+EXTRA output.
+        # Strip it, but record it: pydantic-settings reads plain UTF-8 and
+        # WOULD see the ``U+FEFF``-prefixed key, so `validate` warns (#486).
+        if content.startswith("\ufeff"):
+            content = content.removeprefix("\ufeff")
+            env_file.leading_bom = True
         lines = self.LINE_BOUNDARY_PATTERN.split(content)
         pattern = self.LENIENT_LINE_PATTERN if lenient else self.LINE_PATTERN
 
@@ -291,8 +309,12 @@ class EnvParser:
                 env_file.comments.append(line)
                 continue
 
-            # Parse KEY=value
-            match = pattern.match(line)
+            # Parse KEY=value. Match the lstripped line — NOT the fully
+            # stripped one — so the RHS keeps its trailing whitespace: when a
+            # quote opens here and closes on a later line, python-dotenv keeps
+            # that whitespace (space, tab, U+2028, form feed, ...) inside the
+            # value; unquoted values rstrip it anyway (#486 fuzz).
+            match = pattern.match(original_line.lstrip())
             if not match:
                 continue
 
@@ -324,7 +346,12 @@ class EnvParser:
             if "${" in value:
                 value = self._interpolate(value, env_file.variables)
 
-            # Determine encryption status and backend
+            # Determine encryption status and backend. Detection runs on the
+            # interpolated value, so an alias of an encrypted variable
+            # (`B=${A}` with `A=encrypted:...`) is classified ENCRYPTED too —
+            # deliberate: the file stores only the reference (no plaintext
+            # secret on disk), and classifying it PLAINTEXT would make
+            # encrypt/lock re-encrypt the literal `${A}` on every run.
             encryption_status, encryption_backend = self._detect_encryption_status(value)
 
             env_var = EnvVar(
@@ -346,22 +373,41 @@ class EnvParser:
         A cleanly quoted value (single- or multi-line) is lexed exactly like
         python-dotenv: the value runs to the matching close quote (see
         ``_scan_chunk``), anything after it must be whitespace or a ``#``
-        comment, and the quote-appropriate escape set is decoded (#458).
-        Otherwise the legacy treatment applies: strip an unquoted inline
-        comment, then surrounding whitespace, then a single matching pair of
-        surrounding quotes — note ``parse_string`` never takes the legacy path
-        for a quote-opening RHS (it drops malformed quoted bindings like
-        python-dotenv); the fallback serves direct callers. Public so
-        callers that recover assignments the strict ``LINE_PATTERN`` rejects
-        (e.g. ``init`` for non-identifier keys) reuse this canonical handling
-        instead of the private helpers. The whitespace context matters, so pass
-        the RAW value (the regex's ``=`` group), unstripped: ``K= # c`` is a
-        comment but ``K=#FF0000`` is a value.
+        comment, and the quote-appropriate escape set is decoded (#458). A
+        value that does not open with a quote follows python-dotenv's
+        ``parse_unquoted_value`` rule (see ``_parse_unquoted_value``). A value
+        that opens a quote which does not terminate cleanly keeps the legacy
+        treatment (quote-aware comment strip, then surrounding whitespace,
+        then one pair of surrounding quotes) — note ``parse_string`` never
+        takes that path (it drops malformed quoted bindings like
+        python-dotenv); it serves direct callers only. The whitespace context
+        matters, so pass the RAW value (the regex's ``=`` group), unstripped:
+        ``K= # c`` is the value ``# c`` but ``K=v # c`` is ``v``.
         """
-        quoted = self._match_quoted_value(raw_value.strip())
+        stripped = raw_value.strip()
+        quoted = self._match_quoted_value(stripped)
         if quoted is not None:
             return quoted
-        return self._unquote(self._strip_inline_comment(raw_value).strip())
+        if stripped[:1] in ("'", '"'):
+            # Malformed quoted binding: parse_string drops these before ever
+            # calling here (dotenv parity, #458); legacy handling for direct
+            # callers that need a best-effort value.
+            return self._unquote(self._strip_inline_comment(raw_value).strip())
+        return self._parse_unquoted_value(raw_value)
+
+    def _parse_unquoted_value(self, raw_value: str) -> str:
+        """Lex an unquoted RHS exactly like python-dotenv (#486/#537).
+
+        python-dotenv's ``_equal_sign`` lexer (``=[^\\S\\r\\n]*``) consumes the
+        whitespace right after ``=`` BEFORE the value starts, then
+        ``parse_unquoted_value`` applies ``re.sub(r"\\s+#.*", "", part)`` and
+        ``.rstrip()``. A ``#`` at the start of the value therefore has no
+        preceding whitespace inside the value and is content: ``K= # c`` is
+        ``# c`` (dotenv_values: ``{'K': '# c'}``), while ``K= v # c`` is
+        ``v``.
+        """
+        part = raw_value.lstrip()
+        return self.UNQUOTED_COMMENT_PATTERN.sub("", part).rstrip()
 
     def _match_quoted_value(self, text: str) -> str | None:
         """Lex ``text`` as a python-dotenv quoted value, or return ``None``.
@@ -517,7 +563,14 @@ class EnvParser:
         a name already defined earlier in the file wins over ``os.environ``
         (``override=True`` semantics), an unset name falls back to the ``:-``
         default or ``""``, and replacement text is never re-expanded.
+
+        python-dotenv materializes ``os.environ`` into a plain dict
+        (``env.update(os.environ)`` in ``resolve_variables``) and looks names
+        up case-SENSITIVELY. Mirror that with a dict snapshot: on Windows,
+        ``os.environ.get`` is case-insensitive (``os._Environ`` upper-cases
+        keys), so ``${path}`` would expand here but not in pydantic-settings.
         """
+        environ = dict(os.environ)
 
         def resolve(match: re.Match[str]) -> str:
             name = match.group("name")
@@ -525,35 +578,27 @@ class EnvParser:
             if var is not None:
                 return var.value
             default = match.group("default")
-            return os.environ.get(name, default if default is not None else "")
+            return environ.get(name, default if default is not None else "")
 
         return self.POSIX_VARIABLE_PATTERN.sub(resolve, value)
 
     def _strip_inline_comment(self, value: str) -> str:
         """Strip an unquoted trailing ` #...` comment from a (raw) value.
 
-        A value that does not OPEN with a quote is unquoted: python-dotenv
-        strips from the first whitespace-preceded `#` unconditionally — a
-        quote character mid-token (`user's data # comment`) never opens a
-        quote context (#486). A `#` at the very start of the value (e.g.
-        `#FF0000`) or glued to a token (`http://x#frag`) is preserved.
-
-        A value that DOES open with a quote only reaches this method when the
-        quote never closes cleanly (legacy fallback, #458); there the
-        quote-aware scan is kept so a `#` inside the quoted span (and after an
-        escaped quote `\\"`, which must not toggle quote state) survives. Call
-        this on the raw `value` (before stripping) so the whitespace context
-        is intact.
+        Legacy quote-aware scan, reachable only through ``value_from_raw``'s
+        malformed-quoted-binding fallback (direct callers): ``parse_string``
+        drops those bindings like python-dotenv, and unquoted values go
+        through ``_parse_unquoted_value`` instead. A `#` starts a comment only
+        when it is outside quotes AND preceded by whitespace; a `#` inside
+        matching quotes, glued to a token, or escaped (`\\#`, and an escaped
+        quote `\\"` that must not toggle quote state) is preserved. Call this
+        on the raw `value` (before stripping) so the whitespace context is
+        intact.
         """
         # Fast path: the overwhelming majority of values contain no `#`, so skip
-        # the scan entirely for them.
+        # the per-character quote-tracking scan entirely for them.
         if "#" not in value:
             return value
-
-        stripped = value.lstrip()
-        if not stripped or stripped[0] not in "\"'":
-            # Unquoted value: python-dotenv's `parse_unquoted_value` rule.
-            return self.UNQUOTED_COMMENT_PATTERN.sub("", value)
 
         in_single = False
         in_double = False

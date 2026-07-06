@@ -48,14 +48,21 @@ judged exactly as the real app loads them:
   whole binding (no truncated value, no phantom variables from interior lines).
 - `${VAR}` and `${VAR:-default}` references are expanded the way
   `dotenv_values` does: a name defined earlier in the same file wins over
-  `os.environ`, and an unset name falls back to the default (or `""`), so
-  `PORT=${OFFSET}234` is judged as the value the app receives.
-- An inline `# comment` (preceded by whitespace) is stripped from unquoted
-  values even when the value contains a stray quote character
-  (`MSG=user's data # comment` is `user's data`).
+  `os.environ` (looked up case-sensitively, exactly like python-dotenv), and
+  an unset name falls back to the default (or `""`), so `PORT=${OFFSET}234`
+  is judged as the value the app receives.
+- Unquoted values follow python-dotenv's comment rule: the whitespace right
+  after `=` is consumed first, then the value is cut at the first
+  whitespace-preceded `#`. `MSG=user's data # comment` is `user's data` even
+  though the value contains a stray quote, while `K= # c` keeps the whole
+  `# c` as its value (a leading `#` has no whitespace before it inside the
+  value).
 - Physical lines end at `\n` / `\r\n` / `\r` only; other Unicode line
-  boundaries (U+2028, form feed, ...) are value content, and a leading UTF-8
-  BOM is ignored instead of becoming part of the first key.
+  boundaries (U+2028, form feed, ...) are value content.
+- A leading UTF-8 BOM is stripped instead of becoming part of the first key,
+  and `validate` warns about it: pydantic-settings reads plain UTF-8, so the
+  running app still sees the BOM-prefixed key unless the BOM is removed or
+  `env_file_encoding='utf-8-sig'` is set.
 
 Other python-dotenv behaviors (`'quoted keys'`, a bare `KEY` line without `=`)
 are not yet mirrored; a file relying on those may still be judged differently
