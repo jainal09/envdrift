@@ -155,9 +155,10 @@ env_file = "postgresql.env" # Custom dotenv filename inside folder_path
 
 Place the file in the project root so auto-discovery finds it; pass `-c envdrift.toml` in CI to pin the exact file.
 
-!!! warning "`folder_path` must exist"
+!!! warning "`folder_path` must be an existing directory"
     Each mapping's `folder_path` is validated: a folder that does not exist
-    (for example a typo like `servces/api`) is reported as a per-mapping
+    (for example a typo like `servces/api`), or that points at a regular
+    file instead of a directory, is reported as a per-mapping
     **error** — the row says `Mapping folder does not exist`, the summary
     counts it under `Errors`, and `sync --ci`, `pull`, and `vault-push --all`
     exit non-zero. Only a *missing env file inside an existing folder* is a

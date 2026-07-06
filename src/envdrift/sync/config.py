@@ -139,6 +139,24 @@ class SyncConfig:
                 raise SyncConfigError("Missing 'secret_name' in mapping")
             if "folder_path" not in mapping_data:
                 raise SyncConfigError("Missing 'folder_path' in mapping")
+            # TOML type surprises (folder_path = 123, secret_name = true, ...)
+            # must be a clean config error, not a raw TypeError traceback from
+            # Path()/str use downstream (#488).
+            for key in (
+                "secret_name",
+                "folder_path",
+                "vault_name",
+                "environment",
+                "env_file",
+                "profile",
+                "activate_to",
+            ):
+                value = mapping_data.get(key)
+                if value is not None and not isinstance(value, str):
+                    raise SyncConfigError(
+                        f"'{key}' must be a string in mapping, "
+                        f"got {type(value).__name__}: {value!r}"
+                    )
 
             activate_to = mapping_data.get("activate_to")
             mappings.append(

@@ -308,6 +308,23 @@ class TestSyncConfigFromToml:
         with pytest.raises(SyncConfigError, match="Missing 'folder_path'"):
             SyncConfig.from_toml(data)
 
+    @pytest.mark.parametrize(
+        ("key", "value"),
+        [
+            ("folder_path", 123),
+            ("secret_name", True),
+            ("env_file", 7),
+            ("activate_to", 3.5),
+        ],
+    )
+    def test_from_toml_non_string_value_raises_clean_error(self, key: str, value) -> None:
+        """#488: a TOML type surprise (int/bool where a string belongs) raises a
+        clean SyncConfigError instead of a raw TypeError traceback from Path()."""
+        mapping = {"secret_name": "mykey", "folder_path": "services/myapp", key: value}
+
+        with pytest.raises(SyncConfigError, match=f"'{key}' must be a string"):
+            SyncConfig.from_toml({"mappings": [mapping]})
+
     def test_from_toml_empty_mappings(self) -> None:
         """Test TOML config with empty mappings."""
         data = {"mappings": []}

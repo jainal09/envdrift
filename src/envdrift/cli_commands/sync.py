@@ -143,6 +143,14 @@ def load_sync_config_and_client(
                 pass
             except tomllib.TOMLDecodeError as e:
                 print_warning(f"TOML syntax error in {config_path}: {e}")
+            except ValueError as e:
+                # A malformed section (e.g. a sync mapping missing secret_name)
+                # in the DISCOVERED config must be a clean error, not a raw
+                # ValueError traceback (#488). The config WAS found, so falling
+                # through to "No sync configuration found" would hide the real
+                # problem. Same boundary as the explicit --config branch above.
+                print_error(f"Invalid config in {config_path}: {e}")
+                raise typer.Exit(code=1) from None
 
     vault_config = getattr(envdrift_config, "vault", None)
 
@@ -606,7 +614,7 @@ def pull(
         ),
     ] = False,
 ) -> None:
-    r"""
+    """
     Pull keys from vault and decrypt all env files (one-command developer setup).
 
     Reads your TOML configuration, fetches encryption keys from your cloud vault,
@@ -621,8 +629,8 @@ def pull(
       and copies the decrypted file to the activate_to path if configured
 
     Configuration is read from:
-    - pyproject.toml \[tool.envdrift.vault.sync] section
-    - envdrift.toml \[vault.sync] section
+    - pyproject.toml [tool.envdrift.vault.sync] section
+    - envdrift.toml [vault.sync] section
     - Explicit --config file
 
     Examples:
@@ -1227,7 +1235,7 @@ def lock(
         ),
     ] = False,
 ) -> None:
-    r"""
+    """
     Verify keys and encrypt all env files (opposite of pull - prepares for commit).
 
     The lock command ensures your environment files are properly encrypted before
@@ -1252,8 +1260,8 @@ def lock(
     Use --profile to filter mappings for a specific environment.
 
     Configuration is read from:
-    - pyproject.toml \[tool.envdrift.vault.sync] section
-    - envdrift.toml \[vault.sync] section
+    - pyproject.toml [tool.envdrift.vault.sync] section
+    - envdrift.toml [vault.sync] section
     - Explicit --config file
 
     Examples:

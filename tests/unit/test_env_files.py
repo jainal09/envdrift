@@ -345,3 +345,25 @@ def test_resolve_mapping_env_file_reports_folder_not_found(tmp_path: Path) -> No
     assert detection.status == "folder_not_found"
     assert detection.path is None
     assert detection.environment == "production"
+
+
+def test_explicit_env_file_with_file_as_folder_is_folder_not_found(tmp_path: Path) -> None:
+    """#488: folder_path pointing at a regular FILE + explicit env_file must be loud.
+
+    exists() classified this broken config as a benign "not_found" skip
+    (exit 0); it must report folder_not_found like the auto-detect path does.
+    """
+    not_a_dir = tmp_path / "service"
+    not_a_dir.write_text("oops, a file\n")
+    mapping = ServiceMapping(
+        secret_name="dotenv-key",
+        folder_path=not_a_dir,
+        environment="production",
+        env_file=Path("postgresql.env"),
+    )
+
+    detection = resolve_mapping_env_file(mapping)
+
+    assert detection.status == "folder_not_found"
+    assert detection.path is None
+    assert detection.environment == "production"

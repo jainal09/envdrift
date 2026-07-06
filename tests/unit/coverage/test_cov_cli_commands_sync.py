@@ -1501,8 +1501,9 @@ class TestNoConfigErrorGuidance:
 class TestHelpShowsTomlSectionNames:
     """#488: pull/lock --help must show the literal TOML section names.
 
-    Rich interpreted ``[tool.envdrift.vault.sync]`` / ``[vault.sync]`` as
-    markup tags and silently deleted them, leaving "pyproject.toml  section".
+    Typer's default (non-rich) markup mode renders docstring brackets
+    verbatim, so ``[vault.sync]`` needs no escaping — a ``\\[`` escape
+    renders a stray literal backslash in --help instead.
     """
 
     @pytest.mark.parametrize("command", ["pull", "lock"])
@@ -1512,6 +1513,44 @@ class TestHelpShowsTomlSectionNames:
         assert result.exit_code == 0
         assert "pyproject.toml [tool.envdrift.vault.sync] section" in out
         assert "envdrift.toml [vault.sync] section" in out
+        # Regression: no leftover backslash-escape artifacts in help output.
+        assert "\\[" not in out
+
+    def test_vault_pull_help_shows_vault_section(self):
+        result = runner.invoke(app, ["vault-pull", "--help"])
+        out = " ".join(result.output.split())
+        assert result.exit_code == 0
+        assert "`[vault]` section" in out
+        assert "\\[" not in out
+
+
+class TestAutoDiscoveredMalformedMappingIsCleanError:
+    """#488: a malformed mapping in the AUTO-DISCOVERED envdrift.toml must be a
+    clean typed error, not a raw ValueError traceback.
+
+    The explicit --config branch already caught ValueError; the discovery
+    branch caught only ConfigNotFoundError/TOMLDecodeError and let the
+    missing-secret_name ValueError escape.
+    """
+
+    MALFORMED_TOML = (
+        '[vault]\nprovider = "hashicorp"\n\n'
+        '[vault.hashicorp]\nurl = "http://127.0.0.1:8200"\n\n'
+        '[[vault.sync.mappings]]\nfolder_path = "service"\nenvironment = "production"\n'
+    )
+
+    @pytest.mark.parametrize("args", [["pull", "--skip-sync"], ["vault-push", "--all"]])
+    def test_missing_secret_name_is_clean_error(self, args, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        (tmp_path / "envdrift.toml").write_text(self.MALFORMED_TOML)
+
+        result = runner.invoke(app, args)
+        out = " ".join(result.output.split())
+        assert result.exit_code == 1
+        assert "Invalid config" in out
+        assert "missing required key" in out
+        # The ValueError must not escape load_sync_config_and_client.
+        assert not isinstance(result.exception, ValueError)
 
 
 class TestMissingMappingFolderIsError:

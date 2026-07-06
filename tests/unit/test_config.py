@@ -284,6 +284,29 @@ class TestLoadConfig:
         with pytest.raises(ValueError, match="secret_name"):
             load_config(cfg)
 
+    @pytest.mark.parametrize(
+        "line",
+        [
+            "folder_path = 123",
+            "secret_name = true",
+            'folder_path = "svc"\nenv_file = 7',
+        ],
+    )
+    def test_load_config_sync_mapping_non_string_value_raises_clean_error(
+        self, tmp_path: Path, line: str
+    ):
+        """#488: a TOML type surprise (int/bool where a string belongs) raises a
+        clean ValueError instead of a raw TypeError traceback from Path()."""
+        cfg = tmp_path / "envdrift.toml"
+        body = f'[vault]\nprovider = "azure"\n\n[[vault.sync.mappings]]\n{line}\n'
+        if "secret_name" not in line:
+            body += 'secret_name = "key"\n'
+        if "folder_path" not in line:
+            body += 'folder_path = "services/app"\n'
+        cfg.write_text(body)
+        with pytest.raises(ValueError, match="non-string"):
+            load_config(cfg)
+
     def test_load_config_default_when_not_found(self, tmp_path: Path, monkeypatch):
         """Test load_config returns default config when no file found."""
         monkeypatch.chdir(tmp_path)

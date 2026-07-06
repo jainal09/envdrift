@@ -264,6 +264,19 @@ class PartialEncryptionConfig:
         validate_partial_encryption_environments(self.environments)
 
 
+# Mapping keys that must hold strings when present. Shared shape with
+# envdrift.sync.config.SyncConfig.from_toml (the explicit --config path).
+_MAPPING_STR_KEYS = (
+    "secret_name",
+    "folder_path",
+    "vault_name",
+    "environment",
+    "env_file",
+    "profile",
+    "activate_to",
+)
+
+
 def _build_vault_config(vault_section: dict[str, Any]) -> VaultConfig:
     """Build the vault config, including its nested ``[vault.sync]`` section."""
     sync_section = vault_section.get("sync", {})
@@ -275,6 +288,17 @@ def _build_vault_config(vault_section: dict[str, Any]) -> VaultConfig:
             raise ValueError(
                 f"[[vault.sync.mappings]] entry is missing required key(s) "
                 f"{', '.join(missing)}: {m!r}"
+            )
+        # TOML type surprises (folder_path = 123, secret_name = true, ...)
+        # used to escape as a raw TypeError traceback from Path()/str use
+        # downstream — validate loudly here instead (#488).
+        wrong_type = [
+            k for k in _MAPPING_STR_KEYS if m.get(k) is not None and not isinstance(m[k], str)
+        ]
+        if wrong_type:
+            raise ValueError(
+                f"[[vault.sync.mappings]] entry has non-string value(s) for "
+                f"{', '.join(wrong_type)}: {m!r}"
             )
     sync_mappings = [
         SyncMappingConfig(

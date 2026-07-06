@@ -171,11 +171,16 @@ def _resolve_explicit_env_file(
 ) -> EnvFileDetection:
     """Resolve an explicitly-configured ``mapping.env_file`` under ``folder_path``.
 
-    Returns "folder_not_found" when the folder is missing, "found" when the
-    configured file exists, else "not_found" (the path is still surfaced so the
-    caller can report where it looked).
+    Returns "folder_not_found" when the folder is missing or not a directory,
+    "found" when the configured file exists, else "not_found" (the path is still
+    surfaced so the caller can report where it looked).
     """
-    if not folder_path.exists():
+    # is_dir(), not exists(): a folder_path pointing at a regular FILE is the
+    # same broken config as a missing folder. exists() let that shape fall
+    # through to a benign "not_found" skip with exit 0 — the exact silent
+    # no-op class of #488 — while the auto-detect path (detect_env_file)
+    # already classified it "folder_not_found".
+    if not folder_path.is_dir():
         return EnvFileDetection(None, environment, "folder_not_found")
     resolved = resolve_custom_env_file(folder_path, env_file)
     if resolved.exists() and resolved.is_file():
