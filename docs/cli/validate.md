@@ -1,11 +1,11 @@
 # envdrift validate
 
-Validate an .env file against a Pydantic Settings schema.
+Validate one or more .env files against a Pydantic Settings schema.
 
 ## Synopsis
 
 ```bash
-envdrift validate [ENV_FILE] --schema SCHEMA [OPTIONS]
+envdrift validate [ENV_FILE]... --schema SCHEMA [OPTIONS]
 ```
 
 ## Description
@@ -13,15 +13,36 @@ envdrift validate [ENV_FILE] --schema SCHEMA [OPTIONS]
 The `validate` command checks that your .env file matches your Pydantic Settings schema. It verifies:
 
 - **Required variables** - All required fields in the schema exist in the .env file
-- **Type validation** - Values can be parsed as the expected type (int, bool, etc.)
+- **Type validation** - Values are accepted by the field's type using real pydantic-settings semantics
 - **Extra variables** - Warns about variables not defined in the schema (errors if `extra="forbid"`)
 - **Encryption status** - Optionally warns if sensitive fields are not encrypted
 
+Type validation mirrors what the real app does at startup:
+
+- Booleans accept every spelling Pydantic v2 accepts (`true/false`, `1/0`, `yes/no`,
+  `on/off`, `t/f`, `y/n`, any case).
+- A present-but-empty value (`PORT=`) is validated as the empty string
+  pydantic-settings actually passes through, so an empty `int`/`float`/`bool`
+  field fails like the real app (unless the schema sets `env_ignore_empty=True`,
+  in which case the value counts as unset).
+- Complex fields (`list`, `dict`, nested models) are JSON-decoded first, exactly
+  like the pydantic-settings env source: `TAGS=a,b,c` fails for `TAGS: list[str]`
+  while `TAGS=["a","b","c"]` passes.
+- Integer parsing is ASCII-only, matching Pydantic (fullwidth digits are rejected).
+- dotenvx's `DOTENV_PUBLIC_KEY*` artifact is exempt from the extra-variable check
+  and the sensitive-name warning, so encrypted files validate cleanly against an
+  `extra="forbid"` schema.
+
+Multiple env files can be validated in one invocation (each gets its own report;
+with `--ci` the exit code is 1 if any file fails). This keeps the command usable
+as a pre-commit `pass_filenames: true` hook, where every matched staged file is
+appended to a single command line.
+
 ## Arguments
 
-| Argument   | Description                       | Default |
-| :--------- | :-------------------------------- | :------ |
-| `ENV_FILE` | Path to the .env file to validate | `.env`  |
+| Argument        | Description                                      | Default |
+| :-------------- | :----------------------------------------------- | :------ |
+| `ENV_FILE`...   | Path(s) to the .env file(s) to validate          | `.env`  |
 
 ## Options
 
@@ -234,8 +255,10 @@ else:
 | Check                              | Error/Warning | Description                                          |
 | :--------------------------------- | :------------ | :--------------------------------------------------- |
 | Missing required vars              | Error         | Fields without defaults must exist                   |
-| Type mismatches                    | Error         | Values must parse as the expected type               |
-| Extra vars (with `extra="forbid"`) | Error         | Unknown variables not allowed                        |
+| Type mismatches                    | Error         | Values must be accepted by pydantic for the type     |
+| Empty values for non-str fields    | Error         | `PORT=` crashes a real `int` field at startup        |
+| Complex fields with invalid JSON   | Error         | `list`/`dict`/nested fields are JSON-decoded         |
+| Extra vars (with `extra="forbid"`) | Error         | Unknown variables not allowed (`DOTENV_PUBLIC_KEY*` exempt) |
 | Extra vars (with `extra="ignore"`) | Warning       | Unknown variables allowed but noted                  |
 | Unencrypted sensitive vars         | Warning       | Fields marked `sensitive=True` should be encrypted   |
 | Case-insensitive name collision    | Warning       | Two `.env` keys differ only in case                  |
