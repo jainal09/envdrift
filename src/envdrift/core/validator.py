@@ -164,9 +164,16 @@ class Validator:
                     f"value from {kept!r} is used, {dropped} ignored"
                 )
 
-        # Check for missing required variables
+        # Check for missing required variables. With env_ignore_empty=True the
+        # real env source drops empty values entirely, so a required field
+        # assigned ``FIELD=`` is missing at startup exactly as if the line were
+        # absent (#517 review) — the empty-value skips below must not turn that
+        # crash into a false PASS.
         for field_name, field_meta in schema.fields.items():
-            if field_meta.required and _lookup_key(field_meta) not in env_names_lower:
+            if not field_meta.required:
+                continue
+            env_var = env_by_lower.get(_lookup_key(field_meta))
+            if env_var is None or (env_var.value == "" and schema.env_ignore_empty):
                 result.missing_required.add(field_name)
 
         # Check for missing optional variables (as warning)
@@ -238,7 +245,9 @@ class Validator:
             if env_var.value == "" and schema.env_ignore_empty:
                 continue
 
-            type_error = self._check_type(env_var.value, field_meta.field_type)
+            type_error = self._check_type(
+                env_var.value, field_meta.field_type, field_meta.type_metadata
+            )
             if type_error:
                 result.type_errors[field_name] = type_error
 
@@ -263,7 +272,9 @@ class Validator:
                     continue
                 if value == "" and schema.env_ignore_empty:
                     continue
-                is_complex, allow_parse_failure = field_complexity(field_meta.field_type)
+                is_complex, allow_parse_failure = field_complexity(
+                    field_meta.field_type, field_meta.type_metadata
+                )
                 if is_complex:
                     # Mirror the env source: JSON-decode complex values; a union
                     # with a complex member falls back to the raw string. Plain
@@ -331,7 +342,9 @@ class Validator:
                 return True
         return False
 
-    def _check_type(self, value: str, expected_type: type) -> str | None:
+    def _check_type(
+        self, value: str, expected_type: type, metadata: tuple[Any, ...] = ()
+    ) -> str | None:
         """
         Validate a plaintext .env value the way pydantic-settings would (#472).
 
@@ -344,6 +357,8 @@ class Validator:
         Parameters:
             value (str): The raw value read from a .env file.
             expected_type (type): The field's annotation (e.g., int, bool, list[str]).
+            metadata (tuple): The field's ``FieldInfo.metadata`` (e.g. a
+                ``pydantic.Json`` marker, which makes the field non-complex).
 
         Returns:
             str | None: An error message describing the mismatch, or `None` if the
@@ -358,7 +373,7 @@ class Validator:
         if value.startswith("encrypted:") or value.startswith("ENC["):
             return None
 
-        coerced = coerce_env_value(expected_type, value)
+        coerced = coerce_env_value(expected_type, value, metadata)
         if coerced.status != "fail":
             return None
 

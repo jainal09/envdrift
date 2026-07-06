@@ -107,14 +107,19 @@ When `--schema` is also passed, each value is coerced through the matching
 Pydantic field type (`bool`, `int`, `list[str]`, `Literal[...]`, etc.) using the
 same pydantic-settings semantics `validate` uses, so the two commands always
 agree. Complex types (`list`/`dict`/nested models) are JSON-decoded first, like
-the real env source. The schema's verdict wins over the universal rules:
+the real env source. Schema coercion is definitive in exactly two cases:
 
-- If both sides coerce to the same value, they are equal (`PORT=1` vs `PORT=01`).
-- If one side coerces and the other fails (it would crash the real app), that is
+- Both sides coerce to the **same** value: equal (`PORT=1` vs `PORT=01`).
+- One side coerces and the other fails (it would crash the real app): that is
   **drift** — e.g. `PORT=1` vs `PORT=true` under `PORT: int` is CHANGED; the
   bool-truthiness rule above never overrules a non-bool schema type.
-- Variables not in the schema, or values failing coercion on both sides, fall
-  back to the universal rules above (minus the bool rule for typed fields).
+
+Everything else — variables not in the schema, values that coerce on both sides
+but to *different* values, or values failing coercion on both sides — falls
+back to the universal rules above (minus the bool rule when a typed field
+failed coercion on both sides). Note the wider bool spellings Pydantic accepts
+(`t`/`f`/`y`/`n`, ...) only compare equal through this schema path; the
+universal bool rule recognizes just `true|false|yes|no|on|off|1|0`.
 
 ```bash
 # Default — normalization on

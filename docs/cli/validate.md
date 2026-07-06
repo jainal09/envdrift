@@ -1,11 +1,11 @@
 # envdrift validate
 
-Validate an .env file against a Pydantic Settings schema.
+Validate one or more .env files against a Pydantic Settings schema.
 
 ## Synopsis
 
 ```bash
-envdrift validate [ENV_FILE] --schema SCHEMA [OPTIONS]
+envdrift validate [ENV_FILE]... --schema SCHEMA [OPTIONS]
 ```
 
 ## Description
@@ -34,8 +34,8 @@ Type validation mirrors what the real app does at startup:
   `extra="forbid"` schema.
 
 The file itself is parsed with python-dotenv's quoting rules — the parser
-pydantic-settings uses — so the variables envdrift judges are exactly the ones
-the real app loads:
+pydantic-settings uses — so quoted values (well-formed or malformed) are
+judged exactly as the real app loads them:
 
 - A value opened with `"` or `'` continues across physical lines until the
   matching close quote (multiline PEM certificates and keys parse as one
@@ -43,22 +43,34 @@ the real app loads:
   separate variables.
 - Inside quoted values the python-dotenv escape sequences are decoded (`\n`,
   `\t`, `\"`, `\\`, ... in double quotes; `\\` and `\'` in single quotes).
+- Malformed quoted bindings are rejected exactly like python-dotenv: an
+  unterminated quote, or non-comment content after the close quote, drops the
+  whole binding (no truncated value, no phantom variables from interior lines).
 - `${VAR}` and `${VAR:-default}` references are expanded the way
   `dotenv_values` does: a name defined earlier in the same file wins over
   `os.environ`, and an unset name falls back to the default (or `""`), so
   `PORT=${OFFSET}234` is judged as the value the app receives.
-- An inline `# comment` (preceded by whitespace) is stripped from unquoted values even when the value
-  contains a stray quote character (`MSG=user's data # comment` is
-  `user's data`).
+- An inline `# comment` (preceded by whitespace) is stripped from unquoted
+  values even when the value contains a stray quote character
+  (`MSG=user's data # comment` is `user's data`).
 - Physical lines end at `\n` / `\r\n` / `\r` only; other Unicode line
   boundaries (U+2028, form feed, ...) are value content, and a leading UTF-8
   BOM is ignored instead of becoming part of the first key.
 
+Other python-dotenv behaviors (`'quoted keys'`, a bare `KEY` line without `=`)
+are not yet mirrored; a file relying on those may still be judged differently
+than the running app sees it.
+
+Multiple env files can be validated in one invocation (each gets its own report;
+with `--ci` the exit code is 1 if any file fails). This keeps the command usable
+as a pre-commit `pass_filenames: true` hook, where every matched staged file is
+appended to a single command line.
+
 ## Arguments
 
-| Argument   | Description                       | Default |
-| :--------- | :-------------------------------- | :------ |
-| `ENV_FILE` | Path to the .env file to validate | `.env`  |
+| Argument        | Description                                      | Default |
+| :-------------- | :----------------------------------------------- | :------ |
+| `ENV_FILE`...   | Path(s) to the .env file(s) to validate          | `.env`  |
 
 ## Options
 

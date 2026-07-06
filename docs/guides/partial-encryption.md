@@ -366,8 +366,13 @@ envdrift lock -f --all
 This will:
 
 1. Encrypt all regular `.env.*` files
-2. Encrypt all `.secret` files
+2. Encrypt all `.secret` files — like `push`, a mixed-state `.secret` (encrypted values
+   plus a freshly added plaintext value) is re-encrypted, never skipped
 3. Delete the combined files (since they're generated)
 
 This is useful when you want a single command to lock all files before committing,
 rather than using separate `push` and `lock` commands.
+
+> **Note:** Secrets-only environments stay managed by `envdrift push`. `lock --all` skips
+> them, and if a skipped environment still holds plaintext secrets it exits 1 and points
+> you at `envdrift push` instead of claiming everything is ready to commit.

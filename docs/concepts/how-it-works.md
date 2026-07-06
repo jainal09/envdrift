@@ -27,10 +27,12 @@ When you run `envdrift validate`, it:
 2. Parses the `.env` file with python-dotenv's semantics, so envdrift sees
    exactly the variables pydantic-settings would load: quoted values may span
    multiple lines (e.g. PEM certificates) and have their escape sequences
-   (`\n`, `\t`, ...) decoded, `${VAR}` / `${VAR:-default}` references are
-   expanded (values defined earlier in the file win over `os.environ`),
-   inline `#` comments are stripped from unquoted values, lines split on
-   `\n` / `\r\n` / `\r` only, and a leading UTF-8 BOM is ignored
+   (`\n`, `\t`, ...) decoded, malformed quoted bindings (unterminated or
+   junk-trailed quotes) are dropped exactly like python-dotenv, `${VAR}` /
+   `${VAR:-default}` references are expanded (values defined earlier in the
+   file win over `os.environ`), inline `#` comments are stripped from
+   unquoted values, lines split on `\n` / `\r\n` / `\r` only, and a leading
+   UTF-8 BOM is ignored
 3. Checks for missing required fields
 4. Validates types (string to int/bool conversion)
 5. Optionally checks for extra undefined variables
