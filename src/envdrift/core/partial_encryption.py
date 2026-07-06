@@ -372,7 +372,7 @@ def is_file_encrypted(file_path: Path) -> bool:
     return "sops_version" in content and _SOPS_CIPHERTEXT_PREFIX in content
 
 
-def _is_fully_encrypted(file_path: Path) -> bool:
+def is_fully_encrypted(file_path: Path) -> bool:
     """Return True only when the file is FULLY encrypted (push would no-op).
 
     Fully encrypted means ciphertext is present AND no leftover plaintext secret
@@ -380,10 +380,17 @@ def _is_fully_encrypted(file_path: Path) -> bool:
     so a MIXED-STATE file (some values encrypted, one freshly-added plaintext)
     looks "encrypted" to it alone; pairing it with ``has_plaintext_secret_value``
     distinguishes a file a real push would re-encrypt from one it would skip.
-    The encrypt paths and the dry-run ``--check`` sync test share this predicate
-    so they agree on what "already pushed" means.
+
+    This is the canonical shared predicate: the push paths, ``envdrift lock``
+    and the dry-run ``--check`` sync test all use it so they agree on what
+    "already pushed/encrypted" means.
     """
     return is_file_encrypted(file_path) and not has_plaintext_secret_value(file_path)
+
+
+# Backward-compatible alias for the pre-#507 private name (in-flight branches
+# still import it); new code should use ``is_fully_encrypted``.
+_is_fully_encrypted = is_fully_encrypted
 
 
 def _build_combined_content(
@@ -585,7 +592,7 @@ def encrypt_secret_file(env_config: PartialEncryptionEnvironmentConfig) -> None:
     # re-encrypted — otherwise the new plaintext secret leaks into the committed
     # .secret file and the combined file. is_file_encrypted() returns True on
     # the first ciphertext value, so it alone cannot tell the two apart.
-    if _is_fully_encrypted(secret_file):
+    if is_fully_encrypted(secret_file):
         # Already fully encrypted (e.g. push run twice) — still lift any stale
         # skip-worktree protection so the encrypted diff is visible to git.
         _git_unskip_worktree(secret_file)
@@ -682,7 +689,7 @@ def push_partial_encryption(
         # added plaintext value) trips is_file_encrypted but would still be
         # re-encrypted, so it must report out of sync.
         secret_file = Path(env_config.secret_file)
-        if secret_file.exists() and not _is_fully_encrypted(secret_file):
+        if secret_file.exists() and not is_fully_encrypted(secret_file):
             stats["in_sync"] = False
         return stats
 
@@ -776,7 +783,7 @@ def _encrypt_secrets_only_file(dotenvx: DotenvxWrapper, file: Path, *, check: bo
     Returns False (already-encrypted) without touching ``dotenvx`` when the file
     is fully encrypted. In ``check`` mode no file is modified.
     """
-    if _is_fully_encrypted(file):
+    if is_fully_encrypted(file):
         if not check:
             # Already fully encrypted — lift any stale skip-worktree protection
             # so the encrypted diff is visible to git.

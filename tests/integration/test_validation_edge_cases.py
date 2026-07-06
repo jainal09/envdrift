@@ -1194,12 +1194,14 @@ class TestValidateRealEdgeCases:
             f"Should explain the class is not BaseSettings. Output: {combined}"
         )
 
-    def test_validate_empty_value_parsed_as_empty_skips_type_check(
+    def test_validate_empty_value_fails_int_field_like_pydantic(
         self,
         tmp_path: Path,
         integration_env: dict[str, str],
     ) -> None:
-        """EC-01: an empty value (KEY=) is EMPTY status, so an int field passes."""
+        """EC-01 (updated by #472): pydantic-settings passes '' through, so
+        ``PORT=`` crashes a required int field at startup — validate must FAIL
+        instead of false-passing the CI gate."""
         result = _run_validate(
             tmp_path=tmp_path,
             integration_env=integration_env,
@@ -1214,15 +1216,15 @@ class TestValidateRealEdgeCases:
             env_text="""
                 PORT=
             """,
-            extra_args=["--no-check-encryption"],
+            extra_args=["--no-check-encryption", "--ci"],
         )
 
-        combined = result.stdout + result.stderr
-        assert result.returncode == 0, (
-            f"Empty value should not fail an int field. Output: {combined}"
+        combined = " ".join((result.stdout + result.stderr).split())
+        assert result.returncode == 1, (
+            f"Empty value on a required int field must exit 1. Output: {combined}"
         )
         assert "Traceback" not in result.stderr
-        assert "PASSED" in combined, f"Should report PASSED. Output: {combined}"
-        assert "Expected integer" not in combined, (
-            f"Empty value must not trigger an integer type error. Output: {combined}"
+        assert "FAILED" in combined, f"Should report FAILED. Output: {combined}"
+        assert "Expected integer" in combined, (
+            f"Empty value must trigger an integer type error like the real app. Output: {combined}"
         )
