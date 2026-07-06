@@ -126,12 +126,28 @@ class TestCaseInsensitiveMatching:
 class TestTypeChecks:
     """Cover the float/bool/list/empty branches of _check_type."""
 
-    def test_empty_value_skips_type_check(self, tmp_path):
-        """An empty value never produces a type error (line 236)."""
+    def test_empty_value_for_int_field_is_type_error(self, tmp_path):
+        """#472: pydantic-settings passes '' through, so an empty int crashes
+        the real app at startup and must be a type error here too."""
         schema = SchemaMetadata(
             class_name="S",
             module_path="m",
             fields={"COUNT": _field("COUNT", required=False, field_type=int)},
+        )
+        env = _parse_file(tmp_path, "COUNT=\n")
+
+        result = Validator().validate(env, schema, check_encryption=False)
+
+        assert "COUNT" in result.type_errors
+
+    def test_empty_value_with_env_ignore_empty_skips_type_check(self, tmp_path):
+        """With env_ignore_empty=True the env source drops '' (field unset),
+        so the empty value must not be type-checked."""
+        schema = SchemaMetadata(
+            class_name="S",
+            module_path="m",
+            fields={"COUNT": _field("COUNT", required=False, field_type=int)},
+            env_ignore_empty=True,
         )
         env = _parse_file(tmp_path, "COUNT=\n")
 
@@ -194,14 +210,28 @@ class TestTypeChecks:
 
         assert "ENABLED" not in result.type_errors
 
-    def test_list_type_accepts_anything(self, tmp_path):
-        """List-typed fields accept arbitrary values without error (line 269)."""
+    def test_list_type_rejects_non_json(self, tmp_path):
+        """#472: the env source JSON-decodes list fields, so a comma-separated
+        value (which crashes the real app with SettingsError) is a type error."""
         schema = SchemaMetadata(
             class_name="S",
             module_path="m",
             fields={"HOSTS": _field("HOSTS", required=False, field_type=list)},
         )
         env = _parse_file(tmp_path, "HOSTS=a,b,c\n")
+
+        result = Validator().validate(env, schema, check_encryption=False)
+
+        assert "HOSTS" in result.type_errors
+
+    def test_list_type_accepts_json_array(self, tmp_path):
+        """A JSON array value loads in the real app and passes validation."""
+        schema = SchemaMetadata(
+            class_name="S",
+            module_path="m",
+            fields={"HOSTS": _field("HOSTS", required=False, field_type=list)},
+        )
+        env = _parse_file(tmp_path, 'HOSTS=["a","b","c"]\n')
 
         result = Validator().validate(env, schema, check_encryption=False)
 
