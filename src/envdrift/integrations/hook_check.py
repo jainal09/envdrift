@@ -125,14 +125,22 @@ def _ensure_hook_file(path: Path, block_lines: list[str]) -> bool:
     path.parent.mkdir(parents=True, exist_ok=True)
 
     if path.exists():
-        content = path.read_text()
+        # Hook scripts are UTF-8 regardless of the platform locale (#454);
+        # the locale default (cp1252 on Windows) would mangle or raise on
+        # existing UTF-8 user content. surrogateescape lets a hook written
+        # by another tool with non-UTF-8 bytes (e.g. a cp1252 0xE9) round-trip
+        # byte-exactly instead of raising UnicodeDecodeError.
+        content = path.read_text(encoding="utf-8", errors="surrogateescape")
         new_content, updated = _inject_hook_block(content, block_lines)
     else:
         new_content = "#!/bin/sh\n\n" + _format_hook_block(block_lines)
         updated = True
 
     if updated:
-        path.write_text(new_content)
+        # newline="" disables newline translation so a `#!/bin/sh` hook never
+        # gains CRLF endings on Windows (#454); surrogateescape re-encodes any
+        # non-UTF-8 bytes from the existing hook back to their original values.
+        path.write_text(new_content, encoding="utf-8", errors="surrogateescape", newline="")
 
     try:
         mode = path.stat().st_mode
@@ -340,13 +348,21 @@ def ensure_git_hook_setup(
             return ["Pre-commit config path could not be resolved."]
 
         if auto_fix:
+            # Two try blocks (not one) because pyrefly flags PrecommitConfigError
+            # as possibly-unbound in a merged `except` clause when the import and
+            # the call share a try.
             try:
-                from envdrift.integrations.precommit import install_hooks
-
+                from envdrift.integrations.precommit import (
+                    PrecommitConfigError,
+                    install_hooks,
+                )
+            except ImportError as e:
+                return [str(e)]
+            try:
                 install_hooks(config_path=precommit_path, create_if_missing=True)
             except ImportError as e:
                 return [str(e)]
-            except OSError as e:
+            except (PrecommitConfigError, OSError) as e:
                 return [f"Failed to update pre-commit config: {e}"]
         elif not precommit_path.exists():
             return [f"Pre-commit config not found: {precommit_path}"]
