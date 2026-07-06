@@ -1,11 +1,13 @@
 name: Release VS Code Extension
 
 on:
-  # Manual trigger via tag push
+  # The only release path: vscode-v* tags pushed by release-please's PAT (or
+  # manually). release-please.yml must NOT also call this workflow — that ran
+  # every release twice (#495).
   push:
     tags:
       - 'vscode-v*'
-  # Called by release-please
+  # Reusable-workflow interface kept for ad-hoc reuse; unused by release-please.
   workflow_call:
     inputs:
       tag_name:
@@ -15,6 +17,17 @@ on:
 
 permissions:
   contents: write
+
+# One release pipeline per tag (#495): the release-please PAT tag push is the
+# only trigger; this per-tag group is a backstop so a re-run or duplicate
+# trigger queues instead of racing .vsix uploads / Marketplace publishes for
+# the same tag. Queue (don't cancel) so an in-flight release isn't killed
+# mid-upload. Fixed prefix, not `github.workflow`: a called workflow sees the
+# *caller's* name there, which would put a workflow_call run for the same tag
+# in a different group than a tag push.
+concurrency:
+  group: release-vscode-${{ inputs.tag_name || github.ref_name }}
+  cancel-in-progress: false
 
 defaults:
   run:
@@ -56,11 +69,20 @@ jobs:
       - name: Compile TypeScript
         run: npm run compile
 
-      - name: Run tests
-        run: npm test || echo "Tests skipped - no test runner configured"
+      # Tests gate the release (#495): a failing or crashing suite must fail
+      # the build. Mirrors vscode-ci.yml — headless unit suite first, then the
+      # Electron integration suite under a virtual X server.
+      - name: Run unit tests
+        run: npm run test:unit
 
+      - name: Run extension tests
+        run: xvfb-run -a npm test
+
+      # Use the lockfile-pinned @vscode/vsce from devDependencies (installed by
+      # `npm ci` above) — never a bare `npx vsce`, which fetches the deprecated
+      # `vsce` package from the registry at release time (#495).
       - name: Package extension
-        run: npx vsce package --out envdrift-${{ steps.version.outputs.VERSION }}.vsix
+        run: ./node_modules/.bin/vsce package --out envdrift-${{ steps.version.outputs.VERSION }}.vsix
 
       - name: Upload artifact
         uses: actions/upload-artifact@v7
@@ -100,7 +122,7 @@ jobs:
           path: release
 
       - name: Create GitHub Release
-        uses: softprops/action-gh-release@v3
+        uses: softprops/action-gh-release@718ea10b132b3b2eba29c1007bb80653f286566b # v3.0.1
         with:
           tag_name: ${{ steps.version.outputs.TAG }}
           name: VS Code Extension v${{ steps.version.outputs.VERSION }}
@@ -143,9 +165,9 @@ jobs:
     runs-on: ubuntu-latest
     needs: release
     # `secrets` is not available in a step `if:` (causes "Unrecognized named-value:
-    # 'secrets'"), which breaks workflow validation when release-please.yml reuses
-    # this file. Expose the PAT as job-level env so the publish step can gate on
-    # `env.VSCE_PAT` instead.
+    # 'secrets'"), which breaks workflow validation when this file is used as a
+    # reusable workflow. Expose the PAT as job-level env so the publish step can
+    # gate on `env.VSCE_PAT` instead.
     env:
       VSCE_PAT: ${{ secrets.VSCE_PAT }}
     # Only publish stable releases to marketplace (no -rc, -beta, -alpha suffixes)
@@ -176,6 +198,11 @@ jobs:
           VERSION="${TAG#vscode-v}"
           echo "VERSION=$VERSION" >> $GITHUB_OUTPUT
 
+      # Install the lockfile-pinned @vscode/vsce so publishing uses the exact
+      # packager CI validates — not whatever `npx` fetches at release time (#495).
+      - name: Install dependencies
+        run: npm ci
+
       - name: Download artifact
         uses: actions/download-artifact@v8
         with:
@@ -188,6 +215,6 @@ jobs:
         # fail the job so a silent non-publish is visible. Gate on env (job-level)
         # rather than secrets, which is not a valid context in a step `if:`.
         if: ${{ env.VSCE_PAT != '' }}
-        run: npx vsce publish --packagePath ../release/envdrift-${{ steps.version.outputs.VERSION }}.vsix
+        run: ./node_modules/.bin/vsce publish --packagePath ../release/envdrift-${{ steps.version.outputs.VERSION }}.vsix
         env:
           VSCE_PAT: ${{ secrets.VSCE_PAT }}
