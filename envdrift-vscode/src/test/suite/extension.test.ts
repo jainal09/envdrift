@@ -22,6 +22,13 @@ suite('Extension Test Suite', () => {
         assert.ok(commands.includes('envdrift.disable'), 'envdrift.disable command should be registered');
         assert.ok(commands.includes('envdrift.encryptNow'), 'envdrift.encryptNow command should be registered');
         assert.ok(commands.includes('envdrift.showStatus'), 'envdrift.showStatus command should be registered');
+        assert.ok(commands.includes('envdrift.showLogs'), 'envdrift.showLogs command should be registered');
+    });
+
+    test('Show Logs command should execute (output channel exists)', async () => {
+        // #482: docs pointed users at View > Output > EnvDrift, but the
+        // extension never created an output channel.
+        await vscode.commands.executeCommand('envdrift.showLogs');
     });
 
     test('Configuration should have default values', () => {

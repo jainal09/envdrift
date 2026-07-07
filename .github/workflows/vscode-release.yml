@@ -81,8 +81,11 @@ jobs:
       # Use the lockfile-pinned @vscode/vsce from devDependencies (installed by
       # `npm ci` above) — never a bare `npx vsce`, which fetches the deprecated
       # `vsce` package from the registry at release time (#495).
+      # `--no-dependencies`: the `vscode:prepublish` script bundles all runtime
+      # deps (cross-spawn et al.) into dist/extension.js via esbuild, so the
+      # vsix needs no node_modules — matches vscode-ci.yml packaging (#584).
       - name: Package extension
-        run: ./node_modules/.bin/vsce package --out envdrift-${{ steps.version.outputs.VERSION }}.vsix
+        run: ./node_modules/.bin/vsce package --no-dependencies --out envdrift-${{ steps.version.outputs.VERSION }}.vsix
 
       - name: Upload artifact
         uses: actions/upload-artifact@v7
