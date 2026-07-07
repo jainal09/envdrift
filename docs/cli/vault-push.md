@@ -241,6 +241,7 @@ On error:
 | :--- | :------------------------------------------------------------------------------- |
 | 0    | Success (secret pushed; in `--all` mode, every mapping pushed or skipped cleanly) |
 | 1    | Error (auth failure, file not found, vault error, or any `--all` mapping failure) |
+| 1    | `--all`: a mapping's `folder_path` does not exist (broken sync config)            |
 
 ## Authentication
 

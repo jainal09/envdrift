@@ -7,11 +7,34 @@ from pathlib import Path
 import pytest
 
 from envdrift.env_files import (
+    _is_excluded_env_file,
     detect_env_file,
     resolve_custom_env_file,
     resolve_mapping_env_file,
 )
 from envdrift.sync.config import ServiceMapping
+
+
+@pytest.mark.parametrize(
+    ("name", "excluded"),
+    [
+        (".env.keys", True),
+        # #474: on macOS/Windows default case-insensitive filesystems,
+        # ".env.KEYS" names the same file as ".env.keys" — a case-sensitive
+        # check let the private-key store be encrypted (irreversible lockout).
+        (".env.KEYS", True),
+        (".env.Keys", True),
+        ("service.env.EXAMPLE", True),
+        (".env.SAMPLE", True),
+        (".env.Template", True),
+        (".env", False),
+        (".env.production", False),
+        ("keys.env", False),
+    ],
+)
+def test_is_excluded_env_file_is_case_insensitive(name: str, excluded: bool) -> None:
+    """Companion-file detection matches suffixes case-insensitively (#474)."""
+    assert _is_excluded_env_file(name) is excluded
 
 
 @pytest.mark.parametrize(
@@ -336,6 +359,28 @@ def test_resolve_mapping_env_file_reports_folder_not_found(tmp_path: Path) -> No
     mapping = ServiceMapping(
         secret_name="dotenv-key",
         folder_path=tmp_path / "does-not-exist",
+        environment="production",
+        env_file=Path("postgresql.env"),
+    )
+
+    detection = resolve_mapping_env_file(mapping)
+
+    assert detection.status == "folder_not_found"
+    assert detection.path is None
+    assert detection.environment == "production"
+
+
+def test_explicit_env_file_with_file_as_folder_is_folder_not_found(tmp_path: Path) -> None:
+    """#488: folder_path pointing at a regular FILE + explicit env_file must be loud.
+
+    exists() classified this broken config as a benign "not_found" skip
+    (exit 0); it must report folder_not_found like the auto-detect path does.
+    """
+    not_a_dir = tmp_path / "service"
+    not_a_dir.write_text("oops, a file\n")
+    mapping = ServiceMapping(
+        secret_name="dotenv-key",
+        folder_path=not_a_dir,
         environment="production",
         env_file=Path("postgresql.env"),
     )

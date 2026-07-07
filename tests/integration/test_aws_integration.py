@@ -1209,7 +1209,7 @@ environment = "production"
         finally:
             _force_delete(aws_secrets_client, secret_name)
 
-    def test_sync_check_decryption_real_dotenvx_roundtrip(
+    def test_sync_check_decryption_real_dotenvx_non_destructive(
         self,
         work_dir: Path,
         aws_test_env: dict[str, str],
@@ -1217,7 +1217,12 @@ environment = "production"
         integration_pythonpath: str,
         envdrift_cmd: list[str],
     ) -> None:
-        """HP-12: sync --check-decryption runs a real dotenvx decrypt+re-encrypt."""
+        """HP-12: sync --check-decryption verifies with real dotenvx, without mutating.
+
+        The check decrypts a temp-dir COPY (#473); the live encrypted file must
+        stay byte-identical (the old in-place decrypt+re-encrypt roundtrip
+        churned the ciphertext on every passing run).
+        """
         if not _dotenvx_available():
             pytest.skip("dotenvx binary not available")
 
@@ -1226,6 +1231,7 @@ environment = "production"
         real_key = _make_encrypted_project(work_dir, "production")
         env_prod = work_dir / ".env.production"
         assert b"encrypted:" in env_prod.read_bytes()
+        original_encrypted_bytes = env_prod.read_bytes()
 
         _create_secret(
             aws_secrets_client,
@@ -1270,8 +1276,8 @@ environment = "production"
             out = (result.stdout + result.stderr).lower()
             assert "pass" in out, f"expected decryption PASSED\n{result.stdout}"
 
-            # The env file must be re-encrypted (left encrypted) afterward.
-            assert b"encrypted:" in env_prod.read_bytes()
+            # A check must not modify files: byte-identical ciphertext (#473).
+            assert env_prod.read_bytes() == original_encrypted_bytes
             # The key was synced locally.
             keys_content = (work_dir / ".env.keys").read_text()
             assert f"DOTENV_PRIVATE_KEY_PRODUCTION={real_key}" in keys_content
@@ -1491,5 +1497,294 @@ class TestAWSSyncEngineRealBackend:
 
             # verify_only must not mutate the local file.
             assert keys_path.read_text() == original_keys
+        finally:
+            _force_delete(aws_secrets_client, secret_name)
+
+
+# --- #480: vault-fetched key material is normalized/validated before install ---
+
+
+class TestAWSKeyMaterialNormalization:
+    """Regression tests for #480 against a live LocalStack Secrets Manager."""
+
+    def test_vault_pull_json_secretstring_extracts_key_field(
+        self,
+        work_dir: Path,
+        aws_test_env: dict[str, str],
+        aws_secrets_client,
+        integration_pythonpath: str,
+        envdrift_cmd: list[str],
+    ) -> None:
+        """#480 item 3: an AWS-console-style JSON key/value SecretString yields
+        the bare key, not the JSON document, in .env.keys."""
+        import json
+
+        secret_name = "envdrift-test/pull-json-doc-480"
+        _create_secret(
+            aws_secrets_client,
+            Name=secret_name,
+            SecretString=json.dumps({"DOTENV_PRIVATE_KEY_PRODUCTION": "json-doc-key-480"}),
+        )
+
+        env = aws_test_env.copy()
+        env["PYTHONPATH"] = integration_pythonpath
+
+        try:
+            result = subprocess.run(
+                [
+                    *envdrift_cmd,
+                    "vault-pull",
+                    str(work_dir),
+                    secret_name,
+                    "--env",
+                    "production",
+                    "--no-decrypt",
+                    "--provider",
+                    "aws",
+                    "--region",
+                    "us-east-1",
+                ],
+                cwd=work_dir,
+                env=env,
+                capture_output=True,
+                text=True,
+                timeout=60,
+            )
+
+            assert result.returncode == 0, f"stdout: {result.stdout}\nstderr: {result.stderr}"
+            keys_path = work_dir / ".env.keys"
+            lines = keys_path.read_text(encoding="utf-8").splitlines()
+            assert "DOTENV_PRIVATE_KEY_PRODUCTION=json-doc-key-480" in lines
+            # The JSON document itself was never installed.
+            assert not any("{" in line for line in lines), lines
+        finally:
+            _force_delete(aws_secrets_client, secret_name)
+
+    def test_vault_pull_json_secretstring_without_key_field_fails_loudly(
+        self,
+        work_dir: Path,
+        aws_test_env: dict[str, str],
+        aws_secrets_client,
+        integration_pythonpath: str,
+        envdrift_cmd: list[str],
+    ) -> None:
+        """A JSON document with no DOTENV_PRIVATE_KEY field is rejected with a
+        clear shape error naming the layout — exit 1, nothing written."""
+        import json
+
+        secret_name = "envdrift-test/pull-json-no-key-480"
+        _create_secret(
+            aws_secrets_client,
+            Name=secret_name,
+            SecretString=json.dumps({"username": "admin", "password": "p"}),
+        )
+
+        env = aws_test_env.copy()
+        env["PYTHONPATH"] = integration_pythonpath
+
+        try:
+            result = subprocess.run(
+                [
+                    *envdrift_cmd,
+                    "vault-pull",
+                    str(work_dir),
+                    secret_name,
+                    "--env",
+                    "production",
+                    "--no-decrypt",
+                    "--provider",
+                    "aws",
+                    "--region",
+                    "us-east-1",
+                ],
+                cwd=work_dir,
+                env=env,
+                capture_output=True,
+                text=True,
+                timeout=60,
+            )
+
+            assert result.returncode == 1, (
+                f"expected exit 1\nstdout: {result.stdout}\nstderr: {result.stderr}"
+            )
+            combined = " ".join((result.stdout + result.stderr).split())
+            assert "JSON" in combined
+            assert not (work_dir / ".env.keys").exists()
+        finally:
+            _force_delete(aws_secrets_client, secret_name)
+
+    def test_vault_pull_secret_binary_rejected_with_clear_error(
+        self,
+        work_dir: Path,
+        aws_test_env: dict[str, str],
+        aws_secrets_client,
+        integration_pythonpath: str,
+        envdrift_cmd: list[str],
+    ) -> None:
+        """#480 item 5: a non-UTF-8 SecretBinary payload must not be silently
+        base64-encoded and installed as key material; vault-pull exits 1 with an
+        error that names the binary shape."""
+        secret_name = "envdrift-test/pull-binary-480"
+        _create_secret(
+            aws_secrets_client,
+            Name=secret_name,
+            SecretBinary=b"\xff\xfe\x00binarykey\x99",
+        )
+
+        env = aws_test_env.copy()
+        env["PYTHONPATH"] = integration_pythonpath
+
+        try:
+            result = subprocess.run(
+                [
+                    *envdrift_cmd,
+                    "vault-pull",
+                    str(work_dir),
+                    secret_name,
+                    "--env",
+                    "production",
+                    "--no-decrypt",
+                    "--provider",
+                    "aws",
+                    "--region",
+                    "us-east-1",
+                ],
+                cwd=work_dir,
+                env=env,
+                capture_output=True,
+                text=True,
+                timeout=60,
+            )
+
+            assert result.returncode == 1, (
+                f"expected exit 1\nstdout: {result.stdout}\nstderr: {result.stderr}"
+            )
+            combined = " ".join((result.stdout + result.stderr).split()).lower()
+            assert "binary" in combined
+            assert not (work_dir / ".env.keys").exists()
+        finally:
+            _force_delete(aws_secrets_client, secret_name)
+
+    def test_get_secret_binary_sets_base64_marker(
+        self, aws_client_configured, aws_secrets_client
+    ) -> None:
+        """#480 item 5 (client contract): the base64 transformation of a binary
+        payload is marked in SecretValue.metadata, never silent."""
+        name = "envdrift-test/get-secret-binary-marker-480"
+        _create_secret(aws_secrets_client, Name=name, SecretBinary=b"\xff\xfe\x00\x99")
+
+        try:
+            secret = aws_client_configured.get_secret(name)
+            assert secret.metadata.get("encoding") == "base64"
+        finally:
+            _force_delete(aws_secrets_client, name)
+
+
+# --- #487: not-found errors must name the region; ephemeral rows are not errors
+
+
+class TestAWSNotFoundNamesRegion:
+    """#487: AWS not-found errors name the region that was searched."""
+
+    def test_get_secret_not_found_error_names_region(self, aws_client_configured) -> None:
+        """The client-level SecretNotFoundError message includes the region."""
+        from envdrift.vault.base import SecretNotFoundError
+
+        with pytest.raises(SecretNotFoundError) as exc_info:
+            aws_client_configured.get_secret("envdrift-test/no-such-secret-487")
+
+        assert "(region us-east-1)" in str(exc_info.value), str(exc_info.value)
+
+    def test_cli_vault_pull_not_found_names_region(
+        self,
+        work_dir: Path,
+        aws_test_env: dict[str, str],
+        integration_pythonpath: str,
+        envdrift_cmd: list[str],
+    ) -> None:
+        """vault-pull against a missing secret prints the searched region (#487)."""
+        env = aws_test_env.copy()
+        env["PYTHONPATH"] = integration_pythonpath
+
+        result = subprocess.run(
+            [
+                *envdrift_cmd,
+                "vault-pull",
+                ".",
+                "envdrift-test/no-such-secret-487",
+                "--env",
+                "production",
+                "--no-decrypt",
+                "-p",
+                "aws",
+                "--region",
+                "us-east-1",
+            ],
+            cwd=work_dir,
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+
+        combined = " ".join((result.stdout + result.stderr).split())
+        assert result.returncode == 1, combined
+        assert "not found in aws vault (region us-east-1)" in combined, combined
+
+
+class TestAWSEphemeralRendering:
+    """#487: successful ephemeral syncs must not render as red error rows."""
+
+    def test_ephemeral_pull_renders_ephemeral_row_not_error(
+        self,
+        work_dir: Path,
+        aws_test_env: dict[str, str],
+        aws_secrets_client,
+        integration_pythonpath: str,
+        envdrift_cmd: list[str],
+    ) -> None:
+        """`pull --force` with ephemeral_keys renders an ephemeral row + summary (#487)."""
+        if not _dotenvx_available():
+            pytest.skip("dotenvx binary required")
+
+        secret_name = "envdrift-test/ephemeral-render-487"
+        svc = work_dir / "svc"
+        svc.mkdir()
+        priv = _make_encrypted_project(svc, "production")
+        _create_secret(
+            aws_secrets_client,
+            Name=secret_name,
+            SecretString=f"DOTENV_PRIVATE_KEY_PRODUCTION={priv}",
+        )
+
+        (work_dir / "envdrift.toml").write_text(
+            '[encryption]\nbackend = "dotenvx"\n'
+            '[vault]\nprovider = "aws"\nregion = "us-east-1"\n'
+            "[vault.sync]\nephemeral_keys = true\n"
+            "[[vault.sync.mappings]]\n"
+            f'secret_name = "{secret_name}"\nfolder_path = "svc"\nenvironment = "production"\n',
+            encoding="utf-8",
+        )
+
+        env = aws_test_env.copy()
+        env["PYTHONPATH"] = integration_pythonpath
+        try:
+            result = subprocess.run(
+                [*envdrift_cmd, "pull", "--force", "--config", "envdrift.toml"],
+                cwd=work_dir,
+                env=env,
+                capture_output=True,
+                text=True,
+                timeout=90,
+            )
+            combined = " ".join((result.stdout + result.stderr).split())
+            assert result.returncode == 0, combined
+            # Pre-#487 every ephemeral service rendered "x svc - error" while the
+            # summary said Errors: 0 / success — contradictory output.
+            assert "- error" not in combined, combined
+            assert "ephemeral" in combined.lower(), combined
+            assert "Ephemeral: 1" in combined, combined
+            assert "All services synced successfully" in combined, combined
+            assert not (svc / ".env.keys").exists()
         finally:
             _force_delete(aws_secrets_client, secret_name)
