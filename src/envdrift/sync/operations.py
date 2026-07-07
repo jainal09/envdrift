@@ -164,7 +164,9 @@ class EnvKeysFile:
         return backup_path
 
 
-def atomic_write(path: Path, content: str, permissions: int = 0o600) -> None:
+def atomic_write(
+    path: Path, content: str, permissions: int = 0o600, *, max_permissions: int | None = None
+) -> None:
     """
     Write file atomically with proper permissions.
 
@@ -177,6 +179,12 @@ def atomic_write(path: Path, content: str, permissions: int = 0o600) -> None:
     preserved instead of unconditionally forcing ``permissions``; a destination
     that is a symlink is ignored for mode purposes so a pre-planted symlink
     cannot inject an overly permissive mode onto the new secret.
+
+    ``max_permissions`` caps the effective mode for secret-bearing writes: a
+    preserved pre-existing mode is intersected with the cap, so a combined or
+    merged file that was created world-readable (0o644) by a pre-fix
+    ``write_text`` is tightened to the cap on the next write instead of staying
+    exposed forever (#510 review). Modes are only ever narrowed, never widened.
     """
     # Ensure parent directory exists
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -191,6 +199,8 @@ def atomic_write(path: Path, content: str, permissions: int = 0o600) -> None:
         dest_stat = path.lstat()
         if not stat.S_ISLNK(dest_stat.st_mode):
             mode = dest_stat.st_mode & 0o777
+    if max_permissions is not None:
+        mode &= max_permissions
 
     fd, tmp_name = tempfile.mkstemp(
         dir=str(path.parent), prefix=f".{path.name}.", suffix=".envdrift-tmp"

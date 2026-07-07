@@ -86,7 +86,19 @@ Force update all mismatches without prompting.
 
 After syncing, verify that the keys can decrypt `.env` files.
 
-This tests actual decryption using dotenvx to ensure keys are valid.
+This tests actual decryption using dotenvx to ensure keys are valid. The check
+is **non-destructive**: the encrypted file and the synced keys file are copied
+into a throwaway temp directory and dotenvx decrypts the copy there, so the
+working-tree file is never decrypted or rewritten (its bytes are identical
+before and after, whether the check passes or fails). Stray
+`DOTENV_PRIVATE_KEY*` variables in your shell are ignored so the verdict
+reflects the synced `.env.keys`, and mappings with relative `folder_path`
+values (the usual monorepo layout) verify correctly from the project root.
+
+If any decryption test fails, `sync` exits 1 — with or without `--ci`. The
+check also refuses to run when dotenvx is not installed: skipping every test
+would verify nothing, so `sync` reports the missing binary and exits 1
+instead of silently succeeding.
 
 ### `--validate-schema`
 
@@ -142,6 +154,15 @@ env_file = "postgresql.env" # Custom dotenv filename inside folder_path
 ```
 
 Place the file in the project root so auto-discovery finds it; pass `-c envdrift.toml` in CI to pin the exact file.
+
+!!! warning "`folder_path` must be an existing directory"
+    Each mapping's `folder_path` is validated: a folder that does not exist
+    (for example a typo like `servces/api`), or that points at a regular
+    file instead of a directory, is reported as a per-mapping
+    **error** — the row says `Mapping folder does not exist or is not a
+    directory`, the summary counts it under `Errors`, and `sync --ci`,
+    `pull`, and `vault-push --all` exit non-zero. Only a *missing env file
+    inside an existing folder* is a benign skip ("file not created yet").
 
 !!! note "`vault_name` / `default_vault_name` do not switch the vault"
     `vault_name` (per-mapping) and `default_vault_name` are parsed and accepted
@@ -292,6 +313,15 @@ Reports differences without modifying files. Mismatches are reported as errors, 
     Vault:  xyz789abc012...
 ```
 
+Every error row carries its reason. A missing local key is reported with a
+message that distinguishes a missing `.env.keys` file from a file that exists
+but lacks the expected key:
+
+```text
+  x services/myapp - error
+    Error: DOTENV_PRIVATE_KEY_PRODUCTION missing from services/myapp/.env.keys
+```
+
 ### Force Mode (`--force`)
 
 Updates all mismatches without prompting. Creates backups before updating.
@@ -309,6 +339,7 @@ Updates all mismatches without prompting. Creates backups before updating.
   + services/myapp - created
   ~ services/auth - updated
   = services/api - skipped
+  * services/ci - ephemeral (key not stored locally)
   x services/broken - error
 ```
 
@@ -316,8 +347,9 @@ Icons:
 
 - `+` - Created new .env.keys file
 - `~` - Updated existing file
-- `=` - Skipped (values match)
-- `x` - Error occurred
+- `=` - Skipped (values match, or env file not created yet)
+- `*` - Ephemeral (key fetched from vault, deliberately not stored locally)
+- `x` - Error occurred (vault error, or the mapping's `folder_path` does not exist)
 
 ### Decryption Test Results
 
@@ -343,12 +375,24 @@ Icons:
 All services synced successfully
 ```
 
+When ephemeral mode is in use, the summary adds an `Ephemeral:` line counting
+the services whose keys were fetched but deliberately not stored locally:
+
+```text
+│ Skipped: 0                           │
+│ Ephemeral: 1 (not stored locally)    │
+│ Errors: 0                            │
+```
+
 ## Exit Codes
 
-| Code | Meaning                                               |
-| :--- | :---------------------------------------------------- |
-| 0    | Success (all synced, no errors)                       |
-| 1    | Error (vault error, sync failure, decryption failure) |
+| Code | Meaning                                                                  |
+| :--- | :------------------------------------------------------------------------ |
+| 0    | Success (all synced, no errors)                                            |
+| 1    | Error (vault error, sync failure, decryption failure)                      |
+| 1    | `--ci`: any per-mapping error, including a `folder_path` that does not exist |
+| 1    | `--check-decryption`: any decryption test failed (even without `--ci`)     |
+| 1    | `--check-decryption`: dotenvx is not installed (nothing can be verified)    |
 
 ## Authentication
 

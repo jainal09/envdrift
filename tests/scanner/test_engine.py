@@ -30,7 +30,7 @@ class TestGuardConfig:
         assert config.use_trufflehog is False
         assert config.auto_install is True
         assert config.include_git_history is False
-        assert config.check_entropy is False
+        assert config.check_entropy is None  # tri-state: unset = env files only (#478)
         assert config.entropy_threshold == 4.5
         assert config.ignore_paths == []
         assert config.ignore_rules == {}
@@ -88,6 +88,17 @@ class TestGuardConfig:
         config = GuardConfig.from_dict({"guard": {"fail_on_severity": "invalid"}})
 
         assert config.fail_on_severity == FindingSeverity.HIGH
+
+    def test_config_from_dict_non_string_severity_raises(self):
+        """A non-string fail_on_severity raises a clean ValueError (#478 review).
+
+        It used to escape ``except ValueError`` as ``AttributeError: 'int'
+        object has no attribute 'lower'``; wrong types now fail like the other
+        type-validated guard knobs (unknown severity *names* keep the HIGH
+        fallback above).
+        """
+        with pytest.raises(ValueError, match="fail_on_severity"):
+            GuardConfig.from_dict({"guard": {"fail_on_severity": 123}})
 
     def test_config_from_dict_with_string_scanner(self):
         """Test config handles scanners as a string."""
@@ -1234,8 +1245,8 @@ class TestGitignoreFilter:
 
         # Mock subprocess.run to return "ignored.py" as gitignored (null-separated)
         def mock_run(cmd, **kwargs):
-            # git check-ignore with -z returns null-separated output
-            return subprocess.CompletedProcess(cmd, 0, stdout="ignored.py\0", stderr="")
+            # git check-ignore with -z returns null-separated bytes (binary pipe)
+            return subprocess.CompletedProcess(cmd, 0, stdout=b"ignored.py\0", stderr=b"")
 
         monkeypatch.setattr(subprocess, "run", mock_run)
 
@@ -1282,23 +1293,23 @@ class TestGitignoreFilter:
             ),
         ]
 
-        calls: list[tuple[Path, str]] = []
+        calls: list[tuple[Path, bytes]] = []
 
         def mock_run(cmd, **kwargs):
             cwd = Path(kwargs.get("cwd") or ".")
-            calls.append((cwd, kwargs.get("input") or ""))
+            calls.append((cwd, kwargs.get("input") or b""))
             if cwd.name == "repo1":
-                return subprocess.CompletedProcess(cmd, 0, stdout="ignored.txt\0", stderr="")
+                return subprocess.CompletedProcess(cmd, 0, stdout=b"ignored.txt\0", stderr=b"")
             if cwd.name == "repo2":
-                return subprocess.CompletedProcess(cmd, 1, stdout="", stderr="")
-            return subprocess.CompletedProcess(cmd, 1, stdout="", stderr="")
+                return subprocess.CompletedProcess(cmd, 1, stdout=b"", stderr=b"")
+            return subprocess.CompletedProcess(cmd, 1, stdout=b"", stderr=b"")
 
         monkeypatch.setattr(subprocess, "run", mock_run)
 
         result = engine._filter_gitignored_files(findings)
         assert len(result) == 1
         assert result[0].file_path == kept_file
-        assert any("ignored.txt" in call_input for _cwd, call_input in calls)
+        assert any(b"ignored.txt" in call_input for _cwd, call_input in calls)
 
     def test_filter_gitignored_files_outside_repo(self, tmp_path, monkeypatch):
         """Files outside any git repo are not filtered."""
@@ -1322,12 +1333,80 @@ class TestGitignoreFilter:
         ]
 
         def mock_run(cmd, **kwargs):
-            return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+            return subprocess.CompletedProcess(cmd, 0, stdout=b"", stderr=b"")
 
         monkeypatch.setattr(subprocess, "run", mock_run)
 
         result = engine._filter_gitignored_files(findings)
         assert len(result) == 1
+
+    def test_filter_gitignored_roundtrips_non_utf8_filename_bytes(self, tmp_path):
+        """#453 follow-up: raw non-UTF-8 filename bytes must round-trip the pipe.
+
+        POSIX filenames can contain bytes that are not valid UTF-8 (e.g. latin-1
+        ``b"caf\\xe9.env"``); Python surfaces them as surrogate-escaped str
+        (``"caf\\udce9.env"``). With ``errors="replace"`` the surrogate was
+        rewritten to ``?`` on the check-ignore stdin pipe, git never matched the
+        .gitignore entry, and the gitignored finding leaked into results.
+        ``errors="surrogateescape"`` sends and receives the exact original bytes.
+        Uses real git; skips where the filesystem rejects such names (Windows,
+        APFS).
+        """
+        import os
+        import shutil
+        import subprocess
+
+        if shutil.which("git") is None:
+            pytest.skip("git not available")
+
+        raw = b"caf\xe9.env"  # latin-1 e-acute: invalid UTF-8
+        try:
+            name = os.fsdecode(raw)  # "caf\udce9.env" via surrogateescape on POSIX
+            with open(tmp_path / name, "wb") as fh:
+                fh.write(b"AWS_SECRET_ACCESS_KEY=x\n")
+        except (OSError, ValueError):
+            pytest.skip("filesystem rejects non-UTF-8 filename bytes")
+
+        subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True, capture_output=True)
+        (tmp_path / ".gitignore").write_bytes(raw + b"\n")
+        kept = tmp_path / "kept.py"
+        kept.write_text("x = 1\n")
+
+        # Fixture sanity: git itself, fed the raw bytes, agrees the file is
+        # ignored — so a leak below is an engine pipe-codec bug, not fixture rot.
+        sanity = subprocess.run(
+            ["git", "check-ignore", "--stdin", "-z"],
+            input=raw + b"\0",
+            capture_output=True,
+            cwd=tmp_path,
+        )
+        assert sanity.stdout == raw + b"\0", sanity.stderr
+
+        config = GuardConfig(use_native=True, use_gitleaks=False, skip_gitignored=True)
+        engine = ScanEngine(config)
+        findings = [
+            ScanFinding(
+                file_path=tmp_path / name,
+                rule_id="test-rule",
+                rule_description="Test",
+                description="Test finding",
+                severity=FindingSeverity.HIGH,
+                scanner="native",
+            ),
+            ScanFinding(
+                file_path=kept,
+                rule_id="test-rule",
+                rule_description="Test",
+                description="Test finding",
+                severity=FindingSeverity.HIGH,
+                scanner="native",
+            ),
+        ]
+
+        result = engine._filter_gitignored_files(findings)
+        assert [f.file_path for f in result] == [kept], (
+            f"gitignored non-UTF-8-byte filename leaked: {[str(f.file_path) for f in result]}"
+        )
 
     def test_config_skip_gitignored_default_false(self):
         """Test that skip_gitignored defaults to False."""
@@ -1362,9 +1441,12 @@ class TestCombinedFilesSecurity:
         )
         engine = ScanEngine(config)
 
-        # Mock subprocess.run to return the file as gitignored (batched stdin approach)
+        # Mock subprocess.run to return the file as gitignored (batched --stdin -z
+        # approach: check-ignore output is NUL-terminated, not newline-terminated)
         def mock_run(cmd, **kwargs):
-            return subprocess.CompletedProcess(cmd, 0, stdout=".env.production\n", stderr="")
+            if "check-ignore" in cmd:
+                return subprocess.CompletedProcess(cmd, 0, stdout=".env.production\0", stderr="")
+            return subprocess.CompletedProcess(cmd, 0, stdout="/repo\n", stderr="")
 
         monkeypatch.setattr(subprocess, "run", mock_run)
 
@@ -1492,9 +1574,12 @@ class TestCombinedFilesSecurity:
         )
         engine = ScanEngine(config)
 
-        # Mock subprocess.run - only .env.production is gitignored
+        # Mock subprocess.run - only .env.production is gitignored (NUL-terminated
+        # check-ignore -z output)
         def mock_run(cmd, **kwargs):
-            return subprocess.CompletedProcess(cmd, 0, stdout=".env.production\n", stderr="")
+            if "check-ignore" in cmd:
+                return subprocess.CompletedProcess(cmd, 0, stdout=".env.production\0", stderr="")
+            return subprocess.CompletedProcess(cmd, 0, stdout="/repo\n", stderr="")
 
         monkeypatch.setattr(subprocess, "run", mock_run)
 
@@ -1504,3 +1589,135 @@ class TestCombinedFilesSecurity:
         assert any(".env.staging" in w for w in warnings)
         assert any(".env.dev" in w for w in warnings)
         assert not any(".env.production" in w for w in warnings)
+
+
+class TestGitHistoryCapability:
+    """Tests for the per-scanner ``supports_git_history`` capability (#476).
+
+    ``--history`` used to be silently dropped when only history-incapable
+    scanners (native, detect-secrets, trivy) were active, reporting a clean
+    pass over an unscanned git history. The capability flag is what guard and
+    the engine consult, so each scanner class must declare it truthfully.
+    """
+
+    def test_backend_default_is_false(self):
+        """A scanner that does not declare support must never count as coverage."""
+        assert ScannerBackend.supports_git_history is False
+
+    def test_history_capable_scanners_declare_support(self):
+        """Every scanner whose scan() implements include_git_history says so."""
+        from envdrift.scanner.git_secrets import GitSecretsScanner
+        from envdrift.scanner.gitleaks import GitleaksScanner
+        from envdrift.scanner.infisical import InfisicalScanner
+        from envdrift.scanner.kingfisher import KingfisherScanner
+        from envdrift.scanner.talisman import TalismanScanner
+        from envdrift.scanner.trufflehog import TrufflehogScanner
+
+        for scanner_cls in (
+            GitleaksScanner,
+            TrufflehogScanner,
+            GitSecretsScanner,
+            KingfisherScanner,
+            TalismanScanner,
+            InfisicalScanner,
+        ):
+            assert scanner_cls.supports_git_history is True, scanner_cls
+
+    def test_history_incapable_scanners_declare_no_support(self):
+        """Scanners that ignore include_git_history must not claim coverage."""
+        from envdrift.scanner.detect_secrets import DetectSecretsScanner
+        from envdrift.scanner.native import NativeScanner
+        from envdrift.scanner.trivy import TrivyScanner
+
+        for scanner_cls in (NativeScanner, DetectSecretsScanner, TrivyScanner):
+            assert scanner_cls.supports_git_history is False, scanner_cls
+
+    def test_engine_warns_when_history_unsatisfiable(self, tmp_path, caplog):
+        """engine.scan() logs a warning when history is requested without support.
+
+        SDK callers bypass the guard CLI's hard refusal, so the engine itself
+        must surface that git history will NOT be scanned (#476).
+        """
+        import logging
+
+        (tmp_path / "app.py").write_text("x = 1\n", encoding="utf-8")
+        config = GuardConfig(use_native=True, use_gitleaks=False, include_git_history=True)
+        engine = ScanEngine(config)
+
+        with caplog.at_level(logging.WARNING, logger="envdrift.scanner.engine"):
+            engine.scan([tmp_path])
+
+        assert any(
+            "no active scanner supports git history" in record.message for record in caplog.records
+        ), caplog.records
+
+    def test_engine_no_warning_when_history_not_requested(self, tmp_path, caplog):
+        """No spurious history warning when include_git_history is off."""
+        import logging
+
+        (tmp_path / "app.py").write_text("x = 1\n", encoding="utf-8")
+        config = GuardConfig(use_native=True, use_gitleaks=False, include_git_history=False)
+        engine = ScanEngine(config)
+
+        with caplog.at_level(logging.WARNING, logger="envdrift.scanner.engine"):
+            engine.scan([tmp_path])
+
+        assert not any("git history" in record.message for record in caplog.records), caplog.records
+
+
+class TestDefaultGlobalIgnoreScoping:
+    """#477: built-in config/lock-file ignores only suppress noisy rules."""
+
+    @staticmethod
+    def _native_only_engine(**kwargs) -> ScanEngine:
+        config = GuardConfig(
+            use_native=True,
+            use_gitleaks=False,
+            auto_install=False,
+            **kwargs,
+        )
+        return ScanEngine(config)
+
+    def test_distinctive_secret_in_pyproject_surfaces(self, tmp_path: Path):
+        """A GitHub PAT in pyproject.toml survives the default global ignore."""
+        token = "ghp_" + "0123456789" + "abcdefghijklmnopqrstuvwxyz"
+        (tmp_path / "pyproject.toml").write_text(f'[tool.demo]\nrepo_token = "{token}"\n')
+
+        engine = self._native_only_engine()
+        result = engine.scan([tmp_path])
+
+        pat_findings = [f for f in result.unique_findings if f.rule_id == "github-pat"]
+        assert any(f.file_path.name == "pyproject.toml" for f in pat_findings)
+
+    def test_noisy_finding_in_pyproject_still_suppressed(self, tmp_path: Path):
+        """The keyword-driven generic-secret match in pyproject.toml stays hidden."""
+        secret = "Zx9Kq2Wm7" + "Lp4Rt8Nv6" + "Bs3Yd1Hf5Gj0Qc"
+        (tmp_path / "pyproject.toml").write_text(f'[tool.demo]\npassword = "{secret}"\n')
+
+        engine = self._native_only_engine()
+        result = engine.scan([tmp_path])
+
+        assert not any(
+            f.file_path.name == "pyproject.toml" and f.rule_id == "generic-secret"
+            for f in result.unique_findings
+        )
+
+    def test_distinctive_secret_in_lock_file_surfaces(self, tmp_path: Path):
+        token = "ghp_" + "0123456789" + "abcdefghijklmnopqrstuvwxyz"
+        (tmp_path / "package-lock.json").write_text(f'{{"token": "{token}"}}\n')
+
+        engine = self._native_only_engine()
+        result = engine.scan([tmp_path])
+
+        pat_findings = [f for f in result.unique_findings if f.rule_id == "github-pat"]
+        assert any(f.file_path.name == "package-lock.json" for f in pat_findings)
+
+    def test_user_ignore_paths_fully_suppress(self, tmp_path: Path):
+        """Explicit user ignore_paths still drop every finding in the path."""
+        token = "ghp_" + "0123456789" + "abcdefghijklmnopqrstuvwxyz"
+        (tmp_path / "pyproject.toml").write_text(f'[tool.demo]\nrepo_token = "{token}"\n')
+
+        engine = self._native_only_engine(ignore_paths=["pyproject.toml"])
+        result = engine.scan([tmp_path])
+
+        assert not any(f.file_path.name == "pyproject.toml" for f in result.unique_findings)

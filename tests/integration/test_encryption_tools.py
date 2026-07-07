@@ -1046,3 +1046,281 @@ def test_lock_custom_filename_decrypt_roundtrip(integration_env):
         decrypted = (work_dir / target).read_text()
         assert plaintext in decrypted, f"{target} did not round-trip to {plaintext!r}"
         assert "encrypted:" not in decrypted
+
+
+# --------------------------------------------------------------------------- #
+# #475: CLI-level truthfulness (real envdrift subprocess + real sops/dotenvx)
+# --------------------------------------------------------------------------- #
+
+
+def _sops_encryption_section(age_recipients: str) -> str:
+    """The [encryption]/[encryption.sops] TOML block shared by the sops helpers,
+    so the two config writers cannot drift as the schema evolves."""
+    return textwrap.dedent(
+        f"""\
+        [encryption]
+        backend = "sops"
+
+        [encryption.sops]
+        auto_install = true
+        config_file = ".sops.yaml"
+        age_key_file = "age.key"
+        age_recipients = "{age_recipients}"
+        """
+    )
+
+
+def _write_sops_toml(work_dir: Path) -> None:
+    (work_dir / "envdrift.toml").write_text(
+        _sops_encryption_section(AGE_PUBLIC_KEY),
+        encoding="utf-8",
+    )
+
+
+@pytest.mark.integration
+def test_sops_encrypt_cli_truthful_on_plaintext_leak(integration_env):
+    """Regression for #475: `envdrift encrypt` must not print "[OK] Encrypted"
+    and exit 0 while a newly appended plaintext secret stays unencrypted in a
+    SOPS-metadata-bearing file. The honest no-op re-run keeps exit 0 but says
+    "already encrypted", not "Encrypted"."""
+    work_dir = integration_env["base_dir"] / "sops-475-leak"
+    work_dir.mkdir()
+    env = integration_env["env"].copy()
+
+    env_file = work_dir / ".env.sops475"
+    env_file.write_text("DB_PASSWORD=hunter2\n", encoding="utf-8")
+    _write_sops_age_setup(work_dir, path_regex=r"\.env\.sops475$")
+    _write_sops_toml(work_dir)
+
+    _run_envdrift(["encrypt", env_file.name], cwd=work_dir, env=env)
+    assert "ENC[" in env_file.read_text(encoding="utf-8")
+
+    # Honest idempotent re-run: exit 0 but no "Encrypted" success banner.
+    rerun = _run_envdrift(["encrypt", env_file.name], cwd=work_dir, env=env)
+    rerun_out = " ".join((rerun.stdout + rerun.stderr).split())
+    assert "already encrypted" in rerun_out.lower()
+
+    # Append a new plaintext secret; the next encrypt must fail loudly.
+    with env_file.open("a", encoding="utf-8") as fh:
+        fh.write("NEW_SECRET=plaintextleak999\n")
+
+    leak = _run_envdrift(["encrypt", env_file.name], cwd=work_dir, env=env, check=False)
+    leak_out = " ".join((leak.stdout + leak.stderr).split())
+
+    assert leak.returncode != 0, (
+        f"encrypt exited 0 while plaintext survived:\n{leak.stdout}\n{leak.stderr}"
+    )
+    assert "NEW_SECRET" in leak_out
+    assert "plaintext" in leak_out.lower()
+    # The secret is indeed still on disk in plaintext (the hazard being reported).
+    assert "NEW_SECRET=plaintextleak999" in env_file.read_text(encoding="utf-8")
+
+
+@pytest.mark.integration
+def test_sops_encrypt_cli_refuses_double_encrypting_dotenvx_file(integration_env):
+    """Regression for #475: with a dotenvx-encrypted file and `backend = "sops"`
+    configured, `envdrift encrypt` must refuse instead of silently nesting SOPS
+    over dotenvx (which bricks decrypt auto-detection)."""
+    work_dir = integration_env["base_dir"] / "sops-475-nesting"
+    work_dir.mkdir()
+    env = integration_env["env"].copy()
+
+    env_file = work_dir / ".env.nest475"
+    env_file.write_text("API_KEY=supersecret\n", encoding="utf-8")
+    (work_dir / "envdrift.toml").write_text(
+        textwrap.dedent(
+            """\
+            [encryption]
+            backend = "dotenvx"
+
+            [encryption.dotenvx]
+            auto_install = true
+            """
+        ),
+        encoding="utf-8",
+    )
+
+    _run_envdrift(["encrypt", env_file.name], cwd=work_dir, env=env)
+    dotenvx_snapshot = env_file.read_text(encoding="utf-8")
+    assert "encrypted:" in dotenvx_snapshot
+
+    # Switch the configured backend to sops (with valid age material).
+    _write_sops_age_setup(work_dir, path_regex=r"\.env\.nest475$")
+    _write_sops_toml(work_dir)
+
+    nested = _run_envdrift(["encrypt", env_file.name], cwd=work_dir, env=env, check=False)
+    nested_out = " ".join((nested.stdout + nested.stderr).split())
+
+    assert nested.returncode != 0, (
+        f"encrypt exited 0 while double-encrypting:\n{nested.stdout}\n{nested.stderr}"
+    )
+    assert "dotenvx" in nested_out.lower()
+    # The file was NOT sops-encrypted on top of dotenvx.
+    content = env_file.read_text(encoding="utf-8")
+    assert "ENC[AES256_GCM," not in content
+    assert "DOTENV_PUBLIC_KEY" in content
+
+
+@pytest.mark.integration
+def test_sops_lock_fails_on_surviving_plaintext(integration_env):
+    """Regression for #475: `envdrift lock` must not bless a SOPS file "ready to
+    commit" while a newly appended plaintext value survives in it."""
+    work_dir = integration_env["base_dir"] / "sops-475-lock"
+    work_dir.mkdir()
+    env = integration_env["env"].copy()
+    _scrub_cloud_credentials(env)
+
+    env_file = work_dir / ".env.production"
+    env_file.write_text("API_KEY=topsecret\n", encoding="utf-8")
+    _write_sops_age_setup(work_dir, path_regex=r"\.env\.production$")
+
+    (work_dir / "envdrift.toml").write_text(
+        textwrap.dedent(
+            f"""\
+            [encryption]
+            backend = "sops"
+
+            [encryption.sops]
+            auto_install = true
+            config_file = ".sops.yaml"
+            age_key_file = "age.key"
+            age_recipients = "{AGE_PUBLIC_KEY}"
+
+            [vault]
+            provider = "azure"
+
+            [vault.azure]
+            vault_url = "https://dummy.vault.azure.net/"
+
+            [vault.sync]
+            default_vault_name = "dummy"
+
+            [[vault.sync.mappings]]
+            secret_name = "unused-for-sops"
+            folder_path = "."
+            environment = "production"
+            """
+        ),
+        encoding="utf-8",
+    )
+
+    _run_envdrift(["lock", "--force"], cwd=work_dir, env=env)
+    assert "ENC[" in env_file.read_text(encoding="utf-8")
+
+    # A teammate appends a plaintext secret after the lock.
+    with env_file.open("a", encoding="utf-8") as fh:
+        fh.write("NEW_SECRET=plaintextleak999\n")
+
+    relock = _run_envdrift(["lock", "--force"], cwd=work_dir, env=env, check=False)
+    relock_out = " ".join((relock.stdout + relock.stderr).split())
+
+    assert relock.returncode != 0, (
+        f"lock blessed a file with surviving plaintext:\n{relock.stdout}\n{relock.stderr}"
+    )
+    assert "plaintext" in relock_out.lower()
+    assert "ready to commit" not in relock_out.lower()
+
+
+def _write_sops_vault_sync_toml(work_dir: Path, *, age_recipients: str) -> None:
+    """envdrift.toml with SOPS encryption plus the [vault.sync] section that
+    `lock`/`pull` require (dummy vault, never contacted with --force/--skip-sync)."""
+    (work_dir / "envdrift.toml").write_text(
+        _sops_encryption_section(age_recipients)
+        + textwrap.dedent(
+            """\
+
+            [vault]
+            provider = "azure"
+
+            [vault.azure]
+            vault_url = "https://dummy.vault.azure.net/"
+
+            [vault.sync]
+            default_vault_name = "dummy"
+
+            [[vault.sync.mappings]]
+            secret_name = "unused-for-sops"
+            folder_path = "."
+            environment = "production"
+            """
+        ),
+        encoding="utf-8",
+    )
+
+
+@pytest.mark.integration
+def test_sops_pull_fails_loudly_on_surviving_plaintext(integration_env):
+    """Regression for #475 (decrypt direction): `envdrift pull` over a mixed SOPS
+    file (metadata + a plaintext value appended after encryption) must fail
+    loudly via sops, not print "skipped (not encrypted)" and exit 0 while the
+    file's values are still ciphertext."""
+    work_dir = integration_env["base_dir"] / "sops-475-pull-mixed"
+    work_dir.mkdir()
+    env = integration_env["env"].copy()
+    _scrub_cloud_credentials(env)
+
+    env_file = work_dir / ".env.production"
+    env_file.write_text("API_KEY=topsecret\n", encoding="utf-8")
+    _write_sops_age_setup(work_dir, path_regex=r"\.env\.production$")
+    _write_sops_vault_sync_toml(work_dir, age_recipients=AGE_PUBLIC_KEY)
+
+    _run_envdrift(["lock", "--force"], cwd=work_dir, env=env)
+    assert "ENC[" in env_file.read_text(encoding="utf-8")
+
+    # A teammate appends a plaintext secret after the lock.
+    with env_file.open("a", encoding="utf-8") as fh:
+        fh.write("NEW_SECRET=plaintextleak999\n")
+    mixed_snapshot = env_file.read_text(encoding="utf-8")
+
+    pulled = _run_envdrift(["pull", "--skip-sync"], cwd=work_dir, env=env, check=False)
+    pulled_out = " ".join((pulled.stdout + pulled.stderr).split())
+
+    assert pulled.returncode != 0, (
+        f"pull silently skipped a mixed SOPS file:\n{pulled.stdout}\n{pulled.stderr}"
+    )
+    # The old behavior printed the factually wrong "skipped (not encrypted)".
+    assert "skipped (not encrypted)" not in pulled_out
+    assert "error" in pulled_out.lower()
+    # The mixed file is left as-is: still ciphertext + the plaintext leak,
+    # never half-decrypted.
+    assert env_file.read_text(encoding="utf-8") == mixed_snapshot
+
+
+@pytest.mark.integration
+def test_sops_lock_fails_on_missing_requested_recipient(integration_env):
+    """Regression for #475 (lock direction): adding a recipient to
+    ``age_recipients`` in envdrift.toml and re-running `envdrift lock` must fail
+    loudly while the file's SOPS metadata does not include the new key —
+    "ready to commit" would mean the new teammate silently never got access."""
+    work_dir = integration_env["base_dir"] / "sops-475-lock-recipient"
+    work_dir.mkdir()
+    env = integration_env["env"].copy()
+    _scrub_cloud_credentials(env)
+
+    env_file = work_dir / ".env.production"
+    env_file.write_text("API_KEY=topsecret\n", encoding="utf-8")
+    _write_sops_age_setup(work_dir, path_regex=r"\.env\.production$")
+    _write_sops_vault_sync_toml(work_dir, age_recipients=AGE_PUBLIC_KEY)
+
+    _run_envdrift(["lock", "--force"], cwd=work_dir, env=env)
+    locked = env_file.read_text(encoding="utf-8")
+    assert "ENC[" in locked
+
+    # The team adds a new recipient in envdrift.toml (the documented flow); the
+    # file's metadata still only records the original key. Valid-format age key,
+    # never used to decrypt anything.
+    new_recipient = "age1ql3z7hjy54pw3hyww5ayyfg7zqgvc7w3j2elw8zmrj2kg5sfn9aqmcac8p"
+    _write_sops_vault_sync_toml(work_dir, age_recipients=f"{AGE_PUBLIC_KEY},{new_recipient}")
+
+    relock = _run_envdrift(["lock", "--force"], cwd=work_dir, env=env, check=False)
+    relock_out = " ".join((relock.stdout + relock.stderr).split())
+
+    assert relock.returncode != 0, (
+        f"lock blessed a file whose metadata is missing a requested recipient:\n"
+        f"{relock.stdout}\n{relock.stderr}"
+    )
+    assert "recipient" in relock_out.lower()
+    assert new_recipient in relock_out
+    assert "ready to commit" not in relock_out.lower()
+    # Metadata untouched: lock must not silently rewrite the encrypted file.
+    assert env_file.read_text(encoding="utf-8") == locked

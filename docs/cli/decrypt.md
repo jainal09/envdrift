@@ -60,7 +60,8 @@ envdrift decrypt .env.production --backend sops
 ### SOPS Options
 
 - `--sops-config` Path to `.sops.yaml`
-- `--age-key-file` Age private key file for decryption (sets `SOPS_AGE_KEY_FILE`)
+- `--age-key-file` Age private key file for decryption (sets `SOPS_AGE_KEY_FILE`;
+  the explicit flag overrides an ambient `SOPS_AGE_KEY_FILE` export)
 
 ## Examples
 
@@ -97,6 +98,13 @@ envdrift decrypt .env.production --verify-vault --ci \
 ```
 
 Exit code 0 if the vault key can decrypt the file, 1 if it cannot.
+
+The vault value is normalized the same way `envdrift lock --verify-vault` and
+`envdrift sync` parse it: surrounding whitespace, one layer of quotes, and a
+`DOTENV_PRIVATE_KEY_<ENV>=` prefix are stripped. A vault secret stored as the
+literal `.env.keys` line `DOTENV_PRIVATE_KEY_PRODUCTION="<hex>"` (quoted, as
+`vault-push` writes it) therefore verifies identically to the bare `<hex>`
+value — all three verify commands agree on the same vault secret.
 
 ### Decrypt Specific Environment
 

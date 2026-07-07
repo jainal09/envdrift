@@ -27,11 +27,13 @@ def _init_empty_git_repo(path) -> None:
     subprocess.run(["git", "config", "user.name", "Test"], cwd=path, check=True)
 
 
-def _stage_clean_file(path, name: str = "clean.env") -> None:
+def _stage_clean_file(path, name: str = "clean.cfg") -> None:
     """Write a secret-free file under ``path`` and ``git add`` it (staged)."""
     target = path / name
-    # No secret-shaped values: guard must finish with an empty-findings doc so
-    # the assertion isolates the success-path *progress* leak, not findings.
+    # No secret-shaped values, and NOT an env-file naming shape (a plaintext
+    # ``*.env`` is itself a HIGH unencrypted-env-file finding, #477): guard
+    # must finish with an empty-findings doc so the assertion isolates the
+    # success-path *progress* leak, not findings.
     target.write_text("HELLO=world\n")
     subprocess.run(["git", "add", name], cwd=path, check=True)
 
@@ -39,21 +41,22 @@ def _stage_clean_file(path, name: str = "clean.env") -> None:
 def _commit_pr_base_history(path) -> str:
     """Build a two-commit history with one changed file; return the base SHA.
 
-    ``<base_sha>...HEAD`` then yields exactly one changed ``.env`` file, so the
+    ``<base_sha>...HEAD`` then yields exactly one changed file, so the
     ``--pr-base`` success path (files present to scan) is exercised against a
-    real git history. The changed file is secret-free so guard finishes with an
-    empty-findings doc and the assertion isolates the progress-prose leak.
+    real git history. The changed file is secret-free and not env-file-shaped
+    (a plaintext ``*.env`` is itself a HIGH finding, #477) so guard finishes
+    with an empty-findings doc and the assertion isolates the progress-prose leak.
     """
-    base = path / "base.env"
+    base = path / "base.cfg"
     base.write_text("BASE=1\n")
-    subprocess.run(["git", "add", "base.env"], cwd=path, check=True)
+    subprocess.run(["git", "add", "base.cfg"], cwd=path, check=True)
     subprocess.run(["git", "commit", "-q", "-m", "base"], cwd=path, check=True)
     base_sha = subprocess.run(
         ["git", "rev-parse", "HEAD"], cwd=path, capture_output=True, text=True, check=True
     ).stdout.strip()
-    changed = path / "changed.env"
+    changed = path / "changed.cfg"
     changed.write_text("HELLO=world\n")
-    subprocess.run(["git", "add", "changed.env"], cwd=path, check=True)
+    subprocess.run(["git", "add", "changed.cfg"], cwd=path, check=True)
     subprocess.run(["git", "commit", "-q", "-m", "change"], cwd=path, check=True)
     return base_sha
 
@@ -86,7 +89,7 @@ def _assert_valid_sarif(result) -> None:
 
 
 def test_guard_missing_config_emits_json_error(tmp_path):
-    """--json --config <missing> exits 1 with a JSON error, not a traceback.
+    """--json --config <missing> exits 6 with a JSON error, not a traceback.
 
     Uses the real load_config so a ConfigNotFoundError is raised at the real
     call site; the command must convert it to a clean ``{"error": ...}`` document
@@ -99,7 +102,7 @@ def test_guard_missing_config_emits_json_error(tmp_path):
     result = runner.invoke(
         app, ["guard", "--native-only", "--json", "--config", str(missing), str(target)]
     )
-    assert result.exit_code == 1
+    assert result.exit_code == 6
     payload = json.loads(result.stdout)
     assert "error" in payload
     assert "Could not load config" in payload["error"]
@@ -107,7 +110,7 @@ def test_guard_missing_config_emits_json_error(tmp_path):
 
 
 def test_guard_malformed_config_emits_json_error(tmp_path):
-    """--json --config <malformed.toml> exits 1 with a JSON error."""
+    """--json --config <malformed.toml> exits 6 with a JSON error."""
     bad = tmp_path / "envdrift.toml"
     bad.write_text("[guard\n")  # missing closing bracket -> TOMLDecodeError
     target = tmp_path / "a.env"
@@ -116,7 +119,7 @@ def test_guard_malformed_config_emits_json_error(tmp_path):
     result = runner.invoke(
         app, ["guard", "--native-only", "--json", "--config", str(bad), str(target)]
     )
-    assert result.exit_code == 1
+    assert result.exit_code == 6
     payload = json.loads(result.stdout)
     assert "error" in payload
     assert "Traceback" not in result.stdout
@@ -127,7 +130,7 @@ def test_guard_path_not_found_emits_json_error(tmp_path):
     missing = tmp_path / "does-not-exist"
 
     result = runner.invoke(app, ["guard", "--native-only", "--json", str(missing)])
-    assert result.exit_code == 1
+    assert result.exit_code == 6
     payload = json.loads(result.stdout)
     assert "error" in payload
     assert "Path not found" in payload["error"]
@@ -143,7 +146,7 @@ def test_guard_path_not_found_emits_valid_sarif(tmp_path):
     missing = tmp_path / "does-not-exist"
 
     result = runner.invoke(app, ["guard", "--native-only", "--sarif", str(missing)])
-    assert result.exit_code == 1
+    assert result.exit_code == 6
     payload = json.loads(result.stdout)
     # Shaped like a SARIF document, not a bare error object.
     assert payload["version"] == "2.1.0"
@@ -168,7 +171,7 @@ def test_guard_human_error_preserves_bracketed_literal(tmp_path):
     missing = tmp_path / "[vault.sync].env"
 
     result = runner.invoke(app, ["guard", "--native-only", str(missing)])
-    assert result.exit_code == 1
+    assert result.exit_code == 6
     # The bracketed literal must appear verbatim, not be swallowed as markup.
     # Rich falls back to an 80-col width under the non-tty CliRunner capture and
     # soft-wraps the path mid-string (inserting newlines), so a long tmp_path can

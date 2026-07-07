@@ -9,6 +9,30 @@ from enum import Enum
 from pathlib import Path
 from typing import Any
 
+# Guard exit codes — the single documented contract (docs/cli/guard.md).
+# 1-4 are severity-derived "findings" codes; 5 and 6 are reserved for runs
+# whose verdict is NOT a finding, so an exit-code-only pipeline can tell a
+# critical secret (1) from an incomplete scan (5) or a bad config (6) (#478).
+EXIT_NO_FINDINGS = 0
+EXIT_CRITICAL_FINDINGS = 1
+EXIT_HIGH_FINDINGS = 2
+EXIT_MEDIUM_FINDINGS = 3
+EXIT_LOW_FINDINGS = 4
+EXIT_SCAN_ERROR = 5
+EXIT_OPERATIONAL_ERROR = 6
+
+# Exit codes caused by findings at/above the active threshold; used to derive
+# the machine-readable ``has_blocking_findings`` field from the same effective
+# exit code the process returns (#478).
+FINDINGS_EXIT_CODES = frozenset(
+    {
+        EXIT_CRITICAL_FINDINGS,
+        EXIT_HIGH_FINDINGS,
+        EXIT_MEDIUM_FINDINGS,
+        EXIT_LOW_FINDINGS,
+    }
+)
+
 
 class FindingSeverity(Enum):
     """Severity levels for scan findings.
@@ -177,34 +201,70 @@ class AggregatedScanResult:
     total_duration_ms: int
 
     @property
-    def exit_code(self) -> int:
-        """Determine exit code based on highest severity finding.
+    def has_errors(self) -> bool:
+        """Whether any selected scanner ran but failed to complete its scan.
+
+        Follows the ``ScanResult.success`` contract (``error is None``) rather
+        than error truthiness: a backend that fails with an empty error string
+        must still fail the run instead of slipping through to the all-clear
+        exit 0 (#478 review).
+        """
+        return any(not r.success for r in self.results)
+
+    def _severity_exit_code(self) -> int:
+        """Exit code derived from the highest-severity finding (0 if none).
 
         Each severity maps to its own code so a pipeline that branches on a
-        specific exit code can tell them apart (LOW must not collide with HIGH's
-        code 2, see #413):
-
-        Returns:
-            0: No findings
-            1: Critical severity findings
-            2: High severity findings
-            3: Medium severity findings
-            4: Low severity findings (policy violations, e.g. unencrypted file)
+        specific exit code can tell them apart (LOW must not collide with
+        HIGH's code 2, see #413).
         """
         if not self.unique_findings:
-            return 0
+            return EXIT_NO_FINDINGS
 
         severities = {f.severity for f in self.unique_findings}
 
         if FindingSeverity.CRITICAL in severities:
-            return 1
+            return EXIT_CRITICAL_FINDINGS
         if FindingSeverity.HIGH in severities:
-            return 2
+            return EXIT_HIGH_FINDINGS
         if FindingSeverity.MEDIUM in severities:
-            return 3
+            return EXIT_MEDIUM_FINDINGS
         if FindingSeverity.LOW in severities:
-            return 4
-        return 0
+            return EXIT_LOW_FINDINGS
+        return EXIT_NO_FINDINGS
+
+    def effective_exit_code(self, fail_on: FindingSeverity | None = None) -> int:
+        """Single source of truth for the guard process exit code (#478).
+
+        Severity-derived codes (1=CRITICAL, 2=HIGH, 3=MEDIUM, 4=LOW) win when a
+        finding blocks the run. With ``fail_on`` set (``--ci``), findings below
+        the threshold do not block (INFO never blocks). A run that would
+        otherwise pass but in which a selected scanner RAN AND FAILED exits
+        ``EXIT_SCAN_ERROR`` (5) instead of the all-clear 0, so an incomplete
+        scan can never masquerade as a clean pass.
+
+        Args:
+            fail_on: Minimum severity that blocks the run (None = any finding).
+
+        Returns:
+            The exit code the guard process must return for this result.
+        """
+        code = self._severity_exit_code()
+        if fail_on is not None and not any(f.severity >= fail_on for f in self.unique_findings):
+            code = EXIT_NO_FINDINGS
+        if code == EXIT_NO_FINDINGS and self.has_errors:
+            return EXIT_SCAN_ERROR
+        return code
+
+    @property
+    def exit_code(self) -> int:
+        """Threshold-unaware exit code for this result.
+
+        Equivalent to :meth:`effective_exit_code` with no ``fail_on`` threshold:
+        the severity-derived code for any finding, or ``EXIT_SCAN_ERROR`` (5)
+        when no finding was reported but a selected scanner failed (#478).
+        """
+        return self.effective_exit_code()
 
     @property
     def has_blocking_findings(self) -> bool:
@@ -213,7 +273,7 @@ class AggregatedScanResult:
         Returns:
             True if there are CRITICAL or HIGH severity findings.
         """
-        return self.exit_code in (1, 2)
+        return self.exit_code in (EXIT_CRITICAL_FINDINGS, EXIT_HIGH_FINDINGS)
 
     @property
     def findings_by_severity(self) -> dict[FindingSeverity, list[ScanFinding]]:
@@ -264,6 +324,13 @@ class ScannerBackend(ABC):
                 # Implementation here
                 pass
     """
+
+    #: Whether this scanner honors ``include_git_history`` and scans git
+    #: history. Defaults to False so a scanner that silently ignores the flag
+    #: is never presented as history coverage — guard refuses ``--history``
+    #: when no active scanner declares support (#476). History-capable
+    #: scanners override this to True.
+    supports_git_history: bool = False
 
     @property
     @abstractmethod
