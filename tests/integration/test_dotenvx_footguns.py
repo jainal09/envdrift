@@ -277,3 +277,81 @@ def test_envdrift_written_env_keys_header_matches_dotenvx(
     EnvKeysFile(ours).write_key("DOTENV_PRIVATE_KEY_PRODUCTION", "0" * 64)
     ours_lines = ours.read_text(encoding="utf-8").splitlines()
     assert ours_lines[: closing + 2] == real_lines[: closing + 2]
+
+
+def test_encrypt_writes_env_keys_next_to_subdir_file(
+    tmp_path: Path,
+    dotenvx_on_path: str,
+) -> None:
+    """#566: the ``.env.keys`` key store lands next to the file, not in the cwd.
+
+    dotenvx **v2** writes and reads ``.env.keys`` in the *process working
+    directory* when ``-fk`` is omitted; **v1** kept it beside the target file.
+    envdrift's per-folder key model — the sync engine,
+    ``normalize_dotenvx_metadata`` and ``EnvKeysFile`` all read
+    ``<folder>/.env.keys`` — depends on the beside-the-file layout, so the
+    wrapper pins ``-fk`` to the sibling path. Without it a file in a subfolder
+    scatters its private key into the cwd and becomes undecryptable.
+    """
+    from envdrift.integrations.dotenvx import DotenvxWrapper
+
+    root = tmp_path / "root"
+    sub = root / "svc"
+    sub.mkdir(parents=True)
+    env_file = sub / "svc.env"
+    env_file.write_text("API_KEY=sekret123\n", encoding="utf-8")
+
+    wrapper = DotenvxWrapper(auto_install=False)
+    # cwd is the *root*, distinct from the file's folder, so a v2 regression
+    # would drop .env.keys into root instead of svc/.
+    wrapper.encrypt(env_file, cwd=root)
+
+    assert (sub / ".env.keys").exists(), "key store must live next to the file"
+    assert not (root / ".env.keys").exists(), "key store must not scatter into cwd"
+    encrypted = env_file.read_text(encoding="utf-8")
+    assert "encrypted:" in encrypted
+    assert "sekret123" not in encrypted
+
+    # And it round-trips: decrypt (also ``-fk``-pinned) finds the sibling store.
+    wrapper.decrypt(env_file, cwd=root)
+    assert "API_KEY=sekret123" in env_file.read_text(encoding="utf-8")
+
+
+def test_decrypt_with_wrong_key_is_surfaced_not_silently_ok(
+    tmp_path: Path,
+    dotenvx_on_path: str,
+) -> None:
+    """#566: a decrypt dotenvx cannot complete must raise, never a misleading no-op.
+
+    dotenvx renamed its decrypt-failure codes across majors (v1
+    ``WRONG_PRIVATE_KEY`` / ``MISSING_PRIVATE_KEY``, v2 ``DECRYPTION_FAILED``),
+    and the decrypt seam has no plaintext post-check — so the wrapper must still
+    surface the failure via the non-zero exit and ``ENCRYPT_ERROR_PATTERNS``
+    instead of reporting success while the ciphertext survives.
+    """
+    from envdrift.integrations.dotenvx import DotenvxError, DotenvxWrapper
+
+    work = tmp_path / "wrongkey"
+    work.mkdir()
+    env_file = work / ".env"
+    env_file.write_text("API_KEY=sekret123\n", encoding="utf-8")
+
+    wrapper = DotenvxWrapper(auto_install=False)
+    wrapper.encrypt(env_file, cwd=work)
+    assert "encrypted:" in env_file.read_text(encoding="utf-8")
+
+    # Replace the private key with a *different* valid dotenvx key so decrypt
+    # fails on a genuine key mismatch (not a malformed key).
+    other = tmp_path / "other"
+    other.mkdir()
+    other_env = other / ".env"
+    other_env.write_text("X=1\n", encoding="utf-8")
+    wrapper.encrypt(other_env, cwd=other)
+    (work / ".env.keys").write_text(
+        (other / ".env.keys").read_text(encoding="utf-8"), encoding="utf-8"
+    )
+
+    with pytest.raises(DotenvxError):
+        wrapper.decrypt(env_file, cwd=work)
+    # The ciphertext survives — never half-written or falsely reported plaintext.
+    assert "encrypted:" in env_file.read_text(encoding="utf-8")

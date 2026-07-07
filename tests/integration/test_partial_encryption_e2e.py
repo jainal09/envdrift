@@ -262,7 +262,7 @@ class TestSecretsOnlyPushPull:
         integration_pythonpath: str,
         envdrift_cmd: list[str],
     ):
-        """BP-09: pull-partial with .env.keys removed surfaces MISSING_PRIVATE_KEY, exits non-zero."""
+        """BP-09: pull-partial with .env.keys removed surfaces the decrypt-key failure, exits non-zero."""
         work_dir = git_repo
         secrets = work_dir / "secrets"
         secrets.mkdir()
@@ -295,7 +295,13 @@ class TestSecretsOnlyPushPull:
         assert pull.returncode == 1, _out(pull)
         out = _out(pull)
         assert "Failed to decrypt" in out, out
-        assert "MISSING_PRIVATE_KEY" in out or "private key" in out.lower(), out
+        # dotenvx surfaces the missing key as MISSING_PRIVATE_KEY (v1) or
+        # DECRYPTION_FAILED (v2); accept either so the bump doesn't break this.
+        assert (
+            "MISSING_PRIVATE_KEY" in out
+            or "DECRYPTION_FAILED" in out
+            or "private key" in out.lower()
+        ), out
         assert "Errors: 1" in out, out
         # File must remain encrypted (no partial/half-written state).
         assert "encrypted:" in api.read_text(), api.read_text()

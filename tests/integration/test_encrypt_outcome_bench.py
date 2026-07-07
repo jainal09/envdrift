@@ -22,6 +22,7 @@ from pathlib import Path
 
 import pytest
 
+from envdrift.encryption.base import EncryptionBackendError
 from envdrift.encryption.dotenvx import DotenvxEncryptionBackend
 
 # Mark all tests in this module
@@ -114,40 +115,65 @@ def test_encrypt_file_of_only_non_identifier_keys_is_not_refused(
 def test_encrypt_with_keys_dir_reports_failure_not_success(
     tmp_path: Path, dotenvx_on_path: None
 ) -> None:
-    """#4/#7: .env.keys as a directory -> dotenvx can't write its key, exits 0, file stays plaintext."""
+    """#4/#7: .env.keys as a directory -> dotenvx cannot write its key.
+
+    dotenvx v1 exited 0 without encrypting (leaving plaintext), so envdrift's
+    outcome check turned it into ``success=False``. dotenvx v2 exits non-zero
+    (EISDIR), which the backend surfaces as ``EncryptionBackendError``. Either
+    way the invariant holds: encryption is never reported as success, and the
+    plaintext secret is preserved (never destroyed, never lied about).
+    """
     env_file = tmp_path / ".env"
     env_file.write_text("API_KEY=supersecret123\nDB_PASS=hunter2\n")
     (tmp_path / ".env.keys").mkdir()  # dotenvx cannot write a key here
 
-    result = DotenvxEncryptionBackend().encrypt(env_file, cwd=tmp_path)
+    try:
+        result = DotenvxEncryptionBackend().encrypt(env_file, cwd=tmp_path)
+    except EncryptionBackendError:
+        pass  # v2: dotenvx exits non-zero; surfaced as a hard error
+    else:
+        # v1: exit 0 without encrypting -> outcome check reports failure.
+        assert result.success is False
+        assert "did not take effect" in result.message.lower()
 
-    # The fix: we must NOT claim success while the secret sits in plaintext.
-    assert result.success is False
-    assert "did not take effect" in result.message.lower()
-    # On-disk truth: the secret really is still plaintext (we are not lying).
+    # On-disk truth (both versions): the secret really is still plaintext.
     assert "API_KEY=supersecret123" in env_file.read_text()
 
 
 def test_encrypt_with_garbage_keys_file_reports_failure(
     tmp_path: Path, dotenvx_on_path: None
 ) -> None:
-    """#5: a malformed .env.keys -> nothing gets encrypted, but exit code is 0."""
+    """#5: a malformed .env.keys must never yield a false success.
+
+    dotenvx v1 exited 0 *without* encrypting (the garbage private key stopped it),
+    so envdrift's outcome check reported ``success=False`` with the plaintext
+    intact. dotenvx v2 ignores the garbage entry, generates a fresh keypair and
+    genuinely encrypts, so ``success=True`` is honest. The invariant that must
+    hold on both is the #443 contract: never a success verdict while a plaintext
+    secret value survives on disk.
+    """
     env_file = tmp_path / ".env"
     env_file.write_text("API_KEY=supersecret123\nDB_PASS=hunter2\n")
     (tmp_path / ".env.keys").write_text("garbage not a key\nDOTENV_PRIVATE_KEY=zzz_not_hex\n")
 
     result = DotenvxEncryptionBackend().encrypt(env_file, cwd=tmp_path)
 
-    assert result.success is False
     on_disk = env_file.read_text()
-    assert "API_KEY=supersecret123" in on_disk
-    assert "encrypted:" not in on_disk
+    plaintext_survived = "supersecret123" in on_disk
+    assert not (result.success and plaintext_survived), on_disk
 
 
 def test_reencrypt_with_corrupted_keys_does_not_hide_plaintext_leak(
     tmp_path: Path, dotenvx_on_path: None
 ) -> None:
-    """#6: corrupt the key, append a new plaintext secret -> the leak must be reported, not OK'd."""
+    """#6: corrupt the key, append a new plaintext secret -> the leak must never be OK'd as plaintext.
+
+    dotenvx v1 exited 0 without re-encrypting (the corrupt key stopped it), so
+    the new plaintext secret survived and envdrift reported ``success=False``.
+    dotenvx v2 re-encrypts the new value with the still-valid public key already
+    in the ``.env`` header, so the plaintext is genuinely removed. The invariant
+    on both: envdrift never reports success while the plaintext leak survives.
+    """
     env_file = tmp_path / ".env"
     env_file.write_text("API_KEY=supersecret123\n")
 
@@ -160,8 +186,8 @@ def test_reencrypt_with_corrupted_keys_does_not_hide_plaintext_leak(
 
     result = DotenvxEncryptionBackend().encrypt(env_file, cwd=tmp_path)
 
-    assert result.success is False  # must not report OK while a plaintext secret survives
-    assert "NEW_SECRET=plaintextleak999" in env_file.read_text()
+    leak_survived = "NEW_SECRET=plaintextleak999" in env_file.read_text()
+    assert not (result.success and leak_survived), env_file.read_text()
 
 
 # --- Control: the happy path must still succeed (no false-positive) ------------

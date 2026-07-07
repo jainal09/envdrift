@@ -114,10 +114,11 @@ class TestPushFailsWhenEncryptionDoesNotTakeEffect:
         integration_pythonpath: str,
         envdrift_cmd: list[str],
     ):
-        """.env.keys as a DIRECTORY: dotenvx cannot write its private key, warns,
-        exits 0 and leaves every value plaintext. push must exit non-zero with no
-        success banner, keep the plaintext source intact, and must NOT generate a
-        combined file carrying the plaintext secret."""
+        """.env.keys as a DIRECTORY: dotenvx cannot write its private key. v1
+        warned, exited 0 and left every value plaintext; v2 exits non-zero
+        (EISDIR). Either way push must exit non-zero with no success banner, keep
+        the plaintext source intact, and must NOT generate a combined file
+        carrying the plaintext secret."""
         work_dir = git_repo
         _write_combine_config(work_dir)
         (work_dir / ".env.production.clear").write_text("DEBUG=false\n", encoding="utf-8")
@@ -140,7 +141,10 @@ class TestPushFailsWhenEncryptionDoesNotTakeEffect:
         # still plaintext — the exact false-success the issue reproduces.
         assert result.returncode == 1, f"exit={result.returncode}\n{out}"
         assert "Push complete" not in out, out
-        assert "did not take effect" in out, out
+        # The encryption failure is surfaced: v1 via envdrift's outcome check
+        # ("did not take effect"), v2 via dotenvx's own non-zero exit
+        # ("Failed to encrypt"). Either proves push did not silently succeed.
+        assert "did not take effect" in out or "Failed to encrypt" in out, out
         # The plaintext source survives untouched (never destroyed, never lied about).
         assert leak_value in secret.read_text(encoding="utf-8")
         # No combined artifact carrying the plaintext secret is generated.
@@ -179,7 +183,9 @@ class TestPushFailsWhenEncryptionDoesNotTakeEffect:
             out = " ".join(_out(result).split())
             assert result.returncode == 1, f"exit={result.returncode}\n{out}"
             assert "Push complete" not in out, out
-            assert "did not take effect" in out, out
+            # v1 surfaces the failure via envdrift's outcome check, v2 via
+            # dotenvx's own EACCES non-zero exit. Either proves no false success.
+            assert "did not take effect" in out or "Failed to encrypt" in out, out
             assert leak_value in secret.read_text(encoding="utf-8")
         finally:
             keys.chmod(0o644)  # let tmp_path cleanup remove it

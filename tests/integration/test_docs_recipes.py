@@ -128,6 +128,10 @@ def test_faq_ci_decrypt_recipe_round_trips(
     assert _PLAIN_VALUE in decrypted, "corrected recipe must restore the plaintext value"
 
 
+@pytest.mark.xfail(
+    strict=False,
+    reason="dotenvx v2 removed the `rotate` command; recipe + test need a v2 story (see #585)",
+)
 def test_env_file_sync_rotation_recipe(
     envdrift_cmd: list[str],
     dotenvx_bin: str,
@@ -140,6 +144,11 @@ def test_env_file_sync_rotation_recipe(
     it generates a new keypair, re-encrypts the file to the new public key, and
     *appends* the new private key to the suffixed ``.env.keys`` entry
     (comma-separated, old key kept so older ciphertext stays decryptable).
+
+    xfail under dotenvx v2 (2.1.5): the ``rotate`` subcommand was removed, so the
+    documented one-liner is a no-op and the comma-chained key append never
+    happens. Tracked in #585; flip back to a passing assertion when the recipe is
+    reworked for v2.
     """
     old_key = _encrypt_production(envdrift_cmd, work_dir, integration_env)
     old_public = _public_key_line(work_dir / ".env.production")
