@@ -280,11 +280,16 @@ Yes, run multiple validation commands:
 
 Option 1: Store private key as CI secret
 
+The key name in `.env.keys` must carry the environment suffix matching the
+file you decrypt: `.env.production` needs `DOTENV_PRIVATE_KEY_PRODUCTION`
+(the name `envdrift encrypt` itself writes). A bare `DOTENV_PRIVATE_KEY`
+only decrypts a plain `.env`.
+
 ```yaml
 - env:
-    DOTENV_PRIVATE_KEY: ${{ secrets.DOTENV_PRIVATE_KEY }}
+    DOTENV_PRIVATE_KEY_PRODUCTION: ${{ secrets.DOTENV_PRIVATE_KEY_PRODUCTION }}
   run: |
-    echo "DOTENV_PRIVATE_KEY=$DOTENV_PRIVATE_KEY" > .env.keys
+    echo "DOTENV_PRIVATE_KEY_PRODUCTION=$DOTENV_PRIVATE_KEY_PRODUCTION" > .env.keys
     envdrift decrypt .env.production
 ```
 

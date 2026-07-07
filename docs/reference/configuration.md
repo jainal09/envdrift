@@ -58,8 +58,8 @@ In `pyproject.toml`, findings name the section as you wrote it — a typo'd
 ### envdrift.toml
 
 ```toml
-[envdrift]
-schema = "config:Settings"
+[validation]
+check_encryption = true
 
 [vault]
 provider = "azure"
@@ -77,8 +77,8 @@ scanners = ["native", "gitleaks"]
 ### pyproject.toml
 
 ```toml
-[tool.envdrift]
-schema = "config:Settings"
+[tool.envdrift.validation]
+check_encryption = true
 
 [tool.envdrift.vault]
 provider = "azure"
@@ -94,21 +94,6 @@ scanners = ["native", "gitleaks"]
 ```
 
 ## Sections
-
-### [envdrift] — Core Settings
-
-Core configuration options for envdrift.
-
-| Option | Type | Default | Description |
-|:-------|:-----|:--------|:------------|
-| `schema` | `string` | `null` | Default schema path for validation (e.g., `config:Settings`) |
-| `environments` | `list[string]` | `["development", "staging", "production"]` | List of environment names |
-
-```toml
-[envdrift]
-schema = "config.settings:ProductionSettings"
-environments = ["development", "staging", "production"]
-```
 
 ### [validation] — Validation Settings
 
@@ -387,27 +372,6 @@ folder_path = "services/ci"
 ephemeral_keys = true  # Always fetch from vault
 ```
 
-### [precommit] — Pre-commit Hook Settings
-
-Configuration for pre-commit hook integration.
-
-| Option | Type | Default | Description |
-|:-------|:-----|:--------|:------------|
-| `files` | `list[string]` | `[]` | Files to validate on commit |
-| `schemas` | `dict[string, string]` | `{}` | Per-file schema overrides |
-
-```toml
-[precommit]
-files = [
-    ".env.production",
-    ".env.staging",
-]
-
-[precommit.schemas]
-".env.production" = "config.settings:ProductionSettings"
-".env.staging" = "config.settings:StagingSettings"
-```
-
 ### [git_hook_check] — Git Hook Enforcement
 
 Configuration for automatic git hook setup checks. When enabled, envdrift
@@ -523,10 +487,6 @@ notify = true
 ```toml
 # envdrift.toml
 
-[envdrift]
-schema = "config.settings:Settings"
-environments = ["development", "staging", "production"]
-
 [validation]
 check_encryption = true
 strict_extra = true
@@ -567,13 +527,6 @@ secret_name = "app-local-key"
 folder_path = "."
 profile = "local"
 activate_to = ".env"
-
-[precommit]
-files = [".env.production", ".env.staging"]
-
-[precommit.schemas]
-".env.production" = "config.settings:ProductionSettings"
-".env.staging" = "config.settings:StagingSettings"
 ```
 
 ## Environment Variables
