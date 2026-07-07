@@ -125,6 +125,20 @@ class Validator:
         """
         result = ValidationResult(valid=True)
 
+        # The parser strips a leading UTF-8 BOM so reports name the variable
+        # the user wrote — but pydantic-settings reads .env files as plain
+        # UTF-8 (dotenv_values default), so at startup the app sees the first
+        # key BOM-prefixed and a required field backed by it comes up missing.
+        # Surface that loudly instead of a silent false PASS (#486 review).
+        if env_file.leading_bom:
+            result.warnings.append(
+                "File starts with a UTF-8 BOM: pydantic-settings reads .env files "
+                "as plain UTF-8, so the app will see the first key with an "
+                "invisible '\\ufeff' prefix and a required field backed by it "
+                "will come up missing at startup. Remove the BOM or set "
+                "env_file_encoding='utf-8-sig' on the model config."
+            )
+
         # Pydantic Settings defaults to case_sensitive=False, loading e.g.
         # `API_KEY` from a conventional UPPERCASE .env into a lowercase
         # `api_key` field. Mirror that here by matching names case-insensitively

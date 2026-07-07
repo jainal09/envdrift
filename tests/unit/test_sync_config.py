@@ -308,6 +308,49 @@ class TestSyncConfigFromToml:
         with pytest.raises(SyncConfigError, match="Missing 'folder_path'"):
             SyncConfig.from_toml(data)
 
+    @pytest.mark.parametrize(
+        ("key", "value"),
+        [
+            ("folder_path", 123),
+            ("secret_name", True),
+            ("env_file", 7),
+            ("activate_to", 3.5),
+            ("secret_name", None),
+            ("folder_path", None),
+        ],
+    )
+    def test_from_toml_non_string_value_raises_clean_error(self, key: str, value) -> None:
+        """#488: a TOML type surprise (int/bool where a string belongs) raises a
+        clean SyncConfigError instead of a raw TypeError traceback from Path().
+        A required key that is present but None (unreachable from TOML, which
+        has no null, but reachable via the public from_toml API) is rejected too."""
+        mapping = {"secret_name": "mykey", "folder_path": "services/myapp", key: value}
+
+        with pytest.raises(SyncConfigError, match=f"'{key}' must be a string"):
+            SyncConfig.from_toml({"mappings": [mapping]})
+
+    def test_from_toml_non_bool_ephemeral_keys_raises_clean_error(self) -> None:
+        """#488: ephemeral_keys = "yes"/1 must be a clean config error, not a
+        silently-truthy flag."""
+        mapping = {"secret_name": "s", "folder_path": ".", "ephemeral_keys": "yes"}
+
+        with pytest.raises(SyncConfigError, match="'ephemeral_keys' must be a boolean"):
+            SyncConfig.from_toml({"mappings": [mapping]})
+
+    def test_from_toml_reports_all_wrong_typed_keys_at_once(self) -> None:
+        """#488: every wrong-typed key is reported in one pass (matching the
+        discovered-config layer) so users are not forced into fix-and-re-run."""
+        mapping = {"secret_name": "s", "folder_path": 123, "env_file": 7}
+
+        with pytest.raises(SyncConfigError, match=r"'folder_path'.*'env_file'"):
+            SyncConfig.from_toml({"mappings": [mapping]})
+
+    def test_from_toml_non_table_entry_raises_clean_error(self) -> None:
+        """#488: a non-table mappings entry (mappings = [123]) raises a clean
+        SyncConfigError instead of a raw TypeError from the `in` membership test."""
+        with pytest.raises(SyncConfigError, match="must be a table"):
+            SyncConfig.from_toml({"mappings": [123]})
+
     def test_from_toml_empty_mappings(self) -> None:
         """Test TOML config with empty mappings."""
         data = {"mappings": []}

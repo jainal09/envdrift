@@ -348,10 +348,15 @@ class TestDecryptionTestEdgeCases:
         )
         assert engine._test_decryption(mapping) == DecryptionTestResult.SKIPPED
 
-    def test_failed_when_reencrypt_fails_restores_file(
+    def test_passing_check_never_reencrypts(
         self, mock_vault_client: MagicMock, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """Decrypt succeeds but re-encrypt fails -> FAILED + restore (343-344)."""
+        """A passing check makes exactly ONE dotenvx call — no re-encrypt stage (#473).
+
+        The old in-place roundtrip needed a second `dotenvx encrypt` run to undo
+        its own decrypt of the live file. The temp-copy check never modifies the
+        live file, so there is nothing to re-encrypt.
+        """
         mapping = self._encrypted_mapping(tmp_path)
         env_file = tmp_path / ".env.production"
         original = env_file.read_text()
@@ -359,10 +364,7 @@ class TestDecryptionTestEdgeCases:
         monkeypatch.setattr("envdrift.sync.engine.shutil.which", lambda _: "/usr/bin/dotenvx")
 
         runner = MagicMock()
-        runner.side_effect = [
-            subprocess.CompletedProcess(["decrypt"], 0),
-            subprocess.CompletedProcess(["encrypt"], 1),
-        ]
+        runner.return_value = subprocess.CompletedProcess(["decrypt"], 0)
         monkeypatch.setattr("envdrift.sync.engine.subprocess.run", runner)
 
         engine = SyncEngine(
@@ -372,9 +374,10 @@ class TestDecryptionTestEdgeCases:
         )
         result = engine._test_decryption(mapping)
 
-        assert result == DecryptionTestResult.FAILED
-        assert runner.call_count == 2
-        # Original content restored from backup.
+        assert result == DecryptionTestResult.PASSED
+        assert runner.call_count == 1
+        assert "decrypt" in runner.call_args.args[0]
+        # Live file untouched, no backup byproduct.
         assert env_file.read_text() == original
         assert not env_file.with_suffix(".backup_decryption_test").exists()
 
@@ -400,10 +403,10 @@ class TestDecryptionTestEdgeCases:
         assert result == DecryptionTestResult.SKIPPED
         assert not (tmp_path / ".env.production").with_suffix(".backup_decryption_test").exists()
 
-    def test_failed_on_generic_exception_restores_file(
+    def test_failed_on_generic_exception_file_untouched(
         self, mock_vault_client: MagicMock, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """A generic exception during run -> FAILED + restore (lines 354-356)."""
+        """A generic exception during run -> FAILED with the live file untouched."""
         mapping = self._encrypted_mapping(tmp_path)
         env_file = tmp_path / ".env.production"
         original = env_file.read_text()

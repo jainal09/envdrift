@@ -209,6 +209,20 @@ class TestInstallHooks:
         with pytest.raises(FileNotFoundError):
             install_hooks(create_if_missing=False)
 
+    @pytest.mark.xfail(
+        strict=False,
+        reason="install_hooks creates an explicit missing config_path even when "
+        "create_if_missing=False (see #580)",
+    )
+    def test_explicit_missing_path_respects_create_if_missing_false(self, tmp_path: Path):
+        """An explicit missing config_path with create_if_missing=False must raise,
+        not silently create the file (docstring contract; see #580)."""
+        target = tmp_path / ".pre-commit-config.yaml"
+
+        with pytest.raises(FileNotFoundError):
+            install_hooks(config_path=target, create_if_missing=False)
+        assert not target.exists()
+
     def test_idempotent_install(self, tmp_path: Path):
         """Test installing hooks twice doesn't duplicate them."""
 
