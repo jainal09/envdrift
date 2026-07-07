@@ -34,6 +34,11 @@ type RotatingWriter struct {
 	backups  int
 	file     *os.File
 	size     int64
+	// closed distinguishes a Close()d writer (writes must stay refused) from a
+	// writer whose file is momentarily nil because a rotation's reopen failed
+	// (writes must retry the open — see Write). Without it a single transient
+	// reopen failure would permanently, silently disable all agent logging.
+	closed bool
 }
 
 // NewRotatingWriter opens (creating parent directories as needed) a rotating
@@ -78,8 +83,18 @@ func (w *RotatingWriter) Write(p []byte) (int, error) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 
-	if w.file == nil {
+	if w.closed {
 		return 0, os.ErrClosed
+	}
+
+	// A previous rotation failed to reopen the file (w.file left nil). Retry the
+	// open here so a transient failure (e.g. momentary disk pressure) does not
+	// permanently disable logging for the life of the process (#494). The write
+	// that hit the failure is lost; logging resumes from this one.
+	if w.file == nil {
+		if err := w.reopenLocked(); err != nil {
+			return 0, err
+		}
 	}
 
 	if w.size > 0 && w.size+int64(len(p)) > w.maxBytes {
@@ -93,11 +108,28 @@ func (w *RotatingWriter) Write(p []byte) (int, error) {
 	return n, err
 }
 
+// reopenLocked opens the active log file in append mode and refreshes the size
+// accounting from its current length. It recovers a writer whose file was left
+// nil by a failed rotation reopen. Callers must hold w.mu.
+func (w *RotatingWriter) reopenLocked() error {
+	f, err := os.OpenFile(w.path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
+	if err != nil {
+		return fmt.Errorf("reopen log file: %w", err)
+	}
+	w.file = f
+	w.size = 0
+	if info, statErr := f.Stat(); statErr == nil {
+		w.size = info.Size()
+	}
+	return nil
+}
+
 // Close closes the underlying file. Subsequent writes return os.ErrClosed.
 func (w *RotatingWriter) Close() error {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 
+	w.closed = true
 	if w.file == nil {
 		return nil
 	}

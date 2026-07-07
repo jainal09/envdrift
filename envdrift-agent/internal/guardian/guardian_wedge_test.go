@@ -38,6 +38,12 @@ func TestMain(m *testing.M) {
 //     contract) so the guardian proceeds to encrypt; with
 //     ENVDRIFT_AGENT_FAKE_LSOF=open it prints a foreign PID and exits 0,
 //     simulating a file held open by another process.
+//   - handle: the Windows lock-check probe (lockcheck.isFileOpenWindows runs
+//     `handle.exe`); the fake prints "No matching handles found." and exits 0
+//     so the guardian treats the file as not-open and proceeds to encrypt —
+//     the Windows counterpart of the default fake lsof, keeping the wedge tests
+//     hermetic on Windows instead of falling through to the real
+//     handle.exe/PowerShell probe.
 //   - envdrift encrypt <file>: writes a marker file (so the test knows the
 //     subprocess started), then acts per ENVDRIFT_AGENT_FAKE_ENVDRIFT:
 //     "ok" exits 0, "fail" exits 1, default ("hang") sleeps far longer than
@@ -51,6 +57,9 @@ func fakeBinMain() int {
 			return 0
 		}
 		return 1
+	case "handle":
+		fmt.Println("No matching handles found.")
+		return 0
 	case "envdrift":
 		if len(os.Args) > 1 && os.Args[1] == "encrypt" {
 			if marker := os.Getenv("ENVDRIFT_AGENT_FAKE_MARKER"); marker != "" {
@@ -88,8 +97,10 @@ func installFakeBins(t *testing.T, marker string) {
 	dir := t.TempDir()
 	names := []string{"envdrift", "lsof"}
 	if runtime.GOOS == "windows" {
-		// lockcheck uses handle.exe/PowerShell on Windows, not lsof.
-		names = []string{"envdrift.exe"}
+		// lockcheck uses handle.exe/PowerShell on Windows, not lsof: fake
+		// handle.exe too, or checkIdleFiles falls through to the real Windows
+		// lock probe and can skip encryption before the fake envdrift starts.
+		names = []string{"envdrift.exe", "handle.exe"}
 	}
 	for _, name := range names {
 		if err := os.WriteFile(filepath.Join(dir, name), data, 0o755); err != nil {

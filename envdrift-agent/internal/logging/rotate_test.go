@@ -4,6 +4,7 @@ package logging
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -156,6 +157,63 @@ func TestRotatingWriter_ResumesSizeAcrossReopen(t *testing.T) {
 
 	if _, err := os.Stat(path + ".1"); err != nil {
 		t.Errorf("pre-existing bytes were not counted; no rotation happened: %v", err)
+	}
+}
+
+// TestRotatingWriter_RecoversFromReopenFailure is the CodeRabbit regression: a
+// rotation whose reopen fails once (here the log directory vanishes mid-life)
+// must not permanently disable logging. The failing Write surfaces the error,
+// but a later Write — after the directory is restored — retries the open and
+// resumes writing, instead of returning os.ErrClosed forever.
+//
+// The failure is injected by removing the parent directory while the active
+// file is open, which is reliable only on Unix (Windows refuses to remove a dir
+// containing an open file); the RotatingWriter exists for the macOS launchd log
+// and the retry logic it exercises is platform-agnostic.
+func TestRotatingWriter_RecoversFromReopenFailure(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("cannot remove a directory holding an open file on windows")
+	}
+
+	logDir := filepath.Join(t.TempDir(), "logs")
+	if err := os.MkdirAll(logDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(logDir, "agent.log")
+
+	w, err := NewRotatingWriter(path, 10, 0) // backups=0: rotation just reopens
+	if err != nil {
+		t.Fatalf("NewRotatingWriter: %v", err)
+	}
+	defer func() { _ = w.Close() }()
+
+	if _, err := w.Write([]byte("aaaaaa\n")); err != nil {
+		t.Fatalf("initial Write: %v", err)
+	}
+
+	// Remove the log directory so the next write's rotation cannot reopen.
+	if err := os.RemoveAll(logDir); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := w.Write([]byte("bbbbbb\n")); err == nil {
+		t.Fatal("Write must surface the rotation reopen failure while the dir is gone")
+	}
+
+	// Restore the directory; the next write must retry the reopen and succeed
+	// rather than staying permanently disabled.
+	if err := os.MkdirAll(logDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := w.Write([]byte("cccccc\n")); err != nil {
+		t.Fatalf("Write after the directory was restored must recover, got: %v", err)
+	}
+
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read recovered log: %v", err)
+	}
+	if string(got) != "cccccc\n" {
+		t.Errorf("recovered log = %q, want the post-recovery write", got)
 	}
 }
 
