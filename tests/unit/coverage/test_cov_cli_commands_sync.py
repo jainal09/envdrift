@@ -10,6 +10,7 @@ so the suite is hermetic and fast.
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -1639,10 +1640,19 @@ class TestHelpShowsTomlSectionNames:
     renders a stray literal backslash in --help instead.
     """
 
+    # CI sets FORCE_COLOR=1, so Rich injects ANSI style codes INSIDE the help
+    # phrases (e.g. around "pyproject.toml") — strip them before asserting, and
+    # collapse whitespace so soft-wrapping at CI's width can't split a phrase.
+    _ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
+
+    @classmethod
+    def _plain(cls, output: str) -> str:
+        return " ".join(cls._ANSI_RE.sub("", output).split())
+
     @pytest.mark.parametrize("command", ["pull", "lock"])
     def test_help_shows_section_names(self, command):
         result = runner.invoke(app, [command, "--help"])
-        out = " ".join(result.output.split())
+        out = self._plain(result.output)
         assert result.exit_code == 0
         assert "pyproject.toml [tool.envdrift.vault.sync] section" in out
         assert "envdrift.toml [vault.sync] section" in out
@@ -1651,7 +1661,7 @@ class TestHelpShowsTomlSectionNames:
 
     def test_vault_pull_help_shows_vault_section(self):
         result = runner.invoke(app, ["vault-pull", "--help"])
-        out = " ".join(result.output.split())
+        out = self._plain(result.output)
         assert result.exit_code == 0
         assert "`[vault]` section" in out
         assert "\\[" not in out
