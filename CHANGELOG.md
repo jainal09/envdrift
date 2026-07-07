@@ -1,5 +1,46 @@
 # Changelog
 
+## [10.16.2](https://github.com/jainal09/envdrift/compare/v10.16.1...v10.16.2) (2026-07-07)
+
+
+### Bug Fixes
+
+* **agent:** make auto-encryption pipeline functional end-to-end ([#504](https://github.com/jainal09/envdrift/issues/504)) ([dc02fb5](https://github.com/jainal09/envdrift/commit/dc02fb54a22b2eac05bffd77758ca97cedf55f95))
+* **agent:** wire global config, survive registry corruption, unwedge guardian, rotate logs ([#524](https://github.com/jainal09/envdrift/issues/524)) ([bf06709](https://github.com/jainal09/envdrift/commit/bf067096d0909771b74970f5c4a43b283f08c9a1))
+* **ci:** stop dependency drift breaking every fresh CI run ([#558](https://github.com/jainal09/envdrift/issues/558)) ([803e22c](https://github.com/jainal09/envdrift/commit/803e22c7b4aaee0f82f918d4b5af3fe5a7e61067))
+* **config:** error on malformed/unreadable config and warn on unknown keys ([#520](https://github.com/jainal09/envdrift/issues/520)) ([6445b3a](https://github.com/jainal09/envdrift/commit/6445b3a5a710f10d4e4236fed5d1263d4cbf405a))
+* **encrypt:** refuse key-file targets and unsafe filenames; write standard key headers ([#509](https://github.com/jainal09/envdrift/issues/509)) ([c6b9f11](https://github.com/jainal09/envdrift/commit/c6b9f1106f96e1ac30f1ed16b13f20e380b78ec4))
+* **guard:** fail on unresolvable --pr-base, scan staged blobs, honor --history ([#514](https://github.com/jainal09/envdrift/issues/514)) ([78d5c7c](https://github.com/jainal09/envdrift/commit/78d5c7c78994a7f67f76f606933f788a1d55c70f))
+* **guard:** truthful exit codes and validated config across all output modes ([#526](https://github.com/jainal09/envdrift/issues/526)) ([c51e60c](https://github.com/jainal09/envdrift/commit/c51e60c2f9b5595604f51f067a8e4f47c548518a))
+* **hook:** generate a passing hook, preserve YAML, fail cleanly on bad config ([#512](https://github.com/jainal09/envdrift/issues/512)) ([cb4344c](https://github.com/jainal09/envdrift/commit/cb4344cdd6ef150cbc42dc8930fa1743e1e50a1d))
+* **install:** retry atomic-install rename on Windows PermissionError ([#587](https://github.com/jainal09/envdrift/issues/587)) ([2b0ed3c](https://github.com/jainal09/envdrift/commit/2b0ed3ca2d18f69218509431c502cb93cfc7d3a1))
+* **install:** support Windows PowerShell 5.1 and non-ASCII install paths in cmd wrapper ([#483](https://github.com/jainal09/envdrift/issues/483)) ([#503](https://github.com/jainal09/envdrift/issues/503)) ([d72bd92](https://github.com/jainal09/envdrift/commit/d72bd92fe07edc12057e5ba32b216559c0a0cc03))
+* **install:** verify download integrity strictly for scanners and agent ([#519](https://github.com/jainal09/envdrift/issues/519)) ([6f6b127](https://github.com/jainal09/envdrift/commit/6f6b1275fb66ff95ce01f81a412a77067e758c65))
+* **packaging:** raise typer floor to the real minimum (0.15.4) ([#496](https://github.com/jainal09/envdrift/issues/496)) ([#508](https://github.com/jainal09/envdrift/issues/508)) ([9c7017f](https://github.com/jainal09/envdrift/commit/9c7017f9a10f28fb8c00f90732da6277cf46f8b6))
+* **parser:** match python-dotenv on interpolation, comments, escapes, BOM, line splits ([#536](https://github.com/jainal09/envdrift/issues/536)) ([57aed39](https://github.com/jainal09/envdrift/commit/57aed39c8679a88fd4e1ee92530da4c9b9857c96))
+* **parser:** parse quoted multiline values like python-dotenv ([#574](https://github.com/jainal09/envdrift/issues/574)) ([efe1ce4](https://github.com/jainal09/envdrift/commit/efe1ce483d85420982a038e92edda527b8b9e287))
+* **push:** verify encryption before success and write merged files safely ([#510](https://github.com/jainal09/envdrift/issues/510)) ([02dd662](https://github.com/jainal09/envdrift/commit/02dd6629216857f11cfd8ce001f5997d2812aad5))
+* **registry:** lock writes, preserve corrupt files, fail cleanly on bad JSON ([#492](https://github.com/jainal09/envdrift/issues/492)) ([#506](https://github.com/jainal09/envdrift/issues/506)) ([383084b](https://github.com/jainal09/envdrift/commit/383084b33b1c128d823cc924257f6abf17acecb8))
+* resolve remaining Windows CI matrix failures ([#534](https://github.com/jainal09/envdrift/issues/534)) ([bf5bdf5](https://github.com/jainal09/envdrift/commit/bf5bdf56bc29afceb1a2653bdb26c68d85bd24b1))
+* **scanner:** close native detection gaps (encodings, env-file shapes, over-broad ignores) ([#505](https://github.com/jainal09/envdrift/issues/505)) ([c42a357](https://github.com/jainal09/envdrift/commit/c42a3578b185cdf64e83a2be0b93a9a45eb851e1))
+* **scanner:** decode git check-ignore output safely; mark aws e2e tests ([#531](https://github.com/jainal09/envdrift/issues/531)) ([4134c54](https://github.com/jainal09/envdrift/commit/4134c54ab4943b31ee26571798cff05fafda6576))
+* **scanner:** emit portable SARIF (relative URIs, stable fingerprints, real metadata) ([#533](https://github.com/jainal09/envdrift/issues/533)) ([7d32051](https://github.com/jainal09/envdrift/commit/7d320512b4bce978312ed13b6823a5aefd978de6))
+* **scanner:** stop trivy --skip-duplicate collapsing distinct findings ([#502](https://github.com/jainal09/envdrift/issues/502)) ([83f9540](https://github.com/jainal09/envdrift/commit/83f9540f2bc620305804021d2d2d1a3781052a69))
+* **sops:** verify re-encryption results, honor explicit key flags, harden auto-install ([#521](https://github.com/jainal09/envdrift/issues/521)) ([49ff034](https://github.com/jainal09/envdrift/commit/49ff034b36b1d954c6c456ccb28dda13267e75a5))
+* **sync:** copy env files byte-exact during encryption verify ([#518](https://github.com/jainal09/envdrift/issues/518)) ([2f48e8f](https://github.com/jainal09/envdrift/commit/2f48e8ffb3b9170ed95d7cedcfa38071057e86f9))
+* **sync:** validate mappings loudly and surface real config errors ([#535](https://github.com/jainal09/envdrift/issues/535)) ([161a71a](https://github.com/jainal09/envdrift/commit/161a71ac49eb6904dd827debbc5d77e5c1b3ff9d))
+* **tests:** make the Azure integration lane actually run against Lowkey-Vault ([#522](https://github.com/jainal09/envdrift/issues/522)) ([dcdd0b7](https://github.com/jainal09/envdrift/commit/dcdd0b7a7b09b2bbc19647c33ec698cb66919ed4))
+* **validate:** align validate/diff verdicts with real pydantic-settings semantics ([#517](https://github.com/jainal09/envdrift/issues/517)) ([138819d](https://github.com/jainal09/envdrift/commit/138819ded5a051bc604ffb70ea6b25ec85fd6fb1))
+* **vault:** map provider errors cleanly and render truthful sync status ([#530](https://github.com/jainal09/envdrift/issues/530)) ([a1a9341](https://github.com/jainal09/envdrift/commit/a1a93413d5b600b9be58149ce35ddea380310db3))
+* **vault:** validate and normalize fetched key material before writing .env.keys ([#511](https://github.com/jainal09/envdrift/issues/511)) ([a7bf222](https://github.com/jainal09/envdrift/commit/a7bf22208f5a4159ce00794c1f729e7ad50cd907))
+* **vault:** verification flows fail loudly, never mint keys, never mutate files ([#527](https://github.com/jainal09/envdrift/issues/527)) ([fc3d386](https://github.com/jainal09/envdrift/commit/fc3d386a53d44a040dcea4484846f6cc6309c621))
+* **vscode:** working encrypt/status/start flows and truthful state reporting ([#513](https://github.com/jainal09/envdrift/issues/513)) ([11cf981](https://github.com/jainal09/envdrift/commit/11cf981105136bda430708f4fdcf04df9b41a499))
+
+
+### Documentation
+
+* fix broken recipes and remove nonexistent commands/config keys ([#528](https://github.com/jainal09/envdrift/issues/528)) ([cd4f362](https://github.com/jainal09/envdrift/commit/cd4f3628b18ecb3cd46149d267cceaced91f626d))
+
 ## [10.16.1](https://github.com/jainal09/envdrift/compare/v10.16.0...v10.16.1) (2026-06-12)
 
 
