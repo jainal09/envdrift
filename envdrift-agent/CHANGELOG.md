@@ -5,6 +5,16 @@ All notable changes to the EnvDrift Agent will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.4](https://github.com/jainal09/envdrift/compare/agent-v1.1.3...agent-v1.1.4) (2026-07-07)
+
+
+### Bug Fixes
+
+* **agent:** make auto-encryption pipeline functional end-to-end ([#504](https://github.com/jainal09/envdrift/issues/504)) ([dc02fb5](https://github.com/jainal09/envdrift/commit/dc02fb54a22b2eac05bffd77758ca97cedf55f95))
+* **agent:** wire global config, survive registry corruption, unwedge guardian, rotate logs ([#524](https://github.com/jainal09/envdrift/issues/524)) ([bf06709](https://github.com/jainal09/envdrift/commit/bf067096d0909771b74970f5c4a43b283f08c9a1))
+* **deps:** update module github.com/pelletier/go-toml/v2 to v2.4.2 ([#551](https://github.com/jainal09/envdrift/issues/551)) ([1c050d6](https://github.com/jainal09/envdrift/commit/1c050d67ab613319b75d6f04969d812bceca5bb9))
+* **deps:** update module github.com/pelletier/go-toml/v2 to v2.4.3 ([#569](https://github.com/jainal09/envdrift/issues/569)) ([a08475a](https://github.com/jainal09/envdrift/commit/a08475aae53aac63a23c2ae8de0165fd2fd166f0))
+
 ## [1.1.3](https://github.com/jainal09/envdrift/compare/agent-v1.1.2...agent-v1.1.3) (2026-06-08)
 
 
