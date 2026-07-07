@@ -245,8 +245,11 @@ If a file is already encrypted, the extension skips it. Look for:
 - The extension only encrypts on file **close**, not on every save
 - Encryption uses `envdrift encrypt`, which calls `dotenvx encrypt`
   (or SOPS when configured)
-- Keys are stored in `.env.keys` or vault (based on config)
-- Ephemeral-key flows are terminal-only (see the envdrift.toml section)
+- With dotenvx, private keys live in `.env.keys`; with SOPS, keys are managed by
+  your configured SOPS source (an age key file, KMS, or PGP via `.sops.yaml`) and
+  never `.env.keys`
+- The extension never syncs keys with a vault — vault and ephemeral-key flows are
+  terminal-only (see the envdrift.toml section)
 
 ## Performance
 

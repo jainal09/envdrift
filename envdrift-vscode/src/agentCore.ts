@@ -115,9 +115,15 @@ export async function startAgentCore(): Promise<AgentActionResult> {
         return { ok: false, error: `agent is ${status.status} after start`, status };
     } catch (error) {
         const errorMessage = error instanceof Error ? error.message : String(error);
-        // The command failed mid-flight; verify the actual state instead of
-        // guessing one.
-        return { ok: false, error: errorMessage, status: await checkAgentStatus() };
+        // A non-zero exit does not mean the agent failed to start: `install`
+        // can exit non-zero after a service-manager warning while the unit
+        // still ends up active. Trust the verified state over the exit code —
+        // report success only if the agent actually reached 'running'.
+        const status = await checkAgentStatus();
+        if (status.status === 'running') {
+            return { ok: true, status };
+        }
+        return { ok: false, error: errorMessage, status };
     }
 }
 
@@ -135,8 +141,14 @@ export async function stopAgentCore(): Promise<AgentActionResult> {
         return { ok: false, error: `agent is ${status.status} after stop`, status };
     } catch (error) {
         const errorMessage = error instanceof Error ? error.message : String(error);
-        // The command failed mid-flight; verify the actual state instead of
-        // guessing one.
-        return { ok: false, error: errorMessage, status: await checkAgentStatus() };
+        // A non-zero exit does not mean the stop failed: stopping an already
+        // idle service is a no-op that exits non-zero (e.g. `systemctl stop`
+        // on an inactive unit). Trust the verified state over the exit code —
+        // report success only if the agent actually reached 'stopped'.
+        const status = await checkAgentStatus();
+        if (status.status === 'stopped') {
+            return { ok: true, status };
+        }
+        return { ok: false, error: errorMessage, status };
     }
 }

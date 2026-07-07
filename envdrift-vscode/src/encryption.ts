@@ -134,8 +134,10 @@ export async function encryptFile(
     try {
         // Use spawn with args array to prevent command injection.
         // Per-file encryption is `envdrift encrypt <file>` — `lock` accepts
-        // no positional argument and always exited 2 here (#482).
-        const args = [...envdriftInfo.args, 'encrypt', fileName];
+        // no positional argument and always exited 2 here (#482). The `--`
+        // terminates Typer option parsing so a dash-prefixed filename (e.g.
+        // `-.env` or `--config`) is treated as the positional file, not a flag.
+        const args = [...envdriftInfo.args, 'encrypt', '--', fileName];
         log(`Running: ${envdriftInfo.executable} ${args.join(' ')} (cwd: ${cwd})`);
         await spawnWithTimeout(envdriftInfo.executable, args, cwd, ENCRYPTION_TIMEOUT_MS);
 

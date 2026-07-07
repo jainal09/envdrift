@@ -19,12 +19,15 @@ if (cmd === '--version') {
     process.stdout.write('envdrift 0.0.0-test\\n');
     process.exit(0);
 } else if (cmd === 'encrypt') {
+    // Mirror Typer: '--' terminates option parsing, so the file is the last
+    // positional (the extension spawns \`encrypt -- <file>\`).
+    const fileArg = args[args.length - 1];
     if (fs.existsSync(path.join(SHIM_DIR, 'encrypt-noop'))) {
         // Misbehaving-CLI mode: claim success but leave the file plaintext.
-        process.stdout.write('Encrypted ' + args[1] + ' using dotenvx\\n');
+        process.stdout.write('Encrypted ' + fileArg + ' using dotenvx\\n');
         process.exit(0);
     }
-    const target = path.resolve(process.cwd(), args[1]);
+    const target = path.resolve(process.cwd(), fileArg);
     const encrypted = [
         '#/-------------------[DOTENV_PUBLIC_KEY]--------------------/',
         '#/            public-key encryption for .env files          /',
@@ -35,7 +38,7 @@ if (cmd === '--version') {
         '',
     ].join('\\n');
     fs.writeFileSync(target, encrypted, 'utf8');
-    process.stdout.write('Encrypted ' + args[1] + ' using dotenvx\\n');
+    process.stdout.write('Encrypted ' + fileArg + ' using dotenvx\\n');
     process.exit(0);
 } else if (cmd === 'lock') {
     if (args.length > 1) {
@@ -80,8 +83,8 @@ suite('encryptFile against a PATH-shimmed envdrift CLI (#482)', function () {
         const cliCalls = shim.calls().filter((argv) => argv[0] !== '--version');
         assert.deepStrictEqual(
             cliCalls,
-            [['encrypt', '.env.production']],
-            `expected a single 'encrypt <file>' spawn, got: ${JSON.stringify(cliCalls)}`
+            [['encrypt', '--', '.env.production']],
+            `expected a single 'encrypt -- <file>' spawn, got: ${JSON.stringify(cliCalls)}`
         );
 
         const content = fs.readFileSync(filePath, { encoding: 'utf8' });

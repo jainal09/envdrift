@@ -45,6 +45,37 @@ if (cmd === 'version') {
 }
 `;
 
+// Builds an agent shim whose `version`/`status` report a fixed running state,
+// but whose action command (`install`/`stop`) exits non-zero — modelling a
+// service manager that warns, or a no-op stop on an already-idle unit, while
+// still leaving the agent in the target state. Used to prove start/stop trust
+// the verified post-action state over the action's exit code (truthful
+// reporting, not exit-code guessing).
+function flakyActionShim(opts: { running: boolean; failingCmd: 'install' | 'stop' }): Shim {
+    const runningLine = opts.running ? 'true' : 'false';
+    return createShim({
+        'envdrift-agent': `
+record();
+const cmd = args[0];
+if (cmd === 'version') {
+    process.stdout.write('envdrift-agent 9.9.9-test\\n');
+    process.exit(0);
+} else if (cmd === 'status') {
+    process.stdout.write('Installed: true\\n');
+    process.stdout.write('Running:   ${runningLine}\\n');
+    process.stdout.write('Config:    /home/user/.envdrift/guardian.toml\\n');
+    process.stdout.write('envdrift:  true\\n');
+    process.exit(0);
+} else if (cmd === '${opts.failingCmd}') {
+    process.stderr.write('${opts.failingCmd}: non-zero exit (service-manager warning / idle no-op)\\n');
+    process.exit(1);
+} else {
+    process.exit(1);
+}
+`,
+    });
+}
+
 suite('agentCore against a PATH-shimmed envdrift-agent (#482)', function () {
     this.timeout(30000);
 
@@ -114,6 +145,41 @@ suite('agentCore against a PATH-shimmed envdrift-agent (#482)', function () {
 
         const status = await checkAgentStatus();
         assert.strictEqual(status.status, 'stopped');
+    });
+
+    test('stop reports success when the agent verifies stopped despite a non-zero exit', async () => {
+        // Regression: the catch block returned ok:false unconditionally, so an
+        // idempotent stop that exits non-zero on an already-idle service was
+        // reported as a failure even though the agent is genuinely stopped.
+        const flaky = flakyActionShim({ running: false, failingCmd: 'stop' });
+        try {
+            const result = await stopAgentCore();
+            assert.strictEqual(
+                result.ok,
+                true,
+                `stop must report success when verified stopped: ${result.error ?? 'no error'}`
+            );
+            assert.strictEqual(result.status.status, 'stopped');
+        } finally {
+            flaky.dispose();
+        }
+    });
+
+    test('start reports success when the agent verifies running despite a non-zero exit', async () => {
+        // Symmetric regression: `install` exiting non-zero after a
+        // service-manager warning must not mask a genuinely running agent.
+        const flaky = flakyActionShim({ running: true, failingCmd: 'install' });
+        try {
+            const result = await startAgentCore();
+            assert.strictEqual(
+                result.ok,
+                true,
+                `start must report success when verified running: ${result.error ?? 'no error'}`
+            );
+            assert.strictEqual(result.status.status, 'running');
+        } finally {
+            flaky.dispose();
+        }
     });
 
     test('reports not_installed when the binary is absent from PATH', async () => {

@@ -77,7 +77,9 @@ def _extension_sources() -> list[Path]:
 def _extension_envdrift_subcommand() -> str:
     """Extract the envdrift subcommand encryption.ts spawns per closed file."""
     src = (VSCODE_SRC / "encryption.ts").read_text(encoding="utf-8")
-    match = re.search(r"\[\.\.\.envdriftInfo\.args,\s*'([\w-]+)',\s*fileName\]", src)
+    # The argv is `[...args, 'encrypt', '--', fileName]`; the `--` option
+    # terminator is optional so this keeps matching if it is ever dropped.
+    match = re.search(r"\[\.\.\.envdriftInfo\.args,\s*'([\w-]+)',\s*(?:'--',\s*)?fileName\]", src)
     assert match, "could not locate the envdrift spawn argv in encryption.ts"
     return match.group(1)
 
@@ -377,9 +379,9 @@ class TestEncryptEndToEndContract:
         env_file = tmp_path / ".env.production"
         env_file.write_text("API_KEY=plain_test_value\n", encoding="utf-8")
 
-        # The extension spawns: cwd=dirname(file), argv=[sub, basename(file)].
+        # The extension spawns: cwd=dirname(file), argv=[sub, '--', basename(file)].
         result = subprocess.run(
-            [*_envdrift_cmd(), sub, ".env.production"],
+            [*_envdrift_cmd(), sub, "--", ".env.production"],
             capture_output=True,
             text=True,
             encoding="utf-8",
@@ -394,3 +396,46 @@ class TestEncryptEndToEndContract:
         assert "plain_test_value" not in content, "plaintext secret must be gone"
         assert "encrypted:" in content
         assert "DOTENV_PUBLIC_KEY" in content
+
+    def test_dash_prefixed_filename_needs_the_option_terminator(self, tmp_path: Path) -> None:
+        """A dash-prefixed filename encrypts only because the extension sends ``--``.
+
+        Regression: without the ``--`` option terminator the Typer CLI parses a
+        ``-``-prefixed name as an unknown option and exits non-zero without
+        encrypting. The extension's ``encrypt -- <file>`` argv must handle it.
+        """
+        if not shutil.which("dotenvx"):
+            pytest.skip("dotenvx binary not available")
+        sub = _extension_envdrift_subcommand()
+        env_file = tmp_path / "-weird.env"
+        env_file.write_text("API_KEY=plain_test_value\n", encoding="utf-8")
+
+        # Without `--`, Typer rejects the dash-prefixed name as an option.
+        without_sep = subprocess.run(
+            [*_envdrift_cmd(), sub, "-weird.env"],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            cwd=tmp_path,
+            env=_clean_env(),
+            timeout=120,
+        )
+        assert without_sep.returncode != 0, "a dash-prefixed name must fail without `--`"
+        assert "plain_test_value" in env_file.read_text(encoding="utf-8"), "file must be untouched"
+
+        # With `--` (the extension's real argv), the same name encrypts.
+        with_sep = subprocess.run(
+            [*_envdrift_cmd(), sub, "--", "-weird.env"],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            cwd=tmp_path,
+            env=_clean_env(),
+            timeout=120,
+        )
+        assert with_sep.returncode == 0, f"stdout: {with_sep.stdout}\nstderr: {with_sep.stderr}"
+        content = env_file.read_text(encoding="utf-8")
+        assert "plain_test_value" not in content, "plaintext secret must be gone"
+        assert "encrypted:" in content
