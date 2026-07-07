@@ -355,3 +355,35 @@ def test_decrypt_with_wrong_key_is_surfaced_not_silently_ok(
         wrapper.decrypt(env_file, cwd=work)
     # The ciphertext survives — never half-written or falsely reported plaintext.
     assert "encrypted:" in env_file.read_text(encoding="utf-8")
+
+
+@pytest.mark.parametrize("name", [".env.local", ".env.dev", ".env.development"])
+def test_env_local_style_names_encrypt_natively_under_v2(
+    name: str,
+    tmp_path: Path,
+    dotenvx_on_path: str,
+) -> None:
+    """dotenvx#724: ``.env.local``-style names must encrypt natively under v2.
+
+    dotenvx v1 had a Windows bug where a file named exactly ``.env.local`` failed
+    with "Input string must contain hex characters in even length" (it parsed the
+    ``LOCAL`` suffix as a hex string). envdrift carried a ``_validate_filename``
+    guard that refused these names and told the user to rename. dotenvx v2 fixed
+    the bug (big internal refactor), so the guard was removed and these filenames
+    now round-trip through the wrapper on every platform.
+    """
+    from envdrift.integrations.dotenvx import DotenvxWrapper
+
+    work = tmp_path / "proj"
+    work.mkdir()
+    env_file = work / name
+    env_file.write_text("API_KEY=sekret123\n", encoding="utf-8")
+
+    wrapper = DotenvxWrapper(auto_install=False)
+    wrapper.encrypt(env_file, cwd=work)  # no DotenvxFilenameError refusal
+    encrypted = env_file.read_text(encoding="utf-8")
+    assert "encrypted:" in encrypted
+    assert "sekret123" not in encrypted
+
+    wrapper.decrypt(env_file, cwd=work)
+    assert "API_KEY=sekret123" in env_file.read_text(encoding="utf-8")

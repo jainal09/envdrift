@@ -126,14 +126,6 @@ class DotenvxFilenameError(Exception):
     pass
 
 
-# Known problematic filename patterns for dotenvx on Windows
-# See: https://github.com/dotenvx/dotenvx/issues/724
-PROBLEMATIC_FILENAME_PATTERNS = [
-    # .env.local causes "Input string must contain hex characters" on Windows
-    # because dotenvx tries to parse "LOCAL" as a hex string
-    r"^\.env\.local$",
-]
-
 # Only filenames matching this round-trip through dotenvx's key-name derivation.
 # dotenvx builds the DOTENV_PRIVATE_KEY_<SLUG> env-var name from the filename, so
 # a space or non-ASCII character yields an invalid name and a file that encrypts
@@ -825,7 +817,6 @@ class DotenvxWrapper:
         "second arg must be public key",
         "private key not found",
         "decryption failed",
-        "Input string must contain hex characters",  # Windows hex parsing error
     ]
 
     # Regex to strip ANSI escape codes from output
@@ -874,32 +865,6 @@ class DotenvxWrapper:
         except OSError:
             # If normalization fails, proceed anyway - dotenvx might still work
             return False
-
-    @staticmethod
-    def _validate_filename(file_path: Path) -> None:
-        """
-        Validate that the filename is compatible with dotenvx.
-
-        dotenvx has known bugs on Windows where certain filenames cause errors.
-        For example, `.env.local` causes "Input string must contain hex characters"
-        because dotenvx tries to parse the suffix "LOCAL" as a hex string.
-
-        Parameters:
-            file_path (Path): Path to the file to validate.
-
-        Raises:
-            DotenvxFilenameError: If the filename matches a known problematic pattern.
-        """
-        filename = file_path.name.lower()
-        for pattern in PROBLEMATIC_FILENAME_PATTERNS:
-            if re.match(pattern, filename, re.IGNORECASE):
-                raise DotenvxFilenameError(
-                    f"Cannot encrypt/decrypt '{file_path.name}': "
-                    f"dotenvx has a known bug on Windows where this filename causes "
-                    f"'Input string must contain hex characters in even length' error. "
-                    f"Workaround: Rename the file (e.g., '.env.localenv' or '.env.dev') "
-                    f"before encryption. See: https://github.com/dotenvx/dotenvx/issues/724"
-                )
 
     @staticmethod
     def _validate_encryptable_filename(file_path: Path) -> None:
@@ -1108,13 +1073,9 @@ class DotenvxWrapper:
         # this wrapper directly, not the guarded backend (#443/#457, #467).
         self._validate_encryptable_filename(env_file)
 
-        # Validate filename for known dotenvx bugs (Windows-specific)
-        if platform.system() == "Windows":
-            self._validate_filename(env_file)
-
-        # Normalize line endings for cross-platform compatibility
-        # dotenvx on Windows can fail with "Input string must contain hex characters"
-        # when files have CRLF line endings
+        # Normalize CRLF -> LF before encryption so a file encrypted on Windows
+        # decrypts cleanly on Linux/macOS and vice versa (cross-platform
+        # consistency; unrelated to any specific dotenvx version).
         self._normalize_line_endings(env_file)
 
         # Clean up mismatched headers from renamed files
@@ -1156,7 +1117,6 @@ class DotenvxWrapper:
             cwd (Path | str | None): Optional working directory for the subprocess.
 
         Raises:
-            DotenvxFilenameError: If the filename is not compatible with dotenvx.
             DotenvxError: If env_file does not exist or the decryption command fails.
             DotenvxNotFoundError: If the dotenvx binary cannot be located when running the command.
         """
@@ -1164,11 +1124,7 @@ class DotenvxWrapper:
         if not env_file.exists():
             raise DotenvxError(f"File not found: {env_file}")
 
-        # Validate filename for known dotenvx bugs (Windows-specific)
-        if platform.system() == "Windows":
-            self._validate_filename(env_file)
-
-        # Normalize line endings for cross-platform compatibility
+        # Normalize CRLF -> LF for cross-platform consistency (see encrypt()).
         self._normalize_line_endings(env_file)
 
         # Pin -fk to the sibling .env.keys: dotenvx v2 otherwise looks for the
