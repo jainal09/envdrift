@@ -285,6 +285,22 @@ Output results as SARIF for code scanning tools.
 envdrift guard --sarif > guard.sarif
 ```
 
+Artifact URIs are emitted relative to the enclosing git repository root
+(declared as the `SRCROOT` base via `originalUriBaseIds`), percent-encoded
+per RFC 3986, no matter which directory guard runs from, so GitHub/GitLab
+Code Scanning maps every alert to a repo file; a finding outside the
+repository falls back to an absolute `file://` URI. Each result carries a
+stable fingerprint built from the rule id, the location, and a truncated
+hash of the secret value — never the matched text — so two different secrets
+on the same line stay separate alerts. The redacted preview is attached as
+the result's `properties.secretPreview`.
+
+!!! note "Upgrading from older releases"
+    The fingerprint format changed in this release: existing GitHub Code
+    Scanning alerts created from older envdrift SARIF uploads are re-keyed
+    once (closed and re-opened as new alerts) on the first upload from this
+    version.
+
 ### `--ci`
 
 CI mode: no colors, strict exit codes, and `--fail-on` threshold applied.
