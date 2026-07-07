@@ -544,6 +544,21 @@ class TestAggregatedResultExitSemantics:
         assert result.has_errors is True
         assert result.exit_code == 5
 
+    def test_empty_string_error_sarif_carries_a_notification(self):
+        """#478 review (greptile P1): an empty-error failure flips
+        executionSuccessful to false, so the SARIF notifications list must still
+        explain it — the truthiness filter used to drop the empty-error entry,
+        leaving 'execution failed' with no reason."""
+        from envdrift.scanner.output import format_sarif
+
+        result = _result([], errors={"talisman": ""})
+        invocation = json.loads(format_sarif(result))["runs"][0]["invocations"][0]
+        assert invocation["executionSuccessful"] is False
+        notifications = invocation["toolExecutionNotifications"]
+        assert any(n["message"]["text"].startswith("talisman:") for n in notifications), (
+            "an empty-error scan failure must still emit a SARIF notification"
+        )
+
     def test_clean_empty_result_still_exits_zero(self):
         result = _result([])
         assert result.exit_code == 0
