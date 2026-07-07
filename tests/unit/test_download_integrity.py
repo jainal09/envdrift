@@ -776,6 +776,62 @@ class TestInstallIntegrityHelpers:
         with pytest.raises(OSError, match="real copy failure"):
             integrity.atomic_install(source, target)
 
+    @pytest.mark.skipif(IS_WINDOWS, reason="symlink planting requires privileges on Windows")
+    def test_atomic_install_ignores_preplanted_staging_symlink(self, integrity, tmp_path: Path):
+        """Regression (#519 cubic P1): the staging file is created exclusively
+        with an unpredictable name, so a symlink pre-planted at the old
+        predictable ``<target>.install`` path is never followed — the write can
+        no longer be redirected to an attacker-chosen file (shutil.copy2 follows
+        destination symlinks)."""
+        target = tmp_path / "bin" / "tool"
+        target.parent.mkdir(parents=True)
+        victim = tmp_path / "victim"
+        victim.write_bytes(b"do-not-touch")
+        # Attacker pre-plants a symlink at the previously predictable staging path.
+        (target.parent / (target.name + ".install")).symlink_to(victim)
+
+        source = tmp_path / "src-binary"
+        source.write_bytes(b"real-binary")
+        integrity.atomic_install(source, target)
+
+        assert victim.read_bytes() == b"do-not-touch", "write was redirected through the symlink"
+        assert not target.is_symlink()
+        assert target.read_bytes() == b"real-binary"
+
+    def test_atomic_install_concurrent_calls_do_not_corrupt(self, integrity, tmp_path: Path):
+        """Regression (#519 cubic P1): concurrent installs to the same target no
+        longer share a staging file, so they cannot interleave — the final
+        binary is exactly one complete payload and no staging file is left."""
+        import threading
+
+        target = tmp_path / "bin" / "tool"
+        target.parent.mkdir(parents=True)
+        payloads = [bytes([i]) * 8192 for i in range(1, 9)]
+        sources = []
+        for i, payload in enumerate(payloads):
+            src = tmp_path / f"src-{i}"
+            src.write_bytes(payload)
+            sources.append(src)
+
+        errors: list[Exception] = []
+
+        def install(src: Path) -> None:
+            try:
+                integrity.atomic_install(src, target)
+            except Exception as exc:
+                errors.append(exc)
+
+        threads = [threading.Thread(target=install, args=(src,)) for src in sources]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join()
+
+        assert errors == [], f"concurrent installs raised: {errors}"
+        assert target.read_bytes() in payloads, "final binary is an interleaved/corrupt mix"
+        leftovers = [p.name for p in target.parent.iterdir() if p.name != target.name]
+        assert leftovers == [], f"staging file(s) left behind: {leftovers}"
+
     def test_verify_download_accepts_matching_checksum(
         self, integrity, file_server, tmp_path: Path
     ):

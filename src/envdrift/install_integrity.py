@@ -21,6 +21,7 @@ import re
 import shutil
 import stat
 import sys
+import tempfile
 import urllib.request
 from pathlib import Path
 
@@ -67,19 +68,34 @@ def sha256_file(path: Path) -> str:
 def atomic_install(source: Path, target_path: Path, *, make_executable: bool = True) -> None:
     """Install ``source`` onto ``target_path`` atomically (stage + rename).
 
-    Copies ``source`` to a staging file in the target's own directory, sets the
-    executable bit (POSIX), then atomically renames it into place. Because the
-    staging file shares the target's filesystem, the final rename is atomic, so
-    an interrupted or failing copy (disk full, crash, permission error) can
-    never truncate or corrupt a previously working binary: the original stays
-    intact and no partial file is left behind (#490).
+    Copies ``source`` to a private staging file in the target's own directory,
+    sets the executable bit (POSIX), then atomically renames it into place.
+    Because the staging file shares the target's filesystem, the final rename is
+    atomic, so an interrupted or failing copy (disk full, crash, permission
+    error) can never truncate or corrupt a previously working binary: the
+    original stays intact and no partial file is left behind (#490).
+
+    The staging file is created with ``tempfile.mkstemp`` — an exclusive
+    (``O_EXCL``) open with an unpredictable name — rather than a fixed
+    ``<target>.install`` sibling. That closes two flaws in a predictable path:
+    an attacker pre-planting a symlink there would otherwise redirect the write
+    (``shutil.copy2`` follows destination symlinks), and concurrent installs of
+    the same binary would otherwise interleave through one shared staging file.
 
     Raises:
         OSError: if the copy or rename fails; ``target_path`` is left untouched.
     """
     target_path.parent.mkdir(parents=True, exist_ok=True)
-    staging_path = target_path.parent / (target_path.name + ".install")
+    # Exclusive, unpredictable, same-filesystem staging file (preserves the
+    # atomic-rename guarantee while removing the TOCTOU/symlink surface).
+    fd, staging_name = tempfile.mkstemp(
+        dir=target_path.parent, prefix=f".{target_path.name}.", suffix=".install"
+    )
+    staging_path = Path(staging_name)
     try:
+        os.close(fd)
+        # copy2 opens the (already-existing, non-symlink) staging file for
+        # writing, so no symlink is ever followed at the destination.
         shutil.copy2(source, staging_path)
         if make_executable and platform.system() != "Windows":
             staging_path.chmod(
