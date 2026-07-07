@@ -4,7 +4,9 @@ package cmd
 import (
 	"bytes"
 	"io"
+	"log"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -76,5 +78,55 @@ func TestRunStopNotInstalledIsNoOp(t *testing.T) {
 func TestStopCmdHelpMatchesBehavior(t *testing.T) {
 	if !strings.Contains(strings.ToLower(stopCmd.Short), "stop") {
 		t.Errorf("stop command Short help should describe stopping the agent, got %q", stopCmd.Short)
+	}
+}
+
+// TestStartCmdHasLogFileFlag pins the contract the launchd plist relies on
+// (#494): the installed service runs `start --log-file <path>`, so the flag
+// must exist on the start command.
+func TestStartCmdHasLogFileFlag(t *testing.T) {
+	if startCmd.Flags().Lookup("log-file") == nil {
+		t.Fatal("start command is missing the --log-file flag the installed service passes (#494)")
+	}
+}
+
+// TestConfigureLogOutput proves --log-file routes the stdlib logger into the
+// rotating file: a logged line must land in the file, and Close must detach
+// cleanly.
+func TestConfigureLogOutput(t *testing.T) {
+	prev := log.Writer()
+	t.Cleanup(func() { log.SetOutput(prev) })
+
+	path := filepath.Join(t.TempDir(), "logs", "agent.log")
+	closer, err := configureLogOutput(path)
+	if err != nil {
+		t.Fatalf("configureLogOutput: %v", err)
+	}
+
+	log.Printf("hello-from-rotating-log")
+	log.SetOutput(prev)
+	if err := closer.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("log file not created: %v", err)
+	}
+	if !strings.Contains(string(data), "hello-from-rotating-log") {
+		t.Errorf("log line missing from rotating file, got: %q", data)
+	}
+}
+
+// TestConfigureLogOutput_BadPathErrors covers the error path: an unopenable
+// log file must surface an error (runStart turns it into a non-zero exit).
+func TestConfigureLogOutput_BadPathErrors(t *testing.T) {
+	// A path whose parent is an existing FILE cannot be created on any OS.
+	parent := filepath.Join(t.TempDir(), "not-a-dir")
+	if err := os.WriteFile(parent, []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := configureLogOutput(filepath.Join(parent, "agent.log")); err == nil {
+		t.Fatal("configureLogOutput must fail when the log path cannot be created")
 	}
 }

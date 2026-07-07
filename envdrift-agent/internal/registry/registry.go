@@ -3,6 +3,7 @@ package registry
 
 import (
 	"encoding/json"
+	"log"
 	"os"
 	"path/filepath"
 	"sync"
@@ -85,26 +86,54 @@ type RegistryWatcher struct {
 
 // NewRegistryWatcher creates a watcher for the projects.json file.
 // The onChange callback is called whenever the registry changes.
+//
+// A corrupt/unreadable registry is NOT fatal: pre-#494 the Load error was
+// returned, guardian.Start failed, and the process exited 1 — which launchd
+// KeepAlive / systemd Restart=always turned into a perpetual crash-respawn
+// loop over one bad byte in projects.json. loadOrRecover degrades to an empty
+// registry instead, loudly.
 func NewRegistryWatcher(onChange func(*Registry)) (*RegistryWatcher, error) {
 	fsw, err := fsnotify.NewWatcher()
 	if err != nil {
 		return nil, err
 	}
 
-	reg, err := Load()
-	if err != nil {
-		_ = fsw.Close()
-		return nil, err
-	}
-
 	rw := &RegistryWatcher{
 		fsWatcher: fsw,
-		registry:  reg,
+		registry:  loadOrRecover(),
 		onChange:  onChange,
 		done:      make(chan struct{}),
 	}
 
 	return rw, nil
+}
+
+// loadOrRecover loads the registry; on failure it logs the error, preserves
+// the offending file at projects.json.bak for inspection/repair (best effort),
+// and returns an empty registry so startup never crash-loops (#494). The next
+// successful `envdrift agent register/unregister` rewrites projects.json and
+// the watcher picks it up.
+func loadOrRecover() *Registry {
+	reg, err := Load()
+	if err == nil {
+		return reg
+	}
+
+	registryPath := RegistryPath()
+	backupPath := registryPath + ".bak"
+	if data, readErr := os.ReadFile(registryPath); readErr == nil {
+		if writeErr := os.WriteFile(backupPath, data, 0o600); writeErr == nil {
+			log.Printf("registry: failed to parse %s: %v; corrupt file preserved at %s, continuing with an empty registry",
+				registryPath, err, backupPath)
+		} else {
+			log.Printf("registry: failed to parse %s: %v; could not preserve a copy at %s (%v), continuing with an empty registry",
+				registryPath, err, backupPath, writeErr)
+		}
+	} else {
+		log.Printf("registry: failed to load %s: %v; continuing with an empty registry", registryPath, err)
+	}
+
+	return &Registry{Projects: []ProjectEntry{}}
 }
 
 // Start begins watching the registry file for changes.
@@ -210,6 +239,14 @@ func (rw *RegistryWatcher) reload() {
 
 	reg, err := Load()
 	if err != nil {
+		// Tolerant but loud (#494): pre-fix this returned silently, so a
+		// registry corrupted at runtime left the agent watching a stale
+		// project set with zero diagnostics.
+		rw.mu.RLock()
+		kept := len(rw.registry.Projects)
+		rw.mu.RUnlock()
+		log.Printf("registry: failed to reload %s: %v; keeping the last-good registry (%d project(s))",
+			RegistryPath(), err, kept)
 		return
 	}
 

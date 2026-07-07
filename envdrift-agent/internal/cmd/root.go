@@ -4,6 +4,8 @@ package cmd
 import (
 	"context"
 	"fmt"
+	"io"
+	"log"
 	"os"
 	"os/signal"
 	"syscall"
@@ -14,6 +16,7 @@ import (
 	"github.com/jainal09/envdrift-agent/internal/daemon"
 	"github.com/jainal09/envdrift-agent/internal/encrypt"
 	"github.com/jainal09/envdrift-agent/internal/guardian"
+	"github.com/jainal09/envdrift-agent/internal/logging"
 )
 
 var (
@@ -63,6 +66,12 @@ var startCmd = &cobra.Command{
 	RunE:  runStart,
 }
 
+// startLogFile is the --log-file flag: when set, agent logs go to this file
+// with size-based rotation instead of stdout. The installed macOS service
+// passes it because launchd's StandardOutPath cannot rotate and the log grew
+// unbounded (#494).
+var startLogFile string
+
 var stopCmd = &cobra.Command{
 	Use:   "stop",
 	Short: "Stop the running agent",
@@ -77,6 +86,9 @@ var configCmd = &cobra.Command{
 
 // init registers all subcommands with rootCmd: version, install, uninstall, status, start, stop, and config.
 func init() {
+	startCmd.Flags().StringVar(&startLogFile, "log-file", "",
+		"write agent logs to this file with size-based rotation (5 MiB, 3 backups)")
+
 	rootCmd.AddCommand(versionCmd)
 	rootCmd.AddCommand(installCmd)
 	rootCmd.AddCommand(uninstallCmd)
@@ -158,6 +170,14 @@ func runStatus(cmd *cobra.Command, args []string) error {
 func runStart(cmd *cobra.Command, args []string) error {
 	fmt.Println("Starting envdrift-agent in foreground...")
 	fmt.Println("Press Ctrl+C to stop")
+
+	if startLogFile != "" {
+		closer, err := configureLogOutput(startLogFile)
+		if err != nil {
+			return err
+		}
+		defer func() { _ = closer.Close() }()
+	}
 
 	cfg, err := config.Load()
 	if err != nil {
@@ -249,4 +269,17 @@ func runConfig(cmd *cobra.Command, args []string) error {
 	fmt.Printf("  Directories:  %v\n", cfg.Directories.Watch)
 
 	return nil
+}
+
+// configureLogOutput routes the stdlib logger to a size-rotated file (#494):
+// the launchd plist passes --log-file because StandardOutPath cannot rotate
+// and /tmp/envdrift-agent.log previously grew without bound. It returns the
+// writer for the caller to close on shutdown.
+func configureLogOutput(path string) (io.Closer, error) {
+	w, err := logging.NewRotatingWriter(path, logging.DefaultMaxBytes, logging.DefaultBackups)
+	if err != nil {
+		return nil, fmt.Errorf("failed to open log file %s: %w", path, err)
+	}
+	log.SetOutput(w)
+	return w, nil
 }

@@ -64,7 +64,7 @@ make build
 | `envdrift-agent install` | Install as system service (auto-starts on boot) |
 | `envdrift-agent uninstall` | Remove from system startup |
 | `envdrift-agent status` | Check if agent is installed and running |
-| `envdrift-agent start` | Run in foreground (for debugging) |
+| `envdrift-agent start` | Run in foreground (for debugging); `--log-file <path>` writes size-rotated logs there instead of stdout |
 | `envdrift-agent stop` | Stop the running agent (stays installed; restarts on next boot) |
 | `envdrift-agent config` | Show/create configuration file |
 | `envdrift-agent version` | Print version information |
@@ -97,13 +97,21 @@ recursive = true                   # Watch subdirectories
 
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
-| `guardian.enabled` | bool | `true` | Enable/disable the agent |
-| `guardian.idle_timeout` | duration | `"5m"` | Time to wait before encrypting |
-| `guardian.patterns` | string[] | `[".env*"]` | Glob patterns for files to watch |
-| `guardian.exclude` | string[] | `[".env.example", ...]` | Patterns to exclude |
-| `guardian.notify` | bool | `true` | Show desktop notifications |
+| `guardian.enabled` | bool | `true` | Master switch for the whole agent |
+| `guardian.idle_timeout` | duration | `"5m"` | Default time to wait before encrypting |
+| `guardian.patterns` | string[] | `[".env*"]` | Default glob patterns for files to watch |
+| `guardian.exclude` | string[] | `[".env.example", ...]` | Default patterns to exclude |
+| `guardian.notify` | bool | `true` | Default for desktop notifications |
 | `directories.watch` | string[] | `["~/projects"]` | Directories to monitor (display only — not used to select watched directories; see [Selecting which projects to watch](#selecting-which-projects-to-watch)) |
 | `directories.recursive` | bool | `true` | Watch subdirectories |
+
+The global `guardian.idle_timeout`, `guardian.patterns`, `guardian.exclude`
+and `guardian.notify` values act as the defaults for every registered project.
+A project's own `[guardian]` section (in its `envdrift.toml` or
+`pyproject.toml`) overrides them per key. `guardian.enabled` is different: the
+global value is only the agent's master on/off switch — it never opts a
+project in, so each project still needs its own `enabled = true` (see
+[Selecting which projects to watch](#selecting-which-projects-to-watch)).
 
 When a project has `[guardian] enabled = true`, custom
 `[vault.sync].mappings.env_file` names are added to the effective watch patterns
@@ -251,7 +259,12 @@ The CLI guards the registry file against races and corruption:
 
 - **Auto-start**: LaunchAgent (`~/Library/LaunchAgents/com.envdrift.guardian.plist`)
 - **Lock detection**: `lsof`
-- **Logs**: `/tmp/envdrift-agent.log` (stdout) and `/tmp/envdrift-agent.err` (stderr)
+- **Logs**: `~/.envdrift/logs/agent.log`, size-rotated by the agent itself
+  (5 MiB per file, 3 rotated backups: `agent.log.1` … `agent.log.3`). launchd
+  cannot rotate its `StandardOutPath` redirection, so the plist runs the agent
+  with `--log-file` and the `/tmp/envdrift-agent.log` / `/tmp/envdrift-agent.err`
+  files now only receive the brief startup prints and crash output. Re-run
+  `envdrift-agent install` after upgrading to refresh an older plist.
 
 ### Linux
 
@@ -297,6 +310,18 @@ envdrift-agent start
 ```bash
 # See what files are being watched
 envdrift-agent start  # Watch the output
+```
+
+### Registry file corrupted
+
+If `~/.envdrift/projects.json` becomes corrupt (truncated write, manual edit),
+the agent does **not** crash-loop: at startup it logs the parse error,
+preserves the broken file at `projects.json.bak`, and continues with an empty
+registry; at runtime it keeps the last-good project set and logs the error.
+Re-register projects (or restore the `.bak`) to recover:
+
+```bash
+envdrift agent register ~/myapp
 ```
 
 ### envdrift not found

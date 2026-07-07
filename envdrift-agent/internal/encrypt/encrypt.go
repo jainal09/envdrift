@@ -4,6 +4,7 @@ package encrypt
 
 import (
 	"bufio"
+	"context"
 	"errors"
 	"os"
 	"os/exec"
@@ -196,7 +197,16 @@ func Encrypt(path string) error {
 
 // EncryptSilent encrypts silently without stdout/stderr.
 func EncryptSilent(path string) error {
-	cmd, err := buildEncryptCommand(path)
+	return EncryptSilentContext(context.Background(), path)
+}
+
+// EncryptSilentContext encrypts silently without stdout/stderr, bounded by
+// ctx: when ctx is cancelled or times out, the `envdrift encrypt` subprocess
+// is killed and Run returns instead of blocking forever. Pre-#494 the
+// subprocess had no context or timeout, so one hung child wedged the
+// guardian's entire control loop (shutdown and event processing included).
+func EncryptSilentContext(ctx context.Context, path string) error {
+	cmd, err := buildEncryptCommandContext(ctx, path)
 	if err != nil {
 		return err
 	}
@@ -205,21 +215,28 @@ func EncryptSilent(path string) error {
 
 // IsEnvdriftAvailable checks if envdrift CLI is available.
 func IsEnvdriftAvailable() bool {
-	_, _, err := findEnvdrift()
+	_, _, err := findEnvdrift(context.Background())
 	return err == nil
 }
 
-// buildEncryptCommand builds the `envdrift encrypt <file>` command.
+// buildEncryptCommand builds the `envdrift encrypt <file>` command without a
+// cancellation context (used by the plain Encrypt/EncryptSilent paths).
+func buildEncryptCommand(path string) (*exec.Cmd, error) {
+	return buildEncryptCommandContext(context.Background(), path)
+}
+
+// buildEncryptCommandContext builds the `envdrift encrypt <file>` command,
+// bound to ctx so cancellation kills the subprocess (#494).
 //
 // `encrypt` is the CLI's per-file encryption path: it takes a positional
 // ENV_FILE argument. The pre-#481 code invoked `envdrift lock <file>`, but
 // `lock` takes no positional argument — every invocation exited 2 with
 // "Got unexpected extra argument(s)" and no file was ever encrypted.
-func buildEncryptCommand(path string) (*exec.Cmd, error) {
+func buildEncryptCommandContext(ctx context.Context, path string) (*exec.Cmd, error) {
 	dir := filepath.Dir(path)
 	fileName := filepath.Base(path)
 
-	envdrift, isPython, err := findEnvdrift()
+	envdrift, isPython, err := findEnvdrift(ctx)
 	if err != nil {
 		return nil, ErrEnvdriftNotFound
 	}
@@ -228,9 +245,9 @@ func buildEncryptCommand(path string) (*exec.Cmd, error) {
 	if isPython {
 		// A Python interpreter must be invoked as `python -m envdrift ...`
 		// rather than directly (#348 G1).
-		cmd = exec.Command(envdrift, "-m", "envdrift", "encrypt", fileName)
+		cmd = exec.CommandContext(ctx, envdrift, "-m", "envdrift", "encrypt", fileName)
 	} else {
-		cmd = exec.Command(envdrift, "encrypt", fileName)
+		cmd = exec.CommandContext(ctx, envdrift, "encrypt", fileName)
 	}
 	cmd.Dir = dir
 	return cmd, nil
@@ -239,7 +256,14 @@ func buildEncryptCommand(path string) (*exec.Cmd, error) {
 // findEnvdrift locates the envdrift executable. isPython is true when the
 // resolved binary is a Python interpreter that must be invoked as
 // `python -m envdrift ...` rather than directly.
-func findEnvdrift() (path string, isPython bool, err error) {
+//
+// The `python -m envdrift --version` discovery probes are bounded by ctx via
+// exec.CommandContext: EncryptSilentContext already bounds the final encrypt
+// call, but a python interpreter that hangs on the probe would otherwise stall
+// discovery unbounded and re-wedge the guardian this PR set out to unwedge
+// (#494). IsEnvdriftAvailable passes context.Background() — it is a plain
+// availability check, not on the guardian's hot path.
+func findEnvdrift(ctx context.Context) (path string, isPython bool, err error) {
 	// Check if envdrift is in PATH
 	if p, lookErr := exec.LookPath("envdrift"); lookErr == nil {
 		return p, false, nil
@@ -247,7 +271,7 @@ func findEnvdrift() (path string, isPython bool, err error) {
 
 	// Try python3 -m envdrift
 	if python, lookErr := exec.LookPath("python3"); lookErr == nil {
-		cmd := exec.Command(python, "-m", "envdrift", "--version")
+		cmd := exec.CommandContext(ctx, python, "-m", "envdrift", "--version")
 		if cmd.Run() == nil {
 			return python, true, nil
 		}
@@ -255,7 +279,7 @@ func findEnvdrift() (path string, isPython bool, err error) {
 
 	// Try python -m envdrift
 	if python, lookErr := exec.LookPath("python"); lookErr == nil {
-		cmd := exec.Command(python, "-m", "envdrift", "--version")
+		cmd := exec.CommandContext(ctx, python, "-m", "envdrift", "--version")
 		if cmd.Run() == nil {
 			return python, true, nil
 		}
