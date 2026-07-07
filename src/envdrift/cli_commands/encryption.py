@@ -34,9 +34,13 @@ from envdrift.vault.base import SecretNotFoundError, VaultError
 
 
 def _load_encryption_config():
-    import tomllib
-
-    from envdrift.config import ConfigNotFoundError, EnvdriftConfig, find_config, load_config
+    from envdrift.config import (
+        ConfigLoadError,
+        ConfigNotFoundError,
+        EnvdriftConfig,
+        find_config,
+        load_config,
+    )
 
     config_path = find_config()
     if not config_path:
@@ -44,12 +48,13 @@ def _load_encryption_config():
 
     try:
         return load_config(config_path), config_path
-    except tomllib.TOMLDecodeError as e:
-        print_warning(f"TOML syntax error in {config_path}: {e}")
-    except ConfigNotFoundError as e:
-        print_warning(str(e))
-
-    return EnvdriftConfig(), None
+    except (ConfigNotFoundError, ConfigLoadError) as e:
+        # An existing-but-broken config must abort: silently falling back to a
+        # default EnvdriftConfig() used to encrypt a SOPS-configured project
+        # with dotenvx (wrong backend, stray .env.keys minted) on exit 0 (#491).
+        print_error(str(e))
+        print_error(f"Fix (or remove) {config_path} and re-run.")
+        raise typer.Exit(code=1) from None
 
 
 def _resolve_config_path(config_path: Path | None, value: Path | str | None) -> Path | None:

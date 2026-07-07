@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import difflib
 import re
+import sys
 import tomllib
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -508,6 +510,23 @@ class ConfigNotFoundError(Exception):
     pass
 
 
+class ConfigLoadError(ValueError):
+    """An existing config file could not be read, parsed, or built.
+
+    Raised by :func:`load_config` for every malformed/unreadable shape — a TOML
+    syntax error, an unreadable path (permissions), or a wrong-typed/invalid
+    section — so CLI commands can convert one exception type into a clean
+    one-line error instead of a Rich traceback or a silent fallback to default
+    settings (#491). Subclasses ``ValueError`` so pre-existing
+    ``except ValueError`` boundaries (e.g. validate/guard) keep converting it
+    into a clean message.
+    """
+
+    def __init__(self, path: Path, message: str) -> None:
+        self.path = path
+        super().__init__(message)
+
+
 def find_config(start_dir: Path | None = None, filename: str = "envdrift.toml") -> Path | None:
     """
     Locate an envdrift configuration file by searching the given directory and its parents.
@@ -528,12 +547,15 @@ def find_config(start_dir: Path | None = None, filename: str = "envdrift.toml") 
 
     while current != current.parent:
         config_path = current / filename
-        if config_path.exists():
+        # Only regular files qualify: a directory (or socket/fifo) named
+        # envdrift.toml used to be handed to open() by load_config and crash
+        # guard/sync/lock/pull with an uncaught IsADirectoryError (#491).
+        if config_path.is_file():
             return config_path
 
         # Also check pyproject.toml for [tool.envdrift] section
         pyproject = current / "pyproject.toml"
-        if pyproject.exists():
+        if pyproject.is_file():
             try:
                 with open(pyproject, "rb") as f:
                     data = tomllib.load(f)
@@ -559,7 +581,9 @@ def load_config(path: Path | str | None = None) -> EnvdriftConfig:
 
     Raises:
         ConfigNotFoundError: If config file not found and path was specified
-        ValueError: If configuration values are invalid
+        ConfigLoadError: If the config exists but cannot be read, parsed, or
+            built (TOML syntax error, unreadable file, wrong-typed/invalid
+            sections). A ``ValueError`` subclass (#491).
     """
     if path is not None:
         path = Path(path)
@@ -575,28 +599,209 @@ def load_config(path: Path | str | None = None) -> EnvdriftConfig:
             # Return default config if no file found
             return EnvdriftConfig()
 
-    with open(path, "rb") as f:
-        data = tomllib.load(f)
+    try:
+        with open(path, "rb") as f:
+            data = tomllib.load(f)
+    except tomllib.TOMLDecodeError as e:
+        raise ConfigLoadError(path, f"TOML syntax error in {path}: {e}") from e
+    except OSError as e:
+        # PermissionError, a directory that raced past find_config, etc. —
+        # surface as a reportable config error, never a traceback (#491).
+        raise ConfigLoadError(path, f"Cannot read config file {path}: {e}") from e
 
-    # Check if this is pyproject.toml with [tool.envdrift]
-    if path.name == "pyproject.toml":
-        data = _restructure_pyproject(data)
+    # A pyproject.toml without [tool.envdrift] holds nothing envdrift consumes;
+    # skip the unknown-key pass so [project]/[build-system] don't trigger noise.
+    # For pyproject files the pass runs on the original [tool.envdrift] table —
+    # not the restructured dict — so a typo'd section like [tool.envdrift.gaurd]
+    # is reported where the user wrote it, with a did-you-mean hint drawn from
+    # the real section names (#491).
+    unknown_key_data: dict[str, Any] | None = data
+    unknown_key_spec: dict[str, Any] | None = None
+    unknown_key_section = ""
+    try:
+        if path.name == "pyproject.toml":
+            unknown_key_data = data.get("tool", {}).get("envdrift") or None
+            unknown_key_spec = _PYPROJECT_KEY_SPEC
+            unknown_key_section = "tool.envdrift"
+            data = _restructure_pyproject(data)
+        config = EnvdriftConfig.from_dict(data)
+    except (ValueError, TypeError, AttributeError, KeyError) as e:
+        # Wrong-typed sections (e.g. ``vault = "a string"``) used to escape as
+        # raw AttributeError/TypeError tracebacks from pull/lock/sync (#491).
+        raise ConfigLoadError(path, f"Invalid config in {path}: {e}") from e
 
-    return EnvdriftConfig.from_dict(data)
+    if unknown_key_data:
+        _emit_unknown_key_warnings(path, unknown_key_data, unknown_key_spec, unknown_key_section)
+
+    return config
+
+
+# Sentinel for tables whose keys are user-defined by design (e.g.
+# [vault.mappings], [guard.ignore_rules], [precommit.schemas]): the unknown-key
+# pass never descends into them.
+_FREEFORM_TABLE = "freeform"
+
+# Every key envdrift consumes from a config file, mirroring the dataclasses
+# above and the ``_build_*_config`` helpers. Leaf values are ``None``; nested
+# tables are dicts; arrays of tables ([[section]]) are single-element lists
+# holding the per-entry spec. ``test_example_config_has_no_unknown_keys`` keeps
+# this in sync with EXAMPLE_CONFIG.
+_CONFIG_KEY_SPEC: dict[str, Any] = {
+    "envdrift": {"schema": None, "environments": None},
+    "validation": {"check_encryption": None, "strict_extra": None},
+    "vault": {
+        "provider": None,
+        "mappings": _FREEFORM_TABLE,
+        "azure": {"vault_url": None},
+        "aws": {"region": None},
+        "hashicorp": {"url": None},
+        "gcp": {"project_id": None},
+        "sync": {
+            "default_vault_name": None,
+            "env_keys_filename": None,
+            "max_workers": None,
+            "ephemeral_keys": None,
+            "mappings": [
+                {
+                    "secret_name": None,  # nosec B105 - key-spec entry, not a credential
+                    "folder_path": None,
+                    "vault_name": None,
+                    "environment": None,
+                    "env_file": None,
+                    "profile": None,
+                    "activate_to": None,
+                    "ephemeral_keys": None,
+                }
+            ],
+        },
+    },
+    "encryption": {
+        "backend": None,
+        "smart_encryption": None,
+        "dotenvx": {"auto_install": None},
+        "sops": {
+            "auto_install": None,
+            "config_file": None,
+            "age_key_file": None,
+            "age_recipients": None,
+            "kms_arn": None,
+            "gcp_kms": None,
+            "azure_kv": None,
+        },
+    },
+    "precommit": {"files": None, "schemas": _FREEFORM_TABLE},
+    "git_hook_check": {"method": None, "precommit_config": None},
+    "partial_encryption": {
+        "enabled": None,
+        "environments": [
+            {
+                "name": None,
+                "clear_file": None,
+                "secret_file": None,  # nosec B105 - key-spec entry, not a credential
+                "combined_file": None,
+                "secrets_only": None,
+                "secrets_dir": None,
+                "pattern": None,
+            }
+        ],
+    },
+    "guard": {
+        "scanners": None,
+        "auto_install": None,
+        "include_history": None,
+        "check_entropy": None,
+        "entropy_threshold": None,
+        "fail_on_severity": None,
+        "skip_clear_files": None,
+        "skip_encrypted_files": None,
+        "skip_duplicate": None,
+        "skip_gitignored": None,
+        "ignore_paths": None,
+        "ignore_rules": _FREEFORM_TABLE,
+        "verify_secrets": None,
+    },
+    "guardian": {
+        "enabled": None,
+        "idle_timeout": None,
+        "patterns": None,
+        "exclude": None,
+        "notify": None,
+    },
+}
+
+
+def find_unknown_config_keys(
+    data: dict[str, Any],
+    spec: dict[str, Any] | None = None,
+    section: str = "",
+) -> list[str]:
+    """Return one finding per config key that envdrift does not consume (#491).
+
+    A typo'd key (``fail_on_severty``, ``ephemerl_keys``) used to silently
+    revert behavior to the default — flipping security posture with zero
+    diagnostic. Each finding names the key and its section and suggests the
+    closest known key when one is similar enough.
+    """
+    if spec is None:
+        spec = _CONFIG_KEY_SPEC
+    findings: list[str] = []
+    if not isinstance(data, dict):
+        return findings
+    for key, value in data.items():
+        if key not in spec:
+            where = f"in [{section}]" if section else "at the top level"
+            close = difflib.get_close_matches(key, list(spec), n=1, cutoff=0.6)
+            hint = f" (did you mean '{close[0]}'?)" if close else ""
+            findings.append(f"unknown config key '{key}' {where}{hint}")
+            continue
+        sub_spec = spec[key]
+        child_section = f"{section}.{key}" if section else key
+        if isinstance(sub_spec, dict):
+            findings.extend(find_unknown_config_keys(value, sub_spec, child_section))
+        elif isinstance(sub_spec, list) and isinstance(value, list):
+            # Array of tables ([[section]]): check each entry.
+            for entry in value:
+                findings.extend(find_unknown_config_keys(entry, sub_spec[0], child_section))
+    return findings
+
+
+# Findings already emitted this process, keyed by (path, finding): commands load
+# the same config more than once (e.g. encrypt + its git-hook check), and the
+# warning must not repeat for every load.
+_emitted_unknown_key_warnings: set[tuple[str, str]] = set()
+
+
+def _emit_unknown_key_warnings(
+    path: Path,
+    data: dict[str, Any],
+    spec: dict[str, Any] | None = None,
+    section: str = "",
+) -> None:
+    """Print unknown-key findings to stderr, once per process per finding.
+
+    stderr (not the Rich stdout console) so machine-readable stdout — guard
+    ``--json``/``--sarif``, ``diff --format json`` — stays parseable (#491).
+    """
+    for finding in find_unknown_config_keys(data, spec, section):
+        dedupe_key = (str(path), finding)
+        if dedupe_key in _emitted_unknown_key_warnings:
+            continue
+        _emitted_unknown_key_warnings.add(dedupe_key)
+        print(f"Warning: {path}: {finding}", file=sys.stderr)
 
 
 # Top-level sections that live under [tool.envdrift.*] in pyproject.toml and must
 # be hoisted to the root for from_dict (everything else stays under "envdrift").
-_PYPROJECT_TOPLEVEL_SECTIONS = (
-    "validation",
-    "vault",
-    "encryption",
-    "precommit",
-    "git_hook_check",
-    "partial_encryption",
-    "guard",
-    "guardian",
-)
+# Derived from the key spec so a new section cannot drift out of sync.
+_PYPROJECT_TOPLEVEL_SECTIONS = tuple(k for k in _CONFIG_KEY_SPEC if k != "envdrift")
+
+# In pyproject.toml everything lives on one [tool.envdrift] table: the core keys
+# sit directly on it and every other section nests beneath it, so the unknown-key
+# pass needs both merged into one spec (#491).
+_PYPROJECT_KEY_SPEC: dict[str, Any] = {
+    **{k: v for k, v in _CONFIG_KEY_SPEC.items() if k != "envdrift"},
+    **_CONFIG_KEY_SPEC["envdrift"],
+}
 
 
 def _restructure_pyproject(data: dict[str, Any]) -> dict[str, Any]:

@@ -7,11 +7,10 @@ import logging
 import os
 import re
 import tempfile
-import tomllib
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from envdrift.config import ConfigNotFoundError, find_config, load_config
+from envdrift.config import find_config, load_config
 from envdrift.encryption import EncryptionProvider, get_encryption_backend
 from envdrift.utils.git import get_file_from_git, is_file_tracked, restore_file_from_git
 
@@ -43,6 +42,11 @@ def resolve_encryption_backend(
 
     Returns the instantiated backend, selected provider, and the encryption config
     (if available).
+
+    Raises ``ConfigNotFoundError``/``ConfigLoadError`` from ``load_config`` when
+    the config exists but cannot be loaded: silently falling back to the default
+    dotenvx backend used to encrypt SOPS-configured projects with the wrong
+    backend (#491). CLI callers convert these into clean errors and exit 1.
     """
     config_path = None
     if config_file is not None and config_file.suffix.lower() == ".toml":
@@ -52,11 +56,7 @@ def resolve_encryption_backend(
 
     envdrift_config = None
     if config_path:
-        try:
-            envdrift_config = load_config(config_path)
-        except (ConfigNotFoundError, tomllib.TOMLDecodeError) as exc:
-            logger.warning("Failed to load config from %s: %s", config_path, exc)
-            envdrift_config = None
+        envdrift_config = load_config(config_path)
 
     encryption_config = getattr(envdrift_config, "encryption", None) if envdrift_config else None
     backend_name = encryption_config.backend if encryption_config else "dotenvx"
