@@ -18,6 +18,7 @@ from envdrift.utils import normalize_max_workers
 from envdrift.vault.base import SecretNotFoundError, VaultError
 
 if TYPE_CHECKING:
+    from envdrift.encryption import EncryptionProvider
     from envdrift.sync.config import ServiceMapping, SyncConfig
 
 
@@ -848,9 +849,13 @@ def pull(
             backend_provider,
         )
 
-        # Check if file is encrypted
+        # Check if the file carries this backend's ciphertext. Decrypt direction,
+        # so use the lenient predicate (#475): a mixed SOPS file (metadata block
+        # + surviving plaintext value) must still be handed to sops for a loud
+        # outcome, not silently skipped as "not encrypted" (and even
+        # profile-activated) while its values are still ciphertext.
         content = env_file.read_text()
-        if not encryption_helpers.is_encrypted_content(
+        if not encryption_helpers.should_attempt_decryption(
             backend_provider, encryption_backend, content
         ):
             detected_provider = detect_encryption_provider(env_file)
@@ -1117,7 +1122,9 @@ def _find_stale_private_key_name(env_keys_file: Path, expected_key_name: str) ->
 
     if EnvKeysFile(env_keys_file).read_key(expected_key_name):
         return None
-    for line in env_keys_file.read_text().splitlines():
+    # UTF-8 like dotenvx itself: the .env.keys header contains a non-ASCII
+    # character, so the locale codec (cp1252, LC_ALL=C) cannot decode it (#474).
+    for line in env_keys_file.read_text(encoding="utf-8").splitlines():
         if line.startswith("DOTENV_PRIVATE_KEY_") and "=" in line:
             old_key_name = line.split("=")[0].strip()
             if old_key_name != expected_key_name:
@@ -1146,6 +1153,67 @@ def _rekey_dotenvx_file(
     except (EncryptionNotFoundError, EncryptionBackendError) as e:
         return False, f"rekey error: {e}"
     return True, ""
+
+
+def _verify_issue_summary(failed: int, unusable: int) -> str:
+    """Summary line for the ``lock --verify-vault`` fail-fast gate.
+
+    Failed and unusable keys get named separately with their own remedy:
+    ``--sync-keys`` fixes a mismatched or missing/cannot-verify local key,
+    while an unusable (malformed) vault secret must be fixed in the vault
+    itself — the sync engine raises the same ``KeyMaterialError`` — so
+    labeling both the same steered users toward syncing keys that could never
+    install (#480 review follow-up). Every variant states that nothing was
+    encrypted: the gate hard-stops before Step 2, even with ``--force``,
+    because encrypting past a failed verification could mint a fresh
+    local-only key or commit a file the team's vault key cannot decrypt
+    (#473).
+    """
+    found: list[str] = []
+    if failed:
+        found.append(f"{failed} failed key verification(s)")
+    if unusable:
+        found.append(f"{unusable} unusable vault key(s)")
+    if not unusable:
+        remedy = (
+            "Run 'envdrift lock --sync-keys' to sync keys from vault, or rerun "
+            "without --verify-vault to skip verification."
+        )
+    elif failed:
+        remedy = (
+            "Fix the vault secret shapes named above, then run "
+            "'envdrift lock --sync-keys' to sync the remaining keys from vault."
+        )
+    else:
+        remedy = (
+            "Fix the vault secret shapes named above (--sync-keys cannot install an unusable key)."
+        )
+    return f"Found {' and '.join(found)}. Nothing was encrypted. {remedy}"
+
+
+def _sops_missing_recipients(
+    encryption_backend: Any,
+    backend_provider: EncryptionProvider,
+    sops_encrypt_kwargs: dict[str, Any],
+    content: str,
+) -> list[str]:
+    """Recipients configured in envdrift.toml but absent from ``content``'s metadata.
+
+    A fully-encrypted SOPS file skips ``backend.encrypt()`` in ``lock``, so the
+    recipient check inside it never runs — this helper lets lock's
+    already-encrypted branch verify the configured recipients anyway (#475).
+    Returns an empty list for non-SOPS providers, an empty recipient config, or
+    a backend that does not expose the check.
+    """
+    from envdrift.encryption import EncryptionProvider
+
+    if backend_provider != EncryptionProvider.SOPS or not sops_encrypt_kwargs:
+        return []
+    from envdrift.encryption.sops import SOPSEncryptionBackend
+
+    if not isinstance(encryption_backend, SOPSEncryptionBackend):
+        return []
+    return encryption_backend.missing_recipients(content, **sops_encrypt_kwargs)
 
 
 def lock(
@@ -1278,7 +1346,8 @@ def lock(
 
     # === FILTER MAPPINGS BY PROFILE ===
     from envdrift.sync.config import SyncConfig as SyncConfigClass
-    from envdrift.sync.engine import SyncEngine, SyncMode, normalize_vault_key_value
+    from envdrift.sync.engine import SyncEngine, SyncMode
+    from envdrift.vault.keymaterial import KeyMaterialError, extract_key_material
 
     filtered_mappings = sync_config.filter_by_profile(profile)
 
@@ -1373,6 +1442,7 @@ def lock(
             # bless the result "ready to commit" — and a teammate syncing the
             # team key from vault could no longer decrypt the committed file.
             verification_issues = 0
+            unusable_keys = 0
 
             for mapping in filtered_mappings:
                 effective_env = mapping.effective_environment
@@ -1426,13 +1496,15 @@ def lock(
                         verification_issues += 1
                         continue
 
-                    vault_value = vault_secret.value
-
-                    # Parse the vault value identically to the sync engine /
-                    # read_key (strip whitespace + surrounding quotes + a
-                    # DOTENV_PRIVATE_KEY_*= prefix) so a quoted or prefixed vault
-                    # value isn't reported as a false KEY MISMATCH (#413).
-                    vault_key, vault_suffix = normalize_vault_key_value(vault_value)
+                    # Parse the vault secret identically to the sync engine /
+                    # vault-pull (strip whitespace + surrounding quotes + a
+                    # DOTENV_PRIVATE_KEY_*= prefix; extract from JSON documents /
+                    # multi-line keys blobs; reject provider-marked binary
+                    # payloads) so a quoted, prefixed, or document-shaped vault
+                    # value isn't reported as a false KEY MISMATCH (#413, #480).
+                    # Unusable shapes raise KeyMaterialError, counted below as a
+                    # verification issue so encryption never starts on them.
+                    vault_key, vault_suffix = extract_key_material(vault_secret, effective_env)
                     # A key labeled for a different environment is a genuine
                     # mismatch, not a parse artifact.
                     suffix_ok = (
@@ -1468,6 +1540,18 @@ def lock(
                         f"(push the key with 'envdrift vault-push')"
                     )
                     verification_issues += 1
+                except KeyMaterialError as e:
+                    # A secret-shape problem, not a connectivity problem: count
+                    # it as a verification issue so the fail-fast gate below
+                    # stops before any file is encrypted (matching the KEY
+                    # MISMATCH behavior), instead of mislabeling it "vault
+                    # access failed" and encrypting first (#480).
+                    console.print(
+                        f"  [red]✗[/red] {mapping.folder_path} [red]- KEY UNUSABLE: {e}[/red]"
+                    )
+                    errors.append(f"{mapping.folder_path}: vault key material unusable - {e}")
+                    verification_issues += 1
+                    unusable_keys += 1
                 except VaultError as e:
                     console.print(
                         f"  [red]![/red] {mapping.folder_path} "
@@ -1485,9 +1569,7 @@ def lock(
                 # local-only key or commit a file the team's vault key cannot
                 # decrypt (#473).
                 print_error(
-                    f"Vault key verification failed for {verification_issues} mapping(s). "
-                    "Nothing was encrypted. Run 'envdrift lock --sync-keys' to sync keys "
-                    "from vault, or rerun without --verify-vault to skip verification."
+                    _verify_issue_summary(verification_issues - unusable_keys, unusable_keys)
                 )
                 raise typer.Exit(code=1)
 
@@ -1711,6 +1793,30 @@ def lock(
                         )
                         encrypted_count += 1
                         continue
+
+                # Verify that every recipient configured in envdrift.toml is
+                # recorded in the file's metadata. Otherwise `lock` would print
+                # "ready to commit" while a newly added teammate silently never
+                # got access (#475) — and disagree with `envdrift encrypt`,
+                # which fails loudly on the same file + config.
+                missing = _sops_missing_recipients(
+                    encryption_backend, backend_provider, sops_encrypt_kwargs, content
+                )
+                if missing:
+                    recipients = ", ".join(missing)
+                    console.print(
+                        f"  [red]![/red] {env_file} "
+                        f"[red]- encrypted, but SOPS metadata is missing requested "
+                        f"recipient(s): {recipients}[/red]"
+                    )
+                    errors.append(
+                        f"{env_file}: SOPS metadata is missing requested "
+                        f"recipient(s): {recipients} - re-running encrypt cannot add "
+                        f"recipients; use `sops rotate --add-age <recipient>` or "
+                        f"`sops updatekeys`, or decrypt and re-encrypt"
+                    )
+                    error_count += 1
+                    continue
 
                 console.print(f"  [dim]=[/dim] {env_file} [dim]- skipped (already encrypted)[/dim]")
                 already_encrypted_count += 1

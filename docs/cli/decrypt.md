@@ -29,6 +29,17 @@ byte-for-byte untouched — dotenvx is not invoked at all — so a plaintext fil
 (including one with CRLF line endings) or a non-`.env` binary file is never
 silently rewritten or corrupted.
 
+### Refuses the key store and companion files
+
+`envdrift decrypt .env.keys` (or any `.keys`/`.example`/`.sample`/`.template`
+target) is refused by name — case-insensitively, so `.env.KEYS` counts —
+with a non-zero exit: the dotenvx private-key store
+and plaintext companion files are never encrypted by envdrift in the first
+place (`envdrift encrypt` refuses them too), so "decrypting" one is always a
+mistake rather than a no-op worth reporting as success. Leading-dash filenames
+(e.g. `-dash.env`) are passed to dotenvx as `./-dash.env` so they decrypt
+normally via `envdrift decrypt -- -dash.env`.
+
 ## Arguments
 
 | Argument   | Description                     | Default |
@@ -49,7 +60,8 @@ envdrift decrypt .env.production --backend sops
 ### SOPS Options
 
 - `--sops-config` Path to `.sops.yaml`
-- `--age-key-file` Age private key file for decryption (sets `SOPS_AGE_KEY_FILE`)
+- `--age-key-file` Age private key file for decryption (sets `SOPS_AGE_KEY_FILE`;
+  the explicit flag overrides an ambient `SOPS_AGE_KEY_FILE` export)
 
 ## Examples
 
@@ -192,10 +204,12 @@ steps:
 - `envdrift encrypt <file>` to re-encrypt with the vault key
 
 !!! note "`--verify-vault` only verifies — it does not fetch the key"
-    This is a **read-only CI check**: it fetches the vault key, tests decryption in
-    a throwaway temp dir, and discards everything (the original file is *not*
-    decrypted and no `.env.keys` is written). To actually fetch a key onto a
-    machine and decrypt for use, see [`vault-pull`](vault-pull.md).
+    This is a **read-only CI check**: it fetches the vault key, tests decryption
+    against a byte-for-byte copy of the file in a throwaway temp dir, and discards
+    everything (the original file is *not* decrypted and no `.env.keys` is
+    written). The copy preserves the file exactly — encoding and line endings
+    included — on every platform. To actually fetch a key onto a machine and
+    decrypt for use, see [`vault-pull`](vault-pull.md).
 
 ## Error Handling
 
