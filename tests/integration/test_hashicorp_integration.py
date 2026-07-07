@@ -1182,3 +1182,187 @@ environment = "production"
         assert list(work_dir.glob("*.backup*")) == []
     finally:
         _delete_vault_path(vault_client, secret_path)
+
+
+# --- #487: clean error mapping for bad target folders / unreadable files ---
+
+
+@pytest.fixture
+def seeded_pull_secret(vault_client):
+    """Seed a pull-able key secret for the #487 error-rendering tests."""
+    secret_path = "test/err-rendering-487"
+    vault_client.secrets.kv.v2.create_or_update_secret(
+        path=secret_path,
+        secret={"value": "DOTENV_PRIVATE_KEY_PRODUCTION=key487abc"},
+        mount_point="secret",
+    )
+    yield secret_path
+    _delete_vault_path(vault_client, secret_path)
+
+
+def _pull_args(target: Path, secret_path: str, vault_endpoint: str) -> list[str]:
+    return [
+        "vault-pull",
+        str(target),
+        secret_path,
+        "--env",
+        "production",
+        "--no-decrypt",
+        "-p",
+        "hashicorp",
+        "--vault-url",
+        vault_endpoint,
+    ]
+
+
+def test_hcv_cli_vault_pull_nonexistent_folder_clean_error(
+    vault_endpoint: str,
+    vault_test_env: dict,
+    seeded_pull_secret: str,
+    work_dir: Path,
+    integration_pythonpath: str,
+):
+    """#487: a missing target folder exits 1 with a clean error, no traceback."""
+    target = work_dir / "no-such-dir"
+
+    result = _run_envdrift_cli(
+        _pull_args(target, seeded_pull_secret, vault_endpoint),
+        cwd=work_dir,
+        env=vault_test_env,
+        integration_pythonpath=integration_pythonpath,
+    )
+
+    combined = " ".join((result.stdout + result.stderr).split())
+    assert result.returncode == 1, combined
+    assert "Traceback" not in combined, combined
+    assert "Folder not found" in combined, combined
+
+
+def test_hcv_cli_vault_pull_env_keys_directory_clean_error(
+    vault_endpoint: str,
+    vault_test_env: dict,
+    seeded_pull_secret: str,
+    work_dir: Path,
+    integration_pythonpath: str,
+):
+    """#487: .env.keys as a directory exits 1 with a clean error, no traceback."""
+    (work_dir / ".env.keys").mkdir()
+
+    result = _run_envdrift_cli(
+        _pull_args(work_dir, seeded_pull_secret, vault_endpoint),
+        cwd=work_dir,
+        env=vault_test_env,
+        integration_pythonpath=integration_pythonpath,
+    )
+
+    combined = " ".join((result.stdout + result.stderr).split())
+    assert result.returncode == 1, combined
+    assert "Traceback" not in combined, combined
+    assert "Cannot write" in combined, combined
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX permission bits")
+def test_hcv_cli_vault_pull_unwritable_folder_clean_error(
+    vault_endpoint: str,
+    vault_test_env: dict,
+    seeded_pull_secret: str,
+    work_dir: Path,
+    integration_pythonpath: str,
+):
+    """#487: a read-only target folder exits 1 with a clean error, no traceback."""
+    import os
+
+    if hasattr(os, "geteuid") and os.geteuid() == 0:
+        pytest.skip("root ignores permission bits")
+
+    target = work_dir / "readonly"
+    target.mkdir()
+    target.chmod(0o555)
+
+    try:
+        result = _run_envdrift_cli(
+            _pull_args(target, seeded_pull_secret, vault_endpoint),
+            cwd=work_dir,
+            env=vault_test_env,
+            integration_pythonpath=integration_pythonpath,
+        )
+    finally:
+        target.chmod(0o755)
+
+    combined = " ".join((result.stdout + result.stderr).split())
+    assert result.returncode == 1, combined
+    assert "Traceback" not in combined, combined
+    assert "Cannot write" in combined, combined
+
+
+def test_hcv_cli_vault_push_non_utf8_keys_clean_error(
+    vault_endpoint: str,
+    vault_test_env: dict,
+    work_dir: Path,
+    integration_pythonpath: str,
+):
+    """#487: a non-UTF-8 .env.keys exits 1 with a clean error, no traceback."""
+    (work_dir / ".env.keys").write_bytes(b"DOTENV_PRIVATE_KEY_PRODUCTION=caf\xe9\n")
+
+    result = _run_envdrift_cli(
+        [
+            "vault-push",
+            str(work_dir),
+            "test/push-non-utf8-487",
+            "--env",
+            "production",
+            "-p",
+            "hashicorp",
+            "--vault-url",
+            vault_endpoint,
+        ],
+        cwd=work_dir,
+        env=vault_test_env,
+        integration_pythonpath=integration_pythonpath,
+    )
+
+    combined = " ".join((result.stdout + result.stderr).split())
+    assert result.returncode == 1, combined
+    assert "Traceback" not in combined, combined
+    assert "Cannot read" in combined, combined
+
+
+def test_hcv_cli_sync_verify_missing_key_prints_reason(
+    vault_endpoint: str,
+    vault_test_env: dict,
+    seeded_pull_secret: str,
+    work_dir: Path,
+    integration_pythonpath: str,
+):
+    """#487: sync --verify explains WHY a service errored (key missing from file)."""
+    (work_dir / "envdrift.toml").write_text(
+        f"""\
+[vault]
+provider = "hashicorp"
+
+[vault.hashicorp]
+url = "{vault_endpoint}"
+
+[[vault.sync.mappings]]
+secret_name = "{seeded_pull_secret}"
+folder_path = "."
+environment = "production"
+""",
+        encoding="utf-8",
+    )
+    (work_dir / ".env.production").write_text('SECRET="encrypted:abc"\n', encoding="utf-8")
+    # The keys file exists but holds a DIFFERENT environment's key.
+    (work_dir / ".env.keys").write_text("DOTENV_PRIVATE_KEY_OTHERENV=deadbeef\n", encoding="utf-8")
+
+    result = _run_envdrift_cli(
+        ["sync", "--verify"],
+        cwd=work_dir,
+        env=vault_test_env,
+        integration_pythonpath=integration_pythonpath,
+    )
+
+    combined = " ".join((result.stdout + result.stderr).split())
+    assert result.returncode == 0, combined
+    # Pre-#487 this printed a bare red "x . - error" row with no reason.
+    assert "DOTENV_PRIVATE_KEY_PRODUCTION" in combined, combined
+    assert "missing" in combined, combined
