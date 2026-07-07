@@ -39,6 +39,25 @@ adds each `combined_file` to `.gitignore`.
 
 This command requires partial encryption to be configured in `envdrift.toml`.
 
+## Safety guarantees
+
+`push` verifies its outcome instead of trusting the encryptor's exit code, and it
+fails (exit 1, no success banner) rather than report a false success:
+
+- **Encryption is verified.** After encrypting, `push` re-reads each secret file and
+  fails if any plaintext value survived (for example when `.env.keys` is read-only,
+  a directory, or malformed — dotenvx only warns and exits 0 in those cases).
+- **Empty secret files are refused.** A `.secret` (or secrets-only) file with no
+  variable assignments is rejected with "Nothing to encrypt" instead of being handed
+  to dotenvx, which would scaffold placeholder secrets into it.
+- **The combined file is never replaced with an empty scaffold.** If *both* the
+  `clear_file` and the `secret_file` are missing (deleted by mistake, or a path typo
+  in `envdrift.toml`), `push` errors out and leaves the existing combined file
+  untouched. A single missing source file is still fine.
+- **The combined file is written atomically with owner-only permissions** (`0600` on
+  POSIX, like `.env.keys`), since it carries the encrypted secret section and holds
+  decrypted values after `envdrift pull --merge`.
+
 ## Options
 
 ### `--env`, `-e`

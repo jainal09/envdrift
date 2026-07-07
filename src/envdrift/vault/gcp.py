@@ -207,18 +207,23 @@ class GCPSecretManagerClient(VaultClient):
             version_path = self._version_path(name)
             response = self._client.access_secret_version(request={"name": version_path})
             payload = response.payload.data if response.payload else b""
+            metadata: dict[str, Any] = {"name": response.name}
             try:
                 value = payload.decode("utf-8")
             except UnicodeDecodeError:
                 import base64
 
                 value = base64.b64encode(payload).decode("ascii")
+                # Mark the transformation: the value is no longer the stored
+                # bytes. dotenvx key flows reject base64-marked payloads instead
+                # of installing them as key material (#480).
+                metadata["encoding"] = "base64"
             version = response.name.split("/")[-1] if response.name else None
             return SecretValue(
                 name=self._secret_id(name),
                 value=value,
                 version=version,
-                metadata={"name": response.name},
+                metadata=metadata,
             )
         except (google_exceptions.GoogleAPICallError, GoogleAuthError) as e:
             raise _map_gcp_error(

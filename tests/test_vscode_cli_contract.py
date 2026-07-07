@@ -149,8 +149,14 @@ class TestEnvdriftCliContract:
         )
         assert result.returncode == 0, result.stderr
         usage = _plain(result.stdout)
-        # click renders the program name as `envdrift.EXE` on Windows.
-        pattern = rf"Usage: envdrift(?:\.[Ee][Xx][Ee])? {re.escape(sub)} \[OPTIONS\] \[ENV_FILE\]"
+        # click renders the program name as `envdrift.EXE` on Windows. The
+        # positional may be a single `[ENV_FILE]` or a variadic `[ENV_FILES]...`
+        # (encrypt accepts multiple files as a pre-commit hook entry, #493); the
+        # extension spawns exactly one file, which is valid for either shape.
+        pattern = (
+            rf"Usage: envdrift(?:\.[Ee][Xx][Ee])? {re.escape(sub)} "
+            r"\[OPTIONS\] \[ENV_FILES?\](?:\.\.\.)?"
+        )
         assert re.search(pattern, usage), (
             f"`envdrift {sub}` does not take a positional env file — the extension's "
             f"per-file spawn `envdrift {sub} <file>` cannot work. Usage: {usage[:200]}"

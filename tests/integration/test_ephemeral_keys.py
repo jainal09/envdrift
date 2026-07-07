@@ -12,6 +12,10 @@ from envdrift.sync.engine import SyncEngine
 from envdrift.sync.result import SyncAction
 from envdrift.vault.base import SecretValue, VaultClient
 
+# Everything under tests/integration/ runs in the integration lane: the -m
+# selectors decide lanes, not directory luck (#497).
+pytestmark = pytest.mark.integration
+
 
 class TestEphemeralKeysIntegration:
     """Integration tests for ephemeral keys feature."""
