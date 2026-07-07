@@ -13,11 +13,19 @@ envdrift guard [OPTIONS] [PATHS]...
 `envdrift guard` is a defense-in-depth scanner designed to catch secrets that
 slip past other guardrails (hooks, CI, reviews). It detects:
 
-- Unencrypted `.env` files missing dotenvx or SOPS markers
+- Unencrypted env files missing dotenvx or SOPS markers
 - Common secret patterns (tokens, API keys, credentials)
 - Password hashes (bcrypt, sha512crypt) with Kingfisher
-- High-entropy strings (optional, native scanner only)
+- High-entropy strings (native scanner; env files by default, all files with
+  `--entropy`, disable with `--no-entropy`)
 - Secrets in git history (optional)
+
+The unencrypted-file policy covers every env-file naming shape: `.env`,
+`.env.<environment>` (including `.env.local` and `.env.test`), the trailing
+`<name>.env` convention (`production.env`), and custom `vault.sync` mapped files.
+Only the templates `.env.example`, `.env.sample`, and `.env.template` are skipped.
+Files are decoded through UTF-8/UTF-16/UTF-32 BOMs (and BOM-less UTF-16), so a
+UTF-16 env file written by Windows tools is scanned like its UTF-8 equivalent.
 
 The native scanner always runs. By default, gitleaks runs too. You can enable
 trufflehog, detect-secrets, or kingfisher with flags or `envdrift.toml`. If no
@@ -141,18 +149,28 @@ envdrift guard --infisical
 
 ### `--history`, `-H`
 
-Include git history in the scan. Requires a git repository.
+Include git history in the scan. Requires a git repository and at least one active history-capable
+scanner (gitleaks, trufflehog, kingfisher, git-secrets, talisman, or infisical). If none of the
+active scanners can scan git history (for example `--history --native-only`), guard exits with an
+error instead of silently skipping the history.
 
 ```bash
 envdrift guard --history
 ```
 
-### `--entropy`, `-e`
+### `--entropy` / `--no-entropy`, `-e`
 
-Enable entropy-based detection in the native scanner.
+Control entropy-based detection in the native scanner. By default (no flag,
+no config) entropy detection runs on **env files only**. `--entropy` extends
+it to every scanned file; `--no-entropy` disables it entirely, env files
+included. The flags override `check_entropy` in `envdrift.toml`.
 
 ```bash
+# Scan every file for high-entropy strings
 envdrift guard --entropy
+
+# Disable entropy detection completely (overrides check_entropy = true)
+envdrift guard --no-entropy
 ```
 
 ### `--skip-clear` / `--no-skip-clear`
@@ -191,6 +209,18 @@ instead keys solely on the secret value, so each unique secret appears once rega
 of where or by which scanner it was found — that is the mode that collapses the same
 secret across scanners.
 
+Trivy reports matches with the secret already redacted to asterisks, so envdrift
+recovers the raw value from the scanned file before hashing — two *distinct* secrets
+that share a variable name and length stay distinct under `--skip-duplicate`, and a
+secret found by both trivy and another scanner still collapses to one finding. When
+the raw value cannot be recovered (for example the file changed mid-scan, the finding
+spans multiple lines, or several secrets share one line so the mask boundary is
+ambiguous), each finding instead keeps a synthetic hash qualified by its file, line
+span, rule and a per-location occurrence index. Distinct findings therefore never
+share a fallback hash — even the byte-identical findings trivy emits for two distinct
+same-rule secrets on one line — but an unrecovered finding also cannot collapse with
+the same secret reported by another scanner.
+
 ### `--skip-encrypted` / `--no-skip-encrypted`
 
 Skip findings from files that contain dotenvx or SOPS encryption markers. Enabled by
@@ -222,7 +252,9 @@ envdrift guard --no-skip-gitignored
 **Note:** This feature uses `git check-ignore` when git is available and the scan is
 run inside a git repository. If git is not installed or the repository check fails,
 the tool will log a warning and continue by returning the original findings (no
-git-based filtering will be applied).
+git-based filtering will be applied). Paths exchanged with git are encoded and
+decoded as UTF-8 on every platform, so non-ASCII filenames are matched correctly
+regardless of the system locale (e.g. cp1252 on Windows).
 
 ### `--auto-install` / `--no-auto-install`
 
@@ -247,6 +279,22 @@ Output results as SARIF for code scanning tools.
 ```bash
 envdrift guard --sarif > guard.sarif
 ```
+
+Artifact URIs are emitted relative to the enclosing git repository root
+(declared as the `SRCROOT` base via `originalUriBaseIds`), percent-encoded
+per RFC 3986, no matter which directory guard runs from, so GitHub/GitLab
+Code Scanning maps every alert to a repo file; a finding outside the
+repository falls back to an absolute `file://` URI. Each result carries a
+stable fingerprint built from the rule id, the location, and a truncated
+hash of the secret value — never the matched text — so two different secrets
+on the same line stay separate alerts. The redacted preview is attached as
+the result's `properties.secretPreview`.
+
+!!! note "Upgrading from older releases"
+    The fingerprint format changed in this release: existing GitHub Code
+    Scanning alerts created from older envdrift SARIF uploads are re-keyed
+    once (closed and re-opened as new alerts) on the first upload from this
+    version.
 
 ### `--ci`
 
@@ -290,6 +338,11 @@ envdrift guard --config ./envdrift.toml
 
 Scan only git staged files. Useful for pre-commit hooks.
 
+The scan reads the staged *index* content (`git show :<path>`), not the working-tree copies, so a
+secret that is staged but already edited away (or deleted) in the working tree is still caught
+before the commit ships it. Findings are reported against the real repository paths. Running
+`--staged` outside a git repository is an operational error (exit 6).
+
 ```bash
 envdrift guard --staged
 ```
@@ -297,6 +350,11 @@ envdrift guard --staged
 ### `--pr-base`
 
 Scan only files changed since the specified base branch. Useful for CI/CD PR checks.
+
+If the base ref cannot be resolved (typo, or a shallow CI clone that never fetched it), guard exits
+with an error instead of treating the failed diff as "no changed files" — a misconfigured base must
+never pass the secret gate green. A failed `git fetch` of the base is reported as a warning on
+stderr.
 
 ```bash
 envdrift guard --pr-base origin/main
@@ -363,7 +421,8 @@ envdrift guard ./db --kingfisher --native-only
 
 ## Exit Codes
 
-`envdrift guard` uses severity-based exit codes:
+`envdrift guard` uses severity-based exit codes, plus dedicated codes for an
+incomplete scan and for operational errors:
 
 | Code | Meaning |
 | :-- | :-- |
@@ -372,14 +431,42 @@ envdrift guard ./db --kingfisher --native-only
 | 2 | High findings |
 | 3 | Medium findings |
 | 4 | Low findings (policy violations, e.g. unencrypted file) |
+| 5 | Scan incomplete: a selected scanner ran but failed |
+| 6 | Operational error (bad config, invalid path or flags) |
 
 Each severity has its own code so a pipeline branching on a specific exit code
 (`if [ $? -eq 2 ]`) can tell them apart — a LOW-only result never collides with
-HIGH's code 2.
+HIGH's code 2, and a missing config file (6) never looks like a critical
+secret (1).
+
+Collection errors are operational errors and exit `6`, reported as an error message instead
+of findings: an unresolvable `--pr-base` ref, `--staged` outside a git repository, or
+`--history` with no active history-capable scanner. These misconfigurations previously passed
+with exit 0; a broken secret gate now fails loudly instead of green, and exit 6 (never 1)
+keeps them distinct from a real critical finding for an exit-code-only pipeline.
 
 With `--ci`, the `--fail-on` threshold controls what counts as blocking. A
 finding at or above the threshold fails CI with the severity-derived code above;
 anything below the threshold exits 0.
+
+A run in which a selected scanner errored never reports the all-clear 0: if no
+finding blocks the run (none found, or all below the `--fail-on` threshold) but
+a scanner failed, guard exits 5, because the requested scan did not complete.
+Blocking findings take precedence — a critical finding plus a scanner error
+still exits 1. The scanner errors are listed in the human output (Scanner
+Errors panel), in `--json` under `scanner_results[].error`, and in `--sarif`
+as invocation `toolExecutionNotifications`.
+
+The machine-readable verdict fields always match the process exit code: the
+`--json` document's `exit_code`/`has_blocking_findings` and the `--sarif`
+invocation's `exitCode`/`executionSuccessful` are computed from the same
+threshold-adjusted result the process returns.
+
+Operational-error paths keep machine output parseable too — including a bad
+or wrong-typed `[guard]` config value and git failures under
+`--staged`/`--pr-base`. With `--json`, stdout is a `{"error": "..."}`
+document; with `--sarif`, a schema-valid run with
+`executionSuccessful: false` and the error as a tool notification.
 
 ## Configuration
 
@@ -391,7 +478,8 @@ Guard settings live under `[guard]` in `envdrift.toml` or
 scanners = ["native", "gitleaks", "trufflehog", "detect-secrets", "kingfisher", "git-secrets", "talisman", "trivy", "infisical"]
 auto_install = true
 include_history = false
-check_entropy = false  # Set to true to enable entropy-based detection (default: off)
+check_entropy = false  # true = entropy scan on all files, false = off everywhere,
+                       # unset = env files only (default)
 entropy_threshold = 4.5
 fail_on_severity = "high"
 skip_clear_files = false  # Set to true to skip .clear files entirely
@@ -425,6 +513,17 @@ Notes:
 
 Envdrift provides a **centralized ignore system** that works across ALL scanners
 (native, gitleaks, trufflehog, detect-secrets, kingfisher, git-secrets).
+
+### Built-in Default Ignores
+
+Config and lock files (`pyproject.toml`, `envdrift.toml`, `mkdocs.yml`, `*.lock`,
+`package-lock.json`, `*-lock.json`, `*.sum`, ...) only have **noisy** findings
+suppressed by default: rules whose ids contain `generic`, `entropy`, or `keyword`,
+which routinely false-positive on "secret"-keyword config keys and integrity hashes.
+Distinctive-prefix detections (`github-pat`, `aws-access-key-id`, `pypi-token`, ...)
+are never suppressed by the defaults — a real token committed in `pyproject.toml` or
+a lock file is still reported. User-configured `ignore_paths` suppress everything in
+the matching paths.
 
 ### Inline Ignore Comments
 

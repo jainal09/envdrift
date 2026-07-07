@@ -251,6 +251,17 @@ to repeat any of it.
       | gcloud secrets versions add myapp-dotenvx-key --data-file=-
     ```
 
+> **Accepted secret shapes:** `sync`/`pull` normalize the stored value before
+> installing it, so a bare key, a full `DOTENV_PRIVATE_KEY_<ENV>=<key>` line
+> (quoted or not), a JSON key/value document holding a
+> `DOTENV_PRIVATE_KEY_<ENV>` field (the AWS console's native shape, or
+> `vault kv put secret/x DOTENV_PRIVATE_KEY_PRODUCTION=<key>`), and a whole
+> `.env.keys` file blob (e.g. `az keyvault secret set --file .env.keys`) all
+> converge to the same bare key. Shapes that cannot be reduced to a single key
+> token — JSON documents without a usable key field, multi-line documents
+> without a key line, or binary payloads — fail the mapping with an error
+> naming the layout instead of writing a corrupted `.env.keys`.
+
 ### 4. Sync keys locally
 
 Auto-discovery finds `envdrift.toml` (or `[tool.envdrift]` in `pyproject.toml`)
@@ -390,7 +401,9 @@ ephemeral_keys = true   # or enable per-mapping
 ```
 
 With ephemeral keys, `pull` fetches the key, passes it via `DOTENV_PRIVATE_KEY_*`,
-decrypts in place, and writes no key file.
+decrypts in place, and writes no key file. Ephemeral services render with their
+own `*` status row (`ephemeral (key not stored locally)`) and an `Ephemeral:`
+line in the sync summary — they are successes, not errors.
 
 !!! warning
     In ephemeral mode there is no local fallback — if the vault is unavailable,
@@ -600,12 +613,15 @@ That's the whole promise: one command, no Slacked secrets.
 
 ### Key rotation
 
-Rotation is a **dotenvx-native** operation — envdrift has no `--rotate`, so this one
-step calls the [`dotenvx`](https://dotenvx.com) binary directly (envdrift wraps
-dotenvx for everything else). After rotating, re-push the new key and teammates resync:
+Rotation is a **dotenvx-native** operation — envdrift has no rotate command, so this
+one step calls the [`dotenvx`](https://dotenvx.com) binary directly (envdrift wraps
+dotenvx for everything else). `dotenvx rotate` generates a new keypair, re-encrypts
+the file, and appends the new private key to the entry in `.env.keys` (the old key is
+kept, comma-separated, so older ciphertext stays decryptable). After rotating,
+re-push the key and teammates resync:
 
 ```bash
-dotenvx encrypt .env.production --rotate     # dotenvx CLI: new key in .env.keys
+dotenvx rotate -f .env.production            # dotenvx CLI: new key in .env.keys
 # re-push the rotated key — vault-push <folder> <secret-name> --env <env>
 envdrift vault-push . myapp-dotenvx-key --env production \
   -p azure --vault-url https://my-keyvault.vault.azure.net/

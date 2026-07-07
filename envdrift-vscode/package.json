@@ -31,11 +31,12 @@
     "onCommand:envdrift.disable",
     "onCommand:envdrift.encryptNow",
     "onCommand:envdrift.showStatus",
+    "onCommand:envdrift.showLogs",
     "onCommand:envdrift.startAgent",
     "onCommand:envdrift.stopAgent",
     "onCommand:envdrift.refreshAgentStatus"
   ],
-  "main": "./out/extension.js",
+  "main": "./dist/extension.js",
   "capabilities": {
     "untrustedWorkspaces": {
       "supported": "limited",
@@ -62,6 +63,10 @@
       {
         "command": "envdrift.showStatus",
         "title": "EnvDrift: Show Status"
+      },
+      {
+        "command": "envdrift.showLogs",
+        "title": "EnvDrift: Show Logs"
       },
       {
         "command": "envdrift.startAgent",
@@ -115,10 +120,12 @@
     }
   },
   "scripts": {
-    "vscode:prepublish": "npm run compile",
+    "vscode:prepublish": "npm run bundle",
+    "bundle": "esbuild ./src/extension.ts --bundle --outfile=dist/extension.js --external:vscode --format=cjs --platform=node --target=node18",
     "compile": "tsc -p ./",
     "watch": "tsc -watch -p ./",
     "lint": "eslint src/",
+    "pretest": "npm run compile && npm run bundle",
     "test": "node ./out/test/runTest.js",
     "test:unit": "mocha --ui tdd ./out/test/unit/**/*.test.js"
   },
@@ -129,17 +136,23 @@
   },
   "devDependencies": {
     "@eslint/js": "^10.0.0",
+    "@types/cross-spawn": "^6.0.6",
     "@types/glob": "^9.0.0",
     "@types/mocha": "^10.0.0",
     "@types/node": "^24.0.0",
-    "@types/sinon": "^21.0.0",
+    "@types/sinon": "^22.0.0",
     "@types/vscode": "^1.85.0",
-    "@vscode/test-electron": "^2.4.0",
+    "@vscode/test-electron": "^3.0.0",
+    "@vscode/vsce": "^3.9.2",
+    "esbuild": "^0.28.1",
     "eslint": "^10.0.0",
     "glob": "^13.0.0",
     "mocha": "^11.0.0",
     "sinon": "^22.0.0",
     "typescript": "^6.0.0",
     "typescript-eslint": "^8.0.0"
+  },
+  "dependencies": {
+    "cross-spawn": "^7.0.6"
   }
 }

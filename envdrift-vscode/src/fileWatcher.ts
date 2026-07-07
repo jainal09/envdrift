@@ -2,6 +2,7 @@ import * as vscode from 'vscode';
 import * as path from 'path';
 import { getConfig, matchesPatterns, isExcluded } from './config';
 import { encryptFile, isEncrypted } from './encryption';
+import { log } from './logger';
 import { showStatus } from './statusBar';
 
 let disposable: vscode.Disposable | undefined;
@@ -11,7 +12,7 @@ let disposable: vscode.Disposable | undefined;
  */
 export function startWatching(context: vscode.ExtensionContext): void {
     // Only auto-encrypt in a trusted workspace: encryption shells out to
-    // `envdrift lock`, which must never run on untrusted folder content.
+    // `envdrift encrypt`, which must never run on untrusted folder content.
     if (vscode.workspace.isTrusted) {
         registerCloseWatcher(context);
     }
@@ -75,16 +76,21 @@ async function handleDocumentClose(document: vscode.TextDocument): Promise<void>
 
     // Encrypt the file
     showStatus('$(sync~spin) Encrypting...', 10000);
+    log(`Auto-encrypting on close: ${fileName}`);
 
-    const result = await encryptFile(filePath);
+    const result = await encryptFile(filePath, log);
 
     if (result.success) {
         showStatus('$(check) Encrypted', 3000);
+        log(result.message);
         if (config.showNotifications) {
             vscode.window.showInformationMessage(`🔐 ${result.message}`);
         }
     } else {
         showStatus('$(error) Failed', 3000);
+        // Always keep the error observable in the output channel, even with
+        // notifications disabled (#482).
+        log(`FAILED: ${result.message}`);
         if (config.showNotifications) {
             vscode.window.showWarningMessage(`⚠️ ${result.message}`);
         }
@@ -147,13 +153,16 @@ export async function encryptCurrentFile(): Promise<void> {
 
     // Encrypt
     showStatus('$(sync~spin) Encrypting...', 10000);
-    const result = await encryptFile(filePath);
+    log(`Manual encrypt: ${baseName}`);
+    const result = await encryptFile(filePath, log);
 
     if (result.success) {
         showStatus('$(check) Encrypted', 3000);
+        log(result.message);
         vscode.window.showInformationMessage(`🔐 ${result.message}`);
     } else {
         showStatus('$(error) Failed', 3000);
+        log(`FAILED: ${result.message}`);
         vscode.window.showErrorMessage(`❌ ${result.message}`);
     }
 }

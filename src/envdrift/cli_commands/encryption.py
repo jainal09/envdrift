@@ -34,9 +34,13 @@ from envdrift.vault.base import SecretNotFoundError, VaultError
 
 
 def _load_encryption_config():
-    import tomllib
-
-    from envdrift.config import ConfigNotFoundError, EnvdriftConfig, find_config, load_config
+    from envdrift.config import (
+        ConfigLoadError,
+        ConfigNotFoundError,
+        EnvdriftConfig,
+        find_config,
+        load_config,
+    )
 
     config_path = find_config()
     if not config_path:
@@ -44,12 +48,13 @@ def _load_encryption_config():
 
     try:
         return load_config(config_path), config_path
-    except tomllib.TOMLDecodeError as e:
-        print_warning(f"TOML syntax error in {config_path}: {e}")
-    except ConfigNotFoundError as e:
-        print_warning(str(e))
-
-    return EnvdriftConfig(), None
+    except (ConfigNotFoundError, ConfigLoadError) as e:
+        # An existing-but-broken config must abort: silently falling back to a
+        # default EnvdriftConfig() used to encrypt a SOPS-configured project
+        # with dotenvx (wrong backend, stray .env.keys minted) on exit 0 (#491).
+        print_error(str(e))
+        print_error(f"Fix (or remove) {config_path} and re-run.")
+        raise typer.Exit(code=1) from None
 
 
 def _resolve_config_path(config_path: Path | None, value: Path | str | None) -> Path | None:
@@ -60,6 +65,40 @@ def _resolve_config_path(config_path: Path | None, value: Path | str | None) -> 
     if config_path and not path.is_absolute():
         return (config_path.parent / path).resolve()
     return path
+
+
+def _refuse_companion_target(env_file: Path, action: str) -> None:
+    """Refuse encrypt/decrypt on a companion file, by name, for every backend.
+
+    ``envdrift encrypt .env.keys`` would encrypt the dotenvx private-key store
+    itself: the keys become ciphertext under a brand-new keypair whose private
+    half is never persisted, permanently locking out every encrypted file in
+    the project — previously under a clean ``[OK]``/exit 0 (#474). The other
+    companion suffixes (``.example``/``.sample``/``.template``) exist to be
+    read as plaintext, so encrypting (or "decrypting") one is always a
+    mistake. Reuses the canonical predicate that already excludes these names
+    from push/pull.
+    """
+    from envdrift.env_files import _is_excluded_env_file
+
+    if not _is_excluded_env_file(env_file.name):
+        return
+    if env_file.name.casefold().endswith(".keys"):
+        consequence = (
+            "Encrypting it would permanently lock out every file encrypted with its keys."
+            if action == "encrypt"
+            else "It is already plaintext; there is nothing to decrypt."
+        )
+        print_error(
+            f"Refusing to {action} {env_file}: it is the dotenvx private-key "
+            f"store and must stay plaintext. {consequence}"
+        )
+    else:
+        print_error(
+            f"Refusing to {action} {env_file}: it is a plaintext companion "
+            "file (.example/.sample/.template), not a secret store."
+        )
+    raise typer.Exit(code=1)
 
 
 def _protect_private_keys(env_file: Path) -> None:
@@ -80,8 +119,25 @@ def _protect_private_keys(env_file: Path) -> None:
         )
 
 
+def _report_not_installed(encryption_backend) -> None:
+    """Print the not-installed error, surfacing any auto-install failure cause.
+
+    When a backend recorded why its auto-install attempt failed (#475), telling
+    the user only "X is not installed" plus instructions recommending
+    ``auto_install`` (which just failed) hides the actionable cause.
+    """
+    install_error = getattr(encryption_backend, "install_error", None)
+    if isinstance(install_error, str) and install_error:
+        print_error(f"{encryption_backend.name} auto-install failed: {install_error}")
+    print_error(f"{encryption_backend.name} is not installed")
+    console.print(encryption_backend.install_instructions())
+
+
 def encrypt_cmd(
-    env_file: Annotated[Path, typer.Argument(help="Path to .env file")] = Path(".env"),
+    env_files: Annotated[
+        list[Path] | None,
+        typer.Argument(help="Path(s) to .env file(s) (default: .env)"),
+    ] = None,
     check: Annotated[
         bool, typer.Option("--check", help="Only check encryption status, don't encrypt")
     ] = False,
@@ -157,7 +213,7 @@ def encrypt_cmd(
     ] = None,
 ) -> None:
     """
-    Check encryption status of an .env file or encrypt it.
+    Check encryption status of one or more .env files or encrypt them.
 
     Supports multiple encryption backends:
     - dotenvx (default or config): Uses dotenvx CLI for encryption
@@ -166,10 +222,13 @@ def encrypt_cmd(
     If --backend is not provided, envdrift uses the backend from config
     (envdrift.toml/pyproject.toml) or falls back to dotenvx.
 
-    When run with --check, prints an encryption report and exits with code 1
-    if the detector recommends blocking a commit.
+    When run with --check, prints an encryption report per file and exits with
+    code 1 if the detector recommends blocking a commit for any of them.
+    Accepting multiple files keeps the command usable as a pre-commit
+    ``pass_filenames: true`` hook entry, where every matched staged file is
+    appended to one invocation (#493).
 
-    When run without --check, attempts to perform encryption using the
+    When run without --check, attempts to encrypt each file using the
     specified backend; if the tool is not available, prints installation
     instructions and exits.
 
@@ -177,12 +236,24 @@ def encrypt_cmd(
         envdrift encrypt                     # Encrypt with dotenvx (default)
         envdrift encrypt --backend sops      # Encrypt with SOPS
         envdrift encrypt --check             # Check encryption status only
+        envdrift encrypt --check .env.production .env.staging  # Check several files
         envdrift encrypt -b sops --age AGE_PUBLIC_KEY  # SOPS with age key
         envdrift encrypt --sops-config .sops.yaml  # SOPS with explicit config
     """
-    if not env_file.exists():
-        print_error(f"ENV file not found: {env_file}")
+    files = list(env_files) if env_files else [Path(".env")]
+
+    missing_files = [env_file for env_file in files if not env_file.exists()]
+    if missing_files:
+        for env_file in missing_files:
+            print_error(f"ENV file not found: {env_file}")
         raise typer.Exit(code=1)
+
+    # Refuse companion targets (.keys/.example/.sample/.template) across ALL
+    # requested files — the default single [.env] and every multi-file target —
+    # before touching any of them, so one companion in a batch aborts the whole
+    # invocation with nothing encrypted (#474).
+    for env_file in files:
+        _refuse_companion_target(env_file, "encrypt")
 
     if verify_vault or vault_provider or vault_url or vault_region or vault_secret:
         print_error("Vault verification moved to `envdrift decrypt --verify-vault ...`")
@@ -241,32 +312,63 @@ def encrypt_cmd(
         except SchemaLoadError as e:
             print_warning(f"Could not load schema: {e}")
 
-    # Parse env file
     parser = EnvParser()
-    try:
-        env = parser.parse(env_file)
-    except (IsADirectoryError, ValueError) as e:
-        # A directory passed instead of a file, or a non-UTF-8 / binary file —
-        # surface cleanly instead of an uncaught traceback (#24, #25).
-        print_error(str(e))
-        raise typer.Exit(code=1) from None
-
-    # Analyze encryption
     detector = EncryptionDetector()
-    report = detector.analyze(env, schema_meta)
-    detected_backend = detector.detect_backend_for_file(env_file)
-    if detected_backend:
-        report.detected_backend = detected_backend
-    elif report.detected_backend is None:
-        report.detected_backend = backend_enum.value
+
+    def _analyze_file(env_file: Path):
+        """Parse and analyze one env file, exiting cleanly on unreadable input."""
+        try:
+            # lenient=True so --check analyzes every KEY=value assignment dotenvx
+            # would encrypt — a strict parse silently skips non-identifier keys
+            # (e.g. MY-AWS-KEY) and would miss plaintext secrets in them.
+            env = parser.parse(env_file, lenient=True)
+        except (IsADirectoryError, ValueError) as e:
+            # A directory passed instead of a file, or a non-UTF-8 / binary file —
+            # surface cleanly instead of an uncaught traceback (#24, #25).
+            print_error(str(e))
+            raise typer.Exit(code=1) from None
+
+        report = detector.analyze(env, schema_meta)
+        detected_backend = detector.detect_backend_for_file(env_file)
+        if detected_backend:
+            report.detected_backend = detected_backend
+        elif report.detected_backend is None:
+            report.detected_backend = backend_enum.value
+        return report
 
     if check:
-        # Just report status
-        print_encryption_report(report)
+        # Report status per file; block if any file would block a commit.
+        should_block = False
+        for env_file in files:
+            report = _analyze_file(env_file)
+            print_encryption_report(report)
+            if detector.should_block_commit(report):
+                should_block = True
 
-        if detector.should_block_commit(report):
+        if should_block:
             raise typer.Exit(code=1)
     else:
+        # Analyze every target before touching any backend: unreadable input and
+        # cross-backend double encryption are refused up front (#475), and the
+        # refusal must not depend on the selected backend being installed.
+        # report.detected_backend (not the file-level header scan alone) also
+        # carries value-level detection, so a file whose header was stripped but
+        # whose values are still another backend's ciphertext is refused too.
+        # For a plaintext file it equals the selected backend, so encryption
+        # proceeds.
+        for env_file in files:
+            report = _analyze_file(env_file)
+            report_backend = report.detected_backend
+            if report_backend and report_backend != backend_enum.value:
+                print_error(
+                    f"{env_file} is already encrypted with {report_backend}, but the "
+                    f"{backend_enum.value} backend was selected. Double-encrypting would nest "
+                    f"ciphertexts and break decryption. Decrypt it first with "
+                    f"`envdrift decrypt {env_file} --backend {report_backend}` or re-run with "
+                    f"`--backend {report_backend}`."
+                )
+                raise typer.Exit(code=1)
+
         # Attempt encryption using the selected backend
         try:
             backend_config: dict[str, object] = {}
@@ -283,8 +385,7 @@ def encrypt_cmd(
             encryption_backend = get_encryption_backend(backend_enum, **backend_config)
 
             if not encryption_backend.is_installed():
-                print_error(f"{encryption_backend.name} is not installed")
-                console.print(encryption_backend.install_instructions())
+                _report_not_installed(encryption_backend)
                 raise typer.Exit(code=1)
 
             # Build kwargs for SOPS-specific options
@@ -305,20 +406,27 @@ def encrypt_cmd(
             from envdrift.cli_commands.encryption_helpers import should_skip_reencryption
 
             smart_enabled = encryption_config.smart_encryption if encryption_config else False
-            should_skip, skip_reason = should_skip_reencryption(
-                env_file, encryption_backend, enabled=smart_enabled
-            )
-            if should_skip:
-                print_success(f"Skipped re-encryption of {env_file} ({skip_reason})")
-                return
 
-            result = encryption_backend.encrypt(env_file, **encrypt_kwargs)
-            if result.success:
-                print_success(f"Encrypted {env_file} using {encryption_backend.name}")
-                _protect_private_keys(env_file)
-            else:
-                print_error(result.message)
-                raise typer.Exit(code=1)
+            for env_file in files:
+                should_skip, skip_reason = should_skip_reencryption(
+                    env_file, encryption_backend, enabled=smart_enabled
+                )
+                if should_skip:
+                    print_success(f"Skipped re-encryption of {env_file} ({skip_reason})")
+                    continue
+
+                result = encryption_backend.encrypt(env_file, **encrypt_kwargs)
+                if result.success:
+                    if result.changed:
+                        print_success(f"Encrypted {env_file} using {encryption_backend.name}")
+                    else:
+                        # Honest no-op (e.g. already encrypted): surface the backend's
+                        # message instead of an unconditional "Encrypted" banner (#475).
+                        print_warning(result.message)
+                    _protect_private_keys(env_file)
+                else:
+                    print_error(result.message)
+                    raise typer.Exit(code=1)
 
         except EncryptionNotFoundError as e:
             print_error(str(e))
@@ -326,6 +434,24 @@ def encrypt_cmd(
         except EncryptionBackendError as e:
             print_error(f"Encryption failed: {e}")
             raise typer.Exit(code=1) from None
+
+
+def _private_key_var_name_for(env_file: Path) -> str:
+    """Derive dotenvx's private-key variable name from the env file name.
+
+    ``.env`` -> ``DOTENV_PRIVATE_KEY``; ``.env.<env>`` ->
+    ``DOTENV_PRIVATE_KEY_<ENV>`` (dots become underscores, uppercased) — the
+    same derivation dotenvx itself applies. ``Path.stem`` strips only the
+    LAST suffix, so the previous ``env_file.stem`` was always ``".env"`` for
+    ``.env.<env>`` files and every raw vault value collapsed to the
+    PRODUCTION default, false-failing a CORRECT bare key for any other
+    environment (#473).
+    """
+    env_name = env_file.name.removeprefix(".env").replace(".", "_").upper()
+    env_name = env_name.lstrip("_")
+    if not env_name:
+        return "DOTENV_PRIVATE_KEY"
+    return f"DOTENV_PRIVATE_KEY_{env_name}"
 
 
 def _verify_decryption_with_vault(
@@ -357,6 +483,7 @@ def _verify_decryption_with_vault(
         bool: `True` if the vault key successfully decrypts a temporary copy of `env_file`, `False` otherwise.
     """
     import os
+    import shutil
     import tempfile
 
     from envdrift.vault import get_vault_client
@@ -366,6 +493,7 @@ def _verify_decryption_with_vault(
         console.print("[bold]Vault Key Verification[/bold]")
         console.print(f"[dim]Provider: {provider} | Secret: {secret_name}[/dim]")
 
+    vault_client = None
     try:
         # Create vault client
         vault_kwargs: dict = {}
@@ -414,22 +542,31 @@ def _verify_decryption_with_vault(
             print_error("dotenvx is not installed - cannot verify decryption")
             return False
 
-        # The vault stores secrets in "DOTENV_PRIVATE_KEY_ENV=key" format
-        # Parse out the actual key value if it's in that format
-        actual_private_key = private_key_str
-        if "=" in private_key_str and private_key_str.startswith("DOTENV_PRIVATE_KEY"):
-            # Extract just the key value after the =
-            actual_private_key = private_key_str.split("=", 1)[1]
-            # Get the variable name from the vault value
-            key_var_name = private_key_str.split("=", 1)[0]
+        # The vault stores secrets in "DOTENV_PRIVATE_KEY_ENV=key" format.
+        # Normalize exactly like the sync engine and `lock --verify-vault`
+        # (#356/#413): strip whitespace, one layer of quotes, and the
+        # DOTENV_PRIVATE_KEY_<SUFFIX>= prefix. The previous raw split("=", 1)
+        # kept the quotes from the dotenvx-style
+        # DOTENV_PRIVATE_KEY_PRODUCTION="<hex>" format, so dotenvx received an
+        # invalid key and a CORRECT vault key was reported as "CANNOT decrypt"
+        # with destructive git-restore advice (#473).
+        from envdrift.sync.engine import normalize_vault_key_value
+
+        actual_private_key, vault_suffix = normalize_vault_key_value(private_key_str)
+        if vault_suffix is not None:
+            # dotenvx resolves the variable from the UPPERCASED environment
+            # name it derives from the file name; match that casing.
+            key_var_name = f"DOTENV_PRIVATE_KEY_{vault_suffix.upper()}"
+        elif actual_private_key.startswith("DOTENV_PRIVATE_KEY="):
+            # dotenvx's suffix-less format for a plain `.env` file. Re-run the
+            # remainder through the normalizer so a quoted value is dequoted.
+            remainder = actual_private_key.split("=", 1)[1]
+            actual_private_key, _ = normalize_vault_key_value(remainder)
+            key_var_name = "DOTENV_PRIVATE_KEY"
         else:
-            # Key is just the raw value, construct variable name from env file
-            env_name = env_file.stem.replace(".env", "").replace(".", "_").upper()
-            if env_name.startswith("_"):
-                env_name = env_name[1:]
-            if not env_name:
-                env_name = "PRODUCTION"  # Default
-            key_var_name = f"DOTENV_PRIVATE_KEY_{env_name}"
+            # Key is just the raw value: derive the variable name from the
+            # env file name exactly like dotenvx does (#473).
+            key_var_name = _private_key_var_name_for(env_file)
 
         # Build a clean environment so dotenvx cannot fall back to stray keys
         dotenvx_env = {
@@ -443,8 +580,12 @@ def _verify_decryption_with_vault(
             temp_dir_path = Path(temp_dir)
             tmp_path = temp_dir_path / env_file.name  # Preserve filename for key naming
 
-            # Copy env file into isolated directory; inject vault key via environment
-            tmp_path.write_text(env_file.read_text())
+            # Copy the env file into the isolated directory byte-for-byte; the
+            # vault key is injected via the environment. A text-mode copy
+            # (read_text/write_text) would decode with the platform-default
+            # encoding (cp1252 on Windows) and translate newlines, so the temp
+            # copy would not be byte-identical to the original (#454).
+            shutil.copyfile(env_file, tmp_path)
 
             try:
                 dotenvx.decrypt(
@@ -484,7 +625,16 @@ def _verify_decryption_with_vault(
                 return False
 
     except SecretNotFoundError:
-        print_error(f"Secret '{secret_name}' not found in vault")
+        # Name the AWS region that was searched (#487). Read it from the
+        # constructed client (mirrors vault_pull) so the message reflects the
+        # region the client actually used, instead of a hardcoded fallback
+        # that could silently drift from the construction default above.
+        region_note = ""
+        if provider == "aws":
+            client_region = getattr(vault_client, "region", None)
+            if client_region:
+                region_note = f" (region {client_region})"
+        print_error(f"Secret '{secret_name}' not found in vault{region_note}")
         return False
     except VaultError as e:
         print_error(f"Vault error: {e}")
@@ -599,6 +749,8 @@ def decrypt_cmd(
         print_error(f"ENV file not found: {env_file}")
         raise typer.Exit(code=1)
 
+    _refuse_companion_target(env_file, "decrypt")
+
     envdrift_config, config_path = _load_encryption_config()
     encryption_config = getattr(envdrift_config, "encryption", None)
 
@@ -693,8 +845,7 @@ def decrypt_cmd(
         encryption_backend = get_encryption_backend(backend_enum, **backend_config)
 
         if not encryption_backend.is_installed():
-            print_error(f"{encryption_backend.name} is not installed")
-            console.print(encryption_backend.install_instructions())
+            _report_not_installed(encryption_backend)
             raise typer.Exit(code=1)
 
         result = encryption_backend.decrypt(env_file)

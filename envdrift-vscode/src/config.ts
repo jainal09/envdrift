@@ -1,4 +1,5 @@
 import * as vscode from 'vscode';
+import { pickConfigTargetScope } from './utils';
 // Re-export pure utilities for backwards compatibility
 export { matchesPatterns, isExcluded } from './utils';
 
@@ -26,9 +27,18 @@ export function getConfig(): EnvDriftConfig {
 }
 
 /**
- * Set enabled state
+ * Set enabled state, writing to the scope that currently defines the value so
+ * the toggle actually takes effect (a workspace-level `envdrift.enabled` would
+ * otherwise shadow a global write forever).
  */
 export async function setEnabled(enabled: boolean): Promise<void> {
     const config = vscode.workspace.getConfiguration('envdrift');
-    await config.update('enabled', enabled, vscode.ConfigurationTarget.Global);
+    const scope = pickConfigTargetScope(config.inspect<boolean>('enabled'));
+    const target =
+        scope === 'workspaceFolder'
+            ? vscode.ConfigurationTarget.WorkspaceFolder
+            : scope === 'workspace'
+                ? vscode.ConfigurationTarget.Workspace
+                : vscode.ConfigurationTarget.Global;
+    await config.update('enabled', enabled, target);
 }

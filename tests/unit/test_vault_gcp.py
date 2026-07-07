@@ -99,22 +99,29 @@ def mock_gcp():
         cloud=cloud_mod,
     )
 
-    with patch.dict(
-        sys.modules,
-        {
-            "google": google_mod,
-            "google.api_core": api_core_mod,
-            "google.api_core.exceptions": exceptions_mod,
-            "google.auth": auth_mod,
-            "google.auth.exceptions": auth_exceptions_mod,
-            "google.cloud": cloud_mod,
-            "google.cloud.secretmanager": secretmanager_mod,
-        },
-    ):
-        import envdrift.vault.gcp as gcp_module
+    import envdrift.vault.gcp as gcp_module
 
+    try:
+        with patch.dict(
+            sys.modules,
+            {
+                "google": google_mod,
+                "google.api_core": api_core_mod,
+                "google.api_core.exceptions": exceptions_mod,
+                "google.auth": auth_mod,
+                "google.auth.exceptions": auth_exceptions_mod,
+                "google.cloud": cloud_mod,
+                "google.cloud.secretmanager": secretmanager_mod,
+            },
+        ):
+            importlib.reload(gcp_module)
+            yield gcp_module
+    finally:
+        # patch.dict has restored sys.modules by now; reload once more so the
+        # module re-binds the REAL GCP SDK (or its genuine unavailable state)
+        # instead of leaving the stubs poisoning later tests in-process (#497) —
+        # test_vault_gcp_paths.py runs right after this file in the unit lane.
         importlib.reload(gcp_module)
-        yield gcp_module
 
 
 class TestGCPSecretManagerClient:
@@ -430,6 +437,9 @@ class TestGCPSecretManagerClient:
         secret = client.get_secret("bin")
         assert secret.value == base64.b64encode(payload).decode("ascii")
         assert secret.version == "1"
+        # #480: the base64 transformation is marked so dotenvx key flows can
+        # reject the payload instead of installing it as key material.
+        assert secret.metadata.get("encoding") == "base64"
 
     def test_get_secret_not_found(self, mock_gcp):
         """NotFound should map to SecretNotFoundError."""

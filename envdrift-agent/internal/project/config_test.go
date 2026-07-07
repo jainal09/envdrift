@@ -1,9 +1,13 @@
 package project
 
 import (
+	"bytes"
+	"log"
 	"os"
 	"path/filepath"
 	"reflect"
+	"runtime"
+	"strings"
 	"testing"
 	"time"
 )
@@ -342,52 +346,36 @@ idle_timeout = "9m"
 	}
 }
 
-// TestLoadProjectConfig_PyprojectWithoutEnvdriftSkipped: a pyproject.toml with
-// no [tool.envdrift] table does not stop the walk.
-func TestLoadProjectConfig_PyprojectWithoutEnvdriftSkipped(t *testing.T) {
-	parent := t.TempDir()
-	project := filepath.Join(parent, "child")
-	if err := os.MkdirAll(project, 0o755); err != nil {
-		t.Fatal(err)
+// TestLoadProjectConfig_PyprojectSkippedAndWalkContinues: a child pyproject.toml
+// that is unusable for discovery — either missing [tool.envdrift] or malformed —
+// is skipped (matching the CLI's find_config), so the walk continues up to the
+// parent envdrift.toml rather than stopping or erroring.
+func TestLoadProjectConfig_PyprojectSkippedAndWalkContinues(t *testing.T) {
+	cases := []struct {
+		name      string
+		pyproject string
+	}{
+		{"pyproject without [tool.envdrift]", "\n[project]\nname = \"demo\"\n"},
+		{"malformed pyproject", "this is { not TOML\n"},
 	}
-	writeFile(t, filepath.Join(project, "pyproject.toml"), `
-[project]
-name = "demo"
-`)
-	writeFile(t, filepath.Join(parent, "envdrift.toml"), `
-[guardian]
-enabled = true
-`)
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			parent := t.TempDir()
+			project := filepath.Join(parent, "child")
+			if err := os.MkdirAll(project, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			writeFile(t, filepath.Join(project, "pyproject.toml"), tc.pyproject)
+			writeFile(t, filepath.Join(parent, "envdrift.toml"), "\n[guardian]\nenabled = true\n")
 
-	cfg, err := LoadProjectConfig(project)
-	if err != nil {
-		t.Fatalf("LoadProjectConfig() error = %v", err)
-	}
-	if !cfg.Enabled {
-		t.Error("Enabled = false: walk stopped at a pyproject.toml without [tool.envdrift]")
-	}
-}
-
-// TestLoadProjectConfig_MalformedPyprojectSkipped: a malformed pyproject.toml
-// is skipped (matching the CLI's find_config), not a fatal error.
-func TestLoadProjectConfig_MalformedPyprojectSkipped(t *testing.T) {
-	parent := t.TempDir()
-	project := filepath.Join(parent, "child")
-	if err := os.MkdirAll(project, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	writeFile(t, filepath.Join(project, "pyproject.toml"), "this is { not TOML\n")
-	writeFile(t, filepath.Join(parent, "envdrift.toml"), `
-[guardian]
-enabled = true
-`)
-
-	cfg, err := LoadProjectConfig(project)
-	if err != nil {
-		t.Fatalf("LoadProjectConfig() error = %v", err)
-	}
-	if !cfg.Enabled {
-		t.Error("Enabled = false: malformed pyproject.toml aborted discovery instead of being skipped")
+			cfg, err := LoadProjectConfig(project)
+			if err != nil {
+				t.Fatalf("LoadProjectConfig() error = %v", err)
+			}
+			if !cfg.Enabled {
+				t.Error("Enabled = false: discovery did not continue to the parent envdrift.toml")
+			}
+		})
 	}
 }
 
@@ -453,6 +441,59 @@ enabled = false
 	if configs[0].Path != proj1 {
 		t.Errorf("Expected path %s, got %s", proj1, configs[0].Path)
 	}
+}
+
+// TestLoadAllProjectConfigs_LogsDroppedProjectOnLoadError is the #504-review
+// regression: a project whose envdrift.toml (here, an unreadable ancestor) can
+// not be loaded must be reported — pre-fix the bare `continue` dropped it
+// silently, so the operator had no idea the project was no longer watched.
+func TestLoadAllProjectConfigs_LogsDroppedProjectOnLoadError(t *testing.T) {
+	if runtime.GOOS == "windows" || os.Geteuid() == 0 {
+		t.Skip("chmod-000 unreadability is not enforced on Windows or for root")
+	}
+	project := projectUnderUnreadableAncestor(t)
+	logbuf := captureLog(t)
+
+	configs, err := LoadAllProjectConfigs([]string{project})
+	if err != nil {
+		t.Fatalf("LoadAllProjectConfigs() error = %v", err)
+	}
+	if len(configs) != 0 {
+		t.Errorf("expected the unreadable project to be dropped, got %d configs", len(configs))
+	}
+	out := logbuf.String()
+	if !strings.Contains(out, "Skipping project") || !strings.Contains(out, project) {
+		t.Errorf("dropped project was not logged; log output:\n%s", out)
+	}
+}
+
+// projectUnderUnreadableAncestor returns a child project path whose discovery
+// walk hits an existing-but-unreadable ancestor envdrift.toml (a real load
+// error), cleaning the permissions up afterwards.
+func projectUnderUnreadableAncestor(t *testing.T) string {
+	t.Helper()
+	parent := t.TempDir()
+	project := filepath.Join(parent, "child")
+	if err := os.MkdirAll(project, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	ancestor := filepath.Join(parent, "envdrift.toml")
+	writeFile(t, ancestor, "\n[guardian]\nenabled = true\n")
+	if err := os.Chmod(ancestor, 0o000); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(ancestor, 0o600) })
+	return project
+}
+
+// captureLog redirects the standard logger into a buffer for the duration of
+// the test and restores stderr afterwards.
+func captureLog(t *testing.T) *bytes.Buffer {
+	t.Helper()
+	var buf bytes.Buffer
+	log.SetOutput(&buf)
+	t.Cleanup(func() { log.SetOutput(os.Stderr) })
+	return &buf
 }
 
 // TestLoadProjectConfigWithDefaults_AppliesAndOverrides is the project-level

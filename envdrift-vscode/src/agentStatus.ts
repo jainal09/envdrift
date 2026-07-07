@@ -1,28 +1,15 @@
 import * as vscode from 'vscode';
-import { exec } from 'child_process';
-import { promisify } from 'util';
+import {
+    AgentStatusInfo,
+    checkAgentStatus,
+    startAgentCore,
+    stopAgentCore,
+} from './agentCore';
 
-const execAsync = promisify(exec);
-
-/**
- * Agent status types
- */
-export type AgentStatus = 'running' | 'stopped' | 'not_installed' | 'error';
-
-/**
- * Agent status info
- */
-export interface AgentStatusInfo {
-    status: AgentStatus;
-    version?: string;
-    error?: string;
-}
+export { AgentStatus, AgentStatusInfo, checkAgentStatus } from './agentCore';
 
 // Status check interval (30 seconds)
 const CHECK_INTERVAL_MS = 30000;
-
-// Timeout for agent subprocess calls (prevents polling hangs on a stuck binary)
-const AGENT_EXEC_TIMEOUT_MS = 10000;
 
 // Callback for status changes
 type StatusChangeCallback = (status: AgentStatusInfo) => void;
@@ -30,68 +17,6 @@ type StatusChangeCallback = (status: AgentStatusInfo) => void;
 let statusCheckInterval: NodeJS.Timeout | undefined;
 let currentStatus: AgentStatusInfo = { status: 'stopped' };
 let onStatusChangeCallback: StatusChangeCallback | undefined;
-
-/**
- * Check if the envdrift-agent binary is available
- */
-async function isAgentInstalled(): Promise<boolean> {
-    try {
-        await execAsync('envdrift-agent --version', { timeout: AGENT_EXEC_TIMEOUT_MS });
-        return true;
-    } catch {
-        return false;
-    }
-}
-
-/**
- * Get the agent version
- */
-async function getAgentVersion(): Promise<string | undefined> {
-    try {
-        const { stdout } = await execAsync('envdrift-agent --version', { timeout: AGENT_EXEC_TIMEOUT_MS });
-        return stdout.trim();
-    } catch {
-        return undefined;
-    }
-}
-
-/**
- * Check the current agent status
- */
-export async function checkAgentStatus(): Promise<AgentStatusInfo> {
-    try {
-        // First check if agent is installed
-        const installed = await isAgentInstalled();
-        if (!installed) {
-            return { status: 'not_installed' };
-        }
-
-        // Check agent status
-        const { stdout } = await execAsync('envdrift-agent status', { timeout: AGENT_EXEC_TIMEOUT_MS });
-        const output = stdout.toLowerCase();
-
-        // Check for stopped/not running first to avoid false positives
-        // (e.g., "not running" contains "running" as substring)
-        if (output.includes('stopped') || output.includes('not running')) {
-            const version = await getAgentVersion();
-            return { status: 'stopped', version };
-        } else if (/\brunning\b/.test(output)) {
-            const version = await getAgentVersion();
-            return { status: 'running', version };
-        } else {
-            return { status: 'stopped' };
-        }
-    } catch (error) {
-        const errorMessage = error instanceof Error ? error.message : String(error);
-
-        // Check if it's a "not found" error
-        if (errorMessage.includes('not found') || errorMessage.includes('ENOENT')) {
-            return { status: 'not_installed' };
-        }
-
-        return { status: 'error', error: errorMessage };
-    }
-}
 
 /**
  * Start periodic status checking
@@ -120,24 +45,25 @@ export function stopStatusChecking(): void {
 }
 
 /**
+ * Cache a freshly observed status and notify if it changed
+ */
+function applyStatus(newStatus: AgentStatusInfo): void {
+    const changed = newStatus.status !== currentStatus.status;
+    currentStatus = newStatus;
+    if (changed && onStatusChangeCallback) {
+        try {
+            onStatusChangeCallback(newStatus);
+        } catch {
+            // Prevent unhandled exceptions from breaking the status check interval
+        }
+    }
+}
+
+/**
  * Update status and notify if changed
  */
 async function updateStatus(): Promise<void> {
-    const newStatus = await checkAgentStatus();
-
-    // Check if status changed
-    if (newStatus.status !== currentStatus.status) {
-        currentStatus = newStatus;
-        if (onStatusChangeCallback) {
-            try {
-                onStatusChangeCallback(newStatus);
-            } catch {
-                // Prevent unhandled exceptions from breaking the status check interval
-            }
-        }
-    } else {
-        currentStatus = newStatus;
-    }
+    applyStatus(await checkAgentStatus());
 }
 
 /**
@@ -159,32 +85,28 @@ export async function refreshStatus(): Promise<AgentStatusInfo> {
  * Start the agent
  */
 export async function startAgent(): Promise<boolean> {
-    try {
-        // Add timeout to prevent hanging if agent doesn't respond
-        await execAsync('envdrift-agent start', { timeout: AGENT_EXEC_TIMEOUT_MS });
-        await refreshStatus();
-        return currentStatus.status === 'running';
-    } catch (error) {
-        const errorMessage = error instanceof Error ? error.message : String(error);
-        vscode.window.showErrorMessage(`Failed to start agent: ${errorMessage}`);
-        return false;
+    const result = await startAgentCore();
+    // The core already verified the post-action status; reuse it instead of
+    // spawning another check.
+    applyStatus(result.status);
+    if (!result.ok) {
+        vscode.window.showErrorMessage(`Failed to start agent: ${result.error ?? 'unknown error'}`);
     }
+    return result.ok;
 }
 
 /**
  * Stop the agent
  */
 export async function stopAgent(): Promise<boolean> {
-    try {
-        // Add timeout to prevent hanging if agent doesn't respond
-        await execAsync('envdrift-agent stop', { timeout: AGENT_EXEC_TIMEOUT_MS });
-        await refreshStatus();
-        return currentStatus.status === 'stopped';
-    } catch (error) {
-        const errorMessage = error instanceof Error ? error.message : String(error);
-        vscode.window.showErrorMessage(`Failed to stop agent: ${errorMessage}`);
-        return false;
+    const result = await stopAgentCore();
+    // The core already verified the post-action status; reuse it instead of
+    // spawning another check.
+    applyStatus(result.status);
+    if (!result.ok) {
+        vscode.window.showErrorMessage(`Failed to stop agent: ${result.error ?? 'unknown error'}`);
     }
+    return result.ok;
 }
 
 /**

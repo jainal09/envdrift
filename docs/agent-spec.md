@@ -184,6 +184,14 @@ Machine (your laptop)
 }
 ```
 
+CLI writers serialize through an exclusive lock on a sidecar
+`projects.json.lock` file (re-reading the registry under the lock), so
+concurrent `register`/`unregister` commands never lose entries. A corrupt
+registry is surfaced as a warning and moved aside to
+`projects.json.corrupt-<timestamp>` before the next write replaces it — never
+silently discarded. The agent's watcher ignores both sidecar files (it only
+reacts to `projects.json` itself).
+
 ### How It Works
 
 1. **User runs** `envdrift agent register` explicitly — setting `[guardian].enabled = true` alone is not enough
@@ -261,7 +269,9 @@ Reports installation status of all components:
 
 **File:** `.github/workflows/agent-release.yml`
 
-**Trigger:** Push tags matching `agent-v*` (e.g., `agent-v1.0.0`)
+**Trigger:** Push tags matching `agent-v*` (e.g., `agent-v1.0.0`). The tag push (from release-please's PAT,
+or manual) is the *only* trigger — release-please.yml does not also call this workflow, and a per-tag
+`concurrency` group queues duplicate runs so two pipelines can never race binaries against `checksums.txt` (#495).
 
 **Build Matrix (5 platforms):**
 
@@ -294,15 +304,17 @@ Reports installation status of all components:
 
 **File:** `.github/workflows/vscode-release.yml`
 
-**Trigger:** Push tags matching `vscode-v*` (e.g., `vscode-v1.0.0`)
+**Trigger:** Push tags matching `vscode-v*` (e.g., `vscode-v1.0.0`). Like the agent workflow, the tag push is
+the only trigger and a per-tag `concurrency` group prevents duplicate concurrent releases (#495).
 
 **Build Job:**
 
-1. Setup Node.js 20 with npm caching
+1. Setup Node.js with npm caching
 2. `npm ci` - Install dependencies
 3. `npm run compile` - TypeScript compilation
-4. `npm test` - Run tests (non-blocking; failures are logged and release continues)
-5. `npx vsce package` - Package as VSIX
+4. `npm run test:unit` then `xvfb-run -a npm test` - Run the unit and Electron suites
+   (blocking: a failing or crashing test step fails the release, #495)
+5. `./node_modules/.bin/vsce package` - Package as VSIX with the lockfile-pinned `@vscode/vsce`
 
 **Release Job:**
 
@@ -316,9 +328,10 @@ Reports installation status of all components:
 **Publish Job (stable releases only):**
 
 - Only runs for tags without `-rc`, `-beta`, or `-alpha` suffixes
-- Publishes to VS Code Marketplace via `npx vsce publish`
+- Runs `npm ci`, then publishes to the VS Code Marketplace via the lockfile-pinned
+  `./node_modules/.bin/vsce publish` (#495)
 - Uses `VSCE_PAT` secret (Personal Access Token)
-- Continue-on-error (allows manual PAT setup)
+- Skips cleanly when `VSCE_PAT` is not configured, but a real publish failure fails the job
 
 ### Release Tag Examples
 
@@ -358,7 +371,7 @@ Instead of watching entire directories, the agent:
 | Package | File | Purpose |
 |---------|------|---------|
 | `registry` | `internal/registry/registry.go` | Loads and watches `~/.envdrift/projects.json` |
-| `project` | `internal/project/config.go` | Loads per-project `[guardian]` settings from `envdrift.toml` or `pyproject.toml` (CLI `find_config` contract) |
+| `project` | `internal/project/config.go` | Loads `[guardian]` settings from `envdrift.toml` or `pyproject.toml` (CLI `find_config` contract) |
 
 **Refactored Guardian:**
 
@@ -519,9 +532,10 @@ export async function stopAgent(): Promise<boolean>;
 
 Extension communicates via CLI commands:
 
-1. **Status check**: `envdrift-agent status`
-2. **Version**: `envdrift-agent --version`
-3. **Start**: `envdrift-agent start`
+1. **Status check**: `envdrift-agent status` (parses the `Running:` boolean)
+2. **Version**: `envdrift-agent version`
+3. **Start**: `envdrift-agent install` (idempotent; starts the platform
+   service — `start` runs the guardian in the foreground and is debug-only)
 4. **Stop**: `envdrift-agent stop`
 
 ---
@@ -765,7 +779,7 @@ Auto-publish to VS Code Marketplace when a `vscode-v*` tag is pushed.
   env:
     VSCE_PAT: ${{ secrets.VSCE_PAT }}
   run: |
-    npx vsce publish -p $VSCE_PAT
+    ./node_modules/.bin/vsce publish -p $VSCE_PAT
 ```
 
 **Setup required:**

@@ -45,17 +45,22 @@ type rawConfig struct {
 	Directories rawDirectoriesConfig `toml:"directories"`
 }
 
+// Slice fields are pointers so an explicit empty array in the TOML
+// (patterns = [], exclude = [], watch = []) is honored as "clear the default"
+// rather than being indistinguishable from an absent key: a nil pointer means
+// the key was absent (keep the default), a non-nil pointer to an empty slice
+// means the user deliberately cleared it.
 type rawGuardianConfig struct {
-	Enabled     *bool    `toml:"enabled"`
-	IdleTimeout any      `toml:"idle_timeout"`
-	Patterns    []string `toml:"patterns"`
-	Exclude     []string `toml:"exclude"`
-	Notify      *bool    `toml:"notify"`
+	Enabled     *bool     `toml:"enabled"`
+	IdleTimeout any       `toml:"idle_timeout"`
+	Patterns    *[]string `toml:"patterns"`
+	Exclude     *[]string `toml:"exclude"`
+	Notify      *bool     `toml:"notify"`
 }
 
 type rawDirectoriesConfig struct {
-	Watch     []string `toml:"watch"`
-	Recursive *bool    `toml:"recursive"`
+	Watch     *[]string `toml:"watch"`
+	Recursive *bool     `toml:"recursive"`
 }
 
 // savedConfig is the shape Save serializes: idle_timeout goes out as the
@@ -125,33 +130,49 @@ func Load() (*Config, error) {
 		return nil, err
 	}
 
-	if raw.Guardian.Enabled != nil {
-		cfg.Guardian.Enabled = *raw.Guardian.Enabled
+	if err := mergeGuardian(&cfg.Guardian, &raw.Guardian, configPath); err != nil {
+		return nil, err
 	}
-	if raw.Guardian.IdleTimeout != nil {
-		d, err := decodeIdleTimeout(raw.Guardian.IdleTimeout)
-		if err != nil {
-			return nil, fmt.Errorf("%s: guardian.idle_timeout: %w", configPath, err)
-		}
-		cfg.Guardian.IdleTimeout = d
-	}
-	if len(raw.Guardian.Patterns) > 0 {
-		cfg.Guardian.Patterns = raw.Guardian.Patterns
-	}
-	if len(raw.Guardian.Exclude) > 0 {
-		cfg.Guardian.Exclude = raw.Guardian.Exclude
-	}
-	if raw.Guardian.Notify != nil {
-		cfg.Guardian.Notify = *raw.Guardian.Notify
-	}
-	if len(raw.Directories.Watch) > 0 {
-		cfg.Directories.Watch = raw.Directories.Watch
-	}
-	if raw.Directories.Recursive != nil {
-		cfg.Directories.Recursive = *raw.Directories.Recursive
-	}
+	mergeDirectories(&cfg.Directories, &raw.Directories)
 
 	return cfg, nil
+}
+
+// mergeGuardian overlays the present fields of a decoded guardian section onto
+// the defaults already in cfg. Only keys actually present in the file change a
+// default; an explicit empty slice (patterns = []) clears it.
+func mergeGuardian(cfg *GuardianConfig, raw *rawGuardianConfig, configPath string) error {
+	if raw.Enabled != nil {
+		cfg.Enabled = *raw.Enabled
+	}
+	if raw.IdleTimeout != nil {
+		d, err := decodeIdleTimeout(raw.IdleTimeout)
+		if err != nil {
+			return fmt.Errorf("%s: guardian.idle_timeout: %w", configPath, err)
+		}
+		cfg.IdleTimeout = d
+	}
+	if raw.Patterns != nil {
+		cfg.Patterns = *raw.Patterns
+	}
+	if raw.Exclude != nil {
+		cfg.Exclude = *raw.Exclude
+	}
+	if raw.Notify != nil {
+		cfg.Notify = *raw.Notify
+	}
+	return nil
+}
+
+// mergeDirectories overlays the present fields of a decoded directories section
+// onto the defaults already in cfg (explicit watch = [] clears the default).
+func mergeDirectories(cfg *DirectoriesConfig, raw *rawDirectoriesConfig) {
+	if raw.Watch != nil {
+		cfg.Watch = *raw.Watch
+	}
+	if raw.Recursive != nil {
+		cfg.Recursive = *raw.Recursive
+	}
 }
 
 // decodeIdleTimeout converts a TOML idle_timeout value into a time.Duration.

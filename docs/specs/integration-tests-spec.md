@@ -31,10 +31,11 @@ forward-looking.
 **Container Setup:**
 
 ```yaml
-# docker-compose.test.yml
+# docker-compose.test.yml — canonical image pins live in tests/docker-compose.test.yml,
+# kept identical to the integration-tests.yml CI service containers (#500)
 services:
   localstack:
-    image: localstack/localstack:4.0
+    image: localstack/localstack:4.14
     ports:
       - "4566:4566"
     environment:
@@ -105,33 +106,35 @@ def vault_server():
 **Container Setup:**
 
 ```yaml
-# docker-compose.test.yml
+# docker-compose.test.yml — canonical image pins live in tests/docker-compose.test.yml,
+# kept identical to the integration-tests.yml CI service containers (#500)
 services:
   lowkey-vault:
-    image: nagyesta/lowkey-vault:7.1.32
+    image: nagyesta/lowkey-vault:7.3.0
     ports:
-      - "8443:8443"
+      - "8443:8443"  # Key Vault API (HTTPS, self-signed cert)
+      - "8080:8080"  # managed-identity token stub (HTTP)
     environment:
       - LOWKEY_VAULT_NAMES=envdrift-test-vault
 ```
 
-**Test Configuration:**
+**Test Configuration** (see `azure_test_env` in `tests/integration/conftest.py`):
 
-```python
-@pytest.fixture(scope="session")
-def azure_keyvault():
-    """Start Lowkey Vault and return vault URL."""
-    # Lowkey Vault uses self-signed certs, disable verification
-    os.environ["AZURE_KEYVAULT_URL"] = "https://localhost:8443"
-    os.environ["CURL_CA_BUNDLE"] = ""  # Disable cert verification
-    yield "https://localhost:8443"
-```
+- The container's self-signed certificate is exported at session start
+  (`lowkey_vault_ca_bundle`) and trusted via `REQUESTS_CA_BUNDLE`/`CURL_CA_BUNDLE` —
+  TLS verification stays on. The Azure SDK ignores the empty-CA-bundle trick (#484).
+- `AZURE_POD_IDENTITY_AUTHORITY_HOST` points `DefaultAzureCredential`'s IMDS
+  managed-identity flow at Lowkey's token stub on port 8080 (Lowkey accepts any bearer).
+- `ENVDRIFT_AZURE_VERIFY_CHALLENGE_RESOURCE=0` disables the SDK challenge-resource
+  check, which can never match an emulator's `localhost` domain.
 
 **Notes:**
 
 - [Lowkey Vault](https://github.com/nagyesta/lowkey-vault) is a test double for Azure Key Vault
-- Compatible with Azure SDK clients
+- Compatible with Azure SDK clients (7.3.0+ supports the SDK's `2025-07-01` API version)
 - Some encryption algorithms not supported (acceptable for secrets testing)
+- Real-backend Azure tests fail loudly when the running emulator cannot be driven;
+  they skip only when the container is absent (#484)
 
 ---
 

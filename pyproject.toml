@@ -48,7 +48,11 @@ dependencies = [
     "pydantic>=2.0",
     "pydantic-settings>=2.0",
     "rich>=13.0",
-    "typer>=0.9",
+    # typer < 0.13 cannot handle the PEP 604 unions (str | None) in the command
+    # signatures and crashes every invocation; typer 0.13-0.15.3 allow click >= 8.2,
+    # which breaks `--help` rendering (Parameter.make_metavar() signature change).
+    # 0.15.4 is the first release whose resolver-legal installs work (see #496).
+    "typer>=0.15.4",
     "python-dotenv>=1.0",
 ]
 
@@ -79,6 +83,7 @@ dev = [
     "pytest-timeout>=2.3.1",
     "pre-commit>=3.0",
     "pyyaml>=6.0",
+    "jsonschema>=4.0",
     "mkdocs-material>=9.5",
     "mkdocs-redirects>=1.2",
 ]

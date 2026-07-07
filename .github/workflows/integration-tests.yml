@@ -44,7 +44,7 @@ jobs:
     # Service containers for integration tests
     services:
       localstack:
-        image: localstack/localstack:4.14
+        image: localstack/localstack:4.14 # Keep in sync with tests/docker-compose.test.yml
         ports:
           - 4566:4566
         env:
@@ -59,8 +59,7 @@ jobs:
           --health-start-period=30s
 
       vault:
-        # Keep in sync with tests/docker-compose.test.yml (hashicorp/vault:1.21).
-        image: hashicorp/vault:1.21
+        image: hashicorp/vault:1.21 # Keep in sync with tests/docker-compose.test.yml
         ports:
           - 8200:8200
         env:
@@ -83,9 +82,16 @@ jobs:
           --health-start-period=5s
 
       lowkey-vault:
-        image: nagyesta/lowkey-vault:7.2.26
+        # 7.3.0+ is required: older images reject the api-version (2025-07-01)
+        # sent by the azure-keyvault-secrets SDK with HTTP 400.
+        image: nagyesta/lowkey-vault:7.3.0 # Keep in sync with tests/docker-compose.test.yml
         ports:
           - 8443:8443
+          # HTTP port serving the built-in managed-identity token stub
+          # (GET /metadata/identity/oauth2/token). DefaultAzureCredential in
+          # the envdrift CLI gets its dummy token here via
+          # AZURE_POD_IDENTITY_AUTHORITY_HOST (see tests/integration/conftest.py).
+          - 8080:8080
         env:
           LOWKEY_VAULT_NAMES: envdrift-test-vault
         options: >-
@@ -97,7 +103,7 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
 
       - name: Set up Python ${{ matrix.python-version }}
         uses: actions/setup-python@v6
@@ -105,13 +111,10 @@ jobs:
           python-version: ${{ matrix.python-version }}
 
       - name: Install uv
-        uses: astral-sh/setup-uv@v8.2.0
+        uses: astral-sh/setup-uv@v8.3.0
 
       - name: Install dependencies
-        run: |
-          uv sync --all-extras
-          # Install optional integration test dependencies
-          uv pip install boto3 hvac
+        run: uv sync --all-extras --locked
 
       - name: Install dotenvx
         run: |
@@ -211,7 +214,23 @@ jobs:
             echo "ERROR: Lowkey Vault failed to become ready within timeout"
             exit 1
           fi
-          
+
+          echo "Checking Lowkey Vault token endpoint..."
+          LOWKEY_TOKEN_READY=false
+          for i in {1..30}; do
+            if curl -sf "http://localhost:8080/metadata/identity/oauth2/token?resource=https%3A%2F%2Fvault.azure.net&api-version=2018-02-01" > /dev/null 2>&1; then
+              echo "Lowkey Vault token endpoint is ready!"
+              LOWKEY_TOKEN_READY=true
+              break
+            fi
+            echo "Waiting for Lowkey Vault token endpoint... ($i/30)"
+            sleep 2
+          done
+          if [ "$LOWKEY_TOKEN_READY" != "true" ]; then
+            echo "ERROR: Lowkey Vault token endpoint failed to become ready within timeout"
+            exit 1
+          fi
+
           echo "All services ready!"
 
       - name: Run integration tests
@@ -225,11 +244,11 @@ jobs:
           # HashiCorp Vault configuration
           VAULT_ADDR: http://localhost:8200
           VAULT_TOKEN: test-root-token
-          # Azure (Lowkey Vault) configuration
+          # Azure (Lowkey Vault) configuration. TLS trust, the managed-identity
+          # token stub and challenge-resource settings are wired per-fixture in
+          # tests/integration/conftest.py (azure_test_env): the empty-CA-bundle
+          # trick previously set here is ignored by the Azure SDK (#484).
           AZURE_KEYVAULT_URL: https://localhost:8443
-          CURL_CA_BUNDLE: ""
-          REQUESTS_CA_BUNDLE: ""
-          AZURE_CLI_DISABLE_CONNECTION_VERIFICATION: "1"
         run: |
           uv run pytest tests/integration/ \
             -v \
@@ -257,7 +276,7 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
 
       - name: Download coverage artifacts
         uses: actions/download-artifact@v8
@@ -288,7 +307,7 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
 
       - name: Set up Python 3.14
         uses: actions/setup-python@v6
@@ -296,12 +315,10 @@ jobs:
           python-version: "3.14"
 
       - name: Install uv
-        uses: astral-sh/setup-uv@v8.2.0
+        uses: astral-sh/setup-uv@v8.3.0
 
       - name: Install dependencies
-        run: |
-          uv sync --all-extras
-          uv pip install boto3 hvac google-cloud-secret-manager azure-keyvault-secrets azure-identity
+        run: uv sync --all-extras --locked
 
       - name: Run GCP tests (if configured)
         if: env.ENVDRIFT_TEST_GCP == '1'

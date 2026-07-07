@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import os
+import subprocess  # nosec B404
+import sys
 import tempfile
 from datetime import datetime
 from pathlib import Path
@@ -24,6 +26,40 @@ def _fake_private_key(seed: str) -> str:
     source, and so callers can vary ``seed`` to get distinct secrets.
     """
     return (seed * 64)[:64]
+
+
+class TestDotenvxHeaderFormat:
+    """#474: the header constant must match what dotenvx itself writes."""
+
+    def test_header_lines_match_dotenvx_box_style(self) -> None:
+        """Every header line is a ``#/ ... /`` box line — never ``\\#``.
+
+        envdrift previously wrote header lines ending in ``\\#`` (and dropped
+        dotenvx's padding), so a later dotenvx append produced a .env.keys with
+        two visibly different header styles despite the ``EnvKeysFile``
+        format-preservation contract.
+        """
+        lines = DOTENVX_HEADER.splitlines()
+        assert len(lines) == 5
+        for line in lines:
+            assert line.startswith("#/"), line
+            assert line.endswith("/"), line
+            assert "\\" not in line, line
+        # dotenvx pads the link and armor lines so the box edges align.
+        assert lines[2] == "#/     [how it works](https://dotenvx.com/encryption)       /"
+        assert "ARMORED KEYS" in lines[3]
+
+    def test_write_key_new_file_blank_line_after_header(self, tmp_path: Path) -> None:
+        """A fresh .env.keys reproduces dotenvx's blank line after the header."""
+        env_keys = tmp_path / ".env.keys"
+
+        EnvKeysFile(env_keys).write_key("DOTENV_PRIVATE_KEY_PRODUCTION", _fake_private_key("a"))
+
+        lines = env_keys.read_text(encoding="utf-8").splitlines()
+        header_lines = DOTENVX_HEADER.splitlines()
+        assert lines[: len(header_lines)] == header_lines
+        assert lines[len(header_lines)] == ""
+        assert lines[len(header_lines) + 1] == "# .env.production"
 
 
 class TestEnvKeysFile:
@@ -126,7 +162,7 @@ class TestEnvKeysFile:
         file = EnvKeysFile(env_keys)
         file.write_key("DOTENV_PRIVATE_KEY_PRODUCTION", "abc123")
 
-        content = env_keys.read_text()
+        content = env_keys.read_text(encoding="utf-8")
         assert "DOTENV_PRIVATE_KEYS" in content
         assert "DOTENV_PRIVATE_KEY_PRODUCTION=abc123" in content
         assert "# .env.production" in content
@@ -134,12 +170,14 @@ class TestEnvKeysFile:
     def test_write_key_preserves_header(self, tmp_path: Path) -> None:
         """Test writing key preserves existing header."""
         env_keys = tmp_path / ".env.keys"
-        env_keys.write_text(f"{DOTENVX_HEADER}\nDOTENV_PRIVATE_KEY_STAGING=old\n")
+        # The header contains "⛨" — pin utf-8 or the test's own setup dies
+        # with UnicodeEncodeError under Windows' cp1252 default codec.
+        env_keys.write_text(f"{DOTENVX_HEADER}\nDOTENV_PRIVATE_KEY_STAGING=old\n", encoding="utf-8")
 
         file = EnvKeysFile(env_keys)
         file.write_key("DOTENV_PRIVATE_KEY_PRODUCTION", "abc123")
 
-        content = env_keys.read_text()
+        content = env_keys.read_text(encoding="utf-8")
         assert "DOTENV_PRIVATE_KEYS" in content
         assert "DOTENV_PRIVATE_KEY_STAGING=old" in content
         assert "DOTENV_PRIVATE_KEY_PRODUCTION=abc123" in content
@@ -163,14 +201,15 @@ class TestEnvKeysFile:
         file = EnvKeysFile(env_keys)
         file.write_key("DOTENV_PRIVATE_KEY_STAGING", "abc123", environment="staging")
 
-        content = env_keys.read_text()
+        content = env_keys.read_text(encoding="utf-8")
         assert "# .env.staging" in content
         assert "DOTENV_PRIVATE_KEY_STAGING=abc123" in content
 
     def test_has_dotenvx_header_true(self, tmp_path: Path) -> None:
         """Test has_dotenvx_header returns True when header present."""
         env_keys = tmp_path / ".env.keys"
-        env_keys.write_text(f"{DOTENVX_HEADER}\nKEY=value\n")
+        # Pin utf-8: the header's "⛨" is unencodable under Windows cp1252.
+        env_keys.write_text(f"{DOTENVX_HEADER}\nKEY=value\n", encoding="utf-8")
 
         file = EnvKeysFile(env_keys)
 
@@ -303,6 +342,53 @@ class TestAtomicWrite:
         atomic_write(file_path, "New content")
 
         assert file_path.read_text() == "New content"
+
+    @pytest.mark.skipif(os.name == "nt", reason="POSIX permission bits")
+    def test_atomic_write_max_permissions_tightens_preexisting_world_readable(
+        self, tmp_path: Path
+    ) -> None:
+        """A pre-existing 0o644 destination is tightened to the cap, not preserved (#510 review).
+
+        Combined/merged files created world-readable by the pre-#510 ``write_text``
+        must not keep that exposure forever: the secret-bearing call sites pass
+        ``max_permissions=0o600`` so mode preservation intersects with the cap.
+        """
+        import stat
+
+        file_path = tmp_path / ".env.production"
+        file_path.write_text("OLD")
+        file_path.chmod(0o644)
+
+        atomic_write(file_path, "NEW", max_permissions=0o600)
+
+        assert file_path.read_text() == "NEW"
+        assert stat.S_IMODE(file_path.stat().st_mode) == 0o600
+
+    @pytest.mark.skipif(os.name == "nt", reason="POSIX permission bits")
+    def test_atomic_write_max_permissions_never_widens(self, tmp_path: Path) -> None:
+        """The cap only narrows: a stricter pre-existing mode (0o400) is preserved."""
+        import stat
+
+        file_path = tmp_path / ".env.production"
+        file_path.write_text("OLD")
+        file_path.chmod(0o400)
+
+        atomic_write(file_path, "NEW", max_permissions=0o600)
+
+        assert stat.S_IMODE(file_path.stat().st_mode) == 0o400
+
+    @pytest.mark.skipif(os.name == "nt", reason="POSIX permission bits")
+    def test_atomic_write_without_cap_preserves_existing_mode(self, tmp_path: Path) -> None:
+        """Default behavior is unchanged: no cap means the existing mode is preserved."""
+        import stat
+
+        file_path = tmp_path / "notes.txt"
+        file_path.write_text("OLD")
+        file_path.chmod(0o644)
+
+        atomic_write(file_path, "NEW")
+
+        assert stat.S_IMODE(file_path.stat().st_mode) == 0o644
 
     @pytest.mark.skipif(os.name == "nt", reason="symlink/fchmod semantics differ on non-POSIX")
     def test_atomic_write_does_not_follow_predictable_tmp_symlink(self, tmp_path: Path) -> None:
@@ -567,3 +653,120 @@ class TestRedactValue:
         assert out_a is not None and out_b is not None
         assert "len=40" in out_a and "len=40" in out_b
         assert out_a != out_b
+
+
+# ---------------------------------------------------------------------------
+# #474 (cubic review): the .env.keys header contains a non-ASCII character
+# ("⛨ ARMORED KEYS"), so every EnvKeysFile read/write must pin
+# ``encoding="utf-8"`` — dotenvx itself (Node.js) reads/writes UTF-8.
+#
+# These run in a CHILD interpreter under a hostile C locale (LC_ALL=C /
+# PYTHONUTF8=0), mirroring tests/unit/test_partial_encryption.py (#371): the
+# text-mode codec is resolved from interpreter startup state, so an in-process
+# monkeypatch of ``locale.getpreferredencoding`` cannot exercise the bug. On
+# the pre-fix code the child dies with UnicodeEncodeError (atomic_write via
+# ``os.fdopen(fd, "w")``) or UnicodeDecodeError (bare ``read_text()``).
+# ---------------------------------------------------------------------------
+
+_ASCII_LOCALE_ENV = {
+    "LC_ALL": "C",
+    "LANG": "C",
+    "LC_CTYPE": "C",
+    "PYTHONUTF8": "0",
+    "PYTHONIOENCODING": "ascii",
+}
+
+
+def _run_under_ascii_locale(body: str) -> subprocess.CompletedProcess[str]:
+    """Run ``body`` in a child interpreter under a hostile C locale."""
+    env = {**os.environ, **_ASCII_LOCALE_ENV}
+    return subprocess.run(  # nosec B603
+        [sys.executable, "-c", body],
+        capture_output=True,
+        text=True,
+        timeout=60,
+        env=env,
+    )
+
+
+def test_write_key_writes_utf8_header_under_ascii_locale(tmp_path: Path) -> None:
+    """write_key must create/update .env.keys under a non-UTF-8 locale (#474).
+
+    Pre-fix, ``atomic_write``'s ``os.fdopen(fd, "w")`` used the platform
+    default codec, so writing the header's "⛨" raised UnicodeEncodeError on
+    Windows cp1252 / LC_ALL=C — creating a fresh key store crashed.
+    """
+    keys_path = tmp_path / ".env.keys"
+    body = (
+        "from pathlib import Path\n"
+        "from envdrift.sync.operations import DOTENVX_HEADER, EnvKeysFile\n"
+        f"kf = EnvKeysFile(Path(r{str(keys_path)!r}))\n"
+        'kf.write_key("DOTENV_PRIVATE_KEY_PRODUCTION", "0" * 64)\n'
+        "# The update branch re-reads the existing (non-ASCII) content.\n"
+        'kf.write_key("DOTENV_PRIVATE_KEY_STAGING", "1" * 64, environment="staging")\n'
+        'assert kf.read_key("DOTENV_PRIVATE_KEY_STAGING") == "1" * 64\n'
+        "assert kf.has_dotenvx_header()\n"
+    )
+
+    result = _run_under_ascii_locale(body)
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    # The bytes on disk are real UTF-8 with the full dotenvx header, LF-only on
+    # every platform: dotenvx (Node.js) writes .env.keys with LF byte-exactly,
+    # and its Windows parser is known to choke on CRLF — atomic_write pins
+    # ``newline="\n"`` so Windows text mode cannot translate to CRLF.
+    content = keys_path.read_bytes().decode("utf-8")
+    assert "\r" not in content
+    assert content.startswith(DOTENVX_HEADER)
+    assert "DOTENV_PRIVATE_KEY_PRODUCTION=" + "0" * 64 in content
+
+
+def test_read_key_reads_dotenvx_utf8_file_under_ascii_locale(tmp_path: Path) -> None:
+    """read_key must read a dotenvx-written UTF-8 key store anywhere (#474).
+
+    dotenvx writes .env.keys as UTF-8 with the non-ASCII header; pre-fix, the
+    bare ``read_text()`` decoded with the locale codec and raised
+    UnicodeDecodeError under LC_ALL=C before any key could be read.
+    """
+    keys_path = tmp_path / ".env.keys"
+    value = "f" * 64
+    keys_path.write_bytes(
+        (DOTENVX_HEADER + "\n\n# .env\nDOTENV_PRIVATE_KEY=" + value + "\n").encode("utf-8")
+    )
+    body = (
+        "from pathlib import Path\n"
+        "from envdrift.sync.operations import EnvKeysFile\n"
+        f"kf = EnvKeysFile(Path(r{str(keys_path)!r}))\n"
+        f'assert kf.read_key("DOTENV_PRIVATE_KEY") == "{value}"\n'
+        "assert kf.has_dotenvx_header()\n"
+    )
+
+    result = _run_under_ascii_locale(body)
+
+    assert result.returncode == 0, result.stdout + result.stderr
+
+
+def test_find_stale_private_key_name_reads_utf8_under_ascii_locale(tmp_path: Path) -> None:
+    """_find_stale_private_key_name must decode dotenvx UTF-8 keys files (#474).
+
+    Same family as the EnvKeysFile fixes: the helper scans raw .env.keys lines
+    for a stale ``DOTENV_PRIVATE_KEY_*`` name, and its bare ``read_text()``
+    raised UnicodeDecodeError on the non-ASCII header under LC_ALL=C.
+    """
+    keys_path = tmp_path / ".env.keys"
+    keys_path.write_bytes(
+        (DOTENVX_HEADER + "\n\n# .env.local\nDOTENV_PRIVATE_KEY_LOCAL=" + "a" * 64 + "\n").encode(
+            "utf-8"
+        )
+    )
+    body = (
+        "from pathlib import Path\n"
+        "from envdrift.cli_commands.sync import _find_stale_private_key_name\n"
+        f"stale = _find_stale_private_key_name(Path(r{str(keys_path)!r}), "
+        '"DOTENV_PRIVATE_KEY_LOCALENV")\n'
+        'assert stale == "DOTENV_PRIVATE_KEY_LOCAL", stale\n'
+    )
+
+    result = _run_under_ascii_locale(body)
+
+    assert result.returncode == 0, result.stdout + result.stderr

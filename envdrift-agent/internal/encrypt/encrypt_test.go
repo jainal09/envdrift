@@ -13,12 +13,39 @@ import (
 	"time"
 )
 
+// isEncryptedCase is one table row for the IsEncrypted tests.
+type isEncryptedCase struct {
+	name     string
+	content  string
+	expected bool
+}
+
+// runIsEncryptedCases writes each case to a temp .env file and asserts the
+// IsEncrypted verdict, so the dotenvx and SOPS tables share one harness.
+func runIsEncryptedCases(t *testing.T, tests []isEncryptedCase) {
+	t.Helper()
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tempDir := t.TempDir()
+			filePath := filepath.Join(tempDir, ".env.test")
+			if err := os.WriteFile(filePath, []byte(tt.content), 0644); err != nil {
+				t.Fatalf("Failed to create test file: %v", err)
+			}
+
+			result, err := IsEncrypted(filePath)
+			if err != nil {
+				t.Fatalf("IsEncrypted returned error: %v", err)
+			}
+
+			if result != tt.expected {
+				t.Errorf("IsEncrypted(%q) = %v, expected %v", tt.name, result, tt.expected)
+			}
+		})
+	}
+}
+
 func TestIsEncrypted(t *testing.T) {
-	tests := []struct {
-		name     string
-		content  string
-		expected bool
-	}{
+	runIsEncryptedCases(t, []isEncryptedCase{
 		{
 			name:     "encrypted file",
 			content:  "DATABASE_URL=\"encrypted:abc123\"\nAPI_KEY=\"encrypted:xyz789\"",
@@ -106,6 +133,54 @@ func TestIsEncrypted(t *testing.T) {
 				"DATABASE_URL=\"postgres://localhost:5432/db\"\n",
 			expected: false,
 		},
+	})
+}
+
+// TestIsEncryptedInlineComments is the #504 cubic review regression: an inline
+// `# comment` after the closing quote defeated the matching-quotes check, so a
+// quoted ciphertext value was misclassified as plaintext and the guardian
+// re-encrypted the already-encrypted file every idle cycle.
+func TestIsEncryptedInlineComments(t *testing.T) {
+	runIsEncryptedCases(t, []isEncryptedCase{
+		{
+			name:     "quoted ciphertext with inline comment",
+			content:  "SECRET=\"encrypted:abc123\" # rotated 2026-06\n",
+			expected: true,
+		},
+		{
+			// The SOPS flavor: an inline comment after the quoted ENC[...]
+			// token must not flip it to plaintext either.
+			name:     "quoted SOPS ciphertext with inline comment",
+			content:  "API_KEY=\"ENC[AES256_GCM,data:xyz,type:str]\" # managed by sops\n",
+			expected: true,
+		},
+		{
+			// The comment strip must not turn plaintext into ciphertext: a
+			// quoted plaintext value with an inline comment stays plaintext.
+			name:     "quoted plaintext with inline comment",
+			content:  "SECRET=\"hunter2\" # TODO rotate\n",
+			expected: false,
+		},
+		{
+			// Only a comment (or nothing) may follow the closing quote; any
+			// other trailing token is malformed and stays plaintext — the safe
+			// direction (worst case is an idempotent re-encrypt).
+			name:     "quoted ciphertext followed by non-comment token",
+			content:  "SECRET=\"encrypted:abc123\" trailing-junk\n",
+			expected: false,
+		},
+		{
+			// A quoted empty placeholder with an inline comment carries no
+			// secret, mirroring the bare KEY="" empty-assignment rule.
+			name:     "empty quoted assignment with inline comment",
+			content:  "EMPTY=\"\" # placeholder\nSECRET=\"encrypted:abc123\"\n",
+			expected: true,
+		},
+	})
+}
+
+func TestIsEncryptedSOPS(t *testing.T) {
+	runIsEncryptedCases(t, []isEncryptedCase{
 		{
 			// A fully SOPS-encrypted dotenv file: ciphertext values plus the
 			// plaintext metadata trailer SOPS always writes. The metadata keys
@@ -126,27 +201,21 @@ func TestIsEncrypted(t *testing.T) {
 				"sops_token=AKIA-very-plaintext\n",
 			expected: false,
 		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			// Create temp file
-			tempDir := t.TempDir()
-			filePath := filepath.Join(tempDir, ".env.test")
-			if err := os.WriteFile(filePath, []byte(tt.content), 0644); err != nil {
-				t.Fatalf("Failed to create test file: %v", err)
-			}
-
-			result, err := IsEncrypted(filePath)
-			if err != nil {
-				t.Fatalf("IsEncrypted returned error: %v", err)
-			}
-
-			if result != tt.expected {
-				t.Errorf("IsEncrypted(%q) = %v, expected %v", tt.name, result, tt.expected)
-			}
-		})
-	}
+		{
+			// SOPS supports AES256_SIV, not only the default AES256_GCM, and its
+			// ciphertext also opens with ENC[. Pinning detection to AES256_GCM
+			// mislabeled it as plaintext so the guardian re-encrypted forever
+			// (#504 review).
+			name:     "fully encrypted SOPS file using AES256_SIV",
+			content:  "DATABASE_URL=\"ENC[AES256_SIV,data:abc,iv:def,tag:ghi,type:str]\"\n",
+			expected: true,
+		},
+		{
+			name:     "fully encrypted SOPS file using AES256_CTR",
+			content:  "API_KEY=\"ENC[AES256_CTR,data:xyz,type:str]\"\n",
+			expected: true,
+		},
+	})
 }
 
 func TestIsEncryptedMissingFile(t *testing.T) {
@@ -328,14 +397,8 @@ func TestEncryptEndToEnd_RealCLI(t *testing.T) {
 	}
 
 	if err := EncryptSilent(envPath); err != nil {
-		// Re-run with captured output for diagnostics; EncryptSilent discards it.
-		cmd, buildErr := buildEncryptCommand(envPath)
-		var retry []byte
-		if buildErr == nil {
-			retry, _ = cmd.CombinedOutput()
-		}
 		t.Fatalf("EncryptSilent(%q) failed against the real CLI: %v\nretry output:\n%s",
-			envPath, err, retry)
+			envPath, err, captureEncryptOutput(envPath))
 	}
 
 	content, err := os.ReadFile(envPath)
@@ -353,6 +416,18 @@ func TestEncryptEndToEnd_RealCLI(t *testing.T) {
 	if !encrypted {
 		t.Errorf("IsEncrypted = false after a successful real encrypt; content:\n%s", content)
 	}
+}
+
+// captureEncryptOutput re-runs the encrypt command with combined output captured
+// for diagnostics (EncryptSilent discards it). Best-effort: returns nil bytes if
+// the command cannot even be built.
+func captureEncryptOutput(envPath string) []byte {
+	cmd, err := buildEncryptCommand(envPath)
+	if err != nil {
+		return nil
+	}
+	out, _ := cmd.CombinedOutput()
+	return out
 }
 
 // TestEncryptSilentContext_KillsHungSubprocess is the encrypt-package half of

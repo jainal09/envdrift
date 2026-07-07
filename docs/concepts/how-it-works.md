@@ -24,7 +24,17 @@ class Settings(BaseSettings):
 When you run `envdrift validate`, it:
 
 1. Loads your Pydantic Settings class
-2. Parses the `.env` file
+2. Parses the `.env` file with python-dotenv's semantics, so envdrift sees
+   the variables pydantic-settings would load: quoted values may span
+   multiple lines (e.g. PEM certificates) and have their escape sequences
+   (`\n`, `\t`, ...) decoded, malformed quoted bindings (unterminated or
+   junk-trailed quotes) are dropped exactly like python-dotenv, `${VAR}` /
+   `${VAR:-default}` references are expanded (values defined earlier in the
+   file win over `os.environ`), unquoted values follow python-dotenv's
+   inline-`#`-comment rule, and lines split on `\n` / `\r\n` / `\r` only.
+   One deliberate divergence: a leading UTF-8 BOM is stripped — and flagged
+   with a warning — so reports name the key the user wrote, while
+   pydantic-settings keeps the BOM on the first key
 3. Checks for missing required fields
 4. Validates types (string to int/bool conversion)
 5. Optionally checks for extra undefined variables
@@ -168,7 +178,8 @@ Most commands follow consistent exit code conventions:
 | 1 | Validation failure, encryption error, or configuration issue |
 | 2 | Missing required arguments or invalid options |
 
-`guard` is the exception: it uses a severity-based scheme where `0` = no blocking findings, `1` = critical,
-`2` = high, and `3` = medium severity findings detected.
+`guard` is the exception: it uses a severity-based scheme — `0` = no blocking findings, `1` = critical,
+`2` = high, `3` = medium, `4` = low severity findings — plus `5` when a selected scanner ran but failed
+(scan incomplete) and `6` for operational errors (bad config, invalid path or flags).
 
 For CI/CD pipelines, use the `--ci` flag to ensure proper exit codes on validation failures.
