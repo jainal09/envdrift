@@ -12,6 +12,20 @@ docs can't drift back to the stale state the audit found:
 - ``docs/cli/sync.md`` must not claim ``vault_name`` overrides/routes to another
   vault (the sync/push engine ignores it).
 
+Plus the #498 sweep — recipes/keys the shipped tools reject or ignore:
+
+- ``docs/support/faq.md``'s CI decrypt recipe must write the environment-suffixed
+  ``DOTENV_PRIVATE_KEY_PRODUCTION`` (a bare ``DOTENV_PRIVATE_KEY`` can never
+  decrypt ``.env.production``).
+- ``docs/guides/env-file-sync.md`` must document ``dotenvx rotate -f`` — dotenvx
+  has no ``encrypt --rotate`` option.
+- no docs page may mention the fabricated ``DOTENV_KEYS_PATH`` variable.
+- ``docs/reference/configuration.md`` (and the in-source ``EXAMPLE_CONFIG``)
+  must not document ``[envdrift] schema``/``environments`` or ``[precommit]`` —
+  nothing consumes them.
+- ``docs/reference/api.md`` must describe ``init()``'s real alias-everything
+  behavior, not the stale skip-and-UserWarning contract.
+
 They read the real files — no mocking of the behavior under test.
 """
 
@@ -27,10 +41,15 @@ from envdrift.integrations.dotenvx import DOTENVX_VERSION
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 _DOCS = _REPO_ROOT / "docs" / "cli"
+_DOCS_ROOT = _REPO_ROOT / "docs"
 
 
 def _read(name: str) -> str:
     return (_DOCS / name).read_text(encoding="utf-8")
+
+
+def _read_docs_page(relpath: str) -> str:
+    return (_DOCS_ROOT / relpath).read_text(encoding="utf-8")
 
 
 def test_decrypt_md_does_not_hardcode_dotenvx_version() -> None:
@@ -193,6 +212,190 @@ def test_sync_md_does_not_claim_vault_name_routes() -> None:
     )
     # The old misleading inline comment must be gone.
     assert "# Override default\n" not in text
+
+
+def test_faq_ci_decrypt_recipe_writes_suffixed_private_key() -> None:
+    """faq.md's CI decrypt Option 1 must write DOTENV_PRIVATE_KEY_PRODUCTION (#498).
+
+    Pre-fix the snippet wrote a bare ``DOTENV_PRIVATE_KEY`` into ``.env.keys``,
+    which can never decrypt ``.env.production`` — dotenvx looks the key up under
+    the environment-suffixed name. Ground truth comes from the real key-name
+    resolver envdrift itself uses when pushing/pulling keys.
+    """
+    from envdrift.sync.config import ServiceMapping
+
+    expected = ServiceMapping(
+        secret_name="x", folder_path=Path(), environment="production"
+    ).env_key_name
+    assert expected == "DOTENV_PRIVATE_KEY_PRODUCTION"
+
+    text = _read_docs_page("support/faq.md")
+    assert 'echo "DOTENV_PRIVATE_KEY=$DOTENV_PRIVATE_KEY" > .env.keys' not in text, (
+        "faq.md's CI recipe writes a bare DOTENV_PRIVATE_KEY into .env.keys; "
+        "decrypting .env.production requires the suffixed name (#498)."
+    )
+    assert f'echo "{expected}=${expected}" > .env.keys' in text, (
+        f"faq.md's CI recipe must write {expected} into .env.keys — the name "
+        "`envdrift encrypt` itself generates for .env.production (#498)."
+    )
+    # The CI secret feeding the snippet must carry the same suffixed name.
+    assert f"{expected}: ${{{{ secrets.{expected} }}}}" in text, (
+        f"faq.md must name the CI secret {expected} so the recipe is copy-pasteable (#498)."
+    )
+
+
+def test_env_file_sync_rotation_recipe_is_a_real_dotenvx_command() -> None:
+    """env-file-sync.md must document ``dotenvx rotate -f``, not ``encrypt --rotate`` (#498).
+
+    dotenvx has no ``--rotate`` option on any subcommand —
+    ``dotenvx encrypt .env.production --rotate`` dies with "unknown option".
+    The real rotation command is ``dotenvx rotate -f <file>`` (the ``-f`` flag is
+    required to target a non-default filename).
+    """
+    text = _read_docs_page("guides/env-file-sync.md")
+    assert "--rotate" not in text, (
+        "env-file-sync.md references a --rotate option that no shipped tool has (#498)."
+    )
+    assert "dotenvx rotate -f .env.production" in text, (
+        "env-file-sync.md's key-rotation recipe must use the real "
+        "`dotenvx rotate -f .env.production` command (#498)."
+    )
+
+
+def test_no_docs_page_references_fabricated_dotenv_keys_path() -> None:
+    """No docs page may mention DOTENV_KEYS_PATH — nothing reads it (#498).
+
+    Pre-fix monorepo-setup.md told users to "Set DOTENV_KEYS_PATH"; the variable
+    exists in neither envdrift nor dotenvx, so the tip silently does nothing.
+    """
+    offenders = [
+        str(path.relative_to(_REPO_ROOT))
+        for path in sorted(_DOCS_ROOT.rglob("*.md"))
+        if "DOTENV_KEYS_PATH" in path.read_text(encoding="utf-8")
+    ]
+    assert offenders == [], (
+        f"docs pages reference the fabricated DOTENV_KEYS_PATH variable: {offenders} "
+        "— use dotenvx's -fk/--env-keys-file flag or a symlink instead (#498)."
+    )
+
+
+def test_monorepo_shared_keys_tip_documents_real_mechanisms() -> None:
+    """monorepo-setup.md's shared-keys tip must name mechanisms that exist (#498).
+
+    The real options are dotenvx's ``-fk/--env-keys-file`` flag and a symlink —
+    both verified live in ``tests/integration/test_docs_recipes.py``.
+    """
+    text = _read_docs_page("guides/monorepo-setup.md")
+    assert "--env-keys-file" in text, (
+        "monorepo-setup.md must document dotenvx's real --env-keys-file flag for "
+        "pointing at a shared .env.keys (#498)."
+    )
+    assert "ln -s" in text, (
+        "monorepo-setup.md must keep the working symlink mechanism for sharing .env.keys (#498)."
+    )
+
+
+def test_configuration_md_drops_unconsumed_envdrift_and_precommit_keys() -> None:
+    """configuration.md must not document config keys nothing consumes (#498).
+
+    ``[envdrift] schema``/``environments`` and the whole ``[precommit]`` section
+    are parsed into ``EnvdriftConfig`` but have zero consumers — with all three
+    set, ``envdrift validate`` still errors "--schema is required". Documenting
+    them as functional sends users into silently-ignored config.
+    """
+    text = _read_docs_page("reference/configuration.md")
+    # Match the exact TOML table headers on their own line, not as substrings:
+    # `[precommit.schemas]` is a legitimate user-defined-key example in the
+    # unknown-key exemption note, and `[tool.envdrift]` is the real namespace —
+    # a substring check on `[precommit]`/`[envdrift]` would false-fail on those.
+    assert not re.search(r"(?m)^\[precommit\]\s*$", text), (
+        "configuration.md documents a [precommit] section that no code consumes (#498)."
+    )
+    assert not re.search(r"(?m)^\[envdrift\]\s*$", text), (
+        "configuration.md documents an [envdrift] table (schema/environments) "
+        "that no code consumes (#498)."
+    )
+    assert "environments = [" not in text, (
+        "configuration.md documents an `environments` key that no code consumes (#498)."
+    )
+    # The sections that ARE consumed must survive the cleanup.
+    for real_section in ("[validation]", "[guard]", "[encryption]", "[vault]"):
+        assert real_section in text
+
+
+def test_example_config_template_drops_unconsumed_keys() -> None:
+    """The in-source EXAMPLE_CONFIG must not advertise dead config keys (#498).
+
+    It is the canonical envdrift.toml template; shipping ``[envdrift] schema`` /
+    ``environments`` / ``[precommit]`` in it re-creates the configuration.md bug
+    in code form.
+    """
+    from envdrift.config import EXAMPLE_CONFIG
+
+    assert "[precommit]" not in EXAMPLE_CONFIG, (
+        "EXAMPLE_CONFIG ships a [precommit] section that no code consumes (#498)."
+    )
+    assert "[envdrift]" not in EXAMPLE_CONFIG, (
+        "EXAMPLE_CONFIG ships an [envdrift] table (schema/environments) that no "
+        "code consumes (#498)."
+    )
+    assert "environments = [" not in EXAMPLE_CONFIG
+
+
+def test_glossary_toml_example_sets_only_consumed_keys() -> None:
+    """glossary.md's TOML example must not set the dead top-level ``schema`` (#498)."""
+    text = _read_docs_page("glossary.md")
+    assert '\nschema = "' not in text, (
+        "glossary.md's [tool.envdrift] example sets a top-level `schema` key that "
+        "no code consumes (#498)."
+    )
+
+
+def test_api_md_init_documents_alias_everything_not_skip_and_warn(tmp_path: Path) -> None:
+    """api.md must describe init()'s real alias-everything behavior (#498).
+
+    Pre-fix api.md claimed non-identifier keys are *skipped* and a ``UserWarning``
+    names them; since #423 every key is kept under a sanitized field name with a
+    Pydantic alias, and no warning is emitted. Ground truth: the real ``init()``
+    on a .env containing both documented examples.
+    """
+    import warnings
+
+    from envdrift import init
+
+    env_file = tmp_path / ".env"
+    env_file.write_text("2FA_ENABLED=true\nMY-DASH-VAR=v\n", encoding="utf-8")
+    output = tmp_path / "settings.py"
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        init(env_file=env_file, output=output)
+    user_warnings = [w for w in caught if issubclass(w.category, UserWarning)]
+    assert user_warnings == [], "init() must not warn — every key is kept and aliased"
+
+    generated = output.read_text(encoding="utf-8")
+    assert "field_2FA_ENABLED" in generated
+    assert "alias='2FA_ENABLED'" in generated
+    assert "MY_DASH_VAR" in generated
+    assert "alias='MY-DASH-VAR'" in generated
+
+    text = _read_docs_page("reference/api.md")
+    # The stale skip-and-warn contract must be gone…
+    assert "UserWarning" not in text, (
+        "api.md still claims init() emits a UserWarning for non-identifier keys; "
+        "the shipped init() never warns (#498)."
+    )
+    assert "are skipped" not in text, (
+        "api.md still claims init() skips non-identifier keys; the shipped init() "
+        "keeps every key under a sanitized, aliased field (#498)."
+    )
+    # …replaced by the sanitize-plus-alias contract, shown with the exact field
+    # names the generator emits for the documented examples.
+    assert "field_2FA_ENABLED" in text, (
+        "api.md must show the real sanitized field (field_2FA_ENABLED) the "
+        "generator emits for a leading-digit key (#498)."
+    )
+    assert "alias='2FA_ENABLED'" in text
+    assert "MY_DASH_VAR" in text
 
 
 if __name__ == "__main__":  # pragma: no cover

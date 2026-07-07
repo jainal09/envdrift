@@ -613,12 +613,15 @@ That's the whole promise: one command, no Slacked secrets.
 
 ### Key rotation
 
-Rotation is a **dotenvx-native** operation — envdrift has no `--rotate`, so this one
-step calls the [`dotenvx`](https://dotenvx.com) binary directly (envdrift wraps
-dotenvx for everything else). After rotating, re-push the new key and teammates resync:
+Rotation is a **dotenvx-native** operation — envdrift has no rotate command, so this
+one step calls the [`dotenvx`](https://dotenvx.com) binary directly (envdrift wraps
+dotenvx for everything else). `dotenvx rotate` generates a new keypair, re-encrypts
+the file, and appends the new private key to the entry in `.env.keys` (the old key is
+kept, comma-separated, so older ciphertext stays decryptable). After rotating,
+re-push the key and teammates resync:
 
 ```bash
-dotenvx encrypt .env.production --rotate     # dotenvx CLI: new key in .env.keys
+dotenvx rotate -f .env.production            # dotenvx CLI: new key in .env.keys
 # re-push the rotated key — vault-push <folder> <secret-name> --env <env>
 envdrift vault-push . myapp-dotenvx-key --env production \
   -p azure --vault-url https://my-keyvault.vault.azure.net/
