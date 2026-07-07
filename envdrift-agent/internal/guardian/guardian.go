@@ -360,7 +360,7 @@ func (g *Guardian) onRegistryChange(reg *registry.Registry) {
 
 	log.Println("Registry changed, reloading projects...")
 
-	enabledPaths := g.loadEnabledConfigs(reg.GetProjectPaths())
+	enabledPaths, failedPaths := g.loadEnabledConfigs(reg.GetProjectPaths())
 
 	g.mu.Lock()
 	defer g.mu.Unlock()
@@ -373,7 +373,7 @@ func (g *Guardian) onRegistryChange(reg *registry.Registry) {
 		return
 	}
 
-	g.stopRemovedProjects(enabledPaths)
+	g.stopRemovedProjects(enabledPaths, failedPaths)
 	g.startNewProjects(enabledPaths)
 }
 
@@ -400,26 +400,48 @@ func (g *Guardian) ctxDone() bool {
 }
 
 // loadEnabledConfigs loads the guardian config for each registered path —
-// applying the global guardian.toml values as per-project defaults (#494) —
-// and returns the enabled ones keyed by project path.
-func (g *Guardian) loadEnabledConfigs(paths []string) map[string]*project.GuardianConfig {
-	configs, _ := project.LoadAllProjectConfigsWithDefaults(paths, g.projectDefaults())
-	enabledPaths := make(map[string]*project.GuardianConfig, len(configs))
-	for _, pc := range configs {
-		enabledPaths[pc.Path] = pc.Guardian
+// applying the global guardian.toml values as per-project defaults (#494) — and
+// returns two maps: the enabled projects keyed by path, and the set of paths
+// whose config could NOT be loaded this cycle (a transient unreadable or
+// malformed envdrift.toml). The failed set lets stopRemovedProjects keep an
+// already-running watcher alive across a transient load error instead of tearing
+// it down as if the project were removed (#494).
+func (g *Guardian) loadEnabledConfigs(paths []string) (enabled map[string]*project.GuardianConfig, failed map[string]bool) {
+	defaults := g.projectDefaults()
+	enabled = make(map[string]*project.GuardianConfig, len(paths))
+	failed = make(map[string]bool)
+	for _, path := range paths {
+		cfg, err := project.LoadProjectConfigWithDefaults(path, defaults)
+		if err != nil {
+			log.Printf("Keeping current state for %s: cannot load config this reload cycle: %v", path, err)
+			failed[path] = true
+			continue
+		}
+		if cfg.Enabled {
+			enabled[path] = cfg
+		}
 	}
-	return enabledPaths
+	return enabled, failed
 }
 
 // stopRemovedProjects stops and removes watchers for projects no longer present
-// in enabledPaths. Callers must hold g.mu.Lock.
-func (g *Guardian) stopRemovedProjects(enabledPaths map[string]*project.GuardianConfig) {
+// in enabledPaths — EXCEPT those in failedPaths, whose config merely failed to
+// load this reload cycle. A transient parse/read error must not silently stop a
+// valid, already-running watcher; that project keeps running on its last-good
+// config and is re-evaluated on the next reload (#494). Callers must hold
+// g.mu.Lock.
+func (g *Guardian) stopRemovedProjects(enabledPaths map[string]*project.GuardianConfig, failedPaths map[string]bool) {
 	for path, pw := range g.projects {
-		if _, exists := enabledPaths[path]; !exists {
-			log.Printf("Stopping watcher for removed project: %s", path)
-			pw.Stop()
-			delete(g.projects, path)
+		if _, exists := enabledPaths[path]; exists {
+			continue
 		}
+		if failedPaths[path] {
+			log.Printf("Keeping running watcher for %s: config failed to load this reload cycle", path)
+			continue
+		}
+		log.Printf("Stopping watcher for removed project: %s", path)
+		pw.Stop()
+		delete(g.projects, path)
 	}
 }
 

@@ -434,15 +434,21 @@ func captureEncryptOutput(envPath string) []byte {
 // the #494 wedge fix: a hung `envdrift encrypt` subprocess must be killed when
 // the context expires instead of blocking the caller until the child exits
 // (pre-fix EncryptSilent used exec.Command with no context or timeout). A real
-// subprocess is used at the process boundary: a fake envdrift that sleeps far
-// longer than the context deadline.
+// subprocess is used at the process boundary: a fake envdrift that busy-waits
+// forever until the context kills it.
+//
+// The fake hangs with a self-contained shell loop rather than `sleep`: with the
+// restricted PATH (only the fake's dir), `sleep` is not resolvable, so a
+// `sleep 30` fake would exit immediately with "sleep: not found" and the test
+// would pass WITHOUT ever exercising the context kill (a false positive). The
+// `while :; do :; done` loop needs only shell builtins, so it truly blocks.
 func TestEncryptSilentContext_KillsHungSubprocess(t *testing.T) {
 	if testing.Short() {
 		t.Skip("Skipping subprocess test in short mode")
 	}
 
 	dir := t.TempDir()
-	writeFakeExe(t, dir, "envdrift", `sleep 30`)
+	writeFakeExe(t, dir, "envdrift", `while :; do :; done`)
 	t.Setenv("PATH", dir)
 
 	envPath := filepath.Join(t.TempDir(), ".env")
@@ -450,7 +456,8 @@ func TestEncryptSilentContext_KillsHungSubprocess(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	const deadline = 200 * time.Millisecond
+	ctx, cancel := context.WithTimeout(context.Background(), deadline)
 	defer cancel()
 
 	start := time.Now()
@@ -460,8 +467,51 @@ func TestEncryptSilentContext_KillsHungSubprocess(t *testing.T) {
 	if err == nil {
 		t.Fatal("EncryptSilentContext must report an error when the context kills the subprocess")
 	}
+	// Ran until (at least roughly) the deadline: guards against the earlier
+	// false positive where the fake exited instantly and the timeout path was
+	// never taken. The kill cannot precede the deadline, so elapsed >= deadline/2
+	// proves the subprocess actually hung.
+	if elapsed < deadline/2 {
+		t.Fatalf("EncryptSilentContext returned in %v, before the %v deadline; the fake did not actually hang", elapsed, deadline)
+	}
+	// ...but was killed promptly at the deadline, not blocked for the full run.
 	if elapsed > 5*time.Second {
 		t.Fatalf("EncryptSilentContext blocked %v on a hung subprocess; the context must kill it (#494)", elapsed)
+	}
+}
+
+// TestFindEnvdrift_ContextBoundsVersionProbe is the discovery half of the #494
+// wedge fix: findEnvdrift's `python -m envdrift --version` probe must be bounded
+// by the context too, or a hung python interpreter stalls discovery unbounded
+// even though the final encrypt call is context-bounded. With no `envdrift` on
+// PATH, discovery falls through to a fake python3 that busy-waits forever; the
+// context must kill the probe rather than let findEnvdrift block.
+func TestFindEnvdrift_ContextBoundsVersionProbe(t *testing.T) {
+	if testing.Short() {
+		t.Skip("Skipping subprocess test in short mode")
+	}
+
+	dir := t.TempDir()
+	// Only a hanging python3 on PATH: no real envdrift/python can leak in.
+	writeFakeExe(t, dir, "python3", `while :; do :; done`)
+	t.Setenv("PATH", dir)
+
+	const deadline = 200 * time.Millisecond
+	ctx, cancel := context.WithTimeout(context.Background(), deadline)
+	defer cancel()
+
+	start := time.Now()
+	_, _, err := findEnvdrift(ctx)
+	elapsed := time.Since(start)
+
+	if err == nil {
+		t.Fatal("findEnvdrift must fail when the version probe is killed by the context")
+	}
+	if elapsed < deadline/2 {
+		t.Fatalf("findEnvdrift returned in %v, before the %v deadline; the probe did not actually run", elapsed, deadline)
+	}
+	if elapsed > 5*time.Second {
+		t.Fatalf("findEnvdrift blocked %v; the context must bound the version probe (#494)", elapsed)
 	}
 }
 

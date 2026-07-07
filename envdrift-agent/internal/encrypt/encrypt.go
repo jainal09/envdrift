@@ -215,7 +215,7 @@ func EncryptSilentContext(ctx context.Context, path string) error {
 
 // IsEnvdriftAvailable checks if envdrift CLI is available.
 func IsEnvdriftAvailable() bool {
-	_, _, err := findEnvdrift()
+	_, _, err := findEnvdrift(context.Background())
 	return err == nil
 }
 
@@ -236,7 +236,7 @@ func buildEncryptCommandContext(ctx context.Context, path string) (*exec.Cmd, er
 	dir := filepath.Dir(path)
 	fileName := filepath.Base(path)
 
-	envdrift, isPython, err := findEnvdrift()
+	envdrift, isPython, err := findEnvdrift(ctx)
 	if err != nil {
 		return nil, ErrEnvdriftNotFound
 	}
@@ -256,7 +256,14 @@ func buildEncryptCommandContext(ctx context.Context, path string) (*exec.Cmd, er
 // findEnvdrift locates the envdrift executable. isPython is true when the
 // resolved binary is a Python interpreter that must be invoked as
 // `python -m envdrift ...` rather than directly.
-func findEnvdrift() (path string, isPython bool, err error) {
+//
+// The `python -m envdrift --version` discovery probes are bounded by ctx via
+// exec.CommandContext: EncryptSilentContext already bounds the final encrypt
+// call, but a python interpreter that hangs on the probe would otherwise stall
+// discovery unbounded and re-wedge the guardian this PR set out to unwedge
+// (#494). IsEnvdriftAvailable passes context.Background() — it is a plain
+// availability check, not on the guardian's hot path.
+func findEnvdrift(ctx context.Context) (path string, isPython bool, err error) {
 	// Check if envdrift is in PATH
 	if p, lookErr := exec.LookPath("envdrift"); lookErr == nil {
 		return p, false, nil
@@ -264,7 +271,7 @@ func findEnvdrift() (path string, isPython bool, err error) {
 
 	// Try python3 -m envdrift
 	if python, lookErr := exec.LookPath("python3"); lookErr == nil {
-		cmd := exec.Command(python, "-m", "envdrift", "--version")
+		cmd := exec.CommandContext(ctx, python, "-m", "envdrift", "--version")
 		if cmd.Run() == nil {
 			return python, true, nil
 		}
@@ -272,7 +279,7 @@ func findEnvdrift() (path string, isPython bool, err error) {
 
 	// Try python -m envdrift
 	if python, lookErr := exec.LookPath("python"); lookErr == nil {
-		cmd := exec.Command(python, "-m", "envdrift", "--version")
+		cmd := exec.CommandContext(ctx, python, "-m", "envdrift", "--version")
 		if cmd.Run() == nil {
 			return python, true, nil
 		}

@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/jainal09/envdrift-agent/internal/config"
+	"github.com/jainal09/envdrift-agent/internal/project"
 	"github.com/jainal09/envdrift-agent/internal/registry"
 )
 
@@ -105,6 +106,60 @@ notify = true
 	// ...and still inherits the global default for keys it does not set.
 	if !reflect.DeepEqual(got.Exclude, []string{".env.staging"}) {
 		t.Errorf("global exclude not inherited by overriding project: got %v", got.Exclude)
+	}
+}
+
+// TestGuardian_ReloadKeepsWatcherOnTransientConfigError is the #494 reload
+// robustness regression (ironic for a robustness PR): when a registered
+// project's envdrift.toml transiently fails to parse during a registry reload,
+// its already-running watcher must NOT be stopped. Pre-fix loadEnabledConfigs
+// dropped the failed project from the enabled set, so stopRemovedProjects tore
+// its watcher down as if the project had been removed — a transient read/parse
+// error silently stopped a healthy running watcher.
+func TestGuardian_ReloadKeepsWatcherOnTransientConfigError(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+
+	proj := makeProjectWithToml(t, "[guardian]\nenabled = true\n")
+
+	g, err := New(config.DefaultConfig())
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	defer g.stopAllProjects()
+
+	reg := &registry.Registry{Projects: []registry.ProjectEntry{{Path: proj, Added: "now"}}}
+
+	// Initial reload: the enabled project is watched.
+	g.onRegistryChange(reg)
+	g.mu.RLock()
+	pw, watched := g.projects[proj]
+	g.mu.RUnlock()
+	if !watched {
+		t.Fatal("project not watched after the initial reload")
+	}
+
+	// Corrupt the project's envdrift.toml so the config load fails on the next
+	// reload, then reload again with the SAME registry (project still present).
+	if err := os.WriteFile(filepath.Join(proj, "envdrift.toml"), []byte("[unclosed\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// Sanity: the corrupt file really does fail to load.
+	if _, loadErr := project.LoadProjectConfigWithDefaults(proj, g.projectDefaults()); loadErr == nil {
+		t.Fatal("test setup: corrupt envdrift.toml unexpectedly loaded without error")
+	}
+
+	g.onRegistryChange(reg)
+
+	g.mu.RLock()
+	pw2, stillWatched := g.projects[proj]
+	g.mu.RUnlock()
+	if !stillWatched {
+		t.Fatal("a transient config parse error must not stop the running watcher (#494)")
+	}
+	if pw2 != pw {
+		t.Error("the existing watcher must be kept as-is on a transient load error, not replaced")
 	}
 }
 

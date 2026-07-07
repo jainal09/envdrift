@@ -82,10 +82,13 @@ master switch only — it never opts a project in (each project must set
 
 The list of registered projects is kept separately in `~/.envdrift/projects.json`
 (see [Central Registry Architecture](#central-registry-architecture)), not in
-`guardian.toml`. A corrupt `projects.json` is not fatal: the agent logs the
-parse error, preserves the file at `projects.json.bak`, and continues with an
-empty registry at startup (or the last-good registry at runtime) instead of
-crash-looping under launchd/systemd.
+`guardian.toml`. A corrupt `projects.json` is not fatal, so the agent never
+crash-loops under launchd/systemd, but the two recovery paths differ. **At
+startup** the agent logs the parse error, preserves the corrupt file at
+`projects.json.bak`, and continues with an empty registry. **At runtime** a
+failed reload is logged and the agent keeps the last-good registry it already
+holds in memory — the `.bak` copy is written only on the startup path, not on
+runtime reloads.
 
 ### New CLI Commands
 
