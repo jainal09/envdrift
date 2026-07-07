@@ -1,0 +1,4 @@
+Installed: true
+Running:   true
+Config:    /home/user/.envdrift/guardian.toml
+envdrift:  true

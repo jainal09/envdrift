@@ -2,6 +2,7 @@ import * as vscode from 'vscode';
 import { createStatusBar, toggleEnabled, updateStatusBar, updateAgentStatusBar } from './statusBar';
 import { startWatching, encryptCurrentFile } from './fileWatcher';
 import { getConfig, setEnabled } from './config';
+import { getOutputChannel, log, showLogs, disposeLogger } from './logger';
 import {
     startStatusChecking,
     stopStatusChecking,
@@ -19,6 +20,10 @@ import {
 export function activate(context: vscode.ExtensionContext) {
     console.log('EnvDrift extension is now active');
 
+    // Create the EnvDrift output channel (View > Output > EnvDrift)
+    context.subscriptions.push(getOutputChannel());
+    log('EnvDrift extension activated');
+
     // Create status bar
     createStatusBar(context);
 
@@ -35,7 +40,11 @@ export function activate(context: vscode.ExtensionContext) {
         vscode.commands.registerCommand('envdrift.enable', async () => {
             await setEnabled(true);
             updateStatusBar();
-            vscode.window.showInformationMessage('EnvDrift: Auto-encryption enabled');
+            // Toast the EFFECTIVE state, not the requested one (#482).
+            const effective = getConfig().enabled;
+            vscode.window.showInformationMessage(
+                `EnvDrift: Auto-encryption ${effective ? 'enabled' : 'disabled'}`
+            );
         })
     );
 
@@ -43,8 +52,15 @@ export function activate(context: vscode.ExtensionContext) {
         vscode.commands.registerCommand('envdrift.disable', async () => {
             await setEnabled(false);
             updateStatusBar();
-            vscode.window.showInformationMessage('EnvDrift: Auto-encryption disabled');
+            const effective = getConfig().enabled;
+            vscode.window.showInformationMessage(
+                `EnvDrift: Auto-encryption ${effective ? 'enabled' : 'disabled'}`
+            );
         })
+    );
+
+    context.subscriptions.push(
+        vscode.commands.registerCommand('envdrift.showLogs', showLogs)
     );
 
     context.subscriptions.push(
@@ -248,4 +264,5 @@ function getAgentStatusText(status: AgentStatusInfo): string {
 export function deactivate() {
     console.log('EnvDrift extension is now deactivated');
     stopStatusChecking();
+    disposeLogger();
 }
