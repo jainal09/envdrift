@@ -32,6 +32,9 @@ curl -sSL https://raw.githubusercontent.com/jainal09/envdrift/main/install.sh | 
 irm https://raw.githubusercontent.com/jainal09/envdrift/main/install.ps1 | iex
 ```
 
+The installer works in both the OS-default Windows PowerShell 5.1 and PowerShell 7+ (`pwsh`),
+and the generated wrappers support install paths with non-ASCII characters.
+
 Or with options (use environment variables when piping):
 
 ```powershell
