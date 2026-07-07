@@ -362,7 +362,7 @@ Instead of watching entire directories, the agent:
 | Package | File | Purpose |
 |---------|------|---------|
 | `registry` | `internal/registry/registry.go` | Loads and watches `~/.envdrift/projects.json` |
-| `project` | `internal/project/config.go` | Loads per-project `[guardian]` settings from `envdrift.toml` or `pyproject.toml` (CLI `find_config` contract) |
+| `project` | `internal/project/config.go` | Loads `[guardian]` settings from `envdrift.toml` or `pyproject.toml` (CLI `find_config` contract) |
 
 **Refactored Guardian:**
 
