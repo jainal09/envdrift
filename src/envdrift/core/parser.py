@@ -131,10 +131,12 @@ class EnvParser:
       escape sets are decoded inside quoted values
       (``\\\\ \\' \\" \\a \\b \\f \\n \\r \\t \\v`` in double quotes,
       ``\\\\ \\'`` in single quotes). Malformed quoted bindings are rejected
-      exactly like python-dotenv: an unterminated quote or non-comment content
-      after the close quote drops the whole binding (no variable is
-      registered), consuming the physical lines through the close-quote line
-      so interior lines never re-parse as phantom assignments.
+      exactly like python-dotenv — no variable is registered for them.
+      Non-comment content after the close quote consumes the physical lines
+      through the close-quote line, so interior lines never re-parse as
+      phantom assignments; an unterminated quote (no quote left anywhere)
+      consumes only its opening line — dotenv's rest-of-line error recovery —
+      and the following lines are parsed normally.
     """
 
     # dotenvx encrypted value pattern
@@ -262,8 +264,12 @@ class EnvParser:
                 env_file.comments.append(line)
                 continue
 
-            # Parse KEY=value
-            match = pattern.match(line)
+            # Parse KEY=value. Match the lstripped line — NOT the fully
+            # stripped one — so the RHS keeps its trailing whitespace: when a
+            # quote opens here and closes on a later line, python-dotenv keeps
+            # that whitespace inside the value (`CERT="abc   \nrest"` parses
+            # as `abc   \nrest`); single-line values strip it downstream.
+            match = pattern.match(original_line.lstrip())
             if not match:
                 continue
 
@@ -277,11 +283,13 @@ class EnvParser:
             joined_raw, consumed, dropped = self._continue_quoted_value(raw_value, lines, index)
             index += consumed
             if dropped:
-                # python-dotenv rejects this binding (unterminated quote, or
-                # non-comment content after the close quote): everything
-                # through the close-quote line is consumed and NO variable is
-                # registered, so interior lines never become phantom
-                # assignments (#458).
+                # python-dotenv rejects this binding and NO variable is
+                # registered (#458). Trailing junk after the close quote:
+                # `consumed` covers through the close-quote line, so interior
+                # lines never become phantom assignments. Unterminated quote:
+                # `consumed` is 0 — only the opening line is dropped and the
+                # following lines re-parse normally, exactly like dotenv's
+                # rest-of-line error recovery.
                 continue
             if consumed:
                 raw_value = joined_raw
