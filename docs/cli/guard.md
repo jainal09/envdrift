@@ -13,11 +13,18 @@ envdrift guard [OPTIONS] [PATHS]...
 `envdrift guard` is a defense-in-depth scanner designed to catch secrets that
 slip past other guardrails (hooks, CI, reviews). It detects:
 
-- Unencrypted `.env` files missing dotenvx or SOPS markers
+- Unencrypted env files missing dotenvx or SOPS markers
 - Common secret patterns (tokens, API keys, credentials)
 - Password hashes (bcrypt, sha512crypt) with Kingfisher
 - High-entropy strings (optional, native scanner only)
 - Secrets in git history (optional)
+
+The unencrypted-file policy covers every env-file naming shape: `.env`,
+`.env.<environment>` (including `.env.local` and `.env.test`), the trailing
+`<name>.env` convention (`production.env`), and custom `vault.sync` mapped files.
+Only the templates `.env.example`, `.env.sample`, and `.env.template` are skipped.
+Files are decoded through UTF-8/UTF-16/UTF-32 BOMs (and BOM-less UTF-16), so a
+UTF-16 env file written by Windows tools is scanned like its UTF-8 equivalent.
 
 The native scanner always runs. By default, gitleaks runs too. You can enable
 trufflehog, detect-secrets, or kingfisher with flags or `envdrift.toml`. If no
@@ -194,6 +201,18 @@ instead keys solely on the secret value, so each unique secret appears once rega
 of where or by which scanner it was found — that is the mode that collapses the same
 secret across scanners.
 
+Trivy reports matches with the secret already redacted to asterisks, so envdrift
+recovers the raw value from the scanned file before hashing — two *distinct* secrets
+that share a variable name and length stay distinct under `--skip-duplicate`, and a
+secret found by both trivy and another scanner still collapses to one finding. When
+the raw value cannot be recovered (for example the file changed mid-scan, the finding
+spans multiple lines, or several secrets share one line so the mask boundary is
+ambiguous), each finding instead keeps a synthetic hash qualified by its file, line
+span, rule and a per-location occurrence index. Distinct findings therefore never
+share a fallback hash — even the byte-identical findings trivy emits for two distinct
+same-rule secrets on one line — but an unrecovered finding also cannot collapse with
+the same secret reported by another scanner.
+
 ### `--skip-encrypted` / `--no-skip-encrypted`
 
 Skip findings from files that contain dotenvx or SOPS encryption markers. Enabled by
@@ -225,7 +244,9 @@ envdrift guard --no-skip-gitignored
 **Note:** This feature uses `git check-ignore` when git is available and the scan is
 run inside a git repository. If git is not installed or the repository check fails,
 the tool will log a warning and continue by returning the original findings (no
-git-based filtering will be applied).
+git-based filtering will be applied). Paths exchanged with git are encoded and
+decoded as UTF-8 on every platform, so non-ASCII filenames are matched correctly
+regardless of the system locale (e.g. cp1252 on Windows).
 
 ### `--auto-install` / `--no-auto-install`
 
@@ -443,6 +464,17 @@ Notes:
 
 Envdrift provides a **centralized ignore system** that works across ALL scanners
 (native, gitleaks, trufflehog, detect-secrets, kingfisher, git-secrets).
+
+### Built-in Default Ignores
+
+Config and lock files (`pyproject.toml`, `envdrift.toml`, `mkdocs.yml`, `*.lock`,
+`package-lock.json`, `*-lock.json`, `*.sum`, ...) only have **noisy** findings
+suppressed by default: rules whose ids contain `generic`, `entropy`, or `keyword`,
+which routinely false-positive on "secret"-keyword config keys and integrity hashes.
+Distinctive-prefix detections (`github-pat`, `aws-access-key-id`, `pypi-token`, ...)
+are never suppressed by the defaults — a real token committed in `pyproject.toml` or
+a lock file is still reported. User-configured `ignore_paths` suppress everything in
+the matching paths.
 
 ### Inline Ignore Comments
 
