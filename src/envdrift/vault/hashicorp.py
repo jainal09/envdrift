@@ -13,6 +13,7 @@ from envdrift.vault.base import (
     VaultClient,
     VaultError,
 )
+from envdrift.vault.keymaterial import DOTENV_PRIVATE_KEY_NAME_RE
 
 try:
     import hvac as _hvac
@@ -31,13 +32,26 @@ def _coerce_secret_value(secret_data: dict[str, Any]) -> str:
     """Render KV-v2 secret data as the single string ``SecretValue.value`` requires.
 
     A lone ``value`` key is returned as-is when already a string; KV stores
-    arbitrary JSON, so a non-string single ``value`` (int/bool/list/dict) — or any
-    multi-key payload — is JSON-encoded. ``SecretValue.value`` must always be a
+    arbitrary JSON, so a non-string single ``value`` (int/bool/list/dict) is
+    JSON-encoded. A payload whose key lives under its own field name — exactly
+    one string ``DOTENV_PRIVATE_KEY_<ENV>`` field, the shape produced by
+    ``vault kv put secret/x DOTENV_PRIVATE_KEY_PROD=<hex>`` — is surfaced as the
+    full ``DOTENV_PRIVATE_KEY_<ENV>=<key>`` line so downstream key flows parse
+    it like a pushed key instead of installing a JSON blob (#480). Any other
+    multi-key payload is JSON-encoded; ``SecretValue.value`` must always be a
     str, or the sync engine and vault-pull crash downstream.
     """
     if "value" in secret_data and len(secret_data) == 1:
         value = secret_data["value"]
         return value if isinstance(value, str) else json.dumps(value)
+    dotenv_fields = [
+        (key, val)
+        for key, val in secret_data.items()
+        if isinstance(val, str) and DOTENV_PRIVATE_KEY_NAME_RE.fullmatch(key)
+    ]
+    if len(dotenv_fields) == 1:
+        key, val = dotenv_fields[0]
+        return f"{key}={val}"
     return json.dumps(secret_data)
 
 

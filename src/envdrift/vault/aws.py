@@ -203,6 +203,10 @@ class AWSSecretsManagerClient(VaultClient):
                     import base64
 
                     value = base64.b64encode(response["SecretBinary"]).decode("ascii")
+                    # Mark the transformation: the value is no longer the stored
+                    # bytes. dotenvx key flows reject base64-marked payloads
+                    # instead of installing them as key material (#480).
+                    metadata["encoding"] = "base64"
                 return SecretValue(
                     name=name,
                     value=value,

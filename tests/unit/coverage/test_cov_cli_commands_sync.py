@@ -620,6 +620,40 @@ class TestPullCommand:
 # --------------------------------------------------------------------------
 # lock command
 # --------------------------------------------------------------------------
+class TestVerifyIssueSummary:
+    """The verify-vault gate summary names mismatched vs unusable keys
+    separately, each with a remedy that can actually fix it."""
+
+    def test_mismatch_only_keeps_documented_wording(self):
+        from envdrift.cli_commands.sync import _verify_issue_summary
+
+        # Byte-identical to the message documented in docs/cli/lock.md.
+        assert _verify_issue_summary(1, 0) == (
+            "Found 1 key mismatch(es). "
+            "Run with --sync-keys to update local keys, or --force to encrypt anyway."
+        )
+
+    def test_unusable_only_points_at_the_vault_secret(self):
+        from envdrift.cli_commands.sync import _verify_issue_summary
+
+        summary = _verify_issue_summary(0, 2)
+        assert summary == (
+            "Found 2 unusable vault key(s). "
+            "Fix the vault secret shapes named above, or use --force to encrypt anyway."
+        )
+        assert "mismatch" not in summary
+        assert "--sync-keys" not in summary
+
+    def test_mixed_names_both_with_both_remedies(self):
+        from envdrift.cli_commands.sync import _verify_issue_summary
+
+        summary = _verify_issue_summary(1, 1)
+        assert "1 key mismatch(es) and 1 unusable vault key(s)" in summary
+        assert "Fix the vault secret shapes named above" in summary
+        assert "--sync-keys" in summary
+        assert "--force" in summary
+
+
 class TestLockCommand:
     def test_lock_no_mappings_for_profile_exits(self, loaded_config, no_git_hook):
         loaded_config(_sync_config([]))
@@ -820,6 +854,99 @@ class TestLockCommand:
         result = runner.invoke(app, ["lock", "--verify-vault", "--force"])
         assert result.exit_code == 1
         assert "vault access failed" in result.output
+
+    @patch("envdrift.cli_commands.encryption_helpers.resolve_encryption_backend")
+    def test_lock_verify_vault_json_document_env_aware_match(
+        self, mock_resolve, tmp_path, loaded_config, no_git_hook
+    ):
+        """A JSON key/value document secret is parsed env-aware: the field for
+        this environment is extracted and compared, instead of the raw JSON
+        string false-mismatching the local key forever (#480)."""
+        backend = DummyEncryptionBackend()
+        mock_resolve.return_value = (backend, EncryptionProvider.DOTENVX, None)
+        (tmp_path / ".env.production").write_text(
+            "#/---BEGIN DOTENV ENCRYPTED---/\nSECRET=encrypted:abc\n"
+        )
+        (tmp_path / ".env.keys").write_text("DOTENV_PRIVATE_KEY_PRODUCTION=matchme\n")
+
+        client = MagicMock()
+        client.get_secret.return_value = SecretValue(
+            name="s",
+            value=(
+                '{"DOTENV_PRIVATE_KEY_STAGING": "otherkey", '
+                '"DOTENV_PRIVATE_KEY_PRODUCTION": "matchme"}'
+            ),
+        )
+        mapping = ServiceMapping(secret_name="s", folder_path=tmp_path, environment="production")
+        loaded_config(_sync_config([mapping]), client)
+
+        result = runner.invoke(app, ["lock", "--verify-vault", "--force"])
+        normalized = " ".join(result.output.split())
+        assert result.exit_code == 0, result.output
+        assert "keys match vault" in normalized
+        assert "KEY MISMATCH" not in normalized
+
+    @patch("envdrift.cli_commands.encryption_helpers.resolve_encryption_backend")
+    def test_lock_verify_vault_unusable_secret_stops_before_encrypt(
+        self, mock_resolve, tmp_path, loaded_config, no_git_hook
+    ):
+        """A secret shape that cannot be key material (KeyMaterialError) counts
+        as a verification issue: lock exits 1 *before* encrypting anything and
+        names the shape problem — it is not mislabeled 'vault access failed'
+        with encryption proceeding first (#480)."""
+        backend = DummyEncryptionBackend()
+        mock_resolve.return_value = (backend, EncryptionProvider.DOTENVX, None)
+        # Plaintext file: encryption WOULD run if the fail-fast gate is skipped.
+        (tmp_path / ".env.production").write_text("PLAIN=val\n")
+        (tmp_path / ".env.keys").write_text("DOTENV_PRIVATE_KEY_PRODUCTION=localkey\n")
+
+        client = MagicMock()
+        client.get_secret.return_value = SecretValue(
+            name="s", value='{"username": "admin", "password": "hunter2"}'
+        )
+        mapping = ServiceMapping(secret_name="s", folder_path=tmp_path, environment="production")
+        loaded_config(_sync_config([mapping]), client)
+
+        result = runner.invoke(app, ["lock", "--verify-vault"])
+        normalized = " ".join(result.output.split())
+        assert result.exit_code == 1
+        assert "KEY UNUSABLE" in normalized
+        assert "JSON" in normalized
+        assert "vault access failed" not in normalized
+        # The summary names the unusable secret for what it is — not a "key
+        # mismatch" steering the user to --sync-keys, which would raise the
+        # same KeyMaterialError instead of fixing anything.
+        assert "1 unusable vault key(s)" in normalized
+        assert "key mismatch" not in normalized
+        # The fail-fast gate fired before Step 2: nothing was encrypted.
+        assert "Encrypting environment files" not in normalized
+        assert backend.encrypt_calls == []
+
+    @patch("envdrift.cli_commands.encryption_helpers.resolve_encryption_backend")
+    def test_lock_verify_vault_binary_secret_rejected(
+        self, mock_resolve, tmp_path, loaded_config, no_git_hook
+    ):
+        """A provider-marked binary payload (metadata encoding=base64) is
+        rejected by the verify path too — the raw-string comparison used to
+        bypass the binary check entirely."""
+        backend = DummyEncryptionBackend()
+        mock_resolve.return_value = (backend, EncryptionProvider.DOTENVX, None)
+        (tmp_path / ".env.production").write_text("PLAIN=val\n")
+        (tmp_path / ".env.keys").write_text("DOTENV_PRIVATE_KEY_PRODUCTION=localkey\n")
+
+        client = MagicMock()
+        client.get_secret.return_value = SecretValue(
+            name="s", value="//4=", metadata={"encoding": "base64"}
+        )
+        mapping = ServiceMapping(secret_name="s", folder_path=tmp_path, environment="production")
+        loaded_config(_sync_config([mapping]), client)
+
+        result = runner.invoke(app, ["lock", "--verify-vault"])
+        normalized = " ".join(result.output.split())
+        assert result.exit_code == 1
+        assert "KEY UNUSABLE" in normalized
+        assert "binary" in normalized
+        assert backend.encrypt_calls == []
 
     @patch("envdrift.cli_commands.encryption_helpers.resolve_encryption_backend")
     def test_lock_sync_keys_runs_engine(
