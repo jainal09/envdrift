@@ -297,7 +297,7 @@ def vault_push(
                     # green having pushed nothing (#488).
                     print_error(
                         f"Error processing {mapping.folder_path}: folder does not "
-                        "exist (check folder_path in your sync config)"
+                        "exist or is not a directory (check folder_path in your sync config)"
                     )
                     error_count += 1
                     continue

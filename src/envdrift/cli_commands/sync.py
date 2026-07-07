@@ -835,7 +835,7 @@ def pull(
                 # folder_path), not a benign skip — it must fail the run (#488).
                 console.print(
                     f"  [red]![/red] {mapping.folder_path} "
-                    f"[red]- error: folder does not exist "
+                    f"[red]- error: folder does not exist or is not a directory "
                     f"(check folder_path in your sync config)[/red]"
                 )
                 error_count += 1
@@ -1669,11 +1669,11 @@ def lock(
                 # folder_path), not a benign skip — it must fail the run (#488).
                 console.print(
                     f"  [red]![/red] {mapping.folder_path} "
-                    f"[red]- error: folder does not exist "
+                    f"[red]- error: folder does not exist or is not a directory "
                     f"(check folder_path in your sync config)[/red]"
                 )
                 errors.append(
-                    f"{mapping.folder_path}: folder does not exist "
+                    f"{mapping.folder_path}: folder does not exist or is not a directory "
                     "(check folder_path in your sync config)"
                 )
                 error_count += 1

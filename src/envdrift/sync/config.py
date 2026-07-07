@@ -16,36 +16,63 @@ class SyncConfigError(Exception):
     pass
 
 
+# Key shapes of a [[vault.sync.mappings]] entry. Shared with envdrift.config's
+# discovered-config validation (_validate_sync_mapping_entry) so the two
+# layers cannot drift when a mapping key is added (#488).
+MAPPING_REQUIRED_STR_KEYS = ("secret_name", "folder_path")
+MAPPING_OPTIONAL_STR_KEYS = ("vault_name", "environment", "env_file", "profile", "activate_to")
+
+
+def invalid_mapping_value_keys(mapping_data: dict[str, Any]) -> list[str]:
+    """Return the mapping keys whose values have the wrong type.
+
+    TOML type surprises — ``folder_path = 123``, ``secret_name = true``,
+    ``ephemeral_keys = "yes"`` — must be clean config errors, not raw
+    TypeError tracebacks from ``Path()``/str use downstream (#488). Required
+    string keys reject ``None`` too (unreachable from a TOML file, which has
+    no null, but reachable through the public ``from_toml`` API); optional
+    keys treat ``None`` as absent. All offending keys are collected so the
+    caller can report every problem in one pass.
+    """
+    bad = [k for k in MAPPING_REQUIRED_STR_KEYS if not isinstance(mapping_data.get(k), str)]
+    bad += [
+        k
+        for k in MAPPING_OPTIONAL_STR_KEYS
+        if mapping_data.get(k) is not None and not isinstance(mapping_data[k], str)
+    ]
+    ephemeral = mapping_data.get("ephemeral_keys")
+    if ephemeral is not None and not isinstance(ephemeral, bool):
+        bad.append("ephemeral_keys")
+    return bad
+
+
+def _expected_type(key: str) -> str:
+    return "boolean" if key == "ephemeral_keys" else "string"
+
+
 def _validate_mapping_entry(mapping_data: Any) -> None:
     """Validate one TOML mapping entry, raising a clean SyncConfigError.
 
-    TOML type surprises — a non-table entry (``mappings = [123]``), a missing
-    required key, or a non-string value (``folder_path = 123``) — must be a
-    clean config error, not a raw TypeError traceback from ``Path()``/``in``
-    use downstream (#488).
+    A non-table entry (``mappings = [123]``), a missing required key, or a
+    wrong-typed value must be a clean config error, not a raw TypeError
+    traceback downstream (#488).
     """
     if not isinstance(mapping_data, dict):
         raise SyncConfigError(
             f"Mapping entry must be a table, got {type(mapping_data).__name__}: {mapping_data!r}"
         )
-    if "secret_name" not in mapping_data:
-        raise SyncConfigError("Missing 'secret_name' in mapping")
-    if "folder_path" not in mapping_data:
-        raise SyncConfigError("Missing 'folder_path' in mapping")
-    for key in (
-        "secret_name",
-        "folder_path",
-        "vault_name",
-        "environment",
-        "env_file",
-        "profile",
-        "activate_to",
-    ):
-        value = mapping_data.get(key)
-        if value is not None and not isinstance(value, str):
-            raise SyncConfigError(
-                f"'{key}' must be a string in mapping, got {type(value).__name__}: {value!r}"
+    for key in MAPPING_REQUIRED_STR_KEYS:
+        if key not in mapping_data:
+            raise SyncConfigError(f"Missing '{key}' in mapping")
+    bad = invalid_mapping_value_keys(mapping_data)
+    if bad:
+        raise SyncConfigError(
+            "; ".join(
+                f"'{k}' must be a {_expected_type(k)} in mapping, "
+                f"got {type(mapping_data.get(k)).__name__}: {mapping_data.get(k)!r}"
+                for k in bad
             )
+        )
 
 
 @dataclass

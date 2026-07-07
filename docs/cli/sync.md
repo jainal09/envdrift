@@ -159,10 +159,10 @@ Place the file in the project root so auto-discovery finds it; pass `-c envdrift
     Each mapping's `folder_path` is validated: a folder that does not exist
     (for example a typo like `servces/api`), or that points at a regular
     file instead of a directory, is reported as a per-mapping
-    **error** — the row says `Mapping folder does not exist`, the summary
-    counts it under `Errors`, and `sync --ci`, `pull`, and `vault-push --all`
-    exit non-zero. Only a *missing env file inside an existing folder* is a
-    benign skip ("file not created yet").
+    **error** — the row says `Mapping folder does not exist or is not a
+    directory`, the summary counts it under `Errors`, and `sync --ci`,
+    `pull`, and `vault-push --all` exit non-zero. Only a *missing env file
+    inside an existing folder* is a benign skip ("file not created yet").
 
 !!! note "`vault_name` / `default_vault_name` do not switch the vault"
     `vault_name` (per-mapping) and `default_vault_name` are parsed and accepted

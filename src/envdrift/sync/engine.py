@@ -108,10 +108,10 @@ class SyncEngine:
                     secret_name=mapping.secret_name,
                     folder_path=mapping.folder_path,
                     action=SyncAction.ERROR,
-                    message="Mapping folder does not exist",
+                    message="Mapping folder does not exist or is not a directory",
                     error=(
-                        f"Mapping folder does not exist: {mapping.folder_path} "
-                        "(check folder_path in your sync config)"
+                        f"Mapping folder does not exist or is not a directory: "
+                        f"{mapping.folder_path} (check folder_path in your sync config)"
                     ),
                 )
             if (

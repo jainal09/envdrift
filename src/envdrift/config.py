@@ -264,42 +264,31 @@ class PartialEncryptionConfig:
         validate_partial_encryption_environments(self.environments)
 
 
-# Mapping keys that must hold strings when present. Shared shape with
-# envdrift.sync.config.SyncConfig.from_toml (the explicit --config path).
-_MAPPING_STR_KEYS = (
-    "secret_name",
-    "folder_path",
-    "vault_name",
-    "environment",
-    "env_file",
-    "profile",
-    "activate_to",
-)
-
-
 def _validate_sync_mapping_entry(m: Any) -> None:
     """Validate one ``[[vault.sync.mappings]]`` entry, raising a clean ValueError.
 
     TOML type surprises — a non-table entry (``mappings = [123]``), a missing
-    required key, or a non-string value (``folder_path = 123``) — used to
+    required key, or a wrong-typed value (``folder_path = 123``) — used to
     escape as raw TypeError/KeyError tracebacks from ``Path()``/subscript use
-    downstream; validate loudly here instead (#443 #32 #488).
+    downstream; validate loudly here instead (#443 #32 #488). The key shapes
+    are shared with :func:`envdrift.sync.config.invalid_mapping_value_keys`
+    (the explicit ``--config`` path) so the two layers cannot drift.
     """
+    from envdrift.sync.config import MAPPING_REQUIRED_STR_KEYS, invalid_mapping_value_keys
+
     if not isinstance(m, dict):
         raise ValueError(
             f"[[vault.sync.mappings]] entry must be a table, got {type(m).__name__}: {m!r}"
         )
-    missing = [k for k in ("secret_name", "folder_path") if k not in m]
+    missing = [k for k in MAPPING_REQUIRED_STR_KEYS if k not in m]
     if missing:
         raise ValueError(
             f"[[vault.sync.mappings]] entry is missing required key(s) {', '.join(missing)}: {m!r}"
         )
-    wrong_type = [
-        k for k in _MAPPING_STR_KEYS if m.get(k) is not None and not isinstance(m[k], str)
-    ]
+    wrong_type = invalid_mapping_value_keys(m)
     if wrong_type:
         raise ValueError(
-            f"[[vault.sync.mappings]] entry has non-string value(s) for "
+            f"[[vault.sync.mappings]] entry has wrong value type(s) for "
             f"{', '.join(wrong_type)}: {m!r}"
         )
 
