@@ -18,7 +18,6 @@ from __future__ import annotations
 import json
 import platform
 import shutil
-import stat
 import subprocess  # nosec B404
 import tarfile
 import tempfile
@@ -28,6 +27,11 @@ import zipfile
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, ClassVar
 
+from envdrift.install_integrity import (
+    ChecksumVerificationError,
+    atomic_install,
+    verify_download,
+)
 from envdrift.scanner.base import (
     FindingSeverity,
     ScanFinding,
@@ -55,6 +59,11 @@ def _get_trufflehog_version() -> str:
 def _get_trufflehog_download_urls() -> dict[str, str]:
     """Get download URL templates from constants."""
     return _load_constants().get("trufflehog_download_urls", {})
+
+
+def _get_trufflehog_checksums_url() -> str:
+    """Get the upstream checksums file URL template from constants."""
+    return _load_constants().get("trufflehog_checksums_url", "")
 
 
 class TrufflehogNotFoundError(Exception):
@@ -220,14 +229,22 @@ class TrufflehogInstaller:
             ext=ext,
         )
 
+    def get_checksums_url(self) -> str:
+        """Get the URL of the upstream-published checksums file for this version."""
+        template = _get_trufflehog_checksums_url()
+        return template.format(version=self.version) if template else ""
+
     def download_and_extract(self, target_path: Path) -> None:
-        """Download and extract trufflehog to the target path.
+        """Download, verify, and extract trufflehog to the target path.
+
+        The downloaded archive's SHA256 is checked against the upstream
+        checksums file before extraction; verification fails closed (#490).
 
         Args:
             target_path: Where to install the trufflehog binary.
 
         Raises:
-            TrufflehogInstallError: If download or extraction fails.
+            TrufflehogInstallError: If download, verification, or extraction fails.
         """
         url = self.get_download_url()
         self.progress(f"Downloading trufflehog v{self.version}...")
@@ -242,6 +259,13 @@ class TrufflehogInstaller:
                 urllib.request.urlretrieve(url, archive_path)  # nosec B310
             except Exception as e:
                 raise TrufflehogInstallError(f"Download failed: {e}") from e
+
+            # Verify against the published checksums before extracting anything.
+            self.progress("Verifying checksum...")
+            try:
+                verify_download(archive_path, archive_name, self.get_checksums_url(), "trufflehog")
+            except ChecksumVerificationError as e:
+                raise TrufflehogInstallError(str(e)) from e
 
             self.progress("Extracting...")
 
@@ -265,17 +289,13 @@ class TrufflehogInstaller:
             if not extracted_binary:
                 raise TrufflehogInstallError(f"Binary '{binary_name}' not found in archive")
 
-            # Ensure target directory exists
-            target_path.parent.mkdir(parents=True, exist_ok=True)
-
-            # Copy to target
-            shutil.copy2(extracted_binary, target_path)
-
-            # Make executable (Unix)
-            if platform.system() != "Windows":
-                target_path.chmod(
-                    target_path.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH
-                )
+            # Stage next to the target and atomically replace it, so an
+            # interrupted copy (disk full, crash) can never corrupt a working
+            # binary or leave a partial write behind (#490).
+            try:
+                atomic_install(extracted_binary, target_path)
+            except OSError as e:
+                raise TrufflehogInstallError(f"Failed to install binary: {e}") from e
 
             self.progress(f"Installed to {target_path}")
 

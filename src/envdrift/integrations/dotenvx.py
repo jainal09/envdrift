@@ -16,7 +16,6 @@ import os
 import platform
 import re
 import shutil
-import stat
 import subprocess  # nosec B404
 import sys
 import tempfile
@@ -24,6 +23,12 @@ import urllib.request
 from collections.abc import Callable
 from pathlib import Path
 from typing import ClassVar
+
+from envdrift.install_integrity import (
+    ChecksumVerificationError,
+    atomic_install,
+    verify_download,
+)
 
 
 def _load_constants() -> dict:
@@ -60,8 +65,22 @@ def _get_download_url_templates() -> dict[str, str]:
     return _load_constants()["download_urls"]
 
 
+def _get_checksums_url_template() -> str:
+    """
+    Return the dotenvx checksums file URL template from constants.json.
+
+    Returns:
+        checksums_url (str): URL template with a ``{version}`` placeholder, or
+            an empty string when unconfigured (verification then fails closed).
+    """
+    return _load_constants().get("dotenvx_checksums_url", "")
+
+
 # Load version from constants.json
 DOTENVX_VERSION = _get_dotenvx_version()
+
+# Upstream-published checksums file used to verify downloads (fail closed).
+DOTENVX_CHECKSUMS_URL_TEMPLATE = _get_checksums_url_template()
 
 # Download URLs by platform - loaded from constants.json and mapped to tuples
 _URL_TEMPLATES = _get_download_url_templates()
@@ -437,6 +456,17 @@ class DotenvxInstaller:
             return url.format(version=self.version)
         return url.replace(DOTENVX_VERSION, self.version)
 
+    def get_checksums_url(self) -> str:
+        """
+        Return the URL of the upstream-published checksums file for this version.
+
+        Returns:
+            checksums_url (str): Concrete URL, or an empty string when no
+                template is configured (verification then fails closed).
+        """
+        template = DOTENVX_CHECKSUMS_URL_TEMPLATE
+        return template.format(version=self.version) if template else ""
+
     def download_and_extract(self, target_path: Path) -> None:
         """
         Download the packaged dotenvx release for the current platform and place the extracted binary at the given target path.
@@ -470,6 +500,14 @@ class DotenvxInstaller:
             except Exception as e:
                 raise DotenvxInstallError(f"Download failed: {e}") from e
 
+            # Verify against the published checksums before extracting anything,
+            # so a tampered or unverifiable archive never installs (#490).
+            self.progress("Verifying checksum...")
+            try:
+                verify_download(archive_path, archive_name, self.get_checksums_url(), "dotenvx")
+            except ChecksumVerificationError as e:
+                raise DotenvxInstallError(str(e)) from e
+
             self.progress("Extracting...")
 
             # Extract based on archive type
@@ -492,17 +530,13 @@ class DotenvxInstaller:
             if not extracted_binary:
                 raise DotenvxInstallError(f"Binary '{binary_name}' not found in archive")
 
-            # Ensure target directory exists
-            target_path.parent.mkdir(parents=True, exist_ok=True)
-
-            # Copy to target
-            shutil.copy2(extracted_binary, target_path)
-
-            # Make executable (Unix)
-            if platform.system() != "Windows":
-                target_path.chmod(
-                    target_path.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH
-                )
+            # Stage next to the target and atomically replace it, so an
+            # interrupted copy (disk full, crash) can never corrupt a working
+            # binary or leave a partial write behind (#490).
+            try:
+                atomic_install(extracted_binary, target_path)
+            except OSError as e:
+                raise DotenvxInstallError(f"Failed to install binary: {e}") from e
 
             self.progress(f"Installed to {target_path}")
 

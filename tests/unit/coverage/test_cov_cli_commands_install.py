@@ -115,8 +115,8 @@ class TestVerifyChecksum:
             )
         assert ok is True
 
-    def test_platform_not_in_checksums_skips(self, tmp_path: Path):
-        """Missing platform entry skips verification, returns True (lines 174-177)."""
+    def test_platform_not_in_checksums_fails_closed(self, tmp_path: Path):
+        """A checksums file lacking this platform's entry fails closed (#490)."""
         binary = tmp_path / "agent"
         binary.write_bytes(b"x")
         checksums = b"abc123  envdrift-agent-some-other-platform\n"
@@ -125,10 +125,10 @@ class TestVerifyChecksum:
             ok = install_mod._verify_checksum(
                 binary, "darwin-arm64", "https://example/checksums.txt"
             )
-        assert ok is True
+        assert ok is False
 
-    def test_download_error_returns_true_with_warning(self, tmp_path: Path):
-        """URLError while fetching checksums proceeds with warning (lines 195-198)."""
+    def test_download_error_fails_closed(self, tmp_path: Path):
+        """An unreachable checksums file fails closed instead of warning (#490)."""
         binary = tmp_path / "agent"
         binary.write_bytes(b"x")
         with patch(
@@ -138,7 +138,31 @@ class TestVerifyChecksum:
             ok = install_mod._verify_checksum(
                 binary, "darwin-arm64", "https://example/checksums.txt"
             )
-        assert ok is True
+        assert ok is False
+
+    def test_unreadable_staging_file_fails_closed(self, tmp_path: Path):
+        """An unreadable staging file (AV quarantine / vanished) fails closed (#490).
+
+        ``sha256_file`` raises ``ChecksumVerificationError`` when it cannot read
+        the file; that must be caught and turned into a refused install, not
+        escape as an unhandled traceback.
+        """
+        from envdrift.install_integrity import ChecksumVerificationError
+
+        binary = tmp_path / "agent"
+        binary.write_bytes(b"x")
+        checksums = b"abc123  envdrift-agent-darwin-arm64\n"
+        with (
+            patch("urllib.request.urlopen", return_value=_make_response(checksums)),
+            patch(
+                "envdrift.cli_commands.install.sha256_file",
+                side_effect=ChecksumVerificationError("could not read file"),
+            ),
+        ):
+            ok = install_mod._verify_checksum(
+                binary, "darwin-arm64", "https://example/checksums.txt"
+            )
+        assert ok is False
 
 
 class TestRunAgentInstall:
@@ -217,10 +241,12 @@ class TestInstallAgentBranches:
         assert "No agent release found" in result.stdout
         assert "releases" in result.stdout
 
-    def test_checksum_failure_removes_binary_and_exits(self, tmp_path: Path):
-        """Checksum verification failure unlinks binary and exits 1 (399-402)."""
+    def test_checksum_failure_keeps_existing_binary_and_exits(self, tmp_path: Path):
+        """Checksum failure removes the staging file, keeps the old binary, exits 1 (#490)."""
         binary_path = tmp_path / "envdrift-agent"
-        binary_path.write_bytes(b"corrupt")
+        binary_path.write_bytes(b"previously-working")
+        staging_path = tmp_path / "envdrift-agent.download"
+        staging_path.write_bytes(b"corrupt")
 
         with (
             patch("shutil.which", return_value=None),
@@ -242,12 +268,18 @@ class TestInstallAgentBranches:
             result = runner.invoke(app, ["install", "agent"])
         assert result.exit_code == 1
         assert "Checksum verification failed" in result.stdout
-        assert not binary_path.exists()
+        assert not staging_path.exists(), "the unverified download must be removed"
+        assert binary_path.read_bytes() == b"previously-working", (
+            "a failed verification must not touch the previously installed binary"
+        )
 
     def test_autostart_failure_warns(self, tmp_path: Path, monkeypatch):
         """Auto-start failure prints a warning branch (lines 428-429)."""
         binary_path = tmp_path / "envdrift-agent"
         binary_path.write_bytes(b"bin")
+        # _download_binary is mocked; pre-create the staging file the verified
+        # install flow moves onto the final path (#490).
+        (tmp_path / "envdrift-agent.download").write_bytes(b"bin")
         monkeypatch.setenv("PATH", str(tmp_path))
 
         version_result = MagicMock()
@@ -285,6 +317,9 @@ class TestInstallAgentBranches:
         """Project registration success branch (lines 436-442)."""
         binary_path = tmp_path / "envdrift-agent"
         binary_path.write_bytes(b"bin")
+        # _download_binary is mocked; pre-create the staging file the verified
+        # install flow moves onto the final path (#490).
+        (tmp_path / "envdrift-agent.download").write_bytes(b"bin")
         monkeypatch.setenv("PATH", str(tmp_path))
 
         version_result = MagicMock()
@@ -322,6 +357,9 @@ class TestInstallAgentBranches:
         """Project registration failure branch (lines 443-444)."""
         binary_path = tmp_path / "envdrift-agent"
         binary_path.write_bytes(b"bin")
+        # _download_binary is mocked; pre-create the staging file the verified
+        # install flow moves onto the final path (#490).
+        (tmp_path / "envdrift-agent.download").write_bytes(b"bin")
         monkeypatch.setenv("PATH", str(tmp_path))
 
         version_result = MagicMock()
@@ -361,6 +399,9 @@ class TestInstallAgentBranches:
         envdrift_bin.mkdir(parents=True)
         binary_path = envdrift_bin / "envdrift-agent"
         binary_path.write_bytes(b"bin")
+        # _download_binary is mocked; pre-create the staging file the verified
+        # install flow moves onto the final path (#490).
+        (envdrift_bin / "envdrift-agent.download").write_bytes(b"bin")
         # PATH deliberately excludes envdrift_bin.
         monkeypatch.setenv("PATH", "/somewhere/else")
 
@@ -396,6 +437,9 @@ class TestInstallAgentBranches:
         """Version subprocess timeout is swallowed (lines 417-420)."""
         binary_path = tmp_path / "envdrift-agent"
         binary_path.write_bytes(b"bin")
+        # _download_binary is mocked; pre-create the staging file the verified
+        # install flow moves onto the final path (#490).
+        (tmp_path / "envdrift-agent.download").write_bytes(b"bin")
         monkeypatch.setenv("PATH", str(tmp_path))
 
         with (

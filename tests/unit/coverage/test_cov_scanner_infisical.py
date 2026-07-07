@@ -20,6 +20,7 @@ from envdrift.scanner.infisical import (
     InfisicalInstaller,
     InfisicalScanner,
 )
+from tests.helpers import write_checksums_for
 
 
 class TestDownloadUrlTemplateFallback:
@@ -75,14 +76,22 @@ class TestDownloadAndExtractBranches:
         mock_url.return_value = "https://example.test/infisical_x_windows_amd64.zip"
         target = tmp_path / "out" / "infisical.exe"
 
+        checksums_path = tmp_path / "stub-checksums.txt"
+
         def fake_download(url: str, dest: str) -> None:
             with zipfile.ZipFile(dest, "w") as zf:
                 zf.writestr("infisical.exe", "binary-bytes")
+            write_checksums_for(Path(dest), checksums_path, url.rsplit("/", 1)[-1])
 
         mock_urlretrieve.side_effect = fake_download
 
         installer = InfisicalInstaller(version="x")
-        installer.download_and_extract(target)
+        with patch.object(
+            InfisicalInstaller,
+            "get_checksums_url",
+            lambda self: checksums_path.resolve().as_uri(),
+        ):
+            installer.download_and_extract(target)
 
         assert target.exists()
         assert target.read_text() == "binary-bytes"
@@ -99,10 +108,23 @@ class TestDownloadAndExtractBranches:
         from envdrift.scanner.infisical import InfisicalInstallError
 
         mock_url.return_value = "https://example.test/infisical_x_linux.bz2"
-        mock_urlretrieve.side_effect = lambda url, dest: Path(dest).write_bytes(b"x")
+        checksums_path = tmp_path / "stub-checksums.txt"
+
+        def fake_download(url: str, dest: str) -> None:
+            Path(dest).write_bytes(b"x")
+            write_checksums_for(Path(dest), checksums_path, url.rsplit("/", 1)[-1])
+
+        mock_urlretrieve.side_effect = fake_download
 
         installer = InfisicalInstaller(version="x")
-        with pytest.raises(InfisicalInstallError, match="Unknown archive format"):
+        with (
+            patch.object(
+                InfisicalInstaller,
+                "get_checksums_url",
+                lambda self: checksums_path.resolve().as_uri(),
+            ),
+            pytest.raises(InfisicalInstallError, match="Unknown archive format"),
+        ):
             installer.download_and_extract(tmp_path / "infisical")
 
 
