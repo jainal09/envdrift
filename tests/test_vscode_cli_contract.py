@@ -13,6 +13,7 @@ never silently rot again.
 
 from __future__ import annotations
 
+import json
 import os
 import re
 import runpy
@@ -221,6 +222,48 @@ class TestPackagingAndDocsContract:
             "docs reference the 'EnvDrift' output channel but the extension never "
             "creates it — register it or fix the docs"
         )
+
+    def test_runtime_deps_are_bundled_into_a_self_contained_artifact(self) -> None:
+        """The vsix must ship a self-contained esbuild bundle, not loose modules.
+
+        Regression (#584): the extension gained its first runtime dependency
+        (``cross-spawn``), but the vsix carries no ``node_modules``
+        (``.vscodeignore`` excludes them; CI packages with
+        ``--no-dependencies``). The compiled entrypoint does a runtime
+        ``require('cross-spawn')``, so without bundling the packaged extension
+        throws ``Cannot find module 'cross-spawn'`` at activation. This pins the
+        packaging config that keeps every runtime dep inlined into
+        ``dist/extension.js``; the vscode-ci ``package`` job verifies the built
+        vsix empirically.
+        """
+        pkg = json.loads((VSCODE_DIR / "package.json").read_text(encoding="utf-8"))
+
+        # `main` is the esbuild bundle, not the tsc output that ships nothing.
+        assert pkg["main"].replace("\\", "/").startswith("./dist/"), pkg["main"]
+
+        # esbuild bundles src/ and externalizes only `vscode` (host-injected).
+        assert "esbuild" in pkg.get("devDependencies", {}), "esbuild dev dep missing"
+        bundle_script = pkg["scripts"]["bundle"]
+        assert "esbuild" in bundle_script and "--bundle" in bundle_script, bundle_script
+        assert "--external:vscode" in bundle_script, bundle_script
+        assert pkg["scripts"]["vscode:prepublish"] == "npm run bundle", (
+            "vsce must run the bundle at package time via vscode:prepublish"
+        )
+
+        # The runtime dep that must be inlined is real and imported in source.
+        assert "cross-spawn" in pkg.get("dependencies", {}), "cross-spawn runtime dep missing"
+        combined_src = "\n".join(p.read_text(encoding="utf-8") for p in _extension_sources())
+        assert "from 'cross-spawn'" in combined_src or 'from "cross-spawn"' in combined_src, (
+            "cross-spawn is declared but never imported — stale dependency"
+        )
+
+        # The vsix ships only the bundle: no node_modules, no tsc `out/` tree.
+        ignored = {
+            line.strip()
+            for line in (VSCODE_DIR / ".vscodeignore").read_text(encoding="utf-8").splitlines()
+        }
+        assert "node_modules/**" in ignored, ".vscodeignore must exclude node_modules/**"
+        assert "out/**" in ignored, ".vscodeignore must exclude the tsc out/ tree"
 
 
 @pytest.mark.integration

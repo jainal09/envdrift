@@ -36,7 +36,7 @@
     "onCommand:envdrift.stopAgent",
     "onCommand:envdrift.refreshAgentStatus"
   ],
-  "main": "./out/extension.js",
+  "main": "./dist/extension.js",
   "capabilities": {
     "untrustedWorkspaces": {
       "supported": "limited",
@@ -120,10 +120,12 @@
     }
   },
   "scripts": {
-    "vscode:prepublish": "npm run compile",
+    "vscode:prepublish": "npm run bundle",
+    "bundle": "esbuild ./src/extension.ts --bundle --outfile=dist/extension.js --external:vscode --format=cjs --platform=node --target=node18",
     "compile": "tsc -p ./",
     "watch": "tsc -watch -p ./",
     "lint": "eslint src/",
+    "pretest": "npm run compile && npm run bundle",
     "test": "node ./out/test/runTest.js",
     "test:unit": "mocha --ui tdd ./out/test/unit/**/*.test.js"
   },
@@ -142,6 +144,7 @@
     "@types/vscode": "^1.85.0",
     "@vscode/test-electron": "^3.0.0",
     "@vscode/vsce": "^3.9.2",
+    "esbuild": "^0.28.1",
     "eslint": "^10.0.0",
     "glob": "^13.0.0",
     "mocha": "^11.0.0",
