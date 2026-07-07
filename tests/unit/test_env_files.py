@@ -7,11 +7,34 @@ from pathlib import Path
 import pytest
 
 from envdrift.env_files import (
+    _is_excluded_env_file,
     detect_env_file,
     resolve_custom_env_file,
     resolve_mapping_env_file,
 )
 from envdrift.sync.config import ServiceMapping
+
+
+@pytest.mark.parametrize(
+    ("name", "excluded"),
+    [
+        (".env.keys", True),
+        # #474: on macOS/Windows default case-insensitive filesystems,
+        # ".env.KEYS" names the same file as ".env.keys" — a case-sensitive
+        # check let the private-key store be encrypted (irreversible lockout).
+        (".env.KEYS", True),
+        (".env.Keys", True),
+        ("service.env.EXAMPLE", True),
+        (".env.SAMPLE", True),
+        (".env.Template", True),
+        (".env", False),
+        (".env.production", False),
+        ("keys.env", False),
+    ],
+)
+def test_is_excluded_env_file_is_case_insensitive(name: str, excluded: bool) -> None:
+    """Companion-file detection matches suffixes case-insensitively (#474)."""
+    assert _is_excluded_env_file(name) is excluded
 
 
 @pytest.mark.parametrize(

@@ -27,8 +27,14 @@ class EnvFileDetection:
 
 
 def _is_excluded_env_file(name: str) -> bool:
-    """Return True for companion files (.example/.sample/.template/.keys)."""
-    return any(name.endswith(suffix) for suffix in _EXCLUDED_ENV_SUFFIXES)
+    """Return True for companion files (.example/.sample/.template/.keys).
+
+    Case-insensitive: on the default case-insensitive filesystems of macOS and
+    Windows, ``.env.KEYS`` names the same file as ``.env.keys``, so a
+    case-sensitive check would let the private-key store be encrypted (#474).
+    """
+    lowered = name.casefold()
+    return any(lowered.endswith(suffix) for suffix in _EXCLUDED_ENV_SUFFIXES)
 
 
 def _name_encodes_environment(name: str, environment: str) -> bool:

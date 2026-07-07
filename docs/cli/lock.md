@@ -306,7 +306,7 @@ Step 1: Verifying keys with vault...
   ✓ services/myapp - keys match vault
   ✗ services/auth - KEY MISMATCH: local key differs from vault!
 
-ERROR: Vault key verification failed for 1 mapping(s). Nothing was encrypted.
+[ERROR] Found 1 failed key verification(s). Nothing was encrypted.
 Run 'envdrift lock --sync-keys' to sync keys from vault, or rerun without
 --verify-vault to skip verification.
 ```
@@ -318,10 +318,15 @@ Step 1: Verifying keys with vault...
 
   ✗ services/auth - cannot verify: .env.keys not found
 
-ERROR: Vault key verification failed for 1 mapping(s). Nothing was encrypted.
+[ERROR] Found 1 failed key verification(s). Nothing was encrypted.
 Run 'envdrift lock --sync-keys' to sync keys from vault, or rerun without
 --verify-vault to skip verification.
 ```
+
+A vault secret that cannot be parsed as key material at all (a JSON document without a usable
+key field, a multi-line blob with no key line, a binary payload) is reported as
+`KEY UNUSABLE` with the shape problem, and the summary counts it as an *unusable vault key*
+rather than a failed key verification — fix the secret in the vault; `--sync-keys` cannot install it.
 
 ### With Key Sync
 
@@ -407,6 +412,7 @@ The `lock` command catches many edge cases and provides helpful warnings and err
 | Error               | Meaning                                                |
 |:--------------------|:-------------------------------------------------------|
 | `KEY MISMATCH`      | Local key differs from vault key - potential key drift |
+| `KEY UNUSABLE`      | The vault secret's key material is malformed or unusable - fix the vault secret shape |
 | `vault error`       | Failed to access or authenticate with the vault        |
 | `encryption failed` | The configured backend (dotenvx or SOPS) failed to encrypt the file |
 | `Key sync failed`   | Could not sync keys from vault                         |

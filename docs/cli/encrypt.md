@@ -29,6 +29,19 @@ exit code (dotenvx can exit `0` without encrypting):
 - **Refuses content-free files.** An empty, blank-line-only, or comment-only file
   has no variables to encrypt, so the command declines with a non-zero exit
   instead of letting dotenvx scaffold a placeholder-secrets template into it.
+- **Refuses the key store and companion files.** `envdrift encrypt .env.keys`
+  would encrypt the dotenvx private-key store itself — the keys become
+  ciphertext under a brand-new keypair whose private half is never saved,
+  permanently locking out every encrypted file in the project — so the command
+  refuses any `.keys`/`.example`/`.sample`/`.template` target by name, for
+  every backend. The name match is case-insensitive (`.env.KEYS` names the
+  same file on macOS/Windows default filesystems), and a renamed or symlinked
+  key store (`mv .env.keys prodkeys.env`) is still refused by content: a file
+  carrying `DOTENV_PRIVATE_KEY*` entries is never encrypted.
+- **Handles leading-dash filenames.** A file like `-dash.env` is passed to
+  dotenvx as `./-dash.env` so its CLI cannot misparse the name as flags
+  (which previously fabricated a different file full of placeholder secrets).
+  Use `envdrift encrypt -- -dash.env` so envdrift's own CLI accepts the name.
 - **Reports silent encryption failures.** When the key is missing or malformed
   (a `.env.keys` that is a directory, garbage, or a mismatched key), the file is
   re-read after the call; if any plaintext value survives, the command fails
@@ -84,10 +97,18 @@ envdrift encrypt .env.production --backend sops
 
 - `--sops-config` Path to `.sops.yaml`
 - `--age` Age public key(s) for encryption
-- `--age-key-file` Age private key file for decryption (sets `SOPS_AGE_KEY_FILE`)
+- `--age-key-file` Age private key file for decryption (sets `SOPS_AGE_KEY_FILE`;
+  the explicit flag overrides an ambient `SOPS_AGE_KEY_FILE` export)
 - `--kms` AWS KMS key ARN
 - `--gcp-kms` GCP KMS resource ID
 - `--azure-kv` Azure Key Vault key URL
+
+Re-running `encrypt` on an already-encrypted SOPS file verifies the post-state: a
+fully encrypted file is an honest exit-0 no-op (`already encrypted (no change)`),
+while surviving plaintext values or recipient flags missing from the file's metadata
+fail loudly. A file encrypted with the other backend is refused instead of being
+double-encrypted. See the
+[SOPS guide](../guides/sops.md#re-running-encrypt-on-an-already-encrypted-file).
 
 ## Examples
 
@@ -217,9 +238,12 @@ envdrift shells out to [SOPS](https://github.com/getsops/sops) for encryption:
 1. **Encrypted format**: Values use the `ENC[AES256_GCM,...]` format
 2. **Key storage**: Keys live in your SOPS setup (age, KMS, PGP, etc.)
 3. **Config**: `.sops.yaml` controls which files and keys are used
-4. **Idempotent**: Re-encrypting a file that is already SOPS-encrypted is a
-   clean no-op (exit 0, "already encrypted (no change)"). A pre-commit hook
-   firing twice, a CI re-run, or a documented re-run will not fail.
+4. **Idempotent, but verified**: Re-encrypting a file that is already fully
+   SOPS-encrypted with the same recipients is a clean no-op (exit 0,
+   "already encrypted (no change)"). A pre-commit hook firing twice, a CI
+   re-run, or a documented re-run will not fail. The no-op is declared only
+   after verifying the post-state: surviving plaintext values, or recipient
+   flags absent from the file's metadata, fail loudly instead.
 5. **Explicit config is validated**: If you pass `--sops-config` (or set
    `sops_config_file` in `envdrift.toml`) pointing at a path that does not
    exist, encryption fails with `SOPS config file not found: <path>` rather

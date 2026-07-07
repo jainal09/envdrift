@@ -18,11 +18,19 @@ from pathlib import Path
 # target across runs. Not persisted.
 _REDACTION_SALT = secrets.token_bytes(16)
 
-# dotenvx header format
-DOTENVX_HEADER = """#/------------------!DOTENV_PRIVATE_KEYS!-------------------\\#
-#/ private decryption keys. DO NOT commit to source control \\#
-#/ [how it works](https://dotenvx.com/encryption) \\#
-#/----------------------------------------------------------\\#"""
+# dotenvx .env.keys header — byte-identical to the header dotenvx itself writes
+# (#474): box lines end in "/" (not "\#"), the link and armor lines keep
+# dotenvx's padding so the box edges align, and the "ARMORED KEYS" line matches
+# the pinned dotenvx (see constants.json). EnvKeysFile claims dotenvx format
+# preservation, so a later dotenvx append must not introduce a second, visibly
+# different header style. The integration test derives the expected block from
+# the real pinned binary's output, so a dotenvx bump that changes the header
+# fails CI pointing here.
+DOTENVX_HEADER = """#/------------------!DOTENV_PRIVATE_KEYS!-------------------/
+#/ private decryption keys. DO NOT commit to source control /
+#/     [how it works](https://dotenvx.com/encryption)       /
+#/          ⛨ ARMORED KEYS: `dotenvx armor up`              /
+#/----------------------------------------------------------/"""
 
 
 class EnvKeysFile:
@@ -45,6 +53,9 @@ class EnvKeysFile:
         if not self.path.exists():
             return None
 
+        # dotenvx (Node.js) reads/writes .env.keys as UTF-8, and the header now
+        # contains a non-ASCII character — pin the codec so a non-UTF-8 locale
+        # (Windows cp1252, LC_ALL=C) cannot raise UnicodeDecodeError (#474).
         content = self.path.read_text(encoding="utf-8")
         # ``(.*)`` (not ``(.+)``) so a present-but-empty value (``KEY=``) returns
         # "" rather than None. None means "key absent"; conflating the two made
@@ -72,6 +83,7 @@ class EnvKeysFile:
         Creates the file with proper header if it doesn't exist.
         """
         if self.path.exists():
+            # UTF-8 like dotenvx itself, regardless of the platform locale (#474).
             content = self.path.read_text(encoding="utf-8")
             lines = content.splitlines()
 
@@ -100,14 +112,17 @@ class EnvKeysFile:
 
             atomic_write(self.path, new_content)
         else:
-            # Create new file with header
-            content = f"{DOTENVX_HEADER}\n# .env.{environment}\n{key_name}={value}\n"
+            # Create new file with header. dotenvx leaves a blank line between
+            # the header block and the first "# .env.<environment>" comment —
+            # reproduce its layout byte-for-byte (#474).
+            content = f"{DOTENVX_HEADER}\n\n# .env.{environment}\n{key_name}={value}\n"
             atomic_write(self.path, content)
 
     def has_dotenvx_header(self) -> bool:
         """Check if file has the dotenvx header."""
         if not self.path.exists():
             return False
+        # UTF-8 like dotenvx itself, regardless of the platform locale (#474).
         content = self.path.read_text(encoding="utf-8")
         return "DOTENV_PRIVATE_KEYS" in content
 
@@ -188,7 +203,16 @@ def atomic_write(path: Path, content: str, permissions: int = 0o600) -> None:
     # and leaking the temp file) or leak it. ``fchmod`` and ``fsync`` operate on
     # the same fd via ``fileno()`` while the wrapper still owns it.
     try:
-        with os.fdopen(fd, "w") as tmp_file:
+        # Pin UTF-8: ``os.fdopen`` in text mode otherwise uses the platform
+        # default codec, and content can be non-ASCII (the dotenvx .env.keys
+        # header contains "⛨") — under a non-UTF-8 locale (Windows cp1252,
+        # LC_ALL=C) the write would raise UnicodeEncodeError. Pin LF newlines
+        # too: Windows text mode would otherwise translate "\n" to "\r\n", but
+        # dotenvx (Node.js) writes these files byte-exactly with LF on every
+        # platform, and its Windows parser is known to fail on CRLF ("Input
+        # string must contain hex characters" — the reason
+        # DotenvxWrapper._normalize_line_endings exists). Match dotenvx (#474).
+        with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as tmp_file:
             # ``os.fchmod`` applies to the fd we own, never a symlink target. It
             # is absent on Windows, where permission bits are largely a no-op.
             if hasattr(os, "fchmod"):

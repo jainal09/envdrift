@@ -313,6 +313,15 @@ Reports differences without modifying files. Mismatches are reported as errors, 
     Vault:  xyz789abc012...
 ```
 
+Every error row carries its reason. A missing local key is reported with a
+message that distinguishes a missing `.env.keys` file from a file that exists
+but lacks the expected key:
+
+```text
+  x services/myapp - error
+    Error: DOTENV_PRIVATE_KEY_PRODUCTION missing from services/myapp/.env.keys
+```
+
 ### Force Mode (`--force`)
 
 Updates all mismatches without prompting. Creates backups before updating.
@@ -330,6 +339,7 @@ Updates all mismatches without prompting. Creates backups before updating.
   + services/myapp - created
   ~ services/auth - updated
   = services/api - skipped
+  * services/ci - ephemeral (key not stored locally)
   x services/broken - error
 ```
 
@@ -338,6 +348,7 @@ Icons:
 - `+` - Created new .env.keys file
 - `~` - Updated existing file
 - `=` - Skipped (values match, or env file not created yet)
+- `*` - Ephemeral (key fetched from vault, deliberately not stored locally)
 - `x` - Error occurred (vault error, or the mapping's `folder_path` does not exist)
 
 ### Decryption Test Results
@@ -362,6 +373,15 @@ Icons:
 │   Failed: 0                          │
 ╰──────────────────────────────────────╯
 All services synced successfully
+```
+
+When ephemeral mode is in use, the summary adds an `Ephemeral:` line counting
+the services whose keys were fetched but deliberately not stored locally:
+
+```text
+│ Skipped: 0                           │
+│ Ephemeral: 1 (not stored locally)    │
+│ Errors: 0                            │
 ```
 
 ## Exit Codes

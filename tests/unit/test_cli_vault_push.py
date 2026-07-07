@@ -1155,3 +1155,54 @@ class TestVaultPushSkipEncrypt:
 
         # Should show warning about --skip-encrypt only being for --all mode
         assert "--skip-encrypt is only applicable with --all mode" in result.output
+
+
+class TestVaultPushKeysFileReadErrors:
+    """#487: unreadable .env.keys must fail with a clean error, not a traceback.
+
+    The single-service read seam (``EnvKeysFile.read_key``) sits before any
+    vault call, so these tests drive the real CLI with a real bad file and no
+    vault mocking. Pre-fix, the raw ``IsADirectoryError`` /
+    ``UnicodeDecodeError`` escaped as a Rich traceback.
+    """
+
+    def _invoke(self, folder):
+        return runner.invoke(
+            app,
+            [
+                "vault-push",
+                str(folder),
+                "my-secret",
+                "--env",
+                "production",
+                "-p",
+                "azure",
+                "--vault-url",
+                "https://myvault.vault.azure.net/",
+            ],
+        )
+
+    def test_push_env_keys_is_directory_clean_error(self, tmp_path):
+        """.env.keys as a directory exits 1 with a one-line error (#487)."""
+        (tmp_path / ".env.keys").mkdir()
+
+        result = self._invoke(tmp_path)
+
+        assert result.exit_code == 1
+        out = " ".join(result.output.split())
+        assert "Cannot read" in out, out
+        assert ".env.keys" in out, out
+        # The raw OSError must not escape the command boundary.
+        assert not isinstance(result.exception, OSError), result.exception
+
+    def test_push_env_keys_non_utf8_clean_error(self, tmp_path):
+        """.env.keys with non-UTF-8 bytes exits 1 with a one-line error (#487)."""
+        (tmp_path / ".env.keys").write_bytes(b"DOTENV_PRIVATE_KEY_PRODUCTION=caf\xe9\n")
+
+        result = self._invoke(tmp_path)
+
+        assert result.exit_code == 1
+        out = " ".join(result.output.split())
+        assert "Cannot read" in out, out
+        assert ".env.keys" in out, out
+        assert not isinstance(result.exception, ValueError), result.exception
