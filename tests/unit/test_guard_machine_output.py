@@ -89,7 +89,7 @@ def _assert_valid_sarif(result) -> None:
 
 
 def test_guard_missing_config_emits_json_error(tmp_path):
-    """--json --config <missing> exits 1 with a JSON error, not a traceback.
+    """--json --config <missing> exits 6 with a JSON error, not a traceback.
 
     Uses the real load_config so a ConfigNotFoundError is raised at the real
     call site; the command must convert it to a clean ``{"error": ...}`` document
@@ -102,7 +102,7 @@ def test_guard_missing_config_emits_json_error(tmp_path):
     result = runner.invoke(
         app, ["guard", "--native-only", "--json", "--config", str(missing), str(target)]
     )
-    assert result.exit_code == 1
+    assert result.exit_code == 6
     payload = json.loads(result.stdout)
     assert "error" in payload
     assert "Could not load config" in payload["error"]
@@ -110,7 +110,7 @@ def test_guard_missing_config_emits_json_error(tmp_path):
 
 
 def test_guard_malformed_config_emits_json_error(tmp_path):
-    """--json --config <malformed.toml> exits 1 with a JSON error."""
+    """--json --config <malformed.toml> exits 6 with a JSON error."""
     bad = tmp_path / "envdrift.toml"
     bad.write_text("[guard\n")  # missing closing bracket -> TOMLDecodeError
     target = tmp_path / "a.env"
@@ -119,7 +119,7 @@ def test_guard_malformed_config_emits_json_error(tmp_path):
     result = runner.invoke(
         app, ["guard", "--native-only", "--json", "--config", str(bad), str(target)]
     )
-    assert result.exit_code == 1
+    assert result.exit_code == 6
     payload = json.loads(result.stdout)
     assert "error" in payload
     assert "Traceback" not in result.stdout
@@ -130,7 +130,7 @@ def test_guard_path_not_found_emits_json_error(tmp_path):
     missing = tmp_path / "does-not-exist"
 
     result = runner.invoke(app, ["guard", "--native-only", "--json", str(missing)])
-    assert result.exit_code == 1
+    assert result.exit_code == 6
     payload = json.loads(result.stdout)
     assert "error" in payload
     assert "Path not found" in payload["error"]
@@ -146,7 +146,7 @@ def test_guard_path_not_found_emits_valid_sarif(tmp_path):
     missing = tmp_path / "does-not-exist"
 
     result = runner.invoke(app, ["guard", "--native-only", "--sarif", str(missing)])
-    assert result.exit_code == 1
+    assert result.exit_code == 6
     payload = json.loads(result.stdout)
     # Shaped like a SARIF document, not a bare error object.
     assert payload["version"] == "2.1.0"
@@ -171,7 +171,7 @@ def test_guard_human_error_preserves_bracketed_literal(tmp_path):
     missing = tmp_path / "[vault.sync].env"
 
     result = runner.invoke(app, ["guard", "--native-only", str(missing)])
-    assert result.exit_code == 1
+    assert result.exit_code == 6
     # The bracketed literal must appear verbatim, not be swallowed as markup.
     # Rich falls back to an 80-col width under the non-tty CliRunner capture and
     # soft-wraps the path mid-string (inserting newlines), so a long tmp_path can

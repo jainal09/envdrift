@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import codecs
 import fnmatch
+import math
 import re
 import time
 from pathlib import Path, PurePosixPath
@@ -361,7 +362,7 @@ class NativeScanner(ScannerBackend):
 
     def __init__(
         self,
-        check_entropy: bool = False,
+        check_entropy: bool | None = None,
         entropy_threshold: float = 4.5,
         ignore_patterns: list[str] | None = None,
         additional_ignore_patterns: list[str] | None = None,
@@ -372,8 +373,13 @@ class NativeScanner(ScannerBackend):
         """Initialize the native scanner.
 
         Args:
-            check_entropy: Enable entropy-based secret detection.
+            check_entropy: Tri-state entropy knob (#478) — ``None`` (unset)
+                runs entropy detection on env files only (the default),
+                ``True`` extends it to all scanned files, ``False`` disables
+                it entirely (env files included).
             entropy_threshold: Minimum entropy to flag as potential secret.
+                Coerced to ``float`` here so a wrong-typed value fails at
+                construction with a clear error instead of mid-scan (#478).
             ignore_patterns: Patterns to ignore (replaces defaults if provided).
             additional_ignore_patterns: Additional patterns to ignore (added to defaults).
             allowed_clear_files: Files that are intentionally unencrypted (from partial_encryption config).
@@ -381,7 +387,16 @@ class NativeScanner(ScannerBackend):
             mapped_env_files: Custom env files from vault.sync mappings that must be treated as env files.
         """
         self._check_entropy = check_entropy
-        self._entropy_threshold = entropy_threshold
+        try:
+            self._entropy_threshold = float(entropy_threshold)
+        except (TypeError, ValueError):
+            raise ValueError(
+                f"entropy_threshold must be a number, got {entropy_threshold!r}"
+            ) from None
+        if not math.isfinite(self._entropy_threshold):
+            # nan/inf pass float() but break every ``entropy >= threshold``
+            # comparison, silently disabling entropy detection (#478 review).
+            raise ValueError(f"entropy_threshold must be finite, got {entropy_threshold!r}")
         self._allowed_clear_files = set(allowed_clear_files or [])
         self._skip_clear_files = skip_clear_files
         # Canonicalize mapped env files to absolute paths so they match regardless
@@ -816,9 +831,11 @@ class NativeScanner(ScannerBackend):
         if not self._has_sops_markers(content):
             findings.extend(self._scan_patterns(file_path, content))
 
-        # Check 3: High-entropy strings
-        # Run for env files or if check_entropy is enabled globally
-        if is_env_file or self._check_entropy:
+        # Check 3: High-entropy strings (tri-state knob, #478):
+        # - True: entropy detection on every scanned file
+        # - None (unset): entropy detection on env files only (the default)
+        # - False: entropy detection disabled everywhere, env files included
+        if self._check_entropy is True or (self._check_entropy is None and is_env_file):
             findings.extend(self._scan_entropy(file_path, content))
 
         return findings

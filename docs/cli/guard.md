@@ -16,7 +16,8 @@ slip past other guardrails (hooks, CI, reviews). It detects:
 - Unencrypted env files missing dotenvx or SOPS markers
 - Common secret patterns (tokens, API keys, credentials)
 - Password hashes (bcrypt, sha512crypt) with Kingfisher
-- High-entropy strings (optional, native scanner only)
+- High-entropy strings (native scanner; env files by default, all files with
+  `--entropy`, disable with `--no-entropy`)
 - Secrets in git history (optional)
 
 The unencrypted-file policy covers every env-file naming shape: `.env`,
@@ -154,12 +155,19 @@ Include git history in the scan. Requires a git repository.
 envdrift guard --history
 ```
 
-### `--entropy`, `-e`
+### `--entropy` / `--no-entropy`, `-e`
 
-Enable entropy-based detection in the native scanner.
+Control entropy-based detection in the native scanner. By default (no flag,
+no config) entropy detection runs on **env files only**. `--entropy` extends
+it to every scanned file; `--no-entropy` disables it entirely, env files
+included. The flags override `check_entropy` in `envdrift.toml`.
 
 ```bash
+# Scan every file for high-entropy strings
 envdrift guard --entropy
+
+# Disable entropy detection completely (overrides check_entropy = true)
+envdrift guard --no-entropy
 ```
 
 ### `--skip-clear` / `--no-skip-clear`
@@ -389,7 +397,8 @@ envdrift guard ./db --kingfisher --native-only
 
 ## Exit Codes
 
-`envdrift guard` uses severity-based exit codes:
+`envdrift guard` uses severity-based exit codes, plus dedicated codes for an
+incomplete scan and for operational errors:
 
 | Code | Meaning |
 | :-- | :-- |
@@ -398,14 +407,36 @@ envdrift guard ./db --kingfisher --native-only
 | 2 | High findings |
 | 3 | Medium findings |
 | 4 | Low findings (policy violations, e.g. unencrypted file) |
+| 5 | Scan incomplete: a selected scanner ran but failed |
+| 6 | Operational error (bad config, invalid path or flags) |
 
 Each severity has its own code so a pipeline branching on a specific exit code
 (`if [ $? -eq 2 ]`) can tell them apart — a LOW-only result never collides with
-HIGH's code 2.
+HIGH's code 2, and a missing config file (6) never looks like a critical
+secret (1).
 
 With `--ci`, the `--fail-on` threshold controls what counts as blocking. A
 finding at or above the threshold fails CI with the severity-derived code above;
 anything below the threshold exits 0.
+
+A run in which a selected scanner errored never reports the all-clear 0: if no
+finding blocks the run (none found, or all below the `--fail-on` threshold) but
+a scanner failed, guard exits 5, because the requested scan did not complete.
+Blocking findings take precedence — a critical finding plus a scanner error
+still exits 1. The scanner errors are listed in the human output (Scanner
+Errors panel), in `--json` under `scanner_results[].error`, and in `--sarif`
+as invocation `toolExecutionNotifications`.
+
+The machine-readable verdict fields always match the process exit code: the
+`--json` document's `exit_code`/`has_blocking_findings` and the `--sarif`
+invocation's `exitCode`/`executionSuccessful` are computed from the same
+threshold-adjusted result the process returns.
+
+Operational-error paths keep machine output parseable too — including a bad
+or wrong-typed `[guard]` config value and git failures under
+`--staged`/`--pr-base`. With `--json`, stdout is a `{"error": "..."}`
+document; with `--sarif`, a schema-valid run with
+`executionSuccessful: false` and the error as a tool notification.
 
 ## Configuration
 
@@ -417,7 +448,8 @@ Guard settings live under `[guard]` in `envdrift.toml` or
 scanners = ["native", "gitleaks", "trufflehog", "detect-secrets", "kingfisher", "git-secrets", "talisman", "trivy", "infisical"]
 auto_install = true
 include_history = false
-check_entropy = false  # Set to true to enable entropy-based detection (default: off)
+check_entropy = false  # true = entropy scan on all files, false = off everywhere,
+                       # unset = env files only (default)
 entropy_threshold = 4.5
 fail_on_severity = "high"
 skip_clear_files = false  # Set to true to skip .clear files entirely

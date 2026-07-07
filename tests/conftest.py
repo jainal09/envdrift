@@ -19,6 +19,21 @@ def _no_ambient_insecure_skip_checksum(monkeypatch):
     monkeypatch.delenv(INSECURE_SKIP_ENV, raising=False)
 
 
+@pytest.fixture(autouse=True)
+def _reset_unknown_key_warning_dedupe():
+    """Keep tests order-independent w.r.t. the unknown-key warning dedup set.
+
+    ``envdrift.config._emitted_unknown_key_warnings`` deliberately persists for
+    a whole CLI process (one warning per finding per run), but a test process
+    hosts many logical runs: two tests loading a config at the same path would
+    otherwise couple — the second sees no warning (#491 review).
+    """
+    from envdrift.config import _emitted_unknown_key_warnings
+
+    _emitted_unknown_key_warnings.clear()
+    yield
+
+
 @pytest.fixture
 def valid_env_content():
     """
