@@ -720,7 +720,8 @@ class TestTalismanInstallerInstall:
             mock_run.assert_called_once()
 
 
-# Mark integration tests that require actual talisman installation
+# Real-binary tests: integration lane only, skip-gated on the binary (#497)
+@pytest.mark.integration
 @pytest.mark.skipif(
     not TalismanScanner(auto_install=False).is_installed(),
     reason="talisman not installed",

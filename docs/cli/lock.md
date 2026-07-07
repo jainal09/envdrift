@@ -93,6 +93,16 @@ Verify that local `.env.keys` match vault secrets before encrypting.
 
 This helps detect key drift where a developer may have re-encrypted with a new key that doesn't match the team's shared vault key.
 
+Verification is strict: a mapping that **cannot** be verified — missing
+`.env.keys`, a missing key entry, a missing or empty vault secret, or a vault
+access error — fails the same way a key mismatch does. When any mapping fails
+verification, `lock` exits 1 **before** encrypting anything (even with
+`--force`, which only skips prompts). This prevents the encryption step from
+silently minting a fresh local-only key that the rest of the team cannot
+decrypt with the vault key. Repair with `envdrift lock --sync-keys` (fetch
+keys from vault) or `envdrift vault-push` (publish local keys), or rerun
+without `--verify-vault` to encrypt without verification.
+
 ```bash
 envdrift lock --verify-vault
 ```
@@ -103,6 +113,11 @@ Sync keys from vault before encrypting. This implies `--verify-vault`.
 
 Use this to ensure your local keys are up-to-date with vault before encrypting.
 
+The same hard-failure contract applies: when any mapping's key fails to sync
+(missing vault secret, vault error), `lock` exits 1 **before** encrypting
+anything — even with `--force`. Encrypting past a failed sync would mint a
+fresh local-only key for the very mapping whose vault key is unavailable.
+
 ```bash
 envdrift lock --sync-keys
 ```
@@ -110,6 +125,21 @@ envdrift lock --sync-keys
 ### `--check`
 
 Check encryption status only (dry run). Reports what would be encrypted without making changes.
+
+A file counts as encrypted only when **no plaintext value remains** — the same predicate
+`envdrift push` uses, applied to every backend (dotenvx and SOPS alike). A mixed file
+holding even one freshly added plaintext secret fails the check, no matter how many other
+values are already ciphertext. The plaintext `DOTENV_PUBLIC_KEY_*` header line and SOPS's
+`sops_*` metadata trailer are ignored, so fully-encrypted files pass regardless of how few
+variables they hold.
+
+`lock --check` is deliberately **stricter** than `envdrift encrypt --check`: the latter
+flags only values that look like secrets (sensitive names, suspicious values, or
+schema-marked fields), while `lock --check` fails on *any* plaintext value left in a file
+that is supposed to be fully encrypted.
+
+Exits 1 when any file still needs encryption (including, with `--all`,
+partial-encryption `.secret` files); exits 0 only when everything is encrypted.
 
 ```bash
 envdrift lock --check
@@ -125,10 +155,12 @@ Include partial encryption files in the locking process. When set:
 
 This is useful when you want to lock everything and clean up generated files before committing.
 
-> **Secrets-only environments are skipped.** Combine-mode handling does not apply to
-> environments configured with `secrets_only = true` — they have no combined file and
-> are encrypted in place with `envdrift push`. `lock --all` reports them as skipped and
-> leaves them untouched.
+> **Secrets-only environments are skipped — but still checked.** Combine-mode handling
+> does not apply to environments configured with `secrets_only = true` — they have no
+> combined file and are encrypted in place with `envdrift push`. `lock --all` reports
+> them as skipped and leaves them untouched. If a skipped environment still holds
+> plaintext secrets, the final summary says so and `lock --all` exits 1 instead of
+> printing the green "ready to commit" banner — run `envdrift push` to encrypt them.
 
 ```bash
 # Lock everything including partial encryption files
@@ -274,8 +306,27 @@ Step 1: Verifying keys with vault...
   ✓ services/myapp - keys match vault
   ✗ services/auth - KEY MISMATCH: local key differs from vault!
 
-ERROR: Found 1 key mismatch(es). Run with --sync-keys to update local keys, or --force to encrypt anyway.
+[ERROR] Found 1 failed key verification(s). Nothing was encrypted.
+Run 'envdrift lock --sync-keys' to sync keys from vault, or rerun without
+--verify-vault to skip verification.
 ```
+
+An unverifiable mapping fails the same way (exit 1, nothing encrypted):
+
+```text
+Step 1: Verifying keys with vault...
+
+  ✗ services/auth - cannot verify: .env.keys not found
+
+[ERROR] Found 1 failed key verification(s). Nothing was encrypted.
+Run 'envdrift lock --sync-keys' to sync keys from vault, or rerun without
+--verify-vault to skip verification.
+```
+
+A vault secret that cannot be parsed as key material at all (a JSON document without a usable
+key field, a multi-line blob with no key line, a binary payload) is reported as
+`KEY UNUSABLE` with the shape problem, and the summary counts it as an *unusable vault key*
+rather than a failed key verification — fix the secret in the vault; `--sync-keys` cannot install it.
 
 ### With Key Sync
 
@@ -353,7 +404,7 @@ The `lock` command catches many edge cases and provides helpful warnings and err
 | `vault secret not found`                   | The secret doesn't exist in the vault                                |
 | `multiple .env files found`                | Multiple `.env.*` files exist; specify the environment explicitly      |
 | `file not found`                           | The expected `.env.<environment>` file doesn't exist                   |
-| `partially encrypted (N%)`                 | The file is only partially encrypted; will re-encrypt                 |
+| `partially encrypted (plaintext values remain)` | The file mixes ciphertext with plaintext values; will re-encrypt |
 | `partial encryption combined file, use --all to include` | File is a generated combined file; use `--all` to include |
 
 ### Errors
@@ -361,16 +412,22 @@ The `lock` command catches many edge cases and provides helpful warnings and err
 | Error               | Meaning                                                |
 |:--------------------|:-------------------------------------------------------|
 | `KEY MISMATCH`      | Local key differs from vault key - potential key drift |
+| `KEY UNUSABLE`      | The vault secret's key material is malformed or unusable - fix the vault secret shape |
 | `vault error`       | Failed to access or authenticate with the vault        |
 | `encryption failed` | The configured backend (dotenvx or SOPS) failed to encrypt the file |
 | `Key sync failed`   | Could not sync keys from vault                         |
 
 ## Exit Codes
 
-| Code | Meaning                                                  |
-|:-----|:---------------------------------------------------------|
-| 0    | Success (all files encrypted or verified)                  |
-| 1    | Error (key mismatch, encryption failure, or vault error) |
+| Code | Meaning                                                                                  |
+|:-----|:------------------------------------------------------------------------------------------|
+| 0    | Success (all files encrypted or verified)                                                  |
+| 1    | Error (key mismatch, encryption failure, or vault error)                                   |
+| 1    | A mapping's `folder_path` does not exist (broken sync config, reported per row)            |
+| 1    | A mapped env file or `.env.keys` cannot be read (e.g. not valid UTF-8) — per-file error    |
+| 1    | `--verify-vault`: a mapping failed or could not be verified (nothing is encrypted)         |
+| 1    | `--check`: one or more files still need encryption                                         |
+| 1    | `--all`: a skipped secrets-only environment still holds plaintext (run `envdrift push`)    |
 
 ## Configuration File Format
 

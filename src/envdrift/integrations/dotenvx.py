@@ -154,8 +154,38 @@ def is_dotenvx_safe_filename(name: str) -> bool:
     return bool(_DOTENVX_SAFE_FILENAME_RE.fullmatch(name))
 
 
+def _dash_safe_path(path: Path | str) -> str:
+    """Return ``path`` as an argv string dotenvx cannot misparse as CLI flags.
+
+    dotenvx's commander-based CLI treats a leading-dash argv value as bundled
+    options: ``encrypt -f -dash.env`` eats ``-dash.env`` as flags, leaves the
+    real file untouched, fabricates a different file (``-ash.env``) full of
+    placeholder secrets, and appends a junk ``DOTENV_PRIVATE_KEY_-ASH...`` entry
+    to ``.env.keys`` (#474). Prefixing a dash-leading relative path with the
+    current directory makes it unambiguous; the key slug dotenvx derives from
+    the basename is unchanged, so encrypt/decrypt round-trip normally.
+
+    The ``./`` prefix is built literally (not via ``Path``): path arithmetic
+    normalizes ``./-dash.env`` back to ``-dash.env``, which would silently
+    defeat the protection.
+    """
+    text = str(path)
+    if text.startswith("-"):
+        return f".{os.sep}{text}"
+    return text
+
+
 _PUBLIC_KEY_NAME_RE = re.compile(r"\bDOTENV_PUBLIC_KEY_[A-Za-z0-9_-]+=")
 _PRIVATE_KEY_LINE_RE = re.compile(r"^DOTENV_PRIVATE_KEY_[A-Za-z0-9_-]+=(.*)$")
+
+# A private-key assignment as dotenvx writes it into ``.env.keys``: bare
+# ``DOTENV_PRIVATE_KEY=`` (for a plain ``.env``) or ``DOTENV_PRIVATE_KEY_<SLUG>=``,
+# with a non-empty value. A legitimate encrypt target only ever carries
+# ``DOTENV_PUBLIC_KEY*`` lines, so a match identifies a (possibly renamed or
+# symlinked) private-key store (#474).
+_PRIVATE_KEY_ASSIGNMENT_RE = re.compile(
+    r"^DOTENV_PRIVATE_KEY(?:_[A-Za-z0-9_-]+)?=.*\S", re.MULTILINE
+)
 
 
 def dotenvx_filename_needs_normalization(env_file: Path | str, environment: str) -> bool:
@@ -872,6 +902,54 @@ class DotenvxWrapper:
                 "letters, digits, '.', '-' and '_'."
             )
 
+    @staticmethod
+    def _validate_not_key_store(file_path: Path) -> None:
+        """Refuse to encrypt the dotenvx private-key store itself.
+
+        ``encrypt -f .env.keys`` rewrites every ``DOTENV_PRIVATE_KEY*`` value as
+        ciphertext under a brand-new keypair whose private half is never
+        persisted: dotenvx exits 0, but every file encrypted with those keys is
+        permanently locked out. The guarded backend and the bare CLI commands
+        refuse companion files by name, but the partial-encryption push/lock
+        paths reach dotenvx through this wrapper directly, so the guard must
+        live here too (#474).
+
+        Two checks, both case-insensitive-filesystem safe:
+
+        - **Name**: casefolded ``.keys`` suffix, so ``.env.KEYS`` (the same
+          file as ``.env.keys`` on macOS/Windows default filesystems) cannot
+          slip past a case-sensitive comparison.
+        - **Content**: a renamed or symlinked key store (``mv .env.keys
+          prodkeys.env``) passes any name check, so refuse any file carrying a
+          ``DOTENV_PRIVATE_KEY*=`` assignment. A legitimate encrypt target only
+          ever carries ``DOTENV_PUBLIC_KEY*`` lines, so there are no false
+          positives; an unreadable file is left for dotenvx itself to reject.
+
+        Parameters:
+            file_path (Path): Path to the file to validate.
+
+        Raises:
+            DotenvxFilenameError: If the file names or contains a private-key
+                store.
+        """
+        if file_path.name.casefold().endswith(".keys"):
+            raise DotenvxFilenameError(
+                f"Refusing to encrypt '{file_path.name}': it is the dotenvx "
+                "private-key store. Encrypting it would permanently lock out "
+                "every file encrypted with its keys."
+            )
+        try:
+            content = file_path.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            return
+        if _PRIVATE_KEY_ASSIGNMENT_RE.search(content):
+            raise DotenvxFilenameError(
+                f"Refusing to encrypt '{file_path.name}': it contains "
+                "DOTENV_PRIVATE_KEY entries, so it is the dotenvx private-key "
+                "store (possibly renamed). Encrypting it would permanently "
+                "lock out every file encrypted with its keys."
+            )
+
     # Regex pattern for dotenvx public key header blocks
     DOTENVX_HEADER_BLOCK_PATTERN: ClassVar[re.Pattern[str]] = re.compile(
         r"#/---+\[DOTENV_PUBLIC_KEY\]---+/\n"
@@ -988,6 +1066,11 @@ class DotenvxWrapper:
         if not env_file.exists():
             raise DotenvxError(f"File not found: {env_file}")
 
+        # Refuse to encrypt the private-key store itself BEFORE invoking
+        # dotenvx: it would rewrite the keys as ciphertext under a brand-new,
+        # never-persisted keypair — an irreversible project-wide lockout (#474).
+        self._validate_not_key_store(env_file)
+
         # Refuse a filename dotenvx can't turn into a valid key name BEFORE
         # invoking it, on every platform, so the plaintext is preserved. dotenvx
         # would otherwise encrypt the value, exit 0, and leave the file
@@ -1009,9 +1092,11 @@ class DotenvxWrapper:
         # prepends a new header without removing the old one, causing duplicates
         self._clean_mismatched_headers(env_file)
 
-        args = ["encrypt", "-f", str(env_file)]
+        # Leading-dash paths must be ./-prefixed or dotenvx's commander CLI
+        # misparses them as flags and fabricates a different file (#474).
+        args = ["encrypt", "-f", _dash_safe_path(env_file)]
         if env_keys_file:
-            args.extend(["-fk", str(env_keys_file)])
+            args.extend(["-fk", _dash_safe_path(env_keys_file)])
 
         # Run with check=False to handle exit code 0 errors ourselves
         result = self._run(args, env=env, cwd=cwd, check=False)
@@ -1052,9 +1137,11 @@ class DotenvxWrapper:
         # Normalize line endings for cross-platform compatibility
         self._normalize_line_endings(env_file)
 
-        args = ["decrypt", "-f", str(env_file)]
+        # Leading-dash paths must be ./-prefixed or dotenvx's commander CLI
+        # misparses them as flags (#474).
+        args = ["decrypt", "-f", _dash_safe_path(env_file)]
         if env_keys_file:
-            args.extend(["-fk", str(env_keys_file)])
+            args.extend(["-fk", _dash_safe_path(env_keys_file)])
 
         # Run with check=False so we can detect the case where dotenvx prints a
         # decrypt error (e.g. "decryption failed", "private key not found",
@@ -1077,7 +1164,7 @@ class DotenvxWrapper:
             subprocess.CompletedProcess: The completed process result containing return code, stdout, and stderr.
         """
         env_file = Path(env_file)
-        return self._run(["run", "-f", str(env_file), "--"] + command, check=False)
+        return self._run(["run", "-f", _dash_safe_path(env_file), "--"] + command, check=False)
 
     def get(self, env_file: Path | str, key: str) -> str | None:
         """
@@ -1091,7 +1178,7 @@ class DotenvxWrapper:
             str | None: Trimmed value of the variable if present, `None` if the key is not present or the command fails.
         """
         env_file = Path(env_file)
-        result = self._run(["get", "-f", str(env_file), key], check=False)
+        result = self._run(["get", "-f", _dash_safe_path(env_file), key], check=False)
 
         if result.returncode != 0:
             return None
@@ -1108,7 +1195,7 @@ class DotenvxWrapper:
             value (str): The value to assign to `key`.
         """
         env_file = Path(env_file)
-        self._run(["set", "-f", str(env_file), key, value])
+        self._run(["set", "-f", _dash_safe_path(env_file), key, value])
 
     @staticmethod
     def install_instructions() -> str:

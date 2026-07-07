@@ -472,6 +472,51 @@ class TestVaultPushAll:
 
     @patch("envdrift.cli_commands.encryption_helpers.resolve_encryption_backend")
     @patch("envdrift.cli_commands.sync.load_sync_config_and_client")
+    def test_push_all_missing_mapping_folder_is_error(
+        self,
+        mock_loader,
+        mock_resolve_backend,
+        tmp_path,
+    ):
+        """#488: a typo'd/nonexistent folder_path must be a per-mapping ERROR.
+
+        Previously it was reported as "Skipped ...: No .env file found" (the
+        wrong reason) with "Errors: 0" and exit 0 — a key-backup CI job went
+        green having pushed nothing.
+        """
+        mock_client = MagicMock()
+        mock_client.get_secret.side_effect = SecretNotFoundError("missing")
+        mock_loader.return_value = (
+            SyncConfig(
+                mappings=[
+                    ServiceMapping(
+                        secret_name="my-secret",
+                        folder_path=tmp_path / "servces" / "api",  # typo'd, never created
+                        environment="production",
+                    )
+                ]
+            ),
+            mock_client,
+            "azure",
+            None,
+            None,
+            None,
+        )
+        dummy_backend = DummyEncryptionBackend()
+        mock_resolve_backend.return_value = (dummy_backend, EncryptionProvider.DOTENVX, None)
+
+        result = runner.invoke(app, ["vault-push", "--all"])
+        output = " ".join(result.output.split())
+
+        assert result.exit_code == 1, result.output
+        assert "does not exist" in output
+        assert "folder_path" in output
+        assert "No .env file found" not in output
+        assert "Errors: 1" in output
+        mock_client.set_secret.assert_not_called()
+
+    @patch("envdrift.cli_commands.encryption_helpers.resolve_encryption_backend")
+    @patch("envdrift.cli_commands.sync.load_sync_config_and_client")
     def test_push_all_error_handling(
         self,
         mock_loader,
@@ -1110,3 +1155,54 @@ class TestVaultPushSkipEncrypt:
 
         # Should show warning about --skip-encrypt only being for --all mode
         assert "--skip-encrypt is only applicable with --all mode" in result.output
+
+
+class TestVaultPushKeysFileReadErrors:
+    """#487: unreadable .env.keys must fail with a clean error, not a traceback.
+
+    The single-service read seam (``EnvKeysFile.read_key``) sits before any
+    vault call, so these tests drive the real CLI with a real bad file and no
+    vault mocking. Pre-fix, the raw ``IsADirectoryError`` /
+    ``UnicodeDecodeError`` escaped as a Rich traceback.
+    """
+
+    def _invoke(self, folder):
+        return runner.invoke(
+            app,
+            [
+                "vault-push",
+                str(folder),
+                "my-secret",
+                "--env",
+                "production",
+                "-p",
+                "azure",
+                "--vault-url",
+                "https://myvault.vault.azure.net/",
+            ],
+        )
+
+    def test_push_env_keys_is_directory_clean_error(self, tmp_path):
+        """.env.keys as a directory exits 1 with a one-line error (#487)."""
+        (tmp_path / ".env.keys").mkdir()
+
+        result = self._invoke(tmp_path)
+
+        assert result.exit_code == 1
+        out = " ".join(result.output.split())
+        assert "Cannot read" in out, out
+        assert ".env.keys" in out, out
+        # The raw OSError must not escape the command boundary.
+        assert not isinstance(result.exception, OSError), result.exception
+
+    def test_push_env_keys_non_utf8_clean_error(self, tmp_path):
+        """.env.keys with non-UTF-8 bytes exits 1 with a one-line error (#487)."""
+        (tmp_path / ".env.keys").write_bytes(b"DOTENV_PRIVATE_KEY_PRODUCTION=caf\xe9\n")
+
+        result = self._invoke(tmp_path)
+
+        assert result.exit_code == 1
+        out = " ".join(result.output.split())
+        assert "Cannot read" in out, out
+        assert ".env.keys" in out, out
+        assert not isinstance(result.exception, ValueError), result.exception

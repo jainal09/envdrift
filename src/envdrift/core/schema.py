@@ -36,6 +36,11 @@ class FieldMetadata:
     # e.g. a field ``X_API_KEY`` with ``Field(alias='X-API-KEY')``. Validation
     # matches the .env against this when present so a non-identifier key resolves.
     alias: str | None = None
+    # The field's ``FieldInfo.metadata`` — pydantic strips ``Annotated[...]``
+    # extras (constraint markers, ``pydantic.Json``, ...) into it, and the
+    # env-source complexity/coercion decision needs it: a ``Json`` marker makes
+    # the field non-complex, so the raw string must pass through untouched.
+    type_metadata: tuple[Any, ...] = ()
 
     @property
     def is_optional(self) -> bool:
@@ -65,6 +70,11 @@ class SchemaMetadata:
     # the validator skip the (relatively expensive) real model_validate pass for
     # trivially-typed schemas, where the name-based type check already suffices.
     has_constraints: bool = False
+    # Mirrors SettingsConfigDict(env_ignore_empty=...): when True the env source
+    # drops empty values (the field is unset), so validation must skip them too;
+    # when False (the pydantic-settings default) the model sees the empty string
+    # and e.g. ``PORT=`` crashes an int field at startup (#472).
+    env_ignore_empty: bool = False
 
     @property
     def required_fields(self) -> list[str]:
@@ -247,6 +257,14 @@ class SchemaLoader:
 
         schema.extra_policy = extra if extra else "ignore"
 
+        # env_ignore_empty changes what the env source does with empty values
+        # (drop vs pass through), which changes what validation must check (#472).
+        if isinstance(model_config, dict):
+            ignore_empty = model_config.get("env_ignore_empty", False)
+        else:
+            ignore_empty = getattr(model_config, "env_ignore_empty", False)
+        schema.env_ignore_empty = bool(ignore_empty)
+
         # Track whether any field needs real Pydantic validation (a constraint, a
         # non-plain-scalar type such as Literal/EmailStr/a nested model, or a
         # custom validator). A model with only plain str/int/float/bool fields is
@@ -304,6 +322,7 @@ class SchemaLoader:
                 field_type=annotation if annotation else type(None),
                 annotation=type_str,
                 alias=field_alias,
+                type_metadata=tuple(field_info.metadata),
             )
 
         # A custom @field_validator / @model_validator can reject otherwise

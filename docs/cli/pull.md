@@ -256,10 +256,12 @@ The effective environment is resolved in this priority order:
 
 ## Exit Codes
 
-| Code | Meaning                                    |
-| :--- | :----------------------------------------- |
-| 0    | Success (all synced and decrypted)         |
-| 1    | Error (sync failure or decryption failure) |
+| Code | Meaning                                                                       |
+| :--- | :----------------------------------------------------------------------------- |
+| 0    | Success (all synced and decrypted)                                              |
+| 1    | Error (sync failure or decryption failure)                                      |
+| 1    | A mapping's `folder_path` does not exist (broken sync config, reported per row) |
+| 1    | A mapped env file cannot be read (e.g. not valid UTF-8) — clean per-file error  |
 
 ## Prerequisites
 

@@ -770,7 +770,8 @@ class TestInfisicalInstallerInstall:
             installer.install()
 
 
-# Mark integration tests that require actual infisical installation
+# Real-binary tests: integration lane only, skip-gated on the binary (#497)
+@pytest.mark.integration
 @pytest.mark.skipif(
     not InfisicalScanner(auto_install=False).is_installed(),
     reason="infisical not installed",

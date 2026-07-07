@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import os
+import sys
 from unittest.mock import MagicMock, patch
 
+import pytest
 from typer.testing import CliRunner
 
 from envdrift.cli import app
@@ -837,3 +840,323 @@ class TestVaultPullReviewFixes:
         assert "Invalid vault configuration" in result.output
         # No unhandled exception leaked through.
         assert result.exception is None or isinstance(result.exception, SystemExit)
+
+
+class TestVaultPullKeyMaterialNormalization:
+    """Regression tests for #480: vault-pull normalizes and shape-validates the
+    fetched key material before writing .env.keys, instead of installing
+    quoted/JSON/multi-line/binary payloads verbatim under a success banner."""
+
+    def _pull(self, tmp_path, *extra):
+        return runner.invoke(
+            app,
+            [
+                "vault-pull",
+                str(tmp_path),
+                "my-secret",
+                "--env",
+                "production",
+                "--no-decrypt",
+                "-p",
+                "azure",
+                "--vault-url",
+                "https://myvault.vault.azure.net/",
+                *extra,
+            ],
+        )
+
+    @patch("envdrift.vault.get_vault_client")
+    def test_quoted_full_line_value_writes_bare_key(self, mock_get_client, tmp_path):
+        """A whole-line-quoted vault value must be normalized like sync does (#356),
+        not written as DOTENV_PRIVATE_KEY_X="DOTENV_PRIVATE_KEY_X=<key>"."""
+        mock_get_client.return_value = _make_client('"DOTENV_PRIVATE_KEY_PRODUCTION=abc123secret"')
+
+        result = self._pull(tmp_path)
+
+        assert result.exit_code == 0, result.output
+        lines = (tmp_path / ".env.keys").read_text(encoding="utf-8").splitlines()
+        assert "DOTENV_PRIVATE_KEY_PRODUCTION=abc123secret" in lines
+
+    @patch("envdrift.vault.get_vault_client")
+    def test_whitespace_wrapped_bare_value_is_stripped(self, mock_get_client, tmp_path):
+        mock_get_client.return_value = _make_client("  abc123secret  \n")
+
+        result = self._pull(tmp_path)
+
+        assert result.exit_code == 0, result.output
+        lines = (tmp_path / ".env.keys").read_text(encoding="utf-8").splitlines()
+        assert "DOTENV_PRIVATE_KEY_PRODUCTION=abc123secret" in lines
+
+    @patch("envdrift.vault.get_vault_client")
+    def test_json_document_secret_extracts_matching_field(self, mock_get_client, tmp_path):
+        """AWS-console-style JSON key/value SecretString: extract the key field."""
+        mock_get_client.return_value = _make_client(
+            '{"DOTENV_PRIVATE_KEY_PRODUCTION": "abc123secret"}'
+        )
+
+        result = self._pull(tmp_path)
+
+        assert result.exit_code == 0, result.output
+        lines = (tmp_path / ".env.keys").read_text(encoding="utf-8").splitlines()
+        assert "DOTENV_PRIVATE_KEY_PRODUCTION=abc123secret" in lines
+
+    @patch("envdrift.vault.get_vault_client")
+    def test_json_document_without_key_field_fails_loudly(self, mock_get_client, tmp_path):
+        """A JSON document with no DOTENV_PRIVATE_KEY field is rejected with a
+        clear shape error — never installed under [OK] / exit 0."""
+        mock_get_client.return_value = _make_client('{"username": "admin", "password": "hunter2"}')
+
+        result = self._pull(tmp_path)
+
+        assert result.exit_code == 1, result.output
+        normalized = " ".join(result.output.split())
+        assert "JSON" in normalized
+        # Field names are named, secret values are not leaked.
+        assert "username" in normalized
+        assert "hunter2" not in normalized
+        assert not (tmp_path / ".env.keys").exists()
+
+    @patch("envdrift.vault.get_vault_client")
+    def test_multiline_keys_blob_extracts_matching_line(self, mock_get_client, tmp_path):
+        """A secret holding whole .env.keys file content (e.g. pushed via
+        `az keyvault secret set --file .env.keys`) yields the bare key line."""
+        blob = (
+            "#/------------------!DOTENV_PRIVATE_KEYS!-------------------/\n"
+            "#/ private decryption keys. DO NOT commit to source control /\n"
+            "# .env.production\n"
+            'DOTENV_PRIVATE_KEY_PRODUCTION="abc123secret"\n'
+        )
+        mock_get_client.return_value = _make_client(blob)
+
+        result = self._pull(tmp_path)
+
+        assert result.exit_code == 0, result.output
+        content = (tmp_path / ".env.keys").read_text(encoding="utf-8")
+        lines = content.splitlines()
+        assert "DOTENV_PRIVATE_KEY_PRODUCTION=abc123secret" in lines
+        # Only the extracted key line was installed (a single key line, not the
+        # blob's quoted line); the file's own header is freshly generated.
+        key_lines = [line for line in lines if line.startswith("DOTENV_PRIVATE_KEY_")]
+        assert key_lines == ["DOTENV_PRIVATE_KEY_PRODUCTION=abc123secret"]
+
+    @patch("envdrift.vault.get_vault_client")
+    def test_multiline_blob_without_key_line_fails_loudly(self, mock_get_client, tmp_path):
+        mock_get_client.return_value = _make_client("# a comment\nFOO=bar\nBAZ=qux\n")
+
+        result = self._pull(tmp_path)
+
+        assert result.exit_code == 1, result.output
+        assert "multi-line" in " ".join(result.output.split())
+        assert not (tmp_path / ".env.keys").exists()
+
+    @patch("envdrift.vault.get_vault_client")
+    def test_base64_marked_binary_secret_rejected(self, mock_get_client, tmp_path):
+        """A provider-marked binary payload (SecretBinary / non-UTF-8 GCP payload)
+        is rejected — its base64 transform is never installed as a key."""
+        client = MagicMock()
+        client.get_secret.return_value = SecretValue(
+            name="my-secret", value="//4=", metadata={"encoding": "base64"}
+        )
+        mock_get_client.return_value = client
+
+        result = self._pull(tmp_path)
+
+        assert result.exit_code == 1, result.output
+        assert "binary" in " ".join(result.output.split()).lower()
+        assert not (tmp_path / ".env.keys").exists()
+
+    @patch("envdrift.vault.get_vault_client")
+    def test_empty_value_key_line_fails_loudly(self, mock_get_client, tmp_path):
+        """A secret of exactly 'DOTENV_PRIVATE_KEY_PRODUCTION=' (e.g. pushed via
+        `vault kv put ... DOTENV_PRIVATE_KEY_PRODUCTION=$KEY` with $KEY unset)
+        must fail, not be written back as a doubled-prefix .env.keys line."""
+        mock_get_client.return_value = _make_client("DOTENV_PRIVATE_KEY_PRODUCTION=")
+
+        result = self._pull(tmp_path)
+
+        assert result.exit_code == 1, result.output
+        assert "empty" in " ".join(result.output.split()).lower()
+        assert not (tmp_path / ".env.keys").exists()
+
+    @patch("envdrift.vault.get_vault_client")
+    def test_json_field_carrying_full_line_writes_bare_key(self, mock_get_client, tmp_path):
+        """A JSON field value holding the whole 'DOTENV_PRIVATE_KEY_X=<key>' line
+        (a copy-pasted .env.keys line in the console value box) is reduced to
+        the bare key — never written with a doubled prefix."""
+        mock_get_client.return_value = _make_client(
+            '{"DOTENV_PRIVATE_KEY_PRODUCTION": "DOTENV_PRIVATE_KEY_PRODUCTION=abc123secret"}'
+        )
+
+        result = self._pull(tmp_path)
+
+        assert result.exit_code == 0, result.output
+        lines = (tmp_path / ".env.keys").read_text(encoding="utf-8").splitlines()
+        assert "DOTENV_PRIVATE_KEY_PRODUCTION=abc123secret" in lines
+        assert not any("DOTENV_PRIVATE_KEY_PRODUCTION=DOTENV_PRIVATE_KEY" in line for line in lines)
+
+    @patch("envdrift.vault.get_vault_client")
+    def test_pretty_printed_json_document_extracts_key(self, mock_get_client, tmp_path):
+        """Pretty-printed JSON (embedded newlines) must reach the JSON handler,
+        not the keys-blob handler that cannot see the key field."""
+        mock_get_client.return_value = _make_client(
+            '{\n  "DOTENV_PRIVATE_KEY_PRODUCTION": "abc123secret"\n}\n'
+        )
+
+        result = self._pull(tmp_path)
+
+        assert result.exit_code == 0, result.output
+        lines = (tmp_path / ".env.keys").read_text(encoding="utf-8").splitlines()
+        assert "DOTENV_PRIVATE_KEY_PRODUCTION=abc123secret" in lines
+
+    @patch("envdrift.vault.get_vault_client")
+    def test_json_blob_with_mismatched_env_field_still_fails_env_check(
+        self, mock_get_client, tmp_path
+    ):
+        """A JSON document holding only a STAGING key pulled --env production hits
+        the established env-mismatch error rather than being relabeled."""
+        mock_get_client.return_value = _make_client(
+            '{"DOTENV_PRIVATE_KEY_STAGING": "stagingkey123"}'
+        )
+
+        result = self._pull(tmp_path)
+
+        assert result.exit_code == 1, result.output
+        assert "DOTENV_PRIVATE_KEY_STAGING" in result.output
+        assert not (tmp_path / ".env.keys").exists()
+
+
+class TestVaultPullTargetFolderAndWriteErrors:
+    """#487: bad target folders / unwritable .env.keys must fail cleanly.
+
+    Pre-fix, ``vault-pull`` fetched the secret successfully and then dumped a
+    raw ``OSError`` / ``PermissionError`` / ``UnicodeDecodeError`` Rich
+    traceback from the unguarded ``EnvKeysFile.write_key`` call. The vault
+    client is mocked only as a value source; the behavior under test is the
+    CLI's folder validation and file-write error boundary, exercised with real
+    files in ``tmp_path``.
+    """
+
+    def _pull_args(self, folder):
+        return [
+            "vault-pull",
+            str(folder),
+            "my-secret",
+            "--env",
+            "production",
+            "--no-decrypt",
+            "-p",
+            "azure",
+            "--vault-url",
+            "https://myvault.vault.azure.net/",
+        ]
+
+    @patch("envdrift.vault.get_vault_client")
+    def test_pull_nonexistent_folder_fails_before_fetch(self, mock_get_client, tmp_path):
+        """A missing target folder exits 1 cleanly without any vault call (#487)."""
+        client = _make_client("DOTENV_PRIVATE_KEY_PRODUCTION=abc123secret")
+        mock_get_client.return_value = client
+
+        result = runner.invoke(app, self._pull_args(tmp_path / "no-such-dir"))
+
+        assert result.exit_code == 1
+        out = " ".join(result.output.split())
+        assert "Folder not found" in out, out
+        # Fail-fast: the folder is validated before any vault round-trip.
+        client.get_secret.assert_not_called()
+        assert not isinstance(result.exception, OSError), result.exception
+
+    @patch("envdrift.vault.get_vault_client")
+    def test_pull_folder_is_a_file_fails_cleanly(self, mock_get_client, tmp_path):
+        """A non-directory target exits 1 cleanly without any vault call (#487)."""
+        client = _make_client("DOTENV_PRIVATE_KEY_PRODUCTION=abc123secret")
+        mock_get_client.return_value = client
+        target = tmp_path / "afile"
+        target.write_text("not a folder", encoding="utf-8")
+
+        result = runner.invoke(app, self._pull_args(target))
+
+        assert result.exit_code == 1
+        out = " ".join(result.output.split())
+        assert "Not a directory" in out, out
+        client.get_secret.assert_not_called()
+
+    @patch("envdrift.vault.get_vault_client")
+    def test_pull_env_keys_is_directory_clean_error(self, mock_get_client, tmp_path):
+        """.env.keys as a directory exits 1 with a one-line error (#487)."""
+        mock_get_client.return_value = _make_client("DOTENV_PRIVATE_KEY_PRODUCTION=abc123secret")
+        (tmp_path / ".env.keys").mkdir()
+
+        result = runner.invoke(app, self._pull_args(tmp_path))
+
+        assert result.exit_code == 1
+        out = " ".join(result.output.split())
+        assert "Cannot write" in out, out
+        assert ".env.keys" in out, out
+        assert not isinstance(result.exception, OSError), result.exception
+
+    @patch("envdrift.vault.get_vault_client")
+    def test_pull_env_keys_non_utf8_clean_error(self, mock_get_client, tmp_path):
+        """A non-UTF-8 .env.keys exits 1 with a one-line error (#487)."""
+        mock_get_client.return_value = _make_client("DOTENV_PRIVATE_KEY_PRODUCTION=abc123secret")
+        (tmp_path / ".env.keys").write_bytes(b"DOTENV_PRIVATE_KEY_PRODUCTION=caf\xe9\n")
+
+        result = runner.invoke(app, self._pull_args(tmp_path))
+
+        assert result.exit_code == 1
+        out = " ".join(result.output.split())
+        assert "Cannot write" in out, out
+        assert not isinstance(result.exception, ValueError), result.exception
+
+    @pytest.mark.skipif(sys.platform == "win32", reason="POSIX permission bits")
+    @patch("envdrift.vault.get_vault_client")
+    def test_pull_unwritable_folder_clean_error(self, mock_get_client, tmp_path):
+        """A read-only target folder exits 1 with a one-line error (#487)."""
+        if hasattr(os, "geteuid") and os.geteuid() == 0:
+            pytest.skip("root ignores permission bits")
+        mock_get_client.return_value = _make_client("DOTENV_PRIVATE_KEY_PRODUCTION=abc123secret")
+        target = tmp_path / "readonly"
+        target.mkdir()
+        target.chmod(0o555)
+
+        try:
+            result = runner.invoke(app, self._pull_args(target))
+        finally:
+            target.chmod(0o755)
+
+        assert result.exit_code == 1
+        out = " ".join(result.output.split())
+        assert "Cannot write" in out, out
+        assert not isinstance(result.exception, OSError), result.exception
+
+
+class TestVaultPullNotFoundNamesRegion:
+    """#487: the AWS not-found error must name the region that was searched."""
+
+    @patch("envdrift.vault.get_vault_client")
+    def test_pull_aws_not_found_message_names_region(self, mock_get_client, tmp_path):
+        """vault-pull -p aws --region eu-west-1 names eu-west-1 on not-found (#487)."""
+        client = MagicMock()
+        client.region = "eu-west-1"
+        client.get_secret.side_effect = SecretNotFoundError("Secret not found: my-secret")
+        mock_get_client.return_value = client
+
+        result = runner.invoke(
+            app,
+            [
+                "vault-pull",
+                str(tmp_path),
+                "my-secret",
+                "--env",
+                "production",
+                "--no-decrypt",
+                "-p",
+                "aws",
+                "--region",
+                "eu-west-1",
+            ],
+        )
+
+        assert result.exit_code == 1
+        out = " ".join(result.output.split())
+        assert "not found in aws vault" in out, out
+        assert "(region eu-west-1)" in out, out
