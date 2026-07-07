@@ -120,6 +120,14 @@ Available markers:
 | `gcp` | Requires GCP credentials (skipped by default) |
 | `slow` | Tests that take >10 seconds |
 
+Backend-backed tests — Docker containers for `aws`/`vault`/`azure`, real cloud
+credentials for `gcp` — must carry their backend marker in addition to
+`integration`. The cross-platform CI workflow runs on runners without Docker or
+cloud credentials and excludes backend tests by marker
+(`-m "integration and not aws and not vault and not azure and not gcp"`), so an
+unmarked backend test would be selected there and depend on fixture skips
+instead of the marker contract.
+
 ### Suite Hygiene Rules
 
 `tests/unit/test_suite_hygiene.py` enforces the lane contract (see [#497](https://github.com/jainal09/envdrift/issues/497)):

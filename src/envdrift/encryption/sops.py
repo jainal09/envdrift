@@ -77,6 +77,7 @@ class SOPSEncryptionBackend(EncryptionBackend):
         self._auto_install = auto_install
         self._binary_path: Path | None = None
         self._binary_path_lock = Lock()
+        self._install_error: str | None = None
 
     @property
     def name(self) -> str:
@@ -120,7 +121,11 @@ class SOPSEncryptionBackend(EncryptionBackend):
                     installer = SopsInstaller()
                     self._binary_path = installer.install()
                     return self._binary_path
-                except SopsInstallError:
+                except SopsInstallError as e:
+                    # Record the cause so not-installed errors can surface it
+                    # instead of recommending the auto_install that just
+                    # failed (#475).
+                    self._install_error = str(e)
                     return None
 
         return None
@@ -128,6 +133,20 @@ class SOPSEncryptionBackend(EncryptionBackend):
     def is_installed(self) -> bool:
         """Check if SOPS is installed."""
         return self._find_binary() is not None
+
+    @property
+    def install_error(self) -> str | None:
+        """Failure reason recorded by the last auto-install attempt, if any."""
+        return self._install_error
+
+    def _not_installed_message(self) -> str:
+        """Build the not-installed error, surfacing any auto-install failure."""
+        if self._install_error:
+            return (
+                f"SOPS is not installed (auto-install failed: {self._install_error}).\n"
+                f"{self.install_instructions()}"
+            )
+        return f"SOPS is not installed.\n{self.install_instructions()}"
 
     def get_version(self) -> str | None:
         """Get the installed SOPS version."""
@@ -151,18 +170,26 @@ class SOPSEncryptionBackend(EncryptionBackend):
         return None
 
     def _build_env(self, env: dict[str, str] | None = None) -> dict[str, str]:
-        """Build environment dict with SOPS-specific variables."""
-        import os
+        """Build environment dict with SOPS-specific variables.
 
+        Precedence (most specific wins): a per-call ``env`` dict, then explicit
+        backend config (CLI ``--age-key-file``/``--age-key`` or TOML
+        ``age_key_file``/``age_key``), then the ambient process environment. An
+        ambient ``SOPS_AGE_KEY_FILE``/``SOPS_AGE_KEY`` export must NOT silently
+        override an explicitly supplied key (#475) — the documented setup exports
+        the env var, which previously made the explicit flag dead.
+        """
         result = dict(os.environ)
+
+        # Explicit config outranks the ambient environment.
+        if self._age_key:
+            result["SOPS_AGE_KEY"] = self._age_key
+        if self._age_key_file:
+            result["SOPS_AGE_KEY_FILE"] = str(self._age_key_file)
+
+        # A per-call env dict is the most specific request of all.
         if env:
             result.update(env)
-
-        # Add age key if configured
-        if self._age_key and "SOPS_AGE_KEY" not in result:
-            result["SOPS_AGE_KEY"] = self._age_key
-        if self._age_key_file and "SOPS_AGE_KEY_FILE" not in result:
-            result["SOPS_AGE_KEY_FILE"] = str(self._age_key_file)
 
         return result
 
@@ -217,7 +244,7 @@ class SOPSEncryptionBackend(EncryptionBackend):
         """Run SOPS command."""
         binary = self._find_binary()
         if not binary:
-            raise EncryptionNotFoundError(f"SOPS is not installed.\n{self.install_instructions()}")
+            raise EncryptionNotFoundError(self._not_installed_message())
 
         cmd = [str(binary), *self._config_args(cwd), *args]
 
@@ -278,7 +305,7 @@ class SOPSEncryptionBackend(EncryptionBackend):
             )
 
         if not self.is_installed():
-            raise EncryptionNotFoundError(f"SOPS is not installed.\n{self.install_instructions()}")
+            raise EncryptionNotFoundError(self._not_installed_message())
 
         # Validate an explicit config path up front, *before* the idempotency
         # short-circuit, so a misconfigured --sops-config is always surfaced — even
@@ -331,20 +358,226 @@ class SOPSEncryptionBackend(EncryptionBackend):
         be written). Detection uses the genuine line-anchored SOPS metadata block
         (not a bare ``ENC[AES256_GCM,`` substring, which can appear in plaintext),
         matching exactly what SOPS refuses to re-encrypt.
+
+        Metadata presence alone is NOT proof the post-condition holds (#475):
+        before declaring a no-op, verify that no plaintext value survives in the
+        file and that every explicitly requested recipient is already present in
+        the metadata. Either violation is a loud failure — sops itself refuses
+        such a file (exit 203), so "[OK] Encrypted" here would be a false success
+        (a plaintext leak, or a teammate who silently never got access).
         """
         if kwargs.get("output_file"):
             return None
         try:
-            existing = env_file.read_text()
+            existing = env_file.read_text(encoding="utf-8")
         except (OSError, UnicodeDecodeError):
             return None
-        if existing and self._has_sops_metadata_block(existing):
+        if not existing or not self._has_sops_metadata_block(existing):
+            return None
+
+        plaintext_keys = self._plaintext_keys(existing)
+        if plaintext_keys:
+            keys = ", ".join(sorted(plaintext_keys))
             return EncryptionResult(
-                success=True,
-                message=f"{env_file} is already encrypted (no change)",
+                success=False,
+                message=(
+                    f"{env_file} carries SOPS metadata but still contains plaintext "
+                    f"value(s): {keys}. sops refuses to re-encrypt a file with existing "
+                    f"metadata, so these values are NOT protected. Recover with "
+                    f"`sops edit {env_file}`, or move the plaintext line(s) aside, run "
+                    f"`envdrift decrypt {env_file}`, re-add them, then re-run "
+                    f"`envdrift encrypt {env_file}`."
+                ),
                 file_path=env_file,
             )
-        return None
+
+        missing = self._missing_requested_recipients(existing, kwargs)
+        if missing:
+            recipients = ", ".join(missing)
+            return EncryptionResult(
+                success=False,
+                message=(
+                    f"{env_file} is already encrypted, but its SOPS metadata does not "
+                    f"include the requested recipient(s): {recipients}. Re-running "
+                    f"encrypt cannot add recipients; use `sops rotate --add-age "
+                    f"<recipient> -i --input-type dotenv --output-type dotenv "
+                    f"{env_file}` (or `sops updatekeys` with an updated .sops.yaml), "
+                    f"or decrypt and re-encrypt."
+                ),
+                file_path=env_file,
+            )
+
+        return EncryptionResult(
+            success=True,
+            message=f"{env_file} is already encrypted (no change)",
+            file_path=env_file,
+            changed=False,
+        )
+
+    # Metadata keys that mark selective-encryption rules: plaintext values are
+    # then intentional and the surviving-plaintext check cannot infer intent.
+    _SELECTIVE_ENCRYPTION_METADATA = re.compile(
+        r"^sops_(encrypted_suffix|encrypted_regex|unencrypted_regex)\s*=", re.MULTILINE
+    )
+    _UNENCRYPTED_SUFFIX_METADATA = re.compile(r"^sops_unencrypted_suffix\s*=(.*)$", re.MULTILINE)
+
+    def has_plaintext_values(self, content: str) -> bool:
+        """Return True iff dotenv ``content`` carries surviving plaintext values.
+
+        For callers that must not equate "has a SOPS metadata block" with "fully
+        encrypted" (#475): a value appended after encryption stays plaintext
+        while the block still matches. Honors the file's own metadata (see
+        :meth:`_plaintext_keys`), unlike the coarser line scan in
+        ``core.partial_encryption.has_plaintext_secret_value``.
+        """
+        return bool(self._plaintext_keys(content))
+
+    def _plaintext_keys(self, content: str) -> list[str]:
+        """List keys carrying plaintext values in SOPS dotenv ``content``.
+
+        Honors the file's own metadata: keys with the recorded
+        ``sops_unencrypted_suffix`` (default ``_unencrypted``) are intentionally
+        plaintext, and files using selective-encryption rules
+        (``encrypted_suffix`` / ``encrypted_regex`` / ``unencrypted_regex``) are
+        skipped entirely because plaintext is then by design. Empty values are
+        not plaintext (sops keeps them empty).
+
+        Metadata is excluded via the canonical exact-family matcher
+        (``_is_sops_metadata_key``, applied inside ``_line_has_plaintext_secret``),
+        NOT a bare ``sops_`` prefix: a prefix match would also skip a real user
+        secret merely named ``sops_token=…`` / ``sops_api_key=…``, silently
+        blessing a plaintext leak (#416, #475).
+
+        Scans line-by-line rather than the parser's deduplicated variables dict:
+        with duplicate keys the dict keeps only the last assignment, so a later
+        encrypted duplicate would hide an earlier surviving plaintext line and
+        the leak would be blessed as "already encrypted".
+        """
+        if self._SELECTIVE_ENCRYPTION_METADATA.search(content):
+            return []
+        suffix_match = self._UNENCRYPTED_SUFFIX_METADATA.search(content)
+        unencrypted_suffix = suffix_match.group(1).strip() if suffix_match else "_unencrypted"
+
+        from envdrift.core.partial_encryption import _line_has_plaintext_secret
+
+        plaintext: list[str] = []
+        for raw_line in content.splitlines():
+            if not _line_has_plaintext_secret(raw_line):
+                continue
+            name = raw_line.strip().partition("=")[0].strip()
+            if unencrypted_suffix and name.endswith(unencrypted_suffix):
+                continue
+            if name not in plaintext:
+                plaintext.append(name)
+        return plaintext
+
+    @staticmethod
+    def _requested_recipients(kwargs: dict) -> list[str]:
+        """Flatten the explicitly requested recipient values from encrypt() kwargs."""
+        requested: list[str] = []
+        for key in ("age_recipients", "kms_arn", "gcp_kms", "azure_kv"):
+            value = kwargs.get(key)
+            if value:
+                requested.extend(part.strip() for part in str(value).split(",") if part.strip())
+        return requested
+
+    def _missing_requested_recipients(self, content: str, kwargs: dict) -> list[str]:
+        """Requested recipients absent from the file's SOPS metadata."""
+        return [
+            recipient
+            for recipient in self._requested_recipients(kwargs)
+            if not self._recipient_in_metadata(content, recipient)
+        ]
+
+    def missing_recipients(self, content: str, **kwargs) -> list[str]:
+        """Explicitly requested recipients absent from ``content``'s SOPS metadata.
+
+        Public entry point for callers like ``lock`` that skip ``encrypt()`` for
+        an already-encrypted file but must still verify that every configured
+        recipient (``age_recipients``/``kms_arn``/``gcp_kms``/``azure_kv``) is
+        recorded in the metadata — otherwise "skipped (already encrypted)" would
+        silently ignore a recipient newly added to envdrift.toml (#475).
+        """
+        return self._missing_requested_recipients(content, kwargs)
+
+    @staticmethod
+    def _metadata_line_has_value(content: str, value: str) -> bool:
+        """Exact match of ``value`` against a SOPS *key-group* metadata entry.
+
+        Only the recipient-carrying key-group family counts (``sops_age*`` /
+        ``sops_pgp*`` / ``sops_kms*`` / ``sops_gcp_kms*`` / ``sops_azure_kv*`` /
+        ``sops_hc_vault*``, via the canonical ``_SOPS_METADATA_GROUP_KEY``):
+        recipients are never recorded in scalar bookkeeping, so an unrelated
+        scalar value (``sops_shamir_threshold=1``) must not satisfy a short
+        component like an Azure key version ``1``. Whole-line equality kills the
+        substring false-positive classes of #475: a requested recipient that is
+        a prefix of a longer recorded key never matches, and neither do digits
+        inside ``sops_version=3.13.2``.
+        """
+        from envdrift.core.partial_encryption import _SOPS_METADATA_GROUP_KEY
+
+        for raw_line in content.splitlines():
+            key, sep, raw_value = raw_line.partition("=")
+            if not sep or not _SOPS_METADATA_GROUP_KEY.match(key.strip()):
+                continue
+            if raw_value.strip() == value:
+                return True
+        return False
+
+    # One azure_kv metadata record per recipient key. sops' dotenv store
+    # flattens each record to ``sops_azure_kv__list_N__map_<field>=...``
+    # (verified against the real binary; two recipients render as list_0 and
+    # list_1); the flat ``sops_azure_kv_<field>`` single-record form is
+    # accepted defensively.
+    _AZURE_KV_RECORD_KEY = re.compile(
+        r"^sops_azure_kv(?:__list_(?P<idx>\d+)__map_|_)(?P<field>\w+)$"
+    )
+
+    @staticmethod
+    def _azure_kv_records(content: str) -> list[dict[str, str]]:
+        """Parse the azure_kv metadata records (one dict per recipient key)."""
+        records: dict[str, dict[str, str]] = {}
+        for raw_line in content.splitlines():
+            key, sep, raw_value = raw_line.partition("=")
+            if not sep:
+                continue
+            match = SOPSEncryptionBackend._AZURE_KV_RECORD_KEY.match(key.strip())
+            if not match:
+                continue
+            idx = match.group("idx") if match.group("idx") is not None else "flat"
+            records.setdefault(idx, {})[match.group("field")] = raw_value.strip()
+        return list(records.values())
+
+    @staticmethod
+    def _recipient_in_metadata(content: str, recipient: str) -> bool:
+        """Check whether ``recipient`` is recorded in the file's SOPS metadata.
+
+        age keys, KMS ARNs and GCP resource IDs are stored verbatim as one flat
+        dotenv metadata value, so an exact line-anchored match is authoritative.
+        Azure Key Vault URLs are stored split across ``vault_url``/``name``/
+        ``version`` fields of ONE record per recipient, so the URL is decomposed
+        and every component must match its own field within a SINGLE record —
+        matching components across different records (vault host from any, key
+        name from record 0, version from record 1) would declare a
+        never-registered key "present" on any file encrypted to two keys of the
+        same vault.
+        """
+        if SOPSEncryptionBackend._metadata_line_has_value(content, recipient):
+            return True
+        if "/keys/" in recipient:
+            base, _, rest = recipient.partition("/keys/")
+            parts = [part for part in rest.split("/") if part]
+            if not parts or len(parts) > 2:
+                return False
+            name = parts[0]
+            version = parts[1] if len(parts) == 2 else None
+            return any(
+                record.get("vault_url") == base
+                and record.get("name") == name
+                and (version is None or record.get("version") == version)
+                for record in SOPSEncryptionBackend._azure_kv_records(content)
+            )
+        return False
 
     @staticmethod
     def _encrypt_key_args(kwargs: dict) -> list[str]:
@@ -415,7 +648,7 @@ class SOPSEncryptionBackend(EncryptionBackend):
             )
 
         if not self.is_installed():
-            raise EncryptionNotFoundError(f"SOPS is not installed.\n{self.install_instructions()}")
+            raise EncryptionNotFoundError(self._not_installed_message())
 
         # Build SOPS arguments
         args = ["--decrypt"]
@@ -499,6 +732,17 @@ class SOPSEncryptionBackend(EncryptionBackend):
 
         return self._has_sops_metadata_block(content)
 
+    def has_metadata_block(self, content: str) -> bool:
+        """Public alias of :meth:`_has_sops_metadata_block` for CLI-layer checks.
+
+        Callers deciding whether a file is genuinely SOPS-managed (``lock``'s
+        post-state check, ``pull``'s decrypt gate) must key off the metadata
+        block — a bare ``ENC[AES256_GCM,`` token can appear verbatim in a
+        plaintext value or comment, and a file without the metadata block is not
+        decryptable by sops anyway.
+        """
+        return self._has_sops_metadata_block(content)
+
     def _has_sops_metadata_block(self, content: str) -> bool:
         """Return True iff ``content`` carries a genuine SOPS *metadata block*.
 
@@ -515,9 +759,11 @@ class SOPSEncryptionBackend(EncryptionBackend):
         """Return installation instructions for SOPS."""
         from envdrift.integrations.sops import SOPS_VERSION
 
+        # No "SOPS is not installed." lead-in here: every caller
+        # (_not_installed_message, the CLI's _report_not_installed) prints its
+        # own lead sentence, so repeating it made the message say "not
+        # installed" twice in consecutive lines.
         return f"""
-SOPS is not installed.
-
 Installation options:
 
 macOS (Homebrew):
@@ -577,7 +823,7 @@ See https://github.com/getsops/sops for full documentation.
             raise EncryptionBackendError(f"File not found: {env_file}")
 
         if not self.is_installed():
-            raise EncryptionNotFoundError(f"SOPS is not installed.\n{self.install_instructions()}")
+            raise EncryptionNotFoundError(self._not_installed_message())
 
         # Decrypt to memory and run the command directly as argv, rather than via
         # `sops exec-env`. sops' exec-env runs the command through a shell, which
