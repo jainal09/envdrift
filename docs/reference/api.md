@@ -108,13 +108,17 @@ print(f"Generated: {output_path}")
 **Raises:** `ValueError` if `class_name` is not a valid Python identifier (or is a
 Python keyword), before any file is written.
 
-**Warnings:** `.env` keys the strict parser cannot read (a leading digit like
-`2FA_ENABLED`, or a dash like `MY-DASH-VAR`) are skipped — they would later be
-rejected under `extra="forbid"`. The API emits a `UserWarning` naming the skipped
-keys so callers are not left with a silently incomplete file (the CLI surfaces the
-same information in a `[WARN]` line). Keys that are valid identifiers but Python
-keywords (`class`, `import`) are kept, emitted under a sanitized attribute name
-plus a Pydantic `alias` that binds back to the original variable.
+**Non-identifier keys:** every `.env` key is kept — nothing is skipped and no
+warning is emitted. A key that cannot be a bare Python attribute (a leading
+digit like `2FA_ENABLED`, a dash like `MY-DASH-VAR`, a Python keyword like
+`class`) is emitted under a sanitized field name with a Pydantic `alias` that
+binds back to the original variable, so the generated module is complete and
+still validates the real environment:
+
+```python
+field_2FA_ENABLED: bool = Field(alias='2FA_ENABLED', default=True)
+MY_DASH_VAR: str = Field(alias='MY-DASH-VAR')
+```
 
 ---
 

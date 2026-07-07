@@ -952,13 +952,6 @@ def get_schema_for_environment(config: EnvdriftConfig, environment: str) -> str 
 # Example config file content
 EXAMPLE_CONFIG = """# envdrift.toml - Project configuration
 
-[envdrift]
-# Default schema for validation
-schema = "config.settings:ProductionSettings"
-
-# Environments to manage
-environments = ["development", "staging", "production"]
-
 [validation]
 # Consumed by `envdrift validate` (see docs/reference/configuration.md).
 # Default for the encryption check; the --check-encryption/--no-check-encryption
@@ -1032,18 +1025,6 @@ secret_name = "local-key"
 folder_path = "."
 profile = "local"           # Tag for --profile filtering
 activate_to = ".env"        # Copy decrypted .env.local to .env
-
-[precommit]
-# Files to validate on commit
-files = [
-    ".env.production",
-    ".env.staging",
-]
-
-# Schema per environment (optional override)
-[precommit.schemas]
-production = "config.settings:ProductionSettings"
-staging = "config.settings:StagingSettings"
 
 # Git hook verification (optional)
 [git_hook_check]
