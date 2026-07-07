@@ -597,3 +597,106 @@ def test_has_encrypted_header_true_on_genuinely_encrypted_yaml_json(
     assert "ENC[AES256_GCM," in content
     assert backend.has_encrypted_header(content) is True
     assert backend.is_file_encrypted(src) is True
+
+
+# --------------------------------------------------------------------------- #
+# #475: truthful encrypt results and explicit-key precedence (real sops + age)
+# --------------------------------------------------------------------------- #
+
+
+def test_encrypt_appended_plaintext_fails_loudly_not_false_success(
+    tmp_path: Path, sops_workspace: Path
+) -> None:
+    """Regression for #475: after a plaintext value is appended to an encrypted
+    file, a second encrypt must NOT report success while the value stays
+    plaintext on disk (raw sops refuses the same file with exit 203)."""
+    _require_sops()
+    backend = _make_backend(sops_workspace)
+    env_file = _write_and_encrypt(backend, sops_workspace, ".env.leak", "DB_PASSWORD=hunter2\n")
+
+    with env_file.open("a", encoding="utf-8") as fh:
+        fh.write("NEW_SECRET=plaintextleak999\n")
+    tampered_snapshot = env_file.read_text(encoding="utf-8")
+
+    result = backend.encrypt(env_file, age_recipients=AGE_PUBLIC_KEY, cwd=sops_workspace)
+
+    assert result.success is False, "encrypt blessed a file with surviving plaintext"
+    assert "NEW_SECRET" in result.message
+    assert "plaintext" in result.message.lower()
+    # No partial mutation: the file is exactly as the user left it.
+    assert env_file.read_text(encoding="utf-8") == tampered_snapshot
+
+
+def test_encrypt_new_recipient_on_encrypted_file_fails_not_silent_noop(
+    tmp_path: Path, sops_workspace: Path
+) -> None:
+    """Regression for #475: ``encrypt --age <new key>`` on an already-encrypted
+    file must not exit 0 while the metadata still lists only the old recipient —
+    that is a false access grant discovered at decrypt time."""
+    _require_sops()
+    backend = _make_backend(sops_workspace)
+    env_file = _write_and_encrypt(backend, sops_workspace, ".env.grant", "DB_PASSWORD=hunter2\n")
+    encrypted_snapshot = env_file.read_text(encoding="utf-8")
+    assert WRONG_AGE_PUBLIC_KEY not in encrypted_snapshot
+
+    result = backend.encrypt(env_file, age_recipients=WRONG_AGE_PUBLIC_KEY, cwd=sops_workspace)
+
+    assert result.success is False, "encrypt claimed success while ignoring --age"
+    assert WRONG_AGE_PUBLIC_KEY in result.message
+    assert "rotate" in result.message or "updatekeys" in result.message
+    # Metadata untouched: still encrypted only to the original recipient.
+    assert env_file.read_text(encoding="utf-8") == encrypted_snapshot
+
+
+def test_encrypt_rerun_same_recipient_stays_clean_noop_with_changed_false(
+    tmp_path: Path, sops_workspace: Path
+) -> None:
+    """The #413 idempotent re-run survives the #475 verification: same recipient,
+    fully encrypted file -> clean success, ``changed=False``, file untouched."""
+    _require_sops()
+    backend = _make_backend(sops_workspace)
+    env_file = _write_and_encrypt(backend, sops_workspace, ".env.rerun", "DB_PASSWORD=hunter2\n")
+    encrypted_snapshot = env_file.read_text(encoding="utf-8")
+
+    result = backend.encrypt(env_file, age_recipients=AGE_PUBLIC_KEY, cwd=sops_workspace)
+
+    assert result.success is True, f"idempotent re-run regressed: {result.message}"
+    assert result.changed is False
+    assert "already encrypted" in result.message.lower()
+    assert env_file.read_text(encoding="utf-8") == encrypted_snapshot
+
+
+def test_decrypt_explicit_age_key_file_overrides_ambient_env(
+    tmp_path: Path, sops_workspace: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Regression for #475: an ambient SOPS_AGE_KEY_FILE pointing at the WRONG
+    key must not override an explicit ``age_key_file`` carrying the correct key —
+    the docs tell users to export the var, which made the flag dead."""
+    _require_sops()
+    backend = _make_backend(sops_workspace)
+    env_file = _write_and_encrypt(
+        backend, sops_workspace, ".env.precedence", "DB_PASSWORD=hunter2\n"
+    )
+
+    wrong_key_file = sops_workspace / "wrong-age.key"
+    wrong_key_file.write_text(
+        textwrap.dedent(
+            f"""\
+            # public key: {WRONG_AGE_PUBLIC_KEY}
+            {WRONG_AGE_PRIVATE_KEY}
+            """
+        ),
+        encoding="utf-8",
+    )
+    # Ambient environment points at the wrong identity.
+    monkeypatch.setenv("SOPS_AGE_KEY_FILE", str(wrong_key_file))
+
+    explicit_backend = SOPSEncryptionBackend(
+        config_file=sops_workspace / ".sops.yaml",
+        age_key_file=sops_workspace / "age.key",  # the correct, explicit key
+    )
+
+    result = explicit_backend.decrypt(env_file, cwd=sops_workspace)
+
+    assert result.success is True, "explicit --age-key-file lost to ambient SOPS_AGE_KEY_FILE"
+    assert "DB_PASSWORD=hunter2" in env_file.read_text(encoding="utf-8")

@@ -13,8 +13,9 @@ Coverage (highest value first):
 - BUG    test_staged_secret_dropped_when_run_from_subdirectory (P0)
 - HP-17  test_allowed_clear_file_exempt_from_unencrypted_but_secrets_still_scanned (P0)
 - HP-10  test_entropy_flag_enables_high_entropy_detection (P1)
-- BP-01  test_path_not_found_exits_one (P1)
+- BP-01  test_path_not_found_exits_operational_code (P1)
 - EC-21  test_skip_clear_overrides_allowed_clear_files_allowlist (P1)
+- #476   git-scoped collection must never silently pass (--pr-base / --staged / --history)
 """
 
 from __future__ import annotations
@@ -394,14 +395,14 @@ def test_entropy_flag_enables_high_entropy_detection(git_repo: Path) -> None:
     assert on_cli.returncode == 3, f"expected 3, got {on_cli.returncode}\n{on_cli.stdout}"
 
 
-# --- BP-01 (P1): scanning a nonexistent path exits 1 ----------------------------
+# --- BP-01 (P1): scanning a nonexistent path exits 6 (operational error) --------
 
 
-def test_path_not_found_exits_one(git_repo: Path) -> None:
-    """Scanning a path that does not exist exits 1 with a 'Path not found' message."""
+def test_path_not_found_exits_operational_code(git_repo: Path) -> None:
+    """A nonexistent path exits 6 (operational error, distinct from critical's 1, #478)."""
     work_dir = git_repo
     result = _run_envdrift(["guard", "--native-only", "./does_not_exist.py"], cwd=work_dir)
-    assert result.returncode == 1, f"expected 1, got {result.returncode}\n{result.stdout}"
+    assert result.returncode == 6, f"expected 6, got {result.returncode}\n{result.stdout}"
     assert "Path not found" in (result.stdout + result.stderr)
 
 
@@ -440,3 +441,486 @@ def test_skip_clear_overrides_allowed_clear_files_allowlist(git_repo: Path) -> N
     )
     assert skipped["findings"] == []
     assert skipped["exit_code"] == 0
+
+
+# --- #476: git-scoped collection must never silently pass ------------------------
+#
+# The three git-scoped collection modes each promised one thing and scanned
+# another: an unresolvable --pr-base ref was conflated with "no changed files"
+# (green CI pass), --staged scanned working-tree copies instead of the staged
+# index blobs, and --history was silently dropped when no active scanner
+# supports git history. Each test below drives the real CLI as a subprocess
+# against a real git repository.
+
+_LEAK_LINE = f'aws_secret_access_key = "{_AWS_SECRET}"\n'
+
+
+def test_pr_base_unresolvable_ref_fails_loudly(git_repo: Path) -> None:
+    """An unresolvable ``--pr-base`` ref is an error, never a green pass (#476).
+
+    ``git diff <base>...HEAD`` exits 128 for a typo'd/unfetched base. Guard must
+    exit non-zero with a structured error instead of reporting "No changed files
+    to scan" with exit 0 — that green pass let a committed secret through CI.
+    The fetch failure must also be surfaced on stderr (it was verbose-gated).
+    """
+    work_dir = git_repo
+    (work_dir / "leak.py").write_text(_LEAK_LINE, encoding="utf-8")
+    _run_git(["add", "leak.py"], cwd=work_dir)
+    _run_git(["commit", "-m", "add leak"], cwd=work_dir)
+
+    result = _run_envdrift(
+        [
+            "guard",
+            "--pr-base",
+            "does-not-exist-branch",
+            "--native-only",
+            "--no-auto-install",
+            "--json",
+        ],
+        cwd=work_dir,
+    )
+    # An unresolvable base ref is an operational error (exit 6), not a critical
+    # finding (exit 1): #526 reserves 1 for EXIT_CRITICAL_FINDINGS.
+    assert result.returncode == 6, (
+        f"unresolvable --pr-base must exit 6 (operational error), got {result.returncode}\n"
+        f"{result.stdout}\n{result.stderr}"
+    )
+    # stdout stays a clean machine-readable error document.
+    payload = json.loads(result.stdout)
+    assert "error" in payload, payload
+    assert "does-not-exist-branch" in payload["error"]
+    # The failed `git fetch` is surfaced on stderr, not silently swallowed.
+    assert "warning" in result.stderr.lower(), result.stderr
+
+    # Human mode: explicit error, no "No changed files" green prose.
+    human = _run_envdrift(
+        ["guard", "--pr-base", "does-not-exist-branch", "--native-only", "--no-auto-install"],
+        cwd=work_dir,
+    )
+    out = " ".join((human.stdout + human.stderr).split())
+    assert human.returncode == 6, f"expected 6 (operational error), got {human.returncode}\n{out}"
+    assert "Error" in out, out
+    assert "does-not-exist-branch" in out, out
+    assert "No changed files to scan" not in out, out
+
+
+def test_pr_base_resolvable_ref_with_empty_diff_still_passes(git_repo: Path) -> None:
+    """A resolvable base with a genuinely empty diff keeps the clean exit 0 (#476).
+
+    The unresolvable-ref fix must distinguish git failure (rc != 0) from an
+    empty-but-successful diff: ``--pr-base HEAD`` resolves and produces no
+    changed files, so guard still passes with an empty findings document.
+    """
+    work_dir = git_repo
+    (work_dir / "readme.txt").write_text("hello world\n", encoding="utf-8")
+    _run_git(["add", "readme.txt"], cwd=work_dir)
+    _run_git(["commit", "-m", "init"], cwd=work_dir)
+
+    result = _run_envdrift(
+        ["guard", "--pr-base", "HEAD", "--native-only", "--no-auto-install", "--json"],
+        cwd=work_dir,
+    )
+    assert result.returncode == 0, (
+        f"empty diff against a resolvable base must exit 0, got {result.returncode}\n"
+        f"{result.stdout}\n{result.stderr}"
+    )
+    payload = json.loads(result.stdout)
+    assert payload["findings"] == []
+
+
+def test_staged_scans_index_blob_not_worktree(git_repo: Path) -> None:
+    """``--staged`` scans the staged index blob, not the working-tree copy (#476).
+
+    Repro from the issue: a secret is staged, then the working-tree copy is
+    overwritten with clean content. The about-to-be-committed secret lives only
+    in the index — guard must flag it (exit 1), and the finding must point at
+    the repo file, not at any temporary scan location.
+    """
+    work_dir = git_repo
+    app = work_dir / "app.env"
+    app.write_text(_LEAK_LINE, encoding="utf-8")
+    _run_git(["add", "app.env"], cwd=work_dir)
+    # Working tree now clean; the leak exists only in the staged index blob.
+    app.write_text('aws_secret_access_key = "redacted"\n', encoding="utf-8")
+
+    result = _run_envdrift(
+        ["guard", "--staged", "--native-only", "--no-auto-install", "--json"], cwd=work_dir
+    )
+    assert result.returncode == 1, (
+        f"staged-only secret must fail the gate, got {result.returncode}\n"
+        f"{result.stdout}\n{result.stderr}"
+    )
+    payload = _guard_json(result)
+    assert "aws-secret-access-key" in _rule_ids(payload), payload["findings"]
+    reported = {f["file_path"] for f in payload["findings"]}
+    assert "app.env" in reported, reported
+    assert all("envdrift-staged-" not in p for p in reported), reported
+
+
+def test_staged_scans_file_whose_name_needs_git_quoting(git_repo: Path) -> None:
+    """``--staged`` scans a staged file whose name git would C-quote (#514 review).
+
+    ``git diff --cached --name-only`` C-quotes a path containing spaces or
+    non-ASCII (``"sécret env.env"``) under the default ``core.quotepath``, so
+    line-splitting the text output produced a bogus quoted name that
+    ``git show :<path>`` could not resolve — the staged secret slipped past the
+    gate. The ``-z`` binary pipe prints the name verbatim and ``os.fsdecode``
+    round-trips the bytes, so the blob is read and the leak is flagged.
+    """
+    work_dir = git_repo
+    # Space + non-ASCII in the name; keep the ``.env`` shape so the finding is
+    # deterministic. Build the secret by concatenation (push-protection).
+    tricky = work_dir / "sécret env.env"
+    tricky.write_text(f'aws_secret_access_key = "{_AWS_SECRET}"\n', encoding="utf-8")
+    _run_git(["add", "sécret env.env"], cwd=work_dir)
+    # Overwrite the working tree so a worktree read could not explain a hit —
+    # only the staged index blob still carries the secret.
+    tricky.write_text('aws_secret_access_key = "redacted"\n', encoding="utf-8")
+
+    result = _run_envdrift(
+        ["guard", "--staged", "--native-only", "--no-auto-install", "--json"], cwd=work_dir
+    )
+    assert result.returncode == 1, (
+        f"staged secret in a quote-requiring filename must fail the gate, got "
+        f"{result.returncode}\n{result.stdout}\n{result.stderr}"
+    )
+    payload = _guard_json(result)
+    assert "aws-secret-access-key" in _rule_ids(payload), payload["findings"]
+    reported = {f["file_path"] for f in payload["findings"]}
+    assert any("sécret env.env" in p for p in reported), reported
+    assert all("envdrift-staged-" not in p for p in reported), reported
+
+
+def test_staged_file_deleted_from_worktree_still_scanned(git_repo: Path) -> None:
+    """A staged file deleted from the working tree is still scanned (#476).
+
+    The old collection resolved staged names to filesystem paths and dropped
+    non-existent ones, so ``git add app.env; rm app.env`` produced "No staged
+    files to scan." and exit 0 while the commit still shipped the secret.
+    """
+    work_dir = git_repo
+    app = work_dir / "app.env"
+    app.write_text(_LEAK_LINE, encoding="utf-8")
+    _run_git(["add", "app.env"], cwd=work_dir)
+    app.unlink()
+
+    result = _run_envdrift(
+        ["guard", "--staged", "--native-only", "--no-auto-install", "--json"], cwd=work_dir
+    )
+    combined = result.stdout + result.stderr
+    assert "No staged files to scan" not in combined, combined
+    assert result.returncode == 1, f"expected 1, got {result.returncode}\n{combined}"
+    payload = _guard_json(result)
+    assert "aws-secret-access-key" in _rule_ids(payload), payload["findings"]
+
+
+def test_staged_worktree_only_secret_not_flagged(git_repo: Path) -> None:
+    """A secret present only in the working tree is NOT a staged finding (#476).
+
+    The sharp converse of the index-blob test: clean content is staged, then a
+    secret is written to the working tree without ``git add``. The commit would
+    ship the clean blob, so ``--staged`` must pass — flagging the unstaged
+    worktree copy would prove the scan still reads the wrong content. The
+    fixture is deliberately NOT env-file-shaped (``config.py``): an ``app.env``
+    name would trip the content-independent unencrypted-env-file policy (#477)
+    and muddy the content assertion this test exists for.
+    """
+    work_dir = git_repo
+    app = work_dir / "config.py"
+    app.write_text('aws_secret_access_key = "redacted"\n', encoding="utf-8")
+    _run_git(["add", "config.py"], cwd=work_dir)
+    # Secret exists only in the (unstaged) working tree.
+    app.write_text(_LEAK_LINE, encoding="utf-8")
+
+    result = _run_envdrift(
+        ["guard", "--staged", "--native-only", "--no-auto-install", "--json"], cwd=work_dir
+    )
+    assert result.returncode == 0, (
+        f"unstaged worktree secret must not fail --staged, got {result.returncode}\n"
+        f"{result.stdout}\n{result.stderr}"
+    )
+    payload = _guard_json(result)
+    assert payload["findings"] == []
+
+
+def test_staged_private_key_file_still_critical(git_repo: Path) -> None:
+    """A staged ``.env.keys`` keeps its CRITICAL committed-private-key rule (#476).
+
+    The committed-private-key rule asks git whether the file is tracked/staged
+    (``is_file_tracked``). Scanning staged index blobs must preserve that
+    answer — every collected file IS staged — or the pre-commit gate generated
+    by ``envdrift hook`` would silently stop blocking committed key files.
+    """
+    work_dir = git_repo
+    keys = work_dir / ".env.keys"
+    keys.write_text("DOTENV_PRIVATE_KEY_PRODUCTION=abc123def456\n", encoding="utf-8")
+    _run_git(["add", "-f", ".env.keys"], cwd=work_dir)
+
+    result = _run_envdrift(
+        ["guard", "--staged", "--native-only", "--no-auto-install", "--json"], cwd=work_dir
+    )
+    assert result.returncode == 1, (
+        f"staged .env.keys must stay CRITICAL, got {result.returncode}\n"
+        f"{result.stdout}\n{result.stderr}"
+    )
+    payload = _guard_json(result)
+    assert "committed-private-key" in _rule_ids(payload), payload["findings"]
+
+
+def test_staged_outside_git_repo_fails_loudly(tmp_path: Path) -> None:
+    """``--staged`` outside a git repository is an error, not a green pass (#476).
+
+    ``git diff --cached`` exits 128 outside a repo; the old collection conflated
+    that with "no staged files" and passed with exit 0.
+    """
+    result = _run_envdrift(
+        ["guard", "--staged", "--native-only", "--no-auto-install", "--json"], cwd=tmp_path
+    )
+    # Operational error (not a git repo), not a critical finding: exit 6 (#526).
+    assert result.returncode == 6, (
+        f"--staged outside a repo must exit 6 (operational error), got {result.returncode}\n"
+        f"{result.stdout}\n{result.stderr}"
+    )
+    payload = json.loads(result.stdout)
+    assert "error" in payload, payload
+
+
+def test_history_without_history_capable_scanner_fails_loudly(git_repo: Path) -> None:
+    """``--history`` with only history-incapable scanners is an error (#476).
+
+    The native scanner cannot scan git history, so ``--history --native-only``
+    silently scanned nothing extra and reported a clean pass while a secret sat
+    in an earlier commit. Guard must refuse the combination instead.
+    """
+    work_dir = git_repo
+    leak = work_dir / "leak.py"
+    leak.write_text(_LEAK_LINE, encoding="utf-8")
+    _run_git(["add", "leak.py"], cwd=work_dir)
+    _run_git(["commit", "-m", "add leak"], cwd=work_dir)
+    leak.write_text("clean = true\n", encoding="utf-8")
+    _run_git(["add", "leak.py"], cwd=work_dir)
+    _run_git(["commit", "-m", "remove leak"], cwd=work_dir)
+
+    result = _run_envdrift(
+        ["guard", "--history", "--native-only", "--no-auto-install", "--json"], cwd=work_dir
+    )
+    # Refusing an unsatisfiable history request is an operational error (exit
+    # 6), not a critical finding (exit 1) — #526 reserves 1 for real leaks.
+    assert result.returncode == 6, (
+        f"--history with no history-capable scanner must exit 6, got {result.returncode}\n"
+        f"{result.stdout}\n{result.stderr}"
+    )
+    payload = json.loads(result.stdout)
+    assert "error" in payload, payload
+    assert "history" in payload["error"].lower(), payload
+
+    human = _run_envdrift(
+        ["guard", "--history", "--native-only", "--no-auto-install"], cwd=work_dir
+    )
+    out = " ".join((human.stdout + human.stderr).split())
+    assert human.returncode == 6, f"expected 6 (operational error), got {human.returncode}\n{out}"
+    assert "Error" in out, out
+    assert "No secrets or policy violations detected" not in out, out
+
+
+def test_staged_custom_mapped_env_file_policy_still_fires(git_repo: Path) -> None:
+    """A staged custom mapped env file keeps its unencrypted-env-file rule (#476).
+
+    Custom ``vault.sync`` env files are recognized by canonical absolute path
+    (``mapped_env_files``). Scanning staged index blobs from a mirror must not
+    break that match — ``envdrift hook`` relies on ``guard --staged`` blocking a
+    plaintext mapped file at commit time.
+    """
+    work_dir = git_repo
+    (work_dir / "envdrift.toml").write_text(
+        textwrap.dedent(
+            """\
+            [vault]
+            provider = "azure"
+
+            [vault.sync]
+            [[vault.sync.mappings]]
+            secret_name = "test-postgresql-key"
+            folder_path = "secrets/postgresql"
+            environment = "production"
+            env_file = "postgresql.env"
+            """
+        ),
+        encoding="utf-8",
+    )
+    service_dir = work_dir / "secrets" / "postgresql"
+    service_dir.mkdir(parents=True)
+    env_file = service_dir / "postgresql.env"
+    env_file.write_text("POSTGRES_PASSWORD=plaintext-leak\n", encoding="utf-8")
+    _run_git(["add", "envdrift.toml", "secrets/postgresql/postgresql.env"], cwd=work_dir)
+
+    result = _run_envdrift(
+        ["guard", "--staged", "--native-only", "--no-auto-install", "--json"], cwd=work_dir
+    )
+    assert result.returncode != 0, (
+        f"staged plaintext mapped env file must fail the gate, got {result.returncode}\n"
+        f"{result.stdout}\n{result.stderr}"
+    )
+    payload = _guard_json(result)
+    rule_ids = _rule_ids(payload)
+    assert "unencrypted-env-file" in rule_ids, payload["findings"]
+    mapped = [f for f in payload["findings"] if f["rule_id"] == "unencrypted-env-file"]
+    assert any("postgresql.env" in f["file_path"] for f in mapped), mapped
+    # The mirror temp path must not leak anywhere in a finding: descriptions
+    # embed the scanned path (native's "envdrift encrypt <path>" hint) and the
+    # mirror directory is deleted right after the scan (#514 review).
+    assert "envdrift-staged-" not in json.dumps(payload["findings"]), payload["findings"]
+
+
+# --- #453: git check-ignore subprocess pipes must be UTF-8, not the locale ------
+
+# Forces the subprocess text-mode codec away from UTF-8 in the child CLI process.
+# On POSIX, ``LC_ALL=C`` makes ``locale.getpreferredencoding(False)`` US-ASCII
+# (Windows ignores LC_ALL and natively uses its ANSI code page, e.g. cp1252).
+# ``PYTHONUTF8=0`` pins UTF-8 mode off (PEP 540 auto-enables it for the C locale)
+# and ``PYTHONCOERCECLOCALE=0`` stops glibc coercion to C.UTF-8 (PEP 538).
+# ``PYTHONIOENCODING`` keeps the CLI's *own* stdout/stderr UTF-8 so printing JSON
+# or Rich output never trips over the locale — only the pipe codec used for
+# ``git check-ignore`` (the behavior under test) is left to the locale default.
+_NON_UTF8_LOCALE_ENV = {
+    "LC_ALL": "C",
+    "LANG": "C",
+    "PYTHONUTF8": "0",
+    "PYTHONCOERCECLOCALE": "0",
+    "PYTHONIOENCODING": "utf-8",
+}
+
+# 'sécrets-café.env' / '秘密.combined.env'. The accented name is inside cp1252
+# (mis-encodes silently on Windows); the CJK one is outside it (raises on encode).
+_ACCENTED_ENV_NAME = "sécrets-café.env"
+_CJK_COMBINED_NAME = "秘密.combined.env"
+
+
+def _non_ascii_gitignore_repo(work_dir: Path) -> None:
+    """Repo with an exact-named gitignored non-ASCII env file plus a tracked leak."""
+    (work_dir / ".gitignore").write_text(_ACCENTED_ENV_NAME + "\n", encoding="utf-8")
+    (work_dir / _ACCENTED_ENV_NAME).write_text(
+        f'AWS_SECRET_ACCESS_KEY="{_AWS_SECRET}"\n', encoding="utf-8"
+    )
+    (work_dir / "leak.py").write_text(f'aws_secret_access_key = "{_AWS_SECRET}"\n')
+    _run_git(["add", ".gitignore", "leak.py"], cwd=work_dir)
+
+
+def test_skip_gitignored_filters_non_ascii_gitignored_path(git_repo: Path) -> None:
+    """#453: a gitignored non-ASCII filename is filtered on every platform.
+
+    ``_filter_gitignored_files`` feeds finding paths to ``git check-ignore --stdin
+    -z`` over a text pipe. Before the fix the pipe used the platform locale codec
+    (``text=True`` with no ``encoding=``), so on Windows (cp1252) the UTF-8
+    filename was mis-encoded, the exact ``.gitignore`` entry no longer matched,
+    and the finding from the gitignored file leaked into the results.
+    """
+    work_dir = git_repo
+    _non_ascii_gitignore_repo(work_dir)
+
+    # Sanity baseline: without --skip-gitignored the non-ASCII file IS reported,
+    # proving the fixture actually produces a finding for the filter to remove.
+    baseline = _guard_json(
+        _run_envdrift(
+            ["guard", "--native-only", "--json", _ACCENTED_ENV_NAME, "leak.py"],
+            cwd=work_dir,
+            env={"PYTHONUTF8": "0"},
+        )
+    )
+    baseline_files = [f["file_path"] for f in baseline["findings"]]
+    assert any(_ACCENTED_ENV_NAME in f for f in baseline_files), baseline_files
+
+    result = _run_envdrift(
+        ["guard", "--native-only", "--skip-gitignored", "--json", _ACCENTED_ENV_NAME, "leak.py"],
+        cwd=work_dir,
+        env={"PYTHONUTF8": "0"},
+    )
+    payload = _guard_json(result)
+    files = [f["file_path"] for f in payload["findings"]]
+    assert any("leak.py" in f for f in files), files
+    assert not any(_ACCENTED_ENV_NAME in f for f in files), (
+        f"gitignored non-ASCII file leaked into findings: {files}"
+    )
+    # The tracked leak.py CRITICAL finding still fails the run.
+    assert result.returncode == 1, f"expected 1, got {result.returncode}\n{result.stdout}"
+
+
+@pytest.mark.skipif(
+    sys.platform == "win32",
+    reason="LC_ALL does not affect the Windows ANSI code page; cp1252 is covered "
+    "by test_skip_gitignored_filters_non_ascii_gitignored_path",
+)
+def test_skip_gitignored_survives_non_utf8_locale(git_repo: Path) -> None:
+    """#453: ``--skip-gitignored`` must work correctly under a non-UTF-8 locale.
+
+    Before the fix the check-ignore pipe inherited the C locale's US-ASCII codec
+    and raised ``UnicodeEncodeError`` on the non-ASCII path, killing the whole
+    scan with a traceback instead of emitting JSON. Under the C locale the CLI
+    sees the argv filename surrogate-escaped, so the pipe must round-trip the
+    exact filesystem bytes (``os.fsencode``/``os.fsdecode``) — a pinned text
+    codec either rewrote the bytes (gitignored finding leaked) or decoded git's
+    output into real non-ASCII chars that crashed ``Path.resolve()`` under the
+    ASCII filesystem encoding.
+    """
+    work_dir = git_repo
+    _non_ascii_gitignore_repo(work_dir)
+
+    result = _run_envdrift(
+        ["guard", "--native-only", "--skip-gitignored", "--json", _ACCENTED_ENV_NAME, "leak.py"],
+        cwd=work_dir,
+        env=_NON_UTF8_LOCALE_ENV,
+    )
+    assert "Traceback" not in result.stderr, result.stderr
+    payload = _guard_json(result)  # pre-fix: crash means no JSON on stdout
+    files = [f["file_path"] for f in payload["findings"]]
+    assert any("leak.py" in f for f in files), files
+    # The gitignored non-ASCII file must be filtered even in surrogate-escaped
+    # form — only the tracked leak.py finding may remain.
+    assert all("leak.py" in f for f in files), files
+    assert result.returncode == 1, f"expected 1, got {result.returncode}\n{result.stdout}"
+
+
+def test_combined_file_gitignore_check_handles_non_ascii_name(git_repo: Path) -> None:
+    """#453: ``check_combined_files_security`` must match non-ASCII combined files.
+
+    The combined-files security check originally fed newline-joined paths to
+    ``git check-ignore`` over a locale-codec text pipe, which broke three ways:
+    the platform locale codec crashed on (cp1252) or mangled (C locale) non-ASCII
+    names, git C-quoted non-ASCII output (octal escapes per ``core.quotepath``) so
+    stdout never compared equal, and on Windows the text-mode pipe translated each
+    written ``\\n`` to ``\\r\\n`` so git matched ``name\\r`` against .gitignore and
+    reported every gitignored file as unprotected. The fix uses the NUL-separated
+    ``--stdin -z`` pipe with explicit UTF-8, which avoids all three.
+    """
+    work_dir = git_repo
+    (work_dir / ".gitignore").write_text(_CJK_COMBINED_NAME + "\n", encoding="utf-8")
+    (work_dir / "envdrift.toml").write_text(
+        "[partial_encryption]\n"
+        "enabled = true\n\n"
+        "[[partial_encryption.environments]]\n"
+        'name = "production"\n'
+        'clear_file = ".env.production.clear"\n'
+        'secret_file = ".env.production.secret"\n'
+        f'combined_file = "{_CJK_COMBINED_NAME}"\n\n'
+        "[[partial_encryption.environments]]\n"
+        'name = "staging"\n'
+        'clear_file = ".env.staging.clear"\n'
+        'secret_file = ".env.staging.secret"\n'
+        'combined_file = "unprotected.combined.env"\n',
+        encoding="utf-8",
+    )
+    _run_git(["add", ".gitignore"], cwd=work_dir)
+
+    env = dict(_NON_UTF8_LOCALE_ENV)
+    env["COLUMNS"] = "200"  # keep Rich from wrapping the warning mid-filename
+    result = _run_envdrift(["guard", "--native-only", "."], cwd=work_dir, env=env)
+    out = " ".join((result.stdout + result.stderr).split())
+
+    assert "Traceback" not in result.stderr, result.stderr
+    assert result.returncode == 0, f"expected 0, got {result.returncode}\n{out}"
+    # Control: the NOT-gitignored combined file must be flagged, proving the
+    # security check actually ran and matched against git's answer.
+    assert "SECURITY WARNING" in out, out
+    assert "unprotected.combined.env" in out, out
+    # The gitignored CJK combined file must NOT be flagged.
+    assert _CJK_COMBINED_NAME not in out, out

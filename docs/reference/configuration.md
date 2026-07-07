@@ -16,6 +16,43 @@ The nearest directory wins overall, and within a single directory `envdrift.toml
 takes precedence over `pyproject.toml`. As a result, a nearer directory's
 `pyproject.toml` outranks a farther parent's `envdrift.toml`.
 
+Auto-discovery only considers regular files: a directory (or socket/fifo) that
+happens to be named `envdrift.toml` is skipped and the search continues upward.
+
+## Loading Errors and Unknown Keys
+
+A config file that exists but cannot be loaded is a hard error: commands that
+consume it (`encrypt`, `decrypt`, `sync`, `pull`, `lock`, `vault-push`,
+`vault-pull`, `guard`, `validate`, …) print a one-line message and exit
+non-zero instead of silently continuing with default settings. This covers:
+
+- **TOML syntax errors** — `TOML syntax error in <path>: …`. In particular,
+  `encrypt`/`decrypt` never fall back to the default dotenvx backend when the
+  file configuring a different backend fails to parse.
+- **Unreadable files** — `Cannot read config file <path>: …` (for example a
+  permissions problem).
+- **Wrong-typed or invalid sections** — `Invalid config in <path>: …` (for
+  example `vault = "a string"`, a `[[vault.sync.mappings]]` entry missing
+  `secret_name`/`folder_path`, or a non-string mapping value such as
+  `folder_path = 456` or `env_file = 456`).
+
+Keys that envdrift does not consume produce a warning on **stderr** (stdout
+stays clean for `--json`/`--sarif`/`--format json` consumers), with a
+suggestion when a known key is close:
+
+```text
+Warning: ./envdrift.toml: unknown config key 'fail_on_severty' in [guard] (did you mean 'fail_on_severity'?)
+```
+
+This catches typos that would otherwise silently revert an option — including
+security posture knobs like `[guard] fail_on_severity` or `[vault.sync]
+ephemeral_keys` — to its default. Tables whose keys are user-defined by design
+(`[vault.mappings]`, `[guard.ignore_rules]`, `[precommit.schemas]`) are exempt.
+
+In `pyproject.toml`, findings name the section as you wrote it — a typo'd
+`[tool.envdrift.gaurd]` warns with
+`unknown config key 'gaurd' in [tool.envdrift] (did you mean 'guard'?)`.
+
 ## File Formats
 
 ### envdrift.toml
@@ -505,6 +542,7 @@ Some settings can be overridden with environment variables:
 | `AZURE_CLIENT_ID` | Azure service principal client ID |
 | `AZURE_CLIENT_SECRET` | Azure service principal secret |
 | `AZURE_TENANT_ID` | Azure tenant ID |
+| `ENVDRIFT_AZURE_VERIFY_CHALLENGE_RESOURCE` | Set to `0`/`false` to disable the Key Vault challenge-resource check (required for emulators such as Lowkey Vault, whose challenge resource is not `*.vault.azure.net`). Defaults to enabled; malformed values fail loudly |
 | `AWS_ACCESS_KEY_ID` | AWS access key |
 | `AWS_SECRET_ACCESS_KEY` | AWS secret key |
 | `GOOGLE_APPLICATION_CREDENTIALS` | Path to GCP service account key |

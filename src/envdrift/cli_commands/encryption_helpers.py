@@ -7,11 +7,10 @@ import logging
 import os
 import re
 import tempfile
-import tomllib
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from envdrift.config import ConfigNotFoundError, find_config, load_config
+from envdrift.config import find_config, load_config
 from envdrift.encryption import EncryptionProvider, get_encryption_backend
 from envdrift.utils.git import get_file_from_git, is_file_tracked, restore_file_from_git
 
@@ -43,6 +42,11 @@ def resolve_encryption_backend(
 
     Returns the instantiated backend, selected provider, and the encryption config
     (if available).
+
+    Raises ``ConfigNotFoundError``/``ConfigLoadError`` from ``load_config`` when
+    the config exists but cannot be loaded: silently falling back to the default
+    dotenvx backend used to encrypt SOPS-configured projects with the wrong
+    backend (#491). CLI callers convert these into clean errors and exit 1.
     """
     config_path = None
     if config_file is not None and config_file.suffix.lower() == ".toml":
@@ -52,11 +56,7 @@ def resolve_encryption_backend(
 
     envdrift_config = None
     if config_path:
-        try:
-            envdrift_config = load_config(config_path)
-        except (ConfigNotFoundError, tomllib.TOMLDecodeError) as exc:
-            logger.warning("Failed to load config from %s: %s", config_path, exc)
-            envdrift_config = None
+        envdrift_config = load_config(config_path)
 
     encryption_config = getattr(envdrift_config, "encryption", None) if envdrift_config else None
     backend_name = encryption_config.backend if encryption_config else "dotenvx"
@@ -119,8 +119,56 @@ def is_encrypted_content(
     # positives from comments or other text containing "encrypted:".
     if provider == EncryptionProvider.DOTENVX:
         return bool(re.search(r"=\s*encrypted:", content, re.IGNORECASE))
-    # For other providers (like SOPS), the header is sufficient
+    # For SOPS the canonical metadata block (not the looser has_encrypted_header
+    # substring scan) is the signal: a bare ENC[AES256_GCM, token in a plaintext
+    # value or comment must not count (#475), and a file without the block is
+    # not decryptable by sops anyway. Surviving-plaintext (mixed-state) handling
+    # is deliberately NOT folded in here: the lock flow reports mixed files
+    # precisely via has_plaintext_secret_value ("plaintext values remain", #470)
+    # and the backend's encrypt() refuses to bless them (#475) — folding it in
+    # would reroute mixed files to the generic "not encrypted" path and lose
+    # that precision.
+    return _has_backend_ciphertext_marker(backend, content)
+
+
+def _has_backend_ciphertext_marker(backend: EncryptionBackend, content: str) -> bool:
+    """Does ``content`` carry the backend's canonical encryption marker?
+
+    Prefers the backend's genuine metadata-block signal (``has_metadata_block``,
+    SOPS) over the looser ``has_encrypted_header`` substring scan: a plaintext
+    file that merely mentions ``ENC[AES256_GCM,`` in a value or comment carries
+    no SOPS metadata, so it is neither encrypted nor decryptable and must not be
+    treated as either. Backends without the method keep the header check.
+    """
+    has_metadata_block = getattr(backend, "has_metadata_block", None)
+    if callable(has_metadata_block):
+        return bool(has_metadata_block(content))
     return bool(backend.has_encrypted_header(content))
+
+
+def should_attempt_decryption(
+    provider: EncryptionProvider,
+    backend: EncryptionBackend,
+    content: str,
+) -> bool:
+    """Decrypt-direction predicate: does ``content`` carry this backend's ciphertext?
+
+    Deliberately more lenient than :func:`is_encrypted_content`, which asserts a
+    fully encrypted post-state (#475). In the decrypt direction a mixed SOPS file
+    (metadata block + surviving plaintext value) must still be handed to sops so
+    the outcome is loud — sops refuses it (MAC mismatch) unless the file's own
+    ``sops_mac_only_encrypted`` metadata makes the mix legitimate — instead of
+    ``pull`` silently skipping it as "not encrypted" (and even activating it as
+    the working profile) while its values are still ciphertext.
+
+    Gated on the canonical metadata block (when the backend exposes it): a file
+    without the block is not decryptable by sops at all — including a plaintext
+    file that merely mentions ``ENC[AES256_GCM,`` in a value — so it stays a
+    clean "not encrypted" skip rather than an avoidable decrypt failure.
+    """
+    if provider == EncryptionProvider.DOTENVX:
+        return bool(re.search(r"=\s*encrypted:", content, re.IGNORECASE))
+    return _has_backend_ciphertext_marker(backend, content)
 
 
 def should_skip_reencryption(

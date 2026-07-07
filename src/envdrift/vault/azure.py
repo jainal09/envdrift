@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from typing import Any
 
 from envdrift.vault.base import (
@@ -31,6 +32,40 @@ except ImportError:
     ClientAuthenticationError = Exception  # type: ignore[misc, assignment]
     HttpResponseError = Exception  # type: ignore[misc, assignment]
     AzureError = Exception  # type: ignore[misc, assignment]
+
+
+VERIFY_CHALLENGE_RESOURCE_ENV = "ENVDRIFT_AZURE_VERIFY_CHALLENGE_RESOURCE"
+
+_TRUTHY_VALUES = frozenset({"1", "true", "yes", "on"})
+_FALSY_VALUES = frozenset({"0", "false", "no", "off"})
+
+
+def _verify_challenge_resource() -> bool:
+    """Resolve the Key Vault challenge-resource verification toggle.
+
+    The Azure SDK verifies that the authentication challenge returned by the
+    vault matches the vault's domain and refuses to authenticate otherwise.
+    That is the right default for ``*.vault.azure.net``, but it can never
+    succeed against Key Vault emulators or other non-public-cloud domains
+    (e.g. Lowkey Vault on ``localhost``), where the challenge resource is the
+    vault host itself. Set ``ENVDRIFT_AZURE_VERIFY_CHALLENGE_RESOURCE`` to
+    ``0``/``false``/``no``/``off`` to disable the check for such vaults.
+
+    Defaults to enabled (secure). A malformed value fails loudly with
+    ``ValueError`` instead of being coerced to either behavior.
+    """
+    raw = os.environ.get(VERIFY_CHALLENGE_RESOURCE_ENV)
+    if raw is None or not raw.strip():
+        return True
+    value = raw.strip().lower()
+    if value in _TRUTHY_VALUES:
+        return True
+    if value in _FALSY_VALUES:
+        return False
+    raise ValueError(
+        f"Invalid {VERIFY_CHALLENGE_RESOURCE_ENV}={raw!r}: expected one of "
+        "1/true/yes/on or 0/false/no/off"
+    )
 
 
 def _get_azure_classes() -> tuple[Any, Any]:
@@ -88,14 +123,27 @@ class AzureKeyVaultClient(VaultClient):
         Authenticate to Azure Key Vault using DefaultAzureCredential and initialize the SecretClient.
 
         On success sets self._credential to the created credential and self._client to a ready SecretClient.
-        Raises AuthenticationError if credential acquisition fails and VaultError for HTTP-related Key Vault errors.
+        Raises AuthenticationError if credential acquisition fails or when
+        ENVDRIFT_AZURE_VERIFY_CHALLENGE_RESOURCE holds a malformed value, and VaultError for HTTP-related
+        Key Vault errors.
         """
         credential_cls, client_cls = _get_azure_classes()
+        try:
+            verify_challenge_resource = _verify_challenge_resource()
+        except ValueError as e:
+            # Surface the config error through the domain hierarchy so CLI
+            # callers that catch VaultError/AuthenticationError show a clean
+            # message instead of a raw ValueError traceback.
+            raise AuthenticationError(str(e)) from e
         try:
             self._credential = credential_cls()
             self._client = client_cls(
                 vault_url=self.vault_url,
                 credential=self._credential,
+                # Challenge-resource verification can never succeed against
+                # emulators / non-public-cloud vault domains; see
+                # _verify_challenge_resource() for the opt-out env var.
+                verify_challenge_resource=verify_challenge_resource,
             )
             # Test authentication by actually consuming one item from the iterator.
             # The iterator is lazy and won't authenticate until iterated.
@@ -136,6 +184,19 @@ class AzureKeyVaultClient(VaultClient):
             # half-initialized client and surface it as a VaultError (matching
             # how get_secret/list_secrets/set_secret map transport errors), rather
             # than letting the raw SDK exception escape the domain hierarchy.
+            self._client = None
+            self._credential = None
+            raise VaultError(f"Azure Key Vault error: {e}") from e
+        except ValueError as e:
+            # The SDK also raises OUTSIDE the AzureError hierarchy: the
+            # challenge policy's resource verification raises a plain
+            # ``ValueError`` ("The challenge resource ... does not match the
+            # requested domain") for any Key Vault behind a proxy, custom
+            # domain, or emulator. Map it into the domain hierarchy so it
+            # reaches the CLI as a clean VaultError instead of a Rich
+            # traceback (#487). Deliberately narrow -- a broader catch would
+            # absorb programming bugs (AttributeError, KeyError, ...) that
+            # must propagate with their tracebacks.
             self._client = None
             self._credential = None
             raise VaultError(f"Azure Key Vault error: {e}") from e

@@ -2,33 +2,15 @@
 
 from __future__ import annotations
 
+import json
 import re
 from dataclasses import dataclass, field
-from typing import Literal, Union, get_args, get_origin
+from typing import Any
 
+from envdrift.core.encryption import is_dotenvx_public_key_var
+from envdrift.core.env_semantics import coerce_env_value, field_complexity
 from envdrift.core.parser import EncryptionStatus, EnvFile
 from envdrift.core.schema import FieldMetadata, SchemaMetadata
-
-_COERCIBLE_SCALARS = (str, int, float, bool)
-
-
-def _is_string_coercible(tp: object) -> bool:
-    """True if model_validate can validate a *raw env string* against ``tp``.
-
-    Pydantic-settings parses complex types (``list``/``dict``/nested models) from
-    their env string via JSON in its env source; ``model_validate`` of the raw
-    string does not, so feeding it such a field would wrongly reject a config the
-    real schema accepts. Only scalars, ``Literal``, and Optionals of those accept
-    a string directly, so only those are checked via model_validate.
-    """
-    if tp in _COERCIBLE_SCALARS:
-        return True
-    origin = get_origin(tp)
-    if origin is Literal:
-        return True
-    if origin is Union:  # Optional[X] / X | None
-        return all(arg is type(None) or _is_string_coercible(arg) for arg in get_args(tp))
-    return False
 
 
 @dataclass
@@ -143,6 +125,20 @@ class Validator:
         """
         result = ValidationResult(valid=True)
 
+        # The parser strips a leading UTF-8 BOM so reports name the variable
+        # the user wrote — but pydantic-settings reads .env files as plain
+        # UTF-8 (dotenv_values default), so at startup the app sees the first
+        # key BOM-prefixed and a required field backed by it comes up missing.
+        # Surface that loudly instead of a silent false PASS (#486 review).
+        if env_file.leading_bom:
+            result.warnings.append(
+                "File starts with a UTF-8 BOM: pydantic-settings reads .env files "
+                "as plain UTF-8, so the app will see the first key with an "
+                "invisible '\\ufeff' prefix and a required field backed by it "
+                "will come up missing at startup. Remove the BOM or set "
+                "env_file_encoding='utf-8-sig' on the model config."
+            )
+
         # Pydantic Settings defaults to case_sensitive=False, loading e.g.
         # `API_KEY` from a conventional UPPERCASE .env into a lowercase
         # `api_key` field. Mirror that here by matching names case-insensitively
@@ -182,9 +178,16 @@ class Validator:
                     f"value from {kept!r} is used, {dropped} ignored"
                 )
 
-        # Check for missing required variables
+        # Check for missing required variables. With env_ignore_empty=True the
+        # real env source drops empty values entirely, so a required field
+        # assigned ``FIELD=`` is missing at startup exactly as if the line were
+        # absent (#517 review) — the empty-value skips below must not turn that
+        # crash into a false PASS.
         for field_name, field_meta in schema.fields.items():
-            if field_meta.required and _lookup_key(field_meta) not in env_names_lower:
+            if not field_meta.required:
+                continue
+            env_var = env_by_lower.get(_lookup_key(field_meta))
+            if env_var is None or (env_var.value == "" and schema.env_ignore_empty):
                 result.missing_required.add(field_name)
 
         # Check for missing optional variables (as warning)
@@ -192,9 +195,16 @@ class Validator:
             if not field_meta.required and _lookup_key(field_meta) not in env_names_lower:
                 result.missing_optional.add(field_name)
 
-        # Check for extra variables
+        # Check for extra variables. dotenvx's DOTENV_PUBLIC_KEY* artifact is
+        # exempt: every dotenvx-encrypted file carries it, so flagging it would
+        # fail the documented init -> encrypt -> validate loop on an
+        # extra="forbid" schema (#472).
         if check_extra:
-            extra = {name for name in env_file.variables if name.lower() not in schema_names_lower}
+            extra = {
+                name
+                for name in env_file.variables
+                if name.lower() not in schema_names_lower and not is_dotenvx_public_key_var(name)
+            }
             if extra:
                 if schema.extra_policy == "forbid":
                     result.extra_vars = extra
@@ -215,9 +225,13 @@ class Validator:
                     if env_var.encryption_status == EncryptionStatus.PLAINTEXT:
                         result.unencrypted_secrets.add(field_name)
 
-            # Also check for suspicious plaintext values
+            # Also check for suspicious plaintext values. The dotenvx public-key
+            # artifact is, by definition, public — its ``*_KEY`` name must not
+            # produce a bogus "mark it sensitive" warning (#472).
             sensitive_lower = {name.lower() for name in schema.sensitive_fields}
             for var_name, env_var in env_file.variables.items():
+                if is_dotenvx_public_key_var(var_name):
+                    continue
                 if env_var.encryption_status == EncryptionStatus.PLAINTEXT:
                     if self.is_value_suspicious(env_var.value):
                         if var_name.lower() not in sensitive_lower:
@@ -232,42 +246,61 @@ class Validator:
                                 "but is not marked sensitive in schema"
                             )
 
-        # Basic type validation (name-based). Produces envdrift's own messages and
-        # skips encrypted/empty values; kept as the source of base-type errors.
+        # Base type validation against the value pydantic-settings will see.
+        # Coercion runs through the shared env_semantics module (the same one
+        # diff uses) so the two commands cannot disagree (#472). An empty value
+        # is only "unset" when the schema says so (env_ignore_empty) — by
+        # default pydantic-settings passes '' through, so ``PORT=`` must fail
+        # an int field here exactly as it fails the real app at startup.
         for field_name, field_meta in schema.fields.items():
             env_var = env_by_lower.get(_lookup_key(field_meta))
             if env_var is None:
                 continue
+            if env_var.value == "" and schema.env_ignore_empty:
+                continue
 
-            type_error = self._check_type(env_var.value, field_meta.field_type)
+            type_error = self._check_type(
+                env_var.value, field_meta.field_type, field_meta.type_metadata
+            )
             if type_error:
                 result.type_errors[field_name] = type_error
 
         # Field-constraint validation (ge/le, Literal, min_length, pattern, ...).
-        # The heuristic above only parses base types, so a config the real schema
+        # The base check above only parses base types, so a config the real schema
         # rejects on a *constraint* used to pass as valid (#443). Instantiate the
-        # live Settings class with the type-valid, non-encrypted, non-empty values
-        # and surface the constraint errors the heuristic cannot see. Skipped for
-        # trivially-typed schemas (no constraints), where it would only add cost.
+        # live Settings class the way pydantic-settings feeds it: raw strings for
+        # scalar fields, JSON-decoded values for complex fields (#472), skipping
+        # only ciphertext (and empties when env_ignore_empty says they're unset).
+        # Skipped for trivially-typed schemas (no constraints), where it would
+        # only add cost.
         if schema.model_class is not None and schema.has_constraints:
             from pydantic import ValidationError
 
-            values: dict[str, str] = {}
+            values: dict[str, Any] = {}
             for field_name, field_meta in schema.fields.items():
                 env_var = env_by_lower.get(_lookup_key(field_meta))
                 if env_var is None:
                     continue
                 value = env_var.value
-                # Mirror _check_type's skips: ciphertext and empty (= unset).
-                if value == "" or value.startswith(("encrypted:", "ENC[")):
+                if value.startswith(("encrypted:", "ENC[")):
                     continue
-                # Only feed fields whose raw env string model_validate can check.
-                # Complex types (list/dict/nested) are JSON-parsed by the env source
-                # at runtime, which model_validate of the raw string does not do, so
-                # including them would wrongly reject a valid config (#443 review).
-                if not _is_string_coercible(field_meta.field_type):
+                if value == "" and schema.env_ignore_empty:
                     continue
-                values[field_meta.alias or field_name] = value
+                is_complex, allow_parse_failure = field_complexity(
+                    field_meta.field_type, field_meta.type_metadata
+                )
+                if is_complex:
+                    # Mirror the env source: JSON-decode complex values; a union
+                    # with a complex member falls back to the raw string. Plain
+                    # complex fields with invalid JSON were already reported by
+                    # the base check, so they are simply not re-fed here.
+                    try:
+                        values[field_meta.alias or field_name] = json.loads(value)
+                    except ValueError:
+                        if allow_parse_failure:
+                            values[field_meta.alias or field_name] = value
+                else:
+                    values[field_meta.alias or field_name] = value
 
             try:
                 schema.model_class.model_validate(values)
@@ -323,21 +356,29 @@ class Validator:
                 return True
         return False
 
-    def _check_type(self, value: str, expected_type: type) -> str | None:
+    def _check_type(
+        self, value: str, expected_type: type, metadata: tuple[Any, ...] = ()
+    ) -> str | None:
         """
-        Validate a plaintext .env value against an expected Python type.
+        Validate a plaintext .env value the way pydantic-settings would (#472).
+
+        Coercion is delegated to :mod:`envdrift.core.env_semantics` (shared with
+        diff): scalars are validated with pydantic's lax string rules (the full
+        bool alias set, ASCII-only int parsing, ...) and complex types are
+        JSON-decoded first, exactly like the real env source. Encrypted values
+        and uncheckable annotations are skipped.
 
         Parameters:
             value (str): The raw value read from a .env file.
-            expected_type (type): The Python type expected for the value (e.g., int, float, bool, list).
-
-        Notes:
-            If `expected_type` is None or `value` is an empty string, no type check is performed and the function returns None.
+            expected_type (type): The field's annotation (e.g., int, bool, list[str]).
+            metadata (tuple): The field's ``FieldInfo.metadata`` (e.g. a
+                ``pydantic.Json`` marker, which makes the field non-complex).
 
         Returns:
-            str | None: An error message describing the type mismatch, or `None` if the value is acceptable or no check was performed.
+            str | None: An error message describing the mismatch, or `None` if the
+            value is acceptable or no check was performed.
         """
-        if expected_type is None or value == "":
+        if expected_type is None or expected_type is type(None):
             return None
 
         # Skip type check for encrypted values (supports both dotenvx and SOPS)
@@ -346,34 +387,20 @@ class Validator:
         if value.startswith("encrypted:") or value.startswith("ENC["):
             return None
 
+        coerced = coerce_env_value(expected_type, value, metadata)
+        if coerced.status != "fail":
+            return None
+
+        # Keep envdrift's friendly messages for the plain scalar types; fall
+        # back to pydantic's own message everywhere else.
         type_name = getattr(expected_type, "__name__", str(expected_type))
-
-        # Handle int
         if type_name == "int":
-            try:
-                int(value)
-            except ValueError:
-                return f"Expected integer, got '{value}'"
-
-        # Handle float
-        elif type_name == "float":
-            try:
-                float(value)
-            except ValueError:
-                return f"Expected float, got '{value}'"
-
-        # Handle bool
-        elif type_name == "bool":
-            if value.lower() not in ("true", "false", "1", "0", "yes", "no"):
-                return f"Expected boolean, got '{value}'"
-
-        # Handle list (basic check for list-like structure)
-        elif type_name == "list":
-            # Lists in .env are typically comma-separated or JSON
-            # We'll accept anything here, just check it's not obviously wrong
-            pass
-
-        return None
+            return f"Expected integer, got '{value}'"
+        if type_name == "float":
+            return f"Expected float, got '{value}'"
+        if type_name == "bool":
+            return f"Expected boolean, got '{value}'"
+        return coerced.error or "invalid value"
 
     def generate_fix_template(self, result: ValidationResult, schema: SchemaMetadata) -> str:
         """

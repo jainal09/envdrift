@@ -28,6 +28,10 @@ if TYPE_CHECKING:
 LOCALSTACK_PORT = 4566
 VAULT_PORT = 8200
 LOWKEY_VAULT_PORT = 8443
+# Lowkey Vault's built-in managed-identity token stub (plain HTTP). It mimics
+# the Azure IMDS endpoint (GET /metadata/identity/oauth2/token) so
+# DefaultAzureCredential can obtain a (dummy) token without real Azure auth.
+LOWKEY_TOKEN_PORT = 8080
 
 # Test tokens/credentials
 VAULT_ROOT_TOKEN = "test-root-token"
@@ -107,6 +111,23 @@ def _deterministic_cli_output(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("NO_COLOR", "1")
 
 
+def _deterministic_child_env() -> dict[str, str]:
+    """Return an ``os.environ`` copy with Rich colorization forced OFF.
+
+    The session-scoped ``*_test_env`` fixtures are instantiated BEFORE the
+    function-scoped autouse ``_deterministic_cli_output`` strips CI's global
+    ``FORCE_COLOR=1`` from ``os.environ``, so a plain ``os.environ.copy()``
+    there bakes the colorizing var into every CLI child env for the whole
+    session. Rich's highlighter then wraps numbers/parens in ANSI codes,
+    splitting asserted phrases like ``(region us-east-1)`` (PR #530 CI
+    failure). Session-scoped env fixtures must build from this helper instead.
+    """
+    env = os.environ.copy()
+    env.pop("FORCE_COLOR", None)
+    env["NO_COLOR"] = "1"
+    return env
+
+
 def _force_utf8_subprocess_kwargs(kwargs: dict) -> None:
     """Default a text-mode subprocess to UTF-8 decoding (errors='replace')."""
     if (kwargs.get("text") or kwargs.get("universal_newlines")) and not kwargs.get("encoding"):
@@ -178,7 +199,7 @@ def localstack_endpoint(localstack_available: bool) -> Generator[str, None, None
 @pytest.fixture(scope="session")
 def aws_test_env(localstack_endpoint: str) -> Generator[dict[str, str], None, None]:
     """Configure environment for AWS tests with LocalStack."""
-    env = os.environ.copy()
+    env = _deterministic_child_env()
     env.update(
         {
             "AWS_ENDPOINT_URL": localstack_endpoint,
@@ -239,7 +260,7 @@ def vault_endpoint(vault_available: bool) -> Generator[str, None, None]:
 @pytest.fixture(scope="session")
 def vault_test_env(vault_endpoint: str) -> Generator[dict[str, str], None, None]:
     """Configure environment for Vault tests."""
-    env = os.environ.copy()
+    env = _deterministic_child_env()
     env.update(
         {
             "VAULT_ADDR": vault_endpoint,
@@ -298,17 +319,81 @@ def lowkey_vault_endpoint(lowkey_vault_available: bool) -> Generator[str, None, 
 
 
 @pytest.fixture(scope="session")
-def azure_test_env(lowkey_vault_endpoint: str) -> Generator[dict[str, str], None, None]:
-    """Configure environment for Azure Key Vault tests with Lowkey Vault."""
-    env = os.environ.copy()
+def lowkey_vault_ca_bundle(
+    lowkey_vault_endpoint: str, tmp_path_factory: pytest.TempPathFactory
+) -> Path:
+    """Export the running Lowkey Vault container's self-signed TLS certificate.
+
+    The Azure SDK ignores the empty ``CURL_CA_BUNDLE``/``REQUESTS_CA_BUNDLE``
+    trick that was used before #484 (every CLI round-trip failed with
+    ``SSL: CERTIFICATE_VERIFY_FAILED`` and silently skipped). The only way to
+    drive the emulator with TLS verification ON is to trust its actual
+    certificate, so we export the cert the live container presents and point
+    clients/subprocesses at it.
+    """
+    import ssl
+    from urllib.parse import urlparse
+
+    parsed = urlparse(lowkey_vault_endpoint)
+    # Bounded wall-clock: without a timeout a container that accepts TCP but
+    # stalls mid-TLS-handshake would hang the whole session fixture.
+    pem = ssl.get_server_certificate(
+        (parsed.hostname or "localhost", parsed.port or LOWKEY_VAULT_PORT), timeout=10
+    )
+    path = tmp_path_factory.mktemp("lowkey-vault-tls") / "lowkey-vault-ca.pem"
+    path.write_text(pem, encoding="utf-8")
+    return path
+
+
+@pytest.fixture(scope="session")
+def lowkey_token_endpoint(lowkey_vault_endpoint: str) -> str:
+    """Lowkey Vault's managed-identity token stub endpoint (plain HTTP).
+
+    ``DefaultAzureCredential``'s IMDS managed-identity flow fetches its bearer
+    token here via ``AZURE_POD_IDENTITY_AUTHORITY_HOST``. This FAILS loudly
+    (it never skips) when the vault itself is up but the token port is not
+    published: that is a stale/misconfigured container stack, and skipping
+    here is exactly the green-by-skip failure mode of #484.
+    """
+    if not _is_port_open("localhost", LOWKEY_TOKEN_PORT):
+        pytest.fail(
+            f"Lowkey Vault is running on :{LOWKEY_VAULT_PORT} but its managed-identity "
+            f"token endpoint on :{LOWKEY_TOKEN_PORT} is not reachable. Recreate the stack "
+            "so the port is published: "
+            "docker compose -f tests/docker-compose.test.yml up -d --force-recreate lowkey-vault"
+        )
+    return f"http://localhost:{LOWKEY_TOKEN_PORT}"
+
+
+@pytest.fixture(scope="session")
+def azure_test_env(
+    lowkey_vault_endpoint: str,
+    lowkey_vault_ca_bundle: Path,
+    lowkey_token_endpoint: str,
+) -> Generator[dict[str, str], None, None]:
+    """Configure environment for Azure Key Vault tests with Lowkey Vault.
+
+    Three pieces let the real envdrift CLI (DefaultAzureCredential +
+    SecretClient) drive the emulator end to end (#484):
+
+    - ``REQUESTS_CA_BUNDLE``/``CURL_CA_BUNDLE`` point at the *exported* Lowkey
+      certificate — TLS verification stays ON (the previously-used empty-value
+      trick is ignored by the Azure SDK).
+    - ``AZURE_POD_IDENTITY_AUTHORITY_HOST`` points the IMDS managed-identity
+      flow at Lowkey's token stub, so the credential chain obtains a dummy
+      token (Lowkey accepts any bearer).
+    - ``ENVDRIFT_AZURE_VERIFY_CHALLENGE_RESOURCE=0`` disables the Key Vault
+      challenge-resource check: Lowkey's challenge resource is
+      ``localhost:<port>``, not ``*.vault.azure.net``.
+    """
+    env = _deterministic_child_env()
     env.update(
         {
-            # Lowkey Vault uses self-signed certs
             "AZURE_KEYVAULT_URL": lowkey_vault_endpoint,
-            "CURL_CA_BUNDLE": "",
-            "REQUESTS_CA_BUNDLE": "",
-            # For Azure SDK - disable SSL verification
-            "AZURE_CLI_DISABLE_CONNECTION_VERIFICATION": "1",
+            "REQUESTS_CA_BUNDLE": str(lowkey_vault_ca_bundle),
+            "CURL_CA_BUNDLE": str(lowkey_vault_ca_bundle),
+            "AZURE_POD_IDENTITY_AUTHORITY_HOST": lowkey_token_endpoint,
+            "ENVDRIFT_AZURE_VERIFY_CHALLENGE_RESOURCE": "0",
         }
     )
     yield env

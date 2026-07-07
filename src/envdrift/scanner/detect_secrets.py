@@ -255,6 +255,10 @@ class DetectSecretsScanner(ScannerBackend):
         self._version = version or _get_detect_secrets_version()
         self._installed: bool | None = None
 
+    # detect-secrets has no git-history mode; ``include_git_history`` is
+    # intentionally ignored, so never present it as history coverage (#476).
+    supports_git_history = False
+
     @property
     def name(self) -> str:
         """Return scanner identifier."""

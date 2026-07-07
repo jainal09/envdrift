@@ -30,6 +30,17 @@ class TestNativeScanner:
         assert "Built-in" in scanner.description
         assert scanner.is_installed() is True
 
+    @pytest.mark.parametrize(
+        "bad",
+        [float("nan"), float("inf"), float("-inf"), "nan", "inf"],
+        ids=["nan", "inf", "neg-inf", "str-nan", "str-inf"],
+    )
+    def test_non_finite_entropy_threshold_rejected_at_construction(self, bad):
+        """#478 review: nan/inf pass float() but disable every entropy
+        comparison; direct SDK construction must fail fast like the config layer."""
+        with pytest.raises(ValueError, match="finite"):
+            NativeScanner(check_entropy=True, entropy_threshold=bad)
+
     def test_scan_empty_directory(self, scanner: NativeScanner, tmp_path: Path):
         """Test scanning an empty directory."""
         result = scanner.scan([tmp_path])
@@ -1897,3 +1908,235 @@ class TestEcPublicKeyDropped:
 
         aws = [f for f in result.findings if "aws" in f.rule_id.lower()]
         assert len(aws) >= 1
+
+
+class TestEnvFileNamingShapes:
+    """#477: trailing-``.env`` names are env files (policy + entropy coverage)."""
+
+    @pytest.fixture
+    def scanner(self) -> NativeScanner:
+        return NativeScanner()
+
+    @pytest.mark.parametrize(
+        "name", ["production.env", "database.env", "app.env", ".env", ".env.production"]
+    )
+    def test_env_file_shapes_recognized(self, scanner: NativeScanner, name: str):
+        from envdrift.scanner.native import _is_env_file
+
+        assert _is_env_file(name) is True
+        assert scanner._is_env_file(Path(name)) is True
+
+    @pytest.mark.parametrize("name", [".envrc", "env", "environment.py", "config.envy"])
+    def test_non_env_names_not_recognized(self, scanner: NativeScanner, name: str):
+        from envdrift.scanner.native import _is_env_file
+
+        assert _is_env_file(name) is False
+        assert scanner._is_env_file(Path(name)) is False
+
+    def test_trailing_env_gets_unencrypted_policy(self, scanner: NativeScanner, tmp_path: Path):
+        """A plaintext ``production.env`` is flagged unencrypted-env-file HIGH."""
+        env_file = tmp_path / "production.env"
+        env_file.write_text("DB_HOST=localhost\n")
+
+        result = scanner.scan([env_file])
+
+        rule_ids = {f.rule_id for f in result.findings}
+        assert "unencrypted-env-file" in rule_ids
+
+    def test_trailing_env_gets_entropy_scan(self, scanner: NativeScanner, tmp_path: Path):
+        """A prefix-less high-entropy value in ``production.env`` is entropy-scanned."""
+        secret = "Zx9Kq2Wm7" + "Lp4Rt8Nv6" + "Bs3Yd1Hf5Gj0Qc"  # 32-char base62
+        env_file = tmp_path / "production.env"
+        env_file.write_text(f"DB_CONN_VALUE={secret}\n")
+
+        result = scanner.scan([env_file])
+
+        rule_ids = {f.rule_id for f in result.findings}
+        assert "high-entropy-string" in rule_ids
+
+
+class TestRealSecretEnvNamesScanned:
+    """#477: .env.local / .env.test are scanned; templates stay ignored."""
+
+    @pytest.fixture
+    def scanner(self) -> NativeScanner:
+        return NativeScanner()
+
+    @pytest.mark.parametrize("name", [".env.local", ".env.test"])
+    def test_env_local_and_test_scanned(self, scanner: NativeScanner, tmp_path: Path, name: str):
+        env_file = tmp_path / name
+        real_key = "AKIA" + "ZZ7QF4N3XW2KLMNP"
+        env_file.write_text(f"AWS_ACCESS_KEY_ID={real_key}\n")
+
+        result = scanner.scan([env_file])
+
+        rule_ids = {f.rule_id for f in result.findings}
+        assert "unencrypted-env-file" in rule_ids
+        assert any("aws" in r for r in rule_ids)
+
+    @pytest.mark.parametrize("name", [".env.example", ".env.sample", ".env.template"])
+    def test_env_templates_still_ignored(self, scanner: NativeScanner, tmp_path: Path, name: str):
+        env_file = tmp_path / name
+        env_file.write_text("API_KEY=your-api-key-here\n")
+
+        result = scanner.scan([env_file])
+
+        assert result.files_scanned == 0
+
+    def test_config_and_lock_files_scanned_by_native(self, scanner: NativeScanner, tmp_path: Path):
+        """pyproject.toml / lock files are no longer skipped wholesale by native."""
+        token = "ghp_" + "0123456789" + "abcdefghijklmnopqrstuvwxyz"
+        (tmp_path / "pyproject.toml").write_text(f'[tool.demo]\nrepo_token = "{token}"\n')
+        (tmp_path / "package-lock.json").write_text(f'{{"token": "{token}"}}\n')
+
+        result = scanner.scan([tmp_path])
+
+        flagged = {f.file_path.name for f in result.findings if f.rule_id == "github-pat"}
+        assert {"pyproject.toml", "package-lock.json"} <= flagged
+
+    def test_go_test_binary_name_still_ignored(self, scanner: NativeScanner, tmp_path: Path):
+        """The Go ``<pkg>.test`` ignore must not swallow ``.env.test``."""
+        real_key = "AKIA" + "ZZ7QF4N3XW2KLMNP"
+        go_binary_name = tmp_path / "pkg.test"
+        go_binary_name.write_text(f"AWS_ACCESS_KEY_ID={real_key}\n")
+
+        result = scanner.scan([tmp_path])
+
+        assert result.files_scanned == 0
+
+    def test_should_ignore_does_not_swallow_nested_env_test(self, scanner: NativeScanner):
+        """#505: ``[!.]*.test`` must not ignore a NESTED ``.env.test`` via full-path match.
+
+        ``fnmatch``'s ``*`` crosses ``/`` and the ``[!.]`` anchor only constrains the
+        first character of the whole string, so matching the basename pattern against
+        the full relative path let ``apps/web/.env.test`` (full of live secrets) be
+        ignored while a top-level ``.env.test`` was correctly scanned.
+        """
+        base = Path("/repo")
+        # Go test binaries stay ignored at any depth (basename match).
+        assert scanner._should_ignore(Path("/repo/pkg.test"), base) is True
+        assert scanner._should_ignore(Path("/repo/apps/web/pkg.test"), base) is True
+        # Env files are never swallowed — top-level (already worked) or nested (the bug).
+        assert scanner._should_ignore(Path("/repo/.env.test"), base) is False
+        assert scanner._should_ignore(Path("/repo/apps/web/.env.test"), base) is False
+        assert scanner._should_ignore(Path("/repo/config/.env.test"), base) is False
+
+
+class TestUnicodeEncodedFiles:
+    """#477: UTF-16/UTF-32/UTF-8-BOM env files are decoded, not skipped as binary."""
+
+    @pytest.fixture
+    def scanner(self) -> NativeScanner:
+        return NativeScanner()
+
+    _KEY = "AKIA" + "ZZ7QF4N3XW2KLMNP"
+
+    @pytest.mark.parametrize(
+        "encoding", ["utf-16", "utf-16-le", "utf-16-be", "utf-32", "utf-8-sig"]
+    )
+    def test_unicode_env_file_secret_detected(
+        self, scanner: NativeScanner, tmp_path: Path, encoding: str
+    ):
+        env_file = tmp_path / ".env"
+        env_file.write_text(f"AWS_ACCESS_KEY_ID={self._KEY}\n", encoding=encoding)
+
+        result = scanner.scan([env_file])
+
+        rule_ids = {f.rule_id for f in result.findings}
+        assert any("aws" in r for r in rule_ids), f"{encoding} file skipped: {rule_ids}"
+
+    def test_genuine_binary_still_skipped(self, scanner: NativeScanner, tmp_path: Path):
+        """A real binary blob (NULs in both byte planes) is still skipped."""
+        binary_file = tmp_path / "blob.dat"
+        binary_file.write_bytes(bytes(range(8)) * 512 + b"AWS_ACCESS_KEY_ID=" + self._KEY.encode())
+
+        result = scanner.scan([binary_file])
+
+        assert len(result.findings) == 0
+
+    def test_truncated_utf16_bom_is_still_decoded_not_skipped(
+        self, scanner: NativeScanner, tmp_path: Path
+    ):
+        """#505: a BOM'd UTF-16 file with a bad/odd code unit is decoded, not skipped.
+
+        Pre-fix the strict decode raised on the odd trailing byte, _decode_unicode_text
+        returned None, and _looks_binary (True for ~50%-NUL UTF-16) made the scanner
+        skip the whole file. With errors="replace" the BOM-identified text is decoded —
+        the readable prefix survives — so a secret before the truncation is found.
+        """
+        from envdrift.scanner.native import _decode_unicode_text
+
+        raw = b"\xff\xfe" + b"A\x00B\x00C"  # odd payload: last unit is truncated
+        decoded = _decode_unicode_text(raw)
+        assert decoded is not None, "BOM'd UTF-16 with a bad code unit was discarded"
+        assert decoded.startswith("AB")
+
+    def test_odd_length_utf16_env_file_secret_detected(
+        self, scanner: NativeScanner, tmp_path: Path
+    ):
+        """#505: a UTF-16 env file whose byte length is odd is still scanned end to end."""
+        env_file = tmp_path / ".env"
+        body = f"AWS_ACCESS_KEY_ID={self._KEY}\n"
+        # BOM-less UTF-16-LE payload plus a single stray byte -> odd total length,
+        # which strict utf-16 decode rejects but the stride sniff tolerates.
+        env_file.write_bytes(body.encode("utf-16-le") + b"\x00")
+
+        result = scanner.scan([env_file])
+
+        rule_ids = {f.rule_id for f in result.findings}
+        assert any("aws" in r for r in rule_ids), f"odd-length UTF-16 file skipped: {rule_ids}"
+
+    def test_stride_sniff_rejects_short_and_balanced_input(self):
+        from envdrift.scanner.native import _sniff_utf16_stride
+
+        assert _sniff_utf16_stride(b"A\x00B") is None  # too short
+        assert _sniff_utf16_stride(b"\x00" * 16) is None  # NULs in both planes
+        assert _sniff_utf16_stride(b"plain ascii text, no NUL bytes!") is None
+
+    def test_stride_sniff_detects_both_endians(self):
+        from envdrift.scanner.native import _sniff_utf16_stride
+
+        text = "AWS_ACCESS_KEY_ID=value\n" * 4
+        assert _sniff_utf16_stride(text.encode("utf-16-le")) == "utf-16-le"
+        assert _sniff_utf16_stride(text.encode("utf-16-be")) == "utf-16-be"
+
+    def test_stride_sniff_handles_odd_length_chunk(self):
+        from envdrift.scanner.native import _sniff_utf16_stride
+
+        raw = ("X=1\n" * 8).encode("utf-16-le") + b"Z"  # odd total length
+        assert _sniff_utf16_stride(raw) == "utf-16-le"
+
+
+class TestShouldIgnorePathResolution:
+    """#477: dir-scoped ignores apply for relative / symlinked base paths."""
+
+    def test_relative_base_applies_directory_patterns(self, tmp_path: Path, monkeypatch):
+        """``scan([Path(".")])`` must ignore bin/** exactly like an absolute base."""
+        scanner = NativeScanner()
+        (tmp_path / "bin").mkdir()
+        target = tmp_path / "bin" / "tool.cfg"
+        target.write_text("X=1\n")
+        monkeypatch.chdir(tmp_path)
+
+        # Path() is the relative-cwd base exactly as ``guard .`` produces it.
+        assert scanner._should_ignore(target.resolve(), Path()) is True
+
+    def test_symlinked_base_applies_directory_patterns(self, tmp_path: Path):
+        """A symlinked absolute base resolves to the physical path before matching."""
+        real = tmp_path / "real"
+        (real / "dist").mkdir(parents=True)
+        target = (real / "dist" / "bundle.cfg").resolve()
+        target.write_text("X=1\n")
+        link = tmp_path / "link"
+        try:
+            link.symlink_to(real, target_is_directory=True)
+        except (OSError, NotImplementedError):
+            pytest.skip("symlinks not supported on this platform")
+
+        scanner = NativeScanner()
+        assert scanner._should_ignore(target, link) is True
+
+    def test_outside_base_still_falls_back_to_full_path(self):
+        """Files outside the base still match by filename via the fallback."""
+        scanner = NativeScanner(ignore_patterns=["secret.txt"])
+        assert scanner._should_ignore(Path("/outside/secret.txt"), Path("/base")) is True
