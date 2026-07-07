@@ -429,3 +429,140 @@ class TestAgentHelpCommand:
         assert "unregister" in result.stdout
         assert "list" in result.stdout
         assert "status" in result.stdout
+
+
+class TestAgentRegistryCorruptionCli:
+    """Regression tests for #492: corrupt registries surfaced cleanly via the CLI."""
+
+    @pytest.fixture(autouse=True)
+    def reset_registry(self):
+        """Reset the global registry singleton before each test."""
+
+        registry_module._registry = None
+        yield
+        registry_module._registry = None
+
+    @staticmethod
+    def _normalize(output: str) -> str:
+        """Collapse Rich line-wrapping so substring asserts are width-stable."""
+        return " ".join(output.split())
+
+    def test_register_on_corrupt_registry_warns_and_backs_up(self, tmp_path: Path):
+        """Register over a truncated registry succeeds but names the backup."""
+        registry_path = tmp_path / ".envdrift" / "projects.json"
+        registry_path.parent.mkdir(parents=True)
+        registry_path.write_text('{"projects": [{"path": "/old/pro', encoding="utf-8")
+        registry_module._registry = registry_module.ProjectRegistry(registry_path)
+
+        project_dir = tmp_path / "myproject"
+        project_dir.mkdir()
+
+        result = runner.invoke(app, ["agent", "register", str(project_dir)])
+
+        assert result.exit_code == 0
+        out = self._normalize(result.stdout)
+        assert "Registered" in out
+        assert "corrupt" in out.lower()
+        backups = sorted(registry_path.parent.glob("projects.json.corrupt-*"))
+        assert len(backups) == 1
+        # Rich may wrap the long backup path mid-token; squash ALL whitespace
+        # before asserting so the check is terminal-width independent.
+        assert backups[0].name in "".join(result.stdout.split())
+
+    def test_list_top_level_array_exits_zero_with_warning(self, tmp_path: Path):
+        """`agent list` on a top-level JSON array warns instead of crashing."""
+        registry_path = tmp_path / ".envdrift" / "projects.json"
+        registry_path.parent.mkdir(parents=True)
+        registry_path.write_text("[]", encoding="utf-8")
+        registry_module._registry = registry_module.ProjectRegistry(registry_path)
+
+        result = runner.invoke(app, ["agent", "list"])
+
+        assert result.exit_code == 0, result.output
+        assert result.exception is None
+        out = self._normalize(result.stdout)
+        assert "corrupt" in out.lower()
+        assert "No projects registered" in out
+        # Read-only command: the corrupt file must be left in place untouched.
+        assert registry_path.read_text(encoding="utf-8") == "[]"
+
+    def test_status_string_entries_exits_zero_with_warning(self, tmp_path: Path):
+        """`agent status` on string project entries warns instead of crashing."""
+        registry_path = tmp_path / ".envdrift" / "projects.json"
+        registry_path.parent.mkdir(parents=True)
+        registry_path.write_text('{"projects": ["/tmp/foo"]}', encoding="utf-8")
+        registry_module._registry = registry_module.ProjectRegistry(registry_path)
+
+        with patch("envdrift.cli_commands.agent._find_agent_binary", return_value=None):
+            result = runner.invoke(app, ["agent", "status"])
+
+        assert result.exit_code == 0, result.output
+        assert result.exception is None
+        out = self._normalize(result.stdout)
+        assert "corrupt" in out.lower()
+        assert "Registered Projects: 0" in out
+
+    def test_unregister_miss_on_corrupt_registry_warns_without_backup(self, tmp_path: Path):
+        """A no-op unregister on a corrupt registry warns but leaves the file."""
+        registry_path = tmp_path / ".envdrift" / "projects.json"
+        registry_path.parent.mkdir(parents=True)
+        corrupt = "{ not json"
+        registry_path.write_text(corrupt, encoding="utf-8")
+        registry_module._registry = registry_module.ProjectRegistry(registry_path)
+
+        project_dir = tmp_path / "myproject"
+        project_dir.mkdir()
+
+        result = runner.invoke(app, ["agent", "unregister", str(project_dir)])
+
+        assert result.exit_code == 0, result.output
+        out = self._normalize(result.stdout)
+        assert "not registered" in out.lower()
+        assert "corrupt" in out.lower()
+        # The hint must name only `register` — an unregister miss never saves,
+        # so it can never perform the backup (#506 review).
+        assert "by the next register." in out
+        assert registry_path.read_text(encoding="utf-8") == corrupt
+
+    @pytest.mark.parametrize("command", ["register", "unregister"])
+    def test_lock_held_exits_one_with_clean_error(self, tmp_path: Path, command: str):
+        """A held registry lock fails the write command cleanly, not with a hang."""
+        registry_path = tmp_path / ".envdrift" / "projects.json"
+        registry_module._registry = registry_module.ProjectRegistry(registry_path, lock_timeout=0.3)
+        holder = registry_module.ProjectRegistry(registry_path)
+
+        project_dir = tmp_path / "myproject"
+        project_dir.mkdir()
+
+        with holder._exclusive_lock():
+            result = runner.invoke(app, ["agent", command, str(project_dir)])
+
+        assert result.exit_code == 1, result.output
+        assert result.exception is None or isinstance(result.exception, SystemExit)
+        out = self._normalize(result.stdout)
+        assert "lock" in out.lower()
+
+    def test_register_backup_failure_is_reported_truthfully(self, tmp_path: Path, monkeypatch):
+        """If the corrupt-file backup rename fails, the CLI says so honestly."""
+        registry_path = tmp_path / ".envdrift" / "projects.json"
+        registry_path.parent.mkdir(parents=True)
+        registry_path.write_text("{ not json", encoding="utf-8")
+        registry_module._registry = registry_module.ProjectRegistry(registry_path)
+
+        project_dir = tmp_path / "myproject"
+        project_dir.mkdir()
+
+        original_replace = Path.replace
+
+        def failing_backup_replace(self: Path, target):
+            if ".corrupt-" in str(target):
+                raise OSError("simulated rename failure")
+            return original_replace(self, target)
+
+        monkeypatch.setattr(Path, "replace", failing_backup_replace)
+
+        result = runner.invoke(app, ["agent", "register", str(project_dir)])
+
+        assert result.exit_code == 0, result.output
+        out = self._normalize(result.stdout)
+        assert "could not be backed up" in out.lower()

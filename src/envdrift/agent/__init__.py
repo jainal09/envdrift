@@ -8,6 +8,8 @@ the agent should watch.
 from envdrift.agent.registry import (
     ProjectEntry,
     ProjectRegistry,
+    RegistryCorruption,
+    RegistryLockError,
     get_registry,
     list_projects,
     register_project,
@@ -17,6 +19,8 @@ from envdrift.agent.registry import (
 __all__ = [
     "ProjectEntry",
     "ProjectRegistry",
+    "RegistryCorruption",
+    "RegistryLockError",
     "get_registry",
     "register_project",
     "unregister_project",

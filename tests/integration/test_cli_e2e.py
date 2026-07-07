@@ -303,34 +303,148 @@ class TestAgentRegistry:
 class TestRegistryDurability:
     """Corruption recovery and 0o600 permissions, observed via the CLI."""
 
-    def test_registry_corrupt_json_starts_fresh_via_cli(
+    def test_registry_corrupt_json_warns_and_backs_up_via_cli(
         self,
         work_dir: Path,
         integration_pythonpath: str,
         envdrift_cmd: list[str],
         tmp_path: Path,
     ):
-        """EC-13: a corrupt projects.json is treated as empty rather than crashing."""
+        """EC-13 + #492: a corrupt projects.json is treated as empty, surfaced as a
+        warning, and preserved as a timestamped backup on the next write."""
         home_dir = tmp_path / "home"
         home_dir.mkdir()
         env = _base_env(integration_pythonpath, home_dir)
 
         registry = _registry_path(home_dir)
         registry.parent.mkdir(parents=True, exist_ok=True)
-        registry.write_text("{ this is not valid json ]]]")
+        corrupt_content = "{ this is not valid json ]]]"
+        registry.write_text(corrupt_content, encoding="utf-8")
 
+        # Read-only command: warns, treats as empty, leaves the file untouched.
         listed = _run_agent(envdrift_cmd, env, "list")
         assert listed.returncode == 0, listed.stderr
-        assert "No projects registered" in _strip_ansi(listed.stdout)
+        listed_out = " ".join(_strip_ansi(listed.stdout).split())
+        assert "No projects registered" in listed_out
+        assert "corrupt" in listed_out.lower()
+        assert registry.read_text(encoding="utf-8") == corrupt_content
 
         project_dir = work_dir / "freshproj"
         project_dir.mkdir()
         reg = _run_agent(envdrift_cmd, env, "register", str(project_dir))
         assert reg.returncode == 0, reg.stderr
+        reg_out = " ".join(_strip_ansi(reg.stdout).split())
+        assert "corrupt" in reg_out.lower()
 
         projects = _read_projects(home_dir)
         assert len(projects) == 1
         assert projects[0]["path"] == str(project_dir.resolve())
+
+        # #492: the corrupt original must be backed up, byte-for-byte, and named.
+        backups = sorted(registry.parent.glob("projects.json.corrupt-*"))
+        assert len(backups) == 1, "corrupt registry must be backed up before overwrite"
+        assert backups[0].read_text(encoding="utf-8") == corrupt_content
+        # Squash ALL whitespace: Rich may wrap the long backup path mid-token.
+        assert backups[0].name in "".join(_strip_ansi(reg.stdout).split())
+
+    def test_registry_top_level_array_warns_cleanly_via_cli(
+        self,
+        integration_pythonpath: str,
+        envdrift_cmd: list[str],
+        tmp_path: Path,
+    ):
+        """#492: `agent status` on a top-level-array registry warns, never tracebacks."""
+        home_dir = tmp_path / "home"
+        home_dir.mkdir()
+        env = _base_env(integration_pythonpath, home_dir)
+
+        registry = _registry_path(home_dir)
+        registry.parent.mkdir(parents=True, exist_ok=True)
+        registry.write_text("[]", encoding="utf-8")
+
+        result = _run_agent(envdrift_cmd, env, "status")
+
+        combined = _strip_ansi(result.stdout + result.stderr)
+        assert result.returncode == 0, combined
+        assert "Traceback" not in combined
+        assert "AttributeError" not in combined
+        assert "corrupt" in " ".join(combined.split()).lower()
+
+    def test_registry_string_entries_warn_cleanly_via_cli(
+        self,
+        integration_pythonpath: str,
+        envdrift_cmd: list[str],
+        tmp_path: Path,
+    ):
+        """#492: `agent list` on string project entries warns, never tracebacks."""
+        home_dir = tmp_path / "home"
+        home_dir.mkdir()
+        env = _base_env(integration_pythonpath, home_dir)
+
+        registry = _registry_path(home_dir)
+        registry.parent.mkdir(parents=True, exist_ok=True)
+        registry.write_text(json.dumps({"projects": ["/tmp/foo"]}), encoding="utf-8")
+
+        result = _run_agent(envdrift_cmd, env, "list")
+
+        combined = _strip_ansi(result.stdout + result.stderr)
+        assert result.returncode == 0, combined
+        assert "Traceback" not in combined
+        assert "TypeError" not in combined
+        assert "corrupt" in " ".join(combined.split()).lower()
+
+
+class TestRegistryConcurrency:
+    """#492: parallel `agent register` subprocesses must not lose registrations."""
+
+    def test_concurrent_registers_keep_all_projects(
+        self,
+        work_dir: Path,
+        integration_pythonpath: str,
+        envdrift_cmd: list[str],
+        tmp_path: Path,
+    ):
+        """10 parallel registers (shared HOME) all survive in projects.json.
+
+        Pre-#492 the unlocked load->mutate->replace cycle meant every process
+        printed success but only ~5-7 of 10 entries survived (last writer wins).
+        """
+        home_dir = tmp_path / "home"
+        home_dir.mkdir()
+        env = _base_env(integration_pythonpath, home_dir)
+
+        project_dirs = []
+        for i in range(10):
+            project = work_dir / f"raceproj{i}"
+            project.mkdir()
+            project_dirs.append(project)
+
+        procs = [
+            subprocess.Popen(
+                [*envdrift_cmd, "agent", "register", str(project)],
+                env=env,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+            )
+            for project in project_dirs
+        ]
+        outputs = [proc.communicate(timeout=180) for proc in procs]
+
+        for proc, project, (stdout, stderr) in zip(procs, project_dirs, outputs, strict=True):
+            assert proc.returncode == 0, (
+                f"register {project} failed: stdout={stdout}\nstderr={stderr}"
+            )
+            assert "Registered" in _strip_ansi(stdout)
+
+        registered = {entry["path"] for entry in _read_projects(home_dir)}
+        expected = {str(project.resolve()) for project in project_dirs}
+        assert registered == expected, (
+            f"lost {len(expected - registered)} of {len(expected)} concurrent "
+            f"registrations: missing={sorted(expected - registered)}"
+        )
 
     @pytest.mark.skipif(sys.platform == "win32", reason="POSIX file permissions")
     def test_registry_save_creates_parent_dirs_and_0600_perms(
