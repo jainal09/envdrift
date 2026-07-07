@@ -325,6 +325,12 @@ class TestSyncConfigFromToml:
         with pytest.raises(SyncConfigError, match=f"'{key}' must be a string"):
             SyncConfig.from_toml({"mappings": [mapping]})
 
+    def test_from_toml_non_table_entry_raises_clean_error(self) -> None:
+        """#488: a non-table mappings entry (mappings = [123]) raises a clean
+        SyncConfigError instead of a raw TypeError from the `in` membership test."""
+        with pytest.raises(SyncConfigError, match="must be a table"):
+            SyncConfig.from_toml({"mappings": [123]})
+
     def test_from_toml_empty_mappings(self) -> None:
         """Test TOML config with empty mappings."""
         data = {"mappings": []}

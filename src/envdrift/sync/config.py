@@ -16,6 +16,38 @@ class SyncConfigError(Exception):
     pass
 
 
+def _validate_mapping_entry(mapping_data: Any) -> None:
+    """Validate one TOML mapping entry, raising a clean SyncConfigError.
+
+    TOML type surprises — a non-table entry (``mappings = [123]``), a missing
+    required key, or a non-string value (``folder_path = 123``) — must be a
+    clean config error, not a raw TypeError traceback from ``Path()``/``in``
+    use downstream (#488).
+    """
+    if not isinstance(mapping_data, dict):
+        raise SyncConfigError(
+            f"Mapping entry must be a table, got {type(mapping_data).__name__}: {mapping_data!r}"
+        )
+    if "secret_name" not in mapping_data:
+        raise SyncConfigError("Missing 'secret_name' in mapping")
+    if "folder_path" not in mapping_data:
+        raise SyncConfigError("Missing 'folder_path' in mapping")
+    for key in (
+        "secret_name",
+        "folder_path",
+        "vault_name",
+        "environment",
+        "env_file",
+        "profile",
+        "activate_to",
+    ):
+        value = mapping_data.get(key)
+        if value is not None and not isinstance(value, str):
+            raise SyncConfigError(
+                f"'{key}' must be a string in mapping, got {type(value).__name__}: {value!r}"
+            )
+
+
 @dataclass
 class ServiceMapping:
     """Mapping of a vault secret to a local service folder."""
@@ -135,28 +167,7 @@ class SyncConfig:
         max_workers = normalize_max_workers(data.get("max_workers"))
 
         for mapping_data in data.get("mappings", []):
-            if "secret_name" not in mapping_data:
-                raise SyncConfigError("Missing 'secret_name' in mapping")
-            if "folder_path" not in mapping_data:
-                raise SyncConfigError("Missing 'folder_path' in mapping")
-            # TOML type surprises (folder_path = 123, secret_name = true, ...)
-            # must be a clean config error, not a raw TypeError traceback from
-            # Path()/str use downstream (#488).
-            for key in (
-                "secret_name",
-                "folder_path",
-                "vault_name",
-                "environment",
-                "env_file",
-                "profile",
-                "activate_to",
-            ):
-                value = mapping_data.get(key)
-                if value is not None and not isinstance(value, str):
-                    raise SyncConfigError(
-                        f"'{key}' must be a string in mapping, "
-                        f"got {type(value).__name__}: {value!r}"
-                    )
+            _validate_mapping_entry(mapping_data)
 
             activate_to = mapping_data.get("activate_to")
             mappings.append(

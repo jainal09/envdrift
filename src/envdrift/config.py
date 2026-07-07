@@ -277,29 +277,38 @@ _MAPPING_STR_KEYS = (
 )
 
 
+def _validate_sync_mapping_entry(m: Any) -> None:
+    """Validate one ``[[vault.sync.mappings]]`` entry, raising a clean ValueError.
+
+    TOML type surprises — a non-table entry (``mappings = [123]``), a missing
+    required key, or a non-string value (``folder_path = 123``) — used to
+    escape as raw TypeError/KeyError tracebacks from ``Path()``/subscript use
+    downstream; validate loudly here instead (#443 #32 #488).
+    """
+    if not isinstance(m, dict):
+        raise ValueError(
+            f"[[vault.sync.mappings]] entry must be a table, got {type(m).__name__}: {m!r}"
+        )
+    missing = [k for k in ("secret_name", "folder_path") if k not in m]
+    if missing:
+        raise ValueError(
+            f"[[vault.sync.mappings]] entry is missing required key(s) {', '.join(missing)}: {m!r}"
+        )
+    wrong_type = [
+        k for k in _MAPPING_STR_KEYS if m.get(k) is not None and not isinstance(m[k], str)
+    ]
+    if wrong_type:
+        raise ValueError(
+            f"[[vault.sync.mappings]] entry has non-string value(s) for "
+            f"{', '.join(wrong_type)}: {m!r}"
+        )
+
+
 def _build_vault_config(vault_section: dict[str, Any]) -> VaultConfig:
     """Build the vault config, including its nested ``[vault.sync]`` section."""
     sync_section = vault_section.get("sync", {})
     for m in sync_section.get("mappings", []):
-        missing = [k for k in ("secret_name", "folder_path") if k not in m]
-        if missing:
-            # Raw subscripts used to raise an uncaught KeyError traceback when a
-            # mapping omitted a required key (#443 #32).
-            raise ValueError(
-                f"[[vault.sync.mappings]] entry is missing required key(s) "
-                f"{', '.join(missing)}: {m!r}"
-            )
-        # TOML type surprises (folder_path = 123, secret_name = true, ...)
-        # used to escape as a raw TypeError traceback from Path()/str use
-        # downstream — validate loudly here instead (#488).
-        wrong_type = [
-            k for k in _MAPPING_STR_KEYS if m.get(k) is not None and not isinstance(m[k], str)
-        ]
-        if wrong_type:
-            raise ValueError(
-                f"[[vault.sync.mappings]] entry has non-string value(s) for "
-                f"{', '.join(wrong_type)}: {m!r}"
-            )
+        _validate_sync_mapping_entry(m)
     sync_mappings = [
         SyncMappingConfig(
             secret_name=m["secret_name"],
