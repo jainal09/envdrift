@@ -4,10 +4,32 @@ Use `envdrift guard` as a last line of defense against plaintext secrets.
 
 ## What guard checks
 
-- Unencrypted `.env` files missing dotenvx or SOPS markers
+- Unencrypted env files missing dotenvx or SOPS markers
 - Common secret patterns in source and config files
-- High-entropy strings (optional)
+- High-entropy strings (env files by default; all files with `--entropy`,
+  off with `--no-entropy` / `check_entropy = false`)
 - Git history for previously committed secrets (optional)
+
+### Which files count as env files
+
+The native scanner applies the unencrypted-file policy — and, unless entropy
+detection is disabled (`check_entropy = false` / `--no-entropy`), the entropy
+scan — to every file whose name matches an env-file shape:
+
+- `.env` and `.env.<environment>` — including `.env.local` and `.env.test`, the
+  canonical real-secrets files for Next.js/Vite/CRA local development
+- `<name>.env` (e.g. `production.env`, `database.env`) — the `docker --env-file`,
+  direnv, and CI convention
+- Custom env files declared in `vault.sync` mappings
+
+Only the template names `.env.example`, `.env.sample`, and `.env.template` are skipped
+by default, since they hold placeholder values by convention.
+
+Env files are scanned regardless of text encoding instead of being misclassified as
+binary and skipped: UTF-8, and UTF-16 (the Windows Notepad and PowerShell "Unicode"
+default) whether or not it carries a BOM, are decoded before pattern matching. A
+BOM-prefixed UTF-32 file is also decoded; BOM-less UTF-32 (which has no reliable byte
+signature to detect) is the one encoding still treated as binary.
 
 ## Quick start
 
@@ -100,7 +122,7 @@ Guard configuration lives under `[guard]`:
 [guard]
 auto_install = true
 include_history = false
-check_entropy = true
+check_entropy = true   # true = all files, false = off everywhere, unset = env files only
 entropy_threshold = 4.5
 fail_on_severity = "high"
 ignore_paths = ["tests/**", "*.test.py"]
@@ -171,7 +193,25 @@ The ignore system applies in this order:
 
 1. **Inline comments** - Checked first, most specific
 2. **Rule+path ignores** - From `[guard.ignore_rules]` in TOML
-3. **Global path ignores** - From `ignore_paths` in TOML
+3. **Built-in noisy-rule defaults** - Keyword/entropy rules only, in config/lock files
+4. **Global path ignores** - From `ignore_paths` in TOML
+
+### Built-in default ignores
+
+Config and lock files (`pyproject.toml`, `envdrift.toml`, `mkdocs.yml`, `*.lock`,
+`package-lock.json`, `*-lock.json`, `*.sum`, ...) routinely contain "secret"/"token"
+keywords and high-entropy integrity hashes that false-positive the keyword- and
+entropy-driven rules. Guard suppresses **only those noisy rules** (rule ids containing
+`generic`, `entropy`, or `keyword` — across every scanner) in these files.
+
+High-confidence, distinctive-prefix detections are **never** suppressed by the
+defaults: a GitHub PAT (`ghp_...`), AWS access key (`AKIA...`), or PyPI token committed
+inside `pyproject.toml` or a lock file is still reported. To skip such a file entirely,
+add it to `ignore_paths` yourself — explicit user ignores always suppress everything.
+
+Directory-scoped defaults (`bin/**`, `dist/**`, `vendor/**`, `node_modules/**`, ...)
+apply consistently however the scan path is spelled: `envdrift guard`, `envdrift
+guard .`, and a symlinked path all produce the same result set.
 
 ### Finding Rule IDs
 
@@ -288,7 +328,9 @@ exempt from the "unencrypted-env-file" check.
 
 ## Tips
 
-- `--history` requires a git repository and can be slower on large histories.
+- `--history` requires a git repository plus an active history-capable scanner (gitleaks, trufflehog,
+  kingfisher, git-secrets, talisman, or infisical) — guard errors out rather than silently skipping
+  history — and can be slower on large histories.
 - `skip_clear_files` skips `.clear` files entirely (default: false, they ARE scanned).
 - `ignore_paths` applies globally to all scanners.
 - `ignore_rules` provides fine-grained control per rule per path pattern.
