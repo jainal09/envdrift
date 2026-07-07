@@ -111,6 +111,23 @@ def _deterministic_cli_output(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("NO_COLOR", "1")
 
 
+def _deterministic_child_env() -> dict[str, str]:
+    """Return an ``os.environ`` copy with Rich colorization forced OFF.
+
+    The session-scoped ``*_test_env`` fixtures are instantiated BEFORE the
+    function-scoped autouse ``_deterministic_cli_output`` strips CI's global
+    ``FORCE_COLOR=1`` from ``os.environ``, so a plain ``os.environ.copy()``
+    there bakes the colorizing var into every CLI child env for the whole
+    session. Rich's highlighter then wraps numbers/parens in ANSI codes,
+    splitting asserted phrases like ``(region us-east-1)`` (PR #530 CI
+    failure). Session-scoped env fixtures must build from this helper instead.
+    """
+    env = os.environ.copy()
+    env.pop("FORCE_COLOR", None)
+    env["NO_COLOR"] = "1"
+    return env
+
+
 def _force_utf8_subprocess_kwargs(kwargs: dict) -> None:
     """Default a text-mode subprocess to UTF-8 decoding (errors='replace')."""
     if (kwargs.get("text") or kwargs.get("universal_newlines")) and not kwargs.get("encoding"):
@@ -182,7 +199,7 @@ def localstack_endpoint(localstack_available: bool) -> Generator[str, None, None
 @pytest.fixture(scope="session")
 def aws_test_env(localstack_endpoint: str) -> Generator[dict[str, str], None, None]:
     """Configure environment for AWS tests with LocalStack."""
-    env = os.environ.copy()
+    env = _deterministic_child_env()
     env.update(
         {
             "AWS_ENDPOINT_URL": localstack_endpoint,
@@ -243,7 +260,7 @@ def vault_endpoint(vault_available: bool) -> Generator[str, None, None]:
 @pytest.fixture(scope="session")
 def vault_test_env(vault_endpoint: str) -> Generator[dict[str, str], None, None]:
     """Configure environment for Vault tests."""
-    env = os.environ.copy()
+    env = _deterministic_child_env()
     env.update(
         {
             "VAULT_ADDR": vault_endpoint,
@@ -369,7 +386,7 @@ def azure_test_env(
       challenge-resource check: Lowkey's challenge resource is
       ``localhost:<port>``, not ``*.vault.azure.net``.
     """
-    env = os.environ.copy()
+    env = _deterministic_child_env()
     env.update(
         {
             "AZURE_KEYVAULT_URL": lowkey_vault_endpoint,
