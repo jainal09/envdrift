@@ -31,10 +31,11 @@ forward-looking.
 **Container Setup:**
 
 ```yaml
-# docker-compose.test.yml
+# docker-compose.test.yml — canonical image pins live in tests/docker-compose.test.yml,
+# kept identical to the integration-tests.yml CI service containers (#500)
 services:
   localstack:
-    image: localstack/localstack:4.0
+    image: localstack/localstack:4.14
     ports:
       - "4566:4566"
     environment:
@@ -105,7 +106,8 @@ def vault_server():
 **Container Setup:**
 
 ```yaml
-# docker-compose.test.yml
+# docker-compose.test.yml — canonical image pins live in tests/docker-compose.test.yml,
+# kept identical to the integration-tests.yml CI service containers (#500)
 services:
   lowkey-vault:
     image: nagyesta/lowkey-vault:7.3.0

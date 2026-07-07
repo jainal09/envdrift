@@ -17,6 +17,13 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from envdrift.config import (
+    coerce_check_entropy,
+    coerce_entropy_threshold,
+    coerce_fail_on_severity,
+    normalize_ignore_paths,
+    normalize_ignore_rules,
+)
 from envdrift.env_files import resolve_custom_env_file
 from envdrift.scanner.base import (
     AggregatedScanResult,
@@ -57,7 +64,9 @@ class GuardConfig:
         use_infisical: Enable Infisical scanner (140+ secret types).
         auto_install: Auto-install missing external scanners.
         include_git_history: Scan git history for secrets.
-        check_entropy: Enable entropy-based secret detection.
+        check_entropy: Tri-state entropy knob — None (unset) scans env files
+            only (default), True scans all files, False disables entropy
+            detection entirely, env files included (#478).
         entropy_threshold: Minimum entropy to flag as potential secret.
         skip_clear_files: Skip .clear files from scanning entirely.
         skip_encrypted_files: Skip findings from files with dotenvx/SOPS encryption markers.
@@ -82,7 +91,7 @@ class GuardConfig:
     use_infisical: bool = False
     auto_install: bool = True
     include_git_history: bool = False
-    check_entropy: bool = False
+    check_entropy: bool | None = None  # None = entropy on env files only (default)
     entropy_threshold: float = 4.5
     skip_clear_files: bool = False
     skip_encrypted_files: bool = True  # Default True - skip findings from encrypted files
@@ -102,7 +111,7 @@ class GuardConfig:
         """
         Construct a GuardConfig from a parsed configuration dictionary (for example, from envdrift.toml).
 
-        Parses the "guard" section to enable scanner flags, normalization of the "scanners" entry (accepts a string or list; defaults to ["native", "gitleaks"]), and reads other guard settings such as auto_install, include_history, entropy checks, ignore paths/rules, and skip_clear_files. Interprets "fail_on_severity" case-insensitively and falls back to FindingSeverity.HIGH on invalid values.
+        Parses the "guard" section to enable scanner flags, normalization of the "scanners" entry (accepts a string or list; defaults to ["native", "gitleaks"]), and reads other guard settings such as auto_install, include_history, entropy checks, ignore paths/rules, and skip_clear_files. Interprets "fail_on_severity" case-insensitively, raising ValueError on non-string values and falling back to FindingSeverity.HIGH on unknown severity names.
 
         Also reads partial-encryption awareness fields so SDK callers get the same
         false-positive/false-negative protection as the CLI: ``allowed_clear_files``
@@ -123,8 +132,10 @@ class GuardConfig:
         if isinstance(scanners, str):
             scanners = [scanners]
 
-        # Parse severity
-        fail_on = guard_config.get("fail_on_severity", "high")
+        # Parse severity. A non-string raises a clean ValueError like the
+        # other knobs (it used to escape as AttributeError on .lower(), #478);
+        # an invalid severity *name* keeps the documented fallback to HIGH.
+        fail_on = coerce_fail_on_severity(guard_config.get("fail_on_severity", "high"))
         try:
             fail_severity = FindingSeverity(fail_on.lower())
         except ValueError:
@@ -146,14 +157,17 @@ class GuardConfig:
             use_infisical="infisical" in scanners,
             auto_install=guard_config.get("auto_install", True),
             include_git_history=guard_config.get("include_history", False),
-            check_entropy=guard_config.get("check_entropy", False),
-            entropy_threshold=guard_config.get("entropy_threshold", 4.5),
+            # Same wrong-shape validation as the CLI config layer, so SDK
+            # callers get a clean ValueError here instead of a scanner crash
+            # mid-scan (#478).
+            check_entropy=coerce_check_entropy(guard_config.get("check_entropy")),
+            entropy_threshold=coerce_entropy_threshold(guard_config.get("entropy_threshold", 4.5)),
             skip_clear_files=guard_config.get("skip_clear_files", False),
             skip_encrypted_files=guard_config.get("skip_encrypted_files", True),
             skip_duplicate=guard_config.get("skip_duplicate", False),
             skip_gitignored=guard_config.get("skip_gitignored", False),
-            ignore_paths=guard_config.get("ignore_paths", []),
-            ignore_rules=guard_config.get("ignore_rules", {}),
+            ignore_paths=normalize_ignore_paths(guard_config.get("ignore_paths")),
+            ignore_rules=normalize_ignore_rules(guard_config.get("ignore_rules")),
             fail_on_severity=fail_severity,
             allowed_clear_files=allowed_clear_files,
             combined_files=combined_files,
@@ -225,14 +239,23 @@ class ScanEngine:
         print(f"Found {len(result.unique_findings)} issues")
     """
 
-    # Default paths to always ignore across all scanners
-    # These are config/build files that contain "secret" keywords but not actual secrets
+    # Config/build/lock files where only NOISY findings are ignored across all
+    # scanners. These files contain "secret"/"token" keywords and high-entropy
+    # integrity hashes that false-positive keyword/entropy rules — but they are
+    # also real leak vectors (e.g. a private-index URL token in pyproject.toml),
+    # so the suppression is scoped to noisy rule ids (see ignores.is_noisy_rule)
+    # instead of unconditionally dropping every finding (#477). A
+    # distinctive-prefix CRITICAL token (ghp_, AKIA, ...) in any of these files
+    # still surfaces, from every scanner.
     DEFAULT_GLOBAL_IGNORE_PATHS = [
         "envdrift.toml",
         "pyproject.toml",
         "mkdocs.yml",
         "mkdocs.yaml",
         "*.lock",
+        "*.sum",
+        "*-lock.json",
+        "*.lock.json",
         "package-lock.json",
         "yarn.lock",
         "poetry.lock",
@@ -247,13 +270,19 @@ class ScanEngine:
         self.config = config or GuardConfig()
         self.scanners: list[ScannerBackend] = []
 
-        # Merge default global ignores with user-configured ignores
-        all_ignore_paths = list(self.DEFAULT_GLOBAL_IGNORE_PATHS) + list(self.config.ignore_paths)
-
-        # Initialize centralized ignore filter for post-scan filtering
+        # Initialize centralized ignore filter for post-scan filtering.
+        # User-configured ignore_paths suppress everything (explicit opt-out);
+        # the built-in config/lock-file defaults are scoped to noisy
+        # keyword/entropy rules only, so they can never swallow a
+        # high-confidence distinctive-prefix finding (#477).
+        # Wrong-shaped ignore config raises a clean ValueError HERE, at engine
+        # construction, instead of an uncaught TypeError mid-scan on the first
+        # run that has findings (#478). The CLI/config layer already validates,
+        # so this guards direct SDK construction of GuardConfig.
         ignore_config = IgnoreConfig(
-            ignore_paths=all_ignore_paths,
-            ignore_rules=self.config.ignore_rules,
+            ignore_paths=normalize_ignore_paths(self.config.ignore_paths),
+            ignore_rules=normalize_ignore_rules(self.config.ignore_rules),
+            noisy_rule_paths=list(self.DEFAULT_GLOBAL_IGNORE_PATHS),
         )
         self._ignore_filter = IgnoreFilter(ignore_config)
 
@@ -396,6 +425,21 @@ class ScanEngine:
             except ImportError:
                 logger.debug("Infisical scanner not available - module not found")
 
+    def _warn_if_history_unsupported(self) -> None:
+        """Warn when a history request cannot be satisfied by any active scanner.
+
+        A history request no active scanner can satisfy must not masquerade as
+        coverage: warn so SDK callers see the gap. The guard CLI refuses the
+        combination outright before reaching this point (#476).
+        """
+        if self.config.include_git_history and not any(
+            s.supports_git_history for s in self.scanners
+        ):
+            logger.warning(
+                "include_git_history requested but no active scanner supports git "
+                "history; git history will NOT be scanned"
+            )
+
     def scan(
         self,
         paths: list[Path],
@@ -429,6 +473,8 @@ class ScanEngine:
                 scanners_used=[],
                 total_duration_ms=int((time.time() - start_time) * 1000),
             )
+
+        self._warn_if_history_unsupported()
 
         # Run scanners in parallel using ThreadPoolExecutor
         # Use at most 4 workers to avoid overwhelming the system
@@ -809,7 +855,8 @@ class ScanEngine:
         66, which is never true after redaction, so the filter was dead on real
         data (#370). The native scanner now drops these keys at detection by
         value shape; this central filter salvages cross-scanner coverage
-        (gitleaks/trufflehog/native, all of which hash with ``hash_secret``) by
+        (gitleaks/trufflehog/native — and trivy once it recovers the raw value
+        from the file (#479) — all of which hash with ``hash_secret``) by
         matching each finding's ``secret_hash`` against the hash of the public
         key declared in its own file's ``DOTENV_PUBLIC_KEY*`` line.
 
@@ -888,6 +935,7 @@ class ScanEngine:
         Returns:
             Filtered list excluding findings from gitignored files.
         """
+        import os
         import subprocess  # nosec B404
 
         if not findings:
@@ -928,11 +976,24 @@ class ScanEngine:
                 continue
 
             try:
+                # Binary pipes with ``os.fsencode``/``os.fsdecode``: the finding
+                # paths live in filesystem space (``os.walk``/argv surface them
+                # via the fs codec with surrogateescape), so the pipe must apply
+                # the exact same mapping in both directions or paths stop
+                # comparing equal. A text pipe with the locale codec mis-handled
+                # non-ASCII filenames (#453); a pinned-UTF-8 text pipe still
+                # broke both directions — ``errors="replace"`` rewrote raw
+                # non-UTF-8 filename bytes to ``?`` on stdin (git never matched
+                # the .gitignore entry), and decoding git's UTF-8 output produced
+                # real non-ASCII chars that no longer matched surrogate-escaped
+                # finding paths under a non-UTF-8 locale (and crashed
+                # ``Path.resolve()``). Binary pipes also sidestep Windows
+                # text-mode ``\n`` -> ``\r\n`` translation, and ``-z`` makes git
+                # read/print paths verbatim (no core.quotepath quoting).
                 result = subprocess.run(  # nosec B603, B607
                     ["git", "check-ignore", "--stdin", "-z"],
-                    input="\0".join(rel_paths) + "\0",
+                    input=b"\0".join(os.fsencode(p) for p in rel_paths) + b"\0",
                     capture_output=True,
-                    text=True,
                     timeout=30,
                     cwd=str(root),
                 )
@@ -941,12 +1002,12 @@ class ScanEngine:
                         "git check-ignore failed in %s (code %s): %s",
                         root,
                         result.returncode,
-                        result.stderr.strip()[:200],
+                        result.stderr.decode("utf-8", "replace").strip()[:200],
                     )
                     continue
 
                 if result.stdout:
-                    ignored = [p for p in result.stdout.split("\0") if p]
+                    ignored = [os.fsdecode(p) for p in result.stdout.split(b"\0") if p]
                     for rel in ignored:
                         gitignored_files.add((root / rel).resolve())
             except (subprocess.TimeoutExpired, FileNotFoundError, subprocess.SubprocessError) as e:
@@ -998,12 +1059,24 @@ class ScanEngine:
             return warnings
 
         try:
-            # Use batched stdin approach for consistency with _filter_gitignored_files
+            # Use the same batched ``--stdin -z`` NUL-separated pipe as
+            # _filter_gitignored_files. Explicit UTF-8: ``text=True`` alone uses
+            # the platform locale codec (cp1252 on Windows), which mis-handles
+            # non-ASCII filenames (#453). NUL separators (not newlines) are
+            # required for correctness, not just consistency: Windows text-mode
+            # pipes translate every written ``\n`` to ``\r\n``, so git would see
+            # ``name\r`` and never match the .gitignore entry. ``-z`` also makes
+            # git print paths verbatim (no core.quotepath C-quoting), so stdout
+            # compares equal to the configured combined-file names.
+            # ``surrogateescape`` mirrors _filter_gitignored_files: it round-trips
+            # raw filename bytes exactly, where ``replace`` would rewrite them.
             result = subprocess.run(  # nosec B603, B607
-                ["git", "check-ignore", "--stdin"],
-                input="\n".join(self.config.combined_files),
+                ["git", "check-ignore", "--stdin", "-z"],
+                input="\0".join(self.config.combined_files) + "\0",
                 capture_output=True,
                 text=True,
+                encoding="utf-8",
+                errors="surrogateescape",
                 timeout=30,
                 cwd=str(git_root),
             )
@@ -1020,7 +1093,7 @@ class ScanEngine:
                 )
                 return warnings
 
-            gitignored = set(result.stdout.strip().split("\n")) if result.stdout.strip() else set()
+            gitignored = {p for p in result.stdout.split("\0") if p}
 
             for combined_file in self.config.combined_files:
                 if combined_file not in gitignored:

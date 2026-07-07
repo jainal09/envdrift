@@ -34,9 +34,13 @@ from envdrift.vault.base import SecretNotFoundError, VaultError
 
 
 def _load_encryption_config():
-    import tomllib
-
-    from envdrift.config import ConfigNotFoundError, EnvdriftConfig, find_config, load_config
+    from envdrift.config import (
+        ConfigLoadError,
+        ConfigNotFoundError,
+        EnvdriftConfig,
+        find_config,
+        load_config,
+    )
 
     config_path = find_config()
     if not config_path:
@@ -44,12 +48,13 @@ def _load_encryption_config():
 
     try:
         return load_config(config_path), config_path
-    except tomllib.TOMLDecodeError as e:
-        print_warning(f"TOML syntax error in {config_path}: {e}")
-    except ConfigNotFoundError as e:
-        print_warning(str(e))
-
-    return EnvdriftConfig(), None
+    except (ConfigNotFoundError, ConfigLoadError) as e:
+        # An existing-but-broken config must abort: silently falling back to a
+        # default EnvdriftConfig() used to encrypt a SOPS-configured project
+        # with dotenvx (wrong backend, stray .env.keys minted) on exit 0 (#491).
+        print_error(str(e))
+        print_error(f"Fix (or remove) {config_path} and re-run.")
+        raise typer.Exit(code=1) from None
 
 
 def _resolve_config_path(config_path: Path | None, value: Path | str | None) -> Path | None:
@@ -431,6 +436,24 @@ def encrypt_cmd(
             raise typer.Exit(code=1) from None
 
 
+def _private_key_var_name_for(env_file: Path) -> str:
+    """Derive dotenvx's private-key variable name from the env file name.
+
+    ``.env`` -> ``DOTENV_PRIVATE_KEY``; ``.env.<env>`` ->
+    ``DOTENV_PRIVATE_KEY_<ENV>`` (dots become underscores, uppercased) — the
+    same derivation dotenvx itself applies. ``Path.stem`` strips only the
+    LAST suffix, so the previous ``env_file.stem`` was always ``".env"`` for
+    ``.env.<env>`` files and every raw vault value collapsed to the
+    PRODUCTION default, false-failing a CORRECT bare key for any other
+    environment (#473).
+    """
+    env_name = env_file.name.removeprefix(".env").replace(".", "_").upper()
+    env_name = env_name.lstrip("_")
+    if not env_name:
+        return "DOTENV_PRIVATE_KEY"
+    return f"DOTENV_PRIVATE_KEY_{env_name}"
+
+
 def _verify_decryption_with_vault(
     env_file: Path,
     provider: str,
@@ -470,6 +493,7 @@ def _verify_decryption_with_vault(
         console.print("[bold]Vault Key Verification[/bold]")
         console.print(f"[dim]Provider: {provider} | Secret: {secret_name}[/dim]")
 
+    vault_client = None
     try:
         # Create vault client
         vault_kwargs: dict = {}
@@ -518,22 +542,31 @@ def _verify_decryption_with_vault(
             print_error("dotenvx is not installed - cannot verify decryption")
             return False
 
-        # The vault stores secrets in "DOTENV_PRIVATE_KEY_ENV=key" format
-        # Parse out the actual key value if it's in that format
-        actual_private_key = private_key_str
-        if "=" in private_key_str and private_key_str.startswith("DOTENV_PRIVATE_KEY"):
-            # Extract just the key value after the =
-            actual_private_key = private_key_str.split("=", 1)[1]
-            # Get the variable name from the vault value
-            key_var_name = private_key_str.split("=", 1)[0]
+        # The vault stores secrets in "DOTENV_PRIVATE_KEY_ENV=key" format.
+        # Normalize exactly like the sync engine and `lock --verify-vault`
+        # (#356/#413): strip whitespace, one layer of quotes, and the
+        # DOTENV_PRIVATE_KEY_<SUFFIX>= prefix. The previous raw split("=", 1)
+        # kept the quotes from the dotenvx-style
+        # DOTENV_PRIVATE_KEY_PRODUCTION="<hex>" format, so dotenvx received an
+        # invalid key and a CORRECT vault key was reported as "CANNOT decrypt"
+        # with destructive git-restore advice (#473).
+        from envdrift.sync.engine import normalize_vault_key_value
+
+        actual_private_key, vault_suffix = normalize_vault_key_value(private_key_str)
+        if vault_suffix is not None:
+            # dotenvx resolves the variable from the UPPERCASED environment
+            # name it derives from the file name; match that casing.
+            key_var_name = f"DOTENV_PRIVATE_KEY_{vault_suffix.upper()}"
+        elif actual_private_key.startswith("DOTENV_PRIVATE_KEY="):
+            # dotenvx's suffix-less format for a plain `.env` file. Re-run the
+            # remainder through the normalizer so a quoted value is dequoted.
+            remainder = actual_private_key.split("=", 1)[1]
+            actual_private_key, _ = normalize_vault_key_value(remainder)
+            key_var_name = "DOTENV_PRIVATE_KEY"
         else:
-            # Key is just the raw value, construct variable name from env file
-            env_name = env_file.stem.replace(".env", "").replace(".", "_").upper()
-            if env_name.startswith("_"):
-                env_name = env_name[1:]
-            if not env_name:
-                env_name = "PRODUCTION"  # Default
-            key_var_name = f"DOTENV_PRIVATE_KEY_{env_name}"
+            # Key is just the raw value: derive the variable name from the
+            # env file name exactly like dotenvx does (#473).
+            key_var_name = _private_key_var_name_for(env_file)
 
         # Build a clean environment so dotenvx cannot fall back to stray keys
         dotenvx_env = {
@@ -592,7 +625,16 @@ def _verify_decryption_with_vault(
                 return False
 
     except SecretNotFoundError:
-        print_error(f"Secret '{secret_name}' not found in vault")
+        # Name the AWS region that was searched (#487). Read it from the
+        # constructed client (mirrors vault_pull) so the message reflects the
+        # region the client actually used, instead of a hardcoded fallback
+        # that could silently drift from the construction default above.
+        region_note = ""
+        if provider == "aws":
+            client_region = getattr(vault_client, "region", None)
+            if client_region:
+                region_note = f" (region {client_region})"
+        print_error(f"Secret '{secret_name}' not found in vault{region_note}")
         return False
     except VaultError as e:
         print_error(f"Vault error: {e}")

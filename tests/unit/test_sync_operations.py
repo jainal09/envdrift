@@ -343,6 +343,53 @@ class TestAtomicWrite:
 
         assert file_path.read_text() == "New content"
 
+    @pytest.mark.skipif(os.name == "nt", reason="POSIX permission bits")
+    def test_atomic_write_max_permissions_tightens_preexisting_world_readable(
+        self, tmp_path: Path
+    ) -> None:
+        """A pre-existing 0o644 destination is tightened to the cap, not preserved (#510 review).
+
+        Combined/merged files created world-readable by the pre-#510 ``write_text``
+        must not keep that exposure forever: the secret-bearing call sites pass
+        ``max_permissions=0o600`` so mode preservation intersects with the cap.
+        """
+        import stat
+
+        file_path = tmp_path / ".env.production"
+        file_path.write_text("OLD")
+        file_path.chmod(0o644)
+
+        atomic_write(file_path, "NEW", max_permissions=0o600)
+
+        assert file_path.read_text() == "NEW"
+        assert stat.S_IMODE(file_path.stat().st_mode) == 0o600
+
+    @pytest.mark.skipif(os.name == "nt", reason="POSIX permission bits")
+    def test_atomic_write_max_permissions_never_widens(self, tmp_path: Path) -> None:
+        """The cap only narrows: a stricter pre-existing mode (0o400) is preserved."""
+        import stat
+
+        file_path = tmp_path / ".env.production"
+        file_path.write_text("OLD")
+        file_path.chmod(0o400)
+
+        atomic_write(file_path, "NEW", max_permissions=0o600)
+
+        assert stat.S_IMODE(file_path.stat().st_mode) == 0o400
+
+    @pytest.mark.skipif(os.name == "nt", reason="POSIX permission bits")
+    def test_atomic_write_without_cap_preserves_existing_mode(self, tmp_path: Path) -> None:
+        """Default behavior is unchanged: no cap means the existing mode is preserved."""
+        import stat
+
+        file_path = tmp_path / "notes.txt"
+        file_path.write_text("OLD")
+        file_path.chmod(0o644)
+
+        atomic_write(file_path, "NEW")
+
+        assert stat.S_IMODE(file_path.stat().st_mode) == 0o644
+
     @pytest.mark.skipif(os.name == "nt", reason="symlink/fchmod semantics differ on non-POSIX")
     def test_atomic_write_does_not_follow_predictable_tmp_symlink(self, tmp_path: Path) -> None:
         """A pre-planted symlink at the predictable temp name is not written through.
