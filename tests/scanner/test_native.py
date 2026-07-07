@@ -30,6 +30,17 @@ class TestNativeScanner:
         assert "Built-in" in scanner.description
         assert scanner.is_installed() is True
 
+    @pytest.mark.parametrize(
+        "bad",
+        [float("nan"), float("inf"), float("-inf"), "nan", "inf"],
+        ids=["nan", "inf", "neg-inf", "str-nan", "str-inf"],
+    )
+    def test_non_finite_entropy_threshold_rejected_at_construction(self, bad):
+        """#478 review: nan/inf pass float() but disable every entropy
+        comparison; direct SDK construction must fail fast like the config layer."""
+        with pytest.raises(ValueError, match="finite"):
+            NativeScanner(check_entropy=True, entropy_threshold=bad)
+
     def test_scan_empty_directory(self, scanner: NativeScanner, tmp_path: Path):
         """Test scanning an empty directory."""
         result = scanner.scan([tmp_path])

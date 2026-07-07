@@ -534,6 +534,16 @@ class TestAggregatedResultExitSemantics:
         assert result.has_errors is True
         assert result.has_blocking_findings is False
 
+    def test_empty_string_error_still_fails_the_run(self):
+        """#478 review: has_errors follows the ScanResult.success contract.
+
+        A backend that fails with an EMPTY error string used to slip through
+        the truthiness check (``any(r.error ...)``) into the all-clear exit 0.
+        """
+        result = _result([], errors={"talisman": ""})
+        assert result.has_errors is True
+        assert result.exit_code == 5
+
     def test_clean_empty_result_still_exits_zero(self):
         result = _result([])
         assert result.exit_code == 0

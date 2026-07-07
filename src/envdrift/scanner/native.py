@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import codecs
 import fnmatch
+import math
 import re
 import time
 from pathlib import Path, PurePosixPath
@@ -392,6 +393,10 @@ class NativeScanner(ScannerBackend):
             raise ValueError(
                 f"entropy_threshold must be a number, got {entropy_threshold!r}"
             ) from None
+        if not math.isfinite(self._entropy_threshold):
+            # nan/inf pass float() but break every ``entropy >= threshold``
+            # comparison, silently disabling entropy detection (#478 review).
+            raise ValueError(f"entropy_threshold must be finite, got {entropy_threshold!r}")
         self._allowed_clear_files = set(allowed_clear_files or [])
         self._skip_clear_files = skip_clear_files
         # Canonicalize mapped env files to absolute paths so they match regardless

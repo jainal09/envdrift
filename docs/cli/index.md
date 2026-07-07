@@ -81,7 +81,7 @@ Exit codes are per-command. Most commands use:
 | 0    | Success                                                       |
 | 1    | Validation failed, file not found, or other error             |
 
-The [guard](guard.md) command uses severity-based exit codes instead, plus
+The [guard](guard.md) command uses severity-based exit codes, plus
 dedicated codes for an incomplete scan and operational errors (see
 [guard exit codes](guard.md#exit-codes)):
 

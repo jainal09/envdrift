@@ -202,8 +202,14 @@ class AggregatedScanResult:
 
     @property
     def has_errors(self) -> bool:
-        """Whether any selected scanner ran but failed to complete its scan."""
-        return any(r.error for r in self.results)
+        """Whether any selected scanner ran but failed to complete its scan.
+
+        Follows the ``ScanResult.success`` contract (``error is None``) rather
+        than error truthiness: a backend that fails with an empty error string
+        must still fail the run instead of slipping through to the all-clear
+        exit 0 (#478 review).
+        """
+        return any(not r.success for r in self.results)
 
     def _severity_exit_code(self) -> int:
         """Exit code derived from the highest-severity finding (0 if none).
