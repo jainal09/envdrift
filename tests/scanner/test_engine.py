@@ -30,7 +30,7 @@ class TestGuardConfig:
         assert config.use_trufflehog is False
         assert config.auto_install is True
         assert config.include_git_history is False
-        assert config.check_entropy is False
+        assert config.check_entropy is None  # tri-state: unset = env files only (#478)
         assert config.entropy_threshold == 4.5
         assert config.ignore_paths == []
         assert config.ignore_rules == {}
@@ -88,6 +88,17 @@ class TestGuardConfig:
         config = GuardConfig.from_dict({"guard": {"fail_on_severity": "invalid"}})
 
         assert config.fail_on_severity == FindingSeverity.HIGH
+
+    def test_config_from_dict_non_string_severity_raises(self):
+        """A non-string fail_on_severity raises a clean ValueError (#478 review).
+
+        It used to escape ``except ValueError`` as ``AttributeError: 'int'
+        object has no attribute 'lower'``; wrong types now fail like the other
+        type-validated guard knobs (unknown severity *names* keep the HIGH
+        fallback above).
+        """
+        with pytest.raises(ValueError, match="fail_on_severity"):
+            GuardConfig.from_dict({"guard": {"fail_on_severity": 123}})
 
     def test_config_from_dict_with_string_scanner(self):
         """Test config handles scanners as a string."""

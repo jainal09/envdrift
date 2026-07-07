@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import difflib
+import math
 import re
 import sys
 import tomllib
@@ -134,6 +135,10 @@ class GitHookCheckConfig:
 class GuardConfig:
     """Guard command configuration for secret scanning.
 
+    ``check_entropy`` is tri-state: ``None`` (unset) keeps the default of
+    entropy detection on env files only; ``true`` extends it to all scanned
+    files; ``false`` disables it entirely — including env files (#478).
+
     Example envdrift.toml:
         [guard]
         scanners = ["native", "gitleaks"]
@@ -153,7 +158,7 @@ class GuardConfig:
     scanners: list[str] = field(default_factory=lambda: ["native", "gitleaks"])
     auto_install: bool = True
     include_history: bool = False
-    check_entropy: bool = False
+    check_entropy: bool | None = None  # None = entropy on env files only (default)
     entropy_threshold: float = 4.5
     fail_on_severity: str = "high"
     skip_clear_files: bool = False  # Skip .clear files from scanning
@@ -163,6 +168,107 @@ class GuardConfig:
     ignore_paths: list[str] = field(default_factory=list)
     ignore_rules: dict[str, list[str]] = field(default_factory=dict)
     verify_secrets: bool = False  # For trufflehog verification
+
+
+def coerce_entropy_threshold(value: Any) -> float:
+    """Validate/coerce ``[guard] entropy_threshold`` into a float.
+
+    A quoted number (``entropy_threshold = "3.5"``) used to flow through the
+    config layer untouched and crash the native scanner mid-scan, which was
+    swallowed as a non-fatal scanner error and turned the whole guard run into
+    a green false PASS (#478). Coerce numeric strings, reject everything else
+    with a clean ``ValueError`` at config-load time. Non-finite values
+    (``nan``/``inf``, quoted or bare TOML floats) are rejected too: they parse
+    as floats but make every ``entropy >= threshold`` comparison False,
+    silently disabling the entropy gate — the same failure class.
+    """
+    if isinstance(value, bool):
+        raise ValueError(f"[guard] entropy_threshold must be a number, got {value!r}")
+    if isinstance(value, (int, float)):
+        result = float(value)
+    elif isinstance(value, str):
+        try:
+            result = float(value.strip())
+        except ValueError:
+            raise ValueError(f"[guard] entropy_threshold must be a number, got {value!r}") from None
+    else:
+        raise ValueError(f"[guard] entropy_threshold must be a number, got {value!r}")
+    if not math.isfinite(result):
+        raise ValueError(f"[guard] entropy_threshold must be a finite number, got {value!r}")
+    return result
+
+
+def coerce_check_entropy(value: Any) -> bool | None:
+    """Validate the tri-state ``[guard] check_entropy`` knob (bool or unset)."""
+    if value is None or isinstance(value, bool):
+        return value
+    raise ValueError(f"[guard] check_entropy must be a boolean, got {value!r}")
+
+
+def coerce_fail_on_severity(value: Any) -> str:
+    """Validate that ``[guard] fail_on_severity`` is a string at config load.
+
+    A non-string value (``fail_on_severity = 123``) used to escape the guard
+    CLI's ``except ValueError`` as an ``AttributeError`` on ``.lower()`` — a
+    Rich traceback, empty ``--json`` stdout, and exit 1 colliding with
+    critical's code (#478). Reject non-strings with a clean ``ValueError``;
+    severity-name membership stays validated downstream (the guard CLI, which
+    also covers the ``--fail-on`` flag, and ``GuardConfig.from_dict``).
+    """
+    if isinstance(value, str):
+        return value
+    raise ValueError(f"[guard] fail_on_severity must be a severity string, got {value!r}")
+
+
+def normalize_ignore_rules(value: Any) -> dict[str, list[str]]:
+    """Validate/normalize ``[guard] ignore_rules`` into ``{rule: [globs]}``.
+
+    The documented shape is a TOML table mapping rule ids to path-pattern
+    lists. A wrong-typed value (e.g. a bare list of rule ids) used to crash
+    guard mid-scan with an uncaught TypeError — but only on the first run that
+    had findings, leaving ``--json`` stdout empty (#478). Reject non-table
+    shapes with a clean ``ValueError`` at config-load time; a single string
+    pattern value is coerced to a one-item list.
+    """
+    if value is None:
+        return {}
+    if not isinstance(value, dict):
+        raise ValueError(
+            "[guard] ignore_rules must be a TOML table mapping rule ids to "
+            "path-pattern lists, e.g.\n"
+            "    [guard.ignore_rules]\n"
+            '    "unencrypted-env-file" = ["**/fixtures/**"]\n'
+            f"got {value!r}"
+        )
+    normalized: dict[str, list[str]] = {}
+    for rule_id, patterns in value.items():
+        if isinstance(patterns, str):
+            normalized[str(rule_id)] = [patterns]
+        elif isinstance(patterns, list) and all(isinstance(p, str) for p in patterns):
+            normalized[str(rule_id)] = list(patterns)
+        else:
+            raise ValueError(
+                f"[guard] ignore_rules entry {rule_id!r} must map to a path "
+                f"pattern string or a list of pattern strings, got {patterns!r}"
+            )
+    return normalized
+
+
+def normalize_ignore_paths(value: Any) -> list[str]:
+    """Validate/normalize ``[guard] ignore_paths`` into a list of globs.
+
+    A single string is coerced to a one-item list; any other non-list shape is
+    rejected with a clean ``ValueError`` (a bare string would otherwise be
+    iterated character-by-character downstream — same wrong-shape family as
+    ``ignore_rules``, #478).
+    """
+    if value is None:
+        return []
+    if isinstance(value, str):
+        return [value]
+    if isinstance(value, list) and all(isinstance(p, str) for p in value):
+        return list(value)
+    raise ValueError(f"[guard] ignore_paths must be a string or a list of strings, got {value!r}")
 
 
 @dataclass
@@ -394,15 +500,18 @@ def _build_guard_config(guard_section: dict[str, Any]) -> GuardConfig:
         scanners=scanners,
         auto_install=guard_section.get("auto_install", True),
         include_history=guard_section.get("include_history", False),
-        check_entropy=guard_section.get("check_entropy", False),
-        entropy_threshold=guard_section.get("entropy_threshold", 4.5),
-        fail_on_severity=guard_section.get("fail_on_severity", "high"),
+        # Wrong-typed guard knobs are rejected here, at config-load time, with
+        # a clean ValueError instead of crashing a scanner mid-scan into a
+        # green false PASS or an uncaught traceback (#478).
+        check_entropy=coerce_check_entropy(guard_section.get("check_entropy")),
+        entropy_threshold=coerce_entropy_threshold(guard_section.get("entropy_threshold", 4.5)),
+        fail_on_severity=coerce_fail_on_severity(guard_section.get("fail_on_severity", "high")),
         skip_clear_files=guard_section.get("skip_clear_files", False),
         skip_encrypted_files=guard_section.get("skip_encrypted_files", True),
         skip_duplicate=guard_section.get("skip_duplicate", False),
         skip_gitignored=guard_section.get("skip_gitignored", False),
-        ignore_paths=guard_section.get("ignore_paths", []),
-        ignore_rules=guard_section.get("ignore_rules", {}),
+        ignore_paths=normalize_ignore_paths(guard_section.get("ignore_paths")),
+        ignore_rules=normalize_ignore_rules(guard_section.get("ignore_rules")),
         verify_secrets=guard_section.get("verify_secrets", False),
     )
 
