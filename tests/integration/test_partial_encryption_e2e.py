@@ -86,6 +86,10 @@ def _write_combine_config(
     combined_file: str,
 ) -> None:
     """Write a combine-mode envdrift.toml for one environment."""
+    # encoding="utf-8" so a non-ASCII secret_file name (e.g. "café.env.secret")
+    # is written as UTF-8 on every platform. Without it the write uses the
+    # locale codec (cp1252 on Windows), and the UTF-8-only tomllib config
+    # loader would then fail to parse the file for the wrong reason.
     (work_dir / "envdrift.toml").write_text(
         "[partial_encryption]\n"
         "enabled = true\n\n"
@@ -93,7 +97,8 @@ def _write_combine_config(
         f'name = "{name}"\n'
         f'clear_file = "{clear_file}"\n'
         f'secret_file = "{secret_file}"\n'
-        f'combined_file = "{combined_file}"\n'
+        f'combined_file = "{combined_file}"\n',
+        encoding="utf-8",
     )
 
 
