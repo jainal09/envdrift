@@ -179,6 +179,24 @@ Registry: /Users/you/.envdrift/projects.json
 Use `envdrift agent unregister [PATH]` to stop watching a project and
 `envdrift agent status` to see the agent state and registered project count.
 
+### Registry safety
+
+The CLI guards the registry file against races and corruption:
+
+- **Concurrent registers are safe.** `register`/`unregister` hold an exclusive
+  lock on a sidecar `~/.envdrift/projects.json.lock` file and re-read the
+  registry under it, so parallel commands (e.g. several setup scripts at once)
+  never overwrite each other's entries. If the lock cannot be acquired within
+  10 seconds the command fails with exit code 1 instead of corrupting state.
+- **A corrupt registry is never silently wiped.** If `projects.json` is
+  truncated or malformed, read commands (`list`, `status`) warn and treat it as
+  empty without touching the file. The next `register` moves the corrupt
+  original aside to `projects.json.corrupt-<timestamp>` (and tells you where)
+  before writing a fresh registry, so prior registrations can be recovered by
+  hand and re-registered. An `unregister` never performs this backup: a corrupt
+  registry loads as empty, so there is nothing to remove and the file is left
+  untouched.
+
 ## How It Works
 
 ```text

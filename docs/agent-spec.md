@@ -175,6 +175,14 @@ Machine (your laptop)
 }
 ```
 
+CLI writers serialize through an exclusive lock on a sidecar
+`projects.json.lock` file (re-reading the registry under the lock), so
+concurrent `register`/`unregister` commands never lose entries. A corrupt
+registry is surfaced as a warning and moved aside to
+`projects.json.corrupt-<timestamp>` before the next write replaces it — never
+silently discarded. The agent's watcher ignores both sidecar files (it only
+reacts to `projects.json` itself).
+
 ### How It Works
 
 1. **User runs** `envdrift agent register` explicitly — setting `[guardian].enabled = true` alone is not enough

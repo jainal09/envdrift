@@ -11,18 +11,77 @@ File format:
     {"path": "/Users/dev/api", "added": "2025-01-02T00:00:00Z"}
   ]
 }
+
+Robustness guarantees (#492):
+
+- Writes (``register``/``unregister``/``clear``) hold an exclusive lock on a
+  sidecar ``projects.json.lock`` file and re-read the registry from disk under
+  that lock, so concurrent writers never silently lose entries.
+- A corrupt or mis-shaped registry never raises out of ``load()``; it loads as
+  empty with a :class:`RegistryCorruption` notice the CLI can surface.
+- Before a write replaces a corrupt registry, the corrupt original is moved
+  aside to ``projects.json.corrupt-<timestamp>`` so nothing is silently wiped.
 """
 
 from __future__ import annotations
 
+import errno
 import json
 import os
+import sys
 import tempfile
-from contextlib import suppress
+import time
+from contextlib import contextmanager, suppress
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if sys.platform == "win32":
+    import msvcrt
+else:
+    import fcntl
+
+if TYPE_CHECKING:
+    from collections.abc import Iterator
+
+#: How long a writer waits for the registry lock before failing loudly.
+DEFAULT_LOCK_TIMEOUT = 10.0
+
+#: Poll interval while waiting for the registry lock.
+_LOCK_POLL_INTERVAL = 0.05
+
+#: Errno values that mean "another process holds the lock": ``fcntl.flock``
+#: raises EWOULDBLOCK/EAGAIN on POSIX; ``msvcrt.locking`` raises EACCES on
+#: Windows (also seen transiently there when antivirus scanners touch the file).
+_LOCK_CONTENTION_ERRNOS = frozenset({errno.EWOULDBLOCK, errno.EAGAIN, errno.EACCES})
+
+#: How many non-contention OSErrors to retry before re-raising the original
+#: error. Absorbs transient I/O blips without misreporting a persistent
+#: failure (EBADF/EINVAL/EIO) as a lock timeout.
+_TRANSIENT_LOCK_ERROR_RETRIES = 3
+
+
+class RegistryLockError(RuntimeError):
+    """Raised when the exclusive registry lock cannot be acquired in time."""
+
+
+@dataclass
+class RegistryCorruption:
+    """Details about a corrupt registry file encountered during load.
+
+    Attributes:
+        detail: Human-readable description of what was wrong with the file.
+        backup_path: Where the corrupt file was moved before being replaced,
+            if a write has happened. ``None`` while the corrupt file is still
+            in place (read-only commands never touch it).
+        backup_failed: True if a write replaced the corrupt file but the
+            backup rename itself failed (the corrupt bytes are gone).
+    """
+
+    detail: str
+    backup_path: Path | None = None
+    backup_failed: bool = False
 
 
 @dataclass
@@ -35,14 +94,46 @@ class ProjectEntry:
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> ProjectEntry:
         """Create a ProjectEntry from a dictionary."""
+        added = data.get("added")
+        if not isinstance(added, str):
+            added = datetime.now(UTC).isoformat()
         return cls(
             path=data["path"],
-            added=data.get("added", datetime.now(UTC).isoformat()),
+            added=added,
         )
 
     def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary for JSON serialization."""
         return asdict(self)
+
+
+def _parse_registry_entry(item: Any) -> ProjectEntry:
+    """Validate a single raw project entry and convert it.
+
+    Raises:
+        ValueError: If the entry is not a dict carrying a string ``path``.
+    """
+    if not isinstance(item, dict):
+        raise ValueError(f"project entries must be objects, got {type(item).__name__}")
+    if not isinstance(item.get("path"), str):
+        raise ValueError("project entry is missing a string 'path'")
+    return ProjectEntry.from_dict(item)
+
+
+def _parse_registry_document(data: Any) -> list[ProjectEntry]:
+    """Validate the loaded JSON document shape and convert it to entries.
+
+    Raises:
+        ValueError: If the document is not a dict with a ``projects`` list of
+            dicts that each carry a string ``path`` (#492: top-level arrays and
+            string entries previously escaped as AttributeError/TypeError).
+    """
+    if not isinstance(data, dict):
+        raise ValueError(f"expected a JSON object, got {type(data).__name__}")
+    raw_projects = data.get("projects", [])
+    if not isinstance(raw_projects, list):
+        raise ValueError(f"'projects' must be a list, got {type(raw_projects).__name__}")
+    return [_parse_registry_entry(item) for item in raw_projects]
 
 
 class ProjectRegistry:
@@ -52,20 +143,28 @@ class ProjectRegistry:
     the list of projects the agent should watch.
     """
 
-    def __init__(self, registry_path: Path | None = None):
+    def __init__(
+        self,
+        registry_path: Path | None = None,
+        lock_timeout: float = DEFAULT_LOCK_TIMEOUT,
+    ):
         """Initialize the registry.
 
         Args:
             registry_path: Path to the registry file. If None, uses
                            ~/.envdrift/projects.json
+            lock_timeout: Seconds to wait for the exclusive write lock before
+                          raising :class:`RegistryLockError`.
         """
         if registry_path is None:
             home_dir = Path.home()
             self._path = home_dir / ".envdrift" / "projects.json"
         else:
             self._path = registry_path
+        self._lock_timeout = lock_timeout
         self._projects: list[ProjectEntry] = []
         self._loaded = False
+        self._corruption: RegistryCorruption | None = None
 
     @property
     def path(self) -> Path:
@@ -79,8 +178,21 @@ class ProjectRegistry:
             self.load()
         return list(self._projects)
 
+    @property
+    def corruption(self) -> RegistryCorruption | None:
+        """Return details of a corrupt registry encountered on load, if any."""
+        if not self._loaded:
+            self.load()
+        return self._corruption
+
     def load(self) -> None:
-        """Load the registry from disk."""
+        """Load the registry from disk.
+
+        A corrupt or mis-shaped file never raises: the registry loads as empty
+        and :attr:`corruption` records what was wrong. The file itself is left
+        untouched here — it is only moved aside (backed up) by the next save.
+        """
+        self._corruption = None
         if not self._path.exists():
             self._projects = []
             self._loaded = True
@@ -89,10 +201,16 @@ class ProjectRegistry:
         try:
             with open(self._path, encoding="utf-8") as f:
                 data = json.load(f)
-            self._projects = [ProjectEntry.from_dict(p) for p in data.get("projects", [])]
-        except (json.JSONDecodeError, OSError, KeyError):
-            # If file is corrupt or unreadable, start fresh
+            self._projects = _parse_registry_document(data)
+        except json.JSONDecodeError as exc:
             self._projects = []
+            self._corruption = RegistryCorruption(detail=f"invalid JSON: {exc}")
+        except ValueError as exc:
+            self._projects = []
+            self._corruption = RegistryCorruption(detail=str(exc))
+        except OSError as exc:
+            self._projects = []
+            self._corruption = RegistryCorruption(detail=f"unreadable: {exc}")
 
         self._loaded = True
 
@@ -102,6 +220,89 @@ class ProjectRegistry:
         Note: resolve() follows symlinks, so symlinked paths are treated as their targets.
         """
         return project_path.resolve()
+
+    @property
+    def _lock_path(self) -> Path:
+        """Return the sidecar lock file path (projects.json.lock)."""
+        return self._path.with_name(self._path.name + ".lock")
+
+    @staticmethod
+    def _try_lock(fd: int) -> None:
+        """Attempt one non-blocking exclusive lock on ``fd`` (raises OSError)."""
+        if sys.platform == "win32":
+            msvcrt.locking(fd, msvcrt.LK_NBLCK, 1)
+        else:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+
+    def _handle_lock_error(self, exc: OSError, deadline: float, transient_errors: int) -> int:
+        """Decide whether to keep polling after a failed lock attempt.
+
+        Returns the updated transient-error count when polling should
+        continue; raises when it should stop.
+        """
+        if exc.errno not in _LOCK_CONTENTION_ERRNOS:
+            # A real I/O failure, not contention: allow a few retries for
+            # transient blips (e.g. a virus scanner briefly holding the file),
+            # then re-raise as-is instead of misreporting a lock timeout.
+            transient_errors += 1
+            if transient_errors > _TRANSIENT_LOCK_ERROR_RETRIES:
+                raise exc
+            return transient_errors
+        if time.monotonic() >= deadline:
+            raise RegistryLockError(
+                f"timed out after {self._lock_timeout:g}s waiting for the "
+                f"registry lock: {self._lock_path} (is another envdrift "
+                "process stuck?)"
+            ) from None
+        return transient_errors
+
+    def _acquire_lock(self, fd: int) -> None:
+        """Acquire an exclusive lock on ``fd``, polling until the timeout.
+
+        Lock contention (:data:`_LOCK_CONTENTION_ERRNOS`) is retried until
+        ``lock_timeout`` elapses, then reported as :class:`RegistryLockError`.
+        Any other OSError is retried :data:`_TRANSIENT_LOCK_ERROR_RETRIES`
+        times and then re-raised as-is.
+        """
+        deadline = time.monotonic() + self._lock_timeout
+        transient_errors = 0
+        while True:
+            try:
+                self._try_lock(fd)
+                return
+            except OSError as exc:
+                transient_errors = self._handle_lock_error(exc, deadline, transient_errors)
+                time.sleep(_LOCK_POLL_INTERVAL)
+
+    @staticmethod
+    def _release_lock(fd: int) -> None:
+        """Release the exclusive lock on ``fd`` (best-effort)."""
+        with suppress(OSError):
+            if sys.platform == "win32":
+                os.lseek(fd, 0, os.SEEK_SET)
+                msvcrt.locking(fd, msvcrt.LK_UNLCK, 1)
+            else:
+                fcntl.flock(fd, fcntl.LOCK_UN)
+
+    @contextmanager
+    def _exclusive_lock(self) -> Iterator[None]:
+        """Hold the exclusive inter-process registry lock.
+
+        The lock file is a sidecar (``projects.json.lock``) so locking never
+        interferes with the atomic rename of the registry itself. The lock
+        file is intentionally never deleted: unlinking a lock file invites
+        races where two processes lock different inodes.
+        """
+        self._path.parent.mkdir(parents=True, exist_ok=True)
+        fd = os.open(self._lock_path, os.O_RDWR | os.O_CREAT, 0o600)
+        try:
+            self._acquire_lock(fd)
+            try:
+                yield
+            finally:
+                self._release_lock(fd)
+        finally:
+            os.close(fd)
 
     def _write_atomic(self, data: dict[str, Any]) -> None:
         """Write registry data to disk atomically."""
@@ -127,17 +328,63 @@ class ProjectRegistry:
         with suppress(OSError):
             self._path.chmod(0o600)
 
+    def _next_backup_path(self) -> Path:
+        """Return an unused ``projects.json.corrupt-<timestamp>`` sibling path.
+
+        Timestamps carry microseconds, so collisions are rare — but a second
+        corruption event in the same clock tick must never clobber the earlier
+        backup, so a numeric suffix disambiguates.
+        """
+        timestamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%S%f")
+        candidate = self._path.with_name(f"{self._path.name}.corrupt-{timestamp}")
+        counter = 1
+        while candidate.exists():
+            counter += 1
+            candidate = self._path.with_name(f"{self._path.name}.corrupt-{timestamp}-{counter}")
+        return candidate
+
+    def _backup_corrupt_file(self) -> None:
+        """Move a corrupt registry aside before a save replaces it (#492)."""
+        notice = self._corruption
+        if notice is None or not self._path.exists():
+            return
+        # Re-entry guard: once a backup was made (or its rename failed), never
+        # attempt another for the same corruption notice — a second save()
+        # without an intervening load() would otherwise move the freshly
+        # written *valid* registry aside as if it were corrupt.
+        backup_already_attempted = notice.backup_path is not None or notice.backup_failed
+        if backup_already_attempted:
+            return
+        backup_path = self._next_backup_path()
+        try:
+            self._path.replace(backup_path)
+        except OSError:
+            # The save still proceeds; record that the corrupt bytes are gone
+            # so the CLI reports the truth instead of a phantom backup.
+            notice.backup_failed = True
+            return
+        notice.backup_path = backup_path
+
     def save(self) -> None:
-        """Save the registry to disk."""
+        """Save the registry to disk.
+
+        If the last load found the file corrupt, the corrupt original is moved
+        aside to ``projects.json.corrupt-<timestamp>`` first so its contents
+        are never silently destroyed.
+        """
         # Ensure parent directory exists
         self._path.parent.mkdir(parents=True, exist_ok=True)
 
+        self._backup_corrupt_file()
         data = {"projects": [p.to_dict() for p in self._projects]}
         self._write_atomic(data)
         self._apply_permissions()
 
     def register(self, project_path: Path) -> bool:
         """Register a project with the agent.
+
+        Holds the exclusive registry lock and re-reads the file under it, so
+        concurrent registers merge instead of overwriting each other (#492).
 
         Args:
             project_path: Path to the project directory (must contain envdrift.toml
@@ -146,51 +393,60 @@ class ProjectRegistry:
 
         Returns:
             True if newly registered, False if already registered
-        """
-        if not self._loaded:
-            self.load()
 
+        Raises:
+            RegistryLockError: If the registry lock cannot be acquired.
+        """
         # Resolve to absolute path
         abs_path = self._normalize_path(project_path)
         path_str = str(abs_path)
 
-        # Check if already registered
-        for project in self._projects:
-            if project.path == path_str:
-                return False
+        with self._exclusive_lock():
+            # Fresh read under the lock: merge with concurrent writers.
+            self.load()
 
-        # Add new entry
-        entry = ProjectEntry(
-            path=path_str,
-            added=datetime.now(UTC).isoformat(),
-        )
-        self._projects.append(entry)
-        self.save()
-        return True
+            # Check if already registered
+            for project in self._projects:
+                if project.path == path_str:
+                    return False
+
+            # Add new entry
+            entry = ProjectEntry(
+                path=path_str,
+                added=datetime.now(UTC).isoformat(),
+            )
+            self._projects.append(entry)
+            self.save()
+            return True
 
     def unregister(self, project_path: Path) -> bool:
         """Unregister a project from the agent.
+
+        Holds the exclusive registry lock and re-reads the file under it.
 
         Args:
             project_path: Path to the project directory
 
         Returns:
             True if removed, False if not found
-        """
-        if not self._loaded:
-            self.load()
 
+        Raises:
+            RegistryLockError: If the registry lock cannot be acquired.
+        """
         abs_path = self._normalize_path(project_path)
         path_str = str(abs_path)
 
-        # Find and remove
-        for i, project in enumerate(self._projects):
-            if project.path == path_str:
-                del self._projects[i]
-                self.save()
-                return True
+        with self._exclusive_lock():
+            self.load()
 
-        return False
+            # Find and remove
+            for i, project in enumerate(self._projects):
+                if project.path == path_str:
+                    del self._projects[i]
+                    self.save()
+                    return True
+
+            return False
 
     def is_registered(self, project_path: Path) -> bool:
         """Check if a project is registered.
@@ -233,9 +489,15 @@ class ProjectRegistry:
         return None
 
     def clear(self) -> None:
-        """Remove all registered projects."""
-        self._projects = []
-        self.save()
+        """Remove all registered projects.
+
+        Raises:
+            RegistryLockError: If the registry lock cannot be acquired.
+        """
+        with self._exclusive_lock():
+            self.load()
+            self._projects = []
+            self.save()
 
 
 # Module-level singleton
@@ -274,6 +536,9 @@ def register_project(project_path: Path | str | None = None) -> tuple[bool, str]
 
     Returns:
         Tuple of (success, message)
+
+    Raises:
+        RegistryLockError: If the registry lock cannot be acquired.
     """
     project_path = _normalize_project_path(project_path)
 
@@ -298,6 +563,9 @@ def unregister_project(project_path: Path | str | None = None) -> tuple[bool, st
 
     Returns:
         Tuple of (success, message)
+
+    Raises:
+        RegistryLockError: If the registry lock cannot be acquired.
     """
     project_path = _normalize_project_path(project_path)
 
