@@ -144,6 +144,14 @@ def load_sync_config_and_client(
                 pass
             except tomllib.TOMLDecodeError as e:
                 print_warning(f"TOML syntax error in {config_path}: {e}")
+            except ValueError as e:
+                # A malformed section (e.g. a sync mapping missing secret_name)
+                # in the DISCOVERED config must be a clean error, not a raw
+                # ValueError traceback (#488). The config WAS found, so falling
+                # through to "No sync configuration found" would hide the real
+                # problem. Same boundary as the explicit --config branch above.
+                print_error(f"Invalid config in {config_path}: {e}")
+                raise typer.Exit(code=1) from None
 
     vault_config = getattr(envdrift_config, "vault", None)
 
@@ -217,11 +225,15 @@ def load_sync_config_and_client(
             print_warning(f"Could not load sync config from {config_path}: {e}")
 
     if sync_config is None or not sync_config.mappings:
+        # envdrift.toml is the PRIMARY documented config mechanism (README /
+        # quickstart lead with it) — omitting it here steered users debugging a
+        # missing config away from the recommended setup (#488).
         print_error(
             "No sync configuration found. Provide one of:\n"
+            "  [vault.sync] section in envdrift.toml (auto-discovered)\n"
+            "  [tool.envdrift.vault.sync] section in pyproject.toml\n"
             "  --config <file.toml>  TOML config with [vault.sync] section\n"
-            "  --config <pair.txt>   Legacy format: secret=folder\n"
-            "  [tool.envdrift.vault.sync] section in pyproject.toml"
+            "  --config <pair.txt>   Legacy format: secret=folder"
         )
         raise typer.Exit(code=1)
 
@@ -462,10 +474,21 @@ def sync(
 
     Loads sync configuration and a vault client, fetches DOTENV_PRIVATE_KEY_* secrets for configured mappings, and writes/updates local key files; optionally verifies keys, forces updates, checks decryption, and runs schema validation after sync. In interactive mode the command may prompt before updating individual services; --force, --verify, and --ci disable prompts.
 
-    Exits with code 1 on vault or sync configuration errors, and when run with --ci if any sync errors occurred.
+    Exits with code 1 on vault or sync configuration errors, when run with --ci if any sync
+    errors occurred, whenever a --check-decryption test fails (even without --ci), and when
+    --check-decryption is requested but dotenvx is not installed (nothing can be verified).
     """
     from envdrift.output.rich import print_service_sync_status, print_sync_result
     from envdrift.sync.config import SyncConfigError
+
+    # An explicitly requested decryption check must be able to actually run.
+    # Without dotenvx the engine degrades every per-service test to SKIPPED,
+    # so the run would exit 0 having verified nothing — the same
+    # cannot-verify-downgraded-to-success class as #473. Mirror
+    # `decrypt --verify-vault`, which fails loudly for the identical state.
+    if check_decryption and shutil.which("dotenvx") is None:
+        print_error("dotenvx is not installed - cannot verify decryption")
+        raise typer.Exit(code=1)
 
     sync_config, vault_client, effective_provider, _, _, _ = load_sync_config_and_client(
         config_file=config_file,
@@ -538,6 +561,11 @@ def sync(
 
     # Exit with appropriate code
     if ci and result.has_errors:
+        raise typer.Exit(code=1)
+    # An explicitly requested decryption check that failed must fail the run
+    # even without --ci: printing "Decryption: FAILED" and exiting 0 is an
+    # untruthful verdict that scripts and pre-commit hooks silently miss (#473).
+    if check_decryption and result.decryption_failed > 0:
         raise typer.Exit(code=1)
 
 
@@ -802,14 +830,24 @@ def pull(
         )
 
         if detection.status != "found" or detection.path is None:
-            if detection.status == "multiple_found":
+            if detection.status == "folder_not_found":
+                # A missing mapping folder is a broken config (typo'd
+                # folder_path), not a benign skip — it must fail the run (#488).
+                console.print(
+                    f"  [red]![/red] {mapping.folder_path} "
+                    f"[red]- error: folder does not exist or is not a directory "
+                    f"(check folder_path in your sync config)[/red]"
+                )
+                error_count += 1
+            elif detection.status == "multiple_found":
                 console.print(
                     f"  [yellow]?[/yellow] {mapping.folder_path} "
                     f"[yellow]- skipped (multiple .env.* files, specify environment)[/yellow]"
                 )
+                skipped_count += 1
             else:
                 console.print(f"  [dim]=[/dim] {env_file} [dim]- skipped (not found)[/dim]")
-            skipped_count += 1
+                skipped_count += 1
             continue
 
         resolved_env_file = env_file.resolve()
@@ -826,19 +864,30 @@ def pull(
             skipped_count += 1
             continue
 
-        _normalize_mapped_dotenvx_metadata(
-            env_file,
-            mapping.folder_path / (sync_config.env_keys_filename or ".env.keys"),
-            effective_env,
-            backend_provider,
-        )
+        # Reading/normalizing the env file can raise for a non-UTF-8 file
+        # (UnicodeDecodeError is a ValueError) or an unreadable one (OSError).
+        # Neither must escape as a raw traceback that also aborts the remaining
+        # mappings — it is a clean per-file error, same boundary as
+        # vault-push --all (#488).
+        try:
+            _normalize_mapped_dotenvx_metadata(
+                env_file,
+                mapping.folder_path / (sync_config.env_keys_filename or ".env.keys"),
+                effective_env,
+                backend_provider,
+            )
 
-        # Check if the file carries this backend's ciphertext. Decrypt direction,
-        # so use the lenient predicate (#475): a mixed SOPS file (metadata block
-        # + surviving plaintext value) must still be handed to sops for a loud
-        # outcome, not silently skipped as "not encrypted" (and even
-        # profile-activated) while its values are still ciphertext.
-        content = env_file.read_text()
+            # Check if the file carries this backend's ciphertext. Decrypt
+            # direction, so use the lenient predicate (#475): a mixed SOPS file
+            # (metadata block + surviving plaintext value) must still be handed
+            # to sops for a loud outcome, not silently skipped as "not
+            # encrypted" (and even profile-activated) while its values are
+            # still ciphertext.
+            content = env_file.read_text(encoding="utf-8")
+        except (OSError, ValueError) as e:
+            console.print(f"  [red]![/red] {env_file} [red]- error reading file: {e}[/red]")
+            error_count += 1
+            continue
         if not encryption_helpers.should_attempt_decryption(
             backend_provider, encryption_backend, content
         ):
@@ -1139,30 +1188,40 @@ def _rekey_dotenvx_file(
     return True, ""
 
 
-def _verify_issue_summary(mismatches: int, unusable: int) -> str:
+def _verify_issue_summary(failed: int, unusable: int) -> str:
     """Summary line for the ``lock --verify-vault`` fail-fast gate.
 
-    Mismatched and unusable keys get named separately with their own remedy:
-    ``--sync-keys`` only fixes a mismatch, while an unusable (malformed) vault
-    secret must be fixed in the vault itself — the sync engine raises the same
-    ``KeyMaterialError`` — so labeling both "key mismatch(es)" steered users
-    toward syncing keys that could never install (#480 review follow-up).
+    Failed and unusable keys get named separately with their own remedy:
+    ``--sync-keys`` fixes a mismatched or missing/cannot-verify local key,
+    while an unusable (malformed) vault secret must be fixed in the vault
+    itself — the sync engine raises the same ``KeyMaterialError`` — so
+    labeling both the same steered users toward syncing keys that could never
+    install (#480 review follow-up). Every variant states that nothing was
+    encrypted: the gate hard-stops before Step 2, even with ``--force``,
+    because encrypting past a failed verification could mint a fresh
+    local-only key or commit a file the team's vault key cannot decrypt
+    (#473).
     """
     found: list[str] = []
-    if mismatches:
-        found.append(f"{mismatches} key mismatch(es)")
+    if failed:
+        found.append(f"{failed} failed key verification(s)")
     if unusable:
         found.append(f"{unusable} unusable vault key(s)")
     if not unusable:
-        remedy = "Run with --sync-keys to update local keys, or --force to encrypt anyway."
-    elif mismatches:
         remedy = (
-            "Fix the vault secret shapes named above, run with --sync-keys to update "
-            "mismatched local keys, or use --force to encrypt anyway."
+            "Run 'envdrift lock --sync-keys' to sync keys from vault, or rerun "
+            "without --verify-vault to skip verification."
+        )
+    elif failed:
+        remedy = (
+            "Fix the vault secret shapes named above, then run "
+            "'envdrift lock --sync-keys' to sync the remaining keys from vault."
         )
     else:
-        remedy = "Fix the vault secret shapes named above, or use --force to encrypt anyway."
-    return f"Found {' and '.join(found)}. {remedy}"
+        remedy = (
+            "Fix the vault secret shapes named above (--sync-keys cannot install an unusable key)."
+        )
+    return f"Found {' and '.join(found)}. Nothing was encrypted. {remedy}"
 
 
 def _sops_missing_recipients(
@@ -1258,7 +1317,11 @@ def lock(
     3. No plaintext secrets are accidentally committed
 
     Workflow:
-    - With --verify-vault: Check if local .env.keys match vault secrets
+    - With --verify-vault: Check if local .env.keys match vault secrets.
+      Any mapping that cannot be verified (missing .env.keys, missing key
+      entry, missing/empty vault secret, vault error) or that mismatches is
+      a hard failure: nothing is encrypted and the exit code is 1, even with
+      --force. Use --sync-keys to repair, or drop --verify-vault to skip.
     - With --sync-keys: Fetch keys from vault to ensure consistency
     - With --all: Also encrypt partial encryption .secret files and delete combined files
     - Then: Encrypt all .env files that are currently decrypted
@@ -1390,14 +1453,27 @@ def lock(
             print_sync_result(sync_result)
 
             if sync_result.has_errors:
-                errors.append("Key synchronization had errors")
-                if not force:
-                    print_error("Cannot proceed with encryption due to key sync errors")
-                    raise typer.Exit(code=1)
+                # Hard stop BEFORE Step 2, even with --force: --force means
+                # "don't prompt", not "encrypt past a failed key sync". A
+                # mapping whose vault key could not be fetched would reach
+                # Step 2 with no .env.keys entry and dotenvx would mint a
+                # fresh local-only keypair — the exact lockout of #473.
+                print_error(
+                    "Cannot proceed with encryption due to key sync errors. "
+                    "Nothing was encrypted. Fix the vault secrets (or publish "
+                    "local keys with 'envdrift vault-push') and rerun."
+                )
+                raise typer.Exit(code=1)
         else:
-            # Just verify (compare local keys with vault)
+            # Just verify (compare local keys with vault).
             from envdrift.sync.operations import EnvKeysFile
 
+            # Truthful verdicts (#473): a state we CANNOT verify (missing
+            # .env.keys, missing key entry, missing/empty vault secret, vault
+            # access failure) is a verification failure, not a warning.
+            # Continuing would let Step 2 mint a fresh local-only keypair and
+            # bless the result "ready to commit" — and a teammate syncing the
+            # team key from vault could no longer decrypt the committed file.
             verification_issues = 0
             unusable_keys = 0
 
@@ -1409,10 +1485,14 @@ def lock(
                 # Check if local key exists
                 if not env_keys_file.exists():
                     console.print(
-                        f"  [yellow]![/yellow] {mapping.folder_path} "
-                        f"[yellow]- warning: .env.keys not found[/yellow]"
+                        f"  [red]✗[/red] {mapping.folder_path} "
+                        f"[red]- cannot verify: {env_keys_file.name} not found[/red]"
                     )
-                    warnings.append(f"{mapping.folder_path}: .env.keys file missing")
+                    errors.append(
+                        f"{mapping.folder_path}: cannot verify - {env_keys_file.name} missing "
+                        f"(run 'envdrift lock --sync-keys' to fetch keys from vault)"
+                    )
+                    verification_issues += 1
                     continue
 
                 local_keys = EnvKeysFile(env_keys_file)
@@ -1420,10 +1500,14 @@ def lock(
 
                 if not local_key:
                     console.print(
-                        f"  [yellow]![/yellow] {mapping.folder_path} "
-                        f"[yellow]- warning: {key_name} not found in .env.keys[/yellow]"
+                        f"  [red]✗[/red] {mapping.folder_path} "
+                        f"[red]- cannot verify: {key_name} not found in {env_keys_file.name}[/red]"
                     )
-                    warnings.append(f"{mapping.folder_path}: {key_name} missing from .env.keys")
+                    errors.append(
+                        f"{mapping.folder_path}: cannot verify - {key_name} missing from "
+                        f"{env_keys_file.name} (run 'envdrift lock --sync-keys' to fetch it)"
+                    )
+                    verification_issues += 1
                     continue
 
                 # Fetch key from vault for comparison
@@ -1433,10 +1517,16 @@ def lock(
 
                     if not vault_secret or not vault_secret.value:
                         console.print(
-                            f"  [yellow]![/yellow] {mapping.folder_path} "
-                            f"[yellow]- warning: vault secret '{mapping.secret_name}' is empty[/yellow]"
+                            f"  [red]✗[/red] {mapping.folder_path} "
+                            f"[red]- cannot verify: vault secret "
+                            f"'{mapping.secret_name}' is empty[/red]"
                         )
-                        warnings.append(f"{mapping.folder_path}: vault secret is empty")
+                        errors.append(
+                            f"{mapping.folder_path}: cannot verify - vault secret "
+                            f"'{mapping.secret_name}' is empty "
+                            f"(push the key with 'envdrift vault-push')"
+                        )
+                        verification_issues += 1
                         continue
 
                     # Parse the vault secret identically to the sync engine /
@@ -1473,10 +1563,16 @@ def lock(
 
                 except SecretNotFoundError:
                     console.print(
-                        f"  [yellow]![/yellow] {mapping.folder_path} "
-                        f"[yellow]- warning: vault secret '{mapping.secret_name}' not found[/yellow]"
+                        f"  [red]✗[/red] {mapping.folder_path} "
+                        f"[red]- cannot verify: vault secret "
+                        f"'{mapping.secret_name}' not found[/red]"
                     )
-                    warnings.append(f"{mapping.folder_path}: vault secret not found")
+                    errors.append(
+                        f"{mapping.folder_path}: cannot verify - vault secret "
+                        f"'{mapping.secret_name}' not found "
+                        f"(push the key with 'envdrift vault-push')"
+                    )
+                    verification_issues += 1
                 except KeyMaterialError as e:
                     # A secret-shape problem, not a connectivity problem: count
                     # it as a verification issue so the fail-fast gate below
@@ -1495,10 +1591,16 @@ def lock(
                         f"[red]- error: vault access failed: {e}[/red]"
                     )
                     errors.append(f"{mapping.folder_path}: vault error - {e}")
+                    verification_issues += 1
 
             console.print()
 
-            if verification_issues > 0 and not force:
+            if verification_issues > 0:
+                # Hard stop BEFORE Step 2, even with --force: --force means
+                # "don't prompt", not "encrypt with keys that failed (or
+                # escaped) verification". Encrypting now could mint a fresh
+                # local-only key or commit a file the team's vault key cannot
+                # decrypt (#473).
                 print_error(
                     _verify_issue_summary(verification_issues - unusable_keys, unusable_keys)
                 )
@@ -1562,16 +1664,30 @@ def lock(
 
         # Check if env file exists
         if detection.status != "found" or detection.path is None:
-            if detection.status == "multiple_found":
+            if detection.status == "folder_not_found":
+                # A missing mapping folder is a broken config (typo'd
+                # folder_path), not a benign skip — it must fail the run (#488).
+                console.print(
+                    f"  [red]![/red] {mapping.folder_path} "
+                    f"[red]- error: folder does not exist or is not a directory "
+                    f"(check folder_path in your sync config)[/red]"
+                )
+                errors.append(
+                    f"{mapping.folder_path}: folder does not exist or is not a directory "
+                    "(check folder_path in your sync config)"
+                )
+                error_count += 1
+            elif detection.status == "multiple_found":
                 console.print(
                     f"  [yellow]?[/yellow] {mapping.folder_path} "
                     f"[yellow]- skipped (multiple .env.* files, specify environment)[/yellow]"
                 )
                 warnings.append(f"{mapping.folder_path}: multiple .env files found")
+                skipped_count += 1
             else:
                 console.print(f"  [dim]=[/dim] {env_file} [dim]- skipped (not found)[/dim]")
                 warnings.append(f"{env_file}: file not found")
-            skipped_count += 1
+                skipped_count += 1
             continue
 
         resolved_env_file = env_file.resolve()
@@ -1604,16 +1720,27 @@ def lock(
             )
             warnings.append(f"{env_file}: no .env.keys file found, new key will be generated")
 
-        _normalize_mapped_dotenvx_metadata(
-            env_file,
-            env_keys_file,
-            effective_env,
-            backend_provider,
-            check_only=check_only,
-        )
+        # Reading/normalizing the env file can raise for a non-UTF-8 file
+        # (UnicodeDecodeError is a ValueError) or an unreadable one (OSError).
+        # Neither must escape as a raw traceback that also aborts the remaining
+        # mappings — it is a clean per-file error, same boundary as
+        # vault-push --all (#488).
+        try:
+            _normalize_mapped_dotenvx_metadata(
+                env_file,
+                env_keys_file,
+                effective_env,
+                backend_provider,
+                check_only=check_only,
+            )
 
-        # Check if file is already encrypted
-        content = env_file.read_text()
+            # Check if file is already encrypted
+            content = env_file.read_text(encoding="utf-8")
+        except (OSError, ValueError) as e:
+            console.print(f"  [red]![/red] {env_file} [red]- error reading file: {e}[/red]")
+            errors.append(f"{env_file}: read failed - {e}")
+            error_count += 1
+            continue
         if not encryption_helpers.is_encrypted_content(
             backend_provider, encryption_backend, content
         ):
@@ -1678,7 +1805,22 @@ def lock(
                     # was renamed (e.g., .env.local -> .env.localenv) but the
                     # .env.keys still has the old key name.
                     expected_key_name = f"DOTENV_PRIVATE_KEY_{effective_env.upper()}"
-                    old_key_name = _find_stale_private_key_name(env_keys_file, expected_key_name)
+                    # The keys file is read inside the helper (read_key + the
+                    # raw scan); a non-UTF-8 or unreadable .env.keys must be a
+                    # clean per-file error, not a raw UnicodeDecodeError
+                    # traceback that aborts the remaining mappings (#488).
+                    try:
+                        old_key_name = _find_stale_private_key_name(
+                            env_keys_file, expected_key_name
+                        )
+                    except (OSError, ValueError) as e:
+                        console.print(
+                            f"  [red]![/red] {env_keys_file} "
+                            f"[red]- error reading keys file: {e}[/red]"
+                        )
+                        errors.append(f"{env_keys_file}: read failed - {e}")
+                        error_count += 1
+                        continue
 
                     if old_key_name:
                         if check_only:

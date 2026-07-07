@@ -290,6 +290,17 @@ def vault_push(
         for mapping in sync_config.mappings:
             try:
                 detection = resolve_mapping_env_file(mapping)
+                if detection.status == "folder_not_found":
+                    # A missing mapping folder is a broken config (typo'd
+                    # folder_path), not a "No .env file found" skip: reporting
+                    # it as a skip with Errors: 0 let a key-backup CI job go
+                    # green having pushed nothing (#488).
+                    print_error(
+                        f"Error processing {mapping.folder_path}: folder does not "
+                        "exist or is not a directory (check folder_path in your sync config)"
+                    )
+                    error_count += 1
+                    continue
                 env_file = (
                     detection.path
                     if detection.path is not None
@@ -546,7 +557,7 @@ def vault_pull(
         ),
     ] = None,
 ) -> None:
-    r"""
+    """
     Pull a single encryption key from a cloud vault into a local .env.keys file.
 
     This is the config-free inverse of `envdrift vault-push` (single-service mode):
@@ -563,7 +574,7 @@ def vault_pull(
        envdrift vault-pull ./services/soak soak-machine --env soak --no-decrypt -p azure --vault-url https://myvault.vault.azure.net/
 
     Provider/URL/region/project-id may be omitted when they are configured in the
-    `\[vault]` section of an envdrift.toml/pyproject.toml.
+    `[vault]` section of an envdrift.toml/pyproject.toml.
 
     Examples:
         # Azure

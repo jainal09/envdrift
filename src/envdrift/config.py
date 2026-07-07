@@ -264,18 +264,40 @@ class PartialEncryptionConfig:
         validate_partial_encryption_environments(self.environments)
 
 
+def _validate_sync_mapping_entry(m: Any) -> None:
+    """Validate one ``[[vault.sync.mappings]]`` entry, raising a clean ValueError.
+
+    TOML type surprises — a non-table entry (``mappings = [123]``), a missing
+    required key, or a wrong-typed value (``folder_path = 123``) — used to
+    escape as raw TypeError/KeyError tracebacks from ``Path()``/subscript use
+    downstream; validate loudly here instead (#443 #32 #488). The key shapes
+    are shared with :func:`envdrift.sync.config.invalid_mapping_value_keys`
+    (the explicit ``--config`` path) so the two layers cannot drift.
+    """
+    from envdrift.sync.config import MAPPING_REQUIRED_STR_KEYS, invalid_mapping_value_keys
+
+    if not isinstance(m, dict):
+        raise ValueError(
+            f"[[vault.sync.mappings]] entry must be a table, got {type(m).__name__}: {m!r}"
+        )
+    missing = [k for k in MAPPING_REQUIRED_STR_KEYS if k not in m]
+    if missing:
+        raise ValueError(
+            f"[[vault.sync.mappings]] entry is missing required key(s) {', '.join(missing)}: {m!r}"
+        )
+    wrong_type = invalid_mapping_value_keys(m)
+    if wrong_type:
+        raise ValueError(
+            f"[[vault.sync.mappings]] entry has wrong value type(s) for "
+            f"{', '.join(wrong_type)}: {m!r}"
+        )
+
+
 def _build_vault_config(vault_section: dict[str, Any]) -> VaultConfig:
     """Build the vault config, including its nested ``[vault.sync]`` section."""
     sync_section = vault_section.get("sync", {})
     for m in sync_section.get("mappings", []):
-        missing = [k for k in ("secret_name", "folder_path") if k not in m]
-        if missing:
-            # Raw subscripts used to raise an uncaught KeyError traceback when a
-            # mapping omitted a required key (#443 #32).
-            raise ValueError(
-                f"[[vault.sync.mappings]] entry is missing required key(s) "
-                f"{', '.join(missing)}: {m!r}"
-            )
+        _validate_sync_mapping_entry(m)
     sync_mappings = [
         SyncMappingConfig(
             secret_name=m["secret_name"],

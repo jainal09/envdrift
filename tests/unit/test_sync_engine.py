@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-import shutil
+import logging
 import subprocess
 from pathlib import Path
 from textwrap import dedent
@@ -140,6 +140,57 @@ class TestSyncEngineBasic:
         assert result.services[0].action == SyncAction.SKIPPED
         assert ".env.production" in result.services[0].message
         assert not (service_dir / ".env.keys").exists()
+
+    def test_sync_errors_when_mapping_folder_does_not_exist(
+        self, mock_vault_client: MagicMock, tmp_path: Path
+    ) -> None:
+        """#488: a typo'd/nonexistent folder_path is a config ERROR, not a green skip.
+
+        It must fail ``sync --ci`` / ``pull`` instead of reporting full success,
+        and the row must state the real reason (folder missing), distinguishing
+        it from "env file not created yet" (which stays a skip).
+        """
+        mock_vault_client.get_secret.return_value = SecretValue(name="test-key", value="secret123")
+
+        config = SyncConfig(
+            mappings=[
+                ServiceMapping(
+                    secret_name="test-key",
+                    folder_path=tmp_path / "servces" / "api",  # typo'd, never created
+                ),
+            ],
+        )
+
+        engine = SyncEngine(config=config, vault_client=mock_vault_client)
+        result = engine.sync_all()
+
+        assert result.services[0].action == SyncAction.ERROR
+        assert "does not exist" in (result.services[0].error or "")
+        assert "folder_path" in (result.services[0].error or "")
+        assert result.has_errors
+        assert result.exit_code == 1
+
+    def test_sync_errors_when_explicit_env_file_folder_does_not_exist(
+        self, mock_vault_client: MagicMock, tmp_path: Path
+    ) -> None:
+        """#488: same loud error when the mapping uses an explicit env_file."""
+        mock_vault_client.get_secret.return_value = SecretValue(name="test-key", value="secret123")
+
+        config = SyncConfig(
+            mappings=[
+                ServiceMapping(
+                    secret_name="test-key",
+                    folder_path=tmp_path / "missing-svc",
+                    env_file=Path("custom.env"),
+                ),
+            ],
+        )
+
+        engine = SyncEngine(config=config, vault_client=mock_vault_client)
+        result = engine.sync_all()
+
+        assert result.services[0].action == SyncAction.ERROR
+        assert "does not exist" in (result.services[0].error or "")
 
     def test_sync_updates_mismatched_file(
         self, mock_vault_client: MagicMock, tmp_path: Path
@@ -393,14 +444,21 @@ class TestSyncEngineDecryptionTest:
     def test_decryption_test_skipped_no_env_file(
         self, mock_vault_client: MagicMock, tmp_path: Path
     ) -> None:
-        """Test decryption test is skipped when no env file exists."""
+        """Test decryption test is skipped when no env file exists.
+
+        The folder must exist: a missing *folder* is a config ERROR (#488)
+        and the decryption test never runs for errored mappings.
+        """
         mock_vault_client.get_secret.return_value = SecretValue(name="test-key", value="secret123")
+
+        service_dir = tmp_path / "service1"
+        service_dir.mkdir()  # folder exists, but holds no env file
 
         config = SyncConfig(
             mappings=[
                 ServiceMapping(
                     secret_name="test-key",
-                    folder_path=tmp_path / "service1",
+                    folder_path=service_dir,
                 ),
             ],
         )
@@ -442,25 +500,32 @@ class TestSyncEngineDecryptionTest:
 
         assert result.services[0].decryption_result == DecryptionTestResult.SKIPPED
 
-    def test_decryption_test_passes(
+    def test_decryption_test_passes_single_decrypt_on_temp_copy(
         self, mock_vault_client: MagicMock, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """Test decryption test passes and cleans up backup."""
+        """A passing check runs ONE dotenvx decrypt against a temp-dir copy (#473).
+
+        The old implementation decrypted the LIVE file in place and re-encrypted
+        it afterwards (two subprocess calls), churning the ciphertext on every
+        passing run. The check must decrypt a copy in an isolated temp dir, pass
+        only the file NAME with cwd set to that dir, and never touch the live
+        file or leave a backup behind.
+        """
         mapping = ServiceMapping(
             secret_name="test-key", folder_path=tmp_path, environment="production"
         )
         env_file = tmp_path / ".env.production"
-        env_file.write_text('DOTENV_PUBLIC_KEY="abc"\nSECRET="encrypted:xyz"\n')
+        env_file.write_text('DOTENV_PUBLIC_KEY="abc"\nSECRET="encrypted:xyz"\n', encoding="utf-8")
+        original = env_file.read_bytes()
 
         monkeypatch.setattr("envdrift.sync.engine.shutil.which", lambda _: "/usr/bin/dotenvx")
-        monkeypatch.setattr("envdrift.sync.engine.shutil.copy2", lambda *a, **k: None)
-        monkeypatch.setattr("envdrift.sync.engine.Path.unlink", lambda *a, **k: None)
-        runner = MagicMock()
-        runner.side_effect = [
-            subprocess.CompletedProcess(["decrypt"], 0),
-            subprocess.CompletedProcess(["encrypt"], 0),
-        ]
-        monkeypatch.setattr("envdrift.sync.engine.subprocess.run", runner)
+        calls: list[dict] = []
+
+        def fake_run(cmd, **kwargs):
+            calls.append({"cmd": list(cmd), "kwargs": kwargs})
+            return subprocess.CompletedProcess(cmd, 0)
+
+        monkeypatch.setattr("envdrift.sync.engine.subprocess.run", fake_run)
 
         engine = SyncEngine(
             config=SyncConfig(mappings=[mapping]), vault_client=mock_vault_client, mode=SyncMode()
@@ -468,31 +533,114 @@ class TestSyncEngineDecryptionTest:
 
         result = engine._test_decryption(mapping)
 
-        assert runner.call_count == 2  # decrypt + encrypt
         assert result == DecryptionTestResult.PASSED
+        # Exactly one decrypt; the old roundtrip's re-encrypt stage is gone.
+        assert len(calls) == 1
+        assert calls[0]["cmd"][1] == "decrypt"
+        # dotenvx gets the file NAME with cwd set to the isolated temp dir —
+        # never the live path, never the mapping folder as cwd.
+        tested_name = calls[0]["cmd"][-1]
+        run_cwd = Path(calls[0]["kwargs"]["cwd"])
+        assert tested_name == ".env.production"
+        assert run_cwd != tmp_path
+        assert (run_cwd / tested_name).exists() is False  # temp dir already cleaned up
+        # The live file is byte-identical and no backup byproduct exists.
+        assert env_file.read_bytes() == original
         assert not env_file.with_suffix(".backup_decryption_test").exists()
 
-    def test_decryption_test_fails_on_subprocess_error(
+    def test_decryption_test_live_file_untouched_even_when_decrypt_writes(
         self, mock_vault_client: MagicMock, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """Test decryption test returns FAILED when subprocess fails."""
+        """The file dotenvx rewrites is the temp COPY, never the live file (#473).
+
+        Simulates dotenvx faithfully: the fake decrypt rewrites whatever file it
+        is pointed at with plaintext. With the old in-place roundtrip that was
+        the live working-tree file; now it must be the temp copy, so the live
+        bytes stay identical even though the subprocess "decrypted" something.
+        """
         mapping = ServiceMapping(
             secret_name="test-key", folder_path=tmp_path, environment="production"
         )
         env_file = tmp_path / ".env.production"
-        env_file.write_text('DOTENV_PUBLIC_KEY="abc"\nSECRET="encrypted:xyz"\n')
+        env_file.write_text('DOTENV_PUBLIC_KEY="abc"\nSECRET="encrypted:xyz"\n', encoding="utf-8")
+        original = env_file.read_bytes()
+
+        monkeypatch.setattr("envdrift.sync.engine.shutil.which", lambda _: "/usr/bin/dotenvx")
 
         def fake_run(cmd, **kwargs):
-            """
-            Simulate subprocess.run by returning a completed process that indicates failure.
+            # Resolve the file exactly like dotenvx would: -f arg against cwd.
+            target = Path(kwargs["cwd"]) / cmd[-1]
+            assert target.exists(), f"dotenvx pointed at a non-existent file: {target}"
+            target.write_text("SECRET=plaintext-secret\n", encoding="utf-8")
+            return subprocess.CompletedProcess(cmd, 0)
 
-            Parameters:
-                cmd: The command that would have been executed; accepted for signature compatibility and included in the returned CompletedProcess.
-                **kwargs: Additional keyword arguments accepted for compatibility and ignored.
+        monkeypatch.setattr("envdrift.sync.engine.subprocess.run", fake_run)
 
-            Returns:
-                subprocess.CompletedProcess: A CompletedProcess with the provided `cmd` and a `returncode` of 1.
-            """
+        engine = SyncEngine(
+            config=SyncConfig(mappings=[mapping]), vault_client=mock_vault_client, mode=SyncMode()
+        )
+
+        result = engine._test_decryption(mapping)
+
+        assert result == DecryptionTestResult.PASSED
+        assert env_file.read_bytes() == original
+        assert b"plaintext-secret" not in env_file.read_bytes()
+
+    def test_decryption_test_relative_folder_path_resolves(
+        self, mock_vault_client: MagicMock, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A relative folder_path must yield a resolvable dotenvx invocation (#473).
+
+        The old roundtrip ran ``dotenvx decrypt -f services/api/.env.production``
+        with ``cwd=services/api`` — dotenvx resolved the doubled relative path
+        ``services/api/services/api/.env.production`` (MISSING_ENV_FILE) and
+        every relative monorepo mapping reported FAILED. The fake dotenvx below
+        succeeds only when the path it is given actually exists from its cwd,
+        exactly like the real binary.
+        """
+        service_dir = tmp_path / "services" / "api"
+        service_dir.mkdir(parents=True)
+        env_file = service_dir / ".env.production"
+        env_file.write_text('DOTENV_PUBLIC_KEY="abc"\nSECRET="encrypted:xyz"\n', encoding="utf-8")
+        (service_dir / ".env.keys").write_text(
+            "DOTENV_PRIVATE_KEY_PRODUCTION=key\n", encoding="utf-8"
+        )
+
+        monkeypatch.chdir(tmp_path)
+        mapping = ServiceMapping(
+            secret_name="test-key",
+            folder_path=Path("services/api"),
+            environment="production",
+        )
+
+        monkeypatch.setattr("envdrift.sync.engine.shutil.which", lambda _: "/usr/bin/dotenvx")
+
+        def fake_run(cmd, **kwargs):
+            target = Path(kwargs["cwd"]) / cmd[-1]
+            returncode = 0 if target.exists() else 1
+            return subprocess.CompletedProcess(cmd, returncode)
+
+        monkeypatch.setattr("envdrift.sync.engine.subprocess.run", fake_run)
+
+        engine = SyncEngine(
+            config=SyncConfig(mappings=[mapping]), vault_client=mock_vault_client, mode=SyncMode()
+        )
+
+        assert engine._test_decryption(mapping) == DecryptionTestResult.PASSED
+
+    def test_decryption_test_fails_on_subprocess_error(
+        self, mock_vault_client: MagicMock, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A failing dotenvx decrypt returns FAILED with the live file untouched."""
+        mapping = ServiceMapping(
+            secret_name="test-key", folder_path=tmp_path, environment="production"
+        )
+        env_file = tmp_path / ".env.production"
+        env_file.write_text('DOTENV_PUBLIC_KEY="abc"\nSECRET="encrypted:xyz"\n', encoding="utf-8")
+        original = env_file.read_bytes()
+
+        def fake_run(cmd, **kwargs):
+            """Simulate a dotenvx decrypt failure (wrong key)."""
             return subprocess.CompletedProcess(cmd, 1)
 
         monkeypatch.setattr("envdrift.sync.engine.shutil.which", lambda _: "/usr/bin/dotenvx")
@@ -504,30 +652,27 @@ class TestSyncEngineDecryptionTest:
         result = engine._test_decryption(mapping)
 
         assert result == DecryptionTestResult.FAILED
+        # The live file was never part of the test run: byte-identical, no backup.
+        assert env_file.read_bytes() == original
         assert not env_file.with_suffix(".backup_decryption_test").exists()
 
-    def test_decryption_test_timeout_restores_file(
-        self, mock_vault_client: MagicMock, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    def test_decryption_test_timeout_returns_failed_file_untouched(
+        self,
+        mock_vault_client: MagicMock,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        caplog: pytest.LogCaptureFixture,
     ) -> None:
-        """Timeouts should be treated as FAILED and restore the original file."""
+        """Timeouts are FAILED; the live file is untouched (no restore needed)."""
         mapping = ServiceMapping(
             secret_name="test-key", folder_path=tmp_path, environment="production"
         )
         env_file = tmp_path / ".env.production"
         original = 'DOTENV_PUBLIC_KEY="abc"\nSECRET="encrypted:xyz"\n'
-        env_file.write_text(original)
+        env_file.write_text(original, encoding="utf-8")
 
         def fake_run(cmd, **kwargs):
-            """
-            Simulate a subprocess.run invocation that always raises a timeout.
-
-            Parameters:
-                cmd (Sequence[str] | str): The command that was attempted to run; included in the raised exception.
-                **kwargs: Additional keyword arguments accepted by subprocess.run (ignored).
-
-            Raises:
-                subprocess.TimeoutExpired: Always raised with the provided `cmd` and a timeout value of 30 seconds.
-            """
+            """Simulate dotenvx hanging until the timeout fires."""
             raise subprocess.TimeoutExpired(cmd=cmd, timeout=30)
 
         monkeypatch.setattr("envdrift.sync.engine.shutil.which", lambda _: "/usr/bin/dotenvx")
@@ -536,51 +681,38 @@ class TestSyncEngineDecryptionTest:
         engine = SyncEngine(
             config=SyncConfig(mappings=[mapping]), vault_client=mock_vault_client, mode=SyncMode()
         )
-        result = engine._test_decryption(mapping)
+        with caplog.at_level(logging.WARNING, logger="envdrift.sync.engine"):
+            result = engine._test_decryption(mapping)
 
         assert result == DecryptionTestResult.FAILED
-        assert env_file.read_text() == original
+        assert env_file.read_text(encoding="utf-8") == original
+        # The unexpected-failure cause is logged so an infrastructure failure
+        # is distinguishable from a genuine wrong-key FAILED in post-incident
+        # diagnosis (it is not silently swallowed).
+        assert any(
+            "failed unexpectedly" in record.message and record.exc_info for record in caplog.records
+        )
 
-    def test_decryption_test_failed_backup_copy_returns_failed(
+    def test_decryption_test_copy_failure_returns_failed(
         self, mock_vault_client: MagicMock, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """A failed initial backup copy returns FAILED, never a secondary error.
-
-        Regression for #317: the original code copied the target to a backup
-        path inside the main try block; if that very first ``shutil.copy2``
-        raised, control fell into the generic ``except`` which immediately tried
-        to restore *from* the backup that was never created — raising a
-        secondary ``FileNotFoundError`` that escaped the method uncaught instead
-        of returning ``DecryptionTestResult.FAILED``.
-        """
+        """A failed temp-dir copy is FAILED, and dotenvx is never invoked."""
         mapping = ServiceMapping(
             secret_name="test-key", folder_path=tmp_path, environment="production"
         )
         env_file = tmp_path / ".env.production"
         original = 'DOTENV_PUBLIC_KEY="abc"\nSECRET="encrypted:xyz"\n'
-        env_file.write_text(original)
-        backup_path = env_file.with_suffix(".backup_decryption_test")
+        env_file.write_text(original, encoding="utf-8")
 
-        # dotenvx is "present" so the method reaches the backup copy (not SKIP).
         monkeypatch.setattr("envdrift.sync.engine.shutil.which", lambda _: "/usr/bin/dotenvx")
 
-        # Make the very first backup copy (target -> backup) fail as it would on
-        # a read-only directory or full disk. A restore copy (backup -> target)
-        # is a different call; this fixture only fails the backup write so we can
-        # prove the restore path is never wrongly taken.
-        real_copy2 = shutil.copy2
+        def failing_copy(src, dst, *args, **kwargs):
+            raise PermissionError(f"cannot copy to: {dst}")
 
-        def failing_backup_copy(src, dst, *args, **kwargs):
-            if Path(dst) == backup_path:
-                raise PermissionError(f"cannot write backup: {dst}")
-            return real_copy2(src, dst, *args, **kwargs)
+        monkeypatch.setattr("envdrift.sync.engine.shutil.copy2", failing_copy)
 
-        monkeypatch.setattr("envdrift.sync.engine.shutil.copy2", failing_backup_copy)
-
-        # subprocess must never be reached; blow up loudly if the backup guard
-        # is broken and execution proceeds to dotenvx.
         def unreachable_run(*args, **kwargs):
-            raise AssertionError("subprocess.run should not run after a failed backup copy")
+            raise AssertionError("subprocess.run must not run after a failed copy")
 
         monkeypatch.setattr("envdrift.sync.engine.subprocess.run", unreachable_run)
 
@@ -588,225 +720,102 @@ class TestSyncEngineDecryptionTest:
             config=SyncConfig(mappings=[mapping]), vault_client=mock_vault_client, mode=SyncMode()
         )
 
-        # Must not raise FileNotFoundError (or anything) — must return FAILED.
         result = engine._test_decryption(mapping)
 
         assert result == DecryptionTestResult.FAILED
-        # No phantom backup left behind, and the original file is untouched.
-        assert not backup_path.exists()
-        assert env_file.read_text() == original
+        assert env_file.read_text(encoding="utf-8") == original
 
-    def test_decryption_test_failed_restore_preserves_backup(
-        self,
-        mock_vault_client: MagicMock,
-        tmp_path: Path,
-        monkeypatch: pytest.MonkeyPatch,
-        caplog: pytest.LogCaptureFixture,
-    ) -> None:
-        """A failed *restore* must preserve the backup and warn (cubic P1 on #317).
-
-        When ``dotenvx decrypt`` fails, the engine attempts to restore the file
-        from the backup. If that restore copy itself fails (e.g. the target was
-        decrypted on disk and is now unwritable), the file may be left
-        decrypted — the backup is the only recovery copy. The old unconditional
-        ``finally: backup_path.unlink()`` deleted it anyway, destroying the only
-        way to recover the encrypted original. The backup must now be PRESERVED
-        and a warning surfaced, while still returning FAILED.
-        """
-        mapping = ServiceMapping(
-            secret_name="test-key", folder_path=tmp_path, environment="production"
-        )
-        env_file = tmp_path / ".env.production"
-        original = 'DOTENV_PUBLIC_KEY="abc"\nSECRET="encrypted:xyz"\n'
-        env_file.write_text(original)
-        backup_path = env_file.with_suffix(".backup_decryption_test")
-
-        monkeypatch.setattr("envdrift.sync.engine.shutil.which", lambda _: "/usr/bin/dotenvx")
-
-        # The initial backup copy (target -> backup) succeeds so a real backup
-        # exists; the *restore* copy (backup -> target) raises, simulating a file
-        # left decrypted on a now-unwritable target.
-        real_copy2 = shutil.copy2
-
-        def restore_fails_copy(src, dst, *args, **kwargs):
-            if Path(src) == backup_path:
-                raise PermissionError(f"cannot restore over: {dst}")
-            return real_copy2(src, dst, *args, **kwargs)
-
-        monkeypatch.setattr("envdrift.sync.engine.shutil.copy2", restore_fails_copy)
-
-        # dotenvx decrypt returns non-zero so the restore path is taken.
-        def fake_run(cmd, **kwargs):
-            return subprocess.CompletedProcess(cmd, 1)
-
-        monkeypatch.setattr("envdrift.sync.engine.subprocess.run", fake_run)
-
-        engine = SyncEngine(
-            config=SyncConfig(mappings=[mapping]), vault_client=mock_vault_client, mode=SyncMode()
-        )
-
-        with caplog.at_level("WARNING", logger="envdrift.sync.engine"):
-            result = engine._test_decryption(mapping)
-
-        assert result == DecryptionTestResult.FAILED
-        # The backup is the only recovery copy and MUST survive the finally block.
-        assert backup_path.exists()
-        # The user is warned the file may be left decrypted and where the backup is.
-        assert any(
-            "preserved" in record.message and str(backup_path) in record.message
-            for record in caplog.records
-        )
-
-    def test_decryption_test_encrypt_failure_restores_and_deletes_backup(
+    def test_decryption_test_scrubs_stray_private_keys_from_env(
         self, mock_vault_client: MagicMock, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """A failed re-encrypt restores the original and (on success) deletes the backup.
+        """Stray DOTENV_PRIVATE_KEY*/DOTENV_KEY shell vars must not leak in (#473).
 
-        Decrypt succeeds but re-encrypt returns non-zero: the file is restored
-        from the backup. Because that restore succeeds, the file is in a
-        known-good state and the backup is cleaned up (no leftover, no warning).
+        The check verifies the SYNCED keys file; a correct key exported in the
+        parent shell must not turn a broken .env.keys into a false PASS.
         """
         mapping = ServiceMapping(
             secret_name="test-key", folder_path=tmp_path, environment="production"
         )
         env_file = tmp_path / ".env.production"
-        original = 'DOTENV_PUBLIC_KEY="abc"\nSECRET="encrypted:xyz"\n'
-        env_file.write_text(original)
-        backup_path = env_file.with_suffix(".backup_decryption_test")
+        env_file.write_text('DOTENV_PUBLIC_KEY="abc"\nSECRET="encrypted:xyz"\n', encoding="utf-8")
 
+        monkeypatch.setenv("DOTENV_PRIVATE_KEY_PRODUCTION", "stray-shell-key")
+        monkeypatch.setenv("DOTENV_KEY", "stray-dotenv-key")
         monkeypatch.setattr("envdrift.sync.engine.shutil.which", lambda _: "/usr/bin/dotenvx")
-        runner = MagicMock()
-        runner.side_effect = [
-            subprocess.CompletedProcess(["decrypt"], 0),
-            subprocess.CompletedProcess(["encrypt"], 1),  # re-encrypt fails
-        ]
-        monkeypatch.setattr("envdrift.sync.engine.subprocess.run", runner)
+
+        captured_env: dict[str, str] = {}
+
+        def fake_run(cmd, **kwargs):
+            captured_env.update(kwargs["env"])
+            return subprocess.CompletedProcess(cmd, 0)
+
+        monkeypatch.setattr("envdrift.sync.engine.subprocess.run", fake_run)
 
         engine = SyncEngine(
             config=SyncConfig(mappings=[mapping]), vault_client=mock_vault_client, mode=SyncMode()
         )
-        result = engine._test_decryption(mapping)
 
-        assert result == DecryptionTestResult.FAILED
-        # Restore succeeded -> known-good state -> backup is cleaned up.
-        assert not backup_path.exists()
-        assert env_file.read_text() == original
+        assert engine._test_decryption(mapping) == DecryptionTestResult.PASSED
+        assert "DOTENV_PRIVATE_KEY_PRODUCTION" not in captured_env
+        assert "DOTENV_KEY" not in captured_env
 
-    def test_decryption_test_encrypt_stage_fnf_restores_not_skipped(
+    def test_decryption_test_copies_custom_keys_filename_as_env_keys(
         self, mock_vault_client: MagicMock, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """An encrypt-stage FileNotFoundError must restore, never SKIP+delete-backup.
+        """A custom env_keys_filename is staged as `.env.keys` so dotenvx finds it."""
+        mapping = ServiceMapping(
+            secret_name="test-key", folder_path=tmp_path, environment="production"
+        )
+        env_file = tmp_path / ".env.production"
+        env_file.write_text('DOTENV_PUBLIC_KEY="abc"\nSECRET="encrypted:xyz"\n', encoding="utf-8")
+        (tmp_path / "custom.keys").write_text(
+            "DOTENV_PRIVATE_KEY_PRODUCTION=key\n", encoding="utf-8"
+        )
 
-        Data-loss regression: ``dotenvx decrypt`` succeeds (returncode 0) and the
-        live env file is now plaintext on disk. If the *second* ``subprocess.run``
-        (``dotenvx encrypt``) then raises ``FileNotFoundError`` (dotenvx removed
-        mid-run, cwd vanished, …), the old handler returned SKIPPED with no
-        restore — and because ``backup_safe_to_delete`` was still True, the
-        ``finally`` deleted the backup. Net effect: the file is left DECRYPTED
-        (plaintext secret on disk) and the only encrypted copy is gone.
+        monkeypatch.setattr("envdrift.sync.engine.shutil.which", lambda _: "/usr/bin/dotenvx")
 
-        The fix: only the *first* (decrypt) call's FNF means "dotenvx not
-        installed / file untouched" -> SKIPPED. A later FNF, once the file is
-        decrypted on disk, is a real FAILURE: restore from the backup. With the
-        restore succeeding here the file is returned to its encrypted original
-        and the backup is cleaned up; the result is FAILED, not SKIPPED.
-        """
+        staged: dict[str, bool] = {}
+
+        def fake_run(cmd, **kwargs):
+            staged["env_keys_present"] = (Path(kwargs["cwd"]) / ".env.keys").exists()
+            return subprocess.CompletedProcess(cmd, 0)
+
+        monkeypatch.setattr("envdrift.sync.engine.subprocess.run", fake_run)
+
+        engine = SyncEngine(
+            config=SyncConfig(mappings=[mapping], env_keys_filename="custom.keys"),
+            vault_client=mock_vault_client,
+            mode=SyncMode(),
+        )
+
+        assert engine._test_decryption(mapping) == DecryptionTestResult.PASSED
+        assert staged["env_keys_present"] is True
+
+    def test_decryption_test_fnf_returns_skipped(
+        self, mock_vault_client: MagicMock, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """dotenvx vanishing between which() and run() is a SKIP; file untouched."""
         mapping = ServiceMapping(
             secret_name="test-key", folder_path=tmp_path, environment="production"
         )
         env_file = tmp_path / ".env.production"
         original = 'DOTENV_PUBLIC_KEY="abc"\nSECRET="encrypted:xyz"\n'
-        env_file.write_text(original)
-        backup_path = env_file.with_suffix(".backup_decryption_test")
+        env_file.write_text(original, encoding="utf-8")
 
         monkeypatch.setattr("envdrift.sync.engine.shutil.which", lambda _: "/usr/bin/dotenvx")
 
-        decrypted_plaintext = 'DOTENV_PUBLIC_KEY="abc"\nSECRET="plaintext-secret"\n'
-
-        def fake_run(cmd, **kwargs):
-            # First call is `dotenvx decrypt`: succeed AND rewrite the live file
-            # to plaintext on disk, exactly as dotenvx would.
-            if "decrypt" in cmd:
-                env_file.write_text(decrypted_plaintext)
-                return subprocess.CompletedProcess(cmd, 0)
-            # Second call is `dotenvx encrypt`: the binary has vanished mid-run.
+        def raise_fnf(*_a: object, **_k: object) -> subprocess.CompletedProcess[str]:
             raise FileNotFoundError(2, "No such file or directory: 'dotenvx'")
 
-        monkeypatch.setattr("envdrift.sync.engine.subprocess.run", fake_run)
+        monkeypatch.setattr("envdrift.sync.engine.subprocess.run", raise_fnf)
 
         engine = SyncEngine(
             config=SyncConfig(mappings=[mapping]), vault_client=mock_vault_client, mode=SyncMode()
         )
         result = engine._test_decryption(mapping)
 
-        # (a) FAILED, not SKIPPED — the file was modified before the FNF.
-        assert result == DecryptionTestResult.FAILED
-        assert result != DecryptionTestResult.SKIPPED
-        # (b) The restore succeeded -> the file is back to its encrypted original,
-        # never left as plaintext on disk.
-        assert env_file.read_text() == original
-        assert "plaintext-secret" not in env_file.read_text()
-        # The file is in a known-good (encrypted) state, so the backup is cleaned.
-        assert not backup_path.exists()
-
-    def test_decryption_test_encrypt_stage_fnf_failed_restore_preserves_backup(
-        self,
-        mock_vault_client: MagicMock,
-        tmp_path: Path,
-        monkeypatch: pytest.MonkeyPatch,
-        caplog: pytest.LogCaptureFixture,
-    ) -> None:
-        """Encrypt-stage FNF + a failing restore must PRESERVE the backup, never delete it.
-
-        Same data-loss scenario as above (decrypt succeeds, encrypt raises
-        FileNotFoundError) but now the restore copy itself also fails. The file
-        is left decrypted on disk; the backup is the only encrypted recovery
-        copy. It MUST survive the ``finally`` (with a warning) — the old code
-        deleted it, losing the only way back to the encrypted original.
-        """
-        mapping = ServiceMapping(
-            secret_name="test-key", folder_path=tmp_path, environment="production"
-        )
-        env_file = tmp_path / ".env.production"
-        original = 'DOTENV_PUBLIC_KEY="abc"\nSECRET="encrypted:xyz"\n'
-        env_file.write_text(original)
-        backup_path = env_file.with_suffix(".backup_decryption_test")
-
-        monkeypatch.setattr("envdrift.sync.engine.shutil.which", lambda _: "/usr/bin/dotenvx")
-
-        # Initial backup copy (target -> backup) succeeds; the restore copy
-        # (backup -> target) raises, simulating an unwritable decrypted target.
-        real_copy2 = shutil.copy2
-
-        def restore_fails_copy(src, dst, *args, **kwargs):
-            if Path(src) == backup_path:
-                raise PermissionError(f"cannot restore over: {dst}")
-            return real_copy2(src, dst, *args, **kwargs)
-
-        monkeypatch.setattr("envdrift.sync.engine.shutil.copy2", restore_fails_copy)
-
-        def fake_run(cmd, **kwargs):
-            if "decrypt" in cmd:
-                env_file.write_text('DOTENV_PUBLIC_KEY="abc"\nSECRET="plaintext-secret"\n')
-                return subprocess.CompletedProcess(cmd, 0)
-            raise FileNotFoundError(2, "No such file or directory: 'dotenvx'")
-
-        monkeypatch.setattr("envdrift.sync.engine.subprocess.run", fake_run)
-
-        engine = SyncEngine(
-            config=SyncConfig(mappings=[mapping]), vault_client=mock_vault_client, mode=SyncMode()
-        )
-
-        with caplog.at_level("WARNING", logger="envdrift.sync.engine"):
-            result = engine._test_decryption(mapping)
-
-        # FAILED (not SKIPPED), backup PRESERVED as the only encrypted copy.
-        assert result == DecryptionTestResult.FAILED
-        assert backup_path.exists()
-        assert any(
-            "preserved" in record.message and str(backup_path) in record.message
-            for record in caplog.records
-        )
+        assert result == DecryptionTestResult.SKIPPED
+        assert env_file.read_text(encoding="utf-8") == original
 
     def test_decryption_test_non_utf8_file_returns_failed(
         self, mock_vault_client: MagicMock, tmp_path: Path

@@ -1209,7 +1209,7 @@ environment = "production"
         finally:
             _force_delete(aws_secrets_client, secret_name)
 
-    def test_sync_check_decryption_real_dotenvx_roundtrip(
+    def test_sync_check_decryption_real_dotenvx_non_destructive(
         self,
         work_dir: Path,
         aws_test_env: dict[str, str],
@@ -1217,7 +1217,12 @@ environment = "production"
         integration_pythonpath: str,
         envdrift_cmd: list[str],
     ) -> None:
-        """HP-12: sync --check-decryption runs a real dotenvx decrypt+re-encrypt."""
+        """HP-12: sync --check-decryption verifies with real dotenvx, without mutating.
+
+        The check decrypts a temp-dir COPY (#473); the live encrypted file must
+        stay byte-identical (the old in-place decrypt+re-encrypt roundtrip
+        churned the ciphertext on every passing run).
+        """
         if not _dotenvx_available():
             pytest.skip("dotenvx binary not available")
 
@@ -1226,6 +1231,7 @@ environment = "production"
         real_key = _make_encrypted_project(work_dir, "production")
         env_prod = work_dir / ".env.production"
         assert b"encrypted:" in env_prod.read_bytes()
+        original_encrypted_bytes = env_prod.read_bytes()
 
         _create_secret(
             aws_secrets_client,
@@ -1270,8 +1276,8 @@ environment = "production"
             out = (result.stdout + result.stderr).lower()
             assert "pass" in out, f"expected decryption PASSED\n{result.stdout}"
 
-            # The env file must be re-encrypted (left encrypted) afterward.
-            assert b"encrypted:" in env_prod.read_bytes()
+            # A check must not modify files: byte-identical ciphertext (#473).
+            assert env_prod.read_bytes() == original_encrypted_bytes
             # The key was synced locally.
             keys_content = (work_dir / ".env.keys").read_text()
             assert f"DOTENV_PRIVATE_KEY_PRODUCTION={real_key}" in keys_content
