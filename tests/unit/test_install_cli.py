@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import urllib.error
 from email.message import Message
 from pathlib import Path
@@ -496,3 +497,119 @@ class TestInstallHelpCommand:
         assert result.exit_code == 0
         assert "agent" in result.stdout
         assert "check" in result.stdout
+
+
+class TestInstallAgentRegistryGuard:
+    """Regression tests for #506 review: `envdrift install agent` registration.
+
+    The install-time register path must handle a held registry lock with a
+    clean typed error (no raw RegistryLockError traceback) and surface a
+    corrupt-registry recovery exactly like `envdrift agent register` does.
+    """
+
+    @pytest.fixture(autouse=True)
+    def reset_registry(self):
+        """Reset the global registry singleton before each test."""
+        registry_module._registry = None
+        yield
+        registry_module._registry = None
+
+    @staticmethod
+    def _normalize(output: str) -> str:
+        """Collapse Rich line-wrapping so substring asserts are width-stable."""
+        return " ".join(output.split())
+
+    @staticmethod
+    def _install_patches(tmp_path: Path):
+        """Stub the download/verify/autostart plumbing around the register step."""
+        version_result = MagicMock()
+        version_result.returncode = 0
+        version_result.stdout = "v1.0.0"
+
+        def fake_download(_url, dest, _progress):
+            # Honor _download_binary's real contract: a successful download
+            # writes the binary to its staging destination, so the #490 atomic
+            # staging -> replace step then succeeds and control reaches the
+            # #506 registry-guard registration (the behavior under test).
+            Path(dest).write_bytes(b"fake-agent-binary")
+            return True
+
+        return (
+            patch("shutil.which", return_value=None),
+            patch("envdrift.cli_commands.install._detect_platform", return_value="linux-amd64"),
+            patch(
+                "envdrift.cli_commands.install._get_install_path",
+                return_value=tmp_path / "envdrift-agent",
+            ),
+            patch("envdrift.cli_commands.install._download_binary", side_effect=fake_download),
+            patch(
+                "envdrift.cli_commands.install._resolve_agent_release_url",
+                return_value=(
+                    "https://github.com/jainal09/envdrift/releases/download/agent-v1.0.0",
+                    "https://github.com/jainal09/envdrift/releases/download/agent-v1.0.0/checksums.txt",
+                ),
+            ),
+            patch("envdrift.cli_commands.install._verify_checksum", return_value=True),
+            patch("subprocess.run", return_value=version_result),
+            patch("envdrift.config.find_config", return_value=Path("envdrift.toml")),
+        )
+
+    def test_install_agent_lock_held_exits_one_with_clean_error(self, tmp_path: Path):
+        """A held registry lock fails `install agent` cleanly, not with a traceback."""
+        registry_path = tmp_path / ".envdrift" / "projects.json"
+        registry_module._registry = registry_module.ProjectRegistry(registry_path, lock_timeout=0.3)
+        holder = registry_module.ProjectRegistry(registry_path)
+
+        with contextlib.ExitStack() as stack:
+            for patcher in self._install_patches(tmp_path):
+                stack.enter_context(patcher)
+            stack.enter_context(holder._exclusive_lock())
+            result = runner.invoke(app, ["install", "agent"])
+
+        assert result.exit_code == 1, result.output
+        assert result.exception is None or isinstance(result.exception, SystemExit)
+        out = self._normalize(result.stdout)
+        assert "could not lock the agent registry" in out.lower()
+        assert "envdrift agent register" in out
+
+    def test_install_agent_surfaces_registry_corruption(self, tmp_path: Path):
+        """`install agent` over a corrupt registry warns and names the backup."""
+        registry_path = tmp_path / ".envdrift" / "projects.json"
+        registry_path.parent.mkdir(parents=True)
+        registry_path.write_text("{ not json", encoding="utf-8")
+        registry_module._registry = registry_module.ProjectRegistry(registry_path)
+
+        with contextlib.ExitStack() as stack:
+            for patcher in self._install_patches(tmp_path):
+                stack.enter_context(patcher)
+            result = runner.invoke(app, ["install", "agent"])
+
+        assert result.exit_code == 0, result.output
+        out = self._normalize(result.stdout)
+        assert "corrupt" in out.lower()
+        backups = sorted(registry_path.parent.glob("projects.json.corrupt-*"))
+        assert len(backups) == 1
+        # Rich may wrap the long backup path mid-token; squash ALL whitespace.
+        assert backups[0].name in "".join(result.stdout.split())
+
+    def test_install_agent_atomic_install_composes_with_registration(self, tmp_path: Path):
+        """Pin the #490 <-> #506 composition: a successful atomic staged install
+        actually lands the binary at the install path AND control then reaches
+        registration. Neither feature may regress the other."""
+        registry_path = tmp_path / ".envdrift" / "projects.json"
+        registry_module._registry = registry_module.ProjectRegistry(registry_path)
+        install_path = tmp_path / "envdrift-agent"
+
+        with contextlib.ExitStack() as stack:
+            for patcher in self._install_patches(tmp_path):
+                stack.enter_context(patcher)
+            result = runner.invoke(app, ["install", "agent"])
+
+        assert result.exit_code == 0, result.output
+        # #490: the atomic staging -> replace actually installed the binary.
+        assert install_path.read_bytes() == b"fake-agent-binary"
+        # No staging file left behind by the atomic install.
+        assert not (install_path.parent / (install_path.name + ".download")).exists()
+        # #506: registration was reached and ran.
+        out = self._normalize(result.stdout)
+        assert "Registering current project" in out
