@@ -187,9 +187,13 @@ def test_encrypt_secret_file_reencrypts_mixed_state(tmp_path: Path):
         name="test", clear_file="", secret_file=str(secret_file), combined_file=""
     )
     with patch("envdrift.core.partial_encryption.DotenvxWrapper") as mock_cls:
+        # Honest mock (#471): a successful encrypt actually encrypts the file,
+        # or the new post-encrypt read-back rightly fails the push.
+        mock_cls.return_value.encrypt.side_effect = _honest_encrypt_in_place
         encrypt_secret_file(config)
     # The early-return is gone: the wrapper must be asked to encrypt the file.
     mock_cls.return_value.encrypt.assert_called_once_with(secret_file)
+    assert "plaintext_leak_value" not in secret_file.read_text(encoding="utf-8")
 
 
 def test_push_secrets_only_reencrypts_mixed_state(secrets_only_config, secrets_dir):
@@ -203,6 +207,8 @@ def test_push_secrets_only_reencrypts_mixed_state(secrets_only_config, secrets_d
 
     with patch("envdrift.core.partial_encryption.DotenvxWrapper") as mock_dotenvx_cls:
         instance = mock_dotenvx_cls.return_value
+        # Honest mock (#471): the simulated encrypt must leave no plaintext.
+        instance.encrypt.side_effect = _honest_encrypt_in_place
         result = push_secrets_only(secrets_only_config)
 
     assert result["encrypted"] == 1  # the mixed file
@@ -612,6 +618,8 @@ def test_push_secrets_only_encrypts_plaintext_files(secrets_only_config, secrets
     """push_secrets_only encrypts every plaintext file in secrets_dir."""
     with patch("envdrift.core.partial_encryption.DotenvxWrapper") as mock_dotenvx_cls:
         instance = mock_dotenvx_cls.return_value
+        # Honest mock (#471): the simulated encrypt must leave no plaintext.
+        instance.encrypt.side_effect = _honest_encrypt_in_place
         result = push_secrets_only(secrets_only_config)
 
     assert result["encrypted"] == 2
@@ -687,16 +695,6 @@ def test_push_secrets_only_raises_when_dir_missing(tmp_path: Path):
     )
     with pytest.raises(PartialEncryptionError, match="secrets_dir not found"):
         push_secrets_only(config)
-
-
-def test_push_secrets_only_raises_on_encrypt_failure(secrets_only_config, secrets_dir):
-    """push_secrets_only wraps DotenvxError as PartialEncryptionError."""
-    from envdrift.integrations.dotenvx import DotenvxError
-
-    with patch("envdrift.core.partial_encryption.DotenvxWrapper") as mock_dotenvx_cls:
-        mock_dotenvx_cls.return_value.encrypt.side_effect = DotenvxError("boom")
-        with pytest.raises(PartialEncryptionError, match="Failed to encrypt"):
-            push_secrets_only(secrets_only_config)
 
 
 # ---------------------------------------------------------------------------
@@ -876,6 +874,8 @@ def test_secrets_only_respects_pattern(tmp_path: Path):
 
     with patch("envdrift.core.partial_encryption.DotenvxWrapper") as mock_dotenvx_cls:
         instance = mock_dotenvx_cls.return_value
+        # Honest mock (#471): the simulated encrypt must leave no plaintext.
+        instance.encrypt.side_effect = _honest_encrypt_in_place
         result = push_secrets_only(config)
 
     # Only .env.api and .env.db should be processed, not config.yaml
@@ -893,6 +893,8 @@ def test_push_secrets_only_reuses_single_wrapper(secrets_only_config, secrets_di
     from envdrift.core.partial_encryption import push_secrets_only as _push
 
     with patch("envdrift.core.partial_encryption.DotenvxWrapper") as mock_cls:
+        # Honest mock (#471): the simulated encrypt must leave no plaintext.
+        mock_cls.return_value.encrypt.side_effect = _honest_encrypt_in_place
         _push(secrets_only_config)
     assert mock_cls.call_count == 1
 
@@ -1006,7 +1008,9 @@ def test_push_partial_encryption_encrypts_and_combines(tmp_path: Path):
         secret_file=str(secret_file),
         combined_file=str(combined_file),
     )
-    with patch("envdrift.core.partial_encryption.DotenvxWrapper"):
+    with patch("envdrift.core.partial_encryption.DotenvxWrapper") as mock_cls:
+        # Honest mock (#471): the simulated encrypt must leave no plaintext.
+        mock_cls.return_value.encrypt.side_effect = _honest_encrypt_in_place
         stats = push_partial_encryption(config)
     assert combined_file.exists()
     assert stats["clear_lines"] == 1
@@ -1088,9 +1092,12 @@ def test_encrypt_secret_file_calls_unskip_worktree(tmp_path: Path):
         name="test", clear_file="", secret_file=str(secret_file), combined_file=""
     )
     with (
-        patch("envdrift.core.partial_encryption.DotenvxWrapper"),
+        patch("envdrift.core.partial_encryption.DotenvxWrapper") as mock_cls,
         patch("envdrift.core.partial_encryption.subprocess.run") as mock_run,
     ):
+        # Honest mock (#471): the simulated encrypt must leave no plaintext,
+        # or the post-encrypt read-back (rightly) keeps the protection on.
+        mock_cls.return_value.encrypt.side_effect = _honest_encrypt_in_place
         encrypt_secret_file(config)
 
     args = mock_run.call_args[0][0]
@@ -1202,9 +1209,12 @@ def test_pull_secrets_only_protects_already_plaintext_files(secrets_only_config,
 def test_push_secrets_only_unskips_encrypted_files(secrets_only_config, secrets_dir):
     """push_secrets_only lifts skip-worktree on every file it encrypts."""
     with (
-        patch("envdrift.core.partial_encryption.DotenvxWrapper"),
+        patch("envdrift.core.partial_encryption.DotenvxWrapper") as mock_cls,
         patch("envdrift.core.partial_encryption.subprocess.run") as mock_run,
     ):
+        # Honest mock (#471): the simulated encrypt must leave no plaintext,
+        # or the post-encrypt read-back (rightly) keeps the protection on.
+        mock_cls.return_value.encrypt.side_effect = _honest_encrypt_in_place
         push_secrets_only(secrets_only_config)
 
     calls = [call.args[0] for call in mock_run.call_args_list]
@@ -1224,6 +1234,8 @@ def test_push_secrets_only_never_encrypts_keys_file(secrets_only_config, secrets
 
     with patch("envdrift.core.partial_encryption.DotenvxWrapper") as mock_dotenvx_cls:
         instance = mock_dotenvx_cls.return_value
+        # Honest mock (#471): the simulated encrypt must leave no plaintext.
+        instance.encrypt.side_effect = _honest_encrypt_in_place
         result = push_secrets_only(secrets_only_config)
 
     encrypted_paths = [call.args[0].name for call in instance.encrypt.call_args_list]
@@ -1432,3 +1444,60 @@ def test_combine_files_handles_non_ascii_under_ascii_locale(tmp_path):
     written = combined.read_bytes().decode("utf-8")
     assert "café" in written
     assert "héllo_\U0001f511" in written
+
+
+# ---------------------------------------------------------------------------
+# #471: push false success — unit twins of the real-binary e2e regressions.
+#
+# 1. combine_files must refuse to overwrite the combined file with an empty
+#    scaffold when BOTH source files are missing (it may be the last copy of
+#    the runtime env), and must write the combined artifact 0600 + atomically
+#    (it carries the encrypted secret section, and pull --merge reuses the
+#    same writer for DECRYPTED values).
+# 2. encrypt_secret_file / push_secrets_only must refuse a file with no
+#    variable assignments BEFORE invoking dotenvx (which would otherwise
+#    scaffold ~13 placeholder secrets into it and exit 0), and must verify the
+#    encryption actually took effect afterwards (dotenvx exits 0 WITHOUT
+#    encrypting when .env.keys is unwritable/invalid).
+# ---------------------------------------------------------------------------
+
+# The exact production shape of a dotenvx-encrypted secret file (#485): the
+# 4-line "#/" header block, the public-key assignment, the filename comment,
+# then the ciphertext values.
+_DOTENVX_ENCRYPTED_SECRET = (
+    "#/-------------------[DOTENV_PUBLIC_KEY]--------------------/\n"
+    "#/            public-key encryption for .env files          /\n"
+    "#/       [how it works](https://dotenvx.com/encryption)     /\n"
+    "#/----------------------------------------------------------/\n"
+    'DOTENV_PUBLIC_KEY_TEST="03abc123..."\n'
+    "\n"
+    "# .env.test\n"
+    'DATABASE_URL="encrypted:BDaLMxznvYWcHP..."\n'
+)
+
+
+def _honest_encrypt_in_place(path: Path) -> None:
+    """Stand-in for a SUCCESSFUL dotenvx encrypt: plaintext values -> ciphertext.
+
+    #471 added a post-encrypt read-back (``has_plaintext_secret_value``) to the
+    push seam, so a bare ``MagicMock`` no-op "encrypt" now correctly trips it.
+    Mocks that simulate a successful encrypt must therefore actually encrypt
+    the file ("make the mock honest"); only the dotenvx subprocess seam is
+    faked, never the read-back under test.
+    """
+    lines = []
+    for raw in path.read_text(encoding="utf-8").splitlines():
+        stripped = raw.strip()
+        if stripped.startswith("#"):
+            lines.append(raw)
+            continue
+        key, sep, value = stripped.partition("=")
+        if not sep or not key.strip():
+            lines.append(raw)
+            continue
+        bare = value.strip().strip('"').strip("'")
+        if not bare or bare.startswith("encrypted:"):
+            lines.append(raw)
+            continue
+        lines.append(f'{key}="encrypted:stub"')
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
