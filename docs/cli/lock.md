@@ -306,7 +306,7 @@ Step 1: Verifying keys with vault...
   ✓ services/myapp - keys match vault
   ✗ services/auth - KEY MISMATCH: local key differs from vault!
 
-ERROR: Found 1 failed key verification(s). Nothing was encrypted.
+[ERROR] Found 1 failed key verification(s). Nothing was encrypted.
 Run 'envdrift lock --sync-keys' to sync keys from vault, or rerun without
 --verify-vault to skip verification.
 ```
@@ -318,7 +318,7 @@ Step 1: Verifying keys with vault...
 
   ✗ services/auth - cannot verify: .env.keys not found
 
-ERROR: Found 1 failed key verification(s). Nothing was encrypted.
+[ERROR] Found 1 failed key verification(s). Nothing was encrypted.
 Run 'envdrift lock --sync-keys' to sync keys from vault, or rerun without
 --verify-vault to skip verification.
 ```

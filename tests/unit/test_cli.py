@@ -2081,26 +2081,11 @@ class TestVaultVerification:
 
         class DummyVault:
             def ensure_authenticated(self) -> None:
-                """
-                Ensure the command runner is authenticated before performing operations.
-
-                Implementations should verify or establish the required authentication state for subsequent CLI actions.
-                """
+                """Pretend authentication always succeeds."""
                 return None
 
             def get_secret(self, name: str):
-                """
-                Return the fixed plaintext key for the "dotenv-key" secret.
-
-                Parameters:
-                    name (str): The secret name; must be "dotenv-key".
-
-                Returns:
-                    str: The plaintext secret "plainawskey".
-
-                Raises:
-                    AssertionError: If `name` is not "dotenv-key".
-                """
+                """Return the bare (prefix-less) key for the "dotenv-key" secret."""
                 assert name == "dotenv-key"
                 return "plainawskey"
 
@@ -2108,14 +2093,7 @@ class TestVaultVerification:
 
         class DummyDotenvx:
             def is_installed(self):
-                """
-                Check whether the component is installed.
-
-                This implementation always reports the component as installed.
-
-                Returns:
-                    `true` if the component is installed, `false` otherwise.
-                """
+                """Report dotenvx as installed."""
                 return True
 
             def decrypt(
@@ -2125,18 +2103,7 @@ class TestVaultVerification:
                 env: dict[str, str] | None = None,
                 cwd: object = None,
             ) -> None:
-                """
-                Test stub that simulates a decrypt call by recording the production private key and working directory and asserting the env file exists.
-
-                Parameters:
-                    env_path (Path): Path to the environment file to be decrypted; must exist.
-                    env_keys_file (Path|None): Optional path to the keys file (not used by the stub).
-                    env (Mapping|None): Environment mapping; the stub reads `DOTENV_PRIVATE_KEY` from this mapping.
-                    cwd (str|Path|None): Working directory passed to the stub; recorded for inspection.
-
-                Raises:
-                    AssertionError: If `env_path` does not exist.
-                """
+                """Record the suffix-less key var and cwd the verify passes in."""
                 assert env is not None
                 captured["env_var"] = env.get("DOTENV_PRIVATE_KEY")
                 captured["cwd"] = cwd
