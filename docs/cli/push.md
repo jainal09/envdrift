@@ -55,7 +55,8 @@ fails (exit 1, no success banner) rather than report a false success:
   whose name contains a space or non-ASCII character (e.g. `my secret.env`,
   `café.env.secret`) would encrypt cleanly yet be permanently undecryptable. `push`
   refuses such names before invoking dotenvx, leaving the plaintext intact — rename
-  the file to use only letters, digits, `.`, `-` and `_`.
+  the file to use only ASCII letters, digits, `.`, `-` and `_` (the guard's
+  `[A-Za-z0-9._-]` set, so an accented name like `résumé.env.secret` is rejected too).
 - **The combined file is never replaced with an empty scaffold.** If *both* the
   `clear_file` and the `secret_file` are missing (deleted by mistake, or a path typo
   in `envdrift.toml`), `push` errors out and leaves the existing combined file

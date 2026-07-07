@@ -209,9 +209,12 @@ def test_doc_documents_unsafe_filename_refusal(doc: str) -> None:
     from envdrift.integrations.dotenvx import is_dotenvx_safe_filename
 
     # Ground truth from the real shared predicate (#457/#467): a space or
-    # non-ASCII character is refused, normal dotenv names are not.
+    # non-ASCII character is refused, normal dotenv names are not. The predicate
+    # is ASCII-only (`[A-Za-z0-9._-]`), so an accented "letter" is rejected —
+    # the docs must say "ASCII letters", not merely "letters".
     assert not is_dotenvx_safe_filename("my secret.env")
     assert not is_dotenvx_safe_filename("café.env.secret")
+    assert not is_dotenvx_safe_filename("résumé.env")
     assert is_dotenvx_safe_filename(".env.production")
 
     text = _read(doc)
@@ -219,8 +222,9 @@ def test_doc_documents_unsafe_filename_refusal(doc: str) -> None:
         f"{doc} must explain WHY unsafe filenames are refused — the file would "
         "be permanently undecryptable (#467)."
     )
-    assert "letters, digits" in text, (
-        f"{doc} must tell the user the safe character set to rename to (#467)."
+    assert "ASCII letters, digits" in text, (
+        f"{doc} must name the safe character set as ASCII-only, since the guard's "
+        "[A-Za-z0-9._-] set rejects accented letters like résumé.env (#467)."
     )
 
 

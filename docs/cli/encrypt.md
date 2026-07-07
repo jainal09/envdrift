@@ -46,7 +46,9 @@ exit code (dotenvx can exit `0` without encrypting):
   `DOTENV_PRIVATE_KEY_<NAME>` from the filename, so a name with a space or
   non-ASCII character (e.g. `my secrets.env`, `café.env`) encrypts cleanly yet is
   permanently undecryptable. The command refuses such names up front with the
-  plaintext intact — rename the file to use only letters, digits, `.`, `-` and `_`.
+  plaintext intact — rename the file to use only ASCII letters, digits, `.`, `-`
+  and `_` (the guard's `[A-Za-z0-9._-]` set, so an accented name like `résumé.env`
+  is rejected too).
 - **Reports silent encryption failures.** When the key is missing or malformed
   (a `.env.keys` that is a directory, garbage, or a mismatched key), the file is
   re-read after the call; if any plaintext value survives, the command fails
