@@ -22,6 +22,7 @@ import shutil
 import stat
 import sys
 import tempfile
+import time
 import urllib.request
 from pathlib import Path
 
@@ -65,6 +66,31 @@ def sha256_file(path: Path) -> str:
     return digest.hexdigest()
 
 
+def _replace_with_windows_retry(staging_path: Path, target_path: Path) -> None:
+    """Atomically rename ``staging_path`` onto ``target_path``.
+
+    On POSIX ``os.replace`` always succeeds atomically. On Windows it raises
+    ``PermissionError`` (``Access is denied``) when the target is momentarily
+    held open by another process — which happens when several installs of the
+    same binary race on one target. Retry briefly so concurrent installs
+    converge instead of one spuriously failing; a genuine permission error
+    still surfaces after the short window is exhausted.
+    """
+    if platform.system() != "Windows":
+        staging_path.replace(target_path)
+        return
+    delay = 0.02
+    for _ in range(9):
+        try:
+            staging_path.replace(target_path)
+            return
+        except PermissionError:
+            time.sleep(delay)
+            delay = min(delay * 2, 0.5)
+    # Final attempt: let a persistent PermissionError propagate to the caller.
+    staging_path.replace(target_path)
+
+
 def atomic_install(source: Path, target_path: Path, *, make_executable: bool = True) -> None:
     """Install ``source`` onto ``target_path`` atomically (stage + rename).
 
@@ -101,7 +127,7 @@ def atomic_install(source: Path, target_path: Path, *, make_executable: bool = T
             staging_path.chmod(
                 staging_path.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH
             )
-        staging_path.replace(target_path)
+        _replace_with_windows_retry(staging_path, target_path)
     finally:
         # Cleanup must never mask the real error (a non-FileNotFound OSError
         # from unlink would otherwise propagate over the copy/rename failure).
