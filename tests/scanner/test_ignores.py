@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import dataclasses
 from pathlib import Path
 
 import pytest
@@ -140,6 +141,22 @@ class TestIgnoreConfig:
         config = IgnoreConfig.from_dict({"other": "value"})
         assert config.ignore_paths == []
         assert config.ignore_rules == {}
+
+    def test_from_dict_round_trips_noisy_rule_paths(self):
+        """#477 regression: from_dict must not drop noisy_rule_paths.
+
+        from_dict used to read only ignore_paths/ignore_rules, silently
+        discarding a configured noisy_rule_paths list; every field must
+        survive a full dict -> IgnoreConfig -> dict round trip.
+        """
+        guard = {
+            "ignore_paths": ["**/tests/**"],
+            "ignore_rules": {"ftp-password": ["**/*.json"]},
+            "noisy_rule_paths": ["pyproject.toml", "*.lock"],
+        }
+        config = IgnoreConfig.from_dict({"guard": guard})
+        assert config.noisy_rule_paths == ["pyproject.toml", "*.lock"]
+        assert dataclasses.asdict(config) == guard
 
 
 class TestIgnoreFilter:
@@ -653,3 +670,88 @@ class TestIgnoreFilterEdgeCases:
 
         # Empty file, finding should pass through
         assert len(result) == 1
+
+
+class TestNoisyRulePathIgnores:
+    """#477: noisy-scoped path ignores suppress only keyword/entropy rules."""
+
+    @staticmethod
+    def _finding(rule_id: str, file_path: Path, severity=FindingSeverity.HIGH) -> ScanFinding:
+        return ScanFinding(
+            rule_id=rule_id,
+            rule_description=rule_id,
+            file_path=file_path,
+            line_number=1,
+            description="finding",
+            severity=severity,
+            scanner="native",
+        )
+
+    def test_is_noisy_rule_classification(self):
+        from envdrift.scanner.ignores import is_noisy_rule
+
+        # Keyword/entropy-driven rules (any scanner namespace) are noisy.
+        assert is_noisy_rule("generic-secret") is True
+        assert is_noisy_rule("generic-api-key") is True
+        assert is_noisy_rule("high-entropy-string") is True
+        assert is_noisy_rule("gitleaks-generic-api-key") is True
+        assert is_noisy_rule("detect-secrets-KeywordDetector") is True
+        assert is_noisy_rule("detect-secrets-Base64HighEntropyString") is True
+        # Distinctive-prefix detections are never noisy.
+        assert is_noisy_rule("github-pat") is False
+        assert is_noisy_rule("aws-access-key-id") is False
+        assert is_noisy_rule("pypi-token") is False
+
+    def test_noisy_rule_suppressed_in_matching_path(self, tmp_path: Path):
+        pyproject = tmp_path / "pyproject.toml"
+        pyproject.write_text('password = "value"\n')
+
+        config = IgnoreConfig(noisy_rule_paths=["pyproject.toml"])
+        filter_ = IgnoreFilter(config)
+
+        result = filter_.filter([self._finding("generic-secret", pyproject)])
+        assert result == []
+
+    def test_distinctive_rule_survives_in_matching_path(self, tmp_path: Path):
+        """A CRITICAL distinctive-prefix token in pyproject.toml must surface."""
+        pyproject = tmp_path / "pyproject.toml"
+        pyproject.write_text('repo_token = "value"\n')
+
+        config = IgnoreConfig(noisy_rule_paths=["pyproject.toml"])
+        filter_ = IgnoreFilter(config)
+
+        finding = self._finding("github-pat", pyproject, severity=FindingSeverity.CRITICAL)
+        result = filter_.filter([finding])
+        assert result == [finding]
+
+    def test_noisy_rule_survives_in_non_matching_path(self, tmp_path: Path):
+        config_file = tmp_path / "settings.py"
+        config_file.write_text('password = "value"\n')
+
+        config = IgnoreConfig(noisy_rule_paths=["pyproject.toml", "*.lock"])
+        filter_ = IgnoreFilter(config)
+
+        finding = self._finding("generic-secret", config_file)
+        result = filter_.filter([finding])
+        assert result == [finding]
+
+    def test_glob_noisy_path_matches_lock_files(self, tmp_path: Path):
+        lock = tmp_path / "package-lock.json"
+        lock.write_text("{}\n")
+
+        config = IgnoreConfig(noisy_rule_paths=["*-lock.json"])
+        filter_ = IgnoreFilter(config)
+
+        result = filter_.filter([self._finding("high-entropy-string", lock)])
+        assert result == []
+
+    def test_user_global_ignore_still_suppresses_everything(self, tmp_path: Path):
+        """Explicit user ignore_paths keep full-suppression semantics."""
+        pyproject = tmp_path / "pyproject.toml"
+        pyproject.write_text('repo_token = "value"\n')
+
+        config = IgnoreConfig(ignore_paths=["pyproject.toml"])
+        filter_ = IgnoreFilter(config)
+
+        finding = self._finding("github-pat", pyproject, severity=FindingSeverity.CRITICAL)
+        assert filter_.filter([finding]) == []

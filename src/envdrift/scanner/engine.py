@@ -225,14 +225,23 @@ class ScanEngine:
         print(f"Found {len(result.unique_findings)} issues")
     """
 
-    # Default paths to always ignore across all scanners
-    # These are config/build files that contain "secret" keywords but not actual secrets
+    # Config/build/lock files where only NOISY findings are ignored across all
+    # scanners. These files contain "secret"/"token" keywords and high-entropy
+    # integrity hashes that false-positive keyword/entropy rules — but they are
+    # also real leak vectors (e.g. a private-index URL token in pyproject.toml),
+    # so the suppression is scoped to noisy rule ids (see ignores.is_noisy_rule)
+    # instead of unconditionally dropping every finding (#477). A
+    # distinctive-prefix CRITICAL token (ghp_, AKIA, ...) in any of these files
+    # still surfaces, from every scanner.
     DEFAULT_GLOBAL_IGNORE_PATHS = [
         "envdrift.toml",
         "pyproject.toml",
         "mkdocs.yml",
         "mkdocs.yaml",
         "*.lock",
+        "*.sum",
+        "*-lock.json",
+        "*.lock.json",
         "package-lock.json",
         "yarn.lock",
         "poetry.lock",
@@ -247,13 +256,15 @@ class ScanEngine:
         self.config = config or GuardConfig()
         self.scanners: list[ScannerBackend] = []
 
-        # Merge default global ignores with user-configured ignores
-        all_ignore_paths = list(self.DEFAULT_GLOBAL_IGNORE_PATHS) + list(self.config.ignore_paths)
-
-        # Initialize centralized ignore filter for post-scan filtering
+        # Initialize centralized ignore filter for post-scan filtering.
+        # User-configured ignore_paths suppress everything (explicit opt-out);
+        # the built-in config/lock-file defaults are scoped to noisy
+        # keyword/entropy rules only, so they can never swallow a
+        # high-confidence distinctive-prefix finding (#477).
         ignore_config = IgnoreConfig(
-            ignore_paths=all_ignore_paths,
+            ignore_paths=list(self.config.ignore_paths),
             ignore_rules=self.config.ignore_rules,
+            noisy_rule_paths=list(self.DEFAULT_GLOBAL_IGNORE_PATHS),
         )
         self._ignore_filter = IgnoreFilter(ignore_config)
 
