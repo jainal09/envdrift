@@ -280,10 +280,11 @@ Yes, run multiple validation commands:
 
 Option 1: Store private key as CI secret
 
-The key name in `.env.keys` must carry the environment suffix matching the
-file you decrypt: `.env.production` needs `DOTENV_PRIVATE_KEY_PRODUCTION`
-(the name `envdrift encrypt` itself writes). A bare `DOTENV_PRIVATE_KEY`
-only decrypts a plain `.env`.
+Use the environment-suffixed key name that `envdrift encrypt` itself writes:
+`.env.production` gets `DOTENV_PRIVATE_KEY_PRODUCTION`. That name is unambiguous
+and always correct. (dotenvx v2 also accepts a bare `DOTENV_PRIVATE_KEY` as a
+fallback for any file, but on dotenvx v1 it decrypts only a plain `.env` — so
+prefer the suffixed name, which is clearer and works on every version.)
 
 ```yaml
 - env:

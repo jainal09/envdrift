@@ -250,10 +250,12 @@ def test_doc_documents_unsafe_filename_refusal(doc: str) -> None:
 def test_faq_ci_decrypt_recipe_writes_suffixed_private_key() -> None:
     """faq.md's CI decrypt Option 1 must write DOTENV_PRIVATE_KEY_PRODUCTION (#498).
 
-    Pre-fix the snippet wrote a bare ``DOTENV_PRIVATE_KEY`` into ``.env.keys``,
-    which can never decrypt ``.env.production`` — dotenvx looks the key up under
-    the environment-suffixed name. Ground truth comes from the real key-name
-    resolver envdrift itself uses when pushing/pulling keys.
+    Pre-fix the snippet wrote a bare ``DOTENV_PRIVATE_KEY`` into ``.env.keys``.
+    On dotenvx v1 that could never decrypt ``.env.production`` (it looked the key
+    up only under the env-suffixed name); dotenvx v2 accepts the bare key as a
+    fallback, but the suffixed name is still the one ``envdrift encrypt`` writes
+    and the clearer, version-independent recipe to publish. Ground truth comes
+    from the real key-name resolver envdrift itself uses when pushing/pulling keys.
     """
     from envdrift.sync.config import ServiceMapping
 
@@ -265,7 +267,8 @@ def test_faq_ci_decrypt_recipe_writes_suffixed_private_key() -> None:
     text = _read_docs_page("support/faq.md")
     assert 'echo "DOTENV_PRIVATE_KEY=$DOTENV_PRIVATE_KEY" > .env.keys' not in text, (
         "faq.md's CI recipe writes a bare DOTENV_PRIVATE_KEY into .env.keys; "
-        "decrypting .env.production requires the suffixed name (#498)."
+        "publish the suffixed name envdrift generates — it is unambiguous and "
+        "version-independent (#498)."
     )
     assert f'echo "{expected}=${expected}" > .env.keys' in text, (
         f"faq.md's CI recipe must write {expected} into .env.keys — the name "
