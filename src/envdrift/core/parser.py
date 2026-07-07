@@ -124,11 +124,19 @@ class EnvParser:
     - dotenvx encrypted: KEY="encrypted:xxxx"
     - SOPS encrypted: KEY="ENC[AES256_GCM,data:...,iv:...,tag:...,type:str]"
     - Comments and blank lines (skipped)
-
-    Note:
-        Multiline values are not currently supported. Each line is parsed
-        independently. For multiline secrets (e.g., PEM keys), consider
-        base64 encoding or using a single-line escaped format.
+    - Quoted multiline values (#458): a value opened with ``"`` or ``'``
+      continues across physical lines until the matching close quote, exactly
+      like python-dotenv (the parser pydantic-settings uses). Newlines inside
+      the value are preserved (normalized to ``\\n``), and the python-dotenv
+      escape sets are decoded inside quoted values
+      (``\\\\ \\' \\" \\a \\b \\f \\n \\r \\t \\v`` in double quotes,
+      ``\\\\ \\'`` in single quotes). Malformed quoted bindings are rejected
+      exactly like python-dotenv — no variable is registered for them.
+      Non-comment content after the close quote consumes the physical lines
+      through the close-quote line, so interior lines never re-parse as
+      phantom assignments; an unterminated quote (no quote left anywhere)
+      consumes only its opening line — dotenv's rest-of-line error recovery —
+      and the following lines are parsed normally.
     """
 
     # dotenvx encrypted value pattern
@@ -153,6 +161,36 @@ class EnvParser:
     # .env), keeping the init→validate round-trip intact. Other callers keep the
     # strict pattern so their behaviour is unchanged.
     LENIENT_LINE_PATTERN = re.compile(r"^(?:export\s+)?([^\s=#]+)\s*=(.*)$")
+
+    # python-dotenv's quoted-value escape sets (dotenv/parser.py): decoded
+    # inside double-/single-quoted values so `validate`/`diff` see exactly the
+    # values pydantic-settings loads (#458). The value itself runs to the
+    # close quote — across physical lines — found by ``_find_close_quote``,
+    # which reproduces dotenv's greedy `"((?:\\"|[^"])*)"` lexing exactly.
+    DOUBLE_QUOTE_ESCAPES_PATTERN = re.compile(r"\\[\\'\"abfnrtv]")
+    SINGLE_QUOTE_ESCAPES_PATTERN = re.compile(r"\\[\\']")
+
+    # What each escape sequence decodes to (python-dotenv's decode_escapes
+    # output). The tables are total for the patterns above, so decoding is a
+    # plain lookup — no `codecs` bytes-codec coercion on `str` input.
+    ESCAPE_DECODE_TABLE = {
+        "\\\\": "\\",
+        "\\'": "'",
+        '\\"': '"',
+        "\\a": "\a",
+        "\\b": "\b",
+        "\\f": "\f",
+        "\\n": "\n",
+        "\\r": "\r",
+        "\\t": "\t",
+        "\\v": "\v",
+    }
+
+    # What may legally follow a closing quote on its physical line: optional
+    # whitespace and an optional `#...` comment (python-dotenv's `_comment` +
+    # `_end_of_line`). Anything else means the quote did not cleanly terminate
+    # the assignment, and the legacy raw treatment applies.
+    TRAILING_AFTER_QUOTE_PATTERN = re.compile(r"[^\S\r\n]*(?:#.*)?")
 
     def parse(self, path: Path | str, *, lenient: bool = False) -> EnvFile:
         """
@@ -210,9 +248,12 @@ class EnvParser:
         lines = content.splitlines()
         pattern = self.LENIENT_LINE_PATTERN if lenient else self.LINE_PATTERN
 
-        for line_num, line in enumerate(lines, start=1):
-            original_line = line
-            line = line.strip()
+        index = 0
+        while index < len(lines):
+            line_num = index + 1
+            original_line = lines[index]
+            index += 1
+            line = original_line.strip()
 
             # Skip empty lines
             if not line:
@@ -223,13 +264,38 @@ class EnvParser:
                 env_file.comments.append(line)
                 continue
 
-            # Parse KEY=value
-            match = pattern.match(line)
+            # Parse KEY=value. Match the lstripped line — NOT the fully
+            # stripped one — so the RHS keeps its trailing whitespace: when a
+            # quote opens here and closes on a later line, python-dotenv keeps
+            # that whitespace inside the value (`CERT="abc   \nrest"` parses
+            # as `abc   \nrest`); single-line values strip it downstream.
+            match = pattern.match(original_line.lstrip())
             if not match:
                 continue
 
             key = match.group(1)
-            value = self.value_from_raw(match.group(2))
+            raw_value = match.group(2)
+            raw_lines = [original_line]
+
+            # Quoted multiline continuation (#458): when the RHS opens a quote
+            # that closes on a later physical line, the continuation lines are
+            # part of THIS value — not new assignments or comments.
+            joined_raw, consumed, dropped = self._continue_quoted_value(raw_value, lines, index)
+            index += consumed
+            if dropped:
+                # python-dotenv rejects this binding and NO variable is
+                # registered (#458). Trailing junk after the close quote:
+                # `consumed` covers through the close-quote line, so interior
+                # lines never become phantom assignments. Unterminated quote:
+                # `consumed` is 0 — only the opening line is dropped and the
+                # following lines re-parse normally, exactly like dotenv's
+                # rest-of-line error recovery.
+                continue
+            if consumed:
+                raw_value = joined_raw
+                raw_lines.extend(lines[index - consumed : index])
+
+            value = self.value_from_raw(raw_value)
 
             # Determine encryption status and backend
             encryption_status, encryption_backend = self._detect_encryption_status(value)
@@ -239,7 +305,7 @@ class EnvParser:
                 value=value,
                 line_number=line_num,
                 encryption_status=encryption_status,
-                raw_line=original_line,
+                raw_line="\n".join(raw_lines),
                 encryption_backend=encryption_backend,
             )
 
@@ -248,17 +314,173 @@ class EnvParser:
         return env_file
 
     def value_from_raw(self, raw_value: str) -> str:
-        """Normalize the raw RHS of a ``KEY=value`` line to its final value.
+        """Normalize the raw RHS of a ``KEY=value`` assignment to its final value.
 
-        Strips an unquoted inline comment, then surrounding whitespace, then a
-        single matching pair of surrounding quotes — the same transformation
-        ``parse`` applies. Public so callers that recover assignments the strict
-        ``LINE_PATTERN`` rejects (e.g. ``init`` for non-identifier keys) reuse
-        this canonical handling instead of the private helpers. The whitespace
-        context matters, so pass the RAW value (the regex's ``=`` group),
-        unstripped: ``K= # c`` is a comment but ``K=#FF0000`` is a value.
+        A cleanly quoted value (single- or multi-line) is lexed exactly like
+        python-dotenv: the value runs to the matching close quote (see
+        ``_scan_chunk``), anything after it must be whitespace or a ``#``
+        comment, and the quote-appropriate escape set is decoded (#458).
+        Otherwise the legacy treatment applies: strip an unquoted inline
+        comment, then surrounding whitespace, then a single matching pair of
+        surrounding quotes — note ``parse_string`` never takes the legacy path
+        for a quote-opening RHS (it drops malformed quoted bindings like
+        python-dotenv); the fallback serves direct callers. Public so
+        callers that recover assignments the strict ``LINE_PATTERN`` rejects
+        (e.g. ``init`` for non-identifier keys) reuse this canonical handling
+        instead of the private helpers. The whitespace context matters, so pass
+        the RAW value (the regex's ``=`` group), unstripped: ``K= # c`` is a
+        comment but ``K=#FF0000`` is a value.
         """
+        quoted = self._match_quoted_value(raw_value.strip())
+        if quoted is not None:
+            return quoted
         return self._unquote(self._strip_inline_comment(raw_value).strip())
+
+    def _match_quoted_value(self, text: str) -> str | None:
+        """Lex ``text`` as a python-dotenv quoted value, or return ``None``.
+
+        ``text`` must start at the opening quote (callers strip leading
+        whitespace). Returns the decoded inner value when the quote closes and
+        only whitespace / a ``#`` comment follows on the closing line;
+        ``None`` when ``text`` is not quoted, the quote never closes, or
+        non-comment content trails the close quote. The trailing check is safe
+        on multiline ``text``: ``TRAILING_AFTER_QUOTE_PATTERN`` cannot match
+        across a newline (``[^\\S\\r\\n]`` excludes them and ``#.*`` stops at
+        one), and ``parse_string`` only builds joined values that end on the
+        close-quote line.
+        """
+        if len(text) < 2 or text[0] not in "\"'":
+            return None
+        close = self._find_close_quote(text)
+        if close is None:
+            return None
+        if not self.TRAILING_AFTER_QUOTE_PATTERN.fullmatch(text, close + 1):
+            return None
+        escapes = (
+            self.DOUBLE_QUOTE_ESCAPES_PATTERN
+            if text[0] == '"'
+            else self.SINGLE_QUOTE_ESCAPES_PATTERN
+        )
+        return self._decode_escapes(escapes, text[1:close])
+
+    @staticmethod
+    def _scan_chunk(chunk: str, quote: str, start: int) -> tuple[int | None, int | None]:
+        """Scan ``chunk[start:]`` for close-quote candidates (dotenv semantics).
+
+        python-dotenv lexes a quoted value with the greedy backtracking regex
+        ``"((?:\\\\"|[^"])*)"``: a quote can sit INSIDE the value only when it
+        is immediately preceded by a backslash, so the value closes at the
+        first quote NOT preceded by a backslash — or, when every quote is
+        backslash-preceded, at the last quote (the regex gives the final
+        ``\\"`` pair back and reads it as backslash + close quote).
+
+        Returns:
+            tuple[int | None, int | None]: ``(definitive, fallback)`` —
+            ``definitive`` is the index of the first quote in ``chunk[start:]``
+            not immediately preceded by a backslash (the value must close
+            there); ``fallback`` is the index of the last backslash-preceded
+            quote seen before it (the close python-dotenv settles on when no
+            definitive close exists anywhere in the remaining input). A quote
+            at index 0 is always definitive: its predecessor in the joined
+            text is the ``\\n`` joiner (or the opening quote), never a
+            backslash.
+        """
+        fallback = None
+        i = chunk.find(quote, start)
+        while i != -1:
+            if i > 0 and chunk[i - 1] == "\\":
+                fallback = i
+                i = chunk.find(quote, i + 1)
+                continue
+            return i, fallback
+        return None, fallback
+
+    @staticmethod
+    def _find_close_quote(text: str) -> int | None:
+        """Index of the quote closing ``text[0]``, or ``None`` (dotenv rules).
+
+        The first quote not immediately preceded by a backslash; when every
+        quote is backslash-preceded, the last one (see ``_scan_chunk``).
+        Newlines are ordinary value characters.
+        """
+        definitive, fallback = EnvParser._scan_chunk(text, text[0], 1)
+        return definitive if definitive is not None else fallback
+
+    def _continue_quoted_value(
+        self, raw_value: str, lines: list[str], start: int
+    ) -> tuple[str, int, bool]:
+        """Lex a quote-opening RHS exactly like python-dotenv (#458).
+
+        ``raw_value`` is the RHS of the assignment on the line before
+        ``lines[start]``. When it opens a quote, the close quote is searched
+        across the remaining physical lines (python-dotenv's value regex spans
+        newlines). Each line is scanned once with ``_scan_chunk`` — a cursor
+        never re-visits earlier lines, so the scan is linear in the input.
+
+        Returns:
+            tuple[str, int, bool]: ``(joined_raw, consumed, dropped)``.
+            ``consumed`` is the number of continuation lines absorbed (0 when
+            the binding starts and ends on its own line). ``dropped`` is True
+            when python-dotenv rejects the binding and registers nothing:
+            non-comment content after the close quote (input consumed through
+            the close-quote line), or no quote left anywhere (unterminated —
+            only the opening line is consumed, matching dotenv's
+            rest-of-line error recovery). ``(raw_value, 0, False)`` when the
+            RHS does not open with a quote.
+        """
+        text = raw_value.strip()
+        if not text or text[0] not in "\"'":
+            return raw_value, 0, False
+        quote = text[0]
+
+        # Chunk 0 is the (stripped) opening RHS; chunks 1.. are raw lines.
+        close: tuple[int, int] | None = None  # (chunk number, index in chunk)
+        last_fallback: tuple[int, int] | None = None
+        chunks = [text]
+        definitive, fallback = self._scan_chunk(text, quote, 1)
+        if fallback is not None:
+            last_fallback = (0, fallback)
+        if definitive is not None:
+            close = (0, definitive)
+        else:
+            for offset, next_line in enumerate(lines[start:], start=1):
+                chunks.append(next_line)
+                if quote not in next_line:
+                    continue  # close quote can't be here; skip the scan
+                definitive, fallback = self._scan_chunk(next_line, quote, 0)
+                if fallback is not None:
+                    last_fallback = (offset, fallback)
+                if definitive is not None:
+                    close = (offset, definitive)
+                    break
+            if close is None:
+                if last_fallback is None:
+                    # Unterminated: dotenv's value regex never matches, its
+                    # error path consumes the rest of the opening line only,
+                    # and the binding is dropped.
+                    return raw_value, 0, True
+                close = last_fallback
+
+        # After the close quote, only whitespace and a `#` comment may follow
+        # on the closing line (dotenv's `_comment` + `_end_of_line`); anything
+        # else raises in dotenv and drops the binding, consuming the input
+        # through the close-quote line.
+        close_chunk, close_idx = close
+        if not self.TRAILING_AFTER_QUOTE_PATTERN.fullmatch(chunks[close_chunk], close_idx + 1):
+            return raw_value, close_chunk, True
+        if close_chunk == 0:
+            return raw_value, 0, False
+        joined = raw_value + "\n" + "\n".join(lines[start : start + close_chunk])
+        return joined, close_chunk, False
+
+    def _decode_escapes(self, escapes: re.Pattern[str], value: str) -> str:
+        """Decode a quoted value's escape sequences like python-dotenv.
+
+        ``ESCAPE_DECODE_TABLE`` is total for both escape patterns, and non-
+        matching text (including any non-ASCII) is passed through untouched —
+        no whole-string ``unicode-escape`` round-trip that could mojibake it.
+        """
+        return escapes.sub(lambda match: self.ESCAPE_DECODE_TABLE[match.group(0)], value)
 
     def _strip_inline_comment(self, value: str) -> str:
         """Strip an unquoted trailing ` #...` comment from a (raw) value.
