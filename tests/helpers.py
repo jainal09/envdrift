@@ -15,6 +15,11 @@ _REQUIREMENT_NAME_RE = re.compile(r"^\s*([A-Za-z0-9][A-Za-z0-9._-]*)")
 _FLOOR_RE = re.compile(r">=\s*([0-9]+(?:\.[0-9]+)*)")
 
 
+def _canonical_name(name: str) -> str:
+    """PEP 503 normalization: hyphens, underscores, and dots are equivalent."""
+    return re.sub(r"[-_.]+", "-", name).lower()
+
+
 def declared_dependency_floor(package: str) -> str:
     """Return the ``>=`` floor declared for *package* in ``pyproject.toml``.
 
@@ -26,7 +31,7 @@ def declared_dependency_floor(package: str) -> str:
     pyproject = tomllib.loads((REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8"))
     for requirement in pyproject["project"]["dependencies"]:
         name_match = _REQUIREMENT_NAME_RE.match(requirement)
-        if name_match is None or name_match.group(1).lower() != package.lower():
+        if name_match is None or _canonical_name(name_match.group(1)) != _canonical_name(package):
             continue
         floor_match = _FLOOR_RE.search(requirement)
         assert floor_match is not None, (

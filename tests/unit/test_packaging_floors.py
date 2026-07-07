@@ -29,9 +29,9 @@ def test_typer_floor_supports_pep604_union_annotations() -> None:
     """The typer floor must be a version the CLI actually runs on (>= 0.15.4)."""
     floor = version_tuple(declared_dependency_floor("typer"))
     assert floor >= _MINIMUM_WORKING_TYPER, (
-        f"pyproject.toml declares typer>={'.'.join(map(str, floor))}, but typer < 0.13 "
-        "crashes every envdrift invocation with "
+        f"pyproject.toml declares typer>={'.'.join(map(str, floor))}, but the minimum "
+        "working floor is 0.15.4: typer 0.13-0.15.3 resolves click >= 8.2, which breaks "
+        "`--help` rendering, and typer < 0.13 crashes every envdrift invocation with "
         "'RuntimeError: Type not yet supported: str | None' (PEP 604 unions in the "
-        "command signatures), and typer < 0.15.4 resolves click >= 8.2, which breaks "
-        "`--help` rendering (see issue #496)"
+        "command signatures); see issue #496"
     )
