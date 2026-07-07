@@ -5,6 +5,13 @@ All notable changes to the EnvDrift VS Code Extension will be documented in this
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.6](https://github.com/jainal09/envdrift/compare/vscode-v0.1.5...vscode-v0.1.6) (2026-07-07)
+
+
+### Bug Fixes
+
+* **vscode:** working encrypt/status/start flows and truthful state reporting ([#513](https://github.com/jainal09/envdrift/issues/513)) ([11cf981](https://github.com/jainal09/envdrift/commit/11cf981105136bda430708f4fdcf04df9b41a499))
+
 ## [0.1.5](https://github.com/jainal09/envdrift/compare/vscode-v0.1.4...vscode-v0.1.5) (2026-06-07)
 
 
