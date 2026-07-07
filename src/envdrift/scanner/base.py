@@ -325,6 +325,13 @@ class ScannerBackend(ABC):
                 pass
     """
 
+    #: Whether this scanner honors ``include_git_history`` and scans git
+    #: history. Defaults to False so a scanner that silently ignores the flag
+    #: is never presented as history coverage — guard refuses ``--history``
+    #: when no active scanner declares support (#476). History-capable
+    #: scanners override this to True.
+    supports_git_history: bool = False
+
     @property
     @abstractmethod
     def name(self) -> str:

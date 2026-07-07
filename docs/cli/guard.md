@@ -149,7 +149,10 @@ envdrift guard --infisical
 
 ### `--history`, `-H`
 
-Include git history in the scan. Requires a git repository.
+Include git history in the scan. Requires a git repository and at least one active history-capable
+scanner (gitleaks, trufflehog, kingfisher, git-secrets, talisman, or infisical). If none of the
+active scanners can scan git history (for example `--history --native-only`), guard exits with an
+error instead of silently skipping the history.
 
 ```bash
 envdrift guard --history
@@ -319,6 +322,11 @@ envdrift guard --config ./envdrift.toml
 
 Scan only git staged files. Useful for pre-commit hooks.
 
+The scan reads the staged *index* content (`git show :<path>`), not the working-tree copies, so a
+secret that is staged but already edited away (or deleted) in the working tree is still caught
+before the commit ships it. Findings are reported against the real repository paths. Running
+`--staged` outside a git repository is an operational error (exit 6).
+
 ```bash
 envdrift guard --staged
 ```
@@ -326,6 +334,11 @@ envdrift guard --staged
 ### `--pr-base`
 
 Scan only files changed since the specified base branch. Useful for CI/CD PR checks.
+
+If the base ref cannot be resolved (typo, or a shallow CI clone that never fetched it), guard exits
+with an error instead of treating the failed diff as "no changed files" — a misconfigured base must
+never pass the secret gate green. A failed `git fetch` of the base is reported as a warning on
+stderr.
 
 ```bash
 envdrift guard --pr-base origin/main
@@ -409,6 +422,12 @@ Each severity has its own code so a pipeline branching on a specific exit code
 (`if [ $? -eq 2 ]`) can tell them apart — a LOW-only result never collides with
 HIGH's code 2, and a missing config file (6) never looks like a critical
 secret (1).
+
+Collection errors are operational errors and exit `6`, reported as an error message instead
+of findings: an unresolvable `--pr-base` ref, `--staged` outside a git repository, or
+`--history` with no active history-capable scanner. These misconfigurations previously passed
+with exit 0; a broken secret gate now fails loudly instead of green, and exit 6 (never 1)
+keeps them distinct from a real critical finding for an exit-code-only pipeline.
 
 With `--ci`, the `--fail-on` threshold controls what counts as blocking. A
 finding at or above the threshold fails CI with the severity-derived code above;
