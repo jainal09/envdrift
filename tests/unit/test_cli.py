@@ -629,6 +629,23 @@ class TestEncryptCommand:
         # Should pass for encrypted file
         assert result.exit_code == 0 or "encrypt" in result.output.lower()
 
+    @pytest.mark.xfail(
+        strict=False,
+        reason="--check reads the last-wins parsed map, so a plaintext line shadowed "
+        "by a later duplicate encrypted assignment is missed (see #583)",
+    )
+    def test_encrypt_check_blocks_plaintext_shadowed_by_encrypted_duplicate(self, tmp_path: Path):
+        """A plaintext secret must block even when a later duplicate is encrypted."""
+        env_file = tmp_path / ".env"
+        env_file.write_text(
+            'SECRET_KEY=plaintext-value-123\nSECRET_KEY="encrypted:abcdef1234567890"\n'
+        )
+
+        result = runner.invoke(app, ["encrypt", str(env_file), "--check"])
+        assert result.exit_code == 1, (
+            "the plaintext SECRET_KEY line is still on disk and must block the commit"
+        )
+
     def test_encrypt_perform_encryption(self, monkeypatch, tmp_path: Path):
         """Test encrypt without --check calls encryption backend."""
         from unittest.mock import MagicMock
@@ -5587,7 +5604,8 @@ class TestErrorPathHardening:
         result = runner.invoke(
             app, ["guard", str(env), "--native-only", "--json", "--fail-on", "bogus"]
         )
-        assert result.exit_code == 1
+        # Operational errors exit 6, distinct from the severity codes (#478).
+        assert result.exit_code == 6
         # stdout must be a clean JSON error doc, not Rich/human prose (#28).
         doc = json.loads(result.output)
         assert "error" in doc and "bogus" in doc["error"]

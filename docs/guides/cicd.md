@@ -123,7 +123,8 @@ For `validate` and `encrypt --check`:
 | 1         | Validation failed (missing vars, type errors, etc.) |
 
 `guard` uses graduated exit codes based on the highest-severity finding (at or
-above the `--fail-on` threshold in CI mode):
+above the `--fail-on` threshold in CI mode), plus dedicated codes for an
+incomplete scan and operational errors:
 
 | Exit Code | Meaning                                                   |
 |-----------|-----------------------------------------------------------|
@@ -131,6 +132,13 @@ above the `--fail-on` threshold in CI mode):
 | 1         | Critical severity findings detected                       |
 | 2         | High severity findings detected                           |
 | 3         | Medium severity findings detected                         |
+| 4         | Low severity findings detected (policy violations)        |
+| 5         | Scan incomplete: a selected scanner ran but failed        |
+| 6         | Operational error (bad config, invalid path or flags)    |
+
+A run in which a selected scanner errored never exits 0: if nothing blocks the
+run but a scanner failed, guard exits 5 so CI fails closed instead of passing
+on a scan that never completed.
 
 Because `guard` does not collapse failures to a flat `1`, CI scripts that key
 off its result should test for any non-zero exit (`$? -ne 0`) rather than

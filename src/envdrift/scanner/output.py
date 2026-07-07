@@ -17,6 +17,8 @@ from rich.table import Table
 from rich.text import Text
 
 from envdrift.scanner.base import (
+    EXIT_OPERATIONAL_ERROR,
+    FINDINGS_EXIT_CODES,
     AggregatedScanResult,
     FindingSeverity,
     ScanFinding,
@@ -124,8 +126,10 @@ def format_rich(result: AggregatedScanResult, console: Console | None = None) ->
     if console is None:
         console = Console()
 
-    # Surface scanner errors prominently
-    errors = [r for r in result.results if r.error]
+    # Surface scanner errors prominently. Filter on the ScanResult.success
+    # contract (error is not None), not truthiness, so an empty-string failure
+    # still lands in the panel and matches the Scan Incomplete verdict (#478).
+    errors = [r for r in result.results if not r.success]
     if errors:
         error_lines: list[str] = []
         for r in errors:
@@ -143,13 +147,27 @@ def format_rich(result: AggregatedScanResult, console: Console | None = None) ->
         console.print()
 
     if not result.unique_findings:
-        console.print(
-            Panel(
-                "[green]No secrets or policy violations detected[/green]",
-                title="envdrift guard",
-                border_style="green",
+        if errors:
+            # A selected scanner ran and failed: the requested scan never
+            # completed, so the run must not be presented as a clean pass
+            # (it exits EXIT_SCAN_ERROR, not 0 — #478).
+            console.print(
+                Panel(
+                    "[yellow]No findings reported, but the scan is incomplete: "
+                    f"{len(errors)} scanner(s) failed (see Scanner Errors above). "
+                    "This run must not be treated as a clean pass.[/yellow]",
+                    title="envdrift guard - Scan Incomplete",
+                    border_style="yellow",
+                )
             )
-        )
+        else:
+            console.print(
+                Panel(
+                    "[green]No secrets or policy violations detected[/green]",
+                    title="envdrift guard",
+                    border_style="green",
+                )
+            )
         _print_scan_info(result, console)
         return
 
@@ -211,15 +229,22 @@ def _print_scan_info(result: AggregatedScanResult, console: Console) -> None:
     )
 
 
-def format_json(result: AggregatedScanResult) -> str:
+def format_json(result: AggregatedScanResult, exit_code: int | None = None) -> str:
     """Format results as JSON.
 
     Args:
         result: Aggregated scan results.
+        exit_code: The effective process exit code for this run. When the
+            caller applies a ``--ci --fail-on`` threshold it must pass the
+            threshold-adjusted code so the machine-readable ``exit_code`` /
+            ``has_blocking_findings`` fields agree with the actual process
+            exit instead of contradicting it (#478). Defaults to the result's
+            own threshold-unaware code.
 
     Returns:
         JSON string representation.
     """
+    effective = result.exit_code if exit_code is None else exit_code
     data = {
         "findings": [f.to_dict() for f in result.unique_findings],
         "summary": {
@@ -241,8 +266,10 @@ def format_json(result: AggregatedScanResult) -> str:
             for r in result.results
         ],
         "duration_ms": result.total_duration_ms,
-        "exit_code": result.exit_code,
-        "has_blocking_findings": result.has_blocking_findings,
+        "exit_code": effective,
+        # True iff findings caused this run's (effective) non-zero exit — the
+        # same verdict the process exit code carries, by construction (#478).
+        "has_blocking_findings": effective in FINDINGS_EXIT_CODES,
     }
     return json.dumps(data, indent=2)
 
@@ -317,18 +344,28 @@ def _sarif_document(
     return json.dumps(sarif, indent=2)
 
 
-def format_sarif(result: AggregatedScanResult) -> str:
+def format_sarif(result: AggregatedScanResult, exit_code: int | None = None) -> str:
     """Format results as SARIF for GitHub/GitLab Code Scanning.
 
     SARIF (Static Analysis Results Interchange Format) is an OASIS standard
     for the output of static analysis tools.
 
+    The invocation object carries the run's verdict so it can never contradict
+    the process exit (#478): ``exitCode`` is the effective exit code passed by
+    the caller (or the result's own threshold-unaware code), and
+    ``executionSuccessful`` is false when any selected scanner ran but failed,
+    with one error ``toolExecutionNotifications`` entry per failed scanner.
+
     Args:
         result: Aggregated scan results.
+        exit_code: The effective process exit code for this run (see
+            :func:`format_json`).
 
     Returns:
         SARIF JSON string.
     """
+    effective = result.exit_code if exit_code is None else exit_code
+
     # Deduplicate rules by rule_id while preserving first-seen order.
     rules_by_id: dict[str, dict[str, Any]] = {}
     for finding in result.unique_findings:
@@ -337,11 +374,26 @@ def format_sarif(result: AggregatedScanResult) -> str:
     return _sarif_document(
         rules=list(rules_by_id.values()),
         results=[_sarif_result(f) for f in result.unique_findings],
-        invocation={"executionSuccessful": True, "toolExecutionNotifications": []},
+        invocation={
+            "executionSuccessful": not result.has_errors,
+            "exitCode": effective,
+            # Filter on the ScanResult.success contract (error is not None), not
+            # error truthiness, so an empty-string failure that flips
+            # executionSuccessful to false still emits a notification explaining
+            # the failure instead of leaving the consumer with no reason (#478).
+            "toolExecutionNotifications": [
+                {
+                    "level": "error",
+                    "message": {"text": f"{r.scanner_name}: {(r.error or '').strip()}"},
+                }
+                for r in result.results
+                if not r.success
+            ],
+        },
     )
 
 
-def format_sarif_error(message: str) -> str:
+def format_sarif_error(message: str, exit_code: int = EXIT_OPERATIONAL_ERROR) -> str:
     """Format a tool/configuration error as a valid SARIF document.
 
     Used by the error paths (missing/malformed config, path-not-found) so a
@@ -352,6 +404,9 @@ def format_sarif_error(message: str) -> str:
 
     Args:
         message: Human-readable error message.
+        exit_code: The process exit code for this failed run, carried in the
+            invocation so SARIF consumers see the same verdict as the process
+            exit (#478). Defaults to ``EXIT_OPERATIONAL_ERROR``.
 
     Returns:
         SARIF JSON string describing the failed invocation.
@@ -361,6 +416,7 @@ def format_sarif_error(message: str) -> str:
         results=[],
         invocation={
             "executionSuccessful": False,
+            "exitCode": exit_code,
             "toolConfigurationNotifications": [{"level": "error", "message": {"text": message}}],
         },
     )

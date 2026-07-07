@@ -85,21 +85,21 @@ def _patch_guard_dependencies(monkeypatch, config: EnvdriftConfig, result: Aggre
 
 
 def test_guard_missing_path_exits(tmp_path: Path):
-    """Missing paths exit with code 1."""
+    """Missing paths exit with the operational-error code 6 (#478)."""
     missing = tmp_path / "nope"
     result = runner.invoke(app, ["guard", str(missing)])
-    assert result.exit_code == 1
+    assert result.exit_code == 6
     assert "path not found" in result.output.lower()
 
 
 def test_guard_invalid_fail_on_exits(tmp_path: Path, monkeypatch):
-    """Invalid --fail-on values exit with code 1."""
+    """Invalid --fail-on values exit with the operational-error code 6 (#478)."""
     config = EnvdriftConfig()
     dummy_result = _build_result([])
     _patch_guard_dependencies(monkeypatch, config, dummy_result)
 
     result = runner.invoke(app, ["guard", str(tmp_path), "--fail-on", "invalid"])
-    assert result.exit_code == 1
+    assert result.exit_code == 6
     assert "invalid severity" in result.output.lower()
 
 
@@ -283,7 +283,7 @@ def test_guard_rejects_custom_env_files_outside_folder(tmp_path: Path, monkeypat
 
     result = runner.invoke(app, ["guard", str(tmp_path)])
 
-    assert result.exit_code == 1
+    assert result.exit_code == 6  # operational error, distinct from critical's 1 (#478)
     assert "invalid env_file" in result.output.lower()
 
 
@@ -486,7 +486,9 @@ def test_guard_json_output(tmp_path: Path, monkeypatch):
     """--json outputs serialized results."""
     config = EnvdriftConfig()
     created_configs, _info_calls = _patch_guard_dependencies(monkeypatch, config, _build_result([]))
-    monkeypatch.setattr("envdrift.cli_commands.guard.format_json", lambda _r: "JSON-OUT")
+    monkeypatch.setattr(
+        "envdrift.cli_commands.guard.format_json", lambda _r, exit_code=None: "JSON-OUT"
+    )
 
     result = runner.invoke(app, ["guard", str(tmp_path), "--json"])
     assert result.exit_code == 0
@@ -498,7 +500,9 @@ def test_guard_sarif_output(tmp_path: Path, monkeypatch):
     """--sarif outputs SARIF content."""
     config = EnvdriftConfig()
     created_configs, _info_calls = _patch_guard_dependencies(monkeypatch, config, _build_result([]))
-    monkeypatch.setattr("envdrift.cli_commands.guard.format_sarif", lambda _r: "SARIF-OUT")
+    monkeypatch.setattr(
+        "envdrift.cli_commands.guard.format_sarif", lambda _r, exit_code=None: "SARIF-OUT"
+    )
 
     result = runner.invoke(app, ["guard", str(tmp_path), "--sarif"])
     assert result.exit_code == 0
@@ -786,7 +790,7 @@ def test_guard_staged_without_git_fails(tmp_path: Path, monkeypatch):
 
     monkeypatch.chdir(tmp_path)
     result = runner.invoke(app, ["guard", "--staged"])
-    assert result.exit_code == 1
+    assert result.exit_code == 6  # operational error (#478)
     assert "git not found" in result.output.lower()
 
 
@@ -839,7 +843,8 @@ def test_guard_pr_base_unresolvable_ref_errors(tmp_path: Path, monkeypatch):
 
     result = runner.invoke(app, ["guard", "--pr-base", "nope"])
     out = " ".join(result.output.split())
-    assert result.exit_code == 1, out
+    # Operational error (unresolvable base ref) is exit 6, not critical's 1 (#526).
+    assert result.exit_code == 6, out
     assert "Error" in out, out
     assert "'nope'" in out, out
     assert "unknown revision" in out, out
@@ -865,7 +870,7 @@ def test_guard_pr_base_unresolvable_ref_errors_json(tmp_path: Path, monkeypatch)
     monkeypatch.chdir(tmp_path)
 
     result = runner.invoke(app, ["guard", "--pr-base", "nope", "--json"])
-    assert result.exit_code == 1
+    assert result.exit_code == 6  # operational error, not critical's 1 (#526)
     payload = json_module.loads(result.stdout)
     assert "error" in payload
     assert "'nope'" in payload["error"]
@@ -891,7 +896,7 @@ def test_guard_staged_git_diff_failure_errors(tmp_path: Path, monkeypatch):
 
     result = runner.invoke(app, ["guard", "--staged"])
     out = " ".join(result.output.split())
-    assert result.exit_code == 1, out
+    assert result.exit_code == 6, out  # operational error, not critical's 1 (#526)
     assert "Error" in out, out
     assert "not a git repository" in out, out
     assert "no staged files" not in out.lower(), out
@@ -924,7 +929,7 @@ def test_guard_history_without_capable_scanner_errors(tmp_path: Path, monkeypatc
 
     result = runner.invoke(app, ["guard", str(tmp_path), "--history"])
     out = " ".join(result.output.split())
-    assert result.exit_code == 1, out
+    assert result.exit_code == 6, out  # operational error, not critical's 1 (#526)
     assert "history" in out.lower(), out
     assert "gitleaks" in out.lower(), out
 
@@ -956,7 +961,7 @@ def test_guard_history_without_capable_scanner_errors_json(tmp_path: Path, monke
     monkeypatch.setattr("envdrift.cli_commands.guard.ScanEngine", NoHistoryEngine)
 
     result = runner.invoke(app, ["guard", str(tmp_path), "--history", "--json"])
-    assert result.exit_code == 1
+    assert result.exit_code == 6  # operational error, not critical's 1 (#526)
     payload = json_module.loads(result.stdout)
     assert "error" in payload
     assert "history" in payload["error"].lower()
@@ -1015,7 +1020,7 @@ def test_guard_staged_all_blobs_unreadable_errors(tmp_path: Path, monkeypatch):
 
     result = runner.invoke(app, ["guard", "--staged"])
     out = " ".join(result.output.split())
-    assert result.exit_code == 1, out
+    assert result.exit_code == 6, out  # operational error, not critical's 1 (#526)
     assert "Error" in out, out
     assert "could not read any staged file content" in out, out
     assert not scan_paths
@@ -1222,7 +1227,7 @@ def test_guard_pr_base_without_git_fails(tmp_path: Path, monkeypatch):
 
     monkeypatch.chdir(tmp_path)
     result = runner.invoke(app, ["guard", "--pr-base", "origin/main"])
-    assert result.exit_code == 1
+    assert result.exit_code == 6  # operational error (#478)
     assert "git not found" in result.output.lower()
 
 
@@ -1251,7 +1256,7 @@ def test_guard_staged_timeout(tmp_path: Path, monkeypatch):
 
     monkeypatch.chdir(tmp_path)
     result = runner.invoke(app, ["guard", "--staged"])
-    assert result.exit_code == 1
+    assert result.exit_code == 6  # operational error (#478)
     assert "timed out" in result.output.lower()
 
 
@@ -1269,7 +1274,7 @@ def test_guard_pr_base_timeout(tmp_path: Path, monkeypatch):
 
     monkeypatch.chdir(tmp_path)
     result = runner.invoke(app, ["guard", "--pr-base", "origin/main"])
-    assert result.exit_code == 1
+    assert result.exit_code == 6  # operational error (#478)
     assert "timed out" in result.output.lower()
 
 

@@ -13,7 +13,7 @@ Coverage (highest value first):
 - BUG    test_staged_secret_dropped_when_run_from_subdirectory (P0)
 - HP-17  test_allowed_clear_file_exempt_from_unencrypted_but_secrets_still_scanned (P0)
 - HP-10  test_entropy_flag_enables_high_entropy_detection (P1)
-- BP-01  test_path_not_found_exits_one (P1)
+- BP-01  test_path_not_found_exits_operational_code (P1)
 - EC-21  test_skip_clear_overrides_allowed_clear_files_allowlist (P1)
 - #476   git-scoped collection must never silently pass (--pr-base / --staged / --history)
 """
@@ -395,14 +395,14 @@ def test_entropy_flag_enables_high_entropy_detection(git_repo: Path) -> None:
     assert on_cli.returncode == 3, f"expected 3, got {on_cli.returncode}\n{on_cli.stdout}"
 
 
-# --- BP-01 (P1): scanning a nonexistent path exits 1 ----------------------------
+# --- BP-01 (P1): scanning a nonexistent path exits 6 (operational error) --------
 
 
-def test_path_not_found_exits_one(git_repo: Path) -> None:
-    """Scanning a path that does not exist exits 1 with a 'Path not found' message."""
+def test_path_not_found_exits_operational_code(git_repo: Path) -> None:
+    """A nonexistent path exits 6 (operational error, distinct from critical's 1, #478)."""
     work_dir = git_repo
     result = _run_envdrift(["guard", "--native-only", "./does_not_exist.py"], cwd=work_dir)
-    assert result.returncode == 1, f"expected 1, got {result.returncode}\n{result.stdout}"
+    assert result.returncode == 6, f"expected 6, got {result.returncode}\n{result.stdout}"
     assert "Path not found" in (result.stdout + result.stderr)
 
 
@@ -479,8 +479,10 @@ def test_pr_base_unresolvable_ref_fails_loudly(git_repo: Path) -> None:
         ],
         cwd=work_dir,
     )
-    assert result.returncode == 1, (
-        f"unresolvable --pr-base must exit 1, got {result.returncode}\n"
+    # An unresolvable base ref is an operational error (exit 6), not a critical
+    # finding (exit 1): #526 reserves 1 for EXIT_CRITICAL_FINDINGS.
+    assert result.returncode == 6, (
+        f"unresolvable --pr-base must exit 6 (operational error), got {result.returncode}\n"
         f"{result.stdout}\n{result.stderr}"
     )
     # stdout stays a clean machine-readable error document.
@@ -496,7 +498,7 @@ def test_pr_base_unresolvable_ref_fails_loudly(git_repo: Path) -> None:
         cwd=work_dir,
     )
     out = " ".join((human.stdout + human.stderr).split())
-    assert human.returncode == 1, f"expected 1, got {human.returncode}\n{out}"
+    assert human.returncode == 6, f"expected 6 (operational error), got {human.returncode}\n{out}"
     assert "Error" in out, out
     assert "does-not-exist-branch" in out, out
     assert "No changed files to scan" not in out, out
@@ -674,8 +676,9 @@ def test_staged_outside_git_repo_fails_loudly(tmp_path: Path) -> None:
     result = _run_envdrift(
         ["guard", "--staged", "--native-only", "--no-auto-install", "--json"], cwd=tmp_path
     )
-    assert result.returncode == 1, (
-        f"--staged outside a repo must exit 1, got {result.returncode}\n"
+    # Operational error (not a git repo), not a critical finding: exit 6 (#526).
+    assert result.returncode == 6, (
+        f"--staged outside a repo must exit 6 (operational error), got {result.returncode}\n"
         f"{result.stdout}\n{result.stderr}"
     )
     payload = json.loads(result.stdout)
@@ -701,8 +704,10 @@ def test_history_without_history_capable_scanner_fails_loudly(git_repo: Path) ->
     result = _run_envdrift(
         ["guard", "--history", "--native-only", "--no-auto-install", "--json"], cwd=work_dir
     )
-    assert result.returncode == 1, (
-        f"--history with no history-capable scanner must exit 1, got {result.returncode}\n"
+    # Refusing an unsatisfiable history request is an operational error (exit
+    # 6), not a critical finding (exit 1) — #526 reserves 1 for real leaks.
+    assert result.returncode == 6, (
+        f"--history with no history-capable scanner must exit 6, got {result.returncode}\n"
         f"{result.stdout}\n{result.stderr}"
     )
     payload = json.loads(result.stdout)
@@ -713,7 +718,7 @@ def test_history_without_history_capable_scanner_fails_loudly(git_repo: Path) ->
         ["guard", "--history", "--native-only", "--no-auto-install"], cwd=work_dir
     )
     out = " ".join((human.stdout + human.stderr).split())
-    assert human.returncode == 1, f"expected 1, got {human.returncode}\n{out}"
+    assert human.returncode == 6, f"expected 6 (operational error), got {human.returncode}\n{out}"
     assert "Error" in out, out
     assert "No secrets or policy violations detected" not in out, out
 
