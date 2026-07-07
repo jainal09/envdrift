@@ -7,6 +7,7 @@
         "linux_arm64": "https://github.com/dotenvx/dotenvx/releases/download/v{version}/dotenvx-{version}-linux-arm64.tar.gz",
         "windows_amd64": "https://github.com/dotenvx/dotenvx/releases/download/v{version}/dotenvx-{version}-windows-amd64.zip"
     },
+    "dotenvx_checksums_url": "https://github.com/dotenvx/dotenvx/releases/download/v{version}/checksums.txt",
     "sops_version": "3.13.2",
     "sops_download_urls": {
         "darwin_amd64": "https://github.com/getsops/sops/releases/download/v{version}/sops-v{version}.darwin.amd64",
@@ -15,6 +16,7 @@
         "linux_arm64": "https://github.com/getsops/sops/releases/download/v{version}/sops-v{version}.linux.arm64",
         "windows_amd64": "https://github.com/getsops/sops/releases/download/v{version}/sops-v{version}.amd64.exe"
     },
+    "sops_checksums_url": "https://github.com/getsops/sops/releases/download/v{version}/sops-v{version}.checksums.txt",
     "gitleaks_version": "8.30.1",
     "gitleaks_download_urls": {
         "darwin_amd64": "https://github.com/gitleaks/gitleaks/releases/download/v{version}/gitleaks_{version}_darwin_x64.tar.gz",
@@ -23,6 +25,7 @@
         "linux_arm64": "https://github.com/gitleaks/gitleaks/releases/download/v{version}/gitleaks_{version}_linux_arm64.tar.gz",
         "windows_amd64": "https://github.com/gitleaks/gitleaks/releases/download/v{version}/gitleaks_{version}_windows_x64.zip"
     },
+    "gitleaks_checksums_url": "https://github.com/gitleaks/gitleaks/releases/download/v{version}/gitleaks_{version}_checksums.txt",
     "trufflehog_version": "3.95.8",
     "trufflehog_download_urls": {
         "darwin_amd64": "https://github.com/trufflesecurity/trufflehog/releases/download/v{version}/trufflehog_{version}_darwin_amd64.tar.gz",
@@ -31,6 +34,7 @@
         "linux_arm64": "https://github.com/trufflesecurity/trufflehog/releases/download/v{version}/trufflehog_{version}_linux_arm64.tar.gz",
         "windows_amd64": "https://github.com/trufflesecurity/trufflehog/releases/download/v{version}/trufflehog_{version}_windows_amd64.tar.gz"
     },
+    "trufflehog_checksums_url": "https://github.com/trufflesecurity/trufflehog/releases/download/v{version}/trufflehog_{version}_checksums.txt",
     "detect_secrets_version": "1.5.0",
     "talisman_version": "1.37.0",
     "talisman_download_urls": {
@@ -40,6 +44,7 @@
         "linux_arm64": "https://github.com/thoughtworks/talisman/releases/download/v{version}/talisman_linux_arm64",
         "windows_amd64": "https://github.com/thoughtworks/talisman/releases/download/v{version}/talisman_windows_amd64.exe"
     },
+    "talisman_checksums_url": "https://github.com/thoughtworks/talisman/releases/download/v{version}/checksums",
     "trivy_version": "0.72.0",
     "trivy_download_urls": {
         "darwin_amd64": "https://github.com/aquasecurity/trivy/releases/download/v{version}/trivy_{version}_macOS-64bit.tar.gz",
@@ -48,6 +53,7 @@
         "linux_arm64": "https://github.com/aquasecurity/trivy/releases/download/v{version}/trivy_{version}_Linux-ARM64.tar.gz",
         "windows_amd64": "https://github.com/aquasecurity/trivy/releases/download/v{version}/trivy_{version}_windows-64bit.zip"
     },
+    "trivy_checksums_url": "https://github.com/aquasecurity/trivy/releases/download/v{version}/trivy_{version}_checksums.txt",
     "infisical_version": "0.41.90",
     "infisical_download_urls": {
         "darwin_amd64": "https://github.com/Infisical/infisical/releases/download/infisical-cli/v{version}/infisical_{version}_darwin_amd64.tar.gz",
@@ -55,6 +61,6 @@
         "linux_amd64": "https://github.com/Infisical/infisical/releases/download/infisical-cli/v{version}/infisical_{version}_linux_amd64.tar.gz",
         "linux_arm64": "https://github.com/Infisical/infisical/releases/download/infisical-cli/v{version}/infisical_{version}_linux_arm64.tar.gz",
         "windows_amd64": "https://github.com/Infisical/infisical/releases/download/infisical-cli/v{version}/infisical_{version}_windows_amd64.zip"
-    }
+    },
+    "infisical_checksums_url": "https://github.com/Infisical/infisical/releases/download/infisical-cli/v{version}/checksums.txt"
 }
-

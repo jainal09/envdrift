@@ -10,6 +10,7 @@ from unittest.mock import patch
 import pytest
 
 from envdrift.integrations.sops import SopsInstaller, SopsInstallError, get_sops_path
+from tests.helpers import write_checksums_for
 
 
 def test_get_sops_path_uses_venv_bin(monkeypatch, tmp_path: Path):
@@ -56,10 +57,18 @@ def test_install_downloads_binary(monkeypatch, tmp_path: Path):
     monkeypatch.setattr("envdrift.integrations.sops.get_venv_bin_dir", lambda: target_dir)
     monkeypatch.setattr("platform.system", lambda: "Linux")
 
-    server, url = _serve_bytes(b"sops-binary-bytes")
+    body = b"sops-binary-bytes"
+    server, url = _serve_bytes(body)
+    artifact = tmp_path / "served-sops"
+    artifact.write_bytes(body)
+    checksums_url = write_checksums_for(artifact, tmp_path / "stub-checksums.txt", "sops")
     monkeypatch.setattr(
         "envdrift.integrations.sops.SopsInstaller._get_download_url",
         lambda _self: url,
+    )
+    monkeypatch.setattr(
+        "envdrift.integrations.sops.SopsInstaller.get_checksums_url",
+        lambda _self: checksums_url,
     )
 
     try:
@@ -105,10 +114,18 @@ def test_install_failure_cleans_temp_file(monkeypatch, tmp_path: Path):
     monkeypatch.setattr("envdrift.integrations.sops.get_sops_path", lambda: target)
     monkeypatch.setattr("envdrift.integrations.sops.platform.system", lambda: "Linux")
 
-    server, url = _serve_bytes(b"partial")
+    body = b"partial"
+    server, url = _serve_bytes(body)
+    artifact = tmp_path / "served-sops"
+    artifact.write_bytes(body)
+    checksums_url = write_checksums_for(artifact, tmp_path / "stub-checksums.txt", "sops")
     monkeypatch.setattr(
         "envdrift.integrations.sops.SopsInstaller._get_download_url",
         lambda _self: url,
+    )
+    monkeypatch.setattr(
+        "envdrift.integrations.sops.SopsInstaller.get_checksums_url",
+        lambda _self: checksums_url,
     )
 
     try:

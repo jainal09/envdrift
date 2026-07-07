@@ -76,7 +76,8 @@ envdrift decrypt .env.production --backend sops
 
 ## How dotenvx Works
 
-1. **dotenvx binary** - envdrift can auto-install the dotenvx binary to `.venv/bin/` when enabled
+1. **dotenvx binary** - envdrift can auto-install the dotenvx binary to `.venv/bin/` when enabled;
+   the download is SHA256-verified against the upstream release checksums (fail closed)
 2. **Encryption** - Uses public-key (ECIES) encryption so encrypted `.env` files can be committed; only the private key in `.env.keys` can decrypt
 3. **Key management** - Keys stored in `.env.keys` (never commit this!)
 
@@ -125,7 +126,9 @@ SOPS relies on your chosen key management system (age, KMS, PGP, etc.) and a
 ## SOPS Configuration
 
 Use envdrift config to set SOPS defaults. Auto-install is opt-in; set
-`auto_install = true` if you want envdrift to download the binary for you:
+`auto_install = true` if you want envdrift to download the binary for you
+(downloads are SHA256-verified against the upstream release checksums and the
+install fails closed when verification is not possible):
 
 ```toml
 [encryption]

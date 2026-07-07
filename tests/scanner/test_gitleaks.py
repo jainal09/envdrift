@@ -28,6 +28,7 @@ from envdrift.scanner.gitleaks import (
     get_platform_info,
     get_venv_bin_dir,
 )
+from tests.helpers import write_checksums_for
 
 
 def _create_tar_gz(tmp_path: Path, binary_name: str) -> Path:
@@ -302,6 +303,10 @@ class TestGitleaksInstaller:
         monkeypatch.setattr(
             installer, "get_download_url", lambda: "https://example.com/gitleaks.tar.gz"
         )
+        checksums_url = write_checksums_for(
+            archive_path, tmp_path / "checksums-tar-gz.txt", "gitleaks.tar.gz"
+        )
+        monkeypatch.setattr(installer, "get_checksums_url", lambda: checksums_url)
         monkeypatch.setattr(platform, "system", lambda: "Linux")
 
         def fake_urlretrieve(_url: str, filename: str):
@@ -325,6 +330,10 @@ class TestGitleaksInstaller:
         monkeypatch.setattr(
             installer, "get_download_url", lambda: "https://example.com/gitleaks.zip"
         )
+        checksums_url = write_checksums_for(
+            archive_path, tmp_path / "checksums-zip.txt", "gitleaks.zip"
+        )
+        monkeypatch.setattr(installer, "get_checksums_url", lambda: checksums_url)
         monkeypatch.setattr(platform, "system", lambda: "Windows")
 
         def fake_urlretrieve(_url: str, filename: str):

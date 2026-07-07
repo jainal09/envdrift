@@ -22,6 +22,7 @@ import urllib.request
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, ClassVar
 
+from envdrift.install_integrity import ChecksumVerificationError, verify_download
 from envdrift.scanner.base import (
     FindingSeverity,
     ScanFinding,
@@ -50,6 +51,11 @@ def _get_talisman_version() -> str:
 def _get_talisman_download_urls() -> dict[str, str]:
     """Get download URL templates from constants."""
     return _load_constants().get("talisman_download_urls", {})
+
+
+def _get_talisman_checksums_url() -> str:
+    """Get the upstream checksums file URL template from constants."""
+    return _load_constants().get("talisman_checksums_url", "")
 
 
 # Severity mapping from talisman to our severity levels
@@ -199,16 +205,24 @@ class TalismanInstaller:
             ext=ext,
         )
 
-    def download_binary(self, target_path: Path) -> None:
-        """Download talisman binary directly to target path.
+    def get_checksums_url(self) -> str:
+        """Get the URL of the upstream-published checksums file for this version."""
+        template = _get_talisman_checksums_url()
+        return template.format(version=self.version) if template else ""
 
-        Talisman releases are direct binaries, not archives.
+    def download_binary(self, target_path: Path) -> None:
+        """Download, verify, and install the talisman binary.
+
+        Talisman releases are direct binaries, not archives. The download is
+        staged next to the target, verified against the upstream checksums
+        file, and only then moved onto the final path, so a tampered or
+        unverifiable download never replaces a working binary (#490).
 
         Args:
             target_path: Where to install the talisman binary.
 
         Raises:
-            TalismanInstallError: If download fails.
+            TalismanInstallError: If download or verification fails.
         """
         url = self.get_download_url()
         self.progress(f"Downloading talisman v{self.version}...")
@@ -216,17 +230,35 @@ class TalismanInstaller:
         # Ensure target directory exists
         target_path.parent.mkdir(parents=True, exist_ok=True)
 
-        # Download directly
+        # Stage the download; never write directly onto the install path.
+        staging_path = target_path.parent / (target_path.name + ".download")
         try:
-            urllib.request.urlretrieve(url, target_path)  # nosec B310
-        except Exception as e:
-            raise TalismanInstallError(f"Download failed: {e}") from e
+            try:
+                urllib.request.urlretrieve(url, staging_path)  # nosec B310
+            except Exception as e:
+                raise TalismanInstallError(f"Download failed: {e}") from e
 
-        # Make executable (Unix)
-        if platform.system() != "Windows":
-            target_path.chmod(
-                target_path.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH
-            )
+            # Verify against the published checksums before installing.
+            self.progress("Verifying checksum...")
+            try:
+                verify_download(
+                    staging_path, url.split("/")[-1], self.get_checksums_url(), "talisman"
+                )
+            except ChecksumVerificationError as e:
+                raise TalismanInstallError(str(e)) from e
+
+            # Make executable (Unix)
+            if platform.system() != "Windows":
+                staging_path.chmod(
+                    staging_path.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH
+                )
+
+            try:
+                staging_path.replace(target_path)
+            except OSError as e:
+                raise TalismanInstallError(f"Failed to move verified binary into place: {e}") from e
+        finally:
+            staging_path.unlink(missing_ok=True)
 
         self.progress(f"Installed to {target_path}")
 

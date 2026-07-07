@@ -13,7 +13,6 @@ from __future__ import annotations
 import json
 import platform
 import shutil
-import stat
 import subprocess  # nosec B404
 import tarfile
 import tempfile
@@ -24,6 +23,11 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, ClassVar
 
+from envdrift.install_integrity import (
+    ChecksumVerificationError,
+    atomic_install,
+    verify_download,
+)
 from envdrift.scanner.base import (
     FindingSeverity,
     ScanFinding,
@@ -57,6 +61,11 @@ def _get_trivy_version() -> str:
 def _get_trivy_download_urls() -> dict[str, str]:
     """Get download URL templates from constants."""
     return _load_constants().get("trivy_download_urls", {})
+
+
+def _get_trivy_checksums_url() -> str:
+    """Get the upstream checksums file URL template from constants."""
+    return _load_constants().get("trivy_checksums_url", "")
 
 
 # Severity mapping from trivy to our severity levels
@@ -176,6 +185,11 @@ class TrivyInstaller:
             ext=ext,
         )
 
+    def get_checksums_url(self) -> str:
+        """Get the URL of the upstream-published checksums file for this version."""
+        template = _get_trivy_checksums_url()
+        return template.format(version=self.version) if template else ""
+
     def download_and_extract(self, target_path: Path) -> None:
         """Download and extract trivy to the target path.
 
@@ -199,6 +213,13 @@ class TrivyInstaller:
             except Exception as e:
                 raise TrivyInstallError(f"Download failed: {e}") from e
 
+            # Verify against the published checksums before extracting anything.
+            self.progress("Verifying checksum...")
+            try:
+                verify_download(archive_path, archive_name, self.get_checksums_url(), "trivy")
+            except ChecksumVerificationError as e:
+                raise TrivyInstallError(str(e)) from e
+
             self.progress("Extracting...")
 
             # Extract based on archive type
@@ -221,17 +242,13 @@ class TrivyInstaller:
             if not extracted_binary:
                 raise TrivyInstallError(f"Binary '{binary_name}' not found in archive")
 
-            # Ensure target directory exists
-            target_path.parent.mkdir(parents=True, exist_ok=True)
-
-            # Copy to target
-            shutil.copy2(extracted_binary, target_path)
-
-            # Make executable (Unix)
-            if platform.system() != "Windows":
-                target_path.chmod(
-                    target_path.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH
-                )
+            # Stage next to the target and atomically replace it, so an
+            # interrupted copy (disk full, crash) can never corrupt a working
+            # binary or leave a partial write behind (#490).
+            try:
+                atomic_install(extracted_binary, target_path)
+            except OSError as e:
+                raise TrivyInstallError(f"Failed to install binary: {e}") from e
 
             self.progress(f"Installed to {target_path}")
 

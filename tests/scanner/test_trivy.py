@@ -20,6 +20,7 @@ from envdrift.scanner.trivy import (
     get_platform_info,
     get_trivy_path,
 )
+from tests.helpers import write_checksums_for
 
 
 class TestPlatformDetection:
@@ -639,17 +640,25 @@ class TestTrivyInstallerInstall:
         target_path.parent.mkdir(parents=True, exist_ok=True)
         mock_get_path.return_value = target_path
 
+        checksums_path = tmp_path / "stub-checksums.txt"
+
         def fake_download(url: str, dest: str) -> None:
             # Create a fake tar.gz with trivy binary
             with tarfile.open(dest, "w:gz") as tar:
                 info = tarfile.TarInfo(name="trivy")
                 info.size = 4
                 tar.addfile(info, io.BytesIO(b"fake"))
+            write_checksums_for(Path(dest), checksums_path, url.rsplit("/", 1)[-1])
 
         mock_urlretrieve.side_effect = fake_download
 
         installer = TrivyInstaller()
-        result = installer.install()
+        with patch.object(
+            TrivyInstaller,
+            "get_checksums_url",
+            lambda self: checksums_path.resolve().as_uri(),
+        ):
+            result = installer.install()
 
         assert result == target_path
         assert target_path.exists()
@@ -692,17 +701,27 @@ class TestTrivyInstallerInstall:
 
         mock_get_path.return_value = tmp_path / "trivy"
 
+        checksums_path = tmp_path / "stub-checksums.txt"
+
         def fake_download(url: str, dest: str) -> None:
             # Create a tar.gz without trivy binary
             with tarfile.open(dest, "w:gz") as tar:
                 info = tarfile.TarInfo(name="other_file.txt")
                 info.size = 4
                 tar.addfile(info, io.BytesIO(b"test"))
+            write_checksums_for(Path(dest), checksums_path, url.rsplit("/", 1)[-1])
 
         mock_urlretrieve.side_effect = fake_download
 
         installer = TrivyInstaller()
-        with pytest.raises(TrivyInstallError, match="not found in archive"):
+        with (
+            patch.object(
+                TrivyInstaller,
+                "get_checksums_url",
+                lambda self: checksums_path.resolve().as_uri(),
+            ),
+            pytest.raises(TrivyInstallError, match="not found in archive"),
+        ):
             installer.install()
 
 
