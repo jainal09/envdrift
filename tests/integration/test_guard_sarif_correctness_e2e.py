@@ -54,6 +54,7 @@ def _run_envdrift(args: list[str], *, cwd: Path) -> subprocess.CompletedProcess:
         env=run_env,
         capture_output=True,
         text=True,
+        timeout=120,
     )
 
 
@@ -85,6 +86,7 @@ def scratch_repo(tmp_path: Path) -> Path:
         cwd=str(tmp_path),
         check=True,
         capture_output=True,
+        timeout=60,
     )
     configs = tmp_path / "configs"
     configs.mkdir()
