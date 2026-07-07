@@ -33,6 +33,24 @@ Type validation mirrors what the real app does at startup:
   and the sensitive-name warning, so encrypted files validate cleanly against an
   `extra="forbid"` schema.
 
+The file itself is parsed with python-dotenv's quoting rules — the parser
+pydantic-settings uses — so quoted values (well-formed or malformed) are
+judged exactly as the real app loads them:
+
+- A value opened with `"` or `'` continues across physical lines until the
+  matching close quote (multiline PEM certificates and keys parse as one
+  value); interior `KEY=value`-looking lines are part of the value, never
+  separate variables.
+- Inside quoted values the python-dotenv escape sequences are decoded (`\n`,
+  `\t`, `\"`, `\\`, ... in double quotes; `\\` and `\'` in single quotes).
+- Malformed quoted bindings are rejected exactly like python-dotenv: an
+  unterminated quote, or non-comment content after the close quote, drops the
+  whole binding (no truncated value, no phantom variables from interior lines).
+
+Other python-dotenv behaviors (`${VAR}` interpolation, its inline-comment rule
+for unquoted values, `'quoted keys'`) are not yet mirrored; a file relying on
+those may still be judged differently than the running app sees it.
+
 Multiple env files can be validated in one invocation (each gets its own report;
 with `--ci` the exit code is 1 if any file fails). This keeps the command usable
 as a pre-commit `pass_filenames: true` hook, where every matched staged file is
