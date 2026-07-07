@@ -231,6 +231,24 @@ def test_monorepo_shared_keys_env_keys_file_flag(
     assert result.returncode == 0, result.stdout + result.stderr
     assert _PLAIN_VALUE in result.stdout
 
+    # The doc also advertises the short alias `-fk`; verify the real dotenvx
+    # binary accepts it identically so the shorthand is not a fabrication.
+    result = _run(
+        [
+            dotenvx_bin,
+            "decrypt",
+            "-f",
+            ".env.production",
+            "-fk",
+            str(relative_keys),
+            "--stdout",
+        ],
+        service,
+        integration_env,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert _PLAIN_VALUE in result.stdout
+
 
 @pytest.mark.skipif(sys.platform == "win32", reason="symlink creation needs privileges on Windows")
 def test_monorepo_shared_keys_symlink(
