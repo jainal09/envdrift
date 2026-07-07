@@ -103,10 +103,23 @@ When `--normalize` is in effect, two values are considered equal if:
   of single- vs double-quote style
   (`CORS_ORIGINS=["http://x"]` vs `CORS_ORIGINS=['http://x']`).
 
-When `--schema` is also passed, each value is additionally coerced through the
-matching Pydantic field type (`bool`, `int`, `list[str]`, `Literal[...]`, etc.)
-before comparison. Variables not in the schema, or values that fail Pydantic
-validation, fall back to the universal rules above.
+When `--schema` is also passed, each value is coerced through the matching
+Pydantic field type (`bool`, `int`, `list[str]`, `Literal[...]`, etc.) using the
+same pydantic-settings semantics `validate` uses, so the two commands always
+agree. Complex types (`list`/`dict`/nested models) are JSON-decoded first, like
+the real env source. Schema coercion is definitive in exactly two cases:
+
+- Both sides coerce to the **same** value: equal (`PORT=1` vs `PORT=01`).
+- One side coerces and the other fails (it would crash the real app): that is
+  **drift** — e.g. `PORT=1` vs `PORT=true` under `PORT: int` is CHANGED; the
+  bool-truthiness rule above never overrules a non-bool schema type.
+
+Everything else — variables not in the schema, values that coerce on both sides
+but to *different* values, or values failing coercion on both sides — falls
+back to the universal rules above (minus the bool rule when a typed field
+failed coercion on both sides). Note the wider bool spellings Pydantic accepts
+(`t`/`f`/`y`/`n`, ...) only compare equal through this schema path; the
+universal bool rule recognizes just `true|false|yes|no|on|off|1|0`.
 
 ```bash
 # Default — normalization on

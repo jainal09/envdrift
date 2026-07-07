@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import logging
-import re
 import shutil
 import subprocess  # nosec B404
 from collections.abc import Callable
@@ -22,50 +21,20 @@ from envdrift.sync.result import (
 )
 from envdrift.vault.base import SecretNotFoundError, VaultError
 
+# Re-exported: the canonical vault key-material parser lives in
+# envdrift.vault.keymaterial (#480) but historical importers (tests, sync CLI)
+# reach it through this module.
+from envdrift.vault.keymaterial import (
+    extract_key_material,
+)
+from envdrift.vault.keymaterial import (
+    normalize_vault_key_value as normalize_vault_key_value,
+)
+
 if TYPE_CHECKING:
     from envdrift.vault import VaultClient
 
 logger = logging.getLogger(__name__)
-
-# Match a `DOTENV_PRIVATE_KEY_<SUFFIX>=<value>` line, capturing the environment
-# suffix and the bare value.
-_DOTENV_PRIVATE_KEY_RE = re.compile(r"^DOTENV_PRIVATE_KEY_([A-Za-z0-9_]+)=(.+)$")
-
-
-def _strip_one_quote_layer(value: str) -> str:
-    """Remove a single layer of matching surrounding single/double quotes."""
-    if len(value) >= 2 and (
-        (value[0] == '"' and value[-1] == '"') or (value[0] == "'" and value[-1] == "'")
-    ):
-        return value[1:-1]
-    return value
-
-
-def normalize_vault_key_value(raw: str) -> tuple[str, str | None]:
-    """Normalize a raw vault secret value to its bare key material.
-
-    Strips surrounding whitespace, then a single layer of surrounding quotes,
-    then a ``DOTENV_PRIVATE_KEY_<SUFFIX>=`` prefix if present. The value *after*
-    that prefix is itself stripped and dequoted, exactly as
-    ``EnvKeysFile.read_key`` treats the post-``=`` part — so the two converge
-    even when the vault stores ``DOTENV_PRIVATE_KEY_PROD="abc"`` or
-    ``DOTENV_PRIVATE_KEY_PROD=  abc`` (without this, verify-vault false-mismatched
-    and the engine wrote literal quotes/whitespace as key material). Returns
-    ``(value, suffix)`` where ``suffix`` is the environment label from the prefix
-    (uppercase as stored) or ``None`` when there was no prefix.
-
-    Both the sync engine and ``lock --verify-vault`` use it so they parse
-    identically (#356, #413). Order matters: outer quotes come off before the
-    prefix, so a quoted full ``"DOTENV_PRIVATE_KEY_PROD=abc"`` line still has its
-    prefix stripped. The caller decides what to do with a suffix that does not
-    match the target environment (the engine raises; verify reports a mismatch).
-    """
-    value = _strip_one_quote_layer(raw.strip())
-    match = _DOTENV_PRIVATE_KEY_RE.match(value)
-    if match:
-        inner = _strip_one_quote_layer(match.group(2).strip())
-        return inner, match.group(1)
-    return value, None
 
 
 @dataclass
@@ -301,13 +270,17 @@ class SyncEngine:
         confirming ``<SUFFIX>`` matches the target environment. A mismatch means
         a key labeled for one environment would be silently relabeled and
         installed as another (e.g. staging key written as production), so we
-        raise instead of stripping (#348).
+        raise instead of stripping (#348). Binary payloads, JSON documents
+        without a usable key field, and multi-line blobs without a key line
+        raise ``KeyMaterialError`` (a ``VaultError``) instead of being installed
+        verbatim under a success action (#480).
         """
         secret = self.vault_client.get_secret(mapping.secret_name)
 
-        # Normalize the same way read_key() (operations.py) does so a vault value
-        # and the local file value converge instead of mismatching forever (#356).
-        value, suffix = normalize_vault_key_value(secret.value)
+        # Normalize + shape-validate the same way read_key() (operations.py) and
+        # vault-pull do, so a vault value and the local file value converge
+        # instead of mismatching forever (#356, #480).
+        value, suffix = extract_key_material(secret, effective_environment)
         if suffix is not None and suffix.upper() != effective_environment.upper():
             # A prefix labeled for a different env would silently relabel and
             # install a key as the wrong environment, so raise instead (#348).

@@ -226,7 +226,9 @@ class TestMyFeature:
 | `vault_test_env` | session | Environment variables for Vault |
 | `vault_client` | session | hvac client |
 | `lowkey_vault_endpoint` | session | Azure emulator URL |
-| `azure_test_env` | session | Environment variables for Azure |
+| `lowkey_vault_ca_bundle` | session | Exported Lowkey TLS certificate (verification stays on) |
+| `lowkey_token_endpoint` | session | Lowkey managed-identity token stub URL (fails loudly if unpublished) |
+| `azure_test_env` | session | Environment variables for Azure (CA bundle, token stub, challenge-resource opt-out) |
 
 ## Test Infrastructure
 
@@ -238,7 +240,8 @@ The `tests/docker-compose.test.yml` provides:
 |---------|------|---------|
 | LocalStack | 4566 | AWS Secrets Manager emulator |
 | Vault | 8200 | HashiCorp Vault (dev mode) |
-| Lowkey Vault | 8443 | Azure Key Vault emulator |
+| Lowkey Vault | 8443 | Azure Key Vault emulator (HTTPS, self-signed cert) |
+| Lowkey Vault | 8080 | Managed-identity token stub used by `DefaultAzureCredential` (HTTP) |
 
 ### Health Checks
 
