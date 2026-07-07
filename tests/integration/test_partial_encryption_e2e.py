@@ -912,10 +912,9 @@ class TestUnsafeFilenameLockoutGuard:
         assert "Refusing to encrypt" in out, out
         assert "my secret.env" in out, out
         assert "Errors: 1" in out, out
-        # The guard fired pre-flight: plaintext byte-for-byte intact, never
-        # encrypted into an unrecoverable file.
+        # The guard fired pre-flight: plaintext byte-for-byte intact (which, as
+        # `before` is the plaintext fixture, also proves it was never encrypted).
         assert bad.read_bytes() == before, "plaintext was modified"
-        assert b"encrypted:" not in bad.read_bytes()
         # dotenvx never ran, so no private-key file was ever written.
         assert not (secrets / ".env.keys").exists(), "dotenvx was invoked despite the guard"
         assert not (work_dir / ".env.keys").exists(), "dotenvx was invoked despite the guard"
@@ -956,9 +955,9 @@ class TestUnsafeFilenameLockoutGuard:
         # around the non-ASCII filename can never flake the test.
         assert "Refusing to encrypt" in out, out
         assert "Errors: 1" in out, out
-        # Plaintext preserved byte-for-byte; no lockout occurred.
+        # Plaintext preserved byte-for-byte; no lockout occurred (byte-equality
+        # against the plaintext fixture also proves it was never encrypted).
         assert secret.read_bytes() == before, "plaintext was modified"
-        assert b"encrypted:" not in secret.read_bytes()
         # The failed environment must not generate the combined artifact, and
         # dotenvx must never have run (no private-key file).
         assert not combined.exists(), "combined file generated despite the refusal"
