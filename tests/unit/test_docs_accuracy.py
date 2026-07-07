@@ -304,10 +304,14 @@ def test_configuration_md_drops_unconsumed_envdrift_and_precommit_keys() -> None
     them as functional sends users into silently-ignored config.
     """
     text = _read_docs_page("reference/configuration.md")
-    assert "[precommit]" not in text, (
+    # Match the exact TOML table headers on their own line, not as substrings:
+    # `[precommit.schemas]` is a legitimate user-defined-key example in the
+    # unknown-key exemption note, and `[tool.envdrift]` is the real namespace —
+    # a substring check on `[precommit]`/`[envdrift]` would false-fail on those.
+    assert not re.search(r"(?m)^\[precommit\]\s*$", text), (
         "configuration.md documents a [precommit] section that no code consumes (#498)."
     )
-    assert "[envdrift]" not in text, (
+    assert not re.search(r"(?m)^\[envdrift\]\s*$", text), (
         "configuration.md documents an [envdrift] table (schema/environments) "
         "that no code consumes (#498)."
     )
