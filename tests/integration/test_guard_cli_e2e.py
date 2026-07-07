@@ -555,6 +555,40 @@ def test_staged_scans_index_blob_not_worktree(git_repo: Path) -> None:
     assert all("envdrift-staged-" not in p for p in reported), reported
 
 
+def test_staged_scans_file_whose_name_needs_git_quoting(git_repo: Path) -> None:
+    """``--staged`` scans a staged file whose name git would C-quote (#514 review).
+
+    ``git diff --cached --name-only`` C-quotes a path containing spaces or
+    non-ASCII (``"sécret env.env"``) under the default ``core.quotepath``, so
+    line-splitting the text output produced a bogus quoted name that
+    ``git show :<path>`` could not resolve — the staged secret slipped past the
+    gate. The ``-z`` binary pipe prints the name verbatim and ``os.fsdecode``
+    round-trips the bytes, so the blob is read and the leak is flagged.
+    """
+    work_dir = git_repo
+    # Space + non-ASCII in the name; keep the ``.env`` shape so the finding is
+    # deterministic. Build the secret by concatenation (push-protection).
+    tricky = work_dir / "sécret env.env"
+    tricky.write_text(f'aws_secret_access_key = "{_AWS_SECRET}"\n', encoding="utf-8")
+    _run_git(["add", "sécret env.env"], cwd=work_dir)
+    # Overwrite the working tree so a worktree read could not explain a hit —
+    # only the staged index blob still carries the secret.
+    tricky.write_text('aws_secret_access_key = "redacted"\n', encoding="utf-8")
+
+    result = _run_envdrift(
+        ["guard", "--staged", "--native-only", "--no-auto-install", "--json"], cwd=work_dir
+    )
+    assert result.returncode == 1, (
+        f"staged secret in a quote-requiring filename must fail the gate, got "
+        f"{result.returncode}\n{result.stdout}\n{result.stderr}"
+    )
+    payload = _guard_json(result)
+    assert "aws-secret-access-key" in _rule_ids(payload), payload["findings"]
+    reported = {f["file_path"] for f in payload["findings"]}
+    assert any("sécret env.env" in p for p in reported), reported
+    assert all("envdrift-staged-" not in p for p in reported), reported
+
+
 def test_staged_file_deleted_from_worktree_still_scanned(git_repo: Path) -> None:
     """A staged file deleted from the working tree is still scanned (#476).
 

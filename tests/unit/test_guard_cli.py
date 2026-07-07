@@ -513,9 +513,10 @@ def test_guard_staged_with_no_staged_files(tmp_path: Path, monkeypatch):
     config = EnvdriftConfig()
     _patch_guard_dependencies(monkeypatch, config, _build_result([]))
 
-    # Mock git diff --cached to return empty
+    # Mock git diff --cached to return empty. ``-z`` mode is a binary pipe, so
+    # the staged-file listing is NUL-separated bytes (#514).
     def mock_run(*args, **kwargs):
-        result = subprocess.CompletedProcess(args[0], 0, stdout="", stderr="")
+        result = subprocess.CompletedProcess(args[0], 0, stdout=b"", stderr=b"")
         return result
 
     monkeypatch.setattr("subprocess.run", mock_run)
@@ -566,13 +567,14 @@ def test_guard_staged_scans_only_staged_files(tmp_path: Path, monkeypatch):
     # index blob (which differs from the working-tree copies on disk).
     def mock_run(cmd, *args, **kwargs):
         if "diff" in cmd and "--cached" in cmd:
-            return subprocess.CompletedProcess(cmd, 0, stdout="file1.py\nfile2.env\n", stderr="")
+            # ``-z`` prints NUL-separated bytes verbatim (#514).
+            return subprocess.CompletedProcess(cmd, 0, stdout=b"file1.py\0file2.env\0", stderr=b"")
         if "show" in cmd:
             rel = cmd[-1].removeprefix(":")
             return subprocess.CompletedProcess(
                 cmd, 0, stdout=f"STAGED {rel}\n".encode(), stderr=b""
             )
-        return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+        return subprocess.CompletedProcess(cmd, 0, stdout=b"", stderr=b"")
 
     monkeypatch.setattr("subprocess.run", mock_run)
 
@@ -637,8 +639,9 @@ def test_guard_staged_resolves_repo_relative_paths_against_toplevel(tmp_path: Pa
         if "rev-parse" in cmd and "--show-toplevel" in cmd:
             return subprocess.CompletedProcess(cmd, 0, stdout=f"{repo_root}\n", stderr="")
         if "diff" in cmd and "--cached" in cmd:
-            # git reports the path relative to the repo root, not the cwd.
-            return subprocess.CompletedProcess(cmd, 0, stdout="sub/leak.env\n", stderr="")
+            # git reports the path relative to the repo root, not the cwd;
+            # ``-z`` prints it NUL-separated over a binary pipe (#514).
+            return subprocess.CompletedProcess(cmd, 0, stdout=b"sub/leak.env\0", stderr=b"")
         if "show" in cmd:
             show_cwds.append(kwargs.get("cwd", ""))
             return subprocess.CompletedProcess(cmd, 0, stdout=b"SECRET=staged\n", stderr=b"")
@@ -699,7 +702,7 @@ def test_guard_staged_git_toplevel_falls_back_to_cwd(tmp_path: Path, monkeypatch
             # Exercise the except (subprocess.TimeoutExpired, FileNotFoundError) path.
             raise FileNotFoundError("git not found")
         if "diff" in cmd and "--cached" in cmd:
-            return subprocess.CompletedProcess(cmd, 0, stdout="leak.env\n", stderr="")
+            return subprocess.CompletedProcess(cmd, 0, stdout=b"leak.env\0", stderr=b"")
         if "show" in cmd:
             show_cwds.append(kwargs.get("cwd", ""))
             return subprocess.CompletedProcess(cmd, 0, stdout=b"SECRET=staged\n", stderr=b"")
@@ -877,8 +880,9 @@ def test_guard_staged_git_diff_failure_errors(tmp_path: Path, monkeypatch):
 
     def mock_run(cmd, *args, **kwargs):
         if "diff" in cmd and "--cached" in cmd:
+            # ``-z`` is a binary pipe, so stderr is bytes too (#514).
             return subprocess.CompletedProcess(
-                cmd, 128, stdout="", stderr="fatal: not a git repository\n"
+                cmd, 128, stdout=b"", stderr=b"fatal: not a git repository\n"
             )
         return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
 
@@ -971,7 +975,7 @@ def test_guard_staged_unreadable_blob_skipped_with_warning(tmp_path: Path, monke
 
     def mock_run(cmd, *args, **kwargs):
         if "diff" in cmd and "--cached" in cmd:
-            return subprocess.CompletedProcess(cmd, 0, stdout="submodule\ngood.py\n", stderr="")
+            return subprocess.CompletedProcess(cmd, 0, stdout=b"submodule\0good.py\0", stderr=b"")
         if "show" in cmd:
             if cmd[-1] == ":submodule":
                 return subprocess.CompletedProcess(
@@ -1001,7 +1005,7 @@ def test_guard_staged_all_blobs_unreadable_errors(tmp_path: Path, monkeypatch):
 
     def mock_run(cmd, *args, **kwargs):
         if "diff" in cmd and "--cached" in cmd:
-            return subprocess.CompletedProcess(cmd, 0, stdout="submodule\n", stderr="")
+            return subprocess.CompletedProcess(cmd, 0, stdout=b"submodule\0", stderr=b"")
         if "show" in cmd:
             return subprocess.CompletedProcess(cmd, 128, stdout=b"", stderr=b"fatal: bad object\n")
         return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
@@ -1286,7 +1290,7 @@ def test_guard_staged_files_not_exist(tmp_path: Path, monkeypatch):
     # is still readable via ``git show :deleted_file.py``.
     def mock_run(cmd, *args, **kwargs):
         if "diff" in cmd and "--cached" in cmd:
-            return subprocess.CompletedProcess(cmd, 0, stdout="deleted_file.py\n", stderr="")
+            return subprocess.CompletedProcess(cmd, 0, stdout=b"deleted_file.py\0", stderr=b"")
         if "show" in cmd:
             return subprocess.CompletedProcess(cmd, 0, stdout=b"SECRET=staged\n", stderr=b"")
         return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")

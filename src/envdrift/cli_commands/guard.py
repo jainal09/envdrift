@@ -561,26 +561,29 @@ def guard(
     # Handle --staged flag (pre-commit mode)
     if staged:
         try:
+            # ``-z`` + a binary pipe: git prints staged paths NUL-terminated and
+            # verbatim (no ``core.quotepath`` C-quoting of spaces/non-ASCII), and
+            # ``os.fsdecode`` round-trips the raw filesystem bytes so the decoded
+            # path still resolves under ``git show :<path>``. A text pipe with
+            # ``split("\n")`` mis-parsed any name git would quote (spaces, quotes,
+            # non-ASCII) — the same class #531 fixed for check-ignore.
             result = subprocess.run(  # nosec B603, B607
-                ["git", "diff", "--cached", "--name-only", "--diff-filter=ACMR"],
+                ["git", "diff", "--cached", "-z", "--name-only", "--diff-filter=ACMR"],
                 capture_output=True,
-                text=True,
-                encoding="utf-8",
-                errors="replace",
                 timeout=10,
             )
             # A failing ``git diff --cached`` (e.g. not a git repository) is an
             # error, not "nothing staged": conflating the two turned a broken
             # pre-commit gate into a green pass (#476).
             if result.returncode != 0:
-                detail = (result.stderr or "").strip() or "unknown git error"
+                detail = result.stderr.decode("utf-8", "replace").strip() or "unknown git error"
                 _emit_error(
                     json_output,
                     sarif,
                     f"--staged could not list staged files (git diff --cached failed): {detail}",
                 )
                 raise typer.Exit(code=1)
-            staged_files = [f for f in result.stdout.strip().split("\n") if f]
+            staged_files = [os.fsdecode(p) for p in result.stdout.split(b"\0") if p]
             if not staged_files:
                 _emit_empty_or_prose(json_output, sarif, _NO_STAGED)
                 raise typer.Exit(code=0)
