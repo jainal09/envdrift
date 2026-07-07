@@ -1,0 +1,166 @@
+"""CLI guard tests: encrypt/decrypt refuse companion files by name (#474).
+
+``envdrift encrypt .env.keys`` previously encrypted the dotenvx private-key
+store itself with ``[OK]``/exit 0, permanently locking out every encrypted file
+in the project. The bare ``encrypt``/``decrypt`` commands must refuse companion
+files (``.keys``/``.example``/``.sample``/``.template``) by name — for every
+backend — using the same canonical predicate that already excludes them from
+push/pull.
+
+These drive the real Typer app via CliRunner; the guard fires pre-flight, so no
+encryption binary is needed and the target file must stay byte-for-byte intact.
+"""
+
+from __future__ import annotations
+
+from pathlib import Path
+
+import pytest
+from typer.testing import CliRunner
+
+from envdrift.cli import app
+
+runner = CliRunner()
+
+
+def _fake_private_key(seed: str) -> str:
+    """Build a 64-hex value shaped like a private key (assembled, not literal)."""
+    return (seed * 64)[:64]
+
+
+def _flat(output: str) -> str:
+    """Normalize Rich output (line wraps, padding) for substring assertions."""
+    return " ".join(output.split())
+
+
+@pytest.fixture
+def keys_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """A realistic ``.env.keys`` private-key store in an isolated cwd."""
+    monkeypatch.chdir(tmp_path)
+    keys = tmp_path / ".env.keys"
+    keys.write_text(
+        "# .env\nDOTENV_PRIVATE_KEY=" + _fake_private_key("b") + "\n",
+        encoding="utf-8",
+    )
+    return keys
+
+
+class TestEncryptRefusesCompanionFiles:
+    def test_encrypt_env_keys_refused(self, keys_file: Path) -> None:
+        """#474: ``encrypt .env.keys`` exits 1 and leaves the key store intact."""
+        before = keys_file.read_text(encoding="utf-8")
+
+        result = runner.invoke(app, ["encrypt", ".env.keys"])
+
+        output = _flat(result.output)
+        assert result.exit_code == 1, output
+        assert "Refusing to encrypt" in output, output
+        assert "private-key store" in output, output
+        assert keys_file.read_text(encoding="utf-8") == before
+
+    def test_encrypt_env_keys_refused_for_sops_backend_too(self, keys_file: Path) -> None:
+        """#474: the refusal is by name, before any backend is resolved."""
+        result = runner.invoke(app, ["encrypt", ".env.keys", "--backend", "sops"])
+
+        output = _flat(result.output)
+        assert result.exit_code == 1, output
+        assert "Refusing to encrypt" in output, output
+
+    def test_encrypt_example_companion_refused(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """#474: plaintext companion files (.example) are refused as well."""
+        monkeypatch.chdir(tmp_path)
+        example = tmp_path / ".env.example"
+        example.write_text("API_KEY=placeholder\n", encoding="utf-8")
+
+        result = runner.invoke(app, ["encrypt", ".env.example"])
+
+        output = _flat(result.output)
+        assert result.exit_code == 1, output
+        assert "Refusing to encrypt" in output, output
+        assert example.read_text(encoding="utf-8") == "API_KEY=placeholder\n"
+
+    def test_encrypt_env_keys_case_variant_refused(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """#474: ``encrypt .env.KEYS`` is refused case-insensitively.
+
+        On macOS/Windows default case-insensitive filesystems ``.env.KEYS``
+        resolves to the real ``.env.keys``, so a case-sensitive suffix check
+        let the key store be encrypted anyway — the exact lockout the guard
+        exists to prevent.
+        """
+        monkeypatch.chdir(tmp_path)
+        keys = tmp_path / ".env.KEYS"
+        content = "# .env\nDOTENV_PRIVATE_KEY=" + _fake_private_key("c") + "\n"
+        keys.write_text(content, encoding="utf-8")
+
+        result = runner.invoke(app, ["encrypt", ".env.KEYS"])
+
+        output = _flat(result.output)
+        assert result.exit_code == 1, output
+        assert "Refusing to encrypt" in output, output
+        assert "private-key store" in output, output
+        assert keys.read_text(encoding="utf-8") == content
+
+    def test_encrypt_multi_file_batch_with_companion_aborts_whole_batch(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """#474: a companion anywhere in a multi-file batch aborts everything.
+
+        ``encrypt`` accepts several files (#493); the guard must run over ALL
+        of them — not a stale single ``env_file`` variable — before any file
+        is touched, so ``encrypt second.env .env.keys`` refuses with the
+        plaintext sibling untouched rather than half-encrypting the batch (or
+        crashing with UnboundLocalError, as a bad merge of the two features
+        once did).
+        """
+        monkeypatch.chdir(tmp_path)
+        sibling = tmp_path / "second.env"
+        sibling.write_text("API_KEY=plaintext123\n", encoding="utf-8")
+        keys = tmp_path / ".env.keys"
+        keys_content = "# .env\nDOTENV_PRIVATE_KEY=" + _fake_private_key("e") + "\n"
+        keys.write_text(keys_content, encoding="utf-8")
+
+        result = runner.invoke(app, ["encrypt", "second.env", ".env.keys"])
+
+        output = _flat(result.output)
+        assert result.exit_code == 1, output
+        assert "Refusing to encrypt" in output, output
+        # Nothing in the batch was encrypted — the guard fires pre-flight.
+        assert sibling.read_text(encoding="utf-8") == "API_KEY=plaintext123\n"
+        assert keys.read_text(encoding="utf-8") == keys_content
+
+
+class TestDecryptRefusesCompanionFiles:
+    def test_decrypt_env_keys_refused(self, keys_file: Path) -> None:
+        """#474: ``decrypt .env.keys`` refuses by name instead of a fake no-op."""
+        before = keys_file.read_text(encoding="utf-8")
+
+        result = runner.invoke(app, ["decrypt", ".env.keys"])
+
+        output = _flat(result.output)
+        assert result.exit_code == 1, output
+        assert "Refusing to decrypt" in output, output
+        # The refusal explains the decrypt case — it must not blame the
+        # opposing action ("Encrypting it would permanently lock out...").
+        assert "Encrypting" not in output, output
+        assert "nothing to decrypt" in output, output
+        assert keys_file.read_text(encoding="utf-8") == before
+
+    def test_decrypt_env_keys_case_variant_refused(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """#474: ``decrypt .env.KEYS`` is refused case-insensitively too."""
+        monkeypatch.chdir(tmp_path)
+        keys = tmp_path / ".env.KEYS"
+        content = "# .env\nDOTENV_PRIVATE_KEY=" + _fake_private_key("d") + "\n"
+        keys.write_text(content, encoding="utf-8")
+
+        result = runner.invoke(app, ["decrypt", ".env.KEYS"])
+
+        output = _flat(result.output)
+        assert result.exit_code == 1, output
+        assert "Refusing to decrypt" in output, output
+        assert keys.read_text(encoding="utf-8") == content

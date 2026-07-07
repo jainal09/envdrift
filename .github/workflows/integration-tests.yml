@@ -44,7 +44,7 @@ jobs:
     # Service containers for integration tests
     services:
       localstack:
-        image: localstack/localstack:4.14
+        image: localstack/localstack:4.14 # Keep in sync with tests/docker-compose.test.yml
         ports:
           - 4566:4566
         env:
@@ -59,8 +59,7 @@ jobs:
           --health-start-period=30s
 
       vault:
-        # Keep in sync with tests/docker-compose.test.yml (hashicorp/vault:1.21).
-        image: hashicorp/vault:1.21
+        image: hashicorp/vault:1.21 # Keep in sync with tests/docker-compose.test.yml
         ports:
           - 8200:8200
         env:
@@ -83,10 +82,9 @@ jobs:
           --health-start-period=5s
 
       lowkey-vault:
-        # Keep in sync with tests/docker-compose.test.yml. 7.3.0+ is required:
-        # older images reject the api-version (2025-07-01) sent by the
-        # azure-keyvault-secrets SDK with HTTP 400.
-        image: nagyesta/lowkey-vault:7.3.0
+        # 7.3.0+ is required: older images reject the api-version (2025-07-01)
+        # sent by the azure-keyvault-secrets SDK with HTTP 400.
+        image: nagyesta/lowkey-vault:7.3.0 # Keep in sync with tests/docker-compose.test.yml
         ports:
           - 8443:8443
           # HTTP port serving the built-in managed-identity token stub

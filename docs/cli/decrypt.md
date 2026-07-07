@@ -29,6 +29,17 @@ byte-for-byte untouched — dotenvx is not invoked at all — so a plaintext fil
 (including one with CRLF line endings) or a non-`.env` binary file is never
 silently rewritten or corrupted.
 
+### Refuses the key store and companion files
+
+`envdrift decrypt .env.keys` (or any `.keys`/`.example`/`.sample`/`.template`
+target) is refused by name — case-insensitively, so `.env.KEYS` counts —
+with a non-zero exit: the dotenvx private-key store
+and plaintext companion files are never encrypted by envdrift in the first
+place (`envdrift encrypt` refuses them too), so "decrypting" one is always a
+mistake rather than a no-op worth reporting as success. Leading-dash filenames
+(e.g. `-dash.env`) are passed to dotenvx as `./-dash.env` so they decrypt
+normally via `envdrift decrypt -- -dash.env`.
+
 ## Arguments
 
 | Argument   | Description                     | Default |
@@ -49,7 +60,8 @@ envdrift decrypt .env.production --backend sops
 ### SOPS Options
 
 - `--sops-config` Path to `.sops.yaml`
-- `--age-key-file` Age private key file for decryption (sets `SOPS_AGE_KEY_FILE`)
+- `--age-key-file` Age private key file for decryption (sets `SOPS_AGE_KEY_FILE`;
+  the explicit flag overrides an ambient `SOPS_AGE_KEY_FILE` export)
 
 ## Examples
 
@@ -86,6 +98,13 @@ envdrift decrypt .env.production --verify-vault --ci \
 ```
 
 Exit code 0 if the vault key can decrypt the file, 1 if it cannot.
+
+The vault value is normalized the same way `envdrift lock --verify-vault` and
+`envdrift sync` parse it: surrounding whitespace, one layer of quotes, and a
+`DOTENV_PRIVATE_KEY_<ENV>=` prefix are stripped. A vault secret stored as the
+literal `.env.keys` line `DOTENV_PRIVATE_KEY_PRODUCTION="<hex>"` (quoted, as
+`vault-push` writes it) therefore verifies identically to the bare `<hex>`
+value — all three verify commands agree on the same vault secret.
 
 ### Decrypt Specific Environment
 

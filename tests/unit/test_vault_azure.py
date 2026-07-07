@@ -421,6 +421,51 @@ class TestAzureKeyVaultClient:
             assert client._client is None
             assert client._credential is None
 
+    def test_authenticate_challenge_value_error_maps_to_vault_error(self, mock_azure):
+        """Regression #487 (PR #530 review): the SDK's challenge-resource
+        verification raises a plain ``ValueError`` (OUTSIDE the AzureError
+        hierarchy) for vaults behind a proxy, custom domain, or emulator. It
+        must surface as a domain VaultError -- not escape as a raw ValueError
+        traceback -- and the half-initialized client/credential must be
+        discarded so is_authenticated() reports False.
+        """
+        mock_credential = MagicMock()
+        mock_secret_client = MagicMock()
+        mock_secret_client.list_properties_of_secrets.side_effect = ValueError(
+            "The challenge resource 'https://other.vault.azure.net' "
+            "does not match the requested domain"
+        )
+
+        with self._patched_client(
+            mock_azure,
+            mock_secret_client,
+            credential=mock_credential,
+            faithful_exceptions=True,
+        ) as client:
+            with pytest.raises(VaultError, match="challenge resource"):
+                client.authenticate()
+
+            assert client.is_authenticated() is False
+            assert client._client is None
+            assert client._credential is None
+
+    def test_authenticate_unexpected_error_propagates(self, mock_azure):
+        """PR #530 review: the catch-all was narrowed to ``ValueError`` -- a
+        programming bug raised during the auth probe (e.g. AttributeError)
+        must propagate with its traceback, not be masked as a generic
+        VaultError.
+        """
+        mock_secret_client = MagicMock()
+        mock_secret_client.list_properties_of_secrets.side_effect = AttributeError(
+            "'NoneType' object has no attribute 'x'"
+        )
+
+        with self._patched_client(
+            mock_azure, mock_secret_client, faithful_exceptions=True
+        ) as client:
+            with pytest.raises(AttributeError):
+                client.authenticate()
+
     def test_is_authenticated_false_after_failed_auth_error(self, mock_azure):
         """After authenticate() fails on the probe, is_authenticated() must be False.
 

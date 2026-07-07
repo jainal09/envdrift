@@ -145,8 +145,10 @@ def format_rich(result: AggregatedScanResult, console: Console | None = None) ->
     if console is None:
         console = Console()
 
-    # Surface scanner errors prominently
-    errors = [r for r in result.results if r.error]
+    # Surface scanner errors prominently. Filter on the ScanResult.success
+    # contract (error is not None), not truthiness, so an empty-string failure
+    # still lands in the panel and matches the Scan Incomplete verdict (#478).
+    errors = [r for r in result.results if not r.success]
     if errors:
         error_lines: list[str] = []
         for r in errors:
@@ -478,13 +480,17 @@ def format_sarif(result: AggregatedScanResult, exit_code: int | None = None) -> 
         invocation={
             "executionSuccessful": not result.has_errors,
             "exitCode": effective,
+            # Filter on the ScanResult.success contract (error is not None), not
+            # error truthiness, so an empty-string failure that flips
+            # executionSuccessful to false still emits a notification explaining
+            # the failure instead of leaving the consumer with no reason (#478).
             "toolExecutionNotifications": [
                 {
                     "level": "error",
                     "message": {"text": f"{r.scanner_name}: {(r.error or '').strip()}"},
                 }
                 for r in result.results
-                if r.error
+                if not r.success
             ],
         },
         srcroot=srcroot,
