@@ -340,15 +340,23 @@ def print_service_sync_status(result: ServiceSyncResult) -> None:
     elif result.action == SyncAction.SKIPPED:
         icon = "[dim]=[/dim]"
         status = "[dim]skipped[/dim]"
+    elif result.action == SyncAction.EPHEMERAL:
+        # A successful ephemeral sync is not an error (#487): the key was
+        # fetched and deliberately not stored locally.
+        icon = "[cyan]*[/cyan]"
+        status = "[cyan]ephemeral (key not stored locally)[/cyan]"
     else:  # ERROR
         icon = "[red]x[/red]"
         status = "[red]error[/red]"
 
     console.print(f"  {icon} {result.folder_path} - {status}")
 
-    # Show error details
+    # Show error details. When the engine only set ``message`` (no ``error``),
+    # fall back to it so an error row always carries its reason (#487).
     if result.error:
         console.print(f"    [red]Error: {result.error}[/red]")
+    elif result.action == SyncAction.ERROR and result.message:
+        console.print(f"    [red]Error: {result.message}[/red]")
 
     # Show mismatch preview
     if result.local_value_preview and result.vault_value_preview:
@@ -393,8 +401,12 @@ def print_sync_result(result: SyncResult) -> None:
         f"[green]Created:[/green] {result.created_count}",
         f"[yellow]Updated:[/yellow] {result.updated_count}",
         f"[dim]Skipped:[/dim] {result.skipped_count}",
-        f"[red]Errors:[/red] {result.error_count}",
     ]
+    # Surface ephemeral services (#487) so the per-service rows and the
+    # summary agree; omitted entirely when the mode is unused.
+    if result.ephemeral_count:
+        lines.append(f"[cyan]Ephemeral:[/cyan] {result.ephemeral_count} (not stored locally)")
+    lines.append(f"[red]Errors:[/red] {result.error_count}")
 
     # Add decryption stats if any were tested
     if result.decryption_tested > 0:

@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import os
 import subprocess  # nosec B404
+import sys
 from pathlib import Path, PureWindowsPath
 from unittest.mock import patch
 
@@ -364,3 +366,54 @@ class TestGitUtilsExceptions:
             patch("subprocess.run", side_effect=subprocess.TimeoutExpired(cmd="git", timeout=10)),
         ):
             assert is_file_tracked(tmp_path / "test.txt") is False
+
+
+class TestNonAsciiLocaleSafety:
+    """#453: git output pipes must decode as UTF-8, not the platform locale codec."""
+
+    def test_get_git_root_survives_non_utf8_locale_with_non_ascii_root(self, tmp_path: Path):
+        """A non-ASCII repo root resolves correctly in a child forced off UTF-8.
+
+        ``get_git_root`` used to decode ``git rev-parse --show-toplevel`` with the
+        locale codec (``text=True`` and no ``encoding=``): under a C locale the
+        UTF-8 path bytes raised an uncaught ``UnicodeDecodeError``; under Windows
+        cp1252 they were silently mangled, mis-rooting every downstream git call
+        (e.g. guard's combined-file .gitignore security check). Run the lookup in
+        a child interpreter with the locale forced away from UTF-8 and assert the
+        exact repo-root name round-trips.
+        """
+        repo = tmp_path / "秘密-répo"
+        repo.mkdir()
+        subprocess.run(["git", "init"], cwd=repo, capture_output=True, check=True)
+
+        # Same locale-forcing pattern as the #453 e2e tests: LC_ALL/LANG pin the
+        # POSIX locale codec to US-ASCII (Windows ignores them and natively uses
+        # its ANSI code page), PYTHONUTF8=0 pins UTF-8 mode off (PEP 540) and
+        # PYTHONCOERCECLOCALE=0 stops glibc coercion to C.UTF-8 (PEP 538).
+        # PYTHONIOENCODING keeps the child's *own* stdout UTF-8 so printing the
+        # name cannot crash — only the git pipe codec under test is locale-bound.
+        env = os.environ | {
+            "LC_ALL": "C",
+            "LANG": "C",
+            "PYTHONUTF8": "0",
+            "PYTHONCOERCECLOCALE": "0",
+            "PYTHONIOENCODING": "utf-8",
+        }
+        script = (
+            "import pathlib, sys\n"
+            "from envdrift.utils.git import get_git_root\n"
+            "root = get_git_root(pathlib.Path(sys.argv[1]))\n"
+            "print('NONE' if root is None else root.name)\n"
+        )
+        result = subprocess.run(
+            [sys.executable, "-c", script, str(repo)],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            env=env,
+            timeout=60,
+        )
+        assert "Traceback" not in result.stderr, result.stderr
+        assert result.returncode == 0, result.stderr
+        assert result.stdout.strip() == repo.name

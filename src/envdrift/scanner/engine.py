@@ -225,14 +225,23 @@ class ScanEngine:
         print(f"Found {len(result.unique_findings)} issues")
     """
 
-    # Default paths to always ignore across all scanners
-    # These are config/build files that contain "secret" keywords but not actual secrets
+    # Config/build/lock files where only NOISY findings are ignored across all
+    # scanners. These files contain "secret"/"token" keywords and high-entropy
+    # integrity hashes that false-positive keyword/entropy rules — but they are
+    # also real leak vectors (e.g. a private-index URL token in pyproject.toml),
+    # so the suppression is scoped to noisy rule ids (see ignores.is_noisy_rule)
+    # instead of unconditionally dropping every finding (#477). A
+    # distinctive-prefix CRITICAL token (ghp_, AKIA, ...) in any of these files
+    # still surfaces, from every scanner.
     DEFAULT_GLOBAL_IGNORE_PATHS = [
         "envdrift.toml",
         "pyproject.toml",
         "mkdocs.yml",
         "mkdocs.yaml",
         "*.lock",
+        "*.sum",
+        "*-lock.json",
+        "*.lock.json",
         "package-lock.json",
         "yarn.lock",
         "poetry.lock",
@@ -247,13 +256,15 @@ class ScanEngine:
         self.config = config or GuardConfig()
         self.scanners: list[ScannerBackend] = []
 
-        # Merge default global ignores with user-configured ignores
-        all_ignore_paths = list(self.DEFAULT_GLOBAL_IGNORE_PATHS) + list(self.config.ignore_paths)
-
-        # Initialize centralized ignore filter for post-scan filtering
+        # Initialize centralized ignore filter for post-scan filtering.
+        # User-configured ignore_paths suppress everything (explicit opt-out);
+        # the built-in config/lock-file defaults are scoped to noisy
+        # keyword/entropy rules only, so they can never swallow a
+        # high-confidence distinctive-prefix finding (#477).
         ignore_config = IgnoreConfig(
-            ignore_paths=all_ignore_paths,
+            ignore_paths=list(self.config.ignore_paths),
             ignore_rules=self.config.ignore_rules,
+            noisy_rule_paths=list(self.DEFAULT_GLOBAL_IGNORE_PATHS),
         )
         self._ignore_filter = IgnoreFilter(ignore_config)
 
@@ -809,7 +820,8 @@ class ScanEngine:
         66, which is never true after redaction, so the filter was dead on real
         data (#370). The native scanner now drops these keys at detection by
         value shape; this central filter salvages cross-scanner coverage
-        (gitleaks/trufflehog/native, all of which hash with ``hash_secret``) by
+        (gitleaks/trufflehog/native — and trivy once it recovers the raw value
+        from the file (#479) — all of which hash with ``hash_secret``) by
         matching each finding's ``secret_hash`` against the hash of the public
         key declared in its own file's ``DOTENV_PUBLIC_KEY*`` line.
 
@@ -888,6 +900,7 @@ class ScanEngine:
         Returns:
             Filtered list excluding findings from gitignored files.
         """
+        import os
         import subprocess  # nosec B404
 
         if not findings:
@@ -928,11 +941,24 @@ class ScanEngine:
                 continue
 
             try:
+                # Binary pipes with ``os.fsencode``/``os.fsdecode``: the finding
+                # paths live in filesystem space (``os.walk``/argv surface them
+                # via the fs codec with surrogateescape), so the pipe must apply
+                # the exact same mapping in both directions or paths stop
+                # comparing equal. A text pipe with the locale codec mis-handled
+                # non-ASCII filenames (#453); a pinned-UTF-8 text pipe still
+                # broke both directions — ``errors="replace"`` rewrote raw
+                # non-UTF-8 filename bytes to ``?`` on stdin (git never matched
+                # the .gitignore entry), and decoding git's UTF-8 output produced
+                # real non-ASCII chars that no longer matched surrogate-escaped
+                # finding paths under a non-UTF-8 locale (and crashed
+                # ``Path.resolve()``). Binary pipes also sidestep Windows
+                # text-mode ``\n`` -> ``\r\n`` translation, and ``-z`` makes git
+                # read/print paths verbatim (no core.quotepath quoting).
                 result = subprocess.run(  # nosec B603, B607
                     ["git", "check-ignore", "--stdin", "-z"],
-                    input="\0".join(rel_paths) + "\0",
+                    input=b"\0".join(os.fsencode(p) for p in rel_paths) + b"\0",
                     capture_output=True,
-                    text=True,
                     timeout=30,
                     cwd=str(root),
                 )
@@ -941,12 +967,12 @@ class ScanEngine:
                         "git check-ignore failed in %s (code %s): %s",
                         root,
                         result.returncode,
-                        result.stderr.strip()[:200],
+                        result.stderr.decode("utf-8", "replace").strip()[:200],
                     )
                     continue
 
                 if result.stdout:
-                    ignored = [p for p in result.stdout.split("\0") if p]
+                    ignored = [os.fsdecode(p) for p in result.stdout.split(b"\0") if p]
                     for rel in ignored:
                         gitignored_files.add((root / rel).resolve())
             except (subprocess.TimeoutExpired, FileNotFoundError, subprocess.SubprocessError) as e:
@@ -998,12 +1024,24 @@ class ScanEngine:
             return warnings
 
         try:
-            # Use batched stdin approach for consistency with _filter_gitignored_files
+            # Use the same batched ``--stdin -z`` NUL-separated pipe as
+            # _filter_gitignored_files. Explicit UTF-8: ``text=True`` alone uses
+            # the platform locale codec (cp1252 on Windows), which mis-handles
+            # non-ASCII filenames (#453). NUL separators (not newlines) are
+            # required for correctness, not just consistency: Windows text-mode
+            # pipes translate every written ``\n`` to ``\r\n``, so git would see
+            # ``name\r`` and never match the .gitignore entry. ``-z`` also makes
+            # git print paths verbatim (no core.quotepath C-quoting), so stdout
+            # compares equal to the configured combined-file names.
+            # ``surrogateescape`` mirrors _filter_gitignored_files: it round-trips
+            # raw filename bytes exactly, where ``replace`` would rewrite them.
             result = subprocess.run(  # nosec B603, B607
-                ["git", "check-ignore", "--stdin"],
-                input="\n".join(self.config.combined_files),
+                ["git", "check-ignore", "--stdin", "-z"],
+                input="\0".join(self.config.combined_files) + "\0",
                 capture_output=True,
                 text=True,
+                encoding="utf-8",
+                errors="surrogateescape",
                 timeout=30,
                 cwd=str(git_root),
             )
@@ -1020,7 +1058,7 @@ class ScanEngine:
                 )
                 return warnings
 
-            gitignored = set(result.stdout.strip().split("\n")) if result.stdout.strip() else set()
+            gitignored = {p for p in result.stdout.split("\0") if p}
 
             for combined_file in self.config.combined_files:
                 if combined_file not in gitignored:

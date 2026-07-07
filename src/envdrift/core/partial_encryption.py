@@ -372,7 +372,7 @@ def is_file_encrypted(file_path: Path) -> bool:
     return "sops_version" in content and _SOPS_CIPHERTEXT_PREFIX in content
 
 
-def _is_fully_encrypted(file_path: Path) -> bool:
+def is_fully_encrypted(file_path: Path) -> bool:
     """Return True only when the file is FULLY encrypted (push would no-op).
 
     Fully encrypted means ciphertext is present AND no leftover plaintext secret
@@ -380,10 +380,46 @@ def _is_fully_encrypted(file_path: Path) -> bool:
     so a MIXED-STATE file (some values encrypted, one freshly-added plaintext)
     looks "encrypted" to it alone; pairing it with ``has_plaintext_secret_value``
     distinguishes a file a real push would re-encrypt from one it would skip.
-    The encrypt paths and the dry-run ``--check`` sync test share this predicate
-    so they agree on what "already pushed" means.
+
+    This is the canonical shared predicate: the push paths, ``envdrift lock``
+    and the dry-run ``--check`` sync test all use it so they agree on what
+    "already pushed/encrypted" means.
     """
     return is_file_encrypted(file_path) and not has_plaintext_secret_value(file_path)
+
+
+# Backward-compatible alias for the pre-#507 private name (in-flight branches
+# still import it); new code should use ``is_fully_encrypted``.
+_is_fully_encrypted = is_fully_encrypted
+
+
+def _build_combined_content(
+    env_config: PartialEncryptionEnvironmentConfig,
+    clear_lines: list[str],
+    secret_file_content: str | None,
+) -> str:
+    """Assemble the combined-file text: warning header + clear + encrypted sections.
+
+    The dotenvx public-key header block is stripped from the secret section —
+    ONLY the precise 4-line "#/" border/comment boilerplate, so a legitimate
+    user comment such as "#/ note about this key" survives into the generated
+    combined file.
+    """
+    warning = _build_warning_header(env_config.clear_file, env_config.secret_file)
+    combined_lines = warning.splitlines()
+    combined_lines.append("")
+
+    if clear_lines:
+        combined_lines.append(f"# From {env_config.clear_file}")
+        combined_lines.extend(clear_lines)
+        combined_lines.append("")
+
+    if secret_file_content:
+        stripped_text = _DOTENVX_HEADER_COMMENT_BLOCK.sub("", secret_file_content)
+        combined_lines.append(f"# From {env_config.secret_file} (encrypted)")
+        combined_lines.extend(stripped_text.splitlines())
+
+    return "\n".join(combined_lines) + "\n"
 
 
 def combine_files(
@@ -437,31 +473,7 @@ def combine_files(
         secret_file_content = secret_file.read_text(encoding="utf-8")
         secret_lines = secret_file_content.splitlines()
 
-    # Build combined content with warning header
-    warning = _build_warning_header(env_config.clear_file, env_config.secret_file)
-
-    combined_lines = warning.splitlines()
-    combined_lines.append("")
-
-    # Add clear section
-    if clear_lines:
-        combined_lines.append(f"# From {env_config.clear_file}")
-        combined_lines.extend(clear_lines)
-        combined_lines.append("")
-
-    # Add encrypted secret section
-    if secret_lines and secret_file_content is not None:
-        # Strip ONLY the dotenvx public-key header block (the 4-line "#/"
-        # border/comment boilerplate) to avoid clutter. Matching the precise
-        # block — rather than every line starting with "#/" — preserves a
-        # legitimate user comment such as "#/ note about this key" that would
-        # otherwise be silently dropped from the generated combined file.
-        stripped_text = _DOTENVX_HEADER_COMMENT_BLOCK.sub("", secret_file_content)
-        secret_content = stripped_text.splitlines()
-        combined_lines.append(f"# From {env_config.secret_file} (encrypted)")
-        combined_lines.extend(secret_content)
-
-    new_content = "\n".join(combined_lines) + "\n"
+    new_content = _build_combined_content(env_config, clear_lines, secret_file_content)
 
     existing = combined_file.read_text(encoding="utf-8") if combined_file.exists() else None
     in_sync = existing == new_content
@@ -471,7 +483,7 @@ def combine_files(
         # same artifact holds DECRYPTED values after `pull --merge` — so write
         # it like .env.keys: 0600 for a fresh file, fchmod on the fd, atomic
         # rename. Never a bare write_text at the process umask (#471).
-        atomic_write(combined_file, new_content)
+        atomic_write(combined_file, new_content, max_permissions=0o600)
         in_sync = True
 
     # Count real secret variables (excludes comments and dotenvx public-key line)
@@ -541,6 +553,24 @@ def _git_unskip_worktree(path: Path) -> bool:
     return _run_git_update_index("--no-skip-worktree", path)
 
 
+def _encrypt_and_verify(dotenvx: DotenvxWrapper, file: Path) -> None:
+    """Encrypt ``file`` in place and verify ciphertext actually landed.
+
+    dotenvx exits 0 *without* encrypting when it cannot write or use the
+    private key (.env.keys read-only / a directory / garbage), so trusting the
+    exit code alone reports false success — re-read the file and fail loudly
+    while it is still skip-worktree protected (#471). ``DotenvxFilenameError``
+    is the pre-flight refusal of a name dotenvx would turn into an invalid key
+    (silent lockout), raised BEFORE encrypting with the plaintext intact (#467).
+    """
+    try:
+        dotenvx.encrypt(file)
+    except (DotenvxError, DotenvxFilenameError) as e:
+        raise PartialEncryptionError.encrypt_failed(file, e) from e
+    if has_plaintext_secret_value(file):
+        raise PartialEncryptionError.encryption_did_not_take_effect(file)
+
+
 def encrypt_secret_file(env_config: PartialEncryptionEnvironmentConfig) -> None:
     """
     Encrypt the secret file in-place using dotenvx.
@@ -562,7 +592,7 @@ def encrypt_secret_file(env_config: PartialEncryptionEnvironmentConfig) -> None:
     # re-encrypted — otherwise the new plaintext secret leaks into the committed
     # .secret file and the combined file. is_file_encrypted() returns True on
     # the first ciphertext value, so it alone cannot tell the two apart.
-    if _is_fully_encrypted(secret_file):
+    if is_fully_encrypted(secret_file):
         # Already fully encrypted (e.g. push run twice) — still lift any stale
         # skip-worktree protection so the encrypted diff is visible to git.
         _git_unskip_worktree(secret_file)
@@ -577,24 +607,10 @@ def encrypt_secret_file(env_config: PartialEncryptionEnvironmentConfig) -> None:
         raise PartialEncryptionError.nothing_to_encrypt(secret_file)
 
     # Encrypt using dotenvx (idempotent: re-encrypts only the plaintext values,
-    # leaving any already-encrypted values untouched).
-    dotenvx = DotenvxWrapper()
-    try:
-        dotenvx.encrypt(secret_file)
-    except (DotenvxError, DotenvxFilenameError) as e:
-        # DotenvxFilenameError: the wrapper refused a name dotenvx would turn
-        # into an invalid key (silent lockout) BEFORE encrypting, so the
-        # plaintext is intact — surface a clean error, not a raw traceback (#467).
-        raise PartialEncryptionError.encrypt_failed(secret_file, e) from e
-
-    # Verify the encryption actually took effect rather than trusting the exit
-    # code: dotenvx exits 0 *without* encrypting when it cannot write or use
-    # the private key (.env.keys read-only / a directory / garbage) — the
-    # #443-era read-back the guarded encrypt backend already performs. Checked
-    # BEFORE lifting the git skip-worktree protection so a still-plaintext
-    # file stays protected from a routine `git add .` (#471).
-    if has_plaintext_secret_value(secret_file):
-        raise PartialEncryptionError.encryption_did_not_take_effect(secret_file)
+    # leaving any already-encrypted values untouched), then verify ciphertext
+    # actually landed BEFORE lifting the git skip-worktree protection so a
+    # still-plaintext file stays protected from a routine `git add .` (#471).
+    _encrypt_and_verify(DotenvxWrapper(), secret_file)
 
     # Re-enable git tracking now the file is encrypted again
     _git_unskip_worktree(secret_file)
@@ -673,7 +689,7 @@ def push_partial_encryption(
         # added plaintext value) trips is_file_encrypted but would still be
         # re-encrypted, so it must report out of sync.
         secret_file = Path(env_config.secret_file)
-        if secret_file.exists() and not _is_fully_encrypted(secret_file):
+        if secret_file.exists() and not is_fully_encrypted(secret_file):
             stats["in_sync"] = False
         return stats
 
@@ -767,7 +783,7 @@ def _encrypt_secrets_only_file(dotenvx: DotenvxWrapper, file: Path, *, check: bo
     Returns False (already-encrypted) without touching ``dotenvx`` when the file
     is fully encrypted. In ``check`` mode no file is modified.
     """
-    if _is_fully_encrypted(file):
+    if is_fully_encrypted(file):
         if not check:
             # Already fully encrypted — lift any stale skip-worktree protection
             # so the encrypted diff is visible to git.
@@ -782,18 +798,9 @@ def _encrypt_secrets_only_file(dotenvx: DotenvxWrapper, file: Path, *, check: bo
     if check:
         # Dry run: this plaintext / mixed file would be encrypted by a real push.
         return True
-    try:
-        dotenvx.encrypt(file)
-    except (DotenvxError, DotenvxFilenameError) as e:
-        # DotenvxFilenameError: a secrets_dir file whose name dotenvx can't turn
-        # into a valid key slug (e.g. "my secret.env", "café.env") is refused
-        # pre-flight with the plaintext preserved — surface it cleanly (#467).
-        raise PartialEncryptionError.encrypt_failed(file, e) from e
-    # Verify the encryption actually took effect (dotenvx exits 0 without
-    # encrypting when .env.keys is unwritable/invalid) BEFORE lifting the git
+    # Encrypt and verify ciphertext actually landed BEFORE lifting the git
     # skip-worktree protection, so a still-plaintext file stays protected (#471).
-    if has_plaintext_secret_value(file):
-        raise PartialEncryptionError.encryption_did_not_take_effect(file)
+    _encrypt_and_verify(dotenvx, file)
     # Re-enable git tracking now the file is encrypted again.
     _git_unskip_worktree(file)
     return True

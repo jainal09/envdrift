@@ -83,6 +83,24 @@ must match `--env`; a mismatch (e.g. a `DOTENV_PRIVATE_KEY_STAGING=` value pulle
 with `--env production`) is rejected rather than silently relabeled, so a key
 for one environment is never installed as another.
 
+The fetched value is normalized through the same parser used by `envdrift sync`
+and `lock --verify-vault` before anything is written, so these storage shapes
+all yield the bare key:
+
+- surrounding whitespace and one layer of quotes are stripped (including a
+  whole-line-quoted `"DOTENV_PRIVATE_KEY_<ENV>=<key>"` value)
+- a JSON key/value document (the AWS console's native storage shape, or a
+  HashiCorp KV entry) holding a `DOTENV_PRIVATE_KEY_<ENV>` field has that field
+  extracted
+- a multi-line `.env.keys` file blob (e.g. pushed with
+  `az keyvault secret set --file .env.keys`) has the matching key line extracted
+
+Anything that cannot be reduced to a single key token fails with an error naming
+the secret's layout instead of writing a corrupted `.env.keys`: JSON documents
+without a usable key field, multi-line documents without a key line, binary
+payloads (AWS `SecretBinary` / non-UTF-8 GCP payloads), and values that still
+contain whitespace or look like structured documents after normalization.
+
 ### `--no-decrypt`
 
 Only write the key to `.env.keys`; do not decrypt the `.env.<env>` file.
@@ -181,11 +199,19 @@ Pulled 'myapp-key' -> DOTENV_PRIVATE_KEY_PRODUCTION written to services/myapp/.e
 Decrypted services/myapp/.env.production
 ```
 
-On error:
+On error, the command prints a single clean `[ERROR]` line and exits 1 — never
+a raw traceback. AWS not-found errors name the region that was searched (the
+client defaults to `us-east-1` when `--region` is omitted):
 
 ```text
-Error: Secret 'myapp-key' not found in azure vault
+[ERROR] Secret 'myapp-key' not found in azure vault
+[ERROR] Secret 'myapp-key' not found in aws vault (region us-east-1)
+[ERROR] Folder not found: ./services/typo
+[ERROR] Cannot write services/myapp/.env.keys: [Errno 13] Permission denied: ...
 ```
+
+`FOLDER` must be an existing directory; it is validated before the secret is
+fetched.
 
 ## Exit Codes
 

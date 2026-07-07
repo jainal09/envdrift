@@ -284,6 +284,39 @@ class TestLoadConfig:
         with pytest.raises(ValueError, match="secret_name"):
             load_config(cfg)
 
+    @pytest.mark.parametrize(
+        "line",
+        [
+            "folder_path = 123",
+            "secret_name = true",
+            'folder_path = "svc"\nenv_file = 7',
+            'folder_path = "svc"\nephemeral_keys = "yes"',
+        ],
+    )
+    def test_load_config_sync_mapping_wrong_value_type_raises_clean_error(
+        self, tmp_path: Path, line: str
+    ):
+        """#488: a TOML type surprise (int/bool where a string belongs, or a
+        non-boolean ephemeral_keys) raises a clean ValueError instead of a raw
+        TypeError traceback from Path() or a silently-truthy flag."""
+        cfg = tmp_path / "envdrift.toml"
+        body = f'[vault]\nprovider = "azure"\n\n[[vault.sync.mappings]]\n{line}\n'
+        if "secret_name" not in line:
+            body += 'secret_name = "key"\n'
+        if "folder_path" not in line:
+            body += 'folder_path = "services/app"\n'
+        cfg.write_text(body)
+        with pytest.raises(ValueError, match="wrong value type"):
+            load_config(cfg)
+
+    def test_load_config_sync_mapping_non_table_entry_raises_clean_error(self, tmp_path: Path):
+        """#488: a non-table mappings entry (mappings = [123]) raises a clean
+        ValueError instead of a raw TypeError from the `in` membership test."""
+        cfg = tmp_path / "envdrift.toml"
+        cfg.write_text('[vault]\nprovider = "azure"\n\n[vault.sync]\nmappings = [123]\n')
+        with pytest.raises(ValueError, match="must be a table"):
+            load_config(cfg)
+
     def test_load_config_default_when_not_found(self, tmp_path: Path, monkeypatch):
         """Test load_config returns default config when no file found."""
         monkeypatch.chdir(tmp_path)

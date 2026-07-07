@@ -706,7 +706,8 @@ class TestTrivyInstallerInstall:
             installer.install()
 
 
-# Mark integration tests that require actual trivy installation
+# Real-binary tests: integration lane only, skip-gated on the binary (#497)
+@pytest.mark.integration
 @pytest.mark.skipif(
     not TrivyScanner(auto_install=False).is_installed(),
     reason="trivy not installed",
