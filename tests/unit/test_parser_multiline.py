@@ -65,6 +65,19 @@ class TestMultilineQuotedValues:
         assert set(result.variables) == {"NOTE", "X"}
         assert result.variables["NOTE"].value == "line one\nline two"
 
+    def test_opening_line_trailing_whitespace_is_kept_in_value(self):
+        """Whitespace at the end of the OPENING line is inside the quotes and
+        belongs to the value (``dotenv_values`` on ``CERT="abc   \\nrest"`` is
+        ``{'CERT': 'abc   \\nrest'}``) — it must not be stripped away with the
+        line ends (#574 review)."""
+        content = 'CERT="abc   \nrest"\nTAB="a\t\nb"\nSQ=\'c  \nd\'\n'
+
+        result = EnvParser().parse_string(content)
+
+        assert result.variables["CERT"].value == "abc   \nrest"
+        assert result.variables["TAB"].value == "a\t\nb"
+        assert result.variables["SQ"].value == "c  \nd"
+
     def test_escaped_double_quote_inside_multiline_does_not_close(self):
         """A ``\\"`` inside the value neither closes the quote nor survives
         verbatim — python-dotenv decodes it to ``"``."""
@@ -320,6 +333,11 @@ class TestPythonDotenvParity:
             pytest.param("K=\"café\\nüber\"\nS='café\\n'\n", id="non-ascii-escapes"),
             pytest.param('A="x\ny" z\nB=1\n', id="multiline-junk-after-close"),
             pytest.param('A="x\ny" # ok\nB=1\n', id="multiline-comment-after-close"),
+            pytest.param(
+                'CERT="abc   \nrest"\nTAB="a\t\nb"\nSQ=\'c  \nd\'\n',
+                id="opening-line-trailing-whitespace",
+            ),
+            pytest.param('ONLY="   \nb"\n', id="opener-only-whitespace-after-quote"),
         ],
     )
     def test_parsed_values_match_python_dotenv(self, tmp_path, content):
