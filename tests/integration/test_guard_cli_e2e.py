@@ -521,11 +521,16 @@ def test_skip_gitignored_filters_non_ascii_gitignored_path(git_repo: Path) -> No
     "by test_skip_gitignored_filters_non_ascii_gitignored_path",
 )
 def test_skip_gitignored_survives_non_utf8_locale(git_repo: Path) -> None:
-    """#453: ``--skip-gitignored`` must not abort under a non-UTF-8 locale.
+    """#453: ``--skip-gitignored`` must work correctly under a non-UTF-8 locale.
 
     Before the fix the check-ignore pipe inherited the C locale's US-ASCII codec
     and raised ``UnicodeEncodeError`` on the non-ASCII path, killing the whole
-    scan with a traceback instead of emitting JSON.
+    scan with a traceback instead of emitting JSON. Under the C locale the CLI
+    sees the argv filename surrogate-escaped, so the pipe must round-trip the
+    exact filesystem bytes (``os.fsencode``/``os.fsdecode``) — a pinned text
+    codec either rewrote the bytes (gitignored finding leaked) or decoded git's
+    output into real non-ASCII chars that crashed ``Path.resolve()`` under the
+    ASCII filesystem encoding.
     """
     work_dir = git_repo
     _non_ascii_gitignore_repo(work_dir)
@@ -539,6 +544,9 @@ def test_skip_gitignored_survives_non_utf8_locale(git_repo: Path) -> None:
     payload = _guard_json(result)  # pre-fix: crash means no JSON on stdout
     files = [f["file_path"] for f in payload["findings"]]
     assert any("leak.py" in f for f in files), files
+    # The gitignored non-ASCII file must be filtered even in surrogate-escaped
+    # form — only the tracked leak.py finding may remain.
+    assert all("leak.py" in f for f in files), files
     assert result.returncode == 1, f"expected 1, got {result.returncode}\n{result.stdout}"
 
 

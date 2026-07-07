@@ -120,11 +120,12 @@ Available markers:
 | `gcp` | Requires GCP credentials (skipped by default) |
 | `slow` | Tests that take >10 seconds |
 
-Container-backed tests must carry their backend marker (`aws`, `vault`, `azure`,
-`gcp`) in addition to `integration`. The cross-platform CI workflow runs on
-runners without Docker and excludes container tests by marker
+Backend-backed tests — Docker containers for `aws`/`vault`/`azure`, real cloud
+credentials for `gcp` — must carry their backend marker in addition to
+`integration`. The cross-platform CI workflow runs on runners without Docker or
+cloud credentials and excludes backend tests by marker
 (`-m "integration and not aws and not vault and not azure and not gcp"`), so an
-unmarked container test would be selected there and depend on fixture skips
+unmarked backend test would be selected there and depend on fixture skips
 instead of the marker contract.
 
 ### Suite Hygiene Rules

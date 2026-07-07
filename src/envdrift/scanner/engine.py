@@ -888,6 +888,7 @@ class ScanEngine:
         Returns:
             Filtered list excluding findings from gitignored files.
         """
+        import os
         import subprocess  # nosec B404
 
         if not findings:
@@ -928,17 +929,24 @@ class ScanEngine:
                 continue
 
             try:
-                # Explicit UTF-8: ``text=True`` alone decodes (and encodes the
-                # stdin paths) with the platform locale codec — cp1252 on Windows
-                # — which mis-handles non-ASCII filenames (#453). ``-z`` already
-                # makes git print paths verbatim (no core.quotepath quoting).
+                # Binary pipes with ``os.fsencode``/``os.fsdecode``: the finding
+                # paths live in filesystem space (``os.walk``/argv surface them
+                # via the fs codec with surrogateescape), so the pipe must apply
+                # the exact same mapping in both directions or paths stop
+                # comparing equal. A text pipe with the locale codec mis-handled
+                # non-ASCII filenames (#453); a pinned-UTF-8 text pipe still
+                # broke both directions — ``errors="replace"`` rewrote raw
+                # non-UTF-8 filename bytes to ``?`` on stdin (git never matched
+                # the .gitignore entry), and decoding git's UTF-8 output produced
+                # real non-ASCII chars that no longer matched surrogate-escaped
+                # finding paths under a non-UTF-8 locale (and crashed
+                # ``Path.resolve()``). Binary pipes also sidestep Windows
+                # text-mode ``\n`` -> ``\r\n`` translation, and ``-z`` makes git
+                # read/print paths verbatim (no core.quotepath quoting).
                 result = subprocess.run(  # nosec B603, B607
                     ["git", "check-ignore", "--stdin", "-z"],
-                    input="\0".join(rel_paths) + "\0",
+                    input=b"\0".join(os.fsencode(p) for p in rel_paths) + b"\0",
                     capture_output=True,
-                    text=True,
-                    encoding="utf-8",
-                    errors="replace",
                     timeout=30,
                     cwd=str(root),
                 )
@@ -947,12 +955,12 @@ class ScanEngine:
                         "git check-ignore failed in %s (code %s): %s",
                         root,
                         result.returncode,
-                        result.stderr.strip()[:200],
+                        result.stderr.decode("utf-8", "replace").strip()[:200],
                     )
                     continue
 
                 if result.stdout:
-                    ignored = [p for p in result.stdout.split("\0") if p]
+                    ignored = [os.fsdecode(p) for p in result.stdout.split(b"\0") if p]
                     for rel in ignored:
                         gitignored_files.add((root / rel).resolve())
             except (subprocess.TimeoutExpired, FileNotFoundError, subprocess.SubprocessError) as e:
@@ -1013,13 +1021,15 @@ class ScanEngine:
             # ``name\r`` and never match the .gitignore entry. ``-z`` also makes
             # git print paths verbatim (no core.quotepath C-quoting), so stdout
             # compares equal to the configured combined-file names.
+            # ``surrogateescape`` mirrors _filter_gitignored_files: it round-trips
+            # raw filename bytes exactly, where ``replace`` would rewrite them.
             result = subprocess.run(  # nosec B603, B607
                 ["git", "check-ignore", "--stdin", "-z"],
                 input="\0".join(self.config.combined_files) + "\0",
                 capture_output=True,
                 text=True,
                 encoding="utf-8",
-                errors="replace",
+                errors="surrogateescape",
                 timeout=30,
                 cwd=str(git_root),
             )
