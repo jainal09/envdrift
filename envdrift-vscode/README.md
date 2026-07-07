@@ -48,6 +48,7 @@ irm https://raw.githubusercontent.com/jainal09/envdrift/main/install.ps1 | iex
 - **EnvDrift: Disable Auto-Encryption** - Turn off auto-encryption
 - **EnvDrift: Encrypt Current File** - Manually encrypt open file
 - **EnvDrift: Show Status** - Display current settings
+- **EnvDrift: Show Logs** - Open the EnvDrift output channel
 
 ## Status Bar
 
@@ -61,12 +62,12 @@ irm https://raw.githubusercontent.com/jainal09/envdrift/main/install.ps1 | iex
 1. Open a `.env` file in VS Code
 2. Make your changes
 3. Close the file (or close VS Code)
-4. EnvDrift calls `envdrift lock` to encrypt
-5. Your `envdrift.toml` settings are respected (partial encryption, vault, ephemeral keys)
+4. EnvDrift calls `envdrift encrypt <file>` to encrypt it
+5. Your `envdrift.toml` `[encryption]` settings are respected (backend choice, smart encryption)
 
 ## Documentation
 
-📖 **See the [comprehensive guide](../docs/guides/vscode-extension.md) for:**
+📖 **See the [comprehensive guide](https://github.com/jainal09/envdrift/blob/main/docs/guides/vscode-extension.md) for:**
 
 - Detailed configuration options
 - Troubleshooting

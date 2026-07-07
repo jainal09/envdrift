@@ -96,6 +96,7 @@ Access via Command Palette (`Cmd+Shift+P` / `Ctrl+Shift+P`):
 | `EnvDrift: Disable Auto-Encryption` | Turn off auto-encryption |
 | `EnvDrift: Encrypt Current File` | Manually encrypt the active file |
 | `EnvDrift: Show Status` | Display current settings and status |
+| `EnvDrift: Show Logs` | Open the EnvDrift output channel |
 | `EnvDrift: Start Background Agent` | Start the envdrift background agent |
 | `EnvDrift: Stop Background Agent` | Stop the envdrift background agent |
 | `EnvDrift: Refresh Agent Status` | Re-check the agent status |
@@ -113,7 +114,7 @@ Access via Command Palette (`Cmd+Shift+P` / `Ctrl+Shift+P`):
 │  └─────────────┘      │  1. File Close Listener │   │
 │                       │  2. Pattern Matching    │   │
 │  ┌─────────────┐      │  3. Encryption Check    │   │
-│  │ File closed │─────▶│  4. envdrift lock       │   │
+│  │ File closed │─────▶│  4. envdrift encrypt    │   │
 │  └─────────────┘      │  5. Notification         │   │
 │                       └─────────────────────────┘   │
 │                                                     │
@@ -126,8 +127,10 @@ Access via Command Palette (`Cmd+Shift+P` / `Ctrl+Shift+P`):
 1. **File Close Listener** - Detects when configured env file patterns are closed
 2. **Pattern Matching** - Checks if file matches configured patterns
 3. **Encryption Check** - Verifies file isn't already encrypted
-4. **envdrift lock** - Calls CLI to encrypt (respects `envdrift.toml`)
-5. **Notification** - Shows success/failure message
+4. **envdrift encrypt** - Calls `envdrift encrypt <file>` and verifies the file
+   really ends up encrypted before reporting success
+5. **Notification** - Shows success/failure message (also logged to the
+   EnvDrift output channel)
 
 ## Status Bar
 
@@ -142,40 +145,29 @@ The extension adds a status bar item at the bottom of VS Code:
 
 ## Integration with envdrift.toml
 
-The extension calls `envdrift lock`, which means it respects all settings in your project's `envdrift.toml`:
+The extension calls `envdrift encrypt <file>` on the closed file, which
+respects the `[encryption]` settings in your project's `envdrift.toml`:
 
 ```toml
 # envdrift.toml in your project root
-[partial_encryption]
-enabled = true            # Only encrypt secrets
-
-[vault]
-provider = "azure"        # azure, aws, hashicorp, gcp
-
-[vault.azure]
-vault_url = "https://my-vault.vault.azure.net/"
-
-[vault.sync]
-# Note: the extension calls `envdrift lock <file>` without `--sync-keys` /
-# `--verify-vault`, so dotenvx still creates/uses `.env.keys` locally even
-# when this flag is set. For true ephemeral-key flows, run `envdrift pull`
-# or `envdrift lock --sync-keys` from the terminal — not from the extension.
-ephemeral_keys = true
+[encryption]
+backend = "dotenvx"       # or "sops"
+smart_encryption = true   # skip re-encrypting when content is unchanged
 ```
-
-To push local keys to the vault, run `envdrift vault-push --all`.
 
 When the extension encrypts a file:
 
-- **Partial encryption** applies if configured
-- **Vault sync** happens if configured
-- **Ephemeral keys**: only active when triggered via the terminal commands
-  noted above; the extension's encrypt action does not honor this flag
+- **Backend choice** (`dotenvx` or `sops`) applies if configured
+- **Smart encryption** applies if configured (avoids ciphertext churn in git)
 
-For custom `[vault.sync].mappings.env_file` names, add the filename to
-`envdrift.patterns` in VS Code settings. The extension calls `envdrift lock`
-after a matching file closes, but pattern matching itself is controlled by the
-extension settings.
+Vault-driven flows are terminal workflows, not extension ones: the extension
+never syncs keys with a vault. Run `envdrift lock --sync-keys`, `envdrift
+pull`, or `envdrift vault-push --all` from the terminal for vault key
+management and ephemeral-key flows.
+
+For custom env file names, add the filename to `envdrift.patterns` in VS Code
+settings. The extension calls `envdrift encrypt` after a matching file closes,
+but pattern matching itself is controlled by the extension settings.
 
 ## Workflow Examples
 
@@ -230,7 +222,9 @@ which envdrift
 
 ### Encryption failing
 
-1. Check Output panel: `View > Output > EnvDrift`
+1. Check the Output panel: `View > Output > EnvDrift` (or run
+   `EnvDrift: Show Logs`) — every encryption attempt and CLI error is
+   logged there, even with notifications disabled
 2. Verify `envdrift.toml` is valid
 3. Ensure dotenvx is installed
 
@@ -242,15 +236,20 @@ npm install -g @dotenvx/dotenvx
 
 If a file is already encrypted, the extension skips it. Look for:
 
-- `DOTENV_PUBLIC_KEY` in comments
-- `encrypted:` prefix in values
+- A real `DOTENV_PUBLIC_KEY=...` assignment
+- The `encrypted:` prefix at the start of values
+- SOPS `ENC[AES256_GCM,...` envelopes at the start of values
 
 ## Security Considerations
 
 - The extension only encrypts on file **close**, not on every save
-- Encryption uses `envdrift lock`, which calls `dotenvx encrypt`
-- Keys are stored in `.env.keys` or vault (based on config)
-- Enabling **ephemeral keys** means keys never touch disk
+- Encryption uses `envdrift encrypt`, which calls `dotenvx encrypt`
+  (or SOPS when configured)
+- With dotenvx, private keys live in `.env.keys`; with SOPS, keys are managed by
+  your configured SOPS source (an age key file, KMS, or PGP via `.sops.yaml`) and
+  never `.env.keys`
+- The extension never syncs keys with a vault — vault and ephemeral-key flows are
+  terminal-only (see the envdrift.toml section)
 
 ## Performance
 

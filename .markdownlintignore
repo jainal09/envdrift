@@ -11,6 +11,10 @@ dist/
 build/
 site/
 
+# Ignore the downloaded VS Code instance the extension's @vscode/test-electron
+# suite unpacks here — it ships its own long-line markdown we do not own.
+**/.vscode-test/
+
 # Ignore caches
 .pytest_cache/
 .ruff_cache/
