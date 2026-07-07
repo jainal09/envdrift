@@ -325,6 +325,10 @@ class TrivyScanner(ScannerBackend):
         self._version = version or _get_trivy_version()
         self._binary_path: Path | None = None
 
+    # ``trivy fs`` ignores ``include_git_history`` (no history scan), so
+    # this scanner must not be presented as history coverage (#476).
+    supports_git_history = False
+
     @property
     def name(self) -> str:
         """Return scanner identifier."""

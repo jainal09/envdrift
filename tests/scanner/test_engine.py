@@ -1591,6 +1591,80 @@ class TestCombinedFilesSecurity:
         assert not any(".env.production" in w for w in warnings)
 
 
+class TestGitHistoryCapability:
+    """Tests for the per-scanner ``supports_git_history`` capability (#476).
+
+    ``--history`` used to be silently dropped when only history-incapable
+    scanners (native, detect-secrets, trivy) were active, reporting a clean
+    pass over an unscanned git history. The capability flag is what guard and
+    the engine consult, so each scanner class must declare it truthfully.
+    """
+
+    def test_backend_default_is_false(self):
+        """A scanner that does not declare support must never count as coverage."""
+        assert ScannerBackend.supports_git_history is False
+
+    def test_history_capable_scanners_declare_support(self):
+        """Every scanner whose scan() implements include_git_history says so."""
+        from envdrift.scanner.git_secrets import GitSecretsScanner
+        from envdrift.scanner.gitleaks import GitleaksScanner
+        from envdrift.scanner.infisical import InfisicalScanner
+        from envdrift.scanner.kingfisher import KingfisherScanner
+        from envdrift.scanner.talisman import TalismanScanner
+        from envdrift.scanner.trufflehog import TrufflehogScanner
+
+        for scanner_cls in (
+            GitleaksScanner,
+            TrufflehogScanner,
+            GitSecretsScanner,
+            KingfisherScanner,
+            TalismanScanner,
+            InfisicalScanner,
+        ):
+            assert scanner_cls.supports_git_history is True, scanner_cls
+
+    def test_history_incapable_scanners_declare_no_support(self):
+        """Scanners that ignore include_git_history must not claim coverage."""
+        from envdrift.scanner.detect_secrets import DetectSecretsScanner
+        from envdrift.scanner.native import NativeScanner
+        from envdrift.scanner.trivy import TrivyScanner
+
+        for scanner_cls in (NativeScanner, DetectSecretsScanner, TrivyScanner):
+            assert scanner_cls.supports_git_history is False, scanner_cls
+
+    def test_engine_warns_when_history_unsatisfiable(self, tmp_path, caplog):
+        """engine.scan() logs a warning when history is requested without support.
+
+        SDK callers bypass the guard CLI's hard refusal, so the engine itself
+        must surface that git history will NOT be scanned (#476).
+        """
+        import logging
+
+        (tmp_path / "app.py").write_text("x = 1\n", encoding="utf-8")
+        config = GuardConfig(use_native=True, use_gitleaks=False, include_git_history=True)
+        engine = ScanEngine(config)
+
+        with caplog.at_level(logging.WARNING, logger="envdrift.scanner.engine"):
+            engine.scan([tmp_path])
+
+        assert any(
+            "no active scanner supports git history" in record.message for record in caplog.records
+        ), caplog.records
+
+    def test_engine_no_warning_when_history_not_requested(self, tmp_path, caplog):
+        """No spurious history warning when include_git_history is off."""
+        import logging
+
+        (tmp_path / "app.py").write_text("x = 1\n", encoding="utf-8")
+        config = GuardConfig(use_native=True, use_gitleaks=False, include_git_history=False)
+        engine = ScanEngine(config)
+
+        with caplog.at_level(logging.WARNING, logger="envdrift.scanner.engine"):
+            engine.scan([tmp_path])
+
+        assert not any("git history" in record.message for record in caplog.records), caplog.records
+
+
 class TestDefaultGlobalIgnoreScoping:
     """#477: built-in config/lock-file ignores only suppress noisy rules."""
 

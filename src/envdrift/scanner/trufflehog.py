@@ -386,6 +386,9 @@ class TrufflehogScanner(ScannerBackend):
         self._verify = verify
         self._binary_path: Path | None = None
 
+    # Scans git history when ``include_git_history`` is set (#476).
+    supports_git_history = True
+
     @property
     def name(self) -> str:
         """Return scanner identifier."""
