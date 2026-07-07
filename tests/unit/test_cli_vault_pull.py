@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import os
+import sys
 from unittest.mock import MagicMock, patch
 
+import pytest
 from typer.testing import CliRunner
 
 from envdrift.cli import app
@@ -1020,3 +1023,140 @@ class TestVaultPullKeyMaterialNormalization:
         assert result.exit_code == 1, result.output
         assert "DOTENV_PRIVATE_KEY_STAGING" in result.output
         assert not (tmp_path / ".env.keys").exists()
+
+
+class TestVaultPullTargetFolderAndWriteErrors:
+    """#487: bad target folders / unwritable .env.keys must fail cleanly.
+
+    Pre-fix, ``vault-pull`` fetched the secret successfully and then dumped a
+    raw ``OSError`` / ``PermissionError`` / ``UnicodeDecodeError`` Rich
+    traceback from the unguarded ``EnvKeysFile.write_key`` call. The vault
+    client is mocked only as a value source; the behavior under test is the
+    CLI's folder validation and file-write error boundary, exercised with real
+    files in ``tmp_path``.
+    """
+
+    def _pull_args(self, folder):
+        return [
+            "vault-pull",
+            str(folder),
+            "my-secret",
+            "--env",
+            "production",
+            "--no-decrypt",
+            "-p",
+            "azure",
+            "--vault-url",
+            "https://myvault.vault.azure.net/",
+        ]
+
+    @patch("envdrift.vault.get_vault_client")
+    def test_pull_nonexistent_folder_fails_before_fetch(self, mock_get_client, tmp_path):
+        """A missing target folder exits 1 cleanly without any vault call (#487)."""
+        client = _make_client("DOTENV_PRIVATE_KEY_PRODUCTION=abc123secret")
+        mock_get_client.return_value = client
+
+        result = runner.invoke(app, self._pull_args(tmp_path / "no-such-dir"))
+
+        assert result.exit_code == 1
+        out = " ".join(result.output.split())
+        assert "Folder not found" in out, out
+        # Fail-fast: the folder is validated before any vault round-trip.
+        client.get_secret.assert_not_called()
+        assert not isinstance(result.exception, OSError), result.exception
+
+    @patch("envdrift.vault.get_vault_client")
+    def test_pull_folder_is_a_file_fails_cleanly(self, mock_get_client, tmp_path):
+        """A non-directory target exits 1 cleanly without any vault call (#487)."""
+        client = _make_client("DOTENV_PRIVATE_KEY_PRODUCTION=abc123secret")
+        mock_get_client.return_value = client
+        target = tmp_path / "afile"
+        target.write_text("not a folder", encoding="utf-8")
+
+        result = runner.invoke(app, self._pull_args(target))
+
+        assert result.exit_code == 1
+        out = " ".join(result.output.split())
+        assert "Not a directory" in out, out
+        client.get_secret.assert_not_called()
+
+    @patch("envdrift.vault.get_vault_client")
+    def test_pull_env_keys_is_directory_clean_error(self, mock_get_client, tmp_path):
+        """.env.keys as a directory exits 1 with a one-line error (#487)."""
+        mock_get_client.return_value = _make_client("DOTENV_PRIVATE_KEY_PRODUCTION=abc123secret")
+        (tmp_path / ".env.keys").mkdir()
+
+        result = runner.invoke(app, self._pull_args(tmp_path))
+
+        assert result.exit_code == 1
+        out = " ".join(result.output.split())
+        assert "Cannot write" in out, out
+        assert ".env.keys" in out, out
+        assert not isinstance(result.exception, OSError), result.exception
+
+    @patch("envdrift.vault.get_vault_client")
+    def test_pull_env_keys_non_utf8_clean_error(self, mock_get_client, tmp_path):
+        """A non-UTF-8 .env.keys exits 1 with a one-line error (#487)."""
+        mock_get_client.return_value = _make_client("DOTENV_PRIVATE_KEY_PRODUCTION=abc123secret")
+        (tmp_path / ".env.keys").write_bytes(b"DOTENV_PRIVATE_KEY_PRODUCTION=caf\xe9\n")
+
+        result = runner.invoke(app, self._pull_args(tmp_path))
+
+        assert result.exit_code == 1
+        out = " ".join(result.output.split())
+        assert "Cannot write" in out, out
+        assert not isinstance(result.exception, ValueError), result.exception
+
+    @pytest.mark.skipif(sys.platform == "win32", reason="POSIX permission bits")
+    @patch("envdrift.vault.get_vault_client")
+    def test_pull_unwritable_folder_clean_error(self, mock_get_client, tmp_path):
+        """A read-only target folder exits 1 with a one-line error (#487)."""
+        if hasattr(os, "geteuid") and os.geteuid() == 0:
+            pytest.skip("root ignores permission bits")
+        mock_get_client.return_value = _make_client("DOTENV_PRIVATE_KEY_PRODUCTION=abc123secret")
+        target = tmp_path / "readonly"
+        target.mkdir()
+        target.chmod(0o555)
+
+        try:
+            result = runner.invoke(app, self._pull_args(target))
+        finally:
+            target.chmod(0o755)
+
+        assert result.exit_code == 1
+        out = " ".join(result.output.split())
+        assert "Cannot write" in out, out
+        assert not isinstance(result.exception, OSError), result.exception
+
+
+class TestVaultPullNotFoundNamesRegion:
+    """#487: the AWS not-found error must name the region that was searched."""
+
+    @patch("envdrift.vault.get_vault_client")
+    def test_pull_aws_not_found_message_names_region(self, mock_get_client, tmp_path):
+        """vault-pull -p aws --region eu-west-1 names eu-west-1 on not-found (#487)."""
+        client = MagicMock()
+        client.region = "eu-west-1"
+        client.get_secret.side_effect = SecretNotFoundError("Secret not found: my-secret")
+        mock_get_client.return_value = client
+
+        result = runner.invoke(
+            app,
+            [
+                "vault-pull",
+                str(tmp_path),
+                "my-secret",
+                "--env",
+                "production",
+                "--no-decrypt",
+                "-p",
+                "aws",
+                "--region",
+                "eu-west-1",
+            ],
+        )
+
+        assert result.exit_code == 1
+        out = " ".join(result.output.split())
+        assert "not found in aws vault" in out, out
+        assert "(region eu-west-1)" in out, out

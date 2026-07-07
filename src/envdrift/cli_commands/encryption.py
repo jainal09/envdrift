@@ -470,6 +470,7 @@ def _verify_decryption_with_vault(
         console.print("[bold]Vault Key Verification[/bold]")
         console.print(f"[dim]Provider: {provider} | Secret: {secret_name}[/dim]")
 
+    vault_client = None
     try:
         # Create vault client
         vault_kwargs: dict = {}
@@ -592,7 +593,16 @@ def _verify_decryption_with_vault(
                 return False
 
     except SecretNotFoundError:
-        print_error(f"Secret '{secret_name}' not found in vault")
+        # Name the AWS region that was searched (#487). Read it from the
+        # constructed client (mirrors vault_pull) so the message reflects the
+        # region the client actually used, instead of a hardcoded fallback
+        # that could silently drift from the construction default above.
+        region_note = ""
+        if provider == "aws":
+            client_region = getattr(vault_client, "region", None)
+            if client_region:
+                region_note = f" (region {client_region})"
+        print_error(f"Secret '{secret_name}' not found in vault{region_note}")
         return False
     except VaultError as e:
         print_error(f"Vault error: {e}")
