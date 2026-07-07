@@ -1464,3 +1464,58 @@ class TestSyncEngineKeyMaterialShapes:
         assert result.services[0].action == SyncAction.ERROR
         assert "binary" in (result.services[0].error or "").lower()
         assert not (service_dir / ".env.keys").exists()
+
+
+class TestVerifyModeMissingKeyReasons:
+    """#487: verify-only must populate ``error`` with a diagnosable reason.
+
+    Pre-fix the verify branch for a missing local key set only ``message`` —
+    which the renderer never printed — and the one message it did set ("Key
+    file does not exist") was wrong when the file existed but lacked the key.
+    """
+
+    def _make_service(self, tmp_path: Path) -> tuple[SyncConfig, Path]:
+        service_dir = tmp_path / "service1"
+        service_dir.mkdir()
+        (service_dir / ".env.production").write_text('SECRET="encrypted:abc"\n')
+        config = SyncConfig(
+            mappings=[
+                ServiceMapping(
+                    secret_name="test-key",
+                    folder_path=service_dir,
+                    environment="production",
+                ),
+            ],
+        )
+        return config, service_dir
+
+    def test_verify_missing_keys_file_reports_file_reason(self, tmp_path: Path) -> None:
+        """No .env.keys at all: error names the missing file (#487)."""
+        config, _service_dir = self._make_service(tmp_path)
+        client = _StoredVaultClient({"test-key": "DOTENV_PRIVATE_KEY_PRODUCTION=secret123"})
+
+        engine = SyncEngine(config=config, vault_client=client, mode=SyncMode(verify_only=True))
+        result = engine.sync_all()
+
+        service = result.services[0]
+        assert service.action == SyncAction.ERROR
+        assert service.error, "verify-only must populate error with a reason (#487)"
+        assert ".env.keys" in service.error
+        assert "does not exist" in service.error
+
+    def test_verify_key_missing_from_existing_file_names_the_key(self, tmp_path: Path) -> None:
+        """.env.keys exists but lacks the expected key: error names the key (#487)."""
+        config, service_dir = self._make_service(tmp_path)
+        (service_dir / ".env.keys").write_text("DOTENV_PRIVATE_KEY_OTHERENV=deadbeef\n")
+        client = _StoredVaultClient({"test-key": "DOTENV_PRIVATE_KEY_PRODUCTION=secret123"})
+
+        engine = SyncEngine(config=config, vault_client=client, mode=SyncMode(verify_only=True))
+        result = engine.sync_all()
+
+        service = result.services[0]
+        assert service.action == SyncAction.ERROR
+        assert service.error, "verify-only must populate error with a reason (#487)"
+        assert "DOTENV_PRIVATE_KEY_PRODUCTION" in service.error
+        assert "missing" in service.error
+        # Must NOT claim the file is missing — it exists.
+        assert "does not exist" not in service.error

@@ -401,7 +401,9 @@ ephemeral_keys = true   # or enable per-mapping
 ```
 
 With ephemeral keys, `pull` fetches the key, passes it via `DOTENV_PRIVATE_KEY_*`,
-decrypts in place, and writes no key file.
+decrypts in place, and writes no key file. Ephemeral services render with their
+own `*` status row (`ephemeral (key not stored locally)`) and an `Ephemeral:`
+line in the sync summary — they are successes, not errors.
 
 !!! warning
     In ephemeral mode there is no local fallback — if the vault is unavailable,
