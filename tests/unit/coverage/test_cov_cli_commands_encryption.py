@@ -385,6 +385,111 @@ def test_verify_vault_non_str_secret_is_stringified(monkeypatch, tmp_path: Path)
     assert captured["env"]["DOTENV_PRIVATE_KEY_PRODUCTION"] == "coerced-key"
 
 
+def _capture_verify_vault_env(
+    monkeypatch, tmp_path: Path, vault_value: str, filename: str = ".env.production"
+) -> dict[str, Any]:
+    """Run _verify_decryption_with_vault with a stubbed vault/dotenvx, capture the env.
+
+    Returns a dict with ``result`` (bool) and ``env`` (the environment passed to
+    the dotenvx decrypt call).
+    """
+    env_file = tmp_path / filename
+    env_file.write_text("SECRET=encrypted", encoding="utf-8")
+
+    monkeypatch.setattr(
+        "envdrift.vault.get_vault_client",
+        lambda *_, **__: _Vault(SimpleNamespace(value=vault_value)),
+    )
+    monkeypatch.setattr(
+        "envdrift.integrations.dotenvx.DotenvxWrapper.is_installed",
+        lambda self: True,
+    )
+
+    captured: dict[str, Any] = {}
+
+    def fake_decrypt(self, env_path, env_keys_file=None, env=None, cwd=None):
+        captured["env"] = env
+
+    monkeypatch.setattr(
+        "envdrift.integrations.dotenvx.DotenvxWrapper.decrypt",
+        fake_decrypt,
+    )
+
+    captured["result"] = _verify_decryption_with_vault(
+        env_file=env_file,
+        provider="aws",
+        vault_url=None,
+        region="us-east-1",
+        project_id=None,
+        secret_name="dotenv-key",
+        ci=True,
+    )
+    return captured
+
+
+def test_verify_vault_quoted_vault_value_is_normalized(monkeypatch, tmp_path: Path):
+    """#473: the quoted dotenvx `.env.keys` line format must be dequoted.
+
+    The vault commonly stores the literal keys-file line
+    DOTENV_PRIVATE_KEY_PRODUCTION="<hex>" (the format lock --verify-vault and
+    sync already normalize). The raw split("=", 1) kept the quotes, dotenvx got
+    an invalid key, and a CORRECT vault key reported "CANNOT decrypt".
+    """
+    captured = _capture_verify_vault_env(
+        monkeypatch, tmp_path, 'DOTENV_PRIVATE_KEY_PRODUCTION="vault-key-hex"'
+    )
+
+    assert captured["result"] is True
+    assert captured["env"]["DOTENV_PRIVATE_KEY_PRODUCTION"] == "vault-key-hex"
+
+
+def test_verify_vault_lowercase_suffix_var_name_uppercased(monkeypatch, tmp_path: Path):
+    """#473: dotenvx looks up the UPPERCASED env var; match its casing."""
+    captured = _capture_verify_vault_env(
+        monkeypatch, tmp_path, "DOTENV_PRIVATE_KEY_production=vault-key-hex"
+    )
+
+    assert captured["result"] is True
+    assert captured["env"]["DOTENV_PRIVATE_KEY_PRODUCTION"] == "vault-key-hex"
+
+
+def test_verify_vault_suffixless_prefix_keeps_var_name(monkeypatch, tmp_path: Path):
+    """The suffix-less DOTENV_PRIVATE_KEY=<key> format (plain .env) still works."""
+    captured = _capture_verify_vault_env(
+        monkeypatch, tmp_path, 'DOTENV_PRIVATE_KEY="vault-key-hex"'
+    )
+
+    assert captured["result"] is True
+    assert captured["env"]["DOTENV_PRIVATE_KEY"] == "vault-key-hex"
+
+
+def test_verify_vault_raw_value_staging_file_targets_staging_var(monkeypatch, tmp_path: Path):
+    """#473: a bare vault value for .env.staging must set DOTENV_PRIVATE_KEY_STAGING.
+
+    Path(".env.staging").stem is ".env" (stem strips only the LAST suffix), so
+    the old derivation collapsed every .env.<env> file to the PRODUCTION
+    default: dotenvx looked up DOTENV_PRIVATE_KEY_STAGING, found nothing, and
+    a CORRECT bare staging key was reported "CANNOT decrypt" with destructive
+    git-restore advice.
+    """
+    captured = _capture_verify_vault_env(
+        monkeypatch, tmp_path, "raw-key-hex", filename=".env.staging"
+    )
+
+    assert captured["result"] is True
+    assert captured["env"]["DOTENV_PRIVATE_KEY_STAGING"] == "raw-key-hex"
+    assert "DOTENV_PRIVATE_KEY_PRODUCTION" not in captured["env"]
+
+
+def test_verify_vault_raw_value_plain_env_file_targets_suffixless_var(monkeypatch, tmp_path: Path):
+    """#473: a bare vault value for a plain .env file must set DOTENV_PRIVATE_KEY."""
+    captured = _capture_verify_vault_env(monkeypatch, tmp_path, "raw-key-hex", filename=".env")
+
+    assert captured["result"] is True
+    assert captured["env"]["DOTENV_PRIVATE_KEY"] == "raw-key-hex"
+    assert "DOTENV_PRIVATE_KEY_PRODUCTION" not in captured["env"]
+
+
 def test_verify_vault_dotenvx_not_installed_returns_false(monkeypatch, tmp_path: Path):
     """If dotenvx is not installed verification cannot proceed (381-382)."""
     env_file = tmp_path / ".env.production"
