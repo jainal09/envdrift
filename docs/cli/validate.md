@@ -46,10 +46,27 @@ judged exactly as the real app loads them:
 - Malformed quoted bindings are rejected exactly like python-dotenv: an
   unterminated quote, or non-comment content after the close quote, drops the
   whole binding (no truncated value, no phantom variables from interior lines).
+- `${VAR}` and `${VAR:-default}` references are expanded the way
+  `dotenv_values` does: a name defined earlier in the same file wins over
+  `os.environ` (looked up case-sensitively, exactly like python-dotenv), and
+  an unset name falls back to the default (or `""`), so `PORT=${OFFSET}234`
+  is judged as the value the app receives.
+- Unquoted values follow python-dotenv's comment rule: the whitespace right
+  after `=` is consumed first, then the value is cut at the first
+  whitespace-preceded `#`. `MSG=user's data # comment` is `user's data` even
+  though the value contains a stray quote, while `K= # c` keeps the whole
+  `# c` as its value (a leading `#` has no whitespace before it inside the
+  value).
+- Physical lines end at `\n` / `\r\n` / `\r` only; other Unicode line
+  boundaries (U+2028, form feed, ...) are value content.
+- A leading UTF-8 BOM is stripped instead of becoming part of the first key,
+  and `validate` warns about it: pydantic-settings reads plain UTF-8, so the
+  running app still sees the BOM-prefixed key unless the BOM is removed or
+  `env_file_encoding='utf-8-sig'` is set.
 
-Other python-dotenv behaviors (`${VAR}` interpolation, its inline-comment rule
-for unquoted values, `'quoted keys'`) are not yet mirrored; a file relying on
-those may still be judged differently than the running app sees it.
+Other python-dotenv behaviors (`'quoted keys'`, a bare `KEY` line without `=`)
+are not yet mirrored; a file relying on those may still be judged differently
+than the running app sees it.
 
 Multiple env files can be validated in one invocation (each gets its own report;
 with `--ci` the exit code is 1 if any file fails). This keeps the command usable
