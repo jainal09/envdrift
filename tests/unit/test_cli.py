@@ -7,7 +7,6 @@ import json
 import keyword
 import shlex
 import shutil
-import tomllib
 from pathlib import Path
 from textwrap import dedent
 from types import SimpleNamespace
@@ -22,7 +21,6 @@ from envdrift.cli_commands.encryption import (
     _resolve_config_path,
     _verify_decryption_with_vault,
 )
-from envdrift.config import EnvdriftConfig
 from envdrift.encryption import EncryptionProvider
 from envdrift.encryption.base import EncryptionBackendError, EncryptionResult
 from envdrift.integrations.dotenvx import DotenvxError
@@ -1189,25 +1187,22 @@ class TestDecryptCommand:
 class TestEncryptionHelpers:
     """Tests for encryption helper functions."""
 
-    def test_load_encryption_config_handles_toml_error(self, monkeypatch, tmp_path: Path):
-        """Invalid TOML should return default config and no path."""
+    def test_load_encryption_config_aborts_on_toml_error(self, monkeypatch, tmp_path: Path):
+        """Invalid TOML aborts instead of silently returning defaults (#491)."""
+        import typer
+
         config_path = tmp_path / "envdrift.toml"
-        config_path.write_text("invalid = [")
+        config_path.write_text("invalid = [", encoding="utf-8")
 
-        def fake_load(_path):
-            raise tomllib.TOMLDecodeError("bad", "invalid = [", 10)
+        errors = []
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.setattr("envdrift.cli_commands.encryption.print_error", errors.append)
 
-        warnings = []
+        with pytest.raises(typer.Exit) as exc_info:
+            _load_encryption_config()
 
-        monkeypatch.setattr("envdrift.config.find_config", lambda: config_path)
-        monkeypatch.setattr("envdrift.config.load_config", fake_load)
-        monkeypatch.setattr("envdrift.cli_commands.encryption.print_warning", warnings.append)
-
-        config, resolved = _load_encryption_config()
-
-        assert isinstance(config, EnvdriftConfig)
-        assert resolved is None
-        assert warnings
+        assert exc_info.value.exit_code == 1
+        assert any("TOML syntax error" in e for e in errors)
 
     def test_resolve_config_path_relative(self, tmp_path: Path):
         """Relative paths should resolve relative to config file."""
@@ -2522,47 +2517,25 @@ class TestSyncCommand:
         assert sync_config.default_vault_name == "aws-vault"
         assert sync_config.mappings[0].vault_name == "aws-vault"
 
-    def test_sync_falls_back_to_sync_config_when_load_config_fails(
-        self, monkeypatch, tmp_path: Path
-    ):
-        """If config loading fails, still attempt to read sync config from the TOML path."""
+    def test_sync_aborts_when_discovered_config_is_malformed(self, monkeypatch, tmp_path: Path):
+        """A broken auto-discovered config is a hard error, not a fallback (#491).
+
+        Pre-#491 sync warned about the parse failure and then re-read the same
+        TOML for the [vault.sync] section — continuing with defaults for every
+        other section the file configured.
+        """
 
         config_file = tmp_path / "envdrift.toml"
         config_file.write_text(
             dedent(
                 """
-                [vault.sync]
+                [vault.sync
                 default_vault_name = "fallback"
-
-                [[vault.sync.mappings]]
-                secret_name = "dotenv-key"
-                folder_path = "services/api"
                 """
-            )
+            ),
+            encoding="utf-8",
         )
-
-        def broken_load_config(*_args, **_kwargs):
-            raise tomllib.TOMLDecodeError("boom", "", 0)
-
-        monkeypatch.setattr("envdrift.config.find_config", lambda *_args, **_kwargs: config_file)
-        monkeypatch.setattr("envdrift.config.load_config", broken_load_config)
-        monkeypatch.setattr(
-            "envdrift.vault.get_vault_client",
-            lambda *_args, **_kwargs: SimpleNamespace(ensure_authenticated=lambda: None),
-        )
-        monkeypatch.setattr("envdrift.output.rich.print_service_sync_status", lambda *_, **__: None)
-        monkeypatch.setattr("envdrift.output.rich.print_sync_result", lambda *_, **__: None)
-
-        captured: dict[str, Any] = {}
-
-        class DummyEngine:
-            def __init__(self, config, vault_client, mode, prompt_callback, progress_callback):
-                captured["config"] = config
-
-            def sync_all(self):
-                return SimpleNamespace(services=[], has_errors=False)
-
-        monkeypatch.setattr("envdrift.sync.engine.SyncEngine", DummyEngine)
+        monkeypatch.chdir(tmp_path)
 
         result = runner.invoke(
             app,
@@ -2575,8 +2548,10 @@ class TestSyncCommand:
             ],
         )
 
-        assert result.exit_code == 0
-        assert captured["config"].default_vault_name == "fallback"
+        assert result.exit_code == 1
+        normalized = " ".join(result.output.split())
+        assert "TOML syntax error in" in normalized
+        assert "No sync configuration found" not in normalized
 
     def test_sync_missing_config_file_errors(self, tmp_path: Path):
         """Missing provided config file should exit with error."""
@@ -2817,11 +2792,11 @@ class TestSyncCommand:
         assert result.exit_code == 1
         assert "toml syntax error" in result.output.lower()
 
-    def test_sync_warns_on_autodiscovered_toml_syntax_error(self, monkeypatch, tmp_path: Path):
-        """Auto-discovery should warn about TOML syntax errors instead of silently skipping."""
+    def test_sync_errors_on_autodiscovered_toml_syntax_error(self, monkeypatch, tmp_path: Path):
+        """Auto-discovery must hard-error on TOML syntax errors, not warn-and-continue (#491)."""
 
         bad_config = tmp_path / "envdrift.toml"
-        bad_config.write_text("bad = [")
+        bad_config.write_text("bad = [", encoding="utf-8")
 
         monkeypatch.chdir(tmp_path)
 
@@ -2837,7 +2812,9 @@ class TestSyncCommand:
         )
 
         assert result.exit_code == 1
-        assert "toml syntax error" in result.output.lower()
+        normalized = " ".join(result.output.split())
+        assert "[ERROR] TOML syntax error in" in normalized
+        assert "No sync configuration found" not in normalized
 
 
 class TestPullCommand:

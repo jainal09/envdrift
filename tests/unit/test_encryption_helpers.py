@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import logging
 from textwrap import dedent
 from typing import Any, cast
 
@@ -91,16 +90,32 @@ def test_resolve_encryption_backend_sops_config(tmp_path, monkeypatch):
     assert captured["config"]["age_key_file"] == str(tmp_path / ".agekey")
 
 
-def test_resolve_encryption_backend_warns_on_bad_config(tmp_path, caplog):
-    """resolve_encryption_backend should warn when config load fails."""
+def test_resolve_encryption_backend_raises_on_bad_config(tmp_path):
+    """resolve_encryption_backend raises when config load fails (#491).
+
+    The pre-#491 behavior — log a warning and fall back to the default dotenvx
+    backend — silently encrypted SOPS-configured projects with the wrong
+    backend. CLI callers convert the raised error into a clean exit 1.
+    """
+    import pytest
+
+    from envdrift.config import ConfigLoadError
+
     config_file = tmp_path / "envdrift.toml"
-    config_file.write_text("invalid = [")
+    config_file.write_text("invalid = [", encoding="utf-8")
 
-    caplog.set_level(logging.WARNING)
-    resolve_encryption_backend(config_file)
+    with pytest.raises(ConfigLoadError, match="TOML syntax error"):
+        resolve_encryption_backend(config_file)
 
-    assert "Failed to load config" in caplog.text
-    assert any(record.levelno == logging.WARNING for record in caplog.records)
+
+def test_resolve_encryption_backend_defaults_when_no_config_discovered(tmp_path, monkeypatch):
+    """Auto-discovery finding no config falls back to the dotenvx default."""
+    monkeypatch.chdir(tmp_path)
+
+    _backend, provider, encryption_config = resolve_encryption_backend(None)
+
+    assert provider == EncryptionProvider.DOTENVX
+    assert encryption_config is None
 
 
 def test_build_sops_encrypt_kwargs():
