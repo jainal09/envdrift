@@ -155,6 +155,15 @@ env_file = "postgresql.env" # Custom dotenv filename inside folder_path
 
 Place the file in the project root so auto-discovery finds it; pass `-c envdrift.toml` in CI to pin the exact file.
 
+!!! warning "`folder_path` must be an existing directory"
+    Each mapping's `folder_path` is validated: a folder that does not exist
+    (for example a typo like `servces/api`), or that points at a regular
+    file instead of a directory, is reported as a per-mapping
+    **error** — the row says `Mapping folder does not exist or is not a
+    directory`, the summary counts it under `Errors`, and `sync --ci`,
+    `pull`, and `vault-push --all` exit non-zero. Only a *missing env file
+    inside an existing folder* is a benign skip ("file not created yet").
+
 !!! note "`vault_name` / `default_vault_name` do not switch the vault"
     `vault_name` (per-mapping) and `default_vault_name` are parsed and accepted
     but are **informational only** — the sync/push engine fetches and pushes
@@ -338,9 +347,9 @@ Icons:
 
 - `+` - Created new .env.keys file
 - `~` - Updated existing file
-- `=` - Skipped (values match)
+- `=` - Skipped (values match, or env file not created yet)
 - `*` - Ephemeral (key fetched from vault, deliberately not stored locally)
-- `x` - Error occurred
+- `x` - Error occurred (vault error, or the mapping's `folder_path` does not exist)
 
 ### Decryption Test Results
 
@@ -381,6 +390,7 @@ the services whose keys were fetched but deliberately not stored locally:
 | :--- | :------------------------------------------------------------------------ |
 | 0    | Success (all synced, no errors)                                            |
 | 1    | Error (vault error, sync failure, decryption failure)                      |
+| 1    | `--ci`: any per-mapping error, including a `folder_path` that does not exist |
 | 1    | `--check-decryption`: any decryption test failed (even without `--ci`)     |
 | 1    | `--check-decryption`: dotenvx is not installed (nothing can be verified)    |
 

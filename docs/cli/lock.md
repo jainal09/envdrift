@@ -423,6 +423,8 @@ The `lock` command catches many edge cases and provides helpful warnings and err
 |:-----|:------------------------------------------------------------------------------------------|
 | 0    | Success (all files encrypted or verified)                                                  |
 | 1    | Error (key mismatch, encryption failure, or vault error)                                   |
+| 1    | A mapping's `folder_path` does not exist (broken sync config, reported per row)            |
+| 1    | A mapped env file or `.env.keys` cannot be read (e.g. not valid UTF-8) — per-file error    |
 | 1    | `--verify-vault`: a mapping failed or could not be verified (nothing is encrypted)         |
 | 1    | `--check`: one or more files still need encryption                                         |
 | 1    | `--all`: a skipped secrets-only environment still holds plaintext (run `envdrift push`)    |

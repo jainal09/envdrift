@@ -10,6 +10,7 @@ so the suite is hermetic and fast.
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -1610,6 +1611,216 @@ class TestLockPartialEncryptionAll:
         normalized = " ".join(result.output.split())
         assert "Secrets-only environments skipped: 1" in normalized
         assert "ready to commit" in normalized
+
+
+# --------------------------------------------------------------------------
+# Issue #488 - config discovery and mapping validation
+# --------------------------------------------------------------------------
+class TestNoConfigErrorGuidance:
+    """#488: the no-config error must list envdrift.toml, the primary mechanism."""
+
+    def test_no_sync_config_error_mentions_envdrift_toml(self, monkeypatch, tmp_path):
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.setattr("envdrift.config.find_config", lambda: None)
+        result = runner.invoke(app, ["pull"])
+        out = " ".join(result.output.split())
+        assert result.exit_code == 1
+        # All three config mechanisms must be listed, with their literal
+        # section names (print_error escapes Rich markup).
+        assert "envdrift.toml" in out
+        assert "[vault.sync]" in out
+        assert "[tool.envdrift.vault.sync]" in out
+
+
+class TestHelpShowsTomlSectionNames:
+    """#488: pull/lock --help must show the literal TOML section names.
+
+    Typer's default (non-rich) markup mode renders docstring brackets
+    verbatim, so ``[vault.sync]`` needs no escaping — a ``\\[`` escape
+    renders a stray literal backslash in --help instead.
+    """
+
+    # CI sets FORCE_COLOR=1, so Rich injects ANSI style codes INSIDE the help
+    # phrases (e.g. around "pyproject.toml") — strip them before asserting, and
+    # collapse whitespace so soft-wrapping at CI's width can't split a phrase.
+    _ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
+
+    @classmethod
+    def _plain(cls, output: str) -> str:
+        return " ".join(cls._ANSI_RE.sub("", output).split())
+
+    @pytest.mark.parametrize("command", ["pull", "lock"])
+    def test_help_shows_section_names(self, command):
+        result = runner.invoke(app, [command, "--help"])
+        out = self._plain(result.output)
+        assert result.exit_code == 0
+        assert "pyproject.toml [tool.envdrift.vault.sync] section" in out
+        assert "envdrift.toml [vault.sync] section" in out
+        # Regression: no leftover backslash-escape artifacts in help output.
+        assert "\\[" not in out
+
+    def test_vault_pull_help_shows_vault_section(self):
+        result = runner.invoke(app, ["vault-pull", "--help"])
+        out = self._plain(result.output)
+        assert result.exit_code == 0
+        assert "`[vault]` section" in out
+        assert "\\[" not in out
+
+
+class TestAutoDiscoveredMalformedMappingIsCleanError:
+    """#488: a malformed mapping in the AUTO-DISCOVERED envdrift.toml must be a
+    clean typed error, not a raw ValueError traceback.
+
+    The explicit --config branch already caught ValueError; the discovery
+    branch caught only ConfigNotFoundError/TOMLDecodeError and let the
+    missing-secret_name ValueError escape.
+    """
+
+    MALFORMED_TOML = (
+        '[vault]\nprovider = "hashicorp"\n\n'
+        '[vault.hashicorp]\nurl = "http://127.0.0.1:8200"\n\n'
+        '[[vault.sync.mappings]]\nfolder_path = "service"\nenvironment = "production"\n'
+    )
+
+    @pytest.mark.parametrize("args", [["pull", "--skip-sync"], ["vault-push", "--all"]])
+    def test_missing_secret_name_is_clean_error(self, args, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        (tmp_path / "envdrift.toml").write_text(self.MALFORMED_TOML)
+
+        result = runner.invoke(app, args)
+        out = " ".join(result.output.split())
+        assert result.exit_code == 1
+        assert "Invalid config" in out
+        assert "missing required key" in out
+        # The ValueError must not escape load_sync_config_and_client.
+        assert not isinstance(result.exception, ValueError)
+
+
+class TestMissingMappingFolderIsError:
+    """#488: a nonexistent mapping folder_path is a loud per-mapping error."""
+
+    @patch("envdrift.cli_commands.encryption_helpers.resolve_encryption_backend")
+    def test_pull_missing_mapping_folder_is_error(
+        self, mock_resolve, tmp_path, loaded_config, no_git_hook
+    ):
+        backend = DummyEncryptionBackend()
+        mock_resolve.return_value = (backend, EncryptionProvider.DOTENVX, None)
+        missing = tmp_path / "servces" / "api"  # typo'd folder, never created
+        mapping = ServiceMapping(secret_name="s", folder_path=missing, environment="production")
+        loaded_config(_sync_config([mapping]))
+
+        result = runner.invoke(app, ["pull", "--skip-sync"])
+        out = " ".join(result.output.split())
+        assert result.exit_code == 1, result.output
+        assert "does not exist" in out
+        assert "folder_path" in out
+        assert "skipped (not found)" not in out
+        assert "Setup complete" not in out
+
+    @patch("envdrift.cli_commands.encryption_helpers.resolve_encryption_backend")
+    def test_lock_missing_mapping_folder_is_error(
+        self, mock_resolve, tmp_path, loaded_config, no_git_hook
+    ):
+        backend = DummyEncryptionBackend()
+        mock_resolve.return_value = (backend, EncryptionProvider.DOTENVX, None)
+        missing = tmp_path / "servces" / "api"
+        mapping = ServiceMapping(secret_name="s", folder_path=missing, environment="production")
+        loaded_config(_sync_config([mapping]))
+
+        result = runner.invoke(app, ["lock", "--force"])
+        out = " ".join(result.output.split())
+        assert result.exit_code == 1, result.output
+        assert "does not exist" in out
+        assert "folder_path" in out
+        assert "skipped (not found)" not in out
+
+    @patch("envdrift.cli_commands.encryption_helpers.resolve_encryption_backend")
+    def test_pull_existing_folder_without_env_file_still_skips(
+        self, mock_resolve, tmp_path, loaded_config, no_git_hook
+    ):
+        """An existing folder whose env file is not created yet stays a skip."""
+        backend = DummyEncryptionBackend()
+        mock_resolve.return_value = (backend, EncryptionProvider.DOTENVX, None)
+        folder = tmp_path / "svc"
+        folder.mkdir()
+        mapping = ServiceMapping(secret_name="s", folder_path=folder, environment="production")
+        loaded_config(_sync_config([mapping]))
+
+        result = runner.invoke(app, ["pull", "--skip-sync"])
+        out = " ".join(result.output.split())
+        assert result.exit_code == 0, result.output
+        assert "skipped (not found)" in out
+
+
+class TestNonUtf8MappedFilesCleanError:
+    """#488: non-UTF-8 mapped files are clean per-file errors, not tracebacks."""
+
+    @patch("envdrift.cli_commands.encryption_helpers.resolve_encryption_backend")
+    def test_pull_non_utf8_env_file_clean_error(
+        self, mock_resolve, tmp_path, loaded_config, no_git_hook
+    ):
+        backend = DummyEncryptionBackend()
+        mock_resolve.return_value = (backend, EncryptionProvider.DOTENVX, None)
+        folder = tmp_path / "svc"
+        folder.mkdir()
+        (folder / ".env.production").write_bytes(b"X=caf\xe9\n")
+        mapping = ServiceMapping(secret_name="s", folder_path=folder, environment="production")
+        loaded_config(_sync_config([mapping]))
+
+        result = runner.invoke(app, ["pull", "--skip-sync"])
+        out = " ".join(result.output.split())
+        assert not isinstance(result.exception, UnicodeDecodeError), (
+            "pull crashed with a raw UnicodeDecodeError on a non-UTF-8 env file"
+        )
+        assert result.exit_code == 1, result.output
+        assert "error" in out.lower()
+        assert "Errors: 1" in out
+
+    @patch("envdrift.cli_commands.encryption_helpers.resolve_encryption_backend")
+    def test_lock_non_utf8_env_file_clean_error(
+        self, mock_resolve, tmp_path, loaded_config, no_git_hook
+    ):
+        backend = DummyEncryptionBackend()
+        mock_resolve.return_value = (backend, EncryptionProvider.DOTENVX, None)
+        folder = tmp_path / "svc"
+        folder.mkdir()
+        (folder / ".env.production").write_bytes(b"X=caf\xe9\n")
+        (folder / ".env.keys").write_text("DOTENV_PRIVATE_KEY_PRODUCTION=k\n")
+        mapping = ServiceMapping(secret_name="s", folder_path=folder, environment="production")
+        loaded_config(_sync_config([mapping]))
+
+        result = runner.invoke(app, ["lock", "--force"])
+        out = " ".join(result.output.split())
+        assert not isinstance(result.exception, UnicodeDecodeError), (
+            "lock crashed with a raw UnicodeDecodeError on a non-UTF-8 env file"
+        )
+        assert result.exit_code == 1, result.output
+        assert "Errors: 1" in out
+        assert backend.encrypt_calls == []
+
+    @patch("envdrift.cli_commands.encryption_helpers.resolve_encryption_backend")
+    def test_lock_non_utf8_env_keys_file_clean_error(
+        self, mock_resolve, tmp_path, loaded_config, no_git_hook
+    ):
+        """The rekey check reads .env.keys; a non-UTF-8 keys file must not crash."""
+        backend = DummyEncryptionBackend()
+        mock_resolve.return_value = (backend, EncryptionProvider.DOTENVX, None)
+        folder = tmp_path / "svc"
+        folder.mkdir()
+        (folder / ".env.production").write_text(
+            "#/---BEGIN DOTENV ENCRYPTED---/\nSECRET=encrypted:abc\n"
+        )
+        (folder / ".env.keys").write_bytes(b"DOTENV_PRIVATE_KEY_PRODUCTION=caf\xe9\n")
+        mapping = ServiceMapping(secret_name="s", folder_path=folder, environment="production")
+        loaded_config(_sync_config([mapping]))
+
+        result = runner.invoke(app, ["lock", "--force"])
+        out = " ".join(result.output.split())
+        assert not isinstance(result.exception, UnicodeDecodeError), (
+            "lock crashed with a raw UnicodeDecodeError on a non-UTF-8 .env.keys"
+        )
+        assert result.exit_code == 1, result.output
+        assert "Errors: 1" in out
 
 
 # --------------------------------------------------------------------------

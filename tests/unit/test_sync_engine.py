@@ -141,6 +141,57 @@ class TestSyncEngineBasic:
         assert ".env.production" in result.services[0].message
         assert not (service_dir / ".env.keys").exists()
 
+    def test_sync_errors_when_mapping_folder_does_not_exist(
+        self, mock_vault_client: MagicMock, tmp_path: Path
+    ) -> None:
+        """#488: a typo'd/nonexistent folder_path is a config ERROR, not a green skip.
+
+        It must fail ``sync --ci`` / ``pull`` instead of reporting full success,
+        and the row must state the real reason (folder missing), distinguishing
+        it from "env file not created yet" (which stays a skip).
+        """
+        mock_vault_client.get_secret.return_value = SecretValue(name="test-key", value="secret123")
+
+        config = SyncConfig(
+            mappings=[
+                ServiceMapping(
+                    secret_name="test-key",
+                    folder_path=tmp_path / "servces" / "api",  # typo'd, never created
+                ),
+            ],
+        )
+
+        engine = SyncEngine(config=config, vault_client=mock_vault_client)
+        result = engine.sync_all()
+
+        assert result.services[0].action == SyncAction.ERROR
+        assert "does not exist" in (result.services[0].error or "")
+        assert "folder_path" in (result.services[0].error or "")
+        assert result.has_errors
+        assert result.exit_code == 1
+
+    def test_sync_errors_when_explicit_env_file_folder_does_not_exist(
+        self, mock_vault_client: MagicMock, tmp_path: Path
+    ) -> None:
+        """#488: same loud error when the mapping uses an explicit env_file."""
+        mock_vault_client.get_secret.return_value = SecretValue(name="test-key", value="secret123")
+
+        config = SyncConfig(
+            mappings=[
+                ServiceMapping(
+                    secret_name="test-key",
+                    folder_path=tmp_path / "missing-svc",
+                    env_file=Path("custom.env"),
+                ),
+            ],
+        )
+
+        engine = SyncEngine(config=config, vault_client=mock_vault_client)
+        result = engine.sync_all()
+
+        assert result.services[0].action == SyncAction.ERROR
+        assert "does not exist" in (result.services[0].error or "")
+
     def test_sync_updates_mismatched_file(
         self, mock_vault_client: MagicMock, tmp_path: Path
     ) -> None:
@@ -393,14 +444,21 @@ class TestSyncEngineDecryptionTest:
     def test_decryption_test_skipped_no_env_file(
         self, mock_vault_client: MagicMock, tmp_path: Path
     ) -> None:
-        """Test decryption test is skipped when no env file exists."""
+        """Test decryption test is skipped when no env file exists.
+
+        The folder must exist: a missing *folder* is a config ERROR (#488)
+        and the decryption test never runs for errored mappings.
+        """
         mock_vault_client.get_secret.return_value = SecretValue(name="test-key", value="secret123")
+
+        service_dir = tmp_path / "service1"
+        service_dir.mkdir()  # folder exists, but holds no env file
 
         config = SyncConfig(
             mappings=[
                 ServiceMapping(
                     secret_name="test-key",
-                    folder_path=tmp_path / "service1",
+                    folder_path=service_dir,
                 ),
             ],
         )
