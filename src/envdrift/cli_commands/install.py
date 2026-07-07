@@ -181,7 +181,14 @@ def _verify_checksum(file_path: Path, platform_name: str, checksum_url: str) -> 
         )
         return False
 
-    actual_checksum = sha256_file(file_path)
+    try:
+        actual_checksum = sha256_file(file_path)
+    except ChecksumVerificationError as e:
+        # An unreadable staging file (AV quarantine, filesystem error, or the
+        # file vanishing mid-flight) must fail closed — refuse the install
+        # rather than escape as an unhandled traceback.
+        console.print(f"[red]{e}[/red]")
+        return False
     if actual_checksum != expected_checksum:
         console.print("[red]Checksum mismatch![/red]")
         console.print(f"  Expected: {expected_checksum}")

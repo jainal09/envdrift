@@ -140,6 +140,30 @@ class TestVerifyChecksum:
             )
         assert ok is False
 
+    def test_unreadable_staging_file_fails_closed(self, tmp_path: Path):
+        """An unreadable staging file (AV quarantine / vanished) fails closed (#490).
+
+        ``sha256_file`` raises ``ChecksumVerificationError`` when it cannot read
+        the file; that must be caught and turned into a refused install, not
+        escape as an unhandled traceback.
+        """
+        from envdrift.install_integrity import ChecksumVerificationError
+
+        binary = tmp_path / "agent"
+        binary.write_bytes(b"x")
+        checksums = b"abc123  envdrift-agent-darwin-arm64\n"
+        with (
+            patch("urllib.request.urlopen", return_value=_make_response(checksums)),
+            patch(
+                "envdrift.cli_commands.install.sha256_file",
+                side_effect=ChecksumVerificationError("could not read file"),
+            ),
+        ):
+            ok = install_mod._verify_checksum(
+                binary, "darwin-arm64", "https://example/checksums.txt"
+            )
+        assert ok is False
+
 
 class TestRunAgentInstall:
     """Tests for _run_agent_install (lines 270-285)."""
