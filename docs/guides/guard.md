@@ -336,4 +336,6 @@ exempt from the "unencrypted-env-file" check.
 - `ignore_rules` provides fine-grained control per rule per path pattern.
 - Use inline comments for one-off ignores; use TOML for bulk patterns.
 - Always provide a `reason` in inline comments for future maintainers.
-- External scanners can auto-install; disable with `--no-auto-install`.
+- External scanners can auto-install; disable with `--no-auto-install`. Downloads
+  are SHA256-verified against upstream checksums and fail closed when the
+  checksum is missing or mismatched.

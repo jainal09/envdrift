@@ -23,6 +23,7 @@ from envdrift.scanner.gitleaks import (
     GitleaksScanner,
     get_venv_bin_dir,
 )
+from tests.helpers import write_checksums_for
 
 
 class TestGetVenvBinDirWindowsBranches:
@@ -105,12 +106,18 @@ class TestDownloadAndExtractErrors:
             installer, "get_download_url", lambda: "https://example.com/gitleaks.rar"
         )
 
+        checksums_path = tmp_path / "stub-checksums.txt"
+
         def fake_urlretrieve(_url, filename):
             Path(filename).write_bytes(b"junk")
+            write_checksums_for(Path(filename), checksums_path, "gitleaks.rar")
             return filename, None
 
         monkeypatch.setattr(
             "envdrift.scanner.gitleaks.urllib.request.urlretrieve", fake_urlretrieve
+        )
+        monkeypatch.setattr(
+            installer, "get_checksums_url", lambda: checksums_path.resolve().as_uri()
         )
 
         with pytest.raises(GitleaksInstallError, match="Unknown archive format"):
@@ -140,6 +147,10 @@ class TestDownloadAndExtractErrors:
         monkeypatch.setattr(
             "envdrift.scanner.gitleaks.urllib.request.urlretrieve", fake_urlretrieve
         )
+        checksums_url = write_checksums_for(
+            archive, tmp_path / "stub-checksums.txt", "gitleaks.tar.gz"
+        )
+        monkeypatch.setattr(installer, "get_checksums_url", lambda: checksums_url)
 
         with pytest.raises(GitleaksInstallError, match="not found in archive"):
             installer.download_and_extract(tmp_path / "bin" / "gitleaks")

@@ -264,6 +264,11 @@ Control auto-installation of external scanners.
 envdrift guard --no-auto-install
 ```
 
+Auto-installed scanner binaries are verified against the upstream-published
+SHA256 checksums before they are installed or executed; the install fails
+closed when the checksum is missing, unreachable, or mismatched. Set
+`ENVDRIFT_INSECURE_SKIP_CHECKSUM=1` to skip verification (unsafe).
+
 ### `--json`, `-j`
 
 Output results as JSON.

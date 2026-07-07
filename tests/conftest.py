@@ -4,6 +4,20 @@ import pytest
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from envdrift.install_integrity import INSECURE_SKIP_ENV
+
+
+@pytest.fixture(autouse=True)
+def _no_ambient_insecure_skip_checksum(monkeypatch):
+    """Never inherit the host's checksum-verification bypass (#490).
+
+    The fail-closed download-integrity assertions across the suite depend on
+    ENVDRIFT_INSECURE_SKIP_CHECKSUM being unset; a developer or CI job
+    exporting it would silently neuter every such regression test. Tests that
+    exercise the escape hatch set the variable explicitly via monkeypatch.
+    """
+    monkeypatch.delenv(INSECURE_SKIP_ENV, raising=False)
+
 
 @pytest.fixture(autouse=True)
 def _reset_unknown_key_warning_dedupe():

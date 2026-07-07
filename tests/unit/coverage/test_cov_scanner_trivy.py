@@ -23,6 +23,7 @@ from envdrift.scanner.trivy import (
     TrivyInstallError,
     TrivyScanner,
 )
+from tests.helpers import write_checksums_for
 
 
 class TestDownloadUrlTemplateFallback:
@@ -52,11 +53,14 @@ class TestDownloadAndExtractArchiveTypes:
         """A .zip download routes through _extract_zip and installs the binary."""
         target = tmp_path / "out" / "trivy.exe"
 
+        checksums_path = tmp_path / "stub-checksums.txt"
+
         def fake_download(url: str, dest: str) -> None:
             import zipfile
 
             with zipfile.ZipFile(dest, "w") as zf:
                 zf.writestr("trivy.exe", "binary-bytes")
+            write_checksums_for(Path(dest), checksums_path, url.rsplit("/", 1)[-1])
 
         mock_urlretrieve.side_effect = fake_download
 
@@ -68,6 +72,11 @@ class TestDownloadAndExtractArchiveTypes:
                 "get_download_url",
                 return_value="https://example.test/trivy_0.58.0_windows-64bit.zip",
             ),
+            patch.object(
+                installer,
+                "get_checksums_url",
+                lambda: checksums_path.resolve().as_uri(),
+            ),
             patch("envdrift.scanner.trivy.platform.system", return_value="Windows"),
         ):
             installer.download_and_extract(target)
@@ -78,12 +87,25 @@ class TestDownloadAndExtractArchiveTypes:
     @patch("urllib.request.urlretrieve")
     def test_unknown_archive_format_raises(self, mock_urlretrieve: MagicMock, tmp_path: Path):
         """An archive with an unrecognized extension raises TrivyInstallError."""
-        mock_urlretrieve.side_effect = lambda url, dest: Path(dest).write_bytes(b"x")
+        checksums_path = tmp_path / "stub-checksums.txt"
+
+        def fake_download(url: str, dest: str) -> None:
+            Path(dest).write_bytes(b"x")
+            write_checksums_for(Path(dest), checksums_path, url.rsplit("/", 1)[-1])
+
+        mock_urlretrieve.side_effect = fake_download
         installer = TrivyInstaller()
-        with patch.object(
-            installer,
-            "get_download_url",
-            return_value="https://example.test/trivy_0.58.0.rpm",
+        with (
+            patch.object(
+                installer,
+                "get_download_url",
+                return_value="https://example.test/trivy_0.58.0.rpm",
+            ),
+            patch.object(
+                installer,
+                "get_checksums_url",
+                lambda: checksums_path.resolve().as_uri(),
+            ),
         ):
             with pytest.raises(TrivyInstallError, match="Unknown archive format"):
                 installer.download_and_extract(tmp_path / "trivy")

@@ -273,6 +273,10 @@ class TestInstallAgentCommand:
     def test_successful_installation(self, tmp_path: Path):
         """Test successful installation flow."""
         binary_path = tmp_path / "envdrift-agent"
+        # _download_binary is mocked, so pre-create the staging file the
+        # verified-install flow moves onto the final path (#490).
+        staging_path = tmp_path / "envdrift-agent.download"
+        staging_path.write_bytes(b"bin")
 
         # Mock subprocess to return success for version check and install
         version_result = MagicMock()
@@ -521,6 +525,15 @@ class TestInstallAgentRegistryGuard:
         version_result = MagicMock()
         version_result.returncode = 0
         version_result.stdout = "v1.0.0"
+
+        def fake_download(_url, dest, _progress):
+            # Honor _download_binary's real contract: a successful download
+            # writes the binary to its staging destination, so the #490 atomic
+            # staging -> replace step then succeeds and control reaches the
+            # #506 registry-guard registration (the behavior under test).
+            Path(dest).write_bytes(b"fake-agent-binary")
+            return True
+
         return (
             patch("shutil.which", return_value=None),
             patch("envdrift.cli_commands.install._detect_platform", return_value="linux-amd64"),
@@ -528,7 +541,7 @@ class TestInstallAgentRegistryGuard:
                 "envdrift.cli_commands.install._get_install_path",
                 return_value=tmp_path / "envdrift-agent",
             ),
-            patch("envdrift.cli_commands.install._download_binary", return_value=True),
+            patch("envdrift.cli_commands.install._download_binary", side_effect=fake_download),
             patch(
                 "envdrift.cli_commands.install._resolve_agent_release_url",
                 return_value=(
@@ -578,3 +591,25 @@ class TestInstallAgentRegistryGuard:
         assert len(backups) == 1
         # Rich may wrap the long backup path mid-token; squash ALL whitespace.
         assert backups[0].name in "".join(result.stdout.split())
+
+    def test_install_agent_atomic_install_composes_with_registration(self, tmp_path: Path):
+        """Pin the #490 <-> #506 composition: a successful atomic staged install
+        actually lands the binary at the install path AND control then reaches
+        registration. Neither feature may regress the other."""
+        registry_path = tmp_path / ".envdrift" / "projects.json"
+        registry_module._registry = registry_module.ProjectRegistry(registry_path)
+        install_path = tmp_path / "envdrift-agent"
+
+        with contextlib.ExitStack() as stack:
+            for patcher in self._install_patches(tmp_path):
+                stack.enter_context(patcher)
+            result = runner.invoke(app, ["install", "agent"])
+
+        assert result.exit_code == 0, result.output
+        # #490: the atomic staging -> replace actually installed the binary.
+        assert install_path.read_bytes() == b"fake-agent-binary"
+        # No staging file left behind by the atomic install.
+        assert not (install_path.parent / (install_path.name + ".download")).exists()
+        # #506: registration was reached and ran.
+        out = self._normalize(result.stdout)
+        assert "Registering current project" in out

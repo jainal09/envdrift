@@ -217,20 +217,25 @@ envdrift install agent              # Install with defaults
 envdrift install agent --force      # Force reinstall
 envdrift install agent --skip-autostart  # Skip auto-start setup
 envdrift install agent --skip-register   # Skip project registration
+envdrift install agent --insecure-skip-checksum  # Skip SHA256 verification (unsafe)
 envdrift install check              # Check installation status
 ```
 
 **Behavior:**
 
 1. Detect platform (macOS/Linux/Windows + arch: amd64, arm64)
-2. Download latest binary from GitHub releases
-3. Install to standard location:
+2. Download latest binary from GitHub releases to a staging file
+3. Verify its SHA256 against the release `checksums.txt` **before** install — the
+   install aborts (keeping any previously installed agent) if the checksum is
+   missing, unreachable, or mismatched, unless `--insecure-skip-checksum` (or the
+   `ENVDRIFT_INSECURE_SKIP_CHECKSUM=1` environment variable) is set
+4. Install to standard location:
    - **Unix**: `~/.envdrift/bin` → `/usr/local/bin` → `/opt/homebrew/bin` → `~/.local/bin`
      (a system dir is only used if it already exists and is writable; otherwise
      `~/.envdrift/bin` is created as the default)
    - **Windows**: `%LOCALAPPDATA%\Programs\envdrift\envdrift-agent.exe`
-4. Run `envdrift-agent install` to set up auto-start (unless `--skip-autostart`)
-5. Register current directory if has `envdrift.toml` (unless `--skip-register`)
+5. Run `envdrift-agent install` to set up auto-start (unless `--skip-autostart`)
+6. Register current directory if has `envdrift.toml` (unless `--skip-register`)
 
 ### Implementation
 
