@@ -416,6 +416,11 @@ class NativeScanner(ScannerBackend):
         if additional_ignore_patterns:
             self._ignore_patterns = self._ignore_patterns + tuple(additional_ignore_patterns)
 
+    # The native scanner reads file content only and ignores
+    # ``include_git_history``; guard refuses ``--history`` when no active
+    # scanner declares history support instead of passing silently (#476).
+    supports_git_history = False
+
     @property
     def name(self) -> str:
         """Return scanner identifier."""
