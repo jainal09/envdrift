@@ -584,12 +584,15 @@ def test_staged_worktree_only_secret_not_flagged(git_repo: Path) -> None:
     The sharp converse of the index-blob test: clean content is staged, then a
     secret is written to the working tree without ``git add``. The commit would
     ship the clean blob, so ``--staged`` must pass — flagging the unstaged
-    worktree copy would prove the scan still reads the wrong content.
+    worktree copy would prove the scan still reads the wrong content. The
+    fixture is deliberately NOT env-file-shaped (``config.py``): an ``app.env``
+    name would trip the content-independent unencrypted-env-file policy (#477)
+    and muddy the content assertion this test exists for.
     """
     work_dir = git_repo
-    app = work_dir / "app.env"
+    app = work_dir / "config.py"
     app.write_text('aws_secret_access_key = "redacted"\n', encoding="utf-8")
-    _run_git(["add", "app.env"], cwd=work_dir)
+    _run_git(["add", "config.py"], cwd=work_dir)
     # Secret exists only in the (unstaged) working tree.
     app.write_text(_LEAK_LINE, encoding="utf-8")
 
@@ -724,6 +727,10 @@ def test_staged_custom_mapped_env_file_policy_still_fires(git_repo: Path) -> Non
     assert "unencrypted-env-file" in rule_ids, payload["findings"]
     mapped = [f for f in payload["findings"] if f["rule_id"] == "unencrypted-env-file"]
     assert any("postgresql.env" in f["file_path"] for f in mapped), mapped
+    # The mirror temp path must not leak anywhere in a finding: descriptions
+    # embed the scanned path (native's "envdrift encrypt <path>" hint) and the
+    # mirror directory is deleted right after the scan (#514 review).
+    assert "envdrift-staged-" not in json.dumps(payload["findings"]), payload["findings"]
 
 
 # --- #453: git check-ignore subprocess pipes must be UTF-8, not the locale ------

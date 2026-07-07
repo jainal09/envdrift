@@ -275,7 +275,10 @@ def _remap_finding_paths(
     The staged mirror exists only for the duration of the scan; findings (and
     the per-scanner results embedded in the aggregate) must point at the real
     cwd-relative repo paths in every output mode, exactly like the other
-    collection branches (#476).
+    collection branches (#476). Descriptions are rewritten too: scanners embed
+    the scanned path in prose (e.g. native's "Run 'envdrift encrypt <path>'"),
+    and a mirror temp path there is both a leak and a dead suggestion — the
+    directory is deleted right after the scan.
     """
 
     def remap(finding: ScanFinding) -> ScanFinding:
@@ -286,7 +289,11 @@ def _remap_finding_paths(
         display = display_paths.get(resolved)
         if display is None:
             return finding
-        return dataclasses.replace(finding, file_path=display)
+        description = finding.description
+        for mirror_str in (str(finding.file_path), str(resolved)):
+            if mirror_str in description:
+                description = description.replace(mirror_str, str(display))
+        return dataclasses.replace(finding, file_path=display, description=description)
 
     # dataclasses.replace carries every unlisted field forward, so a future
     # AggregatedScanResult field can never be silently dropped here.

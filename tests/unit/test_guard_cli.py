@@ -1131,7 +1131,10 @@ def test_remap_finding_paths_rewrites_mirror_paths(tmp_path: Path):
         line_number=1,
         rule_id="test-rule",
         rule_description="Test Rule",
-        description="Test finding",
+        # Scanners embed the scanned path in prose (native's encrypt hint);
+        # the mirror temp path must be rewritten there too, not just in
+        # file_path — it is deleted right after the scan.
+        description=f"Run 'envdrift encrypt {mirror_file}' before committing.",
         severity=FindingSeverity.CRITICAL,
         scanner="native",
     )
@@ -1146,8 +1149,11 @@ def test_remap_finding_paths_rewrites_mirror_paths(tmp_path: Path):
     remapped = _remap_finding_paths(result, {mirror_file.resolve(): display})
 
     assert remapped.unique_findings[0].file_path == display
+    assert str(mirror_file) not in remapped.unique_findings[0].description
+    assert f"envdrift encrypt {display}" in remapped.unique_findings[0].description
     # A finding outside the mirror map is left untouched.
     assert remapped.unique_findings[1].file_path == finding.file_path
+    assert remapped.unique_findings[1].description == finding.description
     assert remapped.results[0].findings[0].file_path == display
     # Non-finding fields ride through dataclasses.replace untouched.
     assert remapped.total_findings == 2
