@@ -130,6 +130,28 @@ class TestSarifRelativeUris:
             )
             assert location["uriBaseId"] == "SRCROOT"
 
+    def test_explicit_repo_path_from_unrelated_cwd_stays_repo_relative(
+        self, scratch_repo: Path, tmp_path: Path
+    ) -> None:
+        """``guard --sarif /path/to/repo`` run from an unrelated cwd must derive
+        SRCROOT from the scanned repo, not cwd, so URIs stay repo-relative
+        instead of falling back to absolute ``file://`` (cubic P2, #489)."""
+        outside = tmp_path / "unrelated"
+        outside.mkdir()
+        result = _run_envdrift([*_SARIF_ARGS, str(scratch_repo)], cwd=outside)
+        assert result.returncode == 1, result.stderr
+        sarif = _parse_sarif(result)
+
+        locations = _artifact_uris(sarif)
+        assert locations, "expected findings for the fixture secrets"
+        for location in locations:
+            assert location["uri"] == "configs/.env", (
+                f"URI must be relative to the scanned repo, got {location['uri']!r}"
+            )
+            assert location["uriBaseId"] == "SRCROOT"
+        srcroot = sarif["runs"][0]["originalUriBaseIds"]["SRCROOT"]["uri"]
+        assert srcroot == scratch_repo.resolve().as_uri() + "/"
+
     def test_srcroot_base_id_is_declared_in_original_uri_base_ids(self, scratch_repo: Path) -> None:
         """``SRCROOT`` must be declared by an ``originalUriBaseIds`` entry whose key
         exactly matches every emitted ``uriBaseId`` (SARIF 2.1.0 §3.4.4 resolves

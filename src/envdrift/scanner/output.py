@@ -29,6 +29,7 @@ from envdrift.scanner.base import (
 from envdrift.utils.git import get_git_root
 
 if TYPE_CHECKING:
+    from collections.abc import Sequence
     from pathlib import PurePath
 
 # The real project repository, reported as the SARIF driver's informationUri
@@ -308,16 +309,26 @@ def _sarif_rule(finding: ScanFinding) -> dict[str, Any]:
     }
 
 
-def _sarif_source_root() -> Path:
+def _sarif_source_root(finding_paths: Sequence[Path] = ()) -> Path:
     """Resolve the ``SRCROOT`` base directory for SARIF artifact URIs.
 
     Artifact URIs are emitted relative to the enclosing git repository root
     (``git rev-parse --show-toplevel``) so alerts map to repo files no matter
-    which directory guard was invoked from; outside a git repo the invocation
-    cwd is the source root.
+    which directory guard was invoked from.
+
+    The root is derived from the git repo that actually contains the scanned
+    findings, then the invocation cwd's repo, and finally cwd itself when
+    nothing is under git. Preferring the findings' repo means
+    ``guard --sarif /path/to/repo`` run from an unrelated cwd still emits
+    repo-relative URIs instead of absolute ``file://`` fallbacks that Code
+    Scanning cannot map (#489).
     """
-    root = get_git_root(Path.cwd()) or Path.cwd()
-    return root.resolve()
+    for candidate in (*finding_paths, Path.cwd()):
+        base = candidate if candidate.is_dir() else candidate.parent
+        root = get_git_root(base)
+        if root is not None:
+            return root.resolve()
+    return Path.cwd().resolve()
 
 
 def _sarif_artifact_location(file_path: PurePath, srcroot: PurePath) -> dict[str, Any]:
@@ -473,7 +484,10 @@ def format_sarif(result: AggregatedScanResult, exit_code: int | None = None) -> 
     for finding in result.unique_findings:
         rules_by_id.setdefault(finding.rule_id, _sarif_rule(finding))
 
-    srcroot = _sarif_source_root()
+    # Derive the source root from the findings' own paths so scanning an
+    # explicit path outside the cwd still yields repo-relative URIs (#489).
+    resolved_paths = [_resolved_finding_path(f.file_path) for f in result.unique_findings]
+    srcroot = _sarif_source_root(resolved_paths)
     return _sarif_document(
         rules=list(rules_by_id.values()),
         results=[_sarif_result(f, srcroot) for f in result.unique_findings],
