@@ -2,6 +2,7 @@
 package project
 
 import (
+	"log"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -61,25 +62,95 @@ type vaultSyncMappingToml struct {
 	EnvFile string `toml:"env_file"`
 }
 
-// LoadProjectConfig loads the guardian configuration from a project's envdrift.toml.
-// If the file doesn't exist or has no guardian section, returns default config.
-func LoadProjectConfig(projectPath string) (*GuardianConfig, error) {
-	configPath := filepath.Join(projectPath, "envdrift.toml")
+// pyprojectToml extracts the [tool.envdrift] table from a pyproject.toml. The
+// pointer distinguishes "table present (even if empty)" from "absent", the
+// same presence test the CLI's find_config applies.
+type pyprojectToml struct {
+	Tool struct {
+		Envdrift *envdriftConfig `toml:"envdrift"`
+	} `toml:"tool"`
+}
 
-	data, err := os.ReadFile(configPath)
+// LoadProjectConfig loads the guardian configuration for a project using the
+// same config-discovery contract as the Python CLI's find_config
+// (src/envdrift/config.py): walk from the project directory toward the
+// filesystem root; at each level an envdrift.toml wins, then a pyproject.toml
+// with a [tool.envdrift] table. `envdrift agent register` blesses projects
+// with that contract, so the agent must honor it too — pre-#481 it read only
+// <path>/envdrift.toml and silently never watched projects registered via
+// pyproject.toml or a parent-dir envdrift.toml.
+// If no config is discovered, returns the default config.
+func LoadProjectConfig(projectPath string) (*GuardianConfig, error) {
+	cfg, found, err := discoverEnvdriftConfig(projectPath)
 	if err != nil {
-		if os.IsNotExist(err) {
-			return DefaultGuardianConfig(), nil
-		}
 		return nil, err
 	}
-
-	var cfg envdriftConfig
-	if err := toml.Unmarshal(data, &cfg); err != nil {
-		return nil, err
+	if !found {
+		return DefaultGuardianConfig(), nil
 	}
 
 	return parseGuardianConfig(&cfg.Guardian, cfg.Vault.Sync.Mappings)
+}
+
+// discoverEnvdriftConfig mirrors the CLI's find_config walk: starting at dir
+// and moving up to (but not including) the filesystem root, return the first
+// envdrift.toml, else the first pyproject.toml containing [tool.envdrift].
+// A malformed pyproject.toml is skipped (like the CLI); a malformed
+// envdrift.toml is an error (pre-existing behavior).
+func discoverEnvdriftConfig(dir string) (*envdriftConfig, bool, error) {
+	// Match Python's Path.resolve(): absolute with symlinks resolved, so the
+	// walk sees the same ancestor chain the CLI saw at registration time.
+	if resolved, err := filepath.EvalSymlinks(dir); err == nil {
+		dir = resolved
+	}
+	current, err := filepath.Abs(dir)
+	if err != nil {
+		return nil, false, err
+	}
+
+	for filepath.Dir(current) != current {
+		data, err := os.ReadFile(filepath.Join(current, "envdrift.toml"))
+		switch {
+		case err == nil:
+			var cfg envdriftConfig
+			if err := toml.Unmarshal(data, &cfg); err != nil {
+				return nil, false, err
+			}
+			return &cfg, true, nil
+		case !os.IsNotExist(err):
+			// An existing-but-unreadable envdrift.toml is an error, not a
+			// silent skip (pre-existing behavior for the project's own file).
+			return nil, false, err
+		}
+
+		if cfg, ok := readPyprojectEnvdrift(filepath.Join(current, "pyproject.toml")); ok {
+			return cfg, true, nil
+		}
+
+		current = filepath.Dir(current)
+	}
+
+	return nil, false, nil
+}
+
+// readPyprojectEnvdrift returns the [tool.envdrift] config from a
+// pyproject.toml, reporting ok=false when the file is missing, unreadable,
+// malformed, or has no [tool.envdrift] table (all skipped silently, matching
+// the CLI's find_config).
+func readPyprojectEnvdrift(path string) (*envdriftConfig, bool) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, false
+	}
+
+	var py pyprojectToml
+	if err := toml.Unmarshal(data, &py); err != nil {
+		return nil, false
+	}
+	if py.Tool.Envdrift == nil {
+		return nil, false
+	}
+	return py.Tool.Envdrift, true
 }
 
 // DefaultGuardianConfig returns a GuardianConfig with default values.
@@ -209,7 +280,11 @@ func LoadAllProjectConfigs(projectPaths []string) ([]*ProjectConfig, error) {
 	for _, path := range projectPaths {
 		cfg, err := LoadProjectConfig(path)
 		if err != nil {
-			// Log but continue with other projects
+			// A real load error (an unreadable/malformed envdrift.toml in this
+			// project or an ancestor) means the project is NOT being watched —
+			// surface it instead of dropping it silently. "No config found" is
+			// not an error here: LoadProjectConfig returns a disabled default.
+			log.Printf("Skipping project %s: cannot load config: %v", path, err)
 			continue
 		}
 

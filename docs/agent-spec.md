@@ -354,7 +354,10 @@ git push origin vscode-v1.0.0
 Instead of watching entire directories, the agent:
 
 1. Only watches registered project roots (from `~/.envdrift/projects.json`)
-2. Uses each project's `envdrift.toml` for patterns/excludes
+2. Uses each project's config for patterns/excludes, discovered with the same
+   contract as the CLI's `find_config`: the nearest `envdrift.toml` walking up
+   from the project root, else the nearest `pyproject.toml` with a
+   `[tool.envdrift]` table
 3. Respects project-specific idle timeouts and notification settings
 
 ### Implementation
@@ -364,7 +367,7 @@ Instead of watching entire directories, the agent:
 | Package | File | Purpose |
 |---------|------|---------|
 | `registry` | `internal/registry/registry.go` | Loads and watches `~/.envdrift/projects.json` |
-| `project` | `internal/project/config.go` | Loads per-project `[guardian]` settings from `envdrift.toml` |
+| `project` | `internal/project/config.go` | Loads `[guardian]` settings from `envdrift.toml` or `pyproject.toml` (CLI `find_config` contract) |
 
 **Refactored Guardian:**
 
