@@ -114,6 +114,21 @@ envdrift push --env production
 2. Combines `.clear` + encrypted `.secret` → `.{env}`
 3. Adds warning header to generated file
 
+**Safety guarantees** (see [push](../cli/push.md#safety-guarantees) for details):
+
+- `push` re-reads the `.secret` file after encrypting and **fails** if any plaintext
+  value survived (e.g. an unwritable or malformed `.env.keys` makes dotenvx warn and
+  exit 0 without encrypting) — it never prints the success banner over plaintext.
+- An empty or comment-only `.secret` file is refused ("Nothing to encrypt") instead
+  of letting dotenvx scaffold placeholder secrets into it. The same applies to
+  secrets-only files.
+- When **both** the `.clear` and `.secret` files are missing, `push` errors out and
+  leaves the existing combined file untouched instead of overwriting it with an
+  empty scaffold.
+- Combined files are written atomically with owner-only permissions (`0600` on
+  POSIX, like `.env.keys`). `envdrift pull --merge` writes the merged file — which
+  holds **decrypted** secret values — the same way.
+
 ### `envdrift pull-partial`
 
 Decrypt secret files for editing:
