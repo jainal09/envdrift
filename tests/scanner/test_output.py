@@ -501,3 +501,388 @@ class TestRichOutput:
         assert "native" in output
         assert "boom" in output
         assert "Files with findings" in output
+
+
+def _aggregate(findings: list[ScanFinding]) -> AggregatedScanResult:
+    """Wrap findings in a single-scanner AggregatedScanResult."""
+    return AggregatedScanResult(
+        results=[ScanResult(scanner_name="native", findings=findings)],
+        total_findings=len(findings),
+        unique_findings=findings,
+        scanners_used=["native"],
+        total_duration_ms=1,
+    )
+
+
+class TestSarifPortability:
+    """Regression tests for #489 — portable SARIF for Code Scanning uploads.
+
+    Three defects: absolute filesystem URIs under ``SRCROOT`` (alerts cannot
+    map to repo files), colliding fingerprints for two distinct same-line
+    secrets (Code Scanning merges them), and placeholder driver metadata.
+    """
+
+    @staticmethod
+    def _secret_finding(column: int, secret_hash: str, preview: str) -> ScanFinding:
+        """A same-file/line/rule finding distinguished only by column + hash."""
+        return ScanFinding(
+            file_path=Path("configs/.env"),
+            line_number=1,
+            column_number=column,
+            rule_id="aws-access-key-id",
+            rule_description="AWS Access Key ID",
+            description="AWS key detected",
+            severity=FindingSeverity.CRITICAL,
+            scanner="native",
+            secret_preview=preview,
+            secret_hash=secret_hash,
+        )
+
+    def test_two_distinct_secrets_same_line_get_distinct_fingerprints(self):
+        """Two distinct secrets on one line must not share fingerprints.primary."""
+        findings = [
+            self._secret_finding(5, "a" * 64, "AKIA************MPLE"),
+            self._secret_finding(26, "b" * 64, "AKIA************EXMP"),
+        ]
+        data = json.loads(format_sarif(_aggregate(findings)))
+
+        primaries = [r["fingerprints"]["primary"] for r in data["runs"][0]["results"]]
+        assert len(primaries) == 2
+        assert primaries[0] != primaries[1]
+
+    def test_partial_fingerprints_distinct_and_hash_based(self):
+        """partialFingerprints must derive from the stable content hash, so two
+        distinct secrets whose redacted previews collide stay distinct."""
+        preview = "AKIA************SAME"  # redaction can collapse distinct secrets
+        findings = [
+            self._secret_finding(5, "a" * 64, preview),
+            self._secret_finding(26, "b" * 64, preview),
+        ]
+        data = json.loads(format_sarif(_aggregate(findings)))
+
+        partials = [r["partialFingerprints"] for r in data["runs"][0]["results"]]
+        assert partials[0] != partials[1]
+
+    def test_fingerprint_includes_rule_id_but_never_raw_secret_text(self):
+        """The fingerprint carries the rule id and a content hash — never the
+        matched text or the redacted preview."""
+        finding = self._secret_finding(5, "c" * 64, "AKIA************MPLE")
+        data = json.loads(format_sarif(_aggregate([finding])))
+
+        result = data["runs"][0]["results"][0]
+        primary = result["fingerprints"]["primary"]
+        assert "aws-access-key-id" in primary
+        assert "AKIA" not in primary
+        assert "AKIA" not in json.dumps(result["fingerprints"])
+        assert "AKIA" not in json.dumps(result.get("partialFingerprints", {}))
+
+    def test_secret_preview_preserved_as_result_property(self):
+        """The human-readable redacted preview survives, but as a property —
+        not as a fingerprint that drives alert deduplication."""
+        finding = self._secret_finding(5, "d" * 64, "AKIA************MPLE")
+        data = json.loads(format_sarif(_aggregate([finding])))
+
+        result = data["runs"][0]["results"][0]
+        assert result["properties"]["secretPreview"] == "AKIA************MPLE"
+
+    def test_finding_without_secret_hash_disambiguated_by_column(self):
+        """Scanners that report no secret_hash still get column-distinct
+        fingerprints for two same-line findings."""
+        findings = [
+            self._secret_finding(5, "", "AKIA************MPLE"),
+            self._secret_finding(26, "", "AKIA************EXMP"),
+        ]
+        data = json.loads(format_sarif(_aggregate(findings)))
+
+        primaries = [r["fingerprints"]["primary"] for r in data["runs"][0]["results"]]
+        assert primaries[0] != primaries[1]
+
+    def test_driver_metadata_is_real_package_metadata(self):
+        """driver.version/informationUri must be the real package metadata."""
+        import envdrift
+
+        finding = self._secret_finding(5, "e" * 64, "AKIA************MPLE")
+        data = json.loads(format_sarif(_aggregate([finding])))
+
+        driver = data["runs"][0]["tool"]["driver"]
+        assert driver["version"] == envdrift.__version__
+        assert driver["version"] != "0.1.0"
+        assert driver["informationUri"] == "https://github.com/jainal09/envdrift"
+
+    def test_error_document_driver_metadata_is_real(self):
+        """The error path emits the same real driver metadata."""
+        import envdrift
+
+        data = json.loads(format_sarif_error("Could not load config: boom"))
+
+        driver = data["runs"][0]["tool"]["driver"]
+        assert driver["version"] == envdrift.__version__
+        assert driver["informationUri"] == "https://github.com/jainal09/envdrift"
+        assert "your-org" not in driver["informationUri"]
+
+    def test_absolute_path_under_srcroot_becomes_relative_uri(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        """An absolute finding path under the source root must emit a relative
+        URI with ``uriBaseId: SRCROOT`` and declare the base in
+        ``originalUriBaseIds`` under the exact same key (SARIF 2.1.0 §3.4.4 /
+        §3.14.14 — resolution is by exact string lookup)."""
+        monkeypatch.chdir(tmp_path)
+        finding = ScanFinding(
+            file_path=tmp_path / "configs" / ".env",
+            line_number=1,
+            rule_id="aws-access-key-id",
+            rule_description="AWS Access Key ID",
+            description="AWS key detected",
+            severity=FindingSeverity.CRITICAL,
+            scanner="native",
+        )
+        data = json.loads(format_sarif(_aggregate([finding])))
+
+        run = data["runs"][0]
+        location = run["results"][0]["locations"][0]["physicalLocation"]["artifactLocation"]
+        assert location["uri"] == "configs/.env"
+        assert location["uriBaseId"] == "SRCROOT"
+        # Regression (#533 review): the uriBaseId must be resolvable by exact
+        # key lookup in originalUriBaseIds — "%SRCROOT%" vs "SRCROOT" drift
+        # left the base undeclared for strict consumers.
+        assert location["uriBaseId"] in run["originalUriBaseIds"]
+        srcroot_uri = run["originalUriBaseIds"]["SRCROOT"]["uri"]
+        assert srcroot_uri == tmp_path.resolve().as_uri() + "/"
+
+    def test_relative_finding_path_resolves_against_cwd(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        """A cwd-relative finding path is absolutized before relativizing, so
+        the emitted URI is stable and source-root-relative."""
+        monkeypatch.chdir(tmp_path)
+        finding = ScanFinding(
+            file_path=Path("configs/.env"),
+            line_number=1,
+            rule_id="aws-access-key-id",
+            rule_description="AWS Access Key ID",
+            description="AWS key detected",
+            severity=FindingSeverity.CRITICAL,
+            scanner="native",
+        )
+        data = json.loads(format_sarif(_aggregate([finding])))
+
+        location = data["runs"][0]["results"][0]["locations"][0]["physicalLocation"]
+        assert location["artifactLocation"]["uri"] == "configs/.env"
+
+    def test_absolute_path_outside_srcroot_falls_back_to_file_uri(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        """A path outside the source root cannot be relativized: emit an
+        absolute ``file://`` URI and no ``uriBaseId`` (a base id on an absolute
+        URI is contradictory and Code Scanning drops the alert)."""
+        inside = tmp_path / "inside"
+        inside.mkdir()
+        monkeypatch.chdir(inside)
+        outside_file = tmp_path / "outside" / ".env"
+        finding = ScanFinding(
+            file_path=outside_file,
+            line_number=1,
+            rule_id="aws-access-key-id",
+            rule_description="AWS Access Key ID",
+            description="AWS key detected",
+            severity=FindingSeverity.CRITICAL,
+            scanner="native",
+        )
+        data = json.loads(format_sarif(_aggregate([finding])))
+
+        location = data["runs"][0]["results"][0]["locations"][0]["physicalLocation"]
+        artifact = location["artifactLocation"]
+        assert artifact["uri"] == outside_file.resolve().as_uri()
+        assert "uriBaseId" not in artifact
+
+    def test_windows_paths_emit_forward_slash_uris(self):
+        """SARIF URIs must use forward slashes on Windows too (§3.4.4)."""
+        from pathlib import PureWindowsPath
+
+        from envdrift.scanner.output import _sarif_artifact_location
+
+        location = _sarif_artifact_location(
+            PureWindowsPath(r"C:\repo\configs\.env"), PureWindowsPath(r"C:\repo")
+        )
+        assert location == {"uri": "configs/.env", "uriBaseId": "SRCROOT"}
+
+    # PurePath.as_uri() is deprecated on 3.14+ (use Path.as_uri()); production
+    # always passes a concrete Path — only this Windows-shape test drives the
+    # fallback with a PureWindowsPath, which cannot be a concrete Path on CI.
+    @pytest.mark.filterwarnings("ignore:pathlib.PurePath.as_uri:DeprecationWarning")
+    def test_windows_path_outside_srcroot_is_absolute_file_uri(self):
+        """A Windows path outside the source root falls back to a file:// URI."""
+        from pathlib import PureWindowsPath
+
+        from envdrift.scanner.output import _sarif_artifact_location
+
+        location = _sarif_artifact_location(
+            PureWindowsPath(r"D:\elsewhere\.env"), PureWindowsPath(r"C:\repo")
+        )
+        assert location["uri"] == "file:///D:/elsewhere/.env"
+        assert "uriBaseId" not in location
+
+    def test_path_with_space_and_hash_is_percent_encoded(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        """A repo path with a space or ``#`` must be RFC 3986 percent-encoded
+        (SARIF 2.1.0 §3.4.3) — a raw space is an invalid URI-reference and a
+        raw ``#`` truncates the path at the fragment when parsed."""
+        monkeypatch.chdir(tmp_path)
+        finding = ScanFinding(
+            file_path=tmp_path / "My Project#1" / ".env",
+            line_number=1,
+            rule_id="aws-access-key-id",
+            rule_description="AWS Access Key ID",
+            description="AWS key detected",
+            severity=FindingSeverity.CRITICAL,
+            scanner="native",
+        )
+        data = json.loads(format_sarif(_aggregate([finding])))
+
+        location = data["runs"][0]["results"][0]["locations"][0]["physicalLocation"]
+        assert location["artifactLocation"]["uri"] == "My%20Project%231/.env"
+
+    def test_non_ascii_path_is_percent_encoded_as_utf8(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        """Non-ASCII path segments are percent-encoded as UTF-8 octets,
+        matching the encoding ``Path.as_uri()`` uses on the fallback branch."""
+        monkeypatch.chdir(tmp_path)
+        finding = ScanFinding(
+            file_path=tmp_path / "sécrets" / ".env",
+            line_number=1,
+            rule_id="aws-access-key-id",
+            rule_description="AWS Access Key ID",
+            description="AWS key detected",
+            severity=FindingSeverity.CRITICAL,
+            scanner="native",
+        )
+        data = json.loads(format_sarif(_aggregate([finding])))
+
+        location = data["runs"][0]["results"][0]["locations"][0]["physicalLocation"]
+        assert location["artifactLocation"]["uri"] == "s%C3%A9crets/.env"
+
+    def test_unreserved_path_is_not_over_encoded(self):
+        """A plain path must pass through unchanged — encoding is applied only
+        where RFC 3986 requires it, keeping existing fingerprints stable."""
+        from pathlib import PurePosixPath
+
+        from envdrift.scanner.output import _sarif_artifact_location
+
+        location = _sarif_artifact_location(
+            PurePosixPath("/repo/configs/.env"), PurePosixPath("/repo")
+        )
+        assert location == {"uri": "configs/.env", "uriBaseId": "SRCROOT"}
+
+
+def _validate_against_sarif_schema(document: dict) -> None:
+    """Validate a SARIF document against the official 2.1.0 JSON schema."""
+    jsonschema = pytest.importorskip("jsonschema")
+    schema_path = Path(__file__).parents[1] / "fixtures" / "sarif-schema-2.1.0.json"
+    schema = json.loads(schema_path.read_text(encoding="utf-8"))
+    jsonschema.validate(instance=document, schema=schema)
+
+
+class TestSarifSchemaConformance:
+    """The emitted documents must validate against the official SARIF 2.1.0
+    schema (oasis-tcs/sarif-spec), vendored at tests/fixtures/."""
+
+    def test_full_document_validates_against_official_schema(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        """A run with findings (hash, preview, encoded URI), a failed scanner
+        notification and a declared SRCROOT base must be schema-valid."""
+        monkeypatch.chdir(tmp_path)
+        findings = [
+            ScanFinding(
+                file_path=tmp_path / "My Project" / ".env",
+                line_number=1,
+                column_number=5,
+                rule_id="aws-access-key-id",
+                rule_description="AWS Access Key ID",
+                description="AWS key detected",
+                severity=FindingSeverity.CRITICAL,
+                scanner="native",
+                secret_preview="AKIA************MPLE",
+                secret_hash="a" * 64,
+            ),
+            ScanFinding(
+                file_path=Path("configs/.env"),
+                line_number=2,
+                rule_id="unencrypted-env-file",
+                rule_description="Unencrypted .env File",
+                description="File is not encrypted",
+                severity=FindingSeverity.HIGH,
+                scanner="native",
+            ),
+        ]
+        result = AggregatedScanResult(
+            results=[
+                ScanResult(scanner_name="native", findings=findings),
+                ScanResult(scanner_name="gitleaks", error="binary exploded"),
+            ],
+            total_findings=len(findings),
+            unique_findings=findings,
+            scanners_used=["native", "gitleaks"],
+            total_duration_ms=1,
+        )
+
+        _validate_against_sarif_schema(json.loads(format_sarif(result, exit_code=1)))
+
+    def test_error_document_validates_against_official_schema(self):
+        """The error-path document must be schema-valid too."""
+        _validate_against_sarif_schema(json.loads(format_sarif_error("Could not load config")))
+
+    def test_empty_error_scan_incomplete_document_validates_against_schema(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        """Merge-seam battle test (#489 SARIF x #478 exit-truthfulness).
+
+        A scanner that failed with an EMPTY error string flips
+        ``executionSuccessful`` to false via the ``not r.success`` contract and
+        must still emit a ``toolExecutionNotifications`` entry (#478) — while a
+        finding carries a SRCROOT-relative, percent-encoded artifact URI (#489).
+        Both live in the same ``format_sarif`` document; validate the whole
+        thing against the official 2.1.0 schema so the empty-text notification
+        can never produce a malformed message on the scan-incomplete (exit 5)
+        path.
+        """
+        monkeypatch.chdir(tmp_path)
+        finding = ScanFinding(
+            file_path=tmp_path / "sub dir" / ".env",
+            line_number=1,
+            column_number=5,
+            rule_id="aws-access-key-id",
+            rule_description="AWS Access Key ID",
+            description="AWS key detected",
+            severity=FindingSeverity.LOW,
+            scanner="native",
+        )
+        result = AggregatedScanResult(
+            results=[
+                ScanResult(scanner_name="native", findings=[finding]),
+                # Empty-string error: the #478 edge the truthiness filter dropped.
+                ScanResult(scanner_name="talisman", error=""),
+            ],
+            total_findings=1,
+            unique_findings=[finding],
+            scanners_used=["native", "talisman"],
+            total_duration_ms=1,
+        )
+
+        document = json.loads(format_sarif(result, exit_code=5))
+        _validate_against_sarif_schema(document)
+
+        invocation = document["runs"][0]["invocations"][0]
+        assert invocation["exitCode"] == 5
+        assert invocation["executionSuccessful"] is False
+        notifications = invocation["toolExecutionNotifications"]
+        assert any(n["message"]["text"].startswith("talisman:") for n in notifications), (
+            "an empty-error scan failure must still emit a schema-valid notification"
+        )
+        # #489 delta is intact on the same document: SRCROOT-relative, encoded URI.
+        location = document["runs"][0]["results"][0]["locations"][0]["physicalLocation"]
+        assert location["artifactLocation"]["uri"] == "sub%20dir/.env"
+        assert location["artifactLocation"]["uriBaseId"] == "SRCROOT"
