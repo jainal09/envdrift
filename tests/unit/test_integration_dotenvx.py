@@ -158,7 +158,15 @@ def test_wrapper_encrypt_allows_public_key_and_plain_assignments(tmp_path):
 
         wrapper.encrypt(env_file)
 
-    assert mock_run.call_args[0][0] == ["encrypt", "-f", str(env_file)]
+    # -fk is pinned to the sibling .env.keys so dotenvx v2 keeps the key store
+    # next to the file rather than in the process cwd (#566).
+    assert mock_run.call_args[0][0] == [
+        "encrypt",
+        "-f",
+        str(env_file),
+        "-fk",
+        str(env_file.parent / ".env.keys"),
+    ]
 
 
 def test_dash_safe_path_prefixes_leading_dash():
@@ -202,7 +210,9 @@ def test_encrypt_passes_dash_proof_path_to_dotenvx(tmp_path, monkeypatch):
         wrapper.encrypt(dash_file)
 
     args = mock_run.call_args[0][0]
-    assert args == ["encrypt", "-f", f".{os.sep}-dash.env"]
+    # The sibling .env.keys (cwd here) is pinned via -fk (#566); it carries no
+    # leading dash, so it is passed through unprefixed.
+    assert args == ["encrypt", "-f", f".{os.sep}-dash.env", "-fk", ".env.keys"]
 
 
 def test_decrypt_passes_dash_proof_path_to_dotenvx(tmp_path, monkeypatch):

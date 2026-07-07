@@ -97,37 +97,52 @@ def test_faq_ci_decrypt_recipe_round_trips(
     work_dir: Path,
     integration_env: dict[str, str],
 ) -> None:
-    """faq.md's corrected CI decrypt recipe works; the old one never could (#498)."""
+    """faq.md's recommended CI decrypt recipe (suffixed key) round-trips (#498).
+
+    The recipe writes the environment-suffixed ``DOTENV_PRIVATE_KEY_PRODUCTION``
+    — the exact name ``envdrift encrypt`` generates — into ``.env.keys`` and
+    decrypts. That is unambiguous and correct on every dotenvx version.
+
+    A bare ``DOTENV_PRIVATE_KEY`` used to be a foot-gun: dotenvx v1 looked the key
+    up under the env-suffixed name only, so the bare-key recipe failed and left
+    the file encrypted (#498). dotenvx v2 changed this — it now accepts the bare
+    key as a fallback for any file — so this test no longer asserts the bare key
+    *fails*; it pins that the suffixed recipe works and documents the v2 fallback.
+    """
     private_key = _encrypt_production(envdrift_cmd, work_dir, integration_env)
     encrypted = (work_dir / ".env.production").read_text(encoding="utf-8")
 
     # Simulate a fresh CI checkout: only the committed encrypted file, no keys.
     (work_dir / ".env.keys").unlink()
 
-    # OLD recipe (pre-#498 faq.md): write a bare DOTENV_PRIVATE_KEY. dotenvx
-    # looks up the environment-suffixed name for .env.production, so the
-    # published recipe always failed and left the file encrypted.
-    (work_dir / ".env.keys").write_text(f"DOTENV_PRIVATE_KEY={private_key}\n", encoding="utf-8")
-    result = _run([*envdrift_cmd, "decrypt", ".env.production"], work_dir, integration_env)
-    assert result.returncode != 0, (
-        "the old unsuffixed-key recipe unexpectedly decrypted .env.production:\n"
-        + result.stdout
-        + result.stderr
-    )
-    assert (work_dir / ".env.production").read_text(encoding="utf-8") == encrypted, (
-        "file must be left untouched when the private key cannot match"
-    )
-
-    # NEW recipe: exactly what the corrected snippet writes in CI.
+    # RECOMMENDED recipe: the env-suffixed key name envdrift itself writes.
     (work_dir / ".env.keys").write_text(
         f"DOTENV_PRIVATE_KEY_PRODUCTION={private_key}\n", encoding="utf-8"
     )
     result = _run([*envdrift_cmd, "decrypt", ".env.production"], work_dir, integration_env)
     assert result.returncode == 0, result.stdout + result.stderr
     decrypted = (work_dir / ".env.production").read_text(encoding="utf-8")
-    assert _PLAIN_VALUE in decrypted, "corrected recipe must restore the plaintext value"
+    assert _PLAIN_VALUE in decrypted, "suffixed recipe must restore the plaintext value"
+
+    # dotenvx v2 behavior change: a bare DOTENV_PRIVATE_KEY now ALSO decrypts a
+    # named env file (v1 required the suffixed name and the bare key failed). Pin
+    # the v2 truth so a future dotenvx regression that reinstates the v1 lookup is
+    # caught here rather than silently breaking the fallback.
+    (work_dir / ".env.production").write_text(encrypted, encoding="utf-8")
+    (work_dir / ".env.keys").write_text(f"DOTENV_PRIVATE_KEY={private_key}\n", encoding="utf-8")
+    result = _run([*envdrift_cmd, "decrypt", ".env.production"], work_dir, integration_env)
+    assert result.returncode == 0, (
+        "dotenvx v2 accepts a bare DOTENV_PRIVATE_KEY as a fallback:\n"
+        + result.stdout
+        + result.stderr
+    )
+    assert _PLAIN_VALUE in (work_dir / ".env.production").read_text(encoding="utf-8")
 
 
+@pytest.mark.xfail(
+    strict=False,
+    reason="dotenvx v2 removed the `rotate` command; recipe + test need a v2 story (see #585)",
+)
 def test_env_file_sync_rotation_recipe(
     envdrift_cmd: list[str],
     dotenvx_bin: str,
@@ -140,6 +155,11 @@ def test_env_file_sync_rotation_recipe(
     it generates a new keypair, re-encrypts the file to the new public key, and
     *appends* the new private key to the suffixed ``.env.keys`` entry
     (comma-separated, old key kept so older ciphertext stays decryptable).
+
+    xfail under dotenvx v2 (2.1.5): the ``rotate`` subcommand was removed, so the
+    documented one-liner is a no-op and the comma-chained key append never
+    happens. Tracked in #585; flip back to a passing assertion when the recipe is
+    reworked for v2.
     """
     old_key = _encrypt_production(envdrift_cmd, work_dir, integration_env)
     old_public = _public_key_line(work_dir / ".env.production")

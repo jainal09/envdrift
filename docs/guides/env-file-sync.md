@@ -620,6 +620,11 @@ the file, and appends the new private key to the entry in `.env.keys` (the old k
 kept, comma-separated, so older ciphertext stays decryptable). After rotating,
 re-push the key and teammates resync:
 
+> **dotenvx v2 note:** the pinned dotenvx (v2) removed the `rotate` subcommand, so
+> the one-liner below is currently a no-op. A v2 rotation recipe is tracked in
+> [#585](https://github.com/jainal09/envdrift/issues/585); until it lands, rotate
+> with a dotenvx v1 binary or re-encrypt the file to a fresh keypair.
+
 ```bash
 dotenvx rotate -f .env.production            # dotenvx CLI: new key in .env.keys
 # re-push the rotated key — vault-push <folder> <secret-name> --env <env>

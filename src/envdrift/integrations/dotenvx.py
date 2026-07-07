@@ -126,14 +126,6 @@ class DotenvxFilenameError(Exception):
     pass
 
 
-# Known problematic filename patterns for dotenvx on Windows
-# See: https://github.com/dotenvx/dotenvx/issues/724
-PROBLEMATIC_FILENAME_PATTERNS = [
-    # .env.local causes "Input string must contain hex characters" on Windows
-    # because dotenvx tries to parse "LOCAL" as a hex string
-    r"^\.env\.local$",
-]
-
 # Only filenames matching this round-trip through dotenvx's key-name derivation.
 # dotenvx builds the DOTENV_PRIVATE_KEY_<SLUG> env-var name from the filename, so
 # a space or non-ASCII character yields an invalid name and a file that encrypts
@@ -176,6 +168,24 @@ def _dash_safe_path(path: Path | str) -> str:
     if text.startswith("-"):
         return f".{os.sep}{text}"
     return text
+
+
+def _sibling_env_keys_file(env_file: Path, env_keys_file: Path | str | None) -> Path | str:
+    """Return the ``.env.keys`` path to hand dotenvx as ``-fk``.
+
+    dotenvx **v2** writes and reads ``.env.keys`` in the *process working
+    directory* when ``-fk`` is omitted; **v1** kept it next to the target file.
+    envdrift's model — and every caller here — expects one key store per folder,
+    living beside the env file (``env_file.parent/.env.keys``): the sync engine,
+    :func:`normalize_dotenvx_metadata` and ``EnvKeysFile`` all read it there. So
+    when the caller does not pin a keys file, default it to that sibling path,
+    preserving v1's layout under v2 — a file in a subfolder keeps its private key
+    beside it (and stays decryptable) instead of scattering it into cwd, where a
+    later decrypt could not find it.
+    """
+    if env_keys_file is None:
+        return env_file.parent / ".env.keys"
+    return env_keys_file
 
 
 _PUBLIC_KEY_NAME_RE = re.compile(r"\bDOTENV_PUBLIC_KEY_[A-Za-z0-9_-]+=")
@@ -788,13 +798,25 @@ class DotenvxWrapper:
         except FileNotFoundError as e:
             raise DotenvxNotFoundError(f"dotenvx binary not found: {e}") from e
 
-    # Error patterns that indicate encryption failure even with exit code 0
+    # Error patterns that indicate an encrypt/decrypt failure even when dotenvx
+    # exits 0 (its historical false-success behavior). dotenvx renamed these
+    # error codes across major versions and — for the decrypt path, which has no
+    # plaintext post-check — the exit code alone is the only other signal, so the
+    # net must cover both wordings:
+    #   * v1: MISSING_PRIVATE_KEY / WRONG_PRIVATE_KEY / MISPAIRED_PRIVATE_KEY
+    #     ("does not match the existing public key"); the mispaired encrypt exits 0.
+    #   * v2: DECRYPTION_FAILED ("could not decrypt"), "second arg must be public
+    #     key"; these now exit non-zero, but match them anyway for defense in depth.
     ENCRYPT_ERROR_PATTERNS: ClassVar[list[str]] = [
         "does not match the existing public key",
         "MISSING_DOTENV_KEY",
+        "MISSING_PRIVATE_KEY",
+        "WRONG_PRIVATE_KEY",
+        "DECRYPTION_FAILED",
+        "could not decrypt",
+        "second arg must be public key",
         "private key not found",
         "decryption failed",
-        "Input string must contain hex characters",  # Windows hex parsing error
     ]
 
     # Regex to strip ANSI escape codes from output
@@ -843,32 +865,6 @@ class DotenvxWrapper:
         except OSError:
             # If normalization fails, proceed anyway - dotenvx might still work
             return False
-
-    @staticmethod
-    def _validate_filename(file_path: Path) -> None:
-        """
-        Validate that the filename is compatible with dotenvx.
-
-        dotenvx has known bugs on Windows where certain filenames cause errors.
-        For example, `.env.local` causes "Input string must contain hex characters"
-        because dotenvx tries to parse the suffix "LOCAL" as a hex string.
-
-        Parameters:
-            file_path (Path): Path to the file to validate.
-
-        Raises:
-            DotenvxFilenameError: If the filename matches a known problematic pattern.
-        """
-        filename = file_path.name.lower()
-        for pattern in PROBLEMATIC_FILENAME_PATTERNS:
-            if re.match(pattern, filename, re.IGNORECASE):
-                raise DotenvxFilenameError(
-                    f"Cannot encrypt/decrypt '{file_path.name}': "
-                    f"dotenvx has a known bug on Windows where this filename causes "
-                    f"'Input string must contain hex characters in even length' error. "
-                    f"Workaround: Rename the file (e.g., '.env.localenv' or '.env.dev') "
-                    f"before encryption. See: https://github.com/dotenvx/dotenvx/issues/724"
-                )
 
     @staticmethod
     def _validate_encryptable_filename(file_path: Path) -> None:
@@ -1077,13 +1073,9 @@ class DotenvxWrapper:
         # this wrapper directly, not the guarded backend (#443/#457, #467).
         self._validate_encryptable_filename(env_file)
 
-        # Validate filename for known dotenvx bugs (Windows-specific)
-        if platform.system() == "Windows":
-            self._validate_filename(env_file)
-
-        # Normalize line endings for cross-platform compatibility
-        # dotenvx on Windows can fail with "Input string must contain hex characters"
-        # when files have CRLF line endings
+        # Normalize CRLF -> LF before encryption so a file encrypted on Windows
+        # decrypts cleanly on Linux/macOS and vice versa (cross-platform
+        # consistency; unrelated to any specific dotenvx version).
         self._normalize_line_endings(env_file)
 
         # Clean up mismatched headers from renamed files
@@ -1091,11 +1083,15 @@ class DotenvxWrapper:
         # prepends a new header without removing the old one, causing duplicates
         self._clean_mismatched_headers(env_file)
 
+        # Pin -fk to the sibling .env.keys: dotenvx v2 otherwise writes the key
+        # store into the process cwd (v1 kept it next to the file), scattering a
+        # subfolder file's private key away from it (#566).
+        env_keys_file = _sibling_env_keys_file(env_file, env_keys_file)
+
         # Leading-dash paths must be ./-prefixed or dotenvx's commander CLI
         # misparses them as flags and fabricates a different file (#474).
         args = ["encrypt", "-f", _dash_safe_path(env_file)]
-        if env_keys_file:
-            args.extend(["-fk", _dash_safe_path(env_keys_file)])
+        args.extend(["-fk", _dash_safe_path(env_keys_file)])
 
         # Run with check=False to handle exit code 0 errors ourselves
         result = self._run(args, env=env, cwd=cwd, check=False)
@@ -1121,7 +1117,6 @@ class DotenvxWrapper:
             cwd (Path | str | None): Optional working directory for the subprocess.
 
         Raises:
-            DotenvxFilenameError: If the filename is not compatible with dotenvx.
             DotenvxError: If env_file does not exist or the decryption command fails.
             DotenvxNotFoundError: If the dotenvx binary cannot be located when running the command.
         """
@@ -1129,18 +1124,18 @@ class DotenvxWrapper:
         if not env_file.exists():
             raise DotenvxError(f"File not found: {env_file}")
 
-        # Validate filename for known dotenvx bugs (Windows-specific)
-        if platform.system() == "Windows":
-            self._validate_filename(env_file)
-
-        # Normalize line endings for cross-platform compatibility
+        # Normalize CRLF -> LF for cross-platform consistency (see encrypt()).
         self._normalize_line_endings(env_file)
+
+        # Pin -fk to the sibling .env.keys: dotenvx v2 otherwise looks for the
+        # key store in the process cwd (v1 read it next to the file), so a
+        # subfolder file would fail to decrypt (#566).
+        env_keys_file = _sibling_env_keys_file(env_file, env_keys_file)
 
         # Leading-dash paths must be ./-prefixed or dotenvx's commander CLI
         # misparses them as flags (#474).
         args = ["decrypt", "-f", _dash_safe_path(env_file)]
-        if env_keys_file:
-            args.extend(["-fk", _dash_safe_path(env_keys_file)])
+        args.extend(["-fk", _dash_safe_path(env_keys_file)])
 
         # Run with check=False so we can detect the case where dotenvx prints a
         # decrypt error (e.g. "decryption failed", "private key not found",
