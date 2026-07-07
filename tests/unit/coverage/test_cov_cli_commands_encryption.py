@@ -506,13 +506,21 @@ def test_verify_vault_secret_not_found(monkeypatch, tmp_path: Path):
     env_file.write_text("SECRET=encrypted")
 
     class MissingVault:
+        # Mirrors AWSSecretsManagerClient: the region the client was
+        # constructed with is what the not-found message must name.
+        def __init__(self, region: str | None = None) -> None:
+            self.region = region
+
         def ensure_authenticated(self) -> None:
             return None
 
         def get_secret(self, name: str):
             raise SecretNotFoundError("nope")
 
-    monkeypatch.setattr("envdrift.vault.get_vault_client", lambda *_, **__: MissingVault())
+    monkeypatch.setattr(
+        "envdrift.vault.get_vault_client",
+        lambda _provider, **kwargs: MissingVault(region=kwargs.get("region")),
+    )
 
     errors: list[str] = []
     monkeypatch.setattr(f"{ENC_MOD}.print_error", lambda msg: errors.append(str(msg)))
@@ -529,6 +537,89 @@ def test_verify_vault_secret_not_found(monkeypatch, tmp_path: Path):
 
     assert result is False
     assert any("not found in vault" in e for e in errors)
+    # #487: the AWS not-found message names the region that was searched.
+    assert any("(region us-east-1)" in e for e in errors)
+
+
+def test_verify_vault_not_found_names_explicit_region(monkeypatch, tmp_path: Path):
+    """#487: with --region given, the not-found message names that region."""
+    from envdrift.vault.base import SecretNotFoundError
+
+    env_file = tmp_path / ".env.production"
+    env_file.write_text("SECRET=encrypted")
+
+    class MissingVault:
+        def __init__(self, region: str | None = None) -> None:
+            self.region = region
+
+        def ensure_authenticated(self) -> None:
+            return None
+
+        def get_secret(self, name: str):
+            raise SecretNotFoundError("nope")
+
+    monkeypatch.setattr(
+        "envdrift.vault.get_vault_client",
+        lambda _provider, **kwargs: MissingVault(region=kwargs.get("region")),
+    )
+
+    errors: list[str] = []
+    monkeypatch.setattr(f"{ENC_MOD}.print_error", lambda msg: errors.append(str(msg)))
+
+    result = _verify_decryption_with_vault(
+        env_file=env_file,
+        provider="aws",
+        vault_url=None,
+        region="eu-west-1",
+        project_id=None,
+        secret_name="dotenv-key",
+        ci=True,
+    )
+
+    assert result is False
+    assert any("(region eu-west-1)" in e for e in errors), errors
+
+
+def test_verify_vault_not_found_region_comes_from_client(monkeypatch, tmp_path: Path):
+    """Regression (#530 review): the not-found note must name the CLIENT's
+    effective region, not a second hardcoded ``region or "us-east-1"`` that
+    could silently drift from the client-construction default (e.g. if the
+    client ever starts honoring AWS_DEFAULT_REGION)."""
+    from envdrift.vault.base import SecretNotFoundError
+
+    env_file = tmp_path / ".env.production"
+    env_file.write_text("SECRET=encrypted")
+
+    class MissingVault:
+        # Deliberately reports a region that differs from both the CLI arg
+        # (None) and the construction fallback, as a client resolving the
+        # region itself would.
+        region = "ap-south-1"
+
+        def ensure_authenticated(self) -> None:
+            return None
+
+        def get_secret(self, name: str):
+            raise SecretNotFoundError("nope")
+
+    monkeypatch.setattr("envdrift.vault.get_vault_client", lambda *_, **__: MissingVault())
+
+    errors: list[str] = []
+    monkeypatch.setattr(f"{ENC_MOD}.print_error", lambda msg: errors.append(str(msg)))
+
+    result = _verify_decryption_with_vault(
+        env_file=env_file,
+        provider="aws",
+        vault_url=None,
+        region=None,
+        project_id=None,
+        secret_name="dotenv-key",
+        ci=True,
+    )
+
+    assert result is False
+    assert any("(region ap-south-1)" in e for e in errors), errors
+    assert not any("us-east-1" in e for e in errors), errors
 
 
 def test_verify_vault_vault_error(monkeypatch, tmp_path: Path):

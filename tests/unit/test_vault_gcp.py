@@ -437,6 +437,9 @@ class TestGCPSecretManagerClient:
         secret = client.get_secret("bin")
         assert secret.value == base64.b64encode(payload).decode("ascii")
         assert secret.version == "1"
+        # #480: the base64 transformation is marked so dotenvx key flows can
+        # reject the payload instead of installing it as key material.
+        assert secret.metadata.get("encoding") == "base64"
 
     def test_get_secret_not_found(self, mock_gcp):
         """NotFound should map to SecretNotFoundError."""
