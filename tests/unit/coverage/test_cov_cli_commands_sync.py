@@ -798,7 +798,8 @@ class TestLockCommand:
         # no --force so mismatch triggers exit
         result = runner.invoke(app, ["lock", "--verify-vault"])
         assert result.exit_code == 1
-        assert "KEY MISMATCH" in result.output
+        # Width-independent: Rich can wrap the long tmp_path line mid-phrase.
+        assert "KEY MISMATCH" in " ".join(result.output.split())
 
     @patch("envdrift.cli_commands.encryption_helpers.resolve_encryption_backend")
     def test_lock_verify_vault_key_mismatch_with_force_still_refuses(
@@ -819,7 +820,8 @@ class TestLockCommand:
 
         result = runner.invoke(app, ["lock", "--verify-vault", "--force"])
         assert result.exit_code == 1
-        assert "KEY MISMATCH" in result.output
+        # Width-independent: Rich can wrap the long tmp_path line mid-phrase.
+        assert "KEY MISMATCH" in " ".join(result.output.split())
         # The hard stop happens BEFORE Step 2: nothing was encrypted.
         assert backend.encrypt_calls == []
         assert "SECRET=plaintext" in (tmp_path / ".env.production").read_text()

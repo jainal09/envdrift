@@ -4568,7 +4568,12 @@ class TestLockCommand:
         result = runner.invoke(app, ["lock", "-c", str(config_file), "--verify-vault"])
 
         assert result.exit_code == 1
-        assert "key mismatch" in result.output.lower()
+        # Collapse whitespace: Rich soft-wraps the long tmp_path service line
+        # in CI, which can split the KEY MISMATCH phrase across a newline.
+        out = " ".join(result.output.lower().split())
+        assert "key mismatch" in out
+        # The #473 contract: the gate reports that nothing was encrypted.
+        assert "nothing was encrypted" in out
 
     def test_lock_skips_already_encrypted_file(self, monkeypatch, tmp_path: Path):
         """Lock should skip fully encrypted files."""
