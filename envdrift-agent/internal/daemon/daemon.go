@@ -144,6 +144,15 @@ func buildLaunchdPlist(execPath string) string {
 	args := []string{execPath, "start"}
 	if logPath, err := agentLogPath(); err == nil {
 		args = append(args, "--log-file", logPath)
+	} else {
+		// UserHomeDir failed, so --log-file is dropped and the service falls back
+		// to the unbounded /tmp StandardOutPath this PR replaces (#494). This is
+		// extremely unlikely on a normal macOS install, but warn loudly so the
+		// lost log rotation is diagnosable from the install output instead of
+		// silently swallowed.
+		fmt.Fprintf(os.Stderr,
+			"envdrift-agent: WARNING: could not determine home dir for --log-file (%v); agent logs will not be rotated\n",
+			err)
 	}
 
 	var argXML strings.Builder

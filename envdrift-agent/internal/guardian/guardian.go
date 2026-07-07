@@ -116,15 +116,24 @@ type Guardian struct {
 	// These are set during Start() for use by onRegistryChange
 	ctx    context.Context
 	events chan projectEvent
+	// notifyError/notifyEncrypted dispatch the desktop notifications for the
+	// failed- and successful-encrypt paths. They default to the real notify
+	// package and are overridable in tests so notification behaviour (e.g. the
+	// #494 rule that a timeout must NOT notify) is observable without a real
+	// desktop backend.
+	notifyError     func(string) error
+	notifyEncrypted func(string) error
 }
 
 // New creates a Guardian configured with cfg.
 func New(cfg *config.Config) (*Guardian, error) {
 	g := &Guardian{
-		globalConfig:   cfg,
-		projects:       make(map[string]*ProjectWatcher),
-		checkTick:      30 * time.Second,
-		encryptTimeout: defaultEncryptTimeout,
+		globalConfig:    cfg,
+		projects:        make(map[string]*ProjectWatcher),
+		checkTick:       30 * time.Second,
+		encryptTimeout:  defaultEncryptTimeout,
+		notifyError:     notify.Error,
+		notifyEncrypted: notify.Encrypted,
 	}
 
 	return g, nil
@@ -512,10 +521,14 @@ func (g *Guardian) checkIdleFiles(ctx context.Context) {
 func (g *Guardian) encryptIdleFile(ctx context.Context, projectPath string, pw *ProjectWatcher, path string) bool {
 	log.Printf("[%s] Encrypting idle file: %s", projectPath, path)
 
+	// defer cancel() so the child context is always released even if
+	// EncryptSilentContext panics; timedOut is read from encCtx.Err() before
+	// the deferred cancel fires, so it still reflects the deadline rather than
+	// the cancellation (#494).
 	encCtx, cancel := context.WithTimeout(ctx, g.encryptTimeout)
+	defer cancel()
 	err := encrypt.EncryptSilentContext(encCtx, path)
 	timedOut := errors.Is(encCtx.Err(), context.DeadlineExceeded)
-	cancel()
 
 	if err != nil {
 		// Our own shutdown killed the subprocess; not an error worth noise.
@@ -525,18 +538,22 @@ func (g *Guardian) encryptIdleFile(ctx context.Context, projectPath string, pw *
 		if timedOut {
 			log.Printf("[%s] Encrypting %s timed out after %v (subprocess killed); will retry on a later check",
 				projectPath, path, g.encryptTimeout)
+			// Do not notify on timeout: the file is retried on the next check,
+			// and a "Failed to encrypt" desktop notification every checkTick
+			// (e.g. a persistently slow drive) would be indistinguishable from a
+			// permanent failure and just noisy (#494).
 		} else {
 			log.Printf("[%s] Error encrypting %s: %v", projectPath, path, err)
-		}
-		if pw.config.Notify {
-			_ = notify.Error("Failed to encrypt: " + path)
+			if pw.config.Notify {
+				_ = g.notifyError("Failed to encrypt: " + path)
+			}
 		}
 		return true
 	}
 
 	log.Printf("[%s] Successfully encrypted: %s", projectPath, path)
 	if pw.config.Notify {
-		_ = notify.Encrypted(path)
+		_ = g.notifyEncrypted(path)
 	}
 
 	// Remove from tracking

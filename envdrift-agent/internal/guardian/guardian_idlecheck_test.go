@@ -143,6 +143,60 @@ func TestCheckIdleFiles_EncryptTimeoutIsBounded(t *testing.T) {
 	}
 }
 
+// TestCheckIdleFiles_TimeoutDoesNotNotify is the #494 notification-noise fix:
+// a subprocess that times out is logged and left tracked for retry, but must
+// NOT fire a "Failed to encrypt" desktop notification. A persistently slow
+// drive would otherwise notify every checkTick, indistinguishable from a
+// permanent failure.
+func TestCheckIdleFiles_TimeoutDoesNotNotify(t *testing.T) {
+	if testing.Short() {
+		t.Skip("Skipping subprocess test in short mode")
+	}
+
+	prevOut := log.Writer()
+	log.SetOutput(io.Discard)
+	t.Cleanup(func() { log.SetOutput(prevOut) })
+
+	f := newIdleCheckFixture(t, "hang")
+	f.g.encryptTimeout = 200 * time.Millisecond
+	f.pw.config.Notify = true
+
+	notified := 0
+	f.g.notifyError = func(string) error { notified++; return nil }
+
+	path := f.trackIdle(t, ".env", "SECRET=plaintext\n")
+	f.g.checkIdleFiles(context.Background())
+
+	if notified != 0 {
+		t.Errorf("a timed-out encrypt must not notify; notifyError called %d times", notified)
+	}
+	if !f.tracked(path) {
+		t.Error("a timed-out file must stay tracked for retry")
+	}
+}
+
+// TestCheckIdleFiles_FailureNotifies pins the other side of the #494 rule: a
+// genuine (non-timeout) encrypt failure with notifications on still fires
+// exactly one "Failed to encrypt" notification.
+func TestCheckIdleFiles_FailureNotifies(t *testing.T) {
+	prevOut := log.Writer()
+	log.SetOutput(io.Discard)
+	t.Cleanup(func() { log.SetOutput(prevOut) })
+
+	f := newIdleCheckFixture(t, "fail")
+	f.pw.config.Notify = true
+
+	notified := 0
+	f.g.notifyError = func(string) error { notified++; return nil }
+
+	f.trackIdle(t, ".env", "SECRET=plaintext\n")
+	f.g.checkIdleFiles(context.Background())
+
+	if notified != 1 {
+		t.Errorf("a genuine failure with Notify=true must notify once, got %d", notified)
+	}
+}
+
 // TestCheckIdleFiles_MissingFileUntracked covers the stat branch: a tracked
 // file that disappeared is dropped without invoking envdrift.
 func TestCheckIdleFiles_MissingFileUntracked(t *testing.T) {

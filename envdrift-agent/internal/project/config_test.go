@@ -514,9 +514,22 @@ func TestLoadProjectConfigWithDefaults_AppliesAndOverrides(t *testing.T) {
 		if err != nil {
 			t.Fatalf("LoadProjectConfigWithDefaults: %v", err)
 		}
-		if cfg.IdleTimeout != 42*time.Second || !reflect.DeepEqual(cfg.Patterns, []string{"*.secret"}) ||
-			!reflect.DeepEqual(cfg.Exclude, []string{".env.staging"}) || cfg.Notify || cfg.Enabled {
-			t.Errorf("defaults not applied: %+v", cfg)
+		// One assertion per field: a single compound conditional both trips
+		// CodeScene's complexity threshold and hides which field regressed.
+		if cfg.Enabled {
+			t.Error("Enabled = true, want the false default")
+		}
+		if cfg.IdleTimeout != 42*time.Second {
+			t.Errorf("IdleTimeout = %v, want the 42s default", cfg.IdleTimeout)
+		}
+		if !reflect.DeepEqual(cfg.Patterns, []string{"*.secret"}) {
+			t.Errorf("Patterns = %v, want the [*.secret] default", cfg.Patterns)
+		}
+		if !reflect.DeepEqual(cfg.Exclude, []string{".env.staging"}) {
+			t.Errorf("Exclude = %v, want the [.env.staging] default", cfg.Exclude)
+		}
+		if cfg.Notify {
+			t.Error("Notify = true, want the false default")
 		}
 	})
 

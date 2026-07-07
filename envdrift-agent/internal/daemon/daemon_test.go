@@ -2,9 +2,11 @@
 package daemon
 
 import (
+	"bytes"
 	"encoding/xml"
 	"errors"
 	"io"
+	"os"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -246,6 +248,63 @@ func TestLaunchdPlistPassesRotatingLogFile(t *testing.T) {
 	}
 
 	// The document must still parse as XML.
+	dec := xml.NewDecoder(strings.NewReader(plist))
+	for {
+		_, err := dec.Token()
+		if errors.Is(err, io.EOF) {
+			break
+		}
+		if err != nil {
+			t.Fatalf("plist is not valid XML: %v", err)
+		}
+	}
+}
+
+// captureStderr redirects os.Stderr to a pipe for the duration of one call and
+// returns a function that restores it and yields everything written.
+func captureStderr(t *testing.T) func() string {
+	t.Helper()
+	orig := os.Stderr
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("os.Pipe: %v", err)
+	}
+	os.Stderr = w
+	return func() string {
+		_ = w.Close()
+		os.Stderr = orig
+		var buf bytes.Buffer
+		_, _ = io.Copy(&buf, r)
+		_ = r.Close()
+		return buf.String()
+	}
+}
+
+// TestLaunchdPlistWarnsWhenHomeDirUnavailable is the #494 review follow-up: if
+// os.UserHomeDir() fails, --log-file cannot be built and the service falls back
+// to the unbounded /tmp log. That regression must not be silent — the plist
+// omits --log-file, but a WARNING is written to stderr so the lost rotation is
+// diagnosable from the install output.
+func TestLaunchdPlistWarnsWhenHomeDirUnavailable(t *testing.T) {
+	// Force os.UserHomeDir() to fail by clearing the home env vars.
+	t.Setenv("HOME", "")
+	t.Setenv("USERPROFILE", "")
+	if _, err := os.UserHomeDir(); err == nil {
+		t.Skip("os.UserHomeDir still resolves a home dir on this platform; cannot exercise the failure path")
+	}
+
+	restore := captureStderr(t)
+	plist := buildLaunchdPlist("/usr/local/bin/envdrift-agent")
+	warning := restore()
+
+	if strings.Contains(plist, "--log-file") {
+		t.Errorf("plist must omit --log-file when the home dir is unavailable:\n%s", plist)
+	}
+	if !strings.Contains(warning, "WARNING") || !strings.Contains(warning, "--log-file") {
+		t.Errorf("expected a stderr WARNING about the missing --log-file, got %q", warning)
+	}
+
+	// The document must still parse as valid XML without the log-file args.
 	dec := xml.NewDecoder(strings.NewReader(plist))
 	for {
 		_, err := dec.Token()
