@@ -13,9 +13,13 @@ mirroring ``install.sh --insecure-skip-checksum``.
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import os
+import platform
 import re
+import shutil
+import stat
 import sys
 import urllib.request
 from pathlib import Path
@@ -40,12 +44,53 @@ def verification_disabled() -> bool:
 
 
 def sha256_file(path: Path) -> str:
-    """Compute the SHA256 hex digest of a file."""
+    """Compute the SHA256 hex digest of a file.
+
+    Raises:
+        ChecksumVerificationError: if the file cannot be read (missing,
+            unreadable, vanished mid-read). Surfacing a typed error keeps the
+            fail-closed contract — callers catch ``ChecksumVerificationError``,
+            not a raw ``OSError``.
+    """
     digest = hashlib.sha256()
-    with open(path, "rb") as fh:
-        for chunk in iter(lambda: fh.read(65536), b""):
-            digest.update(chunk)
+    try:
+        with open(path, "rb") as fh:
+            for chunk in iter(lambda: fh.read(65536), b""):
+                digest.update(chunk)
+    except OSError as exc:
+        raise ChecksumVerificationError(
+            f"could not read {path} to compute its checksum: {exc}"
+        ) from exc
     return digest.hexdigest()
+
+
+def atomic_install(source: Path, target_path: Path, *, make_executable: bool = True) -> None:
+    """Install ``source`` onto ``target_path`` atomically (stage + rename).
+
+    Copies ``source`` to a staging file in the target's own directory, sets the
+    executable bit (POSIX), then atomically renames it into place. Because the
+    staging file shares the target's filesystem, the final rename is atomic, so
+    an interrupted or failing copy (disk full, crash, permission error) can
+    never truncate or corrupt a previously working binary: the original stays
+    intact and no partial file is left behind (#490).
+
+    Raises:
+        OSError: if the copy or rename fails; ``target_path`` is left untouched.
+    """
+    target_path.parent.mkdir(parents=True, exist_ok=True)
+    staging_path = target_path.parent / (target_path.name + ".install")
+    try:
+        shutil.copy2(source, staging_path)
+        if make_executable and platform.system() != "Windows":
+            staging_path.chmod(
+                staging_path.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH
+            )
+        staging_path.replace(target_path)
+    finally:
+        # Cleanup must never mask the real error (a non-FileNotFound OSError
+        # from unlink would otherwise propagate over the copy/rename failure).
+        with contextlib.suppress(OSError):
+            staging_path.unlink(missing_ok=True)
 
 
 def parse_checksums(content: str) -> dict[str, str]:

@@ -423,7 +423,10 @@ def install_agent(
             console.print(f"\n[red]✗[/red] Failed to move verified binary into place: {e}")
             raise typer.Exit(1) from e
     finally:
-        staging_path.unlink(missing_ok=True)
+        # Cleanup must not mask the real error (e.g. a verification failure): a
+        # non-FileNotFound OSError from unlink would otherwise propagate over it.
+        with contextlib.suppress(OSError):
+            staging_path.unlink(missing_ok=True)
 
     console.print(f"[green]✓[/green] Installed agent to: {install_path}")
 

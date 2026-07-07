@@ -13,7 +13,6 @@ from __future__ import annotations
 import json
 import platform
 import shutil
-import stat
 import subprocess  # nosec B404
 import tarfile
 import tempfile
@@ -23,7 +22,11 @@ import zipfile
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, ClassVar
 
-from envdrift.install_integrity import ChecksumVerificationError, verify_download
+from envdrift.install_integrity import (
+    ChecksumVerificationError,
+    atomic_install,
+    verify_download,
+)
 from envdrift.scanner.base import (
     FindingSeverity,
     ScanFinding,
@@ -289,17 +292,13 @@ class GitleaksInstaller:
             if not extracted_binary:
                 raise GitleaksInstallError(f"Binary '{binary_name}' not found in archive")
 
-            # Ensure target directory exists
-            target_path.parent.mkdir(parents=True, exist_ok=True)
-
-            # Copy to target
-            shutil.copy2(extracted_binary, target_path)
-
-            # Make executable (Unix)
-            if platform.system() != "Windows":
-                target_path.chmod(
-                    target_path.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH
-                )
+            # Stage next to the target and atomically replace it, so an
+            # interrupted copy (disk full, crash) can never corrupt a working
+            # binary or leave a partial write behind (#490).
+            try:
+                atomic_install(extracted_binary, target_path)
+            except OSError as e:
+                raise GitleaksInstallError(f"Failed to install binary: {e}") from e
 
             self.progress(f"Installed to {target_path}")
 

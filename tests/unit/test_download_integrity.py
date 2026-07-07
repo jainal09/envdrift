@@ -220,6 +220,42 @@ class TestScannerAutoInstallIntegrity:
         assert target.exists()
         assert target.read_bytes() == payload
 
+    def test_failed_final_install_keeps_previous_binary(
+        self, mod, prefix, tool, file_server, tmp_path: Path, monkeypatch
+    ):
+        """Regression (#519 cubic P1): the final install is atomic — a copy that
+        fails mid-way (disk full / crash) must leave a previously working binary
+        intact and leave no partial/staging file behind."""
+        import envdrift.install_integrity as integrity_mod
+
+        payload = b"good-binary-payload"
+        archive_name = f"{tool}-release.tar.gz"
+        archive_bytes = _make_tar_gz(file_server.docroot, archive_name, _exe(tool), payload)
+        _write_checksums(
+            file_server.docroot, "checksums.txt", {archive_name: _sha256_bytes(archive_bytes)}
+        )
+        _point_scanner_at_server(monkeypatch, mod, tool, file_server, archive_name)
+
+        target = tmp_path / "bin" / _exe(tool)
+        target.parent.mkdir(parents=True)
+        target.write_bytes(b"previously-working-binary")
+
+        def boom_copy(*_a, **_k):
+            raise OSError("simulated disk full during install")
+
+        monkeypatch.setattr(integrity_mod.shutil, "copy2", boom_copy)
+
+        installer = getattr(mod, f"{prefix}Installer")()
+        install_error = getattr(mod, f"{prefix}InstallError")
+        with pytest.raises(install_error):
+            installer.download_and_extract(target)
+
+        assert target.read_bytes() == b"previously-working-binary", (
+            "a failed install must not corrupt the previously working binary"
+        )
+        leftovers = [p.name for p in target.parent.iterdir() if p.name != target.name]
+        assert leftovers == [], f"staging file(s) left behind: {leftovers}"
+
 
 # ---------------------------------------------------------------------------
 # Talisman (direct binary download, no archive)
@@ -435,6 +471,35 @@ class TestDotenvxInstallIntegrity:
         installer.download_and_extract(target)
         assert target.read_bytes() == payload
 
+    def test_failed_final_install_keeps_previous_binary(
+        self, file_server, tmp_path: Path, monkeypatch
+    ):
+        """Regression (#519 cubic P1): a failing final copy must not corrupt a
+        previously working dotenvx binary or leave a partial write."""
+        import envdrift.install_integrity as integrity_mod
+
+        payload = b"good-dotenvx-binary"
+        archive_name = "dotenvx-release.tar.gz"
+        archive_bytes = _make_tar_gz(file_server.docroot, archive_name, _exe("dotenvx"), payload)
+        _write_checksums(
+            file_server.docroot, "checksums.txt", {archive_name: _sha256_bytes(archive_bytes)}
+        )
+        self._point_at_server(monkeypatch, file_server, archive_name)
+
+        target = tmp_path / "bin" / _exe("dotenvx")
+        target.parent.mkdir(parents=True)
+        target.write_bytes(b"previously-working-dotenvx")
+        monkeypatch.setattr(
+            integrity_mod.shutil, "copy2", lambda *a, **k: (_ for _ in ()).throw(OSError("full"))
+        )
+
+        installer = dotenvx_mod.DotenvxInstaller()
+        with pytest.raises(dotenvx_mod.DotenvxInstallError):
+            installer.download_and_extract(target)
+        assert target.read_bytes() == b"previously-working-dotenvx"
+        leftovers = [p.name for p in target.parent.iterdir() if p.name != target.name]
+        assert leftovers == []
+
 
 # ---------------------------------------------------------------------------
 # envdrift install agent (CLI, end to end against the local server)
@@ -579,6 +644,32 @@ class TestInstallAgentFailClosed:
         assert "ENVDRIFT_INSECURE_SKIP_CHECKSUM" in normalized
         assert "--insecure-skip-checksum" not in normalized
 
+    def test_staging_cleanup_error_does_not_mask_verification_failure(self, agent_env, monkeypatch):
+        """Regression (#519 cubic P2): if the finally-block cleanup unlink itself
+        fails, that OSError must not mask the real verification failure — the
+        command still exits 1 and keeps the previously working agent."""
+        (agent_env.server.docroot / agent_env.asset).write_bytes(b"tampered-agent-bytes")
+        _write_checksums(agent_env.server.docroot, "checksums.txt", {agent_env.asset: WRONG_DIGEST})
+        agent_env.install_path.parent.mkdir(parents=True, exist_ok=True)
+        agent_env.install_path.write_bytes(b"previously-working-agent")
+
+        real_unlink = Path.unlink
+
+        def boom_unlink(self, *a, **k):
+            if self.name.endswith(".download"):
+                raise PermissionError("cannot remove staging")
+            return real_unlink(self, *a, **k)
+
+        monkeypatch.setattr(Path, "unlink", boom_unlink)
+
+        result = runner.invoke(app, AGENT_ARGS)
+
+        assert result.exit_code == 1
+        assert not isinstance(result.exception, OSError), (
+            f"cleanup OSError masked the real failure: {result.exception!r}"
+        )
+        assert agent_env.install_path.read_bytes() == b"previously-working-agent"
+
 
 # ---------------------------------------------------------------------------
 # Shared integrity helper unit tests (module added by the #490 fix)
@@ -618,6 +709,72 @@ class TestInstallIntegrityHelpers:
             "my binary.tar.gz": "d" * 64,
             "my tool.zip": "e" * 64,
         }
+
+    def test_sha256_file_missing_raises_typed_error(self, integrity, tmp_path: Path):
+        """Regression (#519 cubic P2): an unreadable file surfaces a typed
+        ChecksumVerificationError, never a raw OSError that escapes callers."""
+        missing = tmp_path / "does-not-exist"
+        with pytest.raises(integrity.ChecksumVerificationError, match="could not read"):
+            integrity.sha256_file(missing)
+
+    def test_atomic_install_replaces_target(self, integrity, tmp_path: Path):
+        """atomic_install installs the source and (POSIX) makes it executable."""
+        source = tmp_path / "src-binary"
+        source.write_bytes(b"new-binary")
+        target = tmp_path / "bin" / "tool"
+        integrity.atomic_install(source, target)
+        assert target.read_bytes() == b"new-binary"
+        if not IS_WINDOWS:
+            assert target.stat().st_mode & 0o100, "installed binary must be executable"
+        assert not (target.parent / (target.name + ".install")).exists()
+
+    def test_atomic_install_failed_copy_keeps_original(
+        self, integrity, tmp_path: Path, monkeypatch
+    ):
+        """Regression (#519 cubic P1): a copy that fails mid-way leaves the
+        previously working binary intact and no partial/staging file behind."""
+        source = tmp_path / "src-binary"
+        source.write_bytes(b"new-binary")
+        target = tmp_path / "bin" / "tool"
+        target.parent.mkdir(parents=True)
+        target.write_bytes(b"previously-working")
+
+        def boom_copy(*_a, **_k):
+            raise OSError("simulated disk full")
+
+        monkeypatch.setattr(integrity.shutil, "copy2", boom_copy)
+        with pytest.raises(OSError):
+            integrity.atomic_install(source, target)
+
+        assert target.read_bytes() == b"previously-working"
+        leftovers = [p.name for p in target.parent.iterdir() if p.name != target.name]
+        assert leftovers == [], f"staging file(s) left behind: {leftovers}"
+
+    def test_atomic_install_cleanup_does_not_mask_error(
+        self, integrity, tmp_path: Path, monkeypatch
+    ):
+        """The staging cleanup must not replace the real copy failure with an
+        unlink OSError (#519 cubic P2)."""
+        source = tmp_path / "src-binary"
+        source.write_bytes(b"new-binary")
+        target = tmp_path / "bin" / "tool"
+
+        def boom_copy(*_a, **_k):
+            raise OSError("real copy failure")
+
+        monkeypatch.setattr(integrity.shutil, "copy2", boom_copy)
+        # Make cleanup's unlink also raise; it must be suppressed so the real
+        # copy failure is what propagates.
+        real_unlink = Path.unlink
+
+        def boom_unlink(self, *a, **k):
+            if self.name.endswith(".install"):
+                raise PermissionError("cannot remove staging")
+            return real_unlink(self, *a, **k)
+
+        monkeypatch.setattr(Path, "unlink", boom_unlink)
+        with pytest.raises(OSError, match="real copy failure"):
+            integrity.atomic_install(source, target)
 
     def test_verify_download_accepts_matching_checksum(
         self, integrity, file_server, tmp_path: Path
