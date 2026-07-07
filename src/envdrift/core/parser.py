@@ -284,14 +284,7 @@ class EnvParser:
             EnvFile: An EnvFile populated with parsed EnvVar entries keyed by variable name and a list of comment lines.
         """
         env_file = EnvFile(path=Path())
-        # A leading UTF-8 BOM is an encoding artifact (Notepad/PowerShell), not
-        # part of the first key — keeping it produced an invisible phantom
-        # ``U+FEFF``-prefixed ``NAME`` variable and self-contradictory MISSING+EXTRA output.
-        # Strip it, but record it: pydantic-settings reads plain UTF-8 and
-        # WOULD see the ``U+FEFF``-prefixed key, so `validate` warns (#486).
-        if content.startswith("\ufeff"):
-            content = content.removeprefix("\ufeff")
-            env_file.leading_bom = True
+        content, env_file.leading_bom = self._strip_leading_bom(content)
         lines = self.LINE_BOUNDARY_PATTERN.split(content)
         pattern = self.LENIENT_LINE_PATTERN if lenient else self.LINE_PATTERN
 
@@ -370,6 +363,21 @@ class EnvParser:
             env_file.variables[key] = env_var
 
         return env_file
+
+    @staticmethod
+    def _strip_leading_bom(content: str) -> tuple[str, bool]:
+        """Strip a leading UTF-8 BOM, reporting whether one was present.
+
+        A leading BOM is an encoding artifact (Notepad/PowerShell), not part
+        of the first key — keeping it produced an invisible phantom
+        ``U+FEFF``-prefixed ``NAME`` variable and self-contradictory
+        MISSING+EXTRA output. It is stripped but recorded on
+        ``EnvFile.leading_bom``: pydantic-settings reads plain UTF-8 and WOULD
+        see the ``U+FEFF``-prefixed key, so ``validate`` warns (#486).
+        """
+        if content.startswith("\ufeff"):
+            return content.removeprefix("\ufeff"), True
+        return content, False
 
     def value_from_raw(self, raw_value: str) -> str:
         """Normalize the raw RHS of a ``KEY=value`` assignment to its final value.
