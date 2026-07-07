@@ -214,6 +214,39 @@ def test_sync_md_does_not_claim_vault_name_routes() -> None:
     assert "# Override default\n" not in text
 
 
+@pytest.mark.parametrize("doc", ["push.md", "encrypt.md"])
+def test_doc_documents_unsafe_filename_refusal(doc: str) -> None:
+    """push.md/encrypt.md must document the unsafe-filename lockout guard (#467).
+
+    #457 made the bare ``encrypt`` backend refuse filenames dotenvx cannot turn
+    into a valid ``DOTENV_PRIVATE_KEY_<SLUG>`` name (the value encrypts, dotenvx
+    exits 0, and the file is permanently undecryptable), and #467/#468 extended
+    the same guard to the partial-encryption push/lock paths — but neither change
+    documented the refusal. Pin both docs to the REAL shared predicate so the
+    guarantee can't drift out of the docs again (CLAUDE.md: keep docs in sync).
+    """
+    from envdrift.integrations.dotenvx import is_dotenvx_safe_filename
+
+    # Ground truth from the real shared predicate (#457/#467): a space or
+    # non-ASCII character is refused, normal dotenv names are not. The predicate
+    # is ASCII-only (`[A-Za-z0-9._-]`), so an accented "letter" is rejected —
+    # the docs must say "ASCII letters", not merely "letters".
+    assert not is_dotenvx_safe_filename("my secret.env")
+    assert not is_dotenvx_safe_filename("café.env.secret")
+    assert not is_dotenvx_safe_filename("résumé.env")
+    assert is_dotenvx_safe_filename(".env.production")
+
+    text = _read(doc)
+    assert "permanently undecryptable" in text, (
+        f"{doc} must explain WHY unsafe filenames are refused — the file would "
+        "be permanently undecryptable (#467)."
+    )
+    assert "ASCII letters, digits" in text, (
+        f"{doc} must name the safe character set as ASCII-only, since the guard's "
+        "[A-Za-z0-9._-] set rejects accented letters like résumé.env (#467)."
+    )
+
+
 def test_faq_ci_decrypt_recipe_writes_suffixed_private_key() -> None:
     """faq.md's CI decrypt Option 1 must write DOTENV_PRIVATE_KEY_PRODUCTION (#498).
 
