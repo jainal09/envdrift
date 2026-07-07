@@ -961,3 +961,224 @@ def test_hcv_get_secret_multikey_returns_json(
         "API_SECRET": "secret456",
     }
     assert secret.version is not None
+
+
+# ===========================================================================
+# #480: vault-fetched key material is normalized/validated before install
+# ===========================================================================
+
+
+@pytest.mark.slow
+@pytest.mark.skipif(
+    not DOTENVX_AVAILABLE, reason="dotenvx binary required to encrypt/decrypt .env files"
+)
+def test_hcv_cli_vault_pull_quoted_value_normalized_and_decrypts(
+    vault_endpoint: str,
+    vault_test_env: dict,
+    vault_client,
+    work_dir: Path,
+    integration_pythonpath: str,
+):
+    """#480 item 1: a whole-line-quoted vault value ("DOTENV_PRIVATE_KEY_X=<key>")
+    is normalized like sync/lock, so the pulled key decrypts the file instead of
+    writing a corrupted .env.keys under [OK]."""
+    secret_path = "test/cli-pull-quoted-480"
+    plaintext = "API_URL=https://example.com\nSECRET_TOKEN=quoted-roundtrip-480\n"
+    env_file = work_dir / ".env.production"
+    env_file.write_text(plaintext, encoding="utf-8")
+
+    encrypt_result = _run_envdrift_cli(
+        ["encrypt", ".env.production"],
+        cwd=work_dir,
+        env=vault_test_env,
+        integration_pythonpath=integration_pythonpath,
+    )
+    assert encrypt_result.returncode == 0, (
+        f"encrypt failed: {encrypt_result.stdout}\n{encrypt_result.stderr}"
+    )
+
+    env_keys = work_dir / ".env.keys"
+    from envdrift.sync.operations import EnvKeysFile
+
+    priv = EnvKeysFile(env_keys).read_key("DOTENV_PRIVATE_KEY_PRODUCTION")
+    assert priv, "dotenvx did not write DOTENV_PRIVATE_KEY_PRODUCTION"
+
+    # Store the WHOLE line wrapped in literal double quotes — the shape the
+    # issue reproduced — then delete local keys so pull must recreate them.
+    vault_client.secrets.kv.v2.create_or_update_secret(
+        path=secret_path,
+        secret={"value": f'"DOTENV_PRIVATE_KEY_PRODUCTION={priv}"'},
+        mount_point="secret",
+    )
+    env_keys.unlink()
+
+    try:
+        result = _run_envdrift_cli(
+            [
+                "vault-pull",
+                ".",
+                secret_path,
+                "--env",
+                "production",
+                "-p",
+                "hashicorp",
+                "--vault-url",
+                vault_endpoint,
+            ],
+            cwd=work_dir,
+            env=vault_test_env,
+            integration_pythonpath=integration_pythonpath,
+        )
+
+        assert result.returncode == 0, (
+            f"pull failed: {result.returncode}\nstdout={result.stdout}\nstderr={result.stderr}"
+        )
+        # The bare key was installed (no literal quotes / doubled prefix)...
+        lines = env_keys.read_text(encoding="utf-8").splitlines()
+        assert f"DOTENV_PRIVATE_KEY_PRODUCTION={priv}" in lines
+        # ...and the real dotenvx decryption round-trip succeeded.
+        decrypted = env_file.read_text(encoding="utf-8")
+        assert "SECRET_TOKEN=quoted-roundtrip-480" in decrypted
+        assert "encrypted:" not in decrypted
+    finally:
+        _delete_vault_path(vault_client, secret_path)
+
+
+def test_hcv_cli_sync_extracts_key_from_field_named_kv_entry(
+    vault_endpoint: str,
+    vault_test_env: dict,
+    vault_client,
+    work_dir: Path,
+    integration_pythonpath: str,
+):
+    """#480 item 2: a KV-v2 secret storing the key under its own field name
+    (vault kv put secret/x DOTENV_PRIVATE_KEY_PRODUCTION=<hex>) must not be
+    installed as a JSON blob; sync extracts the field and converges."""
+    secret_path = "test/sync-field-named-480"
+    vault_client.secrets.kv.v2.create_or_update_secret(
+        path=secret_path,
+        secret={"DOTENV_PRIVATE_KEY_PRODUCTION": "field-named-key-480"},
+        mount_point="secret",
+    )
+
+    (work_dir / "envdrift.toml").write_text(
+        f"""\
+[vault]
+provider = "hashicorp"
+
+[vault.hashicorp]
+url = "{vault_endpoint}"
+
+[[vault.sync.mappings]]
+secret_name = "{secret_path}"
+folder_path = "."
+environment = "production"
+""",
+        encoding="utf-8",
+    )
+    (work_dir / ".env.production").write_text(
+        'DOTENV_PUBLIC_KEY_PRODUCTION="pub"\nSECRET="encrypted:abc"\n', encoding="utf-8"
+    )
+
+    try:
+        first = _run_envdrift_cli(
+            ["sync", "--force"],
+            cwd=work_dir,
+            env=vault_test_env,
+            integration_pythonpath=integration_pythonpath,
+        )
+        assert first.returncode == 0, f"stdout: {first.stdout}\nstderr: {first.stderr}"
+
+        keys_path = work_dir / ".env.keys"
+        assert keys_path.exists()
+        lines = keys_path.read_text(encoding="utf-8").splitlines()
+        assert "DOTENV_PRIVATE_KEY_PRODUCTION=field-named-key-480" in lines
+        # No JSON blob installed.
+        assert not any("{" in line for line in lines), lines
+        first_bytes = keys_path.read_bytes()
+
+        # Second run converges: byte-identical file, no new backups.
+        second = _run_envdrift_cli(
+            ["sync", "--force"],
+            cwd=work_dir,
+            env=vault_test_env,
+            integration_pythonpath=integration_pythonpath,
+        )
+        assert second.returncode == 0, f"stdout: {second.stdout}\nstderr: {second.stderr}"
+        assert keys_path.read_bytes() == first_bytes
+        assert list(work_dir.glob("*.backup*")) == []
+    finally:
+        _delete_vault_path(vault_client, secret_path)
+
+
+def test_hcv_cli_sync_multiline_keys_blob_converges(
+    vault_endpoint: str,
+    vault_test_env: dict,
+    vault_client,
+    work_dir: Path,
+    integration_pythonpath: str,
+):
+    """#480 item 4: a secret holding whole .env.keys file content (header
+    comments + key line) is reduced to the key line and the mapping converges
+    instead of re-updating (with a new .backup) on every run."""
+    secret_path = "test/sync-multiline-blob-480"
+    blob = (
+        "#/------------------!DOTENV_PRIVATE_KEYS!-------------------/\n"
+        "#/ private decryption keys. DO NOT commit to source control /\n"
+        "# .env.production\n"
+        'DOTENV_PRIVATE_KEY_PRODUCTION="blob-key-480"\n'
+    )
+    vault_client.secrets.kv.v2.create_or_update_secret(
+        path=secret_path,
+        secret={"value": blob},
+        mount_point="secret",
+    )
+
+    (work_dir / "envdrift.toml").write_text(
+        f"""\
+[vault]
+provider = "hashicorp"
+
+[vault.hashicorp]
+url = "{vault_endpoint}"
+
+[[vault.sync.mappings]]
+secret_name = "{secret_path}"
+folder_path = "."
+environment = "production"
+""",
+        encoding="utf-8",
+    )
+    (work_dir / ".env.production").write_text(
+        'DOTENV_PUBLIC_KEY_PRODUCTION="pub"\nSECRET="encrypted:abc"\n', encoding="utf-8"
+    )
+
+    try:
+        first = _run_envdrift_cli(
+            ["sync", "--force"],
+            cwd=work_dir,
+            env=vault_test_env,
+            integration_pythonpath=integration_pythonpath,
+        )
+        assert first.returncode == 0, f"stdout: {first.stdout}\nstderr: {first.stderr}"
+
+        keys_path = work_dir / ".env.keys"
+        lines = keys_path.read_text(encoding="utf-8").splitlines()
+        key_lines = [line for line in lines if line.startswith("DOTENV_PRIVATE_KEY_")]
+        assert key_lines == ["DOTENV_PRIVATE_KEY_PRODUCTION=blob-key-480"]
+        first_bytes = keys_path.read_bytes()
+
+        second = _run_envdrift_cli(
+            ["sync", "--force"],
+            cwd=work_dir,
+            env=vault_test_env,
+            integration_pythonpath=integration_pythonpath,
+        )
+        assert second.returncode == 0, f"stdout: {second.stdout}\nstderr: {second.stderr}"
+        second_out = (second.stdout + second.stderr).lower()
+        assert "match" in second_out or "skip" in second_out, second.stdout
+        assert keys_path.read_bytes() == first_bytes
+        # The forever-divergence symptom was a fresh .backup on every run.
+        assert list(work_dir.glob("*.backup*")) == []
+    finally:
+        _delete_vault_path(vault_client, secret_path)

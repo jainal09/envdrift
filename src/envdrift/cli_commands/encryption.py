@@ -62,6 +62,40 @@ def _resolve_config_path(config_path: Path | None, value: Path | str | None) -> 
     return path
 
 
+def _refuse_companion_target(env_file: Path, action: str) -> None:
+    """Refuse encrypt/decrypt on a companion file, by name, for every backend.
+
+    ``envdrift encrypt .env.keys`` would encrypt the dotenvx private-key store
+    itself: the keys become ciphertext under a brand-new keypair whose private
+    half is never persisted, permanently locking out every encrypted file in
+    the project — previously under a clean ``[OK]``/exit 0 (#474). The other
+    companion suffixes (``.example``/``.sample``/``.template``) exist to be
+    read as plaintext, so encrypting (or "decrypting") one is always a
+    mistake. Reuses the canonical predicate that already excludes these names
+    from push/pull.
+    """
+    from envdrift.env_files import _is_excluded_env_file
+
+    if not _is_excluded_env_file(env_file.name):
+        return
+    if env_file.name.casefold().endswith(".keys"):
+        consequence = (
+            "Encrypting it would permanently lock out every file encrypted with its keys."
+            if action == "encrypt"
+            else "It is already plaintext; there is nothing to decrypt."
+        )
+        print_error(
+            f"Refusing to {action} {env_file}: it is the dotenvx private-key "
+            f"store and must stay plaintext. {consequence}"
+        )
+    else:
+        print_error(
+            f"Refusing to {action} {env_file}: it is a plaintext companion "
+            "file (.example/.sample/.template), not a secret store."
+        )
+    raise typer.Exit(code=1)
+
+
 def _protect_private_keys(env_file: Path) -> None:
     """Ensure the dotenvx ``.env.keys`` private-key file is gitignored.
 
@@ -78,6 +112,20 @@ def _protect_private_keys(env_file: Path) -> None:
         print_warning(
             f"Added {', '.join(added)} to .gitignore — never commit your private keys (.env.keys)."
         )
+
+
+def _report_not_installed(encryption_backend) -> None:
+    """Print the not-installed error, surfacing any auto-install failure cause.
+
+    When a backend recorded why its auto-install attempt failed (#475), telling
+    the user only "X is not installed" plus instructions recommending
+    ``auto_install`` (which just failed) hides the actionable cause.
+    """
+    install_error = getattr(encryption_backend, "install_error", None)
+    if isinstance(install_error, str) and install_error:
+        print_error(f"{encryption_backend.name} auto-install failed: {install_error}")
+    print_error(f"{encryption_backend.name} is not installed")
+    console.print(encryption_backend.install_instructions())
 
 
 def encrypt_cmd(
@@ -195,6 +243,13 @@ def encrypt_cmd(
             print_error(f"ENV file not found: {env_file}")
         raise typer.Exit(code=1)
 
+    # Refuse companion targets (.keys/.example/.sample/.template) across ALL
+    # requested files — the default single [.env] and every multi-file target —
+    # before touching any of them, so one companion in a batch aborts the whole
+    # invocation with nothing encrypted (#474).
+    for env_file in files:
+        _refuse_companion_target(env_file, "encrypt")
+
     if verify_vault or vault_provider or vault_url or vault_region or vault_secret:
         print_error("Vault verification moved to `envdrift decrypt --verify-vault ...`")
         raise typer.Exit(code=1)
@@ -288,6 +343,27 @@ def encrypt_cmd(
         if should_block:
             raise typer.Exit(code=1)
     else:
+        # Analyze every target before touching any backend: unreadable input and
+        # cross-backend double encryption are refused up front (#475), and the
+        # refusal must not depend on the selected backend being installed.
+        # report.detected_backend (not the file-level header scan alone) also
+        # carries value-level detection, so a file whose header was stripped but
+        # whose values are still another backend's ciphertext is refused too.
+        # For a plaintext file it equals the selected backend, so encryption
+        # proceeds.
+        for env_file in files:
+            report = _analyze_file(env_file)
+            report_backend = report.detected_backend
+            if report_backend and report_backend != backend_enum.value:
+                print_error(
+                    f"{env_file} is already encrypted with {report_backend}, but the "
+                    f"{backend_enum.value} backend was selected. Double-encrypting would nest "
+                    f"ciphertexts and break decryption. Decrypt it first with "
+                    f"`envdrift decrypt {env_file} --backend {report_backend}` or re-run with "
+                    f"`--backend {report_backend}`."
+                )
+                raise typer.Exit(code=1)
+
         # Attempt encryption using the selected backend
         try:
             backend_config: dict[str, object] = {}
@@ -304,8 +380,7 @@ def encrypt_cmd(
             encryption_backend = get_encryption_backend(backend_enum, **backend_config)
 
             if not encryption_backend.is_installed():
-                print_error(f"{encryption_backend.name} is not installed")
-                console.print(encryption_backend.install_instructions())
+                _report_not_installed(encryption_backend)
                 raise typer.Exit(code=1)
 
             # Build kwargs for SOPS-specific options
@@ -328,10 +403,6 @@ def encrypt_cmd(
             smart_enabled = encryption_config.smart_encryption if encryption_config else False
 
             for env_file in files:
-                # Surface unreadable input (directory / binary file) cleanly
-                # before invoking the backend.
-                _analyze_file(env_file)
-
                 should_skip, skip_reason = should_skip_reencryption(
                     env_file, encryption_backend, enabled=smart_enabled
                 )
@@ -341,7 +412,12 @@ def encrypt_cmd(
 
                 result = encryption_backend.encrypt(env_file, **encrypt_kwargs)
                 if result.success:
-                    print_success(f"Encrypted {env_file} using {encryption_backend.name}")
+                    if result.changed:
+                        print_success(f"Encrypted {env_file} using {encryption_backend.name}")
+                    else:
+                        # Honest no-op (e.g. already encrypted): surface the backend's
+                        # message instead of an unconditional "Encrypted" banner (#475).
+                        print_warning(result.message)
                     _protect_private_keys(env_file)
                 else:
                     print_error(result.message)
@@ -631,6 +707,8 @@ def decrypt_cmd(
         print_error(f"ENV file not found: {env_file}")
         raise typer.Exit(code=1)
 
+    _refuse_companion_target(env_file, "decrypt")
+
     envdrift_config, config_path = _load_encryption_config()
     encryption_config = getattr(envdrift_config, "encryption", None)
 
@@ -725,8 +803,7 @@ def decrypt_cmd(
         encryption_backend = get_encryption_backend(backend_enum, **backend_config)
 
         if not encryption_backend.is_installed():
-            print_error(f"{encryption_backend.name} is not installed")
-            console.print(encryption_backend.install_instructions())
+            _report_not_installed(encryption_backend)
             raise typer.Exit(code=1)
 
         result = encryption_backend.decrypt(env_file)
