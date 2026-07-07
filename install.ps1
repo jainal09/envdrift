@@ -242,10 +242,16 @@ function Initialize-Venv {
     # Upgrade pip silently (best-effort). Keep $ErrorActionPreference relaxed
     # around the redirection: under Windows PowerShell 5.1 with 'Stop', any
     # native stderr line combined with 2>$null becomes a terminating
-    # NativeCommandError (fixed only in PowerShell 7.2+).
-    $ErrorActionPreference = "Continue"
-    & $script:VenvPython -m pip install --upgrade pip 2>$null | Out-Null
-    $ErrorActionPreference = "Stop"
+    # NativeCommandError (fixed only in PowerShell 7.2+). Save/restore the
+    # caller's preference instead of assuming it was "Stop".
+    $prevErrorActionPreference = $ErrorActionPreference
+    try {
+        $ErrorActionPreference = "Continue"
+        & $script:VenvPython -m pip install --upgrade pip 2>$null | Out-Null
+    }
+    finally {
+        $ErrorActionPreference = $prevErrorActionPreference
+    }
 }
 
 # -------------------------------------------------------------------

@@ -140,6 +140,38 @@ $BinDir = Join-Path $InstallDir 'bin'
 New-Wrappers
 """
 
+# Dot-sources the real Initialize-Venv and dot-invokes it from a caller whose
+# $ErrorActionPreference is not "Stop". A normal function call cannot observe
+# the old hardcoded restore (a preference-variable write inside a function is
+# function-local), but dot-invocation runs the body in the caller's scope —
+# there the hardcode really did clobber the caller's preference with "Stop".
+# A --without-pip venv makes the best-effort pip upgrade fail on native stderr
+# — the exact 2>$null trigger that is a terminating NativeCommandError under
+# 5.1 with "Stop" — without touching the network.
+_EAP_RESTORE_HARNESS = """
+param([string]$ScriptPath, [string]$PythonExe, [string]$InstallDir)
+$tokens = $null
+$errors = $null
+$ast = [System.Management.Automation.Language.Parser]::ParseFile(
+    $ScriptPath, [ref]$tokens, [ref]$errors)
+if ($errors.Count -gt 0) {
+    foreach ($e in $errors) { [Console]::Error.WriteLine($e.ToString()) }
+    exit 2
+}
+$functions = $ast.FindAll(
+    { param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] },
+    $true)
+foreach ($fn in $functions) {
+    . ([scriptblock]::Create($fn.Extent.Text))
+}
+$VenvDir = Join-Path $InstallDir 'venv'
+& $PythonExe -m venv --without-pip $VenvDir
+if ($LASTEXITCODE -ne 0) { exit 3 }
+$ErrorActionPreference = 'SilentlyContinue'
+. Initialize-Venv
+[Console]::Out.WriteLine("EAP_AFTER=$ErrorActionPreference")
+"""
+
 
 def _powershell() -> str | None:
     """Best available PowerShell: pwsh (7+) anywhere, else Windows PowerShell."""
@@ -166,12 +198,30 @@ def _run_harness(
     exe: str, harness: str, tmp_path: Path, *args: str
 ) -> subprocess.CompletedProcess[str]:
     harness_file = tmp_path / "harness.ps1"
-    harness_file.write_text(harness, encoding="utf-8")
+    # utf-8-sig: Windows PowerShell 5.1 decodes BOM-less files as legacy ANSI,
+    # so the BOM keeps any future non-ASCII harness content from being mangled.
+    harness_file.write_text(harness, encoding="utf-8-sig")
+    # -ExecutionPolicy Bypass is process-scoped: stock Windows boxes default to
+    # "Restricted", which rejects -File outright (GitHub runners allow scripts,
+    # so CI never sees it). pwsh accepts and ignores the flag on non-Windows.
     return subprocess.run(
-        [exe, "-NoProfile", "-NonInteractive", "-File", str(harness_file), *args],
+        [
+            exe,
+            "-NoProfile",
+            "-NonInteractive",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-File",
+            str(harness_file),
+            *args,
+        ],
         capture_output=True,
         text=True,
         encoding="utf-8",
+        # Windows PowerShell 5.1 writes console output in the OEM codepage
+        # (e.g. 0x82 for an accented e), which is not valid UTF-8. Only ASCII
+        # markers/JSON are parsed from stdout, so replacement is lossless.
+        errors="replace",
         env=os.environ.copy(),
         check=False,
         timeout=120,
@@ -234,6 +284,34 @@ def test_join_path_calls_bind_under_real_windows_powershell_51(tmp_path: Path) -
     failures = json.loads(proc.stdout.strip())
     assert failures == [], (
         f"Join-Path calls in install.ps1 fail to bind under Windows PowerShell 5.1: {failures}"
+    )
+
+
+@requires_windows_powershell_51
+def test_initialize_venv_restores_caller_error_action_preference(tmp_path: Path) -> None:
+    """Initialize-Venv must restore the entry $ErrorActionPreference.
+
+    The function relaxes the preference to "Continue" around the best-effort
+    pip upgrade (under 5.1, native stderr + ``2>$null`` is a terminating
+    NativeCommandError with "Stop"). It must restore whatever value was active
+    on entry — not hardcode "Stop". A normal call can't leak the write (it is
+    function-local), so the harness dot-invokes the function: with the old
+    hardcode that replaced a "SilentlyContinue" caller's preference with
+    "Stop" for the rest of the session.
+    """
+    install_dir = tmp_path / "install"
+    proc = _run_harness(
+        _windows_powershell_51() or "",
+        _EAP_RESTORE_HARNESS,
+        tmp_path,
+        str(INSTALL_PS1),
+        sys.executable,
+        str(install_dir),
+    )
+    assert proc.returncode == 0, f"EAP restore harness failed:\n{proc.stdout}\n{proc.stderr}"
+    assert "EAP_AFTER=SilentlyContinue" in proc.stdout, (
+        "Initialize-Venv must restore the caller's $ErrorActionPreference "
+        f"instead of hardcoding 'Stop':\n{proc.stdout}"
     )
 
 
