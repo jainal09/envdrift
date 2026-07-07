@@ -16,6 +16,7 @@ from __future__ import annotations
 import hashlib
 import os
 import re
+import sys
 import urllib.request
 from pathlib import Path
 
@@ -56,10 +57,12 @@ def parse_checksums(content: str) -> dict[str, str]:
     """
     checksums: dict[str, str] = {}
     for line in content.splitlines():
-        parts = line.split()
-        if len(parts) < 2:
+        # Split digest from name on the first whitespace run only, so
+        # filenames containing spaces keep their full name intact.
+        parts = line.strip().split(None, 1)
+        if len(parts) != 2:
             continue
-        digest, name = parts[0], parts[-1]
+        digest, name = parts[0], parts[1].strip()
         if not _SHA256_HEX_RE.match(digest):
             continue
         # Strip sha256sum binary-mode marker and any path prefix.
@@ -102,6 +105,12 @@ def verify_download(
             and leave any previously installed binary untouched.
     """
     if verification_disabled():
+        # The bypass must be loud: stderr keeps machine-readable stdout clean.
+        print(
+            f"WARNING: {INSECURE_SKIP_ENV} is set — skipping checksum verification "
+            f"for {tool_name}; installing an UNVERIFIED binary",
+            file=sys.stderr,
+        )
         return
     checksums = fetch_checksums(checksums_url)
     expected = checksums.get(artifact_name)

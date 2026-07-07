@@ -290,6 +290,26 @@ class TestTalismanInstallIntegrity:
         if not IS_WINDOWS:
             assert target.stat().st_mode & 0o100, "installed binary must be executable"
 
+    def test_rename_failure_raises_install_error(self, file_server, tmp_path: Path, monkeypatch):
+        """Regression (#519 review): a failed final rename must surface as
+        TalismanInstallError, not escape as a raw OSError."""
+        payload = b"good-talisman-binary"
+        asset = "talisman_test_binary"
+        (file_server.docroot / asset).write_bytes(payload)
+        _write_checksums(file_server.docroot, "checksums", {asset: _sha256_bytes(payload)})
+        self._point_at_server(monkeypatch, file_server, asset)
+
+        # A non-empty directory at the target path makes the verified rename fail.
+        target = tmp_path / "bin" / _exe("talisman")
+        target.mkdir(parents=True)
+        (target / "occupied").write_text("x")
+
+        installer = talisman_mod.TalismanInstaller()
+        with pytest.raises(talisman_mod.TalismanInstallError, match="move verified binary"):
+            installer.download_binary(target)
+        staging = target.parent / (target.name + ".download")
+        assert not staging.exists(), "staging file must be cleaned up on rename failure"
+
 
 # ---------------------------------------------------------------------------
 # sops integration installer
@@ -540,6 +560,24 @@ class TestInstallAgentFailClosed:
         assert result.exit_code == 0, f"expected success with escape hatch, got: {normalized}"
         assert agent_env.install_path.read_bytes() == payload
         assert "Skipping checksum verification" in normalized
+        assert "--insecure-skip-checksum" in normalized
+
+    def test_env_var_skip_warning_names_the_env_var(self, agent_env, monkeypatch):
+        """Regression (#519 review): a skip triggered by the environment variable
+        must attribute the bypass to the env var, not to --insecure-skip-checksum."""
+        payload = b"unverified-agent-binary"
+        (agent_env.server.docroot / agent_env.asset).write_bytes(payload)
+        # No checksums.txt served: the skip comes from the environment, not the flag.
+        monkeypatch.setenv("ENVDRIFT_INSECURE_SKIP_CHECKSUM", "1")
+
+        result = runner.invoke(app, AGENT_ARGS)
+
+        normalized = " ".join(result.output.split())
+        assert result.exit_code == 0, f"expected success with env escape hatch, got: {normalized}"
+        assert agent_env.install_path.read_bytes() == payload
+        assert "Skipping checksum verification" in normalized
+        assert "ENVDRIFT_INSECURE_SKIP_CHECKSUM" in normalized
+        assert "--insecure-skip-checksum" not in normalized
 
 
 # ---------------------------------------------------------------------------
@@ -569,6 +607,16 @@ class TestInstallIntegrityHelpers:
             "plain-name.tar.gz": "a" * 64,
             "binary-mode-name.zip": "b" * 64,
             "path-name": "c" * 64,
+        }
+
+    def test_parse_checksums_preserves_names_with_spaces(self, integrity):
+        """Regression (#519 review): ``parts[-1]`` used to truncate a filename
+        containing spaces to its last word (``my binary.tar.gz`` -> ``binary.tar.gz``)."""
+        content = f"{'d' * 64}  my binary.tar.gz\n{'e' * 64}  ./dir/my tool.zip\n"
+        parsed = integrity.parse_checksums(content)
+        assert parsed == {
+            "my binary.tar.gz": "d" * 64,
+            "my tool.zip": "e" * 64,
         }
 
     def test_verify_download_accepts_matching_checksum(
@@ -625,12 +673,19 @@ class TestInstallIntegrityHelpers:
         with pytest.raises(integrity.ChecksumVerificationError, match="checksums URL"):
             integrity.verify_download(artifact, "tool.tar.gz", "", "tool")
 
-    def test_env_escape_hatch_skips_verification(self, integrity, tmp_path: Path, monkeypatch):
+    def test_env_escape_hatch_skips_verification_loudly(
+        self, integrity, tmp_path: Path, monkeypatch, capsys
+    ):
         monkeypatch.setenv(integrity.INSECURE_SKIP_ENV, "1")
         artifact = tmp_path / "tool.tar.gz"
         artifact.write_bytes(b"artifact-bytes")
         # No URL configured and no server: only the env escape hatch lets this pass.
         integrity.verify_download(artifact, "tool.tar.gz", "", "tool")
+        # The bypass must be loud (on stderr, keeping stdout machine-readable)
+        # so verification can never be disabled silently.
+        err = capsys.readouterr().err
+        assert integrity.INSECURE_SKIP_ENV in err
+        assert "UNVERIFIED" in err
 
     def test_env_escape_hatch_disabled_by_default(self, integrity, monkeypatch):
         monkeypatch.delenv(integrity.INSECURE_SKIP_ENV, raising=False)

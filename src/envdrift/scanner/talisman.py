@@ -253,7 +253,10 @@ class TalismanInstaller:
                     staging_path.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH
                 )
 
-            staging_path.replace(target_path)
+            try:
+                staging_path.replace(target_path)
+            except OSError as e:
+                raise TalismanInstallError(f"Failed to move verified binary into place: {e}") from e
         finally:
             staging_path.unlink(missing_ok=True)
 

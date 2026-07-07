@@ -27,6 +27,7 @@ from rich.progress import Progress, SpinnerColumn, TextColumn
 
 from envdrift.cli_commands.agent_utils import parse_agent_running_status
 from envdrift.install_integrity import (
+    INSECURE_SKIP_ENV,
     ChecksumVerificationError,
     fetch_checksums,
     sha256_file,
@@ -398,8 +399,14 @@ def install_agent(
 
         # Verify checksum (fail closed) before the binary reaches install_path.
         if insecure_skip_checksum or verification_disabled():
+            # Name whichever mechanism actually triggered the skip.
+            reason = (
+                "--insecure-skip-checksum"
+                if insecure_skip_checksum
+                else f"{INSECURE_SKIP_ENV} environment variable"
+            )
             console.print(
-                "[yellow]⚠ Skipping checksum verification (--insecure-skip-checksum) — "
+                f"[yellow]⚠ Skipping checksum verification ({reason}) — "
                 "installing an unverified binary[/yellow]"
             )
         elif not _verify_checksum(staging_path, plat, _checksum_url):
