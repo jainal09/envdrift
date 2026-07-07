@@ -834,3 +834,55 @@ class TestSarifSchemaConformance:
     def test_error_document_validates_against_official_schema(self):
         """The error-path document must be schema-valid too."""
         _validate_against_sarif_schema(json.loads(format_sarif_error("Could not load config")))
+
+    def test_empty_error_scan_incomplete_document_validates_against_schema(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        """Merge-seam battle test (#489 SARIF x #478 exit-truthfulness).
+
+        A scanner that failed with an EMPTY error string flips
+        ``executionSuccessful`` to false via the ``not r.success`` contract and
+        must still emit a ``toolExecutionNotifications`` entry (#478) — while a
+        finding carries a SRCROOT-relative, percent-encoded artifact URI (#489).
+        Both live in the same ``format_sarif`` document; validate the whole
+        thing against the official 2.1.0 schema so the empty-text notification
+        can never produce a malformed message on the scan-incomplete (exit 5)
+        path.
+        """
+        monkeypatch.chdir(tmp_path)
+        finding = ScanFinding(
+            file_path=tmp_path / "sub dir" / ".env",
+            line_number=1,
+            column_number=5,
+            rule_id="aws-access-key-id",
+            rule_description="AWS Access Key ID",
+            description="AWS key detected",
+            severity=FindingSeverity.LOW,
+            scanner="native",
+        )
+        result = AggregatedScanResult(
+            results=[
+                ScanResult(scanner_name="native", findings=[finding]),
+                # Empty-string error: the #478 edge the truthiness filter dropped.
+                ScanResult(scanner_name="talisman", error=""),
+            ],
+            total_findings=1,
+            unique_findings=[finding],
+            scanners_used=["native", "talisman"],
+            total_duration_ms=1,
+        )
+
+        document = json.loads(format_sarif(result, exit_code=5))
+        _validate_against_sarif_schema(document)
+
+        invocation = document["runs"][0]["invocations"][0]
+        assert invocation["exitCode"] == 5
+        assert invocation["executionSuccessful"] is False
+        notifications = invocation["toolExecutionNotifications"]
+        assert any(n["message"]["text"].startswith("talisman:") for n in notifications), (
+            "an empty-error scan failure must still emit a schema-valid notification"
+        )
+        # #489 delta is intact on the same document: SRCROOT-relative, encoded URI.
+        location = document["runs"][0]["results"][0]["locations"][0]["physicalLocation"]
+        assert location["artifactLocation"]["uri"] == "sub%20dir/.env"
+        assert location["artifactLocation"]["uriBaseId"] == "SRCROOT"
