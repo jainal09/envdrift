@@ -352,8 +352,10 @@ BAR=plaintext
         assert result.variables["COLOR"].value == "#FF0000"
         # leading `#` value kept; the later space-preceded `#` is the comment.
         assert result.variables["ALSO"].value == "#123"
-        # value is only whitespace + a space-preceded comment -> empty.
-        assert result.variables["EMPTY"].value == ""
+        # Whitespace right after `=` is consumed like python-dotenv's
+        # `_equal_sign` lexer, so the `#` starts the VALUE, not a comment
+        # (#537): dotenv_values loads {'EMPTY': '# just a comment'}.
+        assert result.variables["EMPTY"].value == "# just a comment"
 
     def test_parse_inline_comment_escaped_quote(self, tmp_path):
         """#357: an escaped quote does not toggle quote state, so a `#` inside the
@@ -366,15 +368,19 @@ BAR=plaintext
         # The `\"` is escaped (quote stays open), so the `#` is inside quotes.
         assert "#" in result.variables["Q"].value
 
-    def test_parse_inline_comment_only_is_empty(self, tmp_path):
-        """#357: a value that is only a comment collapses to EMPTY."""
+    def test_parse_inline_comment_only_is_the_value(self, tmp_path):
+        """#537 (flips the #357 pin): whitespace-then-`#` after `=` is the
+        VALUE `# just a comment`, matching python-dotenv exactly —
+        dotenv_values (1.2.2) loads {'ONLY': '# just a comment'} because its
+        `_equal_sign` lexer consumes the post-`=` whitespace before the value
+        starts, so the `#` is never whitespace-preceded inside the value."""
         content = "ONLY=   # just a comment\n"
         env_file = tmp_path / ".env"
         env_file.write_text(content)
 
         result = EnvParser().parse(env_file)
-        assert result.variables["ONLY"].value == ""
-        assert result.variables["ONLY"].encryption_status == EncryptionStatus.EMPTY
+        assert result.variables["ONLY"].value == "# just a comment"
+        assert result.variables["ONLY"].encryption_status == EncryptionStatus.PLAINTEXT
 
     def test_parse_inline_comment_after_quoted_encrypted_value(self, tmp_path):
         """#357: comment stripped BEFORE unquote, so `encrypted:` is detected.

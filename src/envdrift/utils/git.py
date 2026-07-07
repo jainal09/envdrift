@@ -11,6 +11,15 @@ import subprocess  # nosec B404
 from collections.abc import Iterable
 from pathlib import Path
 
+# Every subprocess call in this module pins ``encoding="utf-8"`` with
+# ``errors="surrogateescape"``: ``text=True`` alone decodes git's output with the
+# platform locale codec — cp1252 on Windows, US-ASCII under LC_ALL=C — which
+# mangles non-ASCII repo paths / file content or raises an uncaught
+# ``UnicodeDecodeError`` (#453). Git emits UTF-8 on every platform, so pin the
+# codec; ``surrogateescape`` (not ``replace``) round-trips raw non-UTF-8 filename
+# bytes exactly, matching how the OS surfaces such paths to Python, instead of
+# rewriting them and corrupting the returned path.
+
 
 class GitError(Exception):
     """Error executing git command."""
@@ -34,6 +43,8 @@ def is_git_repo(path: Path) -> bool:
             cwd=str(path if path.is_dir() else path.parent),
             capture_output=True,
             text=True,
+            encoding="utf-8",
+            errors="surrogateescape",
             timeout=10,
         )
         return result.returncode == 0 and result.stdout.strip() == "true"
@@ -57,6 +68,8 @@ def get_git_root(path: Path) -> Path | None:
             cwd=str(path if path.is_dir() else path.parent),
             capture_output=True,
             text=True,
+            encoding="utf-8",
+            errors="surrogateescape",
             timeout=10,
         )
         if result.returncode == 0:
@@ -93,6 +106,8 @@ def get_file_from_git(file_path: Path, ref: str = "HEAD") -> str | None:
             cwd=str(git_root),
             capture_output=True,
             text=True,
+            encoding="utf-8",
+            errors="surrogateescape",
             timeout=10,
         )
 
@@ -127,6 +142,8 @@ def is_file_modified(file_path: Path) -> bool:
             cwd=str(git_root),
             capture_output=True,
             text=True,
+            encoding="utf-8",
+            errors="surrogateescape",
             timeout=10,
         )
 
@@ -162,6 +179,8 @@ def restore_file_from_git(file_path: Path, ref: str = "HEAD") -> bool:
             cwd=str(git_root),
             capture_output=True,
             text=True,
+            encoding="utf-8",
+            errors="surrogateescape",
             timeout=10,
         )
 
@@ -192,6 +211,8 @@ def is_file_tracked(file_path: Path) -> bool:
             cwd=str(git_root),
             capture_output=True,
             text=True,
+            encoding="utf-8",
+            errors="surrogateescape",
             timeout=10,
         )
 
@@ -272,6 +293,8 @@ def _is_path_ignored(path: Path, git_root: Path) -> bool:
             cwd=str(git_root),
             capture_output=True,
             text=True,
+            encoding="utf-8",
+            errors="surrogateescape",
             timeout=10,
         )
         return result.returncode == 0

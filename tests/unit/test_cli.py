@@ -25,7 +25,7 @@ from envdrift.config import EnvdriftConfig
 from envdrift.encryption import EncryptionProvider
 from envdrift.encryption.base import EncryptionBackendError, EncryptionResult
 from envdrift.integrations.dotenvx import DotenvxError
-from envdrift.vault import VaultError
+from envdrift.vault import SecretValue, VaultError
 from tests.helpers import DummyEncryptionBackend
 
 runner = CliRunner()
@@ -4033,8 +4033,10 @@ class TestLockCommand:
             env_keys_filename=".env.keys",
         )
 
-        # Vault stores the key QUOTED; local stores it bare.
-        vault_secret = SimpleNamespace(value=f'"{secret}"')
+        # Vault stores the key QUOTED; local stores it bare. A real SecretValue
+        # (not a bare namespace) so the verify path's extract_key_material sees
+        # the metadata attribute every provider's secret carries.
+        vault_secret = SecretValue(name="k", value=f'"{secret}"')
 
         class _VaultClient:
             def ensure_authenticated(self) -> None:
@@ -4292,12 +4294,25 @@ class TestLockCommand:
         encrypted: list[Path] = []
         _mock_encryption_backend(monkeypatch, encrypted_paths=encrypted)
 
+        # The .secret now goes through the partial-encryption lifecycle seam
+        # (encrypt_secret_file), aligned with `envdrift push` (#507 review),
+        # rather than the raw backend. Patch that seam to record + simulate it.
+        partial_encrypted: list[Path] = []
+
+        def _fake_encrypt_secret(env_config):
+            partial_encrypted.append(Path(env_config.secret_file))
+
+        monkeypatch.setattr(
+            "envdrift.core.partial_encryption.encrypt_secret_file", _fake_encrypt_secret
+        )
+
         result = runner.invoke(app, ["lock", "-c", str(config_file), "--force", "--all"])
 
         assert result.exit_code == 0
-        # Both the main env file and the secret file should be encrypted
+        # The main env file goes through the resolved backend...
         assert env_file.resolve() in [p.resolve() for p in encrypted]
-        assert secret_file.resolve() in [p.resolve() for p in encrypted]
+        # ...and the .secret through the partial-encryption lifecycle seam.
+        assert secret_file.resolve() in [p.resolve() for p in partial_encrypted]
         # Combined file should be deleted
         assert not env_file.exists()
         assert "combined files deleted" in result.output.lower()
@@ -4466,9 +4481,9 @@ class TestLockCommand:
                     _name: Ignored; present to match the expected secret-retrieval signature.
 
                 Returns:
-                    SimpleNamespace: An object with a `value` attribute set to "DOTENV_PRIVATE_KEY_PRODUCTION=remote".
+                    SecretValue: A secret whose value is "DOTENV_PRIVATE_KEY_PRODUCTION=remote".
                 """
-                return SimpleNamespace(value="DOTENV_PRIVATE_KEY_PRODUCTION=remote")
+                return SecretValue(name="k", value="DOTENV_PRIVATE_KEY_PRODUCTION=remote")
 
         monkeypatch.setattr("envdrift.vault.get_vault_client", lambda *_, **__: DummyVault())
 
@@ -5533,3 +5548,129 @@ class TestReadSeamGuards:
         result = runner.invoke(app, ["encrypt", "--check", str(bad)])
         assert result.exit_code != 0
         assert "UTF-8" in result.output
+
+
+class TestEncryptTruthfulness475:
+    """Regressions for #475: encrypt must not report success without verifying
+    the post-state, must refuse cross-backend double-encryption, and must
+    surface auto-install failure causes."""
+
+    def test_encrypt_refuses_cross_backend_double_encryption(self, monkeypatch, tmp_path: Path):
+        """A dotenvx-encrypted file with ``--backend sops`` selected is refused
+        before any backend runs — silently nesting sops over dotenvx bricks the
+        file for ``decrypt`` auto-detect (#475)."""
+        monkeypatch.chdir(tmp_path)
+        env_file = tmp_path / ".env"
+        original = (
+            "#/---BEGIN DOTENV ENCRYPTED---/\n"
+            'DOTENV_PUBLIC_KEY="03a5d2bc97e9f1c2"\n'
+            'API_KEY="encrypted:BDqDBJaENb1cDe"\n'
+        )
+        env_file.write_text(original, encoding="utf-8")
+
+        result = runner.invoke(app, ["encrypt", str(env_file), "--backend", "sops"])
+
+        assert result.exit_code == 1
+        out = " ".join(result.output.split())
+        assert "dotenvx" in out
+        assert "sops" in out
+        # The file was not double-encrypted.
+        assert env_file.read_text(encoding="utf-8") == original
+
+    def test_encrypt_refuses_sops_file_with_dotenvx_backend(self, monkeypatch, tmp_path: Path):
+        """The reverse direction is refused too: a SOPS-encrypted file must not be
+        re-encrypted with dotenvx."""
+        monkeypatch.chdir(tmp_path)
+        env_file = tmp_path / ".env"
+        original = (
+            "DB_PASSWORD=ENC[AES256_GCM,data:abc,iv:def,tag:ghi,type:str]\nsops_version=3.13.1\n"
+        )
+        env_file.write_text(original, encoding="utf-8")
+
+        result = runner.invoke(app, ["encrypt", str(env_file), "--backend", "dotenvx"])
+
+        assert result.exit_code == 1
+        out = " ".join(result.output.split())
+        assert "sops" in out
+        assert "dotenvx" in out
+        assert env_file.read_text(encoding="utf-8") == original
+
+    def test_encrypt_refuses_header_stripped_dotenvx_file_with_sops_backend(
+        self, monkeypatch, tmp_path: Path
+    ):
+        """Value-level detection backs the cross-backend guard: a dotenvx file
+        whose header lines were stripped (no banner, no DOTENV_PUBLIC_KEY) but
+        whose values are still ``encrypted:`` ciphertext must be refused with
+        ``--backend sops`` — the file-level header scan alone would miss it and
+        sops would nest ciphertexts."""
+        monkeypatch.chdir(tmp_path)
+        env_file = tmp_path / ".env"
+        original = 'API_KEY="encrypted:BDqDBJaENb1cDe"\n'
+        env_file.write_text(original, encoding="utf-8")
+
+        result = runner.invoke(app, ["encrypt", str(env_file), "--backend", "sops"])
+
+        assert result.exit_code == 1
+        out = " ".join(result.output.split())
+        assert "dotenvx" in out
+        assert env_file.read_text(encoding="utf-8") == original
+
+    def test_encrypt_noop_result_message_is_not_discarded(self, monkeypatch, tmp_path: Path):
+        """A successful no-change result prints the backend's honest message
+        instead of an unconditional "Encrypted ... using ..." banner (#475)."""
+        from unittest.mock import MagicMock
+
+        from envdrift.encryption.base import EncryptionResult
+
+        monkeypatch.chdir(tmp_path)
+        env_file = tmp_path / ".env"
+        env_file.write_text("FOO=bar\n", encoding="utf-8")
+
+        mock_backend = MagicMock()
+        mock_backend.name = "sops"
+        mock_backend.is_installed.return_value = True
+        mock_backend.encrypt.return_value = EncryptionResult(
+            success=True,
+            message=f"{env_file} is already encrypted (no change)",
+            file_path=env_file,
+            changed=False,
+        )
+        monkeypatch.setattr(
+            "envdrift.cli_commands.encryption.get_encryption_backend",
+            lambda *args, **kwargs: mock_backend,
+        )
+
+        result = runner.invoke(app, ["encrypt", str(env_file), "--backend", "sops"])
+
+        assert result.exit_code == 0
+        out = " ".join(result.output.split())
+        assert "already encrypted (no change)" in out
+        assert "Encrypted" not in out
+
+    def test_encrypt_not_installed_surfaces_auto_install_failure(self, monkeypatch, tmp_path: Path):
+        """When the backend recorded an auto-install failure, the not-installed
+        error includes the cause instead of recommending the auto_install option
+        that just failed (#475)."""
+        from unittest.mock import MagicMock
+
+        monkeypatch.chdir(tmp_path)
+        env_file = tmp_path / ".env"
+        env_file.write_text("FOO=bar\n", encoding="utf-8")
+
+        mock_backend = MagicMock()
+        mock_backend.name = "sops"
+        mock_backend.is_installed.return_value = False
+        mock_backend.install_error = "Failed to install SOPS from http://x: refused"
+        mock_backend.install_instructions.return_value = "brew install sops"
+        monkeypatch.setattr(
+            "envdrift.cli_commands.encryption.get_encryption_backend",
+            lambda *args, **kwargs: mock_backend,
+        )
+
+        result = runner.invoke(app, ["encrypt", str(env_file), "--backend", "sops"])
+
+        assert result.exit_code == 1
+        out = " ".join(result.output.split())
+        assert "auto-install failed" in out
+        assert "refused" in out
+        assert "sops is not installed" in out

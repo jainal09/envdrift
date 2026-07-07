@@ -222,7 +222,9 @@ envdrift guard --no-skip-gitignored
 **Note:** This feature uses `git check-ignore` when git is available and the scan is
 run inside a git repository. If git is not installed or the repository check fails,
 the tool will log a warning and continue by returning the original findings (no
-git-based filtering will be applied).
+git-based filtering will be applied). Paths exchanged with git are encoded and
+decoded as UTF-8 on every platform, so non-ASCII filenames are matched correctly
+regardless of the system locale (e.g. cp1252 on Windows).
 
 ### `--auto-install` / `--no-auto-install`
 
