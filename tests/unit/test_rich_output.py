@@ -319,6 +319,7 @@ class TestSyncOutput:
             created_count=1,
             updated_count=1,
             skipped_count=1,
+            ephemeral_count=0,
             error_count=1,
             has_errors=True,
             decryption_tested=2,
@@ -337,3 +338,70 @@ class TestSyncOutput:
             print_mismatch_warning("svc", "local", "vault")
         joined = " ".join(" ".join(map(str, c.args)) for c in mock_print.call_args_list)
         assert "VALUE MISMATCH" in joined
+
+
+class TestSyncStatusErrorAndEphemeralRendering:
+    """#487: truthful per-service rows — reasons rendered, ephemeral != error."""
+
+    def test_error_row_without_error_field_falls_back_to_message(self):
+        """An ERROR row whose only explanation lives in ``message`` prints it (#487)."""
+        result = ServiceSyncResult(
+            secret_name="svc-secret",
+            folder_path=Path("svc"),
+            action=SyncAction.ERROR,
+            message="Key file does not exist: svc/.env.keys",
+        )
+        with console.capture() as capture:
+            print_service_sync_status(result)
+        out = " ".join(capture.get().split())
+        assert "Key file does not exist: svc/.env.keys" in out, out
+
+    def test_ephemeral_row_renders_ephemeral_not_error(self):
+        """A successful ephemeral sync must not render as a red error row (#487)."""
+        result = ServiceSyncResult(
+            secret_name="svc-secret",
+            folder_path=Path("svc"),
+            action=SyncAction.EPHEMERAL,
+            message="Ephemeral mode: key fetched from vault (not stored locally)",
+        )
+        with console.capture() as capture:
+            print_service_sync_status(result)
+        out = " ".join(capture.get().split())
+        assert "ephemeral" in out.lower(), out
+        assert "error" not in out.lower(), out
+
+    def test_sync_result_summary_surfaces_ephemeral_count(self):
+        """The summary panel reports ephemeral services instead of hiding them (#487)."""
+        sync_result = SyncResult(
+            services=[
+                ServiceSyncResult(
+                    secret_name="svc-secret",
+                    folder_path=Path("svc"),
+                    action=SyncAction.EPHEMERAL,
+                    message="Ephemeral mode: key fetched from vault (not stored locally)",
+                ),
+            ],
+        )
+        with console.capture() as capture:
+            print_sync_result(sync_result)
+        out = " ".join(capture.get().split())
+        assert "Ephemeral: 1" in out, out
+        assert "Errors: 0" in out, out
+        assert "All services synced successfully" in out, out
+
+    def test_sync_result_summary_omits_ephemeral_line_when_none(self):
+        """No ephemeral services -> the summary stays unchanged (#487)."""
+        sync_result = SyncResult(
+            services=[
+                ServiceSyncResult(
+                    secret_name="svc-secret",
+                    folder_path=Path("svc"),
+                    action=SyncAction.SKIPPED,
+                    message="Values match - no update needed",
+                ),
+            ],
+        )
+        with console.capture() as capture:
+            print_sync_result(sync_result)
+        out = " ".join(capture.get().split())
+        assert "Ephemeral" not in out, out

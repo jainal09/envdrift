@@ -1,11 +1,11 @@
 # envdrift validate
 
-Validate an .env file against a Pydantic Settings schema.
+Validate one or more .env files against a Pydantic Settings schema.
 
 ## Synopsis
 
 ```bash
-envdrift validate [ENV_FILE] --schema SCHEMA [OPTIONS]
+envdrift validate [ENV_FILE]... --schema SCHEMA [OPTIONS]
 ```
 
 ## Description
@@ -13,15 +13,71 @@ envdrift validate [ENV_FILE] --schema SCHEMA [OPTIONS]
 The `validate` command checks that your .env file matches your Pydantic Settings schema. It verifies:
 
 - **Required variables** - All required fields in the schema exist in the .env file
-- **Type validation** - Values can be parsed as the expected type (int, bool, etc.)
+- **Type validation** - Values are accepted by the field's type using real pydantic-settings semantics
 - **Extra variables** - Warns about variables not defined in the schema (errors if `extra="forbid"`)
 - **Encryption status** - Optionally warns if sensitive fields are not encrypted
 
+Type validation mirrors what the real app does at startup:
+
+- Booleans accept every spelling Pydantic v2 accepts (`true/false`, `1/0`, `yes/no`,
+  `on/off`, `t/f`, `y/n`, any case).
+- A present-but-empty value (`PORT=`) is validated as the empty string
+  pydantic-settings actually passes through, so an empty `int`/`float`/`bool`
+  field fails like the real app (unless the schema sets `env_ignore_empty=True`,
+  in which case the value counts as unset).
+- Complex fields (`list`, `dict`, nested models) are JSON-decoded first, exactly
+  like the pydantic-settings env source: `TAGS=a,b,c` fails for `TAGS: list[str]`
+  while `TAGS=["a","b","c"]` passes.
+- Integer parsing is ASCII-only, matching Pydantic (fullwidth digits are rejected).
+- dotenvx's `DOTENV_PUBLIC_KEY*` artifact is exempt from the extra-variable check
+  and the sensitive-name warning, so encrypted files validate cleanly against an
+  `extra="forbid"` schema.
+
+The file itself is parsed with python-dotenv's quoting rules — the parser
+pydantic-settings uses — so quoted values (well-formed or malformed) are
+judged exactly as the real app loads them:
+
+- A value opened with `"` or `'` continues across physical lines until the
+  matching close quote (multiline PEM certificates and keys parse as one
+  value); interior `KEY=value`-looking lines are part of the value, never
+  separate variables.
+- Inside quoted values the python-dotenv escape sequences are decoded (`\n`,
+  `\t`, `\"`, `\\`, ... in double quotes; `\\` and `\'` in single quotes).
+- Malformed quoted bindings are rejected exactly like python-dotenv: an
+  unterminated quote, or non-comment content after the close quote, drops the
+  whole binding (no truncated value, no phantom variables from interior lines).
+- `${VAR}` and `${VAR:-default}` references are expanded the way
+  `dotenv_values` does: a name defined earlier in the same file wins over
+  `os.environ` (looked up case-sensitively, exactly like python-dotenv), and
+  an unset name falls back to the default (or `""`), so `PORT=${OFFSET}234`
+  is judged as the value the app receives.
+- Unquoted values follow python-dotenv's comment rule: the whitespace right
+  after `=` is consumed first, then the value is cut at the first
+  whitespace-preceded `#`. `MSG=user's data # comment` is `user's data` even
+  though the value contains a stray quote, while `K= # c` keeps the whole
+  `# c` as its value (a leading `#` has no whitespace before it inside the
+  value).
+- Physical lines end at `\n` / `\r\n` / `\r` only; other Unicode line
+  boundaries (U+2028, form feed, ...) are value content.
+- A leading UTF-8 BOM is stripped instead of becoming part of the first key,
+  and `validate` warns about it: pydantic-settings reads plain UTF-8, so the
+  running app still sees the BOM-prefixed key unless the BOM is removed or
+  `env_file_encoding='utf-8-sig'` is set.
+
+Other python-dotenv behaviors (`'quoted keys'`, a bare `KEY` line without `=`)
+are not yet mirrored; a file relying on those may still be judged differently
+than the running app sees it.
+
+Multiple env files can be validated in one invocation (each gets its own report;
+with `--ci` the exit code is 1 if any file fails). This keeps the command usable
+as a pre-commit `pass_filenames: true` hook, where every matched staged file is
+appended to a single command line.
+
 ## Arguments
 
-| Argument   | Description                       | Default |
-| :--------- | :-------------------------------- | :------ |
-| `ENV_FILE` | Path to the .env file to validate | `.env`  |
+| Argument        | Description                                      | Default |
+| :-------------- | :----------------------------------------------- | :------ |
+| `ENV_FILE`...   | Path(s) to the .env file(s) to validate          | `.env`  |
 
 ## Options
 
@@ -234,8 +290,10 @@ else:
 | Check                              | Error/Warning | Description                                          |
 | :--------------------------------- | :------------ | :--------------------------------------------------- |
 | Missing required vars              | Error         | Fields without defaults must exist                   |
-| Type mismatches                    | Error         | Values must parse as the expected type               |
-| Extra vars (with `extra="forbid"`) | Error         | Unknown variables not allowed                        |
+| Type mismatches                    | Error         | Values must be accepted by pydantic for the type     |
+| Empty values for non-str fields    | Error         | `PORT=` crashes a real `int` field at startup        |
+| Complex fields with invalid JSON   | Error         | `list`/`dict`/nested fields are JSON-decoded         |
+| Extra vars (with `extra="forbid"`) | Error         | Unknown variables not allowed (`DOTENV_PUBLIC_KEY*` exempt) |
 | Extra vars (with `extra="ignore"`) | Warning       | Unknown variables allowed but noted                  |
 | Unencrypted sensitive vars         | Warning       | Fields marked `sensitive=True` should be encrypted   |
 | Case-insensitive name collision    | Warning       | Two `.env` keys differ only in case                  |
