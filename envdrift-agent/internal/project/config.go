@@ -81,15 +81,31 @@ type pyprojectToml struct {
 // pyproject.toml or a parent-dir envdrift.toml.
 // If no config is discovered, returns the default config.
 func LoadProjectConfig(projectPath string) (*GuardianConfig, error) {
+	return LoadProjectConfigWithDefaults(projectPath, nil)
+}
+
+// LoadProjectConfigWithDefaults is LoadProjectConfig with caller-supplied
+// defaults: keys the project's own [guardian] section does not set fall back
+// to `defaults` instead of the hardcoded package defaults. The guardian uses
+// this to make the documented global ~/.envdrift/guardian.toml settings
+// (idle_timeout, patterns, exclude, notify) act as real per-project defaults —
+// pre-#494 they were dead config that only `envdrift-agent config` echoed.
+// A nil defaults means DefaultGuardianConfig(). The defaults value is never
+// mutated.
+func LoadProjectConfigWithDefaults(projectPath string, defaults *GuardianConfig) (*GuardianConfig, error) {
+	if defaults == nil {
+		defaults = DefaultGuardianConfig()
+	}
+
 	cfg, found, err := discoverEnvdriftConfig(projectPath)
 	if err != nil {
 		return nil, err
 	}
 	if !found {
-		return DefaultGuardianConfig(), nil
+		return defaults.clone(), nil
 	}
 
-	return parseGuardianConfig(&cfg.Guardian, cfg.Vault.Sync.Mappings)
+	return parseGuardianConfig(&cfg.Guardian, cfg.Vault.Sync.Mappings, defaults)
 }
 
 // discoverEnvdriftConfig mirrors the CLI's find_config walk: starting at dir
@@ -164,9 +180,19 @@ func DefaultGuardianConfig() *GuardianConfig {
 	}
 }
 
-// parseGuardianConfig converts the raw TOML config to GuardianConfig with defaults.
-func parseGuardianConfig(raw *guardianToml, vaultMappings []vaultSyncMappingToml) (*GuardianConfig, error) {
-	cfg := DefaultGuardianConfig()
+// clone returns a deep copy of c (slices included) so per-project parsing can
+// never alias or mutate a shared defaults value.
+func (c *GuardianConfig) clone() *GuardianConfig {
+	out := *c
+	out.Patterns = append([]string(nil), c.Patterns...)
+	out.Exclude = append([]string(nil), c.Exclude...)
+	return &out
+}
+
+// parseGuardianConfig converts the raw TOML config to GuardianConfig, filling
+// keys the project does not set from the caller-supplied defaults.
+func parseGuardianConfig(raw *guardianToml, vaultMappings []vaultSyncMappingToml, defaults *GuardianConfig) (*GuardianConfig, error) {
+	cfg := defaults.clone()
 
 	// Apply values from TOML if present
 	if raw.Enabled != nil {
@@ -275,10 +301,17 @@ type ProjectConfig struct {
 // LoadAllProjectConfigs loads guardian configs for all given project paths.
 // Projects with guardian.enabled = false are excluded from the result.
 func LoadAllProjectConfigs(projectPaths []string) ([]*ProjectConfig, error) {
+	return LoadAllProjectConfigsWithDefaults(projectPaths, nil)
+}
+
+// LoadAllProjectConfigsWithDefaults is LoadAllProjectConfigs with
+// caller-supplied per-project defaults (see LoadProjectConfigWithDefaults).
+// Projects with guardian.enabled = false are excluded from the result.
+func LoadAllProjectConfigsWithDefaults(projectPaths []string, defaults *GuardianConfig) ([]*ProjectConfig, error) {
 	var configs []*ProjectConfig
 
 	for _, path := range projectPaths {
-		cfg, err := LoadProjectConfig(path)
+		cfg, err := LoadProjectConfigWithDefaults(path, defaults)
 		if err != nil {
 			// A real load error (an unreadable/malformed envdrift.toml in this
 			// project or an ancestor) means the project is NOT being watched —

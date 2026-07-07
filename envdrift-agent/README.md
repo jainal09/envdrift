@@ -84,16 +84,26 @@ Config file location: `~/.envdrift/guardian.toml`
 
 ```toml
 [guardian]
-enabled = true
-idle_timeout = "5m"           # Encrypt after 5 minutes idle
-patterns = [".env*"]          # Files to watch
+enabled = true                # Master switch for the agent
+idle_timeout = "5m"           # Default: encrypt after 5 minutes idle
+patterns = [".env*"]          # Default: files to watch
 exclude = [".env.example", ".env.sample", ".env.keys"]
-notify = true                 # Desktop notifications
+notify = true                 # Default: desktop notifications
 
 [directories]
-watch = ["~/projects"]        # Directories to monitor
+watch = ["~/projects"]        # Display only (projects come from the registry)
 recursive = true
 ```
+
+The `idle_timeout`/`patterns`/`exclude`/`notify` values are the defaults for
+every registered project; a project's own `[guardian]` section overrides them
+per key. `enabled` is the agent-wide master switch only — each project still
+opts in with its own `enabled = true`.
+
+On macOS the installed service writes size-rotated logs to
+`~/.envdrift/logs/agent.log` (5 MiB per file, 3 backups) via
+`start --log-file`; on Linux logs go to the journal
+(`journalctl --user -u envdrift-guardian`).
 
 ## How It Works
 
