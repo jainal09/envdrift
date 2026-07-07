@@ -154,7 +154,7 @@ func unquoteValue(value string) string {
 // value untouched, so a malformed line still counts as plaintext (the safe
 // direction: the worst case is a redundant, idempotent re-encrypt).
 func stripCommentAfterQuotedValue(v string) string {
-	if len(v) < 2 || (v[0] != '"' && v[0] != '\'') {
+	if len(v) < 2 || !isQuoteByte(v[0]) {
 		return v
 	}
 	end := strings.IndexByte(v[1:], v[0])
@@ -169,14 +169,18 @@ func stripCommentAfterQuotedValue(v string) string {
 	return v
 }
 
+// isQuoteByte reports whether b is one of the two dotenv quote characters.
+func isQuoteByte(b byte) bool {
+	return b == '"' || b == '\''
+}
+
 // isWrappedInMatchingQuotes reports whether v opens and closes with the same
 // single- or double-quote character (a complete quoted token of length >= 2).
 func isWrappedInMatchingQuotes(v string) bool {
 	if len(v) < 2 {
 		return false
 	}
-	q := v[0]
-	return (q == '"' || q == '\'') && v[len(v)-1] == q
+	return isQuoteByte(v[0]) && v[len(v)-1] == v[0]
 }
 
 // Encrypt encrypts a .env file using the envdrift CLI.

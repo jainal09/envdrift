@@ -131,13 +131,25 @@ func TestIsEncrypted(t *testing.T) {
 				"DATABASE_URL=\"postgres://localhost:5432/db\"\n",
 			expected: false,
 		},
+	})
+}
+
+// TestIsEncryptedInlineComments is the #504 cubic review regression: an inline
+// `# comment` after the closing quote defeated the matching-quotes check, so a
+// quoted ciphertext value was misclassified as plaintext and the guardian
+// re-encrypted the already-encrypted file every idle cycle.
+func TestIsEncryptedInlineComments(t *testing.T) {
+	runIsEncryptedCases(t, []isEncryptedCase{
 		{
-			// #504 cubic review regression: an inline `# comment` after the
-			// closing quote defeated the matching-quotes check, so quoted
-			// ciphertext was misclassified as plaintext and the guardian
-			// re-encrypted the already-encrypted file every idle cycle.
 			name:     "quoted ciphertext with inline comment",
 			content:  "SECRET=\"encrypted:abc123\" # rotated 2026-06\n",
+			expected: true,
+		},
+		{
+			// The SOPS flavor: an inline comment after the quoted ENC[...]
+			// token must not flip it to plaintext either.
+			name:     "quoted SOPS ciphertext with inline comment",
+			content:  "API_KEY=\"ENC[AES256_GCM,data:xyz,type:str]\" # managed by sops\n",
 			expected: true,
 		},
 		{
@@ -157,7 +169,7 @@ func TestIsEncrypted(t *testing.T) {
 		},
 		{
 			// A quoted empty placeholder with an inline comment carries no
-			// secret, mirroring the bare `KEY=\"\"` case above.
+			// secret, mirroring the bare KEY="" empty-assignment rule.
 			name:     "empty quoted assignment with inline comment",
 			content:  "EMPTY=\"\" # placeholder\nSECRET=\"encrypted:abc123\"\n",
 			expected: true,
@@ -199,13 +211,6 @@ func TestIsEncryptedSOPS(t *testing.T) {
 		{
 			name:     "fully encrypted SOPS file using AES256_CTR",
 			content:  "API_KEY=\"ENC[AES256_CTR,data:xyz,type:str]\"\n",
-			expected: true,
-		},
-		{
-			// #504 cubic review regression, SOPS flavor: an inline comment
-			// after the quoted ENC[...] token must not flip it to plaintext.
-			name:     "quoted SOPS ciphertext with inline comment",
-			content:  "API_KEY=\"ENC[AES256_GCM,data:xyz,type:str]\" # managed by sops\n",
 			expected: true,
 		},
 	})
