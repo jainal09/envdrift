@@ -379,3 +379,169 @@ def test_scan_engine_filters_dotenvx_public_keys_from_real_output(tmp_path):
     kept = engine._filter_public_keys([pubkey_finding, normal_finding])
     assert pubkey_finding not in kept
     assert normal_finding in kept
+
+
+# --- Trivy redacted-Match dedup regression (#479) --------------------------
+
+# A second GitHub PAT with the SAME shape and length as GITHUB_TOKEN (and the
+# same variable name in fixtures below) so trivy's redacted ``Match`` lines are
+# byte-identical for both files. Assembled from fragments for push protection.
+GITHUB_TOKEN_B = "ghp_" + "92RkXwQ7tBn4MvCs" + "1LhJd8PfYg5WzEuA63To"
+
+
+def _plant_same_shape_tokens(directory) -> None:
+    """Two distinct same-shape secrets whose redacted Match lines collide."""
+    (directory / "a.txt").write_text(f"TOKEN={GITHUB_TOKEN}\n", encoding="utf-8")
+    (directory / "b.txt").write_text(f"TOKEN={GITHUB_TOKEN_B}\n", encoding="utf-8")
+
+
+@requires_trivy
+def test_trivy_distinct_secrets_survive_skip_duplicate_cli(tmp_path):
+    """#479: ``guard --trivy --skip-duplicate`` must report BOTH distinct secrets.
+
+    Exact issue repro through the real CLI subprocess and the real trivy
+    binary: two files each hold a different GitHub PAT with the same variable
+    name and length. Trivy redacts the matched span in ``Match`` to a
+    same-length ``*`` run (``Secret`` is null), so hashing the Match line makes
+    the two findings collide and ``--skip-duplicate`` silently drops one — a
+    false negative.
+    """
+    import json as _json
+    import os
+    import subprocess  # nosec B404
+    import sys
+    from pathlib import Path
+
+    assert len(GITHUB_TOKEN_B) == len(GITHUB_TOKEN) and GITHUB_TOKEN_B != GITHUB_TOKEN
+    _plant_same_shape_tokens(tmp_path)
+
+    repo_root = Path(__file__).resolve().parents[2]
+    env = os.environ.copy()
+    env["PYTHONPATH"] = f"{repo_root / 'src'}{os.pathsep}{env.get('PYTHONPATH', '')}"
+    proc = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "envdrift.cli",
+            "guard",
+            "--trivy",
+            "--no-gitleaks",
+            "--no-detect-secrets",
+            "--no-auto-install",
+            "--skip-duplicate",
+            "--json",
+            ".",
+        ],
+        cwd=str(tmp_path),
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=300,
+    )
+
+    out = proc.stdout
+    # ``--json`` stdout is contractually a single clean JSON document (no
+    # ANSI, no prose) -- parse it strictly so any stray output fails loudly.
+    try:
+        payload = _json.loads(out)
+    except _json.JSONDecodeError as exc:  # pragma: no cover - failure path
+        pytest.fail(
+            f"guard --json stdout is not clean JSON: {exc}\nstdout:\n{out}\nstderr:\n{proc.stderr}"
+        )
+    trivy_files = {
+        Path(f["file_path"]).name for f in payload["findings"] if f["scanner"] == "trivy"
+    }
+    assert trivy_files == {"a.txt", "b.txt"}, (
+        f"--skip-duplicate must keep both distinct secrets, got {sorted(trivy_files)}\n"
+        f"stdout:\n{out}\nstderr:\n{proc.stderr}"
+    )
+    # Critical findings present -> guard exits 1.
+    assert proc.returncode == 1, f"expected exit 1, got {proc.returncode}\nstderr: {proc.stderr}"
+
+
+@requires_trivy
+def test_trivy_hash_and_preview_recover_raw_secret_from_real_output(tmp_path):
+    """#479: the adapter recovers the raw value trivy redacted in ``Match``.
+
+    ``secret_hash`` must be the hash of the actual secret (so cross-scanner
+    collapse keeps working) and ``secret_preview`` must preview the secret,
+    not the redacted Match line.
+    """
+    from envdrift.scanner.patterns import hash_secret, redact_secret
+
+    _plant_same_shape_tokens(tmp_path)
+
+    scanner = TrivyScanner(auto_install=False)
+    result = scanner.scan([tmp_path])
+
+    assert result.error is None, f"unexpected error: {result.error}"
+    by_file = {f.file_path.name: f for f in result.findings if f.rule_id == "trivy-github-pat"}
+    assert set(by_file) == {"a.txt", "b.txt"}, f"got findings: {result.findings}"
+    assert by_file["a.txt"].secret_hash == hash_secret(GITHUB_TOKEN)
+    assert by_file["b.txt"].secret_hash == hash_secret(GITHUB_TOKEN_B)
+    assert by_file["a.txt"].secret_preview == redact_secret(GITHUB_TOKEN)
+    assert by_file["b.txt"].secret_preview == redact_secret(GITHUB_TOKEN_B)
+    # The raw secrets never leak into previews.
+    assert GITHUB_TOKEN not in by_file["a.txt"].secret_preview
+    assert GITHUB_TOKEN_B not in by_file["b.txt"].secret_preview
+
+
+@requires_trivy
+def test_trivy_finding_collapses_with_native_for_same_secret_under_skip_duplicate(tmp_path):
+    """#479: one secret found by trivy AND native collapses under skip_duplicate.
+
+    The documented cross-scanner duplicate collapse keys on ``secret_hash``;
+    that only works when trivy hashes the raw value rather than the redacted
+    Match line (which can never match another scanner's hash).
+    """
+    from envdrift.scanner.patterns import hash_secret
+
+    (tmp_path / "creds.env").write_text(f"GITHUB_TOKEN={GITHUB_TOKEN}\n", encoding="utf-8")
+
+    config = GuardConfig(
+        use_native=True,
+        use_gitleaks=False,
+        use_trivy=True,
+        auto_install=False,
+        skip_duplicate=True,
+    )
+    result = ScanEngine(config).scan([tmp_path])
+
+    assert {"native", "trivy"}.issubset(set(result.scanners_used))
+    token_hash = hash_secret(GITHUB_TOKEN)
+    matching = [f for f in result.unique_findings if f.secret_hash == token_hash]
+    assert len(matching) == 1, (
+        f"the same secret must collapse to ONE finding, got {len(matching)}: {matching}"
+    )
+    # The old bug: trivy hashed the redacted Match line instead of the secret.
+    masked_line_hash = hash_secret("GITHUB_TOKEN=" + "*" * len(GITHUB_TOKEN))
+    assert all(f.secret_hash != masked_line_hash for f in result.unique_findings), (
+        "a finding still hashes the redacted Match line as if it were the secret"
+    )
+
+
+@requires_trivy
+def test_trivy_two_distinct_secrets_on_one_line_keep_distinct_hashes(tmp_path):
+    """#479 same-line case: two distinct same-rule secrets on ONE line.
+
+    Trivy censors ALL secret spans in the line before building each finding's
+    ``Match``, so the two findings it emits are byte-identical dicts. Recovery
+    is rejected (the differing span contains the unmasked separator), and the
+    fallback hash must carry an occurrence index so the two real secrets do
+    not collapse into one under ``--skip-duplicate``.
+    """
+    (tmp_path / "creds.env").write_text(
+        f"T1={GITHUB_TOKEN} T2={GITHUB_TOKEN_B}\n", encoding="utf-8"
+    )
+
+    scanner = TrivyScanner(auto_install=False)
+    result = scanner.scan([tmp_path])
+
+    assert result.error is None, f"unexpected error: {result.error}"
+    pats = [f for f in result.findings if f.rule_id == "trivy-github-pat"]
+    assert len(pats) == 2, f"trivy must report both same-line secrets, got: {result.findings}"
+    hashes = {f.secret_hash for f in pats}
+    assert all(hashes), "fallback findings must still carry a non-empty hash"
+    assert len(hashes) == 2, (
+        "two distinct same-line secrets collapsed to one hash (#479 same-line case)"
+    )

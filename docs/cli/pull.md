@@ -113,7 +113,9 @@ This creates a single usable `.env` file for local development.
 > **Note:** The merged `.env.{env}` file contains decrypted secrets, so it is
 > added to `.gitignore` (just like `envdrift push`) to keep a routine
 > `git add .` from staging plaintext secrets. Commit only the `.clear` and
-> `.secret` files, never the combined file.
+> `.secret` files, never the combined file. The merged file is written
+> atomically with owner-only permissions (`0600` on POSIX, like `.env.keys`),
+> never world-readable at the process umask.
 
 ```bash
 # Decrypt and merge partial encryption files
@@ -256,10 +258,12 @@ The effective environment is resolved in this priority order:
 
 ## Exit Codes
 
-| Code | Meaning                                    |
-| :--- | :----------------------------------------- |
-| 0    | Success (all synced and decrypted)         |
-| 1    | Error (sync failure or decryption failure) |
+| Code | Meaning                                                                       |
+| :--- | :----------------------------------------------------------------------------- |
+| 0    | Success (all synced and decrypted)                                              |
+| 1    | Error (sync failure or decryption failure)                                      |
+| 1    | A mapping's `folder_path` does not exist (broken sync config, reported per row) |
+| 1    | A mapped env file cannot be read (e.g. not valid UTF-8) — clean per-file error  |
 
 ## Prerequisites
 

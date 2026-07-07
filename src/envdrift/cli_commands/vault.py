@@ -22,27 +22,26 @@ def _resolve_vault_settings(
 
     Merges explicit CLI flags with the ``[vault]`` section of an
     ``envdrift.toml``/``pyproject.toml`` (flags win). Exits the CLI with a
-    user-facing error when the provider is missing or a provider-specific
-    requirement is unmet (azure/hashicorp need ``--vault-url``; gcp needs
-    ``--project-id``).
+    user-facing error when the config exists but cannot be loaded, when the
+    provider is missing, or when a provider-specific requirement is unmet
+    (azure/hashicorp need ``--vault-url``; gcp needs ``--project-id``).
 
     Shared by ``vault-push`` (single-service mode) and ``vault-pull`` so the two
     commands stay byte-for-byte consistent.
     """
-    import contextlib
-    import tomllib
-
-    from envdrift.config import ConfigNotFoundError, find_config, load_config
+    from envdrift.config import ConfigLoadError, ConfigNotFoundError, find_config, load_config
 
     envdrift_config = None
-    if config:
-        with contextlib.suppress(ConfigNotFoundError, tomllib.TOMLDecodeError):
-            envdrift_config = load_config(config)
-    else:
-        config_path = find_config()
-        if config_path:
-            with contextlib.suppress(ConfigNotFoundError, tomllib.TOMLDecodeError):
-                envdrift_config = load_config(config_path)
+    config_path = config if config is not None else find_config()
+    if config_path is not None:
+        try:
+            envdrift_config = load_config(config_path)
+        except (ConfigNotFoundError, ConfigLoadError) as e:
+            # These were silently suppressed; the user was then told to
+            # "configure in envdrift.toml" — the very file whose parse error
+            # was being hidden (#491). Report the real failure instead.
+            print_error(str(e))
+            raise typer.Exit(code=1) from None
 
     vault_config = getattr(envdrift_config, "vault", None)
 
@@ -256,10 +255,17 @@ def vault_push(
             print_error(str(e))
             raise typer.Exit(code=1) from None
 
+        from envdrift.config import ConfigLoadError, ConfigNotFoundError
+
         try:
             encryption_backend, backend_provider, encryption_config = resolve_encryption_backend(
                 config
             )
+        except (ConfigNotFoundError, ConfigLoadError) as e:
+            # resolve_encryption_backend no longer falls back to dotenvx on a
+            # broken config (#491); surface the loader's message verbatim.
+            print_error(str(e))
+            raise typer.Exit(code=1) from None
         except ValueError as e:
             print_error(f"Unsupported encryption backend: {e}")
             raise typer.Exit(code=1) from None
@@ -290,6 +296,17 @@ def vault_push(
         for mapping in sync_config.mappings:
             try:
                 detection = resolve_mapping_env_file(mapping)
+                if detection.status == "folder_not_found":
+                    # A missing mapping folder is a broken config (typo'd
+                    # folder_path), not a "No .env file found" skip: reporting
+                    # it as a skip with Errors: 0 let a key-backup CI job go
+                    # green having pushed nothing (#488).
+                    print_error(
+                        f"Error processing {mapping.folder_path}: folder does not "
+                        "exist or is not a directory (check folder_path in your sync config)"
+                    )
+                    error_count += 1
+                    continue
                 env_file = (
                     detection.path
                     if detection.path is not None
@@ -546,7 +563,7 @@ def vault_pull(
         ),
     ] = None,
 ) -> None:
-    r"""
+    """
     Pull a single encryption key from a cloud vault into a local .env.keys file.
 
     This is the config-free inverse of `envdrift vault-push` (single-service mode):
@@ -563,7 +580,7 @@ def vault_pull(
        envdrift vault-pull ./services/soak soak-machine --env soak --no-decrypt -p azure --vault-url https://myvault.vault.azure.net/
 
     Provider/URL/region/project-id may be omitted when they are configured in the
-    `\[vault]` section of an envdrift.toml/pyproject.toml.
+    `[vault]` section of an envdrift.toml/pyproject.toml.
 
     Examples:
         # Azure
@@ -697,8 +714,15 @@ def vault_pull(
             f"but ignored when selecting the encryption backend (auto-detected instead)."
         )
 
+    from envdrift.config import ConfigLoadError, ConfigNotFoundError
+
     try:
         encryption_backend, backend_provider, _ = resolve_encryption_backend(config)
+    except (ConfigNotFoundError, ConfigLoadError) as e:
+        # resolve_encryption_backend no longer falls back to dotenvx on a
+        # broken config (#491); surface the loader's message verbatim.
+        print_error(str(e))
+        raise typer.Exit(code=1) from None
     except ValueError as e:
         print_error(f"Unsupported encryption backend: {e}")
         raise typer.Exit(code=1) from None

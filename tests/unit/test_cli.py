@@ -6,7 +6,8 @@ import importlib.util
 import json
 import keyword
 import shlex
-import tomllib
+import shutil
+import sys
 from pathlib import Path
 from textwrap import dedent
 from types import SimpleNamespace
@@ -21,7 +22,6 @@ from envdrift.cli_commands.encryption import (
     _resolve_config_path,
     _verify_decryption_with_vault,
 )
-from envdrift.config import EnvdriftConfig
 from envdrift.encryption import EncryptionProvider
 from envdrift.encryption.base import EncryptionBackendError, EncryptionResult
 from envdrift.integrations.dotenvx import DotenvxError
@@ -45,6 +45,21 @@ def _mock_sync_engine_success(monkeypatch):
     monkeypatch.setattr("envdrift.output.rich.print_service_sync_status", lambda *_, **__: None)
     monkeypatch.setattr("envdrift.output.rich.print_sync_result", lambda *_, **__: None)
     return DummyEngine
+
+
+def _fake_dotenvx_on_path(monkeypatch):
+    """Make shutil.which report dotenvx as installed; other lookups stay real.
+
+    Keeps the ``sync --check-decryption`` gate tests deterministic on hosts
+    without the real dotenvx binary.
+    """
+    real_which = shutil.which
+    monkeypatch.setattr(
+        "shutil.which",
+        lambda cmd, *args, **kwargs: (
+            "/usr/bin/dotenvx" if cmd == "dotenvx" else real_which(cmd, *args, **kwargs)
+        ),
+    )
 
 
 def _mock_encryption_backend(
@@ -614,6 +629,23 @@ class TestEncryptCommand:
         # Should pass for encrypted file
         assert result.exit_code == 0 or "encrypt" in result.output.lower()
 
+    @pytest.mark.xfail(
+        strict=False,
+        reason="--check reads the last-wins parsed map, so a plaintext line shadowed "
+        "by a later duplicate encrypted assignment is missed (see #583)",
+    )
+    def test_encrypt_check_blocks_plaintext_shadowed_by_encrypted_duplicate(self, tmp_path: Path):
+        """A plaintext secret must block even when a later duplicate is encrypted."""
+        env_file = tmp_path / ".env"
+        env_file.write_text(
+            'SECRET_KEY=plaintext-value-123\nSECRET_KEY="encrypted:abcdef1234567890"\n'
+        )
+
+        result = runner.invoke(app, ["encrypt", str(env_file), "--check"])
+        assert result.exit_code == 1, (
+            "the plaintext SECRET_KEY line is still on disk and must block the commit"
+        )
+
     def test_encrypt_perform_encryption(self, monkeypatch, tmp_path: Path):
         """Test encrypt without --check calls encryption backend."""
         from unittest.mock import MagicMock
@@ -1173,25 +1205,22 @@ class TestDecryptCommand:
 class TestEncryptionHelpers:
     """Tests for encryption helper functions."""
 
-    def test_load_encryption_config_handles_toml_error(self, monkeypatch, tmp_path: Path):
-        """Invalid TOML should return default config and no path."""
+    def test_load_encryption_config_aborts_on_toml_error(self, monkeypatch, tmp_path: Path):
+        """Invalid TOML aborts instead of silently returning defaults (#491)."""
+        import typer
+
         config_path = tmp_path / "envdrift.toml"
-        config_path.write_text("invalid = [")
+        config_path.write_text("invalid = [", encoding="utf-8")
 
-        def fake_load(_path):
-            raise tomllib.TOMLDecodeError("bad", "invalid = [", 10)
+        errors = []
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.setattr("envdrift.cli_commands.encryption.print_error", errors.append)
 
-        warnings = []
+        with pytest.raises(typer.Exit) as exc_info:
+            _load_encryption_config()
 
-        monkeypatch.setattr("envdrift.config.find_config", lambda: config_path)
-        monkeypatch.setattr("envdrift.config.load_config", fake_load)
-        monkeypatch.setattr("envdrift.cli_commands.encryption.print_warning", warnings.append)
-
-        config, resolved = _load_encryption_config()
-
-        assert isinstance(config, EnvdriftConfig)
-        assert resolved is None
-        assert warnings
+        assert exc_info.value.exit_code == 1
+        assert any("TOML syntax error" in e for e in errors)
 
     def test_resolve_config_path_relative(self, tmp_path: Path):
         """Relative paths should resolve relative to config file."""
@@ -2053,33 +2082,23 @@ class TestVaultVerification:
         assert captured["kwargs"]["project_id"] == "my-gcp-project"
 
     def test_verify_vault_aws_with_raw_secret(self, monkeypatch, tmp_path: Path):
-        """Vault verification should accept raw secrets and derive key name."""
+        """Vault verification should accept raw secrets and derive key name.
+
+        For a plain ``.env`` file dotenvx expects the suffix-less
+        ``DOTENV_PRIVATE_KEY`` variable; the old ``env_file.stem`` derivation
+        wrongly defaulted to ``DOTENV_PRIVATE_KEY_PRODUCTION`` (#473).
+        """
 
         env_file = tmp_path / ".env"
         env_file.write_text("SECRET=encrypted")
 
         class DummyVault:
             def ensure_authenticated(self) -> None:
-                """
-                Ensure the command runner is authenticated before performing operations.
-
-                Implementations should verify or establish the required authentication state for subsequent CLI actions.
-                """
+                """Pretend authentication always succeeds."""
                 return None
 
             def get_secret(self, name: str):
-                """
-                Return the fixed plaintext key for the "dotenv-key" secret.
-
-                Parameters:
-                    name (str): The secret name; must be "dotenv-key".
-
-                Returns:
-                    str: The plaintext secret "plainawskey".
-
-                Raises:
-                    AssertionError: If `name` is not "dotenv-key".
-                """
+                """Return the bare (prefix-less) key for the "dotenv-key" secret."""
                 assert name == "dotenv-key"
                 return "plainawskey"
 
@@ -2087,14 +2106,7 @@ class TestVaultVerification:
 
         class DummyDotenvx:
             def is_installed(self):
-                """
-                Check whether the component is installed.
-
-                This implementation always reports the component as installed.
-
-                Returns:
-                    `true` if the component is installed, `false` otherwise.
-                """
+                """Report dotenvx as installed."""
                 return True
 
             def decrypt(
@@ -2104,20 +2116,9 @@ class TestVaultVerification:
                 env: dict[str, str] | None = None,
                 cwd: object = None,
             ) -> None:
-                """
-                Test stub that simulates a decrypt call by recording the production private key and working directory and asserting the env file exists.
-
-                Parameters:
-                    env_path (Path): Path to the environment file to be decrypted; must exist.
-                    env_keys_file (Path|None): Optional path to the keys file (not used by the stub).
-                    env (Mapping|None): Environment mapping; the stub reads `DOTENV_PRIVATE_KEY_PRODUCTION` from this mapping.
-                    cwd (str|Path|None): Working directory passed to the stub; recorded for inspection.
-
-                Raises:
-                    AssertionError: If `env_path` does not exist.
-                """
+                """Record the suffix-less key var and cwd the verify passes in."""
                 assert env is not None
-                captured["env_var"] = env.get("DOTENV_PRIVATE_KEY_PRODUCTION")
+                captured["env_var"] = env.get("DOTENV_PRIVATE_KEY")
                 captured["cwd"] = cwd
                 assert env_path.exists()
 
@@ -2339,6 +2340,93 @@ class TestSyncCommand:
 
         assert result.exit_code == 1
 
+    def test_sync_check_decryption_failure_exits_nonzero_without_ci(
+        self, monkeypatch, tmp_path: Path
+    ):
+        """#473: a requested --check-decryption that FAILED must exit 1 even without --ci.
+
+        The deep-review verifier reproduced "Decryption: FAILED / Failed: 1"
+        with overall exit 0 — an untruthful verdict scripts silently miss.
+        """
+        from envdrift.sync.result import (
+            DecryptionTestResult,
+            ServiceSyncResult,
+            SyncAction,
+            SyncResult,
+        )
+
+        config_file = tmp_path / "pair.txt"
+        config_file.write_text("secret=service")
+
+        # The up-front --check-decryption gate needs dotenvx present; fake it
+        # so this test exercises the FAILED-result gate on dotenvx-less hosts.
+        _fake_dotenvx_on_path(monkeypatch)
+        monkeypatch.setattr("envdrift.vault.get_vault_client", lambda *_, **__: SimpleNamespace())
+        monkeypatch.setattr("envdrift.output.rich.print_service_sync_status", lambda *_, **__: None)
+        monkeypatch.setattr("envdrift.output.rich.print_sync_result", lambda *_, **__: None)
+
+        failed_check = SyncResult(
+            services=[
+                ServiceSyncResult(
+                    secret_name="secret",
+                    folder_path=tmp_path / "service",
+                    action=SyncAction.SKIPPED,
+                    message="up to date",
+                    decryption_result=DecryptionTestResult.FAILED,
+                )
+            ]
+        )
+
+        class FailedCheckEngine:
+            def __init__(self, *_args, **_kwargs):
+                """Test stub returning a sync result with a failed decryption test."""
+
+            def sync_all(self):
+                return failed_check
+
+        monkeypatch.setattr("envdrift.sync.engine.SyncEngine", FailedCheckEngine)
+
+        common_args = [
+            "sync",
+            "-c",
+            str(config_file),
+            "-p",
+            "hashicorp",
+            "--vault-url",
+            "http://localhost:8200",
+        ]
+
+        # Without --check-decryption the (stubbed) failed test is not an
+        # explicitly requested check, so the historic exit contract holds.
+        result = runner.invoke(app, common_args)
+        assert result.exit_code == 0
+
+        result = runner.invoke(app, [*common_args, "--check-decryption"])
+        assert result.exit_code == 1
+
+    def test_sync_check_decryption_without_dotenvx_exits_nonzero(self, monkeypatch):
+        """#473: --check-decryption with dotenvx absent must fail loudly, not exit 0.
+
+        Without dotenvx the engine degrades every per-service test to SKIPPED,
+        so the run exited 0 having verified nothing - the same
+        cannot-verify-downgraded-to-success class the rest of #473 fixes.
+        `decrypt --verify-vault` already fails loudly for the identical state.
+        """
+        real_which = shutil.which
+        monkeypatch.setattr(
+            "shutil.which",
+            lambda cmd, *args, **kwargs: (
+                None if cmd == "dotenvx" else real_which(cmd, *args, **kwargs)
+            ),
+        )
+
+        result = runner.invoke(app, ["sync", "--check-decryption"])
+
+        assert result.exit_code == 1
+        out = " ".join(result.output.split())
+        assert "dotenvx is not installed" in out
+        assert "cannot verify decryption" in out
+
     def test_sync_autodiscovery_uses_config_defaults(self, monkeypatch, tmp_path: Path):
         """Auto-discovered envdrift.toml should supply provider, vault URL, and mappings."""
 
@@ -2447,47 +2535,25 @@ class TestSyncCommand:
         assert sync_config.default_vault_name == "aws-vault"
         assert sync_config.mappings[0].vault_name == "aws-vault"
 
-    def test_sync_falls_back_to_sync_config_when_load_config_fails(
-        self, monkeypatch, tmp_path: Path
-    ):
-        """If config loading fails, still attempt to read sync config from the TOML path."""
+    def test_sync_aborts_when_discovered_config_is_malformed(self, monkeypatch, tmp_path: Path):
+        """A broken auto-discovered config is a hard error, not a fallback (#491).
+
+        Pre-#491 sync warned about the parse failure and then re-read the same
+        TOML for the [vault.sync] section — continuing with defaults for every
+        other section the file configured.
+        """
 
         config_file = tmp_path / "envdrift.toml"
         config_file.write_text(
             dedent(
                 """
-                [vault.sync]
+                [vault.sync
                 default_vault_name = "fallback"
-
-                [[vault.sync.mappings]]
-                secret_name = "dotenv-key"
-                folder_path = "services/api"
                 """
-            )
+            ),
+            encoding="utf-8",
         )
-
-        def broken_load_config(*_args, **_kwargs):
-            raise tomllib.TOMLDecodeError("boom", "", 0)
-
-        monkeypatch.setattr("envdrift.config.find_config", lambda *_args, **_kwargs: config_file)
-        monkeypatch.setattr("envdrift.config.load_config", broken_load_config)
-        monkeypatch.setattr(
-            "envdrift.vault.get_vault_client",
-            lambda *_args, **_kwargs: SimpleNamespace(ensure_authenticated=lambda: None),
-        )
-        monkeypatch.setattr("envdrift.output.rich.print_service_sync_status", lambda *_, **__: None)
-        monkeypatch.setattr("envdrift.output.rich.print_sync_result", lambda *_, **__: None)
-
-        captured: dict[str, Any] = {}
-
-        class DummyEngine:
-            def __init__(self, config, vault_client, mode, prompt_callback, progress_callback):
-                captured["config"] = config
-
-            def sync_all(self):
-                return SimpleNamespace(services=[], has_errors=False)
-
-        monkeypatch.setattr("envdrift.sync.engine.SyncEngine", DummyEngine)
+        monkeypatch.chdir(tmp_path)
 
         result = runner.invoke(
             app,
@@ -2500,8 +2566,10 @@ class TestSyncCommand:
             ],
         )
 
-        assert result.exit_code == 0
-        assert captured["config"].default_vault_name == "fallback"
+        assert result.exit_code == 1
+        normalized = " ".join(result.output.split())
+        assert "TOML syntax error in" in normalized
+        assert "No sync configuration found" not in normalized
 
     def test_sync_missing_config_file_errors(self, tmp_path: Path):
         """Missing provided config file should exit with error."""
@@ -2666,6 +2734,9 @@ class TestSyncCommand:
         )
         monkeypatch.chdir(tmp_path)
 
+        # The up-front --check-decryption gate needs dotenvx present; fake it
+        # so this test still reaches the engine on dotenvx-less hosts.
+        _fake_dotenvx_on_path(monkeypatch)
         monkeypatch.setattr(
             "envdrift.vault.get_vault_client",
             lambda *_a, **_k: SimpleNamespace(ensure_authenticated=lambda: None),
@@ -2739,11 +2810,11 @@ class TestSyncCommand:
         assert result.exit_code == 1
         assert "toml syntax error" in result.output.lower()
 
-    def test_sync_warns_on_autodiscovered_toml_syntax_error(self, monkeypatch, tmp_path: Path):
-        """Auto-discovery should warn about TOML syntax errors instead of silently skipping."""
+    def test_sync_errors_on_autodiscovered_toml_syntax_error(self, monkeypatch, tmp_path: Path):
+        """Auto-discovery must hard-error on TOML syntax errors, not warn-and-continue (#491)."""
 
         bad_config = tmp_path / "envdrift.toml"
-        bad_config.write_text("bad = [")
+        bad_config.write_text("bad = [", encoding="utf-8")
 
         monkeypatch.chdir(tmp_path)
 
@@ -2759,7 +2830,9 @@ class TestSyncCommand:
         )
 
         assert result.exit_code == 1
-        assert "toml syntax error" in result.output.lower()
+        normalized = " ".join(result.output.split())
+        assert "[ERROR] TOML syntax error in" in normalized
+        assert "No sync configuration found" not in normalized
 
 
 class TestPullCommand:
@@ -3987,6 +4060,46 @@ class TestPullCommand:
         _write_merged_combined_file(clear, secret, combined)
         assert combined.read_text() == "\n"
 
+    @staticmethod
+    def test_write_merged_combined_file_owner_only_and_atomic(tmp_path: Path):
+        """The merged file holds DECRYPTED secrets -> 0600 + atomic write (#471).
+
+        Pre-fix, ``_write_merged_combined_file`` used a bare ``write_text``, so
+        ``pull --merge`` created a file full of decrypted plaintext secrets at
+        the process umask (0644: world-readable) while the ``.env.keys``
+        private key next to it was written 0600 via ``atomic_write``. The merge
+        writer must use the same hardened helper.
+        """
+        import stat as _stat
+
+        from envdrift.cli_commands.sync import _write_merged_combined_file
+
+        clear = tmp_path / ".env.clear"
+        secret = tmp_path / ".env.secret"
+        combined = tmp_path / ".env"
+        clear.write_text("APP=web\n", encoding="utf-8")
+        # Decrypted secret with the residual dotenvx header (production shape).
+        secret.write_text(
+            "#/-------------------[DOTENV_PUBLIC_KEY]--------------------/\n"
+            "#/            public-key encryption for .env files          /\n"
+            "#/       [how it works](https://dotenvx.com/encryption)     /\n"
+            "#/----------------------------------------------------------/\n"
+            'DOTENV_PUBLIC_KEY_TEST="03abc123..."\n'
+            "API_KEY=" + "supersecret-" + "merged" + "\n",
+            encoding="utf-8",
+        )
+
+        _write_merged_combined_file(clear, secret, combined)
+
+        body = combined.read_text(encoding="utf-8")
+        assert "API_KEY=" + "supersecret-" + "merged" in body
+        if sys.platform != "win32":
+            mode = _stat.S_IMODE(combined.stat().st_mode)
+            assert mode == 0o600, f"merged combined file mode {oct(mode)} != 0o600"
+        # Atomic write leaves no half-written temp file next to the secrets.
+        leftovers = list(tmp_path.glob("*.envdrift-tmp"))
+        assert leftovers == [], f"temp files left behind: {leftovers}"
+
 
 class TestLockCommand:
     """Tests for the lock CLI command."""
@@ -4490,7 +4603,12 @@ class TestLockCommand:
         result = runner.invoke(app, ["lock", "-c", str(config_file), "--verify-vault"])
 
         assert result.exit_code == 1
-        assert "key mismatch" in result.output.lower()
+        # Collapse whitespace: Rich soft-wraps the long tmp_path service line
+        # in CI, which can split the KEY MISMATCH phrase across a newline.
+        out = " ".join(result.output.lower().split())
+        assert "key mismatch" in out
+        # The #473 contract: the gate reports that nothing was encrypted.
+        assert "nothing was encrypted" in out
 
     def test_lock_skips_already_encrypted_file(self, monkeypatch, tmp_path: Path):
         """Lock should skip fully encrypted files."""
@@ -5486,7 +5604,8 @@ class TestErrorPathHardening:
         result = runner.invoke(
             app, ["guard", str(env), "--native-only", "--json", "--fail-on", "bogus"]
         )
-        assert result.exit_code == 1
+        # Operational errors exit 6, distinct from the severity codes (#478).
+        assert result.exit_code == 6
         # stdout must be a clean JSON error doc, not Rich/human prose (#28).
         doc = json.loads(result.output)
         assert "error" in doc and "bogus" in doc["error"]

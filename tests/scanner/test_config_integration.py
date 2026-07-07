@@ -16,7 +16,7 @@ class TestGuardConfigDataclass:
         assert config.scanners == ["native", "gitleaks"]
         assert config.auto_install is True
         assert config.include_history is False
-        assert config.check_entropy is False
+        assert config.check_entropy is None  # tri-state: unset = env files only (#478)
         assert config.entropy_threshold == 4.5
         assert config.fail_on_severity == "high"
         assert config.ignore_paths == []

@@ -24,9 +24,11 @@ Configuration can be set in envdrift.toml:
 
 from __future__ import annotations
 
+import dataclasses
 import json
 import os
 import sys
+import tempfile
 import time as time_module
 import tomllib
 from pathlib import Path
@@ -41,7 +43,12 @@ from rich.text import Text
 
 from envdrift.config import ConfigNotFoundError, EnvdriftConfig, load_config
 from envdrift.env_files import resolve_custom_env_file
-from envdrift.scanner.base import AggregatedScanResult, FindingSeverity
+from envdrift.scanner.base import (
+    EXIT_OPERATIONAL_ERROR,
+    AggregatedScanResult,
+    FindingSeverity,
+    ScanFinding,
+)
 from envdrift.scanner.engine import GuardConfig, ScanEngine
 from envdrift.scanner.output import (
     format_json,
@@ -95,15 +102,16 @@ def _load_guard_config(config_file: Path | None, json_output: bool, sarif: bool)
     ``load_config`` can raise ``ConfigNotFoundError`` (explicit --config that
     doesn't exist), ``tomllib.TOMLDecodeError`` (malformed TOML), or
     ``ValueError`` (eager config validation). All three are turned into a
-    structured error document (json/sarif) or error prose plus ``Exit(1)`` so a
-    Rich traceback never contaminates machine output (#413). Mirrors sync.py /
-    encryption_helpers.py.
+    structured error document (json/sarif) or error prose plus the operational
+    exit code 6 (#478) so a Rich traceback never contaminates machine output
+    (#413) and an exit-code-only pipeline can tell a config failure from a
+    critical finding. Mirrors sync.py / encryption_helpers.py.
     """
     try:
         return load_config(config_file)
     except (ConfigNotFoundError, tomllib.TOMLDecodeError, ValueError) as exc:
         _emit_error(json_output, sarif, f"Could not load config: {exc}")
-        raise typer.Exit(code=1) from None
+        raise typer.Exit(code=EXIT_OPERATIONAL_ERROR) from None
 
 
 def _emit_error(json_output: bool, sarif: bool, message: str) -> None:
@@ -150,6 +158,159 @@ def _emit_progress(json_output: bool, sarif: bool, message: str) -> None:
     """
     if not _machine_mode(json_output, sarif):
         console.print(message)
+
+
+def _warn_stderr(message: str) -> None:
+    """Print a warning on stderr (visible in every output mode).
+
+    Warnings must reach the user even under ``--json``/``--sarif``, where prose
+    on stdout would corrupt the machine-readable document — stderr keeps them
+    visible in CI logs without contaminating stdout (#476).
+    """
+    print(f"Warning: {message}", file=sys.stderr)
+
+
+def _materialize_staged_index(
+    staged_files: list[str], repo_root: Path
+) -> tuple[tempfile.TemporaryDirectory, list[Path], dict[Path, Path]]:
+    """Mirror the staged *index blobs* of ``staged_files`` into a temp dir.
+
+    ``--staged`` must scan what is about to be committed — the blob staged in
+    the git index — not the current working-tree copy: a secret staged and then
+    edited away (or deleted) in the working tree would otherwise pass with exit
+    0 while the commit still ships it (#476). Each repo-root-relative staged
+    path (the form ``git diff --cached --name-only`` emits) is read with ``git
+    show :<path>`` and written under the mirror with the same relative layout,
+    so filename/suffix rules and path-pattern ignores keep matching.
+
+    Returns the ``TemporaryDirectory`` handle (caller cleans up), the mirror
+    paths to scan, and a map of resolved mirror path -> display path
+    (cwd-relative, like the other collection branches) used to rewrite finding
+    locations after the scan.
+    """
+    import subprocess  # nosec B404
+
+    tmpdir = tempfile.TemporaryDirectory(prefix="envdrift-staged-", ignore_cleanup_errors=True)
+    mirror_root = Path(tmpdir.name)
+    scan_paths: list[Path] = []
+    display_paths: dict[Path, Path] = {}
+    cwd = Path.cwd()
+
+    try:
+        for rel in staged_files:
+            # ``:<path>`` reads the staged blob; <path> is repo-root-relative
+            # regardless of cwd, but run from the repo root for unambiguity.
+            show = subprocess.run(  # nosec B603, B607
+                ["git", "show", f":{rel}"],
+                capture_output=True,
+                timeout=30,
+                cwd=str(repo_root),
+            )
+            if show.returncode != 0:
+                # E.g. a submodule (gitlink) entry: there is no blob to
+                # content-scan. Skip it loudly, never silently.
+                detail = show.stderr.decode("utf-8", errors="replace").strip()
+                _warn_stderr(
+                    f"skipping staged entry '{rel}' — could not read its index blob"
+                    + (f" ({detail})" if detail else "")
+                )
+                continue
+            dest = mirror_root / Path(rel)
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            dest.write_bytes(show.stdout)
+            scan_paths.append(dest)
+            display_paths[dest.resolve()] = Path(os.path.relpath(repo_root / rel, cwd))
+
+        if scan_paths:
+            _git_index_mirror(mirror_root)
+    except BaseException:
+        # The caller can only clean up a *returned* handle: if we raise
+        # mid-mirror (disk full, git timeout, ...) the temp dir holding staged
+        # secret content must not linger until a GC finalizer runs.
+        tmpdir.cleanup()
+        raise
+
+    return tmpdir, scan_paths, display_paths
+
+
+def _git_index_mirror(mirror_root: Path) -> None:
+    """Stage every mirrored file in a throwaway git repo at ``mirror_root``.
+
+    In the real repository every collected file IS staged, and rules that ask
+    git about a file's state (``is_file_tracked`` behind committed-private-key)
+    must keep answering "staged" for the mirror copies (#476). Hook-injected
+    git env (GIT_DIR/GIT_INDEX_FILE/...) is stripped so the mirror can never
+    touch the real repository's index. Failure only degrades those git-state
+    rules, so it warns instead of aborting the scan.
+    """
+    import subprocess  # nosec B404
+
+    env = os.environ.copy()
+    for key in ("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_COMMON_DIR"):
+        env.pop(key, None)
+    # An injected global/system git config (core.hooksPath, init.templateDir,
+    # core.fsmonitor, ...) must not shape the throwaway mirror repo either.
+    # Point both at the null device — merely unsetting them would fall back to
+    # the real ~/.gitconfig / system config.
+    env["GIT_CONFIG_GLOBAL"] = os.devnull
+    env["GIT_CONFIG_SYSTEM"] = os.devnull
+    try:
+        for args in (
+            ["git", "init", "--quiet", str(mirror_root)],
+            # --force: a user-global excludes file must not keep e.g. .env
+            # files out of the mirror index.
+            ["git", "-C", str(mirror_root), "add", "--force", "--all"],
+        ):
+            proc = subprocess.run(  # nosec B603, B607
+                args, capture_output=True, timeout=30, env=env
+            )
+            if proc.returncode != 0:
+                raise OSError(proc.stderr.decode("utf-8", errors="replace").strip())
+    except (subprocess.TimeoutExpired, OSError) as exc:
+        _warn_stderr(
+            f"could not git-index the staged-file mirror ({exc}); "
+            "git-state rules (e.g. committed-private-key) may not fire"
+        )
+
+
+def _remap_finding_paths(
+    result: AggregatedScanResult, display_paths: dict[Path, Path]
+) -> AggregatedScanResult:
+    """Rewrite staged-mirror scan paths in findings back to repo display paths.
+
+    The staged mirror exists only for the duration of the scan; findings (and
+    the per-scanner results embedded in the aggregate) must point at the real
+    cwd-relative repo paths in every output mode, exactly like the other
+    collection branches (#476). Descriptions are rewritten too: scanners embed
+    the scanned path in prose (e.g. native's "Run 'envdrift encrypt <path>'"),
+    and a mirror temp path there is both a leak and a dead suggestion — the
+    directory is deleted right after the scan.
+    """
+
+    def remap(finding: ScanFinding) -> ScanFinding:
+        try:
+            resolved = Path(finding.file_path).resolve()
+        except OSError:
+            return finding
+        display = display_paths.get(resolved)
+        if display is None:
+            return finding
+        description = finding.description
+        for mirror_str in (str(finding.file_path), str(resolved)):
+            if mirror_str in description:
+                description = description.replace(mirror_str, str(display))
+        return dataclasses.replace(finding, file_path=display, description=description)
+
+    # dataclasses.replace carries every unlisted field forward, so a future
+    # AggregatedScanResult field can never be silently dropped here.
+    return dataclasses.replace(
+        result,
+        results=[
+            dataclasses.replace(scan, findings=[remap(f) for f in scan.findings])
+            for scan in result.results
+        ],
+        unique_findings=[remap(f) for f in result.unique_findings],
+    )
 
 
 def guard(
@@ -248,13 +409,14 @@ def guard(
         ),
     ] = False,
     entropy: Annotated[
-        bool,
+        bool | None,
         typer.Option(
-            "--entropy",
+            "--entropy/--no-entropy",
             "-e",
-            help="Enable entropy-based detection for random secrets",
+            help="Entropy detection: --entropy scans all files, --no-entropy disables it "
+            "entirely (default: env files only)",
         ),
-    ] = False,
+    ] = None,
     skip_clear: Annotated[
         bool | None,
         typer.Option(
@@ -353,6 +515,8 @@ def guard(
       2 - High severity findings detected
       3 - Medium severity findings detected
       4 - Low severity findings detected
+      5 - Scan incomplete: a selected scanner failed to run
+      6 - Operational error (bad config, invalid path or flags)
 
     \b
     Examples:
@@ -397,41 +561,71 @@ def guard(
             pass
         return Path.cwd()
 
+    # Staged-mirror state (set only by the --staged branch): the temp dir
+    # holding the staged index blobs and the mirror-path -> display-path map
+    # used to rewrite finding locations after the scan (#476).
+    staged_tmpdir: tempfile.TemporaryDirectory | None = None
+    staged_display_paths: dict[Path, Path] = {}
+
     # Handle --staged flag (pre-commit mode)
     if staged:
         try:
+            # ``-z`` + a binary pipe: git prints staged paths NUL-terminated and
+            # verbatim (no ``core.quotepath`` C-quoting of spaces/non-ASCII), and
+            # ``os.fsdecode`` round-trips the raw filesystem bytes so the decoded
+            # path still resolves under ``git show :<path>``. A text pipe with
+            # ``split("\n")`` mis-parsed any name git would quote (spaces, quotes,
+            # non-ASCII) — the same class #531 fixed for check-ignore.
             result = subprocess.run(  # nosec B603, B607
-                ["git", "diff", "--cached", "--name-only", "--diff-filter=ACMR"],
+                ["git", "diff", "--cached", "-z", "--name-only", "--diff-filter=ACMR"],
                 capture_output=True,
-                text=True,
-                encoding="utf-8",
-                errors="replace",
                 timeout=10,
             )
-            if result.returncode == 0 and result.stdout.strip():
-                repo_root = _git_toplevel()
-                candidates = [repo_root / f for f in result.stdout.strip().split("\n") if f]
-                # Check existence against the repo-root-resolved path, but scan
-                # with cwd-relative paths so findings display the short relative
-                # filename (a long absolute path gets truncated by the Rich
-                # panel) and path-based config matching behaves as it did from
-                # the repo root.
-                paths = [Path(os.path.relpath(p, Path.cwd())) for p in candidates if p.exists()]
-                if not paths:
-                    _emit_empty_or_prose(json_output, sarif, _NO_STAGED)
-                    raise typer.Exit(code=0)
-                _emit_progress(
-                    json_output, sarif, f"[dim]Scanning {len(paths)} staged file(s)...[/dim]"
+            # A failing ``git diff --cached`` (e.g. not a git repository) is an
+            # error, not "nothing staged": conflating the two turned a broken
+            # pre-commit gate into a green pass (#476).
+            if result.returncode != 0:
+                detail = result.stderr.decode("utf-8", "replace").strip() or "unknown git error"
+                _emit_error(
+                    json_output,
+                    sarif,
+                    f"--staged could not list staged files (git diff --cached failed): {detail}",
                 )
-            else:
+                # An operational git failure, not a critical finding: exit 6 so
+                # an exit-code-only pipeline never reads it as a leak (exit 1 is
+                # EXIT_CRITICAL_FINDINGS under the #526 contract).
+                raise typer.Exit(code=EXIT_OPERATIONAL_ERROR)
+            staged_files = [os.fsdecode(p) for p in result.stdout.split(b"\0") if p]
+            if not staged_files:
                 _emit_empty_or_prose(json_output, sarif, _NO_STAGED)
                 raise typer.Exit(code=0)
+            # Scan the staged *index blobs*, not the working-tree copies: the
+            # blob is what the commit ships, and the two can differ (#476).
+            # Findings are remapped to cwd-relative repo paths after the scan
+            # so output and path-based config matching are unchanged.
+            staged_tmpdir, paths, staged_display_paths = _materialize_staged_index(
+                staged_files, _git_toplevel()
+            )
+            if not paths:
+                staged_tmpdir.cleanup()
+                _emit_error(
+                    json_output,
+                    sarif,
+                    "--staged could not read any staged file content from the git index.",
+                )
+                # Operational failure (no readable index blobs), not a finding.
+                raise typer.Exit(code=EXIT_OPERATIONAL_ERROR)
+            _emit_progress(
+                json_output, sarif, f"[dim]Scanning {len(paths)} staged file(s)...[/dim]"
+            )
         except subprocess.TimeoutExpired as err:
-            console.print("[red]Error:[/red] Git command timed out")
-            raise typer.Exit(code=1) from err
+            # Route through _emit_error so --json/--sarif stdout stays a
+            # parseable document on git failures too (#478 review).
+            _emit_error(json_output, sarif, "Git command timed out")
+            raise typer.Exit(code=EXIT_OPERATIONAL_ERROR) from err
         except FileNotFoundError as err:
-            console.print("[red]Error:[/red] Git not found. --staged requires git.")
-            raise typer.Exit(code=1) from err
+            _emit_error(json_output, sarif, "Git not found. --staged requires git.")
+            raise typer.Exit(code=EXIT_OPERATIONAL_ERROR) from err
 
     # Handle --pr-base flag (CI mode for PRs)
     elif pr_base:
@@ -448,12 +642,11 @@ def guard(
                 capture_output=True,
                 timeout=30,
             )
-            if fetch_result.returncode != 0 and verbose:
-                _emit_progress(
-                    json_output,
-                    sarif,
-                    f"[yellow]Warning:[/yellow] Could not fetch {pr_base}, using local refs",
-                )
+            if fetch_result.returncode != 0:
+                # Surface fetch failures unconditionally (#476): they used to be
+                # verbose-gated and swallowed in machine modes, hiding the usual
+                # root cause of an unresolvable base ref.
+                _warn_stderr(f"could not fetch '{base_ref}' from origin; using local refs")
             # Get all files changed between base and HEAD
             result = subprocess.run(  # nosec B603, B607
                 ["git", "diff", "--name-only", "--diff-filter=ACMR", f"{pr_base}...HEAD"],
@@ -463,11 +656,30 @@ def guard(
                 errors="replace",
                 timeout=10,
             )
-            if result.returncode == 0 and result.stdout.strip():
+            # rc != 0 means git itself failed (unknown revision, shallow clone
+            # missing the base, ...) — distinct from a successful empty diff.
+            # Conflating the two passed the CI secret gate green on a typo'd or
+            # unfetched base ref (#476).
+            if result.returncode != 0:
+                stderr_lines = (result.stderr or "").strip().splitlines()
+                reason = stderr_lines[0] if stderr_lines else "unknown git error"
+                _emit_error(
+                    json_output,
+                    sarif,
+                    f"--pr-base '{pr_base}' could not be diffed against: {reason} "
+                    f"Fetch or fix the base ref (e.g. 'git fetch origin {base_ref}').",
+                )
+                # An unresolvable base ref is an operational failure, not a
+                # critical finding: exit 6, never 1 (#526 contract).
+                raise typer.Exit(code=EXIT_OPERATIONAL_ERROR)
+            if result.stdout.strip():
                 repo_root = _git_toplevel()
                 candidates = [repo_root / f for f in result.stdout.strip().split("\n") if f]
                 # Resolve against the repo root for existence, scan with
-                # cwd-relative paths (see the --staged branch for rationale).
+                # cwd-relative paths so findings display the short relative
+                # filename (a long absolute path gets truncated by the Rich
+                # panel) and path-based config matching behaves as it did from
+                # the repo root.
                 paths = [Path(os.path.relpath(p, Path.cwd())) for p in candidates if p.exists()]
                 if not paths:
                     _emit_empty_or_prose(json_output, sarif, _NO_PR_CHANGES)
@@ -481,11 +693,12 @@ def guard(
                 _emit_empty_or_prose(json_output, sarif, _NO_PR_CHANGES)
                 raise typer.Exit(code=0)
         except subprocess.TimeoutExpired as err:
-            console.print("[red]Error:[/red] Git command timed out")
-            raise typer.Exit(code=1) from err
+            # Same machine-output contract as the --staged branch (#478 review).
+            _emit_error(json_output, sarif, "Git command timed out")
+            raise typer.Exit(code=EXIT_OPERATIONAL_ERROR) from err
         except FileNotFoundError as err:
-            console.print("[red]Error:[/red] Git not found. --pr-base requires git.")
-            raise typer.Exit(code=1) from err
+            _emit_error(json_output, sarif, "Git not found. --pr-base requires git.")
+            raise typer.Exit(code=EXIT_OPERATIONAL_ERROR) from err
 
     # Default behavior: use provided paths or current directory
     else:
@@ -496,7 +709,7 @@ def guard(
         for path in paths:
             if not path.exists():
                 _emit_error(json_output, sarif, f"Path not found: {path}")
-                raise typer.Exit(code=1)
+                raise typer.Exit(code=EXIT_OPERATIONAL_ERROR)
 
     # Load configuration from envdrift.toml (a bad/missing --config exits
     # cleanly via _load_guard_config instead of a Rich traceback; see #413).
@@ -515,7 +728,7 @@ def guard(
             sarif,
             f"Invalid severity '{fail_on_value}'. Valid options: critical, high, medium, low",
         )
-        raise typer.Exit(code=1) from e
+        raise typer.Exit(code=EXIT_OPERATIONAL_ERROR) from e
 
     # Determine which scanners to use
     # CLI flags override config file settings when provided
@@ -569,8 +782,23 @@ def guard(
                     )
                 )
             except ValueError as e:
-                console.print(f"[red]Error:[/red] Invalid env_file for {mapping.folder_path}: {e}")
-                raise typer.Exit(code=1) from e
+                # Same machine-output contract as the other operational-error
+                # paths: --json/--sarif stdout stays parseable (#478 review).
+                _emit_error(json_output, sarif, f"Invalid env_file for {mapping.folder_path}: {e}")
+                raise typer.Exit(code=EXIT_OPERATIONAL_ERROR) from e
+
+    # In --staged mode the scan runs on mirror copies of the index blobs, but
+    # mapped env files are matched by canonical absolute path. Alias each
+    # staged mirror copy of a mapped file or the unencrypted-env-file policy
+    # would silently stop firing for custom vault.sync env files (#476).
+    if staged_display_paths and mapped_env_files:
+        cwd = Path.cwd()
+        mapped_set = set(mapped_env_files)
+        mapped_env_files.extend(
+            str(mirror)
+            for mirror, display in staged_display_paths.items()
+            if str((cwd / display).resolve()) in mapped_set
+        )
 
     # Determine skip_clear_files (CLI overrides config)
     skip_clear_final = skip_clear if skip_clear is not None else guard_cfg.skip_clear_files
@@ -603,7 +831,10 @@ def guard(
         use_infisical=use_infisical_final,
         auto_install=auto_install,
         include_git_history=history or guard_cfg.include_history,
-        check_entropy=entropy or guard_cfg.check_entropy,
+        # Tri-state: an explicit --entropy/--no-entropy wins; otherwise the
+        # config knob (true/false/unset) decides. Unset means the native
+        # scanner's default of entropy on env files only (#478).
+        check_entropy=entropy if entropy is not None else guard_cfg.check_entropy,
         entropy_threshold=guard_cfg.entropy_threshold,
         skip_clear_files=skip_clear_final,
         skip_encrypted_files=skip_encrypted_final,
@@ -622,8 +853,31 @@ def guard(
     if ci or _machine_mode(json_output, sarif):
         output_console = Console(force_terminal=False, no_color=True)
 
-    # Create scan engine
-    engine = ScanEngine(config)
+    # Create scan engine. Wrong-shaped guard config (e.g. ignore_rules built
+    # programmatically as a list) raises a clean ValueError at construction;
+    # surface it as an operational error instead of a Rich traceback (#478).
+    try:
+        engine = ScanEngine(config)
+    except ValueError as exc:
+        _emit_error(json_output, sarif, f"Invalid guard configuration: {exc}")
+        raise typer.Exit(code=EXIT_OPERATIONAL_ERROR) from None
+
+    # Refuse a history request that no active scanner can satisfy: silently
+    # dropping the flag reported "No secrets detected" over an unscanned git
+    # history — a false security PASS (#476).
+    if config.include_git_history and not any(s.supports_git_history for s in engine.scanners):
+        active = ", ".join(s.name for s in engine.scanners) or "none"
+        _emit_error(
+            json_output,
+            sarif,
+            "Git history scanning was requested (--history or include_history in "
+            f"config), but no active scanner ({active}) supports it. Enable a "
+            "history-capable scanner (gitleaks, trufflehog, kingfisher, "
+            "git-secrets, talisman, or infisical) or drop --history.",
+        )
+        # Refusing an unsatisfiable history request is an operational error, not
+        # a critical finding: exit 6 like the other guard misconfig paths (#526).
+        raise typer.Exit(code=EXIT_OPERATIONAL_ERROR)
 
     # Check combined files security (should be in .gitignore)
     # Only check if partial_encryption is enabled and not in JSON/SARIF mode
@@ -708,64 +962,45 @@ def guard(
             live.update(Spinner("dots", text=make_progress_text()))
 
     # Run scan with progress indicator
-    if show_progress:
-        output_console.print()
-        live = Live(
-            Spinner("dots", text=make_progress_text()),
-            console=output_console,
-            refresh_per_second=10,
-        )
-        with live:
-            result = engine.scan(paths, on_scanner_complete=on_scanner_complete)
-        output_console.print()
-    else:
-        live = None
-        result = engine.scan(paths)
+    try:
+        if show_progress:
+            output_console.print()
+            live = Live(
+                Spinner("dots", text=make_progress_text()),
+                console=output_console,
+                refresh_per_second=10,
+            )
+            with live:
+                result = engine.scan(paths, on_scanner_complete=on_scanner_complete)
+            output_console.print()
+        else:
+            live = None
+            result = engine.scan(paths)
+
+        if staged_display_paths:
+            # Findings point into the staged mirror; rewrite them to the real
+            # cwd-relative repo paths before any output (#476).
+            result = _remap_finding_paths(result, staged_display_paths)
+    finally:
+        if staged_tmpdir is not None:
+            staged_tmpdir.cleanup()
+
+    # One source of truth for the verdict (#478): compute the effective exit
+    # code BEFORE rendering, so the machine-readable documents carry the exact
+    # code the process returns. In CI mode the --fail-on threshold applies
+    # (severity-derived codes keep CRITICAL=1/HIGH=2/MEDIUM=3/LOW=4 distinct,
+    # #413); in any mode a run that would otherwise pass while a selected
+    # scanner RAN AND FAILED exits 5 (scan incomplete) instead of the
+    # all-clear 0.
+    exit_code = result.effective_exit_code(fail_severity if ci else None)
 
     # Output results
     if sarif:
-        print(format_sarif(result))
+        print(format_sarif(result, exit_code=exit_code))
     elif json_output:
-        print(format_json(result))
+        print(format_json(result, exit_code=exit_code))
     else:
         format_rich(result, output_console)
-
-    # Determine exit code
-    exit_code = result.exit_code
-
-    # In CI mode, only fail if severity >= fail_on threshold
-    if ci:
-        # Map severity levels to which severities they include
-        threshold_severities: dict[FindingSeverity, set[FindingSeverity]] = {
-            FindingSeverity.CRITICAL: {FindingSeverity.CRITICAL},
-            FindingSeverity.HIGH: {FindingSeverity.CRITICAL, FindingSeverity.HIGH},
-            FindingSeverity.MEDIUM: {
-                FindingSeverity.CRITICAL,
-                FindingSeverity.HIGH,
-                FindingSeverity.MEDIUM,
-            },
-            FindingSeverity.LOW: {
-                FindingSeverity.CRITICAL,
-                FindingSeverity.HIGH,
-                FindingSeverity.MEDIUM,
-                FindingSeverity.LOW,
-            },
-        }
-
-        blocking_severities = threshold_severities.get(
-            fail_severity,
-            {FindingSeverity.CRITICAL, FindingSeverity.HIGH},
-        )
-
-        has_blocking = any(f.severity in blocking_severities for f in result.unique_findings)
-
-        # Fail CI iff a finding meets the threshold, using the severity-derived
-        # code so each severity stays distinguishable (CRITICAL=1/HIGH=2/MEDIUM=3/
-        # LOW=4). ``result.exit_code`` is already nonzero for any finding, so a
-        # blocking LOW (``--fail-on low`` with LOW-only findings) now fails CI with
-        # its own code 4 instead of silently passing or colliding with HIGH's 2
-        # (#413). No blocking finding => clean exit 0.
-        exit_code = result.exit_code if has_blocking else 0
 
     if exit_code != 0:
         raise typer.Exit(code=exit_code)
