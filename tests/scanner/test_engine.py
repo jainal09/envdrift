@@ -1234,8 +1234,8 @@ class TestGitignoreFilter:
 
         # Mock subprocess.run to return "ignored.py" as gitignored (null-separated)
         def mock_run(cmd, **kwargs):
-            # git check-ignore with -z returns null-separated output
-            return subprocess.CompletedProcess(cmd, 0, stdout="ignored.py\0", stderr="")
+            # git check-ignore with -z returns null-separated bytes (binary pipe)
+            return subprocess.CompletedProcess(cmd, 0, stdout=b"ignored.py\0", stderr=b"")
 
         monkeypatch.setattr(subprocess, "run", mock_run)
 
@@ -1282,23 +1282,23 @@ class TestGitignoreFilter:
             ),
         ]
 
-        calls: list[tuple[Path, str]] = []
+        calls: list[tuple[Path, bytes]] = []
 
         def mock_run(cmd, **kwargs):
             cwd = Path(kwargs.get("cwd") or ".")
-            calls.append((cwd, kwargs.get("input") or ""))
+            calls.append((cwd, kwargs.get("input") or b""))
             if cwd.name == "repo1":
-                return subprocess.CompletedProcess(cmd, 0, stdout="ignored.txt\0", stderr="")
+                return subprocess.CompletedProcess(cmd, 0, stdout=b"ignored.txt\0", stderr=b"")
             if cwd.name == "repo2":
-                return subprocess.CompletedProcess(cmd, 1, stdout="", stderr="")
-            return subprocess.CompletedProcess(cmd, 1, stdout="", stderr="")
+                return subprocess.CompletedProcess(cmd, 1, stdout=b"", stderr=b"")
+            return subprocess.CompletedProcess(cmd, 1, stdout=b"", stderr=b"")
 
         monkeypatch.setattr(subprocess, "run", mock_run)
 
         result = engine._filter_gitignored_files(findings)
         assert len(result) == 1
         assert result[0].file_path == kept_file
-        assert any("ignored.txt" in call_input for _cwd, call_input in calls)
+        assert any(b"ignored.txt" in call_input for _cwd, call_input in calls)
 
     def test_filter_gitignored_files_outside_repo(self, tmp_path, monkeypatch):
         """Files outside any git repo are not filtered."""
@@ -1322,12 +1322,80 @@ class TestGitignoreFilter:
         ]
 
         def mock_run(cmd, **kwargs):
-            return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+            return subprocess.CompletedProcess(cmd, 0, stdout=b"", stderr=b"")
 
         monkeypatch.setattr(subprocess, "run", mock_run)
 
         result = engine._filter_gitignored_files(findings)
         assert len(result) == 1
+
+    def test_filter_gitignored_roundtrips_non_utf8_filename_bytes(self, tmp_path):
+        """#453 follow-up: raw non-UTF-8 filename bytes must round-trip the pipe.
+
+        POSIX filenames can contain bytes that are not valid UTF-8 (e.g. latin-1
+        ``b"caf\\xe9.env"``); Python surfaces them as surrogate-escaped str
+        (``"caf\\udce9.env"``). With ``errors="replace"`` the surrogate was
+        rewritten to ``?`` on the check-ignore stdin pipe, git never matched the
+        .gitignore entry, and the gitignored finding leaked into results.
+        ``errors="surrogateescape"`` sends and receives the exact original bytes.
+        Uses real git; skips where the filesystem rejects such names (Windows,
+        APFS).
+        """
+        import os
+        import shutil
+        import subprocess
+
+        if shutil.which("git") is None:
+            pytest.skip("git not available")
+
+        raw = b"caf\xe9.env"  # latin-1 e-acute: invalid UTF-8
+        try:
+            name = os.fsdecode(raw)  # "caf\udce9.env" via surrogateescape on POSIX
+            with open(tmp_path / name, "wb") as fh:
+                fh.write(b"AWS_SECRET_ACCESS_KEY=x\n")
+        except (OSError, ValueError):
+            pytest.skip("filesystem rejects non-UTF-8 filename bytes")
+
+        subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True, capture_output=True)
+        (tmp_path / ".gitignore").write_bytes(raw + b"\n")
+        kept = tmp_path / "kept.py"
+        kept.write_text("x = 1\n")
+
+        # Fixture sanity: git itself, fed the raw bytes, agrees the file is
+        # ignored — so a leak below is an engine pipe-codec bug, not fixture rot.
+        sanity = subprocess.run(
+            ["git", "check-ignore", "--stdin", "-z"],
+            input=raw + b"\0",
+            capture_output=True,
+            cwd=tmp_path,
+        )
+        assert sanity.stdout == raw + b"\0", sanity.stderr
+
+        config = GuardConfig(use_native=True, use_gitleaks=False, skip_gitignored=True)
+        engine = ScanEngine(config)
+        findings = [
+            ScanFinding(
+                file_path=tmp_path / name,
+                rule_id="test-rule",
+                rule_description="Test",
+                description="Test finding",
+                severity=FindingSeverity.HIGH,
+                scanner="native",
+            ),
+            ScanFinding(
+                file_path=kept,
+                rule_id="test-rule",
+                rule_description="Test",
+                description="Test finding",
+                severity=FindingSeverity.HIGH,
+                scanner="native",
+            ),
+        ]
+
+        result = engine._filter_gitignored_files(findings)
+        assert [f.file_path for f in result] == [kept], (
+            f"gitignored non-UTF-8-byte filename leaked: {[str(f.file_path) for f in result]}"
+        )
 
     def test_config_skip_gitignored_default_false(self):
         """Test that skip_gitignored defaults to False."""
@@ -1362,9 +1430,12 @@ class TestCombinedFilesSecurity:
         )
         engine = ScanEngine(config)
 
-        # Mock subprocess.run to return the file as gitignored (batched stdin approach)
+        # Mock subprocess.run to return the file as gitignored (batched --stdin -z
+        # approach: check-ignore output is NUL-terminated, not newline-terminated)
         def mock_run(cmd, **kwargs):
-            return subprocess.CompletedProcess(cmd, 0, stdout=".env.production\n", stderr="")
+            if "check-ignore" in cmd:
+                return subprocess.CompletedProcess(cmd, 0, stdout=".env.production\0", stderr="")
+            return subprocess.CompletedProcess(cmd, 0, stdout="/repo\n", stderr="")
 
         monkeypatch.setattr(subprocess, "run", mock_run)
 
@@ -1492,9 +1563,12 @@ class TestCombinedFilesSecurity:
         )
         engine = ScanEngine(config)
 
-        # Mock subprocess.run - only .env.production is gitignored
+        # Mock subprocess.run - only .env.production is gitignored (NUL-terminated
+        # check-ignore -z output)
         def mock_run(cmd, **kwargs):
-            return subprocess.CompletedProcess(cmd, 0, stdout=".env.production\n", stderr="")
+            if "check-ignore" in cmd:
+                return subprocess.CompletedProcess(cmd, 0, stdout=".env.production\0", stderr="")
+            return subprocess.CompletedProcess(cmd, 0, stdout="/repo\n", stderr="")
 
         monkeypatch.setattr(subprocess, "run", mock_run)
 

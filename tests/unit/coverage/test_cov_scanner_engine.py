@@ -488,7 +488,7 @@ class TestGitignoredFilterEdgeCases:
 
         def fake_run(cmd, **kwargs):
             # returncode 128 is not in (0, 1) -> warning branch + continue.
-            return subprocess.CompletedProcess(cmd, 128, stdout="", stderr="fatal: boom")
+            return subprocess.CompletedProcess(cmd, 128, stdout=b"", stderr=b"fatal: boom")
 
         monkeypatch.setattr(subprocess, "run", fake_run)
 

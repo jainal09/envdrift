@@ -52,39 +52,49 @@ envdrift hook
 Output:
 
 ```yaml
-# Add to .pre-commit-config.yaml
+# envdrift pre-commit hooks
+# Add this to your .pre-commit-config.yaml
+
 repos:
+  # >>> envdrift pre-commit hooks >>>
   - repo: local
     hooks:
-      - id: envdrift-validate
-        name: Validate env files
-        entry: envdrift validate --ci
-        language: system
-        files: ^\.env\.(production|staging|development)$
-        pass_filenames: true
-
+      # Uncomment the validate hook once you have a Pydantic Settings class and
+      # point --schema at it (envdrift validate accepts multiple env files):
+      # - id: envdrift-validate
+      #   name: Validate env files against schema
+      #   entry: envdrift validate --ci --schema app.config:Settings
+      #   language: system
+      #   files: ^\.env\.(production|staging|development)$
+      #   pass_filenames: true
       - id: envdrift-encryption
-        name: Check env encryption
+        name: Check env encryption status
         entry: envdrift encrypt --check
         language: system
         files: ^\.env\.(production|staging)$
         pass_filenames: true
-
+        description: Ensures sensitive .env files are encrypted
       - id: envdrift-guard
         name: Guard staged env files
         entry: envdrift guard --staged --native-only --ci
         language: system
         always_run: true
         pass_filenames: false
-
-      # Optional: Verify encryption keys match vault (prevents key drift)
+        description: Scans staged files, including vault.sync env_file mappings
+      # Optional: verify encryption keys match vault (prevents key drift)
       # - id: envdrift-vault-verify
       #   name: Verify vault key can decrypt
       #   entry: envdrift decrypt --verify-vault -p azure --vault-url https://myvault.vault.azure.net --secret myapp-dotenvx-key --ci
       #   language: system
       #   files: ^\.env\.production$
       #   pass_filenames: true
+  # <<< envdrift pre-commit hooks <<<
 ```
+
+The validate hook ships commented out because it needs a `--schema` pointing at your
+Settings class, which envdrift cannot guess — uncomment it and set the schema path once
+you have one. Both `validate` and `encrypt --check` accept multiple env-file arguments,
+so `pass_filenames: true` hooks keep working when several matched files are staged.
 
 Use `envdrift hook --install` to add these hooks to `.pre-commit-config.yaml`.
 
@@ -100,7 +110,13 @@ envdrift hook --config
 envdrift hook --install
 ```
 
-This modifies your `.pre-commit-config.yaml` directly.
+This adds the envdrift block to your `.pre-commit-config.yaml` with a targeted text
+edit: existing comments, ordering, and formatting are preserved, and the block is
+wrapped in `# >>> envdrift pre-commit hooks >>>` / `# <<< envdrift pre-commit hooks <<<`
+markers so it can be removed cleanly later. Re-running the command when the hooks are
+already present is a no-op (it reports "already installed"). If the file is malformed
+YAML or its top level is not a mapping, the command fails with a clean error and exit
+code 1 without touching the file.
 
 ## Manual Setup
 
@@ -151,6 +167,10 @@ If you prefer manual setup:
 | `entry`          | Command to run (customize schema path) |
 | `files`          | Regex matching .env files to validate  |
 | `pass_filenames` | Pass matched files as arguments        |
+
+This hook is installed commented out: `--schema` must point at your Settings class
+before it can pass. `envdrift validate` accepts multiple env-file arguments, so the
+hook keeps working when pre-commit appends several matched staged files at once.
 
 ### Encryption Hook
 
