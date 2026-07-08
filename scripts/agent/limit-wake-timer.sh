@@ -17,7 +17,10 @@ target=$(TZ=America/New_York date -d "today $RESET_RAW" +%s 2>/dev/null) || {
   echo "WAKE_TIMER_ERROR: cannot parse '$RESET_RAW'"; exit 1; }
 now=$(date +%s)
 # If the reset already passed today, it means tomorrow.
-[ "$target" -le "$now" ] && target=$(TZ=America/New_York date -d "tomorrow $RESET_RAW" +%s)
+if [ "$target" -le "$now" ]; then
+  target=$(TZ=America/New_York date -d "tomorrow $RESET_RAW" +%s) || {
+    echo "WAKE_TIMER_ERROR: cannot parse 'tomorrow $RESET_RAW'"; exit 1; }
+fi
 
 # +5 min grace, plus exponential backoff by attempt (capped ~2h past the reset).
 case "$ATTEMPT" in
