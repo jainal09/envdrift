@@ -1,5 +1,12 @@
 # Changelog
 
+## [10.16.3](https://github.com/jainal09/envdrift/compare/v10.16.2...v10.16.3) (2026-07-08)
+
+
+### Documentation
+
+* **agents:** reliability-first operating guide + autonomy tooling ([#589](https://github.com/jainal09/envdrift/issues/589)) ([175c341](https://github.com/jainal09/envdrift/commit/175c34176d911be62b69235e9a6d541d50ad60d8))
+
 ## [10.16.2](https://github.com/jainal09/envdrift/compare/v10.16.1...v10.16.2) (2026-07-07)
 
 
