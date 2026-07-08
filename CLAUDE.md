@@ -3,6 +3,19 @@
 Guidance for contributors and AI agents (Claude Code, etc.) working in this repo.
 These are the conventions we actually enforce — follow them on every change.
 
+> **North star: reliability first.** Until the existing features are
+> production-ready, every change is judged by whether it makes the tool *more
+> reliable* — not more capable. Fail loud and fail closed; never report success
+> while the real outcome failed; every bug fix ships a regression test that fails
+> before the fix; no known-broken merges (even in a secondary artifact); fix-or-file
+> pre-existing bugs.
+>
+> **Doing substantial or autonomous work here?** Read [`AGENTS.md`](./AGENTS.md) —
+> the full operating guide (verify-then-fix discipline, real-backend + real-Windows
+> battle-testing, the PR merge gate, stacked-PR/release-please mechanics, review-bot
+> handling, and the `scripts/agent/` autonomy loop). This file is the always-loaded
+> summary; AGENTS.md is the depth. Keep the two in sync.
+
 ## Testing
 
 - **Real tests, not mocks of the behavior under test.** Integration tests drive
@@ -107,6 +120,16 @@ These have bitten us in CI or review and aren't obvious from the code alone.
   worktrees as **siblings of the repo** (`../envdrift-<name>`), and always run the
   **full** `uv run pyrefly check` (never scope it to `src/...`) — test-file types
   are part of the gate.
+- **Deleting a branch with an open child PR CLOSES the child permanently** (GitHub
+  does not retarget it here). For stacked PRs: merge the parent **without**
+  `--delete-branch`, `gh api -X PATCH pulls/<child> -f base=main` while the child is
+  still open, **then** delete the parent branch. See `AGENTS.md` §5.
+- **Real Windows testing runs under `C:\DBSW` only.** This is a WSL2 box with
+  Windows interop (`powershell.exe` → real PS 5.1 / `C:\Python314`); it's a work
+  laptop where corporate security blocks execution from arbitrary paths, so do all
+  Windows clone/test work under `C:\DBSW` (`/mnt/c/DBSW` from WSL). Cross-platform
+  bugs (drive paths, cp1252, CRLF, `os.replace` on an open file) need real-Windows
+  before/after proof — see `AGENTS.md` §3.
 
 ## CI, branch protection & merging
 
