@@ -65,15 +65,17 @@ uv run ruff check src tests
 uv run ruff format --check .
 uv run pyrefly check          # run the WHOLE project — never scope to src/…; test-file types are gated
 uv run bandit -r src -c pyproject.toml
-uv run pytest -m "not integration"
-make lint-docs                # if you touched docs/**
+uv run pytest -m "not integration"   # fast pre-push gate
+make lint-docs                # if you touched ANY .md — it lints all **/*.md, incl. root
 ```
 
-For anything that drives a real backend/binary, also run the relevant integration
-subset — and for a **core-binary or cross-cutting change, run the FULL integration
-suite** (`uv run pytest -m integration`), not a keyword-filtered subset. A selective
-`-k` run once hid a real dotenvx-v2 regression that CI caught only because CI runs
-everything.
+`pytest -m "not integration"` is the fast pre-push subset; the complete run is
+`uv run pytest` (the whole suite, with the container stack up via
+`make test-integration-up`) as listed in `CLAUDE.md`. For anything that drives a
+real backend/binary, run the relevant integration tests — and for a **core-binary or
+cross-cutting change, run the FULL integration suite** (`uv run pytest -m
+integration`), not a keyword-filtered subset. A selective `-k` run once hid a real
+dotenvx-v2 regression that CI caught only because CI runs everything.
 
 ---
 
@@ -177,7 +179,7 @@ DIRTY/BEHIND state you're already handling. Re-arm only after the agent's final 
   — it does not retarget it. This cost two PRs before the pattern was learned. The
   safe choreography when a parent merges:
   1. merge the parent **without** `--delete-branch`,
-  2. `gh api -X PATCH pulls/<child> -f base=main` while the child is still open,
+  2. `gh api -X PATCH repos/<owner>/<repo>/pulls/<child> -f base=main` while the child is still open,
   3. **then** delete the parent branch.
   A child killed this way is recovered by opening a successor PR from its surviving
   head branch.

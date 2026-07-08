@@ -122,7 +122,7 @@ These have bitten us in CI or review and aren't obvious from the code alone.
   are part of the gate.
 - **Deleting a branch with an open child PR CLOSES the child permanently** (GitHub
   does not retarget it here). For stacked PRs: merge the parent **without**
-  `--delete-branch`, `gh api -X PATCH pulls/<child> -f base=main` while the child is
+  `--delete-branch`, `gh api -X PATCH repos/<owner>/<repo>/pulls/<child> -f base=main` while the child is
   still open, **then** delete the parent branch. See `AGENTS.md` §5.
 - **Real Windows testing runs under `C:\DBSW` only.** This is a WSL2 box with
   Windows interop (`powershell.exe` → real PS 5.1 / `C:\Python314`); it's a work

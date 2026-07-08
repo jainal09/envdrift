@@ -13,20 +13,30 @@
 #   - an ARMED PR stuck BLOCKED ~50 min with 0 threads (suspect a CI failure)
 #
 # Requires: gh (authenticated), jq (via gh --jq).
+# Caps: up to 100 open PRs, 100 threads/PR — generous for this repo (no pagination).
 set -u
 REPO="${ENVDRIFT_REPO:-jainal09/envdrift}"
 OWNER="${REPO%%/*}"
 NAME="${REPO##*/}"
-QUERY="query { repository(owner: \"$OWNER\", name: \"$NAME\") { pullRequests(states: OPEN, first: 60) { nodes { number mergeStateStatus autoMergeRequest { mergeMethod } reviewThreads(first: 100) { nodes { isResolved } } } } } }"
+QUERY="query { repository(owner: \"$OWNER\", name: \"$NAME\") { pullRequests(states: OPEN, first: 100) { nodes { number mergeStateStatus autoMergeRequest { mergeMethod } reviewThreads(first: 100) { nodes { isResolved } } } } } }"
 
+# Prints one line per open PR (empty = a genuinely empty PR set, i.e. all merged/
+# closed), or "__ERR__" on an API/network failure — gh exits non-zero on the latter
+# but 0-with-empty-output on the former, letting callers tell them apart.
 snapshot() {
-  gh api graphql -f query="$QUERY" --jq '
+  local raw
+  # Capture gh's exit directly (no pipe) so an API failure is distinguishable from
+  # a valid empty result; sort afterwards.
+  raw=$(gh api graphql -f query="$QUERY" --jq '
     .data.repository.pullRequests.nodes[] |
-    "\(.number):\(.mergeStateStatus):\(if .autoMergeRequest then "ARMED" else "-" end):\([.reviewThreads.nodes[] | select(.isResolved | not)] | length)"' 2>/dev/null | sort
+    "\(.number):\(.mergeStateStatus):\(if .autoMergeRequest then "ARMED" else "-" end):\([.reviewThreads.nodes[] | select(.isResolved | not)] | length)"' 2>/dev/null) || { echo "__ERR__"; return; }
+  [ -z "$raw" ] && return   # valid empty PR set (all merged/closed)
+  echo "$raw" | sort
 }
 
 prev="$(snapshot)"
-[ -z "$prev" ] && { echo "WATCHDOG_ERROR: initial snapshot failed"; exit 1; }
+[ "$prev" = "__ERR__" ] && { echo "WATCHDOG_ERROR: initial snapshot failed"; exit 1; }
+[ -z "$prev" ] && { echo "WATCHDOG: no open PRs at launch — nothing to watch"; exit 0; }
 echo "watchdog armed over:"; echo "$prev"
 
 # Per-PR count of consecutive cycles spent armed+BLOCKED+0-threads, so one PR's
@@ -40,7 +50,7 @@ prev_line() { echo "$prev" | grep -m1 "^$1:" || true; }
 while true; do
   sleep 120
   cur="$(snapshot)"
-  [ -z "$cur" ] && continue  # transient API failure — keep the baseline
+  [ "$cur" = "__ERR__" ] && continue  # transient API failure — keep the baseline
 
   events=""
   declare -A seen_stuck=()
