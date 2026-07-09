@@ -22,6 +22,19 @@ class TestEnvParser:
         assert result.variables["FOO"].value == "bar"
         assert result.variables["BAZ"].value == "qux"
 
+    def test_duplicate_assignments_keep_audit_history_and_last_value(self, tmp_path):
+        """Lookup remains last-wins while safety checks can inspect every line (#583)."""
+        env_file = tmp_path / ".env"
+        env_file.write_text(
+            'SECRET_KEY=plaintext-value\nSECRET_KEY="encrypted:BDqDBJ24bUq3x"\n',
+            encoding="utf-8",
+        )
+
+        result = EnvParser().parse(env_file)
+
+        assert result.variables["SECRET_KEY"].is_encrypted
+        assert [assignment.line_number for assignment in result.assignments] == [1, 2]
+
     def test_parse_quoted_values(self, tmp_path):
         """Parse KEY="value" and KEY='value'."""
         content = """

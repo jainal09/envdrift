@@ -249,6 +249,16 @@ def _fresh_config_text(hook_ids: list[str]) -> str:
     return "repos:\n" + _render_repo_block(hook_ids, "  ")
 
 
+def _create_missing_config(config_path: Path, create_if_missing: bool) -> None:
+    """Create a fresh config, or explain why an absent explicit path is an error."""
+    if not create_if_missing:
+        raise FileNotFoundError(
+            f"Pre-commit config not found: {config_path}. "
+            "Run from repository root or specify --config path."
+        )
+    config_path.write_text(_fresh_config_text(_active_hook_ids()), encoding="utf-8")
+
+
 def _block_sequence_indent(repos_value: Any) -> str:
     """Indent (dash column) of an existing block-style repos sequence."""
     return " " * repos_value.start_mark.column
@@ -358,7 +368,7 @@ def install_hooks(
             )
 
     if not config_path.exists():
-        config_path.write_text(_fresh_config_text(_active_hook_ids()), encoding="utf-8")
+        _create_missing_config(config_path, create_if_missing)
         return True
 
     content = _read_config_text(config_path)

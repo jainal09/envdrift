@@ -209,11 +209,6 @@ class TestInstallHooks:
         with pytest.raises(FileNotFoundError):
             install_hooks(create_if_missing=False)
 
-    @pytest.mark.xfail(
-        strict=False,
-        reason="install_hooks creates an explicit missing config_path even when "
-        "create_if_missing=False (see #580)",
-    )
     def test_explicit_missing_path_respects_create_if_missing_false(self, tmp_path: Path):
         """An explicit missing config_path with create_if_missing=False must raise,
         not silently create the file (docstring contract; see #580)."""

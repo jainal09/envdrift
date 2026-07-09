@@ -29,7 +29,7 @@ exit code (dotenvx can exit `0` without encrypting):
 - **Refuses content-free files.** An empty, blank-line-only, or comment-only file
   has no variables to encrypt, so the command declines with a non-zero exit
   instead of letting dotenvx scaffold a placeholder-secrets template into it.
-- **Refuses the key store and companion files.** `envdrift encrypt .env.keys`
+- **Refuses key stores and companion files when encrypting.** `envdrift encrypt .env.keys`
   would encrypt the dotenvx private-key store itself — the keys become
   ciphertext under a brand-new keypair whose private half is never saved,
   permanently locking out every encrypted file in the project — so the command
@@ -37,7 +37,9 @@ exit code (dotenvx can exit `0` without encrypting):
   every backend. The name match is case-insensitive (`.env.KEYS` names the
   same file on macOS/Windows default filesystems), and a renamed or symlinked
   key store (`mv .env.keys prodkeys.env`) is still refused by content: a file
-  carrying `DOTENV_PRIVATE_KEY*` entries is never encrypted.
+  carrying `DOTENV_PRIVATE_KEY*` entries is never encrypted. With `--check`,
+  companions are instead reported as skipped so a pre-commit filename batch
+  still checks its secret stores.
 - **Handles leading-dash filenames.** A file like `-dash.env` is passed to
   dotenvx as `./-dash.env` so its CLI cannot misparse the name as flags
   (which previously fabricated a different file full of placeholder secrets).
@@ -54,11 +56,11 @@ exit code (dotenvx can exit `0` without encrypting):
   re-read after the call; if any plaintext value survives, the command fails
   loudly instead of printing `[OK]`.
 
-Multiple env files can be passed in one invocation. With `--check`, each file gets
-its own report and the exit code is 1 if any file should block a commit — this keeps
-the command usable as a pre-commit `pass_filenames: true` hook, where every matched
-staged file is appended to a single command line. Without `--check`, each file is
-encrypted in turn.
+Multiple env files can be passed in one invocation. With `--check`, each secret
+store gets its own report, plaintext companions are skipped, and the exit code is 1
+if any file should block a commit — this keeps the command usable as a pre-commit
+`pass_filenames: true` hook, where every matched staged file is appended to a single
+command line. Without `--check`, each file is encrypted in turn.
 
 ## Arguments
 

@@ -133,6 +133,51 @@ class TestGeneratedConfigRunsAsEmitted:
         )
         assert result.returncode == 1, _diag(result)
 
+    def test_encrypt_check_skips_companions_and_checks_remaining_files(
+        self, tmp_path: Path
+    ) -> None:
+        """A companion must not abort a pre-commit filename batch (#579)."""
+        env = _cli_env(tmp_path)
+        (tmp_path / ".env.production").write_text("API_KEY=plaintext-value\n", encoding="utf-8")
+        (tmp_path / ".env.example").write_text("API_KEY=example-value\n", encoding="utf-8")
+
+        result = _run_envdrift(
+            ["encrypt", "--check", ".env.production", ".env.example"], cwd=tmp_path, env=env
+        )
+        output = " ".join((result.stdout + result.stderr).split())
+
+        assert result.returncode == 1, _diag(result)
+        assert ".env.production" in output
+        assert "Skipping .env.example" in output
+
+    def test_encrypt_check_skips_a_companion_only_batch(self, tmp_path: Path) -> None:
+        """Named plaintext companions are intentionally outside encryption policy (#579)."""
+        env = _cli_env(tmp_path)
+        (tmp_path / ".env.example").write_text("API_KEY=example-value\n", encoding="utf-8")
+
+        result = _run_envdrift(["encrypt", "--check", ".env.example"], cwd=tmp_path, env=env)
+        output = " ".join((result.stdout + result.stderr).split())
+
+        assert result.returncode == 0, _diag(result)
+        assert "Skipping .env.example" in output
+        assert "Encryption Status" not in output
+
+    def test_encrypt_check_blocks_plaintext_duplicate_shadowed_by_ciphertext(
+        self, tmp_path: Path
+    ) -> None:
+        """Every on-disk assignment must be checked, not just the last duplicate (#583)."""
+        env = _cli_env(tmp_path)
+        (tmp_path / ".env.production").write_text(
+            'SECRET_KEY=plaintext-value\nSECRET_KEY="encrypted:BDqDBJ24bUq3x"\n',
+            encoding="utf-8",
+        )
+
+        result = _run_envdrift(["encrypt", "--check", ".env.production"], cwd=tmp_path, env=env)
+        output = " ".join((result.stdout + result.stderr).split())
+
+        assert result.returncode == 1, _diag(result)
+        assert "Plaintext: 1" in output
+
     def test_validate_hook_entry_with_schema_accepts_multiple_files(self, tmp_path: Path) -> None:
         """The documented validate hook entry works with 2 staged files appended."""
         env = _cli_env(tmp_path)

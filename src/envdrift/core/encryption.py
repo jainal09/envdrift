@@ -150,6 +150,8 @@ class EncryptionDetector:
         self,
         env_file: EnvFile,
         schema: SchemaMetadata | None = None,
+        *,
+        include_overridden_assignments: bool = False,
     ) -> EncryptionReport:
         """
         Analyze an EnvFile to determine which variables are encrypted, plaintext, empty, and which plaintext values appear to be secrets.
@@ -157,6 +159,10 @@ class EncryptionDetector:
         Parameters:
             env_file (EnvFile): Parsed env file to analyze.
             schema (SchemaMetadata | None): Optional schema whose sensitive_fields will be treated as sensitive names.
+            include_overridden_assignments: Analyze every accepted assignment,
+                including occurrences hidden by a later duplicate. This is for
+                on-disk safety checks; normal config semantics remain
+                last-assignment-wins.
 
         Returns:
             EncryptionReport: Report containing the file path, sets of encrypted/plaintext/empty variables, detected plaintext secrets, collected warnings, and the is_fully_encrypted flag.
@@ -166,7 +172,11 @@ class EncryptionDetector:
         # Get sensitive fields from schema
         schema_sensitive = set(schema.sensitive_fields) if schema else set()
 
-        for var_name, env_var in env_file.variables.items():
+        assignments = env_file.variables.values()
+        if include_overridden_assignments and env_file.assignments:
+            assignments = env_file.assignments
+        for env_var in assignments:
+            var_name = env_var.name
             # dotenvx's DOTENV_PUBLIC_KEY* artifact is a public key: always
             # plaintext, safe to commit, and never a value to encrypt. Skip it so it
             # neither counts as a plaintext var (which would keep is_fully_encrypted
@@ -206,9 +216,7 @@ class EncryptionDetector:
             report.is_fully_encrypted = len(report.plaintext_vars) == 0
 
         detected_backends = {
-            env_var.encryption_backend
-            for env_var in env_file.variables.values()
-            if env_var.encryption_backend
+            env_var.encryption_backend for env_var in assignments if env_var.encryption_backend
         }
         if len(detected_backends) == 1:
             report.detected_backend = next(iter(detected_backends))
