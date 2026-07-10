@@ -22,6 +22,11 @@ from envdrift.scanner.output import (
 )
 
 
+def _interactive_console(width: int) -> Console:
+    """Build a fixed-width interactive Console independent of host terminal state."""
+    return Console(record=True, force_terminal=True, width=width, _environ={})
+
+
 class TestJsonOutput:
     """Tests for JSON output formatter."""
 
@@ -421,7 +426,7 @@ class TestRichOutput:
         """Interactive narrow terminal: keep Sev/Location/Description (one line
         each, ellipsized) and drop the Rule/Preview columns.
         """
-        console = Console(record=True, force_terminal=True, width=80)
+        console = _interactive_console(80)
         format_rich(self._aws_finding_result(), console)
         out = console.export_text()
 
@@ -447,7 +452,7 @@ class TestRichOutput:
 
     def test_format_rich_wide_terminal_shows_all_columns(self):
         """Wide terminal shows the Rule and Preview columns too."""
-        console = Console(record=True, force_terminal=True, width=140)
+        console = _interactive_console(140)
         format_rich(self._aws_finding_result(), console)
         out = console.export_text()
 
@@ -470,13 +475,13 @@ class TestRichOutput:
 
     def test_format_rich_threshold_99_is_narrow(self):
         """Width 99 (one below the threshold) drops the secondary Preview column."""
-        console = Console(record=True, force_terminal=True, width=99)
+        console = _interactive_console(99)
         format_rich(self._aws_finding_result(), console)
         assert "AKIA1234" not in console.export_text()
 
     def test_format_rich_threshold_100_is_wide(self):
         """Width 100 (exactly the threshold) shows the secondary Preview column."""
-        console = Console(record=True, force_terminal=True, width=100)
+        console = _interactive_console(100)
         format_rich(self._aws_finding_result(), console)
         assert "AKIA1234" in console.export_text()
 
