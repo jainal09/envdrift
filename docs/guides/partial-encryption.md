@@ -122,6 +122,8 @@ envdrift push --env production
 - An empty or comment-only `.secret` file is refused ("Nothing to encrypt") instead
   of letting dotenvx scaffold placeholder secrets into it. The same applies to
   secrets-only files.
+- A quoted encrypted value may retain a normal inline comment, such as
+  `API_KEY="encrypted:..." # rotated`; it is still recognized as encrypted.
 - When **both** the `.clear` and `.secret` files are missing, `push` errors out and
   leaves the existing combined file untouched instead of overwriting it with an
   empty scaffold.

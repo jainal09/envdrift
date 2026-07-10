@@ -225,6 +225,35 @@ def _is_quote_wrapped(v: str) -> bool:
     return len(v) >= 2 and v[0] in ('"', "'") and v[-1] == v[0]
 
 
+def _strip_inline_comment_after_quoted_value(value: str) -> str:
+    """Drop a trailing comment after one complete dotenv-quoted value.
+
+    A comment is removable only when nothing but optional whitespace and a
+    ``#`` comment follows the closing quote. Keeping any other suffix makes the
+    whole value non-quoted, so malformed assignments remain fail-closed.
+    """
+    if not value or value[0] not in ('"', "'"):
+        return value
+
+    quote = value[0]
+    escaped = False
+    for index, char in enumerate(value[1:], start=1):
+        if escaped:
+            escaped = False
+            continue
+        if char == "\\":
+            escaped = True
+            continue
+        if char != quote:
+            continue
+
+        suffix = value[index + 1 :].strip()
+        if not suffix or suffix.startswith("#"):
+            return value[: index + 1]
+        return value
+    return value
+
+
 def _unquote_value(value: str) -> str:
     """Strip surrounding whitespace and a single layer of matching quotes.
 
@@ -235,6 +264,7 @@ def _unquote_value(value: str) -> str:
     surrounding whitespace must be removed first.
     """
     v = value.strip()
+    v = _strip_inline_comment_after_quoted_value(v)
     if _is_quote_wrapped(v):
         v = v[1:-1].strip()
     return v
