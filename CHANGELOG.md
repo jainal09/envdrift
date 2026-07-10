@@ -1,5 +1,12 @@
 # Changelog
 
+## [10.16.7](https://github.com/jainal09/envdrift/compare/v10.16.6...v10.16.7) (2026-07-10)
+
+
+### Bug Fixes
+
+* **scanner:** discover non-ASCII Git paths ([#601](https://github.com/jainal09/envdrift/issues/601)) ([bd4a420](https://github.com/jainal09/envdrift/commit/bd4a420262893da3839f3ea5c6d699b28733b4ad))
+
 ## [10.16.6](https://github.com/jainal09/envdrift/compare/v10.16.5...v10.16.6) (2026-07-10)
 
 
