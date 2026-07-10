@@ -60,6 +60,10 @@ class EnvFile:
 
     path: Path
     variables: dict[str, EnvVar] = field(default_factory=dict)
+    # ``variables`` mirrors python-dotenv's last-assignment-wins lookup. Keep
+    # every accepted assignment too: safety checks must see a plaintext secret
+    # that a later encrypted duplicate would otherwise hide (#583).
+    assignments: list[EnvVar] = field(default_factory=list)
     comments: list[str] = field(default_factory=list)
     # True when the source text began with a UTF-8 BOM (U+FEFF). The parser
     # strips it so reports name the variable the user wrote — but
@@ -360,6 +364,7 @@ class EnvParser:
                 encryption_backend=encryption_backend,
             )
 
+            env_file.assignments.append(env_var)
             env_file.variables[key] = env_var
 
         return env_file

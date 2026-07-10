@@ -8,12 +8,13 @@ Supports multiple encryption backends:
 from __future__ import annotations
 
 import shlex
+from collections.abc import Callable
 from pathlib import Path
 from typing import Annotated
 
 import typer
 
-from envdrift.core.encryption import EncryptionDetector
+from envdrift.core.encryption import EncryptionDetector, EncryptionReport
 from envdrift.core.parser import EnvParser
 from envdrift.core.schema import SchemaLoader, SchemaLoadError
 from envdrift.encryption import EncryptionProvider, get_encryption_backend
@@ -99,6 +100,46 @@ def _refuse_companion_target(env_file: Path, action: str) -> None:
             "file (.example/.sample/.template), not a secret store."
         )
     raise typer.Exit(code=1)
+
+
+def _is_companion_target(env_file: Path) -> bool:
+    """Return whether ``env_file`` is a plaintext companion, by filename."""
+    from envdrift.env_files import _is_excluded_env_file
+
+    return _is_excluded_env_file(env_file.name)
+
+
+def _refuse_companion_targets(
+    files: list[Path],
+    action: str,
+    *,
+    allow_plaintext_companions: bool,
+) -> None:
+    """Refuse companion files unless this is a non-destructive check batch."""
+    if allow_plaintext_companions:
+        return
+    for env_file in files:
+        _refuse_companion_target(env_file, action)
+
+
+def _check_files_and_report(
+    files: list[Path],
+    analyze_file: Callable[[Path], EncryptionReport],
+    detector: EncryptionDetector,
+) -> bool:
+    """Print check reports and return whether any non-companion file blocks a commit."""
+    should_block = False
+    for env_file in files:
+        if _is_companion_target(env_file):
+            print_warning(
+                f"Skipping {env_file}: it is a plaintext companion file, not a secret store."
+            )
+            continue
+        report = analyze_file(env_file)
+        print_encryption_report(report)
+        if detector.should_block_commit(report):
+            should_block = True
+    return should_block
 
 
 def _protect_private_keys(env_file: Path) -> None:
@@ -248,12 +289,14 @@ def encrypt_cmd(
             print_error(f"ENV file not found: {env_file}")
         raise typer.Exit(code=1)
 
-    # Refuse companion targets (.keys/.example/.sample/.template) across ALL
-    # requested files — the default single [.env] and every multi-file target —
-    # before touching any of them, so one companion in a batch aborts the whole
-    # invocation with nothing encrypted (#474).
-    for env_file in files:
-        _refuse_companion_target(env_file, "encrypt")
+    # A check invocation can receive a broad pre-commit filename batch. It
+    # permits plaintext companions while the check helper skips them, whereas
+    # a destructive invocation refuses every companion target (#579).
+    _refuse_companion_targets(
+        files,
+        "encrypt",
+        allow_plaintext_companions=check,
+    )
 
     if verify_vault or vault_provider or vault_url or vault_region or vault_secret:
         print_error("Vault verification moved to `envdrift decrypt --verify-vault ...`")
@@ -315,7 +358,7 @@ def encrypt_cmd(
     parser = EnvParser()
     detector = EncryptionDetector()
 
-    def _analyze_file(env_file: Path):
+    def _analyze_file(env_file: Path) -> EncryptionReport:
         """Parse and analyze one env file, exiting cleanly on unreadable input."""
         try:
             # lenient=True so --check analyzes every KEY=value assignment dotenvx
@@ -328,7 +371,11 @@ def encrypt_cmd(
             print_error(str(e))
             raise typer.Exit(code=1) from None
 
-        report = detector.analyze(env, schema_meta)
+        report = detector.analyze(
+            env,
+            schema_meta,
+            include_overridden_assignments=check,
+        )
         detected_backend = detector.detect_backend_for_file(env_file)
         if detected_backend:
             report.detected_backend = detected_backend
@@ -337,15 +384,7 @@ def encrypt_cmd(
         return report
 
     if check:
-        # Report status per file; block if any file would block a commit.
-        should_block = False
-        for env_file in files:
-            report = _analyze_file(env_file)
-            print_encryption_report(report)
-            if detector.should_block_commit(report):
-                should_block = True
-
-        if should_block:
+        if _check_files_and_report(files, _analyze_file, detector):
             raise typer.Exit(code=1)
     else:
         # Analyze every target before touching any backend: unreadable input and
