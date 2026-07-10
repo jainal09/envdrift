@@ -1,5 +1,12 @@
 # Changelog
 
+## [10.16.5](https://github.com/jainal09/envdrift/compare/v10.16.4...v10.16.5) (2026-07-10)
+
+
+### Bug Fixes
+
+* **partial:** detect quoted ciphertext with comments ([#595](https://github.com/jainal09/envdrift/issues/595)) ([c945312](https://github.com/jainal09/envdrift/commit/c945312d5b8d2a230cbafb49fbe2d113c2c46f04))
+
 ## [10.16.4](https://github.com/jainal09/envdrift/compare/v10.16.3...v10.16.4) (2026-07-10)
 
 
