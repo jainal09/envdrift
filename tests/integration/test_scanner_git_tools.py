@@ -258,10 +258,6 @@ class TestGitSecretsRealBinary:
         assert len(result.findings) >= 1, "git-secrets finding (emitted on stderr) was not captured"
         assert any("aws" in f.rule_id for f in result.findings)
 
-    @pytest.mark.xfail(
-        strict=False,
-        reason="git-secrets scans its registered Bedrock pattern in .git/config (see #581)",
-    )
     def test_scan_clean_repo_has_no_findings(self, scanner_test_env):
         """scan() of a repo without secrets yields no findings and no error."""
         work_dir = scanner_test_env["work_dir"]
@@ -273,6 +269,35 @@ class TestGitSecretsRealBinary:
 
         assert result.error is None
         assert result.findings == []
+
+    def test_scan_detects_ignored_secret_file(self, scanner_test_env):
+        """An ignored dotenv file remains in scope when Git metadata is excluded (#581)."""
+        work_dir = scanner_test_env["work_dir"]
+        self._init_repo_with_aws_patterns(work_dir)
+        (work_dir / ".gitignore").write_text(".env\n")
+        (work_dir / ".env").write_text("AWS_KEY=AKIAZ9Q8W7E6R5T4Y3U2\n")
+
+        scanner = GitSecretsScanner(auto_install=False, register_aws=True)
+        result = scanner.scan([work_dir])
+
+        assert result.error is None
+        assert any(f.file_path == (work_dir / ".env").resolve() for f in result.findings)
+
+    def test_scan_detects_ignored_nested_secret_file(self, scanner_test_env):
+        """Recursive scanning retains ignored nested files when Git metadata is excluded (#581)."""
+        work_dir = scanner_test_env["work_dir"]
+        self._init_repo_with_aws_patterns(work_dir)
+        nested_dir = work_dir / "sub" / "deep"
+        nested_dir.mkdir(parents=True)
+        (work_dir / ".gitignore").write_text("sub/\n")
+        secret_file = nested_dir / "secrets.env"
+        secret_file.write_text("AWS_KEY=AKIAZ9Q8W7E6R5T4Y3U2\n")
+
+        scanner = GitSecretsScanner(auto_install=False, register_aws=True)
+        result = scanner.scan([work_dir])
+
+        assert result.error is None
+        assert any(f.file_path == secret_file.resolve() for f in result.findings)
 
 
 @pytest.mark.integration
