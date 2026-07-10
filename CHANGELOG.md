@@ -1,5 +1,12 @@
 # Changelog
 
+## [10.16.4](https://github.com/jainal09/envdrift/compare/v10.16.3...v10.16.4) (2026-07-10)
+
+
+### Bug Fixes
+
+* **hook:** make encryption checks complete ([#591](https://github.com/jainal09/envdrift/issues/591)) ([b0cfd63](https://github.com/jainal09/envdrift/commit/b0cfd63e9dc67ae2a6ff1873b0a86fc3f2134a26))
+
 ## [10.16.3](https://github.com/jainal09/envdrift/compare/v10.16.2...v10.16.3) (2026-07-08)
 
 
