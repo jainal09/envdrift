@@ -71,8 +71,8 @@ class TestNativeScannerInternals:
         monkeypatch.setattr(Path, "rglob", raise_permission)
         assert scanner._collect_files(tmp_path) == []
 
-    def test_collect_files_sorts_git_results(self, tmp_path: Path, monkeypatch):
-        """Git-based collection returns deterministically sorted results."""
+    def test_collect_files_sorts_nul_delimited_git_results(self, tmp_path: Path, monkeypatch):
+        """Git collection uses NUL output so quoted or newline-containing paths stay intact (#576)."""
         import subprocess
 
         scanner = NativeScanner()
@@ -81,12 +81,14 @@ class TestNativeScannerInternals:
         (tmp_path / "b.txt").touch()
         (tmp_path / ".env.a").touch()
         (tmp_path / ".env.z").touch()
+        calls: list[list[str]] = []
 
         def mock_run(cmd, **kwargs):
+            calls.append(cmd)
             if cmd[:2] == ["git", "ls-files"] and "--others" not in cmd:
-                return subprocess.CompletedProcess(cmd, 0, stdout="b.txt\na.txt\n", stderr="")
+                return subprocess.CompletedProcess(cmd, 0, stdout="b.txt\0a.txt\0", stderr="")
             if cmd[:2] == ["git", "ls-files"] and "--others" in cmd:
-                return subprocess.CompletedProcess(cmd, 0, stdout=".env.z\n.env.a\n", stderr="")
+                return subprocess.CompletedProcess(cmd, 0, stdout=".env.z\0.env.a\0", stderr="")
             return subprocess.CompletedProcess(cmd, 1, stdout="", stderr="")
 
         monkeypatch.setattr(subprocess, "run", mock_run)
@@ -98,6 +100,7 @@ class TestNativeScannerInternals:
         )
 
         assert files == expected
+        assert all("-z" in cmd for cmd in calls)
 
     def test_collect_files_includes_gitignored_env_secret(self, tmp_path: Path):
         """A gitignored, untracked, plaintext .env secret must still be collected.

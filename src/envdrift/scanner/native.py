@@ -494,10 +494,14 @@ class NativeScanner(ScannerBackend):
         files: set[Path] = set()
         directory = directory.resolve()
 
+        # ``-z`` keeps filenames byte-for-byte rather than applying Git's
+        # C-style quotepath escaping to non-ASCII or newline-containing paths.
+        # Every git invocation below therefore uses NUL-separated output.
+
         # Method 1: Get tracked files from git (fast - reads index)
         try:
             result = subprocess.run(  # nosec B603, B607
-                ["git", "ls-files"],
+                ["git", "ls-files", "-z"],
                 capture_output=True,
                 text=True,
                 encoding="utf-8",
@@ -509,7 +513,7 @@ class NativeScanner(ScannerBackend):
                 # Not a git repo or git error - use fallback
                 return self._collect_files_fallback(directory)
 
-            for rel_path in result.stdout.splitlines():
+            for rel_path in result.stdout.split("\0"):
                 if rel_path:
                     files.add(directory / rel_path)
 
@@ -521,7 +525,15 @@ class NativeScanner(ScannerBackend):
         # These are files developers might forget to encrypt before committing
         try:
             result = subprocess.run(  # nosec B603, B607
-                ["git", "ls-files", "--others", "--exclude-standard", "--", *_ENV_FILE_PATHSPECS],
+                [
+                    "git",
+                    "ls-files",
+                    "--others",
+                    "--exclude-standard",
+                    "-z",
+                    "--",
+                    *_ENV_FILE_PATHSPECS,
+                ],
                 capture_output=True,
                 text=True,
                 encoding="utf-8",
@@ -530,7 +542,7 @@ class NativeScanner(ScannerBackend):
                 timeout=30,
             )
             if result.returncode == 0:
-                for rel_path in result.stdout.splitlines():
+                for rel_path in result.stdout.split("\0"):
                     if rel_path and _is_env_file(rel_path):
                         files.add(directory / rel_path)
         except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
@@ -554,6 +566,7 @@ class NativeScanner(ScannerBackend):
                     "--others",
                     "--ignored",
                     "--exclude-standard",
+                    "-z",
                     "--",
                     *_ENV_FILE_PATHSPECS,
                 ],
@@ -565,7 +578,7 @@ class NativeScanner(ScannerBackend):
                 timeout=30,
             )
             if result.returncode == 0:
-                for rel_path in result.stdout.splitlines():
+                for rel_path in result.stdout.split("\0"):
                     if (
                         rel_path
                         and _is_env_file(rel_path)
