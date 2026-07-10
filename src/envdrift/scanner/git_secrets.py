@@ -516,8 +516,13 @@ class GitSecretsScanner(ScannerBackend):
                     # Scan entire git history
                     result = self._run_git_secrets(["--scan-history"], cwd)
                 else:
-                    # Scan specific files or directory
-                    args = ["--scan", "-r"] + scan_paths
+                    # ``--no-index`` recurses through the requested paths but
+                    # excludes Git metadata. ``-r .`` scans ``.git/config``,
+                    # where modern git-secrets stores its own literal Bedrock
+                    # pattern, producing a false positive (#581). Unlike
+                    # ``--untracked``, this keeps ignored user files (such as
+                    # ``.env``) in the scanner's scope.
+                    args = ["--scan", "--no-index", *scan_paths]
                     result = self._run_git_secrets(args, cwd)
 
                 # Parse output.
