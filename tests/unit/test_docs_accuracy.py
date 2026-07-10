@@ -17,8 +17,8 @@ Plus the #498 sweep — recipes/keys the shipped tools reject or ignore:
 - ``docs/support/faq.md``'s CI decrypt recipe must write the environment-suffixed
   ``DOTENV_PRIVATE_KEY_PRODUCTION`` (a bare ``DOTENV_PRIVATE_KEY`` can never
   decrypt ``.env.production``).
-- ``docs/guides/env-file-sync.md`` must document ``dotenvx rotate -f`` — dotenvx
-  has no ``encrypt --rotate`` option.
+- ``docs/guides/env-file-sync.md`` must not advertise dotenvx v1's removed
+  local rotation command; dotenvx v2 has no safe drop-in replacement.
 - no docs page may mention the fabricated ``DOTENV_KEYS_PATH`` variable.
 - ``docs/reference/configuration.md`` (and the in-source ``EXAMPLE_CONFIG``)
   must not document ``[envdrift] schema``/``environments`` or ``[precommit]`` —
@@ -280,21 +280,17 @@ def test_faq_ci_decrypt_recipe_writes_suffixed_private_key() -> None:
     )
 
 
-def test_env_file_sync_rotation_recipe_is_a_real_dotenvx_command() -> None:
-    """env-file-sync.md must document ``dotenvx rotate -f``, not ``encrypt --rotate`` (#498).
-
-    dotenvx has no ``--rotate`` option on any subcommand —
-    ``dotenvx encrypt .env.production --rotate`` dies with "unknown option".
-    The real rotation command is ``dotenvx rotate -f <file>`` (the ``-f`` flag is
-    required to target a non-default filename).
-    """
+def test_env_file_sync_rotation_recipe_matches_dotenvx_v2() -> None:
+    """The guide must not advertise dotenvx v1's removed local rotate recipe (#585)."""
     text = _read_docs_page("guides/env-file-sync.md")
     assert "--rotate" not in text, (
         "env-file-sync.md references a --rotate option that no shipped tool has (#498)."
     )
-    assert "dotenvx rotate -f .env.production" in text, (
-        "env-file-sync.md's key-rotation recipe must use the real "
-        "`dotenvx rotate -f .env.production` command (#498)."
+    assert "dotenvx rotate -f .env.production" not in text, (
+        "env-file-sync.md advertises dotenvx v1's removed local rotation command (#585)."
+    )
+    assert "dotenvx v2 has no local `rotate` subcommand" in text, (
+        "env-file-sync.md must explain the pinned dotenvx v2 rotation limitation (#585)."
     )
 
 
