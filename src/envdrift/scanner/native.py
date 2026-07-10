@@ -496,7 +496,8 @@ class NativeScanner(ScannerBackend):
 
         # ``-z`` keeps filenames byte-for-byte rather than applying Git's
         # C-style quotepath escaping to non-ASCII or newline-containing paths.
-        # Every git invocation below therefore uses NUL-separated output.
+        # ``surrogateescape`` round-trips any non-UTF-8 bytes into ``Path``;
+        # every git invocation below therefore uses NUL-separated output.
 
         # Method 1: Get tracked files from git (fast - reads index)
         try:
@@ -505,7 +506,7 @@ class NativeScanner(ScannerBackend):
                 capture_output=True,
                 text=True,
                 encoding="utf-8",
-                errors="replace",
+                errors="surrogateescape",
                 cwd=directory,
                 timeout=30,
             )
@@ -537,7 +538,7 @@ class NativeScanner(ScannerBackend):
                 capture_output=True,
                 text=True,
                 encoding="utf-8",
-                errors="replace",
+                errors="surrogateescape",
                 cwd=directory,
                 timeout=30,
             )
@@ -573,7 +574,7 @@ class NativeScanner(ScannerBackend):
                 capture_output=True,
                 text=True,
                 encoding="utf-8",
-                errors="replace",
+                errors="surrogateescape",
                 cwd=directory,
                 timeout=30,
             )

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from pathlib import Path, PureWindowsPath
 
 import pytest
@@ -101,6 +102,30 @@ class TestNativeScannerInternals:
 
         assert files == expected
         assert all("-z" in cmd for cmd in calls)
+
+    @pytest.mark.skipif(os.name == "nt", reason="Windows filenames cannot contain arbitrary bytes")
+    def test_collect_files_round_trips_non_utf8_git_paths(self, tmp_path: Path):
+        """Raw Git pathname bytes must map back to the file on disk (#576)."""
+        import shutil
+        import subprocess
+
+        if shutil.which("git") is None:
+            pytest.skip("git not available")
+
+        def git(*args: str) -> None:
+            subprocess.run(["git", *args], cwd=tmp_path, check=True, capture_output=True)
+
+        git("init")
+        git("config", "core.quotepath", "true")
+        raw_directory_name = os.fsdecode(b"secrets-\xff")
+        env_file = tmp_path / raw_directory_name / ".env"
+        env_file.parent.mkdir()
+        env_file.write_bytes(b"TOKEN=secret\n")
+        git("add", "-A")
+
+        collected = NativeScanner()._collect_files(tmp_path)
+
+        assert env_file in collected
 
     def test_collect_files_includes_gitignored_env_secret(self, tmp_path: Path):
         """A gitignored, untracked, plaintext .env secret must still be collected.
