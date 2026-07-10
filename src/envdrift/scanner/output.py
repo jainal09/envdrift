@@ -9,9 +9,10 @@ This module provides multiple output formats for scan results:
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
-from urllib.parse import quote
+from urllib.parse import quote_from_bytes
 
 from rich.console import Console
 from rich.panel import Panel
@@ -336,19 +337,25 @@ def _sarif_artifact_location(file_path: PurePath, srcroot: PurePath) -> dict[str
 
     Both arguments must be absolute. A path under ``srcroot`` becomes a
     srcroot-relative URI with forward slashes — on Windows too, per SARIF
-    2.1.0 §3.4.4 — tagged with ``uriBaseId: SRCROOT``, percent-encoded so a
-    space, ``#`` or non-ASCII character still yields a valid RFC 3986
-    URI-reference (§3.4.3), matching the ``as_uri()`` fallback's encoding. A
-    path outside the source root cannot be expressed relative to it, so it
-    falls back to an absolute ``file://`` URI with no base id (an absolute
-    URI under a base id is contradictory and Code Scanning drops such
-    alerts — #489).
+    2.1.0 §3.4.4 — tagged with ``uriBaseId: SRCROOT`` and percent-encoded so
+    a space, ``#``, non-ASCII character, or arbitrary POSIX pathname byte
+    still yields a valid RFC 3986 URI-reference (§3.4.3), matching the
+    ``as_uri()`` fallback's encoding. A path outside the source root cannot
+    be expressed relative to it, so it falls back to an absolute ``file://``
+    URI with no base id (an absolute URI under a base id is contradictory and
+    Code Scanning drops such alerts — #489).
     """
     try:
         relative = file_path.relative_to(srcroot)
     except ValueError:
         return {"uri": file_path.as_uri()}
-    return {"uri": quote(relative.as_posix()), "uriBaseId": _SRCROOT_BASE_ID}
+    # ``Path`` can contain surrogate-escaped POSIX pathname bytes.  Encoding
+    # via ``os.fsencode`` preserves those bytes before URI percent-encoding;
+    # ``quote(str)`` would strictly UTF-8 encode and reject the surrogate.
+    return {
+        "uri": quote_from_bytes(os.fsencode(relative.as_posix())),
+        "uriBaseId": _SRCROOT_BASE_ID,
+    }
 
 
 def _resolved_finding_path(file_path: Path) -> Path:

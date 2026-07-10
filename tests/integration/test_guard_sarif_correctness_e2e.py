@@ -189,15 +189,17 @@ class TestSarifRelativeUris:
         assert "sub%20dir/.env" in uris, f"expected a percent-encoded URI, got {sorted(uris)}"
         assert not any(" " in uri for uri in uris), "raw spaces are invalid in URI-references"
 
-    @pytest.mark.xfail(
-        strict=False,
-        reason="native discovery drops non-ASCII paths: git ls-files quotepath output "
-        "is not unquoted (see #576)",
-    )
     def test_non_ascii_path_is_discovered_and_percent_encoded(self, scratch_repo: Path) -> None:
-        """A finding in a non-ASCII directory must be discovered and emitted as a
-        UTF-8 percent-encoded URI. The emitter side is unit-tested and correct;
-        discovery currently drops the file before it ever reaches SARIF (#576)."""
+        """A non-ASCII path must survive Git quotepath discovery into SARIF (#576)."""
+        git_path = shutil.which("git")
+        assert git_path is not None
+        subprocess.run(
+            [git_path, "config", "core.quotepath", "true"],
+            cwd=str(scratch_repo),
+            check=True,
+            capture_output=True,
+            timeout=60,
+        )
         non_ascii = scratch_repo / "sécrets"
         non_ascii.mkdir()
         (non_ascii / ".env").write_text(f"TOKEN={_AWS_KEY_TWO}\n", encoding="utf-8")
@@ -210,6 +212,41 @@ class TestSarifRelativeUris:
         assert "s%C3%A9crets/.env" in uris, (
             f"finding in a non-ASCII directory was not reported, got {sorted(uris)}"
         )
+
+    @pytest.mark.skipif(os.name == "nt", reason="Windows filenames cannot contain arbitrary bytes")
+    def test_non_utf8_path_is_discovered_and_percent_encoded(self, scratch_repo: Path) -> None:
+        """Raw Git pathname bytes must survive discovery and SARIF emission (#576)."""
+        git_path = shutil.which("git")
+        assert git_path is not None
+        subprocess.run(
+            [git_path, "config", "core.quotepath", "true"],
+            cwd=str(scratch_repo),
+            check=True,
+            capture_output=True,
+            timeout=60,
+        )
+        raw_directory_name = os.fsdecode(b"secrets-\xe9")
+        env_file = scratch_repo / raw_directory_name / ".env"
+        env_file.parent.mkdir()
+        env_file.write_text(f"TOKEN={_AWS_KEY_TWO}\n", encoding="utf-8")
+        subprocess.run(
+            [git_path, "add", str(env_file.relative_to(scratch_repo))],
+            cwd=str(scratch_repo),
+            check=True,
+            capture_output=True,
+            timeout=60,
+        )
+
+        result = _run_envdrift(_SARIF_ARGS, cwd=scratch_repo)
+        assert result.returncode == 1, result.stderr
+        sarif = _parse_sarif(result)
+
+        locations = _artifact_uris(sarif)
+        raw_byte_locations = [
+            location for location in locations if location["uri"] == "secrets-%E9/.env"
+        ]
+        assert raw_byte_locations, f"raw-byte path was not reported, got {locations}"
+        assert all(location["uriBaseId"] == "SRCROOT" for location in raw_byte_locations)
 
 
 class TestSarifFingerprints:

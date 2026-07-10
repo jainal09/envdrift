@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from pathlib import Path, PureWindowsPath
 
 import pytest
@@ -71,8 +72,8 @@ class TestNativeScannerInternals:
         monkeypatch.setattr(Path, "rglob", raise_permission)
         assert scanner._collect_files(tmp_path) == []
 
-    def test_collect_files_sorts_git_results(self, tmp_path: Path, monkeypatch):
-        """Git-based collection returns deterministically sorted results."""
+    def test_collect_files_sorts_nul_delimited_git_results(self, tmp_path: Path, monkeypatch):
+        """Git collection uses NUL output so quoted or newline-containing paths stay intact (#576)."""
         import subprocess
 
         scanner = NativeScanner()
@@ -81,12 +82,14 @@ class TestNativeScannerInternals:
         (tmp_path / "b.txt").touch()
         (tmp_path / ".env.a").touch()
         (tmp_path / ".env.z").touch()
+        calls: list[list[str]] = []
 
         def mock_run(cmd, **kwargs):
+            calls.append(cmd)
             if cmd[:2] == ["git", "ls-files"] and "--others" not in cmd:
-                return subprocess.CompletedProcess(cmd, 0, stdout="b.txt\na.txt\n", stderr="")
+                return subprocess.CompletedProcess(cmd, 0, stdout="b.txt\0a.txt\0", stderr="")
             if cmd[:2] == ["git", "ls-files"] and "--others" in cmd:
-                return subprocess.CompletedProcess(cmd, 0, stdout=".env.z\n.env.a\n", stderr="")
+                return subprocess.CompletedProcess(cmd, 0, stdout=".env.z\0.env.a\0", stderr="")
             return subprocess.CompletedProcess(cmd, 1, stdout="", stderr="")
 
         monkeypatch.setattr(subprocess, "run", mock_run)
@@ -98,6 +101,31 @@ class TestNativeScannerInternals:
         )
 
         assert files == expected
+        assert all("-z" in cmd for cmd in calls)
+
+    @pytest.mark.skipif(os.name == "nt", reason="Windows filenames cannot contain arbitrary bytes")
+    def test_collect_files_round_trips_non_utf8_git_paths(self, tmp_path: Path):
+        """Raw Git pathname bytes must map back to the file on disk (#576)."""
+        import shutil
+        import subprocess
+
+        if shutil.which("git") is None:
+            pytest.skip("git not available")
+
+        def git(*args: str) -> None:
+            subprocess.run(["git", *args], cwd=tmp_path, check=True, capture_output=True)
+
+        git("init")
+        git("config", "core.quotepath", "true")
+        raw_directory_name = os.fsdecode(b"secrets-\xff")
+        env_file = tmp_path / raw_directory_name / ".env"
+        env_file.parent.mkdir()
+        env_file.write_bytes(b"TOKEN=secret\n")
+        git("add", "-A")
+
+        collected = NativeScanner()._collect_files(tmp_path)
+
+        assert env_file in collected
 
     def test_collect_files_includes_gitignored_env_secret(self, tmp_path: Path):
         """A gitignored, untracked, plaintext .env secret must still be collected.
