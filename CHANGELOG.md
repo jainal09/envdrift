@@ -1,5 +1,17 @@
 # Changelog
 
+## [10.16.6](https://github.com/jainal09/envdrift/compare/v10.16.5...v10.16.6) (2026-07-10)
+
+
+### Bug Fixes
+
+* **scanner:** avoid Git metadata false positives ([#597](https://github.com/jainal09/envdrift/issues/597)) ([3ee9d1a](https://github.com/jainal09/envdrift/commit/3ee9d1a6d82d81a374a1468dbabf1279c7c9cb23))
+
+
+### Documentation
+
+* **sync:** correct dotenvx v2 rotation guidance ([#599](https://github.com/jainal09/envdrift/issues/599)) ([059d3bf](https://github.com/jainal09/envdrift/commit/059d3bffbfa0e2fcb61c8bf78277d1ead4c19c0d))
+
 ## [10.16.5](https://github.com/jainal09/envdrift/compare/v10.16.4...v10.16.5) (2026-07-10)
 
 
