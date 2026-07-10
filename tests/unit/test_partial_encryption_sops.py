@@ -18,6 +18,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from envdrift.config import PartialEncryptionEnvironmentConfig
 from envdrift.core.partial_encryption import combine_files, push_partial_encryption
 
@@ -33,6 +35,27 @@ def test_has_plaintext_secret_value_fully_encrypted_is_false(tmp_path: Path):
         'DB_PASS="encrypted:def..."\n'
     )
     assert has_plaintext_secret_value(f) is False
+
+
+@pytest.mark.parametrize(
+    ("line", "has_plaintext"),
+    [
+        ('API_KEY="encrypted:abc..." # rotated 2026-06', False),
+        ("DB_PASS='ENC[AES256_GCM,data:abc]' # rotated", False),
+        ('API_KEY="plaintext-value" # rotated', True),
+        ('API_KEY="encrypted:abc..." trailing-text', True),
+    ],
+)
+def test_has_plaintext_secret_value_quoted_value_with_suffix(
+    tmp_path: Path, line: str, has_plaintext: bool
+):
+    """Only an inline comment after quoted ciphertext is safe to trim (#578)."""
+    from envdrift.core.partial_encryption import has_plaintext_secret_value
+
+    f = tmp_path / ".env.secret"
+    f.write_text(line + "\n", encoding="utf-8")
+
+    assert has_plaintext_secret_value(f) is has_plaintext
 
 
 def test_has_plaintext_secret_value_mixed_is_true(tmp_path: Path):
