@@ -70,6 +70,15 @@ def _step_uses(workflow: dict[Any, Any]) -> list[str]:
     return refs
 
 
+def _local_reusable_workflow_name(reference: str) -> str | None:
+    """Return a same-repository reusable-workflow filename, if any."""
+    path = reference.split("@", 1)[0]
+    prefix = "./.github/workflows/"
+    if not path.startswith(prefix):
+        return None
+    return path.rsplit("/", 1)[-1]
+
+
 def test_vscode_release_runs_tests_unmasked() -> None:
     """The vscode release build must let test failures fail the release (#495).
 
@@ -171,10 +180,10 @@ def test_release_tags_have_exactly_one_trigger_path() -> None:
             called = job.get("uses")
             if not called:
                 continue
-            called_file = called.split("@", 1)[0].rsplit("/", 1)[-1]
-            if not (_WORKFLOWS / called_file).is_file():
-                # Reusable workflow from another repository — no local
-                # push-tags trigger to double-fire.
+            called_file = _local_reusable_workflow_name(called)
+            if called_file is None or not (_WORKFLOWS / called_file).is_file():
+                # External reusable workflow, or a missing local file — no
+                # local push-tags trigger to double-fire.
                 continue
             called_workflow = _load_workflow(called_file)
             push = _triggers(called_workflow).get("push") or {}
@@ -184,6 +193,17 @@ def test_release_tags_have_exactly_one_trigger_path() -> None:
                 "run twice and race the release assets (#495). Keep exactly one "
                 "trigger path per tag."
             )
+
+
+def test_external_reusable_workflow_is_not_confused_by_matching_basename() -> None:
+    """Only ``./`` references are local, even when an external basename matches (#582)."""
+    assert _local_reusable_workflow_name("./.github/workflows/vscode-release.yml@main") == (
+        "vscode-release.yml"
+    )
+    assert (
+        _local_reusable_workflow_name("example-org/example/.github/workflows/vscode-release.yml@v1")
+        is None
+    )
 
 
 def test_release_workflows_define_per_tag_concurrency() -> None:
