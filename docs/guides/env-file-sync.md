@@ -613,26 +613,16 @@ That's the whole promise: one command, no Slacked secrets.
 
 ### Key rotation
 
-Rotation is a **dotenvx-native** operation — envdrift has no rotate command, so this
-one step calls the [`dotenvx`](https://dotenvx.com) binary directly (envdrift wraps
-dotenvx for everything else). `dotenvx rotate` generates a new keypair, re-encrypts
-the file, and appends the new private key to the entry in `.env.keys` (the old key is
-kept, comma-separated, so older ciphertext stays decryptable). After rotating,
-re-push the key and teammates resync:
+dotenvx v2 has no local `rotate` subcommand. Do not use the legacy v1 rotation
+one-liner: under the dotenvx version envdrift ships, it reports an unknown command
+but exits successfully without changing either the encrypted file or `.env.keys`.
 
-> **dotenvx v2 note:** the pinned dotenvx (v2) removed the `rotate` subcommand, so
-> the one-liner below is currently a no-op. A v2 rotation recipe is tracked in
-> [#585](https://github.com/jainal09/envdrift/issues/585); until it lands, rotate
-> with a dotenvx v1 binary or re-encrypt the file to a fresh keypair.
-
-```bash
-dotenvx rotate -f .env.production            # dotenvx CLI: new key in .env.keys
-# re-push the rotated key — vault-push <folder> <secret-name> --env <env>
-envdrift vault-push . myapp-dotenvx-key --env production \
-  -p azure --vault-url https://my-keyvault.vault.azure.net/
-# teammates pick it up with:
-envdrift sync --force
-```
+There is no safe drop-in local replacement. Generating a fresh key pair,
+re-encrypting, and replacing `.env.keys` makes existing ciphertext undecryptable
+with the replacement key. If a key must be rotated or revoked, use your
+organization's key-management process to preserve historical decryption keys and
+coordinate a re-encryption migration before replacing the vaulted key. `envdrift
+vault-push` and `sync` distribute `.env.keys`; they do not rotate the keys.
 
 ## Troubleshooting
 

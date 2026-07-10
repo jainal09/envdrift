@@ -8,8 +8,8 @@ can't drift back to a recipe that dies at the moment a user needs it:
 - ``docs/support/faq.md`` "decrypt in CI" Option 1: a bare ``DOTENV_PRIVATE_KEY``
   in ``.env.keys`` can never decrypt ``.env.production``; the suffixed
   ``DOTENV_PRIVATE_KEY_PRODUCTION`` round-trips.
-- ``docs/guides/env-file-sync.md`` key rotation: ``dotenvx encrypt --rotate``
-  is rejected ("unknown option"); ``dotenvx rotate -f`` rotates for real.
+- ``docs/guides/env-file-sync.md`` key rotation: dotenvx v2 has no local
+  ``rotate`` command, and its removed v1 command is a no-op.
 - ``docs/guides/monorepo-setup.md`` shared keys: ``DOTENV_KEYS_PATH`` is read by
   nothing; dotenvx's ``--env-keys-file`` flag and a symlink both work.
 
@@ -63,14 +63,6 @@ def _run(
         timeout=120,
         check=False,
     )
-
-
-def _public_key_line(env_file: Path) -> str:
-    """Return the DOTENV_PUBLIC_KEY_* line of an encrypted env file."""
-    text = env_file.read_text(encoding="utf-8")
-    match = re.search(r"^DOTENV_PUBLIC_KEY[A-Z_]*=.*$", text, re.MULTILINE)
-    assert match, f"no public key line in {env_file}:\n{text}"
-    return match.group(0)
 
 
 def _encrypt_production(envdrift_cmd: list[str], cwd: Path, env: dict[str, str]) -> str:
@@ -139,65 +131,56 @@ def test_faq_ci_decrypt_recipe_round_trips(
     assert _PLAIN_VALUE in (work_dir / ".env.production").read_text(encoding="utf-8")
 
 
-@pytest.mark.xfail(
-    strict=False,
-    reason="dotenvx v2 removed the `rotate` command; recipe + test need a v2 story (see #585)",
-)
-def test_env_file_sync_rotation_recipe(
+def test_env_file_sync_rotation_command_is_a_noop_in_dotenvx_v2(
     envdrift_cmd: list[str],
     dotenvx_bin: str,
     work_dir: Path,
     integration_env: dict[str, str],
 ) -> None:
-    """env-file-sync.md's rotation one-liner rotates; the old flag is dead (#498).
+    """The removed v1 command reports an error but exits 0 without rotating (#585)."""
+    _encrypt_production(envdrift_cmd, work_dir, integration_env)
+    env_file = work_dir / ".env.production"
+    keys_file = work_dir / ".env.keys"
+    encrypted_before = env_file.read_bytes()
+    keys_before = keys_file.read_bytes()
 
-    Real ``dotenvx rotate`` semantics (pinned here so the doc stays truthful):
-    it generates a new keypair, re-encrypts the file to the new public key, and
-    *appends* the new private key to the suffixed ``.env.keys`` entry
-    (comma-separated, old key kept so older ciphertext stays decryptable).
-
-    xfail under dotenvx v2 (2.1.5): the ``rotate`` subcommand was removed, so the
-    documented one-liner is a no-op and the comma-chained key append never
-    happens. Tracked in #585; flip back to a passing assertion when the recipe is
-    reworked for v2.
-    """
-    old_key = _encrypt_production(envdrift_cmd, work_dir, integration_env)
-    old_public = _public_key_line(work_dir / ".env.production")
-
-    # OLD documented command: dotenvx has no `encrypt --rotate` option.
-    result = _run(
-        [dotenvx_bin, "encrypt", ".env.production", "--rotate"], work_dir, integration_env
-    )
-    assert result.returncode != 0
-    assert "unknown option" in (result.stdout + result.stderr)
-
-    # NEW documented command rotates for real: exit 0, a NEW private key
-    # appended to .env.keys, file re-encrypted to a NEW public key.
     result = _run([dotenvx_bin, "rotate", "-f", ".env.production"], work_dir, integration_env)
-    assert result.returncode == 0, result.stdout + result.stderr
-    keys_text = (work_dir / ".env.keys").read_text(encoding="utf-8")
-    match = re.search(
-        r'^DOTENV_PRIVATE_KEY_PRODUCTION="?([0-9a-fA-F,]+)"?', keys_text, re.MULTILINE
-    )
-    assert match, f"rotate must keep the suffixed key entry in .env.keys; got:\n{keys_text}"
-    key_chain = match.group(1).split(",")
-    assert key_chain[0] == old_key, "rotate keeps the old key so history stays decryptable"
-    assert len(key_chain) == 2 and key_chain[-1] != old_key, (
-        "rotate must append a NEW private key to the suffixed entry"
-    )
-    rotated = (work_dir / ".env.production").read_text(encoding="utf-8")
-    assert "encrypted:" in rotated
-    assert _PLAIN_VALUE not in rotated
-    assert _public_key_line(work_dir / ".env.production") != old_public, (
-        "rotate must re-encrypt the file to a NEW public key"
-    )
+    output = result.stdout + result.stderr
+    assert result.returncode == 0, output
+    assert "unknown command 'rotate'" in output
+    assert env_file.read_bytes() == encrypted_before, "removed rotate must not alter ciphertext"
+    assert keys_file.read_bytes() == keys_before, "removed rotate must not alter .env.keys"
 
-    # The rotated file still round-trips with the new key.
-    result = _run(
-        [dotenvx_bin, "decrypt", "-f", ".env.production", "--stdout"], work_dir, integration_env
-    )
+
+def test_replacing_dotenvx_v2_key_cannot_decrypt_prior_ciphertext(
+    envdrift_cmd: list[str],
+    dotenvx_bin: str,
+    work_dir: Path,
+    integration_env: dict[str, str],
+) -> None:
+    """A fresh local key replacement is not a history-preserving rotation (#585)."""
+    _encrypt_production(envdrift_cmd, work_dir, integration_env)
+    env_file = work_dir / ".env.production"
+    keys_file = work_dir / ".env.keys"
+    encrypted_before = env_file.read_bytes()
+    prior_dir = work_dir / "prior"
+    prior_dir.mkdir()
+    prior_file = prior_dir / ".env.production"
+    prior_file.write_bytes(encrypted_before)
+
+    result = _run([dotenvx_bin, "decrypt", "-f", ".env.production"], work_dir, integration_env)
     assert result.returncode == 0, result.stdout + result.stderr
-    assert _PLAIN_VALUE in result.stdout
+    keys_file.unlink()
+    result = _run([dotenvx_bin, "encrypt", "-f", ".env.production"], work_dir, integration_env)
+    assert result.returncode == 0, result.stdout + result.stderr
+
+    result = _run(
+        [dotenvx_bin, "decrypt", "-f", ".env.production", "-fk", "../.env.keys"],
+        prior_dir,
+        integration_env,
+    )
+    assert result.returncode != 0, "a replacement key must not decrypt prior ciphertext"
+    assert prior_file.read_bytes() == encrypted_before
 
 
 def test_monorepo_shared_keys_env_keys_file_flag(
