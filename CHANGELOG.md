@@ -1,5 +1,12 @@
 # Changelog
 
+## [10.16.8](https://github.com/jainal09/envdrift/compare/v10.16.7...v10.16.8) (2026-07-11)
+
+
+### Bug Fixes
+
+* **scanner:** bound auto-install downloads ([#606](https://github.com/jainal09/envdrift/issues/606)) ([8a7e01b](https://github.com/jainal09/envdrift/commit/8a7e01be6650a8a5d88e57f38c4b7cfe6fdd860c))
+
 ## [10.16.7](https://github.com/jainal09/envdrift/compare/v10.16.6...v10.16.7) (2026-07-10)
 
 
