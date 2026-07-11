@@ -1,5 +1,12 @@
 # Changelog
 
+## [10.16.9](https://github.com/jainal09/envdrift/compare/v10.16.8...v10.16.9) (2026-07-11)
+
+
+### Bug Fixes
+
+* **install:** support Python launcher arguments ([#610](https://github.com/jainal09/envdrift/issues/610)) ([b731164](https://github.com/jainal09/envdrift/commit/b731164d96efa7eee708e8d9c45c77954dfd50db))
+
 ## [10.16.8](https://github.com/jainal09/envdrift/compare/v10.16.7...v10.16.8) (2026-07-11)
 
 
