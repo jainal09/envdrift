@@ -1,5 +1,12 @@
 # Changelog
 
+## [10.16.13](https://github.com/jainal09/envdrift/compare/v10.16.12...v10.16.13) (2026-07-11)
+
+
+### Documentation
+
+* align vault and monorepo config examples ([#624](https://github.com/jainal09/envdrift/issues/624)) ([a8d5c86](https://github.com/jainal09/envdrift/commit/a8d5c86b976878685072d85f6aec13ddbaaa5275))
+
 ## [10.16.12](https://github.com/jainal09/envdrift/compare/v10.16.11...v10.16.12) (2026-07-11)
 
 
