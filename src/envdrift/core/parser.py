@@ -152,6 +152,15 @@ class _KeyToken:
     quoted: bool
 
 
+@dataclass(frozen=True)
+class _ParseContext:
+    """Shared mutable collections used while consuming one dotenv string."""
+
+    lines: list[str]
+    env_file: EnvFile
+    bare_keys: set[str]
+
+
 class EnvParser:
     """Parse .env files with multi-backend encryption awareness.
 
@@ -335,6 +344,7 @@ class EnvParser:
         # Bare bindings are omitted from EnvFile.variables but must shadow
         # os.environ during sequential interpolation (#573).
         bare_keys: set[str] = set()
+        context = _ParseContext(lines, env_file, bare_keys)
         index = 0
         while index < len(lines):
             line_num = index + 1
@@ -363,11 +373,9 @@ class EnvParser:
             else:
                 prepared, index = self._prepare_nonstandard_binding(
                     original_line,
-                    lines,
                     index,
                     lenient,
-                    env_file,
-                    bare_keys,
+                    context,
                 )
                 if prepared is None:
                     continue
@@ -425,37 +433,36 @@ class EnvParser:
     def _prepare_nonstandard_binding(
         self,
         original_line: str,
-        lines: list[str],
         index: int,
         lenient: bool,
-        env_file: EnvFile,
-        bare_keys: set[str],
+        context: _ParseContext,
     ) -> tuple[tuple[str, str, list[str]] | None, int]:
         """Lex and prepare a quoted, bare, or malformed fallback binding."""
-        binding = self._parse_key_binding(original_line, lines, index, lenient=lenient)
+        binding = self._parse_key_binding(original_line, context.lines, index, lenient=lenient)
         if binding is None:
             return None, index
-        return self._prepare_binding(binding, original_line, lines, index, env_file, bare_keys)
+        return self._prepare_binding(binding, original_line, index, context)
 
     @staticmethod
     def _prepare_binding(
         binding: _KeyBinding,
         original_line: str,
-        lines: list[str],
         index: int,
-        env_file: EnvFile,
-        bare_keys: set[str],
+        context: _ParseContext,
     ) -> tuple[tuple[str, str, list[str]] | None, int]:
         """Consume key lines and apply the state change from a bare binding."""
-        raw_lines = [original_line, *lines[index : index + binding.consumed]]
+        raw_lines = [
+            original_line,
+            *context.lines[index : index + binding.consumed],
+        ]
         index += binding.consumed
         if binding.dropped or binding.key is None:
             return None, index
         if binding.raw_value is None:
             # A later bare duplicate wins in dotenv_values (A=1; A -> A=None),
             # and pydantic-settings then filters that None out.
-            bare_keys.add(binding.key)
-            env_file.variables.pop(binding.key, None)
+            context.bare_keys.add(binding.key)
+            context.env_file.variables.pop(binding.key, None)
             return None, index
         return (binding.key, binding.raw_value, raw_lines), index
 
