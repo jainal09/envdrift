@@ -650,7 +650,7 @@ class TestTalismanInstallerInstall:
 
         checksums_path = tmp_path / "stub-checksums.txt"
 
-        def fake_download(url: str, dest: str, **_kwargs) -> None:
+        def fake_download(url: str, dest: Path, **_kwargs) -> None:
             # Create a fake binary file
             Path(dest).write_bytes(b"fake binary content")
             write_checksums_for(Path(dest), checksums_path, url.rsplit("/", 1)[-1])

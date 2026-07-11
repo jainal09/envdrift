@@ -55,7 +55,7 @@ class TestDownloadAndExtractArchiveTypes:
 
         checksums_path = tmp_path / "stub-checksums.txt"
 
-        def fake_download(url: str, dest: str, **_kwargs) -> None:
+        def fake_download(url: str, dest: Path, **_kwargs) -> None:
             import zipfile
 
             with zipfile.ZipFile(dest, "w") as zf:
@@ -89,7 +89,7 @@ class TestDownloadAndExtractArchiveTypes:
         """An archive with an unrecognized extension raises TrivyInstallError."""
         checksums_path = tmp_path / "stub-checksums.txt"
 
-        def fake_download(url: str, dest: str, **_kwargs) -> None:
+        def fake_download(url: str, dest: Path, **_kwargs) -> None:
             Path(dest).write_bytes(b"x")
             write_checksums_for(Path(dest), checksums_path, url.rsplit("/", 1)[-1])
 

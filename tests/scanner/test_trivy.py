@@ -642,7 +642,7 @@ class TestTrivyInstallerInstall:
 
         checksums_path = tmp_path / "stub-checksums.txt"
 
-        def fake_download(url: str, dest: str, **_kwargs) -> None:
+        def fake_download(url: str, dest: Path, **_kwargs) -> None:
             # Create a fake tar.gz with trivy binary
             with tarfile.open(dest, "w:gz") as tar:
                 info = tarfile.TarInfo(name="trivy")
@@ -703,7 +703,7 @@ class TestTrivyInstallerInstall:
 
         checksums_path = tmp_path / "stub-checksums.txt"
 
-        def fake_download(url: str, dest: str, **_kwargs) -> None:
+        def fake_download(url: str, dest: Path, **_kwargs) -> None:
             # Create a tar.gz without trivy binary
             with tarfile.open(dest, "w:gz") as tar:
                 info = tarfile.TarInfo(name="other_file.txt")

@@ -690,7 +690,7 @@ class TestInfisicalInstallerInstall:
 
         checksums_path = tmp_path / "stub-checksums.txt"
 
-        def fake_download(url: str, dest: str, **_kwargs) -> None:
+        def fake_download(url: str, dest: Path, **_kwargs) -> None:
             with tarfile.open(dest, "w:gz") as tar:
                 info = tarfile.TarInfo(name="infisical")
                 info.size = 4
@@ -749,7 +749,7 @@ class TestInfisicalInstallerInstall:
         mock_get_path.return_value = tmp_path / "infisical"
         checksums_path = tmp_path / "stub-checksums.txt"
 
-        def fake_download(url: str, dest: str, **_kwargs) -> None:
+        def fake_download(url: str, dest: Path, **_kwargs) -> None:
             with tarfile.open(dest, "w:gz") as tar:
                 info = tarfile.TarInfo(name="other_file.txt")
                 info.size = 4

@@ -78,7 +78,7 @@ class TestDownloadAndExtractBranches:
 
         checksums_path = tmp_path / "stub-checksums.txt"
 
-        def fake_download(url: str, dest: str, **_kwargs) -> None:
+        def fake_download(url: str, dest: Path, **_kwargs) -> None:
             with zipfile.ZipFile(dest, "w") as zf:
                 zf.writestr("infisical.exe", "binary-bytes")
             write_checksums_for(Path(dest), checksums_path, url.rsplit("/", 1)[-1])
@@ -110,7 +110,7 @@ class TestDownloadAndExtractBranches:
         mock_url.return_value = "https://example.test/infisical_x_linux.bz2"
         checksums_path = tmp_path / "stub-checksums.txt"
 
-        def fake_download(url: str, dest: str, **_kwargs) -> None:
+        def fake_download(url: str, dest: Path, **_kwargs) -> None:
             Path(dest).write_bytes(b"x")
             write_checksums_for(Path(dest), checksums_path, url.rsplit("/", 1)[-1])
 
