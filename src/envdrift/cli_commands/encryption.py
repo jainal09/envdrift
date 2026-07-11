@@ -625,6 +625,20 @@ _DeprecatedVaultSecretOpt = Annotated[
     typer.Option("--secret", help="(Deprecated) Use with decrypt --verify-vault", hidden=True),
 ]
 
+ENCRYPT_HELP_EPILOG = """Backend selection:
+  Without --backend, envdrift uses envdrift.toml/pyproject.toml and then falls back to dotenvx.
+
+Pre-commit:
+  --check accepts multiple files so pass_filenames: true hooks can check one staged batch.
+
+Examples:
+  envdrift encrypt
+  envdrift encrypt --backend sops
+  envdrift encrypt --check .env.production .env.staging
+  envdrift encrypt -b sops --age AGE_PUBLIC_KEY
+  envdrift encrypt --sops-config .sops.yaml
+"""
+
 
 def encrypt_cmd(
     env_files: _EncryptFilesArg = None,

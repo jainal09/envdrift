@@ -582,6 +582,18 @@ class TestDiffCommand:
 class TestEncryptCommand:
     """Tests for the encrypt CLI command."""
 
+    def test_encrypt_help_keeps_examples_and_precommit_contract(self):
+        """The large-method refactor must not discard long-form CLI guidance (#575)."""
+        result = runner.invoke(app, ["encrypt", "--help"])
+
+        assert result.exit_code == 0
+        output = " ".join(result.output.split())
+        assert "envdrift.toml/pyproject.toml" in output
+        assert "pass_filenames: true" in output
+        assert "envdrift encrypt --backend sops" in output
+        assert "envdrift encrypt -b sops --age AGE_PUBLIC_KEY" in output
+        assert "envdrift encrypt --sops-config .sops.yaml" in output
+
     def test_encrypt_check_missing_file(self, tmp_path: Path):
         """Test encrypt --check with missing file."""
         result = runner.invoke(app, ["encrypt", str(tmp_path / "missing.env"), "--check"])
