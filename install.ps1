@@ -230,7 +230,9 @@ function Initialize-Venv {
     else {
         Write-Info "Creating virtual environment at $VenvDir"
         New-Item -ItemType Directory -Path $InstallDir -Force | Out-Null
-        & @script:PythonCmd -m venv $VenvDir
+        $pythonExe = $script:PythonCmd[0]
+        $pythonArgs = @($script:PythonCmd | Select-Object -Skip 1)
+        & $pythonExe @pythonArgs -m venv $VenvDir
         if ($LASTEXITCODE -ne 0) {
             Stop-WithError "Failed to create virtual environment"
         }
