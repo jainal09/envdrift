@@ -17,14 +17,15 @@ import subprocess  # nosec B404
 import tarfile
 import tempfile
 import time
-import urllib.request
 import zipfile
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, ClassVar
 
 from envdrift.install_integrity import (
+    DOWNLOAD_TIMEOUT_SECONDS,
     ChecksumVerificationError,
     atomic_install,
+    download_file,
     verify_download,
 )
 from envdrift.scanner.base import (
@@ -259,7 +260,7 @@ class GitleaksInstaller:
 
             # Download
             try:
-                urllib.request.urlretrieve(url, archive_path)  # nosec B310
+                download_file(url, archive_path, timeout=DOWNLOAD_TIMEOUT_SECONDS)
             except Exception as e:
                 raise GitleaksInstallError(f"Download failed: {e}") from e
 

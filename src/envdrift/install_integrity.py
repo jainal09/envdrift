@@ -33,11 +33,33 @@ INSECURE_SKIP_ENV = "ENVDRIFT_INSECURE_SKIP_CHECKSUM"
 #: Timeout (seconds) for fetching the checksums file.
 FETCH_TIMEOUT_SECONDS = 30.0
 
+#: Timeout (seconds) for downloading an executable or archive.  This must be
+#: passed per request: ``urlretrieve`` has no timeout argument and can block an
+#: auto-install forever after a server accepts the connection and stalls (#515).
+DOWNLOAD_TIMEOUT_SECONDS = 60.0
+
 _SHA256_HEX_RE = re.compile(r"^[0-9a-fA-F]{64}$")
 
 
 class ChecksumVerificationError(Exception):
     """A downloaded artifact could not be verified against published checksums."""
+
+
+def download_file(
+    url: str, destination: Path, *, timeout: float = DOWNLOAD_TIMEOUT_SECONDS
+) -> None:
+    """Stream ``url`` to ``destination`` with a bounded per-request timeout.
+
+    ``urlopen`` applies ``timeout`` to connection setup and every socket read.
+    Streaming avoids buffering an entire release archive in memory, while
+    leaving each caller responsible for its existing typed install error and
+    staging cleanup behavior.
+    """
+    with (
+        urllib.request.urlopen(url, timeout=timeout) as response,  # nosec B310
+        destination.open("wb") as output,
+    ):
+        shutil.copyfileobj(response, output)
 
 
 def verification_disabled() -> bool:

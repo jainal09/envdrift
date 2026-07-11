@@ -61,12 +61,12 @@ class TestDownloadAndExtractBranches:
     """Cover the zip and unknown-archive branches of download_and_extract."""
 
     @patch("envdrift.scanner.infisical.platform.system", return_value="Windows")
-    @patch("urllib.request.urlretrieve")
+    @patch("envdrift.scanner.infisical.download_file")
     @patch.object(InfisicalInstaller, "get_download_url")
     def test_zip_archive_branch(
         self,
         mock_url: MagicMock,
-        mock_urlretrieve: MagicMock,
+        mock_download_file: MagicMock,
         mock_system: MagicMock,
         tmp_path: Path,
     ):
@@ -78,12 +78,12 @@ class TestDownloadAndExtractBranches:
 
         checksums_path = tmp_path / "stub-checksums.txt"
 
-        def fake_download(url: str, dest: str) -> None:
+        def fake_download(url: str, dest: str, **_kwargs) -> None:
             with zipfile.ZipFile(dest, "w") as zf:
                 zf.writestr("infisical.exe", "binary-bytes")
             write_checksums_for(Path(dest), checksums_path, url.rsplit("/", 1)[-1])
 
-        mock_urlretrieve.side_effect = fake_download
+        mock_download_file.side_effect = fake_download
 
         installer = InfisicalInstaller(version="x")
         with patch.object(
@@ -96,12 +96,12 @@ class TestDownloadAndExtractBranches:
         assert target.exists()
         assert target.read_text() == "binary-bytes"
 
-    @patch("urllib.request.urlretrieve")
+    @patch("envdrift.scanner.infisical.download_file")
     @patch.object(InfisicalInstaller, "get_download_url")
     def test_unknown_archive_format_raises(
         self,
         mock_url: MagicMock,
-        mock_urlretrieve: MagicMock,
+        mock_download_file: MagicMock,
         tmp_path: Path,
     ):
         """An unrecognized archive extension raises (line 200)."""
@@ -110,11 +110,11 @@ class TestDownloadAndExtractBranches:
         mock_url.return_value = "https://example.test/infisical_x_linux.bz2"
         checksums_path = tmp_path / "stub-checksums.txt"
 
-        def fake_download(url: str, dest: str) -> None:
+        def fake_download(url: str, dest: str, **_kwargs) -> None:
             Path(dest).write_bytes(b"x")
             write_checksums_for(Path(dest), checksums_path, url.rsplit("/", 1)[-1])
 
-        mock_urlretrieve.side_effect = fake_download
+        mock_download_file.side_effect = fake_download
 
         installer = InfisicalInstaller(version="x")
         with (

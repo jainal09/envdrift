@@ -20,6 +20,7 @@ import socket
 import sys
 import tarfile
 import threading
+import time
 from functools import partial
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -80,6 +81,46 @@ def file_server(tmp_path: Path):
         server.shutdown()
         thread.join(timeout=5)
         server.server_close()
+
+
+@pytest.fixture
+def stall_server():
+    """Accept one HTTP connection but withhold its response for a bounded time.
+
+    The forced close makes a regression fail quickly instead of leaving a CI
+    worker blocked forever if a caller stops passing its per-request timeout.
+    """
+    server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    server.bind(("127.0.0.1", 0))
+    server.listen(1)
+    server.settimeout(0.1)
+    accepted = threading.Event()
+    release = threading.Event()
+
+    def serve() -> None:
+        try:
+            while not release.is_set():
+                try:
+                    connection, _ = server.accept()
+                except TimeoutError:
+                    continue
+                with connection:
+                    accepted.set()
+                    release.wait(timeout=3)
+                return
+        finally:
+            server.close()
+
+    thread = threading.Thread(target=serve, daemon=True)
+    thread.start()
+    try:
+        yield SimpleNamespace(
+            base_url=f"http://127.0.0.1:{server.getsockname()[1]}", accepted=accepted
+        )
+    finally:
+        release.set()
+        thread.join(timeout=5)
 
 
 def _sha256_bytes(data: bytes) -> str:
@@ -147,6 +188,16 @@ SCANNER_CASES = [
     pytest.param(trufflehog_mod, "Trufflehog", "trufflehog", id="trufflehog"),
     pytest.param(trivy_mod, "Trivy", "trivy", id="trivy"),
     pytest.param(infisical_mod, "Infisical", "infisical", id="infisical"),
+]
+
+TIMEOUT_SCANNER_CASES = [
+    pytest.param(gitleaks_mod, "Gitleaks", "gitleaks", "download_and_extract", id="gitleaks"),
+    pytest.param(
+        trufflehog_mod, "Trufflehog", "trufflehog", "download_and_extract", id="trufflehog"
+    ),
+    pytest.param(trivy_mod, "Trivy", "trivy", "download_and_extract", id="trivy"),
+    pytest.param(infisical_mod, "Infisical", "infisical", "download_and_extract", id="infisical"),
+    pytest.param(talisman_mod, "Talisman", "talisman", "download_binary", id="talisman"),
 ]
 
 
@@ -255,6 +306,32 @@ class TestScannerAutoInstallIntegrity:
         )
         leftovers = [p.name for p in target.parent.iterdir() if p.name != target.name]
         assert leftovers == [], f"staging file(s) left behind: {leftovers}"
+
+
+@pytest.mark.parametrize(("mod", "prefix", "tool", "method"), TIMEOUT_SCANNER_CASES)
+def test_scanner_download_stall_uses_bounded_timeout(
+    mod, prefix, tool, method, stall_server, tmp_path: Path, monkeypatch
+):
+    """An accepted-but-stalled release request fails promptly for every scanner (#515)."""
+    timeout = 0.25
+    monkeypatch.setattr(mod, "DOWNLOAD_TIMEOUT_SECONDS", timeout)
+
+    installer = getattr(mod, f"{prefix}Installer")()
+    monkeypatch.setattr(
+        installer,
+        "get_download_url",
+        lambda: f"{stall_server.base_url}/release-artifact",
+    )
+    install_error = getattr(mod, f"{prefix}InstallError")
+    target = tmp_path / "bin" / _exe(tool)
+
+    started = time.monotonic()
+    with pytest.raises(install_error, match="Download failed"):
+        getattr(installer, method)(target)
+    elapsed = time.monotonic() - started
+
+    assert stall_server.accepted.wait(0.5), "the installer never reached the release server"
+    assert elapsed < 1.5, f"download ignored its {timeout}s per-request timeout ({elapsed:.2f}s)"
 
 
 # ---------------------------------------------------------------------------

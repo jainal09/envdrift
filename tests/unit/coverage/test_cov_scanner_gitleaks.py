@@ -85,16 +85,16 @@ class TestDownloadAndExtractErrors:
     """Error branches in download_and_extract (lines 249-250, 260, 272)."""
 
     def test_download_failure_wrapped_in_install_error(self, tmp_path: Path, monkeypatch):
-        """A urlretrieve failure is wrapped in GitleaksInstallError (lines 249-250)."""
+        """A bounded-download failure is wrapped in GitleaksInstallError."""
         installer = GitleaksInstaller(version="8.30.0")
         monkeypatch.setattr(
             installer, "get_download_url", lambda: "https://example.com/gitleaks.tar.gz"
         )
 
-        def boom(_url, _filename):
+        def boom(_url, _filename, **_kwargs):
             raise OSError("network down")
 
-        monkeypatch.setattr("envdrift.scanner.gitleaks.urllib.request.urlretrieve", boom)
+        monkeypatch.setattr("envdrift.scanner.gitleaks.download_file", boom)
 
         with pytest.raises(GitleaksInstallError, match="Download failed: network down"):
             installer.download_and_extract(tmp_path / "bin" / "gitleaks")
@@ -108,14 +108,11 @@ class TestDownloadAndExtractErrors:
 
         checksums_path = tmp_path / "stub-checksums.txt"
 
-        def fake_urlretrieve(_url, filename):
+        def fake_download(_url, filename, **_kwargs):
             Path(filename).write_bytes(b"junk")
             write_checksums_for(Path(filename), checksums_path, "gitleaks.rar")
-            return filename, None
 
-        monkeypatch.setattr(
-            "envdrift.scanner.gitleaks.urllib.request.urlretrieve", fake_urlretrieve
-        )
+        monkeypatch.setattr("envdrift.scanner.gitleaks.download_file", fake_download)
         monkeypatch.setattr(
             installer, "get_checksums_url", lambda: checksums_path.resolve().as_uri()
         )
@@ -140,13 +137,10 @@ class TestDownloadAndExtractErrors:
         )
         monkeypatch.setattr(platform, "system", lambda: "Linux")
 
-        def fake_urlretrieve(_url, filename):
+        def fake_download(_url, filename, **_kwargs):
             Path(filename).write_bytes(archive.read_bytes())
-            return filename, None
 
-        monkeypatch.setattr(
-            "envdrift.scanner.gitleaks.urllib.request.urlretrieve", fake_urlretrieve
-        )
+        monkeypatch.setattr("envdrift.scanner.gitleaks.download_file", fake_download)
         checksums_url = write_checksums_for(
             archive, tmp_path / "stub-checksums.txt", "gitleaks.tar.gz"
         )

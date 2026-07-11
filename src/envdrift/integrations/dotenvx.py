@@ -25,6 +25,7 @@ from pathlib import Path
 from typing import ClassVar
 
 from envdrift.install_integrity import (
+    DOWNLOAD_TIMEOUT_SECONDS,
     ChecksumVerificationError,
     atomic_install,
     verify_download,
@@ -92,12 +93,6 @@ DOWNLOAD_URLS = {
     ("Windows", "AMD64"): _URL_TEMPLATES["windows_amd64"],
     ("Windows", "x86_64"): _URL_TEMPLATES["windows_amd64"],
 }
-
-# Per-request timeout (seconds) for the binary download. Passed directly to
-# urllib.request.urlopen so a connection that is accepted then stalls cannot
-# hang the auto-install path indefinitely. Using urlopen's timeout keeps the
-# bound local to this request instead of mutating process-global socket state.
-DOWNLOAD_TIMEOUT_SECONDS = 60
 
 _ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-9;?]*[ -/]*[@-~]")
 

@@ -48,21 +48,21 @@ class TestDownloadUrlTemplateFallback:
 class TestDownloadAndExtractArchiveTypes:
     """Cover the zip and unknown-archive branches in download_and_extract."""
 
-    @patch("urllib.request.urlretrieve")
-    def test_zip_archive_branch(self, mock_urlretrieve: MagicMock, tmp_path: Path):
+    @patch("envdrift.scanner.trivy.download_file")
+    def test_zip_archive_branch(self, mock_download_file: MagicMock, tmp_path: Path):
         """A .zip download routes through _extract_zip and installs the binary."""
         target = tmp_path / "out" / "trivy.exe"
 
         checksums_path = tmp_path / "stub-checksums.txt"
 
-        def fake_download(url: str, dest: str) -> None:
+        def fake_download(url: str, dest: str, **_kwargs) -> None:
             import zipfile
 
             with zipfile.ZipFile(dest, "w") as zf:
                 zf.writestr("trivy.exe", "binary-bytes")
             write_checksums_for(Path(dest), checksums_path, url.rsplit("/", 1)[-1])
 
-        mock_urlretrieve.side_effect = fake_download
+        mock_download_file.side_effect = fake_download
 
         installer = TrivyInstaller(version="0.58.0")
         # Force a windows .zip URL regardless of host platform.
@@ -84,16 +84,16 @@ class TestDownloadAndExtractArchiveTypes:
         assert target.exists()
         assert target.read_text() == "binary-bytes"
 
-    @patch("urllib.request.urlretrieve")
-    def test_unknown_archive_format_raises(self, mock_urlretrieve: MagicMock, tmp_path: Path):
+    @patch("envdrift.scanner.trivy.download_file")
+    def test_unknown_archive_format_raises(self, mock_download_file: MagicMock, tmp_path: Path):
         """An archive with an unrecognized extension raises TrivyInstallError."""
         checksums_path = tmp_path / "stub-checksums.txt"
 
-        def fake_download(url: str, dest: str) -> None:
+        def fake_download(url: str, dest: str, **_kwargs) -> None:
             Path(dest).write_bytes(b"x")
             write_checksums_for(Path(dest), checksums_path, url.rsplit("/", 1)[-1])
 
-        mock_urlretrieve.side_effect = fake_download
+        mock_download_file.side_effect = fake_download
         installer = TrivyInstaller()
         with (
             patch.object(

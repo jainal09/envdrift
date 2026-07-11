@@ -18,11 +18,15 @@ import stat
 import subprocess  # nosec B404
 import tempfile
 import time
-import urllib.request
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, ClassVar
 
-from envdrift.install_integrity import ChecksumVerificationError, verify_download
+from envdrift.install_integrity import (
+    DOWNLOAD_TIMEOUT_SECONDS,
+    ChecksumVerificationError,
+    download_file,
+    verify_download,
+)
 from envdrift.scanner.base import (
     FindingSeverity,
     ScanFinding,
@@ -234,7 +238,7 @@ class TalismanInstaller:
         staging_path = target_path.parent / (target_path.name + ".download")
         try:
             try:
-                urllib.request.urlretrieve(url, staging_path)  # nosec B310
+                download_file(url, staging_path, timeout=DOWNLOAD_TIMEOUT_SECONDS)
             except Exception as e:
                 raise TalismanInstallError(f"Download failed: {e}") from e
 
