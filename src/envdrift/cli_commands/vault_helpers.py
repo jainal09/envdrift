@@ -180,14 +180,21 @@ def build_authenticated_client(settings: VaultSettings) -> VaultClient:
 
 def execute_vault_push(request: VaultPushRequest) -> None:
     """Validate push-mode flags and dispatch bulk or single-service execution."""
-    if request.skip_encrypt and not request.all_services:
-        print_warning("--skip-encrypt is only applicable with --all mode, ignoring")
-    if request.force and not request.all_services:
-        print_warning("--force is only applicable with --all mode, ignoring")
+    _warn_ignored_push_flags(request)
     if request.all_services:
         _push_all_services(request)
         return
     _push_single_secret(request)
+
+
+def _warn_ignored_push_flags(request: VaultPushRequest) -> None:
+    """Warn when bulk-only flags are present in single-service mode."""
+    if request.all_services:
+        return
+    if request.skip_encrypt:
+        print_warning("--skip-encrypt is only applicable with --all mode, ignoring")
+    if request.force:
+        print_warning("--force is only applicable with --all mode, ignoring")
 
 
 def _load_bulk_vault(
