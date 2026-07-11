@@ -486,160 +486,189 @@ def _run_encrypt_action(
     _encrypt_files(files, backend, encryption_config, sops_options)
 
 
-def encrypt_cmd(
-    env_files: Annotated[
-        list[Path] | None,
-        typer.Argument(help="Path(s) to .env file(s) (default: .env)"),
-    ] = None,
-    check: Annotated[
-        bool, typer.Option("--check", help="Only check encryption status, don't encrypt")
-    ] = False,
-    backend: Annotated[
-        str | None,
-        typer.Option(
-            "--backend",
-            "-b",
-            help="Encryption backend to use: dotenvx or sops (defaults to config or dotenvx)",
-        ),
-    ] = None,
-    schema: Annotated[
-        str | None,
-        typer.Option("--schema", "-s", help="Schema for sensitive field detection"),
-    ] = None,
-    service_dir: Annotated[
-        Path | None,
-        typer.Option("--service-dir", "-d", help="Service directory for imports"),
-    ] = None,
-    # SOPS-specific options
-    age_recipients: Annotated[
-        str | None,
-        typer.Option("--age", help="Age public key(s) for SOPS encryption"),
-    ] = None,
-    kms_arn: Annotated[
-        str | None,
-        typer.Option("--kms", help="AWS KMS key ARN for SOPS encryption"),
-    ] = None,
-    gcp_kms: Annotated[
-        str | None,
-        typer.Option("--gcp-kms", help="GCP KMS resource ID for SOPS encryption"),
-    ] = None,
-    azure_kv: Annotated[
-        str | None,
-        typer.Option("--azure-kv", help="Azure Key Vault key URL for SOPS encryption"),
-    ] = None,
-    sops_config_file: Annotated[
-        Path | None,
-        typer.Option("--sops-config", help="Path to .sops.yaml config for SOPS"),
-    ] = None,
-    age_key_file: Annotated[
-        Path | None,
-        typer.Option("--age-key-file", help="Path to age private key file for SOPS"),
-    ] = None,
-    # Deprecated vault options
-    verify_vault: Annotated[
-        bool,
-        typer.Option(
-            "--verify-vault",
-            help="(Deprecated) Use `envdrift decrypt --verify-vault` instead",
-            hidden=True,
-        ),
-    ] = False,
-    vault_provider: Annotated[
-        str | None,
-        typer.Option(
-            "--provider", "-p", help="(Deprecated) Use with decrypt --verify-vault", hidden=True
-        ),
-    ] = None,
-    vault_url: Annotated[
-        str | None,
-        typer.Option(
-            "--vault-url", help="(Deprecated) Use with decrypt --verify-vault", hidden=True
-        ),
-    ] = None,
-    vault_region: Annotated[
-        str | None,
-        typer.Option("--region", help="(Deprecated) Use with decrypt --verify-vault", hidden=True),
-    ] = None,
-    vault_secret: Annotated[
-        str | None,
-        typer.Option("--secret", help="(Deprecated) Use with decrypt --verify-vault", hidden=True),
-    ] = None,
-) -> None:
-    """
-    Check encryption status of one or more .env files or encrypt them.
+@dataclass(frozen=True)
+class _EncryptCommandRequest:
+    """Plain values collected by the Typer-facing encrypt callback."""
 
-    Supports multiple encryption backends:
-    - dotenvx (default or config): Uses dotenvx CLI for encryption
-    - sops: Uses Mozilla SOPS for encryption
+    env_files: list[Path] | None
+    check: bool
+    backend: str | None
+    schema: str | None
+    service_dir: Path | None
+    age_recipients: str | None
+    kms_arn: str | None
+    gcp_kms: str | None
+    azure_kv: str | None
+    sops_config_file: Path | None
+    age_key_file: Path | None
+    verify_vault: bool
+    vault_provider: str | None
+    vault_url: str | None
+    vault_region: str | None
+    vault_secret: str | None
 
-    If --backend is not provided, envdrift uses the backend from config
-    (envdrift.toml/pyproject.toml) or falls back to dotenvx.
 
-    When run with --check, prints an encryption report per file and exits with
-    code 1 if the detector recommends blocking a commit for any of them.
-    Accepting multiple files keeps the command usable as a pre-commit
-    ``pass_filenames: true`` hook entry, where every matched staged file is
-    appended to one invocation (#493).
-
-    When run without --check, attempts to encrypt each file using the
-    specified backend; if the tool is not available, prints installation
-    instructions and exits.
-
-    Examples:
-        envdrift encrypt                     # Encrypt with dotenvx (default)
-        envdrift encrypt --backend sops      # Encrypt with SOPS
-        envdrift encrypt --check             # Check encryption status only
-        envdrift encrypt --check .env.production .env.staging  # Check several files
-        envdrift encrypt -b sops --age AGE_PUBLIC_KEY  # SOPS with age key
-        envdrift encrypt --sops-config .sops.yaml  # SOPS with explicit config
-    """
+def _execute_encrypt_command(request: _EncryptCommandRequest) -> None:
+    """Execute encrypt/check after Typer has parsed the command-line values."""
     files = _prepare_encrypt_files(
-        env_files,
-        check=check,
+        request.env_files,
+        check=request.check,
         deprecated_vault_options=(
-            verify_vault,
-            vault_provider,
-            vault_url,
-            vault_region,
-            vault_secret,
+            request.verify_vault,
+            request.vault_provider,
+            request.vault_url,
+            request.vault_region,
+            request.vault_secret,
         ),
     )
 
     envdrift_config, config_path = _load_encryption_config()
     encryption_config = getattr(envdrift_config, "encryption", None)
     _ensure_encrypt_hook_setup(envdrift_config, config_path)
-    backend_enum = _resolve_encrypt_backend(backend, encryption_config)
+    backend_enum = _resolve_encrypt_backend(request.backend, encryption_config)
 
     sops_options = _resolve_sops_options(
         backend_enum,
         encryption_config,
         config_path,
         _SopsEncryptOptions(
-            age_recipients=age_recipients,
-            kms_arn=kms_arn,
-            gcp_kms=gcp_kms,
-            azure_kv=azure_kv,
-            config_file=sops_config_file,
-            age_key_file=age_key_file,
+            age_recipients=request.age_recipients,
+            kms_arn=request.kms_arn,
+            gcp_kms=request.gcp_kms,
+            azure_kv=request.azure_kv,
+            config_file=request.sops_config_file,
+            age_key_file=request.age_key_file,
         ),
     )
     detector = EncryptionDetector()
     analysis_context = _EncryptAnalysisContext(
         parser=EnvParser(),
         detector=detector,
-        schema_meta=_load_schema_metadata(schema, service_dir),
+        schema_meta=_load_schema_metadata(request.schema, request.service_dir),
         backend=backend_enum,
-        include_overridden_assignments=check,
+        include_overridden_assignments=request.check,
     )
     analyze_file = partial(_analyze_encrypt_file, context=analysis_context)
     _run_encrypt_action(
         files,
-        check=check,
+        check=request.check,
         detector=detector,
         analyze_file=analyze_file,
         backend=backend_enum,
         encryption_config=encryption_config,
         sops_options=sops_options,
+    )
+
+
+_EncryptFilesArg = Annotated[
+    list[Path] | None, typer.Argument(help="Path(s) to .env file(s) (default: .env)")
+]
+_EncryptCheckOpt = Annotated[
+    bool, typer.Option("--check", help="Only check encryption status, don't encrypt")
+]
+_EncryptBackendOpt = Annotated[
+    str | None,
+    typer.Option(
+        "--backend",
+        "-b",
+        help="Encryption backend to use: dotenvx or sops (defaults to config or dotenvx)",
+    ),
+]
+_EncryptSchemaOpt = Annotated[
+    str | None, typer.Option("--schema", "-s", help="Schema for sensitive field detection")
+]
+_EncryptServiceDirOpt = Annotated[
+    Path | None, typer.Option("--service-dir", "-d", help="Service directory for imports")
+]
+_EncryptAgeOpt = Annotated[
+    str | None, typer.Option("--age", help="Age public key(s) for SOPS encryption")
+]
+_EncryptKmsOpt = Annotated[
+    str | None, typer.Option("--kms", help="AWS KMS key ARN for SOPS encryption")
+]
+_EncryptGcpKmsOpt = Annotated[
+    str | None, typer.Option("--gcp-kms", help="GCP KMS resource ID for SOPS encryption")
+]
+_EncryptAzureKvOpt = Annotated[
+    str | None, typer.Option("--azure-kv", help="Azure Key Vault key URL for SOPS encryption")
+]
+_EncryptSopsConfigOpt = Annotated[
+    Path | None, typer.Option("--sops-config", help="Path to .sops.yaml config for SOPS")
+]
+_EncryptAgeKeyOpt = Annotated[
+    Path | None, typer.Option("--age-key-file", help="Path to age private key file for SOPS")
+]
+_DeprecatedVerifyVaultOpt = Annotated[
+    bool,
+    typer.Option(
+        "--verify-vault",
+        help="(Deprecated) Use `envdrift decrypt --verify-vault` instead",
+        hidden=True,
+    ),
+]
+_DeprecatedVaultProviderOpt = Annotated[
+    str | None,
+    typer.Option(
+        "--provider", "-p", help="(Deprecated) Use with decrypt --verify-vault", hidden=True
+    ),
+]
+_DeprecatedVaultUrlOpt = Annotated[
+    str | None,
+    typer.Option("--vault-url", help="(Deprecated) Use with decrypt --verify-vault", hidden=True),
+]
+_DeprecatedVaultRegionOpt = Annotated[
+    str | None,
+    typer.Option("--region", help="(Deprecated) Use with decrypt --verify-vault", hidden=True),
+]
+_DeprecatedVaultSecretOpt = Annotated[
+    str | None,
+    typer.Option("--secret", help="(Deprecated) Use with decrypt --verify-vault", hidden=True),
+]
+
+
+def encrypt_cmd(
+    env_files: _EncryptFilesArg = None,
+    check: _EncryptCheckOpt = False,
+    backend: _EncryptBackendOpt = None,
+    schema: _EncryptSchemaOpt = None,
+    service_dir: _EncryptServiceDirOpt = None,
+    age_recipients: _EncryptAgeOpt = None,
+    kms_arn: _EncryptKmsOpt = None,
+    gcp_kms: _EncryptGcpKmsOpt = None,
+    azure_kv: _EncryptAzureKvOpt = None,
+    sops_config_file: _EncryptSopsConfigOpt = None,
+    age_key_file: _EncryptAgeKeyOpt = None,
+    verify_vault: _DeprecatedVerifyVaultOpt = False,
+    vault_provider: _DeprecatedVaultProviderOpt = None,
+    vault_url: _DeprecatedVaultUrlOpt = None,
+    vault_region: _DeprecatedVaultRegionOpt = None,
+    vault_secret: _DeprecatedVaultSecretOpt = None,
+) -> None:
+    """Check encryption status or encrypt one or more .env files.
+
+    Uses the configured backend (dotenvx by default) unless --backend selects
+    SOPS. --check reports every file without modifying it and exits nonzero
+    when the detector recommends blocking a commit.
+    """
+    _execute_encrypt_command(
+        _EncryptCommandRequest(
+            env_files=env_files,
+            check=check,
+            backend=backend,
+            schema=schema,
+            service_dir=service_dir,
+            age_recipients=age_recipients,
+            kms_arn=kms_arn,
+            gcp_kms=gcp_kms,
+            azure_kv=azure_kv,
+            sops_config_file=sops_config_file,
+            age_key_file=age_key_file,
+            verify_vault=verify_vault,
+            vault_provider=vault_provider,
+            vault_url=vault_url,
+            vault_region=vault_region,
+            vault_secret=vault_secret,
+        )
     )
 
 
