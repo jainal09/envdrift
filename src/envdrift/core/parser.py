@@ -142,6 +142,16 @@ class _KeyBinding:
     dropped: bool = False
 
 
+@dataclass(frozen=True)
+class _KeyToken:
+    """A key plus the unparsed text following its closing token."""
+
+    key: str
+    tail: str
+    consumed: int
+    quoted: bool
+
+
 class EnvParser:
     """Parse .env files with multi-backend encryption awareness.
 
@@ -321,10 +331,10 @@ class EnvParser:
         env_file = EnvFile(path=Path())
         content, env_file.leading_bom = self._strip_leading_bom(content)
         lines = self.LINE_BOUNDARY_PATTERN.split(content)
-        # Includes bare bindings as ``None`` for sequential interpolation.
-        # EnvFile.variables intentionally contains only values the Pydantic
-        # dotenv source can pass to model validation (#573).
-        interpolation_values: dict[str, str | None] = {}
+        pattern = self.LENIENT_LINE_PATTERN if lenient else self.LINE_PATTERN
+        # Bare bindings are omitted from EnvFile.variables but must shadow
+        # os.environ during sequential interpolation (#573).
+        bare_keys: set[str] = set()
         index = 0
         while index < len(lines):
             line_num = index + 1
@@ -341,29 +351,27 @@ class EnvParser:
                 env_file.comments.append(line)
                 continue
 
-            # Lex the key before the value. Unlike LINE_PATTERN, this accepts
-            # python-dotenv's single-quoted keys and consumes a quoted key
-            # across physical lines. That consumption is important even for
-            # bare bindings: interior ``K=1`` text belongs to the key and must
-            # never re-parse as a phantom assignment (#573).
-            binding = self._parse_key_binding(original_line, lines, index, lenient=lenient)
-            if binding is None:
-                continue
-            raw_lines = [original_line]
-            if binding.consumed:
-                raw_lines.extend(lines[index : index + binding.consumed])
-                index += binding.consumed
-            if binding.dropped or binding.key is None:
-                continue
-
-            key = binding.key
-            if binding.raw_value is None:
-                # A later bare duplicate wins in dotenv_values (A=1; A ->
-                # A=None), and pydantic-settings then filters that None out.
-                interpolation_values[key] = None
-                env_file.variables.pop(key, None)
-                continue
-            raw_value = binding.raw_value
+            # Keep the established regex as the hot path for ordinary
+            # KEY=value files. Quoted/bare bindings fall through to the richer
+            # key lexer; bypass a lenient match whose captured key starts with
+            # a quote, because python-dotenv removes those key quotes (#573).
+            match = pattern.match(original_line.lstrip())
+            if match is not None and not match.group(1).startswith("'"):
+                key = match.group(1)
+                raw_value = match.group(2)
+                raw_lines = [original_line]
+            else:
+                prepared, index = self._prepare_nonstandard_binding(
+                    original_line,
+                    lines,
+                    index,
+                    lenient,
+                    env_file,
+                    bare_keys,
+                )
+                if prepared is None:
+                    continue
+                key, raw_value, raw_lines = prepared
 
             # Quoted multiline continuation (#458): when the RHS opens a quote
             # that closes on a later physical line, the continuation lines are
@@ -389,8 +397,8 @@ class EnvParser:
             # the loader pydantic-settings uses — so validate/diff judge the
             # value the application receives, not the unexpanded literal.
             if "${" in value:
-                value = self._interpolate(value, interpolation_values)
-            interpolation_values[key] = value
+                value = self._interpolate(value, env_file.variables, bare_keys)
+            bare_keys.discard(key)
 
             # Determine encryption status and backend. Detection runs on the
             # interpolated value, so an alias of an encrypted variable
@@ -414,6 +422,43 @@ class EnvParser:
 
         return env_file
 
+    def _prepare_nonstandard_binding(
+        self,
+        original_line: str,
+        lines: list[str],
+        index: int,
+        lenient: bool,
+        env_file: EnvFile,
+        bare_keys: set[str],
+    ) -> tuple[tuple[str, str, list[str]] | None, int]:
+        """Lex and prepare a quoted, bare, or malformed fallback binding."""
+        binding = self._parse_key_binding(original_line, lines, index, lenient=lenient)
+        if binding is None:
+            return None, index
+        return self._prepare_binding(binding, original_line, lines, index, env_file, bare_keys)
+
+    @staticmethod
+    def _prepare_binding(
+        binding: _KeyBinding,
+        original_line: str,
+        lines: list[str],
+        index: int,
+        env_file: EnvFile,
+        bare_keys: set[str],
+    ) -> tuple[tuple[str, str, list[str]] | None, int]:
+        """Consume key lines and apply the state change from a bare binding."""
+        raw_lines = [original_line, *lines[index : index + binding.consumed]]
+        index += binding.consumed
+        if binding.dropped or binding.key is None:
+            return None, index
+        if binding.raw_value is None:
+            # A later bare duplicate wins in dotenv_values (A=1; A -> A=None),
+            # and pydantic-settings then filters that None out.
+            bare_keys.add(binding.key)
+            env_file.variables.pop(binding.key, None)
+            return None, index
+        return (binding.key, binding.raw_value, raw_lines), index
+
     def _parse_key_binding(
         self, original_line: str, lines: list[str], start: int, *, lenient: bool
     ) -> _KeyBinding | None:
@@ -435,51 +480,64 @@ class EnvParser:
         position = export.end() if export is not None else 0
 
         if text[position : position + 1] == "'":
-            close = text.find("'", position + 1)
-            consumed = 0
-            close_line = text
-            if close != -1:
-                key = text[position + 1 : close]
-            else:
-                key_parts = [text[position + 1 :]]
-                for offset, next_line in enumerate(lines[start:], start=1):
-                    key_parts.append(next_line)
-                    close = next_line.find("'")
-                    if close != -1:
-                        consumed = offset
-                        close_line = next_line
-                        break
-                if close == -1:
-                    return _KeyBinding(None, None, dropped=True)
-                key_parts[-1] = key_parts[-1][:close]
-                key = "\n".join(key_parts)
-            if not key:
-                # ``'([^']+)'`` requires at least one character. dotenv's
-                # error path consumes only this physical line for ``''=v``.
+            token = self._parse_quoted_key_token(text, position, lines, start)
+            if token is None:
                 return _KeyBinding(None, None, dropped=True)
-            tail = close_line[close + 1 :]
-            quoted = True
         else:
-            match = self.UNQUOTED_KEY_PATTERN.match(text, position)
-            if match is None:
-                return None
-            key = match.group(0)
-            if not lenient and self.STRICT_KEY_PATTERN.fullmatch(key) is None:
-                return None
-            tail = text[match.end() :]
-            consumed = 0
-            quoted = False
+            token = self._parse_unquoted_key_token(text, position, lenient=lenient)
+        if token is None:
+            return None
+        return self._binding_from_key_token(token)
 
-        tail_without_space = tail.lstrip()
+    def _parse_quoted_key_token(
+        self, text: str, position: int, lines: list[str], start: int
+    ) -> _KeyToken | None:
+        """Return python-dotenv's single-quoted key token, if it closes."""
+        close = text.find("'", position + 1)
+        if close != -1:
+            key = text[position + 1 : close]
+            return _KeyToken(key, text[close + 1 :], 0, True) if key else None
+        return self._continue_quoted_key_token(text[position + 1 :], lines, start)
+
+    @staticmethod
+    def _continue_quoted_key_token(
+        opening_part: str, lines: list[str], start: int
+    ) -> _KeyToken | None:
+        """Search later physical lines for a quoted key's first close quote."""
+        key_parts = [opening_part]
+        for offset, next_line in enumerate(lines[start:], start=1):
+            key_parts.append(next_line)
+            close = next_line.find("'")
+            if close == -1:
+                continue
+            key_parts[-1] = key_parts[-1][:close]
+            return _KeyToken("\n".join(key_parts), next_line[close + 1 :], offset, True)
+        return None
+
+    def _parse_unquoted_key_token(
+        self, text: str, position: int, *, lenient: bool
+    ) -> _KeyToken | None:
+        """Return an unquoted key token accepted by the selected mode."""
+        match = self.UNQUOTED_KEY_PATTERN.match(text, position)
+        if match is None:
+            return None
+        key = match.group(0)
+        if not lenient and self.STRICT_KEY_PATTERN.fullmatch(key) is None:
+            return None
+        return _KeyToken(key, text[match.end() :], 0, False)
+
+    def _binding_from_key_token(self, token: _KeyToken) -> _KeyBinding:
+        """Classify a key token's tail as assigned, bare, or malformed."""
+        tail_without_space = token.tail.lstrip()
         if tail_without_space.startswith("="):
-            return _KeyBinding(key, tail_without_space[1:], consumed=consumed)
-        if self.BINDING_TAIL_PATTERN.fullmatch(tail) is not None:
-            return _KeyBinding(key, None, consumed=consumed)
+            return _KeyBinding(token.key, tail_without_space[1:], consumed=token.consumed)
+        if self.BINDING_TAIL_PATTERN.fullmatch(token.tail) is not None:
+            return _KeyBinding(token.key, None, consumed=token.consumed)
 
         # Once a quoted key spans lines, python-dotenv's error recovery has
         # already advanced through the close-quote line. Preserve that
         # consumption so its interior lines cannot become phantom variables.
-        return _KeyBinding(None, None, consumed=consumed, dropped=quoted)
+        return _KeyBinding(None, None, consumed=token.consumed, dropped=token.quoted)
 
     @staticmethod
     def _strip_leading_bom(content: str) -> tuple[str, bool]:
@@ -636,32 +694,11 @@ class EnvParser:
         quote = text[0]
 
         # Chunk 0 is the (stripped) opening RHS; chunks 1.. are raw lines.
-        close: tuple[int, int] | None = None  # (chunk number, index in chunk)
-        last_fallback: tuple[int, int] | None = None
-        chunks = [text]
-        definitive, fallback = self._scan_chunk(text, quote, 1)
-        if fallback is not None:
-            last_fallback = (0, fallback)
-        if definitive is not None:
-            close = (0, definitive)
-        else:
-            for offset, next_line in enumerate(lines[start:], start=1):
-                chunks.append(next_line)
-                if quote not in next_line:
-                    continue  # close quote can't be here; skip the scan
-                definitive, fallback = self._scan_chunk(next_line, quote, 0)
-                if fallback is not None:
-                    last_fallback = (offset, fallback)
-                if definitive is not None:
-                    close = (offset, definitive)
-                    break
-            if close is None:
-                if last_fallback is None:
-                    # Unterminated: dotenv's value regex never matches, its
-                    # error path consumes the rest of the opening line only,
-                    # and the binding is dropped.
-                    return raw_value, 0, True
-                close = last_fallback
+        chunks, close = self._locate_quoted_value_close(text, quote, lines, start)
+        if close is None:
+            # Unterminated: dotenv's value regex never matches, its error path
+            # consumes the rest of the opening line only and drops the binding.
+            return raw_value, 0, True
 
         # After the close quote, only whitespace and a `#` comment may follow
         # on the closing line (dotenv's `_comment` + `_end_of_line`); anything
@@ -675,6 +712,27 @@ class EnvParser:
         joined = raw_value + "\n" + "\n".join(lines[start : start + close_chunk])
         return joined, close_chunk, False
 
+    def _locate_quoted_value_close(
+        self, text: str, quote: str, lines: list[str], start: int
+    ) -> tuple[list[str], tuple[int, int] | None]:
+        """Locate a definitive or fallback close without nesting the caller."""
+        chunks = [text]
+        definitive, fallback = self._scan_chunk(text, quote, 1)
+        fallback_close = (0, fallback) if fallback is not None else None
+        if definitive is not None:
+            return chunks, (0, definitive)
+
+        for offset, next_line in enumerate(lines[start:], start=1):
+            chunks.append(next_line)
+            if quote not in next_line:
+                continue
+            definitive, fallback = self._scan_chunk(next_line, quote, 0)
+            if fallback is not None:
+                fallback_close = (offset, fallback)
+            if definitive is not None:
+                return chunks, (offset, definitive)
+        return chunks, fallback_close
+
     def _decode_escapes(self, escapes: re.Pattern[str], value: str) -> str:
         """Decode a quoted value's escape sequences like python-dotenv.
 
@@ -684,7 +742,7 @@ class EnvParser:
         """
         return escapes.sub(lambda match: self.ESCAPE_DECODE_TABLE[match.group(0)], value)
 
-    def _interpolate(self, value: str, parsed: dict[str, str | None]) -> str:
+    def _interpolate(self, value: str, parsed: dict[str, EnvVar], bare_keys: set[str]) -> str:
         """Expand ``${NAME}`` / ``${NAME:-default}`` like python-dotenv (#486).
 
         ``dotenv_values`` (the loader pydantic-settings wraps) resolves
@@ -703,11 +761,14 @@ class EnvParser:
 
         def resolve(match: re.Match[str]) -> str:
             name = match.group("name")
-            if name in parsed:
+            if name in bare_keys:
                 # A present bare binding maps to None. python-dotenv treats it
                 # as an explicit empty interpolation value (even for ``:-``),
                 # shadowing a same-named process environment variable (#573).
-                return parsed[name] or ""
+                return ""
+            var = parsed.get(name)
+            if var is not None:
+                return var.value
             default = match.group("default")
             return environ.get(name, default if default is not None else "")
 

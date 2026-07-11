@@ -96,6 +96,14 @@ def test_bare_key_shadows_process_environment_during_interpolation(monkeypatch):
     )
 
 
+def test_malformed_bare_line_does_not_shadow_process_environment(monkeypatch):
+    """Greptile review: trailing junk makes the binding invalid, not bare."""
+    monkeypatch.setenv("ENVDRIFT_573_INVALID", "from-process")
+    content = "ENVDRIFT_573_INVALID junk\nVALUE=${ENVDRIFT_573_INVALID}\n"
+
+    assert _parsed_values(content) == _pydantic_dotenv_values(content) == {"VALUE": "from-process"}
+
+
 def test_later_bare_duplicate_removes_public_value_but_keeps_assignment_history():
     parsed = EnvParser().parse_string("TOKEN=plaintext\nTOKEN\n")
 
