@@ -9,16 +9,19 @@ from __future__ import annotations
 
 import shlex
 from collections.abc import Callable
+from dataclasses import dataclass
+from functools import partial
 from pathlib import Path
-from typing import Annotated
+from typing import TYPE_CHECKING, Annotated
 
 import typer
 
 from envdrift.core.encryption import EncryptionDetector, EncryptionReport
 from envdrift.core.parser import EnvParser
-from envdrift.core.schema import SchemaLoader, SchemaLoadError
+from envdrift.core.schema import SchemaLoader, SchemaLoadError, SchemaMetadata
 from envdrift.encryption import EncryptionProvider, get_encryption_backend
 from envdrift.encryption.base import (
+    EncryptionBackend,
     EncryptionBackendError,
     EncryptionNotFoundError,
     EncryptionResult,
@@ -32,6 +35,9 @@ from envdrift.output.rich import (
 )
 from envdrift.utils.git import ensure_gitignore_entries
 from envdrift.vault.base import SecretNotFoundError, VaultError
+
+if TYPE_CHECKING:
+    from envdrift.config import EncryptionConfig, EnvdriftConfig
 
 
 def _load_encryption_config():
@@ -174,6 +180,312 @@ def _report_not_installed(encryption_backend) -> None:
     console.print(encryption_backend.install_instructions())
 
 
+@dataclass(frozen=True)
+class _SopsEncryptOptions:
+    """Resolved SOPS inputs from CLI flags and project configuration."""
+
+    age_recipients: str | None = None
+    kms_arn: str | None = None
+    gcp_kms: str | None = None
+    azure_kv: str | None = None
+    config_file: Path | None = None
+    age_key_file: Path | None = None
+
+
+@dataclass(frozen=True)
+class _EncryptAnalysisContext:
+    """Dependencies shared while analyzing an encrypt/check file batch."""
+
+    parser: EnvParser
+    detector: EncryptionDetector
+    schema_meta: SchemaMetadata | None
+    backend: EncryptionProvider
+    include_overridden_assignments: bool
+
+
+def _resolve_sops_options(
+    backend: EncryptionProvider,
+    encryption_config: EncryptionConfig | None,
+    config_path: Path | None,
+    options: _SopsEncryptOptions,
+) -> _SopsEncryptOptions:
+    """Merge SOPS CLI values with configuration defaults."""
+    if backend != EncryptionProvider.SOPS or encryption_config is None:
+        return options
+
+    config_file = options.config_file
+    if config_file is None:
+        config_file = _resolve_config_path(config_path, encryption_config.sops_config_file)
+
+    age_key_file = options.age_key_file
+    if age_key_file is None:
+        age_key_file = _resolve_config_path(config_path, encryption_config.sops_age_key_file)
+
+    return _SopsEncryptOptions(
+        age_recipients=(
+            options.age_recipients
+            if options.age_recipients is not None
+            else encryption_config.sops_age_recipients
+        ),
+        kms_arn=(
+            options.kms_arn if options.kms_arn is not None else encryption_config.sops_kms_arn
+        ),
+        gcp_kms=(
+            options.gcp_kms if options.gcp_kms is not None else encryption_config.sops_gcp_kms
+        ),
+        azure_kv=(
+            options.azure_kv if options.azure_kv is not None else encryption_config.sops_azure_kv
+        ),
+        config_file=config_file,
+        age_key_file=age_key_file,
+    )
+
+
+def _load_schema_metadata(schema: str | None, service_dir: Path | None) -> SchemaMetadata | None:
+    """Load optional sensitive-field metadata, retaining warning-only failure semantics."""
+    if schema is None:
+        return None
+
+    loader = SchemaLoader()
+    try:
+        settings_cls = loader.load(schema, service_dir)
+        return loader.extract_metadata(settings_cls)
+    except SchemaLoadError as e:
+        print_warning(f"Could not load schema: {e}")
+        return None
+
+
+def _analyze_encrypt_file(
+    env_file: Path,
+    context: _EncryptAnalysisContext,
+) -> EncryptionReport:
+    """Parse and analyze one env file, exiting cleanly on unreadable input."""
+    try:
+        # lenient=True so --check analyzes every KEY=value assignment dotenvx
+        # would encrypt — a strict parse silently skips non-identifier keys
+        # (e.g. MY-AWS-KEY) and would miss plaintext secrets in them.
+        env = context.parser.parse(env_file, lenient=True)
+    except (IsADirectoryError, ValueError) as e:
+        # A directory passed instead of a file, or a non-UTF-8 / binary file —
+        # surface cleanly instead of an uncaught traceback (#24, #25).
+        print_error(str(e))
+        raise typer.Exit(code=1) from None
+
+    report = context.detector.analyze(
+        env,
+        context.schema_meta,
+        include_overridden_assignments=context.include_overridden_assignments,
+    )
+    detected_backend = context.detector.detect_backend_for_file(env_file)
+    if detected_backend:
+        report.detected_backend = detected_backend
+    elif report.detected_backend is None:
+        report.detected_backend = context.backend.value
+    return report
+
+
+def _refuse_cross_backend_encryption(
+    files: list[Path],
+    analyze_file: Callable[[Path], EncryptionReport],
+    backend: EncryptionProvider,
+) -> None:
+    """Analyze a whole batch before refusing ciphertext from another backend."""
+    # Analyze every target before touching any backend: unreadable input and
+    # cross-backend double encryption are refused up front (#475), and the
+    # refusal must not depend on the selected backend being installed.
+    for env_file in files:
+        report_backend = analyze_file(env_file).detected_backend
+        if not report_backend or report_backend == backend.value:
+            continue
+        print_error(
+            f"{env_file} is already encrypted with {report_backend}, but the "
+            f"{backend.value} backend was selected. Double-encrypting would nest "
+            f"ciphertexts and break decryption. Decrypt it first with "
+            f"`envdrift decrypt {env_file} --backend {report_backend}` or re-run with "
+            f"`--backend {report_backend}`."
+        )
+        raise typer.Exit(code=1)
+
+
+def _build_backend_config(
+    backend: EncryptionProvider,
+    encryption_config: EncryptionConfig | None,
+    sops_options: _SopsEncryptOptions,
+) -> dict[str, object]:
+    """Build constructor configuration for the selected backend."""
+    backend_config: dict[str, object] = {}
+    if encryption_config and backend == EncryptionProvider.DOTENVX:
+        backend_config["auto_install"] = encryption_config.dotenvx_auto_install
+    if backend != EncryptionProvider.SOPS:
+        return backend_config
+
+    if encryption_config:
+        backend_config["auto_install"] = encryption_config.sops_auto_install
+    if sops_options.config_file:
+        backend_config["config_file"] = sops_options.config_file
+    if sops_options.age_key_file:
+        backend_config["age_key_file"] = sops_options.age_key_file
+    return backend_config
+
+
+def _build_encrypt_kwargs(
+    backend: EncryptionProvider,
+    sops_options: _SopsEncryptOptions,
+) -> dict[str, str]:
+    """Build per-call encryption options for SOPS."""
+    if backend != EncryptionProvider.SOPS:
+        return {}
+
+    encrypt_kwargs: dict[str, str] = {}
+    for name in ("age_recipients", "kms_arn", "gcp_kms", "azure_kv"):
+        value = getattr(sops_options, name)
+        if value:
+            encrypt_kwargs[name] = value
+    return encrypt_kwargs
+
+
+def _encrypt_one_file(
+    env_file: Path,
+    encryption_backend: EncryptionBackend,
+    encrypt_kwargs: dict[str, str],
+    *,
+    smart_enabled: bool,
+) -> None:
+    """Encrypt one file or report its truthful smart-skip/no-op outcome."""
+    from envdrift.cli_commands.encryption_helpers import should_skip_reencryption
+
+    should_skip, skip_reason = should_skip_reencryption(
+        env_file, encryption_backend, enabled=smart_enabled
+    )
+    if should_skip:
+        print_success(f"Skipped re-encryption of {env_file} ({skip_reason})")
+        return
+
+    result = encryption_backend.encrypt(env_file, **encrypt_kwargs)
+    if not result.success:
+        print_error(result.message)
+        raise typer.Exit(code=1)
+    if result.changed:
+        print_success(f"Encrypted {env_file} using {encryption_backend.name}")
+    else:
+        # Honest no-op (e.g. already encrypted): surface the backend's
+        # message instead of an unconditional "Encrypted" banner (#475).
+        print_warning(result.message)
+    _protect_private_keys(env_file)
+
+
+def _encrypt_files(
+    files: list[Path],
+    backend: EncryptionProvider,
+    encryption_config: EncryptionConfig | None,
+    sops_options: _SopsEncryptOptions,
+) -> None:
+    """Construct the backend once and encrypt a preflighted file batch."""
+    try:
+        backend_config = _build_backend_config(backend, encryption_config, sops_options)
+        encryption_backend = get_encryption_backend(backend, **backend_config)
+        if not encryption_backend.is_installed():
+            _report_not_installed(encryption_backend)
+            raise typer.Exit(code=1)
+
+        encrypt_kwargs = _build_encrypt_kwargs(backend, sops_options)
+        smart_enabled = encryption_config.smart_encryption if encryption_config else False
+        for env_file in files:
+            _encrypt_one_file(
+                env_file,
+                encryption_backend,
+                encrypt_kwargs,
+                smart_enabled=smart_enabled,
+            )
+    except EncryptionNotFoundError as e:
+        print_error(str(e))
+        raise typer.Exit(code=1) from None
+    except EncryptionBackendError as e:
+        print_error(f"Encryption failed: {e}")
+        raise typer.Exit(code=1) from None
+
+
+def _prepare_encrypt_files(
+    env_files: list[Path] | None,
+    *,
+    check: bool,
+    deprecated_vault_options: tuple[object, ...],
+) -> list[Path]:
+    """Resolve and validate every target before loading project configuration."""
+    files = list(env_files) if env_files else [Path(".env")]
+    missing_files = [env_file for env_file in files if not env_file.exists()]
+    if missing_files:
+        for env_file in missing_files:
+            print_error(f"ENV file not found: {env_file}")
+        raise typer.Exit(code=1)
+
+    # A check invocation can receive a broad pre-commit filename batch. It
+    # permits plaintext companions while the check helper skips them, whereas
+    # a destructive invocation refuses every companion target (#579).
+    _refuse_companion_targets(
+        files,
+        "encrypt",
+        allow_plaintext_companions=check,
+    )
+    if any(deprecated_vault_options):
+        print_error("Vault verification moved to `envdrift decrypt --verify-vault ...`")
+        raise typer.Exit(code=1)
+    return files
+
+
+def _ensure_encrypt_hook_setup(
+    envdrift_config: EnvdriftConfig,
+    config_path: Path | None,
+) -> None:
+    """Enforce configured hook prerequisites before selecting a backend."""
+    from envdrift.integrations.hook_check import ensure_git_hook_setup
+
+    hook_errors = ensure_git_hook_setup(config=envdrift_config, config_path=config_path)
+    if not hook_errors:
+        return
+    for error in hook_errors:
+        print_error(error)
+    raise typer.Exit(code=1)
+
+
+def _resolve_encrypt_backend(
+    requested_backend: str | None,
+    encryption_config: EncryptionConfig | None,
+) -> EncryptionProvider:
+    """Resolve the CLI/config backend name and report invalid providers cleanly."""
+    backend_name = requested_backend
+    if backend_name is None:
+        backend_name = encryption_config.backend if encryption_config else "dotenvx"
+    try:
+        return EncryptionProvider(backend_name.lower())
+    except ValueError:
+        print_error(f"Unknown encryption backend: {backend_name}")
+        print_error("Supported backends: dotenvx, sops")
+        raise typer.Exit(code=1) from None
+
+
+def _run_encrypt_action(
+    files: list[Path],
+    *,
+    check: bool,
+    detector: EncryptionDetector,
+    analyze_file: Callable[[Path], EncryptionReport],
+    backend: EncryptionProvider,
+    encryption_config: EncryptionConfig | None,
+    sops_options: _SopsEncryptOptions,
+) -> None:
+    """Dispatch a prepared batch to the non-destructive check or encrypt path."""
+    if check:
+        if _check_files_and_report(files, analyze_file, detector):
+            raise typer.Exit(code=1)
+        return
+
+    # report.detected_backend carries header and value-level detection, so
+    # stripped-header ciphertext is still refused before backend creation.
+    _refuse_cross_backend_encryption(files, analyze_file, backend)
+    _encrypt_files(files, backend, encryption_config, sops_options)
+
+
 def encrypt_cmd(
     env_files: Annotated[
         list[Path] | None,
@@ -281,198 +593,54 @@ def encrypt_cmd(
         envdrift encrypt -b sops --age AGE_PUBLIC_KEY  # SOPS with age key
         envdrift encrypt --sops-config .sops.yaml  # SOPS with explicit config
     """
-    files = list(env_files) if env_files else [Path(".env")]
-
-    missing_files = [env_file for env_file in files if not env_file.exists()]
-    if missing_files:
-        for env_file in missing_files:
-            print_error(f"ENV file not found: {env_file}")
-        raise typer.Exit(code=1)
-
-    # A check invocation can receive a broad pre-commit filename batch. It
-    # permits plaintext companions while the check helper skips them, whereas
-    # a destructive invocation refuses every companion target (#579).
-    _refuse_companion_targets(
-        files,
-        "encrypt",
-        allow_plaintext_companions=check,
+    files = _prepare_encrypt_files(
+        env_files,
+        check=check,
+        deprecated_vault_options=(
+            verify_vault,
+            vault_provider,
+            vault_url,
+            vault_region,
+            vault_secret,
+        ),
     )
-
-    if verify_vault or vault_provider or vault_url or vault_region or vault_secret:
-        print_error("Vault verification moved to `envdrift decrypt --verify-vault ...`")
-        raise typer.Exit(code=1)
 
     envdrift_config, config_path = _load_encryption_config()
     encryption_config = getattr(envdrift_config, "encryption", None)
+    _ensure_encrypt_hook_setup(envdrift_config, config_path)
+    backend_enum = _resolve_encrypt_backend(backend, encryption_config)
 
-    from envdrift.integrations.hook_check import ensure_git_hook_setup
-
-    hook_errors = ensure_git_hook_setup(config=envdrift_config, config_path=config_path)
-    if hook_errors:
-        for error in hook_errors:
-            print_error(error)
-        raise typer.Exit(code=1)
-
-    if backend is None:
-        backend = encryption_config.backend if encryption_config else "dotenvx"
-
-    # Validate backend
-    try:
-        backend_enum = EncryptionProvider(backend.lower())
-    except ValueError:
-        print_error(f"Unknown encryption backend: {backend}")
-        print_error("Supported backends: dotenvx, sops")
-        raise typer.Exit(code=1) from None
-
-    if encryption_config and backend_enum == EncryptionProvider.SOPS:
-        if age_recipients is None:
-            age_recipients = encryption_config.sops_age_recipients
-        if kms_arn is None:
-            kms_arn = encryption_config.sops_kms_arn
-        if gcp_kms is None:
-            gcp_kms = encryption_config.sops_gcp_kms
-        if azure_kv is None:
-            azure_kv = encryption_config.sops_azure_kv
-
-        if sops_config_file is None:
-            sops_config_file = _resolve_config_path(
-                config_path,
-                encryption_config.sops_config_file,
-            )
-        if age_key_file is None:
-            age_key_file = _resolve_config_path(
-                config_path,
-                encryption_config.sops_age_key_file,
-            )
-
-    # Load schema if provided
-    schema_meta = None
-    if schema:
-        loader = SchemaLoader()
-        try:
-            settings_cls = loader.load(schema, service_dir)
-            schema_meta = loader.extract_metadata(settings_cls)
-        except SchemaLoadError as e:
-            print_warning(f"Could not load schema: {e}")
-
-    parser = EnvParser()
+    sops_options = _resolve_sops_options(
+        backend_enum,
+        encryption_config,
+        config_path,
+        _SopsEncryptOptions(
+            age_recipients=age_recipients,
+            kms_arn=kms_arn,
+            gcp_kms=gcp_kms,
+            azure_kv=azure_kv,
+            config_file=sops_config_file,
+            age_key_file=age_key_file,
+        ),
+    )
     detector = EncryptionDetector()
-
-    def _analyze_file(env_file: Path) -> EncryptionReport:
-        """Parse and analyze one env file, exiting cleanly on unreadable input."""
-        try:
-            # lenient=True so --check analyzes every KEY=value assignment dotenvx
-            # would encrypt — a strict parse silently skips non-identifier keys
-            # (e.g. MY-AWS-KEY) and would miss plaintext secrets in them.
-            env = parser.parse(env_file, lenient=True)
-        except (IsADirectoryError, ValueError) as e:
-            # A directory passed instead of a file, or a non-UTF-8 / binary file —
-            # surface cleanly instead of an uncaught traceback (#24, #25).
-            print_error(str(e))
-            raise typer.Exit(code=1) from None
-
-        report = detector.analyze(
-            env,
-            schema_meta,
-            include_overridden_assignments=check,
-        )
-        detected_backend = detector.detect_backend_for_file(env_file)
-        if detected_backend:
-            report.detected_backend = detected_backend
-        elif report.detected_backend is None:
-            report.detected_backend = backend_enum.value
-        return report
-
-    if check:
-        if _check_files_and_report(files, _analyze_file, detector):
-            raise typer.Exit(code=1)
-    else:
-        # Analyze every target before touching any backend: unreadable input and
-        # cross-backend double encryption are refused up front (#475), and the
-        # refusal must not depend on the selected backend being installed.
-        # report.detected_backend (not the file-level header scan alone) also
-        # carries value-level detection, so a file whose header was stripped but
-        # whose values are still another backend's ciphertext is refused too.
-        # For a plaintext file it equals the selected backend, so encryption
-        # proceeds.
-        for env_file in files:
-            report = _analyze_file(env_file)
-            report_backend = report.detected_backend
-            if report_backend and report_backend != backend_enum.value:
-                print_error(
-                    f"{env_file} is already encrypted with {report_backend}, but the "
-                    f"{backend_enum.value} backend was selected. Double-encrypting would nest "
-                    f"ciphertexts and break decryption. Decrypt it first with "
-                    f"`envdrift decrypt {env_file} --backend {report_backend}` or re-run with "
-                    f"`--backend {report_backend}`."
-                )
-                raise typer.Exit(code=1)
-
-        # Attempt encryption using the selected backend
-        try:
-            backend_config: dict[str, object] = {}
-            if encryption_config and backend_enum == EncryptionProvider.DOTENVX:
-                backend_config["auto_install"] = encryption_config.dotenvx_auto_install
-            if backend_enum == EncryptionProvider.SOPS:
-                if encryption_config:
-                    backend_config["auto_install"] = encryption_config.sops_auto_install
-                if sops_config_file:
-                    backend_config["config_file"] = sops_config_file
-                if age_key_file:
-                    backend_config["age_key_file"] = age_key_file
-
-            encryption_backend = get_encryption_backend(backend_enum, **backend_config)
-
-            if not encryption_backend.is_installed():
-                _report_not_installed(encryption_backend)
-                raise typer.Exit(code=1)
-
-            # Build kwargs for SOPS-specific options
-            encrypt_kwargs = {}
-            if backend_enum == EncryptionProvider.SOPS:
-                if age_recipients:
-                    encrypt_kwargs["age_recipients"] = age_recipients
-                if kms_arn:
-                    encrypt_kwargs["kms_arn"] = kms_arn
-                if gcp_kms:
-                    encrypt_kwargs["gcp_kms"] = gcp_kms
-                if azure_kv:
-                    encrypt_kwargs["azure_kv"] = azure_kv
-
-            # === SMART ENCRYPTION: Skip re-encryption if content unchanged ===
-            # This addresses dotenvx's non-deterministic encryption (ECIES) which
-            # produces different ciphertext each time, causing unnecessary git noise.
-            from envdrift.cli_commands.encryption_helpers import should_skip_reencryption
-
-            smart_enabled = encryption_config.smart_encryption if encryption_config else False
-
-            for env_file in files:
-                should_skip, skip_reason = should_skip_reencryption(
-                    env_file, encryption_backend, enabled=smart_enabled
-                )
-                if should_skip:
-                    print_success(f"Skipped re-encryption of {env_file} ({skip_reason})")
-                    continue
-
-                result = encryption_backend.encrypt(env_file, **encrypt_kwargs)
-                if result.success:
-                    if result.changed:
-                        print_success(f"Encrypted {env_file} using {encryption_backend.name}")
-                    else:
-                        # Honest no-op (e.g. already encrypted): surface the backend's
-                        # message instead of an unconditional "Encrypted" banner (#475).
-                        print_warning(result.message)
-                    _protect_private_keys(env_file)
-                else:
-                    print_error(result.message)
-                    raise typer.Exit(code=1)
-
-        except EncryptionNotFoundError as e:
-            print_error(str(e))
-            raise typer.Exit(code=1) from None
-        except EncryptionBackendError as e:
-            print_error(f"Encryption failed: {e}")
-            raise typer.Exit(code=1) from None
+    analysis_context = _EncryptAnalysisContext(
+        parser=EnvParser(),
+        detector=detector,
+        schema_meta=_load_schema_metadata(schema, service_dir),
+        backend=backend_enum,
+        include_overridden_assignments=check,
+    )
+    analyze_file = partial(_analyze_encrypt_file, context=analysis_context)
+    _run_encrypt_action(
+        files,
+        check=check,
+        detector=detector,
+        analyze_file=analyze_file,
+        backend=backend_enum,
+        encryption_config=encryption_config,
+        sops_options=sops_options,
+    )
 
 
 def _private_key_var_name_for(env_file: Path) -> str:
