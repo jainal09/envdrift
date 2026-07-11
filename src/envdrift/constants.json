@@ -26,7 +26,7 @@
         "windows_amd64": "https://github.com/gitleaks/gitleaks/releases/download/v{version}/gitleaks_{version}_windows_x64.zip"
     },
     "gitleaks_checksums_url": "https://github.com/gitleaks/gitleaks/releases/download/v{version}/gitleaks_{version}_checksums.txt",
-    "trufflehog_version": "3.95.8",
+    "trufflehog_version": "3.95.9",
     "trufflehog_download_urls": {
         "darwin_amd64": "https://github.com/trufflesecurity/trufflehog/releases/download/v{version}/trufflehog_{version}_darwin_amd64.tar.gz",
         "darwin_arm64": "https://github.com/trufflesecurity/trufflehog/releases/download/v{version}/trufflehog_{version}_darwin_arm64.tar.gz",
