@@ -103,13 +103,15 @@ Your `.gitignore` should include:
 DOTENV_PUBLIC_KEY_PRODUCTION="03abc123..."
 
 # .env.production
-DATABASE_URL="encrypted:BDQE1234567890abcdef..."
-API_KEY="encrypted:BDQEsecretkey123456..."
-DEBUG=false
+DATABASE_URL=encrypted:BDQE1234567890abcdef...
+API_KEY=encrypted:BDQEsecretkey123456...
+DEBUG=encrypted:BDQEfalse1234567890...
 #/----------------------------------------------------------/
 ```
 
-Note: Non-sensitive values like `DEBUG` remain plaintext.
+Dotenvx encrypts every value in the file, including non-secret configuration
+such as `DEBUG`. Use envdrift's [partial encryption](partial-encryption.md) flow
+when selected values must remain readable.
 
 ## SOPS Encrypted File Format
 

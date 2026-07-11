@@ -178,9 +178,9 @@ envdrift encrypt .env.production
 This will:
 
 1. Install dotenvx if `encryption.dotenvx.auto_install` is enabled
-2. Generate an ECIES (secp256k1) keypair, encrypt each sensitive value with the
-   public key (ECIES envelope around an AES-256-GCM payload), and rewrite the
-   file in place
+2. Generate an ECIES (secp256k1) keypair, encrypt every value with the public
+   key (ECIES envelope around an AES-256-GCM payload), and rewrite the file in
+   place
 3. Create `.env.keys` with the matching private key (never commit this!)
 
 ### Encrypt with SOPS
@@ -221,8 +221,8 @@ The `--check` option provides a detailed report:
 envdrift integrates with [dotenvx](https://dotenvx.com/) for encryption:
 
 1. **Encrypted format**: dotenvx uses ECIES (secp256k1 public-key encryption)
-   wrapping an AES-256-GCM payload. Each sensitive value is encrypted to the
-   project's public key and prefixed with `encrypted:`
+   wrapping an AES-256-GCM payload. Every value is encrypted to the project's
+   public key and prefixed with `encrypted:`
 2. **Key storage**: The matching private key lives in `.env.keys` (add to
    `.gitignore`); the public key is written into the encrypted file as
    `DOTENV_PUBLIC_KEY_<ENV>` so anyone can encrypt new values without the
@@ -234,11 +234,18 @@ Example encrypted file:
 ```bash
 #/-------------------[DOTENV_PUBLIC_KEY]--------------------/
 DOTENV_PUBLIC_KEY_PRODUCTION="03abc123..."
-DATABASE_URL="encrypted:BDQE1234567890abcdef..."
-API_KEY="encrypted:BDQEsecretkey123456..."
-DEBUG=false
+DATABASE_URL=encrypted:BDQE1234567890abcdef...
+API_KEY=encrypted:BDQEsecretkey123456...
+DEBUG=encrypted:BDQEfalse1234567890...
 #/----------------------------------------------------------/
 ```
+
+The pinned dotenvx binary quotes the public-key value but writes ciphertext
+values unquoted; the example preserves that generated format.
+
+The sensitive-field detection below powers `--check` warnings; it does not make
+dotenvx encryption selective. For selective encryption, use
+[partial encryption](../guides/partial-encryption.md).
 
 ## How SOPS Encryption Works
 

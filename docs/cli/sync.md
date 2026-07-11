@@ -296,8 +296,8 @@ Prompts for confirmation when values mismatch.
 
 ```text
 Value mismatch for myapp-key:
-  Local:  abc123def456...
-  Vault:  xyz789abc012...
+  Local:  <redacted len=64 sha=1a2b3c4d>
+  Vault:  <redacted len=64 sha=5e6f7a8b>
 Update local file with vault value? (y/N):
 ```
 
@@ -309,8 +309,8 @@ Reports differences without modifying files. Mismatches are reported as errors, 
 ```text
   x services/myapp - error
     Error: Local value differs from vault
-    Local:  abc123def456...
-    Vault:  xyz789abc012...
+    Local:  <redacted len=64 sha=1a2b3c4d>
+    Vault:  <redacted len=64 sha=5e6f7a8b>
 ```
 
 Every error row carries its reason. A missing local key is reported with a
@@ -328,7 +328,7 @@ Updates all mismatches without prompting. Creates backups before updating.
 
 ```text
   ~ services/myapp - updated
-    Backup: services/myapp/.env.keys.backup.20240115_143022
+    Backup: services/myapp/.env.keys.backup.20240115_143022_123456
 ```
 
 ## Output

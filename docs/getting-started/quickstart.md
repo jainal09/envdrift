@@ -142,10 +142,10 @@ After encryption:
 
 ```bash
 # .env.prod (encrypted)
-DOTENV_PUBLIC_KEY="034a5c..."
-DATABASE_URL="encrypted:BD7HQzb..."
-API_KEY="encrypted:BD9XKwm..."
-DEBUG=false
+DOTENV_PUBLIC_KEY_PROD="034a5c..."
+DATABASE_URL=encrypted:BD7HQzb...
+API_KEY=encrypted:BD9XKwm...
+DEBUG=encrypted:BD2QpRf...
 ```
 
 The `DOTENV_PUBLIC_KEY*` line is a dotenvx artifact (a public key, not a

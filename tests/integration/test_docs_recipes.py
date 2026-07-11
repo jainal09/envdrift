@@ -1,4 +1,4 @@
-"""Live verification of the documented recipes corrected in #498.
+"""Live verification of the documented recipes corrected in #498 and #499.
 
 Each test runs the *corrected* documented command against the real envdrift CLI
 (subprocess) and the real ``dotenvx`` binary, and also proves the *old*
@@ -12,6 +12,8 @@ can't drift back to a recipe that dies at the moment a user needs it:
   ``rotate`` command, and its removed v1 command is a no-op.
 - ``docs/guides/monorepo-setup.md`` shared keys: ``DOTENV_KEYS_PATH`` is read by
   nothing; dotenvx's ``--env-keys-file`` flag and a symlink both work.
+- dotenvx whole-file encryption: even a non-secret ``DEBUG=false`` value is
+  encrypted and the public-key variable is environment-suffixed.
 
 No mocking of the behavior under test.
 """
@@ -81,6 +83,32 @@ def _encrypt_production(envdrift_cmd: list[str], cwd: Path, env: dict[str, str])
     assert "encrypted:" in encrypted
     assert _PLAIN_VALUE not in encrypted
     return match.group(1)
+
+
+def test_dotenvx_encryption_recipe_encrypts_every_value(
+    envdrift_cmd: list[str],
+    dotenvx_bin: str,
+    work_dir: Path,
+    integration_env: dict[str, str],
+) -> None:
+    """Dotenvx encrypts non-secret configuration as well as sensitive values (#499)."""
+    del dotenvx_bin  # The fixture guarantees the real pinned binary is on PATH.
+    (work_dir / ".env.production").write_text(
+        "DATABASE_URL=postgres://user:pass@example.test/app\n"
+        "API_KEY=example-api-key\n"
+        "DEBUG=false\n",
+        encoding="utf-8",
+    )
+
+    result = _run([*envdrift_cmd, "encrypt", ".env.production"], work_dir, integration_env)
+    assert result.returncode == 0, result.stdout + result.stderr
+
+    encrypted = (work_dir / ".env.production").read_text(encoding="utf-8")
+    assert 'DOTENV_PUBLIC_KEY_PRODUCTION="' in encrypted
+    assert "DATABASE_URL=encrypted:" in encrypted
+    assert "API_KEY=encrypted:" in encrypted
+    assert "DEBUG=encrypted:" in encrypted
+    assert "DEBUG=false" not in encrypted
 
 
 def test_faq_ci_decrypt_recipe_round_trips(

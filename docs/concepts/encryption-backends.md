@@ -10,7 +10,7 @@ envdrift supports two encryption backends: **dotenvx** and **SOPS**. This page h
 | **Key storage** | `.env.keys` file | External KMS or age keys |
 | **Cloud KMS** | No (vault sync for key sharing) | Yes (native AWS/GCP/Azure KMS) |
 | **Team sharing** | Via envdrift vault sync | Via KMS permissions or key files |
-| **Partial encryption** | Yes | No |
+| **Partial encryption** | Via envdrift's split-file flow | No |
 | **Best for** | Small teams, simple setups | Enterprise, existing KMS infra |
 
 ## dotenvx
@@ -34,17 +34,18 @@ envdrift supports two encryption backends: **dotenvx** and **SOPS**. This page h
 
 ```bash
 # .env.production (encrypted)
-DOTENV_PUBLIC_KEY="034a5c..."
-DATABASE_URL="encrypted:BD7HQzb..."
-API_KEY="encrypted:BD9XKwm..."
-DEBUG=false  # Non-sensitive, not encrypted
+DOTENV_PUBLIC_KEY_PRODUCTION="034a5c..."
+DATABASE_URL=encrypted:BD7HQzb...
+API_KEY=encrypted:BD9XKwm...
+DEBUG=encrypted:BD2QpRf...
 ```
 
 ### Advantages
 
 - Simple setup, no external dependencies
-- Clear separation between encrypted and plain values
-- Easy to debug (can see which values are encrypted)
+- Variable names remain readable while every value is encrypted
+- Whole-file encryption in the standard `encrypt` flow avoids accidental plaintext
+- A separate partial-encryption flow keeps selected values readable when needed
 - Works with envdrift's vault sync for team key sharing
 
 ### Disadvantages

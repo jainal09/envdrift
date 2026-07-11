@@ -30,7 +30,7 @@ envdrift is built around three main ideas:
 │  ┌────────────────────┐      ┌────────────────────────────┐     │
 │  │ class Settings:    │      │ DATABASE_URL="encrypted:..." │    │
 │  │   DATABASE_URL: str│ ──── │ API_KEY="encrypted:..."      │    │
-│  │   API_KEY: str     │      │ DEBUG=false                  │    │
+│  │   API_KEY: str     │      │ DEBUG=encrypted:...          │    │
 │  │   DEBUG: bool      │      └────────────────────────────┘     │
 │  └────────────────────┘                                          │
 │                                                                  │
