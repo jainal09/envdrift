@@ -669,14 +669,14 @@ class TestInfisicalInstallerInstall:
     """Tests for InfisicalInstaller.install method."""
 
     @patch("envdrift.scanner.infisical.get_infisical_path")
-    @patch("urllib.request.urlretrieve")
+    @patch("envdrift.scanner.infisical.download_file")
     @patch("envdrift.scanner.platform_utils.platform.system", return_value="Linux")
     @patch("envdrift.scanner.platform_utils.platform.machine", return_value="x86_64")
     def test_install_success(
         self,
         mock_machine: MagicMock,
         mock_system: MagicMock,
-        mock_urlretrieve: MagicMock,
+        mock_download_file: MagicMock,
         mock_get_path: MagicMock,
         tmp_path: Path,
     ):
@@ -690,14 +690,14 @@ class TestInfisicalInstallerInstall:
 
         checksums_path = tmp_path / "stub-checksums.txt"
 
-        def fake_download(url: str, dest: str) -> None:
+        def fake_download(url: str, dest: Path, **_kwargs) -> None:
             with tarfile.open(dest, "w:gz") as tar:
                 info = tarfile.TarInfo(name="infisical")
                 info.size = 4
                 tar.addfile(info, io.BytesIO(b"fake"))
             write_checksums_for(Path(dest), checksums_path, url.rsplit("/", 1)[-1])
 
-        mock_urlretrieve.side_effect = fake_download
+        mock_download_file.side_effect = fake_download
 
         installer = InfisicalInstaller()
         with patch.object(
@@ -711,34 +711,34 @@ class TestInfisicalInstallerInstall:
         assert target_path.exists()
 
     @patch("envdrift.scanner.infisical.get_infisical_path")
-    @patch("urllib.request.urlretrieve")
+    @patch("envdrift.scanner.infisical.download_file")
     @patch("envdrift.scanner.platform_utils.platform.system", return_value="Linux")
     @patch("envdrift.scanner.platform_utils.platform.machine", return_value="x86_64")
     def test_install_download_failure(
         self,
         mock_machine: MagicMock,
         mock_system: MagicMock,
-        mock_urlretrieve: MagicMock,
+        mock_download_file: MagicMock,
         mock_get_path: MagicMock,
         tmp_path: Path,
     ):
         """Test installation failure on download error."""
         mock_get_path.return_value = tmp_path / "infisical"
-        mock_urlretrieve.side_effect = Exception("Network error")
+        mock_download_file.side_effect = Exception("Network error")
 
         installer = InfisicalInstaller()
         with pytest.raises(InfisicalInstallError, match="Download failed"):
             installer.install()
 
     @patch("envdrift.scanner.infisical.get_infisical_path")
-    @patch("urllib.request.urlretrieve")
+    @patch("envdrift.scanner.infisical.download_file")
     @patch("envdrift.scanner.platform_utils.platform.system", return_value="Linux")
     @patch("envdrift.scanner.platform_utils.platform.machine", return_value="x86_64")
     def test_install_binary_not_found_in_archive(
         self,
         mock_machine: MagicMock,
         mock_system: MagicMock,
-        mock_urlretrieve: MagicMock,
+        mock_download_file: MagicMock,
         mock_get_path: MagicMock,
         tmp_path: Path,
     ):
@@ -749,14 +749,14 @@ class TestInfisicalInstallerInstall:
         mock_get_path.return_value = tmp_path / "infisical"
         checksums_path = tmp_path / "stub-checksums.txt"
 
-        def fake_download(url: str, dest: str) -> None:
+        def fake_download(url: str, dest: Path, **_kwargs) -> None:
             with tarfile.open(dest, "w:gz") as tar:
                 info = tarfile.TarInfo(name="other_file.txt")
                 info.size = 4
                 tar.addfile(info, io.BytesIO(b"test"))
             write_checksums_for(Path(dest), checksums_path, url.rsplit("/", 1)[-1])
 
-        mock_urlretrieve.side_effect = fake_download
+        mock_download_file.side_effect = fake_download
 
         installer = InfisicalInstaller()
         with (

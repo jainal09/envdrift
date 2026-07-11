@@ -636,26 +636,26 @@ class TestTalismanInstallerDownload:
 class TestTalismanInstallerInstall:
     """Tests for TalismanInstaller.install method."""
 
-    @patch("urllib.request.urlretrieve")
+    @patch("envdrift.scanner.talisman.download_file")
     @patch("envdrift.scanner.platform_utils.platform.system", return_value="Linux")
     @patch("envdrift.scanner.platform_utils.platform.machine", return_value="x86_64")
     def test_install_success(
         self,
         mock_machine: MagicMock,
         mock_system: MagicMock,
-        mock_urlretrieve: MagicMock,
+        mock_download_file: MagicMock,
         tmp_path: Path,
     ):
         """Test successful installation."""
 
         checksums_path = tmp_path / "stub-checksums.txt"
 
-        def fake_download(url: str, dest: str) -> None:
+        def fake_download(url: str, dest: Path, **_kwargs) -> None:
             # Create a fake binary file
             Path(dest).write_bytes(b"fake binary content")
             write_checksums_for(Path(dest), checksums_path, url.rsplit("/", 1)[-1])
 
-        mock_urlretrieve.side_effect = fake_download
+        mock_download_file.side_effect = fake_download
 
         with (
             patch(
@@ -674,18 +674,18 @@ class TestTalismanInstallerInstall:
             assert result == tmp_path / "talisman"
             assert (tmp_path / "talisman").exists()
 
-    @patch("urllib.request.urlretrieve")
+    @patch("envdrift.scanner.talisman.download_file")
     @patch("envdrift.scanner.platform_utils.platform.system", return_value="Linux")
     @patch("envdrift.scanner.platform_utils.platform.machine", return_value="x86_64")
     def test_install_download_failure(
         self,
         mock_machine: MagicMock,
         mock_system: MagicMock,
-        mock_urlretrieve: MagicMock,
+        mock_download_file: MagicMock,
         tmp_path: Path,
     ):
         """Test installation failure on download error."""
-        mock_urlretrieve.side_effect = Exception("Network error")
+        mock_download_file.side_effect = Exception("Network error")
 
         with patch(
             "envdrift.scanner.talisman.get_talisman_path",

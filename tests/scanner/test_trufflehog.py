@@ -256,13 +256,12 @@ class TestTrufflehogInstaller:
         monkeypatch.setattr(installer, "get_checksums_url", lambda: checksums_url)
         monkeypatch.setattr(platform, "system", lambda: "Linux")
 
-        def fake_urlretrieve(_url: str, filename: str):
+        def fake_download(_url: str, filename: Path, **_kwargs) -> None:
             shutil.copy2(archive_path, filename)
-            return filename, None
 
         monkeypatch.setattr(
-            "envdrift.scanner.trufflehog.urllib.request.urlretrieve",
-            fake_urlretrieve,
+            "envdrift.scanner.trufflehog.download_file",
+            fake_download,
         )
 
         target_path = tmp_path / "bin" / "trufflehog"
@@ -283,13 +282,12 @@ class TestTrufflehogInstaller:
         monkeypatch.setattr(installer, "get_checksums_url", lambda: checksums_url)
         monkeypatch.setattr(platform, "system", lambda: "Windows")
 
-        def fake_urlretrieve(_url: str, filename: str):
+        def fake_download(_url: str, filename: Path, **_kwargs) -> None:
             shutil.copy2(archive_path, filename)
-            return filename, None
 
         monkeypatch.setattr(
-            "envdrift.scanner.trufflehog.urllib.request.urlretrieve",
-            fake_urlretrieve,
+            "envdrift.scanner.trufflehog.download_file",
+            fake_download,
         )
 
         target_path = tmp_path / "bin" / "trufflehog.exe"

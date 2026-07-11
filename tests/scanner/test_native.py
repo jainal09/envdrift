@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import errno
 import os
 from pathlib import Path, PureWindowsPath
 
@@ -119,7 +120,12 @@ class TestNativeScannerInternals:
         git("config", "core.quotepath", "true")
         raw_directory_name = os.fsdecode(b"secrets-\xff")
         env_file = tmp_path / raw_directory_name / ".env"
-        env_file.parent.mkdir()
+        try:
+            env_file.parent.mkdir()
+        except OSError as exc:
+            if exc.errno == errno.EILSEQ:
+                pytest.skip("filesystem does not support non-UTF-8 filename bytes")
+            raise
         env_file.write_bytes(b"TOKEN=secret\n")
         git("add", "-A")
 

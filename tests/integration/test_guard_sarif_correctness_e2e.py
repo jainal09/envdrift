@@ -19,6 +19,7 @@ realistic literal ever appears in the repository (GitHub push protection).
 
 from __future__ import annotations
 
+import errno
 import json
 import os
 import shutil
@@ -227,7 +228,12 @@ class TestSarifRelativeUris:
         )
         raw_directory_name = os.fsdecode(b"secrets-\xe9")
         env_file = scratch_repo / raw_directory_name / ".env"
-        env_file.parent.mkdir()
+        try:
+            env_file.parent.mkdir()
+        except OSError as exc:
+            if exc.errno == errno.EILSEQ:
+                pytest.skip("filesystem does not support non-UTF-8 filename bytes")
+            raise
         env_file.write_text(f"TOKEN={_AWS_KEY_TWO}\n", encoding="utf-8")
         subprocess.run(
             [git_path, "add", str(env_file.relative_to(scratch_repo))],
