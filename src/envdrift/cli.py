@@ -12,7 +12,7 @@ import typer
 from envdrift import __version__
 from envdrift.cli_commands.agent import agent_app
 from envdrift.cli_commands.diff import diff
-from envdrift.cli_commands.encryption import decrypt_cmd, encrypt_cmd
+from envdrift.cli_commands.encryption import ENCRYPT_HELP_EPILOG, decrypt_cmd, encrypt_cmd
 from envdrift.cli_commands.guard import guard
 from envdrift.cli_commands.hook import hook
 from envdrift.cli_commands.init_cmd import init as init_cmd
@@ -83,7 +83,7 @@ def main(
 
 app.command()(validate)
 app.command()(diff)
-app.command("encrypt")(encrypt_cmd)
+app.command("encrypt", epilog=ENCRYPT_HELP_EPILOG)(encrypt_cmd)
 app.command("decrypt")(decrypt_cmd)
 app.command("init")(init_cmd)
 app.command()(guard)

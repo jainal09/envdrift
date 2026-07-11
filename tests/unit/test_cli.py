@@ -5,6 +5,7 @@ from __future__ import annotations
 import importlib.util
 import json
 import keyword
+import re
 import shlex
 import shutil
 import sys
@@ -29,6 +30,13 @@ from envdrift.vault import SecretValue, VaultError
 from tests.helpers import DummyEncryptionBackend
 
 runner = CliRunner()
+
+_ANSI_ESCAPES = re.compile(r"\x1b\[[0-9;?]*[ -/]*[@-~]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)")
+
+
+def _plain_cli_output(output: str) -> str:
+    """Strip terminal styling and normalize help wrapping for assertions."""
+    return " ".join(_ANSI_ESCAPES.sub("", output).split())
 
 
 def _mock_sync_engine_success(monkeypatch):
@@ -581,6 +589,18 @@ class TestDiffCommand:
 
 class TestEncryptCommand:
     """Tests for the encrypt CLI command."""
+
+    def test_encrypt_help_keeps_examples_and_precommit_contract(self):
+        """The large-method refactor must not discard long-form CLI guidance (#575)."""
+        result = runner.invoke(app, ["encrypt", "--help"], color=True)
+
+        assert result.exit_code == 0
+        output = _plain_cli_output(result.output)
+        assert "envdrift.toml/pyproject.toml" in output
+        assert "pass_filenames: true" in output
+        assert "envdrift encrypt --backend sops" in output
+        assert "envdrift encrypt -b sops --age AGE_PUBLIC_KEY" in output
+        assert "envdrift encrypt --sops-config .sops.yaml" in output
 
     def test_encrypt_check_missing_file(self, tmp_path: Path):
         """Test encrypt --check with missing file."""
