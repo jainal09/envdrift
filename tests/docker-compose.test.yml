@@ -23,7 +23,7 @@ services:
       start_period: 10s
 
   vault:
-    image: hashicorp/vault:1.21  # Keep in sync with .github/workflows/integration-tests.yml
+    image: hashicorp/vault:2.0  # Keep in sync with .github/workflows/integration-tests.yml
     # Match integration-tests.yml (`--user root`) so the setcap/IPC_LOCK
     # behavior is identical between the local compose stack and CI.
     user: root
