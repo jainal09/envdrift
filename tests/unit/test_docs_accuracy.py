@@ -1,4 +1,4 @@
-"""Regression tests pinning user docs to real CLI/library behavior (#413).
+"""Regression tests pinning user docs to real CLI/library behavior (#413, #498, #499).
 
 These assert the *rendered* docs match what the code actually produces, so the
 docs can't drift back to the stale state the audit found:
@@ -26,6 +26,13 @@ Plus the #498 sweep — recipes/keys the shipped tools reject or ignore:
 - ``docs/reference/api.md`` must describe ``init()``'s real alias-everything
   behavior, not the stale skip-and-UserWarning contract.
 
+And the #499 sweep — examples that contradicted live library/CLI behavior:
+
+- the nested-settings FAQ must configure Pydantic's ``env_nested_delimiter``;
+- dotenvx examples must show every value encrypted and the suffixed public key;
+- sync mismatch previews must be redacted and backup names include microseconds;
+- guard docs must identify unencrypted environment files as HIGH / exit 2.
+
 They read the real files — no mocking of the behavior under test.
 """
 
@@ -50,6 +57,90 @@ def _read(name: str) -> str:
 
 def _read_docs_page(relpath: str) -> str:
     return (_DOCS_ROOT / relpath).read_text(encoding="utf-8")
+
+
+def test_faq_nested_settings_recipe_configures_delimiter(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The FAQ recipe must load DATABASE__* through Pydantic's real delimiter (#499)."""
+    from pydantic_settings import BaseSettings, SettingsConfigDict
+
+    class DatabaseSettings(BaseSettings):
+        URL: str
+        POOL_SIZE: int = 5
+
+    class Settings(BaseSettings):
+        model_config = SettingsConfigDict(env_nested_delimiter="__")
+
+        DATABASE: DatabaseSettings
+
+    monkeypatch.setenv("DATABASE__URL", "postgres://example.test/app")
+    monkeypatch.setenv("DATABASE__POOL_SIZE", "10")
+    settings = Settings()
+    assert settings.DATABASE.URL == "postgres://example.test/app"
+    assert settings.DATABASE.POOL_SIZE == 10
+
+    text = _read_docs_page("support/faq.md")
+    assert "from pydantic_settings import BaseSettings, SettingsConfigDict" in text
+    assert 'SettingsConfigDict(env_nested_delimiter="__")' in text
+
+
+@pytest.mark.parametrize(
+    ("relpath", "expected_debug"),
+    [
+        ("getting-started/quickstart.md", "DEBUG=encrypted:BD2QpRf..."),
+        ("guides/encryption.md", "DEBUG=encrypted:BDQEfalse1234567890..."),
+        ("concepts/encryption-backends.md", "DEBUG=encrypted:BD2QpRf..."),
+        ("concepts/index.md", "DEBUG=encrypted:..."),
+        ("cli/encrypt.md", "DEBUG=encrypted:BDQEfalse1234567890..."),
+    ],
+)
+def test_dotenvx_examples_encrypt_every_value(relpath: str, expected_debug: str) -> None:
+    """Every dotenvx example must encrypt DEBUG instead of teaching selectivity (#499)."""
+    text = _read_docs_page(relpath)
+    assert expected_debug in text, f"{relpath} must show dotenvx encrypting DEBUG"
+
+    if relpath in {"getting-started/quickstart.md", "concepts/encryption-backends.md"}:
+        assert not re.search(r"(?m)^DOTENV_PUBLIC_KEY=", text), (
+            f"{relpath} must suffix the dotenvx public-key name with the environment"
+        )
+
+
+def test_sync_examples_redact_values_and_show_collision_safe_backup_name() -> None:
+    """sync.md must mirror the redaction and microsecond backup contracts (#499)."""
+    from envdrift.sync.operations import redact_value
+
+    # Ground truth: real previews never contain plaintext and use this shape.
+    preview = redact_value("a" * 64)
+    assert preview is not None
+    assert re.fullmatch(r"<redacted len=64 sha=[0-9a-f]{8}>", preview)
+
+    text = _read("sync.md")
+    assert "abc123def456..." not in text
+    assert "xyz789abc012..." not in text
+    assert len(re.findall(r"Local:\s+<redacted len=64 sha=[0-9a-f]{8}>", text)) >= 2
+    assert len(re.findall(r"Vault:\s+<redacted len=64 sha=[0-9a-f]{8}>", text)) >= 2
+    assert re.search(r"\.env\.keys\.backup\.\d{8}_\d{6}_\d{6}", text)
+
+
+def test_guard_docs_classify_unencrypted_env_as_high(tmp_path: Path) -> None:
+    """guard.md must match the native rule's HIGH severity and exit 2 (#499)."""
+    from envdrift.scanner.base import FindingSeverity
+    from envdrift.scanner.native import NativeScanner
+
+    env_file = tmp_path / ".env"
+    env_file.write_text("FOO=bar\nGREETING=hello\n", encoding="utf-8")
+    result = NativeScanner().scan([tmp_path])
+    finding = next(f for f in result.findings if f.rule_id == "unencrypted-env-file")
+    assert finding.severity == FindingSeverity.HIGH
+
+    text = _read("guard.md")
+    assert "An unencrypted environment file is HIGH" in text
+    assert "| 2 | High findings (including unencrypted environment files) |" in text
+    assert "Low findings (policy violations, e.g. unencrypted file)" not in text
+
+    base_text = (_REPO_ROOT / "src" / "envdrift" / "scanner" / "base.py").read_text(
+        encoding="utf-8"
+    )
+    assert "LOW: Policy violation (e.g., unencrypted file)" not in base_text
 
 
 def test_decrypt_md_does_not_hardcode_dotenvx_version() -> None:

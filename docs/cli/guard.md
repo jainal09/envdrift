@@ -314,8 +314,9 @@ envdrift guard --ci --fail-on high
 Minimum severity to return a non-zero exit code in CI mode. Accepts
 `critical`, `high`, `medium`, or `low`. Any finding at or above the chosen
 threshold fails CI with that severity's exit code (see [Exit Codes](#exit-codes))
-— including `--fail-on low` on a LOW-only result (such as an unencrypted-file
-policy violation), which exits with code `4`, distinct from HIGH's code `2`.
+— including `--fail-on low` on a LOW-only result, which exits with code `4`,
+distinct from HIGH's code `2`. An unencrypted environment file is HIGH and exits
+with code `2` when it blocks the run.
 `INFO` findings are informational only and never fail CI.
 
 ```bash
@@ -433,9 +434,9 @@ incomplete scan and for operational errors:
 | :-- | :-- |
 | 0 | No blocking findings |
 | 1 | Critical findings |
-| 2 | High findings |
+| 2 | High findings (including unencrypted environment files) |
 | 3 | Medium findings |
-| 4 | Low findings (policy violations, e.g. unencrypted file) |
+| 4 | Low findings |
 | 5 | Scan incomplete: a selected scanner ran but failed |
 | 6 | Operational error (bad config, invalid path or flags) |
 

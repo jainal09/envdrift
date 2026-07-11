@@ -142,11 +142,15 @@ class Settings(BaseSettings):
 Use Pydantic's nested model support:
 
 ```python
+from pydantic_settings import BaseSettings, SettingsConfigDict
+
 class DatabaseSettings(BaseSettings):
     URL: str
     POOL_SIZE: int = 5
 
 class Settings(BaseSettings):
+    model_config = SettingsConfigDict(env_nested_delimiter="__")
+
     DATABASE: DatabaseSettings
 ```
 

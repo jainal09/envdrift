@@ -41,7 +41,7 @@ class FindingSeverity(Enum):
     - CRITICAL: Confirmed secret (high-confidence pattern match)
     - HIGH: Very likely a secret (strong pattern or high entropy)
     - MEDIUM: Possibly a secret (moderate confidence)
-    - LOW: Policy violation (e.g., unencrypted file)
+    - LOW: Low-confidence finding or minor policy violation
     - INFO: Informational only
     """
 

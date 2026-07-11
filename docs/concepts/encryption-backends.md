@@ -34,17 +34,17 @@ envdrift supports two encryption backends: **dotenvx** and **SOPS**. This page h
 
 ```bash
 # .env.production (encrypted)
-DOTENV_PUBLIC_KEY="034a5c..."
-DATABASE_URL="encrypted:BD7HQzb..."
-API_KEY="encrypted:BD9XKwm..."
-DEBUG=false  # Non-sensitive, not encrypted
+DOTENV_PUBLIC_KEY_PRODUCTION="034a5c..."
+DATABASE_URL=encrypted:BD7HQzb...
+API_KEY=encrypted:BD9XKwm...
+DEBUG=encrypted:BD2QpRf...
 ```
 
 ### Advantages
 
 - Simple setup, no external dependencies
-- Clear separation between encrypted and plain values
-- Easy to debug (can see which values are encrypted)
+- Variable names remain readable while every value is encrypted
+- Consistent whole-file encryption with no accidental plaintext values
 - Works with envdrift's vault sync for team key sharing
 
 ### Disadvantages
