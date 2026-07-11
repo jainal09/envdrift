@@ -1,4 +1,4 @@
-"""Regression tests for ``install.ps1`` Windows PowerShell 5.1 compatibility (#483).
+"""Regression tests for the ``install.ps1`` Windows execution contract (#483, #501).
 
 The documented install flow (``irm ... | iex``) runs in the OS-default Windows
 PowerShell 5.1 on every stock Windows box, so ``install.ps1`` must stay within
@@ -11,6 +11,9 @@ the 5.1 language/cmdlet surface:
   ``-Encoding ASCII``, mangling non-ASCII profile paths (``José`` -> ``Jos?``)
   into a dead wrapper. The wrapper must resolve the venv at runtime so it works
   for any user-profile path.
+- The py launcher is represented as a command plus a version selector. Splatting
+  both at the call-operator position joins them into one nonexistent executable;
+  the installer must invoke the executable and its arguments separately.
 
 These drive the *real* installer code under a real PowerShell engine — no
 re-implementation of the behavior under test. They are deliberately not marked
@@ -172,6 +175,38 @@ $ErrorActionPreference = 'SilentlyContinue'
 [Console]::Out.WriteLine("EAP_AFTER=$ErrorActionPreference")
 """
 
+# Runs the real Initialize-Venv with the same multi-element command shape used
+# for the py launcher. ``-X utf8`` is a valid interpreter-level option and lets
+# the test use CI's selected Python without assuming a particular py registration.
+# PIP_NO_INDEX makes the function's best-effort pip upgrade deterministic and
+# network-free after the venv has been created.
+_MULTI_ARG_PYTHON_HARNESS = """
+param([string]$ScriptPath, [string]$PythonExe, [string]$InstallDir)
+$ErrorActionPreference = 'Stop'
+$tokens = $null
+$errors = $null
+$ast = [System.Management.Automation.Language.Parser]::ParseFile(
+    $ScriptPath, [ref]$tokens, [ref]$errors)
+if ($errors.Count -gt 0) {
+    foreach ($e in $errors) { [Console]::Error.WriteLine($e.ToString()) }
+    exit 2
+}
+$functions = $ast.FindAll(
+    { param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] },
+    $true)
+foreach ($fn in $functions) {
+    . ([scriptblock]::Create($fn.Extent.Text))
+}
+$script:InstallDir = $InstallDir
+$script:VenvDir = Join-Path $InstallDir 'venv'
+$script:PythonCmd = @($PythonExe, '-X', 'utf8')
+$env:PIP_NO_INDEX = '1'
+$env:PIP_DISABLE_PIP_VERSION_CHECK = '1'
+Initialize-Venv
+if (-not (Test-Path $script:VenvPython)) { exit 3 }
+[Console]::Out.WriteLine("MULTI_ARG_PYTHON_OK")
+"""
+
 
 def _powershell() -> str | None:
     """Best available PowerShell: pwsh (7+) anywhere, else Windows PowerShell."""
@@ -313,6 +348,29 @@ def test_initialize_venv_restores_caller_error_action_preference(tmp_path: Path)
         "Initialize-Venv must restore the caller's $ErrorActionPreference "
         f"instead of hardcoding 'Stop':\n{proc.stdout}"
     )
+
+
+@requires_windows_powershell_51
+def test_initialize_venv_accepts_python_command_with_arguments(tmp_path: Path) -> None:
+    """Initialize-Venv must keep launcher arguments separate from its executable.
+
+    Find-Python stores the py-launcher fallback as ``@('py', '-3')``. Passing
+    that array directly to ``&`` joins it into a command name such as ``py -3``,
+    which does not exist and aborts py-launcher-only installs (#501).
+    """
+    install_dir = tmp_path / "multi-arg-python"
+    proc = _run_harness(
+        _windows_powershell_51() or "",
+        _MULTI_ARG_PYTHON_HARNESS,
+        tmp_path,
+        str(INSTALL_PS1),
+        sys.executable,
+        str(install_dir),
+    )
+    assert proc.returncode == 0, (
+        f"Initialize-Venv rejected a multi-part Python command:\n{proc.stdout}\n{proc.stderr}"
+    )
+    assert "MULTI_ARG_PYTHON_OK" in proc.stdout
 
 
 @requires_powershell
