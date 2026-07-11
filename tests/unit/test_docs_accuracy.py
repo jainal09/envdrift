@@ -103,6 +103,15 @@ def test_dotenvx_examples_encrypt_every_value(relpath: str, expected_debug: str)
             f"{relpath} must suffix the dotenvx public-key name with the environment"
         )
 
+    if relpath == "concepts/encryption-backends.md":
+        assert "| **Partial encryption** | Via envdrift's split-file flow | No |" in text
+        assert "Whole-file encryption in the standard `encrypt` flow" in text
+
+    if relpath == "cli/encrypt.md":
+        assert re.search(
+            r"quotes the public-key value but writes ciphertext\s+values unquoted", text
+        )
+
 
 def test_sync_examples_redact_values_and_show_collision_safe_backup_name() -> None:
     """sync.md must mirror the redaction and microsecond backup contracts (#499)."""

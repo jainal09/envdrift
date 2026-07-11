@@ -240,6 +240,9 @@ DEBUG=encrypted:BDQEfalse1234567890...
 #/----------------------------------------------------------/
 ```
 
+The pinned dotenvx binary quotes the public-key value but writes ciphertext
+values unquoted; the example preserves that generated format.
+
 The sensitive-field detection below powers `--check` warnings; it does not make
 dotenvx encryption selective. For selective encryption, use
 [partial encryption](../guides/partial-encryption.md).
