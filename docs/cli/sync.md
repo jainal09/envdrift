@@ -129,6 +129,12 @@ provider = "azure"  # azure | aws | hashicorp | gcp
 [vault.azure]
 vault_url = "https://my-keyvault.vault.azure.net/"
 
+[vault.aws]
+region = "us-east-1"
+
+[vault.hashicorp]
+url = "https://vault.example.com:8200"
+
 [vault.gcp]
 project_id = "my-gcp-project"
 

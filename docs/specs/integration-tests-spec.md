@@ -68,12 +68,18 @@ def localstack_aws():
 # docker-compose.test.yml
 services:
   vault:
-    image: hashicorp/vault:1.18
+    # Keep the image pin in sync with tests/docker-compose.test.yml.
+    image: hashicorp/vault:2.0
+    user: root
     ports:
       - "8200:8200"
     environment:
       - VAULT_DEV_ROOT_TOKEN_ID=test-root-token
       - VAULT_DEV_LISTEN_ADDRESS=0.0.0.0:8200
+      - VAULT_ADDR=http://0.0.0.0:8200
+      # Current images do not ship setcap; dev mode does not need mlock.
+      - SKIP_SETCAP=true
+      - VAULT_DISABLE_MLOCK=true
     cap_add:
       - IPC_LOCK
 ```
