@@ -1,5 +1,12 @@
 # Changelog
 
+## [10.16.12](https://github.com/jainal09/envdrift/compare/v10.16.11...v10.16.12) (2026-07-11)
+
+
+### Bug Fixes
+
+* **parser:** address key lexer review findings ([#622](https://github.com/jainal09/envdrift/issues/622)) ([0da0d53](https://github.com/jainal09/envdrift/commit/0da0d53eb00133b992e1ea3abf299dc7f5dd55f4))
+
 ## [10.16.11](https://github.com/jainal09/envdrift/compare/v10.16.10...v10.16.11) (2026-07-11)
 
 
