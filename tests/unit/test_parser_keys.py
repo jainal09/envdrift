@@ -42,6 +42,10 @@ def _pydantic_dotenv_values(content: str) -> dict[str, str]:
         pytest.param("'\nK=1\n' junk\nB=2\n", id="junk-after-key-consumes-interior"),
         pytest.param("''=ignored\nB=2\n", id="empty-quoted-key-is-invalid"),
         pytest.param("export # comment\nB=2\n", id="export-without-key-is-ignored"),
+        pytest.param("export =v\nB=2\n", id="export-prefix-with-missing-key"),
+        pytest.param("export  =B=x\nB=2\n", id="export-prefix-with-equals-tail"),
+        pytest.param("export \t =\nB=2\n", id="export-prefix-with-tab-and-missing-key"),
+        pytest.param("export=v\nB=2\n", id="literal-export-key-without-prefix-space"),
         pytest.param(
             "export 'MY KEY' = value\nexport bare # note\nB=2\n",
             id="export-quoted-and-bare",

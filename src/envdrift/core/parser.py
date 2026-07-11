@@ -365,8 +365,9 @@ class EnvParser:
             # KEY=value files. Quoted/bare bindings fall through to the richer
             # key lexer; bypass a lenient match whose captured key starts with
             # a quote, because python-dotenv removes those key quotes (#573).
-            match = pattern.match(original_line.lstrip())
-            if match is not None and not match.group(1).startswith("'"):
+            stripped_line = original_line.lstrip()
+            match = self._standard_line_match(pattern, stripped_line)
+            if match is not None:
                 key = match.group(1)
                 raw_value = match.group(2)
                 raw_lines = [original_line]
@@ -429,6 +430,23 @@ class EnvParser:
             env_file.variables[key] = env_var
 
         return env_file
+
+    def _standard_line_match(self, pattern: re.Pattern[str], text: str) -> re.Match[str] | None:
+        """Return an unambiguous ordinary assignment for the regex hot path.
+
+        The optional ``export`` prefix in LINE_PATTERN can backtrack: for
+        ``export =v`` it retries without the prefix and captures ``export`` as
+        the key. The real dotenv lexer commits to the prefix and rejects that
+        missing-key line, so route only that ambiguous match to the full key
+        lexer. ``export=v`` has no prefix whitespace and remains a legitimate
+        assignment whose key is literally ``export`` (#620 review).
+        """
+        match = pattern.match(text)
+        if match is None or match.group(1).startswith("'"):
+            return None
+        if match.group(1) == "export" and self.EXPORT_PATTERN.match(text):
+            return None
+        return match
 
     def _prepare_nonstandard_binding(
         self,
