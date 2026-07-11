@@ -42,6 +42,10 @@ def _pydantic_dotenv_values(content: str) -> dict[str, str]:
         pytest.param("'\nK=1\n' junk\nB=2\n", id="junk-after-key-consumes-interior"),
         pytest.param("''=ignored\nB=2\n", id="empty-quoted-key-is-invalid"),
         pytest.param("export # comment\nB=2\n", id="export-without-key-is-ignored"),
+        pytest.param("export =v\nB=2\n", id="export-prefix-with-missing-key"),
+        pytest.param("export  =B=x\nB=2\n", id="export-prefix-with-equals-tail"),
+        pytest.param("export \t =\nB=2\n", id="export-prefix-with-tab-and-missing-key"),
+        pytest.param("export=v\nB=2\n", id="literal-export-key-without-prefix-space"),
         pytest.param(
             "export 'MY KEY' = value\nexport bare # note\nB=2\n",
             id="export-quoted-and-bare",
@@ -94,6 +98,14 @@ def test_bare_key_shadows_process_environment_during_interpolation(monkeypatch):
             "PLAIN": "",
         }
     )
+
+
+def test_malformed_bare_line_does_not_shadow_process_environment(monkeypatch):
+    """Greptile review: trailing junk makes the binding invalid, not bare."""
+    monkeypatch.setenv("ENVDRIFT_573_INVALID", "from-process")
+    content = "ENVDRIFT_573_INVALID junk\nVALUE=${ENVDRIFT_573_INVALID}\n"
+
+    assert _parsed_values(content) == _pydantic_dotenv_values(content) == {"VALUE": "from-process"}
 
 
 def test_later_bare_duplicate_removes_public_value_but_keeps_assignment_history():
