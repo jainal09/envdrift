@@ -5,6 +5,7 @@ from __future__ import annotations
 import importlib.util
 import json
 import keyword
+import re
 import shlex
 import shutil
 import sys
@@ -29,6 +30,13 @@ from envdrift.vault import SecretValue, VaultError
 from tests.helpers import DummyEncryptionBackend
 
 runner = CliRunner()
+
+_ANSI_ESCAPES = re.compile(r"\x1b\[[0-9;?]*[ -/]*[@-~]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)")
+
+
+def _plain_cli_output(output: str) -> str:
+    """Strip terminal styling and normalize help wrapping for assertions."""
+    return " ".join(_ANSI_ESCAPES.sub("", output).split())
 
 
 def _mock_sync_engine_success(monkeypatch):
@@ -584,10 +592,10 @@ class TestEncryptCommand:
 
     def test_encrypt_help_keeps_examples_and_precommit_contract(self):
         """The large-method refactor must not discard long-form CLI guidance (#575)."""
-        result = runner.invoke(app, ["encrypt", "--help"])
+        result = runner.invoke(app, ["encrypt", "--help"], color=True)
 
         assert result.exit_code == 0
-        output = " ".join(result.output.split())
+        output = _plain_cli_output(result.output)
         assert "envdrift.toml/pyproject.toml" in output
         assert "pass_filenames: true" in output
         assert "envdrift encrypt --backend sops" in output
