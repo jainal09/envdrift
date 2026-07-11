@@ -8,6 +8,7 @@ from typing import Annotated
 import typer
 
 from envdrift.cli_commands.vault_helpers import (
+    VaultConnectionOptions,
     VaultPullRequest,
     VaultPushRequest,
     execute_vault_pull,
@@ -198,11 +199,13 @@ def vault_push(
             all_services=all_services,
             force=force,
             skip_encrypt=skip_encrypt,
-            config=config,
-            provider=provider,
-            vault_url=vault_url,
-            region=region,
-            project_id=project_id,
+            connection=VaultConnectionOptions(
+                config=config,
+                provider=provider,
+                vault_url=vault_url,
+                region=region,
+                project_id=project_id,
+            ),
         )
     )
 
@@ -225,11 +228,13 @@ def vault_pull(
             folder=folder,
             secret_name=secret_name,
             environment=env,
-            config=config,
-            provider=provider,
-            vault_url=vault_url,
-            region=region,
-            project_id=project_id,
+            connection=VaultConnectionOptions(
+                config=config,
+                provider=provider,
+                vault_url=vault_url,
+                region=region,
+                project_id=project_id,
+            ),
             no_decrypt=no_decrypt,
             env_file=env_file,
         )

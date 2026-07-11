@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Never
 
 import typer
 
@@ -29,6 +29,17 @@ class VaultSettings:
 
 
 @dataclass(frozen=True)
+class VaultConnectionOptions:
+    """CLI inputs used to resolve and construct a vault client."""
+
+    config: Path | None
+    provider: str | None
+    vault_url: str | None
+    region: str | None
+    project_id: str | None
+
+
+@dataclass(frozen=True)
 class VaultPushRequest:
     """Parsed inputs for a vault-push invocation."""
 
@@ -39,11 +50,7 @@ class VaultPushRequest:
     all_services: bool
     force: bool
     skip_encrypt: bool
-    config: Path | None
-    provider: str | None
-    vault_url: str | None
-    region: str | None
-    project_id: str | None
+    connection: VaultConnectionOptions
 
 
 @dataclass(frozen=True)
@@ -53,11 +60,7 @@ class VaultPullRequest:
     folder: Path
     secret_name: str
     environment: str
-    config: Path | None
-    provider: str | None
-    vault_url: str | None
-    region: str | None
-    project_id: str | None
+    connection: VaultConnectionOptions
     no_decrypt: bool
     env_file: Path | None
 
@@ -112,11 +115,8 @@ def _provider_vault_url(
     """Resolve provider-specific URL, preserving explicit CLI precedence."""
     if explicit_url is not None or vault_config is None:
         return explicit_url
-    if provider == "azure":
-        return getattr(vault_config, "azure_vault_url", None)
-    if provider == "hashicorp":
-        return getattr(vault_config, "hashicorp_url", None)
-    return None
+    attribute = {"azure": "azure_vault_url", "hashicorp": "hashicorp_url"}.get(provider)
+    return getattr(vault_config, attribute, None) if attribute is not None else None
 
 
 def _validate_vault_settings(settings: VaultSettings) -> None:
@@ -129,26 +129,20 @@ def _validate_vault_settings(settings: VaultSettings) -> None:
         raise typer.Exit(code=1)
 
 
-def resolve_vault_settings(
-    config: Path | None,
-    provider: str | None,
-    vault_url: str | None,
-    region: str | None,
-    project_id: str | None,
-) -> VaultSettings:
+def resolve_vault_settings(options: VaultConnectionOptions) -> VaultSettings:
     """Merge CLI flags with the config's vault settings and validate them."""
-    envdrift_config = _load_vault_config(config)
+    envdrift_config = _load_vault_config(options.config)
     vault_config = getattr(envdrift_config, "vault", None)
-    effective_provider = provider or getattr(vault_config, "provider", None)
+    effective_provider = options.provider or getattr(vault_config, "provider", None)
     if not effective_provider:
         print_error("Vault provider required. Use --provider or configure in envdrift.toml")
         raise typer.Exit(code=1)
 
     settings = VaultSettings(
         provider=effective_provider,
-        vault_url=_provider_vault_url(effective_provider, vault_url, vault_config),
-        region=region or getattr(vault_config, "aws_region", None),
-        project_id=project_id or getattr(vault_config, "gcp_project_id", None),
+        vault_url=_provider_vault_url(effective_provider, options.vault_url, vault_config),
+        region=options.region or getattr(vault_config, "aws_region", None),
+        project_id=options.project_id or getattr(vault_config, "gcp_project_id", None),
     )
     _validate_vault_settings(settings)
     return settings
@@ -156,15 +150,13 @@ def resolve_vault_settings(
 
 def _vault_client_kwargs(settings: VaultSettings) -> dict[str, str | None]:
     """Build provider-specific client keyword arguments."""
-    if settings.provider == "azure":
-        return {"vault_url": settings.vault_url}
-    if settings.provider == "aws":
-        return {"region": settings.region or "us-east-1"}
-    if settings.provider == "hashicorp":
-        return {"url": settings.vault_url}
-    if settings.provider == "gcp":
-        return {"project_id": settings.project_id}
-    return {}
+    kwargs_by_provider: dict[str, dict[str, str | None]] = {
+        "azure": {"vault_url": settings.vault_url},
+        "aws": {"region": settings.region or "us-east-1"},
+        "hashicorp": {"url": settings.vault_url},
+        "gcp": {"project_id": settings.project_id},
+    }
+    return kwargs_by_provider.get(settings.provider, {})
 
 
 def build_authenticated_client(settings: VaultSettings) -> VaultClient:
@@ -198,32 +190,37 @@ def execute_vault_push(request: VaultPushRequest) -> None:
     _push_single_secret(request)
 
 
-def _load_bulk_push_context(request: VaultPushRequest) -> _BulkPushContext:
-    """Load sync, vault, and encryption dependencies for bulk push."""
-    from envdrift.cli_commands.encryption_helpers import (
-        build_sops_encrypt_kwargs,
-        resolve_encryption_backend,
-    )
+def _load_bulk_vault(
+    options: VaultConnectionOptions,
+) -> tuple[SyncConfig, VaultClient, str]:
+    """Load bulk mappings and authenticate their vault client."""
     from envdrift.cli_commands.sync import load_sync_config_and_client
-    from envdrift.config import ConfigLoadError, ConfigNotFoundError
-    from envdrift.encryption import EncryptionProvider
     from envdrift.vault import VaultError
 
     sync_config, client, vault_provider, _, _, _ = load_sync_config_and_client(
-        config_file=request.config,
-        provider=request.provider,
-        vault_url=request.vault_url,
-        region=request.region,
-        project_id=request.project_id,
+        config_file=options.config,
+        provider=options.provider,
+        vault_url=options.vault_url,
+        region=options.region,
+        project_id=options.project_id,
     )
     try:
         client.authenticate()
     except VaultError as e:
         print_error(str(e))
         raise typer.Exit(code=1) from None
+    return sync_config, client, vault_provider
+
+
+def _load_encryption_backend(
+    config: Path | None,
+) -> tuple[EncryptionBackend, EncryptionProvider, Any]:
+    """Resolve an encryption backend with clean config-facing failures."""
+    from envdrift.cli_commands.encryption_helpers import resolve_encryption_backend
+    from envdrift.config import ConfigLoadError, ConfigNotFoundError
 
     try:
-        backend, backend_provider, encryption_config = resolve_encryption_backend(request.config)
+        return resolve_encryption_backend(config)
     except (ConfigNotFoundError, ConfigLoadError) as e:
         print_error(str(e))
         raise typer.Exit(code=1) from None
@@ -231,22 +228,42 @@ def _load_bulk_push_context(request: VaultPushRequest) -> _BulkPushContext:
         print_error(f"Unsupported encryption backend: {e}")
         raise typer.Exit(code=1) from None
 
+
+def _require_installed_backend(backend: EncryptionBackend) -> None:
+    """Fail with install guidance when an encryption backend is unavailable."""
     if not backend.is_installed():
         print_error(f"{backend.name} is not installed")
         console.print(backend.install_instructions())
         raise typer.Exit(code=1)
-    sops_kwargs = (
-        build_sops_encrypt_kwargs(encryption_config)
-        if backend_provider == EncryptionProvider.SOPS
-        else {}
+
+
+def _bulk_sops_kwargs(
+    provider: EncryptionProvider,
+    encryption_config: Any,
+) -> dict[str, Any]:
+    """Build SOPS-only encryption options for bulk push."""
+    from envdrift.cli_commands.encryption_helpers import build_sops_encrypt_kwargs
+    from envdrift.encryption import EncryptionProvider
+
+    if provider != EncryptionProvider.SOPS:
+        return {}
+    return build_sops_encrypt_kwargs(encryption_config)
+
+
+def _load_bulk_push_context(request: VaultPushRequest) -> _BulkPushContext:
+    """Load sync, vault, and encryption dependencies for bulk push."""
+    sync_config, client, vault_provider = _load_bulk_vault(request.connection)
+    backend, backend_provider, encryption_config = _load_encryption_backend(
+        request.connection.config
     )
+    _require_installed_backend(backend)
     return _BulkPushContext(
         sync_config=sync_config,
         client=client,
         vault_provider=vault_provider,
         backend=backend,
         backend_provider=backend_provider,
-        sops_kwargs=sops_kwargs,
+        sops_kwargs=_bulk_sops_kwargs(backend_provider, encryption_config),
         force=request.force,
         skip_encrypt=request.skip_encrypt,
     )
@@ -498,19 +515,39 @@ def _single_push_value(request: VaultPushRequest) -> tuple[str, str]:
 
 def _file_push_value(request: VaultPushRequest) -> tuple[str, str]:
     """Read one private key from a service's .env.keys file."""
+    folder, secret_name, environment = _require_file_push_inputs(request)
+    env_keys_path = folder / ".env.keys"
+    key_name = f"DOTENV_PRIVATE_KEY_{environment.upper()}"
+    key_value = _read_file_push_key(env_keys_path, key_name)
+    return secret_name, f"{key_name}={key_value}"
+
+
+def _missing_file_push_inputs() -> Never:
+    """Exit with the shared single-service usage error."""
+    print_error(
+        "Required: envdrift vault-push <folder> <secret-name> --env <environment> (or use --all)"
+    )
+    raise typer.Exit(code=1)
+
+
+def _require_file_push_inputs(request: VaultPushRequest) -> tuple[Path, str, str]:
+    """Narrow required single-service inputs without a compound conditional."""
+    if not request.folder:
+        _missing_file_push_inputs()
+    if not request.secret_name:
+        _missing_file_push_inputs()
+    if not request.environment:
+        _missing_file_push_inputs()
+    return request.folder, request.secret_name, request.environment
+
+
+def _read_file_push_key(env_keys_path: Path, key_name: str) -> str:
+    """Read one required key with clean filesystem and missing-key errors."""
     from envdrift.sync.operations import EnvKeysFile
 
-    if not request.folder or not request.secret_name or not request.environment:
-        print_error(
-            "Required: envdrift vault-push <folder> <secret-name> --env <environment> "
-            "(or use --all)"
-        )
-        raise typer.Exit(code=1)
-    env_keys_path = request.folder / ".env.keys"
     if not env_keys_path.exists():
         print_error(f"File not found: {env_keys_path}")
         raise typer.Exit(code=1)
-    key_name = f"DOTENV_PRIVATE_KEY_{request.environment.upper()}"
     try:
         key_value = EnvKeysFile(env_keys_path).read_key(key_name)
     except (OSError, ValueError) as e:
@@ -519,20 +556,14 @@ def _file_push_value(request: VaultPushRequest) -> tuple[str, str]:
     if not key_value:
         print_error(f"Key '{key_name}' not found in {env_keys_path}")
         raise typer.Exit(code=1)
-    return request.secret_name, f"{key_name}={key_value}"
+    return key_value
 
 
 def _push_single_secret(request: VaultPushRequest) -> None:
     """Push one direct value or one key read from a service folder."""
     from envdrift.vault import VaultError
 
-    settings = resolve_vault_settings(
-        request.config,
-        request.provider,
-        request.vault_url,
-        request.region,
-        request.project_id,
-    )
+    settings = resolve_vault_settings(request.connection)
     secret_name, value = _single_push_value(request)
     client = build_authenticated_client(settings)
     try:
@@ -634,28 +665,20 @@ def _resolve_pull_target(request: VaultPullRequest) -> Path:
         raise typer.Exit(code=1) from None
 
 
-def _resolve_pull_backend(config: Path | None) -> tuple[EncryptionBackend, EncryptionProvider]:
-    """Resolve and validate the encryption backend used after a key pull."""
-    from envdrift.cli_commands.encryption_helpers import resolve_encryption_backend
-    from envdrift.config import ConfigLoadError, ConfigNotFoundError
-
+def _warn_non_toml_encryption_config(config: Path | None) -> None:
+    """Explain why a non-TOML config cannot select the encryption backend."""
     if config is not None and config.suffix.lower() != ".toml":
         print_warning(
             f"--config {config} has no .toml suffix; it is used for vault settings "
             "but ignored when selecting the encryption backend (auto-detected instead)."
         )
-    try:
-        backend, provider, _ = resolve_encryption_backend(config)
-    except (ConfigNotFoundError, ConfigLoadError) as e:
-        print_error(str(e))
-        raise typer.Exit(code=1) from None
-    except ValueError as e:
-        print_error(f"Unsupported encryption backend: {e}")
-        raise typer.Exit(code=1) from None
-    if not backend.is_installed():
-        print_error(f"{backend.name} is not installed")
-        console.print(backend.install_instructions())
-        raise typer.Exit(code=1)
+
+
+def _resolve_pull_backend(config: Path | None) -> tuple[EncryptionBackend, EncryptionProvider]:
+    """Resolve and validate the encryption backend used after a key pull."""
+    _warn_non_toml_encryption_config(config)
+    backend, provider, _ = _load_encryption_backend(config)
+    _require_installed_backend(backend)
     return backend, provider
 
 
@@ -671,7 +694,7 @@ def _decrypt_pull_target(
         EncryptionProvider,
     )
 
-    backend, provider = _resolve_pull_backend(request.config)
+    backend, provider = _resolve_pull_backend(request.connection.config)
     if provider == EncryptionProvider.DOTENVX and request.env_file is not None:
         from envdrift.integrations.dotenvx import normalize_dotenvx_metadata
 
@@ -690,13 +713,7 @@ def _decrypt_pull_target(
 def execute_vault_pull(request: VaultPullRequest) -> None:
     """Fetch, install, and optionally use one vault-backed encryption key."""
     _validate_pull_folder(request.folder)
-    settings = resolve_vault_settings(
-        request.config,
-        request.provider,
-        request.vault_url,
-        request.region,
-        request.project_id,
-    )
+    settings = resolve_vault_settings(request.connection)
     client = build_authenticated_client(settings)
     secret = _fetch_pull_secret(request, settings, client)
     key_name, key_value = _extract_pull_key(request, secret)
