@@ -33,6 +33,13 @@ And the #499 sweep — examples that contradicted live library/CLI behavior:
 - sync mismatch previews must be redacted and backup names include microseconds;
 - guard docs must identify unencrypted environment files as HIGH / exit 2.
 
+And current configuration-example contracts from #441/#619:
+
+- the integration spec's Vault container must match the tested Compose image
+  and the runtime flags that let that image start;
+- profile ``activate_to`` paths are relative to ``folder_path``;
+- the sync configuration example covers all four supported vault providers.
+
 They read the real files — no mocking of the behavior under test.
 """
 
@@ -128,6 +135,63 @@ def test_sync_examples_redact_values_and_show_collision_safe_backup_name() -> No
     assert len(re.findall(r"Local:\s+<redacted len=64 sha=[0-9a-f]{8}>", text)) >= 2
     assert len(re.findall(r"Vault:\s+<redacted len=64 sha=[0-9a-f]{8}>", text)) >= 2
     assert re.search(r"\.env\.keys\.backup\.\d{8}_\d{6}_\d{6}", text)
+
+
+def test_integration_spec_vault_service_matches_test_stack() -> None:
+    """The prose Compose example must track the real tested Vault service (#619)."""
+    spec = _read_docs_page("specs/integration-tests-spec.md")
+    compose = (_REPO_ROOT / "tests" / "docker-compose.test.yml").read_text(encoding="utf-8")
+    image_pattern = r"image:\s*hashicorp/vault:([^\s#]+)"
+
+    spec_image = re.search(image_pattern, spec)
+    compose_image = re.search(image_pattern, compose)
+    assert spec_image is not None, "integration spec has no pinned HashiCorp Vault image"
+    assert compose_image is not None, "test Compose stack has no pinned HashiCorp Vault image"
+    assert spec_image.group(1) == compose_image.group(1)
+    for setting in (
+        "user: root",
+        "VAULT_ADDR=http://0.0.0.0:8200",
+        "SKIP_SETCAP=true",
+        "VAULT_DISABLE_MLOCK=true",
+    ):
+        assert setting in compose, f"tested Vault stack no longer contains {setting!r}"
+        assert setting in spec, f"integration spec must mirror tested Vault setting {setting!r}"
+
+
+def test_monorepo_profile_activation_example_is_folder_relative(tmp_path: Path) -> None:
+    """The documented activate_to value must not repeat folder_path (#441)."""
+    from envdrift.cli_commands.sync import _maybe_activate_profile
+    from envdrift.sync.config import ServiceMapping
+
+    service = tmp_path / "services" / "api"
+    service.mkdir(parents=True)
+    source = service / ".env.local"
+    source.write_text("APP_ENV=local\n", encoding="utf-8")
+    mapping = ServiceMapping(
+        secret_name="api-local-key",
+        folder_path=service,
+        profile="local",
+        activate_to=Path(".env"),
+    )
+
+    assert _maybe_activate_profile(mapping, source, "local") == "activated"
+    assert (service / ".env").read_text(encoding="utf-8") == "APP_ENV=local\n"
+
+    text = _read_docs_page("guides/monorepo-setup.md")
+    assert 'activate_to = "services/api/.env"' not in text
+    assert 'activate_to = "services/web/.env"' not in text
+    assert text.count('activate_to = ".env"') >= 2
+    assert "resolved relative to its mapping's `folder_path`" in text
+
+
+def test_sync_config_example_covers_every_supported_vault_provider() -> None:
+    """sync.md must mirror the four provider blocks in the real scaffold (#441)."""
+    from envdrift.config import EXAMPLE_CONFIG
+
+    text = _read("sync.md")
+    for section in ("[vault.azure]", "[vault.aws]", "[vault.hashicorp]", "[vault.gcp]"):
+        assert section in EXAMPLE_CONFIG, f"canonical config no longer contains {section}"
+        assert section in text, f"sync.md configuration example omits {section}"
 
 
 def test_guard_docs_classify_unencrypted_env_as_high(tmp_path: Path) -> None:

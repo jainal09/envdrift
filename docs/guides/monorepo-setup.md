@@ -296,14 +296,17 @@ envdrift diff services/api/.env.staging services/api/.env.production
 secret_name = "api-local-key"
 folder_path = "services/api"
 profile = "local"
-activate_to = "services/api/.env"
+activate_to = ".env"
 
 [[vault.sync.mappings]]
 secret_name = "web-local-key"
 folder_path = "services/web"
 profile = "local"
-activate_to = "services/web/.env"
+activate_to = ".env"
 ```
+
+`activate_to` is resolved relative to its mapping's `folder_path`, so `.env`
+above activates to `services/api/.env` or `services/web/.env` respectively.
 
 ```bash
 # Pull local development keys
