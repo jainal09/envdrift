@@ -1,5 +1,12 @@
 # Changelog
 
+## [10.16.11](https://github.com/jainal09/envdrift/compare/v10.16.10...v10.16.11) (2026-07-11)
+
+
+### Bug Fixes
+
+* **parser:** mirror quoted and bare key semantics ([#620](https://github.com/jainal09/envdrift/issues/620)) ([10ba096](https://github.com/jainal09/envdrift/commit/10ba096f5a8d9656162872a61b3738ad7aa7466c))
+
 ## [10.16.10](https://github.com/jainal09/envdrift/compare/v10.16.9...v10.16.10) (2026-07-11)
 
 
