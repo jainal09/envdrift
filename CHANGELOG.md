@@ -1,5 +1,12 @@
 # Changelog
 
+## [10.16.10](https://github.com/jainal09/envdrift/compare/v10.16.9...v10.16.10) (2026-07-11)
+
+
+### Documentation
+
+* correct encryption and guard examples ([#614](https://github.com/jainal09/envdrift/issues/614)) ([8e3ddd0](https://github.com/jainal09/envdrift/commit/8e3ddd0f431fe33a878234024b2fc3d619a31d99))
+
 ## [10.16.9](https://github.com/jainal09/envdrift/compare/v10.16.8...v10.16.9) (2026-07-11)
 
 
