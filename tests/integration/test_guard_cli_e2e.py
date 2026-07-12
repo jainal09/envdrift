@@ -10,6 +10,7 @@ Coverage (highest value first):
 - BP-16  test_critical_finding_exit_code_one_non_ci (P0)
 - BP-16  test_committed_private_key_exit_code_one (P0)
 - BP-17  test_high_unencrypted_env_file_exit_code_two_non_ci (P0)
+- #441   test_untracked_non_env_secret_is_discovered (P0)
 - BUG    test_staged_secret_dropped_when_run_from_subdirectory (P0)
 - HP-17  test_allowed_clear_file_exempt_from_unencrypted_but_secrets_still_scanned (P0)
 - HP-10  test_entropy_flag_enables_high_entropy_detection (P1)
@@ -220,6 +221,28 @@ def test_critical_finding_exit_code_one_non_ci(git_repo: Path) -> None:
     assert "aws-secret-access-key" in _rule_ids(payload)
     assert payload["summary"]["by_severity"]["critical"] >= 1
     assert payload["exit_code"] == 1
+
+
+def test_untracked_non_env_secret_is_discovered(git_repo: Path) -> None:
+    """An untracked non-.env file is part of a normal repository scan (#441).
+
+    Before this regression fix, native discovery asked Git only for untracked
+    .env-shaped names. A config.txt containing a high-confidence credential was
+    therefore absent from the scan, and guard returned a false-success exit 0.
+    """
+    work_dir = git_repo
+    target = work_dir / "config.txt"
+    target.write_text(f'aws_secret_access_key = "{_AWS_SECRET}"\n')
+
+    result = _run_envdrift(
+        ["guard", "--native-only", "--no-auto-install", "--json", "."], cwd=work_dir
+    )
+    payload = _guard_json(result)
+
+    assert result.returncode == 1, result.stdout + result.stderr
+    assert payload["exit_code"] == 1
+    assert "aws-secret-access-key" in _rule_ids(payload)
+    assert any(Path(finding["file_path"]).name == "config.txt" for finding in payload["findings"])
 
 
 # --- BP-16 (P0, second vector): tracked .env.keys -> committed-private-key ------

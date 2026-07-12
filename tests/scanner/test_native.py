@@ -5,12 +5,14 @@ from __future__ import annotations
 import errno
 import os
 from pathlib import Path, PureWindowsPath
+from types import SimpleNamespace
 
 import pytest
 
+from envdrift.scanner._native_io import NATIVE_MAX_SCAN_BYTES
 from envdrift.scanner.base import FindingSeverity
 from envdrift.scanner.engine import GuardConfig, ScanEngine
-from envdrift.scanner.native import NativeScanner
+from envdrift.scanner.native import _ENV_FILE_PATHSPECS, NativeScanner
 
 
 class TestNativeScanner:
@@ -85,13 +87,11 @@ class TestNativeScannerInternals:
         (tmp_path / ".env.z").touch()
         calls: list[list[str]] = []
 
+        outputs = iter(("b.txt\0a.txt\0", ".env.z\0.env.a\0", ".env.z\0.env.a\0"))
+
         def mock_run(cmd, **kwargs):
             calls.append(cmd)
-            if cmd[:2] == ["git", "ls-files"] and "--others" not in cmd:
-                return subprocess.CompletedProcess(cmd, 0, stdout="b.txt\0a.txt\0", stderr="")
-            if cmd[:2] == ["git", "ls-files"] and "--others" in cmd:
-                return subprocess.CompletedProcess(cmd, 0, stdout=".env.z\0.env.a\0", stderr="")
-            return subprocess.CompletedProcess(cmd, 1, stdout="", stderr="")
+            return subprocess.CompletedProcess(cmd, 0, stdout=next(outputs), stderr="")
 
         monkeypatch.setattr(subprocess, "run", mock_run)
 
@@ -102,7 +102,11 @@ class TestNativeScannerInternals:
         )
 
         assert files == expected
+        assert len(calls) == 3
         assert all("-z" in cmd for cmd in calls)
+        _, ordinary_untracked, ignored_env = calls
+        assert "--" not in ordinary_untracked
+        assert ignored_env[-3:] == ["--", *_ENV_FILE_PATHSPECS]
 
     @pytest.mark.skipif(os.name == "nt", reason="Windows filenames cannot contain arbitrary bytes")
     def test_collect_files_round_trips_non_utf8_git_paths(self, tmp_path: Path):
@@ -165,6 +169,52 @@ class TestNativeScannerInternals:
         collected = scanner._collect_files(tmp_path)
 
         assert (tmp_path / ".env.production.secret").resolve() in {p.resolve() for p in collected}
+
+    def test_collect_files_includes_untracked_non_env_files_but_respects_gitignore(
+        self, tmp_path: Path
+    ):
+        """Untracked commit candidates are scanned regardless of filename.
+
+        The native scanner used to ask Git only for untracked .env-shaped paths,
+        so a secret in config.txt or settings.yaml produced a clean exit. Gitignored
+        non-env files remain an explicit repository opt-out, while the existing
+        ignored-env safety pass still includes plaintext secret stores.
+        """
+        import shutil
+        import subprocess
+
+        if shutil.which("git") is None:
+            pytest.skip("git not available")
+
+        def git(*args: str) -> None:
+            subprocess.run(["git", *args], cwd=tmp_path, check=True, capture_output=True)
+
+        git("init")
+        (tmp_path / ".gitignore").write_text("ignored.txt\n.env.production.secret\n")
+        git("add", ".gitignore")
+
+        untracked = tmp_path / "config.txt"
+        oversized = tmp_path / "big-output.txt"
+        ignored_non_env = tmp_path / "ignored.txt"
+        ignored_env = tmp_path / ".env.production.secret"
+        untracked.write_text("GITHUB_TOKEN=ghp_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\n")
+        oversized.write_text("GITHUB_TOKEN=ghp_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\n")
+        with oversized.open("ab") as stream:
+            stream.truncate(NATIVE_MAX_SCAN_BYTES + 1)
+        ignored_non_env.write_text("GITHUB_TOKEN=ghp_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\n")
+        ignored_env.write_text("API_KEY=plaintext-leak\n")
+
+        collected = {path.resolve() for path in NativeScanner()._collect_files(tmp_path)}
+
+        assert untracked.resolve() in collected
+        assert oversized.resolve() in collected
+        assert ignored_non_env.resolve() not in collected
+        assert ignored_env.resolve() in collected
+
+        result = NativeScanner().scan([tmp_path])
+        finding_paths = {finding.file_path.resolve() for finding in result.findings}
+        assert untracked.resolve() in finding_paths
+        assert oversized.resolve() not in finding_paths
 
     def test_collect_files_includes_gitignored_mapped_env_file(self, tmp_path: Path):
         """A gitignored custom env filename from vault.sync must still be collected."""
@@ -336,15 +386,33 @@ class TestNativeScannerInternals:
         scanner = NativeScanner()
         file_path = tmp_path / "config.py"
         file_path.write_text("SECRET=VALUE")
-        original_read_text = Path.read_text
+        original_open = Path.open
 
         def raise_error(self, *args, **kwargs):
             if self == file_path:
                 raise OSError("boom")
-            return original_read_text(self, *args, **kwargs)
+            return original_open(self, *args, **kwargs)
 
-        monkeypatch.setattr(Path, "read_text", raise_error)
+        monkeypatch.setattr(Path, "open", raise_error)
         assert scanner._scan_file(file_path) == []
+
+    def test_read_scannable_content_bounds_a_file_that_grows_after_stat(
+        self, tmp_path: Path, monkeypatch
+    ):
+        """The read cap still holds if a file grows between stat and open."""
+        file_path = tmp_path / "growing.txt"
+        file_path.write_text("GITHUB_TOKEN=ghp_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\n")
+        with file_path.open("ab") as stream:
+            stream.truncate(NATIVE_MAX_SCAN_BYTES + 1)
+        original_stat = Path.stat
+
+        def report_small_size(self, *args, **kwargs):
+            if self == file_path:
+                return SimpleNamespace(st_size=1)
+            return original_stat(self, *args, **kwargs)
+
+        monkeypatch.setattr(Path, "stat", report_small_size)
+        assert NativeScanner._read_scannable_content(file_path) is None
 
     def test_scan_file_skips_empty_content(self, tmp_path: Path):
         """Empty files return no findings."""
