@@ -92,14 +92,20 @@ _NO_COMMIT_ERROR_MARKERS = (
 )
 
 
-def _friendly_execution_error(error: str, path: Path) -> str:
-    """Translate Talisman's opaque empty-repository failure when provable."""
+def _friendly_execution_error(error: str, display_path: Path, check_path: Path) -> str:
+    """Translate Talisman's opaque empty-repository failure when provable.
+
+    ``check_path`` locates the Git repository (the directory the scan ran
+    from); ``display_path`` is what the user asked to scan and is what the
+    message names — for a file target the two differ, and naming the parent
+    directory instead of the file misdirects the user (#641).
+    """
     normalized = error.lower()
     if any(marker in normalized for marker in _NO_COMMIT_ERROR_MARKERS):
-        git_root = get_git_root(path)
+        git_root = get_git_root(check_path)
         if git_root is not None and not has_git_head(git_root):
             return (
-                f"Talisman cannot scan {path}: the Git repository has no commits. "
+                f"Talisman cannot scan {display_path}: the Git repository has no commits. "
                 "Create an initial commit, then run the scan again."
             )
     return error
@@ -108,7 +114,7 @@ def _friendly_execution_error(error: str, path: Path) -> str:
 def _execution_error(result: subprocess.CompletedProcess[str], path: Path, work_dir: Path) -> str:
     """Build a useful error from a failed Talisman subprocess."""
     raw_error = result.stderr.strip() or result.stdout.strip() or f"talisman scan failed for {path}"
-    return _friendly_execution_error(raw_error, work_dir)
+    return _friendly_execution_error(raw_error, path, work_dir)
 
 
 def _extract_secret_from_message(message: str) -> str:

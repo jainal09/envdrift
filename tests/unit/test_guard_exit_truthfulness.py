@@ -24,6 +24,10 @@ engine's *result* (the behavior under test is the CLI's exit-code derivation).
 from __future__ import annotations
 
 import json
+import os
+import shutil
+import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -579,6 +583,55 @@ class TestDefaultScannerUnavailableSkips:
         assert "Scanners Skipped" in normalized
         assert "gitleaks" in normalized
         assert "No secrets or policy violations detected" in normalized
+
+    def test_default_set_skip_reason_prints_once_on_stderr(self, tmp_path: Path):
+        """#641 review: the skip reason must reach stderr exactly once — the
+        CLI's ``Warning:`` line. Before the package-level ``NullHandler``, the
+        engine's ``logger.warning`` ALSO escaped through logging's lastResort
+        handler (the CLI configures no handlers), printing the same reason
+        twice. Runs the real CLI as a subprocess: an in-process runner shares
+        the test session's logging state and cannot prove the leak.
+        """
+        git = shutil.which("git")
+        if git is None:
+            pytest.skip("git is required to build the clean scan repo")
+        # A PATH dir exposing ONLY git, so gitleaks is genuinely undiscoverable
+        # while repo discovery inside the CLI subprocess still works.
+        bin_dir = tmp_path / "git-only-bin"
+        bin_dir.mkdir()
+        try:
+            (bin_dir / Path(git).name).symlink_to(git)
+        except (OSError, NotImplementedError):
+            pytest.skip("cannot build a git-only PATH dir on this platform")
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        subprocess.run([git, "init", "--quiet", str(repo)], check=True, timeout=60)
+        (repo / "note.txt").write_text("nothing secret here\n", encoding="utf-8")
+
+        env = os.environ.copy()
+        env.pop("FORCE_COLOR", None)  # keep --json machine-readable under CI
+        env["PATH"] = str(bin_dir)
+        env["VIRTUAL_ENV"] = str(tmp_path / "no-venv")  # defeat venv-bin discovery
+        result = subprocess.run(
+            [sys.executable, "-m", "envdrift", "guard", "--no-auto-install", "--json", "."],
+            cwd=repo,
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=180,
+        )
+
+        assert result.returncode == 0, result.stderr
+        payload = json.loads(result.stdout)  # stdout must stay parseable JSON
+        gitleaks = next(r for r in payload["scanner_results"] if r["name"] == "gitleaks")
+        assert gitleaks["skipped"] is True
+        reason = gitleaks["skip_reason"]
+        assert reason and "skipping this default-selection scanner" in reason
+        assert result.stderr.count(reason) == 1, (
+            f"the skip reason must print exactly once on stderr:\n{result.stderr}"
+        )
+        reason_lines = [line for line in result.stderr.splitlines() if reason in line]
+        assert reason_lines == [f"Warning: {reason}"], result.stderr
 
     def test_explicit_flag_missing_binary_fails_closed(self, tmp_path: Path, monkeypatch):
         scan_dir = self._hide_gitleaks(monkeypatch, tmp_path)

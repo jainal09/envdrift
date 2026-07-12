@@ -1455,6 +1455,7 @@ class TrufflehogScanner(ScannerBackend):
 
 from __future__ import annotations
 
+import logging
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -1469,6 +1470,8 @@ from .base import (
 from .native import NativeScanner
 from .gitleaks import GitleaksScanner
 from .trufflehog import TrufflehogScanner
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -1518,6 +1521,7 @@ class ScanEngine:
         # Skip records for default-set scanners whose binary is unavailable
         # with auto-install disabled; included in every aggregated result.
         self.skipped_results: list[ScanResult] = []
+        self._explicit_scanner_names = frozenset(self.config.explicit_scanners)
 
         # Initialize scanners based on config
         if config.use_native:
@@ -1536,24 +1540,28 @@ class ScanEngine:
     def _retain_scanner(self, scanner: ScannerBackend) -> None:
         """Retain an external scanner, or record a skip when it cannot run.
 
-        EXPLICITLY-selected scanners (CLI flag, or a `scanners` list written
-        in the config) are always retained: with the binary unavailable and
-        auto-install disabled the scan records their failure and the run
-        exits 5 (scan incomplete). A scanner active only via the DEFAULT set
-        is skipped instead — with a warning and a truthful skip record
-        (`ScanResult.skip_reason`) carried in the aggregated results — so a
-        missing optional binary cannot fail a run nobody asked it to gate.
+        Explicitly-requested scanners (``config.explicit_scanners``) are always
+        retained: with the binary unavailable and auto-install disabled the
+        scan records their failure and the run exits 5 (scan incomplete), never
+        the all-clear 0. A scanner active only via the DEFAULT set is skipped
+        instead — with a warning and a truthful skip record — so a missing
+        optional binary cannot fail a run the user never asked it to gate
+        (#641).
         """
         if (
             self.config.auto_install
-            or scanner.name in set(self.config.explicit_scanners)
+            or scanner.name in self._explicit_scanner_names
             or scanner.is_installed()
         ):
             self.scanners.append(scanner)
             return
-        self.skipped_results.append(
-            ScanResult(scanner_name=scanner.name, skip_reason="not installed; skipped")
+        reason = (
+            f"{scanner.name} is not installed and auto-install is disabled; "
+            "skipping this default-selection scanner. Install it or select it "
+            "explicitly to make the missing binary a blocking scan error."
         )
+        logger.warning(reason)
+        self.skipped_results.append(ScanResult(scanner_name=scanner.name, skip_reason=reason))
 
     def scan(self, paths: list[Path]) -> AggregatedScanResult:
         """Run all scanners and aggregate results."""
