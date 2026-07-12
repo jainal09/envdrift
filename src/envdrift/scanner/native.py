@@ -30,6 +30,7 @@ from envdrift.scanner._native_filters import (
     _is_encrypted_value_line,
     _looks_like_code_member_access,
 )
+from envdrift.scanner._native_io import read_raw_scannable_bytes
 from envdrift.scanner.base import (
     FindingSeverity,
     ScanFinding,
@@ -718,15 +719,14 @@ class NativeScanner(ScannerBackend):
     def _read_scannable_content(file_path: Path) -> str | None:
         """Read ``file_path`` and return its text content, or ``None`` to skip it.
 
-        Reads raw bytes (so the binary check sees the true content: ``read_text``
-        with ``errors="ignore"`` would silently drop the very non-text bytes that
-        identify a binary file), decodes demonstrably-Unicode text first, and
-        neutralizes stray NULs. Returns ``None`` for an unreadable file, a genuine
-        binary blob, or an empty/whitespace-only file.
+        Rejects oversized files before opening them, then performs a bounded read
+        so a concurrently growing file cannot bypass the cap. Raw bytes let the
+        binary check see the true content (``read_text(errors="ignore")`` would
+        silently drop the bytes that identify a binary file). Returns ``None``
+        for an unreadable/oversized file, a genuine binary blob, or empty content.
         """
-        try:
-            raw = file_path.read_bytes()
-        except OSError:
+        raw = read_raw_scannable_bytes(file_path)
+        if raw is None:
             return None
 
         # Decode demonstrably-Unicode text before the binary heuristic can see it
