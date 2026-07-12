@@ -120,7 +120,7 @@ class TestGetAgentStatusErrorBranches:
     """Tests for ``_get_agent_status`` error paths (lines 125, 126-127)."""
 
     def test_nonzero_returncode_is_error(self, monkeypatch):
-        """A non-zero status exit code maps to ('error', None) (line 125)."""
+        """A non-zero status exit code maps to ('error', None, None)."""
         monkeypatch.setattr(
             agent_module,
             "_find_agent_binary",
@@ -132,10 +132,10 @@ class TestGetAgentStatusErrorBranches:
 
         monkeypatch.setattr(agent_module.subprocess, "run", fake_run)
 
-        assert _get_agent_status() == ("error", None)
+        assert _get_agent_status() == ("error", None, None)
 
     def test_timeout_is_error(self, monkeypatch):
-        """A TimeoutExpired is caught and mapped to ('error', None) (lines 126-127)."""
+        """A TimeoutExpired is caught and mapped to ('error', None, None)."""
         monkeypatch.setattr(
             agent_module,
             "_find_agent_binary",
@@ -147,10 +147,10 @@ class TestGetAgentStatusErrorBranches:
 
         monkeypatch.setattr(agent_module.subprocess, "run", fake_run)
 
-        assert _get_agent_status() == ("error", None)
+        assert _get_agent_status() == ("error", None, None)
 
-    def test_oserror_is_error(self, monkeypatch):
-        """An OSError from subprocess.run is caught (lines 126-127)."""
+    def test_oserror_is_broken_with_detail(self, monkeypatch):
+        """An OSError maps to 'broken' and carries the message as detail (#441)."""
         monkeypatch.setattr(
             agent_module,
             "_find_agent_binary",
@@ -162,7 +162,7 @@ class TestGetAgentStatusErrorBranches:
 
         monkeypatch.setattr(agent_module.subprocess, "run", fake_run)
 
-        assert _get_agent_status() == ("error", None)
+        assert _get_agent_status() == ("broken", None, "no such binary")
 
 
 class TestFormatTimestamp:
@@ -209,7 +209,7 @@ class TestStatusCommandEdgeCases:
         monkeypatch.setattr(
             agent_module,
             "_get_agent_status",
-            lambda: ("bogus", None),
+            lambda: ("bogus", None, None),
         )
 
         result = runner.invoke(app, ["agent", "status"])
@@ -230,7 +230,7 @@ class TestStatusCommandEdgeCases:
         monkeypatch.setattr(
             agent_module,
             "_get_agent_status",
-            lambda: ("not_installed", None),
+            lambda: ("not_installed", None, None),
         )
 
         result = runner.invoke(app, ["agent", "status"])

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import contextlib
+import platform
 import urllib.error
 from email.message import Message
 from pathlib import Path
@@ -486,6 +487,68 @@ class TestCheckCommand:
             assert result.exit_code == 0
             assert "Not running" in result.stdout
             assert "⚡ Running" not in result.stdout
+
+    def test_check_broken_agent_binary_warns_instead_of_installed(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        """Regression for #441: a non-executable agent binary is not '✓ Installed'.
+
+        A wrong-arch/corrupt file on PATH (real garbage bytes, no subprocess
+        mocks) raises OSError (Exec format error) on execution. ``install
+        check`` previously printed a green '✓ Installed at' with
+        'Version: unknown' / 'Status: unknown'; it must instead warn that the
+        binary is broken, name the reason, and point at
+        ``envdrift install agent --force``.
+        """
+        fake_dir = tmp_path / "fakebin"
+        fake_dir.mkdir()
+        binary_name = (
+            "envdrift-agent.exe" if platform.system().lower() == "windows" else "envdrift-agent"
+        )
+        fake_agent = fake_dir / binary_name
+        fake_agent.write_bytes(b"\x7fELF\xff\xffgarbage")
+        fake_agent.chmod(0o755)
+        monkeypatch.setenv("PATH", str(fake_dir))
+        registry_module._registry = registry_module.ProjectRegistry(tmp_path / "projects.json")
+
+        result = runner.invoke(app, ["install", "check"])
+
+        out = " ".join(result.output.split())
+        assert result.exit_code == 0
+        assert "Broken installation at" in out
+        assert "envdrift install agent --force" in out
+        assert "Version: unknown" not in out
+        assert "Status: unknown" not in out
+
+    def test_check_agent_version_nonzero_exit_reports_broken(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        """Regression for #441: '--version' exiting non-zero means a broken agent.
+
+        A real executable that runs but cannot answer ``--version`` is not a
+        working agent; ``install check`` must report it as broken rather than
+        printing a green '✓ Installed at' with no version.
+        """
+        fake_dir = tmp_path / "fakebin"
+        fake_dir.mkdir()
+        if platform.system().lower() == "windows":
+            fake_agent = fake_dir / "envdrift-agent.cmd"
+            fake_agent.write_text("@echo not an agent 1>&2\n@exit /b 2\n")
+        else:
+            fake_agent = fake_dir / "envdrift-agent"
+            fake_agent.write_text("#!/bin/sh\necho 'not an agent' >&2\nexit 2\n")
+            fake_agent.chmod(0o755)
+        monkeypatch.setenv("PATH", str(fake_dir))
+        registry_module._registry = registry_module.ProjectRegistry(tmp_path / "projects.json")
+
+        result = runner.invoke(app, ["install", "check"])
+
+        out = " ".join(result.output.split())
+        assert result.exit_code == 0
+        assert "Broken installation at" in out
+        assert "exited with code 2" in out
+        assert "not an agent" in out
+        assert "envdrift install agent --force" in out
 
 
 class TestInstallHelpCommand:

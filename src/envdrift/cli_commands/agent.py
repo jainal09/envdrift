@@ -79,16 +79,17 @@ def _normalize_project_path(path: str | None) -> Path:
     return project_path.resolve()
 
 
-def _get_agent_status() -> tuple[str, str | None]:
+def _get_agent_status() -> tuple[str, str | None, str | None]:
     """Get the agent status.
 
     Returns:
-        Tuple of (status, version) where status is 'running', 'stopped', 'not_installed',
-        or 'error'
+        Tuple of (status, version, detail) where status is 'running', 'stopped',
+        'not_installed', 'broken', or 'error'. ``detail`` carries the underlying
+        OS error for the 'broken' state (binary present but unable to execute).
     """
     agent_binary = _find_agent_binary()
     if not agent_binary:
-        return "not_installed", None
+        return "not_installed", None, None
 
     try:
         result = subprocess.run(  # nosec B603 - trusted binary path
@@ -102,7 +103,7 @@ def _get_agent_status() -> tuple[str, str | None]:
             running_state = parse_agent_running_status(result.stdout)
 
             if running_state is None:
-                return "error", None
+                return "error", None, None
 
             if running_state:
                 # Try to get version
@@ -114,13 +115,18 @@ def _get_agent_status() -> tuple[str, str | None]:
                     check=False,
                 )
                 version = version_result.stdout.strip() if version_result.returncode == 0 else None
-                return "running", version
+                return "running", version, None
 
-            return "stopped", None
+            return "stopped", None, None
 
-        return "error", None
-    except (subprocess.TimeoutExpired, OSError):
-        return "error", None
+        return "error", None, None
+    except subprocess.TimeoutExpired:
+        return "error", None, None
+    except OSError as exc:
+        # The binary exists but cannot execute (wrong arch, corrupt download,
+        # lost permissions). Suggesting to run it would dead-end, so carry the
+        # real reason to the status command instead (#441).
+        return "broken", None, str(exc)
 
 
 def _format_timestamp(iso_timestamp: str) -> str:
@@ -305,7 +311,7 @@ def list_registered() -> None:
 @agent_app.command("status")
 def status() -> None:
     """Show the status of the envdrift background agent."""
-    agent_status, version = _get_agent_status()
+    agent_status, version, detail = _get_agent_status()
 
     # Agent status
     if agent_status == "running":
@@ -318,6 +324,11 @@ def status() -> None:
     elif agent_status == "not_installed":
         console.print("[yellow]⚠ Agent is not installed[/yellow]")
         console.print("   Run [bold]envdrift install agent[/bold] to install it")
+    elif agent_status == "broken":
+        console.print("[red]✗ Agent binary is installed but cannot run[/red]")
+        if detail:
+            console.print(f"   {detail}")
+        console.print("   Run [bold]envdrift install agent --force[/bold] to reinstall it")
     elif agent_status == "error":
         console.print("[yellow]⚠ Agent status check failed[/yellow]")
         console.print("   Run [bold]envdrift-agent status[/bold] for details")
