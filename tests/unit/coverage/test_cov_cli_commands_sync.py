@@ -1315,7 +1315,7 @@ class TestLockRekeyOnKeyNameMismatch:
 # lock command - interactive (non-force) prompt path (sync.py 1511-1543)
 # --------------------------------------------------------------------------
 class TestLockInteractivePrompt:
-    @patch("envdrift.cli_commands.sync.console")
+    @patch("envdrift.cli_commands.sync_lock_helpers.console")
     @patch("envdrift.cli_commands.encryption_helpers.resolve_encryption_backend")
     def test_lock_user_declines_skips(
         self, mock_resolve, mock_console, tmp_path, loaded_config, no_git_hook
@@ -1338,7 +1338,7 @@ class TestLockInteractivePrompt:
         printed = " ".join(str(c.args[0]) for c in mock_console.print.call_args_list if c.args)
         assert "user declined" in printed
 
-    @patch("envdrift.cli_commands.sync.console")
+    @patch("envdrift.cli_commands.sync_lock_helpers.console")
     @patch("envdrift.cli_commands.encryption_helpers.resolve_encryption_backend")
     def test_lock_user_accepts_encrypts_inline(
         self, mock_resolve, mock_console, tmp_path, loaded_config, no_git_hook
@@ -1356,7 +1356,7 @@ class TestLockInteractivePrompt:
         # accepting => the inline (non-force) encrypt path runs
         assert (tmp_path / ".env.production").resolve() in backend.encrypt_calls
 
-    @patch("envdrift.cli_commands.sync.console")
+    @patch("envdrift.cli_commands.sync_lock_helpers.console")
     @patch("envdrift.cli_commands.encryption_helpers.resolve_encryption_backend")
     def test_lock_inline_encrypt_failure_records_error(
         self, mock_resolve, mock_console, tmp_path, loaded_config, no_git_hook
