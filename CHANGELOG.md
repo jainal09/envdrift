@@ -1,5 +1,12 @@
 # Changelog
 
+## [10.16.15](https://github.com/jainal09/envdrift/compare/v10.16.14...v10.16.15) (2026-07-12)
+
+
+### Bug Fixes
+
+* **scanner:** report incomplete scans truthfully ([#641](https://github.com/jainal09/envdrift/issues/641)) ([de834a7](https://github.com/jainal09/envdrift/commit/de834a7810fb459817c7a7ed96f897752744c49f))
+
 ## [10.16.14](https://github.com/jainal09/envdrift/compare/v10.16.13...v10.16.14) (2026-07-12)
 
 
