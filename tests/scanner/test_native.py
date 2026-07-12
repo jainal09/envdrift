@@ -10,7 +10,7 @@ import pytest
 
 from envdrift.scanner.base import FindingSeverity
 from envdrift.scanner.engine import GuardConfig, ScanEngine
-from envdrift.scanner.native import NativeScanner
+from envdrift.scanner.native import _ENV_FILE_PATHSPECS, NativeScanner
 
 
 class TestNativeScanner:
@@ -103,6 +103,12 @@ class TestNativeScannerInternals:
 
         assert files == expected
         assert all("-z" in cmd for cmd in calls)
+        ordinary_untracked = next(
+            cmd for cmd in calls if "--others" in cmd and "--ignored" not in cmd
+        )
+        ignored_env = next(cmd for cmd in calls if "--ignored" in cmd)
+        assert "--" not in ordinary_untracked
+        assert ignored_env[-3:] == ["--", *_ENV_FILE_PATHSPECS]
 
     @pytest.mark.skipif(os.name == "nt", reason="Windows filenames cannot contain arbitrary bytes")
     def test_collect_files_round_trips_non_utf8_git_paths(self, tmp_path: Path):
@@ -165,6 +171,42 @@ class TestNativeScannerInternals:
         collected = scanner._collect_files(tmp_path)
 
         assert (tmp_path / ".env.production.secret").resolve() in {p.resolve() for p in collected}
+
+    def test_collect_files_includes_untracked_non_env_files_but_respects_gitignore(
+        self, tmp_path: Path
+    ):
+        """Untracked commit candidates are scanned regardless of filename.
+
+        The native scanner used to ask Git only for untracked .env-shaped paths,
+        so a secret in config.txt or settings.yaml produced a clean exit. Gitignored
+        non-env files remain an explicit repository opt-out, while the existing
+        ignored-env safety pass still includes plaintext secret stores.
+        """
+        import shutil
+        import subprocess
+
+        if shutil.which("git") is None:
+            pytest.skip("git not available")
+
+        def git(*args: str) -> None:
+            subprocess.run(["git", *args], cwd=tmp_path, check=True, capture_output=True)
+
+        git("init")
+        (tmp_path / ".gitignore").write_text("ignored.txt\n.env.production.secret\n")
+        git("add", ".gitignore")
+
+        untracked = tmp_path / "config.txt"
+        ignored_non_env = tmp_path / "ignored.txt"
+        ignored_env = tmp_path / ".env.production.secret"
+        untracked.write_text("GITHUB_TOKEN=ghp_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\n")
+        ignored_non_env.write_text("GITHUB_TOKEN=ghp_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\n")
+        ignored_env.write_text("API_KEY=plaintext-leak\n")
+
+        collected = {path.resolve() for path in NativeScanner()._collect_files(tmp_path)}
+
+        assert untracked.resolve() in collected
+        assert ignored_non_env.resolve() not in collected
+        assert ignored_env.resolve() in collected
 
     def test_collect_files_includes_gitignored_mapped_env_file(self, tmp_path: Path):
         """A gitignored custom env filename from vault.sync must still be collected."""

@@ -73,9 +73,8 @@ DEFAULT_IGNORE_PATTERNS = (
     ".env.example",
     ".env.sample",
     ".env.template",
-    # Documentation and text files
+    # Documentation markup (plain .txt files can be real config/secret stores)
     "*.md",
-    "*.txt",
     "*.rst",
     "*.adoc",
     # Minified files (high entropy but not secrets)
@@ -230,12 +229,13 @@ DEFAULT_IGNORE_PATTERNS = (
 # gitignored; it must not be treated as an "unencrypted env file" to encrypt.
 DOTENVX_KEYS_FILENAME = ".env.keys"
 
-# git pathspecs that match env-file naming shapes at any depth: the leading-dot
+# Git pathspecs that match env-file naming shapes at any depth: the leading-dot
 # convention (.env, .env.*) and the trailing-suffix convention (<name>.env,
-# #477). Passed to `git ls-files` so git itself filters to env files instead of
-# enumerating every untracked or ignored path (e.g. a large node_modules) and
-# letting Python discard them. A superset of _is_env_file (it also matches e.g.
-# ".envrc"), which still does the precise filtering, so correctness is unchanged.
+# #477). These are only for the deliberately exceptional ignored-file pass:
+# ordinary untracked files must be scanned regardless of name, while ignored
+# files stay excluded unless they are env stores that may be plaintext locally.
+# A superset of _is_env_file (it also matches e.g. ".envrc"), which still does
+# the precise filtering.
 _ENV_FILE_PATHSPECS = (":(glob)**/.env*", ":(glob)**/*.env")
 
 
@@ -477,11 +477,12 @@ class NativeScanner(ScannerBackend):
         )
 
     def _collect_files(self, directory: Path) -> list[Path]:
-        """Collect files using hybrid approach: git ls-files + untracked .env files.
+        """Collect tracked and untracked files using Git, plus ignored env stores.
 
         This is much faster than rglob because:
         1. git ls-files reads from git's index (no filesystem traversal)
-        2. Untracked .env files are found via git, respecting .gitignore
+        2. Untracked files are found via git, respecting .gitignore
+        3. Ignored env stores get a narrow safety pass for partial encryption
 
         Args:
             directory: Directory to scan.
@@ -522,8 +523,11 @@ class NativeScanner(ScannerBackend):
             # git not available - fall back to os.walk
             return self._collect_files_fallback(directory)
 
-        # Method 2: Get untracked .env* files (respects .gitignore)
-        # These are files developers might forget to encrypt before committing
+        # Method 2: Get every ordinary untracked file (respects .gitignore).
+        # Restricting this pass to .env-shaped names let secrets in config.txt,
+        # secrets.yaml, and other would-be commit inputs bypass the native scanner
+        # with exit 0. Git already applies the repository's ignore policy, and the
+        # normal _should_ignore/_looks_binary filters still apply before scanning.
         try:
             result = subprocess.run(  # nosec B603, B607
                 [
@@ -532,8 +536,6 @@ class NativeScanner(ScannerBackend):
                     "--others",
                     "--exclude-standard",
                     "-z",
-                    "--",
-                    *_ENV_FILE_PATHSPECS,
                 ],
                 capture_output=True,
                 text=True,
@@ -544,7 +546,7 @@ class NativeScanner(ScannerBackend):
             )
             if result.returncode == 0:
                 for rel_path in result.stdout.split("\0"):
-                    if rel_path and _is_env_file(rel_path):
+                    if rel_path:
                         files.add(directory / rel_path)
         except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
             pass
