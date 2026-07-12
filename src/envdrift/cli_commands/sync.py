@@ -210,59 +210,118 @@ def _write_merged_combined_file(clear_file: Path, secret_file: Path, combined_fi
     atomic_write(combined_file, "\n".join(combined_lines) + "\n", max_permissions=0o600)
 
 
+_SyncConfigOption = Annotated[
+    Path | None,
+    typer.Option(
+        "--config",
+        "-c",
+        help="Path to sync config file (TOML or legacy pair.txt format)",
+    ),
+]
+_ProviderOption = Annotated[
+    str | None,
+    typer.Option("--provider", "-p", help="Vault provider: azure, aws, hashicorp, gcp"),
+]
+_VaultUrlOption = Annotated[
+    str | None,
+    typer.Option("--vault-url", help="Vault URL (Azure Key Vault or HashiCorp Vault)"),
+]
+_RegionOption = Annotated[
+    str | None,
+    typer.Option("--region", help="AWS region (default: us-east-1)"),
+]
+_ProjectIdOption = Annotated[
+    str | None,
+    typer.Option("--project-id", help="GCP project ID (Secret Manager)"),
+]
+_PullForceOption = Annotated[
+    bool,
+    typer.Option("--force", "-f", help="Update all mismatches without prompting"),
+]
+_ProfileOption = Annotated[
+    str | None,
+    typer.Option("--profile", help="Only process mappings for this profile"),
+]
+_SkipSyncOption = Annotated[
+    bool,
+    typer.Option("--skip-sync", help="Skip syncing keys from vault, only decrypt files"),
+]
+_MergeOption = Annotated[
+    bool,
+    typer.Option(
+        "--merge",
+        "-m",
+        help="For partial encryption: create combined decrypted .env file from .clear + .secret",
+    ),
+]
+_LockForceOption = Annotated[
+    bool,
+    typer.Option("--force", "-f", help="Force encryption without prompting"),
+]
+_VerifyVaultOption = Annotated[
+    bool,
+    typer.Option("--verify-vault", help="Verify local keys match vault before encrypting"),
+]
+_SyncKeysOption = Annotated[
+    bool,
+    typer.Option(
+        "--sync-keys", help="Sync keys from vault before encrypting (implies --verify-vault)"
+    ),
+]
+_CheckOnlyOption = Annotated[
+    bool,
+    typer.Option("--check", help="Only check encryption status, don't encrypt"),
+]
+_AllFilesOption = Annotated[
+    bool,
+    typer.Option(
+        "--all",
+        help="Include partial encryption files: encrypt .secret files and delete combined files",
+    ),
+]
+_SyncVerifyOption = Annotated[
+    bool,
+    typer.Option("--verify", help="Check only, don't modify files"),
+]
+_SyncForceOption = Annotated[
+    bool,
+    typer.Option("--force", "-f", help="Update all mismatches without prompting"),
+]
+_CheckDecryptionOption = Annotated[
+    bool,
+    typer.Option("--check-decryption", help="Verify keys can decrypt .env files"),
+]
+_ValidateSchemaOption = Annotated[
+    bool,
+    typer.Option("--validate-schema", help="Run schema validation after sync"),
+]
+_SchemaOption = Annotated[
+    str | None,
+    typer.Option("--schema", "-s", help="Schema path for validation"),
+]
+_ServiceDirOption = Annotated[
+    Path | None,
+    typer.Option("--service-dir", "-d", help="Service directory for schema imports"),
+]
+_CiOption = Annotated[
+    bool,
+    typer.Option("--ci", help="CI mode: exit with code 1 on errors"),
+]
+
+
 def sync(
-    config_file: Annotated[
-        Path | None,
-        typer.Option(
-            "--config",
-            "-c",
-            help="Path to sync config file (TOML or legacy pair.txt format)",
-        ),
-    ] = None,
-    provider: Annotated[
-        str | None,
-        typer.Option("--provider", "-p", help="Vault provider: azure, aws, hashicorp, gcp"),
-    ] = None,
-    vault_url: Annotated[
-        str | None,
-        typer.Option("--vault-url", help="Vault URL (Azure Key Vault or HashiCorp Vault)"),
-    ] = None,
-    region: Annotated[
-        str | None,
-        typer.Option("--region", help="AWS region (default: us-east-1)"),
-    ] = None,
-    project_id: Annotated[
-        str | None,
-        typer.Option("--project-id", help="GCP project ID (Secret Manager)"),
-    ] = None,
-    verify: Annotated[
-        bool,
-        typer.Option("--verify", help="Check only, don't modify files"),
-    ] = False,
-    force: Annotated[
-        bool,
-        typer.Option("--force", "-f", help="Update all mismatches without prompting"),
-    ] = False,
-    check_decryption: Annotated[
-        bool,
-        typer.Option("--check-decryption", help="Verify keys can decrypt .env files"),
-    ] = False,
-    validate_schema: Annotated[
-        bool,
-        typer.Option("--validate-schema", help="Run schema validation after sync"),
-    ] = False,
-    schema: Annotated[
-        str | None,
-        typer.Option("--schema", "-s", help="Schema path for validation"),
-    ] = None,
-    service_dir: Annotated[
-        Path | None,
-        typer.Option("--service-dir", "-d", help="Service directory for schema imports"),
-    ] = None,
-    ci: Annotated[
-        bool,
-        typer.Option("--ci", help="CI mode: exit with code 1 on errors"),
-    ] = False,
+    config_file: _SyncConfigOption = None,
+    provider: _ProviderOption = None,
+    vault_url: _VaultUrlOption = None,
+    region: _RegionOption = None,
+    project_id: _ProjectIdOption = None,
+    verify: _SyncVerifyOption = False,
+    force: _SyncForceOption = False,
+    check_decryption: _CheckDecryptionOption = False,
+    validate_schema: _ValidateSchemaOption = False,
+    schema: _SchemaOption = None,
+    service_dir: _ServiceDirOption = None,
+    ci: _CiOption = False,
 ) -> None:
     """
     Sync encryption keys from a configured vault to local .env.keys files for each service.
@@ -389,76 +448,6 @@ Examples:
     # Include partial encryption files (encrypt .secret, delete combined)
     envdrift lock --all
 """
-
-_SyncConfigOption = Annotated[
-    Path | None,
-    typer.Option(
-        "--config",
-        "-c",
-        help="Path to sync config file (TOML or legacy pair.txt format)",
-    ),
-]
-_ProviderOption = Annotated[
-    str | None,
-    typer.Option("--provider", "-p", help="Vault provider: azure, aws, hashicorp, gcp"),
-]
-_VaultUrlOption = Annotated[
-    str | None,
-    typer.Option("--vault-url", help="Vault URL (Azure Key Vault or HashiCorp Vault)"),
-]
-_RegionOption = Annotated[
-    str | None,
-    typer.Option("--region", help="AWS region (default: us-east-1)"),
-]
-_ProjectIdOption = Annotated[
-    str | None,
-    typer.Option("--project-id", help="GCP project ID (Secret Manager)"),
-]
-_PullForceOption = Annotated[
-    bool,
-    typer.Option("--force", "-f", help="Update all mismatches without prompting"),
-]
-_ProfileOption = Annotated[
-    str | None,
-    typer.Option("--profile", help="Only process mappings for this profile"),
-]
-_SkipSyncOption = Annotated[
-    bool,
-    typer.Option("--skip-sync", help="Skip syncing keys from vault, only decrypt files"),
-]
-_MergeOption = Annotated[
-    bool,
-    typer.Option(
-        "--merge",
-        "-m",
-        help="For partial encryption: create combined decrypted .env file from .clear + .secret",
-    ),
-]
-_LockForceOption = Annotated[
-    bool,
-    typer.Option("--force", "-f", help="Force encryption without prompting"),
-]
-_VerifyVaultOption = Annotated[
-    bool,
-    typer.Option("--verify-vault", help="Verify local keys match vault before encrypting"),
-]
-_SyncKeysOption = Annotated[
-    bool,
-    typer.Option(
-        "--sync-keys", help="Sync keys from vault before encrypting (implies --verify-vault)"
-    ),
-]
-_CheckOnlyOption = Annotated[
-    bool,
-    typer.Option("--check", help="Only check encryption status, don't encrypt"),
-]
-_AllFilesOption = Annotated[
-    bool,
-    typer.Option(
-        "--all",
-        help="Include partial encryption files: encrypt .secret files and delete combined files",
-    ),
-]
 
 
 def pull(

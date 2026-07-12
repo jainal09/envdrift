@@ -94,7 +94,7 @@ def _new_sync_engine(request: SyncRequest, context: _SyncContext):
             console.print(f"[dim]{message}[/dim]")
 
     def prompt_callback(message: str) -> bool:
-        if request.force or request.verify or request.ci:
+        if _prompting_disabled(request):
             return request.force
         response = console.input(f"{message} (y/N): ").strip().lower()
         return response in ("y", "yes")
@@ -106,6 +106,10 @@ def _new_sync_engine(request: SyncRequest, context: _SyncContext):
         prompt_callback=prompt_callback,
         progress_callback=progress_callback,
     )
+
+
+def _prompting_disabled(request: SyncRequest) -> bool:
+    return request.force or request.verify or request.ci
 
 
 def _print_sync_header(request: SyncRequest, context: _SyncContext) -> None:

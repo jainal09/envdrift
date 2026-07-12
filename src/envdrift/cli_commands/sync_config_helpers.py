@@ -170,23 +170,42 @@ def _require_sync_config(sync_config: SyncConfig | None) -> SyncConfig:
     raise typer.Exit(code=1)
 
 
-def _validate_vault_settings(settings: _VaultSettings) -> str:
+def _require_provider(settings: _VaultSettings) -> str:
     if settings.provider is None:
         print_error(
             "--provider is required (or set [vault] provider in config). "
             "Options: azure, aws, hashicorp, gcp"
         )
         raise typer.Exit(code=1)
-    if settings.provider == "azure" and not settings.vault_url:
-        print_error("Azure provider requires --vault-url (or [vault.azure] vault_url in config)")
-        raise typer.Exit(code=1)
-    if settings.provider == "hashicorp" and not settings.vault_url:
-        print_error("HashiCorp provider requires --vault-url (or [vault.hashicorp] url in config)")
-        raise typer.Exit(code=1)
-    if settings.provider == "gcp" and not settings.project_id:
-        print_error("GCP provider requires --project-id (or [vault.gcp] project_id in config)")
-        raise typer.Exit(code=1)
     return settings.provider
+
+
+def _validate_provider_options(provider: str, settings: _VaultSettings) -> None:
+    requirements = {
+        "azure": (
+            settings.vault_url,
+            "Azure provider requires --vault-url (or [vault.azure] vault_url in config)",
+        ),
+        "hashicorp": (
+            settings.vault_url,
+            "HashiCorp provider requires --vault-url (or [vault.hashicorp] url in config)",
+        ),
+        "gcp": (
+            settings.project_id,
+            "GCP provider requires --project-id (or [vault.gcp] project_id in config)",
+        ),
+    }
+    requirement = requirements.get(provider)
+    if requirement is None or requirement[0]:
+        return
+    print_error(requirement[1])
+    raise typer.Exit(code=1)
+
+
+def _validate_vault_settings(settings: _VaultSettings) -> str:
+    provider = _require_provider(settings)
+    _validate_provider_options(provider, settings)
+    return provider
 
 
 def _vault_client_kwargs(settings: _VaultSettings) -> dict[str, str | None]:
