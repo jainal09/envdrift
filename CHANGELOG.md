@@ -1,5 +1,12 @@
 # Changelog
 
+## [10.16.14](https://github.com/jainal09/envdrift/compare/v10.16.13...v10.16.14) (2026-07-12)
+
+
+### Bug Fixes
+
+* **scanner:** scan untracked non-env files ([#639](https://github.com/jainal09/envdrift/issues/639)) ([0fe89aa](https://github.com/jainal09/envdrift/commit/0fe89aa17f5a584f419bbc8beb02e06bac47006e))
+
 ## [10.16.13](https://github.com/jainal09/envdrift/compare/v10.16.12...v10.16.13) (2026-07-11)
 
 
