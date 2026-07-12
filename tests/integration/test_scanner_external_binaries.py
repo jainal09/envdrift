@@ -448,11 +448,16 @@ def test_trivy_distinct_secrets_survive_skip_duplicate_cli(tmp_path):
         pytest.fail(
             f"guard --json stdout is not clean JSON: {exc}\nstdout:\n{out}\nstderr:\n{proc.stderr}"
         )
-    trivy_files = {
-        Path(f["file_path"]).name for f in payload["findings"] if f["scanner"] == "trivy"
-    }
-    assert trivy_files == {"a.txt", "b.txt"}, (
-        f"--skip-duplicate must keep both distinct secrets, got {sorted(trivy_files)}\n"
+    # Native now scans untracked .txt files (#441), so cross-scanner duplicate
+    # collapse may correctly retain the native-owned copy of each secret. The
+    # companion direct-Trivy test below proves both raw hashes originate from
+    # Trivy; this CLI assertion owns the aggregate contract that both distinct
+    # values survive --skip-duplicate regardless of scanner attribution.
+    reported_files = {Path(f["file_path"]).name for f in payload["findings"]}
+    scanner_results = {result["name"]: result for result in payload["scanner_results"]}
+    assert scanner_results["trivy"]["files_scanned"] == 2, scanner_results
+    assert reported_files == {"a.txt", "b.txt"}, (
+        f"--skip-duplicate must keep both distinct secrets, got {sorted(reported_files)}\n"
         f"stdout:\n{out}\nstderr:\n{proc.stderr}"
     )
     # Critical findings present -> guard exits 1.
