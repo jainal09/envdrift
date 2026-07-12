@@ -550,93 +550,181 @@ def sync(
         raise typer.Exit(code=1)
 
 
+PULL_HELP = """Pull keys from vault and decrypt all env files (one-command developer setup).
+
+Reads your TOML configuration, fetches encryption keys from your cloud vault,
+writes them to local .env.keys files, and decrypts all corresponding .env files.
+
+This is the recommended command for onboarding new developers - just run
+`envdrift pull` and all encrypted environment files are ready to use.
+
+Use --profile to filter mappings and activate a specific environment:
+- Without --profile: processes all mappings without a profile tag
+- With --profile: processes regular mappings + the matching profile,
+  and copies the decrypted file to the activate_to path if configured
+
+Configuration is read from:
+- pyproject.toml [tool.envdrift.vault.sync] section
+- envdrift.toml [vault.sync] section
+- Explicit --config file
+
+Examples:
+    # Auto-discover config and pull everything (non-profile mappings only)
+    envdrift pull
+
+    # Pull with a specific profile (regular mappings + profile, activates env)
+    envdrift pull --profile local
+
+    # Use explicit config file
+    envdrift pull -c envdrift.toml
+
+    # Override provider settings
+    envdrift pull -p azure --vault-url https://myvault.vault.azure.net/
+
+    # Force update without prompts
+    envdrift pull --force
+
+    # Skip vault sync, only decrypt files (useful when keys are already local)
+    envdrift pull --skip-sync
+
+    # For partial encryption: decrypt and create combined .env file for local use
+    envdrift pull --merge
+"""
+
+LOCK_HELP = """Verify keys and encrypt all env files (opposite of pull - prepares for commit).
+
+The lock command ensures your environment files are properly encrypted before
+committing. It can optionally verify that local keys match vault keys to prevent
+key drift, and then encrypts all decrypted .env files.
+
+This is the recommended command before committing changes to ensure:
+1. Local encryption keys are in sync with the team's vault keys
+2. All .env files are properly encrypted
+3. No plaintext secrets are accidentally committed
+
+Workflow:
+- With --verify-vault: Check if local .env.keys match vault secrets.
+  Any mapping that cannot be verified (missing .env.keys, missing key
+  entry, missing/empty vault secret, vault error) or that mismatches is
+  a hard failure: nothing is encrypted and the exit code is 1, even with
+  --force. Use --sync-keys to repair, or drop --verify-vault to skip.
+- With --sync-keys: Fetch keys from vault to ensure consistency
+- With --all: Also encrypt partial encryption .secret files and delete combined files
+- Then: Encrypt all .env files that are currently decrypted
+
+Use --profile to filter mappings for a specific environment.
+
+Configuration is read from:
+- pyproject.toml [tool.envdrift.vault.sync] section
+- envdrift.toml [vault.sync] section
+- Explicit --config file
+
+Examples:
+    # Encrypt all env files (basic usage)
+    envdrift lock
+
+    # Verify keys match vault, then encrypt
+    envdrift lock --verify-vault
+
+    # Sync keys from vault first, then encrypt
+    envdrift lock --sync-keys
+
+    # Check encryption status only (dry run)
+    envdrift lock --check
+
+    # Lock with a specific profile
+    envdrift lock --profile local
+
+    # Force encryption without prompts
+    envdrift lock --force
+
+    # Include partial encryption files (encrypt .secret, delete combined)
+    envdrift lock --all
+"""
+
+_SyncConfigOption = Annotated[
+    Path | None,
+    typer.Option(
+        "--config",
+        "-c",
+        help="Path to sync config file (TOML or legacy pair.txt format)",
+    ),
+]
+_ProviderOption = Annotated[
+    str | None,
+    typer.Option("--provider", "-p", help="Vault provider: azure, aws, hashicorp, gcp"),
+]
+_VaultUrlOption = Annotated[
+    str | None,
+    typer.Option("--vault-url", help="Vault URL (Azure Key Vault or HashiCorp Vault)"),
+]
+_RegionOption = Annotated[
+    str | None,
+    typer.Option("--region", help="AWS region (default: us-east-1)"),
+]
+_ProjectIdOption = Annotated[
+    str | None,
+    typer.Option("--project-id", help="GCP project ID (Secret Manager)"),
+]
+_PullForceOption = Annotated[
+    bool,
+    typer.Option("--force", "-f", help="Update all mismatches without prompting"),
+]
+_ProfileOption = Annotated[
+    str | None,
+    typer.Option("--profile", help="Only process mappings for this profile"),
+]
+_SkipSyncOption = Annotated[
+    bool,
+    typer.Option("--skip-sync", help="Skip syncing keys from vault, only decrypt files"),
+]
+_MergeOption = Annotated[
+    bool,
+    typer.Option(
+        "--merge",
+        "-m",
+        help="For partial encryption: create combined decrypted .env file from .clear + .secret",
+    ),
+]
+_LockForceOption = Annotated[
+    bool,
+    typer.Option("--force", "-f", help="Force encryption without prompting"),
+]
+_VerifyVaultOption = Annotated[
+    bool,
+    typer.Option("--verify-vault", help="Verify local keys match vault before encrypting"),
+]
+_SyncKeysOption = Annotated[
+    bool,
+    typer.Option(
+        "--sync-keys", help="Sync keys from vault before encrypting (implies --verify-vault)"
+    ),
+]
+_CheckOnlyOption = Annotated[
+    bool,
+    typer.Option("--check", help="Only check encryption status, don't encrypt"),
+]
+_AllFilesOption = Annotated[
+    bool,
+    typer.Option(
+        "--all",
+        help="Include partial encryption files: encrypt .secret files and delete combined files",
+    ),
+]
+
+
 def pull(
-    config_file: Annotated[
-        Path | None,
-        typer.Option(
-            "--config",
-            "-c",
-            help="Path to sync config file (TOML or legacy pair.txt format)",
-        ),
-    ] = None,
-    provider: Annotated[
-        str | None,
-        typer.Option("--provider", "-p", help="Vault provider: azure, aws, hashicorp, gcp"),
-    ] = None,
-    vault_url: Annotated[
-        str | None,
-        typer.Option("--vault-url", help="Vault URL (Azure Key Vault or HashiCorp Vault)"),
-    ] = None,
-    region: Annotated[
-        str | None,
-        typer.Option("--region", help="AWS region (default: us-east-1)"),
-    ] = None,
-    project_id: Annotated[
-        str | None,
-        typer.Option("--project-id", help="GCP project ID (Secret Manager)"),
-    ] = None,
-    force: Annotated[
-        bool,
-        typer.Option("--force", "-f", help="Update all mismatches without prompting"),
-    ] = False,
-    profile: Annotated[
-        str | None,
-        typer.Option("--profile", help="Only process mappings for this profile"),
-    ] = None,
-    skip_sync: Annotated[
-        bool,
-        typer.Option("--skip-sync", help="Skip syncing keys from vault, only decrypt files"),
-    ] = False,
-    merge: Annotated[
-        bool,
-        typer.Option(
-            "--merge",
-            "-m",
-            help="For partial encryption: create combined decrypted .env file from .clear + .secret",
-        ),
-    ] = False,
+    config_file: _SyncConfigOption = None,
+    provider: _ProviderOption = None,
+    vault_url: _VaultUrlOption = None,
+    region: _RegionOption = None,
+    project_id: _ProjectIdOption = None,
+    force: _PullForceOption = False,
+    profile: _ProfileOption = None,
+    skip_sync: _SkipSyncOption = False,
+    merge: _MergeOption = False,
 ) -> None:
-    """
-    Pull keys from vault and decrypt all env files (one-command developer setup).
-
-    Reads your TOML configuration, fetches encryption keys from your cloud vault,
-    writes them to local .env.keys files, and decrypts all corresponding .env files.
-
-    This is the recommended command for onboarding new developers - just run
-    `envdrift pull` and all encrypted environment files are ready to use.
-
-    Use --profile to filter mappings and activate a specific environment:
-    - Without --profile: processes all mappings without a profile tag
-    - With --profile: processes regular mappings + the matching profile,
-      and copies the decrypted file to the activate_to path if configured
-
-    Configuration is read from:
-    - pyproject.toml [tool.envdrift.vault.sync] section
-    - envdrift.toml [vault.sync] section
-    - Explicit --config file
-
-    Examples:
-        # Auto-discover config and pull everything (non-profile mappings only)
-        envdrift pull
-
-        # Pull with a specific profile (regular mappings + profile, activates env)
-        envdrift pull --profile local
-
-        # Use explicit config file
-        envdrift pull -c envdrift.toml
-
-        # Override provider settings
-        envdrift pull -p azure --vault-url https://myvault.vault.azure.net/
-
-        # Force update without prompts
-        envdrift pull --force
-
-        # Skip vault sync, only decrypt files (useful when keys are already local)
-        envdrift pull --skip-sync
-
-        # For partial encryption: decrypt and create combined .env file for local use
-        envdrift pull --merge
-    """
+    """Pull vault keys and decrypt the configured environment files."""
     from envdrift.cli_commands.sync_helpers import PullRequest, PullRuntime, execute_pull
 
     execute_pull(
@@ -772,112 +860,20 @@ def _sops_missing_recipients(
 
 
 def lock(
-    config_file: Annotated[
-        Path | None,
-        typer.Option(
-            "--config",
-            "-c",
-            help="Path to sync config file (TOML or legacy pair.txt format)",
-        ),
-    ] = None,
-    provider: Annotated[
-        str | None,
-        typer.Option("--provider", "-p", help="Vault provider: azure, aws, hashicorp, gcp"),
-    ] = None,
-    vault_url: Annotated[
-        str | None,
-        typer.Option("--vault-url", help="Vault URL (Azure Key Vault or HashiCorp Vault)"),
-    ] = None,
-    region: Annotated[
-        str | None,
-        typer.Option("--region", help="AWS region (default: us-east-1)"),
-    ] = None,
-    project_id: Annotated[
-        str | None,
-        typer.Option("--project-id", help="GCP project ID (Secret Manager)"),
-    ] = None,
-    force: Annotated[
-        bool,
-        typer.Option("--force", "-f", help="Force encryption without prompting"),
-    ] = False,
-    profile: Annotated[
-        str | None,
-        typer.Option("--profile", help="Only process mappings for this profile"),
-    ] = None,
-    verify_vault: Annotated[
-        bool,
-        typer.Option("--verify-vault", help="Verify local keys match vault before encrypting"),
-    ] = False,
-    sync_keys: Annotated[
-        bool,
-        typer.Option(
-            "--sync-keys", help="Sync keys from vault before encrypting (implies --verify-vault)"
-        ),
-    ] = False,
-    check_only: Annotated[
-        bool,
-        typer.Option("--check", help="Only check encryption status, don't encrypt"),
-    ] = False,
-    all_files: Annotated[
-        bool,
-        typer.Option(
-            "--all",
-            help="Include partial encryption files: encrypt .secret files and delete combined files",
-        ),
-    ] = False,
+    config_file: _SyncConfigOption = None,
+    provider: _ProviderOption = None,
+    vault_url: _VaultUrlOption = None,
+    region: _RegionOption = None,
+    project_id: _ProjectIdOption = None,
+    force: _LockForceOption = False,
+    profile: _ProfileOption = None,
+    verify_vault: _VerifyVaultOption = False,
+    sync_keys: _SyncKeysOption = False,
+    check_only: _CheckOnlyOption = False,
+    all_files: _AllFilesOption = False,
 ) -> None:
-    """
-    Verify keys and encrypt all env files (opposite of pull - prepares for commit).
-
-    The lock command ensures your environment files are properly encrypted before
-    committing. It can optionally verify that local keys match vault keys to prevent
-    key drift, and then encrypts all decrypted .env files.
-
-    This is the recommended command before committing changes to ensure:
-    1. Local encryption keys are in sync with the team's vault keys
-    2. All .env files are properly encrypted
-    3. No plaintext secrets are accidentally committed
-
-    Workflow:
-    - With --verify-vault: Check if local .env.keys match vault secrets.
-      Any mapping that cannot be verified (missing .env.keys, missing key
-      entry, missing/empty vault secret, vault error) or that mismatches is
-      a hard failure: nothing is encrypted and the exit code is 1, even with
-      --force. Use --sync-keys to repair, or drop --verify-vault to skip.
-    - With --sync-keys: Fetch keys from vault to ensure consistency
-    - With --all: Also encrypt partial encryption .secret files and delete combined files
-    - Then: Encrypt all .env files that are currently decrypted
-
-    Use --profile to filter mappings for a specific environment.
-
-    Configuration is read from:
-    - pyproject.toml [tool.envdrift.vault.sync] section
-    - envdrift.toml [vault.sync] section
-    - Explicit --config file
-
-    Examples:
-        # Encrypt all env files (basic usage)
-        envdrift lock
-
-        # Verify keys match vault, then encrypt
-        envdrift lock --verify-vault
-
-        # Sync keys from vault first, then encrypt
-        envdrift lock --sync-keys
-
-        # Check encryption status only (dry run)
-        envdrift lock --check
-
-        # Lock with a specific profile
-        envdrift lock --profile local
-
-        # Force encryption without prompts
-        envdrift lock --force
-
-        # Include partial encryption files (encrypt .secret, delete combined)
-        envdrift lock --all
-    """
-    from envdrift.cli_commands.sync_helpers import LockRequest, LockRuntime, execute_lock
+    """Verify keys and encrypt the configured environment files."""
+    from envdrift.cli_commands.sync_lock_helpers import LockRequest, LockRuntime, execute_lock
 
     execute_lock(
         LockRequest(
