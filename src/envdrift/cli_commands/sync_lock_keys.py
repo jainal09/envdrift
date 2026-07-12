@@ -92,17 +92,7 @@ def _compare_lock_vault_key(
         context.vault_client.ensure_authenticated()
         secret = context.vault_client.get_secret(local.mapping.secret_name)
         if not _vault_secret_has_value(secret):
-            console.print(
-                f"  [red]✗[/red] {local.mapping.folder_path} "
-                f"[red]- cannot verify: vault secret "
-                f"'{local.mapping.secret_name}' is empty[/red]"
-            )
-            state.errors.append(
-                f"{local.mapping.folder_path}: cannot verify - vault secret "
-                f"'{local.mapping.secret_name}' is empty "
-                f"(push the key with 'envdrift vault-push')"
-            )
-            state.verification_issues += 1
+            _record_unavailable_vault_secret(local, "is empty", state)
             return
         vault_key, vault_suffix = extract_key_material(secret, local.environment)
         if _vault_key_matches(local.value, vault_key, vault_suffix, local.environment):
@@ -110,41 +100,53 @@ def _compare_lock_vault_key(
                 f"  [green]✓[/green] {local.mapping.folder_path} [dim]- keys match vault[/dim]"
             )
             return
-        console.print(
-            f"  [red]✗[/red] {local.mapping.folder_path} "
-            f"[red]- KEY MISMATCH: local key differs from vault![/red]"
-        )
-        state.errors.append(
-            f"{local.mapping.folder_path}: local key does not match vault "
-            f"(run 'envdrift lock --sync-keys' to fix)"
-        )
-        state.verification_issues += 1
+        _record_lock_key_mismatch(local, state)
     except SecretNotFoundError:
-        console.print(
-            f"  [red]✗[/red] {local.mapping.folder_path} "
-            f"[red]- cannot verify: vault secret "
-            f"'{local.mapping.secret_name}' not found[/red]"
-        )
-        state.errors.append(
-            f"{local.mapping.folder_path}: cannot verify - vault secret "
-            f"'{local.mapping.secret_name}' "
-            f"not found (push the key with 'envdrift vault-push')"
-        )
-        state.verification_issues += 1
+        _record_unavailable_vault_secret(local, "not found", state)
     except KeyMaterialError as exc:
-        console.print(
-            f"  [red]✗[/red] {local.mapping.folder_path} [red]- KEY UNUSABLE: {exc}[/red]"
-        )
-        state.errors.append(f"{local.mapping.folder_path}: vault key material unusable - {exc}")
-        state.verification_issues += 1
-        state.unusable_keys += 1
+        _record_unusable_vault_key(local, exc, state)
     except VaultError as exc:
-        console.print(
-            f"  [red]![/red] {local.mapping.folder_path} "
-            f"[red]- error: vault access failed: {exc}[/red]"
-        )
-        state.errors.append(f"{local.mapping.folder_path}: vault error - {exc}")
-        state.verification_issues += 1
+        _record_vault_access_error(local, exc, state)
+
+
+def _record_unavailable_vault_secret(local: _LocalLockKey, reason: str, state: _LockState) -> None:
+    console.print(
+        f"  [red]✗[/red] {local.mapping.folder_path} "
+        f"[red]- cannot verify: vault secret '{local.mapping.secret_name}' {reason}[/red]"
+    )
+    state.errors.append(
+        f"{local.mapping.folder_path}: cannot verify - vault secret "
+        f"'{local.mapping.secret_name}' {reason} (push the key with 'envdrift vault-push')"
+    )
+    state.verification_issues += 1
+
+
+def _record_lock_key_mismatch(local: _LocalLockKey, state: _LockState) -> None:
+    console.print(
+        f"  [red]✗[/red] {local.mapping.folder_path} "
+        f"[red]- KEY MISMATCH: local key differs from vault![/red]"
+    )
+    state.errors.append(
+        f"{local.mapping.folder_path}: local key does not match vault "
+        f"(run 'envdrift lock --sync-keys' to fix)"
+    )
+    state.verification_issues += 1
+
+
+def _record_unusable_vault_key(local: _LocalLockKey, error: Exception, state: _LockState) -> None:
+    console.print(f"  [red]✗[/red] {local.mapping.folder_path} [red]- KEY UNUSABLE: {error}[/red]")
+    state.errors.append(f"{local.mapping.folder_path}: vault key material unusable - {error}")
+    state.verification_issues += 1
+    state.unusable_keys += 1
+
+
+def _record_vault_access_error(local: _LocalLockKey, error: Exception, state: _LockState) -> None:
+    console.print(
+        f"  [red]![/red] {local.mapping.folder_path} "
+        f"[red]- error: vault access failed: {error}[/red]"
+    )
+    state.errors.append(f"{local.mapping.folder_path}: vault error - {error}")
+    state.verification_issues += 1
 
 
 def _vault_secret_has_value(secret: Any) -> bool:

@@ -187,29 +187,32 @@ def _print_pull_header(request: PullRequest, context: SyncCommandContext) -> Non
 
 
 def _ephemeral_keys_from_sync_result(sync_result: Any, mappings: list[ServiceMapping]):
-    from envdrift.sync.result import SyncAction
-
     mappings_by_folder: dict[Path, ServiceMapping] = {}
     for mapping in mappings:
         mappings_by_folder.setdefault(mapping.folder_path.resolve(), mapping)
 
     ephemeral_keys: dict[Path, tuple[str, str]] = {}
     for service_result in sync_result.services:
-        action = getattr(service_result, "action", None)
-        key_value = getattr(service_result, "vault_key_value", None)
-        if action != SyncAction.EPHEMERAL or not key_value:
-            continue
-        matched = mappings_by_folder.get(service_result.folder_path.resolve())
-        environment = (
-            matched.effective_environment
-            if matched is not None
-            else service_result.folder_path.name
-        )
-        ephemeral_keys[service_result.folder_path.resolve()] = (
-            f"DOTENV_PRIVATE_KEY_{environment.upper()}",
-            key_value,
-        )
+        ephemeral_key = _ephemeral_key_from_service_result(service_result, mappings_by_folder)
+        if ephemeral_key is not None:
+            folder, key = ephemeral_key
+            ephemeral_keys[folder] = key
     return ephemeral_keys
+
+
+def _ephemeral_key_from_service_result(
+    service_result: Any, mappings_by_folder: dict[Path, ServiceMapping]
+) -> tuple[Path, tuple[str, str]] | None:
+    from envdrift.sync.result import SyncAction
+
+    action = getattr(service_result, "action", None)
+    key_value = getattr(service_result, "vault_key_value", None)
+    if action != SyncAction.EPHEMERAL or not key_value:
+        return None
+    folder = service_result.folder_path.resolve()
+    matched = mappings_by_folder.get(folder)
+    environment = matched.effective_environment if matched else service_result.folder_path.name
+    return folder, (f"DOTENV_PRIVATE_KEY_{environment.upper()}", key_value)
 
 
 def _sync_pull_keys(
@@ -331,17 +334,9 @@ def _should_queue_decryption(
     context: _PullDecryptContext,
 ) -> bool:
     from envdrift.cli_commands import encryption_helpers
-    from envdrift.encryption import EncryptionProvider, detect_encryption_provider
 
-    keys_file = mapping.folder_path / (context.command.sync_config.env_keys_filename or ".env.keys")
-    try:
-        context.runtime.normalize_metadata(
-            env_file, keys_file, environment, context.encryption.provider
-        )
-        content = env_file.read_text(encoding="utf-8")
-    except (OSError, ValueError) as exc:
-        console.print(f"  [red]![/red] {env_file} [red]- error reading file: {exc}[/red]")
-        context.state.errors += 1
+    content = _read_pull_encrypted_file(mapping, env_file, environment, context)
+    if content is None:
         return False
 
     if encryption_helpers.should_attempt_decryption(
@@ -349,29 +344,55 @@ def _should_queue_decryption(
     ):
         return True
 
-    detected = detect_encryption_provider(env_file)
-    if detected and detected != context.encryption.provider:
-        if (
-            detected == EncryptionProvider.DOTENVX
-            and context.encryption.provider != EncryptionProvider.DOTENVX
-        ):
-            console.print(
-                f"  [red]![/red] {env_file} [red]- encrypted with dotenvx, but config uses "
-                f"{context.encryption.provider.value}[/red]"
-            )
-            context.state.errors += 1
-            return False
-        console.print(
-            f"  [dim]=[/dim] {env_file} [dim]- skipped (encrypted with {detected.value}, "
-            f"config uses {context.encryption.provider.value})[/dim]"
-        )
-        context.state.skipped += 1
+    if _record_pull_provider_mismatch(env_file, context):
         return False
 
     console.print(f"  [dim]=[/dim] {env_file} [dim]- skipped (not encrypted)[/dim]")
     context.state.skipped += 1
     _record_activation(mapping, env_file, context)
     return False
+
+
+def _read_pull_encrypted_file(
+    mapping: ServiceMapping,
+    env_file: Path,
+    environment: str,
+    context: _PullDecryptContext,
+) -> str | None:
+    keys_file = mapping.folder_path / (context.command.sync_config.env_keys_filename or ".env.keys")
+    try:
+        context.runtime.normalize_metadata(
+            env_file, keys_file, environment, context.encryption.provider
+        )
+        return env_file.read_text(encoding="utf-8")
+    except (OSError, ValueError) as exc:
+        console.print(f"  [red]![/red] {env_file} [red]- error reading file: {exc}[/red]")
+        context.state.errors += 1
+        return None
+
+
+def _record_pull_provider_mismatch(env_file: Path, context: _PullDecryptContext) -> bool:
+    from envdrift.encryption import EncryptionProvider, detect_encryption_provider
+
+    detected = detect_encryption_provider(env_file)
+    if not detected or detected == context.encryption.provider:
+        return False
+    if (
+        detected == EncryptionProvider.DOTENVX
+        and context.encryption.provider != EncryptionProvider.DOTENVX
+    ):
+        console.print(
+            f"  [red]![/red] {env_file} [red]- encrypted with dotenvx, but config uses "
+            f"{context.encryption.provider.value}[/red]"
+        )
+        context.state.errors += 1
+        return True
+    console.print(
+        f"  [dim]=[/dim] {env_file} [dim]- skipped (encrypted with {detected.value}, "
+        f"config uses {context.encryption.provider.value})[/dim]"
+    )
+    context.state.skipped += 1
+    return True
 
 
 def _queue_pull_mapping(mapping: ServiceMapping, context: _PullDecryptContext) -> None:
@@ -436,6 +457,13 @@ def _record_pull_decrypt_result(
 
 
 def _print_pull_decrypt_summary(state: _PullDecryptState) -> None:
+    lines = _pull_decrypt_summary_lines(state)
+    console.print()
+    console.print(Panel("\n".join(lines), title="Decrypt Summary", expand=False))
+    _raise_pull_decrypt_errors(state)
+
+
+def _pull_decrypt_summary_lines(state: _PullDecryptState) -> list[str]:
     lines = [
         f"Decrypted: {state.decrypted}",
         f"Skipped: {state.skipped}",
@@ -445,8 +473,10 @@ def _print_pull_decrypt_summary(state: _PullDecryptState) -> None:
         lines.append(f"Activated: {state.activated}")
     if state.activation_errors > 0:
         lines.append(f"Activation errors: {state.activation_errors}")
-    console.print()
-    console.print(Panel("\n".join(lines), title="Decrypt Summary", expand=False))
+    return lines
+
+
+def _raise_pull_decrypt_errors(state: _PullDecryptState) -> None:
     if state.errors > 0:
         print_warning("Some files could not be decrypted")
     if state.activation_errors > 0:
@@ -588,17 +618,28 @@ def _process_pull_partial_encryption(request: PullRequest, runtime: PullRuntime)
     console.print()
     console.print("[bold cyan]Step 3:[/bold cyan] Processing partial encryption files...")
     console.print()
-    if request.merge:
-        from envdrift.cli_commands.partial import _ensure_combined_gitignore
-
-        _ensure_combined_gitignore(partial_config.partial_encryption.environments)
+    _prepare_pull_partial_merge(partial_config, request.merge)
     state = _PullPartialState()
     for env_config in partial_config.partial_encryption.environments:
-        if env_config.secrets_only:
-            _pull_secrets_only_environment(env_config, state)
-        else:
-            _pull_combined_environment(env_config, request.merge, state, runtime)
+        _pull_partial_environment(env_config, request.merge, state, runtime)
     _print_partial_pull_summary(state, request.merge)
+
+
+def _prepare_pull_partial_merge(partial_config: Any, merge: bool) -> None:
+    if not merge:
+        return
+    from envdrift.cli_commands.partial import _ensure_combined_gitignore
+
+    _ensure_combined_gitignore(partial_config.partial_encryption.environments)
+
+
+def _pull_partial_environment(
+    env_config: Any, merge: bool, state: _PullPartialState, runtime: PullRuntime
+) -> None:
+    if env_config.secrets_only:
+        _pull_secrets_only_environment(env_config, state)
+        return
+    _pull_combined_environment(env_config, merge, state, runtime)
 
 
 def execute_pull(request: PullRequest, runtime: PullRuntime) -> None:
