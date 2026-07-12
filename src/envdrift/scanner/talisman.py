@@ -35,6 +35,7 @@ from envdrift.scanner.base import (
 )
 from envdrift.scanner.patterns import hash_secret, redact_secret
 from envdrift.scanner.platform_utils import get_platform_info, get_venv_bin_dir
+from envdrift.utils.git import get_git_root, has_git_head
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -81,6 +82,27 @@ _TALISMAN_SECRET_MARKERS = (
     "secret pattern :",
     "secret pattern:",
 )
+
+_NO_COMMIT_ERROR_MARKERS = (
+    "exit status 128",
+    "bad revision",
+    "unknown revision",
+    "ambiguous argument 'head'",
+    "does not have any commits",
+)
+
+
+def _friendly_execution_error(error: str, path: Path) -> str:
+    """Translate Talisman's opaque empty-repository failure when provable."""
+    normalized = error.lower()
+    if any(marker in normalized for marker in _NO_COMMIT_ERROR_MARKERS):
+        git_root = get_git_root(path)
+        if git_root is not None and not has_git_head(git_root):
+            return (
+                f"Talisman cannot scan {path}: the Git repository has no commits. "
+                "Create an initial commit, then run the scan again."
+            )
+    return error
 
 
 def _extract_secret_from_message(message: str) -> str:
@@ -526,6 +548,7 @@ class TalismanScanner(ScannerBackend):
                         stderr_msg = result.stderr.strip()
                         stdout_msg = result.stdout.strip()
                         error_msg = stderr_msg or stdout_msg or f"talisman scan failed for {path}"
+                        error_msg = _friendly_execution_error(error_msg, work_dir)
                         return ScanResult(
                             scanner_name=self.name,
                             findings=all_findings,

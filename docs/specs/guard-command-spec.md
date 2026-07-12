@@ -912,7 +912,8 @@ def format_json(result: AggregatedScanResult) -> str:
     return json.dumps({
         "findings": [f.to_dict() for f in result.unique_findings],
         "summary": {
-            "total": result.total_findings,
+            "total": len(result.unique_findings),
+            "total_raw": result.total_findings,
             "unique": len(result.unique_findings),
             "by_severity": {
                 s.value: sum(1 for f in result.unique_findings if f.severity == s)

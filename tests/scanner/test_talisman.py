@@ -460,6 +460,29 @@ class TestTalismanScanExecution:
         assert "talisman: command not found or invalid flag" in result.error
         assert result.success is False
 
+    def test_scan_explains_empty_repository_failure(
+        self, mock_scanner: TalismanScanner, tmp_path: Path
+    ):
+        """Talisman's opaque exit-status 128 names the actionable Git state."""
+        with (
+            patch.object(mock_scanner, "_find_binary", return_value=mock_scanner._binary_path),
+            patch("envdrift.scanner.talisman.get_git_root", return_value=tmp_path),
+            patch("envdrift.scanner.talisman.has_git_head", return_value=False),
+            patch("subprocess.run") as mock_run,
+        ):
+            mock_run.return_value = MagicMock(
+                stdout="",
+                stderr="Error while scanning: exit status 128",
+                returncode=1,
+            )
+            result = mock_scanner.scan([tmp_path])
+
+        assert result.success is False
+        assert result.error is not None
+        assert "Git repository has no commits" in result.error
+        assert "initial commit" in result.error
+        assert "exit status 128" not in result.error
+
     def test_scan_ignores_nonzero_exit_with_valid_report(
         self, mock_scanner: TalismanScanner, tmp_path: Path
     ):

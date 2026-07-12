@@ -24,6 +24,7 @@ from envdrift.scanner.gitleaks import (
     GitleaksScanner,
     _get_gitleaks_download_urls,
     _get_gitleaks_version,
+    _git_history_target,
     get_gitleaks_path,
     get_platform_info,
     get_venv_bin_dir,
@@ -499,6 +500,50 @@ class TestFindingParsing:
         assert finding.rule_id == "gitleaks-unknown"
 
 
+class TestGitHistoryTarget:
+    """Tests for the preflight that prevents false-clean history scans."""
+
+    def test_rejects_non_git_directory(self, tmp_path: Path):
+        target, error = _git_history_target(tmp_path)
+
+        assert target is None
+        assert error is not None
+        assert "not inside a Git repository" in error
+
+    def test_rejects_repository_without_commits(self, tmp_path: Path):
+        subprocess.run(["git", "init"], cwd=tmp_path, capture_output=True, check=True)
+
+        target, error = _git_history_target(tmp_path)
+
+        assert target is None
+        assert error is not None
+        assert "has no commits" in error
+
+    def test_returns_repository_root(self, tmp_path: Path):
+        subprocess.run(["git", "init"], cwd=tmp_path, capture_output=True, check=True)
+        subprocess.run(
+            [
+                "git",
+                "-c",
+                "user.name=Test",
+                "-c",
+                "user.email=test@example.com",
+                "commit",
+                "--allow-empty",
+                "-m",
+                "initial",
+            ],
+            cwd=tmp_path,
+            capture_output=True,
+            check=True,
+        )
+
+        target, error = _git_history_target(tmp_path)
+
+        assert target == tmp_path.resolve()
+        assert error is None
+
+
 class TestGitleaksScanExecution:
     """Tests for gitleaks scan execution with mocked subprocess."""
 
@@ -587,26 +632,69 @@ class TestGitleaksScanExecution:
         assert "timed out" in result.error.lower()
 
     def test_scan_with_git_history_flag(self, mock_scanner: GitleaksScanner, tmp_path: Path):
-        """Test that scan passes correct args for git history scan."""
+        """Git history uses the modern positional ``gitleaks git`` command."""
         with patch.object(mock_scanner, "_find_binary", return_value=mock_scanner._binary_path):
-            with patch("subprocess.run") as mock_run:
-                mock_run.return_value = MagicMock(stdout="[]", stderr="", returncode=0)
-                mock_scanner.scan([tmp_path], include_git_history=True)
+            with patch(
+                "envdrift.scanner.gitleaks._git_history_target",
+                return_value=(tmp_path, None),
+            ):
+                with patch("subprocess.run") as mock_run:
+                    mock_run.return_value = MagicMock(stdout="[]", stderr="", returncode=0)
+                    mock_scanner.scan([tmp_path], include_git_history=True)
 
-        # Check that --no-git was NOT passed
         call_args = mock_run.call_args[0][0]
-        assert "--no-git" not in call_args
+        assert call_args[1] == "git"
+        assert "detect" not in call_args
+        assert "--source" not in call_args
+        assert call_args[-1] == str(tmp_path)
 
     def test_scan_without_git_history_flag(self, mock_scanner: GitleaksScanner, tmp_path: Path):
-        """Test that scan passes --no-git when not scanning history."""
+        """Working-tree scans use the modern positional ``gitleaks dir`` command."""
         with patch.object(mock_scanner, "_find_binary", return_value=mock_scanner._binary_path):
             with patch("subprocess.run") as mock_run:
                 mock_run.return_value = MagicMock(stdout="[]", stderr="", returncode=0)
                 mock_scanner.scan([tmp_path], include_git_history=False)
 
-        # Check that --no-git WAS passed
         call_args = mock_run.call_args[0][0]
-        assert "--no-git" in call_args
+        assert call_args[1] == "dir"
+        assert "detect" not in call_args
+        assert "--no-git" not in call_args
+        assert call_args[-1] == str(tmp_path)
+
+    def test_history_outside_git_is_an_error(self, mock_scanner: GitleaksScanner, tmp_path: Path):
+        """A zero-commit Gitleaks false pass must not become a clean result."""
+        with patch.object(mock_scanner, "_find_binary", return_value=mock_scanner._binary_path):
+            with patch(
+                "envdrift.scanner.gitleaks._git_history_target",
+                return_value=(None, "not inside a Git repository"),
+            ):
+                with patch("subprocess.run") as mock_run:
+                    result = mock_scanner.scan([tmp_path], include_git_history=True)
+
+        assert result.success is False
+        assert result.error is not None
+        assert "not inside a Git repository" in result.error
+        mock_run.assert_not_called()
+
+    def test_history_scans_each_repository_once(
+        self, mock_scanner: GitleaksScanner, tmp_path: Path
+    ):
+        """Multiple requested paths in one repository do not duplicate the scan."""
+        first = tmp_path / "first"
+        second = tmp_path / "second"
+        first.mkdir()
+        second.mkdir()
+        with patch.object(mock_scanner, "_find_binary", return_value=mock_scanner._binary_path):
+            with patch(
+                "envdrift.scanner.gitleaks._git_history_target",
+                return_value=(tmp_path, None),
+            ):
+                with patch("subprocess.run") as mock_run:
+                    mock_run.return_value = MagicMock(stdout="[]", stderr="", returncode=0)
+                    result = mock_scanner.scan([first, second], include_git_history=True)
+
+        assert result.success is True
+        mock_run.assert_called_once()
 
     def test_scan_multiple_paths(self, mock_scanner: GitleaksScanner, tmp_path: Path):
         """Test scanning multiple paths."""
@@ -749,3 +837,31 @@ class TestGitleaksIntegration:
         assert result.success is True
         # gitleaks should detect this pattern
         # Note: may or may not trigger depending on gitleaks config
+
+    def test_scan_git_history_uses_modern_command_and_reports_commit(self, tmp_path: Path):
+        """The real Gitleaks 8.x history path returns commit-attributed findings."""
+        token = "ghp_" + "016C7eX9bQ2vYwN3kLmZpRtUaScDfGhJkL01"
+        subprocess.run(["git", "init"], cwd=tmp_path, capture_output=True, check=True)
+        (tmp_path / "secret.txt").write_text(f"TOKEN={token}\n", encoding="utf-8")
+        subprocess.run(["git", "add", "secret.txt"], cwd=tmp_path, capture_output=True, check=True)
+        subprocess.run(
+            [
+                "git",
+                "-c",
+                "user.name=Test",
+                "-c",
+                "user.email=test@example.com",
+                "commit",
+                "-m",
+                "add secret",
+            ],
+            cwd=tmp_path,
+            capture_output=True,
+            check=True,
+        )
+
+        result = GitleaksScanner(auto_install=False).scan([tmp_path], include_git_history=True)
+
+        assert result.success is True, result.error
+        assert result.findings
+        assert all(finding.commit_sha for finding in result.findings)

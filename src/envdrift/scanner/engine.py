@@ -333,8 +333,7 @@ class ScanEngine:
                 from envdrift.scanner.gitleaks import GitleaksScanner
 
                 scanner = GitleaksScanner(auto_install=self.config.auto_install)
-                if scanner.is_installed() or self.config.auto_install:
-                    self.scanners.append(scanner)
+                self.scanners.append(scanner)
             except ImportError:
                 pass  # Gitleaks not yet implemented
 
@@ -344,8 +343,7 @@ class ScanEngine:
                 from envdrift.scanner.trufflehog import TrufflehogScanner
 
                 scanner = TrufflehogScanner(auto_install=self.config.auto_install)
-                if scanner.is_installed() or self.config.auto_install:
-                    self.scanners.append(scanner)
+                self.scanners.append(scanner)
             except ImportError:
                 pass  # Trufflehog not yet implemented
 
@@ -355,8 +353,7 @@ class ScanEngine:
                 from envdrift.scanner.detect_secrets import DetectSecretsScanner
 
                 scanner = DetectSecretsScanner(auto_install=self.config.auto_install)
-                if scanner.is_installed() or self.config.auto_install:
-                    self.scanners.append(scanner)
+                self.scanners.append(scanner)
             except ImportError:
                 pass  # detect-secrets not yet implemented
 
@@ -373,8 +370,7 @@ class ScanEngine:
                     extract_archives=True,
                     jobs=1,  # deterministic results over speed
                 )
-                if scanner.is_installed() or self.config.auto_install:
-                    self.scanners.append(scanner)
+                self.scanners.append(scanner)
             except ImportError:
                 logger.debug("Kingfisher scanner not available - module not found")
 
@@ -387,8 +383,7 @@ class ScanEngine:
                     auto_install=self.config.auto_install,
                     register_aws=True,  # Register AWS patterns by default
                 )
-                if scanner.is_installed() or self.config.auto_install:
-                    self.scanners.append(scanner)
+                self.scanners.append(scanner)
             except ImportError:
                 logger.debug("git-secrets scanner not available - module not found")
 
@@ -398,8 +393,7 @@ class ScanEngine:
                 from envdrift.scanner.talisman import TalismanScanner
 
                 scanner = TalismanScanner(auto_install=self.config.auto_install)
-                if scanner.is_installed() or self.config.auto_install:
-                    self.scanners.append(scanner)
+                self.scanners.append(scanner)
             except ImportError:
                 logger.debug("Talisman scanner not available - module not found")
 
@@ -409,8 +403,7 @@ class ScanEngine:
                 from envdrift.scanner.trivy import TrivyScanner
 
                 scanner = TrivyScanner(auto_install=self.config.auto_install)
-                if scanner.is_installed() or self.config.auto_install:
-                    self.scanners.append(scanner)
+                self.scanners.append(scanner)
             except ImportError:
                 logger.debug("Trivy scanner not available - module not found")
 
@@ -420,8 +413,7 @@ class ScanEngine:
                 from envdrift.scanner.infisical import InfisicalScanner
 
                 scanner = InfisicalScanner(auto_install=self.config.auto_install)
-                if scanner.is_installed() or self.config.auto_install:
-                    self.scanners.append(scanner)
+                self.scanners.append(scanner)
             except ImportError:
                 logger.debug("Infisical scanner not available - module not found")
 

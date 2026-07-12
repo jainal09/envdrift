@@ -80,6 +80,13 @@ def _severity_cell(finding: ScanFinding) -> Text:
     return cell
 
 
+def _display_location(finding: ScanFinding) -> str:
+    """Include short commit context when a finding came from Git history."""
+    if finding.commit_sha:
+        return f"{finding.commit_sha[:8]} @ {finding.location}"
+    return finding.location
+
+
 def _build_full_findings_table(findings: list[ScanFinding]) -> Table:
     """Findings table for non-interactive output (``guard --ci``, piped, hooks).
 
@@ -97,8 +104,30 @@ def _build_full_findings_table(findings: list[ScanFinding]) -> Table:
     table.add_column("Preview", style="dim", max_width=20)
     for f in findings:
         table.add_row(
-            _severity_cell(f), f.location, f.rule_id, f.description, f.secret_preview or "-"
+            _severity_cell(f),
+            _display_location(f),
+            f.rule_id,
+            f.description,
+            f.secret_preview or "-",
         )
+    return table
+
+
+def _build_log_findings_table(findings: list[ScanFinding]) -> Table:
+    """Stack complete finding records for narrow CI, pipes, and redirected logs."""
+    table = Table.grid(expand=True, padding=(0, 0))
+    table.add_column(overflow="fold")
+    for finding in findings:
+        record = Text()
+        record.append_text(_severity_cell(finding))
+        record.append(f"  {_display_location(finding)}", style="cyan")
+        record.append("\nRule: ", style="bold")
+        record.append(finding.rule_id, style="magenta")
+        record.append("\nDescription: ", style="bold")
+        record.append(finding.description)
+        record.append("\nPreview: ", style="bold")
+        record.append(finding.secret_preview or "-", style="dim")
+        table.add_row(record)
     return table
 
 
@@ -119,7 +148,7 @@ def _build_compact_findings_table(findings: list[ScanFinding], *, wide: bool) ->
     if wide:
         table.add_column("Preview", style="dim", no_wrap=True, max_width=14, overflow="ellipsis")
     for f in findings:
-        row: list[str | Text] = [_severity_cell(f), f.location]
+        row: list[str | Text] = [_severity_cell(f), _display_location(f)]
         if wide:
             row.append(f.rule_id)
         row.append(f.description)
@@ -130,10 +159,12 @@ def _build_compact_findings_table(findings: list[ScanFinding], *, wide: bool) ->
 
 
 def _build_findings_table(result: AggregatedScanResult, *, interactive: bool, wide: bool) -> Table:
-    """Dispatch to the full (non-interactive) or compact (interactive) table."""
+    """Dispatch to a layout that stays readable at the available width."""
     findings = sorted(result.unique_findings, key=lambda f: f.severity, reverse=True)
-    if not interactive:
+    if not interactive and wide:
         return _build_full_findings_table(findings)
+    if not interactive:
+        return _build_log_findings_table(findings)
     return _build_compact_findings_table(findings, wide=wide)
 
 
@@ -214,10 +245,9 @@ def format_rich(result: AggregatedScanResult, console: Console | None = None) ->
         )
     )
 
-    # Findings table. A non-interactive console (`guard --ci`, piped, redirected)
-    # keeps all columns (so CI logs retain the rule id + preview); an interactive
-    # terminal gets the compact, width-aware one (dropping the secondary columns
-    # only when genuinely narrow).
+    # Findings table. Narrow non-interactive output stacks complete records so
+    # no field is dropped or squeezed into an unreadable vertical stripe. Wide
+    # logs keep the full table; interactive terminals use the compact layout.
     console.print(
         _build_findings_table(
             result,
@@ -269,7 +299,8 @@ def format_json(result: AggregatedScanResult, exit_code: int | None = None) -> s
     data = {
         "findings": [f.to_dict() for f in result.unique_findings],
         "summary": {
-            "total": result.total_findings,
+            "total": len(result.unique_findings),
+            "total_raw": result.total_findings,
             "unique": len(result.unique_findings),
             "by_severity": {
                 severity.value: sum(1 for f in result.unique_findings if f.severity == severity)

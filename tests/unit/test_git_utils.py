@@ -12,6 +12,7 @@ from envdrift.utils.git import (
     ensure_gitignore_entries,
     get_file_from_git,
     get_git_root,
+    has_git_head,
     is_file_modified,
     is_file_tracked,
     is_git_repo,
@@ -52,6 +53,39 @@ class TestGetGitRoot:
     def test_returns_none_for_non_git_directory(self, tmp_path: Path):
         """Should return None when not in a git repo."""
         assert get_git_root(tmp_path) is None
+
+
+class TestHasGitHead:
+    """Tests for distinguishing an initialized repository from committed history."""
+
+    def test_false_for_repository_without_commits(self, tmp_path: Path):
+        subprocess.run(["git", "init"], cwd=tmp_path, capture_output=True, check=True)
+
+        assert has_git_head(tmp_path) is False
+
+    def test_true_after_initial_commit(self, tmp_path: Path):
+        subprocess.run(["git", "init"], cwd=tmp_path, capture_output=True, check=True)
+        subprocess.run(
+            [
+                "git",
+                "-c",
+                "user.name=Test",
+                "-c",
+                "user.email=test@example.com",
+                "commit",
+                "--allow-empty",
+                "-m",
+                "initial",
+            ],
+            cwd=tmp_path,
+            capture_output=True,
+            check=True,
+        )
+
+        assert has_git_head(tmp_path) is True
+
+    def test_false_outside_repository(self, tmp_path: Path):
+        assert has_git_head(tmp_path) is False
 
 
 class TestIsFileTracked:

@@ -448,8 +448,8 @@ class TestScanEngine:
 
         assert names == ["gitleaks"]
 
-    def test_engine_skips_uninstalled_when_auto_install_disabled(self, monkeypatch):
-        """Disabled auto-install skips unavailable scanners."""
+    def test_engine_keeps_uninstalled_when_auto_install_disabled(self, monkeypatch, tmp_path):
+        """A requested unavailable scanner must run and report its failure."""
 
         def make_scanner(class_name: str, scanner_name: str):
             def __init__(self, auto_install: bool = True):
@@ -469,7 +469,7 @@ class TestScanEngine:
                 paths: list[Path],
                 include_git_history: bool = False,
             ) -> ScanResult:
-                return ScanResult(scanner_name=self.name)
+                return ScanResult(scanner_name=self.name, error="gitleaks not found")
 
             return type(
                 class_name,
@@ -496,7 +496,14 @@ class TestScanEngine:
             auto_install=False,
         )
         engine = ScanEngine(config)
-        assert engine.scanners == []
+        assert [scanner.name for scanner in engine.scanners] == ["gitleaks"]
+
+        result = engine.scan([tmp_path])
+
+        assert result.scanners_used == ["gitleaks"]
+        assert result.has_errors is True
+        assert result.results[0].error == "gitleaks not found"
+        assert result.exit_code == 5
 
     def test_scan_empty_directory(self, tmp_path: Path):
         """Test scanning an empty directory."""

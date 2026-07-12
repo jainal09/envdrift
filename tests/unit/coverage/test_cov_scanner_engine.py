@@ -2,8 +2,8 @@
 
 These tests target previously-uncovered branches in ScanEngine:
 - ImportError fall-throughs for every optional external scanner.
-- Successful initialization of the kingfisher/git-secrets/talisman/trivy/
-  infisical scanners (the constructor + is_installed branches).
+- Successful initialization of every selected external scanner, including the
+  unavailable-binary path that must remain visible in scan results.
 - The scan() early-return when no scanners are configured.
 - The scan() loop's future.result() exception handler and progress callback.
 - The per-scanner timeout branch.
@@ -31,12 +31,12 @@ from envdrift.scanner.base import (
 from envdrift.scanner.engine import GuardConfig, ScanEngine
 
 
-def _make_scanner_class(class_name: str, scanner_name: str):
+def _make_scanner_class(class_name: str, scanner_name: str, *, installed: bool = True):
     """Build a concrete ScannerBackend subclass that records its kwargs."""
 
     def __init__(self, **kwargs) -> None:
         self.init_kwargs = kwargs
-        self._installed = True
+        self._installed = installed
 
     def name(self) -> str:
         return scanner_name
@@ -164,6 +164,22 @@ class TestOptionalScannerInitialization:
 
         names = [s.name for s in engine.scanners]
         assert names == [scanner_name]
+
+    @pytest.mark.parametrize(
+        ("flag", "module_path", "cls_attr", "scanner_name"),
+        [(flag, mod, cls, name) for flag, (mod, cls, name) in OPTIONAL_SCANNERS.items()],
+    )
+    def test_selected_scanner_is_retained_when_binary_is_unavailable(
+        self, flag, module_path, cls_attr, scanner_name, monkeypatch
+    ):
+        """Disabled auto-install must not silently drop a selected scanner."""
+        fake_cls = _make_scanner_class(cls_attr, scanner_name, installed=False)
+        fake_module = SimpleNamespace(**{cls_attr: fake_cls})
+        monkeypatch.setitem(sys.modules, module_path, fake_module)
+
+        engine = ScanEngine(_off_config(enable=flag, auto_install=False))
+
+        assert [scanner.name for scanner in engine.scanners] == [scanner_name]
 
     def test_kingfisher_receives_expected_kwargs(self, monkeypatch):
         """Kingfisher is constructed with its rich set of detection kwargs."""
