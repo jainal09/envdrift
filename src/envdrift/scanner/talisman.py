@@ -105,6 +105,12 @@ def _friendly_execution_error(error: str, path: Path) -> str:
     return error
 
 
+def _execution_error(result: subprocess.CompletedProcess[str], path: Path, work_dir: Path) -> str:
+    """Build a useful error from a failed Talisman subprocess."""
+    raw_error = result.stderr.strip() or result.stdout.strip() or f"talisman scan failed for {path}"
+    return _friendly_execution_error(raw_error, work_dir)
+
+
 def _extract_secret_from_message(message: str) -> str:
     """Recover the offending secret/content from a talisman failure message.
 
@@ -544,15 +550,10 @@ class TalismanScanner(ScannerBackend):
 
                     # Check for execution errors: non-zero exit code without valid report
                     if result.returncode != 0 and not report_found:
-                        # Prefer stderr over stdout for error messages
-                        stderr_msg = result.stderr.strip()
-                        stdout_msg = result.stdout.strip()
-                        error_msg = stderr_msg or stdout_msg or f"talisman scan failed for {path}"
-                        error_msg = _friendly_execution_error(error_msg, work_dir)
                         return ScanResult(
                             scanner_name=self.name,
                             findings=all_findings,
-                            error=error_msg,
+                            error=_execution_error(result, path, work_dir),
                             duration_ms=int((time.time() - start_time) * 1000),
                         )
 
