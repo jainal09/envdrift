@@ -586,28 +586,6 @@ class TestGitleaksScanExecution:
         assert result.error is not None
         assert "timed out" in result.error.lower()
 
-    def test_scan_with_git_history_flag(self, mock_scanner: GitleaksScanner, tmp_path: Path):
-        """Test that scan passes correct args for git history scan."""
-        with patch.object(mock_scanner, "_find_binary", return_value=mock_scanner._binary_path):
-            with patch("subprocess.run") as mock_run:
-                mock_run.return_value = MagicMock(stdout="[]", stderr="", returncode=0)
-                mock_scanner.scan([tmp_path], include_git_history=True)
-
-        # Check that --no-git was NOT passed
-        call_args = mock_run.call_args[0][0]
-        assert "--no-git" not in call_args
-
-    def test_scan_without_git_history_flag(self, mock_scanner: GitleaksScanner, tmp_path: Path):
-        """Test that scan passes --no-git when not scanning history."""
-        with patch.object(mock_scanner, "_find_binary", return_value=mock_scanner._binary_path):
-            with patch("subprocess.run") as mock_run:
-                mock_run.return_value = MagicMock(stdout="[]", stderr="", returncode=0)
-                mock_scanner.scan([tmp_path], include_git_history=False)
-
-        # Check that --no-git WAS passed
-        call_args = mock_run.call_args[0][0]
-        assert "--no-git" in call_args
-
     def test_scan_multiple_paths(self, mock_scanner: GitleaksScanner, tmp_path: Path):
         """Test scanning multiple paths."""
         path1 = tmp_path / "dir1"

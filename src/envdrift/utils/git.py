@@ -79,6 +79,32 @@ def get_git_root(path: Path) -> Path | None:
         return None
 
 
+def has_git_head(path: Path) -> bool:
+    """Return whether the repository containing ``path`` has a commit at HEAD.
+
+    An initialized repository with no commits is a valid work tree, but history
+    scanners cannot produce a trustworthy verdict for it. Keep that state
+    distinct from a repository with an empty *working tree*.
+    """
+    git_root = get_git_root(path)
+    if git_root is None:
+        return False
+
+    try:
+        result = subprocess.run(  # nosec B603, B607
+            ["git", "rev-parse", "--verify", "HEAD^{commit}"],
+            cwd=str(git_root),
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="surrogateescape",
+            timeout=10,
+        )
+        return result.returncode == 0
+    except (subprocess.TimeoutExpired, FileNotFoundError):
+        return False
+
+
 def get_file_from_git(file_path: Path, ref: str = "HEAD") -> str | None:
     """
     Get the content of a file from a git ref (default: HEAD).

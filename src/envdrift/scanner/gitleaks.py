@@ -35,6 +35,7 @@ from envdrift.scanner.base import (
     ScanResult,
 )
 from envdrift.scanner.patterns import hash_secret, redact_secret
+from envdrift.utils.git import get_git_root, has_git_head
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -77,6 +78,55 @@ class GitleaksNotFoundError(Exception):
     """Gitleaks binary not found."""
 
     pass
+
+
+def _git_history_target(path: Path) -> tuple[Path | None, str | None]:
+    """Resolve and validate the repository Gitleaks must scan for ``path``."""
+    git_root = get_git_root(path)
+    if git_root is None:
+        return None, f"Cannot scan Git history for {path}: not inside a Git repository"
+    if not has_git_head(git_root):
+        return None, f"Cannot scan Git history for {path}: the Git repository has no commits"
+    return git_root, None
+
+
+def _prepare_scan_targets(
+    paths: list[Path], *, include_git_history: bool
+) -> tuple[list[tuple[Path, Path]], list[str]]:
+    """Build unique command targets and finding bases for one Gitleaks run.
+
+    Preflight failures are collected PER TARGET: a path that cannot be
+    history-scanned (outside a git repository, or a repository with no
+    commits) yields a diagnostic without discarding the other, valid targets.
+    One bad argument used to abort the whole run — regardless of argument
+    order — and suppress the valid repository's history findings (#641).
+    """
+    targets: list[tuple[Path, Path]] = []
+    errors: list[str] = []
+    seen_history_roots: set[Path] = set()
+    for path in paths:
+        if not path.exists():
+            continue
+        if not include_git_history:
+            targets.append((path, path))
+            continue
+
+        history_target, error = _git_history_target(path)
+        if error is not None or history_target is None:
+            errors.append(error or f"Cannot scan Git history for {path}")
+            continue
+        resolved_target = history_target.resolve()
+        if resolved_target in seen_history_roots:
+            continue
+        seen_history_roots.add(resolved_target)
+        targets.append((history_target, history_target))
+    return targets, errors
+
+
+def _combined_error(run_error: str | None, target_errors: list[str]) -> str | None:
+    """Join a run failure with the per-target preflight diagnostics (#641)."""
+    parts = ([run_error] if run_error else []) + target_errors
+    return "; ".join(parts) if parts else None
 
 
 class GitleaksInstallError(Exception):
@@ -496,45 +546,51 @@ class GitleaksScanner(ScannerBackend):
             ScanResult containing all findings.
         """
         start_time = time.time()
+        all_findings: list[ScanFinding] = []
+        total_files = 0
+
+        # Per-target preflight: invalid history targets become diagnostics,
+        # the valid ones still get scanned. Every returned ScanResult carries
+        # the diagnostics in its error so an invalid argument keeps the run
+        # truthfully incomplete without suppressing real findings (#641).
+        scan_targets, target_errors = _prepare_scan_targets(
+            paths, include_git_history=include_git_history
+        )
+        if target_errors and not scan_targets:
+            return ScanResult(
+                scanner_name=self.name,
+                error=_combined_error(None, target_errors),
+                duration_ms=int((time.time() - start_time) * 1000),
+            )
 
         try:
             binary = self._find_binary()
         except GitleaksNotFoundError as e:
             return ScanResult(
                 scanner_name=self.name,
-                error=str(e),
+                error=_combined_error(str(e), target_errors),
                 duration_ms=int((time.time() - start_time) * 1000),
             )
 
-        all_findings: list[ScanFinding] = []
-        total_files = 0
-
-        for path in paths:
-            if not path.exists():
-                continue
-
+        for scan_target, finding_base in scan_targets:
             # Create temp file for JSON output (gitleaks requires --report-path for JSON)
             with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as report_file:
                 report_path = Path(report_file.name)
 
             try:
                 # Build command
+                command = "git" if include_git_history else "dir"
                 args = [
                     str(binary),
-                    "detect",
-                    "--source",
-                    str(path),
+                    command,
                     "--report-format",
                     "json",
                     "--report-path",
                     str(report_path),
                     "--exit-code",
                     "0",  # Don't fail on findings, we handle that
+                    str(scan_target),
                 ]
-
-                # If not scanning git history, use --no-git
-                if not include_git_history:
-                    args.append("--no-git")
 
                 result = subprocess.run(  # nosec B603
                     args,
@@ -543,19 +599,19 @@ class GitleaksScanner(ScannerBackend):
                     encoding="utf-8",
                     errors="replace",
                     timeout=300,  # 5 minute timeout
-                    cwd=str(path) if path.is_dir() else str(path.parent),
+                    cwd=str(scan_target) if scan_target.is_dir() else str(scan_target.parent),
                 )
 
                 if result.returncode != 0:
                     error_msg = (
                         result.stderr.strip()
                         or result.stdout.strip()
-                        or f"gitleaks scan failed for {path} (exit code {result.returncode})"
+                        or f"gitleaks scan failed for {scan_target} (exit code {result.returncode})"
                     )
                     return ScanResult(
                         scanner_name=self.name,
                         findings=all_findings,
-                        error=error_msg,
+                        error=_combined_error(error_msg, target_errors),
                         duration_ms=int((time.time() - start_time) * 1000),
                     )
 
@@ -570,7 +626,7 @@ class GitleaksScanner(ScannerBackend):
                             }
                             total_files += len(files_with_findings)
                             for item in findings_data:
-                                finding = self._parse_finding(item, path)
+                                finding = self._parse_finding(item, finding_base)
                                 if finding:
                                     all_findings.append(finding)
                     except json.JSONDecodeError:
@@ -581,14 +637,14 @@ class GitleaksScanner(ScannerBackend):
                 return ScanResult(
                     scanner_name=self.name,
                     findings=all_findings,
-                    error=f"Scan timed out for {path}",
+                    error=_combined_error(f"Scan timed out for {scan_target}", target_errors),
                     duration_ms=int((time.time() - start_time) * 1000),
                 )
             except Exception as e:
                 return ScanResult(
                     scanner_name=self.name,
                     findings=all_findings,
-                    error=str(e),
+                    error=_combined_error(str(e), target_errors),
                     duration_ms=int((time.time() - start_time) * 1000),
                 )
             finally:
@@ -600,6 +656,7 @@ class GitleaksScanner(ScannerBackend):
             scanner_name=self.name,
             findings=all_findings,
             files_scanned=total_files,
+            error=_combined_error(None, target_errors),
             duration_ms=int((time.time() - start_time) * 1000),
         )
 

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -103,6 +104,18 @@ class TestJsonOutput:
         assert by_severity["high"] == 1
         assert by_severity["medium"] == 0
 
+    def test_json_total_matches_reported_findings_and_preserves_raw_count(
+        self, sample_result: AggregatedScanResult
+    ):
+        """Filtered/deduplicated JSON totals agree with findings and severities."""
+        sample_result.total_findings = 7
+
+        data = json.loads(format_json(sample_result))
+
+        assert data["summary"]["total"] == len(data["findings"]) == 2
+        assert sum(data["summary"]["by_severity"].values()) == 2
+        assert data["summary"]["total_raw"] == 7
+
     def test_json_has_exit_code(self, sample_result: AggregatedScanResult):
         """Test that JSON contains exit code."""
         output = format_json(sample_result)
@@ -163,6 +176,39 @@ class TestJsonOutput:
         assert "scanner_results" in data
         assert len(data["scanner_results"]) == 2
         assert data["scanner_results"][1]["error"] == "boom"
+
+    def test_json_skip_record_distinguishable_from_clean_and_failed(self):
+        """A skipped default scanner is neither "ran clean" nor "failed" (#641)."""
+        result = AggregatedScanResult(
+            results=[
+                ScanResult(scanner_name="native", files_scanned=3, duration_ms=10),
+                ScanResult(
+                    scanner_name="gitleaks",
+                    skip_reason="gitleaks is not installed and auto-install is disabled",
+                ),
+            ],
+            total_findings=0,
+            unique_findings=[],
+            scanners_used=["native"],
+            total_duration_ms=15,
+        )
+        data = json.loads(format_json(result))
+
+        native, gitleaks = data["scanner_results"]
+        assert native == {
+            "name": "native",
+            "files_scanned": 3,
+            "duration_ms": 10,
+            "error": None,
+            "skipped": False,
+            "skip_reason": None,
+        }
+        assert gitleaks["skipped"] is True
+        assert gitleaks["error"] is None
+        assert "not installed" in gitleaks["skip_reason"]
+        # A skip is not a failure: the run stays a clean exit 0.
+        assert data["exit_code"] == 0
+        assert data["has_blocking_findings"] is False
 
 
 class TestSarifOutput:
@@ -440,15 +486,40 @@ class TestRichOutput:
         assert "AKIA1234" not in out  # Preview column dropped at narrow width
 
     def test_format_rich_non_interactive_keeps_all_columns(self):
-        """A non-interactive console (`guard --ci`, piped) keeps all five columns
-        even at the default width 80, so CI logs retain rule_id and the preview.
-        """
+        """Narrow CI/piped output stacks fields without dropping any data."""
         console = Console(record=True, force_terminal=False, no_color=True, width=80)
         format_rich(self._aws_finding_result(), console)
         out = console.export_text()
 
         assert "aws-access-key-id" in out  # Rule kept for CI triage
         assert "AKIA1234" in out  # Preview kept
+
+    def test_format_rich_very_narrow_non_interactive_is_readable(self):
+        """A 40-column redirected log uses complete stacked records, not stripes."""
+        console = Console(record=True, force_terminal=False, no_color=True, width=40)
+        format_rich(self._aws_finding_result(), console)
+        out = console.export_text()
+        normalized = " ".join(out.split())
+
+        assert "CRIT" in out
+        assert "Rule:" in out
+        assert "aws-access-key-id" in out
+        assert "Description:" in out
+        assert "version control history" in normalized
+        assert "Preview:" in out
+        assert "AKIA1234" in out
+
+    def test_format_rich_shows_history_commit(self):
+        """Human output identifies the commit that contains a historical leak."""
+        result = self._aws_finding_result()
+        result.unique_findings[0] = replace(
+            result.unique_findings[0], commit_sha="abcdef1234567890"
+        )
+        console = Console(record=True, force_terminal=False, no_color=True, width=80)
+
+        format_rich(result, console)
+
+        assert "abcdef12 @ .env" in console.export_text()
 
     def test_format_rich_wide_terminal_shows_all_columns(self):
         """Wide terminal shows the Rule and Preview columns too."""
@@ -462,16 +533,18 @@ class TestRichOutput:
 
     def test_build_findings_table_column_count(self):
         """Interactive narrow drops to 3 columns; interactive wide keeps 5;
-        non-interactive (CI/logs) always keeps all 5 regardless of width."""
+        narrow non-interactive logs stack one complete record per row."""
         from envdrift.scanner.output import _build_findings_table
 
         r = self._aws_finding_result()
         narrow = _build_findings_table(r, interactive=True, wide=False)
         wide = _build_findings_table(r, interactive=True, wide=True)
         ci = _build_findings_table(r, interactive=False, wide=False)
+        wide_ci = _build_findings_table(r, interactive=False, wide=True)
         assert len(narrow.columns) == 3
         assert len(wide.columns) == 5
-        assert len(ci.columns) == 5  # non-interactive keeps all columns even when narrow
+        assert len(ci.columns) == 1
+        assert len(wide_ci.columns) == 5
 
     def test_format_rich_threshold_99_is_narrow(self):
         """Width 99 (one below the threshold) drops the secondary Preview column."""
@@ -506,6 +579,33 @@ class TestRichOutput:
         assert "native" in output
         assert "boom" in output
         assert "Files with findings" in output
+
+    def test_format_rich_shows_skipped_scanners_without_failing_the_run(self):
+        """A skipped default scanner renders its own panel, run stays clean (#641)."""
+        result = AggregatedScanResult(
+            results=[
+                ScanResult(scanner_name="native", files_scanned=1, duration_ms=5),
+                ScanResult(
+                    scanner_name="gitleaks",
+                    skip_reason="gitleaks is not installed and auto-install is disabled",
+                ),
+            ],
+            total_findings=0,
+            unique_findings=[],
+            scanners_used=["native"],
+            total_duration_ms=5,
+        )
+        console = Console(record=True, force_terminal=True, width=120)
+        format_rich(result, console)
+        output = " ".join(console.export_text().split())
+
+        assert "Scanners Skipped" in output
+        assert "gitleaks" in output
+        assert "not installed" in output
+        # The skip must not masquerade as a failure or block the clean verdict.
+        assert "Scanner Errors" not in output
+        assert "No secrets or policy violations detected" in output
+        assert result.exit_code == 0
 
 
 def _aggregate(findings: list[ScanFinding]) -> AggregatedScanResult:

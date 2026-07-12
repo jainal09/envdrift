@@ -156,6 +156,11 @@ class GuardConfig:
     """
 
     scanners: list[str] = field(default_factory=lambda: ["native", "gitleaks"])
+    # Whether the ``scanners`` list was written in the config file (as opposed
+    # to the built-in default set). Explicitly-listed scanners fail closed when
+    # their binary is unavailable; default-set ones are skipped with a visible
+    # warning instead (#641).
+    scanners_explicit: bool = False
     auto_install: bool = True
     include_history: bool = False
     check_entropy: bool | None = None  # None = entropy on env files only (default)
@@ -498,6 +503,7 @@ def _build_guard_config(guard_section: dict[str, Any]) -> GuardConfig:
         )
     return GuardConfig(
         scanners=scanners,
+        scanners_explicit="scanners" in guard_section,
         auto_install=guard_section.get("auto_install", True),
         include_history=guard_section.get("include_history", False),
         # Wrong-typed guard knobs are rejected here, at config-load time, with

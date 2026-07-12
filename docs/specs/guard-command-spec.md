@@ -912,7 +912,8 @@ def format_json(result: AggregatedScanResult) -> str:
     return json.dumps({
         "findings": [f.to_dict() for f in result.unique_findings],
         "summary": {
-            "total": result.total_findings,
+            "total": len(result.unique_findings),
+            "total_raw": result.total_findings,
             "unique": len(result.unique_findings),
             "by_severity": {
                 s.value: sum(1 for f in result.unique_findings if f.severity == s)
@@ -1454,6 +1455,7 @@ class TrufflehogScanner(ScannerBackend):
 
 from __future__ import annotations
 
+import logging
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -1469,6 +1471,8 @@ from .native import NativeScanner
 from .gitleaks import GitleaksScanner
 from .trufflehog import TrufflehogScanner
 
+logger = logging.getLogger(__name__)
+
 
 @dataclass
 class GuardConfig:
@@ -1482,6 +1486,9 @@ class GuardConfig:
     entropy_threshold: float = 4.5
     ignore_paths: list[str] = field(default_factory=list)
     fail_on_severity: FindingSeverity = FindingSeverity.HIGH
+    # Scanners the caller EXPLICITLY requested (CLI flag or a `scanners`
+    # list written in the config), as opposed to the built-in default set.
+    explicit_scanners: list[str] = field(default_factory=list)
 
     @classmethod
     def from_toml(cls, config: dict) -> GuardConfig:
@@ -1511,6 +1518,10 @@ class ScanEngine:
     def __init__(self, config: GuardConfig):
         self.config = config
         self.scanners: list[ScannerBackend] = []
+        # Skip records for default-set scanners whose binary is unavailable
+        # with auto-install disabled; included in every aggregated result.
+        self.skipped_results: list[ScanResult] = []
+        self._explicit_scanner_names = frozenset(self.config.explicit_scanners)
 
         # Initialize scanners based on config
         if config.use_native:
@@ -1521,19 +1532,43 @@ class ScanEngine:
             ))
 
         if config.use_gitleaks:
-            scanner = GitleaksScanner(auto_install=config.auto_install)
-            if scanner.is_installed() or config.auto_install:
-                self.scanners.append(scanner)
+            self._retain_scanner(GitleaksScanner(auto_install=config.auto_install))
 
         if config.use_trufflehog:
-            scanner = TrufflehogScanner(auto_install=config.auto_install)
-            if scanner.is_installed() or config.auto_install:
-                self.scanners.append(scanner)
+            self._retain_scanner(TrufflehogScanner(auto_install=config.auto_install))
+
+    def _retain_scanner(self, scanner: ScannerBackend) -> None:
+        """Retain an external scanner, or record a skip when it cannot run.
+
+        Explicitly-requested scanners (``config.explicit_scanners``) are always
+        retained: with the binary unavailable and auto-install disabled the
+        scan records their failure and the run exits 5 (scan incomplete), never
+        the all-clear 0. A scanner active only via the DEFAULT set is skipped
+        instead — with a warning and a truthful skip record — so a missing
+        optional binary cannot fail a run the user never asked it to gate
+        (#641).
+        """
+        if (
+            self.config.auto_install
+            or scanner.name in self._explicit_scanner_names
+            or scanner.is_installed()
+        ):
+            self.scanners.append(scanner)
+            return
+        reason = (
+            f"{scanner.name} is not installed and auto-install is disabled; "
+            "skipping this default-selection scanner. Install it or select it "
+            "explicitly to make the missing binary a blocking scan error."
+        )
+        logger.warning(reason)
+        self.skipped_results.append(ScanResult(scanner_name=scanner.name, skip_reason=reason))
 
     def scan(self, paths: list[Path]) -> AggregatedScanResult:
         """Run all scanners and aggregate results."""
         start_time = time.time()
-        results: list[ScanResult] = []
+        # Skip records ride along in `results` so every output mode sees a
+        # default-set scanner that was skipped for a missing binary.
+        results: list[ScanResult] = list(self.skipped_results)
 
         for scanner in self.scanners:
             result = scanner.scan(
@@ -1779,6 +1814,26 @@ envdrift guard [OPTIONS] [PATHS]...
 | `--fail-on` | | `high` | Minimum severity to fail |
 | `--verbose` | `-v` | `false` | Show detailed output including scanner info |
 | `--config` | `-c` | | Path to `envdrift.toml` config file (auto-detected if not specified) |
+
+### Explicit vs default scanner selection
+
+A scanner is **explicitly selected** when its CLI flag is passed (e.g.
+`--gitleaks`) or when the config file itself writes a `[guard] scanners`
+list that includes it. A scanner active only via the built-in default set
+(`["native", "gitleaks"]` with no `scanners` key and no flag) is a
+**default-set** scanner.
+
+The distinction matters only when the scanner's binary is unavailable and
+auto-install is disabled (`--no-auto-install` / `auto_install = false`):
+
+- **Explicit + unavailable**: the scanner is retained fail-closed. Its
+  failure is recorded (`scanner_results[].error`), the scan is incomplete,
+  and the run exits `5` unless a blocking finding produces a severity code.
+- **Default-set + unavailable**: the scanner is skipped. The skip is visible
+  as a warning in human output (Scanners Skipped panel + stderr warning) and
+  recorded truthfully in `--json` (`scanner_results[].skipped: true` with a
+  `skip_reason`, `error` stays `null`), and the exit code is unaffected — a
+  missing optional binary cannot fail a run nobody asked it to gate.
 
 ### Exit Codes
 

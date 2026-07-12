@@ -35,6 +35,7 @@ from envdrift.scanner.base import (
 )
 from envdrift.scanner.patterns import hash_secret, redact_secret
 from envdrift.scanner.platform_utils import get_platform_info, get_venv_bin_dir
+from envdrift.utils.git import get_git_root, has_git_head
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -81,6 +82,39 @@ _TALISMAN_SECRET_MARKERS = (
     "secret pattern :",
     "secret pattern:",
 )
+
+_NO_COMMIT_ERROR_MARKERS = (
+    "exit status 128",
+    "bad revision",
+    "unknown revision",
+    "ambiguous argument 'head'",
+    "does not have any commits",
+)
+
+
+def _friendly_execution_error(error: str, display_path: Path, check_path: Path) -> str:
+    """Translate Talisman's opaque empty-repository failure when provable.
+
+    ``check_path`` locates the Git repository (the directory the scan ran
+    from); ``display_path`` is what the user asked to scan and is what the
+    message names — for a file target the two differ, and naming the parent
+    directory instead of the file misdirects the user (#641).
+    """
+    normalized = error.lower()
+    if any(marker in normalized for marker in _NO_COMMIT_ERROR_MARKERS):
+        git_root = get_git_root(check_path)
+        if git_root is not None and not has_git_head(git_root):
+            return (
+                f"Talisman cannot scan {display_path}: the Git repository has no commits. "
+                "Create an initial commit, then run the scan again."
+            )
+    return error
+
+
+def _execution_error(result: subprocess.CompletedProcess[str], path: Path, work_dir: Path) -> str:
+    """Build a useful error from a failed Talisman subprocess."""
+    raw_error = result.stderr.strip() or result.stdout.strip() or f"talisman scan failed for {path}"
+    return _friendly_execution_error(raw_error, path, work_dir)
 
 
 def _extract_secret_from_message(message: str) -> str:
@@ -522,14 +556,10 @@ class TalismanScanner(ScannerBackend):
 
                     # Check for execution errors: non-zero exit code without valid report
                     if result.returncode != 0 and not report_found:
-                        # Prefer stderr over stdout for error messages
-                        stderr_msg = result.stderr.strip()
-                        stdout_msg = result.stdout.strip()
-                        error_msg = stderr_msg or stdout_msg or f"talisman scan failed for {path}"
                         return ScanResult(
                             scanner_name=self.name,
                             findings=all_findings,
-                            error=error_msg,
+                            error=_execution_error(result, path, work_dir),
                             duration_ms=int((time.time() - start_time) * 1000),
                         )
 

@@ -165,6 +165,10 @@ class ScanResult:
         files_scanned: Number of files that were scanned.
         duration_ms: Time taken to complete the scan in milliseconds.
         error: Error message if the scan failed, None otherwise.
+        skip_reason: Why the scanner was skipped without running, None when it
+            ran. A skipped scanner is distinct from both "ran clean" and
+            "failed": it carries no error (the run stays complete for exit-code
+            purposes) but must remain visible in every output mode (#641).
     """
 
     scanner_name: str
@@ -172,11 +176,17 @@ class ScanResult:
     files_scanned: int = 0
     duration_ms: int = 0
     error: str | None = None
+    skip_reason: str | None = None
 
     @property
     def success(self) -> bool:
         """Check if the scan completed without errors."""
         return self.error is None
+
+    @property
+    def skipped(self) -> bool:
+        """Whether this scanner was skipped without running (#641)."""
+        return self.skip_reason is not None
 
 
 @dataclass

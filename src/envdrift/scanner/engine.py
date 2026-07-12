@@ -78,6 +78,13 @@ class GuardConfig:
         allowed_clear_files: Files that are intentionally unencrypted (from partial_encryption config).
         combined_files: Combined files from partial_encryption config (secret + clear merged).
         mapped_env_files: Custom env files from vault.sync mappings.
+        explicit_scanners: Names of scanners the caller EXPLICITLY requested
+            (CLI flag or a ``scanners`` list written in the config), as opposed
+            to scanners active only via the built-in default set. An explicit
+            scanner whose binary is unavailable with auto-install disabled is
+            retained fail-closed (recorded error, scan incomplete, exit 5); a
+            default-set one is skipped with a visible warning and a truthful
+            skip record instead of failing the run (#641).
     """
 
     use_native: bool = True
@@ -105,6 +112,7 @@ class GuardConfig:
         default_factory=list
     )  # Combined files from partial_encryption
     mapped_env_files: list[str] = field(default_factory=list)
+    explicit_scanners: list[str] = field(default_factory=list)
 
     @classmethod
     def from_dict(cls, config: dict) -> GuardConfig:
@@ -127,7 +135,10 @@ class GuardConfig:
         """
         guard_config = config.get("guard", {})
 
-        # Parse scanners list
+        # Parse scanners list. A ``scanners`` key written by the caller is an
+        # explicit selection (those scanners fail closed when unavailable);
+        # the fallback default set is not (#641).
+        scanners_configured = "scanners" in guard_config
         scanners = guard_config.get("scanners", ["native", "gitleaks"])
         if isinstance(scanners, str):
             scanners = [scanners]
@@ -172,6 +183,7 @@ class GuardConfig:
             allowed_clear_files=allowed_clear_files,
             combined_files=combined_files,
             mapped_env_files=mapped_env_files,
+            explicit_scanners=list(scanners) if scanners_configured else [],
         )
 
     @staticmethod
@@ -269,6 +281,12 @@ class ScanEngine:
         """
         self.config = config or GuardConfig()
         self.scanners: list[ScannerBackend] = []
+        # Skip records for default-set scanners whose binary is unavailable
+        # with auto-install disabled: they must stay visible in every output
+        # mode without failing the run the way an explicit selection does
+        # (#641). Included in every AggregatedScanResult this engine produces.
+        self.skipped_results: list[ScanResult] = []
+        self._explicit_scanner_names = frozenset(self.config.explicit_scanners)
 
         # Initialize centralized ignore filter for post-scan filtering.
         # User-configured ignore_paths suppress everything (explicit opt-out);
@@ -312,6 +330,32 @@ class ScanEngine:
                 error=str(e),
             )
 
+    def _retain_scanner(self, scanner: ScannerBackend) -> None:
+        """Retain an external scanner, or record a skip when it cannot run.
+
+        Explicitly-requested scanners (``config.explicit_scanners``) are always
+        retained: with the binary unavailable and auto-install disabled the
+        scan records their failure and the run exits 5 (scan incomplete), never
+        the all-clear 0. A scanner active only via the DEFAULT set is skipped
+        instead — with a warning and a truthful skip record — so a missing
+        optional binary cannot fail a run the user never asked it to gate
+        (#641).
+        """
+        if (
+            self.config.auto_install
+            or scanner.name in self._explicit_scanner_names
+            or scanner.is_installed()
+        ):
+            self.scanners.append(scanner)
+            return
+        reason = (
+            f"{scanner.name} is not installed and auto-install is disabled; "
+            "skipping this default-selection scanner. Install it or select it "
+            "explicitly to make the missing binary a blocking scan error."
+        )
+        logger.warning(reason)
+        self.skipped_results.append(ScanResult(scanner_name=scanner.name, skip_reason=reason))
+
     def _initialize_scanners(self) -> None:
         """Initialize scanner instances based on configuration."""
         # Native scanner (always available)
@@ -333,8 +377,7 @@ class ScanEngine:
                 from envdrift.scanner.gitleaks import GitleaksScanner
 
                 scanner = GitleaksScanner(auto_install=self.config.auto_install)
-                if scanner.is_installed() or self.config.auto_install:
-                    self.scanners.append(scanner)
+                self._retain_scanner(scanner)
             except ImportError:
                 pass  # Gitleaks not yet implemented
 
@@ -344,8 +387,7 @@ class ScanEngine:
                 from envdrift.scanner.trufflehog import TrufflehogScanner
 
                 scanner = TrufflehogScanner(auto_install=self.config.auto_install)
-                if scanner.is_installed() or self.config.auto_install:
-                    self.scanners.append(scanner)
+                self._retain_scanner(scanner)
             except ImportError:
                 pass  # Trufflehog not yet implemented
 
@@ -355,8 +397,7 @@ class ScanEngine:
                 from envdrift.scanner.detect_secrets import DetectSecretsScanner
 
                 scanner = DetectSecretsScanner(auto_install=self.config.auto_install)
-                if scanner.is_installed() or self.config.auto_install:
-                    self.scanners.append(scanner)
+                self._retain_scanner(scanner)
             except ImportError:
                 pass  # detect-secrets not yet implemented
 
@@ -373,8 +414,7 @@ class ScanEngine:
                     extract_archives=True,
                     jobs=1,  # deterministic results over speed
                 )
-                if scanner.is_installed() or self.config.auto_install:
-                    self.scanners.append(scanner)
+                self._retain_scanner(scanner)
             except ImportError:
                 logger.debug("Kingfisher scanner not available - module not found")
 
@@ -387,8 +427,7 @@ class ScanEngine:
                     auto_install=self.config.auto_install,
                     register_aws=True,  # Register AWS patterns by default
                 )
-                if scanner.is_installed() or self.config.auto_install:
-                    self.scanners.append(scanner)
+                self._retain_scanner(scanner)
             except ImportError:
                 logger.debug("git-secrets scanner not available - module not found")
 
@@ -398,8 +437,7 @@ class ScanEngine:
                 from envdrift.scanner.talisman import TalismanScanner
 
                 scanner = TalismanScanner(auto_install=self.config.auto_install)
-                if scanner.is_installed() or self.config.auto_install:
-                    self.scanners.append(scanner)
+                self._retain_scanner(scanner)
             except ImportError:
                 logger.debug("Talisman scanner not available - module not found")
 
@@ -409,8 +447,7 @@ class ScanEngine:
                 from envdrift.scanner.trivy import TrivyScanner
 
                 scanner = TrivyScanner(auto_install=self.config.auto_install)
-                if scanner.is_installed() or self.config.auto_install:
-                    self.scanners.append(scanner)
+                self._retain_scanner(scanner)
             except ImportError:
                 logger.debug("Trivy scanner not available - module not found")
 
@@ -420,8 +457,7 @@ class ScanEngine:
                 from envdrift.scanner.infisical import InfisicalScanner
 
                 scanner = InfisicalScanner(auto_install=self.config.auto_install)
-                if scanner.is_installed() or self.config.auto_install:
-                    self.scanners.append(scanner)
+                self._retain_scanner(scanner)
             except ImportError:
                 logger.debug("Infisical scanner not available - module not found")
 
@@ -462,12 +498,14 @@ class ScanEngine:
                 - total_duration_ms: total scan duration in milliseconds.
         """
         start_time = time.time()
-        results: list[ScanResult] = []
+        # Skip records ride along in ``results`` so every output mode sees a
+        # default-set scanner that was skipped for a missing binary (#641).
+        results: list[ScanResult] = list(self.skipped_results)
 
         # Early return if no scanners configured
         if not self.scanners:
             return AggregatedScanResult(
-                results=[],
+                results=results,
                 total_findings=0,
                 unique_findings=[],
                 scanners_used=[],

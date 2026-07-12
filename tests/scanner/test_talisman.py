@@ -460,6 +460,61 @@ class TestTalismanScanExecution:
         assert "talisman: command not found or invalid flag" in result.error
         assert result.success is False
 
+    def test_scan_explains_empty_repository_failure(
+        self, mock_scanner: TalismanScanner, tmp_path: Path
+    ):
+        """Talisman's opaque exit-status 128 names the actionable Git state."""
+        with (
+            patch.object(mock_scanner, "_find_binary", return_value=mock_scanner._binary_path),
+            patch("envdrift.scanner.talisman.get_git_root", return_value=tmp_path),
+            patch("envdrift.scanner.talisman.has_git_head", return_value=False),
+            patch("subprocess.run") as mock_run,
+        ):
+            mock_run.return_value = MagicMock(
+                stdout="",
+                stderr="Error while scanning: exit status 128",
+                returncode=1,
+            )
+            result = mock_scanner.scan([tmp_path])
+
+        assert result.success is False
+        assert result.error is not None
+        assert "Git repository has no commits" in result.error
+        assert "initial commit" in result.error
+        assert "exit status 128" not in result.error
+
+    def test_empty_repository_failure_names_the_file_target(
+        self, mock_scanner: TalismanScanner, tmp_path: Path
+    ):
+        """The no-commits diagnostic names the FILE the user asked to scan.
+
+        For a file target Talisman runs from the file's parent directory; the
+        Git-state check must use that directory (the check path), but the
+        message must name the requested file (the display path), not its
+        parent (#641).
+        """
+        target = tmp_path / ".env"
+        target.write_text("KEY=value\n", encoding="utf-8")
+        with (
+            patch.object(mock_scanner, "_find_binary", return_value=mock_scanner._binary_path),
+            patch("envdrift.scanner.talisman.get_git_root", return_value=tmp_path) as mock_root,
+            patch("envdrift.scanner.talisman.has_git_head", return_value=False),
+            patch("subprocess.run") as mock_run,
+        ):
+            mock_run.return_value = MagicMock(
+                stdout="",
+                stderr="Error while scanning: exit status 128",
+                returncode=1,
+            )
+            result = mock_scanner.scan([target])
+
+        assert result.success is False
+        assert result.error is not None
+        assert f"Talisman cannot scan {target}:" in result.error
+        assert f"cannot scan {tmp_path}:" not in result.error
+        # Git context still resolves from the directory the scan ran in.
+        mock_root.assert_called_once_with(tmp_path)
+
     def test_scan_ignores_nonzero_exit_with_valid_report(
         self, mock_scanner: TalismanScanner, tmp_path: Path
     ):

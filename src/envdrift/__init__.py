@@ -7,6 +7,8 @@ envdrift helps you:
 - Support dotenvx encryption for secure .env files
 """
 
+import logging
+
 try:
     from envdrift._version import __version__
 except ImportError:
@@ -26,5 +28,13 @@ __author__ = "Jainal Gosaliya"
 __email__ = "gosaliya.jainal@gmail.com"
 
 from envdrift.api import diff, init, validate
+
+# Standard library-package practice (Logging HOWTO): a NullHandler on the
+# package logger so library log records (e.g. the scan engine's skip warnings)
+# never leak to stderr through logging's lastResort handler when the
+# application configures no handlers — the CLI prints its own "Warning:" line,
+# so the leak duplicated it (#641). SDK users who configure logging still
+# receive every record.
+logging.getLogger("envdrift").addHandler(logging.NullHandler())
 
 __all__ = ["__version__", "diff", "init", "validate"]
