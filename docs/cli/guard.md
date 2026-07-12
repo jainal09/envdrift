@@ -264,6 +264,16 @@ Control auto-installation of external scanners.
 envdrift guard --no-auto-install
 ```
 
+With `--no-auto-install`, a missing scanner binary is handled by how the
+scanner was selected. A scanner you selected **explicitly** — its CLI flag
+(e.g. `--gitleaks`) or a `[guard] scanners` list written in your config —
+fails closed: the failure is recorded and the run exits `5` (scan
+incomplete). A scanner active only via the built-in **default** set is
+skipped instead, with a visible warning (Scanners Skipped panel, stderr
+warning) and a truthful `skipped`/`skip_reason` record in `--json`; the
+exit code is unaffected, so `guard --no-auto-install` stays green on a
+machine that simply doesn't have the optional binary.
+
 Auto-installed scanner binaries are verified against the upstream-published
 SHA256 checksums before they are installed or executed; the install fails
 closed when the checksum is missing, unreachable, or mismatched. Set
@@ -462,6 +472,13 @@ Blocking findings take precedence — a critical finding plus a scanner error
 still exits 1. The scanner errors are listed in the human output (Scanner
 Errors panel), in `--json` under `scanner_results[].error`, and in `--sarif`
 as invocation `toolExecutionNotifications`.
+
+Exit 5 applies to scanners you **selected** — a CLI flag or a `[guard]
+scanners` list written in your config. A scanner active only via the built-in
+default set whose binary is missing under `--no-auto-install` never ran and
+never failed: it is skipped with a visible warning and a
+`scanner_results[].skipped`/`skip_reason` record, and does not change the
+exit code (see `--auto-install` above).
 
 The machine-readable verdict fields always match the process exit code: the
 `--json` document's `exit_code`/`has_blocking_findings` and the `--sarif`

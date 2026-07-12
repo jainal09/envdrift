@@ -448,8 +448,10 @@ class TestScanEngine:
 
         assert names == ["gitleaks"]
 
-    def test_engine_keeps_uninstalled_when_auto_install_disabled(self, monkeypatch, tmp_path):
-        """A requested unavailable scanner must run and report its failure."""
+    def test_engine_keeps_explicit_uninstalled_when_auto_install_disabled(
+        self, monkeypatch, tmp_path
+    ):
+        """An EXPLICITLY requested unavailable scanner must run and report its failure."""
 
         def make_scanner(class_name: str, scanner_name: str):
             def __init__(self, auto_install: bool = True):
@@ -494,6 +496,7 @@ class TestScanEngine:
             use_trufflehog=False,
             use_detect_secrets=False,
             auto_install=False,
+            explicit_scanners=["gitleaks"],
         )
         engine = ScanEngine(config)
         assert [scanner.name for scanner in engine.scanners] == ["gitleaks"]
@@ -504,6 +507,82 @@ class TestScanEngine:
         assert result.has_errors is True
         assert result.results[0].error == "gitleaks not found"
         assert result.exit_code == 5
+
+    def test_engine_skips_default_uninstalled_when_auto_install_disabled(
+        self, monkeypatch, tmp_path
+    ):
+        """A DEFAULT-set unavailable scanner is skipped with a truthful record (#641).
+
+        Same setup as the explicit test above, but without ``explicit_scanners``:
+        the run must stay green (exit 0) and the skip must be visible in the
+        aggregated results, distinguishable from both "ran clean" and "failed".
+        """
+
+        def make_scanner(class_name: str, scanner_name: str):
+            def __init__(self, auto_install: bool = True):
+                self._installed = False
+
+            def name(self) -> str:
+                return scanner_name
+
+            def description(self) -> str:
+                return f"{scanner_name} scanner"
+
+            def is_installed(self) -> bool:
+                return self._installed
+
+            def scan(
+                self,
+                paths: list[Path],
+                include_git_history: bool = False,
+            ) -> ScanResult:  # pragma: no cover - a skipped scanner must not run
+                raise AssertionError("a skipped scanner must never be scanned")
+
+            return type(
+                class_name,
+                (ScannerBackend,),
+                {
+                    "__init__": __init__,
+                    "name": property(name),
+                    "description": property(description),
+                    "is_installed": is_installed,
+                    "scan": scan,
+                },
+            )
+
+        gitleaks_mod = SimpleNamespace(
+            GitleaksScanner=make_scanner("GitleaksScanner", "gitleaks"),
+        )
+        monkeypatch.setitem(sys.modules, "envdrift.scanner.gitleaks", gitleaks_mod)
+
+        config = GuardConfig(
+            use_native=False,
+            use_gitleaks=True,
+            use_trufflehog=False,
+            use_detect_secrets=False,
+            auto_install=False,
+        )
+        engine = ScanEngine(config)
+        assert engine.scanners == []
+
+        result = engine.scan([tmp_path])
+
+        assert result.scanners_used == []
+        assert result.has_errors is False
+        assert result.exit_code == 0
+        skipped = [r for r in result.results if r.skipped]
+        assert [r.scanner_name for r in skipped] == ["gitleaks"]
+        assert skipped[0].error is None
+        assert skipped[0].skip_reason is not None
+        assert "not installed" in skipped[0].skip_reason
+
+    def test_from_dict_marks_configured_scanners_explicit(self):
+        """A ``scanners`` list written by the caller is an explicit selection (#641)."""
+        config = GuardConfig.from_dict({"guard": {"scanners": ["native", "gitleaks"]}})
+        assert config.explicit_scanners == ["native", "gitleaks"]
+
+        default_config = GuardConfig.from_dict({})
+        assert default_config.explicit_scanners == []
 
     def test_scan_empty_directory(self, tmp_path: Path):
         """Test scanning an empty directory."""

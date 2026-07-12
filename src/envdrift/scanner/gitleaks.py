@@ -92,9 +92,17 @@ def _git_history_target(path: Path) -> tuple[Path | None, str | None]:
 
 def _prepare_scan_targets(
     paths: list[Path], *, include_git_history: bool
-) -> tuple[list[tuple[Path, Path]], str | None]:
-    """Build unique command targets and finding bases for one Gitleaks run."""
+) -> tuple[list[tuple[Path, Path]], list[str]]:
+    """Build unique command targets and finding bases for one Gitleaks run.
+
+    Preflight failures are collected PER TARGET: a path that cannot be
+    history-scanned (outside a git repository, or a repository with no
+    commits) yields a diagnostic without discarding the other, valid targets.
+    One bad argument used to abort the whole run — regardless of argument
+    order — and suppress the valid repository's history findings (#641).
+    """
     targets: list[tuple[Path, Path]] = []
+    errors: list[str] = []
     seen_history_roots: set[Path] = set()
     for path in paths:
         if not path.exists():
@@ -105,13 +113,20 @@ def _prepare_scan_targets(
 
         history_target, error = _git_history_target(path)
         if error is not None or history_target is None:
-            return [], error or f"Cannot scan Git history for {path}"
+            errors.append(error or f"Cannot scan Git history for {path}")
+            continue
         resolved_target = history_target.resolve()
         if resolved_target in seen_history_roots:
             continue
         seen_history_roots.add(resolved_target)
         targets.append((history_target, history_target))
-    return targets, None
+    return targets, errors
+
+
+def _combined_error(run_error: str | None, target_errors: list[str]) -> str | None:
+    """Join a run failure with the per-target preflight diagnostics (#641)."""
+    parts = ([run_error] if run_error else []) + target_errors
+    return "; ".join(parts) if parts else None
 
 
 class GitleaksInstallError(Exception):
@@ -534,13 +549,17 @@ class GitleaksScanner(ScannerBackend):
         all_findings: list[ScanFinding] = []
         total_files = 0
 
-        scan_targets, target_error = _prepare_scan_targets(
+        # Per-target preflight: invalid history targets become diagnostics,
+        # the valid ones still get scanned. Every returned ScanResult carries
+        # the diagnostics in its error so an invalid argument keeps the run
+        # truthfully incomplete without suppressing real findings (#641).
+        scan_targets, target_errors = _prepare_scan_targets(
             paths, include_git_history=include_git_history
         )
-        if target_error is not None:
+        if target_errors and not scan_targets:
             return ScanResult(
                 scanner_name=self.name,
-                error=target_error,
+                error=_combined_error(None, target_errors),
                 duration_ms=int((time.time() - start_time) * 1000),
             )
 
@@ -549,7 +568,7 @@ class GitleaksScanner(ScannerBackend):
         except GitleaksNotFoundError as e:
             return ScanResult(
                 scanner_name=self.name,
-                error=str(e),
+                error=_combined_error(str(e), target_errors),
                 duration_ms=int((time.time() - start_time) * 1000),
             )
 
@@ -592,7 +611,7 @@ class GitleaksScanner(ScannerBackend):
                     return ScanResult(
                         scanner_name=self.name,
                         findings=all_findings,
-                        error=error_msg,
+                        error=_combined_error(error_msg, target_errors),
                         duration_ms=int((time.time() - start_time) * 1000),
                     )
 
@@ -618,14 +637,14 @@ class GitleaksScanner(ScannerBackend):
                 return ScanResult(
                     scanner_name=self.name,
                     findings=all_findings,
-                    error=f"Scan timed out for {scan_target}",
+                    error=_combined_error(f"Scan timed out for {scan_target}", target_errors),
                     duration_ms=int((time.time() - start_time) * 1000),
                 )
             except Exception as e:
                 return ScanResult(
                     scanner_name=self.name,
                     findings=all_findings,
-                    error=str(e),
+                    error=_combined_error(str(e), target_errors),
                     duration_ms=int((time.time() - start_time) * 1000),
                 )
             finally:
@@ -637,6 +656,7 @@ class GitleaksScanner(ScannerBackend):
             scanner_name=self.name,
             findings=all_findings,
             files_scanned=total_files,
+            error=_combined_error(None, target_errors),
             duration_ms=int((time.time() - start_time) * 1000),
         )
 

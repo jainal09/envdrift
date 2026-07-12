@@ -749,6 +749,28 @@ def guard(
     use_trivy_final = trivy if trivy is not None else "trivy" in guard_cfg.scanners
     use_infisical_final = infisical if infisical is not None else "infisical" in guard_cfg.scanners
 
+    # A scanner is EXPLICITLY selected when its CLI flag was passed or the
+    # config file itself lists it under [guard] scanners — not when it is
+    # active only via the built-in default set. Explicit scanners are retained
+    # fail-closed by the engine (missing binary + no auto-install => recorded
+    # error, exit 5); default-set ones are skipped with a visible warning so a
+    # missing optional binary cannot fail a run nobody asked it to gate (#641).
+    explicit_scanners = [
+        name
+        for flag, name in (
+            (gitleaks, "gitleaks"),
+            (trufflehog, "trufflehog"),
+            (detect_secrets, "detect-secrets"),
+            (kingfisher, "kingfisher"),
+            (git_secrets, "git-secrets"),
+            (talisman, "talisman"),
+            (trivy, "trivy"),
+            (infisical, "infisical"),
+        )
+        if flag is True
+        or (flag is None and guard_cfg.scanners_explicit and name in guard_cfg.scanners)
+    ]
+
     if native_only:
         use_gitleaks_final = False
         use_trufflehog_final = False
@@ -846,6 +868,7 @@ def guard(
         allowed_clear_files=allowed_clear_files,
         combined_files=combined_files,
         mapped_env_files=mapped_env_files,
+        explicit_scanners=explicit_scanners,
     )
 
     # Create output console (suppress colors in CI mode or JSON/SARIF output)
@@ -984,6 +1007,12 @@ def guard(
     finally:
         if staged_tmpdir is not None:
             staged_tmpdir.cleanup()
+
+    # A default-set scanner skipped for a missing binary (no auto-install) must
+    # be visible in every output mode; stderr keeps --json/--sarif stdout
+    # parseable (#641). Human mode additionally gets the Scanners Skipped panel.
+    for skip_record in (r for r in result.results if r.skipped):
+        _warn_stderr(skip_record.skip_reason or f"{skip_record.scanner_name} scanner was skipped")
 
     # One source of truth for the verdict (#478): compute the effective exit
     # code BEFORE rendering, so the machine-readable documents carry the exact

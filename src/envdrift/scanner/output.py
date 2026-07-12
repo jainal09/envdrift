@@ -178,6 +178,20 @@ def format_rich(result: AggregatedScanResult, console: Console | None = None) ->
     if console is None:
         console = Console()
 
+    # Surface default-set scanners skipped for a missing binary: the skip must
+    # be visible in human output even though it does not fail the run (#641).
+    skipped = [r for r in result.results if r.skipped]
+    if skipped:
+        skip_lines = [f"[yellow]{r.scanner_name}[/yellow]: {r.skip_reason}" for r in skipped]
+        console.print(
+            Panel(
+                "\n".join(skip_lines),
+                title="Scanners Skipped",
+                border_style="yellow",
+            )
+        )
+        console.print()
+
     # Surface scanner errors prominently. Filter on the ScanResult.success
     # contract (error is not None), not truthiness, so an empty-string failure
     # still lands in the panel and matches the Scan Incomplete verdict (#478).
@@ -314,6 +328,11 @@ def format_json(result: AggregatedScanResult, exit_code: int | None = None) -> s
                 "files_scanned": r.files_scanned,
                 "duration_ms": r.duration_ms,
                 "error": r.error,
+                # A skipped scanner (default-set, binary unavailable, no
+                # auto-install) is distinguishable from both "ran clean"
+                # (skipped false, error null) and "failed" (error set) (#641).
+                "skipped": r.skipped,
+                "skip_reason": r.skip_reason,
             }
             for r in result.results
         ],

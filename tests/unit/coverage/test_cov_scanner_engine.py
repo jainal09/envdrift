@@ -92,12 +92,18 @@ OPTIONAL_SCANNERS = {
 }
 
 
-def _off_config(*, enable: str | None = None, auto_install: bool = True) -> GuardConfig:
+def _off_config(
+    *,
+    enable: str | None = None,
+    auto_install: bool = True,
+    explicit_scanners: list[str] | None = None,
+) -> GuardConfig:
     """Build a GuardConfig with every scanner disabled, optionally enabling one.
 
     Args:
         enable: Name of a single ``use_*`` flag to turn on, or None for all off.
         auto_install: Value for the auto_install flag.
+        explicit_scanners: Scanner names the caller explicitly requested (#641).
     """
     flags = {
         "use_native": False,
@@ -123,6 +129,7 @@ def _off_config(*, enable: str | None = None, auto_install: bool = True) -> Guar
         use_trivy=flags["use_trivy"],
         use_infisical=flags["use_infisical"],
         auto_install=auto_install,
+        explicit_scanners=explicit_scanners or [],
     )
 
 
@@ -169,17 +176,38 @@ class TestOptionalScannerInitialization:
         ("flag", "module_path", "cls_attr", "scanner_name"),
         [(flag, mod, cls, name) for flag, (mod, cls, name) in OPTIONAL_SCANNERS.items()],
     )
-    def test_selected_scanner_is_retained_when_binary_is_unavailable(
+    def test_explicit_scanner_is_retained_when_binary_is_unavailable(
         self, flag, module_path, cls_attr, scanner_name, monkeypatch
     ):
-        """Disabled auto-install must not silently drop a selected scanner."""
+        """Disabled auto-install must not silently drop an EXPLICIT scanner."""
+        fake_cls = _make_scanner_class(cls_attr, scanner_name, installed=False)
+        fake_module = SimpleNamespace(**{cls_attr: fake_cls})
+        monkeypatch.setitem(sys.modules, module_path, fake_module)
+
+        engine = ScanEngine(
+            _off_config(enable=flag, auto_install=False, explicit_scanners=[scanner_name])
+        )
+
+        assert [scanner.name for scanner in engine.scanners] == [scanner_name]
+
+    @pytest.mark.parametrize(
+        ("flag", "module_path", "cls_attr", "scanner_name"),
+        [(flag, mod, cls, name) for flag, (mod, cls, name) in OPTIONAL_SCANNERS.items()],
+    )
+    def test_default_scanner_is_skipped_when_binary_is_unavailable(
+        self, flag, module_path, cls_attr, scanner_name, monkeypatch
+    ):
+        """A DEFAULT-set unavailable scanner is skipped with a truthful record (#641)."""
         fake_cls = _make_scanner_class(cls_attr, scanner_name, installed=False)
         fake_module = SimpleNamespace(**{cls_attr: fake_cls})
         monkeypatch.setitem(sys.modules, module_path, fake_module)
 
         engine = ScanEngine(_off_config(enable=flag, auto_install=False))
 
-        assert [scanner.name for scanner in engine.scanners] == [scanner_name]
+        assert engine.scanners == []
+        assert [r.scanner_name for r in engine.skipped_results] == [scanner_name]
+        assert engine.skipped_results[0].skipped is True
+        assert engine.skipped_results[0].error is None
 
     def test_kingfisher_receives_expected_kwargs(self, monkeypatch):
         """Kingfisher is constructed with its rich set of detection kwargs."""

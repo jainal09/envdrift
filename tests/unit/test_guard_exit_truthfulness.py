@@ -522,6 +522,96 @@ class TestGitDiscoveryErrorMachineOutput:
         assert "Invalid env_file" in payload["error"]
 
 
+# --- 7. missing binary: default-set scanner skips, explicit selection fails -----
+
+
+class TestDefaultScannerUnavailableSkips:
+    """#641: gitleaks in the DEFAULT set with a missing binary and auto-install
+    disabled must SKIP with a visible warning (exit unaffected); the same
+    scanner selected EXPLICITLY (CLI flag or a config ``scanners`` list) keeps
+    failing closed with the scan-incomplete exit 5.
+
+    These drive the real engine and the real native scanner; only the binary
+    discovery environment (``PATH`` / ``VIRTUAL_ENV``) is pointed away from any
+    gitleaks binary, so the missing-binary condition is real, not mocked.
+    """
+
+    @staticmethod
+    def _hide_gitleaks(monkeypatch, tmp_path: Path) -> Path:
+        """Make gitleaks genuinely undiscoverable, return a clean scan dir."""
+        empty_bin = tmp_path / "empty-bin"
+        empty_bin.mkdir()
+        monkeypatch.setenv("PATH", str(empty_bin))
+        monkeypatch.setenv("VIRTUAL_ENV", str(tmp_path / "no-venv"))
+        monkeypatch.chdir(tmp_path)
+        scan_dir = tmp_path / "clean"
+        scan_dir.mkdir()
+        (scan_dir / "note.txt").write_text("nothing secret here\n", encoding="utf-8")
+        return scan_dir
+
+    def test_default_set_missing_binary_skips_and_exits_zero(self, tmp_path: Path, monkeypatch):
+        scan_dir = self._hide_gitleaks(monkeypatch, tmp_path)
+        result = runner.invoke(app, ["guard", "--no-auto-install", "--json", str(scan_dir)])
+        assert result.exit_code == 0, (
+            f"a skipped default scanner must not fail the run, got {result.exit_code}\n"
+            f"{result.output}"
+        )
+        payload = json.loads(result.stdout)
+        assert payload["exit_code"] == 0
+        assert payload["has_blocking_findings"] is False
+        gitleaks = next(r for r in payload["scanner_results"] if r["name"] == "gitleaks")
+        assert gitleaks["skipped"] is True
+        assert gitleaks["error"] is None
+        assert gitleaks["skip_reason"] is not None
+        assert "not installed" in gitleaks["skip_reason"]
+        assert "gitleaks" not in payload["scanners"], "a skipped scanner did not run"
+        assert "skipping this default-selection scanner" in result.stderr, (
+            "the skip must be visible on stderr in machine modes"
+        )
+
+    def test_default_set_missing_binary_skip_visible_in_human_output(
+        self, tmp_path: Path, monkeypatch
+    ):
+        scan_dir = self._hide_gitleaks(monkeypatch, tmp_path)
+        result = runner.invoke(app, ["guard", "--no-auto-install", str(scan_dir)])
+        assert result.exit_code == 0
+        normalized = " ".join(result.output.split())
+        assert "Scanners Skipped" in normalized
+        assert "gitleaks" in normalized
+        assert "No secrets or policy violations detected" in normalized
+
+    def test_explicit_flag_missing_binary_fails_closed(self, tmp_path: Path, monkeypatch):
+        scan_dir = self._hide_gitleaks(monkeypatch, tmp_path)
+        result = runner.invoke(
+            app, ["guard", "--gitleaks", "--no-auto-install", "--json", str(scan_dir)]
+        )
+        assert result.exit_code == 5, (
+            f"an explicit scanner with a missing binary must exit 5, got {result.exit_code}\n"
+            f"{result.output}"
+        )
+        payload = json.loads(result.stdout)
+        assert payload["exit_code"] == 5
+        gitleaks = next(r for r in payload["scanner_results"] if r["name"] == "gitleaks")
+        assert gitleaks["skipped"] is False
+        assert gitleaks["error"], "the explicit scanner's failure must be recorded"
+
+    def test_config_listed_scanner_missing_binary_fails_closed(self, tmp_path: Path, monkeypatch):
+        """A ``scanners`` list written in envdrift.toml is an explicit selection."""
+        scan_dir = self._hide_gitleaks(monkeypatch, tmp_path)
+        (tmp_path / "envdrift.toml").write_text(
+            '[guard]\nscanners = ["native", "gitleaks"]\n', encoding="utf-8"
+        )
+        result = runner.invoke(app, ["guard", "--no-auto-install", "--json", str(scan_dir)])
+        assert result.exit_code == 5, (
+            f"a config-listed scanner with a missing binary must exit 5, got {result.exit_code}\n"
+            f"{result.output}"
+        )
+        payload = json.loads(result.stdout)
+        gitleaks = next(r for r in payload["scanner_results"] if r["name"] == "gitleaks")
+        assert gitleaks["skipped"] is False
+        assert gitleaks["error"]
+
+
 # --- pure exit-semantics unit coverage on the single source of truth ------------
 
 

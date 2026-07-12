@@ -177,6 +177,39 @@ class TestJsonOutput:
         assert len(data["scanner_results"]) == 2
         assert data["scanner_results"][1]["error"] == "boom"
 
+    def test_json_skip_record_distinguishable_from_clean_and_failed(self):
+        """A skipped default scanner is neither "ran clean" nor "failed" (#641)."""
+        result = AggregatedScanResult(
+            results=[
+                ScanResult(scanner_name="native", files_scanned=3, duration_ms=10),
+                ScanResult(
+                    scanner_name="gitleaks",
+                    skip_reason="gitleaks is not installed and auto-install is disabled",
+                ),
+            ],
+            total_findings=0,
+            unique_findings=[],
+            scanners_used=["native"],
+            total_duration_ms=15,
+        )
+        data = json.loads(format_json(result))
+
+        native, gitleaks = data["scanner_results"]
+        assert native == {
+            "name": "native",
+            "files_scanned": 3,
+            "duration_ms": 10,
+            "error": None,
+            "skipped": False,
+            "skip_reason": None,
+        }
+        assert gitleaks["skipped"] is True
+        assert gitleaks["error"] is None
+        assert "not installed" in gitleaks["skip_reason"]
+        # A skip is not a failure: the run stays a clean exit 0.
+        assert data["exit_code"] == 0
+        assert data["has_blocking_findings"] is False
+
 
 class TestSarifOutput:
     """Tests for SARIF output formatter."""
@@ -546,6 +579,33 @@ class TestRichOutput:
         assert "native" in output
         assert "boom" in output
         assert "Files with findings" in output
+
+    def test_format_rich_shows_skipped_scanners_without_failing_the_run(self):
+        """A skipped default scanner renders its own panel, run stays clean (#641)."""
+        result = AggregatedScanResult(
+            results=[
+                ScanResult(scanner_name="native", files_scanned=1, duration_ms=5),
+                ScanResult(
+                    scanner_name="gitleaks",
+                    skip_reason="gitleaks is not installed and auto-install is disabled",
+                ),
+            ],
+            total_findings=0,
+            unique_findings=[],
+            scanners_used=["native"],
+            total_duration_ms=5,
+        )
+        console = Console(record=True, force_terminal=True, width=120)
+        format_rich(result, console)
+        output = " ".join(console.export_text().split())
+
+        assert "Scanners Skipped" in output
+        assert "gitleaks" in output
+        assert "not installed" in output
+        # The skip must not masquerade as a failure or block the clean verdict.
+        assert "Scanner Errors" not in output
+        assert "No secrets or policy violations detected" in output
+        assert result.exit_code == 0
 
 
 def _aggregate(findings: list[ScanFinding]) -> AggregatedScanResult:
