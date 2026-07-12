@@ -4,6 +4,11 @@ from envdrift.core.encryption import EncryptionDetector
 from envdrift.core.parser import EnvParser
 
 
+def _sops_value(data: str) -> str:
+    """Build a SOPS ENC[...] value of the canonical shape (no real secret)."""
+    return "ENC[AES256_GCM,data:" + data + ",iv:" + "ab" * 16 + ",tag:" + "cd" * 8 + ",type:str]"
+
+
 class TestEncryptionDetector:
     """Test cases for EncryptionDetector."""
 
@@ -112,6 +117,65 @@ DEBUG=true
         assert "DOTENV_PUBLIC_KEY_PRODUCTION_SECRET" not in report.plaintext_vars
         assert detector.should_block_commit(report) is False
         assert report.is_fully_encrypted is True
+
+    def test_sops_metadata_trailer_not_counted_in_tallies(self, tmp_path):
+        """A fully SOPS-encrypted file reports as fully encrypted (#441).
+
+        `sops --encrypt --input-type dotenv --output-type dotenv` appends a flat
+        metadata trailer: sops_version= / sops_lastmodified= /
+        sops_unencrypted_suffix= / the recipient public key are PLAINTEXT lines
+        and sops_mac= is ciphertext (the fixture mirrors byte-for-byte what the
+        real sops binary writes — see tests/unit/test_partial_encryption_sops.py).
+        Pre-fix, analyze() counted the trailer in the tallies, so `encrypt
+        --check` reported a genuine fully-SOPS-encrypted file as "partially
+        encrypted" (Encrypted: 3, Plaintext: 4, ratio 43%). The trailer is SOPS
+        bookkeeping, not user data — it must not sway the tallies.
+        """
+        content = (
+            "DB_PASSWORD=" + _sops_value("U5dotp3cMQ==") + "\n"
+            "API_KEY=" + _sops_value("oNgtRJRCHtOh669puic=") + "\n"
+            "sops_age__list_0__map_recipient="
+            "age1ql3z7hjy54pw3hyww5ayyfg7zqgvc7w3j2elw8zmrj2kg5sfn9aqmcac8p\n"
+            "sops_lastmodified=2026-06-08T14:15:34Z\n"
+            "sops_mac=" + _sops_value("iBjKMupTM") + "\n"
+            "sops_unencrypted_suffix=_unencrypted\n"
+            "sops_version=3.13.1\n"
+        )
+        env_file = tmp_path / ".env"
+        env_file.write_text(content)
+
+        parser = EnvParser()
+        env = parser.parse(env_file)
+
+        detector = EncryptionDetector()
+        report = detector.analyze(env)
+
+        assert report.encrypted_vars == {"DB_PASSWORD", "API_KEY"}
+        assert report.plaintext_vars == set()
+        assert report.is_fully_encrypted is True
+        assert detector.should_block_commit(report) is False
+
+    def test_sops_prefixed_user_var_still_counted_as_plaintext(self, tmp_path):
+        """A user var merely named ``sops_<x>`` stays in the plaintext scan (#441).
+
+        The SOPS-metadata skip matches the EXACT metadata key family shared with
+        partial_encryption (#416), not a bare ``sops_`` prefix — a real user
+        secret such as ``sops_token=…`` must still count as a plaintext secret.
+        """
+        content = "API_KEY=" + _sops_value("oNgtRJRCHtOh669puic=") + "\nsops_token=plain-cred\n"
+        env_file = tmp_path / ".env"
+        env_file.write_text(content)
+
+        parser = EnvParser()
+        env = parser.parse(env_file)
+
+        detector = EncryptionDetector()
+        report = detector.analyze(env)
+
+        assert "sops_token" in report.plaintext_vars
+        assert "sops_token" in report.plaintext_secrets
+        assert report.is_fully_encrypted is False
+        assert detector.should_block_commit(report) is True
 
     def test_has_encrypted_header(self):
         """Check for dotenvx encryption header."""
