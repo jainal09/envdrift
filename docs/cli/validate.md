@@ -46,6 +46,8 @@ judged exactly as the real app loads them:
 - Malformed quoted bindings are rejected exactly like python-dotenv: an
   unterminated quote, or non-comment content after the close quote, drops the
   whole binding (no truncated value, no phantom variables from interior lines).
+  A validation warning identifies the binding's starting line so the omission
+  is never silent.
 - `${VAR}` and `${VAR:-default}` references are expanded the way
   `dotenv_values` does: a name defined earlier in the same file wins over
   `os.environ` (looked up case-sensitively, exactly like python-dotenv), and
@@ -64,9 +66,11 @@ judged exactly as the real app loads them:
   running app still sees the BOM-prefixed key unless the BOM is removed or
   `env_file_encoding='utf-8-sig'` is set.
 
-Other python-dotenv behaviors (`'quoted keys'`, a bare `KEY` line without `=`)
-are not yet mirrored; a file relying on those may still be judged differently
-than the running app sees it.
+Quoted keys and bare `KEY` bindings without `=` also follow python-dotenv. Bare
+bindings are omitted from validation because pydantic-settings filters their
+`None` values before model validation. Other non-comment content that the lexer
+cannot parse is ignored with a line-numbered warning; comments and blank lines
+do not warn.
 
 Multiple env files can be validated in one invocation (each gets its own report;
 with `--ci` the exit code is 1 if any file fails). This keeps the command usable
@@ -297,6 +301,7 @@ else:
 | Extra vars (with `extra="ignore"`) | Warning       | Unknown variables allowed but noted                  |
 | Unencrypted sensitive vars         | Warning       | Fields marked `sensitive=True` should be encrypted   |
 | Case-insensitive name collision    | Warning       | Two `.env` keys differ only in case                  |
+| Unparsable non-comment content     | Warning       | Ignored content is reported by starting line number  |
 
 > **Note:** Variable names are matched against schema fields
 > case-insensitively, mirroring Pydantic Settings (`case_sensitive=False`). So an

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -12,6 +13,18 @@ from envdrift.output.rich import print_error, print_warning
 
 if TYPE_CHECKING:
     from envdrift.sync.config import ServiceMapping, SyncConfig
+
+# Missing-setting messages shared with the vault-push/vault-pull seam
+# (envdrift.cli_commands.vault_helpers) so the same condition cannot drift
+# into two phrasings again (#441 audit).
+AZURE_VAULT_URL_REQUIRED = (
+    "Azure provider requires --vault-url (or [vault.azure] vault_url in config)"
+)
+HASHICORP_VAULT_URL_REQUIRED = (
+    "HashiCorp provider requires --vault-url (or [vault.hashicorp] url in config, "
+    "or the VAULT_ADDR environment variable)"
+)
+GCP_PROJECT_ID_REQUIRED = "GCP provider requires --project-id (or [vault.gcp] project_id in config)"
 
 
 @dataclass(frozen=True)
@@ -71,10 +84,16 @@ def _load_defaults(request: SyncLoadRequest) -> _ConfigDefaults:
 def _provider_vault_url(
     provider: str | None, explicit_url: str | None, vault_config: Any | None
 ) -> str | None:
-    if explicit_url is not None or vault_config is None:
+    if explicit_url is not None:
         return explicit_url
     attribute = {"azure": "azure_vault_url", "hashicorp": "hashicorp_url"}.get(provider or "")
-    return getattr(vault_config, attribute, None) if attribute else None
+    url = getattr(vault_config, attribute, None) if attribute else None
+    if url is None and provider == "hashicorp":
+        # Honor the standard env var every HashiCorp tool reads (#441 audit).
+        # Strip so a padded value is usable and a whitespace-only value still
+        # hits the missing-URL guard instead of a late connection failure.
+        return (os.environ.get("VAULT_ADDR") or "").strip() or None
+    return url
 
 
 def _config_default(explicit: str | None, vault_config: Any | None, attribute: str) -> str | None:
@@ -194,18 +213,9 @@ def _require_provider(settings: _VaultSettings) -> str:
 
 def _validate_provider_options(provider: str, settings: _VaultSettings) -> None:
     requirements = {
-        "azure": (
-            settings.vault_url,
-            "Azure provider requires --vault-url (or [vault.azure] vault_url in config)",
-        ),
-        "hashicorp": (
-            settings.vault_url,
-            "HashiCorp provider requires --vault-url (or [vault.hashicorp] url in config)",
-        ),
-        "gcp": (
-            settings.project_id,
-            "GCP provider requires --project-id (or [vault.gcp] project_id in config)",
-        ),
+        "azure": (settings.vault_url, AZURE_VAULT_URL_REQUIRED),
+        "hashicorp": (settings.vault_url, HASHICORP_VAULT_URL_REQUIRED),
+        "gcp": (settings.project_id, GCP_PROJECT_ID_REQUIRED),
     }
     requirement = requirements.get(provider)
     if requirement is None or requirement[0]:

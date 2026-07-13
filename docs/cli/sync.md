@@ -61,7 +61,9 @@ TOML configs usually include the provider; pass `--provider` to override.
 
 Vault URL. **Required for Azure and HashiCorp.**
 
-Only required when using legacy configs or overriding the TOML defaults.
+Only required when using legacy configs or overriding the TOML defaults. For
+HashiCorp, the standard `VAULT_ADDR` environment variable is also honored as a
+fallback. Azure vault URLs must start with `https://`.
 
 ### `--region`
 

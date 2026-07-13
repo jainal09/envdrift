@@ -120,7 +120,7 @@ class TestGetAgentStatusErrorBranches:
     """Tests for ``_get_agent_status`` error paths (lines 125, 126-127)."""
 
     def test_nonzero_returncode_is_error(self, monkeypatch):
-        """A non-zero status exit code maps to ('error', None) (line 125)."""
+        """A non-zero status exit code maps to ('error', None, None)."""
         monkeypatch.setattr(
             agent_module,
             "_find_agent_binary",
@@ -132,10 +132,10 @@ class TestGetAgentStatusErrorBranches:
 
         monkeypatch.setattr(agent_module.subprocess, "run", fake_run)
 
-        assert _get_agent_status() == ("error", None)
+        assert _get_agent_status() == ("error", None, None)
 
     def test_timeout_is_error(self, monkeypatch):
-        """A TimeoutExpired is caught and mapped to ('error', None) (lines 126-127)."""
+        """A TimeoutExpired is caught and mapped to ('error', None, None)."""
         monkeypatch.setattr(
             agent_module,
             "_find_agent_binary",
@@ -147,10 +147,10 @@ class TestGetAgentStatusErrorBranches:
 
         monkeypatch.setattr(agent_module.subprocess, "run", fake_run)
 
-        assert _get_agent_status() == ("error", None)
+        assert _get_agent_status() == ("error", None, None)
 
-    def test_oserror_is_error(self, monkeypatch):
-        """An OSError from subprocess.run is caught (lines 126-127)."""
+    def test_oserror_is_broken_with_detail(self, monkeypatch):
+        """An OSError maps to 'broken' and carries the message as detail (#441)."""
         monkeypatch.setattr(
             agent_module,
             "_find_agent_binary",
@@ -162,7 +162,43 @@ class TestGetAgentStatusErrorBranches:
 
         monkeypatch.setattr(agent_module.subprocess, "run", fake_run)
 
-        assert _get_agent_status() == ("error", None)
+        assert _get_agent_status() == ("broken", None, "no such binary")
+
+
+class TestGetAgentStatusVersionProbeIsolation:
+    """The nested ``version`` probe must not override a confirmed running status.
+
+    Regression for the #644 review finding: the probe used to share the outer
+    ``status``-probe exception handlers, so a timeout or exec failure while
+    fetching the version of an agent already confirmed running downgraded the
+    whole result to 'error'/'broken' — telling the user to reinstall an agent
+    that is demonstrably running. The version must merely stay unknown.
+    """
+
+    @pytest.mark.parametrize(
+        "probe_failure",
+        [
+            subprocess.TimeoutExpired(cmd=["envdrift-agent", "version"], timeout=5),
+            OSError("binary replaced mid-flight"),
+        ],
+        ids=["timeout", "oserror"],
+    )
+    def test_version_probe_failure_keeps_running_status(self, monkeypatch, probe_failure):
+        """A failing version probe on a running agent yields ('running', None, None)."""
+        monkeypatch.setattr(
+            agent_module,
+            "_find_agent_binary",
+            lambda: Path("/usr/local/bin/envdrift-agent"),
+        )
+
+        def fake_run(args, **_kwargs):
+            if args[1] == "status":
+                return subprocess.CompletedProcess(args, 0, stdout="Running:   true\n", stderr="")
+            raise probe_failure
+
+        monkeypatch.setattr(agent_module.subprocess, "run", fake_run)
+
+        assert _get_agent_status() == ("running", None, None)
 
 
 class TestFormatTimestamp:
@@ -209,7 +245,7 @@ class TestStatusCommandEdgeCases:
         monkeypatch.setattr(
             agent_module,
             "_get_agent_status",
-            lambda: ("bogus", None),
+            lambda: ("bogus", None, None),
         )
 
         result = runner.invoke(app, ["agent", "status"])
@@ -230,7 +266,7 @@ class TestStatusCommandEdgeCases:
         monkeypatch.setattr(
             agent_module,
             "_get_agent_status",
-            lambda: ("not_installed", None),
+            lambda: ("not_installed", None, None),
         )
 
         result = runner.invoke(app, ["agent", "status"])

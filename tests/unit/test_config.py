@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 
 from envdrift.config import (
+    ConfigLoadError,
     ConfigNotFoundError,
     EnvdriftConfig,
     GitHookCheckConfig,
@@ -47,6 +48,61 @@ class TestVaultConfig:
         assert config.hashicorp_url == "https://vault.example.com"
         assert config.gcp_project_id == "my-gcp-project"
         assert config.mappings == {"DB_PASSWORD": "database/password"}
+
+
+class TestVaultProviderInference:
+    """[vault] provider resolution when the ``provider`` key is omitted.
+
+    An omitted provider used to silently default to azure even when the only
+    configured section was ``[vault.gcp]``, so a GCP user was told to supply
+    an Azure vault URL (#441 audit).
+    """
+
+    @pytest.mark.parametrize(
+        ("section", "body", "expected"),
+        [
+            ("azure", {"vault_url": "https://my-vault.vault.azure.net/"}, "azure"),
+            ("aws", {"region": "eu-west-1"}, "aws"),
+            ("hashicorp", {"url": "https://vault.example.com:8200"}, "hashicorp"),
+            ("gcp", {"project_id": "my-gcp-project"}, "gcp"),
+        ],
+    )
+    def test_provider_inferred_from_single_section(self, section, body, expected):
+        """A lone [vault.<provider>] section selects that provider."""
+        config = EnvdriftConfig.from_dict({"vault": {section: body}})
+        assert config.vault.provider == expected
+
+    def test_explicit_provider_wins_over_sections(self):
+        """An explicit provider key is never second-guessed by inference."""
+        data = {"vault": {"provider": "aws", "gcp": {"project_id": "my-gcp-project"}}}
+        assert EnvdriftConfig.from_dict(data).vault.provider == "aws"
+
+    def test_no_provider_sections_keeps_azure_default(self):
+        """With nothing to infer from, the historical azure default stands."""
+        assert EnvdriftConfig.from_dict({"vault": {}}).vault.provider == "azure"
+        assert EnvdriftConfig.from_dict({}).vault.provider == "azure"
+
+    def test_multiple_sections_without_provider_fail_loudly(self):
+        """Two provider sections and no provider key is ambiguous — hard error."""
+        data = {
+            "vault": {
+                "azure": {"vault_url": "https://my-vault.vault.azure.net/"},
+                "gcp": {"project_id": "my-gcp-project"},
+            }
+        }
+        with pytest.raises(ValueError, match="multiple provider sections"):
+            EnvdriftConfig.from_dict(data)
+
+    def test_load_config_reports_ambiguous_provider_cleanly(self, tmp_path: Path):
+        """load_config surfaces the ambiguity as a clean ConfigLoadError."""
+        cfg = tmp_path / "envdrift.toml"
+        cfg.write_text(
+            '[vault.azure]\nvault_url = "https://my-vault.vault.azure.net/"\n\n'
+            '[vault.gcp]\nproject_id = "my-gcp-project"\n',
+            encoding="utf-8",
+        )
+        with pytest.raises(ConfigLoadError, match="multiple provider sections"):
+            load_config(cfg)
 
 
 class TestValidationConfig:

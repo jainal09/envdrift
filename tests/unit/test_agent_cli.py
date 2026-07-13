@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+import os
+import platform
 from pathlib import Path
 from unittest.mock import patch
 
@@ -334,7 +336,7 @@ class TestAgentStatusCommand:
             if args[1] == "status":
                 stdout = "Installed: true\nConfig:    /tmp/envdrift.toml\nenvdrift:  true\n"
                 return subprocess.CompletedProcess(args, 0, stdout=stdout, stderr="")
-            if args[1] == "--version":
+            if args[1] == "version":  # the agent only has a `version` subcommand (#482)
                 return subprocess.CompletedProcess(
                     args, 0, stdout="envdrift-agent v1.2.3\n", stderr=""
                 )
@@ -366,7 +368,7 @@ class TestAgentStatusCommand:
                     "envdrift:  true\n"
                 )
                 return subprocess.CompletedProcess(args, 0, stdout=stdout, stderr="")
-            if args[1] == "--version":
+            if args[1] == "version":  # the agent only has a `version` subcommand (#482)
                 return subprocess.CompletedProcess(
                     args, 0, stdout="envdrift-agent v1.2.3\n", stderr=""
                 )
@@ -399,7 +401,7 @@ class TestAgentStatusCommand:
                     "envdrift:  true\n"
                 )
                 return subprocess.CompletedProcess(args, 0, stdout=stdout, stderr="")
-            if args[1] == "--version":
+            if args[1] == "version":  # the agent only has a `version` subcommand (#482)
                 return subprocess.CompletedProcess(
                     args, 0, stdout="envdrift-agent v1.2.3\n", stderr=""
                 )
@@ -415,6 +417,41 @@ class TestAgentStatusCommand:
         assert result.exit_code == 0
         assert "Agent is stopped" in result.stdout
         assert "Version:" not in result.stdout
+
+    def test_status_broken_binary_names_cause_and_reinstall_hint(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        """Regression for #441: a broken agent binary must not dead-end on itself.
+
+        With a real garbage executable on PATH (no subprocess mocks), running it
+        raises OSError (Exec format error). ``agent status`` previously printed
+        the generic 'Agent status check failed / Run envdrift-agent status for
+        details' — a suggestion that itself cannot run. It must surface the
+        underlying OS error and point at ``envdrift install agent --force``.
+        """
+        registry_path = tmp_path / ".envdrift" / "projects.json"
+        registry_module._registry = registry_module.ProjectRegistry(registry_path)
+
+        fake_dir = tmp_path / "fakebin"
+        fake_dir.mkdir()
+        binary_name = (
+            "envdrift-agent.exe" if platform.system().lower() == "windows" else "envdrift-agent"
+        )
+        fake_agent = fake_dir / binary_name
+        fake_agent.write_bytes(b"\x7fELF\xff\xffgarbage")
+        fake_agent.chmod(0o755)
+        monkeypatch.setenv("PATH", str(fake_dir))
+
+        result = runner.invoke(app, ["agent", "status"])
+
+        out = " ".join(result.output.split())
+        assert result.exit_code == 0
+        assert "Run envdrift-agent status for details" not in out
+        assert "cannot run" in out
+        assert "envdrift install agent --force" in out
+        if os.name == "posix":
+            # The underlying OS error must be carried into the output.
+            assert "Exec format error" in out
 
 
 class TestAgentHelpCommand:

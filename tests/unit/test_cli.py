@@ -197,6 +197,44 @@ class MySettings(BaseSettings):
         assert result.exit_code == 0
         assert "PASSED" in result.output or "valid" in result.output.lower()
 
+    def test_validate_warns_about_unparsable_env_lines(self, tmp_path: Path):
+        """Dropped non-comment content must not hide behind a false clean pass."""
+        env_file = tmp_path / "malformed.env"
+        env_file.write_text(
+            "GOOD_KEY=value\n"
+            "THIS LINE HAS NO EQUALS SIGN\n"
+            "# comment lines are valid\n"
+            "\n"
+            "ANOTHER_KEY=v2\n",
+            encoding="utf-8",
+        )
+        schema_file = tmp_path / "malformed_config.py"
+        schema_file.write_text(
+            "from pydantic_settings import BaseSettings\n\n"
+            "class Settings(BaseSettings):\n"
+            "    GOOD_KEY: str\n"
+            "    ANOTHER_KEY: str\n",
+            encoding="utf-8",
+        )
+
+        result = runner.invoke(
+            app,
+            [
+                "validate",
+                str(env_file),
+                "--schema",
+                "malformed_config:Settings",
+                "--service-dir",
+                str(tmp_path),
+                "--no-check-encryption",
+            ],
+        )
+
+        output = " ".join(result.output.split())
+        assert result.exit_code == 0, result.output
+        assert "Could not parse non-comment content on .env line(s) 2" in output
+        assert "Summary: 0 error(s), 1 warning(s)" in output
+
     def test_validate_ci_mode_fails_on_invalid(self, tmp_path: Path):
         """Test validate --ci exits with code 1 on validation failure."""
         env_file = tmp_path / ".env"
@@ -465,6 +503,24 @@ class TestDiffCommand:
         assert result.exit_code == 0
         # JSON output should be parseable
         assert "{" in result.output
+
+    def test_diff_json_with_unparsable_lines_stays_ansi_clean(self, tmp_path: Path):
+        """Parser diagnostics are data, not stray Rich output in JSON mode."""
+        env1 = tmp_path / "env1"
+        env2 = tmp_path / "env2"
+        malformed = "FOO=one\nTHIS LINE IS NOT AN ASSIGNMENT\n"
+        env1.write_text(malformed, encoding="utf-8")
+        env2.write_text(malformed, encoding="utf-8")
+
+        result = runner.invoke(
+            app,
+            ["diff", str(env1), str(env2), "--format", "json"],
+            env={"FORCE_COLOR": "1"},
+        )
+
+        assert result.exit_code == 0, result.output
+        json.loads(result.stdout)
+        assert _ANSI_ESCAPES.search(result.stdout) is None
 
     def test_diff_include_unchanged(self, tmp_path: Path):
         """Test diff --include-unchanged shows all vars."""
@@ -1302,6 +1358,29 @@ class TestInitCommand:
         assert "APP_NAME" in content
         assert "DEBUG" in content
         assert "PORT" in content
+
+    def test_init_warns_about_unparsable_env_lines(self, tmp_path: Path):
+        """Schema generation must disclose non-comment content it omitted."""
+        env_file = tmp_path / "malformed.env"
+        env_file.write_text(
+            "GOOD_KEY=value\n"
+            "THIS LINE HAS NO EQUALS SIGN\n"
+            "# comment lines are valid\n"
+            "\n"
+            "ANOTHER_KEY=v2\n",
+            encoding="utf-8",
+        )
+        output_file = tmp_path / "generated_settings.py"
+
+        result = runner.invoke(
+            app,
+            ["init", str(env_file), "--output", str(output_file)],
+        )
+
+        output = " ".join(result.output.split())
+        assert result.exit_code == 0, result.output
+        assert output_file.exists()
+        assert "Skipped unparsable non-comment content on .env line(s) 2" in output
 
     def test_init_prints_next_step_and_names_sensitive(self, tmp_path: Path, monkeypatch):
         """init names the sensitive vars and prints the exact validate next-step."""
@@ -5215,7 +5294,7 @@ class TestVaultPushCommand:
             ],
         )
         assert result.exit_code == 1
-        assert "vault-url required" in result.output.lower()
+        assert "azure provider requires --vault-url" in " ".join(result.output.split()).lower()
 
     def test_vault_push_requires_project_id_for_gcp(self):
         """vault-push should require project ID for gcp provider."""

@@ -119,6 +119,26 @@ BAZ=qux
         assert len(result.variables) == 2
         assert len(result.comments) == 2
 
+    def test_parse_records_dropped_non_comment_lines(self, tmp_path):
+        """Malformed content is surfaced without mislabeling comments, blanks,
+        or valid python-dotenv bare bindings as parser failures."""
+        env_file = tmp_path / ".env"
+        env_file.write_text(
+            "GOOD_KEY=value\n"
+            "THIS LINE HAS NO EQUALS SIGN\n"
+            "# a comment\n"
+            "\n"
+            "BARE_KEY\n"
+            'BROKEN="unterminated\n'
+            "ANOTHER_KEY=v2\n",
+            encoding="utf-8",
+        )
+
+        result = EnvParser().parse(env_file, lenient=True)
+
+        assert set(result.variables) == {"GOOD_KEY", "ANOTHER_KEY"}
+        assert result.unparsed_lines == [2, 6]
+
     def test_parse_line_numbers(self, tmp_path):
         """Track line numbers for error reporting."""
         content = """FOO=bar

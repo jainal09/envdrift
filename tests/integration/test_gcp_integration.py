@@ -6,7 +6,7 @@ GCP Secret Manager backend.
 There is no GCP emulator, so this module is split into two tiers:
 
 1. CLI / factory guard tests (run anywhere the GCP SDK is importable). These
-   exercise the ``--project-id required for gcp`` CLI guard and the
+   exercise the ``GCP provider requires --project-id`` CLI guard and the
    ``get_vault_client('gcp')`` config-validation branch using the *real*
    envdrift entrypoint and the *real* vault factory — no auth ever happens, so
    no credentials are needed.
@@ -117,7 +117,8 @@ class TestGCPCLIProjectIdGuard:
         assert "is a package and cannot be directly executed" not in combined, combined
 
         assert result.returncode == 1, combined
-        assert "--project-id required for gcp" in combined, combined
+        flat = " ".join(combined.split())
+        assert "GCP provider requires --project-id" in flat, combined
         # The guard must fire BEFORE any GCP authentication is attempted.
         assert "authentication failed" not in combined.lower(), combined
         assert "credential" not in combined.lower(), combined
@@ -159,7 +160,8 @@ class TestGCPCLIProjectIdGuard:
         assert "is a package and cannot be directly executed" not in combined, combined
 
         assert result.returncode == 1, combined
-        assert "--project-id required for gcp" in combined, combined
+        flat = " ".join(combined.split())
+        assert "GCP provider requires --project-id" in flat, combined
         assert "authentication failed" not in combined.lower(), combined
         assert "credential" not in combined.lower(), combined
 

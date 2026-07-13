@@ -10,7 +10,7 @@ from envdrift.cli import app
 from envdrift.encryption import EncryptionProvider
 from envdrift.encryption.base import EncryptionBackendError
 from envdrift.sync.config import ServiceMapping, SyncConfig
-from envdrift.vault.base import SecretNotFoundError, SecretValue, VaultError
+from envdrift.vault.base import AuthenticationError, SecretNotFoundError, SecretValue, VaultError
 from tests.helpers import DummyEncryptionBackend
 
 runner = CliRunner()
@@ -1086,7 +1086,7 @@ class TestVaultPushSingleService:
             ["vault-push", str(tmp_path), "my-secret", "--env", "soak", "-p", "azure"],
         )
         assert result.exit_code == 1
-        assert "vault-url required" in result.output.lower()
+        assert "azure provider requires --vault-url" in " ".join(result.output.split()).lower()
 
     def test_push_single_gcp_requires_project_id(self, tmp_path):
         """GCP provider without --project-id fails."""
@@ -1096,7 +1096,7 @@ class TestVaultPushSingleService:
             ["vault-push", str(tmp_path), "my-secret", "--env", "soak", "-p", "gcp"],
         )
         assert result.exit_code == 1
-        assert "project-id required" in result.output.lower()
+        assert "gcp provider requires --project-id" in " ".join(result.output.split()).lower()
 
     def test_push_single_missing_provider(self, tmp_path):
         """No provider and no config fails."""
@@ -1111,9 +1111,13 @@ class TestVaultPushSingleService:
 
     @patch("envdrift.vault.get_vault_client")
     def test_push_single_auth_failure(self, mock_get_client, tmp_path):
-        """Auth failure exits with code 1."""
+        """Auth failure exits with code 1.
+
+        Raises AuthenticationError (not a bare VaultError): only genuine auth
+        failures carry the "authentication failed" label now (#441 audit).
+        """
         client = MagicMock()
-        client.authenticate.side_effect = VaultError("auth failed")
+        client.authenticate.side_effect = AuthenticationError("auth failed")
         mock_get_client.return_value = client
         (tmp_path / ".env.keys").write_text("DOTENV_PRIVATE_KEY_SOAK=v\n")
 

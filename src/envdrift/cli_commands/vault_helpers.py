@@ -2,12 +2,18 @@
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Never
 
 import typer
 
+from envdrift.cli_commands.sync_config_helpers import (
+    AZURE_VAULT_URL_REQUIRED,
+    GCP_PROJECT_ID_REQUIRED,
+    HASHICORP_VAULT_URL_REQUIRED,
+)
 from envdrift.env_files import EnvFileDetection, resolve_custom_env_file, resolve_mapping_env_file
 from envdrift.output.rich import console, print_error, print_success, print_warning
 
@@ -117,19 +123,34 @@ def _provider_vault_url(
     vault_config: Any | None,
 ) -> str | None:
     """Resolve provider-specific URL, preserving explicit CLI precedence."""
-    if explicit_url is not None or vault_config is None:
+    if explicit_url is not None:
         return explicit_url
     attribute = {"azure": "azure_vault_url", "hashicorp": "hashicorp_url"}.get(provider)
-    return getattr(vault_config, attribute, None) if attribute is not None else None
+    url = getattr(vault_config, attribute, None) if attribute is not None else None
+    if url is None and provider == "hashicorp":
+        # Honor the standard env var every HashiCorp tool reads (#441 audit).
+        # Strip so a padded value is usable and a whitespace-only value still
+        # hits the missing-URL guard instead of a late connection failure.
+        return (os.environ.get("VAULT_ADDR") or "").strip() or None
+    return url
 
 
 def _validate_vault_settings(settings: VaultSettings) -> None:
-    """Reject missing provider-specific settings with CLI-facing errors."""
-    if settings.provider in ("azure", "hashicorp") and not settings.vault_url:
-        print_error(f"--vault-url required for {settings.provider}")
+    """Reject missing provider-specific settings with CLI-facing errors.
+
+    The messages are shared with the sync-family seam
+    (``envdrift.cli_commands.sync_config_helpers``) so the same missing-URL
+    condition reads identically across commands (#441 audit).
+    """
+    url_required = {
+        "azure": AZURE_VAULT_URL_REQUIRED,
+        "hashicorp": HASHICORP_VAULT_URL_REQUIRED,
+    }
+    if settings.provider in url_required and not settings.vault_url:
+        print_error(url_required[settings.provider])
         raise typer.Exit(code=1)
     if settings.provider == "gcp" and not settings.project_id:
-        print_error("--project-id required for gcp")
+        print_error(GCP_PROJECT_ID_REQUIRED)
         raise typer.Exit(code=1)
 
 
@@ -163,6 +184,20 @@ def _vault_client_kwargs(settings: VaultSettings) -> dict[str, str | None]:
     return kwargs_by_provider.get(settings.provider, {})
 
 
+def _client_failure_message(exc: Exception) -> str:
+    """CLI-facing message for a failed vault client build/authentication."""
+    from envdrift.vault import AuthenticationError
+
+    if isinstance(exc, ValueError):
+        return f"Invalid vault configuration: {exc}"
+    if isinstance(exc, AuthenticationError):
+        return f"Vault authentication failed: {exc}"
+    # ImportError (missing extras) is self-explanatory, and a DNS/network
+    # VaultError is not an authentication failure — labeling it one sent
+    # users chasing credentials (#441 audit).
+    return str(exc)
+
+
 def build_authenticated_client(settings: VaultSettings) -> VaultClient:
     """Create and authenticate a vault client for effective settings."""
     from envdrift.vault import VaultError, get_vault_client
@@ -170,14 +205,8 @@ def build_authenticated_client(settings: VaultSettings) -> VaultClient:
     try:
         client = get_vault_client(settings.provider, **_vault_client_kwargs(settings))
         client.authenticate()
-    except ImportError as e:
-        print_error(str(e))
-        raise typer.Exit(code=1) from None
-    except ValueError as e:
-        print_error(f"Invalid vault configuration: {e}")
-        raise typer.Exit(code=1) from None
-    except VaultError as e:
-        print_error(f"Vault authentication failed: {e}")
+    except (ImportError, ValueError, VaultError) as e:
+        print_error(_client_failure_message(e))
         raise typer.Exit(code=1) from None
     return client
 

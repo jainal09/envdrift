@@ -12,7 +12,7 @@ from typer.testing import CliRunner
 from envdrift.cli import app
 from envdrift.encryption import EncryptionProvider
 from envdrift.encryption.base import EncryptionBackendError, EncryptionResult
-from envdrift.vault.base import SecretNotFoundError, SecretValue, VaultError
+from envdrift.vault.base import AuthenticationError, SecretNotFoundError, SecretValue, VaultError
 from tests.helpers import DummyEncryptionBackend
 
 runner = CliRunner()
@@ -321,7 +321,7 @@ class TestVaultPullSingleSecret:
             ],
         )
         assert result.exit_code == 1
-        assert "vault-url required" in result.output.lower()
+        assert "azure provider requires --vault-url" in " ".join(result.output.split()).lower()
 
     def test_pull_gcp_requires_project_id(self, tmp_path):
         """GCP provider without --project-id fails validation."""
@@ -338,7 +338,7 @@ class TestVaultPullSingleSecret:
             ],
         )
         assert result.exit_code == 1
-        assert "project-id required" in result.output.lower()
+        assert "gcp provider requires --project-id" in " ".join(result.output.split()).lower()
 
     def test_pull_missing_provider(self, tmp_path):
         """No provider and no config fails."""
@@ -362,9 +362,13 @@ class TestVaultPullSingleSecret:
         mock_get_client,
         tmp_path,
     ):
-        """Authentication failure exits with code 1."""
+        """Authentication failure exits with code 1.
+
+        Raises AuthenticationError (not a bare VaultError): only genuine auth
+        failures carry the "authentication failed" label now (#441 audit).
+        """
         client = MagicMock()
-        client.authenticate.side_effect = VaultError("auth failed")
+        client.authenticate.side_effect = AuthenticationError("auth failed")
         mock_get_client.return_value = client
 
         result = runner.invoke(

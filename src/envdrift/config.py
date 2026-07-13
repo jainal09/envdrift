@@ -406,6 +406,34 @@ def _validate_sync_mapping_entry(m: Any) -> None:
         )
 
 
+# Provider names that have a [vault.<provider>] settings section.
+_VAULT_PROVIDER_SECTIONS = ("azure", "aws", "hashicorp", "gcp")
+
+
+def _resolve_vault_provider(vault_section: dict[str, Any]) -> str:
+    """Resolve ``[vault] provider``, inferring it when the key is omitted.
+
+    An omitted ``provider`` used to silently default to azure even when the
+    only configured section was ``[vault.gcp]`` — the GCP user was then told
+    to supply an Azure vault URL (#441 audit). When ``provider`` is not set,
+    infer it from the single ``[vault.<provider>]`` section present; keep the
+    azure default when none is; fail loudly when several are (ambiguous).
+    """
+    provider = vault_section.get("provider")
+    if provider is not None:
+        return provider
+    present = [name for name in _VAULT_PROVIDER_SECTIONS if name in vault_section]
+    if len(present) == 1:
+        return present[0]
+    if len(present) > 1:
+        sections = ", ".join(f"[vault.{name}]" for name in present)
+        raise ValueError(
+            f"[vault] provider is not set but multiple provider sections are "
+            f'configured ({sections}); set provider = "..." explicitly'
+        )
+    return "azure"
+
+
 def _build_vault_config(vault_section: dict[str, Any]) -> VaultConfig:
     """Build the vault config, including its nested ``[vault.sync]`` section."""
     sync_section = vault_section.get("sync", {})
@@ -432,7 +460,7 @@ def _build_vault_config(vault_section: dict[str, Any]) -> VaultConfig:
         ephemeral_keys=sync_section.get("ephemeral_keys", False),
     )
     return VaultConfig(
-        provider=vault_section.get("provider", "azure"),
+        provider=_resolve_vault_provider(vault_section),
         azure_vault_url=vault_section.get("azure", {}).get("vault_url"),
         aws_region=vault_section.get("aws", {}).get("region", "us-east-1"),
         hashicorp_url=vault_section.get("hashicorp", {}).get("url"),
