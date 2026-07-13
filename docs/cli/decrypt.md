@@ -82,16 +82,23 @@ envdrift decrypt .env.production --backend sops
 
 Vault verification is only supported with the dotenvx backend. `--provider` and
 `--secret` are always required with `--verify-vault` (they are not read from
-`envdrift.toml`); `--vault-url` is also required for azure/hashicorp and
-`--project-id` for gcp.
+`envdrift.toml`). Provider settings use the explicit CLI flag first, then the
+matching `[vault.<provider>]` configuration. HashiCorp additionally falls back
+to `VAULT_ADDR` when neither `--vault-url` nor `[vault.hashicorp] url` is set;
+surrounding whitespace is stripped and a whitespace-only value is treated as
+unset.
 
 ```bash
-# Azure Key Vault (or HashiCorp): --vault-url is required
+# Azure Key Vault: pass the URL explicitly or configure [vault.azure]
 envdrift decrypt .env.production --verify-vault --ci \
   -p azure --vault-url https://myvault.vault.azure.net \
   --secret myapp-dotenvx-key
 
-# GCP Secret Manager: --project-id is required
+# HashiCorp Vault: VAULT_ADDR can supply the URL
+VAULT_ADDR=https://vault.example.com envdrift decrypt .env.production \
+  --verify-vault --ci -p hashicorp --secret myapp-dotenvx-key
+
+# GCP Secret Manager: pass the project explicitly or configure [vault.gcp]
 envdrift decrypt .env.production --verify-vault --ci \
   -p gcp --project-id my-gcp-project \
   --secret myapp-dotenvx-key
@@ -199,8 +206,8 @@ steps:
 - `git restore <file>`
 - `envdrift sync --force -p <provider>` to restore the vault key locally. When
   the current command discovered a TOML config, the hint includes
-  `-c <resolved-config>`; `--vault-url`/`--region`/`--project-id` are appended
-  when those flags were passed.
+  `-c <resolved-config>`; the effective `--vault-url`/`--region`/`--project-id`
+  values are appended after CLI/config/environment resolution.
 - `envdrift encrypt <file>` to re-encrypt with the vault key
 
 !!! note "`--verify-vault` only verifies — it does not fetch the key"

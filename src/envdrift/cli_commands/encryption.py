@@ -1054,19 +1054,29 @@ def decrypt_cmd(
         if not vault_secret:
             print_error("--verify-vault requires --secret (vault secret name)")
             raise typer.Exit(code=1)
-        if vault_provider in ("azure", "hashicorp") and not vault_url:
-            print_error(f"--verify-vault with {vault_provider} requires --vault-url")
-            raise typer.Exit(code=1)
-        if vault_provider == "gcp" and not vault_project_id:
-            print_error("--verify-vault with gcp requires --project-id")
-            raise typer.Exit(code=1)
+
+        from envdrift.cli_commands.vault_helpers import (
+            VaultConnectionOptions,
+            resolve_vault_settings,
+        )
+
+        vault_settings = resolve_vault_settings(
+            VaultConnectionOptions(
+                config=config_path,
+                provider=vault_provider,
+                vault_url=vault_url,
+                region=vault_region,
+                project_id=vault_project_id,
+            ),
+            envdrift_config,
+        )
 
         vault_check_passed = _verify_decryption_with_vault(
             env_file=env_file,
-            provider=vault_provider,
-            vault_url=vault_url,
-            region=vault_region,
-            project_id=vault_project_id,
+            provider=vault_settings.provider,
+            vault_url=vault_settings.vault_url,
+            region=vault_settings.region,
+            project_id=vault_settings.project_id,
             secret_name=vault_secret,
             ci=ci,
             auto_install=encryption_config.dotenvx_auto_install if encryption_config else False,
