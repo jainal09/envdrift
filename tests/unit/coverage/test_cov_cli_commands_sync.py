@@ -776,7 +776,7 @@ class TestLockCommand:
 
         result = runner.invoke(app, ["lock", "--verify-vault", "--force"])
         assert result.exit_code == 0, result.output
-        assert "keys match vault" in result.output
+        assert "keys match vault" in " ".join(result.output.split())
 
     @patch("envdrift.cli_commands.encryption_helpers.resolve_encryption_backend")
     def test_lock_verify_vault_key_mismatch_exits(

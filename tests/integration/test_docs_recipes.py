@@ -20,6 +20,7 @@ No mocking of the behavior under test.
 
 from __future__ import annotations
 
+import json
 import re
 import shutil
 import subprocess
@@ -43,6 +44,68 @@ def dotenvx_bin() -> str:
     if path is None:
         pytest.skip("dotenvx binary not found on PATH")
     return path
+
+
+def _pinned_dotenvx_version() -> str:
+    constants_path = Path(__file__).parents[2] / "src" / "envdrift" / "constants.json"
+    with constants_path.open(encoding="utf-8") as constants_file:
+        constants = json.load(constants_file)
+    return str(constants["dotenvx_version"])
+
+
+def _version_parts(version: str) -> tuple[int, ...]:
+    match = re.search(r"\bv?(\d+)\.(\d+)\.(\d+)\b", version)
+    if match is None:
+        pytest.fail(f"could not parse dotenvx version from output: {version!r}")
+    return tuple(int(part) for part in match.groups())
+
+
+@pytest.mark.parametrize(
+    ("raw_version", "expected"),
+    [
+        ("2.6.0", (2, 6, 0)),
+        ("v2.6.0", (2, 6, 0)),
+        ("dotenvx 2.6.0", (2, 6, 0)),
+        ("2.6.0+build", (2, 6, 0)),
+    ],
+)
+def test_version_parts_parses_bounded_version_token(
+    raw_version: str, expected: tuple[int, ...]
+) -> None:
+    assert _version_parts(raw_version) == expected
+
+
+def test_version_parts_fails_loudly_when_token_is_missing() -> None:
+    with pytest.raises(
+        pytest.fail.Exception,
+        match="could not parse dotenvx version from output: 'garbage'",
+    ):
+        _version_parts("garbage")
+
+
+@pytest.fixture
+def pinned_dotenvx_bin(dotenvx_bin: str) -> str:
+    """Path to dotenvx when it is at least the dynamically pinned version."""
+    result = subprocess.run(
+        [dotenvx_bin, "--version"],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        timeout=30,
+        check=False,
+    )
+    if result.returncode != 0:
+        pytest.fail(f"dotenvx --version failed: {result.stdout}{result.stderr}")
+
+    installed_version = result.stdout.strip()
+    pinned_version = _pinned_dotenvx_version()
+    if _version_parts(installed_version) < _version_parts(pinned_version):
+        pytest.skip(
+            f"dotenvx {installed_version} is older than pinned {pinned_version}; "
+            "install the pinned version to run dotenvx v2 behavior tests"
+        )
+    return dotenvx_bin
 
 
 def _run(
@@ -113,7 +176,7 @@ def test_dotenvx_encryption_recipe_encrypts_every_value(
 
 def test_faq_ci_decrypt_recipe_round_trips(
     envdrift_cmd: list[str],
-    dotenvx_bin: str,
+    pinned_dotenvx_bin: str,
     work_dir: Path,
     integration_env: dict[str, str],
 ) -> None:
@@ -129,6 +192,7 @@ def test_faq_ci_decrypt_recipe_round_trips(
     key as a fallback for any file — so this test no longer asserts the bare key
     *fails*; it pins that the suffixed recipe works and documents the v2 fallback.
     """
+    del pinned_dotenvx_bin  # The fixture gates this v2-specific behavior against the pin.
     private_key = _encrypt_production(envdrift_cmd, work_dir, integration_env)
     encrypted = (work_dir / ".env.production").read_text(encoding="utf-8")
 
@@ -161,7 +225,7 @@ def test_faq_ci_decrypt_recipe_round_trips(
 
 def test_env_file_sync_rotation_command_is_a_noop_in_dotenvx_v2(
     envdrift_cmd: list[str],
-    dotenvx_bin: str,
+    pinned_dotenvx_bin: str,
     work_dir: Path,
     integration_env: dict[str, str],
 ) -> None:
@@ -172,7 +236,9 @@ def test_env_file_sync_rotation_command_is_a_noop_in_dotenvx_v2(
     encrypted_before = env_file.read_bytes()
     keys_before = keys_file.read_bytes()
 
-    result = _run([dotenvx_bin, "rotate", "-f", ".env.production"], work_dir, integration_env)
+    result = _run(
+        [pinned_dotenvx_bin, "rotate", "-f", ".env.production"], work_dir, integration_env
+    )
     output = result.stdout + result.stderr
     assert result.returncode == 0, output
     assert "unknown command 'rotate'" in output
