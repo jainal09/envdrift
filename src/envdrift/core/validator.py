@@ -139,6 +139,13 @@ class Validator:
                 "env_file_encoding='utf-8-sig' on the model config."
             )
 
+        if env_file.unparsed_lines:
+            line_numbers = ", ".join(str(line) for line in env_file.unparsed_lines)
+            result.warnings.append(
+                "Could not parse non-comment content on .env line(s) "
+                f"{line_numbers}; those lines were ignored"
+            )
+
         # Pydantic Settings defaults to case_sensitive=False, loading e.g.
         # `API_KEY` from a conventional UPPERCASE .env into a lowercase
         # `api_key` field. Mirror that here by matching names case-insensitively

@@ -16,6 +16,8 @@ The `init` command bootstraps your schema by generating a Pydantic Settings clas
 - **Detects sensitive fields** - Marks likely secrets with `sensitive=True`
 - **Creates required fields** - String values become required (no default)
 - **Adds defaults** - Boolean and integer values get defaults
+- **Reports malformed content** - Warns with the line numbers of non-comment
+  content that could not become schema fields
 
 This is useful when:
 
@@ -195,6 +197,11 @@ The generated module is always valid, importable Python:
   (recovering non-identifier / non-ASCII keys) and matches schema fields by their
   alias, so `init` → `validate` passes instead of falsely flagging the aliased
   fields as missing.
+
+- **Malformed content is not silent.** If non-comment content cannot be parsed
+  as a dotenv binding, `init` warns with its starting line number. The warning
+  does not echo the source text, which may contain a secret. Blank lines,
+  comments, and valid python-dotenv bare bindings are not reported as malformed.
 
 - **Invalid class names fail fast.** A `--class-name` that is not a valid Python
   identifier (e.g. `123Bad`) or is a keyword (e.g. `class`) errors with a

@@ -152,6 +152,21 @@ class TestInitAPI:
         assert "NAME: str" in content
         assert "VALUE: int = 123" in content
 
+    def test_init_warns_about_unparsable_env_lines(self, tmp_path: Path):
+        """The public API must disclose content omitted from its schema."""
+        env_file = tmp_path / ".env"
+        env_file.write_text(
+            "GOOD=value\nTHIS LINE HAS NO EQUALS SIGN\nANOTHER=v2\n",
+            encoding="utf-8",
+        )
+        output = tmp_path / "generated.py"
+
+        with pytest.warns(UserWarning, match=r"\.env line\(s\) 2"):
+            result = init(env_file, output, detect_sensitive=False)
+
+        assert result == output
+        assert output.exists()
+
     def test_init_with_custom_class_name(self, tmp_path: Path):
         """Test init with custom class name."""
         env_file = tmp_path / ".env"

@@ -65,6 +65,10 @@ class EnvFile:
     # that a later encrypted duplicate would otherwise hide (#583).
     assignments: list[EnvVar] = field(default_factory=list)
     comments: list[str] = field(default_factory=list)
+    # Starting line numbers for non-comment content the selected parser mode
+    # could not turn into a dotenv binding. Keep diagnostics as data: callers
+    # decide how to render them, so machine-readable output stays clean.
+    unparsed_lines: list[int] = field(default_factory=list)
     # True when the source text began with a UTF-8 BOM (U+FEFF). The parser
     # strips it so reports name the variable the user wrote — but
     # pydantic-settings reads .env files as plain UTF-8 and would see a
@@ -376,6 +380,7 @@ class EnvParser:
                     original_line,
                     index,
                     lenient,
+                    line_num,
                     context,
                 )
                 if prepared is None:
@@ -395,6 +400,7 @@ class EnvParser:
                 # `consumed` is 0 — only the opening line is dropped and the
                 # following lines re-parse normally, exactly like dotenv's
                 # rest-of-line error recovery.
+                env_file.unparsed_lines.append(line_num)
                 continue
             if consumed:
                 raw_value = joined_raw
@@ -453,19 +459,22 @@ class EnvParser:
         original_line: str,
         index: int,
         lenient: bool,
+        line_number: int,
         context: _ParseContext,
     ) -> tuple[tuple[str, str, list[str]] | None, int]:
         """Lex and prepare a quoted, bare, or malformed fallback binding."""
         binding = self._parse_key_binding(original_line, context.lines, index, lenient=lenient)
         if binding is None:
+            context.env_file.unparsed_lines.append(line_number)
             return None, index
-        return self._prepare_binding(binding, original_line, index, context)
+        return self._prepare_binding(binding, original_line, index, line_number, context)
 
     @staticmethod
     def _prepare_binding(
         binding: _KeyBinding,
         original_line: str,
         index: int,
+        line_number: int,
         context: _ParseContext,
     ) -> tuple[tuple[str, str, list[str]] | None, int]:
         """Consume key lines and apply the state change from a bare binding."""
@@ -475,6 +484,7 @@ class EnvParser:
         ]
         index += binding.consumed
         if binding.dropped or binding.key is None:
+            context.env_file.unparsed_lines.append(line_number)
             return None, index
         if binding.raw_value is None:
             # A later bare duplicate wins in dotenv_values (A=1; A -> A=None),
