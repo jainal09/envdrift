@@ -177,6 +177,35 @@ DEBUG=true
         assert report.is_fully_encrypted is False
         assert detector.should_block_commit(report) is True
 
+    def test_bare_sops_provider_named_user_var_counted_as_plaintext(self, tmp_path):
+        """A user var literally named ``sops_age`` stays in the plaintext scan.
+
+        Real sops (verified against the pinned 3.13.2 binary) never emits a
+        bare ``sops_<provider>`` key nor a single-underscore
+        ``sops_<provider>_<field>`` one — key groups only appear
+        double-underscore flattened (``sops_age__list_0__map_enc``). Pre-fix,
+        the group matcher's ``$``/single-``_`` alternatives skipped such user
+        vars, so ``encrypt --check`` reported the file fully encrypted and
+        ``should_block_commit`` failed open on a plaintext credential.
+        """
+        # Secret-looking value built by concatenation (push-protection).
+        content = (
+            "API_KEY=" + _sops_value("oNgtRJRCHtOh669puic=") + "\nsops_age=sk-" + "plain-cred\n"
+        )
+        env_file = tmp_path / ".env"
+        env_file.write_text(content)
+
+        parser = EnvParser()
+        env = parser.parse(env_file)
+
+        detector = EncryptionDetector()
+        report = detector.analyze(env)
+
+        assert "sops_age" in report.plaintext_vars
+        assert "sops_age" in report.plaintext_secrets
+        assert report.is_fully_encrypted is False
+        assert detector.should_block_commit(report) is True
+
     def test_has_encrypted_header(self):
         """Check for dotenvx encryption header."""
         detector = EncryptionDetector()

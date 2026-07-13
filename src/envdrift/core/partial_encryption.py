@@ -64,9 +64,11 @@ _DOTENVX_PUBLIC_KEY_PREFIX = "DOTENV_PUBLIC_KEY"
 # scan, silently dropping a genuine secret. The flat scalar keys are a fixed set
 # (``sops_version``/``sops_mac``/``sops_lastmodified``/the *_suffix/*_regex
 # toggles/``sops_mac_only_encrypted``/``sops_shamir_threshold``); the key-group
-# providers (age/pgp/kms/gcp_kms/azure_kv/hc_vault) appear as nested
-# ``sops_<provider>__list_N__map_M_<field>`` (or flat ``sops_<provider>_<field>``)
-# entries. Only a key in that family is treated as bookkeeping.
+# providers (age/pgp/kms/gcp_kms/azure_kv/hc_vault) appear ONLY as
+# double-underscore-flattened ``sops_<provider>__list_N__map_M_<field>`` entries
+# (verified against the pinned sops binary — it never emits a bare
+# ``sops_<provider>`` nor a single-underscore ``sops_<provider>_<field>`` key).
+# Only a key in that family is treated as bookkeeping.
 _SOPS_METADATA_SCALAR_KEYS = frozenset(
     {
         "sops_version",
@@ -83,20 +85,23 @@ _SOPS_METADATA_SCALAR_KEYS = frozenset(
     }
 )
 # Key-group providers SOPS records (one nested block per recipient). In dotenv
-# output these flatten to ``sops_<provider>__list_N__map_M_<field>`` (or, for a
-# single flat field, ``sops_<provider>_<field>``). Anchor on the provider token
-# so ``sops_age…`` matches but ``sops_agent`` / ``sops_token`` do not.
-_SOPS_METADATA_GROUP_KEY = re.compile(r"^sops_(?:age|pgp|kms|gcp_kms|azure_kv|hc_vault)(?:_|__|$)")
+# output these ALWAYS flatten with a double-underscore separator
+# (``sops_<provider>__list_N__map_M_<field>``), so require ``__`` right after
+# the provider token: a user var literally named ``sops_age`` or a lookalike
+# such as ``sops_age_backup`` / ``sops_agent`` / ``sops_token`` is NOT metadata
+# and stays in the plaintext scan.
+_SOPS_METADATA_GROUP_KEY = re.compile(r"^sops_(?:age|pgp|kms|gcp_kms|azure_kv|hc_vault)__")
 
 
 def _is_sops_metadata_key(key: str) -> bool:
     """Return True if ``key`` is a genuine SOPS metadata key, not a user var.
 
     Matches the EXACT SOPS metadata family — the fixed scalar bookkeeping keys
-    and the nested key-group provider entries (``sops_age*``/``sops_pgp*``/…) —
-    rather than a bare ``sops_`` prefix, so a real user variable that happens to
-    start with ``sops_`` (e.g. ``sops_token``) is NOT misclassified as
-    bookkeeping and stays in the plaintext-secret scan (#416).
+    and the double-underscore-flattened key-group provider entries
+    (``sops_age__*``/``sops_pgp__*``/…) — rather than a bare ``sops_`` prefix,
+    so a real user variable that happens to start with ``sops_`` (e.g.
+    ``sops_token``, or one literally named ``sops_age``) is NOT misclassified
+    as bookkeeping and stays in the plaintext-secret scan (#416).
     """
     return key in _SOPS_METADATA_SCALAR_KEYS or bool(_SOPS_METADATA_GROUP_KEY.match(key))
 

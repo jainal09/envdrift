@@ -194,8 +194,10 @@ class EncryptionDetector:
             # none of it may sway the encrypted/plaintext tallies — counting it
             # reported a fully SOPS-encrypted file as "partially encrypted" in
             # `encrypt --check`. Matches the EXACT metadata key family shared with
-            # partial_encryption (#416), so a user var merely named sops_token=…
-            # is still scanned.
+            # partial_encryption (#416) — the fixed scalars plus the
+            # double-underscore-flattened key-group entries — so a user var merely
+            # named sops_token=…, or even one literally named sops_age=…, is
+            # still scanned.
             if _is_sops_metadata_key(var_name):
                 continue
             if env_var.encryption_status == EncryptionStatus.ENCRYPTED:
