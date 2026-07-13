@@ -309,12 +309,12 @@ def list_registered() -> None:
     console.print(f"\n[dim]Registry: {get_registry().path}[/dim]")
 
 
-@agent_app.command("status")
-def status() -> None:
-    """Show the status of the envdrift background agent."""
-    agent_status, version, detail = _get_agent_status()
+def _report_agent_state(agent_status: str, version: str | None, detail: str | None) -> None:
+    """Render the per-status message block for :func:`status`.
 
-    # Agent status
+    Split out of :func:`status` so the command body stays a flat
+    status/registry sequence (CodeScene complexity ceiling).
+    """
     if agent_status == "running":
         console.print("[green]⚡ Agent is running[/green]")
         if version:
@@ -335,6 +335,13 @@ def status() -> None:
         console.print("   Run [bold]envdrift-agent status[/bold] for details")
     else:
         console.print("[yellow]⚠ Unable to determine agent status[/yellow]")
+
+
+@agent_app.command("status")
+def status() -> None:
+    """Show the status of the envdrift background agent."""
+    agent_status, version, detail = _get_agent_status()
+    _report_agent_state(agent_status, version, detail)
 
     # Registry info
     registry = get_registry()
