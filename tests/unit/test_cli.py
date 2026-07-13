@@ -2556,6 +2556,49 @@ class TestSyncCommand:
 
         assert result.exit_code == 1
 
+    def test_sync_survives_markup_like_secret_names(self, monkeypatch, tmp_path: Path):
+        """#661 review: markup-like secret names must render, not crash.
+
+        The mapping identity is interpolated into markup-interpreted console
+        output. Pre-fix, ``[/red]`` in a secret name raised ``MarkupError``
+        (full traceback) at the "Processing:" line of every engine command,
+        and a ``[legacy]``-style segment was silently eaten as a Rich tag.
+        """
+        from envdrift.vault.base import SecretValue
+
+        secret_name = "edge661/[/red]key[legacy]"
+        (tmp_path / "envdrift.toml").write_text(
+            "[vault]\n"
+            'provider = "hashicorp"\n\n'
+            "[vault.hashicorp]\n"
+            'url = "http://localhost:8200"\n\n'
+            "[[vault.sync.mappings]]\n"
+            f'secret_name = "{secret_name}"\n'
+            'folder_path = "svc"\n'
+            'environment = "production"\n',
+            encoding="utf-8",
+        )
+        (tmp_path / "svc").mkdir()
+        monkeypatch.chdir(tmp_path)
+
+        class StubVaultClient:
+            def ensure_authenticated(self):
+                """No-op auth for the stub."""
+
+            def get_secret(self, name):
+                """Return usable key material under the bracketed name."""
+                return SecretValue(name=name, value="DOTENV_PRIVATE_KEY_PRODUCTION=deadbeef")
+
+        monkeypatch.setattr("envdrift.vault.get_vault_client", lambda *_, **__: StubVaultClient())
+
+        result = runner.invoke(app, ["sync", "--verify"])
+
+        flat = " ".join(result.output.split())
+        assert result.exit_code == 0, flat
+        assert "MarkupError" not in flat, flat
+        # The bracketed segments render literally on the Processing line and row.
+        assert secret_name in flat, flat
+
     def test_sync_check_decryption_failure_exits_nonzero_without_ci(
         self, monkeypatch, tmp_path: Path
     ):

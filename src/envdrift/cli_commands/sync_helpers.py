@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 import typer
+from rich.markup import escape
 from rich.panel import Panel
 
 from envdrift.env_files import resolve_mapping_env_file
@@ -147,7 +148,10 @@ def _new_sync_engine(context: SyncCommandContext, force: bool):
     from envdrift.sync.engine import SyncEngine, SyncMode
 
     def progress_callback(msg: str) -> None:
-        console.print(f"[dim]{msg}[/dim]")
+        # Progress text embeds user-controlled names (folders, secrets);
+        # escape so brackets render literally instead of being parsed as
+        # Rich markup — or raising MarkupError on a stray closing tag.
+        console.print(f"[dim]{escape(msg)}[/dim]")
 
     def prompt_callback(msg: str) -> bool:
         if force:

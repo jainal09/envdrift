@@ -127,16 +127,7 @@ class SyncEngine:
                 or detection.environment is None
             ):
                 if self.mode.verify_only:
-                    # In verify mode a skip must not leave the configured
-                    # secret unchecked: without an env file the fetch below is
-                    # never reached, so a deleted vault secret passed
-                    # `sync --verify` (and `--verify --ci`) as "skipped" with
-                    # "All services synced successfully" (#441). A missing or
-                    # unreadable secret raises SecretNotFoundError/VaultError,
-                    # which the handlers below turn into an ERROR row; when the
-                    # secret exists the mapping stays a benign skip ("env file
-                    # not created yet").
-                    self.vault_client.get_secret(mapping.secret_name)
+                    self._verify_secret_usable(mapping)
                 if detection.status == "multiple_found":
                     # Distinct, truthful skip reason: the folder has several
                     # candidate env files and the mapping is ambiguous (#488).
@@ -327,6 +318,24 @@ class SyncEngine:
                 message="Unexpected error",
                 error=str(e),
             )
+
+    def _verify_secret_usable(self, mapping: ServiceMapping) -> None:
+        """Verify the configured secret exists in the vault and is usable.
+
+        Called on the verify-mode skip paths (no env file yet / ambiguous
+        mapping), where the value-consuming fetch is never reached: a deleted
+        vault secret used to pass ``sync --verify`` (and ``--verify --ci``)
+        as "skipped" with "All services synced successfully" (#441). Applies
+        the same normalization/shape validation as the consuming path (see
+        ``_fetch_vault_secret``), so a secret that exists but could never
+        sync — unusable key material, an env label that mismatches the
+        mapping — fails verify exactly like it would fail a real sync (#661
+        review). A missing or unusable secret raises
+        ``SecretNotFoundError``/``VaultError``, which ``_sync_service`` turns
+        into an ERROR row; when the secret is usable the mapping stays a
+        benign skip ("env file not created yet").
+        """
+        self._fetch_vault_secret(mapping, mapping.effective_environment)
 
     def _fetch_vault_secret(self, mapping: ServiceMapping, effective_environment: str) -> str:
         """Fetch secret from vault.

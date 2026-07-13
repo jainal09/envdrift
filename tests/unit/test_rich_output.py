@@ -459,3 +459,44 @@ class TestSyncStatusRowIdentity:
         out = " ".join(capture.get().split())
         assert "svc-secret" in out, out
         assert "env:" not in out, out
+
+    def test_bracketed_names_render_literally_not_as_markup(self):
+        """#661 review: bracketed name segments must not be eaten as Rich markup.
+
+        Pre-fix, a secret like ``kv/app[legacy]/key`` rendered as
+        ``kv/app/key`` — the bracketed segment was parsed as a markup tag and
+        silently dropped. Folder paths were exposed the same way.
+        """
+        result = ServiceSyncResult(
+            secret_name="kv/app[legacy]/key",
+            folder_path=Path("svc[1]"),
+            action=SyncAction.SKIPPED,
+            message="Values match - no update needed",
+            environment="production",
+        )
+        with console.capture() as capture:
+            print_service_sync_status(result)
+        out = capture.get()
+        assert "kv/app[legacy]/key" in out, out
+        assert "svc[1]" in out, out
+
+    def test_closing_tag_in_secret_name_renders_instead_of_crashing(self):
+        """#661 review: a stray closing tag must render escaped, not raise.
+
+        Pre-fix, a secret name containing ``[/red]`` raised ``MarkupError``
+        (with a full traceback) from ``console.print`` — on the row line and
+        again on the error-detail line that embeds the name.
+        """
+        result = ServiceSyncResult(
+            secret_name="edge661/[/red]key",
+            folder_path=Path("svc"),
+            action=SyncAction.ERROR,
+            message="Secret not found in vault",
+            environment="production",
+            error="Secret 'edge661/[/red]key' not found in Vault",
+        )
+        with console.capture() as capture:
+            print_service_sync_status(result)
+        out = capture.get()
+        assert "edge661/[/red]key" in out, out
+        assert "Secret 'edge661/[/red]key' not found in Vault" in out, out
