@@ -186,6 +186,10 @@ Registry: /Users/you/.envdrift/projects.json
 
 Use `envdrift agent unregister [PATH]` to stop watching a project and
 `envdrift agent status` to see the agent state and registered project count.
+If the installed binary cannot execute (e.g. wrong architecture or a corrupt
+download), both `envdrift agent status` and `envdrift install check` report it
+as broken with the underlying error and suggest
+`envdrift install agent --force` to reinstall.
 
 ### Registry safety
 
