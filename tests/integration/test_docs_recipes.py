@@ -54,10 +54,33 @@ def _pinned_dotenvx_version() -> str:
 
 
 def _version_parts(version: str) -> tuple[int, ...]:
-    match = re.fullmatch(r"v?(\d+)\.(\d+)\.(\d+)", version.strip())
+    match = re.search(r"\bv?(\d+)\.(\d+)\.(\d+)\b", version)
     if match is None:
-        raise ValueError(f"unexpected dotenvx version: {version!r}")
+        pytest.fail(f"could not parse dotenvx version from output: {version!r}")
     return tuple(int(part) for part in match.groups())
+
+
+@pytest.mark.parametrize(
+    ("raw_version", "expected"),
+    [
+        ("2.6.0", (2, 6, 0)),
+        ("v2.6.0", (2, 6, 0)),
+        ("dotenvx 2.6.0", (2, 6, 0)),
+        ("2.6.0+build", (2, 6, 0)),
+    ],
+)
+def test_version_parts_parses_bounded_version_token(
+    raw_version: str, expected: tuple[int, ...]
+) -> None:
+    assert _version_parts(raw_version) == expected
+
+
+def test_version_parts_fails_loudly_when_token_is_missing() -> None:
+    with pytest.raises(
+        pytest.fail.Exception,
+        match="could not parse dotenvx version from output: 'garbage'",
+    ):
+        _version_parts("garbage")
 
 
 @pytest.fixture
