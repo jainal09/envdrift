@@ -622,7 +622,8 @@ class TestAzureVaultArgValidation:
         combined = result.stdout + result.stderr
         _assert_dispatched(combined)
         assert result.returncode == 1, combined
-        assert "--vault-url required for azure" in combined, combined
+        flat = " ".join(combined.split())
+        assert "Azure provider requires --vault-url" in flat, combined
 
 
 # --- Real Azure vault factory / client behaviour (no creds needed) ---------

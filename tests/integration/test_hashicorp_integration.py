@@ -688,6 +688,9 @@ def test_hcv_cli_vault_push_missing_vault_url_exits_1(
     env_keys = work_dir / ".env.keys"
     env_keys.write_text("DOTENV_PRIVATE_KEY_PRODUCTION=prod-key\n")
 
+    # VAULT_ADDR is now a legitimate URL source (#441 audit), so it must be
+    # stripped for the missing-URL guard to fire at all.
+    env = {k: v for k, v in vault_test_env.items() if k != "VAULT_ADDR"}
     result = _run_envdrift_cli(
         [
             "vault-push",
@@ -699,14 +702,66 @@ def test_hcv_cli_vault_push_missing_vault_url_exits_1(
             "hashicorp",
         ],
         cwd=work_dir,
-        env=vault_test_env,
+        env=env,
         integration_pythonpath=integration_pythonpath,
     )
 
     assert result.returncode == 1, (
         f"expected rc=1, got {result.returncode}\n{result.stdout}\n{result.stderr}"
     )
-    assert "--vault-url required for hashicorp" in (result.stdout + result.stderr)
+    flat = " ".join((result.stdout + result.stderr).split())
+    assert "HashiCorp provider requires --vault-url" in flat, flat
+    assert "VAULT_ADDR" in flat, flat
+
+
+# --- P0: VAULT_ADDR fallback supplies the vault URL ------------------------
+
+
+def test_hcv_cli_vault_pull_uses_vault_addr_fallback(
+    vault_test_env: dict,
+    vault_client,
+    work_dir: Path,
+    integration_pythonpath: str,
+    envdrift_cmd: list[str],
+):
+    """VAULT_ADDR alone (no --vault-url, no config) reaches the real vault.
+
+    The standard HashiCorp env var used to be silently ignored — only
+    VAULT_TOKEN was read — so this exact invocation exited 1 with a
+    missing-URL error (#441 audit).
+    """
+    secret_path = "test/cli-pull-vault-addr"
+    vault_client.secrets.kv.v2.create_or_update_secret(
+        path=secret_path,
+        secret={"value": "DOTENV_PRIVATE_KEY_PRODUCTION=addr-priv-key"},
+        mount_point="secret",
+    )
+    env_keys = work_dir / ".env.keys"
+
+    try:
+        result = _run_envdrift_cli(
+            [
+                "vault-pull",
+                ".",
+                secret_path,
+                "--env",
+                "production",
+                "--no-decrypt",
+                "-p",
+                "hashicorp",
+            ],
+            cwd=work_dir,
+            env=vault_test_env,  # supplies VAULT_ADDR + VAULT_TOKEN only
+            integration_pythonpath=integration_pythonpath,
+        )
+
+        assert result.returncode == 0, (
+            f"pull failed: {result.returncode}\n{result.stdout}\n{result.stderr}"
+        )
+        assert env_keys.exists()
+        assert "DOTENV_PRIVATE_KEY_PRODUCTION=addr-priv-key" in env_keys.read_text()
+    finally:
+        _delete_vault_path(vault_client, secret_path)
 
 
 # --- P0: vault-push normal mode missing --env -----------------------------

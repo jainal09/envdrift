@@ -109,8 +109,10 @@ class HashiCorpVaultClient(VaultClient):
                 VaultError: For other connection or unexpected errors communicating with Vault.
         """
         if not self.token:
+            # No CLI command exposes a --token flag, so the old "or pass token
+            # parameter" remedy pointed at a flag that does not exist (#441 audit).
             raise AuthenticationError(
-                "No Vault token provided. Set VAULT_TOKEN or pass token parameter."
+                "No Vault token provided. Set the VAULT_TOKEN environment variable."
             )
 
         hvac = _get_hvac()

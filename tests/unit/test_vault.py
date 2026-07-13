@@ -177,6 +177,95 @@ class TestGetVaultClient:
         with pytest.raises(ValueError):
             get_vault_client("unsupported_provider")
 
+    def test_invalid_provider_lists_options_with_suggestion(self):
+        """A typo'd provider names the valid options and suggests the closest one.
+
+        The bare enum error ("'azur' is not a valid VaultProvider") leaked an
+        internal type name with no valid-options list (#441 audit).
+        """
+        with pytest.raises(ValueError) as exc_info:
+            get_vault_client("azur")
+        message = str(exc_info.value)
+        assert "Unknown vault provider 'azur'" in message
+        assert "did you mean 'azure'?" in message
+        assert "Valid providers: azure, aws, hashicorp, gcp" in message
+        assert "VaultProvider" not in message
+
+    def test_invalid_provider_without_close_match_omits_suggestion(self):
+        """A provider with no close match still lists the valid options."""
+        with pytest.raises(ValueError) as exc_info:
+            get_vault_client("doppler")
+        message = str(exc_info.value)
+        assert "Valid providers: azure, aws, hashicorp, gcp" in message
+        assert "did you mean" not in message
+
+    def test_azure_schemeless_vault_url_rejected(self):
+        """A vault_url without https:// fails fast at the factory.
+
+        It used to surface much later as the Azure SDK's cryptic "Bearer token
+        authentication is not permitted for non-TLS protected (non-https)
+        URLs" (#441 audit).
+        """
+        mock_azure_module = MagicMock()
+        with patch.dict("sys.modules", {"envdrift.vault.azure": mock_azure_module}):
+            with pytest.raises(ValueError) as exc_info:
+                get_vault_client("azure", vault_url="my-vault.vault.azure.net")
+        assert str(exc_info.value) == (
+            "Azure vault_url must start with https:// (got 'my-vault.vault.azure.net')"
+        )
+
+    def test_azure_http_vault_url_rejected(self):
+        """An http:// vault_url is rejected the same way as a schemeless one."""
+        mock_azure_module = MagicMock()
+        with patch.dict("sys.modules", {"envdrift.vault.azure": mock_azure_module}):
+            with pytest.raises(ValueError, match="must start with https://"):
+                get_vault_client("azure", vault_url="http://my-vault.vault.azure.net")
+
+    def test_azure_padded_https_vault_url_stripped_and_accepted(self):
+        """A whitespace-padded https URL is stripped and used, not rejected.
+
+        It used to fail with the self-contradictory "must start with https://
+        (got ' https://…')" (#652 review).
+        """
+        mock_client = MagicMock()
+        mock_azure_module = MagicMock()
+        mock_azure_module.AzureKeyVaultClient.return_value = mock_client
+        with patch.dict("sys.modules", {"envdrift.vault.azure": mock_azure_module}):
+            client = get_vault_client("azure", vault_url="  https://myvault.vault.azure.net/  ")
+        assert client is mock_client
+        mock_azure_module.AzureKeyVaultClient.assert_called_once_with(
+            vault_url="https://myvault.vault.azure.net/"
+        )
+
+    def test_azure_padded_schemeless_vault_url_rejected_with_trimmed_value(self):
+        """A padded schemeless URL is rejected showing the trimmed value."""
+        mock_azure_module = MagicMock()
+        with patch.dict("sys.modules", {"envdrift.vault.azure": mock_azure_module}):
+            with pytest.raises(ValueError) as exc_info:
+                get_vault_client("azure", vault_url="  my-vault.vault.azure.net")
+        assert str(exc_info.value) == (
+            "Azure vault_url must start with https:// (got 'my-vault.vault.azure.net')"
+        )
+
+    def test_azure_whitespace_only_vault_url_reads_as_missing(self):
+        """A whitespace-only vault_url reports missing config, not a scheme error."""
+        mock_azure_module = MagicMock()
+        with patch.dict("sys.modules", {"envdrift.vault.azure": mock_azure_module}):
+            with pytest.raises(ValueError, match="requires 'vault_url' configuration"):
+                get_vault_client("azure", vault_url="   ")
+
+    def test_all_caps_provider_typo_still_gets_suggestion(self):
+        """Case-insensitive did-you-mean: 'AZURE' hints 'azure' (#652 review)."""
+        with pytest.raises(ValueError) as exc_info:
+            get_vault_client("AZURE")
+        message = str(exc_info.value)
+        assert "Unknown vault provider 'AZURE'" in message
+        assert "did you mean 'azure'?" in message
+
+        with pytest.raises(ValueError) as exc_info:
+            get_vault_client("HASHICORP")
+        assert "did you mean 'hashicorp'?" in str(exc_info.value)
+
     def test_provider_as_string(self):
         """Test provider can be passed as string."""
         mock_aws_module = MagicMock()

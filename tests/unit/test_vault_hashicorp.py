@@ -120,6 +120,23 @@ class TestHashiCorpVaultClientWithMock:
         with pytest.raises(AuthenticationError, match="No Vault token provided"):
             client.authenticate()
 
+    def test_missing_token_error_names_only_real_remedies(self, monkeypatch: pytest.MonkeyPatch):
+        """The missing-token message points at VAULT_TOKEN, not a nonexistent flag.
+
+        It used to say "or pass token parameter", but no CLI command exposes a
+        --token flag, so the suggested remedy did not exist (#441 audit).
+        """
+        monkeypatch.delenv("VAULT_TOKEN", raising=False)
+
+        from envdrift.vault.hashicorp import HashiCorpVaultClient
+
+        client = HashiCorpVaultClient(url="http://localhost:8200")
+        with pytest.raises(AuthenticationError) as exc_info:
+            client.authenticate()
+        message = str(exc_info.value)
+        assert "VAULT_TOKEN" in message
+        assert "token parameter" not in message
+
     @patch("envdrift.vault.hashicorp._hvac")
     def test_authenticate_uses_token_only_no_other_auth_methods(self, mock_hvac_module):
         """Authentication is token-only: no AppRole/OIDC/Kubernetes login is invoked.
