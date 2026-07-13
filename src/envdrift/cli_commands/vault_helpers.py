@@ -125,7 +125,9 @@ def _provider_vault_url(
     url = getattr(vault_config, attribute, None) if attribute is not None else None
     if url is None and provider == "hashicorp":
         # Honor the standard env var every HashiCorp tool reads (#441 audit).
-        return os.environ.get("VAULT_ADDR") or None
+        # Strip so a padded value is usable and a whitespace-only value still
+        # hits the missing-URL guard instead of a late connection failure.
+        return (os.environ.get("VAULT_ADDR") or "").strip() or None
     return url
 
 
@@ -178,26 +180,29 @@ def _vault_client_kwargs(settings: VaultSettings) -> dict[str, str | None]:
     return kwargs_by_provider.get(settings.provider, {})
 
 
+def _client_failure_message(exc: Exception) -> str:
+    """CLI-facing message for a failed vault client build/authentication."""
+    from envdrift.vault import AuthenticationError
+
+    if isinstance(exc, ValueError):
+        return f"Invalid vault configuration: {exc}"
+    if isinstance(exc, AuthenticationError):
+        return f"Vault authentication failed: {exc}"
+    # ImportError (missing extras) is self-explanatory, and a DNS/network
+    # VaultError is not an authentication failure — labeling it one sent
+    # users chasing credentials (#441 audit).
+    return str(exc)
+
+
 def build_authenticated_client(settings: VaultSettings) -> VaultClient:
     """Create and authenticate a vault client for effective settings."""
-    from envdrift.vault import AuthenticationError, VaultError, get_vault_client
+    from envdrift.vault import VaultError, get_vault_client
 
     try:
         client = get_vault_client(settings.provider, **_vault_client_kwargs(settings))
         client.authenticate()
-    except ImportError as e:
-        print_error(str(e))
-        raise typer.Exit(code=1) from None
-    except ValueError as e:
-        print_error(f"Invalid vault configuration: {e}")
-        raise typer.Exit(code=1) from None
-    except AuthenticationError as e:
-        print_error(f"Vault authentication failed: {e}")
-        raise typer.Exit(code=1) from None
-    except VaultError as e:
-        # A DNS/network failure is not an authentication failure — labeling it
-        # one sent users chasing credentials (#441 audit).
-        print_error(str(e))
+    except (ImportError, ValueError, VaultError) as e:
+        print_error(_client_failure_message(e))
         raise typer.Exit(code=1) from None
     return client
 

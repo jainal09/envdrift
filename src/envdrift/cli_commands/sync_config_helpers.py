@@ -90,7 +90,9 @@ def _provider_vault_url(
     url = getattr(vault_config, attribute, None) if attribute else None
     if url is None and provider == "hashicorp":
         # Honor the standard env var every HashiCorp tool reads (#441 audit).
-        return os.environ.get("VAULT_ADDR") or None
+        # Strip so a padded value is usable and a whitespace-only value still
+        # hits the missing-URL guard instead of a late connection failure.
+        return (os.environ.get("VAULT_ADDR") or "").strip() or None
     return url
 
 

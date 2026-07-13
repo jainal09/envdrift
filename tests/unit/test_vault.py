@@ -210,9 +210,9 @@ class TestGetVaultClient:
         with patch.dict("sys.modules", {"envdrift.vault.azure": mock_azure_module}):
             with pytest.raises(ValueError) as exc_info:
                 get_vault_client("azure", vault_url="my-vault.vault.azure.net")
-        message = str(exc_info.value)
-        assert "must start with https://" in message
-        assert "my-vault.vault.azure.net" in message
+        assert str(exc_info.value) == (
+            "Azure vault_url must start with https:// (got 'my-vault.vault.azure.net')"
+        )
 
     def test_azure_http_vault_url_rejected(self):
         """An http:// vault_url is rejected the same way as a schemeless one."""
