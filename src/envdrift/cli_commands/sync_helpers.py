@@ -15,6 +15,8 @@ from envdrift.env_files import resolve_mapping_env_file
 from envdrift.output.rich import console, print_error, print_success, print_warning
 from envdrift.vault.base import SecretNotFoundError, VaultError
 
+from .sync_config_helpers import require_profile_mappings
+
 if TYPE_CHECKING:
     from envdrift.encryption import EncryptionProvider
     from envdrift.sync.config import ServiceMapping, SyncConfig
@@ -117,7 +119,7 @@ def _load_command_context(request: Any, runtime: Any) -> SyncCommandContext:
     )
     _raise_hook_errors(ensure_git_hook_setup(config_file=request.config_file))
 
-    mappings = _require_mappings(sync_config, request.profile)
+    mappings = require_profile_mappings(sync_config, request.profile)
     filtered_config = SyncConfigClass(
         mappings=mappings,
         default_vault_name=sync_config.default_vault_name,
@@ -139,17 +141,6 @@ def _raise_hook_errors(errors: list[str]) -> None:
         print_error(error)
     if errors:
         raise typer.Exit(code=1)
-
-
-def _require_mappings(sync_config: SyncConfig, profile: str | None) -> list[ServiceMapping]:
-    mappings = sync_config.filter_by_profile(profile)
-    if mappings:
-        return mappings
-    if profile:
-        print_error(f"No mappings found for profile '{profile}'")
-    else:
-        print_warning("No non-profile mappings found. Use --profile to specify one.")
-    raise typer.Exit(code=1)
 
 
 def _new_sync_engine(context: SyncCommandContext, force: bool):

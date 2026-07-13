@@ -132,6 +132,33 @@ def test_diff_json_format_structure(tmp_path: Path, integration_pythonpath: str)
     assert entry["sensitive"] is False
 
 
+def test_diff_exit_on_drift_contract(tmp_path: Path, integration_pythonpath: str) -> None:
+    """The real CLI gates drift only when requested and still emits parseable JSON."""
+    (tmp_path / ".env.a").write_text("X=1\n")
+    (tmp_path / ".env.b").write_text("X=2\n")
+
+    default = _run_diff([".env.a", ".env.b"], tmp_path, integration_pythonpath)
+    assert default.returncode == 0
+    assert "Drift detected" in default.stdout
+
+    for flag in ("--exit-on-drift", "--ci"):
+        gated = _run_diff(
+            [".env.a", ".env.b", "--format", "json", flag],
+            tmp_path,
+            integration_pythonpath,
+        )
+        assert gated.returncode == 1
+        assert json.loads(gated.stdout)["summary"]["has_drift"] is True
+
+    matching = _run_diff(
+        [".env.a", ".env.a", "--exit-on-drift"],
+        tmp_path,
+        integration_pythonpath,
+    )
+    assert matching.returncode == 0
+    assert "No drift" in matching.stdout
+
+
 def test_diff_mask_values_via_schema(tmp_path: Path, integration_pythonpath: str) -> None:
     """HP-08: ``--schema`` marking API_KEY sensitive masks its values; PUBLIC_URL stays plaintext."""
     _write_schema(tmp_path)

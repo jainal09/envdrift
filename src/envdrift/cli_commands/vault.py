@@ -113,6 +113,10 @@ _AllServicesOption = Annotated[
         help="Push all secrets defined in sync config (skipping existing unless --force)",
     ),
 ]
+_ProfileOption = Annotated[
+    str | None,
+    typer.Option("--profile", help="Only process mappings for this profile"),
+]
 _ForceOption = Annotated[
     bool,
     typer.Option("--force", "-f", help="Push all secrets even if they already exist"),
@@ -181,6 +185,7 @@ def vault_push(
     env: _PushEnvironment = None,
     direct: _DirectOption = False,
     all_services: _AllServicesOption = False,
+    profile: _ProfileOption = None,
     force: _ForceOption = False,
     skip_encrypt: _SkipEncryptOption = False,
     config: _ConfigOption = None,
@@ -197,6 +202,7 @@ def vault_push(
             environment=env,
             direct=direct,
             all_services=all_services,
+            profile=profile,
             force=force,
             skip_encrypt=skip_encrypt,
             connection=VaultConnectionOptions(

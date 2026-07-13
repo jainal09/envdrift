@@ -2316,6 +2316,52 @@ class TestHookInstall:
 class TestSyncCommand:
     """Tests for the sync CLI command."""
 
+    def test_sync_profile_filters_engine_mappings(self, monkeypatch):
+        """--profile passes regular and matching mappings to the sync engine."""
+        from envdrift.sync.config import ServiceMapping, SyncConfig
+
+        sync_config = SyncConfig(
+            mappings=[
+                ServiceMapping(secret_name="shared", folder_path=Path("shared")),
+                ServiceMapping(secret_name="local", folder_path=Path("local"), profile="local"),
+                ServiceMapping(secret_name="prod", folder_path=Path("prod"), profile="prod"),
+            ]
+        )
+        captured: dict[str, Any] = {}
+        monkeypatch.setattr(
+            "envdrift.cli_commands.sync.load_sync_config_and_client",
+            lambda **_kwargs: (
+                sync_config,
+                SimpleNamespace(),
+                "aws",
+                None,
+                "us-east-1",
+                None,
+            ),
+        )
+        monkeypatch.setattr(
+            "envdrift.integrations.hook_check.ensure_git_hook_setup", lambda **_kwargs: []
+        )
+        monkeypatch.setattr("envdrift.output.rich.print_service_sync_status", lambda *_a: None)
+        monkeypatch.setattr("envdrift.output.rich.print_sync_result", lambda *_a: None)
+
+        class DummyEngine:
+            def __init__(self, config, **_kwargs):
+                captured["config"] = config
+
+            def sync_all(self):
+                return SimpleNamespace(services=[], has_errors=False)
+
+        monkeypatch.setattr("envdrift.sync.engine.SyncEngine", DummyEngine)
+
+        result = runner.invoke(app, ["sync", "--profile", "local"])
+
+        assert result.exit_code == 0, result.output
+        assert [mapping.secret_name for mapping in captured["config"].mappings] == [
+            "shared",
+            "local",
+        ]
+
     def test_sync_requires_config_and_provider(self, tmp_path: Path, monkeypatch):
         """Sync should enforce required options."""
         # Run from isolated tmp directory to prevent auto-discovery of parent config
