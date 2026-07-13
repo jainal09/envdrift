@@ -704,8 +704,24 @@ class TestGitRepoDetection:
         (tmp_path / ".git").mkdir()
         assert scanner._is_git_repo(tmp_path) is True
 
-    def test_is_git_repo_without_git_dir(self, scanner: TrufflehogScanner, tmp_path: Path):
+    def test_is_git_repo_without_git_dir(
+        self,
+        scanner: TrufflehogScanner,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
         """Test detection when no .git directory."""
+        real_parents = Path.parents
+
+        def bounded_parents(path: Path):
+            if path == tmp_path:
+                return ()
+            return real_parents.__get__(path, type(path))
+
+        # Treat the isolated test directory as the walk root. Host ancestors
+        # may contain unrelated git metadata (for example, a mounted /tmp/.git).
+        monkeypatch.setattr(Path, "parents", property(bounded_parents))
+
         assert scanner._is_git_repo(tmp_path) is False
 
     def test_is_git_repo_with_parent_git_dir(self, scanner: TrufflehogScanner, tmp_path: Path):

@@ -163,11 +163,24 @@ class TestResolveGitHooksPathAbsolute:
 class TestFindGitDirWalkToRoot:
     """Cover the walk-up-to-filesystem-root branch (lines 248-250)."""
 
-    def test_walks_up_and_returns_none_at_root(self, tmp_path: Path):
+    def test_walks_up_and_returns_none_at_root(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ):
         nested = tmp_path / "a" / "b" / "c"
         nested.mkdir(parents=True)
 
-        # No .git anywhere up the tree under tmp_path; eventually reaches the
+        real_parent = Path.parent
+
+        def bounded_parent(path: Path) -> Path:
+            if path == tmp_path:
+                return path
+            return real_parent.__get__(path, type(path))
+
+        # Treat the isolated test directory as the filesystem root so host
+        # ancestors cannot contribute unrelated git metadata.
+        monkeypatch.setattr(Path, "parent", property(bounded_parent))
+
+        # No .git anywhere up the isolated tree; eventually reaches the fake
         # filesystem root (current == current.parent) and returns None.
         assert hook_check._find_git_dir(nested) is None
 
