@@ -118,10 +118,16 @@ class TestVaultAddrFallback:
         base.update(overrides)
         return VaultConnectionOptions(**base)
 
-    def test_resolve_vault_settings_falls_back_to_vault_addr(self, monkeypatch):
+    @pytest.mark.parametrize(
+        "vault_addr",
+        ["http://127.0.0.1:8200", "  http://127.0.0.1:8200  "],
+        ids=["plain", "padded"],
+    )
+    def test_resolve_vault_settings_falls_back_to_vault_addr(self, monkeypatch, vault_addr):
+        """VAULT_ADDR supplies the URL; a padded value is stripped, not passed raw."""
         from envdrift.cli_commands.vault_helpers import resolve_vault_settings
 
-        monkeypatch.setenv("VAULT_ADDR", "http://127.0.0.1:8200")
+        monkeypatch.setenv("VAULT_ADDR", vault_addr)
         with patch("envdrift.config.find_config", return_value=None):
             settings = resolve_vault_settings(self._options())
         assert settings.vault_url == "http://127.0.0.1:8200"
@@ -170,15 +176,6 @@ class TestVaultAddrFallback:
             with pytest.raises(typer.Exit):
                 resolve_vault_settings(self._options())
 
-    def test_padded_vault_addr_is_stripped_and_used(self, monkeypatch):
-        """A padded-but-valid VAULT_ADDR is stripped, not passed through raw."""
-        from envdrift.cli_commands.vault_helpers import resolve_vault_settings
-
-        monkeypatch.setenv("VAULT_ADDR", "  http://127.0.0.1:8200  ")
-        with patch("envdrift.config.find_config", return_value=None):
-            settings = resolve_vault_settings(self._options())
-        assert settings.vault_url == "http://127.0.0.1:8200"
-
     def test_sync_seam_whitespace_only_vault_addr_is_ignored(self, tmp_path, monkeypatch):
         """The sync-family seam rejects a whitespace-only VAULT_ADDR too."""
         from envdrift.cli_commands.sync import load_sync_config_and_client
@@ -201,39 +198,16 @@ class TestVaultAddrFallback:
                 )
         mock_get_client.assert_not_called()
 
-    def test_sync_seam_padded_vault_addr_is_stripped(self, tmp_path, monkeypatch):
-        """The sync-family seam strips a padded VAULT_ADDR before use."""
+    @pytest.mark.parametrize(
+        "vault_addr",
+        ["http://127.0.0.1:8200", "  http://127.0.0.1:8200  "],
+        ids=["plain", "padded"],
+    )
+    def test_sync_seam_falls_back_to_vault_addr(self, tmp_path, monkeypatch, vault_addr):
+        """The sync-family seam honors VAULT_ADDR too, stripping a padded value."""
         from envdrift.cli_commands.sync import load_sync_config_and_client
 
-        monkeypatch.setenv("VAULT_ADDR", "  http://127.0.0.1:8200  ")
-        cfg = tmp_path / "sync.toml"
-        cfg.write_text(
-            '[vault]\nprovider = "hashicorp"\n\n'
-            '[[vault.sync.mappings]]\nsecret_name = "s"\nfolder_path = "svc"\n',
-            encoding="utf-8",
-        )
-        captured = {}
-
-        def fake_get_client(provider, **kwargs):
-            captured["kwargs"] = kwargs
-            return MagicMock()
-
-        with patch("envdrift.vault.get_vault_client", side_effect=fake_get_client):
-            _, _, _, vault_url, *_ = load_sync_config_and_client(
-                config_file=cfg,
-                provider=None,
-                vault_url=None,
-                region=None,
-                project_id=None,
-            )
-        assert vault_url == "http://127.0.0.1:8200"
-        assert captured["kwargs"]["url"] == "http://127.0.0.1:8200"
-
-    def test_sync_seam_falls_back_to_vault_addr(self, tmp_path, monkeypatch):
-        """The sync-family seam honors VAULT_ADDR too, not just vault-push/pull."""
-        from envdrift.cli_commands.sync import load_sync_config_and_client
-
-        monkeypatch.setenv("VAULT_ADDR", "http://127.0.0.1:8200")
+        monkeypatch.setenv("VAULT_ADDR", vault_addr)
         cfg = tmp_path / "sync.toml"
         cfg.write_text(
             '[vault]\nprovider = "hashicorp"\n\n'

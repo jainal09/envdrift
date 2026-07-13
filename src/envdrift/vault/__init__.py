@@ -31,7 +31,9 @@ def _coerce_provider(provider: str) -> VaultProvider:
         return VaultProvider(provider)
     except ValueError:
         valid = [p.value for p in VaultProvider]
-        close = difflib.get_close_matches(provider, valid, n=1, cutoff=0.6)
+        # Lowercase the input so an all-caps typo ('AZURE') still gets a
+        # did-you-mean hint — difflib matching is case-sensitive (#652 review).
+        close = difflib.get_close_matches(provider.lower(), valid, n=1, cutoff=0.6)
         hint = f" (did you mean '{close[0]}'?)" if close else ""
         raise ValueError(
             f"Unknown vault provider '{provider}'{hint}. Valid providers: {', '.join(valid)}"
@@ -47,7 +49,10 @@ def _build_azure_client(config: dict[str, Any]) -> VaultClient:
             "Azure vault support requires additional dependencies. "
             "Install with: pip install envdrift[azure]"
         ) from e
-    vault_url = config.get("vault_url")
+    # Strip before the scheme guard: a padded https URL used to be rejected
+    # with a self-contradictory "must start with https:// (got ' https://…')"
+    # (#652 review), and a whitespace-only value read as a scheme problem.
+    vault_url = (config.get("vault_url") or "").strip()
     if not vault_url:
         raise ValueError("Azure vault requires 'vault_url' configuration")
     if not vault_url.lower().startswith("https://"):
