@@ -468,10 +468,10 @@ def install_agent(
 
     console.print(f"[green]✓[/green] Installed agent to: {install_path}")
 
-    # Verify installation
+    # Verify installation (the agent exposes `version` as a subcommand, not a flag)
     try:
         result = subprocess.run(  # nosec B603 - just installed binary
-            [str(install_path), "--version"],
+            [str(install_path), "version"],
             capture_output=True,
             text=True,
             encoding="utf-8",
@@ -522,6 +522,76 @@ def install_agent(
     console.print("  [bold]envdrift agent status[/bold]")
 
 
+def _probe_agent_binary(agent_path: str) -> tuple[str | None, str | None]:
+    """Probe an on-PATH agent binary via its ``version`` subcommand.
+
+    Args:
+        agent_path: Path to the agent binary found on PATH
+
+    Returns:
+        ``(version, broken_reason)``. ``broken_reason`` is set when the binary
+        cannot run or exits non-zero; both are ``None`` when the probe timed
+        out (the binary executes but is slow/hung, so the version stays unknown).
+    """
+    try:
+        # The cobra CLI only has a `version` subcommand — `--version` is an
+        # unknown flag that exits 1 even on a healthy agent (see #482).
+        result = subprocess.run(  # nosec B603 - checking installed binary
+            [agent_path, "version"],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=5,
+        )
+    except subprocess.TimeoutExpired:
+        return None, None
+    except OSError as e:
+        # Exec format error / permission denied — the binary cannot run.
+        return None, str(e)
+    if result.returncode == 0:
+        return result.stdout.strip(), None
+    # A working agent always answers `version` with exit 0.
+    stderr_lines = (result.stderr or "").strip().splitlines()
+    return None, f"'version' exited with code {result.returncode}" + (
+        f": {stderr_lines[0]}" if stderr_lines else ""
+    )
+
+
+def _print_agent_check(agent_path: str) -> None:
+    """Print the Background Agent section of ``install check`` for a found binary.
+
+    Probes the binary before declaring it installed: a wrong-arch or corrupt
+    file on PATH must not get a green checkmark (#441).
+    """
+    version, broken_reason = _probe_agent_binary(agent_path)
+    if broken_reason is not None:
+        console.print(f"  [red]✗ Broken installation at: {agent_path}[/red]")
+        console.print(f"  The binary cannot run: {broken_reason}")
+        console.print("  Run: [bold]envdrift install agent --force[/bold] to reinstall")
+        return
+
+    console.print(f"  ✓ Installed at: {agent_path}")
+    console.print(f"  Version: {version}" if version else "  Version: unknown")
+
+    # Check if running
+    try:
+        result = subprocess.run(  # nosec B603 - checking installed binary
+            [agent_path, "status"],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=5,
+        )
+        if result.returncode == 0 and parse_agent_running_status(result.stdout) is True:
+            console.print("  [green]⚡ Running[/green]")
+        else:
+            console.print("  [dim]⭕ Not running[/dim]")
+    except (subprocess.TimeoutExpired, OSError):
+        console.print("  [dim]Status: unknown[/dim]")
+
+
 @install_app.command("check")
 def check_installation() -> None:
     """Check the installation status of envdrift components."""
@@ -541,37 +611,7 @@ def check_installation() -> None:
     console.print("\n[bold]Background Agent:[/bold]")
     agent_path = shutil.which("envdrift-agent")
     if agent_path:
-        console.print(f"  ✓ Installed at: {agent_path}")
-        try:
-            result = subprocess.run(  # nosec B603 - checking installed binary
-                [agent_path, "--version"],
-                capture_output=True,
-                text=True,
-                encoding="utf-8",
-                errors="replace",
-                timeout=5,
-            )
-            if result.returncode == 0:
-                console.print(f"  Version: {result.stdout.strip()}")
-        except (subprocess.TimeoutExpired, OSError):
-            console.print("  Version: unknown")
-
-        # Check if running
-        try:
-            result = subprocess.run(  # nosec B603 - checking installed binary
-                [agent_path, "status"],
-                capture_output=True,
-                text=True,
-                encoding="utf-8",
-                errors="replace",
-                timeout=5,
-            )
-            if result.returncode == 0 and parse_agent_running_status(result.stdout) is True:
-                console.print("  [green]⚡ Running[/green]")
-            else:
-                console.print("  [dim]⭕ Not running[/dim]")
-        except (subprocess.TimeoutExpired, OSError):
-            console.print("  [dim]Status: unknown[/dim]")
+        _print_agent_check(agent_path)
     else:
         console.print("  [yellow]✗ Not installed[/yellow]")
         console.print("  Run: [bold]envdrift install agent[/bold]")

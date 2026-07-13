@@ -34,7 +34,9 @@ When you run `envdrift validate`, it:
    inline-`#`-comment rule, and lines split on `\n` / `\r\n` / `\r` only.
    One deliberate divergence: a leading UTF-8 BOM is stripped — and flagged
    with a warning — so reports name the key the user wrote, while
-   pydantic-settings keeps the BOM on the first key
+   pydantic-settings keeps the BOM on the first key. Non-comment content that
+   cannot be parsed is also ignored with a line-numbered warning rather than
+   disappearing silently
 3. Checks for missing required fields
 4. Validates types (string to int/bool conversion)
 5. Optionally checks for extra undefined variables

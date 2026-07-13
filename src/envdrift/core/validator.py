@@ -62,6 +62,17 @@ class ValidationResult:
         return len(self.warnings) + len(self.missing_optional) + len(self.unencrypted_secrets)
 
 
+def _unparsed_line_warnings(env_file: EnvFile) -> list[str]:
+    """Build diagnostics for non-comment content the parser omitted."""
+    if not env_file.unparsed_lines:
+        return []
+    line_numbers = ", ".join(str(line) for line in env_file.unparsed_lines)
+    return [
+        "Could not parse non-comment content on .env line(s) "
+        f"{line_numbers}; those lines were ignored"
+    ]
+
+
 class Validator:
     """Validate .env files against Pydantic schemas."""
 
@@ -138,6 +149,8 @@ class Validator:
                 "will come up missing at startup. Remove the BOM or set "
                 "env_file_encoding='utf-8-sig' on the model config."
             )
+
+        result.warnings.extend(_unparsed_line_warnings(env_file))
 
         # Pydantic Settings defaults to case_sensitive=False, loading e.g.
         # `API_KEY` from a conventional UPPERCASE .env into a lowercase

@@ -269,6 +269,13 @@ Reports installation status of all components:
 - Agent running status (⚡ Running / ⭕ Not running)
 - Project registry info
 
+An agent binary that is on PATH but cannot execute (wrong architecture,
+corrupt download, or one that fails the `version` subcommand probe) is
+reported as a broken installation with the underlying error and a reinstall hint
+(`envdrift install agent --force`) — never as a green "Installed".
+`envdrift agent status` reports the same condition the same way instead of
+suggesting to run the broken binary itself.
+
 ---
 
 ## Phase 2C: Build Pipelines ✅

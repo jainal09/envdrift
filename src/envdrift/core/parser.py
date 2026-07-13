@@ -65,6 +65,10 @@ class EnvFile:
     # that a later encrypted duplicate would otherwise hide (#583).
     assignments: list[EnvVar] = field(default_factory=list)
     comments: list[str] = field(default_factory=list)
+    # Starting line numbers for non-comment content the selected parser mode
+    # could not turn into a dotenv binding. Keep diagnostics as data: callers
+    # decide how to render them, so machine-readable output stays clean.
+    unparsed_lines: list[int] = field(default_factory=list)
     # True when the source text began with a UTF-8 BOM (U+FEFF). The parser
     # strips it so reports name the variable the user wrote — but
     # pydantic-settings reads .env files as plain UTF-8 and would see a
@@ -159,6 +163,15 @@ class _ParseContext:
     lines: list[str]
     env_file: EnvFile
     bare_keys: set[str]
+
+
+@dataclass(frozen=True)
+class _SourceLine:
+    """One physical source line and the parser position immediately after it."""
+
+    text: str
+    number: int
+    next_index: int
 
 
 class EnvParser:
@@ -373,8 +386,7 @@ class EnvParser:
                 raw_lines = [original_line]
             else:
                 prepared, index = self._prepare_nonstandard_binding(
-                    original_line,
-                    index,
+                    _SourceLine(original_line, line_num, index),
                     lenient,
                     context,
                 )
@@ -395,6 +407,7 @@ class EnvParser:
                 # `consumed` is 0 — only the opening line is dropped and the
                 # following lines re-parse normally, exactly like dotenv's
                 # rest-of-line error recovery.
+                env_file.unparsed_lines.append(line_num)
                 continue
             if consumed:
                 raw_value = joined_raw
@@ -450,31 +463,36 @@ class EnvParser:
 
     def _prepare_nonstandard_binding(
         self,
-        original_line: str,
-        index: int,
+        source_line: _SourceLine,
         lenient: bool,
         context: _ParseContext,
     ) -> tuple[tuple[str, str, list[str]] | None, int]:
         """Lex and prepare a quoted, bare, or malformed fallback binding."""
-        binding = self._parse_key_binding(original_line, context.lines, index, lenient=lenient)
+        binding = self._parse_key_binding(
+            source_line.text,
+            context.lines,
+            source_line.next_index,
+            lenient=lenient,
+        )
         if binding is None:
-            return None, index
-        return self._prepare_binding(binding, original_line, index, context)
+            context.env_file.unparsed_lines.append(source_line.number)
+            return None, source_line.next_index
+        return self._prepare_binding(binding, source_line, context)
 
     @staticmethod
     def _prepare_binding(
         binding: _KeyBinding,
-        original_line: str,
-        index: int,
+        source_line: _SourceLine,
         context: _ParseContext,
     ) -> tuple[tuple[str, str, list[str]] | None, int]:
         """Consume key lines and apply the state change from a bare binding."""
         raw_lines = [
-            original_line,
-            *context.lines[index : index + binding.consumed],
+            source_line.text,
+            *context.lines[source_line.next_index : source_line.next_index + binding.consumed],
         ]
-        index += binding.consumed
+        index = source_line.next_index + binding.consumed
         if binding.dropped or binding.key is None:
+            context.env_file.unparsed_lines.append(source_line.number)
             return None, index
         if binding.raw_value is None:
             # A later bare duplicate wins in dotenv_values (A=1; A -> A=None),
