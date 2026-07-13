@@ -523,11 +523,11 @@ class TestCheckCommand:
     def test_check_agent_version_nonzero_exit_reports_broken(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ):
-        """Regression for #441: '--version' exiting non-zero means a broken agent.
+        """Regression for #441: the `version` probe exiting non-zero means a broken agent.
 
-        A real executable that runs but cannot answer ``--version`` is not a
-        working agent; ``install check`` must report it as broken rather than
-        printing a green '✓ Installed at' with no version.
+        A real executable that runs but cannot answer the ``version``
+        subcommand is not a working agent; ``install check`` must report it as
+        broken rather than printing a green '✓ Installed at' with no version.
         """
         fake_dir = tmp_path / "fakebin"
         fake_dir.mkdir()
@@ -549,6 +549,65 @@ class TestCheckCommand:
         assert "exited with code 2" in out
         assert "not an agent" in out
         assert "envdrift install agent --force" in out
+
+    def test_check_healthy_agent_with_version_subcommand_is_not_broken(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        """A healthy agent must be probed with `version`, not `--version` (#441 review).
+
+        The real cobra CLI only defines a ``version`` subcommand; ``--version``
+        is an unknown flag that exits 1 even on a perfectly good binary (the
+        same argv contract enforced for the VS Code extension in #482). A fake
+        agent implementing the real contract (real script on PATH, no
+        subprocess mocks) must be reported '✓ Installed at' with its version —
+        never 'Broken installation'.
+        """
+        fake_dir = tmp_path / "fakebin"
+        fake_dir.mkdir()
+        if platform.system().lower() == "windows":
+            fake_agent = fake_dir / "envdrift-agent.cmd"
+            fake_agent.write_text(
+                "@echo off\n"
+                'if "%1"=="version" (\n'
+                "  echo envdrift-agent 1.2.3\n"
+                "  exit /b 0\n"
+                ")\n"
+                'if "%1"=="status" (\n'
+                "  echo Installed: true\n"
+                "  echo Running:   false\n"
+                "  exit /b 0\n"
+                ")\n"
+                "echo Error: unknown flag: %1 1>&2\n"
+                "exit /b 1\n"
+            )
+        else:
+            fake_agent = fake_dir / "envdrift-agent"
+            fake_agent.write_text(
+                "#!/bin/sh\n"
+                'if [ "$1" = "version" ]; then\n'
+                '  echo "envdrift-agent 1.2.3"\n'
+                "  exit 0\n"
+                "fi\n"
+                'if [ "$1" = "status" ]; then\n'
+                '  echo "Installed: true"\n'
+                '  echo "Running:   false"\n'
+                "  exit 0\n"
+                "fi\n"
+                'echo "Error: unknown flag: $1" >&2\n'
+                "exit 1\n"
+            )
+            fake_agent.chmod(0o755)
+        monkeypatch.setenv("PATH", str(fake_dir))
+        registry_module._registry = registry_module.ProjectRegistry(tmp_path / "projects.json")
+
+        result = runner.invoke(app, ["install", "check"])
+
+        out = " ".join(result.output.split())
+        assert result.exit_code == 0
+        assert "Broken installation" not in out
+        assert "Installed at" in out
+        assert "Version: envdrift-agent 1.2.3" in out
+        assert "Not running" in out
 
 
 class TestInstallHelpCommand:

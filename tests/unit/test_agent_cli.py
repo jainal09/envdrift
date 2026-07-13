@@ -336,7 +336,7 @@ class TestAgentStatusCommand:
             if args[1] == "status":
                 stdout = "Installed: true\nConfig:    /tmp/envdrift.toml\nenvdrift:  true\n"
                 return subprocess.CompletedProcess(args, 0, stdout=stdout, stderr="")
-            if args[1] == "--version":
+            if args[1] == "version":  # the agent only has a `version` subcommand (#482)
                 return subprocess.CompletedProcess(
                     args, 0, stdout="envdrift-agent v1.2.3\n", stderr=""
                 )
@@ -368,7 +368,7 @@ class TestAgentStatusCommand:
                     "envdrift:  true\n"
                 )
                 return subprocess.CompletedProcess(args, 0, stdout=stdout, stderr="")
-            if args[1] == "--version":
+            if args[1] == "version":  # the agent only has a `version` subcommand (#482)
                 return subprocess.CompletedProcess(
                     args, 0, stdout="envdrift-agent v1.2.3\n", stderr=""
                 )
@@ -401,7 +401,7 @@ class TestAgentStatusCommand:
                     "envdrift:  true\n"
                 )
                 return subprocess.CompletedProcess(args, 0, stdout=stdout, stderr="")
-            if args[1] == "--version":
+            if args[1] == "version":  # the agent only has a `version` subcommand (#482)
                 return subprocess.CompletedProcess(
                     args, 0, stdout="envdrift-agent v1.2.3\n", stderr=""
                 )

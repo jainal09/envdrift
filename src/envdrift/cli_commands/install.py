@@ -468,10 +468,10 @@ def install_agent(
 
     console.print(f"[green]✓[/green] Installed agent to: {install_path}")
 
-    # Verify installation
+    # Verify installation (the agent exposes `version` as a subcommand, not a flag)
     try:
         result = subprocess.run(  # nosec B603 - just installed binary
-            [str(install_path), "--version"],
+            [str(install_path), "version"],
             capture_output=True,
             text=True,
             encoding="utf-8",
@@ -546,8 +546,10 @@ def check_installation() -> None:
         version: str | None = None
         broken_reason: str | None = None
         try:
+            # The cobra CLI only has a `version` subcommand — `--version` is an
+            # unknown flag that exits 1 even on a healthy agent (see #482).
             result = subprocess.run(  # nosec B603 - checking installed binary
-                [agent_path, "--version"],
+                [agent_path, "version"],
                 capture_output=True,
                 text=True,
                 encoding="utf-8",
@@ -557,9 +559,9 @@ def check_installation() -> None:
             if result.returncode == 0:
                 version = result.stdout.strip()
             else:
-                # A working agent always answers --version with exit 0.
+                # A working agent always answers `version` with exit 0.
                 stderr_lines = (result.stderr or "").strip().splitlines()
-                broken_reason = f"--version exited with code {result.returncode}" + (
+                broken_reason = f"'version' exited with code {result.returncode}" + (
                     f": {stderr_lines[0]}" if stderr_lines else ""
                 )
         except subprocess.TimeoutExpired:

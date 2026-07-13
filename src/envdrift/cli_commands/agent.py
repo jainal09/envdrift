@@ -106,9 +106,10 @@ def _get_agent_status() -> tuple[str, str | None, str | None]:
                 return "error", None, None
 
             if running_state:
-                # Try to get version
+                # Try to get version (a `version` subcommand — the cobra CLI
+                # has no `--version` flag, see #482)
                 version_result = subprocess.run(  # nosec B603
-                    [str(agent_binary), "--version"],
+                    [str(agent_binary), "version"],
                     capture_output=True,
                     text=True,
                     timeout=5,
