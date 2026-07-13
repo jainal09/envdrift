@@ -79,6 +79,27 @@ def _normalize_project_path(path: str | None) -> Path:
     return project_path.resolve()
 
 
+def _fetch_agent_version(agent_binary: Path) -> str | None:
+    """Version of a confirmed-running agent, or None if the probe fails.
+
+    Uses the ``version`` subcommand — the cobra CLI has no ``--version`` flag
+    (see #482). The probe carries its own handler: a timeout or exec failure
+    here must not override an already-confirmed "running" status with
+    'error'/'broken' — the version merely stays unknown.
+    """
+    try:
+        result = subprocess.run(  # nosec B603
+            [str(agent_binary), "version"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+            check=False,
+        )
+    except (subprocess.TimeoutExpired, OSError):
+        return None
+    return result.stdout.strip() if result.returncode == 0 else None
+
+
 def _get_agent_status() -> tuple[str, str | None, str | None]:
     """Get the agent status.
 
@@ -106,25 +127,7 @@ def _get_agent_status() -> tuple[str, str | None, str | None]:
                 return "error", None, None
 
             if running_state:
-                # Try to get version (a `version` subcommand — the cobra CLI
-                # has no `--version` flag, see #482). The probe gets its own
-                # handler: a timeout or exec failure here must not override the
-                # already-confirmed "running" status with 'error'/'broken' —
-                # the version merely stays unknown.
-                version = None
-                try:
-                    version_result = subprocess.run(  # nosec B603
-                        [str(agent_binary), "version"],
-                        capture_output=True,
-                        text=True,
-                        timeout=5,
-                        check=False,
-                    )
-                    if version_result.returncode == 0:
-                        version = version_result.stdout.strip()
-                except (subprocess.TimeoutExpired, OSError):
-                    pass
-                return "running", version, None
+                return "running", _fetch_agent_version(agent_binary), None
 
             return "stopped", None, None
 
