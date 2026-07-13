@@ -107,15 +107,23 @@ def _get_agent_status() -> tuple[str, str | None, str | None]:
 
             if running_state:
                 # Try to get version (a `version` subcommand — the cobra CLI
-                # has no `--version` flag, see #482)
-                version_result = subprocess.run(  # nosec B603
-                    [str(agent_binary), "version"],
-                    capture_output=True,
-                    text=True,
-                    timeout=5,
-                    check=False,
-                )
-                version = version_result.stdout.strip() if version_result.returncode == 0 else None
+                # has no `--version` flag, see #482). The probe gets its own
+                # handler: a timeout or exec failure here must not override the
+                # already-confirmed "running" status with 'error'/'broken' —
+                # the version merely stays unknown.
+                version = None
+                try:
+                    version_result = subprocess.run(  # nosec B603
+                        [str(agent_binary), "version"],
+                        capture_output=True,
+                        text=True,
+                        timeout=5,
+                        check=False,
+                    )
+                    if version_result.returncode == 0:
+                        version = version_result.stdout.strip()
+                except (subprocess.TimeoutExpired, OSError):
+                    pass
                 return "running", version, None
 
             return "stopped", None, None

@@ -165,6 +165,42 @@ class TestGetAgentStatusErrorBranches:
         assert _get_agent_status() == ("broken", None, "no such binary")
 
 
+class TestGetAgentStatusVersionProbeIsolation:
+    """The nested ``version`` probe must not override a confirmed running status.
+
+    Regression for the #644 review finding: the probe used to share the outer
+    ``status``-probe exception handlers, so a timeout or exec failure while
+    fetching the version of an agent already confirmed running downgraded the
+    whole result to 'error'/'broken' — telling the user to reinstall an agent
+    that is demonstrably running. The version must merely stay unknown.
+    """
+
+    @pytest.mark.parametrize(
+        "probe_failure",
+        [
+            subprocess.TimeoutExpired(cmd=["envdrift-agent", "version"], timeout=5),
+            OSError("binary replaced mid-flight"),
+        ],
+        ids=["timeout", "oserror"],
+    )
+    def test_version_probe_failure_keeps_running_status(self, monkeypatch, probe_failure):
+        """A failing version probe on a running agent yields ('running', None, None)."""
+        monkeypatch.setattr(
+            agent_module,
+            "_find_agent_binary",
+            lambda: Path("/usr/local/bin/envdrift-agent"),
+        )
+
+        def fake_run(args, **_kwargs):
+            if args[1] == "status":
+                return subprocess.CompletedProcess(args, 0, stdout="Running:   true\n", stderr="")
+            raise probe_failure
+
+        monkeypatch.setattr(agent_module.subprocess, "run", fake_run)
+
+        assert _get_agent_status() == ("running", None, None)
+
+
 class TestFormatTimestamp:
     """Tests for ``_format_timestamp`` (lines 135-136 - ValueError fallback)."""
 
