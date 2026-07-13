@@ -68,6 +68,65 @@ class TestVaultPushAll:
 
     @patch("envdrift.cli_commands.encryption_helpers.resolve_encryption_backend")
     @patch("envdrift.cli_commands.sync.load_sync_config_and_client")
+    def test_push_all_profile_filters_mappings(
+        self,
+        mock_loader,
+        mock_resolve_backend,
+        tmp_path,
+    ):
+        """--profile pushes regular and matching mappings, excluding other profiles."""
+        mappings = [
+            ServiceMapping(
+                secret_name="shared-secret",
+                folder_path=tmp_path / "shared",
+                environment="production",
+            ),
+            ServiceMapping(
+                secret_name="local-secret",
+                folder_path=tmp_path / "local",
+                profile="local",
+            ),
+            ServiceMapping(
+                secret_name="prod-secret",
+                folder_path=tmp_path / "prod",
+                profile="prod",
+            ),
+        ]
+        for mapping in mappings:
+            mapping.folder_path.mkdir()
+            (mapping.folder_path / ".env.keys").write_text(
+                f"{mapping.env_key_name}={mapping.secret_name}-value\n"
+            )
+
+        mock_client = MagicMock()
+        mock_client.get_secret.side_effect = SecretNotFoundError("missing")
+        mock_loader.return_value = (
+            SyncConfig(mappings=mappings),
+            mock_client,
+            "azure",
+            None,
+            None,
+            None,
+        )
+        mock_resolve_backend.return_value = (
+            DummyEncryptionBackend(),
+            EncryptionProvider.DOTENVX,
+            None,
+        )
+
+        result = runner.invoke(
+            app,
+            ["vault-push", "--all", "--profile", "local", "--skip-encrypt"],
+        )
+
+        assert result.exit_code == 0, result.output
+        assert [args.args[0] for args in mock_client.set_secret.call_args_list] == [
+            "shared-secret",
+            "local-secret",
+        ]
+
+    @patch("envdrift.cli_commands.encryption_helpers.resolve_encryption_backend")
+    @patch("envdrift.cli_commands.sync.load_sync_config_and_client")
     @patch("envdrift.sync.operations.EnvKeysFile")
     def test_push_all_success(
         self,

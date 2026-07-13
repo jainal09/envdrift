@@ -75,6 +75,43 @@ def test_diff_with_differences(tmp_path) -> None:
     assert "FOO" in result.stdout or "changed" in result.stdout.lower()
 
 
+def test_diff_exit_on_drift_exits_nonzero_after_showing_differences(tmp_path) -> None:
+    """The opt-in drift gate exits 1 while preserving diff output."""
+    env1 = tmp_path / ".env1"
+    env1.write_text("FOO=bar")
+    env2 = tmp_path / ".env2"
+    env2.write_text("FOO=different")
+
+    for flag in ("--exit-on-drift", "--ci"):
+        result = runner.invoke(app, ["diff", str(env1), str(env2), flag])
+
+        assert result.exit_code == 1
+        assert "FOO" in result.stdout
+        assert "drift detected" in result.stdout.lower()
+
+
+def test_diff_exit_on_drift_keeps_identical_files_successful(tmp_path) -> None:
+    """The drift gate exits 0 when the files match."""
+    env1 = tmp_path / ".env1"
+    env1.write_text("FOO=bar")
+    env2 = tmp_path / ".env2"
+    env2.write_text("FOO=bar")
+
+    result = runner.invoke(app, ["diff", str(env1), str(env2), "--exit-on-drift"])
+
+    assert result.exit_code == 0
+    assert "No drift" in result.stdout or "match" in result.stdout.lower()
+
+
+def test_diff_help_documents_drift_exit_flags() -> None:
+    """Diff help exposes both names for the opt-in drift gate."""
+    result = runner.invoke(app, ["diff", "--help"])
+
+    assert result.exit_code == 0
+    assert "--exit-on-drift" in result.stdout
+    assert "--ci" in result.stdout
+
+
 def test_diff_json_format(tmp_path) -> None:
     """Test diff with JSON output format."""
     content = "FOO=bar"
@@ -258,6 +295,24 @@ def test_lock_help() -> None:
     assert "--check" in output
     assert "--force" in output
     assert "--profile" in output
+
+
+def test_sync_help_documents_profile_filter() -> None:
+    """Sync exposes the same profile filter as pull and lock."""
+    result = runner.invoke(app, ["sync", "--help"])
+
+    assert result.exit_code == 0
+    assert "--profile" in result.stdout
+    assert "Only process mappings for this profile" in " ".join(result.stdout.split())
+
+
+def test_vault_push_help_documents_profile_filter() -> None:
+    """Bulk vault push documents its profile filter."""
+    result = runner.invoke(app, ["vault-push", "--help"])
+
+    assert result.exit_code == 0
+    assert "--profile" in result.stdout
+    assert "Only process mappings for this profile" in " ".join(result.stdout.split())
 
 
 def test_lock_check_only_with_encrypted_file(tmp_path) -> None:

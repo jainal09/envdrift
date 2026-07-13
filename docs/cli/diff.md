@@ -88,6 +88,21 @@ Include variables that are identical in both files.
 envdrift diff .env.dev .env.prod --include-unchanged
 ```
 
+### `--exit-on-drift`, `--ci`
+
+Exit with code 1 after rendering the normal table or JSON output when drift is detected. Both option names are aliases.
+
+```bash
+# Suitable for a CI gate: exits 1 for added, removed, or changed variables
+envdrift diff .env.dev .env.prod --exit-on-drift
+
+# Short CI-oriented alias with machine-readable output
+envdrift diff .env.dev .env.prod --format json --ci
+```
+
+The flag is opt-in. Without it, detected drift remains a successful comparison and exits 0, preserving the command's existing scripting behavior.
+Identical files exit 0 with or without the flag.
+
 ### `--normalize`, `--strict`
 
 Normalize values before comparing so trivially-equivalent strings don't show up
@@ -224,6 +239,15 @@ envdrift diff .env.dev .env.prod --show-values
 
 ### CI/CD Drift Detection
 
+To fail a CI job when drift exists, enable the opt-in exit gate:
+
+```yaml
+- name: Gate on environment drift
+  run: envdrift diff .env.development .env.production --exit-on-drift
+```
+
+If a later step needs to parse and comment on the report, the default exit-0 behavior remains available:
+
 ```yaml
 # GitHub Actions - Comment on PR with drift report
 - name: Check drift
@@ -250,6 +274,15 @@ envdrift diff .env.dev .env.prod --show-values
         });
       }
 ```
+
+## Exit Codes
+
+| Code | Meaning                                                            |
+| :--- | :----------------------------------------------------------------- |
+| 0    | Comparison completed; this remains the default even when drift exists |
+| 0    | `--exit-on-drift` / `--ci`: files match                            |
+| 1    | `--exit-on-drift` / `--ci`: drift was detected after output        |
+| 1    | Invalid format or unreadable, missing, or invalid input             |
 
 ## Diff Types
 

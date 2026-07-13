@@ -11,7 +11,7 @@ import typer
 from envdrift.output.rich import print_error, print_warning
 
 if TYPE_CHECKING:
-    from envdrift.sync.config import SyncConfig
+    from envdrift.sync.config import ServiceMapping, SyncConfig
 
 
 @dataclass(frozen=True)
@@ -167,6 +167,18 @@ def _require_sync_config(sync_config: SyncConfig | None) -> SyncConfig:
         "  --config <file.toml>  TOML config with [vault.sync] section\n"
         "  --config <pair.txt>   Legacy format: secret=folder"
     )
+    raise typer.Exit(code=1)
+
+
+def require_profile_mappings(sync_config: SyncConfig, profile: str | None) -> list[ServiceMapping]:
+    """Return regular plus selected profile mappings, failing on an empty selection."""
+    mappings = sync_config.filter_by_profile(profile)
+    if mappings:
+        return mappings
+    if profile:
+        print_error(f"No mappings found for profile '{profile}'")
+    else:
+        print_warning("No non-profile mappings found. Use --profile to specify one.")
     raise typer.Exit(code=1)
 
 

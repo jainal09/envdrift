@@ -57,6 +57,13 @@ that are missing from the vault.
 envdrift vault-push --all
 ```
 
+Without `--profile`, `--all` processes only untagged mappings. Add a profile to process regular mappings plus the exact matching profile while skipping
+other profile-tagged mappings:
+
+```bash
+envdrift vault-push --all --profile local
+```
+
 If a sync mapping sets `env_file`, `--all` encrypts that custom dotenv filename
 and still pushes the canonical key named by `environment`:
 
@@ -107,6 +114,17 @@ envdrift vault-push --direct secret-name "KEY=value" -p aws
 ### `--all`
 
 Push all secrets defined in sync config (skipping existing unless `--force` is set).
+
+### `--profile`
+
+In `--all` mode, process regular (untagged) mappings plus mappings tagged with the selected profile. Mappings tagged with other profiles are skipped.
+
+```bash
+envdrift vault-push --all --profile local
+```
+
+Without `--profile`, only regular mappings are processed. An empty selection exits with code 1. Using `--profile` without `--all` prints a warning and
+leaves single-service or direct mode unchanged.
 
 ### `--force`, `-f`
 
@@ -242,6 +260,7 @@ On error:
 | 0    | Success (secret pushed; in `--all` mode, every mapping pushed or skipped cleanly) |
 | 1    | Error (auth failure, file not found, vault error, or any `--all` mapping failure) |
 | 1    | `--all`: a mapping's `folder_path` does not exist (broken sync config)            |
+| 1    | `--all`: the selected profile contains no regular or matching mappings            |
 
 ## Authentication
 
