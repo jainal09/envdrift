@@ -5143,7 +5143,7 @@ class TestVaultPushCommand:
             ],
         )
         assert result.exit_code == 1
-        assert "vault-url required" in result.output.lower()
+        assert "azure provider requires --vault-url" in " ".join(result.output.split()).lower()
 
     def test_vault_push_requires_project_id_for_gcp(self):
         """vault-push should require project ID for gcp provider."""

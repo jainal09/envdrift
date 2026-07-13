@@ -177,6 +177,50 @@ class TestGetVaultClient:
         with pytest.raises(ValueError):
             get_vault_client("unsupported_provider")
 
+    def test_invalid_provider_lists_options_with_suggestion(self):
+        """A typo'd provider names the valid options and suggests the closest one.
+
+        The bare enum error ("'azur' is not a valid VaultProvider") leaked an
+        internal type name with no valid-options list (#441 audit).
+        """
+        with pytest.raises(ValueError) as exc_info:
+            get_vault_client("azur")
+        message = str(exc_info.value)
+        assert "Unknown vault provider 'azur'" in message
+        assert "did you mean 'azure'?" in message
+        assert "Valid providers: azure, aws, hashicorp, gcp" in message
+        assert "VaultProvider" not in message
+
+    def test_invalid_provider_without_close_match_omits_suggestion(self):
+        """A provider with no close match still lists the valid options."""
+        with pytest.raises(ValueError) as exc_info:
+            get_vault_client("doppler")
+        message = str(exc_info.value)
+        assert "Valid providers: azure, aws, hashicorp, gcp" in message
+        assert "did you mean" not in message
+
+    def test_azure_schemeless_vault_url_rejected(self):
+        """A vault_url without https:// fails fast at the factory.
+
+        It used to surface much later as the Azure SDK's cryptic "Bearer token
+        authentication is not permitted for non-TLS protected (non-https)
+        URLs" (#441 audit).
+        """
+        mock_azure_module = MagicMock()
+        with patch.dict("sys.modules", {"envdrift.vault.azure": mock_azure_module}):
+            with pytest.raises(ValueError) as exc_info:
+                get_vault_client("azure", vault_url="my-vault.vault.azure.net")
+        message = str(exc_info.value)
+        assert "must start with https://" in message
+        assert "my-vault.vault.azure.net" in message
+
+    def test_azure_http_vault_url_rejected(self):
+        """An http:// vault_url is rejected the same way as a schemeless one."""
+        mock_azure_module = MagicMock()
+        with patch.dict("sys.modules", {"envdrift.vault.azure": mock_azure_module}):
+            with pytest.raises(ValueError, match="must start with https://"):
+                get_vault_client("azure", vault_url="http://my-vault.vault.azure.net")
+
     def test_provider_as_string(self):
         """Test provider can be passed as string."""
         mock_aws_module = MagicMock()

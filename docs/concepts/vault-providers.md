@@ -179,7 +179,9 @@ provider = "hashicorp"
 
 [vault.hashicorp]
 url = "https://vault.example.com"
-# The token is read from the VAULT_TOKEN env var (no TOML key)
+# The token is read from the VAULT_TOKEN env var (no TOML key).
+# If url is omitted (and no --vault-url is passed), the standard
+# VAULT_ADDR env var is used.
 
 [[vault.sync.mappings]]
 # Path relative to the KV v2 mount (default "secret"); no "secret/data/" prefix
@@ -322,7 +324,7 @@ To use different providers for different environments, run the command separatel
 each one with a different `--provider` (and the matching `--vault-url`/`--project-id`):
 
 ```toml
-# Default provider is azure
+# Configured provider is azure
 [vault]
 provider = "azure"
 
@@ -333,7 +335,7 @@ environment = "production"
 ```
 
 ```bash
-# Fetch every mapping from the default provider (azure)
+# Fetch every mapping from the configured provider (azure)
 envdrift sync --vault-url https://my-keyvault.vault.azure.net/
 
 # Re-run against HashiCorp instead by switching --provider

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import difflib
 from enum import Enum
 from typing import TYPE_CHECKING
 
@@ -27,7 +28,7 @@ def get_vault_client(provider: VaultProvider | str, **config) -> VaultClient:
     Parameters:
         provider (VaultProvider | str): Vault provider enum or provider name ("azure", "aws", "hashicorp", "gcp").
         **config: Provider-specific configuration:
-            - For "azure": `vault_url` (str) — required.
+            - For "azure": `vault_url` (str) — required, must be an https:// URL.
             - For "aws": `region` (str) — optional, defaults to "us-east-1".
             - For "hashicorp": `url` (str) — required; `token` (str) — optional.
             - For "gcp": `project_id` (str) — required.
@@ -40,7 +41,17 @@ def get_vault_client(provider: VaultProvider | str, **config) -> VaultClient:
         ValueError: If the provider is unsupported or cannot be converted to a VaultProvider.
     """
     if isinstance(provider, str):
-        provider = VaultProvider(provider)
+        try:
+            provider = VaultProvider(provider)
+        except ValueError:
+            # The bare enum error ("'azur' is not a valid VaultProvider") leaked
+            # an internal type name with no valid-options list (#441 audit).
+            valid = [p.value for p in VaultProvider]
+            close = difflib.get_close_matches(provider, valid, n=1, cutoff=0.6)
+            hint = f" (did you mean '{close[0]}'?)" if close else ""
+            raise ValueError(
+                f"Unknown vault provider '{provider}'{hint}. Valid providers: {', '.join(valid)}"
+            ) from None
 
     if provider == VaultProvider.AZURE:
         try:
@@ -53,6 +64,11 @@ def get_vault_client(provider: VaultProvider | str, **config) -> VaultClient:
         vault_url = config.get("vault_url")
         if not vault_url:
             raise ValueError("Azure vault requires 'vault_url' configuration")
+        if not vault_url.lower().startswith("https://"):
+            # A schemeless URL used to surface as the Azure SDK's cryptic
+            # "Bearer token authentication is not permitted for non-TLS
+            # protected (non-https) URLs" much later (#441 audit).
+            raise ValueError(f"Azure vault_url must start with https:// (got '{vault_url}')")
         return AzureKeyVaultClient(vault_url=vault_url)
 
     elif provider == VaultProvider.AWS:

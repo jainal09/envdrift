@@ -123,7 +123,9 @@ Options: `azure`, `aws`, `hashicorp`, `gcp`
 
 ### `--vault-url`
 
-Vault URL. **Required for Azure and HashiCorp** unless configured in `envdrift.toml`.
+Vault URL. **Required for Azure and HashiCorp** unless configured in `envdrift.toml`
+(for HashiCorp, the standard `VAULT_ADDR` environment variable is also honored as a
+fallback). Azure vault URLs must start with `https://`.
 
 ### `--region`
 

@@ -217,7 +217,7 @@ Configuration for cloud vault integration.
 
 | Option | Type | Default | Description |
 |:-------|:-----|:--------|:------------|
-| `provider` | `string` | `"azure"` | Vault provider: `azure`, `aws`, `hashicorp`, `gcp` |
+| `provider` | `string` | inferred | Vault provider: `azure`, `aws`, `hashicorp`, `gcp`. When omitted, it is inferred from the single `[vault.<provider>]` section present (`azure` if none; multiple sections without an explicit provider is an error). |
 
 ```toml
 [vault]
@@ -228,7 +228,7 @@ provider = "azure"
 
 | Option | Type | Default | Description |
 |:-------|:-----|:--------|:------------|
-| `vault_url` | `string` | `null` | Azure Key Vault URL (e.g., `https://my-vault.vault.azure.net/`) |
+| `vault_url` | `string` | `null` | Azure Key Vault URL (e.g., `https://my-vault.vault.azure.net/`). Must start with `https://`. |
 
 ```toml
 [vault.azure]
@@ -250,7 +250,7 @@ region = "us-east-1"
 
 | Option | Type | Default | Description |
 |:-------|:-----|:--------|:------------|
-| `url` | `string` | `null` | HashiCorp Vault URL |
+| `url` | `string` | `null` | HashiCorp Vault URL. When unset (and no `--vault-url` is passed), the standard `VAULT_ADDR` environment variable is used. |
 
 ```toml
 [vault.hashicorp]
