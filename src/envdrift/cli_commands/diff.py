@@ -93,6 +93,14 @@ def diff(
     include_unchanged: Annotated[
         bool, typer.Option("--include-unchanged", help="Include unchanged variables")
     ] = False,
+    exit_on_drift: Annotated[
+        bool,
+        typer.Option(
+            "--exit-on-drift",
+            "--ci",
+            help="Exit with code 1 when drift is detected",
+        ),
+    ] = False,
     normalize: Annotated[
         bool,
         typer.Option(
@@ -116,6 +124,7 @@ def diff(
         show_values (bool): If True, do not mask sensitive values in the output.
         format_ (str): Output format, either "table" (default) for human-readable output or "json" for machine-readable output.
         include_unchanged (bool): If True, include variables that are unchanged between the two files in the output.
+        exit_on_drift (bool): If True, exit with code 1 after displaying output when drift is detected. Defaults to False.
         normalize (bool): If True (default), normalize values before comparing — strips leading/trailing whitespace, treats `true/True/TRUE` (and similar bool aliases) as equal, and parses JSON-style lists/dicts so quote-style differences don't read as drift. When a `--schema` is provided, values are also coerced through the corresponding Pydantic type before comparison. Pass `--strict` to disable and fall back to raw string compare.
     """
     # Validate output format up-front (mirrors guard's --fail-on validation).
@@ -152,3 +161,6 @@ def diff(
         print(json.dumps(engine.to_dict(result), indent=2))
     else:
         print_diff_result(result, show_unchanged=include_unchanged)
+
+    if exit_on_drift and result.has_drift:
+        raise typer.Exit(code=1)

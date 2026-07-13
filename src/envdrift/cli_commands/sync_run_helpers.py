@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -11,6 +11,8 @@ import typer
 
 from envdrift.output.rich import console, print_error
 from envdrift.vault.base import SecretNotFoundError, VaultError
+
+from .sync_config_helpers import require_profile_mappings
 
 if TYPE_CHECKING:
     from envdrift.sync.config import SyncConfig
@@ -27,6 +29,7 @@ class SyncRequest:
     project_id: str | None
     verify: bool
     force: bool
+    profile: str | None
     check_decryption: bool
     validate_schema: bool
     schema: str | None
@@ -74,7 +77,12 @@ def _load_sync_context(request: SyncRequest, runtime: SyncRuntime) -> _SyncConte
         project_id=request.project_id,
     )
     _raise_hook_errors(request.config_file)
-    return _SyncContext(config=sync_config, vault_client=vault_client, provider=provider)
+    mappings = require_profile_mappings(sync_config, request.profile)
+    return _SyncContext(
+        config=replace(sync_config, mappings=mappings),
+        vault_client=vault_client,
+        provider=provider,
+    )
 
 
 def _new_sync_engine(request: SyncRequest, context: _SyncContext):
@@ -115,7 +123,8 @@ def _prompting_disabled(request: SyncRequest) -> bool:
 def _print_sync_header(request: SyncRequest, context: _SyncContext) -> None:
     console.print()
     mode = "VERIFY" if request.verify else ("FORCE" if request.force else "Interactive")
-    console.print(f"[bold]Vault Sync[/bold] - Mode: {mode}")
+    profile_info = f" | Profile: {request.profile}" if request.profile else ""
+    console.print(f"[bold]Vault Sync[/bold] - Mode: {mode}{profile_info}")
     console.print(
         f"[dim]Provider: {context.provider} | Services: {len(context.config.mappings)}[/dim]"
     )

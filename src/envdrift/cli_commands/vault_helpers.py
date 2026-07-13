@@ -17,6 +17,8 @@ from envdrift.cli_commands.sync_config_helpers import (
 from envdrift.env_files import EnvFileDetection, resolve_custom_env_file, resolve_mapping_env_file
 from envdrift.output.rich import console, print_error, print_success, print_warning
 
+from .sync_config_helpers import require_profile_mappings
+
 if TYPE_CHECKING:
     from envdrift.encryption import EncryptionProvider
     from envdrift.encryption.base import EncryptionBackend
@@ -54,6 +56,7 @@ class VaultPushRequest:
     environment: str | None
     direct: bool
     all_services: bool
+    profile: str | None
     force: bool
     skip_encrypt: bool
     connection: VaultConnectionOptions
@@ -74,6 +77,7 @@ class VaultPullRequest:
 @dataclass(frozen=True)
 class _BulkPushContext:
     sync_config: SyncConfig
+    mappings: list[ServiceMapping]
     client: VaultClient
     vault_provider: str
     backend: EncryptionBackend
@@ -224,6 +228,8 @@ def _warn_ignored_push_flags(request: VaultPushRequest) -> None:
         print_warning("--skip-encrypt is only applicable with --all mode, ignoring")
     if request.force:
         print_warning("--force is only applicable with --all mode, ignoring")
+    if request.profile:
+        print_warning("--profile is only applicable with --all mode, ignoring")
 
 
 def _load_bulk_vault(
@@ -289,12 +295,14 @@ def _bulk_sops_kwargs(
 def _load_bulk_push_context(request: VaultPushRequest) -> _BulkPushContext:
     """Load sync, vault, and encryption dependencies for bulk push."""
     sync_config, client, vault_provider = _load_bulk_vault(request.connection)
+    mappings = require_profile_mappings(sync_config, request.profile)
     backend, backend_provider, encryption_config = _load_encryption_backend(
         request.connection.config
     )
     _require_installed_backend(backend)
     return _BulkPushContext(
         sync_config=sync_config,
+        mappings=mappings,
         client=client,
         vault_provider=vault_provider,
         backend=backend,
@@ -309,7 +317,7 @@ def _print_bulk_push_header(context: _BulkPushContext) -> None:
     """Render the bulk-push execution summary."""
     console.print("[bold]Vault Push All[/bold]")
     console.print(f"Provider: {context.vault_provider}")
-    console.print(f"Services: {len(context.sync_config.mappings)}")
+    console.print(f"Services: {len(context.mappings)}")
     if context.force:
         console.print("[dim]Force: overwrite existing secrets (--force)[/dim]")
     if context.skip_encrypt:
@@ -322,7 +330,7 @@ def _push_all_services(request: VaultPushRequest) -> None:
     context = _load_bulk_push_context(request)
     _print_bulk_push_header(context)
     stats = _PushStats()
-    for mapping in context.sync_config.mappings:
+    for mapping in context.mappings:
         _push_mapping(context, mapping, stats)
     console.print()
     console.print(f"Done. Pushed: {stats.pushed}, Skipped: {stats.skipped}, Errors: {stats.errors}")
