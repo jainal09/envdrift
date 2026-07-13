@@ -28,6 +28,9 @@ Supported vault providers:
 Auto-discovery usually supplies provider, vault URL, and region from your config file.
 Pass CLI flags when you need to override those defaults or when using legacy `pair.txt`, and use `-c` to pin a specific config file (common in CI).
 
+Profile filtering matches `pull` and `lock`: without `--profile`, only untagged mappings are synchronized. With `--profile NAME`, untagged mappings and
+the mappings tagged with that exact profile are synchronized.
+
 ## Options
 
 ### `--config`, `-c`
@@ -83,6 +86,18 @@ Reports mismatches as errors but exits non-zero only when combined with `--ci`. 
 ### `--force`, `-f`
 
 Force update all mismatches without prompting.
+
+### `--profile`
+
+Process regular (untagged) mappings plus mappings tagged with the selected profile. Mappings tagged with other profiles are skipped.
+
+```bash
+# Sync shared mappings plus the local profile; skip other profile mappings
+envdrift sync --profile local
+```
+
+Without `--profile`, only regular mappings are processed. If the selection is empty, `sync` exits with code 1 instead of reporting an empty run as a
+success.
 
 ### `--check-decryption`
 
@@ -159,6 +174,11 @@ secret_name = "postgres-key"
 folder_path = "secrets/postgresql"
 environment = "production"  # Use DOTENV_PRIVATE_KEY_PRODUCTION
 env_file = "postgresql.env" # Custom dotenv filename inside folder_path
+
+[[vault.sync.mappings]]
+secret_name = "myapp-local-key"
+folder_path = "services/myapp"
+profile = "local"           # Included only with --profile local
 ```
 
 Place the file in the project root so auto-discovery finds it; pass `-c envdrift.toml` in CI to pin the exact file.
@@ -219,6 +239,9 @@ envdrift sync -c envdrift.toml -p azure --vault-url https://myvault.vault.azure.
 
 # Force update
 envdrift sync -c envdrift.toml --force
+
+# Sync regular mappings plus the local profile
+envdrift sync -c envdrift.toml --profile local
 
 # Verify mode (CI)
 envdrift sync -c envdrift.toml --verify --ci
