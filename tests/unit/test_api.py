@@ -161,11 +161,40 @@ class TestInitAPI:
         )
         output = tmp_path / "generated.py"
 
-        with pytest.warns(UserWarning, match=r"\.env line\(s\) 2"):
+        with pytest.warns(UserWarning) as caught:
             result = init(env_file, output, detect_sensitive=False)
 
         assert result == output
         assert output.exists()
+        message = str(caught[0].message)
+        assert str(env_file) in message
+        assert "line(s) 2" in message
+
+    def test_init_warns_for_each_env_file_with_the_same_unparsed_lines(self, tmp_path: Path):
+        """Default warning deduplication must not hide a later source file."""
+        import warnings
+
+        env_files = [tmp_path / "first.env", tmp_path / "second.env"]
+        for env_file in env_files:
+            env_file.write_text(
+                "GOOD=value\nTHIS LINE HAS NO EQUALS SIGN\n",
+                encoding="utf-8",
+            )
+
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("default")
+            for env_file in env_files:
+                init(
+                    env_file,
+                    env_file.with_suffix(".py"),
+                    detect_sensitive=False,
+                )
+
+        user_warnings = [warning for warning in caught if warning.category is UserWarning]
+        assert len(user_warnings) == 2
+        messages = [str(warning.message) for warning in user_warnings]
+        for env_file in env_files:
+            assert any(str(env_file) in message for message in messages)
 
     def test_init_with_custom_class_name(self, tmp_path: Path):
         """Test init with custom class name."""

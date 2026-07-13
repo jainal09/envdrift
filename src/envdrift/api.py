@@ -136,8 +136,8 @@ def init(
     if result.unparsed_lines:
         line_numbers = ", ".join(str(line) for line in result.unparsed_lines)
         warnings.warn(
-            "Skipped unparsable non-comment content on .env line(s) "
-            f"{line_numbers}; the generated schema omits those lines",
+            "Skipped unparsable non-comment content in .env file "
+            f"{env_file} on line(s) {line_numbers}; the generated schema omits those lines",
             UserWarning,
             stacklevel=2,
         )

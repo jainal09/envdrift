@@ -165,6 +165,15 @@ class _ParseContext:
     bare_keys: set[str]
 
 
+@dataclass(frozen=True)
+class _SourceLine:
+    """One physical source line and the parser position immediately after it."""
+
+    text: str
+    number: int
+    next_index: int
+
+
 class EnvParser:
     """Parse .env files with multi-backend encryption awareness.
 
@@ -377,10 +386,8 @@ class EnvParser:
                 raw_lines = [original_line]
             else:
                 prepared, index = self._prepare_nonstandard_binding(
-                    original_line,
-                    index,
+                    _SourceLine(original_line, line_num, index),
                     lenient,
-                    line_num,
                     context,
                 )
                 if prepared is None:
@@ -456,35 +463,36 @@ class EnvParser:
 
     def _prepare_nonstandard_binding(
         self,
-        original_line: str,
-        index: int,
+        source_line: _SourceLine,
         lenient: bool,
-        line_number: int,
         context: _ParseContext,
     ) -> tuple[tuple[str, str, list[str]] | None, int]:
         """Lex and prepare a quoted, bare, or malformed fallback binding."""
-        binding = self._parse_key_binding(original_line, context.lines, index, lenient=lenient)
+        binding = self._parse_key_binding(
+            source_line.text,
+            context.lines,
+            source_line.next_index,
+            lenient=lenient,
+        )
         if binding is None:
-            context.env_file.unparsed_lines.append(line_number)
-            return None, index
-        return self._prepare_binding(binding, original_line, index, line_number, context)
+            context.env_file.unparsed_lines.append(source_line.number)
+            return None, source_line.next_index
+        return self._prepare_binding(binding, source_line, context)
 
     @staticmethod
     def _prepare_binding(
         binding: _KeyBinding,
-        original_line: str,
-        index: int,
-        line_number: int,
+        source_line: _SourceLine,
         context: _ParseContext,
     ) -> tuple[tuple[str, str, list[str]] | None, int]:
         """Consume key lines and apply the state change from a bare binding."""
         raw_lines = [
-            original_line,
-            *context.lines[index : index + binding.consumed],
+            source_line.text,
+            *context.lines[source_line.next_index : source_line.next_index + binding.consumed],
         ]
-        index += binding.consumed
+        index = source_line.next_index + binding.consumed
         if binding.dropped or binding.key is None:
-            context.env_file.unparsed_lines.append(line_number)
+            context.env_file.unparsed_lines.append(source_line.number)
             return None, index
         if binding.raw_value is None:
             # A later bare duplicate wins in dotenv_values (A=1; A -> A=None),

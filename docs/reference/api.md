@@ -121,9 +121,10 @@ MY_DASH_VAR: str = Field(alias='MY-DASH-VAR')
 ```
 
 If other non-comment content cannot be parsed as a dotenv binding, `init()`
-emits a `UserWarning` with its starting line number before writing the module.
-The warning does not echo the source text, which may contain a secret. Comments,
-blank lines, and valid python-dotenv bare bindings do not warn.
+emits a `UserWarning` with its source path and starting line number before
+writing the module. The warning does not echo the source text, which may contain
+a secret. Comments, blank lines, and valid python-dotenv bare bindings do not
+warn.
 
 ---
 
