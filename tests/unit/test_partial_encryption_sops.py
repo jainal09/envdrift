@@ -238,14 +238,31 @@ def test_is_sops_metadata_key_exact_family(tmp_path: Path):
     assert _is_sops_metadata_key("sops_version") is True
     assert _is_sops_metadata_key("sops_mac") is True
     assert _is_sops_metadata_key("sops_age__list_0__map_recipient") is True
+    assert _is_sops_metadata_key("sops_age__list_0__map_enc") is True
     assert _is_sops_metadata_key("sops_pgp__list_0__map_fp") is True
     assert _is_sops_metadata_key("sops_kms__list_0__map_arn") is True
+    assert _is_sops_metadata_key("sops_gcp_kms__list_0__map_resource_id") is True
     # User vars that merely start with ``sops_`` are NOT metadata.
     assert _is_sops_metadata_key("sops_token") is False
     assert _is_sops_metadata_key("sops_api_key") is False
     assert _is_sops_metadata_key("sops_config") is False
     assert _is_sops_metadata_key("sops_agent") is False  # not the ``age`` provider
     assert _is_sops_metadata_key("sops_version_override") is False
+    # A user var literally named after a provider is NOT metadata either: real
+    # sops (verified against the pinned 3.13.2 binary) never emits a bare
+    # ``sops_<provider>`` key — key groups only appear double-underscore
+    # flattened (``sops_age__list_0__map_enc``) — so a plaintext credential
+    # stored under such a name must stay in the plaintext scan.
+    assert _is_sops_metadata_key("sops_age") is False
+    assert _is_sops_metadata_key("sops_pgp") is False
+    assert _is_sops_metadata_key("sops_kms") is False
+    assert _is_sops_metadata_key("sops_gcp_kms") is False
+    assert _is_sops_metadata_key("sops_azure_kv") is False
+    assert _is_sops_metadata_key("sops_hc_vault") is False
+    # Single-underscore lookalikes are user vars too — the dotenv flattening
+    # separator is always a DOUBLE underscore, never a single one.
+    assert _is_sops_metadata_key("sops_age_backup") is False
+    assert _is_sops_metadata_key("sops_kms_arn") is False
 
 
 def test_is_fully_encrypted_true_for_sops_metadata_trailer(tmp_path: Path):

@@ -249,7 +249,7 @@ def push(
     if total_encrypted_files:
         console.print(
             "[dim]Secrets-only files are encrypted in place; "
-            "run 'envdrift pull' to edit them.[/dim]"
+            "run 'envdrift pull-partial' to edit them.[/dim]"
         )
 
 
