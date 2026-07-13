@@ -504,9 +504,10 @@ class SOPSEncryptionBackend(EncryptionBackend):
     def _metadata_line_has_value(content: str, value: str) -> bool:
         """Exact match of ``value`` against a SOPS *key-group* metadata entry.
 
-        Only the recipient-carrying key-group family counts (``sops_age*`` /
-        ``sops_pgp*`` / ``sops_kms*`` / ``sops_gcp_kms*`` / ``sops_azure_kv*`` /
-        ``sops_hc_vault*``, via the canonical ``_SOPS_METADATA_GROUP_KEY``):
+        Only the recipient-carrying key-group family counts (``sops_age__*`` /
+        ``sops_pgp__*`` / ``sops_kms__*`` / ``sops_gcp_kms__*`` /
+        ``sops_azure_kv__*`` / ``sops_hc_vault__*``, via the canonical
+        ``_SOPS_METADATA_GROUP_KEY``):
         recipients are never recorded in scalar bookkeeping, so an unrelated
         scalar value (``sops_shamir_threshold=1``) must not satisfy a short
         component like an Azure key version ``1``. Whole-line equality kills the
