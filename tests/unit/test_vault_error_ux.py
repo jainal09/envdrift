@@ -11,6 +11,7 @@ Each test pins one confirmed finding:
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -26,6 +27,16 @@ from envdrift.cli_commands.sync_config_helpers import (
 from envdrift.vault.base import AuthenticationError, SecretNotFoundError, VaultError
 
 runner = CliRunner()
+
+
+@dataclass(frozen=True)
+class _ProviderCase:
+    """One provider-specific config resolution case."""
+
+    provider: str
+    config_text: str
+    setting_name: str
+    expected_value: str
 
 
 def _flat(output: str) -> str:
@@ -325,40 +336,50 @@ class TestDecryptVerifyVaultSettings:
         )
 
     @pytest.mark.parametrize(
-        ("provider", "provider_config", "setting_name", "expected"),
+        "case",
         [
-            (
-                "azure",
-                '[vault.azure]\nvault_url = "https://config.vault.azure.net"\n',
-                "vault_url",
-                "https://config.vault.azure.net",
+            pytest.param(
+                _ProviderCase(
+                    provider="azure",
+                    config_text='[vault.azure]\nvault_url = "https://config.vault.azure.net"\n',
+                    setting_name="vault_url",
+                    expected_value="https://config.vault.azure.net",
+                ),
+                id="azure",
             ),
-            (
-                "aws",
-                '[vault.aws]\nregion = "eu-west-2"\n',
-                "region",
-                "eu-west-2",
+            pytest.param(
+                _ProviderCase(
+                    provider="aws",
+                    config_text='[vault.aws]\nregion = "eu-west-2"\n',
+                    setting_name="region",
+                    expected_value="eu-west-2",
+                ),
+                id="aws",
             ),
-            (
-                "hashicorp",
-                '[vault.hashicorp]\nurl = "http://config-vault:8200"\n',
-                "vault_url",
-                "http://config-vault:8200",
+            pytest.param(
+                _ProviderCase(
+                    provider="hashicorp",
+                    config_text='[vault.hashicorp]\nurl = "http://config-vault:8200"\n',
+                    setting_name="vault_url",
+                    expected_value="http://config-vault:8200",
+                ),
+                id="hashicorp",
             ),
-            (
-                "gcp",
-                '[vault.gcp]\nproject_id = "config-project"\n',
-                "project_id",
-                "config-project",
+            pytest.param(
+                _ProviderCase(
+                    provider="gcp",
+                    config_text='[vault.gcp]\nproject_id = "config-project"\n',
+                    setting_name="project_id",
+                    expected_value="config-project",
+                ),
+                id="gcp",
             ),
         ],
     )
-    def test_provider_settings_resolve_from_config(
-        self, tmp_path, monkeypatch, provider, provider_config, setting_name, expected
-    ):
+    def test_provider_settings_resolve_from_config(self, tmp_path, monkeypatch, case):
         """Every verify-vault provider consumes its setting from config."""
         (tmp_path / "envdrift.toml").write_text(
-            f'[vault]\nprovider = "{provider}"\n\n{provider_config}',
+            f'[vault]\nprovider = "{case.provider}"\n\n{case.config_text}',
             encoding="utf-8",
         )
         monkeypatch.setenv("VAULT_ADDR", "http://environment-vault:8200")
@@ -368,10 +389,10 @@ class TestDecryptVerifyVaultSettings:
             verify,
         )
 
-        result = self._invoke(tmp_path, provider, monkeypatch)
+        result = self._invoke(tmp_path, case.provider, monkeypatch)
 
         assert result.exit_code == 0
-        assert verify.call_args.kwargs[setting_name] == expected
+        assert verify.call_args.kwargs[case.setting_name] == case.expected_value
 
     @pytest.mark.parametrize(
         "vault_addr",
