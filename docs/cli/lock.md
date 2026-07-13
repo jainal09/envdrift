@@ -336,8 +336,8 @@ Provider: azure | Mode: FORCE | Services: 1
 
 Step 1: Verifying keys with vault...
 
-Processing: .
-  + . - created
+Processing: . (local-key, env: local)
+  + . (local-key, env: local) - created
 
 ╭──────────── Sync Summary ────────────╮
 │ Services processed: 1                │

@@ -255,7 +255,9 @@ class TestSyncOutput:
         """Render service sync details."""
         result = SimpleNamespace(
             action=SyncAction.UPDATED,
+            secret_name="svc-secret",
             folder_path="service",
+            environment="production",
             error="boom",
             local_value_preview="abc",
             vault_value_preview="def",
@@ -288,7 +290,9 @@ class TestSyncOutput:
 
         result = SimpleNamespace(
             action=SyncAction.UPDATED,
+            secret_name="svc-secret",
             folder_path="svc",
+            environment="production",
             error=None,
             # exercise the same path the engine uses:
             local_value_preview=redact_value(local_secret),
@@ -405,3 +409,53 @@ class TestSyncStatusErrorAndEphemeralRendering:
             print_sync_result(sync_result)
         out = " ".join(capture.get().split())
         assert "Ephemeral" not in out, out
+
+
+class TestSyncStatusRowIdentity:
+    """#441: rows identify the mapping, not just the folder."""
+
+    def test_rows_sharing_a_folder_are_distinguishable(self):
+        """Two mappings with the same folder_path render distinct rows (#441).
+
+        Pre-#441 both rendered an identical "= svc - skipped", so a user could
+        not tell which mapping (secret/environment) each row referred to.
+        """
+        results = [
+            ServiceSyncResult(
+                secret_name="test/svc-production",
+                folder_path=Path("svc"),
+                action=SyncAction.SKIPPED,
+                message="No .env.production file found - skipping",
+                environment="production",
+            ),
+            ServiceSyncResult(
+                secret_name="test/svc-staging",
+                folder_path=Path("svc"),
+                action=SyncAction.SKIPPED,
+                message="No .env.staging file found - skipping",
+                environment="staging",
+            ),
+        ]
+        rows = []
+        for result in results:
+            with console.capture() as capture:
+                print_service_sync_status(result)
+            rows.append(" ".join(capture.get().split()))
+
+        assert rows[0] != rows[1], rows
+        assert "test/svc-production" in rows[0] and "env: production" in rows[0], rows[0]
+        assert "test/svc-staging" in rows[1] and "env: staging" in rows[1], rows[1]
+
+    def test_row_without_environment_still_names_the_secret(self):
+        """A result missing the optional environment still renders its secret."""
+        result = ServiceSyncResult(
+            secret_name="svc-secret",
+            folder_path=Path("svc"),
+            action=SyncAction.SKIPPED,
+            message="Values match - no update needed",
+        )
+        with console.capture() as capture:
+            print_service_sync_status(result)
+        out = " ".join(capture.get().split())
+        assert "svc-secret" in out, out
+        assert "env:" not in out, out

@@ -349,7 +349,13 @@ def print_service_sync_status(result: ServiceSyncResult) -> None:
         icon = "[red]x[/red]"
         status = "[red]error[/red]"
 
-    console.print(f"  {icon} {result.folder_path} - {status}")
+    # Identify the mapping, not just the folder: two mappings can share a
+    # folder_path (per-environment secrets for one service), and bare
+    # "<folder> - <status>" rows are indistinguishable (#441).
+    identity = str(result.secret_name)
+    if result.environment:
+        identity += f", env: {result.environment}"
+    console.print(f"  {icon} {result.folder_path} [dim]({identity})[/dim] - {status}")
 
     # Show error details. When the engine only set ``message`` (no ``error``),
     # fall back to it so an error row always carries its reason (#487).

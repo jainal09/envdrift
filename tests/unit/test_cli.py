@@ -2511,6 +2511,51 @@ class TestSyncCommand:
 
         assert result.exit_code == 1
 
+    def test_sync_verify_exits_on_errors_without_ci(self, monkeypatch, tmp_path: Path):
+        """#441: `sync --verify` must exit 1 on errors even without --ci.
+
+        Pre-fix the drift check printed error rows and "Sync completed with
+        errors" yet still exited 0, so scripts gating on the exit code missed
+        real drift.
+        """
+
+        config_file = tmp_path / "pair.txt"
+        config_file.write_text("secret=service")
+
+        monkeypatch.setattr("envdrift.vault.get_vault_client", lambda *_, **__: SimpleNamespace())
+        monkeypatch.setattr("envdrift.output.rich.print_service_sync_status", lambda *_, **__: None)
+        monkeypatch.setattr("envdrift.output.rich.print_sync_result", lambda *_, **__: None)
+        monkeypatch.setattr(
+            "envdrift.sync.engine.SyncMode",
+            lambda **kwargs: SimpleNamespace(**kwargs),
+        )
+
+        class ErrorEngine:
+            def __init__(self, *_args, **_kwargs):
+                """Test stub that returns a failed sync result."""
+
+            def sync_all(self):
+                """Return a sync result with errors."""
+                return SimpleNamespace(services=[], has_errors=True)
+
+        monkeypatch.setattr("envdrift.sync.engine.SyncEngine", ErrorEngine)
+
+        result = runner.invoke(
+            app,
+            [
+                "sync",
+                "-c",
+                str(config_file),
+                "-p",
+                "hashicorp",
+                "--vault-url",
+                "http://localhost:8200",
+                "--verify",
+            ],
+        )
+
+        assert result.exit_code == 1
+
     def test_sync_check_decryption_failure_exits_nonzero_without_ci(
         self, monkeypatch, tmp_path: Path
     ):

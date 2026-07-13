@@ -75,7 +75,13 @@ class SyncEngine:
         self.vault_client.ensure_authenticated()
 
         for mapping in self.config.mappings:
-            self._progress(f"Processing: {mapping.folder_path}")
+            # Name the mapping, not just the folder: two mappings can share a
+            # folder_path (per-environment secrets for one service), and bare
+            # "Processing: <folder>" lines are indistinguishable (#441).
+            self._progress(
+                f"Processing: {mapping.folder_path} "
+                f"({mapping.secret_name}, env: {mapping.effective_environment})"
+            )
             service_result = self._sync_service(mapping)
             result.services.append(service_result)
 
@@ -107,6 +113,7 @@ class SyncEngine:
                 return ServiceSyncResult(
                     secret_name=mapping.secret_name,
                     folder_path=mapping.folder_path,
+                    environment=mapping.effective_environment,
                     action=SyncAction.ERROR,
                     message="Mapping folder does not exist or is not a directory",
                     error=(
@@ -119,12 +126,24 @@ class SyncEngine:
                 or detection.path is None
                 or detection.environment is None
             ):
+                if self.mode.verify_only:
+                    # In verify mode a skip must not leave the configured
+                    # secret unchecked: without an env file the fetch below is
+                    # never reached, so a deleted vault secret passed
+                    # `sync --verify` (and `--verify --ci`) as "skipped" with
+                    # "All services synced successfully" (#441). A missing or
+                    # unreadable secret raises SecretNotFoundError/VaultError,
+                    # which the handlers below turn into an ERROR row; when the
+                    # secret exists the mapping stays a benign skip ("env file
+                    # not created yet").
+                    self.vault_client.get_secret(mapping.secret_name)
                 if detection.status == "multiple_found":
                     # Distinct, truthful skip reason: the folder has several
                     # candidate env files and the mapping is ambiguous (#488).
                     return ServiceSyncResult(
                         secret_name=mapping.secret_name,
                         folder_path=mapping.folder_path,
+                        environment=mapping.effective_environment,
                         action=SyncAction.SKIPPED,
                         message=(
                             "Multiple env files found - skipping "
@@ -140,6 +159,7 @@ class SyncEngine:
                 return ServiceSyncResult(
                     secret_name=mapping.secret_name,
                     folder_path=mapping.folder_path,
+                    environment=mapping.effective_environment,
                     action=SyncAction.SKIPPED,
                     message=f"No {expected.name} file found - skipping",
                 )
@@ -161,6 +181,7 @@ class SyncEngine:
                 return ServiceSyncResult(
                     secret_name=mapping.secret_name,
                     folder_path=mapping.folder_path,
+                    environment=mapping.effective_environment,
                     action=SyncAction.EPHEMERAL,
                     message="Ephemeral mode: key fetched from vault (not stored locally)",
                     vault_value_preview=vault_preview,
@@ -173,6 +194,7 @@ class SyncEngine:
                     return ServiceSyncResult(
                         secret_name=mapping.secret_name,
                         folder_path=mapping.folder_path,
+                        environment=mapping.effective_environment,
                         action=SyncAction.ERROR,
                         message="Folder does not exist",
                         error=f"Folder does not exist: {mapping.folder_path}",
@@ -199,6 +221,7 @@ class SyncEngine:
                     return ServiceSyncResult(
                         secret_name=mapping.secret_name,
                         folder_path=mapping.folder_path,
+                        environment=mapping.effective_environment,
                         action=SyncAction.ERROR,
                         message=reason,
                         vault_value_preview=vault_preview,
@@ -209,6 +232,7 @@ class SyncEngine:
                 return ServiceSyncResult(
                     secret_name=mapping.secret_name,
                     folder_path=mapping.folder_path,
+                    environment=mapping.effective_environment,
                     action=SyncAction.CREATED,
                     message="Created new .env.keys file",
                     vault_value_preview=vault_preview,
@@ -219,6 +243,7 @@ class SyncEngine:
                 return ServiceSyncResult(
                     secret_name=mapping.secret_name,
                     folder_path=mapping.folder_path,
+                    environment=mapping.effective_environment,
                     action=SyncAction.SKIPPED,
                     message="Values match - no update needed",
                     vault_value_preview=vault_preview,
@@ -231,6 +256,7 @@ class SyncEngine:
                     return ServiceSyncResult(
                         secret_name=mapping.secret_name,
                         folder_path=mapping.folder_path,
+                        environment=mapping.effective_environment,
                         action=SyncAction.ERROR,
                         message="Value mismatch detected",
                         vault_value_preview=vault_preview,
@@ -256,6 +282,7 @@ class SyncEngine:
                     return ServiceSyncResult(
                         secret_name=mapping.secret_name,
                         folder_path=mapping.folder_path,
+                        environment=mapping.effective_environment,
                         action=SyncAction.UPDATED,
                         message="Updated with vault value",
                         vault_value_preview=vault_preview,
@@ -266,6 +293,7 @@ class SyncEngine:
                     return ServiceSyncResult(
                         secret_name=mapping.secret_name,
                         folder_path=mapping.folder_path,
+                        environment=mapping.effective_environment,
                         action=SyncAction.SKIPPED,
                         message="Update skipped by user",
                         vault_value_preview=vault_preview,
@@ -276,6 +304,7 @@ class SyncEngine:
             return ServiceSyncResult(
                 secret_name=mapping.secret_name,
                 folder_path=mapping.folder_path,
+                environment=mapping.effective_environment,
                 action=SyncAction.ERROR,
                 message="Secret not found in vault",
                 error=str(e),
@@ -284,6 +313,7 @@ class SyncEngine:
             return ServiceSyncResult(
                 secret_name=mapping.secret_name,
                 folder_path=mapping.folder_path,
+                environment=mapping.effective_environment,
                 action=SyncAction.ERROR,
                 message="Vault error",
                 error=str(e),
@@ -292,6 +322,7 @@ class SyncEngine:
             return ServiceSyncResult(
                 secret_name=mapping.secret_name,
                 folder_path=mapping.folder_path,
+                environment=mapping.effective_environment,
                 action=SyncAction.ERROR,
                 message="Unexpected error",
                 error=str(e),

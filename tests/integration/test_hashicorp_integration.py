@@ -1417,7 +1417,166 @@ environment = "production"
     )
 
     combined = " ".join((result.stdout + result.stderr).split())
-    assert result.returncode == 0, combined
+    # #441: an errored verify exits 1 even without --ci (pre-#441 this was 0).
+    assert result.returncode == 1, combined
     # Pre-#487 this printed a bare red "x . - error" row with no reason.
     assert "DOTENV_PRIVATE_KEY_PRODUCTION" in combined, combined
     assert "missing" in combined, combined
+
+
+def test_hcv_cli_sync_verify_missing_vault_secret_is_error(
+    vault_endpoint: str,
+    vault_test_env: dict,
+    work_dir: Path,
+    integration_pythonpath: str,
+):
+    """#441: a configured secret absent from the vault must fail `sync --verify`.
+
+    Pre-fix, a mapping whose folder had no env file was reported as "skipped"
+    without ever consulting the vault, so a deleted vault secret passed
+    `sync --verify` AND `sync --verify --ci` with exit 0 and "All services
+    synced successfully".
+    """
+    (work_dir / "envdrift.toml").write_text(
+        f"""\
+[vault]
+provider = "hashicorp"
+
+[vault.hashicorp]
+url = "{vault_endpoint}"
+
+[[vault.sync.mappings]]
+secret_name = "test/nonexistent-secret-441"
+folder_path = "svc"
+environment = "production"
+""",
+        encoding="utf-8",
+    )
+    svc = work_dir / "svc"
+    svc.mkdir()
+    # Local key material exists, but there is no env file to compare against.
+    (svc / ".env.keys").write_text("DOTENV_PRIVATE_KEY_PRODUCTION=deadbeef\n", encoding="utf-8")
+
+    for args in (["sync", "--verify"], ["sync", "--verify", "--ci"]):
+        result = _run_envdrift_cli(
+            args,
+            cwd=work_dir,
+            env=vault_test_env,
+            integration_pythonpath=integration_pythonpath,
+        )
+        combined = " ".join((result.stdout + result.stderr).split())
+        assert result.returncode == 1, (args, combined)
+        assert "test/nonexistent-secret-441" in combined, (args, combined)
+        assert "not found" in combined.lower(), (args, combined)
+        assert "All services synced successfully" not in combined, (args, combined)
+
+
+def test_hcv_cli_sync_verify_existing_secret_without_env_file_skips(
+    vault_endpoint: str,
+    vault_test_env: dict,
+    vault_client,
+    work_dir: Path,
+    integration_pythonpath: str,
+):
+    """#441 semantics: no local env file + secret present in vault = benign skip."""
+    secret_path = "test/present-secret-441"
+    vault_client.secrets.kv.v2.create_or_update_secret(
+        path=secret_path,
+        secret={"value": "DOTENV_PRIVATE_KEY_PRODUCTION=key441abc"},
+        mount_point="secret",
+    )
+    try:
+        (work_dir / "envdrift.toml").write_text(
+            f"""\
+[vault]
+provider = "hashicorp"
+
+[vault.hashicorp]
+url = "{vault_endpoint}"
+
+[[vault.sync.mappings]]
+secret_name = "{secret_path}"
+folder_path = "svc"
+environment = "production"
+""",
+            encoding="utf-8",
+        )
+        (work_dir / "svc").mkdir()
+
+        result = _run_envdrift_cli(
+            ["sync", "--verify", "--ci"],
+            cwd=work_dir,
+            env=vault_test_env,
+            integration_pythonpath=integration_pythonpath,
+        )
+    finally:
+        _delete_vault_path(vault_client, secret_path)
+
+    combined = " ".join((result.stdout + result.stderr).split())
+    assert result.returncode == 0, combined
+    assert "skipped" in combined, combined
+    assert "Errors: 0" in combined, combined
+
+
+def test_hcv_cli_sync_rows_distinguish_mappings_sharing_a_folder(
+    vault_endpoint: str,
+    vault_test_env: dict,
+    vault_client,
+    work_dir: Path,
+    integration_pythonpath: str,
+):
+    """#441: two mappings with the same folder_path render distinguishable rows.
+
+    Pre-fix both mappings printed identical "Processing: svc" and
+    "= svc - skipped" lines, so users could not tell which mapping was which.
+    """
+    secrets = {
+        "test/svc-production-441": "DOTENV_PRIVATE_KEY_PRODUCTION=prodkey441",
+        "test/svc-staging-441": "DOTENV_PRIVATE_KEY_STAGING=stagekey441",
+    }
+    for path, value in secrets.items():
+        vault_client.secrets.kv.v2.create_or_update_secret(
+            path=path,
+            secret={"value": value},
+            mount_point="secret",
+        )
+    try:
+        (work_dir / "envdrift.toml").write_text(
+            f"""\
+[vault]
+provider = "hashicorp"
+
+[vault.hashicorp]
+url = "{vault_endpoint}"
+
+[[vault.sync.mappings]]
+secret_name = "test/svc-production-441"
+folder_path = "svc"
+environment = "production"
+
+[[vault.sync.mappings]]
+secret_name = "test/svc-staging-441"
+folder_path = "svc"
+environment = "staging"
+""",
+            encoding="utf-8",
+        )
+        (work_dir / "svc").mkdir()
+
+        result = _run_envdrift_cli(
+            ["sync", "--verify"],
+            cwd=work_dir,
+            env=vault_test_env,
+            integration_pythonpath=integration_pythonpath,
+        )
+    finally:
+        for path in secrets:
+            _delete_vault_path(vault_client, path)
+
+    combined = " ".join((result.stdout + result.stderr).split())
+    # Both secrets exist and neither has a local env file: legitimate skips.
+    assert result.returncode == 0, combined
+    assert "test/svc-production-441" in combined, combined
+    assert "test/svc-staging-441" in combined, combined
+    assert "env: production" in combined, combined
+    assert "env: staging" in combined, combined

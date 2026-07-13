@@ -33,6 +33,10 @@ class ServiceSyncResult:
     folder_path: Path
     action: SyncAction
     message: str
+    # Effective environment of the mapping (environment > profile > default).
+    # Rendered on the per-service row so two mappings sharing a folder_path
+    # (e.g. per-environment secrets for one service) stay distinguishable (#441).
+    environment: str | None = None
     vault_value_preview: str | None = None
     local_value_preview: str | None = None
     backup_path: Path | None = None

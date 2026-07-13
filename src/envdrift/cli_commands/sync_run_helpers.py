@@ -150,7 +150,10 @@ def _print_sync_result(result: Any) -> None:
 
 
 def _raise_sync_result_errors(request: SyncRequest, result: Any) -> None:
-    if request.ci and result.has_errors:
+    # --verify is a drift check: reporting error rows while still exiting 0
+    # let CI pass on real drift (a deleted vault secret, a local/vault
+    # mismatch), so verify implies the --ci error gate (#441).
+    if (request.ci or request.verify) and result.has_errors:
         raise typer.Exit(code=1)
     if request.check_decryption and result.decryption_failed > 0:
         raise typer.Exit(code=1)

@@ -281,7 +281,7 @@ _AllFilesOption = Annotated[
 ]
 _SyncVerifyOption = Annotated[
     bool,
-    typer.Option("--verify", help="Check only, don't modify files"),
+    typer.Option("--verify", help="Check only, don't modify files; exit 1 on any error"),
 ]
 _SyncForceOption = Annotated[
     bool,
@@ -329,9 +329,11 @@ def sync(
 
     Loads sync configuration and a vault client, fetches DOTENV_PRIVATE_KEY_* secrets for configured mappings, and writes/updates local key files; optionally verifies keys, forces updates, checks decryption, and runs schema validation after sync. In interactive mode the command may prompt before updating individual services; --force, --verify, and --ci disable prompts.
 
-    Exits with code 1 on vault or sync configuration errors, when run with --ci if any sync
-    errors occurred, whenever a --check-decryption test fails (even without --ci), and when
-    --check-decryption is requested but dotenvx is not installed (nothing can be verified).
+    Exits with code 1 on vault or sync configuration errors, when run with --verify or --ci if
+    any sync errors occurred, whenever a --check-decryption test fails (even without --ci), and
+    when --check-decryption is requested but dotenvx is not installed (nothing can be verified).
+    In verify mode a configured secret that is missing from the vault is an error even when the
+    mapping has no local env file to compare against.
     """
 
     from envdrift.cli_commands.sync_run_helpers import SyncRequest, SyncRuntime, execute_sync
