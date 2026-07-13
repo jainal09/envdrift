@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import warnings
 from pathlib import Path
 
 from envdrift.core.diff import DiffEngine, DiffResult
@@ -131,6 +132,15 @@ def init(
     output = Path(output)
 
     result = generate_settings_module(env_file, class_name, detect_sensitive)
+
+    if result.unparsed_lines:
+        line_numbers = ", ".join(str(line) for line in result.unparsed_lines)
+        warnings.warn(
+            "Skipped unparsable non-comment content in .env file "
+            f"{env_file} on line(s) {line_numbers}; the generated schema omits those lines",
+            UserWarning,
+            stacklevel=2,
+        )
 
     # encoding="utf-8" so a non-ASCII field name/value round-trips on platforms
     # whose default text encoding is not UTF-8.

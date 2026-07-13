@@ -547,13 +547,14 @@ def test_glossary_toml_example_sets_only_consumed_keys() -> None:
     )
 
 
-def test_api_md_init_documents_alias_everything_not_skip_and_warn(tmp_path: Path) -> None:
-    """api.md must describe init()'s real alias-everything behavior (#498).
+def test_api_md_init_distinguishes_aliases_from_parser_warnings(tmp_path: Path) -> None:
+    """api.md must distinguish aliased keys from malformed content (#498).
 
     Pre-fix api.md claimed non-identifier keys are *skipped* and a ``UserWarning``
     names them; since #423 every key is kept under a sanitized field name with a
-    Pydantic alias, and no warning is emitted. Ground truth: the real ``init()``
-    on a .env containing both documented examples.
+    Pydantic alias, and no warning is emitted for those keys. Malformed non-binding
+    content now has a separate line-numbered warning. Ground truth: the real
+    ``init()`` on a .env containing both documented key examples.
     """
     import warnings
 
@@ -575,14 +576,20 @@ def test_api_md_init_documents_alias_everything_not_skip_and_warn(tmp_path: Path
     assert "alias='MY-DASH-VAR'" in generated
 
     text = _read_docs_page("reference/api.md")
-    # The stale skip-and-warn contract must be gone…
-    assert "UserWarning" not in text, (
-        "api.md still claims init() emits a UserWarning for non-identifier keys; "
-        "the shipped init() never warns (#498)."
+    normalized = " ".join(text.split())
+    # The stale non-identifier skip-and-warn contract must be gone…
+    assert (
+        "**Non-identifier keys:** every `.env` key is kept — nothing is skipped "
+        "and no warning is emitted." in normalized
     )
     assert "are skipped" not in text, (
         "api.md still claims init() skips non-identifier keys; the shipped init() "
         "keeps every key under a sanitized, aliased field (#498)."
+    )
+    # …while the distinct malformed-content warning remains documented.
+    assert (
+        "If other non-comment content cannot be parsed as a dotenv binding, "
+        "`init()` emits a `UserWarning`" in normalized
     )
     # …replaced by the sanitize-plus-alias contract, shown with the exact field
     # names the generator emits for the documented examples.

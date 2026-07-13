@@ -15,7 +15,7 @@ from pydantic_settings import BaseSettings
 
 from envdrift.core.encryption import EncryptionDetector
 from envdrift.core.parser import EnvParser
-from envdrift.output.rich import console, print_error, print_success
+from envdrift.output.rich import console, print_error, print_success, print_warning
 
 # Pydantic protects the ``model_`` attribute namespace: a BaseModel/BaseSettings
 # field whose name starts with this prefix either raises at import (``model_dump``
@@ -53,6 +53,7 @@ class SettingsGeneration:
     source: str
     sensitive_vars: set[str] = field(default_factory=set)
     aliased_count: int = 0
+    unparsed_lines: list[int] = field(default_factory=list)
 
 
 def _sanitize_identifier(name: str) -> str:
@@ -283,11 +284,18 @@ def generate_settings_module(
         source="\n".join(lines),
         sensitive_vars=sensitive_vars,
         aliased_count=aliased_count,
+        unparsed_lines=env.unparsed_lines.copy(),
     )
 
 
 def _print_generation_summary(result: SettingsGeneration) -> None:
     """Print the dim post-generation summary (sensitive + aliased counts)."""
+    if result.unparsed_lines:
+        line_numbers = ", ".join(str(line) for line in result.unparsed_lines)
+        print_warning(
+            "Skipped unparsable non-comment content on .env line(s) "
+            f"{line_numbers}; the generated schema omits those lines"
+        )
     if result.sensitive_vars:
         names = ", ".join(sorted(result.sensitive_vars))
         console.print(
