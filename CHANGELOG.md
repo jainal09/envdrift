@@ -1,5 +1,13 @@
 # Changelog
 
+## [10.16.16](https://github.com/jainal09/envdrift/compare/v10.16.15...v10.16.16) (2026-07-13)
+
+
+### Bug Fixes
+
+* **encrypt:** exclude SOPS metadata from plaintext count in --check ([#643](https://github.com/jainal09/envdrift/issues/643)) ([22e1b6d](https://github.com/jainal09/envdrift/commit/22e1b6dafec6e344db11eb1e04600967aa33ee97))
+* **partial:** point secrets-only tip to pull-partial ([#645](https://github.com/jainal09/envdrift/issues/645)) ([41db297](https://github.com/jainal09/envdrift/commit/41db29753ad44e140b668d9cb8237bc086bd9c78))
+
 ## [10.16.15](https://github.com/jainal09/envdrift/compare/v10.16.14...v10.16.15) (2026-07-12)
 
 

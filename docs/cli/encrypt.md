@@ -216,6 +216,13 @@ The `--check` option provides a detailed report:
 | Plaintext Secrets | Variables detected as secrets but not encrypted        |
 | Warnings          | Additional concerns (e.g., credentials in URLs)        |
 
+Encryption-tool bookkeeping is excluded from the counts: dotenvx's plaintext
+`DOTENV_PUBLIC_KEY_*` line and SOPS's `sops_*` metadata trailer (`sops_version=`,
+`sops_lastmodified=`, the recipient key, `sops_mac=`, …) are neither encrypted nor
+plaintext variables, so a fully SOPS-encrypted file reports as fully encrypted. A real
+user variable that merely starts with `sops_` (e.g. `sops_token`) is still counted
+and scanned.
+
 ## How dotenvx Encryption Works
 
 envdrift integrates with [dotenvx](https://dotenvx.com/) for encryption:

@@ -705,13 +705,39 @@ class TestEncryptCommand:
         # Should pass for encrypted file
         assert result.exit_code == 0 or "encrypt" in result.output.lower()
 
-    @pytest.mark.xfail(
-        strict=False,
-        reason="--check reads the last-wins parsed map, so a plaintext line shadowed "
-        "by a later duplicate encrypted assignment is missed (see #583)",
-    )
+    def test_encrypt_check_fully_sops_encrypted_reports_fully_encrypted(self, tmp_path: Path):
+        """--check reports a genuine fully-SOPS-encrypted file as fully encrypted (#441).
+
+        The SOPS dotenv output carries a flat metadata trailer (plaintext
+        bookkeeping lines + the ciphertext sops_mac=). Pre-fix, the trailer was
+        counted in the variable tallies, so --check printed "File is partially
+        encrypted / Encrypted: 3 / Plaintext: 4 / ratio 43%" for a file whose
+        every user value is ciphertext.
+        """
+        enc_iv_tag = ",iv:" + "ab" * 16 + ",tag:" + "cd" * 8 + ",type:str]"
+        env_file = tmp_path / ".env"
+        env_file.write_text(
+            "DB_PASSWORD=ENC[AES256_GCM,data:U5dotp3cMQ==" + enc_iv_tag + "\n"
+            "API_KEY=ENC[AES256_GCM,data:oNgtRJRCHtOh669puic=" + enc_iv_tag + "\n"
+            "sops_age__list_0__map_recipient="
+            "age1ql3z7hjy54pw3hyww5ayyfg7zqgvc7w3j2elw8zmrj2kg5sfn9aqmcac8p\n"
+            "sops_lastmodified=2026-06-08T14:15:34Z\n"
+            "sops_mac=ENC[AES256_GCM,data:iBjKMupTM" + enc_iv_tag + "\n"
+            "sops_unencrypted_suffix=_unencrypted\n"
+            "sops_version=3.13.1\n"
+        )
+
+        result = runner.invoke(app, ["encrypt", str(env_file), "--check", "--backend", "sops"])
+
+        output = _plain_cli_output(result.output)
+        assert result.exit_code == 0
+        assert "File is fully encrypted" in output
+        assert "partially encrypted" not in output
+        assert "Encrypted: 2" in output
+        assert "Plaintext: 0" in output
+
     def test_encrypt_check_blocks_plaintext_shadowed_by_encrypted_duplicate(self, tmp_path: Path):
-        """A plaintext secret must block even when a later duplicate is encrypted."""
+        """A plaintext secret must block even when a later duplicate is encrypted (#583)."""
         env_file = tmp_path / ".env"
         env_file.write_text(
             'SECRET_KEY=plaintext-value-123\nSECRET_KEY="encrypted:abcdef1234567890"\n'
