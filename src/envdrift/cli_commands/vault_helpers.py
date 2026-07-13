@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import os
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Never
@@ -13,6 +12,7 @@ from envdrift.cli_commands.sync_config_helpers import (
     AZURE_VAULT_URL_REQUIRED,
     GCP_PROJECT_ID_REQUIRED,
     HASHICORP_VAULT_URL_REQUIRED,
+    resolve_provider_vault_url,
 )
 from envdrift.env_files import EnvFileDetection, resolve_custom_env_file, resolve_mapping_env_file
 from envdrift.output.rich import console, print_error, print_success, print_warning
@@ -117,24 +117,6 @@ def _load_vault_config(config: Path | None) -> Any | None:
         raise typer.Exit(code=1) from None
 
 
-def _provider_vault_url(
-    provider: str,
-    explicit_url: str | None,
-    vault_config: Any | None,
-) -> str | None:
-    """Resolve provider-specific URL, preserving explicit CLI precedence."""
-    if explicit_url is not None:
-        return explicit_url
-    attribute = {"azure": "azure_vault_url", "hashicorp": "hashicorp_url"}.get(provider)
-    url = getattr(vault_config, attribute, None) if attribute is not None else None
-    if url is None and provider == "hashicorp":
-        # Honor the standard env var every HashiCorp tool reads (#441 audit).
-        # Strip so a padded value is usable and a whitespace-only value still
-        # hits the missing-URL guard instead of a late connection failure.
-        return (os.environ.get("VAULT_ADDR") or "").strip() or None
-    return url
-
-
 def _validate_vault_settings(settings: VaultSettings) -> None:
     """Reject missing provider-specific settings with CLI-facing errors.
 
@@ -154,9 +136,12 @@ def _validate_vault_settings(settings: VaultSettings) -> None:
         raise typer.Exit(code=1)
 
 
-def resolve_vault_settings(options: VaultConnectionOptions) -> VaultSettings:
+def resolve_vault_settings(
+    options: VaultConnectionOptions, envdrift_config: Any | None = None
+) -> VaultSettings:
     """Merge CLI flags with the config's vault settings and validate them."""
-    envdrift_config = _load_vault_config(options.config)
+    if envdrift_config is None:
+        envdrift_config = _load_vault_config(options.config)
     vault_config = getattr(envdrift_config, "vault", None)
     effective_provider = options.provider or getattr(vault_config, "provider", None)
     if not effective_provider:
@@ -165,7 +150,7 @@ def resolve_vault_settings(options: VaultConnectionOptions) -> VaultSettings:
 
     settings = VaultSettings(
         provider=effective_provider,
-        vault_url=_provider_vault_url(effective_provider, options.vault_url, vault_config),
+        vault_url=resolve_provider_vault_url(effective_provider, options.vault_url, vault_config),
         region=options.region or getattr(vault_config, "aws_region", None),
         project_id=options.project_id or getattr(vault_config, "gcp_project_id", None),
     )

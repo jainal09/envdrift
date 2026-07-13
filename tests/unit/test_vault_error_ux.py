@@ -18,11 +18,14 @@ import typer
 from typer.testing import CliRunner
 
 from envdrift.cli import app
+from envdrift.cli_commands.sync_config_helpers import (
+    AZURE_VAULT_URL_REQUIRED,
+    GCP_PROJECT_ID_REQUIRED,
+    HASHICORP_VAULT_URL_REQUIRED,
+)
 from envdrift.vault.base import AuthenticationError, SecretNotFoundError, VaultError
 
 runner = CliRunner()
-
-AZURE_URL_MESSAGE = "Azure provider requires --vault-url (or [vault.azure] vault_url in config)"
 
 
 def _flat(output: str) -> str:
@@ -249,19 +252,182 @@ class TestVaultAddrFallback:
 class TestMissingUrlMessageParity:
     """The same missing-URL condition must read identically across commands."""
 
-    def test_sync_and_vault_pull_emit_same_azure_message(self, tmp_path, monkeypatch):
+    @pytest.mark.parametrize(
+        ("provider", "required_message"),
+        [
+            ("azure", AZURE_VAULT_URL_REQUIRED),
+            ("hashicorp", HASHICORP_VAULT_URL_REQUIRED),
+            ("gcp", GCP_PROJECT_ID_REQUIRED),
+        ],
+    )
+    def test_sync_vault_pull_and_decrypt_emit_same_message(
+        self, tmp_path, monkeypatch, provider, required_message
+    ):
+        """All three CLI seams use the shared provider-setting message."""
         (tmp_path / "envdrift.toml").write_text(
-            '[vault]\nprovider = "azure"\n\n'
+            f'[vault]\nprovider = "{provider}"\n\n'
             '[[vault.sync.mappings]]\nsecret_name = "s"\nfolder_path = "."\n'
             'environment = "production"\n',
             encoding="utf-8",
         )
+        env_file = tmp_path / ".env.production"
+        env_file.write_text("SECRET=encrypted\n", encoding="utf-8")
         monkeypatch.chdir(tmp_path)
+        monkeypatch.delenv("VAULT_ADDR", raising=False)
 
         sync_result = runner.invoke(app, ["sync", "--verify"])
         pull_result = runner.invoke(app, ["vault-pull", ".", "s", "--env", "production"])
+        decrypt_result = runner.invoke(
+            app,
+            [
+                "decrypt",
+                str(env_file),
+                "--backend",
+                "dotenvx",
+                "--verify-vault",
+                "--provider",
+                provider,
+                "--secret",
+                "s",
+            ],
+        )
 
         assert sync_result.exit_code == 1
         assert pull_result.exit_code == 1
-        assert AZURE_URL_MESSAGE in _flat(sync_result.output)
-        assert AZURE_URL_MESSAGE in _flat(pull_result.output)
+        assert decrypt_result.exit_code == 1
+        assert required_message in _flat(sync_result.output)
+        assert required_message in _flat(pull_result.output)
+        assert required_message in _flat(decrypt_result.output)
+
+
+class TestDecryptVerifyVaultSettings:
+    """decrypt --verify-vault shares provider-setting resolution with vault commands."""
+
+    @staticmethod
+    def _invoke(tmp_path, provider, monkeypatch, *extra_args):
+        env_file = tmp_path / ".env.production"
+        env_file.write_text("SECRET=encrypted\n", encoding="utf-8")
+        monkeypatch.chdir(tmp_path)
+        return runner.invoke(
+            app,
+            [
+                "decrypt",
+                str(env_file),
+                "--backend",
+                "dotenvx",
+                "--verify-vault",
+                "--provider",
+                provider,
+                "--secret",
+                "s",
+                *extra_args,
+            ],
+        )
+
+    @pytest.mark.parametrize(
+        ("provider", "provider_config", "setting_name", "expected"),
+        [
+            (
+                "azure",
+                '[vault.azure]\nvault_url = "https://config.vault.azure.net"\n',
+                "vault_url",
+                "https://config.vault.azure.net",
+            ),
+            (
+                "aws",
+                '[vault.aws]\nregion = "eu-west-2"\n',
+                "region",
+                "eu-west-2",
+            ),
+            (
+                "hashicorp",
+                '[vault.hashicorp]\nurl = "http://config-vault:8200"\n',
+                "vault_url",
+                "http://config-vault:8200",
+            ),
+            (
+                "gcp",
+                '[vault.gcp]\nproject_id = "config-project"\n',
+                "project_id",
+                "config-project",
+            ),
+        ],
+    )
+    def test_provider_settings_resolve_from_config(
+        self, tmp_path, monkeypatch, provider, provider_config, setting_name, expected
+    ):
+        """Every verify-vault provider consumes its setting from config."""
+        (tmp_path / "envdrift.toml").write_text(
+            f'[vault]\nprovider = "{provider}"\n\n{provider_config}',
+            encoding="utf-8",
+        )
+        monkeypatch.setenv("VAULT_ADDR", "http://environment-vault:8200")
+        verify = MagicMock(return_value=True)
+        monkeypatch.setattr(
+            "envdrift.cli_commands.encryption._verify_decryption_with_vault",
+            verify,
+        )
+
+        result = self._invoke(tmp_path, provider, monkeypatch)
+
+        assert result.exit_code == 0
+        assert verify.call_args.kwargs[setting_name] == expected
+
+    @pytest.mark.parametrize(
+        "vault_addr",
+        ["http://environment-vault:8200", "  http://environment-vault:8200  "],
+        ids=["plain", "padded"],
+    )
+    def test_hashicorp_falls_back_to_vault_addr(self, tmp_path, monkeypatch, vault_addr):
+        """VAULT_ADDR supplies and normalizes the HashiCorp URL on this seam."""
+        monkeypatch.setenv("VAULT_ADDR", vault_addr)
+        verify = MagicMock(return_value=True)
+        monkeypatch.setattr(
+            "envdrift.cli_commands.encryption._verify_decryption_with_vault",
+            verify,
+        )
+
+        result = self._invoke(tmp_path, "hashicorp", monkeypatch)
+
+        assert result.exit_code == 0
+        assert verify.call_args.kwargs["vault_url"] == "http://environment-vault:8200"
+
+    def test_hashicorp_explicit_url_beats_config_and_vault_addr(self, tmp_path, monkeypatch):
+        """The explicit URL retains precedence over both lower-priority sources."""
+        (tmp_path / "envdrift.toml").write_text(
+            '[vault]\nprovider = "hashicorp"\n\n'
+            '[vault.hashicorp]\nurl = "http://config-vault:8200"\n',
+            encoding="utf-8",
+        )
+        monkeypatch.setenv("VAULT_ADDR", "http://environment-vault:8200")
+        verify = MagicMock(return_value=True)
+        monkeypatch.setattr(
+            "envdrift.cli_commands.encryption._verify_decryption_with_vault",
+            verify,
+        )
+
+        result = self._invoke(
+            tmp_path,
+            "hashicorp",
+            monkeypatch,
+            "--vault-url",
+            "http://explicit-vault:8200",
+        )
+
+        assert result.exit_code == 0
+        assert verify.call_args.kwargs["vault_url"] == "http://explicit-vault:8200"
+
+    def test_hashicorp_whitespace_only_vault_addr_is_missing(self, tmp_path, monkeypatch):
+        """Whitespace-only VAULT_ADDR fails at validation before client creation."""
+        monkeypatch.setenv("VAULT_ADDR", "   ")
+        verify = MagicMock(return_value=True)
+        monkeypatch.setattr(
+            "envdrift.cli_commands.encryption._verify_decryption_with_vault",
+            verify,
+        )
+
+        result = self._invoke(tmp_path, "hashicorp", monkeypatch)
+
+        assert result.exit_code == 1
+        assert HASHICORP_VAULT_URL_REQUIRED in _flat(result.output)
+        verify.assert_not_called()
