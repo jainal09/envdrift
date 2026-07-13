@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from envdrift.core.parser import EncryptionStatus, EnvFile
+from envdrift.core.partial_encryption import _is_sops_metadata_key
 from envdrift.core.schema import SchemaMetadata
 from envdrift.encryption.sops import SOPSEncryptionBackend
 
@@ -185,6 +186,19 @@ class EncryptionDetector:
             # ``DOTENV_PUBLIC_KEY_<ENV>_SECRET``, which matches the ``*_SECRET``
             # pattern and would otherwise be reported as a plaintext secret.
             if is_dotenvx_public_key_var(var_name):
+                continue
+            # SOPS appends a flat metadata trailer to an encrypted dotenv file
+            # (sops_version= / sops_lastmodified= / the recipient public key /
+            # sops_mac=). It is bookkeeping, not user data: the plaintext entries
+            # are not secrets and sops_mac's ciphertext is not a user variable, so
+            # none of it may sway the encrypted/plaintext tallies — counting it
+            # reported a fully SOPS-encrypted file as "partially encrypted" in
+            # `encrypt --check`. Matches the EXACT metadata key family shared with
+            # partial_encryption (#416) — the fixed scalars plus the
+            # double-underscore-flattened key-group entries — so a user var merely
+            # named sops_token=…, or even one literally named sops_age=…, is
+            # still scanned.
+            if _is_sops_metadata_key(var_name):
                 continue
             if env_var.encryption_status == EncryptionStatus.ENCRYPTED:
                 report.encrypted_vars.add(var_name)
