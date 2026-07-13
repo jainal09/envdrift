@@ -1,6 +1,7 @@
 """Tests for Validator."""
 
-from pydantic import Field
+import pytest
+from pydantic import Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from envdrift.core.parser import EnvParser
@@ -635,3 +636,58 @@ class TestValidatorAliasMatching:
 
         assert result.valid is False
         assert "X_API_KEY" in result.missing_required
+
+
+class TestKnownValidatorGaps:
+    """Confirmed pre-existing bugs, asserted at their correct behavior (xfail).
+
+    Both reproduce identically on pre-refactor main (de834a7) — they are NOT
+    regressions from the #650 decomposition, which is pure code motion. Flip
+    each xfail to a plain assertion in the PR that fixes its issue.
+    """
+
+    @pytest.mark.xfail(
+        strict=False,
+        reason="model-level validation failures map to loc=() and are dropped, so "
+        "validate() reports valid=True for a config the real app crashes on (see #657)",
+    )
+    def test_model_level_validator_rejection_fails_validation(self, tmp_path):
+        """A @model_validator rejection must surface as an error, not a false PASS."""
+
+        class RejectingSettings(BaseSettings):
+            port: int = Field(ge=1)
+
+            @model_validator(mode="after")
+            def reject(self):
+                raise ValueError("model-level rejection")
+
+        env_file = tmp_path / ".env"
+        env_file.write_text("PORT=5\n", encoding="utf-8")
+        env = EnvParser().parse(env_file)
+        schema = SchemaLoader().extract_metadata(RejectingSettings)
+
+        result = Validator().validate(env, schema, check_encryption=False)
+
+        assert result.valid is False
+        assert result.type_errors  # the model-level rejection must be reported
+
+    @pytest.mark.xfail(
+        strict=False,
+        reason="suspicious-plaintext suppression compares the env alias against attribute "
+        "names, so an aliased sensitive field gets contradictory warnings (see #658)",
+    )
+    def test_aliased_sensitive_field_gets_no_contradictory_warning(self, tmp_path):
+        """A field marked sensitive must not also warn 'not marked sensitive' via its alias."""
+
+        class AliasedSensitiveSettings(BaseSettings):
+            api_key: str = Field(alias="X_API_KEY", json_schema_extra={"sensitive": True})
+
+        env_file = tmp_path / ".env"
+        env_file.write_text("X_API_KEY=sk-live-abcdef1234567890\n", encoding="utf-8")
+        env = EnvParser().parse(env_file)
+        schema = SchemaLoader().extract_metadata(AliasedSensitiveSettings)
+
+        result = Validator().validate(env, schema)
+
+        assert "api_key" in result.unencrypted_secrets  # correctly detected as sensitive
+        assert not [w for w in result.warnings if "not marked sensitive" in w]
