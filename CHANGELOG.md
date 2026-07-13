@@ -1,5 +1,19 @@
 # Changelog
 
+## [10.17.0](https://github.com/jainal09/envdrift/compare/v10.16.16...v10.17.0) (2026-07-13)
+
+
+### Features
+
+* **cli:** add profile filters and drift exit gate ([#647](https://github.com/jainal09/envdrift/issues/647)) ([aa89dd6](https://github.com/jainal09/envdrift/commit/aa89dd61abede84e72e1e98e8f89f9346e93801c))
+
+
+### Bug Fixes
+
+* **install:** detect non-functional agent binary in install check and agent status ([#644](https://github.com/jainal09/envdrift/issues/644)) ([ef95f15](https://github.com/jainal09/envdrift/commit/ef95f15abe08eb7e9a3b68483b29b0e3bcb65f38))
+* **parser:** warn when env lines cannot be parsed ([#648](https://github.com/jainal09/envdrift/issues/648)) ([39e289f](https://github.com/jainal09/envdrift/commit/39e289f2dc989c127f05be543bbcfc2eac64aaf5))
+* **vault:** infer provider, truthful error labels, VAULT_ADDR fallback ([#652](https://github.com/jainal09/envdrift/issues/652)) ([8bd3ece](https://github.com/jainal09/envdrift/commit/8bd3ece8ecd26a242da43a143f35d73fa1027c06))
+
 ## [10.16.16](https://github.com/jainal09/envdrift/compare/v10.16.15...v10.16.16) (2026-07-13)
 
 
