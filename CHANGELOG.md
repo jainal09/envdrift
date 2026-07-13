@@ -1,5 +1,12 @@
 # Changelog
 
+## [10.17.1](https://github.com/jainal09/envdrift/compare/v10.17.0...v10.17.1) (2026-07-13)
+
+
+### Bug Fixes
+
+* **decrypt:** share vault setting resolution for verification ([#662](https://github.com/jainal09/envdrift/issues/662)) ([f7e480e](https://github.com/jainal09/envdrift/commit/f7e480e48ec38b3d5714f5f81f6b83d48bd3c849))
+
 ## [10.17.0](https://github.com/jainal09/envdrift/compare/v10.16.16...v10.17.0) (2026-07-13)
 
 
