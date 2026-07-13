@@ -664,10 +664,14 @@ def test_push_message_secrets_only_omits_combined_wording(monkeypatch, tmp_path:
     result = runner.invoke(app, ["push"])
 
     assert result.exit_code == 0
-    assert "Source files are encrypted" in result.output
-    assert "Secrets-only files are encrypted in place" in result.output
+    output = " ".join(result.output.split())
+    assert "Source files are encrypted" in output
+    assert (
+        "Secrets-only files are encrypted in place; run 'envdrift pull-partial' to edit them."
+    ) in output
+    assert "run 'envdrift pull' to edit them." not in output
     # No combined file was produced, so the combined-artifact line must be absent.
-    assert "runtime artifact" not in result.output
+    assert "runtime artifact" not in output
 
 
 def test_load_partial_encryption_paths_skips_secrets_only(monkeypatch, tmp_path: Path):
