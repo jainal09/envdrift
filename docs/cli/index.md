@@ -53,6 +53,16 @@ The following options are available only on the top-level `envdrift` command:
 --show-completion       Show completion script
 ```
 
+## Output Streams
+
+Human-readable command results are written to stdout. Human `[ERROR]` and
+`[WARN]` diagnostics are written to stderr, so redirecting or piping stdout
+does not hide failures or mix diagnostic prose into downstream input.
+
+Machine-readable modes keep their documented stdout contracts. In particular,
+`diff --format json` and `guard --json`/`guard --sarif` emit machine-readable
+error documents on stdout rather than replacing them with human diagnostics.
+
 ## Quick Examples
 
 ```bash

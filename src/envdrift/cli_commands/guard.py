@@ -65,6 +65,7 @@ from envdrift.scanner.output import (
 )
 
 console = Console()
+diagnostic_console = Console(stderr=True)
 
 # Early-exit prose for the git-discovery branches; emitted only in human mode
 # (machine modes get an empty-findings doc via _emit_empty_or_prose).
@@ -141,7 +142,7 @@ def _emit_error(json_output: bool, sarif: bool, message: str) -> None:
         # names like ``[vault.sync]``) survive Rich markup instead of being
         # interpreted as console tags and silently dropped (mirrors
         # output/rich.py print_error). The static label stays markup.
-        console.print(f"[red]Error:[/red] {escape(message)}")
+        diagnostic_console.print(f"[red]Error:[/red] {escape(message)}")
 
 
 def _machine_mode(json_output: bool, sarif: bool) -> bool:
@@ -824,7 +825,6 @@ def _refuse_unsupported_history(
 def _print_combined_files_warnings(
     combined_files: list[str],
     engine: ScanEngine,
-    output_console: Console,
     json_output: bool,
     sarif: bool,
 ) -> None:
@@ -834,9 +834,9 @@ def _print_combined_files_warnings(
     if combined_files and not _machine_mode(json_output, sarif):
         security_warnings = engine.check_combined_files_security()
         for warning in security_warnings:
-            output_console.print(f"[bold red]{warning}[/bold red]")
+            diagnostic_console.print(f"[bold red]{warning}[/bold red]")
         if security_warnings:
-            output_console.print()
+            diagnostic_console.print()
 
 
 def _print_scan_header(
@@ -1243,7 +1243,7 @@ def guard(
     output_console = _make_output_console(ci, json_output, sarif)
     engine = _create_scan_engine(config, json_output, sarif)
     _refuse_unsupported_history(config, engine, json_output, sarif)
-    _print_combined_files_warnings(combined_files, engine, output_console, json_output, sarif)
+    _print_combined_files_warnings(combined_files, engine, json_output, sarif)
 
     # Show scanner info in verbose mode or when running interactively
     scanner_names = [s.name for s in engine.scanners]
