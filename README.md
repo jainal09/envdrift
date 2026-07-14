@@ -14,8 +14,10 @@
 Sync environment variables across your team. No more "it works on my machine."
 
 > **Status: stable.** envdrift v11 marks the first release the project considers
-> production-ready: every feature ships with real-backend integration tests, regression
-> coverage, and a reliability-first review gate. See the
+> production-ready: core features are covered by integration tests against real backends in
+> CI (LocalStack, HashiCorp Vault, Lowkey Vault emulating Azure) and the real encryption
+> binaries, every bug fix ships a regression test, and changes pass a reliability-first
+> review gate. See the
 > [changelog](https://github.com/jainal09/envdrift/blob/main/CHANGELOG.md) for history.
 
 ## The Problem
