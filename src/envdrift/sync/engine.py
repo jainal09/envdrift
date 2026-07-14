@@ -49,6 +49,8 @@ class SyncMode:
     validate_schema: bool = False
     schema_path: str | None = None
     service_dir: Path | None = None
+    # Sync-capable workflows can promise verification without becoming read-only.
+    verify_skipped_secrets: bool = False
 
 
 @dataclass
@@ -126,7 +128,9 @@ class SyncEngine:
                 or detection.path is None
                 or detection.environment is None
             ):
-                if self.mode.verify_only:
+                # ``lock --sync-keys`` still creates/updates local keys, but its
+                # verification-labeled phase must validate mappings it skips.
+                if self.mode.verify_only or self.mode.verify_skipped_secrets:
                     self._verify_secret_usable(mapping)
                 if detection.status == "multiple_found":
                     # Distinct, truthful skip reason: the folder has several

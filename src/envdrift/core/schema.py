@@ -28,16 +28,18 @@ def _effective_env_binding(
 ) -> tuple[str | None, str]:
     """Return the model input alias and effective environment binding."""
     alias_candidate = field_info.validation_alias or field_info.alias
-    if isinstance(alias_candidate, AliasChoices):
+    if isinstance(alias_candidate, AliasChoices) and alias_candidate.choices:
         # FieldMetadata represents one binding today. Preserve Pydantic's
         # first-choice order; #673 tracks support for every candidate.
-        alias_candidate = alias_candidate.choices[0] if alias_candidate.choices else None
-    if isinstance(alias_candidate, AliasPath):
-        alias_candidate = alias_candidate.path[0] if alias_candidate.path else None
+        alias_candidate = alias_candidate.choices[0]
+    if isinstance(alias_candidate, AliasPath) and alias_candidate.path:
+        alias_candidate = alias_candidate.path[0]
 
-    field_alias = alias_candidate if isinstance(alias_candidate, str) else None
+    if isinstance(alias_candidate, str):
+        return alias_candidate, alias_candidate
+
     env_prefix = raw_env_prefix if isinstance(raw_env_prefix, str) else ""
-    return field_alias, field_alias or f"{env_prefix}{field_name}"
+    return None, f"{env_prefix}{field_name}"
 
 
 @dataclass

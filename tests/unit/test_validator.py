@@ -1,11 +1,27 @@
 """Tests for Validator."""
 
+import pytest
 from pydantic import AliasChoices, Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from envdrift.core.parser import EnvParser
 from envdrift.core.schema import SchemaLoader
 from envdrift.core.validator import Validator
+
+
+class _PrefixedSensitiveSettings(BaseSettings):
+    model_config = SettingsConfigDict(env_prefix="MYAPP_", extra="forbid")
+
+    api_key: str = Field(json_schema_extra={"sensitive": True})
+
+
+class _AliasChoicesSensitiveSettings(BaseSettings):
+    model_config = SettingsConfigDict(env_prefix="MYAPP_", extra="forbid")
+
+    api_key: str = Field(
+        validation_alias=AliasChoices("API_KEY", "LEGACY_API_KEY"),
+        json_schema_extra={"sensitive": True},
+    )
 
 
 class TestValidator:
@@ -643,21 +659,27 @@ class TestValidatorAliasMatching:
 class TestValidatorEnvPrefix:
     """#669: validation mirrors pydantic-settings ``env_prefix`` bindings."""
 
-    def test_prefixed_sensitive_field_validates_without_contradictory_warnings(self, tmp_path):
-        class Settings(BaseSettings):
-            model_config = SettingsConfigDict(env_prefix="MYAPP_", extra="forbid")
-
-            api_key: str = Field(json_schema_extra={"sensitive": True})
-
+    @pytest.mark.parametrize(
+        ("settings_cls", "env_name", "expected_alias", "expected_env_name"),
+        [
+            (_PrefixedSensitiveSettings, "MYAPP_API_KEY", None, "MYAPP_api_key"),
+            (_AliasChoicesSensitiveSettings, "API_KEY", "API_KEY", "API_KEY"),
+        ],
+        ids=["plain-prefixed", "alias-choices"],
+    )
+    def test_prefixed_sensitive_binding_validates_without_contradictory_warnings(
+        self, tmp_path, settings_cls, env_name, expected_alias, expected_env_name
+    ):
         secret = "sk-" + "live-abcdef1234567890"
         env_file = tmp_path / ".env"
-        env_file.write_text(f"MYAPP_API_KEY={secret}\n", encoding="utf-8")
+        env_file.write_text(f"{env_name}={secret}\n", encoding="utf-8")
         env = EnvParser().parse(env_file)
-        schema = SchemaLoader().extract_metadata(Settings)
+        schema = SchemaLoader().extract_metadata(settings_cls)
 
         result = Validator().validate(env, schema)
 
-        assert schema.fields["api_key"].env_name == "MYAPP_api_key"
+        assert schema.fields["api_key"].alias == expected_alias
+        assert schema.fields["api_key"].env_name == expected_env_name
         assert result.valid is True
         assert result.missing_required == set()
         assert result.extra_vars == set()
@@ -721,31 +743,6 @@ class TestValidatorEnvPrefix:
         assert schema.fields["api_key"].env_name == "API_KEY"
         assert result.missing_required == set()
         assert result.extra_vars == set()
-        assert result.valid is True
-
-    def test_alias_choices_first_choice_bypasses_prefix_and_suppresses_warning(self, tmp_path):
-        class Settings(BaseSettings):
-            model_config = SettingsConfigDict(env_prefix="MYAPP_", extra="forbid")
-
-            api_key: str = Field(
-                validation_alias=AliasChoices("API_KEY", "LEGACY_API_KEY"),
-                json_schema_extra={"sensitive": True},
-            )
-
-        secret = "sk-" + "live-abcdef1234567890"
-        env_file = tmp_path / ".env"
-        env_file.write_text(f"API_KEY={secret}\n", encoding="utf-8")
-        env = EnvParser().parse(env_file)
-        schema = SchemaLoader().extract_metadata(Settings)
-
-        result = Validator().validate(env, schema)
-
-        assert schema.fields["api_key"].alias == "API_KEY"
-        assert schema.fields["api_key"].env_name == "API_KEY"
-        assert result.missing_required == set()
-        assert result.extra_vars == set()
-        assert result.unencrypted_secrets == {"api_key"}
-        assert not [warning for warning in result.warnings if "not marked sensitive" in warning]
         assert result.valid is True
 
     def test_prefixed_empty_required_field_respects_env_ignore_empty(self, tmp_path):
