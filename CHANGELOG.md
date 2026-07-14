@@ -1,5 +1,17 @@
 # Changelog
 
+## [11.0.0](https://github.com/jainal09/envdrift/compare/v10.17.4...v11.0.0) (2026-07-14)
+
+
+### Features
+
+* declare envdrift stable ([#688](https://github.com/jainal09/envdrift/issues/688)) ([4f1cbaf](https://github.com/jainal09/envdrift/commit/4f1cbaf751a626ea6d6dffb89a79cdb29ee67f8c))
+
+
+### Documentation
+
+* record the Release-As squash-body gotcha ([#690](https://github.com/jainal09/envdrift/issues/690)) ([6956e84](https://github.com/jainal09/envdrift/commit/6956e84e11bc5ac33b041137fafbd16bb0435804))
+
 ## [10.17.4](https://github.com/jainal09/envdrift/compare/v10.17.3...v10.17.4) (2026-07-14)
 
 
