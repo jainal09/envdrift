@@ -24,6 +24,10 @@ from typer.testing import CliRunner
 from envdrift.cli import app
 
 runner = CliRunner()
+# Click 8.3 always captures stderr separately and no longer accepts the old
+# ``mix_stderr`` option. Keep a dedicated runner for these stream-contract
+# tests so a future capture-semantics change fails their explicit assertions.
+separate_streams_runner = CliRunner()
 
 
 def _flat(output: str) -> str:
@@ -427,12 +431,12 @@ class TestEncryptDecryptAbortOnBrokenConfig:
         env_file = self._write_broken_sops_project(tmp_path)
         monkeypatch.chdir(tmp_path)
 
-        result = runner.invoke(app, ["encrypt", str(env_file)])
+        result = separate_streams_runner.invoke(app, ["encrypt", str(env_file)])
 
         assert result.exit_code == 1, result.output
-        out = _flat(result.output)
+        out = _flat(result.stderr)
         assert "[ERROR] TOML syntax error in" in out
-        assert "[OK] Encrypted" not in out
+        assert result.stdout == ""
         assert env_file.read_text(encoding="utf-8") == "FOO=bar\n"
         assert not (tmp_path / ".env.keys").exists()
 
@@ -443,11 +447,12 @@ class TestEncryptDecryptAbortOnBrokenConfig:
         env_file = self._write_broken_sops_project(tmp_path)
         monkeypatch.chdir(tmp_path)
 
-        result = runner.invoke(app, ["decrypt", str(env_file)])
+        result = separate_streams_runner.invoke(app, ["decrypt", str(env_file)])
 
         assert result.exit_code == 1, result.output
-        out = _flat(result.output)
+        out = _flat(result.stderr)
         assert "[ERROR] TOML syntax error in" in out
+        assert result.stdout == ""
         assert env_file.read_text(encoding="utf-8") == "FOO=bar\n"
 
 

@@ -14,6 +14,7 @@ from envdrift.core.schema import FieldMetadata, SchemaMetadata
 from envdrift.core.validator import ValidationResult
 from envdrift.output.rich import (
     console,
+    diagnostic_console,
     print_diff_result,
     print_encryption_report,
     print_error,
@@ -41,7 +42,7 @@ class TestPrintFunctions:
 
     def test_print_error(self):
         """Test print_error outputs red ERROR."""
-        with patch.object(console, "print") as mock_print:
+        with patch.object(diagnostic_console, "print") as mock_print:
             print_error("Something failed")
             mock_print.assert_called_once()
             call_args = str(mock_print.call_args)
@@ -49,7 +50,7 @@ class TestPrintFunctions:
 
     def test_print_warning(self):
         """Test print_warning outputs yellow WARN."""
-        with patch.object(console, "print") as mock_print:
+        with patch.object(diagnostic_console, "print") as mock_print:
             print_warning("Something suspicious")
             mock_print.assert_called_once()
             call_args = str(mock_print.call_args)
@@ -68,7 +69,7 @@ class TestPrintFunctions:
 
         buf = io.StringIO()
         capture = Console(file=buf, force_terminal=False, no_color=True, width=200)
-        with patch.object(rich_module, "console", capture):
+        with patch.object(rich_module, "diagnostic_console", capture):
             rich_module.print_error("Expected [vault.sync] section with [[vault.sync.mappings]]")
         output = buf.getvalue()
         assert "[vault.sync]" in output
@@ -82,7 +83,7 @@ class TestPrintFunctions:
 
         buf = io.StringIO()
         capture = Console(file=buf, force_terminal=False, no_color=True, width=200)
-        with patch.object(rich_module, "console", capture):
+        with patch.object(rich_module, "diagnostic_console", capture):
             rich_module.print_warning("Add a [tool.envdrift.vault.sync] block")
         assert "[tool.envdrift.vault.sync]" in buf.getvalue()
 
@@ -95,6 +96,8 @@ class TestConsole:
         from rich.console import Console
 
         assert isinstance(console, Console)
+        assert isinstance(diagnostic_console, Console)
+        assert diagnostic_console.stderr is True
 
 
 class TestValidationOutput:
@@ -359,7 +362,7 @@ class TestSyncOutput:
 
     def test_print_mismatch_warning(self):
         """Mismatch warning helper."""
-        with patch.object(console, "print") as mock_print:
+        with patch.object(diagnostic_console, "print") as mock_print:
             print_mismatch_warning("svc", "local", "vault")
         joined = " ".join(" ".join(map(str, c.args)) for c in mock_print.call_args_list)
         assert "VALUE MISMATCH" in joined

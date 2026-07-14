@@ -89,7 +89,8 @@ def test_guard_missing_path_exits(tmp_path: Path):
     missing = tmp_path / "nope"
     result = runner.invoke(app, ["guard", str(missing)])
     assert result.exit_code == 6
-    assert "path not found" in result.output.lower()
+    assert result.stdout == ""
+    assert "path not found" in result.stderr.lower()
 
 
 def test_guard_invalid_fail_on_exits(tmp_path: Path, monkeypatch):
@@ -100,7 +101,7 @@ def test_guard_invalid_fail_on_exits(tmp_path: Path, monkeypatch):
 
     result = runner.invoke(app, ["guard", str(tmp_path), "--fail-on", "invalid"])
     assert result.exit_code == 6
-    assert "invalid severity" in result.output.lower()
+    assert "invalid severity" in result.stderr.lower()
 
 
 def test_guard_defaults_to_cwd(tmp_path: Path, monkeypatch):
@@ -284,7 +285,7 @@ def test_guard_rejects_custom_env_files_outside_folder(tmp_path: Path, monkeypat
     result = runner.invoke(app, ["guard", str(tmp_path)])
 
     assert result.exit_code == 6  # operational error, distinct from critical's 1 (#478)
-    assert "invalid env_file" in result.output.lower()
+    assert "invalid env_file" in result.stderr.lower()
 
 
 def test_guard_pr_base_fetch_warns_on_failure(tmp_path: Path, monkeypatch):
@@ -309,8 +310,8 @@ def test_guard_pr_base_fetch_warns_on_failure(tmp_path: Path, monkeypatch):
 
     result = runner.invoke(app, ["guard", "--pr-base", "origin/"])
     assert result.exit_code == 0
-    assert "warning" in result.output.lower()
-    assert "could not fetch" in result.output.lower()
+    assert "warning" in result.stderr.lower()
+    assert "could not fetch" in result.stderr.lower()
 
 
 def test_guard_pr_base_strips_only_leading_origin_prefix(tmp_path: Path, monkeypatch):
@@ -791,7 +792,7 @@ def test_guard_staged_without_git_fails(tmp_path: Path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     result = runner.invoke(app, ["guard", "--staged"])
     assert result.exit_code == 6  # operational error (#478)
-    assert "git not found" in result.output.lower()
+    assert "git not found" in result.stderr.lower()
 
 
 def test_guard_pr_base_with_no_changed_files(tmp_path: Path, monkeypatch):
@@ -842,7 +843,7 @@ def test_guard_pr_base_unresolvable_ref_errors(tmp_path: Path, monkeypatch):
     monkeypatch.chdir(tmp_path)
 
     result = runner.invoke(app, ["guard", "--pr-base", "nope"])
-    out = " ".join(result.output.split())
+    out = " ".join(result.stderr.split())
     # Operational error (unresolvable base ref) is exit 6, not critical's 1 (#526).
     assert result.exit_code == 6, out
     assert "Error" in out, out
@@ -895,7 +896,7 @@ def test_guard_staged_git_diff_failure_errors(tmp_path: Path, monkeypatch):
     monkeypatch.chdir(tmp_path)
 
     result = runner.invoke(app, ["guard", "--staged"])
-    out = " ".join(result.output.split())
+    out = " ".join(result.stderr.split())
     assert result.exit_code == 6, out  # operational error, not critical's 1 (#526)
     assert "Error" in out, out
     assert "not a git repository" in out, out
@@ -928,7 +929,7 @@ def test_guard_history_without_capable_scanner_errors(tmp_path: Path, monkeypatc
     monkeypatch.setattr("envdrift.cli_commands.guard.ScanEngine", NoHistoryEngine)
 
     result = runner.invoke(app, ["guard", str(tmp_path), "--history"])
-    out = " ".join(result.output.split())
+    out = " ".join(result.stderr.split())
     assert result.exit_code == 6, out  # operational error, not critical's 1 (#526)
     assert "history" in out.lower(), out
     assert "gitleaks" in out.lower(), out
@@ -993,7 +994,7 @@ def test_guard_staged_unreadable_blob_skipped_with_warning(tmp_path: Path, monke
     monkeypatch.chdir(tmp_path)
 
     result = runner.invoke(app, ["guard", "--staged"])
-    out = " ".join(result.output.split())
+    out = " ".join(result.stderr.split())
     assert result.exit_code == 0, out
     assert "warning" in out.lower(), out
     assert "submodule" in out, out
@@ -1019,7 +1020,7 @@ def test_guard_staged_all_blobs_unreadable_errors(tmp_path: Path, monkeypatch):
     monkeypatch.chdir(tmp_path)
 
     result = runner.invoke(app, ["guard", "--staged"])
-    out = " ".join(result.output.split())
+    out = " ".join(result.stderr.split())
     assert result.exit_code == 6, out  # operational error, not critical's 1 (#526)
     assert "Error" in out, out
     assert "could not read any staged file content" in out, out
@@ -1228,7 +1229,7 @@ def test_guard_pr_base_without_git_fails(tmp_path: Path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     result = runner.invoke(app, ["guard", "--pr-base", "origin/main"])
     assert result.exit_code == 6  # operational error (#478)
-    assert "git not found" in result.output.lower()
+    assert "git not found" in result.stderr.lower()
 
 
 def test_guard_history_flag(tmp_path: Path, monkeypatch):
@@ -1257,7 +1258,7 @@ def test_guard_staged_timeout(tmp_path: Path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     result = runner.invoke(app, ["guard", "--staged"])
     assert result.exit_code == 6  # operational error (#478)
-    assert "timed out" in result.output.lower()
+    assert "timed out" in result.stderr.lower()
 
 
 def test_guard_pr_base_timeout(tmp_path: Path, monkeypatch):
@@ -1275,7 +1276,7 @@ def test_guard_pr_base_timeout(tmp_path: Path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     result = runner.invoke(app, ["guard", "--pr-base", "origin/main"])
     assert result.exit_code == 6  # operational error (#478)
-    assert "timed out" in result.output.lower()
+    assert "timed out" in result.stderr.lower()
 
 
 def test_guard_staged_files_not_exist(tmp_path: Path, monkeypatch):
@@ -1530,9 +1531,8 @@ def test_guard_json_and_sarif_warns_about_precedence(tmp_path: Path):
 
     # The precedence warning lands on stderr.
     assert "--json is ignored" in result.stderr
-    # stdout (the captured output with the stderr portion removed) is a clean,
-    # parseable SARIF document — the warning must NOT leak into it.
-    stdout = result.output.replace(result.stderr, "")
-    assert "--json is ignored" not in stdout
-    sarif = json.loads(stdout)
+    # stdout is a clean, parseable SARIF document — the warning must NOT leak
+    # into it.
+    assert "--json is ignored" not in result.stdout
+    sarif = json.loads(result.stdout)
     assert "runs" in sarif

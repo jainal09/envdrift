@@ -19,7 +19,9 @@ from envdrift.core.validator import MODEL_ERROR_KEY, ValidationResult
 if TYPE_CHECKING:
     from envdrift.sync.result import ServiceSyncResult, SyncResult
 
+# Full command reports are stdout payloads; standalone diagnostics use stderr.
 console = Console()
+diagnostic_console = Console(stderr=True)
 
 
 def print_success(message: str) -> None:
@@ -29,24 +31,24 @@ def print_success(message: str) -> None:
 
 def print_error(message: str) -> None:
     """
-    Print a message prefixed with a red "ERROR" badge to the module console.
+    Print a message prefixed with a red "ERROR" badge to stderr.
 
     The message is treated as literal text: any bracketed substrings (e.g. TOML
     table names like ``[vault.sync]``) are escaped so Rich does not interpret
     them as console markup and silently drop them.
     """
-    console.print(f"[red][ERROR][/red] {escape(message)}")
+    diagnostic_console.print(f"[red][ERROR][/red] {escape(message)}")
 
 
 def print_warning(message: str) -> None:
     """
-    Display a yellow "WARN" badge followed by the provided message to the shared console.
+    Display a yellow "WARN" badge followed by the provided message on stderr.
 
     The message is treated as literal text: any bracketed substrings (e.g. TOML
     table names like ``[vault.sync]``) are escaped so Rich does not interpret
     them as console markup and silently drop them.
     """
-    console.print(f"[yellow][WARN][/yellow] {escape(message)}")
+    diagnostic_console.print(f"[yellow][WARN][/yellow] {escape(message)}")
 
 
 def print_validation_result(
@@ -453,15 +455,15 @@ def print_mismatch_warning(
     vault_preview: str,
 ) -> None:
     """
-    Print value mismatch warning.
+    Print a value mismatch diagnostic to stderr.
 
     Parameters:
         service_name (str): Name of the service with mismatched values.
         local_preview (str): Preview of local value (first N chars).
         vault_preview (str): Preview of vault value (first N chars).
     """
-    console.print()
-    console.print(f"[bold yellow]VALUE MISMATCH: {service_name}[/bold yellow]")
-    console.print(f"  Local:  {local_preview}")
-    console.print(f"  Vault:  {vault_preview}")
-    console.print()
+    diagnostic_console.print()
+    diagnostic_console.print(f"[bold yellow]VALUE MISMATCH: {service_name}[/bold yellow]")
+    diagnostic_console.print(f"  Local:  {local_preview}")
+    diagnostic_console.print(f"  Vault:  {vault_preview}")
+    diagnostic_console.print()

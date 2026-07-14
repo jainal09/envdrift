@@ -1649,8 +1649,9 @@ class TestNoConfigErrorGuidance:
         monkeypatch.chdir(tmp_path)
         monkeypatch.setattr("envdrift.config.find_config", lambda: None)
         result = runner.invoke(app, ["pull"])
-        out = " ".join(result.output.split())
+        out = " ".join(result.stderr.split())
         assert result.exit_code == 1
+        assert result.stdout == ""
         # All three config mechanisms must be listed, with their literal
         # section names (print_error escapes Rich markup).
         assert "envdrift.toml" in out
