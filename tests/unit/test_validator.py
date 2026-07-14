@@ -1,6 +1,5 @@
 """Tests for Validator."""
 
-import pytest
 from pydantic import Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -426,8 +425,7 @@ NEW_FEATURE_FLAG=enabled
         assert result.valid is True
 
     def test_constraint_pass_survives_non_validation_error(self, tmp_path):
-        """A model_post_init raising a non-ValidationError must not crash
-        validate — the constraint pass swallows it (#443 review)."""
+        """A model_post_init error becomes a warning without crashing validate."""
         from pydantic import Field
         from pydantic_settings import BaseSettings
 
@@ -445,6 +443,7 @@ NEW_FEATURE_FLAG=enabled
         result = Validator().validate(env, schema, check_encryption=False)
 
         assert result.valid is True
+        assert result.warnings == ["Model constraint validation raised RuntimeError: boom"]
 
     def test_validate_constraint_pass_keeps_base_type_message(self, tmp_path):
         """A field failing both the base-type check and Pydantic keeps the
@@ -639,18 +638,8 @@ class TestValidatorAliasMatching:
 
 
 class TestKnownValidatorGaps:
-    """Confirmed pre-existing bugs, asserted at their correct behavior (xfail).
+    """Regression tests for previously confirmed validator gaps."""
 
-    Both reproduce identically on pre-refactor main (de834a7) — they are NOT
-    regressions from the #650 decomposition, which is pure code motion. Flip
-    each xfail to a plain assertion in the PR that fixes its issue.
-    """
-
-    @pytest.mark.xfail(
-        strict=False,
-        reason="model-level validation failures map to loc=() and are dropped, so "
-        "validate() reports valid=True for a config the real app crashes on (see #657)",
-    )
     def test_model_level_validator_rejection_fails_validation(self, tmp_path):
         """A @model_validator rejection must surface as an error, not a false PASS."""
 
@@ -669,13 +658,10 @@ class TestKnownValidatorGaps:
         result = Validator().validate(env, schema, check_encryption=False)
 
         assert result.valid is False
-        assert result.type_errors  # the model-level rejection must be reported
+        assert result.type_errors.keys() == {"__model__"}
+        assert "model-level rejection" in result.type_errors["__model__"]
+        assert Validator().generate_fix_template(result, schema) == ""
 
-    @pytest.mark.xfail(
-        strict=False,
-        reason="suspicious-plaintext suppression compares the env alias against attribute "
-        "names, so an aliased sensitive field gets contradictory warnings (see #658)",
-    )
     def test_aliased_sensitive_field_gets_no_contradictory_warning(self, tmp_path):
         """A field marked sensitive must not also warn 'not marked sensitive' via its alias."""
 
