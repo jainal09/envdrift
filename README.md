@@ -13,6 +13,11 @@
 
 Sync environment variables across your team. No more "it works on my machine."
 
+> **Status: stable.** envdrift v11 marks the first release the project considers
+> production-ready: every feature ships with real-backend integration tests, regression
+> coverage, and a reliability-first review gate. See the
+> [changelog](https://github.com/jainal09/envdrift/blob/main/CHANGELOG.md) for history.
+
 ## The Problem
 
 - New developer joins → spends half a day hunting for the right `.env` values
