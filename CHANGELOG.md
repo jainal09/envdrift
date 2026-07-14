@@ -1,5 +1,14 @@
 # Changelog
 
+## [10.17.3](https://github.com/jainal09/envdrift/compare/v10.17.2...v10.17.3) (2026-07-14)
+
+
+### Bug Fixes
+
+* **lock:** verify skipped vault secrets before encryption ([#670](https://github.com/jainal09/envdrift/issues/670)) ([910a912](https://github.com/jainal09/envdrift/commit/910a912b7879bf7fa71de5479331d3ef1594bc52))
+* **schema:** honor pydantic settings env prefixes ([#672](https://github.com/jainal09/envdrift/issues/672)) ([0c03542](https://github.com/jainal09/envdrift/commit/0c03542db134240ee9f1cc6166c65474486adbe2))
+* **validator:** surface model errors and honor sensitive aliases ([#667](https://github.com/jainal09/envdrift/issues/667)) ([1db44c5](https://github.com/jainal09/envdrift/commit/1db44c5742b1bb654dbab41c14477c895f77029d))
+
 ## [10.17.2](https://github.com/jainal09/envdrift/compare/v10.17.1...v10.17.2) (2026-07-14)
 
 
