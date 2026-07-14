@@ -161,6 +161,12 @@ validator = Validator()
 result = validator.validate(env, schema)
 ```
 
+Schema validation honors pydantic-settings environment bindings. Plain field
+names include `SettingsConfigDict(env_prefix=...)`; explicit aliases bypass the
+prefix, and `case_sensitive=True` uses exact-case matching. Constraint checks
+still pass model field names or aliases to Pydantic rather than prefixed
+environment names.
+
 ### DiffEngine
 
 Compare env files.

@@ -10,6 +10,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, cast
 
+from pydantic import AliasChoices, AliasPath
+from pydantic.fields import FieldInfo
 from pydantic_settings import BaseSettings
 
 # Environment variable to signal schema extraction mode
@@ -19,6 +21,25 @@ ENVDRIFT_SCHEMA_EXTRACTION = "ENVDRIFT_SCHEMA_EXTRACTION"
 # a schema using only these (with no constraints/validators) needs no real
 # model_validate pass.
 _PLAIN_SCALARS = (str, int, float, bool)
+
+
+def _effective_env_binding(
+    field_name: str, field_info: FieldInfo, raw_env_prefix: Any
+) -> tuple[str | None, str]:
+    """Return the model input alias and effective environment binding."""
+    alias_candidate = field_info.validation_alias or field_info.alias
+    if isinstance(alias_candidate, AliasChoices) and alias_candidate.choices:
+        # FieldMetadata represents one binding today. Preserve Pydantic's
+        # first-choice order; #673 tracks support for every candidate.
+        alias_candidate = alias_candidate.choices[0]
+    if isinstance(alias_candidate, AliasPath) and alias_candidate.path:
+        alias_candidate = alias_candidate.path[0]
+
+    if isinstance(alias_candidate, str):
+        return alias_candidate, alias_candidate
+
+    env_prefix = raw_env_prefix if isinstance(raw_env_prefix, str) else ""
+    return None, f"{env_prefix}{field_name}"
 
 
 @dataclass
@@ -32,10 +53,14 @@ class FieldMetadata:
     description: str | None
     field_type: type
     annotation: str
-    # The Pydantic alias (the real env-var name) when the attribute name differs,
-    # e.g. a field ``X_API_KEY`` with ``Field(alias='X-API-KEY')``. Validation
-    # matches the .env against this when present so a non-identifier key resolves.
+    # The effective Pydantic validation alias used as the input key for
+    # ``model_validate``. ``validation_alias`` takes precedence over ``alias``.
     alias: str | None = None
+    # The effective environment binding name. Plain fields include the model's
+    # ``env_prefix``; explicit aliases bypass the prefix, matching
+    # pydantic-settings. Kept separate from ``alias`` because model validation
+    # expects field names/aliases, never prefixed environment names (#669).
+    env_name: str | None = None
     # The field's ``FieldInfo.metadata`` — pydantic strips ``Annotated[...]``
     # extras (constraint markers, ``pydantic.Json``, ...) into it, and the
     # env-source complexity/coercion decision needs it: a ``Json`` marker makes
@@ -75,6 +100,9 @@ class SchemaMetadata:
     # when False (the pydantic-settings default) the model sees the empty string
     # and e.g. ``PORT=`` crashes an int field at startup (#472).
     env_ignore_empty: bool = False
+    # Mirrors SettingsConfigDict(case_sensitive=...). Environment binding names
+    # are folded only when False, the pydantic-settings default.
+    case_sensitive: bool = False
 
     @property
     def required_fields(self) -> list[str]:
@@ -251,11 +279,16 @@ class SchemaLoader:
         model_config = getattr(settings_cls, "model_config", {})
         if isinstance(model_config, dict):
             extra = model_config.get("extra", "ignore")
+            raw_env_prefix = model_config.get("env_prefix", "")
+            case_sensitive = model_config.get("case_sensitive", False)
         else:
             # SettingsConfigDict object
             extra = getattr(model_config, "extra", "ignore")
+            raw_env_prefix = getattr(model_config, "env_prefix", "")
+            case_sensitive = getattr(model_config, "case_sensitive", False)
 
         schema.extra_policy = extra if extra else "ignore"
+        schema.case_sensitive = bool(case_sensitive)
 
         # env_ignore_empty changes what the env source does with empty values
         # (drop vs pass through), which changes what validation must check (#472).
@@ -308,10 +341,9 @@ class SchemaLoader:
             else:
                 type_str = "Any"
 
-            # The real env-var name when it differs from the attribute name
-            # (validation_alias takes precedence over alias when both are set).
-            field_alias = field_info.validation_alias or field_info.alias
-            field_alias = field_alias if isinstance(field_alias, str) else None
+            # Keep model-validation input separate from environment binding:
+            # plain fields add env_prefix while explicit aliases do not.
+            field_alias, env_name = _effective_env_binding(field_name, field_info, raw_env_prefix)
 
             schema.fields[field_name] = FieldMetadata(
                 name=field_name,
@@ -322,6 +354,7 @@ class SchemaLoader:
                 field_type=annotation if annotation else type(None),
                 annotation=type_str,
                 alias=field_alias,
+                env_name=env_name,
                 type_metadata=tuple(field_info.metadata),
             )
 

@@ -79,14 +79,20 @@ def _unparsed_line_warnings(env_file: EnvFile) -> list[str]:
     ]
 
 
-def _field_lookup_key(fm: FieldMetadata) -> str:
-    """Lower-cased env-var name a schema field binds to.
+def _normalize_env_name(name: str, case_sensitive: bool) -> str:
+    """Return the environment lookup key for the model's case policy."""
+    return name if case_sensitive else name.lower()
 
-    A field is matched against the .env by its alias when it has one (the
-    real env-var name, e.g. ``X-API-KEY`` for attribute ``X_API_KEY``),
-    else by its attribute name — mirroring how pydantic-settings binds.
+
+def _field_lookup_key(fm: FieldMetadata, case_sensitive: bool = False) -> str:
+    """Return the normalized env-var name a schema field binds to.
+
+    ``env_name`` is extracted from pydantic-settings configuration: plain
+    fields include ``env_prefix`` while explicit aliases bypass it. The
+    alias/name fallbacks preserve manually constructed metadata.
     """
-    return (fm.alias or fm.name).lower()
+    env_name = fm.env_name or fm.alias or fm.name
+    return _normalize_env_name(env_name, case_sensitive)
 
 
 def _warn_leading_bom(env_file: EnvFile, result: ValidationResult) -> None:
@@ -109,42 +115,41 @@ def _warn_leading_bom(env_file: EnvFile, result: ValidationResult) -> None:
 
 
 def _index_env_variables(
-    env_file: EnvFile, result: ValidationResult
+    env_file: EnvFile, result: ValidationResult, case_sensitive: bool = False
 ) -> tuple[set[str], dict[str, EnvVar]]:
-    """One pass over the env vars deriving everything case-insensitive matching needs.
+    """Index env vars using the schema's case-matching policy.
 
-    (Pydantic Settings defaults to case_insensitive):
-      - env_names_lower: lower-cased names present (missing/extra checks)
-      - env_by_lower:    lower-cased name -> env var, last-wins like Pydantic
-    A case-only collision (e.g. ``API_KEY`` + ``api_key``) is surfaced as
-    a warning instead of silently dropping a value (see issue #306).
+    Pydantic Settings defaults to case-insensitive matching. In that mode a
+    case-only collision is surfaced as a warning instead of silently dropping
+    a value (see issue #306), while the last value wins like Pydantic. With
+    ``case_sensitive=True``, differently cased names stay distinct (#669).
     """
-    env_names_lower: set[str] = set()
-    env_by_lower: dict[str, EnvVar] = {}
+    env_names: set[str] = set()
+    env_by_name: dict[str, EnvVar] = {}
     env_groups: dict[str, list[str]] = {}
     for name, env_var in env_file.variables.items():
-        lower = name.lower()
-        env_names_lower.add(lower)
-        env_by_lower[lower] = env_var  # last-wins, mirroring Pydantic Settings
-        env_groups.setdefault(lower, []).append(name)
+        lookup_name = _normalize_env_name(name, case_sensitive)
+        env_names.add(lookup_name)
+        env_by_name[lookup_name] = env_var  # last-wins, mirroring Pydantic Settings
+        env_groups.setdefault(lookup_name, []).append(name)
 
-    for lower_name, names in env_groups.items():
+    for lookup_name, names in env_groups.items():
         if len(names) > 1:
             kept = names[-1]
             dropped = ", ".join(repr(n) for n in names[:-1])
             result.warnings.append(
-                f"Case-insensitive name collision for {lower_name!r}: "
+                f"Case-insensitive name collision for {lookup_name!r}: "
                 f"{', '.join(repr(n) for n in names)} all map to the same field; "
                 f"value from {kept!r} is used, {dropped} ignored"
             )
 
-    return env_names_lower, env_by_lower
+    return env_names, env_by_name
 
 
 def _check_extra_vars(
     env_file: EnvFile,
     schema: SchemaMetadata,
-    schema_names_lower: set[str],
+    schema_names: set[str],
     result: ValidationResult,
 ) -> None:
     """Record variables the schema does not declare.
@@ -156,7 +161,8 @@ def _check_extra_vars(
     extra = {
         name
         for name in env_file.variables
-        if name.lower() not in schema_names_lower and not is_dotenvx_public_key_var(name)
+        if _normalize_env_name(name, schema.case_sensitive) not in schema_names
+        and not is_dotenvx_public_key_var(name)
     }
     if not extra:
         return
@@ -169,7 +175,7 @@ def _check_extra_vars(
 
 
 def _collect_constraint_values(
-    schema: SchemaMetadata, env_by_lower: dict[str, EnvVar]
+    schema: SchemaMetadata, env_by_name: dict[str, EnvVar]
 ) -> dict[str, Any]:
     """Assemble the values dict the constraint pass feeds to the live model.
 
@@ -179,7 +185,7 @@ def _collect_constraint_values(
     """
     values: dict[str, Any] = {}
     for field_name, field_meta in schema.fields.items():
-        env_var = env_by_lower.get(_field_lookup_key(field_meta))
+        env_var = env_by_name.get(_field_lookup_key(field_meta, schema.case_sensitive))
         if env_var is None:
             continue
         value = env_var.value
@@ -308,19 +314,20 @@ class Validator:
         # Pydantic Settings defaults to case_sensitive=False, loading e.g.
         # `API_KEY` from a conventional UPPERCASE .env into a lowercase
         # `api_key` field. Mirror that here by matching names case-insensitively
-        # (via ``_field_lookup_key``) so an UPPERCASE .env against a lowercase
-        # schema is not falsely reported as both missing_required and
-        # extra_vars (see issue #306).
-        schema_names_lower = {_field_lookup_key(fm) for fm in schema.fields.values()}
-        env_names_lower, env_by_lower = _index_env_variables(env_file, result)
+        # unless the model opts into exact-case matching. ``_field_lookup_key``
+        # also includes ``env_prefix`` for plain fields (#669).
+        schema_names = {
+            _field_lookup_key(fm, schema.case_sensitive) for fm in schema.fields.values()
+        }
+        env_names, env_by_name = _index_env_variables(env_file, result, schema.case_sensitive)
 
-        self._check_missing(schema, env_names_lower, env_by_lower, result)
+        self._check_missing(schema, env_names, env_by_name, result)
         if check_extra:
-            _check_extra_vars(env_file, schema, schema_names_lower, result)
+            _check_extra_vars(env_file, schema, schema_names, result)
         if check_encryption:
-            self._check_sensitive_encryption(env_file, schema, env_by_lower, result)
-        self._check_base_types(schema, env_by_lower, result)
-        self._check_constraints(schema, env_by_lower, result)
+            self._check_sensitive_encryption(env_file, schema, env_by_name, result)
+        self._check_base_types(schema, env_by_name, result)
+        self._check_constraints(schema, env_by_name, result)
 
         # Determine overall validity
         # Note: unencrypted_secrets are warnings, not errors
@@ -332,8 +339,8 @@ class Validator:
     def _check_missing(
         self,
         schema: SchemaMetadata,
-        env_names_lower: set[str],
-        env_by_lower: dict[str, EnvVar],
+        env_names: set[str],
+        env_by_name: dict[str, EnvVar],
         result: ValidationResult,
     ) -> None:
         """Record required fields absent from the .env, and optional ones as warnings.
@@ -346,24 +353,25 @@ class Validator:
         for field_name, field_meta in schema.fields.items():
             if not field_meta.required:
                 continue
-            env_var = env_by_lower.get(_field_lookup_key(field_meta))
+            env_var = env_by_name.get(_field_lookup_key(field_meta, schema.case_sensitive))
             if env_var is None or (env_var.value == "" and schema.env_ignore_empty):
                 result.missing_required.add(field_name)
 
         for field_name, field_meta in schema.fields.items():
-            if not field_meta.required and _field_lookup_key(field_meta) not in env_names_lower:
+            lookup_key = _field_lookup_key(field_meta, schema.case_sensitive)
+            if not field_meta.required and lookup_key not in env_names:
                 result.missing_optional.add(field_name)
 
     def _check_sensitive_encryption(
         self,
         env_file: EnvFile,
         schema: SchemaMetadata,
-        env_by_lower: dict[str, EnvVar],
+        env_by_name: dict[str, EnvVar],
         result: ValidationResult,
     ) -> None:
         """Record schema-sensitive fields left in plaintext, and suspicious lookalikes."""
         for field_name, field_meta in schema.fields.items():
-            env_var = env_by_lower.get(_field_lookup_key(field_meta))
+            env_var = env_by_name.get(_field_lookup_key(field_meta, schema.case_sensitive))
             if env_var is None:
                 continue
 
@@ -375,8 +383,8 @@ class Validator:
         # Also check for suspicious plaintext values. The dotenvx public-key
         # artifact is, by definition, public — its ``*_KEY`` name must not
         # produce a bogus "mark it sensitive" warning (#472).
-        sensitive_lower = {
-            _field_lookup_key(field_meta)
+        sensitive_names = {
+            _field_lookup_key(field_meta, schema.case_sensitive)
             for field_meta in schema.fields.values()
             if field_meta.sensitive
         }
@@ -385,13 +393,13 @@ class Validator:
                 continue
             if env_var.encryption_status == EncryptionStatus.PLAINTEXT:
                 if self.is_value_suspicious(env_var.value):
-                    if var_name.lower() not in sensitive_lower:
+                    if _normalize_env_name(var_name, schema.case_sensitive) not in sensitive_names:
                         result.warnings.append(
                             f"'{var_name}' looks like a secret but "
                             "is not marked sensitive in schema"
                         )
                 if self.is_name_suspicious(var_name):
-                    if var_name.lower() not in sensitive_lower:
+                    if _normalize_env_name(var_name, schema.case_sensitive) not in sensitive_names:
                         result.warnings.append(
                             f"'{var_name}' has a name suggesting sensitive data "
                             "but is not marked sensitive in schema"
@@ -400,7 +408,7 @@ class Validator:
     def _check_base_types(
         self,
         schema: SchemaMetadata,
-        env_by_lower: dict[str, EnvVar],
+        env_by_name: dict[str, EnvVar],
         result: ValidationResult,
     ) -> None:
         """Base type validation against the value pydantic-settings will see.
@@ -412,7 +420,7 @@ class Validator:
         an int field here exactly as it fails the real app at startup.
         """
         for field_name, field_meta in schema.fields.items():
-            env_var = env_by_lower.get(_field_lookup_key(field_meta))
+            env_var = env_by_name.get(_field_lookup_key(field_meta, schema.case_sensitive))
             if env_var is None:
                 continue
             if env_var.value == "" and schema.env_ignore_empty:
@@ -427,7 +435,7 @@ class Validator:
     def _check_constraints(
         self,
         schema: SchemaMetadata,
-        env_by_lower: dict[str, EnvVar],
+        env_by_name: dict[str, EnvVar],
         result: ValidationResult,
     ) -> None:
         """Field-constraint validation (ge/le, Literal, min_length, pattern, ...).
@@ -443,7 +451,7 @@ class Validator:
 
         from pydantic import ValidationError
 
-        values = _collect_constraint_values(schema, env_by_lower)
+        values = _collect_constraint_values(schema, env_by_name)
         try:
             schema.model_class.model_validate(values)
         except ValidationError as exc:
