@@ -34,6 +34,7 @@ from envdrift.vault.keymaterial import (
 )
 
 if TYPE_CHECKING:
+    from envdrift.env_files import EnvFileDetection
     from envdrift.vault import VaultClient
 
 logger = logging.getLogger(__name__)
@@ -106,60 +107,10 @@ class SyncEngine:
     def _sync_service(self, mapping: ServiceMapping) -> ServiceSyncResult:
         """Sync a single service."""
         try:
-            detection = resolve_mapping_env_file(mapping)
-            if detection.status == "folder_not_found":
-                # A mapping whose folder does not exist is a broken config (a
-                # typo'd folder_path), not a benign "env file not created yet"
-                # skip. Reporting it as SKIPPED let `sync --ci` / `pull` exit 0
-                # ("All services synced successfully") while doing nothing (#488).
-                return ServiceSyncResult(
-                    secret_name=mapping.secret_name,
-                    folder_path=mapping.folder_path,
-                    environment=mapping.effective_environment,
-                    action=SyncAction.ERROR,
-                    message="Mapping folder does not exist or is not a directory",
-                    error=(
-                        f"Mapping folder does not exist or is not a directory: "
-                        f"{mapping.folder_path} (check folder_path in your sync config)"
-                    ),
-                )
-            if (
-                detection.status != "found"
-                or detection.path is None
-                or detection.environment is None
-            ):
-                # ``lock --sync-keys`` still creates/updates local keys, but its
-                # verification-labeled phase must validate mappings it skips.
-                if self.mode.verify_only or self.mode.verify_skipped_secrets:
-                    self._verify_secret_usable(mapping)
-                if detection.status == "multiple_found":
-                    # Distinct, truthful skip reason: the folder has several
-                    # candidate env files and the mapping is ambiguous (#488).
-                    return ServiceSyncResult(
-                        secret_name=mapping.secret_name,
-                        folder_path=mapping.folder_path,
-                        environment=mapping.effective_environment,
-                        action=SyncAction.SKIPPED,
-                        message=(
-                            "Multiple env files found - skipping "
-                            "(set environment or env_file in the mapping)"
-                        ),
-                    )
-                if detection.path is not None:
-                    expected = detection.path
-                elif mapping.env_file is not None:
-                    expected = mapping.folder_path / mapping.env_file
-                else:
-                    expected = mapping.folder_path / f".env.{mapping.effective_environment}"
-                return ServiceSyncResult(
-                    secret_name=mapping.secret_name,
-                    folder_path=mapping.folder_path,
-                    environment=mapping.effective_environment,
-                    action=SyncAction.SKIPPED,
-                    message=f"No {expected.name} file found - skipping",
-                )
-
-            effective_environment = detection.environment
+            resolved = self._resolve_sync_env_file(mapping)
+            if isinstance(resolved, ServiceSyncResult):
+                return resolved
+            effective_environment = resolved
 
             # Use effective environment for key name
             effective_key_name = f"DOTENV_PRIVATE_KEY_{effective_environment.upper()}"
@@ -171,129 +122,16 @@ class SyncEngine:
             # Check for ephemeral mode - skip local file operations
             is_ephemeral = self.config.get_effective_ephemeral(mapping)
             if is_ephemeral:
-                # In ephemeral mode, we don't store keys locally
-                # Just return the key for downstream use
-                return ServiceSyncResult(
-                    secret_name=mapping.secret_name,
-                    folder_path=mapping.folder_path,
-                    environment=mapping.effective_environment,
-                    action=SyncAction.EPHEMERAL,
-                    message="Ephemeral mode: key fetched from vault (not stored locally)",
-                    vault_value_preview=vault_preview,
-                    vault_key_value=vault_value,  # Pass actual key for downstream use
-                )
+                return self._ephemeral_result(mapping, vault_value, vault_preview)
 
             # Ensure folder exists
-            if not mapping.folder_path.exists():
-                if self.mode.verify_only:
-                    return ServiceSyncResult(
-                        secret_name=mapping.secret_name,
-                        folder_path=mapping.folder_path,
-                        environment=mapping.effective_environment,
-                        action=SyncAction.ERROR,
-                        message="Folder does not exist",
-                        error=f"Folder does not exist: {mapping.folder_path}",
-                    )
-                ensure_directory(mapping.folder_path)
+            folder_error = self._ensure_service_folder(mapping)
+            if folder_error is not None:
+                return folder_error
 
-            # Read local file
-            env_keys_path = mapping.folder_path / self.config.env_keys_filename
-            env_keys_file = EnvKeysFile(env_keys_path)
-            local_value = env_keys_file.read_key(effective_key_name)
-            local_preview = redact_value(local_value) if local_value is not None else None
-
-            # Compare values
-            if local_value is None:
-                # Key doesn't exist - create
-                if self.mode.verify_only:
-                    # Populate ``error`` with a diagnosable reason (#487): the
-                    # renderer prints ``error``, and a file that exists but
-                    # lacks the key is a different problem than a missing file.
-                    if env_keys_file.exists():
-                        reason = f"{effective_key_name} missing from {env_keys_path}"
-                    else:
-                        reason = f"Key file does not exist: {env_keys_path}"
-                    return ServiceSyncResult(
-                        secret_name=mapping.secret_name,
-                        folder_path=mapping.folder_path,
-                        environment=mapping.effective_environment,
-                        action=SyncAction.ERROR,
-                        message=reason,
-                        vault_value_preview=vault_preview,
-                        error=reason,
-                    )
-
-                env_keys_file.write_key(effective_key_name, vault_value, effective_environment)
-                return ServiceSyncResult(
-                    secret_name=mapping.secret_name,
-                    folder_path=mapping.folder_path,
-                    environment=mapping.effective_environment,
-                    action=SyncAction.CREATED,
-                    message="Created new .env.keys file",
-                    vault_value_preview=vault_preview,
-                )
-
-            elif local_value == vault_value:
-                # Values match - skip
-                return ServiceSyncResult(
-                    secret_name=mapping.secret_name,
-                    folder_path=mapping.folder_path,
-                    environment=mapping.effective_environment,
-                    action=SyncAction.SKIPPED,
-                    message="Values match - no update needed",
-                    vault_value_preview=vault_preview,
-                    local_value_preview=local_preview,
-                )
-
-            else:
-                # Mismatch - update
-                if self.mode.verify_only:
-                    return ServiceSyncResult(
-                        secret_name=mapping.secret_name,
-                        folder_path=mapping.folder_path,
-                        environment=mapping.effective_environment,
-                        action=SyncAction.ERROR,
-                        message="Value mismatch detected",
-                        vault_value_preview=vault_preview,
-                        local_value_preview=local_preview,
-                        error="Local value differs from vault",
-                    )
-
-                # Check if we should update
-                should_update = self.mode.force_update
-                if not should_update and self.prompt_callback:
-                    prompt_msg = (
-                        f"Value mismatch for {mapping.secret_name}:\n"
-                        f"  Local:  {local_preview}\n"
-                        f"  Vault:  {vault_preview}\n"
-                        "Update local file with vault value?"
-                    )
-                    should_update = self.prompt_callback(prompt_msg)
-
-                if should_update:
-                    # Create backup before updating
-                    backup_path = env_keys_file.create_backup()
-                    env_keys_file.write_key(effective_key_name, vault_value, effective_environment)
-                    return ServiceSyncResult(
-                        secret_name=mapping.secret_name,
-                        folder_path=mapping.folder_path,
-                        environment=mapping.effective_environment,
-                        action=SyncAction.UPDATED,
-                        message="Updated with vault value",
-                        vault_value_preview=vault_preview,
-                        local_value_preview=local_preview,
-                        backup_path=backup_path,
-                    )
-                else:
-                    return ServiceSyncResult(
-                        secret_name=mapping.secret_name,
-                        folder_path=mapping.folder_path,
-                        environment=mapping.effective_environment,
-                        action=SyncAction.SKIPPED,
-                        message="Update skipped by user",
-                        vault_value_preview=vault_preview,
-                        local_value_preview=local_preview,
-                    )
+            return self._sync_local_key(
+                mapping, effective_key_name, effective_environment, vault_value, vault_preview
+            )
 
         except SecretNotFoundError as e:
             return ServiceSyncResult(
@@ -321,6 +159,257 @@ class SyncEngine:
                 action=SyncAction.ERROR,
                 message="Unexpected error",
                 error=str(e),
+            )
+
+    def _resolve_sync_env_file(self, mapping: ServiceMapping) -> ServiceSyncResult | str:
+        """Resolve the mapping's env file to the effective environment name.
+
+        Returns the detected environment on success, or a terminal
+        ``ServiceSyncResult`` (broken-config ERROR / benign skip) when the
+        mapping has no usable env file.
+        """
+        detection = resolve_mapping_env_file(mapping)
+        if detection.status == "folder_not_found":
+            # A mapping whose folder does not exist is a broken config (a
+            # typo'd folder_path), not a benign "env file not created yet"
+            # skip. Reporting it as SKIPPED let `sync --ci` / `pull` exit 0
+            # ("All services synced successfully") while doing nothing (#488).
+            return ServiceSyncResult(
+                secret_name=mapping.secret_name,
+                folder_path=mapping.folder_path,
+                environment=mapping.effective_environment,
+                action=SyncAction.ERROR,
+                message="Mapping folder does not exist or is not a directory",
+                error=(
+                    f"Mapping folder does not exist or is not a directory: "
+                    f"{mapping.folder_path} (check folder_path in your sync config)"
+                ),
+            )
+        if detection.status != "found" or detection.path is None or detection.environment is None:
+            return self._env_file_not_found_result(mapping, detection)
+        return detection.environment
+
+    def _env_file_not_found_result(
+        self, mapping: ServiceMapping, detection: EnvFileDetection
+    ) -> ServiceSyncResult:
+        """Build the skip result for a mapping whose env file was not resolved.
+
+        Verify-labeled modes probe the vault secret first; the probe raises
+        (``SecretNotFoundError``/``VaultError``) for a missing or unusable
+        secret, which ``_sync_service`` turns into an ERROR row.
+        """
+        # ``lock --sync-keys`` still creates/updates local keys, but its
+        # verification-labeled phase must validate mappings it skips.
+        if self.mode.verify_only or self.mode.verify_skipped_secrets:
+            self._verify_secret_usable(mapping)
+        if detection.status == "multiple_found":
+            # Distinct, truthful skip reason: the folder has several
+            # candidate env files and the mapping is ambiguous (#488).
+            return ServiceSyncResult(
+                secret_name=mapping.secret_name,
+                folder_path=mapping.folder_path,
+                environment=mapping.effective_environment,
+                action=SyncAction.SKIPPED,
+                message=(
+                    "Multiple env files found - skipping "
+                    "(set environment or env_file in the mapping)"
+                ),
+            )
+        if detection.path is not None:
+            expected = detection.path
+        elif mapping.env_file is not None:
+            expected = mapping.folder_path / mapping.env_file
+        else:
+            expected = mapping.folder_path / f".env.{mapping.effective_environment}"
+        return ServiceSyncResult(
+            secret_name=mapping.secret_name,
+            folder_path=mapping.folder_path,
+            environment=mapping.effective_environment,
+            action=SyncAction.SKIPPED,
+            message=f"No {expected.name} file found - skipping",
+        )
+
+    def _ephemeral_result(
+        self, mapping: ServiceMapping, vault_value: str, vault_preview: str | None
+    ) -> ServiceSyncResult:
+        """Build the ephemeral-mode result carrying the fetched key."""
+        # In ephemeral mode, we don't store keys locally
+        # Just return the key for downstream use
+        return ServiceSyncResult(
+            secret_name=mapping.secret_name,
+            folder_path=mapping.folder_path,
+            environment=mapping.effective_environment,
+            action=SyncAction.EPHEMERAL,
+            message="Ephemeral mode: key fetched from vault (not stored locally)",
+            vault_value_preview=vault_preview,
+            vault_key_value=vault_value,  # Pass actual key for downstream use
+        )
+
+    def _ensure_service_folder(self, mapping: ServiceMapping) -> ServiceSyncResult | None:
+        """Ensure the mapping folder exists, creating it outside verify mode.
+
+        Returns an ERROR result in verify mode (which must not create
+        anything); ``None`` once the folder exists.
+        """
+        if not mapping.folder_path.exists():
+            if self.mode.verify_only:
+                return ServiceSyncResult(
+                    secret_name=mapping.secret_name,
+                    folder_path=mapping.folder_path,
+                    environment=mapping.effective_environment,
+                    action=SyncAction.ERROR,
+                    message="Folder does not exist",
+                    error=f"Folder does not exist: {mapping.folder_path}",
+                )
+            ensure_directory(mapping.folder_path)
+        return None
+
+    def _sync_local_key(
+        self,
+        mapping: ServiceMapping,
+        effective_key_name: str,
+        effective_environment: str,
+        vault_value: str,
+        vault_preview: str | None,
+    ) -> ServiceSyncResult:
+        """Compare the local key against the vault value and apply the outcome."""
+        # Read local file
+        env_keys_path = mapping.folder_path / self.config.env_keys_filename
+        env_keys_file = EnvKeysFile(env_keys_path)
+        local_value = env_keys_file.read_key(effective_key_name)
+        local_preview = redact_value(local_value) if local_value is not None else None
+
+        # Compare values
+        if local_value is None:
+            # Key doesn't exist - create
+            return self._create_missing_key(
+                mapping,
+                env_keys_file,
+                env_keys_path,
+                effective_key_name,
+                effective_environment,
+                vault_value,
+                vault_preview,
+            )
+        elif local_value == vault_value:
+            # Values match - skip
+            return ServiceSyncResult(
+                secret_name=mapping.secret_name,
+                folder_path=mapping.folder_path,
+                environment=mapping.effective_environment,
+                action=SyncAction.SKIPPED,
+                message="Values match - no update needed",
+                vault_value_preview=vault_preview,
+                local_value_preview=local_preview,
+            )
+        else:
+            # Mismatch - update
+            return self._update_mismatched_key(
+                mapping,
+                env_keys_file,
+                effective_key_name,
+                effective_environment,
+                vault_value,
+                vault_preview,
+                local_preview,
+            )
+
+    def _create_missing_key(
+        self,
+        mapping: ServiceMapping,
+        env_keys_file: EnvKeysFile,
+        env_keys_path: Path,
+        effective_key_name: str,
+        effective_environment: str,
+        vault_value: str,
+        vault_preview: str | None,
+    ) -> ServiceSyncResult:
+        """Write the missing local key, or report why verify-only cannot."""
+        if self.mode.verify_only:
+            # Populate ``error`` with a diagnosable reason (#487): the
+            # renderer prints ``error``, and a file that exists but
+            # lacks the key is a different problem than a missing file.
+            if env_keys_file.exists():
+                reason = f"{effective_key_name} missing from {env_keys_path}"
+            else:
+                reason = f"Key file does not exist: {env_keys_path}"
+            return ServiceSyncResult(
+                secret_name=mapping.secret_name,
+                folder_path=mapping.folder_path,
+                environment=mapping.effective_environment,
+                action=SyncAction.ERROR,
+                message=reason,
+                vault_value_preview=vault_preview,
+                error=reason,
+            )
+
+        env_keys_file.write_key(effective_key_name, vault_value, effective_environment)
+        return ServiceSyncResult(
+            secret_name=mapping.secret_name,
+            folder_path=mapping.folder_path,
+            environment=mapping.effective_environment,
+            action=SyncAction.CREATED,
+            message="Created new .env.keys file",
+            vault_value_preview=vault_preview,
+        )
+
+    def _update_mismatched_key(
+        self,
+        mapping: ServiceMapping,
+        env_keys_file: EnvKeysFile,
+        effective_key_name: str,
+        effective_environment: str,
+        vault_value: str,
+        vault_preview: str | None,
+        local_preview: str | None,
+    ) -> ServiceSyncResult:
+        """Update a mismatched local key (verify errors; prompt unless forced)."""
+        if self.mode.verify_only:
+            return ServiceSyncResult(
+                secret_name=mapping.secret_name,
+                folder_path=mapping.folder_path,
+                environment=mapping.effective_environment,
+                action=SyncAction.ERROR,
+                message="Value mismatch detected",
+                vault_value_preview=vault_preview,
+                local_value_preview=local_preview,
+                error="Local value differs from vault",
+            )
+
+        # Check if we should update
+        should_update = self.mode.force_update
+        if not should_update and self.prompt_callback:
+            prompt_msg = (
+                f"Value mismatch for {mapping.secret_name}:\n"
+                f"  Local:  {local_preview}\n"
+                f"  Vault:  {vault_preview}\n"
+                "Update local file with vault value?"
+            )
+            should_update = self.prompt_callback(prompt_msg)
+
+        if should_update:
+            # Create backup before updating
+            backup_path = env_keys_file.create_backup()
+            env_keys_file.write_key(effective_key_name, vault_value, effective_environment)
+            return ServiceSyncResult(
+                secret_name=mapping.secret_name,
+                folder_path=mapping.folder_path,
+                environment=mapping.effective_environment,
+                action=SyncAction.UPDATED,
+                message="Updated with vault value",
+                vault_value_preview=vault_preview,
+                local_value_preview=local_preview,
+                backup_path=backup_path,
+            )
+        else:
+            return ServiceSyncResult(
+                secret_name=mapping.secret_name,
+                folder_path=mapping.folder_path,
+                environment=mapping.effective_environment,
+                action=SyncAction.SKIPPED,
+                message="Update skipped by user",
+                vault_value_preview=vault_preview,
+                local_value_preview=local_preview,
             )
 
     def _verify_secret_usable(self, mapping: ServiceMapping) -> None:
