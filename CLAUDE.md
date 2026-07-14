@@ -86,6 +86,11 @@ issue** — don't silently leave it. Cite `file:line` and evidence in the issue.
 
 These have bitten us in CI or review and aren't obvious from the code alone.
 
+- **`Release-As:` footers must survive the squash.** This repo squashes with the **PR body**
+  as the commit body, so a version override belongs in the PR *body* as a standalone,
+  unwrapped `Release-As: x.y.z` line — hard-wrapping the body mid-sentence (or leaving the
+  footer only in a branch commit message) silently loses it and release-please picks the
+  normal bump instead.
 - **release-please force-pushes its release-PR branches.** On every push to
   `main` it rebases each open `release-please--branches--main--components--*`
   branch onto the new `main` and **regenerates** the CHANGELOG + manifest from
