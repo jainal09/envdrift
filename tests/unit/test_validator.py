@@ -1,7 +1,7 @@
 """Tests for Validator."""
 
 import pytest
-from pydantic import AliasChoices, Field, model_validator
+from pydantic import AliasChoices, AliasPath, Field, ValidationError, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from envdrift.core.parser import EnvParser
@@ -847,6 +847,31 @@ class TestValidatorEnvPrefix:
         assert result.missing_required == set()
         assert result.extra_vars == set()
         assert expected_error in result.type_errors["port"]
+        assert result.valid is False
+
+    def test_mixed_alias_choice_uses_bound_validation_key_for_constraints(self, tmp_path):
+        class Settings(BaseSettings):
+            model_config = SettingsConfigDict(extra="forbid")
+
+            port: int = Field(
+                ge=1,
+                validation_alias=AliasChoices(AliasPath("NESTED_PORT", "value"), "LEGACY_PORT"),
+            )
+
+        env_file = tmp_path / ".env"
+        env_file.write_text("LEGACY_PORT=0\n", encoding="utf-8")
+
+        with pytest.raises(ValidationError) as pydantic_error:
+            Settings(_env_file=env_file)
+        assert pydantic_error.value.errors()[0]["type"] == "greater_than_equal"
+
+        env = EnvParser().parse(env_file)
+        schema = SchemaLoader().extract_metadata(Settings)
+        result = Validator().validate(env, schema, check_encryption=False)
+
+        assert result.missing_required == set()
+        assert result.extra_vars == set()
+        assert "greater than or equal to 1" in result.type_errors["port"]
         assert result.valid is False
 
     def test_alias_choice_later_value_satisfies_optional_field(self, tmp_path):

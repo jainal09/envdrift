@@ -84,6 +84,11 @@ def _normalize_env_name(name: str, case_sensitive: bool) -> str:
     return name if case_sensitive else name.lower()
 
 
+def _field_binding_names(fm: FieldMetadata) -> tuple[str, ...]:
+    """Return declared binding names with legacy metadata fallbacks."""
+    return fm.binding_names or (fm.env_name or fm.alias or fm.name,)
+
+
 def _field_lookup_keys(fm: FieldMetadata, case_sensitive: bool = False) -> tuple[str, ...]:
     """Return every normalized env-var name a schema field can bind to.
 
@@ -91,8 +96,23 @@ def _field_lookup_keys(fm: FieldMetadata, case_sensitive: bool = False) -> tuple
     first-match-wins order. The legacy single-name fields preserve manually
     constructed metadata.
     """
-    binding_names = fm.binding_names or (fm.env_name or fm.alias or fm.name,)
-    return tuple(_normalize_env_name(name, case_sensitive) for name in binding_names)
+    return tuple(_normalize_env_name(name, case_sensitive) for name in _field_binding_names(fm))
+
+
+def _bound_env_binding(
+    fm: FieldMetadata,
+    env_by_name: dict[str, EnvVar],
+    case_sensitive: bool = False,
+    ignore_empty: bool = False,
+) -> tuple[str, EnvVar] | None:
+    """Return the declared name and value of the first matching candidate."""
+    for binding_name in _field_binding_names(fm):
+        lookup_key = _normalize_env_name(binding_name, case_sensitive)
+        env_var = env_by_name.get(lookup_key)
+        if env_var is None or (ignore_empty and env_var.value == ""):
+            continue
+        return binding_name, env_var
+    return None
 
 
 def _bound_env_var(
@@ -102,12 +122,8 @@ def _bound_env_var(
     ignore_empty: bool = False,
 ) -> EnvVar | None:
     """Return the first candidate value pydantic-settings would bind."""
-    for lookup_key in _field_lookup_keys(fm, case_sensitive):
-        env_var = env_by_name.get(lookup_key)
-        if env_var is None or (ignore_empty and env_var.value == ""):
-            continue
-        return env_var
-    return None
+    binding = _bound_env_binding(fm, env_by_name, case_sensitive, ignore_empty)
+    return binding[1] if binding is not None else None
 
 
 def _warn_leading_bom(env_file: EnvFile, result: ValidationResult) -> None:
@@ -200,14 +216,16 @@ def _collect_constraint_values(
     """
     values: dict[str, Any] = {}
     for field_name, field_meta in schema.fields.items():
-        env_var = _bound_env_var(
+        binding = _bound_env_binding(
             field_meta,
             env_by_name,
             schema.case_sensitive,
             ignore_empty=schema.env_ignore_empty,
         )
-        if env_var is None:
+        if binding is None:
             continue
+        binding_name, env_var = binding
+        model_input_key = binding_name if field_meta.alias is not None else field_name
         value = env_var.value
         if value.startswith(("encrypted:", "ENC[")):
             continue
@@ -220,12 +238,12 @@ def _collect_constraint_values(
             # complex fields with invalid JSON were already reported by
             # the base check, so they are simply not re-fed here.
             try:
-                values[field_meta.alias or field_name] = json.loads(value)
+                values[model_input_key] = json.loads(value)
             except ValueError:
                 if allow_parse_failure:
-                    values[field_meta.alias or field_name] = value
+                    values[model_input_key] = value
         else:
-            values[field_meta.alias or field_name] = value
+            values[model_input_key] = value
     return values
 
 
@@ -250,7 +268,12 @@ def _record_constraint_errors(
     schema: SchemaMetadata, exc: ValidationError, result: ValidationResult
 ) -> None:
     """Map a constraint-pass ValidationError onto field or model type_errors."""
-    alias_to_field = {(fm.alias or name): name for name, fm in schema.fields.items()}
+    alias_to_field = {
+        binding_name: name
+        for name, fm in schema.fields.items()
+        if fm.alias is not None
+        for binding_name in _field_binding_names(fm)
+    }
     for err in exc.errors():
         # missing/extra are reported via missing_required / extra_vars;
         # don't override a base-type message the heuristic already set.
