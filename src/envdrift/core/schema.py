@@ -25,21 +25,36 @@ _PLAIN_SCALARS = (str, int, float, bool)
 
 def _effective_env_binding(
     field_name: str, field_info: FieldInfo, raw_env_prefix: Any
-) -> tuple[str | None, str]:
-    """Return the model input alias and effective environment binding."""
+) -> tuple[str | None, tuple[str, ...]]:
+    """Return the model input alias and ordered environment bindings."""
     alias_candidate = field_info.validation_alias or field_info.alias
-    if isinstance(alias_candidate, AliasChoices) and alias_candidate.choices:
-        # FieldMetadata represents one binding today. Preserve Pydantic's
-        # first-choice order; #673 tracks support for every candidate.
-        alias_candidate = alias_candidate.choices[0]
-    if isinstance(alias_candidate, AliasPath) and alias_candidate.path:
-        alias_candidate = alias_candidate.path[0]
 
-    if isinstance(alias_candidate, str):
-        return alias_candidate, alias_candidate
+    if isinstance(alias_candidate, AliasChoices):
+        binding_names = tuple(
+            binding_name
+            for choice in alias_candidate.choices
+            if (binding_name := _alias_binding_name(choice)) is not None
+        )
+        if binding_names:
+            return binding_names[0], binding_names
+
+    binding_name = _alias_binding_name(alias_candidate)
+    if binding_name is not None:
+        return binding_name, (binding_name,)
 
     env_prefix = raw_env_prefix if isinstance(raw_env_prefix, str) else ""
-    return None, f"{env_prefix}{field_name}"
+    return None, (f"{env_prefix}{field_name}",)
+
+
+def _alias_binding_name(alias: Any) -> str | None:
+    """Return the environment name represented by one alias candidate."""
+    if isinstance(alias, str):
+        return alias
+    if isinstance(alias, AliasPath) and alias.path:
+        first_component = alias.path[0]
+        if isinstance(first_component, str):
+            return first_component
+    return None
 
 
 @dataclass
@@ -60,7 +75,13 @@ class FieldMetadata:
     # ``env_prefix``; explicit aliases bypass the prefix, matching
     # pydantic-settings. Kept separate from ``alias`` because model validation
     # expects field names/aliases, never prefixed environment names (#669).
+    # For a multi-alias field this remains the first candidate for backward
+    # compatibility; ``binding_names`` contains the complete ordered set.
     env_name: str | None = None
+    # Every environment name the field can bind to, in pydantic-settings'
+    # first-match-wins order. Plain fields have one prefixed name; explicit
+    # aliases, including every AliasChoices candidate, bypass ``env_prefix``.
+    binding_names: tuple[str, ...] = ()
     # The field's ``FieldInfo.metadata`` — pydantic strips ``Annotated[...]``
     # extras (constraint markers, ``pydantic.Json``, ...) into it, and the
     # env-source complexity/coercion decision needs it: a ``Json`` marker makes
@@ -343,7 +364,9 @@ class SchemaLoader:
 
             # Keep model-validation input separate from environment binding:
             # plain fields add env_prefix while explicit aliases do not.
-            field_alias, env_name = _effective_env_binding(field_name, field_info, raw_env_prefix)
+            field_alias, binding_names = _effective_env_binding(
+                field_name, field_info, raw_env_prefix
+            )
 
             schema.fields[field_name] = FieldMetadata(
                 name=field_name,
@@ -354,7 +377,8 @@ class SchemaLoader:
                 field_type=annotation if annotation else type(None),
                 annotation=type_str,
                 alias=field_alias,
-                env_name=env_name,
+                env_name=binding_names[0],
+                binding_names=binding_names,
                 type_metadata=tuple(field_info.metadata),
             )
 

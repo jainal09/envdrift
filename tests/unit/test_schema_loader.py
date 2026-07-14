@@ -7,7 +7,7 @@ from types import SimpleNamespace
 from typing import cast
 
 import pytest
-from pydantic import AliasPath, Field
+from pydantic import AliasChoices, AliasPath, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from envdrift.core.schema import FieldMetadata, SchemaLoader, SchemaLoadError, SchemaMetadata
@@ -161,6 +161,25 @@ def test_extract_metadata_alias_path_uses_first_component_without_prefix():
 
     assert schema.fields["api_key"].alias == "TOKENS"
     assert schema.fields["api_key"].env_name == "TOKENS"
+
+
+def test_extract_metadata_records_ordered_environment_binding_names():
+    """Plain, aliased, and multi-alias fields expose their real env candidates."""
+
+    class Settings(BaseSettings):
+        model_config = SettingsConfigDict(env_prefix="MYAPP_")
+
+        plain: str
+        token: str = Field(validation_alias="AUTH_TOKEN")
+        api_key: str = Field(validation_alias=AliasChoices("API_KEY", "LEGACY_API_KEY"))
+
+    schema = SchemaLoader().extract_metadata(Settings)
+
+    assert schema.fields["plain"].binding_names == ("MYAPP_plain",)
+    assert schema.fields["token"].binding_names == ("AUTH_TOKEN",)
+    assert schema.fields["api_key"].binding_names == ("API_KEY", "LEGACY_API_KEY")
+    assert schema.fields["api_key"].alias == "API_KEY"
+    assert schema.fields["api_key"].env_name == "API_KEY"
 
 
 def test_get_schema_metadata_func_missing_module():
