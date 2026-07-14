@@ -10,6 +10,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, cast
 
+from pydantic import AliasChoices, AliasPath
+from pydantic.fields import FieldInfo
 from pydantic_settings import BaseSettings
 
 # Environment variable to signal schema extraction mode
@@ -19,6 +21,23 @@ ENVDRIFT_SCHEMA_EXTRACTION = "ENVDRIFT_SCHEMA_EXTRACTION"
 # a schema using only these (with no constraints/validators) needs no real
 # model_validate pass.
 _PLAIN_SCALARS = (str, int, float, bool)
+
+
+def _effective_env_binding(
+    field_name: str, field_info: FieldInfo, raw_env_prefix: Any
+) -> tuple[str | None, str]:
+    """Return the model input alias and effective environment binding."""
+    alias_candidate = field_info.validation_alias or field_info.alias
+    if isinstance(alias_candidate, AliasChoices):
+        # FieldMetadata represents one binding today. Preserve Pydantic's
+        # first-choice order; #673 tracks support for every candidate.
+        alias_candidate = alias_candidate.choices[0] if alias_candidate.choices else None
+    if isinstance(alias_candidate, AliasPath):
+        alias_candidate = alias_candidate.path[0] if alias_candidate.path else None
+
+    field_alias = alias_candidate if isinstance(alias_candidate, str) else None
+    env_prefix = raw_env_prefix if isinstance(raw_env_prefix, str) else ""
+    return field_alias, field_alias or f"{env_prefix}{field_name}"
 
 
 @dataclass
@@ -258,11 +277,16 @@ class SchemaLoader:
         model_config = getattr(settings_cls, "model_config", {})
         if isinstance(model_config, dict):
             extra = model_config.get("extra", "ignore")
+            raw_env_prefix = model_config.get("env_prefix", "")
+            case_sensitive = model_config.get("case_sensitive", False)
         else:
             # SettingsConfigDict object
             extra = getattr(model_config, "extra", "ignore")
+            raw_env_prefix = getattr(model_config, "env_prefix", "")
+            case_sensitive = getattr(model_config, "case_sensitive", False)
 
         schema.extra_policy = extra if extra else "ignore"
+        schema.case_sensitive = bool(case_sensitive)
 
         # env_ignore_empty changes what the env source does with empty values
         # (drop vs pass through), which changes what validation must check (#472).
@@ -271,18 +295,6 @@ class SchemaLoader:
         else:
             ignore_empty = getattr(model_config, "env_ignore_empty", False)
         schema.env_ignore_empty = bool(ignore_empty)
-
-        # The prefix is part of the environment-source binding for plain fields,
-        # while an explicit alias bypasses it. Matching folds the resulting name
-        # only when the model is case-insensitive (#669).
-        if isinstance(model_config, dict):
-            raw_env_prefix = model_config.get("env_prefix", "")
-            case_sensitive = model_config.get("case_sensitive", False)
-        else:
-            raw_env_prefix = getattr(model_config, "env_prefix", "")
-            case_sensitive = getattr(model_config, "case_sensitive", False)
-        env_prefix = raw_env_prefix if isinstance(raw_env_prefix, str) else ""
-        schema.case_sensitive = bool(case_sensitive)
 
         # Track whether any field needs real Pydantic validation (a constraint, a
         # non-plain-scalar type such as Literal/EmailStr/a nested model, or a
@@ -327,11 +339,9 @@ class SchemaLoader:
             else:
                 type_str = "Any"
 
-            # The model-validation input alias. The environment binding is kept
-            # separately because plain fields add env_prefix while aliases do not.
-            field_alias = field_info.validation_alias or field_info.alias
-            field_alias = field_alias if isinstance(field_alias, str) else None
-            env_name = field_alias or f"{env_prefix}{field_name}"
+            # Keep model-validation input separate from environment binding:
+            # plain fields add env_prefix while explicit aliases do not.
+            field_alias, env_name = _effective_env_binding(field_name, field_info, raw_env_prefix)
 
             schema.fields[field_name] = FieldMetadata(
                 name=field_name,

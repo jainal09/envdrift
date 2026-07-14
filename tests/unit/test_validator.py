@@ -1,7 +1,6 @@
 """Tests for Validator."""
 
-import pytest
-from pydantic import Field, model_validator
+from pydantic import AliasChoices, Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from envdrift.core.parser import EnvParser
@@ -426,25 +425,28 @@ NEW_FEATURE_FLAG=enabled
         assert result.valid is True
 
     def test_constraint_pass_survives_non_validation_error(self, tmp_path):
-        """A model_post_init raising a non-ValidationError must not crash
-        validate — the constraint pass swallows it (#443 review)."""
-        from pydantic import Field
-        from pydantic_settings import BaseSettings
+        """An unexpected model error warns without echoing setting values."""
+        sentinel = "do-not-echo-" + "sensitive-value"
 
         class Settings(BaseSettings):
-            PORT: int = Field(ge=1)
+            api_key: str
 
-            def model_post_init(self, __context: object) -> None:
-                raise RuntimeError("boom")
+            @model_validator(mode="after")
+            def reject(self):
+                raise RuntimeError(f"bad key: {self.api_key}")
 
         env_file = tmp_path / ".env"
-        env_file.write_text("PORT=8080\n", encoding="utf-8")
+        env_file.write_text(f"API_KEY={sentinel}\n", encoding="utf-8")
 
         env = EnvParser().parse(env_file)
         schema = SchemaLoader().extract_metadata(Settings)
         result = Validator().validate(env, schema, check_encryption=False)
 
         assert result.valid is True
+        assert sentinel not in "\n".join(result.warnings)
+        assert result.warnings == [
+            "Model-level validation raised RuntimeError; re-run the model directly for details"
+        ]
 
     def test_validate_constraint_pass_keeps_base_type_message(self, tmp_path):
         """A field failing both the base-type check and Pydantic keeps the
@@ -637,23 +639,6 @@ class TestValidatorAliasMatching:
         assert result.valid is False
         assert "X_API_KEY" in result.missing_required
 
-    def test_aliased_sensitive_field_gets_no_contradictory_warning(self, tmp_path):
-        """Sensitive-warning suppression uses the effective env binding (#658)."""
-
-        class AliasedSensitiveSettings(BaseSettings):
-            api_key: str = Field(alias="X_API_KEY", json_schema_extra={"sensitive": True})
-
-        secret = "sk-" + "live-abcdef1234567890"
-        env_file = tmp_path / ".env"
-        env_file.write_text(f"X_API_KEY={secret}\n", encoding="utf-8")
-        env = EnvParser().parse(env_file)
-        schema = SchemaLoader().extract_metadata(AliasedSensitiveSettings)
-
-        result = Validator().validate(env, schema)
-
-        assert "api_key" in result.unencrypted_secrets
-        assert not [warning for warning in result.warnings if "not marked sensitive" in warning]
-
 
 class TestValidatorEnvPrefix:
     """#669: validation mirrors pydantic-settings ``env_prefix`` bindings."""
@@ -719,6 +704,50 @@ class TestValidatorEnvPrefix:
         assert result.extra_vars == set()
         assert result.valid is True
 
+    def test_alias_choices_first_choice_binds_without_env_prefix(self, tmp_path):
+        class Settings(BaseSettings):
+            model_config = SettingsConfigDict(extra="forbid")
+
+            api_key: str = Field(validation_alias=AliasChoices("API_KEY", "LEGACY_API_KEY"))
+
+        env_file = tmp_path / ".env"
+        env_file.write_text("API_KEY=value\n", encoding="utf-8")
+        env = EnvParser().parse(env_file)
+        schema = SchemaLoader().extract_metadata(Settings)
+
+        result = Validator().validate(env, schema, check_encryption=False)
+
+        assert schema.fields["api_key"].alias == "API_KEY"
+        assert schema.fields["api_key"].env_name == "API_KEY"
+        assert result.missing_required == set()
+        assert result.extra_vars == set()
+        assert result.valid is True
+
+    def test_alias_choices_first_choice_bypasses_prefix_and_suppresses_warning(self, tmp_path):
+        class Settings(BaseSettings):
+            model_config = SettingsConfigDict(env_prefix="MYAPP_", extra="forbid")
+
+            api_key: str = Field(
+                validation_alias=AliasChoices("API_KEY", "LEGACY_API_KEY"),
+                json_schema_extra={"sensitive": True},
+            )
+
+        secret = "sk-" + "live-abcdef1234567890"
+        env_file = tmp_path / ".env"
+        env_file.write_text(f"API_KEY={secret}\n", encoding="utf-8")
+        env = EnvParser().parse(env_file)
+        schema = SchemaLoader().extract_metadata(Settings)
+
+        result = Validator().validate(env, schema)
+
+        assert schema.fields["api_key"].alias == "API_KEY"
+        assert schema.fields["api_key"].env_name == "API_KEY"
+        assert result.missing_required == set()
+        assert result.extra_vars == set()
+        assert result.unencrypted_secrets == {"api_key"}
+        assert not [warning for warning in result.warnings if "not marked sensitive" in warning]
+        assert result.valid is True
+
     def test_prefixed_empty_required_field_respects_env_ignore_empty(self, tmp_path):
         class Settings(BaseSettings):
             model_config = SettingsConfigDict(
@@ -767,18 +796,8 @@ class TestValidatorEnvPrefix:
 
 
 class TestKnownValidatorGaps:
-    """Confirmed pre-existing bug, asserted at its correct behavior (xfail).
+    """Regression tests for previously confirmed validator gaps."""
 
-    It reproduces identically on pre-refactor main (de834a7) and is not a
-    regression from the #650 decomposition, which is pure code motion. Flip
-    the xfail to a plain assertion in the PR that fixes its issue.
-    """
-
-    @pytest.mark.xfail(
-        strict=False,
-        reason="model-level validation failures map to loc=() and are dropped, so "
-        "validate() reports valid=True for a config the real app crashes on (see #657)",
-    )
     def test_model_level_validator_rejection_fails_validation(self, tmp_path):
         """A @model_validator rejection must surface as an error, not a false PASS."""
 
@@ -797,4 +816,22 @@ class TestKnownValidatorGaps:
         result = Validator().validate(env, schema, check_encryption=False)
 
         assert result.valid is False
-        assert result.type_errors  # the model-level rejection must be reported
+        assert result.type_errors.keys() == {"__model__"}
+        assert "model-level rejection" in result.type_errors["__model__"]
+        assert Validator().generate_fix_template(result, schema) == ""
+
+    def test_aliased_sensitive_field_gets_no_contradictory_warning(self, tmp_path):
+        """A field marked sensitive must not also warn 'not marked sensitive' via its alias."""
+
+        class AliasedSensitiveSettings(BaseSettings):
+            api_key: str = Field(alias="X_API_KEY", json_schema_extra={"sensitive": True})
+
+        env_file = tmp_path / ".env"
+        env_file.write_text("X_API_KEY=sk-live-abcdef1234567890\n", encoding="utf-8")
+        env = EnvParser().parse(env_file)
+        schema = SchemaLoader().extract_metadata(AliasedSensitiveSettings)
+
+        result = Validator().validate(env, schema)
+
+        assert "api_key" in result.unencrypted_secrets  # correctly detected as sensitive
+        assert not [w for w in result.warnings if "not marked sensitive" in w]
