@@ -1,6 +1,5 @@
 """Tests for Validator."""
 
-import pytest
 from pydantic import Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -426,25 +425,28 @@ NEW_FEATURE_FLAG=enabled
         assert result.valid is True
 
     def test_constraint_pass_survives_non_validation_error(self, tmp_path):
-        """A model_post_init raising a non-ValidationError must not crash
-        validate — the constraint pass swallows it (#443 review)."""
-        from pydantic import Field
-        from pydantic_settings import BaseSettings
+        """An unexpected model error warns without echoing setting values."""
+        sentinel = "do-not-echo-" + "sensitive-value"
 
         class Settings(BaseSettings):
-            PORT: int = Field(ge=1)
+            api_key: str
 
-            def model_post_init(self, __context: object) -> None:
-                raise RuntimeError("boom")
+            @model_validator(mode="after")
+            def reject(self):
+                raise RuntimeError(f"bad key: {self.api_key}")
 
         env_file = tmp_path / ".env"
-        env_file.write_text("PORT=8080\n", encoding="utf-8")
+        env_file.write_text(f"API_KEY={sentinel}\n", encoding="utf-8")
 
         env = EnvParser().parse(env_file)
         schema = SchemaLoader().extract_metadata(Settings)
         result = Validator().validate(env, schema, check_encryption=False)
 
         assert result.valid is True
+        assert sentinel not in "\n".join(result.warnings)
+        assert result.warnings == [
+            "Model-level validation raised RuntimeError; re-run the model directly for details"
+        ]
 
     def test_validate_constraint_pass_keeps_base_type_message(self, tmp_path):
         """A field failing both the base-type check and Pydantic keeps the
@@ -639,18 +641,8 @@ class TestValidatorAliasMatching:
 
 
 class TestKnownValidatorGaps:
-    """Confirmed pre-existing bugs, asserted at their correct behavior (xfail).
+    """Regression tests for previously confirmed validator gaps."""
 
-    Both reproduce identically on pre-refactor main (de834a7) — they are NOT
-    regressions from the #650 decomposition, which is pure code motion. Flip
-    each xfail to a plain assertion in the PR that fixes its issue.
-    """
-
-    @pytest.mark.xfail(
-        strict=False,
-        reason="model-level validation failures map to loc=() and are dropped, so "
-        "validate() reports valid=True for a config the real app crashes on (see #657)",
-    )
     def test_model_level_validator_rejection_fails_validation(self, tmp_path):
         """A @model_validator rejection must surface as an error, not a false PASS."""
 
@@ -669,13 +661,10 @@ class TestKnownValidatorGaps:
         result = Validator().validate(env, schema, check_encryption=False)
 
         assert result.valid is False
-        assert result.type_errors  # the model-level rejection must be reported
+        assert result.type_errors.keys() == {"__model__"}
+        assert "model-level rejection" in result.type_errors["__model__"]
+        assert Validator().generate_fix_template(result, schema) == ""
 
-    @pytest.mark.xfail(
-        strict=False,
-        reason="suspicious-plaintext suppression compares the env alias against attribute "
-        "names, so an aliased sensitive field gets contradictory warnings (see #658)",
-    )
     def test_aliased_sensitive_field_gets_no_contradictory_warning(self, tmp_path):
         """A field marked sensitive must not also warn 'not marked sensitive' via its alias."""
 

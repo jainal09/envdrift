@@ -14,7 +14,7 @@ from rich.text import Text
 from envdrift.core.diff import DiffResult, DiffType
 from envdrift.core.encryption import EncryptionReport
 from envdrift.core.schema import SchemaMetadata
-from envdrift.core.validator import ValidationResult
+from envdrift.core.validator import MODEL_ERROR_KEY, ValidationResult
 
 if TYPE_CHECKING:
     from envdrift.sync.result import ServiceSyncResult, SyncResult
@@ -112,7 +112,8 @@ def print_validation_result(
     if result.type_errors:
         console.print("[bold red]TYPE ERRORS:[/bold red]")
         for var, error in sorted(result.type_errors.items()):
-            console.print(f"  [red]*[/red] {var}: {error}")
+            label = "Model validation" if var == MODEL_ERROR_KEY else var
+            console.print(f"  [red]*[/red] {label}: {error}")
         console.print()
 
     # Warnings

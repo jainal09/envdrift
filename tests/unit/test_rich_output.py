@@ -100,6 +100,27 @@ class TestConsole:
 class TestValidationOutput:
     """Tests for validation rendering."""
 
+    def test_model_level_error_uses_readable_label(self):
+        """The internal model-error key is not exposed as a field name."""
+        from rich.console import Console
+
+        from envdrift.output import rich as rich_module
+
+        result = ValidationResult(
+            valid=False,
+            type_errors={"__model__": "Value error, model-level rejection"},
+        )
+        schema = SchemaMetadata(class_name="Settings", module_path="app.config")
+        buf = io.StringIO()
+        capture = Console(file=buf, force_terminal=False, no_color=True, width=200)
+
+        with patch.object(rich_module, "console", capture):
+            rich_module.print_validation_result(result, Path(".env"), schema)
+
+        output = buf.getvalue()
+        assert "Model validation: Value error, model-level rejection" in output
+        assert "__model__" not in output
+
     def test_print_validation_result_failure_verbose(self):
         """Render validation failures with verbose sections."""
 
