@@ -32,7 +32,7 @@ import tempfile
 import time as time_module
 import tomllib
 from pathlib import Path
-from typing import Annotated
+from typing import Annotated, NamedTuple
 
 import typer
 from rich.console import Console
@@ -41,7 +41,14 @@ from rich.markup import escape
 from rich.spinner import Spinner
 from rich.text import Text
 
-from envdrift.config import ConfigNotFoundError, EnvdriftConfig, load_config
+from envdrift.config import (
+    ConfigNotFoundError,
+    EnvdriftConfig,
+    load_config,
+)
+from envdrift.config import (
+    GuardConfig as GuardFileConfig,
+)
 from envdrift.env_files import resolve_custom_env_file
 from envdrift.scanner.base import (
     EXIT_OPERATIONAL_ERROR,
@@ -313,6 +320,654 @@ def _remap_finding_paths(
     )
 
 
+def _warn_sarif_overrides_json(json_output: bool, sarif: bool) -> None:
+    """Warn when ``--json`` is ignored because ``--sarif`` was also passed."""
+    if sarif and json_output:
+        # SARIF takes precedence over JSON; warn on stderr so the choice is not
+        # silent, without contaminating the (SARIF) stdout (#443 #31).
+        print(
+            "[WARN] --json is ignored because --sarif was also passed "
+            "(SARIF output takes precedence).",
+            file=sys.stderr,
+        )
+
+
+def _git_toplevel() -> Path:
+    """Return the git repository root, falling back to cwd if unavailable.
+
+    ``git diff`` emits paths relative to the repository root, so returned
+    paths must be resolved against the toplevel (not the process cwd) or
+    every file is dropped by the ``.exists()`` filter when guard is invoked
+    from a subdirectory.
+    """
+    import subprocess  # nosec B404
+
+    try:
+        toplevel = subprocess.run(  # nosec B603, B607
+            ["git", "rev-parse", "--show-toplevel"],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=10,
+        )
+        if toplevel.returncode == 0 and toplevel.stdout.strip():
+            return Path(toplevel.stdout.strip())
+    except (subprocess.TimeoutExpired, FileNotFoundError):
+        pass
+    return Path.cwd()
+
+
+def _collect_staged_targets(
+    json_output: bool, sarif: bool
+) -> tuple[tempfile.TemporaryDirectory, list[Path], dict[Path, Path]]:
+    """Collect the ``--staged`` (pre-commit) scan targets from the git index.
+
+    Returns the staged-mirror temp dir handle (the caller cleans it up), the
+    mirror paths to scan, and the mirror-path -> display-path map used to
+    rewrite finding locations after the scan (#476). Exits 0 when nothing is
+    staged and with the operational exit code when git fails.
+    """
+    import subprocess  # nosec B404
+
+    try:
+        # ``-z`` + a binary pipe: git prints staged paths NUL-terminated and
+        # verbatim (no ``core.quotepath`` C-quoting of spaces/non-ASCII), and
+        # ``os.fsdecode`` round-trips the raw filesystem bytes so the decoded
+        # path still resolves under ``git show :<path>``. A text pipe with
+        # ``split("\n")`` mis-parsed any name git would quote (spaces, quotes,
+        # non-ASCII) — the same class #531 fixed for check-ignore.
+        result = subprocess.run(  # nosec B603, B607
+            ["git", "diff", "--cached", "-z", "--name-only", "--diff-filter=ACMR"],
+            capture_output=True,
+            timeout=10,
+        )
+        # A failing ``git diff --cached`` (e.g. not a git repository) is an
+        # error, not "nothing staged": conflating the two turned a broken
+        # pre-commit gate into a green pass (#476).
+        if result.returncode != 0:
+            detail = result.stderr.decode("utf-8", "replace").strip() or "unknown git error"
+            _emit_error(
+                json_output,
+                sarif,
+                f"--staged could not list staged files (git diff --cached failed): {detail}",
+            )
+            # An operational git failure, not a critical finding: exit 6 so
+            # an exit-code-only pipeline never reads it as a leak (exit 1 is
+            # EXIT_CRITICAL_FINDINGS under the #526 contract).
+            raise typer.Exit(code=EXIT_OPERATIONAL_ERROR)
+        staged_files = [os.fsdecode(p) for p in result.stdout.split(b"\0") if p]
+        if not staged_files:
+            _emit_empty_or_prose(json_output, sarif, _NO_STAGED)
+            raise typer.Exit(code=0)
+        # Scan the staged *index blobs*, not the working-tree copies: the
+        # blob is what the commit ships, and the two can differ (#476).
+        # Findings are remapped to cwd-relative repo paths after the scan
+        # so output and path-based config matching are unchanged.
+        staged_tmpdir, paths, staged_display_paths = _materialize_staged_index(
+            staged_files, _git_toplevel()
+        )
+        if not paths:
+            staged_tmpdir.cleanup()
+            _emit_error(
+                json_output,
+                sarif,
+                "--staged could not read any staged file content from the git index.",
+            )
+            # Operational failure (no readable index blobs), not a finding.
+            raise typer.Exit(code=EXIT_OPERATIONAL_ERROR)
+        _emit_progress(json_output, sarif, f"[dim]Scanning {len(paths)} staged file(s)...[/dim]")
+        return staged_tmpdir, paths, staged_display_paths
+    except subprocess.TimeoutExpired as err:
+        # Route through _emit_error so --json/--sarif stdout stays a
+        # parseable document on git failures too (#478 review).
+        _emit_error(json_output, sarif, "Git command timed out")
+        raise typer.Exit(code=EXIT_OPERATIONAL_ERROR) from err
+    except FileNotFoundError as err:
+        _emit_error(json_output, sarif, "Git not found. --staged requires git.")
+        raise typer.Exit(code=EXIT_OPERATIONAL_ERROR) from err
+
+
+def _collect_pr_base_targets(pr_base: str, json_output: bool, sarif: bool) -> list[Path]:
+    """Collect files changed since the ``--pr-base`` ref as scan targets.
+
+    Paths are returned cwd-relative so findings display short filenames and
+    path-based config matching is stable. Exits 0 (emitting an empty-findings
+    document in machine modes) when the diff is empty, and with the
+    operational exit code when the base ref cannot be diffed or git is
+    unavailable (#476, #526).
+    """
+    import subprocess  # nosec B404
+
+    try:
+        # Fetch the base branch first to ensure it's up to date.
+        # Strip only a leading "origin/" prefix; a global replace would
+        # corrupt refs that contain "origin/" elsewhere (e.g.
+        # "release/origin-mirror").
+        base_ref = pr_base.removeprefix("origin/")
+        if not base_ref:
+            base_ref = pr_base
+        fetch_result = subprocess.run(  # nosec B603, B607
+            ["git", "fetch", "origin", base_ref],
+            capture_output=True,
+            timeout=30,
+        )
+        if fetch_result.returncode != 0:
+            # Surface fetch failures unconditionally (#476): they used to be
+            # verbose-gated and swallowed in machine modes, hiding the usual
+            # root cause of an unresolvable base ref.
+            _warn_stderr(f"could not fetch '{base_ref}' from origin; using local refs")
+        # Get all files changed between base and HEAD
+        result = subprocess.run(  # nosec B603, B607
+            ["git", "diff", "--name-only", "--diff-filter=ACMR", f"{pr_base}...HEAD"],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=10,
+        )
+        # rc != 0 means git itself failed (unknown revision, shallow clone
+        # missing the base, ...) — distinct from a successful empty diff.
+        # Conflating the two passed the CI secret gate green on a typo'd or
+        # unfetched base ref (#476).
+        if result.returncode != 0:
+            stderr_lines = (result.stderr or "").strip().splitlines()
+            reason = stderr_lines[0] if stderr_lines else "unknown git error"
+            _emit_error(
+                json_output,
+                sarif,
+                f"--pr-base '{pr_base}' could not be diffed against: {reason} "
+                f"Fetch or fix the base ref (e.g. 'git fetch origin {base_ref}').",
+            )
+            # An unresolvable base ref is an operational failure, not a
+            # critical finding: exit 6, never 1 (#526 contract).
+            raise typer.Exit(code=EXIT_OPERATIONAL_ERROR)
+        if result.stdout.strip():
+            repo_root = _git_toplevel()
+            candidates = [repo_root / f for f in result.stdout.strip().split("\n") if f]
+            # Resolve against the repo root for existence, scan with
+            # cwd-relative paths so findings display the short relative
+            # filename (a long absolute path gets truncated by the Rich
+            # panel) and path-based config matching behaves as it did from
+            # the repo root.
+            paths = [Path(os.path.relpath(p, Path.cwd())) for p in candidates if p.exists()]
+            if not paths:
+                _emit_empty_or_prose(json_output, sarif, _NO_PR_CHANGES)
+                raise typer.Exit(code=0)
+            _emit_progress(
+                json_output,
+                sarif,
+                f"[bold]Scanning {len(paths)} file(s) changed since {pr_base}...[/bold]",
+            )
+            return paths
+        else:
+            _emit_empty_or_prose(json_output, sarif, _NO_PR_CHANGES)
+            raise typer.Exit(code=0)
+    except subprocess.TimeoutExpired as err:
+        # Same machine-output contract as the --staged branch (#478 review).
+        _emit_error(json_output, sarif, "Git command timed out")
+        raise typer.Exit(code=EXIT_OPERATIONAL_ERROR) from err
+    except FileNotFoundError as err:
+        _emit_error(json_output, sarif, "Git not found. --pr-base requires git.")
+        raise typer.Exit(code=EXIT_OPERATIONAL_ERROR) from err
+
+
+def _validate_target_paths(paths: list[Path] | None, json_output: bool, sarif: bool) -> list[Path]:
+    """Default to the current directory and require every scan path to exist.
+
+    A nonexistent path is an operational error (exit 6), reported as a clean
+    error document in machine modes.
+    """
+    if not paths:
+        paths = [Path.cwd()]
+
+    # Validate paths exist
+    for path in paths:
+        if not path.exists():
+            _emit_error(json_output, sarif, f"Path not found: {path}")
+            raise typer.Exit(code=EXIT_OPERATIONAL_ERROR)
+    return paths
+
+
+def _resolve_fail_severity(
+    fail_on: str | None, guard_cfg: GuardFileConfig, json_output: bool, sarif: bool
+) -> FindingSeverity:
+    """Resolve the minimum severity that fails the run (CLI overrides config).
+
+    An unrecognized severity name is an operational error, emitted as a clean
+    error document in machine modes (#28).
+    """
+    # Determine fail_on severity (CLI overrides config)
+    fail_on_value = fail_on or guard_cfg.fail_on_severity or "high"
+    try:
+        return FindingSeverity(fail_on_value.lower())
+    except ValueError as e:
+        # Route through _emit_error so --json/--sarif get a clean error document
+        # instead of Rich-markup human prose contaminating machine stdout (#28).
+        _emit_error(
+            json_output,
+            sarif,
+            f"Invalid severity '{fail_on_value}'. Valid options: critical, high, medium, low",
+        )
+        raise typer.Exit(code=EXIT_OPERATIONAL_ERROR) from e
+
+
+class _ScannerSelection(NamedTuple):
+    """Resolved scanner enablement plus the explicitly selected scanner names."""
+
+    use_gitleaks: bool
+    use_trufflehog: bool
+    use_detect_secrets: bool
+    use_kingfisher: bool
+    use_git_secrets: bool
+    use_talisman: bool
+    use_trivy: bool
+    use_infisical: bool
+    explicit_scanners: list[str]
+
+
+def _resolve_scanner_selection(
+    *,
+    gitleaks: bool | None,
+    trufflehog: bool | None,
+    detect_secrets: bool | None,
+    kingfisher: bool | None,
+    git_secrets: bool | None,
+    talisman: bool | None,
+    trivy: bool | None,
+    infisical: bool | None,
+    native_only: bool,
+    guard_cfg: GuardFileConfig,
+) -> _ScannerSelection:
+    """Decide which scanners run (CLI flag > config > built-in default set).
+
+    Also records which scanners were EXPLICITLY selected — the engine retains
+    those fail-closed when their binary is missing (#641). ``--native-only``
+    disables every external scanner.
+    """
+    # Determine which scanners to use
+    # CLI flags override config file settings when provided
+    use_gitleaks_final = gitleaks if gitleaks is not None else "gitleaks" in guard_cfg.scanners
+    use_trufflehog_final = (
+        trufflehog if trufflehog is not None else "trufflehog" in guard_cfg.scanners
+    )
+    use_detect_secrets_final = (
+        detect_secrets if detect_secrets is not None else "detect-secrets" in guard_cfg.scanners
+    )
+    use_kingfisher_final = (
+        kingfisher if kingfisher is not None else "kingfisher" in guard_cfg.scanners
+    )
+    use_git_secrets_final = (
+        git_secrets if git_secrets is not None else "git-secrets" in guard_cfg.scanners
+    )
+    use_talisman_final = talisman if talisman is not None else "talisman" in guard_cfg.scanners
+    use_trivy_final = trivy if trivy is not None else "trivy" in guard_cfg.scanners
+    use_infisical_final = infisical if infisical is not None else "infisical" in guard_cfg.scanners
+
+    # A scanner is EXPLICITLY selected when its CLI flag was passed or the
+    # config file itself lists it under [guard] scanners — not when it is
+    # active only via the built-in default set. Explicit scanners are retained
+    # fail-closed by the engine (missing binary + no auto-install => recorded
+    # error, exit 5); default-set ones are skipped with a visible warning so a
+    # missing optional binary cannot fail a run nobody asked it to gate (#641).
+    explicit_scanners = [
+        name
+        for flag, name in (
+            (gitleaks, "gitleaks"),
+            (trufflehog, "trufflehog"),
+            (detect_secrets, "detect-secrets"),
+            (kingfisher, "kingfisher"),
+            (git_secrets, "git-secrets"),
+            (talisman, "talisman"),
+            (trivy, "trivy"),
+            (infisical, "infisical"),
+        )
+        if flag is True
+        or (flag is None and guard_cfg.scanners_explicit and name in guard_cfg.scanners)
+    ]
+
+    if native_only:
+        use_gitleaks_final = False
+        use_trufflehog_final = False
+        use_detect_secrets_final = False
+        use_kingfisher_final = False
+        use_git_secrets_final = False
+        use_talisman_final = False
+        use_trivy_final = False
+        use_infisical_final = False
+
+    return _ScannerSelection(
+        use_gitleaks=use_gitleaks_final,
+        use_trufflehog=use_trufflehog_final,
+        use_detect_secrets=use_detect_secrets_final,
+        use_kingfisher=use_kingfisher_final,
+        use_git_secrets=use_git_secrets_final,
+        use_talisman=use_talisman_final,
+        use_trivy=use_trivy_final,
+        use_infisical=use_infisical_final,
+        explicit_scanners=explicit_scanners,
+    )
+
+
+def _collect_policy_file_lists(
+    file_config: EnvdriftConfig,
+    staged_display_paths: dict[Path, Path],
+    json_output: bool,
+    sarif: bool,
+) -> tuple[list[str], list[str], list[str]]:
+    """Collect the allowed-clear, combined, and vault-mapped env file lists.
+
+    These feed the engine's policy checks: partial-encryption clear files are
+    intentionally unencrypted, combined files get a .gitignore check, and
+    vault.sync custom env files must keep tripping the unencrypted-env-file
+    policy — including their staged mirror copies in ``--staged`` mode (#476).
+    An invalid ``env_file`` mapping is an operational error.
+    """
+    # Extract allowed clear files from partial_encryption config
+    # These files are intentionally unencrypted and should not be flagged
+    allowed_clear_files: list[str] = []
+    combined_files: list[str] = []
+    mapped_env_files: list[str] = []
+    if file_config.partial_encryption.enabled:
+        for env in file_config.partial_encryption.environments:
+            if env.clear_file:
+                allowed_clear_files.append(env.clear_file)
+            if env.combined_file:
+                combined_files.append(env.combined_file)
+
+    for mapping in file_config.vault.sync.mappings:
+        if mapping.env_file:
+            try:
+                mapped_env_files.append(
+                    str(
+                        resolve_custom_env_file(
+                            Path(mapping.folder_path), mapping.env_file
+                        ).resolve()
+                    )
+                )
+            except ValueError as e:
+                # Same machine-output contract as the other operational-error
+                # paths: --json/--sarif stdout stays parseable (#478 review).
+                _emit_error(json_output, sarif, f"Invalid env_file for {mapping.folder_path}: {e}")
+                raise typer.Exit(code=EXIT_OPERATIONAL_ERROR) from e
+
+    # In --staged mode the scan runs on mirror copies of the index blobs, but
+    # mapped env files are matched by canonical absolute path. Alias each
+    # staged mirror copy of a mapped file or the unencrypted-env-file policy
+    # would silently stop firing for custom vault.sync env files (#476).
+    if staged_display_paths and mapped_env_files:
+        cwd = Path.cwd()
+        mapped_set = set(mapped_env_files)
+        mapped_env_files.extend(
+            str(mirror)
+            for mirror, display in staged_display_paths.items()
+            if str((cwd / display).resolve()) in mapped_set
+        )
+
+    return allowed_clear_files, combined_files, mapped_env_files
+
+
+def _build_engine_config(
+    *,
+    selection: _ScannerSelection,
+    auto_install: bool,
+    history: bool,
+    entropy: bool | None,
+    skip_clear: bool | None,
+    skip_duplicate: bool | None,
+    skip_encrypted: bool | None,
+    skip_gitignored: bool | None,
+    fail_severity: FindingSeverity,
+    guard_cfg: GuardFileConfig,
+    allowed_clear_files: list[str],
+    combined_files: list[str],
+    mapped_env_files: list[str],
+) -> GuardConfig:
+    """Merge the file config with the CLI overrides into the engine config."""
+    # Determine skip_clear_files (CLI overrides config)
+    skip_clear_final = skip_clear if skip_clear is not None else guard_cfg.skip_clear_files
+
+    # Determine skip_duplicate (CLI overrides config)
+    skip_duplicate_final = (
+        skip_duplicate if skip_duplicate is not None else guard_cfg.skip_duplicate
+    )
+
+    # Determine skip_encrypted_files (CLI overrides config)
+    skip_encrypted_final = (
+        skip_encrypted if skip_encrypted is not None else guard_cfg.skip_encrypted_files
+    )
+
+    # Determine skip_gitignored (CLI overrides config)
+    skip_gitignored_final = (
+        skip_gitignored if skip_gitignored is not None else guard_cfg.skip_gitignored
+    )
+
+    # Build configuration merging file config with CLI overrides
+    return GuardConfig(
+        use_native=True,
+        use_gitleaks=selection.use_gitleaks,
+        use_trufflehog=selection.use_trufflehog,
+        use_detect_secrets=selection.use_detect_secrets,
+        use_kingfisher=selection.use_kingfisher,
+        use_git_secrets=selection.use_git_secrets,
+        use_talisman=selection.use_talisman,
+        use_trivy=selection.use_trivy,
+        use_infisical=selection.use_infisical,
+        auto_install=auto_install,
+        include_git_history=history or guard_cfg.include_history,
+        # Tri-state: an explicit --entropy/--no-entropy wins; otherwise the
+        # config knob (true/false/unset) decides. Unset means the native
+        # scanner's default of entropy on env files only (#478).
+        check_entropy=entropy if entropy is not None else guard_cfg.check_entropy,
+        entropy_threshold=guard_cfg.entropy_threshold,
+        skip_clear_files=skip_clear_final,
+        skip_encrypted_files=skip_encrypted_final,
+        skip_duplicate=skip_duplicate_final,
+        skip_gitignored=skip_gitignored_final,
+        ignore_paths=guard_cfg.ignore_paths,
+        ignore_rules=guard_cfg.ignore_rules,
+        fail_on_severity=fail_severity,
+        allowed_clear_files=allowed_clear_files,
+        combined_files=combined_files,
+        mapped_env_files=mapped_env_files,
+        explicit_scanners=selection.explicit_scanners,
+    )
+
+
+def _make_output_console(ci: bool, json_output: bool, sarif: bool) -> Console:
+    """Return the console for results output.
+
+    Colors are suppressed in CI mode and in machine modes so ``--json`` /
+    ``--sarif`` stdout stays free of ANSI escapes.
+    """
+    # Create output console (suppress colors in CI mode or JSON/SARIF output)
+    output_console = console
+    if ci or _machine_mode(json_output, sarif):
+        output_console = Console(force_terminal=False, no_color=True)
+    return output_console
+
+
+def _create_scan_engine(config: GuardConfig, json_output: bool, sarif: bool) -> ScanEngine:
+    """Construct the scan engine, exiting cleanly on an invalid guard config."""
+    # Create scan engine. Wrong-shaped guard config (e.g. ignore_rules built
+    # programmatically as a list) raises a clean ValueError at construction;
+    # surface it as an operational error instead of a Rich traceback (#478).
+    try:
+        return ScanEngine(config)
+    except ValueError as exc:
+        _emit_error(json_output, sarif, f"Invalid guard configuration: {exc}")
+        raise typer.Exit(code=EXIT_OPERATIONAL_ERROR) from None
+
+
+def _refuse_unsupported_history(
+    config: GuardConfig, engine: ScanEngine, json_output: bool, sarif: bool
+) -> None:
+    """Exit when git-history scanning is requested but no active scanner supports it."""
+    # Refuse a history request that no active scanner can satisfy: silently
+    # dropping the flag reported "No secrets detected" over an unscanned git
+    # history — a false security PASS (#476).
+    if config.include_git_history and not any(s.supports_git_history for s in engine.scanners):
+        active = ", ".join(s.name for s in engine.scanners) or "none"
+        _emit_error(
+            json_output,
+            sarif,
+            "Git history scanning was requested (--history or include_history in "
+            f"config), but no active scanner ({active}) supports it. Enable a "
+            "history-capable scanner (gitleaks, trufflehog, kingfisher, "
+            "git-secrets, talisman, or infisical) or drop --history.",
+        )
+        # Refusing an unsatisfiable history request is an operational error, not
+        # a critical finding: exit 6 like the other guard misconfig paths (#526).
+        raise typer.Exit(code=EXIT_OPERATIONAL_ERROR)
+
+
+def _print_combined_files_warnings(
+    combined_files: list[str],
+    engine: ScanEngine,
+    output_console: Console,
+    json_output: bool,
+    sarif: bool,
+) -> None:
+    """Warn when combined (partial-encryption) files are not covered by .gitignore."""
+    # Check combined files security (should be in .gitignore)
+    # Only check if partial_encryption is enabled and not in JSON/SARIF mode
+    if combined_files and not _machine_mode(json_output, sarif):
+        security_warnings = engine.check_combined_files_security()
+        for warning in security_warnings:
+            output_console.print(f"[bold red]{warning}[/bold red]")
+        if security_warnings:
+            output_console.print()
+
+
+def _print_scan_header(
+    output_console: Console,
+    engine: ScanEngine,
+    scanner_names: list[str],
+    show_progress: bool | list[str],
+    verbose: bool,
+) -> None:
+    """Print the scanner roster (and per-scanner install/version details with -v)."""
+    if show_progress:
+        output_console.print(f"[bold]Running scanners:[/bold] {', '.join(scanner_names)}")
+        output_console.print("[dim]Scanners run in parallel for better performance...[/dim]")
+
+        if verbose:
+            output_console.print()
+            output_console.print("[bold]Scanner details:[/bold]")
+            for info in engine.get_scanner_info():
+                status = (
+                    "[green]installed[/green]"
+                    if info["installed"]
+                    else "[yellow]not installed[/yellow]"
+                )
+                version = f" (v{info['version']})" if info["version"] else ""
+                output_console.print(f"  - {info['name']}: {status}{version}")
+
+
+def _run_scan_with_progress(
+    engine: ScanEngine,
+    paths: list[Path],
+    output_console: Console,
+    scanner_names: list[str],
+    show_progress: bool | list[str],
+) -> AggregatedScanResult:
+    """Run the scan, with a live per-scanner progress display in human mode."""
+    # Track completed scanners for progress display
+    completed_scanners: dict[str, float] = {}  # name -> duration in seconds
+    total_scanners = len(scanner_names)
+    scan_start_time = time_module.time()
+
+    def format_duration(seconds: float) -> str:
+        """Format duration as human readable string."""
+        if seconds < 60:
+            return f"{seconds:.1f}s"
+        minutes = int(seconds // 60)
+        secs = seconds % 60
+        return f"{minutes}m {secs:.0f}s"
+
+    def make_progress_text() -> Text:
+        """Build progress display text."""
+        text = Text()
+        done_count = len(completed_scanners)
+        elapsed = time_module.time() - scan_start_time
+        text.append(f"Scanning {done_count}/{total_scanners} complete ", style="bold")
+        text.append(f"({format_duration(elapsed)})\n\n", style="dim")
+        for name in scanner_names:
+            if name in completed_scanners:
+                duration = completed_scanners[name]
+                text.append("  [*] ", style="green bold")
+                text.append(f"{name:<15}", style="green")
+                text.append(f" done in {format_duration(duration)}\n", style="green")
+            else:
+                text.append("  [ ] ", style="yellow")
+                text.append(f"{name:<15}", style="yellow")
+                text.append(" running...\n", style="yellow dim")
+        return text
+
+    def on_scanner_complete(
+        name: str,
+        completed: int,
+        total: int,
+        result: object | None = None,
+    ) -> None:
+        """Callback when a scanner completes."""
+        elapsed = time_module.time() - scan_start_time
+        duration = elapsed
+        # Prefer scanner-reported duration if available
+        if result is not None and hasattr(result, "duration_ms"):
+            try:
+                duration_ms = float(getattr(result, "duration_ms", 0))
+                if duration_ms > 0:
+                    duration = duration_ms / 1000.0
+            except (TypeError, ValueError):
+                pass
+        completed_scanners[name] = duration
+        if show_progress and live:
+            live.update(Spinner("dots", text=make_progress_text()))
+
+    # Run scan with progress indicator
+    if show_progress:
+        output_console.print()
+        live = Live(
+            Spinner("dots", text=make_progress_text()),
+            console=output_console,
+            refresh_per_second=10,
+        )
+        with live:
+            result = engine.scan(paths, on_scanner_complete=on_scanner_complete)
+        output_console.print()
+    else:
+        live = None
+        result = engine.scan(paths)
+    return result
+
+
+def _warn_skipped_scanners(result: AggregatedScanResult) -> None:
+    """Surface scanners skipped for a missing binary on stderr in every mode."""
+    # A default-set scanner skipped for a missing binary (no auto-install) must
+    # be visible in every output mode; stderr keeps --json/--sarif stdout
+    # parseable (#641). Human mode additionally gets the Scanners Skipped panel.
+    for skip_record in (r for r in result.results if r.skipped):
+        _warn_stderr(skip_record.skip_reason or f"{skip_record.scanner_name} scanner was skipped")
+
+
+def _render_results(
+    result: AggregatedScanResult,
+    exit_code: int,
+    json_output: bool,
+    sarif: bool,
+    output_console: Console,
+) -> None:
+    """Emit the scan result as SARIF, JSON, or Rich human-readable output."""
+    # Output results
+    if sarif:
+        print(format_sarif(result, exit_code=exit_code))
+    elif json_output:
+        print(format_json(result, exit_code=exit_code))
+    else:
+        format_rich(result, output_console)
+
+
 def guard(
     paths: Annotated[
         list[Path] | None,
@@ -527,39 +1182,7 @@ def guard(
       envdrift guard --json              # JSON output for automation
       envdrift guard ./src ./config      # Scan specific directories
     """
-    import subprocess  # nosec B404
-
-    if sarif and json_output:
-        # SARIF takes precedence over JSON; warn on stderr so the choice is not
-        # silent, without contaminating the (SARIF) stdout (#443 #31).
-        print(
-            "[WARN] --json is ignored because --sarif was also passed "
-            "(SARIF output takes precedence).",
-            file=sys.stderr,
-        )
-
-    def _git_toplevel() -> Path:
-        """Return the git repository root, falling back to cwd if unavailable.
-
-        ``git diff`` emits paths relative to the repository root, so returned
-        paths must be resolved against the toplevel (not the process cwd) or
-        every file is dropped by the ``.exists()`` filter when guard is invoked
-        from a subdirectory.
-        """
-        try:
-            toplevel = subprocess.run(  # nosec B603, B607
-                ["git", "rev-parse", "--show-toplevel"],
-                capture_output=True,
-                text=True,
-                encoding="utf-8",
-                errors="replace",
-                timeout=10,
-            )
-            if toplevel.returncode == 0 and toplevel.stdout.strip():
-                return Path(toplevel.stdout.strip())
-        except (subprocess.TimeoutExpired, FileNotFoundError):
-            pass
-        return Path.cwd()
+    _warn_sarif_overrides_json(json_output, sarif)
 
     # Staged-mirror state (set only by the --staged branch): the temp dir
     # holding the staged index blobs and the mirror-path -> display-path map
@@ -569,437 +1192,68 @@ def guard(
 
     # Handle --staged flag (pre-commit mode)
     if staged:
-        try:
-            # ``-z`` + a binary pipe: git prints staged paths NUL-terminated and
-            # verbatim (no ``core.quotepath`` C-quoting of spaces/non-ASCII), and
-            # ``os.fsdecode`` round-trips the raw filesystem bytes so the decoded
-            # path still resolves under ``git show :<path>``. A text pipe with
-            # ``split("\n")`` mis-parsed any name git would quote (spaces, quotes,
-            # non-ASCII) — the same class #531 fixed for check-ignore.
-            result = subprocess.run(  # nosec B603, B607
-                ["git", "diff", "--cached", "-z", "--name-only", "--diff-filter=ACMR"],
-                capture_output=True,
-                timeout=10,
-            )
-            # A failing ``git diff --cached`` (e.g. not a git repository) is an
-            # error, not "nothing staged": conflating the two turned a broken
-            # pre-commit gate into a green pass (#476).
-            if result.returncode != 0:
-                detail = result.stderr.decode("utf-8", "replace").strip() or "unknown git error"
-                _emit_error(
-                    json_output,
-                    sarif,
-                    f"--staged could not list staged files (git diff --cached failed): {detail}",
-                )
-                # An operational git failure, not a critical finding: exit 6 so
-                # an exit-code-only pipeline never reads it as a leak (exit 1 is
-                # EXIT_CRITICAL_FINDINGS under the #526 contract).
-                raise typer.Exit(code=EXIT_OPERATIONAL_ERROR)
-            staged_files = [os.fsdecode(p) for p in result.stdout.split(b"\0") if p]
-            if not staged_files:
-                _emit_empty_or_prose(json_output, sarif, _NO_STAGED)
-                raise typer.Exit(code=0)
-            # Scan the staged *index blobs*, not the working-tree copies: the
-            # blob is what the commit ships, and the two can differ (#476).
-            # Findings are remapped to cwd-relative repo paths after the scan
-            # so output and path-based config matching are unchanged.
-            staged_tmpdir, paths, staged_display_paths = _materialize_staged_index(
-                staged_files, _git_toplevel()
-            )
-            if not paths:
-                staged_tmpdir.cleanup()
-                _emit_error(
-                    json_output,
-                    sarif,
-                    "--staged could not read any staged file content from the git index.",
-                )
-                # Operational failure (no readable index blobs), not a finding.
-                raise typer.Exit(code=EXIT_OPERATIONAL_ERROR)
-            _emit_progress(
-                json_output, sarif, f"[dim]Scanning {len(paths)} staged file(s)...[/dim]"
-            )
-        except subprocess.TimeoutExpired as err:
-            # Route through _emit_error so --json/--sarif stdout stays a
-            # parseable document on git failures too (#478 review).
-            _emit_error(json_output, sarif, "Git command timed out")
-            raise typer.Exit(code=EXIT_OPERATIONAL_ERROR) from err
-        except FileNotFoundError as err:
-            _emit_error(json_output, sarif, "Git not found. --staged requires git.")
-            raise typer.Exit(code=EXIT_OPERATIONAL_ERROR) from err
-
+        staged_tmpdir, paths, staged_display_paths = _collect_staged_targets(json_output, sarif)
     # Handle --pr-base flag (CI mode for PRs)
     elif pr_base:
-        try:
-            # Fetch the base branch first to ensure it's up to date.
-            # Strip only a leading "origin/" prefix; a global replace would
-            # corrupt refs that contain "origin/" elsewhere (e.g.
-            # "release/origin-mirror").
-            base_ref = pr_base.removeprefix("origin/")
-            if not base_ref:
-                base_ref = pr_base
-            fetch_result = subprocess.run(  # nosec B603, B607
-                ["git", "fetch", "origin", base_ref],
-                capture_output=True,
-                timeout=30,
-            )
-            if fetch_result.returncode != 0:
-                # Surface fetch failures unconditionally (#476): they used to be
-                # verbose-gated and swallowed in machine modes, hiding the usual
-                # root cause of an unresolvable base ref.
-                _warn_stderr(f"could not fetch '{base_ref}' from origin; using local refs")
-            # Get all files changed between base and HEAD
-            result = subprocess.run(  # nosec B603, B607
-                ["git", "diff", "--name-only", "--diff-filter=ACMR", f"{pr_base}...HEAD"],
-                capture_output=True,
-                text=True,
-                encoding="utf-8",
-                errors="replace",
-                timeout=10,
-            )
-            # rc != 0 means git itself failed (unknown revision, shallow clone
-            # missing the base, ...) — distinct from a successful empty diff.
-            # Conflating the two passed the CI secret gate green on a typo'd or
-            # unfetched base ref (#476).
-            if result.returncode != 0:
-                stderr_lines = (result.stderr or "").strip().splitlines()
-                reason = stderr_lines[0] if stderr_lines else "unknown git error"
-                _emit_error(
-                    json_output,
-                    sarif,
-                    f"--pr-base '{pr_base}' could not be diffed against: {reason} "
-                    f"Fetch or fix the base ref (e.g. 'git fetch origin {base_ref}').",
-                )
-                # An unresolvable base ref is an operational failure, not a
-                # critical finding: exit 6, never 1 (#526 contract).
-                raise typer.Exit(code=EXIT_OPERATIONAL_ERROR)
-            if result.stdout.strip():
-                repo_root = _git_toplevel()
-                candidates = [repo_root / f for f in result.stdout.strip().split("\n") if f]
-                # Resolve against the repo root for existence, scan with
-                # cwd-relative paths so findings display the short relative
-                # filename (a long absolute path gets truncated by the Rich
-                # panel) and path-based config matching behaves as it did from
-                # the repo root.
-                paths = [Path(os.path.relpath(p, Path.cwd())) for p in candidates if p.exists()]
-                if not paths:
-                    _emit_empty_or_prose(json_output, sarif, _NO_PR_CHANGES)
-                    raise typer.Exit(code=0)
-                _emit_progress(
-                    json_output,
-                    sarif,
-                    f"[bold]Scanning {len(paths)} file(s) changed since {pr_base}...[/bold]",
-                )
-            else:
-                _emit_empty_or_prose(json_output, sarif, _NO_PR_CHANGES)
-                raise typer.Exit(code=0)
-        except subprocess.TimeoutExpired as err:
-            # Same machine-output contract as the --staged branch (#478 review).
-            _emit_error(json_output, sarif, "Git command timed out")
-            raise typer.Exit(code=EXIT_OPERATIONAL_ERROR) from err
-        except FileNotFoundError as err:
-            _emit_error(json_output, sarif, "Git not found. --pr-base requires git.")
-            raise typer.Exit(code=EXIT_OPERATIONAL_ERROR) from err
-
+        paths = _collect_pr_base_targets(pr_base, json_output, sarif)
     # Default behavior: use provided paths or current directory
     else:
-        if not paths:
-            paths = [Path.cwd()]
-
-        # Validate paths exist
-        for path in paths:
-            if not path.exists():
-                _emit_error(json_output, sarif, f"Path not found: {path}")
-                raise typer.Exit(code=EXIT_OPERATIONAL_ERROR)
+        paths = _validate_target_paths(paths, json_output, sarif)
 
     # Load configuration from envdrift.toml (a bad/missing --config exits
     # cleanly via _load_guard_config instead of a Rich traceback; see #413).
     file_config = _load_guard_config(config_file, json_output, sarif)
     guard_cfg = file_config.guard
 
-    # Determine fail_on severity (CLI overrides config)
-    fail_on_value = fail_on or guard_cfg.fail_on_severity or "high"
-    try:
-        fail_severity = FindingSeverity(fail_on_value.lower())
-    except ValueError as e:
-        # Route through _emit_error so --json/--sarif get a clean error document
-        # instead of Rich-markup human prose contaminating machine stdout (#28).
-        _emit_error(
-            json_output,
-            sarif,
-            f"Invalid severity '{fail_on_value}'. Valid options: critical, high, medium, low",
-        )
-        raise typer.Exit(code=EXIT_OPERATIONAL_ERROR) from e
+    fail_severity = _resolve_fail_severity(fail_on, guard_cfg, json_output, sarif)
 
-    # Determine which scanners to use
-    # CLI flags override config file settings when provided
-    use_gitleaks_final = gitleaks if gitleaks is not None else "gitleaks" in guard_cfg.scanners
-    use_trufflehog_final = (
-        trufflehog if trufflehog is not None else "trufflehog" in guard_cfg.scanners
-    )
-    use_detect_secrets_final = (
-        detect_secrets if detect_secrets is not None else "detect-secrets" in guard_cfg.scanners
-    )
-    use_kingfisher_final = (
-        kingfisher if kingfisher is not None else "kingfisher" in guard_cfg.scanners
-    )
-    use_git_secrets_final = (
-        git_secrets if git_secrets is not None else "git-secrets" in guard_cfg.scanners
-    )
-    use_talisman_final = talisman if talisman is not None else "talisman" in guard_cfg.scanners
-    use_trivy_final = trivy if trivy is not None else "trivy" in guard_cfg.scanners
-    use_infisical_final = infisical if infisical is not None else "infisical" in guard_cfg.scanners
-
-    # A scanner is EXPLICITLY selected when its CLI flag was passed or the
-    # config file itself lists it under [guard] scanners — not when it is
-    # active only via the built-in default set. Explicit scanners are retained
-    # fail-closed by the engine (missing binary + no auto-install => recorded
-    # error, exit 5); default-set ones are skipped with a visible warning so a
-    # missing optional binary cannot fail a run nobody asked it to gate (#641).
-    explicit_scanners = [
-        name
-        for flag, name in (
-            (gitleaks, "gitleaks"),
-            (trufflehog, "trufflehog"),
-            (detect_secrets, "detect-secrets"),
-            (kingfisher, "kingfisher"),
-            (git_secrets, "git-secrets"),
-            (talisman, "talisman"),
-            (trivy, "trivy"),
-            (infisical, "infisical"),
-        )
-        if flag is True
-        or (flag is None and guard_cfg.scanners_explicit and name in guard_cfg.scanners)
-    ]
-
-    if native_only:
-        use_gitleaks_final = False
-        use_trufflehog_final = False
-        use_detect_secrets_final = False
-        use_kingfisher_final = False
-        use_git_secrets_final = False
-        use_talisman_final = False
-        use_trivy_final = False
-        use_infisical_final = False
-
-    # Extract allowed clear files from partial_encryption config
-    # These files are intentionally unencrypted and should not be flagged
-    allowed_clear_files = []
-    combined_files = []
-    mapped_env_files = []
-    if file_config.partial_encryption.enabled:
-        for env in file_config.partial_encryption.environments:
-            if env.clear_file:
-                allowed_clear_files.append(env.clear_file)
-            if env.combined_file:
-                combined_files.append(env.combined_file)
-
-    for mapping in file_config.vault.sync.mappings:
-        if mapping.env_file:
-            try:
-                mapped_env_files.append(
-                    str(
-                        resolve_custom_env_file(
-                            Path(mapping.folder_path), mapping.env_file
-                        ).resolve()
-                    )
-                )
-            except ValueError as e:
-                # Same machine-output contract as the other operational-error
-                # paths: --json/--sarif stdout stays parseable (#478 review).
-                _emit_error(json_output, sarif, f"Invalid env_file for {mapping.folder_path}: {e}")
-                raise typer.Exit(code=EXIT_OPERATIONAL_ERROR) from e
-
-    # In --staged mode the scan runs on mirror copies of the index blobs, but
-    # mapped env files are matched by canonical absolute path. Alias each
-    # staged mirror copy of a mapped file or the unencrypted-env-file policy
-    # would silently stop firing for custom vault.sync env files (#476).
-    if staged_display_paths and mapped_env_files:
-        cwd = Path.cwd()
-        mapped_set = set(mapped_env_files)
-        mapped_env_files.extend(
-            str(mirror)
-            for mirror, display in staged_display_paths.items()
-            if str((cwd / display).resolve()) in mapped_set
-        )
-
-    # Determine skip_clear_files (CLI overrides config)
-    skip_clear_final = skip_clear if skip_clear is not None else guard_cfg.skip_clear_files
-
-    # Determine skip_duplicate (CLI overrides config)
-    skip_duplicate_final = (
-        skip_duplicate if skip_duplicate is not None else guard_cfg.skip_duplicate
+    selection = _resolve_scanner_selection(
+        gitleaks=gitleaks,
+        trufflehog=trufflehog,
+        detect_secrets=detect_secrets,
+        kingfisher=kingfisher,
+        git_secrets=git_secrets,
+        talisman=talisman,
+        trivy=trivy,
+        infisical=infisical,
+        native_only=native_only,
+        guard_cfg=guard_cfg,
     )
 
-    # Determine skip_encrypted_files (CLI overrides config)
-    skip_encrypted_final = (
-        skip_encrypted if skip_encrypted is not None else guard_cfg.skip_encrypted_files
+    allowed_clear_files, combined_files, mapped_env_files = _collect_policy_file_lists(
+        file_config, staged_display_paths, json_output, sarif
     )
 
-    # Determine skip_gitignored (CLI overrides config)
-    skip_gitignored_final = (
-        skip_gitignored if skip_gitignored is not None else guard_cfg.skip_gitignored
-    )
-
-    # Build configuration merging file config with CLI overrides
-    config = GuardConfig(
-        use_native=True,
-        use_gitleaks=use_gitleaks_final,
-        use_trufflehog=use_trufflehog_final,
-        use_detect_secrets=use_detect_secrets_final,
-        use_kingfisher=use_kingfisher_final,
-        use_git_secrets=use_git_secrets_final,
-        use_talisman=use_talisman_final,
-        use_trivy=use_trivy_final,
-        use_infisical=use_infisical_final,
+    config = _build_engine_config(
+        selection=selection,
         auto_install=auto_install,
-        include_git_history=history or guard_cfg.include_history,
-        # Tri-state: an explicit --entropy/--no-entropy wins; otherwise the
-        # config knob (true/false/unset) decides. Unset means the native
-        # scanner's default of entropy on env files only (#478).
-        check_entropy=entropy if entropy is not None else guard_cfg.check_entropy,
-        entropy_threshold=guard_cfg.entropy_threshold,
-        skip_clear_files=skip_clear_final,
-        skip_encrypted_files=skip_encrypted_final,
-        skip_duplicate=skip_duplicate_final,
-        skip_gitignored=skip_gitignored_final,
-        ignore_paths=guard_cfg.ignore_paths,
-        ignore_rules=guard_cfg.ignore_rules,
-        fail_on_severity=fail_severity,
+        history=history,
+        entropy=entropy,
+        skip_clear=skip_clear,
+        skip_duplicate=skip_duplicate,
+        skip_encrypted=skip_encrypted,
+        skip_gitignored=skip_gitignored,
+        fail_severity=fail_severity,
+        guard_cfg=guard_cfg,
         allowed_clear_files=allowed_clear_files,
         combined_files=combined_files,
         mapped_env_files=mapped_env_files,
-        explicit_scanners=explicit_scanners,
     )
 
-    # Create output console (suppress colors in CI mode or JSON/SARIF output)
-    output_console = console
-    if ci or _machine_mode(json_output, sarif):
-        output_console = Console(force_terminal=False, no_color=True)
-
-    # Create scan engine. Wrong-shaped guard config (e.g. ignore_rules built
-    # programmatically as a list) raises a clean ValueError at construction;
-    # surface it as an operational error instead of a Rich traceback (#478).
-    try:
-        engine = ScanEngine(config)
-    except ValueError as exc:
-        _emit_error(json_output, sarif, f"Invalid guard configuration: {exc}")
-        raise typer.Exit(code=EXIT_OPERATIONAL_ERROR) from None
-
-    # Refuse a history request that no active scanner can satisfy: silently
-    # dropping the flag reported "No secrets detected" over an unscanned git
-    # history — a false security PASS (#476).
-    if config.include_git_history and not any(s.supports_git_history for s in engine.scanners):
-        active = ", ".join(s.name for s in engine.scanners) or "none"
-        _emit_error(
-            json_output,
-            sarif,
-            "Git history scanning was requested (--history or include_history in "
-            f"config), but no active scanner ({active}) supports it. Enable a "
-            "history-capable scanner (gitleaks, trufflehog, kingfisher, "
-            "git-secrets, talisman, or infisical) or drop --history.",
-        )
-        # Refusing an unsatisfiable history request is an operational error, not
-        # a critical finding: exit 6 like the other guard misconfig paths (#526).
-        raise typer.Exit(code=EXIT_OPERATIONAL_ERROR)
-
-    # Check combined files security (should be in .gitignore)
-    # Only check if partial_encryption is enabled and not in JSON/SARIF mode
-    if combined_files and not _machine_mode(json_output, sarif):
-        security_warnings = engine.check_combined_files_security()
-        for warning in security_warnings:
-            output_console.print(f"[bold red]{warning}[/bold red]")
-        if security_warnings:
-            output_console.print()
+    output_console = _make_output_console(ci, json_output, sarif)
+    engine = _create_scan_engine(config, json_output, sarif)
+    _refuse_unsupported_history(config, engine, json_output, sarif)
+    _print_combined_files_warnings(combined_files, engine, output_console, json_output, sarif)
 
     # Show scanner info in verbose mode or when running interactively
     scanner_names = [s.name for s in engine.scanners]
     show_progress = not _machine_mode(json_output, sarif) and scanner_names
+    _print_scan_header(output_console, engine, scanner_names, show_progress, verbose)
 
-    if show_progress:
-        output_console.print(f"[bold]Running scanners:[/bold] {', '.join(scanner_names)}")
-        output_console.print("[dim]Scanners run in parallel for better performance...[/dim]")
-
-        if verbose:
-            output_console.print()
-            output_console.print("[bold]Scanner details:[/bold]")
-            for info in engine.get_scanner_info():
-                status = (
-                    "[green]installed[/green]"
-                    if info["installed"]
-                    else "[yellow]not installed[/yellow]"
-                )
-                version = f" (v{info['version']})" if info["version"] else ""
-                output_console.print(f"  - {info['name']}: {status}{version}")
-
-    # Track completed scanners for progress display
-    completed_scanners: dict[str, float] = {}  # name -> duration in seconds
-    total_scanners = len(scanner_names)
-    scan_start_time = time_module.time()
-
-    def format_duration(seconds: float) -> str:
-        """Format duration as human readable string."""
-        if seconds < 60:
-            return f"{seconds:.1f}s"
-        minutes = int(seconds // 60)
-        secs = seconds % 60
-        return f"{minutes}m {secs:.0f}s"
-
-    def make_progress_text() -> Text:
-        """Build progress display text."""
-        text = Text()
-        done_count = len(completed_scanners)
-        elapsed = time_module.time() - scan_start_time
-        text.append(f"Scanning {done_count}/{total_scanners} complete ", style="bold")
-        text.append(f"({format_duration(elapsed)})\n\n", style="dim")
-        for name in scanner_names:
-            if name in completed_scanners:
-                duration = completed_scanners[name]
-                text.append("  [*] ", style="green bold")
-                text.append(f"{name:<15}", style="green")
-                text.append(f" done in {format_duration(duration)}\n", style="green")
-            else:
-                text.append("  [ ] ", style="yellow")
-                text.append(f"{name:<15}", style="yellow")
-                text.append(" running...\n", style="yellow dim")
-        return text
-
-    def on_scanner_complete(
-        name: str,
-        completed: int,
-        total: int,
-        result: object | None = None,
-    ) -> None:
-        """Callback when a scanner completes."""
-        elapsed = time_module.time() - scan_start_time
-        duration = elapsed
-        # Prefer scanner-reported duration if available
-        if result is not None and hasattr(result, "duration_ms"):
-            try:
-                duration_ms = float(getattr(result, "duration_ms", 0))
-                if duration_ms > 0:
-                    duration = duration_ms / 1000.0
-            except (TypeError, ValueError):
-                pass
-        completed_scanners[name] = duration
-        if show_progress and live:
-            live.update(Spinner("dots", text=make_progress_text()))
-
-    # Run scan with progress indicator
     try:
-        if show_progress:
-            output_console.print()
-            live = Live(
-                Spinner("dots", text=make_progress_text()),
-                console=output_console,
-                refresh_per_second=10,
-            )
-            with live:
-                result = engine.scan(paths, on_scanner_complete=on_scanner_complete)
-            output_console.print()
-        else:
-            live = None
-            result = engine.scan(paths)
-
+        result = _run_scan_with_progress(
+            engine, paths, output_console, scanner_names, show_progress
+        )
         if staged_display_paths:
             # Findings point into the staged mirror; rewrite them to the real
             # cwd-relative repo paths before any output (#476).
@@ -1008,11 +1262,7 @@ def guard(
         if staged_tmpdir is not None:
             staged_tmpdir.cleanup()
 
-    # A default-set scanner skipped for a missing binary (no auto-install) must
-    # be visible in every output mode; stderr keeps --json/--sarif stdout
-    # parseable (#641). Human mode additionally gets the Scanners Skipped panel.
-    for skip_record in (r for r in result.results if r.skipped):
-        _warn_stderr(skip_record.skip_reason or f"{skip_record.scanner_name} scanner was skipped")
+    _warn_skipped_scanners(result)
 
     # One source of truth for the verdict (#478): compute the effective exit
     # code BEFORE rendering, so the machine-readable documents carry the exact
@@ -1023,13 +1273,7 @@ def guard(
     # all-clear 0.
     exit_code = result.effective_exit_code(fail_severity if ci else None)
 
-    # Output results
-    if sarif:
-        print(format_sarif(result, exit_code=exit_code))
-    elif json_output:
-        print(format_json(result, exit_code=exit_code))
-    else:
-        format_rich(result, output_console)
+    _render_results(result, exit_code, json_output, sarif, output_console)
 
     if exit_code != 0:
         raise typer.Exit(code=exit_code)

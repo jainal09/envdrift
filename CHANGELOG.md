@@ -1,5 +1,12 @@
 # Changelog
 
+## [10.17.2](https://github.com/jainal09/envdrift/compare/v10.17.1...v10.17.2) (2026-07-14)
+
+
+### Bug Fixes
+
+* **sync:** verify exits 1 on errors and flags missing vault secrets ([#661](https://github.com/jainal09/envdrift/issues/661)) ([1150ec6](https://github.com/jainal09/envdrift/commit/1150ec6936d15ec6c4f0b23e9e7683467086a9cd))
+
 ## [10.17.1](https://github.com/jainal09/envdrift/compare/v10.17.0...v10.17.1) (2026-07-13)
 
 
