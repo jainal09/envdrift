@@ -86,11 +86,13 @@ issue** — don't silently leave it. Cite `file:line` and evidence in the issue.
 
 These have bitten us in CI or review and aren't obvious from the code alone.
 
-- **`Release-As:` footers must survive the squash.** This repo squashes with the **PR body**
-  as the commit body, so a version override belongs in the PR *body* as a standalone,
-  unwrapped `Release-As: x.y.z` line — hard-wrapping the body mid-sentence (or leaving the
-  footer only in a branch commit message) silently loses it and release-please picks the
-  normal bump instead.
+- **`Release-As:` footers must survive the squash.** This repo's squash settings are
+  `squash_merge_commit_title: PR_TITLE` + `squash_merge_commit_message: PR_BODY` (verify with
+  `gh api repos/<owner>/<repo> --jq .squash_merge_commit_message` if in doubt — the guidance
+  below only holds for `PR_BODY`), so a version override belongs in the PR *body* as a
+  standalone, unwrapped `Release-As: x.y.z` line. Hard-wrapping the body mid-sentence (or
+  leaving the footer only in a branch commit message) silently loses it and release-please
+  picks the normal bump instead (how #688 released as 10.18.0 instead of 11.0.0).
 - **release-please force-pushes its release-PR branches.** On every push to
   `main` it rebases each open `release-please--branches--main--components--*`
   branch onto the new `main` and **regenerates** the CHANGELOG + manifest from
