@@ -25,21 +25,36 @@ _PLAIN_SCALARS = (str, int, float, bool)
 
 def _effective_env_binding(
     field_name: str, field_info: FieldInfo, raw_env_prefix: Any
-) -> tuple[str | None, str]:
-    """Return the model input alias and effective environment binding."""
+) -> tuple[str | None, tuple[str, ...]]:
+    """Return the model input alias and ordered environment bindings."""
     alias_candidate = field_info.validation_alias or field_info.alias
-    if isinstance(alias_candidate, AliasChoices) and alias_candidate.choices:
-        # FieldMetadata represents one binding today. Preserve Pydantic's
-        # first-choice order; #673 tracks support for every candidate.
-        alias_candidate = alias_candidate.choices[0]
-    if isinstance(alias_candidate, AliasPath) and alias_candidate.path:
-        alias_candidate = alias_candidate.path[0]
 
-    if isinstance(alias_candidate, str):
-        return alias_candidate, alias_candidate
+    if isinstance(alias_candidate, AliasChoices):
+        binding_names = tuple(
+            binding_name
+            for choice in alias_candidate.choices
+            if (binding_name := _alias_binding_name(choice)) is not None
+        )
+        if binding_names:
+            return binding_names[0], binding_names
+
+    binding_name = _alias_binding_name(alias_candidate)
+    if binding_name is not None:
+        return binding_name, (binding_name,)
 
     env_prefix = raw_env_prefix if isinstance(raw_env_prefix, str) else ""
-    return None, f"{env_prefix}{field_name}"
+    return None, (f"{env_prefix}{field_name}",)
+
+
+def _alias_binding_name(alias: Any) -> str | None:
+    """Return the environment name represented by one alias candidate."""
+    if isinstance(alias, str):
+        return alias
+    if isinstance(alias, AliasPath) and alias.path:
+        first_component = alias.path[0]
+        if isinstance(first_component, str):
+            return first_component
+    return None
 
 
 @dataclass
@@ -60,7 +75,13 @@ class FieldMetadata:
     # ``env_prefix``; explicit aliases bypass the prefix, matching
     # pydantic-settings. Kept separate from ``alias`` because model validation
     # expects field names/aliases, never prefixed environment names (#669).
+    # For a multi-alias field this remains the first candidate for backward
+    # compatibility; ``binding_names`` contains the complete ordered set.
     env_name: str | None = None
+    # Every environment name the field can bind to, in pydantic-settings'
+    # first-match-wins order. Plain fields have one prefixed name; explicit
+    # aliases, including every AliasChoices candidate, bypass ``env_prefix``.
+    binding_names: tuple[str, ...] = ()
     # The field's ``FieldInfo.metadata`` — pydantic strips ``Annotated[...]``
     # extras (constraint markers, ``pydantic.Json``, ...) into it, and the
     # env-source complexity/coercion decision needs it: a ``Json`` marker makes
@@ -76,6 +97,49 @@ class FieldMetadata:
             `true` if the field can be omitted because it has a default value, `false` otherwise.
         """
         return not self.required
+
+
+def _extract_field_metadata(
+    field_name: str, field_info: FieldInfo, raw_env_prefix: Any
+) -> tuple[FieldMetadata, bool]:
+    """Build one field's metadata and report whether it needs constraint validation."""
+    is_required = field_info.is_required()
+
+    extra_schema = field_info.json_schema_extra
+    is_sensitive = False
+    if isinstance(extra_schema, dict):
+        raw_sensitive = extra_schema.get("sensitive", False)
+        is_sensitive = raw_sensitive if isinstance(raw_sensitive, bool) else False
+
+    annotation = field_info.annotation
+    has_constraints = bool(field_info.metadata) or annotation not in _PLAIN_SCALARS
+    if annotation is None:
+        type_str = "Any"
+    elif hasattr(annotation, "__name__"):
+        type_str = annotation.__name__
+    else:
+        type_str = str(annotation)
+
+    # Keep model-validation input separate from environment binding: plain
+    # fields add env_prefix while explicit aliases do not.
+    field_alias, binding_names = _effective_env_binding(field_name, field_info, raw_env_prefix)
+
+    return (
+        FieldMetadata(
+            name=field_name,
+            required=is_required,
+            sensitive=is_sensitive,
+            default=None if is_required else field_info.default,
+            description=field_info.description,
+            field_type=annotation if annotation else type(None),
+            annotation=type_str,
+            alias=field_alias,
+            env_name=binding_names[0],
+            binding_names=binding_names,
+            type_metadata=tuple(field_info.metadata),
+        ),
+        has_constraints,
+    )
 
 
 @dataclass
@@ -307,56 +371,11 @@ class SchemaLoader:
 
         # Extract field metadata
         for field_name, field_info in settings_cls.model_fields.items():
-            # Check if field is required
-            is_required = field_info.is_required()
-
-            # Check if marked as sensitive
-            extra_schema = field_info.json_schema_extra
-            is_sensitive = False
-            if isinstance(extra_schema, dict):
-                raw_sensitive = extra_schema.get("sensitive", False)
-                is_sensitive = raw_sensitive if isinstance(raw_sensitive, bool) else False
-
-            # Get default value
-            default_value = None if is_required else field_info.default
-
-            # Get description
-            description = field_info.description
-
-            # Get type annotation as string
-            annotation = field_info.annotation
-
-            # Does this field carry validation beyond a plain scalar type?
-            # field_info.metadata holds constraint markers (Ge/Le/MinLen/Pattern/
-            # ...); a non-plain annotation (Literal, Optional, a special pydantic
-            # type, a nested model) also needs the real validator.
-            if field_info.metadata or annotation not in _PLAIN_SCALARS:
-                has_constraints = True
-
-            if annotation is not None:
-                if hasattr(annotation, "__name__"):
-                    type_str = annotation.__name__
-                else:
-                    type_str = str(annotation)
-            else:
-                type_str = "Any"
-
-            # Keep model-validation input separate from environment binding:
-            # plain fields add env_prefix while explicit aliases do not.
-            field_alias, env_name = _effective_env_binding(field_name, field_info, raw_env_prefix)
-
-            schema.fields[field_name] = FieldMetadata(
-                name=field_name,
-                required=is_required,
-                sensitive=is_sensitive,
-                default=default_value,
-                description=description,
-                field_type=annotation if annotation else type(None),
-                annotation=type_str,
-                alias=field_alias,
-                env_name=env_name,
-                type_metadata=tuple(field_info.metadata),
+            field_metadata, field_has_constraints = _extract_field_metadata(
+                field_name, field_info, raw_env_prefix
             )
+            schema.fields[field_name] = field_metadata
+            has_constraints = has_constraints or field_has_constraints
 
         # A custom @field_validator / @model_validator can reject otherwise
         # plainly-typed values, so it too requires the real validator.

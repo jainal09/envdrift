@@ -27,8 +27,11 @@ Type validation mirrors what the real app does at startup:
   in which case the value counts as unset).
 - `SettingsConfigDict(env_prefix="MYAPP_")` is applied to plain field names, so
   `api_key` binds to `MYAPP_API_KEY` under the default case-insensitive matching.
-  Explicit field aliases and validation aliases bypass the prefix, and
-  `case_sensitive=True` requires the prefix and field-name casing to match exactly.
+  Explicit field aliases and validation aliases bypass the prefix, including every
+  candidate in `AliasChoices`. If several choices are present, the first declared
+  choice supplies the value; every choice is still recognized as a schema variable
+  and, for sensitive fields, as sensitive. `case_sensitive=True` requires each
+  binding's casing to match exactly.
 - Complex fields (`list`, `dict`, nested models) are JSON-decoded first, exactly
   like the pydantic-settings env source: `TAGS=a,b,c` fails for `TAGS: list[str]`
   while `TAGS=["a","b","c"]` passes.
@@ -149,8 +152,9 @@ envdrift validate .env.production -s config.settings:ProductionSettings --no-che
 ```
 
 When enabled, unencrypted sensitive fields are reported as **warnings** (not errors). Use `envdrift encrypt --check` for strict encryption enforcement.
-Sensitive fields are matched by their validation alias when present, so an aliased
-field is not also reported as unmarked sensitive.
+Sensitive fields are matched by every validation alias when present, so aliased
+fields (including all `AliasChoices` candidates) are not also reported as unmarked
+sensitive.
 
 ### `--fix`
 

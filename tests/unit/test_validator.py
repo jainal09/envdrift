@@ -1,7 +1,7 @@
 """Tests for Validator."""
 
 import pytest
-from pydantic import AliasChoices, Field, model_validator
+from pydantic import AliasChoices, AliasPath, Field, ValidationError, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from envdrift.core.parser import EnvParser
@@ -660,15 +660,46 @@ class TestValidatorEnvPrefix:
     """#669: validation mirrors pydantic-settings ``env_prefix`` bindings."""
 
     @pytest.mark.parametrize(
-        ("settings_cls", "env_name", "expected_alias", "expected_env_name"),
+        (
+            "settings_cls",
+            "env_name",
+            "expected_alias",
+            "expected_env_name",
+            "expected_binding_names",
+        ),
         [
-            (_PrefixedSensitiveSettings, "MYAPP_API_KEY", None, "MYAPP_api_key"),
-            (_AliasChoicesSensitiveSettings, "API_KEY", "API_KEY", "API_KEY"),
+            (
+                _PrefixedSensitiveSettings,
+                "MYAPP_API_KEY",
+                None,
+                "MYAPP_api_key",
+                ("MYAPP_api_key",),
+            ),
+            (
+                _AliasChoicesSensitiveSettings,
+                "API_KEY",
+                "API_KEY",
+                "API_KEY",
+                ("API_KEY", "LEGACY_API_KEY"),
+            ),
+            (
+                _AliasChoicesSensitiveSettings,
+                "LEGACY_API_KEY",
+                "API_KEY",
+                "API_KEY",
+                ("API_KEY", "LEGACY_API_KEY"),
+            ),
         ],
-        ids=["plain-prefixed", "alias-choices"],
+        ids=["plain-prefixed", "alias-choice-first", "alias-choice-later"],
     )
     def test_prefixed_sensitive_binding_validates_without_contradictory_warnings(
-        self, tmp_path, settings_cls, env_name, expected_alias, expected_env_name
+        self,
+        tmp_path,
+        settings_cls,
+        env_name,
+        expected_alias,
+        expected_env_name,
+        expected_binding_names,
     ):
         secret = "sk-" + "live-abcdef1234567890"
         env_file = tmp_path / ".env"
@@ -680,6 +711,7 @@ class TestValidatorEnvPrefix:
 
         assert schema.fields["api_key"].alias == expected_alias
         assert schema.fields["api_key"].env_name == expected_env_name
+        assert schema.fields["api_key"].binding_names == expected_binding_names
         assert result.valid is True
         assert result.missing_required == set()
         assert result.extra_vars == set()
@@ -744,6 +776,157 @@ class TestValidatorEnvPrefix:
         assert result.missing_required == set()
         assert result.extra_vars == set()
         assert result.valid is True
+
+    @pytest.mark.parametrize(
+        ("content", "expected_value"),
+        [
+            ("ENVDRIFT_PRIMARY_PORT_673=7\n", 7),
+            ("ENVDRIFT_LEGACY_PORT_673=8\n", 8),
+            (
+                "ENVDRIFT_PRIMARY_PORT_673=7\nENVDRIFT_LEGACY_PORT_673=not-an-integer\n",
+                7,
+            ),
+        ],
+        ids=["first-choice", "later-choice", "first-choice-wins"],
+    )
+    def test_alias_choices_match_pydantic_settings_binding_order(
+        self, tmp_path, content, expected_value
+    ):
+        class Settings(BaseSettings):
+            model_config = SettingsConfigDict(extra="forbid")
+
+            port: int = Field(
+                ge=1,
+                validation_alias=AliasChoices(
+                    "ENVDRIFT_PRIMARY_PORT_673", "ENVDRIFT_LEGACY_PORT_673"
+                ),
+            )
+
+        env_file = tmp_path / ".env"
+        env_file.write_text(content, encoding="utf-8")
+
+        assert Settings(_env_file=env_file).port == expected_value
+
+        env = EnvParser().parse(env_file)
+        schema = SchemaLoader().extract_metadata(Settings)
+        result = Validator().validate(env, schema, check_encryption=False)
+
+        assert result.missing_required == set()
+        assert result.extra_vars == set()
+        assert result.type_errors == {}
+        assert result.valid is True
+
+    @pytest.mark.parametrize(
+        ("value", "expected_error"),
+        [
+            ("not-an-integer", "Expected integer"),
+            ("0", "greater than or equal to 1"),
+        ],
+        ids=["base-type", "constraint"],
+    )
+    def test_alias_choice_later_value_runs_type_and_constraint_checks(
+        self, tmp_path, value, expected_error
+    ):
+        class Settings(BaseSettings):
+            model_config = SettingsConfigDict(extra="forbid")
+
+            port: int = Field(
+                ge=1,
+                validation_alias=AliasChoices(
+                    "ENVDRIFT_PRIMARY_PORT_673", "ENVDRIFT_LEGACY_PORT_673"
+                ),
+            )
+
+        env_file = tmp_path / ".env"
+        env_file.write_text(f"ENVDRIFT_LEGACY_PORT_673={value}\n", encoding="utf-8")
+        env = EnvParser().parse(env_file)
+        schema = SchemaLoader().extract_metadata(Settings)
+
+        result = Validator().validate(env, schema, check_encryption=False)
+
+        assert result.missing_required == set()
+        assert result.extra_vars == set()
+        assert expected_error in result.type_errors["port"]
+        assert result.valid is False
+
+    def test_mixed_alias_choice_uses_bound_validation_key_for_constraints(self, tmp_path):
+        class Settings(BaseSettings):
+            model_config = SettingsConfigDict(extra="forbid")
+
+            port: int = Field(
+                ge=1,
+                validation_alias=AliasChoices(AliasPath("NESTED_PORT", "value"), "LEGACY_PORT"),
+            )
+
+        env_file = tmp_path / ".env"
+        env_file.write_text("LEGACY_PORT=0\n", encoding="utf-8")
+
+        with pytest.raises(ValidationError) as pydantic_error:
+            Settings(_env_file=env_file)
+        assert pydantic_error.value.errors()[0]["type"] == "greater_than_equal"
+
+        env = EnvParser().parse(env_file)
+        schema = SchemaLoader().extract_metadata(Settings)
+        result = Validator().validate(env, schema, check_encryption=False)
+
+        assert result.missing_required == set()
+        assert result.extra_vars == set()
+        assert "greater than or equal to 1" in result.type_errors["port"]
+        assert result.valid is False
+
+    def test_alias_choice_later_value_satisfies_optional_field(self, tmp_path):
+        class Settings(BaseSettings):
+            model_config = SettingsConfigDict(extra="forbid")
+
+            token: str = Field(
+                default="fallback",
+                validation_alias=AliasChoices("CURRENT_TOKEN", "LEGACY_TOKEN"),
+            )
+
+        env_file = tmp_path / ".env"
+        env_file.write_text("LEGACY_TOKEN=value\n", encoding="utf-8")
+        env = EnvParser().parse(env_file)
+        schema = SchemaLoader().extract_metadata(Settings)
+
+        result = Validator().validate(env, schema, check_encryption=False)
+
+        assert result.missing_optional == set()
+        assert result.extra_vars == set()
+        assert result.valid is True
+
+    def test_sensitive_alias_choices_cover_every_present_candidate(self, tmp_path):
+        env_file = tmp_path / ".env"
+        env_file.write_text(
+            "API_KEY=encrypted:protected\nLEGACY_API_KEY=ordinary\n", encoding="utf-8"
+        )
+        env = EnvParser().parse(env_file)
+        schema = SchemaLoader().extract_metadata(_AliasChoicesSensitiveSettings)
+
+        result = Validator().validate(env, schema)
+
+        assert result.extra_vars == set()
+        assert result.unencrypted_secrets == {"api_key"}
+        assert not [warning for warning in result.warnings if "not marked sensitive" in warning]
+
+    def test_alias_choices_respect_case_sensitive_matching(self, tmp_path):
+        class Settings(BaseSettings):
+            model_config = SettingsConfigDict(case_sensitive=True, extra="forbid")
+
+            token: str = Field(validation_alias=AliasChoices("CurrentToken", "LegacyToken"))
+
+        exact_file = tmp_path / ".env.exact"
+        exact_file.write_text("LegacyToken=value\n", encoding="utf-8")
+        wrong_case_file = tmp_path / ".env.wrong"
+        wrong_case_file.write_text("LEGACYTOKEN=value\n", encoding="utf-8")
+        schema = SchemaLoader().extract_metadata(Settings)
+
+        exact = Validator().validate(EnvParser().parse(exact_file), schema)
+        wrong_case = Validator().validate(EnvParser().parse(wrong_case_file), schema)
+
+        assert exact.valid is True
+        assert wrong_case.missing_required == {"token"}
+        assert wrong_case.extra_vars == {"LEGACYTOKEN"}
+        assert wrong_case.valid is False
 
     def test_prefixed_empty_required_field_respects_env_ignore_empty(self, tmp_path):
         class Settings(BaseSettings):
