@@ -81,7 +81,9 @@ Only required when using legacy configs or overriding the TOML defaults.
 
 Check only mode. Reports differences without modifying files.
 
-Reports mismatches as errors but exits non-zero only when combined with `--ci`. In CI/CD, use `--verify --ci` so the build fails on drift.
+Exits with code 1 when any mapping errors (a mismatch, a missing local key, or a configured secret that is missing from the vault), so CI fails on drift
+without needing `--ci`. A mapping whose folder has no env file yet is only skipped after confirming its configured secret exists in the vault — a
+deleted vault secret is an error, not a skip.
 
 ### `--force`, `-f`
 
@@ -334,11 +336,11 @@ Update local file with vault value? (y/N):
 
 ### Verify Mode (`--verify`)
 
-Reports differences without modifying files. Mismatches are reported as errors, but the command exits non-zero only when combined with `--ci`
-(use `--verify --ci` to fail the build on mismatch).
+Reports differences without modifying files. Any error — a local/vault mismatch, a missing local key, or a configured secret that is missing from the
+vault — makes the command exit 1, with or without `--ci`.
 
 ```text
-  x services/myapp - error
+  x services/myapp (myapp-key, env: production) - error
     Error: Local value differs from vault
     Local:  <redacted len=64 sha=1a2b3c4d>
     Vault:  <redacted len=64 sha=5e6f7a8b>
@@ -349,8 +351,17 @@ message that distinguishes a missing `.env.keys` file from a file that exists
 but lacks the expected key:
 
 ```text
-  x services/myapp - error
+  x services/myapp (myapp-key, env: production) - error
     Error: DOTENV_PRIVATE_KEY_PRODUCTION missing from services/myapp/.env.keys
+```
+
+A mapping whose folder has no env file yet is skipped only after the
+configured secret is confirmed to exist in the vault; if the secret is
+missing, verify reports an error instead of a skip:
+
+```text
+  x services/myapp (myapp-key, env: production) - error
+    Error: Secret 'myapp-key' not found in Vault
 ```
 
 ### Force Mode (`--force`)
@@ -358,7 +369,7 @@ but lacks the expected key:
 Updates all mismatches without prompting. Creates backups before updating.
 
 ```text
-  ~ services/myapp - updated
+  ~ services/myapp (myapp-key, env: production) - updated
     Backup: services/myapp/.env.keys.backup.20240115_143022_123456
 ```
 
@@ -366,12 +377,16 @@ Updates all mismatches without prompting. Creates backups before updating.
 
 ### Per-Service Status
 
+Each row names the mapping's secret and effective environment alongside the
+folder, so two mappings sharing a `folder_path` (for example per-environment
+secrets for one service) stay distinguishable:
+
 ```text
-  + services/myapp - created
-  ~ services/auth - updated
-  = services/api - skipped
-  * services/ci - ephemeral (key not stored locally)
-  x services/broken - error
+  + services/myapp (myapp-key, env: production) - created
+  ~ services/auth (auth-key, env: production) - updated
+  = services/api (api-key, env: production) - skipped
+  * services/ci (ci-key, env: production) - ephemeral (key not stored locally)
+  x services/broken (broken-key, env: production) - error
 ```
 
 Icons:
@@ -385,7 +400,7 @@ Icons:
 ### Decryption Test Results
 
 ```text
-  + services/myapp - created
+  + services/myapp (myapp-key, env: production) - created
     Decryption: PASSED
 ```
 

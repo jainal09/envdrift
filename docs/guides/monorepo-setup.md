@@ -179,14 +179,14 @@ envdrift pull
 Output:
 
 ```text
-Processing: services/api
-  + services/api - created
+Processing: services/api (api-dotenvx-key, env: production)
+  + services/api (api-dotenvx-key, env: production) - created
 
-Processing: services/web
-  + services/web - created
+Processing: services/web (web-dotenvx-key, env: production)
+  + services/web (web-dotenvx-key, env: production) - created
 
-Processing: services/worker
-  + services/worker - created
+Processing: services/worker (worker-dotenvx-key, env: production)
+  + services/worker (worker-dotenvx-key, env: production) - created
 
 ╭──────────── Sync Summary ────────────╮
 │ Services processed: 3                │

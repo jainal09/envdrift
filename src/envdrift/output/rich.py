@@ -321,6 +321,23 @@ def print_sync_summary(
         console.print(f"[bold red]{errors} service(s) failed[/bold red]")
 
 
+def _service_identity(result: ServiceSyncResult) -> str:
+    """Escaped ``<folder> (<secret>, env: <env>)`` row prefix for sync output.
+
+    Identifies the mapping, not just the folder: two mappings can share a
+    folder_path (per-environment secrets for one service), and bare
+    "<folder> - <status>" rows are indistinguishable (#441). Folder, secret
+    name, and environment are user-controlled (config/vault values), so each
+    is escaped: a bracketed segment like ``kv/app[legacy]/key`` must render
+    literally instead of being eaten as Rich markup, and a stray closing tag
+    must not raise ``MarkupError``.
+    """
+    identity = escape(str(result.secret_name))
+    if result.environment:
+        identity += f", env: {escape(result.environment)}"
+    return f"{escape(str(result.folder_path))} [dim]({identity})[/dim]"
+
+
 def print_service_sync_status(result: ServiceSyncResult) -> None:
     """
     Print status for a single service sync operation.
@@ -349,14 +366,16 @@ def print_service_sync_status(result: ServiceSyncResult) -> None:
         icon = "[red]x[/red]"
         status = "[red]error[/red]"
 
-    console.print(f"  {icon} {result.folder_path} - {status}")
+    console.print(f"  {icon} {_service_identity(result)} - {status}")
 
     # Show error details. When the engine only set ``message`` (no ``error``),
     # fall back to it so an error row always carries its reason (#487).
+    # Escaped: error text embeds user-controlled names (secret, folder), so a
+    # bracketed segment must render literally, not crash or vanish as markup.
     if result.error:
-        console.print(f"    [red]Error: {result.error}[/red]")
+        console.print(f"    [red]Error: {escape(result.error)}[/red]")
     elif result.action == SyncAction.ERROR and result.message:
-        console.print(f"    [red]Error: {result.message}[/red]")
+        console.print(f"    [red]Error: {escape(result.message)}[/red]")
 
     # Show mismatch preview
     if result.local_value_preview and result.vault_value_preview:

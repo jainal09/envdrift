@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 import typer
+from rich.markup import escape
 
 from envdrift.output.rich import console, print_error
 from envdrift.vault.base import SecretNotFoundError, VaultError
@@ -99,7 +100,10 @@ def _new_sync_engine(request: SyncRequest, context: _SyncContext):
 
     def progress_callback(message: str) -> None:
         if not request.ci:
-            console.print(f"[dim]{message}[/dim]")
+            # Progress text embeds user-controlled names (folders, secrets);
+            # escape so brackets render literally instead of being parsed as
+            # Rich markup — or raising MarkupError on a stray closing tag.
+            console.print(f"[dim]{escape(message)}[/dim]")
 
     def prompt_callback(message: str) -> bool:
         if _prompting_disabled(request):
@@ -150,7 +154,11 @@ def _print_sync_result(result: Any) -> None:
 
 
 def _raise_sync_result_errors(request: SyncRequest, result: Any) -> None:
-    if request.ci and result.has_errors:
+    # --verify is a drift check: reporting error rows while still exiting 0
+    # let CI pass on real drift (a deleted vault secret, a local/vault
+    # mismatch), so verify implies the --ci error gate (#441).
+    errors_gate_exit = request.ci or request.verify
+    if errors_gate_exit and result.has_errors:
         raise typer.Exit(code=1)
     if request.check_decryption and result.decryption_failed > 0:
         raise typer.Exit(code=1)

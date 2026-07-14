@@ -171,10 +171,10 @@ Provider: azure | Services: 3
 
 Step 1: Syncing keys from vault...
 
-Processing: services/myapp
-Processing: services/auth
-  + services/myapp - created
-  = services/auth - skipped
+Processing: services/myapp (myapp-key, env: production)
+Processing: services/auth (auth-key, env: production)
+  + services/myapp (myapp-key, env: production) - created
+  = services/auth (auth-key, env: production) - skipped
 
 ╭──────────── Sync Summary ────────────╮
 │ Services processed: 2                │

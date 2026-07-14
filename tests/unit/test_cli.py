@@ -2511,6 +2511,94 @@ class TestSyncCommand:
 
         assert result.exit_code == 1
 
+    def test_sync_verify_exits_on_errors_without_ci(self, monkeypatch, tmp_path: Path):
+        """#441: `sync --verify` must exit 1 on errors even without --ci.
+
+        Pre-fix the drift check printed error rows and "Sync completed with
+        errors" yet still exited 0, so scripts gating on the exit code missed
+        real drift.
+        """
+
+        config_file = tmp_path / "pair.txt"
+        config_file.write_text("secret=service")
+
+        monkeypatch.setattr("envdrift.vault.get_vault_client", lambda *_, **__: SimpleNamespace())
+        monkeypatch.setattr("envdrift.output.rich.print_service_sync_status", lambda *_, **__: None)
+        monkeypatch.setattr("envdrift.output.rich.print_sync_result", lambda *_, **__: None)
+        monkeypatch.setattr(
+            "envdrift.sync.engine.SyncMode",
+            lambda **kwargs: SimpleNamespace(**kwargs),
+        )
+
+        class ErrorEngine:
+            def __init__(self, *_args, **_kwargs):
+                """Test stub that returns a failed sync result."""
+
+            def sync_all(self):
+                """Return a sync result with errors."""
+                return SimpleNamespace(services=[], has_errors=True)
+
+        monkeypatch.setattr("envdrift.sync.engine.SyncEngine", ErrorEngine)
+
+        result = runner.invoke(
+            app,
+            [
+                "sync",
+                "-c",
+                str(config_file),
+                "-p",
+                "hashicorp",
+                "--vault-url",
+                "http://localhost:8200",
+                "--verify",
+            ],
+        )
+
+        assert result.exit_code == 1
+
+    def test_sync_survives_markup_like_secret_names(self, monkeypatch, tmp_path: Path):
+        """#661 review: markup-like secret names must render, not crash.
+
+        The mapping identity is interpolated into markup-interpreted console
+        output. Pre-fix, ``[/red]`` in a secret name raised ``MarkupError``
+        (full traceback) at the "Processing:" line of every engine command,
+        and a ``[legacy]``-style segment was silently eaten as a Rich tag.
+        """
+        from envdrift.vault.base import SecretValue
+
+        secret_name = "edge661/[/red]key[legacy]"
+        (tmp_path / "envdrift.toml").write_text(
+            "[vault]\n"
+            'provider = "hashicorp"\n\n'
+            "[vault.hashicorp]\n"
+            'url = "http://localhost:8200"\n\n'
+            "[[vault.sync.mappings]]\n"
+            f'secret_name = "{secret_name}"\n'
+            'folder_path = "svc"\n'
+            'environment = "production"\n',
+            encoding="utf-8",
+        )
+        (tmp_path / "svc").mkdir()
+        monkeypatch.chdir(tmp_path)
+
+        class StubVaultClient:
+            def ensure_authenticated(self):
+                """No-op auth for the stub."""
+
+            def get_secret(self, name):
+                """Return usable key material under the bracketed name."""
+                return SecretValue(name=name, value="DOTENV_PRIVATE_KEY_PRODUCTION=deadbeef")
+
+        monkeypatch.setattr("envdrift.vault.get_vault_client", lambda *_, **__: StubVaultClient())
+
+        result = runner.invoke(app, ["sync", "--verify"])
+
+        flat = " ".join(result.output.split())
+        assert result.exit_code == 0, flat
+        assert "MarkupError" not in flat, flat
+        # The bracketed segments render literally on the Processing line and row.
+        assert secret_name in flat, flat
+
     def test_sync_check_decryption_failure_exits_nonzero_without_ci(
         self, monkeypatch, tmp_path: Path
     ):
