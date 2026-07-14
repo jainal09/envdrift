@@ -11,6 +11,11 @@ import pytest
 pytestmark = [pytest.mark.integration]
 
 
+def _flat(output: str) -> str:
+    """Normalize Rich output for substring assertions at narrow widths."""
+    return " ".join(output.split())
+
+
 def _run_envdrift(
     args: list[str],
     cwd: Path,
@@ -43,7 +48,7 @@ def test_human_error_is_written_only_to_stderr(
 
     assert result.returncode == 1
     assert result.stdout == ""
-    assert "[ERROR] No sync configuration found" in result.stderr
+    assert "[ERROR] No sync configuration found" in _flat(result.stderr)
 
 
 def test_successful_diff_keeps_stderr_quiet(
@@ -63,7 +68,7 @@ def test_successful_diff_keeps_stderr_quiet(
     )
 
     assert result.returncode == 0
-    assert "No drift detected" in result.stdout
+    assert "No drift detected" in _flat(result.stdout)
     assert result.stderr == ""
 
 
@@ -84,9 +89,9 @@ def test_human_warning_is_written_only_to_stderr(
     )
 
     assert result.returncode == 0
-    assert "Drift detected" in result.stdout
-    assert "Could not load schema" not in result.stdout
-    assert "[WARN] Could not load schema" in result.stderr
+    assert "Drift detected" in _flat(result.stdout)
+    assert "Could not load schema" not in _flat(result.stdout)
+    assert "[WARN] Could not load schema" in _flat(result.stderr)
 
 
 def test_guard_usage_error_is_written_only_to_stderr(
@@ -104,7 +109,7 @@ def test_guard_usage_error_is_written_only_to_stderr(
 
     assert result.returncode == 6
     assert result.stdout == ""
-    assert "Error: Path not found: missing.env" in result.stderr
+    assert "Error: Path not found: missing.env" in _flat(result.stderr)
 
 
 def test_guard_human_findings_report_stays_on_stdout(
@@ -124,7 +129,7 @@ def test_guard_human_findings_report_stays_on_stdout(
     )
 
     assert result.returncode == 1
-    assert "aws-secret-access-key" in result.stdout
+    assert "aws-secret-access-key" in _flat(result.stdout)
     assert result.stderr == ""
 
 
