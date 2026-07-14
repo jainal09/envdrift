@@ -467,9 +467,9 @@ def test_diff_format_unknown_value_exits_1(tmp_path: Path, integration_pythonpat
     result = _run_diff([".env.a", ".env.b", "--format", "bogus"], tmp_path, integration_pythonpath)
 
     assert result.returncode == 1
-    combined = result.stdout + result.stderr
-    assert "Invalid --format" in combined
-    assert "bogus" in combined
+    assert result.stdout == ""
+    assert "Invalid --format" in result.stderr
+    assert "bogus" in result.stderr
 
 
 class TestDiffRobustErrors:
@@ -489,7 +489,8 @@ class TestDiffRobustErrors:
         result = _run_diff([str(a), str(d)], tmp_path, integration_pythonpath)
         assert result.returncode == 1
         assert "Traceback" not in result.stderr
-        assert "Not a file" in result.stdout
+        assert result.stdout == ""
+        assert "Not a file" in result.stderr
 
     def test_binary_file_errors_cleanly(self, tmp_path, integration_pythonpath):
         a = self._env(tmp_path)
@@ -498,7 +499,8 @@ class TestDiffRobustErrors:
         result = _run_diff([str(a), str(b)], tmp_path, integration_pythonpath)
         assert result.returncode == 1
         assert "Traceback" not in result.stderr
-        assert "UTF-8" in result.stdout
+        assert result.stdout == ""
+        assert "UTF-8" in result.stderr
 
     def test_json_error_path_is_clean_json(self, tmp_path, integration_pythonpath):
         a = self._env(tmp_path)

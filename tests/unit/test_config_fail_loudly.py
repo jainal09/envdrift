@@ -430,9 +430,9 @@ class TestEncryptDecryptAbortOnBrokenConfig:
         result = runner.invoke(app, ["encrypt", str(env_file)])
 
         assert result.exit_code == 1, result.output
-        out = _flat(result.output)
+        out = _flat(result.stderr)
         assert "[ERROR] TOML syntax error in" in out
-        assert "[OK] Encrypted" not in out
+        assert result.stdout == ""
         assert env_file.read_text(encoding="utf-8") == "FOO=bar\n"
         assert not (tmp_path / ".env.keys").exists()
 
@@ -446,8 +446,9 @@ class TestEncryptDecryptAbortOnBrokenConfig:
         result = runner.invoke(app, ["decrypt", str(env_file)])
 
         assert result.exit_code == 1, result.output
-        out = _flat(result.output)
+        out = _flat(result.stderr)
         assert "[ERROR] TOML syntax error in" in out
+        assert result.stdout == ""
         assert env_file.read_text(encoding="utf-8") == "FOO=bar\n"
 
 

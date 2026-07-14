@@ -2826,9 +2826,10 @@ class TestSyncCommand:
         )
 
         assert result.exit_code == 1
-        normalized = " ".join(result.output.split())
+        normalized = " ".join(result.stderr.split())
         assert "TOML syntax error in" in normalized
         assert "No sync configuration found" not in normalized
+        assert result.stdout == ""
 
     def test_sync_missing_config_file_errors(self, tmp_path: Path):
         """Missing provided config file should exit with error."""
@@ -3089,9 +3090,10 @@ class TestSyncCommand:
         )
 
         assert result.exit_code == 1
-        normalized = " ".join(result.output.split())
+        normalized = " ".join(result.stderr.split())
         assert "[ERROR] TOML syntax error in" in normalized
         assert "No sync configuration found" not in normalized
+        assert result.stdout == ""
 
 
 class TestPullCommand:

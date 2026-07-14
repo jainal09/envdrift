@@ -30,7 +30,8 @@ def test_validate_requires_schema() -> None:
     """Test validate command requires --schema."""
     result = runner.invoke(app, ["validate"])
     assert result.exit_code == 1
-    assert "--schema" in result.stdout or "schema" in result.stdout.lower()
+    assert result.stdout == ""
+    assert "--schema" in result.stderr or "schema" in result.stderr.lower()
 
 
 def test_validate_file_not_found(tmp_path) -> None:
@@ -39,7 +40,8 @@ def test_validate_file_not_found(tmp_path) -> None:
         app, ["validate", str(tmp_path / "nonexistent.env"), "--schema", "app:Settings"]
     )
     assert result.exit_code == 1
-    assert "not found" in result.stdout.lower()
+    assert result.stdout == ""
+    assert "not found" in result.stderr.lower()
 
 
 def test_diff_requires_two_files() -> None:
@@ -55,7 +57,8 @@ def test_diff_file_not_found(tmp_path) -> None:
 
     result = runner.invoke(app, ["diff", str(env1), str(tmp_path / "nonexistent.env")])
     assert result.exit_code == 1
-    assert "not found" in result.stdout.lower()
+    assert result.stdout == ""
+    assert "not found" in result.stderr.lower()
 
 
 def test_diff_identical_files(tmp_path) -> None:
@@ -146,7 +149,8 @@ def test_diff_env1_missing(tmp_path) -> None:
 
     result = runner.invoke(app, ["diff", str(tmp_path / "missing.env"), str(env2)])
     assert result.exit_code == 1
-    assert "not found" in result.stdout.lower()
+    assert result.stdout == ""
+    assert "not found" in result.stderr.lower()
 
 
 def test_diff_normalize_default_collapses_bool_casing(tmp_path) -> None:
@@ -182,7 +186,8 @@ def test_diff_schema_load_error_warns_and_continues(tmp_path) -> None:
 
     result = runner.invoke(app, ["diff", str(env1), str(env2), "--schema", "does.not.exist:Nope"])
     assert result.exit_code == 0
-    assert "could not load schema" in result.stdout.lower()
+    assert "could not load schema" not in result.stdout.lower()
+    assert "could not load schema" in result.stderr.lower()
 
 
 def test_encrypt_check_file_not_found(tmp_path) -> None:
@@ -288,7 +293,8 @@ def test_lock_no_config_found(tmp_path) -> None:
         result = runner.invoke(app, ["lock"])
         assert result.exit_code == 1
         # Should indicate no config found
-        assert "No sync configuration found" in result.stdout or "provider" in result.stdout.lower()
+        assert result.stdout == ""
+        assert "No sync configuration found" in result.stderr or "provider" in result.stderr.lower()
     finally:
         os.chdir(original_cwd)
 
