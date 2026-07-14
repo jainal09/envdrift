@@ -32,10 +32,14 @@ class FieldMetadata:
     description: str | None
     field_type: type
     annotation: str
-    # The Pydantic alias (the real env-var name) when the attribute name differs,
-    # e.g. a field ``X_API_KEY`` with ``Field(alias='X-API-KEY')``. Validation
-    # matches the .env against this when present so a non-identifier key resolves.
+    # The effective Pydantic validation alias used as the input key for
+    # ``model_validate``. ``validation_alias`` takes precedence over ``alias``.
     alias: str | None = None
+    # The effective environment binding name. Plain fields include the model's
+    # ``env_prefix``; explicit aliases bypass the prefix, matching
+    # pydantic-settings. Kept separate from ``alias`` because model validation
+    # expects field names/aliases, never prefixed environment names (#669).
+    env_name: str | None = None
     # The field's ``FieldInfo.metadata`` — pydantic strips ``Annotated[...]``
     # extras (constraint markers, ``pydantic.Json``, ...) into it, and the
     # env-source complexity/coercion decision needs it: a ``Json`` marker makes
@@ -75,6 +79,9 @@ class SchemaMetadata:
     # when False (the pydantic-settings default) the model sees the empty string
     # and e.g. ``PORT=`` crashes an int field at startup (#472).
     env_ignore_empty: bool = False
+    # Mirrors SettingsConfigDict(case_sensitive=...). Environment binding names
+    # are folded only when False, the pydantic-settings default.
+    case_sensitive: bool = False
 
     @property
     def required_fields(self) -> list[str]:
@@ -265,6 +272,18 @@ class SchemaLoader:
             ignore_empty = getattr(model_config, "env_ignore_empty", False)
         schema.env_ignore_empty = bool(ignore_empty)
 
+        # The prefix is part of the environment-source binding for plain fields,
+        # while an explicit alias bypasses it. Matching folds the resulting name
+        # only when the model is case-insensitive (#669).
+        if isinstance(model_config, dict):
+            raw_env_prefix = model_config.get("env_prefix", "")
+            case_sensitive = model_config.get("case_sensitive", False)
+        else:
+            raw_env_prefix = getattr(model_config, "env_prefix", "")
+            case_sensitive = getattr(model_config, "case_sensitive", False)
+        env_prefix = raw_env_prefix if isinstance(raw_env_prefix, str) else ""
+        schema.case_sensitive = bool(case_sensitive)
+
         # Track whether any field needs real Pydantic validation (a constraint, a
         # non-plain-scalar type such as Literal/EmailStr/a nested model, or a
         # custom validator). A model with only plain str/int/float/bool fields is
@@ -308,10 +327,11 @@ class SchemaLoader:
             else:
                 type_str = "Any"
 
-            # The real env-var name when it differs from the attribute name
-            # (validation_alias takes precedence over alias when both are set).
+            # The model-validation input alias. The environment binding is kept
+            # separately because plain fields add env_prefix while aliases do not.
             field_alias = field_info.validation_alias or field_info.alias
             field_alias = field_alias if isinstance(field_alias, str) else None
+            env_name = field_alias or f"{env_prefix}{field_name}"
 
             schema.fields[field_name] = FieldMetadata(
                 name=field_name,
@@ -322,6 +342,7 @@ class SchemaLoader:
                 field_type=annotation if annotation else type(None),
                 annotation=type_str,
                 alias=field_alias,
+                env_name=env_name,
                 type_metadata=tuple(field_info.metadata),
             )
 
