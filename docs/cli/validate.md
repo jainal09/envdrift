@@ -25,6 +25,10 @@ Type validation mirrors what the real app does at startup:
   pydantic-settings actually passes through, so an empty `int`/`float`/`bool`
   field fails like the real app (unless the schema sets `env_ignore_empty=True`,
   in which case the value counts as unset).
+- `SettingsConfigDict(env_prefix="MYAPP_")` is applied to plain field names, so
+  `api_key` binds to `MYAPP_API_KEY` under the default case-insensitive matching.
+  Explicit field aliases and validation aliases bypass the prefix, and
+  `case_sensitive=True` requires the prefix and field-name casing to match exactly.
 - Complex fields (`list`, `dict`, nested models) are JSON-decoded first, exactly
   like the pydantic-settings env source: `TAGS=a,b,c` fails for `TAGS: list[str]`
   while `TAGS=["a","b","c"]` passes.

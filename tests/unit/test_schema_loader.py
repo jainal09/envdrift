@@ -7,6 +7,7 @@ from types import SimpleNamespace
 from typing import cast
 
 import pytest
+from pydantic import AliasPath, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from envdrift.core.schema import FieldMetadata, SchemaLoader, SchemaLoadError, SchemaMetadata
@@ -146,6 +147,20 @@ def test_extract_metadata_with_config_object_and_typing():
     assert schema.extra_policy == "forbid"
     assert "items" in schema.fields
     assert schema.fields["items"].annotation
+
+
+def test_extract_metadata_alias_path_uses_first_component_without_prefix():
+    """AliasPath's environment key bypasses env_prefix like pydantic-settings."""
+
+    class Settings(BaseSettings):
+        model_config = SettingsConfigDict(env_prefix="MYAPP_")
+
+        api_key: str = Field(validation_alias=AliasPath("TOKENS", 0))
+
+    schema = SchemaLoader().extract_metadata(Settings)
+
+    assert schema.fields["api_key"].alias == "TOKENS"
+    assert schema.fields["api_key"].env_name == "TOKENS"
 
 
 def test_get_schema_metadata_func_missing_module():

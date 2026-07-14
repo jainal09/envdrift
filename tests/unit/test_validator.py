@@ -1,11 +1,27 @@
 """Tests for Validator."""
 
-from pydantic import Field, model_validator
+import pytest
+from pydantic import AliasChoices, Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from envdrift.core.parser import EnvParser
 from envdrift.core.schema import SchemaLoader
 from envdrift.core.validator import Validator
+
+
+class _PrefixedSensitiveSettings(BaseSettings):
+    model_config = SettingsConfigDict(env_prefix="MYAPP_", extra="forbid")
+
+    api_key: str = Field(json_schema_extra={"sensitive": True})
+
+
+class _AliasChoicesSensitiveSettings(BaseSettings):
+    model_config = SettingsConfigDict(env_prefix="MYAPP_", extra="forbid")
+
+    api_key: str = Field(
+        validation_alias=AliasChoices("API_KEY", "LEGACY_API_KEY"),
+        json_schema_extra={"sensitive": True},
+    )
 
 
 class TestValidator:
@@ -638,6 +654,142 @@ class TestValidatorAliasMatching:
 
         assert result.valid is False
         assert "X_API_KEY" in result.missing_required
+
+
+class TestValidatorEnvPrefix:
+    """#669: validation mirrors pydantic-settings ``env_prefix`` bindings."""
+
+    @pytest.mark.parametrize(
+        ("settings_cls", "env_name", "expected_alias", "expected_env_name"),
+        [
+            (_PrefixedSensitiveSettings, "MYAPP_API_KEY", None, "MYAPP_api_key"),
+            (_AliasChoicesSensitiveSettings, "API_KEY", "API_KEY", "API_KEY"),
+        ],
+        ids=["plain-prefixed", "alias-choices"],
+    )
+    def test_prefixed_sensitive_binding_validates_without_contradictory_warnings(
+        self, tmp_path, settings_cls, env_name, expected_alias, expected_env_name
+    ):
+        secret = "sk-" + "live-abcdef1234567890"
+        env_file = tmp_path / ".env"
+        env_file.write_text(f"{env_name}={secret}\n", encoding="utf-8")
+        env = EnvParser().parse(env_file)
+        schema = SchemaLoader().extract_metadata(settings_cls)
+
+        result = Validator().validate(env, schema)
+
+        assert schema.fields["api_key"].alias == expected_alias
+        assert schema.fields["api_key"].env_name == expected_env_name
+        assert result.valid is True
+        assert result.missing_required == set()
+        assert result.extra_vars == set()
+        assert result.unencrypted_secrets == {"api_key"}
+        assert not [warning for warning in result.warnings if "not marked sensitive" in warning]
+
+    def test_prefixed_type_and_constraint_errors_use_model_field_keys(self, tmp_path):
+        class Settings(BaseSettings):
+            model_config = SettingsConfigDict(env_prefix="MYAPP_", extra="forbid")
+
+            port: int
+            retry_count: int = Field(ge=1)
+
+        env_file = tmp_path / ".env"
+        env_file.write_text("MYAPP_PORT=not-an-int\nMYAPP_RETRY_COUNT=0\n", encoding="utf-8")
+        env = EnvParser().parse(env_file)
+        schema = SchemaLoader().extract_metadata(Settings)
+
+        result = Validator().validate(env, schema, check_encryption=False)
+
+        assert result.missing_required == set()
+        assert result.extra_vars == set()
+        assert "Expected integer" in result.type_errors["port"]
+        assert "greater than or equal to 1" in result.type_errors["retry_count"]
+        assert result.valid is False
+
+    def test_aliases_bypass_env_prefix(self, tmp_path):
+        class Settings(BaseSettings):
+            model_config = SettingsConfigDict(env_prefix="MYAPP_", extra="forbid")
+
+            api_key: str = Field(alias="AUTH_TOKEN")
+            legacy_key: str = Field(validation_alias="LEGACY_TOKEN")
+
+        env_file = tmp_path / ".env"
+        env_file.write_text("AUTH_TOKEN=value\nLEGACY_TOKEN=legacy\n", encoding="utf-8")
+        env = EnvParser().parse(env_file)
+        schema = SchemaLoader().extract_metadata(Settings)
+
+        result = Validator().validate(env, schema, check_encryption=False)
+
+        assert schema.fields["api_key"].env_name == "AUTH_TOKEN"
+        assert schema.fields["legacy_key"].env_name == "LEGACY_TOKEN"
+        assert result.missing_required == set()
+        assert result.extra_vars == set()
+        assert result.valid is True
+
+    def test_alias_choices_first_choice_binds_without_env_prefix(self, tmp_path):
+        class Settings(BaseSettings):
+            model_config = SettingsConfigDict(extra="forbid")
+
+            api_key: str = Field(validation_alias=AliasChoices("API_KEY", "LEGACY_API_KEY"))
+
+        env_file = tmp_path / ".env"
+        env_file.write_text("API_KEY=value\n", encoding="utf-8")
+        env = EnvParser().parse(env_file)
+        schema = SchemaLoader().extract_metadata(Settings)
+
+        result = Validator().validate(env, schema, check_encryption=False)
+
+        assert schema.fields["api_key"].alias == "API_KEY"
+        assert schema.fields["api_key"].env_name == "API_KEY"
+        assert result.missing_required == set()
+        assert result.extra_vars == set()
+        assert result.valid is True
+
+    def test_prefixed_empty_required_field_respects_env_ignore_empty(self, tmp_path):
+        class Settings(BaseSettings):
+            model_config = SettingsConfigDict(
+                env_prefix="MYAPP_", env_ignore_empty=True, extra="forbid"
+            )
+
+            port: int
+
+        env_file = tmp_path / ".env"
+        env_file.write_text("MYAPP_PORT=\n", encoding="utf-8")
+        env = EnvParser().parse(env_file)
+        schema = SchemaLoader().extract_metadata(Settings)
+
+        result = Validator().validate(env, schema, check_encryption=False)
+
+        assert result.missing_required == {"port"}
+        assert result.extra_vars == set()
+        assert result.type_errors == {}
+        assert result.valid is False
+
+    def test_case_sensitive_prefix_and_field_name_require_exact_case(self, tmp_path):
+        class Settings(BaseSettings):
+            model_config = SettingsConfigDict(
+                env_prefix="MyApp_", case_sensitive=True, extra="forbid"
+            )
+
+            api_key: str
+
+        exact_file = tmp_path / ".env.exact"
+        exact_file.write_text("MyApp_api_key=value\n", encoding="utf-8")
+        wrong_case_file = tmp_path / ".env.wrong"
+        wrong_case_file.write_text("MYAPP_API_KEY=value\n", encoding="utf-8")
+        schema = SchemaLoader().extract_metadata(Settings)
+
+        exact = Validator().validate(EnvParser().parse(exact_file), schema, check_encryption=False)
+        wrong_case = Validator().validate(
+            EnvParser().parse(wrong_case_file), schema, check_encryption=False
+        )
+
+        assert schema.case_sensitive is True
+        assert schema.fields["api_key"].env_name == "MyApp_api_key"
+        assert exact.valid is True
+        assert wrong_case.missing_required == {"api_key"}
+        assert wrong_case.extra_vars == {"MYAPP_API_KEY"}
+        assert wrong_case.valid is False
 
 
 class TestKnownValidatorGaps:
