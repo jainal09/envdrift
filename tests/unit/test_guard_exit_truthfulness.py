@@ -147,7 +147,7 @@ class TestScanErrorExitCode:
     def test_rich_mode_does_not_print_green_all_clear(self, tmp_path: Path, monkeypatch):
         _patch_engine(monkeypatch, _result([], errors={"talisman": "exit status 128"}))
         result = runner.invoke(app, ["guard", str(tmp_path)])
-        normalized = " ".join(result.output.split())
+        normalized = " ".join(result.stdout.split())
         assert "No secrets or policy violations detected" not in normalized, (
             "an errored scan must not be presented as a clean pass"
         )
@@ -256,7 +256,7 @@ class TestIgnoreRulesShapeValidation:
         monkeypatch.chdir(tmp_path)
         result = runner.invoke(app, ["guard", "--native-only", "--no-auto-install", "."])
         assert result.exit_code == 6
-        normalized = " ".join(result.output.split())
+        normalized = " ".join(result.stderr.split())
         assert "ignore_rules" in normalized
         assert "Traceback" not in result.output
 
@@ -372,7 +372,7 @@ class TestFailOnSeverityValidation:
         monkeypatch.chdir(tmp_path)
         result = runner.invoke(app, ["guard", "--native-only", "--no-auto-install", "."])
         assert result.exit_code == 6
-        assert "fail_on_severity" in " ".join(result.output.split())
+        assert "fail_on_severity" in " ".join(result.stderr.split())
         assert "Traceback" not in result.output
 
 
@@ -456,7 +456,7 @@ class TestOperationalErrorExitCode:
         _patch_engine(monkeypatch, _result([]))
         result = runner.invoke(app, ["guard", str(tmp_path), "--fail-on", "bogus"])
         assert result.exit_code == 6
-        assert "invalid severity" in result.output.lower()
+        assert "invalid severity" in result.stderr.lower()
 
     def test_sarif_error_doc_carries_operational_exit_code(self, tmp_path: Path):
         missing = tmp_path / "does-not-exist"
@@ -579,7 +579,7 @@ class TestDefaultScannerUnavailableSkips:
         scan_dir = self._hide_gitleaks(monkeypatch, tmp_path)
         result = runner.invoke(app, ["guard", "--no-auto-install", str(scan_dir)])
         assert result.exit_code == 0
-        normalized = " ".join(result.output.split())
+        normalized = " ".join(result.stdout.split())
         assert "Scanners Skipped" in normalized
         assert "gitleaks" in normalized
         assert "No secrets or policy violations detected" in normalized

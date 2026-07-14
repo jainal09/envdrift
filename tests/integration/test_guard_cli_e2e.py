@@ -425,8 +425,9 @@ def test_path_not_found_exits_operational_code(git_repo: Path) -> None:
     """A nonexistent path exits 6 (operational error, distinct from critical's 1, #478)."""
     work_dir = git_repo
     result = _run_envdrift(["guard", "--native-only", "./does_not_exist.py"], cwd=work_dir)
-    assert result.returncode == 6, f"expected 6, got {result.returncode}\n{result.stdout}"
-    assert "Path not found" in (result.stdout + result.stderr)
+    assert result.returncode == 6, f"expected 6, got {result.returncode}\n{result.stderr}"
+    assert result.stdout == ""
+    assert "Path not found" in result.stderr
 
 
 # --- EC-21 (P1): --skip-clear overrides the allowed_clear_files allowlist --------
@@ -945,5 +946,7 @@ def test_combined_file_gitignore_check_handles_non_ascii_name(git_repo: Path) ->
     # security check actually ran and matched against git's answer.
     assert "SECURITY WARNING" in out, out
     assert "unprotected.combined.env" in out, out
+    assert "SECURITY WARNING" not in result.stdout
+    assert "unprotected.combined.env" in result.stderr
     # The gitignored CJK combined file must NOT be flagged.
     assert _CJK_COMBINED_NAME not in out, out

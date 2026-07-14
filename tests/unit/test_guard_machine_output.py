@@ -178,7 +178,7 @@ def test_guard_human_error_preserves_bracketed_literal(tmp_path):
     # split the literal across lines -- normalize whitespace before asserting. The
     # behavior under test is markup-escaping (does "[vault.sync]" survive Rich?),
     # not line wrapping.
-    normalized = "".join(result.stdout.split())
+    normalized = "".join(result.stderr.split())
     assert "[vault.sync].env" in normalized
 
 

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import subprocess
 from pathlib import Path
 
@@ -86,3 +87,65 @@ def test_human_warning_is_written_only_to_stderr(
     assert "Drift detected" in result.stdout
     assert "Could not load schema" not in result.stdout
     assert "[WARN] Could not load schema" in result.stderr
+
+
+def test_guard_usage_error_is_written_only_to_stderr(
+    tmp_path: Path,
+    envdrift_cmd: list[str],
+    integration_env: dict[str, str],
+) -> None:
+    """Guard operational errors follow the human-diagnostic stream contract."""
+    result = _run_envdrift(
+        ["guard", "missing.env", "--native-only", "--no-auto-install"],
+        tmp_path,
+        envdrift_cmd,
+        integration_env,
+    )
+
+    assert result.returncode == 6
+    assert result.stdout == ""
+    assert "Error: Path not found: missing.env" in result.stderr
+
+
+def test_guard_human_findings_report_stays_on_stdout(
+    tmp_path: Path,
+    envdrift_cmd: list[str],
+    integration_env: dict[str, str],
+) -> None:
+    """Guard findings are product output, not diagnostics."""
+    secret = "wJalrXUtnFEMI/" + "K7MDENG/bPxRfiCYEXAMPLEKEY"
+    (tmp_path / "config.py").write_text(f'aws_secret_access_key = "{secret}"\n', encoding="utf-8")
+
+    result = _run_envdrift(
+        ["guard", "config.py", "--native-only", "--no-auto-install"],
+        tmp_path,
+        envdrift_cmd,
+        integration_env,
+    )
+
+    assert result.returncode == 1
+    assert "aws-secret-access-key" in result.stdout
+    assert result.stderr == ""
+
+
+def test_guard_json_payload_stays_on_stdout(
+    tmp_path: Path,
+    envdrift_cmd: list[str],
+    integration_env: dict[str, str],
+) -> None:
+    """Guard JSON remains a complete, parseable stdout document."""
+    secret = "wJalrXUtnFEMI/" + "K7MDENG/bPxRfiCYEXAMPLEKEY"
+    (tmp_path / "config.py").write_text(f'aws_secret_access_key = "{secret}"\n', encoding="utf-8")
+
+    result = _run_envdrift(
+        ["guard", "config.py", "--native-only", "--no-auto-install", "--json"],
+        tmp_path,
+        envdrift_cmd,
+        integration_env,
+    )
+
+    payload = json.loads(result.stdout)
+    assert result.returncode == 1
+    assert payload["exit_code"] == 1
+    assert any(finding["rule_id"] == "aws-secret-access-key" for finding in payload["findings"])
+    assert result.stderr == ""
