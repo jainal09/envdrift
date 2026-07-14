@@ -32,7 +32,8 @@ Type validation mirrors what the real app does at startup:
 - Field and model validators run against the assembled settings values. A model-level
   rejection appears as a `Model validation` type error instead of a false pass.
 - If custom validation raises an unexpected non-validation exception, validation
-  stays crash-safe and reports the exception type and message as a warning.
+  stays crash-safe and reports only the exception type as a warning; the exception
+  message is omitted because it may contain setting values.
 - dotenvx's `DOTENV_PUBLIC_KEY*` artifact is exempt from the extra-variable check
   and the sensitive-name warning, so encrypted files validate cleanly against an
   `extra="forbid"` schema.
@@ -302,7 +303,7 @@ else:
 | Missing required vars              | Error         | Fields without defaults must exist                   |
 | Type mismatches                    | Error         | Values must be accepted by pydantic for the type     |
 | Field/model validator rejection    | Error         | Custom Pydantic validators must accept the settings  |
-| Unexpected validator exception     | Warning       | Exception type and message are reported without a crash |
+| Unexpected validator exception     | Warning       | Type is reported without echoing its potentially sensitive message |
 | Empty values for non-str fields    | Error         | `PORT=` crashes a real `int` field at startup        |
 | Complex fields with invalid JSON   | Error         | `list`/`dict`/nested fields are JSON-decoded         |
 | Extra vars (with `extra="forbid"`) | Error         | Unknown variables not allowed (`DOTENV_PUBLIC_KEY*` exempt) |

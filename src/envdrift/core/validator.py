@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import re
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
@@ -204,6 +205,23 @@ def _collect_constraint_values(
     return values
 
 
+def _constraint_error_entry(
+    schema: SchemaMetadata,
+    alias_to_field: dict[str, str],
+    err: Mapping[str, Any],
+) -> tuple[str, str] | None:
+    """Map one Pydantic error to its result key and display message."""
+    loc = err.get("loc") or ()
+    if not loc:
+        return MODEL_ERROR_KEY, err.get("msg", "invalid model configuration")
+
+    key = str(loc[0])
+    field_name = alias_to_field.get(key, key)
+    if field_name not in schema.fields:
+        return None
+    return field_name, err.get("msg", "invalid value")
+
+
 def _record_constraint_errors(
     schema: SchemaMetadata, exc: ValidationError, result: ValidationResult
 ) -> None:
@@ -214,16 +232,11 @@ def _record_constraint_errors(
         # don't override a base-type message the heuristic already set.
         if err.get("type") in ("missing", "extra_forbidden"):
             continue
-        loc = err.get("loc") or ()
-        if not loc:
-            result.type_errors.setdefault(
-                MODEL_ERROR_KEY, err.get("msg", "invalid model configuration")
-            )
+        entry = _constraint_error_entry(schema, alias_to_field, err)
+        if entry is None:
             continue
-        key = str(loc[0]) if loc else ""
-        field_name = alias_to_field.get(key, key)
-        if field_name in schema.fields and field_name not in result.type_errors:
-            result.type_errors[field_name] = err.get("msg", "invalid value")
+        field_name, message = entry
+        result.type_errors.setdefault(field_name, message)
 
 
 class Validator:
@@ -440,7 +453,8 @@ class Validator:
             # non-ValidationError; the base-type check already ran, so a
             # constraint-pass failure must not crash validate (#443 review).
             result.warnings.append(
-                f"Model constraint validation raised {type(exc).__name__}: {exc}"
+                f"Model-level validation raised {type(exc).__name__}; "
+                "re-run the model directly for details"
             )
 
     def is_value_suspicious(self, value: str) -> bool:

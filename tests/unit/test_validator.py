@@ -425,25 +425,28 @@ NEW_FEATURE_FLAG=enabled
         assert result.valid is True
 
     def test_constraint_pass_survives_non_validation_error(self, tmp_path):
-        """A model_post_init error becomes a warning without crashing validate."""
-        from pydantic import Field
-        from pydantic_settings import BaseSettings
+        """An unexpected model error warns without echoing setting values."""
+        sentinel = "do-not-echo-" + "sensitive-value"
 
         class Settings(BaseSettings):
-            PORT: int = Field(ge=1)
+            api_key: str
 
-            def model_post_init(self, __context: object) -> None:
-                raise RuntimeError("boom")
+            @model_validator(mode="after")
+            def reject(self):
+                raise RuntimeError(f"bad key: {self.api_key}")
 
         env_file = tmp_path / ".env"
-        env_file.write_text("PORT=8080\n", encoding="utf-8")
+        env_file.write_text(f"API_KEY={sentinel}\n", encoding="utf-8")
 
         env = EnvParser().parse(env_file)
         schema = SchemaLoader().extract_metadata(Settings)
         result = Validator().validate(env, schema, check_encryption=False)
 
         assert result.valid is True
-        assert result.warnings == ["Model constraint validation raised RuntimeError: boom"]
+        assert sentinel not in "\n".join(result.warnings)
+        assert result.warnings == [
+            "Model-level validation raised RuntimeError; re-run the model directly for details"
+        ]
 
     def test_validate_constraint_pass_keeps_base_type_message(self, tmp_path):
         """A field failing both the base-type check and Pydantic keeps the
