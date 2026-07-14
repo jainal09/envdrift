@@ -144,7 +144,12 @@ def _raise_hook_errors(errors: list[str]) -> None:
         raise typer.Exit(code=1)
 
 
-def _new_sync_engine(context: SyncCommandContext, force: bool):
+def _new_sync_engine(
+    context: SyncCommandContext,
+    force: bool,
+    *,
+    verify_skipped_secrets: bool = False,
+):
     from envdrift.sync.engine import SyncEngine, SyncMode
 
     def progress_callback(msg: str) -> None:
@@ -162,7 +167,10 @@ def _new_sync_engine(context: SyncCommandContext, force: bool):
     return SyncEngine(
         config=context.filtered_config,
         vault_client=context.vault_client,
-        mode=SyncMode(force_update=force),
+        mode=SyncMode(
+            force_update=force,
+            verify_skipped_secrets=verify_skipped_secrets,
+        ),
         prompt_callback=prompt_callback,
         progress_callback=progress_callback,
     )

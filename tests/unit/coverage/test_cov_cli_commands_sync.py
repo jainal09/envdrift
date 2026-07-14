@@ -1049,6 +1049,32 @@ class TestLockCommand:
         assert "Verifying keys with vault" in result.output
 
     @patch("envdrift.cli_commands.encryption_helpers.resolve_encryption_backend")
+    def test_lock_sync_keys_missing_secret_without_env_file_fails(
+        self, mock_resolve, tmp_path, loaded_config, no_git_hook
+    ):
+        """#663: the verification step must probe secrets on engine skip paths."""
+        backend = DummyEncryptionBackend()
+        mock_resolve.return_value = (backend, EncryptionProvider.DOTENVX, None)
+        client = MagicMock()
+        client.get_secret.side_effect = SecretNotFoundError("Secret not found: deleted-key")
+        mapping = ServiceMapping(
+            secret_name="deleted-key",
+            folder_path=tmp_path,
+            environment="production",
+        )
+        loaded_config(_sync_config([mapping]), client)
+
+        result = runner.invoke(app, ["lock", "--sync-keys", "--force"])
+        normalized = " ".join(result.output.split())
+
+        assert result.exit_code == 1, result.output
+        assert "Secret not found" in normalized
+        assert "All services synced successfully" not in normalized
+        assert "Encrypting environment files" not in normalized
+        assert backend.encrypt_calls == []
+        client.get_secret.assert_called_once_with("deleted-key")
+
+    @patch("envdrift.cli_commands.encryption_helpers.resolve_encryption_backend")
     def test_lock_sync_keys_error_with_force_still_refuses(
         self, mock_resolve, monkeypatch, tmp_path, loaded_config, no_git_hook
     ):
