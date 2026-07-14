@@ -306,6 +306,58 @@ class TestLockVerifyVaultCannotVerify:
         assert "fresh-plain" not in env_file.read_text(encoding="utf-8")
 
 
+class TestLockSyncKeysVerifySemantics:
+    """#663: lock's key-sync phase makes a verification claim and must honor it."""
+
+    def test_deleted_secret_without_env_file_fails_closed(
+        self,
+        tmp_path: Path,
+        vault_endpoint: str,
+        vault_client,
+        vault_prefix: str,
+        integration_pythonpath: str,
+        envdrift_cmd: list[str],
+    ) -> None:
+        """A deleted secret is an error even when no local env file exists."""
+        env = _child_env(vault_endpoint, integration_pythonpath)
+        secret_path = f"{vault_prefix}/deleted-lock-key"
+        _store_vault_value(
+            vault_client,
+            secret_path,
+            "DOTENV_PRIVATE_KEY_PRODUCTION=deleted-key-value",
+        )
+        vault_client.secrets.kv.v2.delete_metadata_and_all_versions(
+            path=secret_path,
+            mount_point="secret",
+        )
+
+        project = tmp_path / "project"
+        (project / "svc").mkdir(parents=True)
+        (project / "envdrift.toml").write_text(
+            _config_toml(secret_path, "svc"),
+            encoding="utf-8",
+        )
+
+        result = _run(
+            envdrift_cmd,
+            ["lock", "--sync-keys", "--force", "-p", "hashicorp", "--vault-url", vault_endpoint],
+            project,
+            env,
+        )
+
+        out = _norm(result)
+        assert result.returncode == 1, (
+            f"lock --sync-keys accepted a deleted secret with no env file:\n"
+            f"{result.stdout}\n{result.stderr}"
+        )
+        assert "Verifying keys with vault" in out
+        assert secret_path in out
+        assert "not found" in out.lower()
+        assert "All services synced successfully" not in out
+        assert "Encrypting environment files" not in out
+        assert not (project / "svc" / ".env.keys").exists()
+
+
 class TestDecryptVerifyVaultQuotedValue:
     """Item 2 of #473: the quoted dotenvx vault value format must verify, not false-fail."""
 

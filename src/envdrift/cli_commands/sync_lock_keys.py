@@ -29,7 +29,11 @@ def _sync_lock_keys(request: LockRequest, context: SyncCommandContext) -> None:
     from envdrift.output.rich import print_service_sync_status, print_sync_result
     from envdrift.sync.config import SyncConfigError
 
-    engine = _new_sync_engine(context, request.force)
+    engine = _new_sync_engine(
+        context,
+        request.force,
+        verify_skipped_secrets=True,
+    )
     try:
         sync_result = engine.sync_all()
     except (VaultError, SyncConfigError, SecretNotFoundError) as exc:

@@ -117,6 +117,9 @@ The same hard-failure contract applies: when any mapping's key fails to sync
 (missing vault secret, vault error), `lock` exits 1 **before** encrypting
 anything — even with `--force`. Encrypting past a failed sync would mint a
 fresh local-only key for the very mapping whose vault key is unavailable.
+The verification phase checks that every configured vault secret exists and
+contains usable key material even when its mapping has no local env file yet;
+an unavailable or unusable secret is an error, not a successful skip.
 
 ```bash
 envdrift lock --sync-keys
