@@ -1,5 +1,12 @@
 # Changelog
 
+## [10.17.4](https://github.com/jainal09/envdrift/compare/v10.17.3...v10.17.4) (2026-07-14)
+
+
+### Bug Fixes
+
+* **output:** route human diagnostics to stderr ([#677](https://github.com/jainal09/envdrift/issues/677)) ([c933f32](https://github.com/jainal09/envdrift/commit/c933f32df2ec48d56515eda82782a7d491d1e064))
+
 ## [10.17.3](https://github.com/jainal09/envdrift/compare/v10.17.2...v10.17.3) (2026-07-14)
 
 
