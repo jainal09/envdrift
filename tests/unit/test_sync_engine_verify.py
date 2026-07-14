@@ -263,20 +263,36 @@ class TestVerifyModeVaultSecretExistence:
 class TestVerifySkippedSecretsMode:
     """#663: sync workflows that claim verification must probe skip paths."""
 
-    def test_missing_secret_without_env_file_is_error(self, tmp_path: Path) -> None:
-        """A sync-capable verify step must not skip a deleted vault secret."""
+    @pytest.mark.parametrize(
+        ("vault_values", "expected_error"),
+        [
+            pytest.param({}, "test-key", id="missing"),
+            pytest.param(
+                {"test-key": '{"username": "admin", "password": "value"}'},
+                "JSON",
+                id="unusable",
+            ),
+        ],
+    )
+    def test_missing_or_unusable_secret_without_env_file_is_error(
+        self,
+        tmp_path: Path,
+        vault_values: dict[str, str],
+        expected_error: str,
+    ) -> None:
+        """A sync-capable verify step must reject unusable vault state."""
         service_dir = tmp_path / "svc"
         service_dir.mkdir()
         config = SyncConfig(
             mappings=[
                 ServiceMapping(
-                    secret_name="deleted-key",
+                    secret_name="test-key",
                     folder_path=service_dir,
                     environment="production",
                 ),
             ],
         )
-        client = _StoredVaultClient({})
+        client = _StoredVaultClient(vault_values)
 
         engine = SyncEngine(
             config=config,
@@ -287,34 +303,7 @@ class TestVerifySkippedSecretsMode:
 
         service = result.services[0]
         assert service.action == SyncAction.ERROR
-        assert service.error and "deleted-key" in service.error, service
-        assert result.has_errors and result.exit_code == 1
-
-    def test_unusable_secret_without_env_file_is_error(self, tmp_path: Path) -> None:
-        """The sync-capable verification path applies key-shape validation."""
-        service_dir = tmp_path / "svc"
-        service_dir.mkdir()
-        config = SyncConfig(
-            mappings=[
-                ServiceMapping(
-                    secret_name="unusable-key",
-                    folder_path=service_dir,
-                    environment="production",
-                ),
-            ],
-        )
-        client = _StoredVaultClient({"unusable-key": '{"username": "admin", "password": "value"}'})
-
-        engine = SyncEngine(
-            config=config,
-            vault_client=client,
-            mode=SyncMode(force_update=True, verify_skipped_secrets=True),
-        )
-        result = engine.sync_all()
-
-        service = result.services[0]
-        assert service.action == SyncAction.ERROR
-        assert service.error and "JSON" in service.error, service
+        assert service.error and expected_error in service.error, service
         assert result.has_errors and result.exit_code == 1
 
     def test_existing_env_file_still_syncs(self, tmp_path: Path) -> None:
