@@ -14,9 +14,9 @@ from envdrift.output.rich import print_error, print_warning
 if TYPE_CHECKING:
     from envdrift.sync.config import ServiceMapping, SyncConfig
 
-# Missing-setting messages shared with the vault-push/vault-pull seam
-# (envdrift.cli_commands.vault_helpers) so the same condition cannot drift
-# into two phrasings again (#441 audit).
+# Missing-setting messages shared by the sync family, vault-push/vault-pull,
+# and decrypt --verify-vault so the same condition cannot drift into multiple
+# phrasings again (#441 audit, #653).
 AZURE_VAULT_URL_REQUIRED = (
     "Azure provider requires --vault-url (or [vault.azure] vault_url in config)"
 )
@@ -81,9 +81,10 @@ def _load_defaults(request: SyncLoadRequest) -> _ConfigDefaults:
     return _ConfigDefaults(path=path, config=_load_envdrift_config(path))
 
 
-def _provider_vault_url(
+def resolve_provider_vault_url(
     provider: str | None, explicit_url: str | None, vault_config: Any | None
 ) -> str | None:
+    """Resolve a provider URL from CLI, config, then HashiCorp's environment."""
     if explicit_url is not None:
         return explicit_url
     attribute = {"azure": "azure_vault_url", "hashicorp": "hashicorp_url"}.get(provider or "")
@@ -107,7 +108,7 @@ def _resolve_vault_settings(request: SyncLoadRequest, defaults: _ConfigDefaults)
     provider = request.provider or getattr(vault_config, "provider", None)
     return _VaultSettings(
         provider=provider,
-        vault_url=_provider_vault_url(provider, request.vault_url, vault_config),
+        vault_url=resolve_provider_vault_url(provider, request.vault_url, vault_config),
         region=_config_default(request.region, vault_config, "aws_region"),
         project_id=_config_default(request.project_id, vault_config, "gcp_project_id"),
     )
