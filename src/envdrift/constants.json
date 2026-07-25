@@ -8,7 +8,7 @@
         "windows_amd64": "https://github.com/dotenvx/dotenvx/releases/download/v{version}/dotenvx-{version}-windows-amd64.zip"
     },
     "dotenvx_checksums_url": "https://github.com/dotenvx/dotenvx/releases/download/v{version}/checksums.txt",
-    "sops_version": "3.13.2",
+    "sops_version": "3.13.3",
     "sops_download_urls": {
         "darwin_amd64": "https://github.com/getsops/sops/releases/download/v{version}/sops-v{version}.darwin.amd64",
         "darwin_arm64": "https://github.com/getsops/sops/releases/download/v{version}/sops-v{version}.darwin.arm64",
