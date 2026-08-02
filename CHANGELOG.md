@@ -1,5 +1,12 @@
 # Changelog
 
+## [11.0.1](https://github.com/jainal09/envdrift/compare/v11.0.0...v11.0.1) (2026-08-02)
+
+
+### Bug Fixes
+
+* **deps:** patch 25 Python dependency security advisories ([#710](https://github.com/jainal09/envdrift/issues/710)) ([0fad8ae](https://github.com/jainal09/envdrift/commit/0fad8ae79298ae52664ddb31bfe2ea7875c7e384))
+
 ## [11.0.0](https://github.com/jainal09/envdrift/compare/v10.17.4...v11.0.0) (2026-07-14)
 
 
