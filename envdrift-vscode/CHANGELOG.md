@@ -5,6 +5,13 @@ All notable changes to the EnvDrift VS Code Extension will be documented in this
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.7](https://github.com/jainal09/envdrift/compare/vscode-v0.1.6...vscode-v0.1.7) (2026-08-02)
+
+
+### Bug Fixes
+
+* **deps:** patch fast-uri, js-yaml and brace-expansion advisories ([#709](https://github.com/jainal09/envdrift/issues/709)) ([3f00d63](https://github.com/jainal09/envdrift/commit/3f00d6357cc343b26d25d528daeadd7e978f03d8))
+
 ## [0.1.6](https://github.com/jainal09/envdrift/compare/vscode-v0.1.5...vscode-v0.1.6) (2026-07-07)
 
 
