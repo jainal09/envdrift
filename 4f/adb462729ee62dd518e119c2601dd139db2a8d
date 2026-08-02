@@ -1,0 +1,49 @@
+envdrift-vscode/src/test/unit/overridesCompat.test.ts
+  s_387a201b31e3a1::t_1af9b223e3d5c3 32-40,42,55-57
+  s_387a201b31e3a1::t_4c91fcf4a26370 58-59
+docs/specs/guard-command-spec.md
+  s_387a201b31e3a1::t_a1ef19bad0ce96 1023-1029,1287-1291
+  s_387a201b31e3a1::t_961c274ee740e4 1292-1293
+docs/cli/decrypt.md
+  s_387a201b31e3a1::t_f6ad126cd45db7 47
+tests/unit/test_cli_help_markup.py
+  s_387a201b31e3a1::t_9a37d259ec2569 47-52,60,62-63
+  s_387a201b31e3a1::t_ca4d0edea207c0 105-111,122,138,183
+  s_387a201b31e3a1::t_93f44355bc4ee1 41-45
+  s_387a201b31e3a1::t_ebc8ab30dcbf20 86-104,113-114,116-119
+  s_387a201b31e3a1::t_f49779a67fea09 157-182
+docs/cli/diff.md
+  s_387a201b31e3a1::t_f6ad126cd45db7 30-31
+docs/cli/validate.md
+  s_387a201b31e3a1::t_6cabf8c11f91c1 96
+docs/cli/guard.md
+  s_387a201b31e3a1::t_f6ad126cd45db7 38
+docs/specs/integration-tests-spec.md
+  s_387a201b31e3a1::t_a7bb3ded53731a 66-69
+tests/scanner/test_infisical_cli_migration.py
+  s_387a201b31e3a1::t_9dd1732a7bae50 1-114
+Makefile
+  s_387a201b31e3a1::t_506d18ad231a0d 57-66,73,89,94,98
+docs/cli/encrypt.md
+  s_387a201b31e3a1::t_6cabf8c11f91c1 69
+docs/cli/init.md
+  s_387a201b31e3a1::t_f6ad126cd45db7 32
+docs/support/troubleshooting.md
+  s_387a201b31e3a1::t_b3a4f3f9384301 133-135,137-138
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.20",
+  "base_commit_sha": "4fadb462729ee62dd518e119c2601dd139db2a8d",
+  "prompts": {},
+  "sessions": {
+    "s_387a201b31e3a1": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "1bd295c2-9ec5-43f6-a658-6971b2b820c0",
+        "model": "claude-opus-5"
+      },
+      "human_author": "Jainal Gosaliya <jainal09gosalia@gmail.com>"
+    }
+  }
+}
