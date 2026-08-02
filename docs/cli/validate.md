@@ -5,7 +5,7 @@ Validate one or more .env files against a Pydantic Settings schema.
 ## Synopsis
 
 ```bash
-envdrift validate [ENV_FILE]... --schema SCHEMA [OPTIONS]
+envdrift validate [OPTIONS] [env_files]... --schema SCHEMA
 ```
 
 ## Description

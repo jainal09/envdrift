@@ -6,7 +6,7 @@ This command is specific to dotenvx keys; SOPS users should use their SOPS key m
 ## Synopsis
 
 ```bash
-envdrift vault-pull [OPTIONS] FOLDER SECRET_NAME
+envdrift vault-pull [OPTIONS] {folder} {secret_name}
 ```
 
 ## Description

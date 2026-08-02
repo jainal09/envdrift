@@ -5,7 +5,7 @@ Check or perform encryption on .env files using dotenvx or SOPS.
 ## Synopsis
 
 ```bash
-envdrift encrypt [ENV_FILE]... [OPTIONS]
+envdrift encrypt [OPTIONS] [env_files]...
 ```
 
 ## Description

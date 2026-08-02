@@ -1662,9 +1662,17 @@ class TestNoConfigErrorGuidance:
 class TestHelpShowsTomlSectionNames:
     """#488: pull/lock --help must show the literal TOML section names.
 
-    Typer's default (non-rich) markup mode renders docstring brackets
-    verbatim, so ``[vault.sync]`` needs no escaping — a ``\\[`` escape
-    renders a stray literal backslash in --help instead.
+    Historically these needed no escaping: typer <= 0.20 left
+    ``rich_markup_mode`` as an unresolved ``DefaultPlaceholder``, so help text
+    was rendered without markup interpretation and ``[vault.sync]`` came out
+    verbatim. typer 0.21+ defaults the mode to ``"rich"``, and Rich then parses
+    ``[vault.sync]`` as a style tag and silently DELETES it from --help.
+
+    So the bracket must now be escaped as ``\\[`` at the source. Rich consumes
+    the backslash, so the rendered output still contains a bare
+    ``[vault.sync]`` and never a literal backslash — which the assertions below
+    pin from both directions. Setting ``rich_markup_mode=None`` is NOT an
+    alternative: it also strips the Rich option panels from every command.
     """
 
     # CI sets FORCE_COLOR=1, so Rich injects ANSI style codes INSIDE the help

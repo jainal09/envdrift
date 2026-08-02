@@ -47,7 +47,7 @@ Examples:
     envdrift vault-push --all --skip-encrypt
 """
 
-VAULT_PULL_HELP = """Pull a single encryption key from a cloud vault into a local .env.keys file.
+VAULT_PULL_HELP = r"""Pull a single encryption key from a cloud vault into a local .env.keys file.
 
 This is the config-free inverse of `envdrift vault-push` (single-service mode):
 it fetches one secret, writes the DOTENV_PRIVATE_KEY_<ENV> key into
@@ -63,7 +63,7 @@ Modes:
    envdrift vault-pull ./services/soak soak-machine --env soak --no-decrypt -p azure --vault-url https://myvault.vault.azure.net/
 
 Provider/URL/region/project-id may be omitted when they are configured in the
-`[vault]` section of an envdrift.toml/pyproject.toml.
+`\[vault]` section of an envdrift.toml/pyproject.toml.
 
 Examples:
     # Azure

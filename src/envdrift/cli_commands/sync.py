@@ -361,7 +361,7 @@ def sync(
     )
 
 
-PULL_HELP = """Pull keys from vault and decrypt all env files (one-command developer setup).
+PULL_HELP = r"""Pull keys from vault and decrypt all env files (one-command developer setup).
 
 Reads your TOML configuration, fetches encryption keys from your cloud vault,
 writes them to local .env.keys files, and decrypts all corresponding .env files.
@@ -375,8 +375,8 @@ Use --profile to filter mappings and activate a specific environment:
   and copies the decrypted file to the activate_to path if configured
 
 Configuration is read from:
-- pyproject.toml [tool.envdrift.vault.sync] section
-- envdrift.toml [vault.sync] section
+- pyproject.toml \[tool.envdrift.vault.sync] section
+- envdrift.toml \[vault.sync] section
 - Explicit --config file
 
 Examples:
@@ -402,7 +402,7 @@ Examples:
     envdrift pull --merge
 """
 
-LOCK_HELP = """Verify keys and encrypt all env files (opposite of pull - prepares for commit).
+LOCK_HELP = r"""Verify keys and encrypt all env files (opposite of pull - prepares for commit).
 
 The lock command ensures your environment files are properly encrypted before
 committing. It can optionally verify that local keys match vault keys to prevent
@@ -426,8 +426,8 @@ Workflow:
 Use --profile to filter mappings for a specific environment.
 
 Configuration is read from:
-- pyproject.toml [tool.envdrift.vault.sync] section
-- envdrift.toml [vault.sync] section
+- pyproject.toml \[tool.envdrift.vault.sync] section
+- envdrift.toml \[vault.sync] section
 - Explicit --config file
 
 Examples:

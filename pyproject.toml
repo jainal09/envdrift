@@ -75,7 +75,9 @@ docs = ["mkdocs-material>=9.5", "mkdocs-redirects>=1.2"]
 # Development dependencies
 dev = [
     "ruff>=0.8.0",
-    "pyrefly>=1.0,<2",
+    # No upper bound: this repo tracks latest deliberately, and a hardcoded major
+    # cap silently freezes the pin instead of failing loudly when the major lands.
+    "pyrefly>=1.0",
     "bandit>=1.7.0",
     "pytest>=8.0",
     "pytest-cov>=4.0",
@@ -119,6 +121,13 @@ version-file = "src/envdrift/_version.py"
 target-version = "py311"
 line-length = 100
 src = ["src", "tests"]
+# ruff 0.16 added "*.md" to the default `include`, so `ruff format` started
+# rewriting Python blocks inside docs/. We opt out: the reformat normalises
+# string quotes (e.g. alias='2FA_ENABLED' -> "2FA_ENABLED"), but
+# tests/unit/test_docs_accuracy.py asserts those snippets match what the real
+# `envdrift init` generator emits, which uses single quotes. Formatting the
+# docs would break that contract.
+extend-exclude = ["*.md"]
 
 [tool.ruff.lint]
 select = [

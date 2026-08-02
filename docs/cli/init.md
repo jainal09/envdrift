@@ -5,7 +5,7 @@ Generate a Pydantic Settings class from an existing .env file.
 ## Synopsis
 
 ```bash
-envdrift init [ENV_FILE] [OPTIONS]
+envdrift init [OPTIONS] [env_file]
 ```
 
 ## Description

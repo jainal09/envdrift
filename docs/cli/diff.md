@@ -5,7 +5,7 @@ Compare two .env files and show differences.
 ## Synopsis
 
 ```bash
-envdrift diff ENV1 ENV2 [OPTIONS]
+envdrift diff [OPTIONS] {env1} {env2}
 ```
 
 ## Description
