@@ -1,0 +1,22 @@
+envdrift-vscode/package.json
+  s_387a201b31e3a1::t_722a58f0f42586 134-135
+  s_387a201b31e3a1::t_b3d34e3cb2eb01 136-137
+envdrift-vscode/package-lock.json
+  s_387a201b31e3a1::t_4323e39723e9fe 2110-2112,2119,3174-3176,3945-3947,3949-3958
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.20",
+  "base_commit_sha": "e489b7300f6e5f914d33d922fe1b4ff0f4bbd8dc",
+  "prompts": {},
+  "sessions": {
+    "s_387a201b31e3a1": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "1bd295c2-9ec5-43f6-a658-6971b2b820c0",
+        "model": "claude-opus-5"
+      },
+      "human_author": "Jainal Gosaliya <jainal09gosalia@gmail.com>"
+    }
+  }
+}
