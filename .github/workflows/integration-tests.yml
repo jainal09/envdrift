@@ -7,6 +7,20 @@
 # - Pull requests to main
 # - Pushes to main
 # - Manual dispatch
+#
+# REQUIRES the LOCALSTACK_AUTH_TOKEN repository secret. LocalStack has been
+# account-gated since 2026.03.0 and the container exits(55) with "License
+# activation failed" without it. A free Hobby token is sufficient.
+#
+# FORK PULL REQUESTS: GitHub does not expose secrets to PRs from forks, and
+# service containers start before any step runs, so there is nowhere to add a
+# graceful guard. These jobs WILL fail at "Initialize containers" on a fork PR.
+# That is a platform limitation, not a defect in the contribution. Fork
+# contributors should run the suite locally with their own free token, or add
+# the secret to their own fork and use Run workflow (workflow_dispatch); see
+# the "If you are contributing from a fork" section of CONTRIBUTING.md.
+# Branches pushed to this repository (including Renovate/Dependabot) are
+# unaffected.
 
 name: Integration Tests
 
