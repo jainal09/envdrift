@@ -1032,12 +1032,25 @@ def _load_constants() -> dict:
 # source of truth, and a copied literal silently goes stale on every bump.
 GITLEAKS_VERSION = _load_constants()["gitleaks_version"]
 
+# Read the URL templates from constants.json too — do NOT re-type the asset
+# names here. Upstream gitleaks publishes x64 assets (gitleaks_<v>_linux_x64),
+# not amd64, and an inlined copy of the wrong name produces 404s that only
+# surface at install time. constants.json is Renovate-managed and already
+# correct; PLATFORM_MAP translates platform.system()/machine() to its keys.
+PLATFORM_MAP = {
+    ("Darwin", "arm64"): "darwin_arm64",
+    ("Darwin", "x86_64"): "darwin_amd64",
+    ("Linux", "x86_64"): "linux_amd64",
+    ("Linux", "aarch64"): "linux_arm64",
+    ("Windows", "AMD64"): "windows_amd64",
+}
+
+_URL_TEMPLATES = _load_constants()["gitleaks_download_urls"]
+
 DOWNLOAD_URLS = {
-    ("Darwin", "arm64"): f"https://github.com/gitleaks/gitleaks/releases/download/v{GITLEAKS_VERSION}/gitleaks_{GITLEAKS_VERSION}_darwin_arm64.tar.gz",
-    ("Darwin", "x86_64"): f"https://github.com/gitleaks/gitleaks/releases/download/v{GITLEAKS_VERSION}/gitleaks_{GITLEAKS_VERSION}_darwin_amd64.tar.gz",
-    ("Linux", "x86_64"): f"https://github.com/gitleaks/gitleaks/releases/download/v{GITLEAKS_VERSION}/gitleaks_{GITLEAKS_VERSION}_linux_amd64.tar.gz",
-    ("Linux", "aarch64"): f"https://github.com/gitleaks/gitleaks/releases/download/v{GITLEAKS_VERSION}/gitleaks_{GITLEAKS_VERSION}_linux_arm64.tar.gz",
-    ("Windows", "AMD64"): f"https://github.com/gitleaks/gitleaks/releases/download/v{GITLEAKS_VERSION}/gitleaks_{GITLEAKS_VERSION}_windows_amd64.zip",
+    platform_key: _URL_TEMPLATES[constants_key].format(version=GITLEAKS_VERSION)
+    for platform_key, constants_key in PLATFORM_MAP.items()
+    if constants_key in _URL_TEMPLATES
 }
 
 SEVERITY_MAP = {

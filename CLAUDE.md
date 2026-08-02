@@ -1,5 +1,19 @@
 # Engineering conventions (envdrift)
 
+@AGENTS.md
+
+<!--
+The bare `@AGENTS.md` line above is a Claude Code IMPORT, not a link: it inlines
+AGENTS.md into context at session start. Keep it on its own line and never wrap
+it in backticks or a code fence — import parsing skips code spans and fenced
+blocks, so `@AGENTS.md` in backticks silently becomes inert text.
+
+This used to be a prose "go read AGENTS.md" link. That relies on the agent
+noticing the sentence and choosing to open the file, and in practice it did not
+happen: an agent ran a large autonomous change here having only ever read this
+summary. Anything an agent MUST have should be imported, not recommended.
+-->
+
 Guidance for contributors and AI agents (Claude Code, etc.) working in this repo.
 These are the conventions we actually enforce — follow them on every change.
 
@@ -10,11 +24,13 @@ These are the conventions we actually enforce — follow them on every change.
 > before the fix; no known-broken merges (even in a secondary artifact); fix-or-file
 > pre-existing bugs.
 >
-> **Doing substantial or autonomous work here?** Read [`AGENTS.md`](./AGENTS.md) —
-> the full operating guide (verify-then-fix discipline, real-backend + real-Windows
-> battle-testing, the PR merge gate, stacked-PR/release-please mechanics, review-bot
-> handling, and the `scripts/agent/` autonomy loop). This file is the always-loaded
-> summary; AGENTS.md is the depth. Keep the two in sync.
+> **AGENTS.md is imported above, so it is already in your context** — the full
+> operating guide (verify-then-fix discipline, real-backend battle-testing, the
+> PR merge gate, stacked-PR/release-please mechanics, review-bot handling, and
+> the `scripts/agent/` autonomy loop). This file is the summary; AGENTS.md is
+> the depth. Keep the two in sync. Other agents (Codex, Cursor, …) read
+> AGENTS.md directly, which is why it stays a separate file rather than being
+> merged into this one.
 
 ## Testing
 
@@ -131,12 +147,14 @@ These have bitten us in CI or review and aren't obvious from the code alone.
   does not retarget it here). For stacked PRs: merge the parent **without**
   `--delete-branch`, `gh api -X PATCH repos/<owner>/<repo>/pulls/<child> -f base=main` while the child is
   still open, **then** delete the parent branch. See `AGENTS.md` §5.
-- **Real Windows testing runs under `C:\DBSW` only.** This is a WSL2 box with
-  Windows interop (`powershell.exe` → real PS 5.1 / `C:\Python314`); it's a work
-  laptop where corporate security blocks execution from arbitrary paths, so do all
-  Windows clone/test work under `C:\DBSW` (`/mnt/c/DBSW` from WSL). Cross-platform
-  bugs (drive paths, cp1252, CRLF, `os.replace` on an open file) need real-Windows
-  before/after proof — see `AGENTS.md` §3.
+- **Cross-platform bugs need proof on the target OS — and you may not have it.**
+  Drive paths, cp1252, CRLF and `os.replace`-on-an-open-file bugs are Windows-only
+  and cannot be proven from Linux/macOS. Check what you actually have (`uname -s`,
+  `command -v powershell.exe`) before claiming a platform is verified. If you
+  cannot reach the target OS, say so plainly and rely on the CI cross-platform
+  matrix (ubuntu/macos/windows on every PR); a red run there is a real bug even
+  though the check is not required. Never claim a platform was verified when it
+  was not. See `AGENTS.md` §3 for the full rule and the maintainer's WSL setup.
 
 ## CI, branch protection & merging
 

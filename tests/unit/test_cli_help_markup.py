@@ -44,12 +44,15 @@ from envdrift.cli import app
 # while this sweep still reported green.
 _BRACKETED = re.compile(r"\[([a-z][a-z0-9_.-]*)\]")
 
-# Bracketed tokens click/typer generate for usage lines rather than our prose:
-# the structural ones, plus every parameter name in the app (typer renders
-# optional positionals from the lowercase parameter name, e.g. `[env_files]`,
-# `[paths]`). Deriving the parameter names instead of hardcoding a prefix keeps
-# this correct as commands are added.
-_STRUCTURAL_METAVARS = frozenset({"options", "args", "command"})
+# NOTE: deliberately no metavar exclusion list.
+#
+# An earlier revision excluded every parameter name in the app, reasoning that
+# click renders optional positionals as `[env_files]` / `[paths]`. But this
+# sweep only reads `cmd.help` and `param.help`, which never contain click's
+# generated usage line — so the exclusion protected against a case that cannot
+# occur, while creating a real blind spot: 86 names including generic words
+# like `config`, `env`, `backend` and `profile` were skipped, so documenting
+# `\[config]` as a TOML section would have been silently unswept.
 
 
 def _render(markup: str) -> str:
@@ -57,10 +60,9 @@ def _render(markup: str) -> str:
     return Text.from_markup(markup).plain
 
 
-def _candidates(text: str, exclude: frozenset[str] = frozenset()) -> set[str]:
+def _candidates(text: str) -> set[str]:
     """Bracketed identifiers in ``text`` that Rich could swallow."""
-    ignored = _STRUCTURAL_METAVARS | exclude
-    return {m.group(1) for m in _BRACKETED.finditer(text) if m.group(1) not in ignored}
+    return {m.group(1) for m in _BRACKETED.finditer(text)}
 
 
 def _walk(cmd: Any, path: list[str]) -> Iterator[tuple[list[str], Any]]:
@@ -97,29 +99,17 @@ def _param_help(where: str, cmd: Any) -> list[tuple[str, str]]:
     ]
 
 
-def _param_names(cmd: Any) -> set[str]:
-    """Lowercased parameter names — what click renders as usage metavars."""
-    return {param.name.lower() for param in cmd.params if param.name}
-
-
-def _collect() -> tuple[list[tuple[str, str]], frozenset[str]]:
-    """Every (location, help_text) in the app, plus all parameter names.
-
-    The parameter names are what click renders as usage-line metavars, so they
-    are excluded from the sweep: `[paths]` in a usage string is click's doing,
-    not prose we control.
-    """
+def _collect() -> list[tuple[str, str]]:
+    """Every (location, help_text) pair in the app."""
     out: list[tuple[str, str]] = []
-    names: set[str] = set()
     for path, cmd in _walk(typer.main.get_command(app), []):
         where = " ".join(path) or "<root>"
         out.extend(_command_help(where, cmd))
         out.extend(_param_help(where, cmd))
-        names |= _param_names(cmd)
-    return out, frozenset(names)
+    return out
 
 
-HELP_STRINGS, PARAM_NAMES = _collect()
+HELP_STRINGS = _collect()
 
 
 def test_sweep_is_not_empty():
@@ -135,7 +125,7 @@ def test_sweep_is_not_empty():
 def test_bracketed_text_survives_rich_markup(location: str, text: str):
     """No bracketed identifier may be deleted by Rich markup parsing."""
     rendered = _render(text)
-    lost = sorted(tok for tok in _candidates(text, PARAM_NAMES) if f"[{tok}]" not in rendered)
+    lost = sorted(tok for tok in _candidates(text) if f"[{tok}]" not in rendered)
     assert not lost, (
         f"{location}: Rich markup swallowed {lost} from --help. "
         f"Escape the opening bracket at the source as '\\\\[' (e.g. '\\\\[vault]'), "
@@ -178,6 +168,12 @@ class TestDetectorItself:
         r"""The prescribed fix (``\[``) must actually render a bare bracket."""
         assert f"[{name}]" in _render(f"see the `\\[{name}]` section")
 
-    def test_click_metavars_are_not_flagged(self):
-        """Usage-line metavars come from click, not our prose."""
-        assert _candidates("Usage: envdrift guard [OPTIONS] [paths]...", PARAM_NAMES) == set()
+    def test_nothing_is_excluded_by_name(self):
+        """A bracketed identifier is swept even if it matches a parameter name.
+
+        Regression: an exclusion list keyed on parameter names made generic
+        words (`config`, `env`, `backend`, `profile`) invisible to the sweep,
+        so documenting one as a TOML section would go unchecked.
+        """
+        for name in ("config", "env", "backend", "profile"):
+            assert _candidates(f"see the `[{name}]` section") == {name}

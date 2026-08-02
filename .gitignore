@@ -81,3 +81,10 @@ venv.bak/
 .uv/
 .uv-cache/
 site/
+
+# Personal, machine-specific agent instructions. Loaded by Claude Code
+# alongside CLAUDE.md but never committed: keep local paths, sandbox
+# directories, corporate policies and anything else about your machine here,
+# NOT in CLAUDE.md/AGENTS.md, which are public.
+CLAUDE.local.md
+*.local.md
