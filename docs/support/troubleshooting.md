@@ -126,8 +126,12 @@ Install SOPS:
 # macOS
 brew install sops
 
-# Linux
-wget https://github.com/getsops/sops/releases/download/v3.13.1/sops-v3.13.1.linux.amd64 -O /usr/local/bin/sops
+# Linux — install the version envdrift pins, read from constants.json so this
+# never drifts from what the tool actually expects.
+SOPS_VERSION=$(python -c "import json,importlib.resources as r; \
+  print(json.loads(r.files('envdrift').joinpath('constants.json').read_text())['sops_version'])")
+wget "https://github.com/getsops/sops/releases/download/v${SOPS_VERSION}/sops-v${SOPS_VERSION}.linux.amd64" \
+  -O /usr/local/bin/sops
 chmod +x /usr/local/bin/sops
 ```
 

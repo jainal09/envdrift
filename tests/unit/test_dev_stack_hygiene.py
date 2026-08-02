@@ -339,3 +339,112 @@ def test_every_versioned_tool_has_a_custom_manager() -> None:
         f"constants.json pins {missing} with no Renovate custom manager. "
         "Hardcoded versions must always be Renovate-managed."
     )
+
+
+def test_localstack_pins_the_canonical_calver_form() -> None:
+    """LocalStack must stay on the canonical zero-padded CalVer tag.
+
+    Upstream publishes 2026.07.1 alongside equivalent aliases (2026.7.1,
+    2026.07, 2026) that Renovate's docker versioning treats as EQUAL, so
+    without an allowedVersions constraint the pinned literal can silently flip
+    form between bumps and desynchronise the two stack files.
+
+    The constraint also blocks a regression to the pre-2026.03 4.x line. 4.14.0
+    was the last tokenless release; everything after it is account-gated.
+    """
+    rules = _renovate_config().get("packageRules", [])
+    guard = [
+        rule
+        for rule in rules
+        if "localstack/localstack" in rule.get("matchPackageNames", [])
+        and "allowedVersions" in rule
+    ]
+    assert guard, (
+        "renovate.json must constrain localstack/localstack with allowedVersions "
+        "so the CalVer tag literal cannot flip between equivalent forms."
+    )
+    pattern = guard[0]["allowedVersions"].strip("/")
+    assert re.fullmatch(pattern, "2026.07.1"), (
+        f"allowedVersions {pattern!r} rejects the canonical padded form"
+    )
+    assert not re.fullmatch(pattern, "2026.7.1"), (
+        f"allowedVersions {pattern!r} admits the unpadded alias"
+    )
+
+    for source, images in (
+        ("tests/docker-compose.test.yml", _compose_images()),
+        ("integration-tests.yml", _ci_service_images()),
+    ):
+        _, _, tag = images.get("localstack", "").rpartition(":")
+        assert re.fullmatch(pattern, tag), (
+            f"{source}: localstack tag {tag!r} is not the canonical CalVer form."
+        )
+
+
+# Services the free Hobby tier actually exposes, confirmed 2026-08-02 by
+# booting localstack/localstack:2026.07.1 with a Hobby token and reading
+# /_localstack/health. Anything outside this set needs a PAID plan.
+_HOBBY_TIER_SERVICES = frozenset({"kms", "lambda", "s3", "secretsmanager", "sts"})
+
+
+def _declared_services() -> dict[str, set[str]]:
+    """SERVICES declared for localstack in the compose file and the CI job."""
+    compose = yaml.safe_load(_COMPOSE_PATH.read_text(encoding="utf-8"))
+    env = compose["services"]["localstack"]["environment"]
+    # compose uses a KEY=VALUE list; the workflow uses a mapping.
+    compose_services = ""
+    for item in env:
+        if isinstance(item, str) and item.startswith("SERVICES="):
+            compose_services = item.split("=", 1)[1]
+
+    workflow = yaml.safe_load(_INTEGRATION_WORKFLOW_PATH.read_text(encoding="utf-8"))
+    ci_env = workflow["jobs"]["integration-tests"]["services"]["localstack"]["env"]
+    return {
+        "tests/docker-compose.test.yml": {
+            s.strip() for s in compose_services.split(",") if s.strip()
+        },
+        "integration-tests.yml": {
+            s.strip() for s in str(ci_env.get("SERVICES", "")).split(",") if s.strip()
+        },
+    }
+
+
+def test_localstack_services_stay_within_the_free_hobby_tier() -> None:
+    """Never enable a LocalStack service that requires a paid plan.
+
+    LocalStack is account-gated since 2026.03.0 and this project runs on the
+    free Hobby tier. Hobby covers a subset of services; enabling one outside it
+    would make the stack silently require a paid licence — breaking CI for
+    anyone without one, including every fork.
+    """
+    for source, services in _declared_services().items():
+        assert services, f"{source}: localstack declares no SERVICES"
+        paid_only = sorted(services - _HOBBY_TIER_SERVICES)
+        assert not paid_only, (
+            f"{source}: SERVICES includes {paid_only}, which the free Hobby tier "
+            f"does not provide. Hobby exposes {sorted(_HOBBY_TIER_SERVICES)}. "
+            "Adding a paid-tier service would require a paid LocalStack plan."
+        )
+
+
+def test_localstack_requires_an_auth_token_in_both_stacks() -> None:
+    """Both stacks must pass LOCALSTACK_AUTH_TOKEN, and never a literal one."""
+    compose_text = _COMPOSE_PATH.read_text(encoding="utf-8")
+    workflow_text = _INTEGRATION_WORKFLOW_PATH.read_text(encoding="utf-8")
+
+    assert "LOCALSTACK_AUTH_TOKEN" in compose_text, (
+        "tests/docker-compose.test.yml must pass LOCALSTACK_AUTH_TOKEN - "
+        "LocalStack exits(55) without it since 2026.03.0."
+    )
+    assert "LOCALSTACK_AUTH_TOKEN" in workflow_text, (
+        "integration-tests.yml must pass LOCALSTACK_AUTH_TOKEN to the service container."
+    )
+    # The token must come from the environment / a GitHub secret, never inline.
+    for source, text in (
+        ("tests/docker-compose.test.yml", compose_text),
+        ("integration-tests.yml", workflow_text),
+    ):
+        assert not re.search(r"ls-[A-Za-z0-9]{6,}-", text), (
+            f"{source}: a literal LocalStack token appears to be committed. "
+            "Tokens must come from the environment or a repository secret."
+        )

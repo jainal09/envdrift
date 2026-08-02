@@ -55,8 +55,32 @@ test:
 	uv run pytest
 
 # Start integration test containers
+#
+# LocalStack has been account-gated since 2026.03.0 and exits(55) without a
+# token, so fail here with something actionable rather than letting compose
+# emit a bare variable-not-set error. A free Hobby token is enough.
 test-integration-up:
-	docker compose -f tests/docker-compose.test.yml up -d --wait
+	@if [ -z "$$LOCALSTACK_AUTH_TOKEN" ] && [ ! -f tests/.env ]; then \
+		echo ""; \
+		echo "ERROR: LOCALSTACK_AUTH_TOKEN is not set."; \
+		echo ""; \
+		echo "LocalStack requires an auth token since 2026.03.0. A FREE Hobby"; \
+		echo "token covers everything this suite needs."; \
+		echo ""; \
+		echo "  1. Sign up at https://app.localstack.cloud"; \
+		echo "  2. Copy your Personal Auth Token"; \
+		echo "  3. Either export it:"; \
+		echo "       export LOCALSTACK_AUTH_TOKEN=ls-..."; \
+		echo "     or write tests/.env (gitignored):"; \
+		echo "       echo 'LOCALSTACK_AUTH_TOKEN=ls-...' > tests/.env"; \
+		echo ""; \
+		exit 1; \
+	fi
+	@if [ -f tests/.env ]; then \
+		docker compose --env-file tests/.env -f tests/docker-compose.test.yml up -d --wait; \
+	else \
+		docker compose -f tests/docker-compose.test.yml up -d --wait; \
+	fi
 	@echo "Services started. Run 'make test-integration' to run tests."
 
 # Stop integration test containers

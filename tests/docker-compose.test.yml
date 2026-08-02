@@ -8,10 +8,26 @@
 
 services:
   localstack:
-    image: localstack/localstack:4.14  # Keep in sync with .github/workflows/integration-tests.yml
+    # LocalStack consolidated to a single CalVer image in 2026.03.0 and made it
+    # account-gated: without LOCALSTACK_AUTH_TOKEN it exits(55) with "License
+    # activation failed". The old tokenless community image is gone (the
+    # ACKNOWLEDGE_ACCOUNT_REQUIREMENT bypass expired 2026-04-06), and the last
+    # tokenless release was 4.14.0.
+    #
+    # A free Hobby token covers everything this suite needs. Verified 2026-08-02
+    # against 2026.07.1 with a Hobby token: the container boots healthy and
+    # secretsmanager is "available" — create-secret/get-secret-value both work.
+    # Hobby exposes kms, lambda, s3, secretsmanager and sts, so keep SERVICES
+    # within that set (tests/unit/test_dev_stack_hygiene.py enforces it) or the
+    # stack would need a paid plan.
+    image: localstack/localstack:2026.07.1  # Keep in sync with .github/workflows/integration-tests.yml
     ports:
       - "4566:4566"
     environment:
+      # Required since 2026.03.0. Get a free Hobby token at
+      # https://app.localstack.cloud and export it, or put it in tests/.env
+      # (gitignored). Never commit the token.
+      - LOCALSTACK_AUTH_TOKEN=${LOCALSTACK_AUTH_TOKEN:?LOCALSTACK_AUTH_TOKEN is required - get a free Hobby token at https://app.localstack.cloud}
       - SERVICES=secretsmanager
       - DEBUG=0
       - EAGER_SERVICE_LOADING=1
@@ -19,11 +35,15 @@ services:
       test: ["CMD", "curl", "-f", "http://localhost:4566/_localstack/health"]
       interval: 5s
       timeout: 5s
-      retries: 10
-      start_period: 10s
+      # Matches the CI service-container window (integration-tests.yml). The
+      # CalVer images are larger and boot more services than the old 4.x line,
+      # and `make test-integration-up` uses `--wait`, so too tight a window
+      # fails the local stack outright.
+      retries: 20
+      start_period: 30s
 
   vault:
-    image: hashicorp/vault:2.0  # Keep in sync with .github/workflows/integration-tests.yml
+    image: hashicorp/vault:2.0.3  # Keep in sync with .github/workflows/integration-tests.yml
     # Match integration-tests.yml (`--user root`) so the setcap/IPC_LOCK
     # behavior is identical between the local compose stack and CI.
     user: root

@@ -1020,8 +1020,10 @@ from .base import (
 )
 
 
-# Version pinned for reproducibility (sourced from constants.json)
-GITLEAKS_VERSION = "8.30.0"
+# Version pinned for reproducibility. Read it from constants.json rather than
+# repeating the literal here — constants.json is the single Renovate-managed
+# source of truth, and a copied literal silently goes stale on every bump.
+GITLEAKS_VERSION = _load_constants()["gitleaks_version"]
 
 DOWNLOAD_URLS = {
     ("Darwin", "arm64"): f"https://github.com/gitleaks/gitleaks/releases/download/v{GITLEAKS_VERSION}/gitleaks_{GITLEAKS_VERSION}_darwin_arm64.tar.gz",
@@ -1275,7 +1277,7 @@ from .base import (
 )
 
 
-TRUFFLEHOG_VERSION = "3.92.4"  # sourced from constants.json
+TRUFFLEHOG_VERSION = _load_constants()["trufflehog_version"]  # never hardcode
 
 DOWNLOAD_URLS = {
     ("Darwin", "arm64"): f"https://github.com/trufflesecurity/trufflehog/releases/download/v{TRUFFLEHOG_VERSION}/trufflehog_{TRUFFLEHOG_VERSION}_darwin_arm64.tar.gz",
