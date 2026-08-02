@@ -130,9 +130,12 @@ brew install sops
 # never drifts from what the tool actually expects.
 SOPS_VERSION=$(python -c "import json,importlib.resources as r; \
   print(json.loads(r.files('envdrift').joinpath('constants.json').read_text())['sops_version'])")
+# Download to a temp file on the same filesystem, then move it into place, so
+# an interrupted download cannot leave a truncated binary at the target path.
+TMP_SOPS=$(mktemp /usr/local/bin/.sops.XXXXXX)
 wget "https://github.com/getsops/sops/releases/download/v${SOPS_VERSION}/sops-v${SOPS_VERSION}.linux.amd64" \
-  -O /usr/local/bin/sops
-chmod +x /usr/local/bin/sops
+  -O "$TMP_SOPS" && chmod +x "$TMP_SOPS" && mv -f "$TMP_SOPS" /usr/local/bin/sops \
+  || { rm -f "$TMP_SOPS"; echo "sops install failed" >&2; exit 1; }
 ```
 
 ### "Failed to decrypt: no key found"

@@ -1020,6 +1020,13 @@ from .base import (
 )
 
 
+def _load_constants() -> dict:
+    """Load constants from the package's constants.json."""
+    constants_path = Path(__file__).parent.parent / "constants.json"
+    with open(constants_path) as f:
+        return json.load(f)
+
+
 # Version pinned for reproducibility. Read it from constants.json rather than
 # repeating the literal here — constants.json is the single Renovate-managed
 # source of truth, and a copied literal silently goes stale on every bump.
@@ -1275,6 +1282,13 @@ from .base import (
     ScannerBackend,
     ScanResult,
 )
+
+
+def _load_constants() -> dict:
+    """Load constants from the package's constants.json."""
+    constants_path = Path(__file__).parent.parent / "constants.json"
+    with open(constants_path) as f:
+        return json.load(f)
 
 
 TRUFFLEHOG_VERSION = _load_constants()["trufflehog_version"]  # never hardcode

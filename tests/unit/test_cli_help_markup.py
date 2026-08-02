@@ -38,10 +38,18 @@ from envdrift.cli import app
 # TOML section names and similar identifiers, e.g. [vault], [vault.sync],
 # [tool.envdrift.vault.sync], [guardian]. Metavars like [OPTIONS] / [env_files]
 # are produced by click itself (not our help text) and are filtered out below.
-_BRACKETED = re.compile(r"\[([a-z][a-z0-9_.]*)\]")
+#
+# The dash matters: Rich swallows [vault-sync] exactly like [vault], so leaving
+# `-` out of the class would let a dashed section name be deleted from --help
+# while this sweep still reported green.
+_BRACKETED = re.compile(r"\[([a-z][a-z0-9_.-]*)\]")
 
-# Bracketed tokens click/typer generate for usage lines; not our prose.
-_CLICK_METAVARS = frozenset({"options", "args", "command"})
+# Bracketed tokens click/typer generate for usage lines rather than our prose:
+# the structural ones, plus every parameter name in the app (typer renders
+# optional positionals from the lowercase parameter name, e.g. `[env_files]`,
+# `[paths]`). Deriving the parameter names instead of hardcoding a prefix keeps
+# this correct as commands are added.
+_STRUCTURAL_METAVARS = frozenset({"options", "args", "command"})
 
 
 def _render(markup: str) -> str:
@@ -49,13 +57,10 @@ def _render(markup: str) -> str:
     return Text.from_markup(markup).plain
 
 
-def _candidates(text: str) -> set[str]:
+def _candidates(text: str, exclude: frozenset[str] = frozenset()) -> set[str]:
     """Bracketed identifiers in ``text`` that Rich could swallow."""
-    return {
-        m.group(1)
-        for m in _BRACKETED.finditer(text)
-        if m.group(1) not in _CLICK_METAVARS and not m.group(1).startswith("env_file")
-    }
+    ignored = _STRUCTURAL_METAVARS | exclude
+    return {m.group(1) for m in _BRACKETED.finditer(text) if m.group(1) not in ignored}
 
 
 def _walk(cmd: Any, path: list[str]) -> Iterator[tuple[list[str], Any]]:
@@ -78,22 +83,43 @@ def _walk(cmd: Any, path: list[str]) -> Iterator[tuple[list[str], Any]]:
             yield from _walk(sub, [*path, name])
 
 
-def _all_help_strings() -> list[tuple[str, str]]:
-    """(location, help_text) for every command and parameter in the app."""
-    root = typer.main.get_command(app)
+def _command_help(where: str, cmd: Any) -> list[tuple[str, str]]:
+    """The command's own help text, if it has any."""
+    return [(f"{where} (command help)", cmd.help)] if cmd.help else []
+
+
+def _param_help(where: str, cmd: Any) -> list[tuple[str, str]]:
+    """Help text for each of the command's parameters that has any."""
+    return [
+        (f"{where} --{param.name} (param help)", param.help)
+        for param in cmd.params
+        if getattr(param, "help", None)
+    ]
+
+
+def _param_names(cmd: Any) -> set[str]:
+    """Lowercased parameter names — what click renders as usage metavars."""
+    return {param.name.lower() for param in cmd.params if param.name}
+
+
+def _collect() -> tuple[list[tuple[str, str]], frozenset[str]]:
+    """Every (location, help_text) in the app, plus all parameter names.
+
+    The parameter names are what click renders as usage-line metavars, so they
+    are excluded from the sweep: `[paths]` in a usage string is click's doing,
+    not prose we control.
+    """
     out: list[tuple[str, str]] = []
-    for path, cmd in _walk(root, []):
+    names: set[str] = set()
+    for path, cmd in _walk(typer.main.get_command(app), []):
         where = " ".join(path) or "<root>"
-        if cmd.help:
-            out.append((f"{where} (command help)", cmd.help))
-        for param in cmd.params:
-            help_text = getattr(param, "help", None)
-            if help_text:
-                out.append((f"{where} --{param.name} (param help)", help_text))
-    return out
+        out.extend(_command_help(where, cmd))
+        out.extend(_param_help(where, cmd))
+        names |= _param_names(cmd)
+    return out, frozenset(names)
 
 
-HELP_STRINGS = _all_help_strings()
+HELP_STRINGS, PARAM_NAMES = _collect()
 
 
 def test_sweep_is_not_empty():
@@ -109,7 +135,7 @@ def test_sweep_is_not_empty():
 def test_bracketed_text_survives_rich_markup(location: str, text: str):
     """No bracketed identifier may be deleted by Rich markup parsing."""
     rendered = _render(text)
-    lost = sorted(tok for tok in _candidates(text) if f"[{tok}]" not in rendered)
+    lost = sorted(tok for tok in _candidates(text, PARAM_NAMES) if f"[{tok}]" not in rendered)
     assert not lost, (
         f"{location}: Rich markup swallowed {lost} from --help. "
         f"Escape the opening bracket at the source as '\\\\[' (e.g. '\\\\[vault]'), "
@@ -128,3 +154,30 @@ def test_no_literal_backslash_leaks_into_help(location: str, text: str):
         f"{location}: a literal backslash reaches --help. The source is "
         f"double-escaped (or the string is not a raw literal)."
     )
+
+
+class TestDetectorItself:
+    """Meta-tests: the sweep is only as good as what ``_candidates`` sees.
+
+    A too-narrow pattern makes every assertion above vacuously pass, which is
+    the worst possible failure mode for a regression guard.
+    """
+
+    @pytest.mark.parametrize(
+        "name",
+        ["vault", "vault.sync", "tool.envdrift.vault.sync", "guardian", "vault-sync"],
+    )
+    def test_detects_identifiers_rich_would_swallow(self, name: str):
+        """Every shape of section name we document must be detected."""
+        assert _candidates(f"see the `[{name}]` section") == {name}
+        # ...and Rich really does delete it, which is why we look for it.
+        assert f"[{name}]" not in _render(f"see the `[{name}]` section")
+
+    @pytest.mark.parametrize("name", ["vault", "vault-sync", "tool.envdrift.a-b"])
+    def test_escaped_form_survives_rich(self, name: str):
+        r"""The prescribed fix (``\[``) must actually render a bare bracket."""
+        assert f"[{name}]" in _render(f"see the `\\[{name}]` section")
+
+    def test_click_metavars_are_not_flagged(self):
+        """Usage-line metavars come from click, not our prose."""
+        assert _candidates("Usage: envdrift guard [OPTIONS] [paths]...", PARAM_NAMES) == set()

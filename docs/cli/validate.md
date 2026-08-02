@@ -93,7 +93,7 @@ appended to a single command line.
 
 | Argument        | Description                                      | Default |
 | :-------------- | :----------------------------------------------- | :------ |
-| `ENV_FILE`...   | Path(s) to the .env file(s) to validate          | `.env`  |
+| `[env_files]`... | Path(s) to the .env file(s) to validate          | `.env`  |
 
 ## Options
 

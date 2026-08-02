@@ -66,7 +66,7 @@ command line. Without `--check`, each file is encrypted in turn.
 
 | Argument      | Description                    | Default |
 | :------------ | :----------------------------- | :------ |
-| `ENV_FILE`... | Path(s) to the .env file(s)    | `.env`  |
+| `[env_files]`... | Path(s) to the .env file(s)    | `.env`  |
 
 ## Options
 

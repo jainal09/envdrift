@@ -29,7 +29,7 @@ This is useful when:
 
 | Argument   | Description                   | Default |
 | :--------- | :---------------------------- | :------ |
-| `ENV_FILE` | Path to the .env file to read | `.env`  |
+| `[env_file]` | Path to the .env file to read | `.env`  |
 
 ## Options
 

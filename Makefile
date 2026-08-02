@@ -54,13 +54,23 @@ security:
 test:
 	uv run pytest
 
+# Single source of truth for the integration compose invocation.
+#
+# --env-file must be passed to EVERY compose command, not just `up`: the compose
+# file declares LOCALSTACK_AUTH_TOKEN with a `${...:?}` guard, and compose
+# evaluates that interpolation on every parse. If the token lives only in
+# tests/.env (the documented fallback), omitting --env-file makes `down` and
+# `ps` fail to read the file at all — so the stack could be started but never
+# stopped, and the `ps` probe below would silently report zero running services.
+COMPOSE_TEST = docker compose $(if $(wildcard tests/.env),--env-file tests/.env,) -f tests/docker-compose.test.yml
+
 # Start integration test containers
 #
 # LocalStack has been account-gated since 2026.03.0 and exits(55) without a
 # token, so fail here with something actionable rather than letting compose
 # emit a bare variable-not-set error. A free Hobby token is enough.
 test-integration-up:
-	@if [ -z "$$LOCALSTACK_AUTH_TOKEN" ] && [ ! -f tests/.env ]; then \
+	@if [ -z "$$LOCALSTACK_AUTH_TOKEN" ] && ! grep -qsE '^[[:space:]]*LOCALSTACK_AUTH_TOKEN[[:space:]]*=[[:space:]]*\S' tests/.env; then \
 		echo ""; \
 		echo "ERROR: LOCALSTACK_AUTH_TOKEN is not set."; \
 		echo ""; \
@@ -76,20 +86,16 @@ test-integration-up:
 		echo ""; \
 		exit 1; \
 	fi
-	@if [ -f tests/.env ]; then \
-		docker compose --env-file tests/.env -f tests/docker-compose.test.yml up -d --wait; \
-	else \
-		docker compose -f tests/docker-compose.test.yml up -d --wait; \
-	fi
+	$(COMPOSE_TEST) up -d --wait
 	@echo "Services started. Run 'make test-integration' to run tests."
 
 # Stop integration test containers
 test-integration-down:
-	docker compose -f tests/docker-compose.test.yml down -v
+	$(COMPOSE_TEST) down -v
 
 # Run integration tests (starts containers if needed)
 test-integration:
-	@running=$$(docker compose -f tests/docker-compose.test.yml ps --status running --format json 2>/dev/null | grep -c '"Service"' || echo 0); \
+	@running=$$($(COMPOSE_TEST) ps --status running --format json 2>/dev/null | grep -c '"Service"' || echo 0); \
 	if [ "$$running" -lt 3 ]; then \
 		echo "Starting containers..."; \
 		$(MAKE) test-integration-up; \

@@ -44,7 +44,7 @@ normally via `envdrift decrypt -- -dash.env`.
 
 | Argument   | Description                     | Default |
 | :--------- | :------------------------------ | :------ |
-| `ENV_FILE` | Path to the encrypted .env file | `.env`  |
+| `[env_file]` | Path to the encrypted .env file | `.env`  |
 
 ## Options
 

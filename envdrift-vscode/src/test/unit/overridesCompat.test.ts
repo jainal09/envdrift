@@ -29,9 +29,17 @@ import * as path from 'path';
 const EXT_ROOT = path.resolve(__dirname, '..', '..', '..');
 const NODE_MODULES = path.join(EXT_ROOT, 'node_modules');
 
-/** Every installed copy of `minimatch`, top-level and nested. */
+/**
+ * Every installed copy of `minimatch`, top-level and nested.
+ *
+ * Scoped packages install as `@scope/pkg`, so a scope directory is an extra
+ * level of nesting with no `node_modules` of its own. Descending into `@*`
+ * directories matters: without it, a nested minimatch under
+ * `@scope/pkg/node_modules/` would be skipped and this guard would report
+ * green while the exact bug it exists to catch was present.
+ */
 function findMinimatchCopies(root: string, depth = 0): string[] {
-    if (depth > 4 || !fs.existsSync(root)) {
+    if (depth > 6 || !fs.existsSync(root)) {
         return [];
     }
     const found: string[] = [];
@@ -42,6 +50,11 @@ function findMinimatchCopies(root: string, depth = 0): string[] {
         const dir = path.join(root, entry.name);
         if (entry.name === 'minimatch') {
             found.push(dir);
+            continue;
+        }
+        // A scope directory holds packages, not a node_modules tree.
+        if (entry.name.startsWith('@')) {
+            found.push(...findMinimatchCopies(dir, depth + 1));
             continue;
         }
         const nested = path.join(dir, 'node_modules');

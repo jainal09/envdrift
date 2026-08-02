@@ -63,6 +63,10 @@ services:
     ports:
       - "4566:4566"
     environment:
+      # Mandatory since 2026.03.0 — the container exits(55) without it.
+      # Supplied from the environment or the gitignored tests/.env locally,
+      # and from the LOCALSTACK_AUTH_TOKEN repository secret in CI.
+      - LOCALSTACK_AUTH_TOKEN=${LOCALSTACK_AUTH_TOKEN:?get a free Hobby token at https://app.localstack.cloud}
       - SERVICES=secretsmanager
       - DEBUG=0
     volumes:
