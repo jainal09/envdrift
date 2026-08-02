@@ -1,0 +1,44 @@
+renovate.json
+  s_387a201b31e3a1::t_2c4a81dd4c2419 15-20,88,90
+tests/unit/test_dev_stack_hygiene.py
+  s_387a201b31e3a1::t_c977aaaf8eb77a 289-317,321-328,330-341
+  s_387a201b31e3a1::t_a6cc89935d528a 318-320
+  s_387a201b31e3a1::t_7838ce9836294a 329
+tests/unit/coverage/test_cov_scanner_infisical.py
+  s_387a201b31e3a1::t_9a8b82ba755aea 55
+  s_387a201b31e3a1::t_7838ce9836294a 40
+src/envdrift/scanner/infisical.py
+  s_387a201b31e3a1::t_687cec818cae1f 15
+  s_387a201b31e3a1::t_aadc8e421d780f 139-142,144-145
+  s_387a201b31e3a1::t_987e895b37626a 72-80
+  s_387a201b31e3a1::t_6976e0aef4e64e 204-222
+  s_387a201b31e3a1::t_d88b957829fe0a 320-323
+  s_387a201b31e3a1::t_f60611b4bd5b82 68,81-88
+  s_387a201b31e3a1::t_bdb5fb86365eb9 89-90
+tests/unit/test_download_integrity.py
+  s_387a201b31e3a1::t_de8a70f670cfb4 214-223
+docs/specs/new-guards-spec.md
+  s_387a201b31e3a1::t_36bad59bfd5222 203,384-388,390-394,397-401
+  s_387a201b31e3a1::t_1af4ef3b21824d 402
+src/envdrift/constants.json
+  s_387a201b31e3a1::t_fdd2e17ac0aa92 2-69
+tests/scanner/test_infisical.py
+  s_387a201b31e3a1::t_7838ce9836294a 827,867,884
+  s_387a201b31e3a1::t_265616138a49ce 791-826,828-866,868-883,885
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.20",
+  "base_commit_sha": "1c0755b8131b91231c8f5acf56ac720ec290152e",
+  "prompts": {},
+  "sessions": {
+    "s_387a201b31e3a1": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "1bd295c2-9ec5-43f6-a658-6971b2b820c0",
+        "model": "claude-opus-5"
+      },
+      "human_author": "Jainal Gosaliya <jainal09gosalia@gmail.com>"
+    }
+  }
+}
