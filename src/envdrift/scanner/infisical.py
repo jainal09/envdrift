@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import json
 import platform
+import re
 import shutil
 import subprocess  # nosec B404
 import tarfile
@@ -64,8 +65,27 @@ def _get_infisical_download_urls() -> dict[str, str]:
 
 
 def _get_infisical_checksums_url() -> str:
-    """Get the upstream checksums file URL template from constants."""
+    """Get the generic upstream checksums file URL template from constants."""
     return _load_constants().get("infisical_checksums_url", "")
+
+
+def _parse_version_tokens(output: str) -> set[str]:
+    """Extract whole dotted-version tokens from ``<binary> --version`` output.
+
+    Used instead of a substring test so that a pinned ``0.43.11`` is not
+    considered satisfied by a binary reporting ``0.43.116``.
+    """
+    return set(re.findall(r"\d+(?:\.\d+)+", output))
+
+
+def _get_infisical_checksums_urls() -> dict[str, str]:
+    """Get per-platform checksums URL template overrides from constants.
+
+    Upstream publishes macOS digests in a separate ``checksums-darwin.txt``;
+    the generic ``checksums.txt`` contains no darwin entries at all. Platforms
+    absent from this map fall back to the generic URL.
+    """
+    return _load_constants().get("infisical_checksums_urls", {})
 
 
 # Severity mapping - Infisical doesn't have built-in severity, so we map by rule type
@@ -116,9 +136,13 @@ class InfisicalInstaller:
     """Installer for infisical binary."""
 
     # Download URLs by platform
+    # The CLI moved out of the Infisical/infisical monorepo into Infisical/cli
+    # (the last CLI release published from the old repo was 0.41.90). The tag
+    # format lost its `infisical-cli/` prefix and the tarballs are named
+    # `cli_*` rather than `infisical_*`.
     DOWNLOAD_URL_TEMPLATE = (
-        "https://github.com/Infisical/infisical/releases/download/"
-        "infisical-cli/v{version}/infisical_{version}_{os}_{arch}.{ext}"
+        "https://github.com/Infisical/cli/releases/download/"
+        "v{version}/cli_{version}_{os}_{arch}.{ext}"
     )
 
     PLATFORM_MAP: ClassVar[dict[tuple[str, str], tuple[str, str, str]]] = {
@@ -177,7 +201,25 @@ class InfisicalInstaller:
         )
 
     def get_checksums_url(self) -> str:
-        """Get the URL of the upstream-published checksums file for this version."""
+        """Get the URL of the upstream-published checksums file for this version.
+
+        Platform-aware: upstream splits macOS digests into a separate
+        ``checksums-darwin.txt`` and the generic ``checksums.txt`` carries no
+        darwin entries. Since :func:`verify_download` fails closed, resolving
+        the generic file on macOS would make every install abort. Platforms
+        without an override fall back to the generic URL, so a future upstream
+        re-consolidation degrades gracefully instead of breaking.
+        """
+        overrides = _get_infisical_checksums_urls()
+        if overrides:
+            system, machine = get_platform_info()
+            entry = self.PLATFORM_MAP.get((system, machine))
+            if entry is not None:
+                os_name, arch, _ext = entry
+                template = overrides.get(f"{os_name}_{arch}")
+                if template:
+                    return template.format(version=self.version)
+
         template = _get_infisical_checksums_url()
         return template.format(version=self.version) if template else ""
 
@@ -275,7 +317,10 @@ class InfisicalInstaller:
                     errors="replace",
                     timeout=10,
                 )
-                if self.version in result.stdout:
+                # Exact token match, not a substring: upstream version numbers
+                # carry large patch components, so `0.43.11 in "... 0.43.116"`
+                # would be true and would skip reinstalling a wrong binary.
+                if self.version in _parse_version_tokens(result.stdout):
                     self.progress(f"infisical v{self.version} already installed")
                     return target_path
             except Exception:

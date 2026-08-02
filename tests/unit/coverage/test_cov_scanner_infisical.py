@@ -37,8 +37,7 @@ class TestDownloadUrlTemplateFallback:
         url = installer.get_download_url()
         # Template uses os/arch/ext placeholders -> linux/amd64/tar.gz
         assert url == (
-            "https://github.com/Infisical/infisical/releases/download/"
-            "infisical-cli/v9.9.9/infisical_9.9.9_linux_amd64.tar.gz"
+            "https://github.com/Infisical/cli/releases/download/v9.9.9/cli_9.9.9_linux_amd64.tar.gz"
         )
 
     @patch(
@@ -53,7 +52,7 @@ class TestDownloadUrlTemplateFallback:
         mock_platform.return_value = ("Linux", "arm64")
         installer = InfisicalInstaller(version="1.2.3")
         url = installer.get_download_url()
-        assert url.endswith("infisical_1.2.3_linux_arm64.tar.gz")
+        assert url.endswith("cli_1.2.3_linux_arm64.tar.gz")
         assert "custom://" not in url
 
 

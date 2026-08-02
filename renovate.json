@@ -12,6 +12,12 @@
     "**/test/**",
     "**/__fixtures__/**"
   ],
+  "lockFileMaintenance": {
+    "enabled": true,
+    "schedule": ["every weekend"],
+    "commitMessageAction": "Lock file maintenance",
+    "automerge": false
+  },
   "dependencyDashboardApproval": false,
   "semanticCommits": "enabled",
   "labels": [
@@ -79,9 +85,9 @@
       "customType": "regex",
       "managerFilePatterns": ["/^src/envdrift/constants\\.json$/"],
       "matchStrings": ["\"infisical_version\":\\s*\"(?<currentValue>\\d+\\.\\d+\\.\\d+)\""],
-      "depNameTemplate": "Infisical/infisical",
+      "depNameTemplate": "Infisical/cli",
       "datasourceTemplate": "github-releases",
-      "extractVersionTemplate": "^infisical-cli/v(?<version>.*)$"
+      "extractVersionTemplate": "^v(?<version>.*)$"
     },
     {
       "customType": "regex",

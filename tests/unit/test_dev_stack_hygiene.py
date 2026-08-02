@@ -286,3 +286,56 @@ def test_renovate_pr_body_copy_matches_automerge_reality() -> None:
             f"prBodyTemplate major line ({line!r}) must keep requiring manual "
             "review — automerge-version-bump.yml refuses major bumps (#500)."
         )
+
+
+def _constants() -> dict[str, Any]:
+    path = _REPO_ROOT / "src" / "envdrift" / "constants.json"
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def test_custom_manager_regexes_match_the_constants_they_target() -> None:
+    """Every ``constants.json`` custom manager must actually match its key.
+
+    A ``matchStrings`` regex that no longer matches makes Renovate report
+    "up to date" forever with ZERO diagnostics — the pin silently freezes.
+    This is not hypothetical: the infisical manager targeted the wrong
+    repository's tag format, so the CLI sat at 0.41.90 while upstream moved
+    to a different repo entirely.
+    """
+    constants_text = (_REPO_ROOT / "src" / "envdrift" / "constants.json").read_text(
+        encoding="utf-8"
+    )
+    managers = [
+        m
+        for m in _renovate_config().get("customManagers", [])
+        if any("constants" in p for p in m.get("managerFilePatterns", []))
+    ]
+    assert managers, "expected custom managers targeting constants.json"
+
+    for manager in managers:
+        dep = manager.get("depNameTemplate", "<unnamed>")
+        for pattern in manager["matchStrings"]:
+            # Renovate regexes use JS-style named groups; Python wants (?P<n>...).
+            py_pattern = re.sub(r"\(\?<(\w+)>", r"(?P<\1>", pattern)
+            assert re.search(py_pattern, constants_text), (
+                f"renovate.json custom manager for {dep} has a matchStrings "
+                f"regex that matches nothing in constants.json: {pattern!r}. "
+                "Renovate would silently never update this pin."
+            )
+
+
+def test_every_versioned_tool_has_a_custom_manager() -> None:
+    """No ``<tool>_version`` key may exist without Renovate tracking it."""
+    versioned = {key.removesuffix("_version") for key in _constants() if key.endswith("_version")}
+    covered = {
+        tool
+        for tool in versioned
+        for m in _renovate_config().get("customManagers", [])
+        for pattern in m.get("matchStrings", [])
+        if f"{tool}_version" in pattern
+    }
+    missing = sorted(versioned - covered)
+    assert not missing, (
+        f"constants.json pins {missing} with no Renovate custom manager. "
+        "Hardcoded versions must always be Renovate-managed."
+    )

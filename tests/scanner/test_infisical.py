@@ -788,3 +788,98 @@ class TestInfisicalIntegration:
         result = scanner.scan([tmp_path])
 
         assert result.success is True
+
+
+class TestPlatformSpecificChecksums:
+    """Regression: macOS digests live in a separate upstream checksums file.
+
+    Upstream Infisical/cli publishes darwin SHA256s in ``checksums-darwin.txt``;
+    the generic ``checksums.txt`` contains ZERO darwin entries. Because
+    ``verify_download`` fails closed, resolving the generic file on macOS made
+    every install abort with a "no checksum entry" error.
+
+    Nothing caught this: CI installs the Linux tarball only, so a broken macOS
+    install would have shipped silently.
+
+    Versions are read dynamically from constants.json — never hardcode them
+    here, or Renovate bumps break CI.
+    """
+
+    @staticmethod
+    def _url_for(system: str, machine: str) -> str:
+        with patch(
+            "envdrift.scanner.infisical.get_platform_info",
+            return_value=(system, machine),
+        ):
+            return InfisicalInstaller().get_checksums_url()
+
+    @pytest.mark.parametrize("machine", ["x86_64", "arm64"])
+    def test_darwin_resolves_the_darwin_checksums_file(self, machine: str):
+        """On macOS the installer must not use the generic checksums file."""
+        url = self._url_for("Darwin", machine)
+        assert url.endswith("checksums-darwin.txt"), url
+        assert _get_infisical_version() in url
+
+    @pytest.mark.parametrize(
+        ("system", "machine"),
+        [("Linux", "x86_64"), ("Linux", "arm64"), ("Windows", "x86_64")],
+    )
+    def test_non_darwin_resolves_the_generic_checksums_file(self, system: str, machine: str):
+        """Linux/Windows digests are still published in checksums.txt."""
+        url = self._url_for(system, machine)
+        assert url.endswith("checksums.txt"), url
+        assert "checksums-darwin.txt" not in url
+        assert _get_infisical_version() in url
+
+    def test_darwin_and_linux_disagree(self):
+        """The whole point: the two platforms must not share one URL."""
+        assert self._url_for("Darwin", "arm64") != self._url_for("Linux", "x86_64")
+
+    def test_falls_back_to_generic_when_no_override_configured(self):
+        """If upstream re-consolidates, an empty override map degrades gracefully."""
+        with (
+            patch(
+                "envdrift.scanner.infisical._get_infisical_checksums_urls",
+                return_value={},
+            ),
+            patch(
+                "envdrift.scanner.infisical.get_platform_info",
+                return_value=("Darwin", "arm64"),
+            ),
+        ):
+            assert InfisicalInstaller().get_checksums_url().endswith("checksums.txt")
+
+
+class TestInstalledVersionMatchIsExact:
+    """Regression: the installed-version check was a substring test.
+
+    ``if self.version in result.stdout`` treats a pinned 0.43.11 as satisfied
+    by a binary reporting 0.43.116, so a wrong binary is silently kept in
+    place. Upstream patch numbers are three digits, so this is reachable.
+    """
+
+    @staticmethod
+    def _install_with_reported_version(tmp_path: Path, pinned: str, reported: str):
+        target = tmp_path / "infisical"
+        target.write_text("#!/bin/sh\n")
+        installer = InfisicalInstaller(version=pinned)
+        with (
+            patch("envdrift.scanner.infisical.get_infisical_path", return_value=target),
+            patch("envdrift.scanner.infisical.subprocess.run") as run,
+            patch.object(InfisicalInstaller, "download_and_extract") as download,
+        ):
+            run.return_value = MagicMock(
+                returncode=0, stdout=f"infisical version {reported}\n", stderr=""
+            )
+            installer.install()
+            return download
+
+    def test_prefix_version_does_not_satisfy_the_pin(self, tmp_path: Path):
+        """0.43.116 installed must NOT satisfy a 0.43.11 pin -> reinstall."""
+        download = self._install_with_reported_version(tmp_path, "0.43.11", "0.43.116")
+        download.assert_called_once()
+
+    def test_exact_version_skips_reinstall(self, tmp_path: Path):
+        """The matching version is still recognised -> no redundant download."""
+        download = self._install_with_reported_version(tmp_path, "0.43.116", "0.43.116")
+        download.assert_not_called()

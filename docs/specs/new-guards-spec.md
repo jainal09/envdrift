@@ -200,7 +200,7 @@ disable-rules:
 
 ### Overview
 
-- **Source**: <https://github.com/Infisical/infisical>
+- **Source**: <https://github.com/Infisical/cli>
 - **Maintainer**: Infisical Inc.
 - **License**: MIT
 - **Purpose**: Secret management platform with scanning capabilities
@@ -381,13 +381,24 @@ windows_amd64: https://github.com/aquasecurity/trivy/releases/download/v{version
 
 ### Infisical
 
+The CLI is published from `Infisical/cli`, not the `Infisical/infisical`
+monorepo. The last CLI release cut from the monorepo was 0.41.90; the tag
+format dropped its `infisical-cli/` prefix and the archives are named `cli_*`
+rather than `infisical_*`.
+
 ```text
-darwin_amd64: https://github.com/Infisical/infisical/releases/download/infisical-cli/v{version}/infisical_{version}_darwin_amd64.tar.gz
-darwin_arm64: https://github.com/Infisical/infisical/releases/download/infisical-cli/v{version}/infisical_{version}_darwin_arm64.tar.gz
-linux_amd64: https://github.com/Infisical/infisical/releases/download/infisical-cli/v{version}/infisical_{version}_linux_amd64.tar.gz
-linux_arm64: https://github.com/Infisical/infisical/releases/download/infisical-cli/v{version}/infisical_{version}_linux_arm64.tar.gz
-windows_amd64: https://github.com/Infisical/infisical/releases/download/infisical-cli/v{version}/infisical_{version}_windows_amd64.zip
+darwin_amd64: https://github.com/Infisical/cli/releases/download/v{version}/cli_{version}_darwin_amd64.tar.gz
+darwin_arm64: https://github.com/Infisical/cli/releases/download/v{version}/cli_{version}_darwin_arm64.tar.gz
+linux_amd64: https://github.com/Infisical/cli/releases/download/v{version}/cli_{version}_linux_amd64.tar.gz
+linux_arm64: https://github.com/Infisical/cli/releases/download/v{version}/cli_{version}_linux_arm64.tar.gz
+windows_amd64: https://github.com/Infisical/cli/releases/download/v{version}/cli_{version}_windows_amd64.zip
 ```
+
+Checksums are split by platform. Linux and Windows digests are in
+`checksums.txt`; macOS digests are published separately in
+`checksums-darwin.txt` and are absent from the generic file. Since checksum
+verification fails closed, the installer resolves the darwin file on macOS and
+falls back to the generic one elsewhere.
 
 ---
 
