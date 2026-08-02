@@ -1,0 +1,56 @@
+docs/cli/validate.md
+  s_387a201b31e3a1::t_d66cd6474366fb 8
+docs/cli/vault-push.md
+  s_387a201b31e3a1::t_d66cd6474366fb 9
+src/envdrift/cli_commands/sync.py
+  s_387a201b31e3a1::t_92350707252d09 364,378-379,405,429-430
+docs/cli/decrypt.md
+  s_387a201b31e3a1::t_d66cd6474366fb 9-10
+tests/test_vscode_cli_contract.py
+  s_387a201b31e3a1::t_1a6abecbcaaeb3 159-163,166
+docs/cli/diff.md
+  s_387a201b31e3a1::t_d66cd6474366fb 8
+tests/unit/coverage/test_cov_cli_commands_sync.py
+  s_387a201b31e3a1::t_be1dc9ec5e419f 1665-1675
+docs/cli/encrypt.md
+  s_387a201b31e3a1::t_d66cd6474366fb 8
+src/envdrift/cli_commands/agent.py
+  s_387a201b31e3a1::t_92350707252d09 213
+src/envdrift/cli_commands/vault.py
+  s_387a201b31e3a1::t_92350707252d09 50,66
+docs/cli/vault-pull.md
+  s_387a201b31e3a1::t_d66cd6474366fb 9
+tests/unit/test_cli_help_markup.py
+  s_387a201b31e3a1::t_e451063e325980 61-68,71-72,76
+  s_387a201b31e3a1::t_ff82b8dcbf31c3 1-26,29-60,69-70,73-75,77-130
+  s_387a201b31e3a1::t_0793116045e505 27-28
+docs/cli/init.md
+  s_387a201b31e3a1::t_d66cd6474366fb 8
+docs/cli/guard.md
+  s_387a201b31e3a1::t_d66cd6474366fb 8
+pyproject.toml
+  s_387a201b31e3a1::t_afd9f47751f2d5 78-80
+  s_387a201b31e3a1::t_08cf6e320d8343 124-130
+src/envdrift/cli_commands/validate.py
+  s_387a201b31e3a1::t_e1e222ab20a96b 96
+  s_387a201b31e3a1::t_92350707252d09 63
+  s_387a201b31e3a1::t_e13fedbddc66cc 73
+uv.lock
+  s_387a201b31e3a1::t_b0f507a420451b 10-18,21,23,25,52,61,63,68,75,77,82,84,86,91,93,95-99,104,112,114,119,126,128,133,140,142,147,149,151,156,161-249,263-332,337,342,344,358-437,503,505,507,512,519,521,649-650,700,709,711,722,728,730,735,745,747,752,757,759,783,788-829,834,841,843,860,862,864,908,910,912,944,946,948,953,958,960,1081,1088,1090,1095,1110,1112,1165,1167,1169,1174,1176,1178,1192,1194,1196,1201,1203,1205,1219,1228,1230,1258,1263,1265,1270,1272,1274-1280,1306,1308,1310,1315,1323,1325,1330,1335-1427,1482,1484,1486-1496,1551,1558,1560,1622,1625-1639,1740,1746,1748,1876-1896,1901,1906,1908,1931,1933,1935,1940-1989,1994,1997-1998,2002,2004,2009,2011,2013
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.20",
+  "base_commit_sha": "e0fce9d72c1e01c82bcbc43172e5da9fc3c7f3c3",
+  "prompts": {},
+  "sessions": {
+    "s_387a201b31e3a1": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "1bd295c2-9ec5-43f6-a658-6971b2b820c0",
+        "model": "claude-opus-5"
+      },
+      "human_author": "Jainal Gosaliya <jainal09gosalia@gmail.com>"
+    }
+  }
+}
