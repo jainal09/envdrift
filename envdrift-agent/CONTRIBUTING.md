@@ -6,7 +6,7 @@ Thank you for your interest in contributing to EnvDrift Agent!
 
 ### Prerequisites
 
-- Go 1.23+
+- Go 1.25.12+ (the go.mod floor carries a stdlib security fix; older toolchains are refused)
 - Make
 - (Optional) golangci-lint for linting
 
@@ -49,7 +49,10 @@ go test -v ./internal/config/...
 
 ```bash
 # Install golangci-lint
-go install github.com/golangci/golangci-lint/cmd/golangci-lint@latest
+# v2 module path — the /cmd/... path without /v2 silently installs the
+# abandoned v1 line (tops out at 1.64.x) while CI runs v2; keep the version
+# in sync with .github/workflows/agent-ci.yml
+go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.12.2
 
 # Run linter
 make lint

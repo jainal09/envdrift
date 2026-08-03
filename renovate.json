@@ -128,7 +128,39 @@
         "/^\\.github/workflows/.*\\.ya?ml$/"
       ],
       "matchStrings": [
-        "# renovate: datasource=(?<datasource>\\S+) depName=(?<depName>\\S+)\\s+version:\\s*(?<currentValue>v\\d+\\.\\d+\\.\\d+)"
+        "# renovate: datasource=(?<datasource>\\S+) depName=(?<depName>\\S+)\\s+version:\\s*(?<currentValue>v?\\d+\\.\\d+\\.\\d+)"
+      ]
+    },
+    {
+      "customType": "regex",
+      "description": "Tool versions pinned as Makefile variables (e.g. markdownlint-cli2, invoked via npx inside the REQUIRED Lint check).",
+      "managerFilePatterns": [
+        "/^Makefile$/"
+      ],
+      "matchStrings": [
+        "# renovate: datasource=(?<datasource>\\S+) depName=(?<depName>\\S+)\\s+\\w+ *[:?]?= *(?<currentValue>\\S+)"
+      ]
+    },
+    {
+      "customType": "regex",
+      "description": "golangci-lint install command in the agent contributor docs. Keeps the doc copy in the SAME Renovate PR as the agent-ci.yml pin, so the two cannot drift the way copied pins otherwise do. MAJOR-BUMP NOTE: this regex and the doc command both hardcode the /v2/ module path. When golangci-lint cuts v3, the (manual-review) major PR must also move the module path in BOTH places - the parity guard stays green if the two copies break identically.",
+      "managerFilePatterns": [
+        "/^envdrift-agent/CONTRIBUTING\\.md$/"
+      ],
+      "matchStrings": [
+        "go install github\\.com/golangci/golangci-lint/v2/cmd/golangci-lint@(?<currentValue>v\\d+\\.\\d+\\.\\d+)"
+      ],
+      "depNameTemplate": "golangci/golangci-lint",
+      "datasourceTemplate": "github-releases"
+    },
+    {
+      "customType": "regex",
+      "description": "Annotated `go install <module>@vX.Y.Z` commands in workflows (govulncheck in agent-ci.yml). datasource=go resolves the module version; the annotation names the MODULE (golang.org/x/vuln), not the cmd/ path.",
+      "managerFilePatterns": [
+        "/^\\.github/workflows/.*\\.ya?ml$/"
+      ],
+      "matchStrings": [
+        "# renovate: datasource=(?<datasource>\\S+) depName=(?<depName>\\S+)\\s+[^\\n]*go install [^@\\s]+@(?<currentValue>v\\d+\\.\\d+\\.\\d+)"
       ]
     }
   ],
@@ -173,10 +205,24 @@
         "localstack/localstack"
       ],
       "allowedVersions": "/^\\d{4}\\.\\d{2}\\.\\d+$/"
+    },
+    {
+      "description": "Track Go INDIRECT dependencies. Renovate's gomod extractor stamps enabled:false on every '// indirect' require (no Go 1.24+ tool directive here to re-enable them), so they vanish from updates AND from the dependency dashboard with no diagnostic - 12 of the agent's deps were invisible, including golang.org/x/sys with GO-2026-5024 package-imported in the shipped Windows binary.",
+      "matchManagers": [
+        "gomod"
+      ],
+      "matchDepTypes": [
+        "indirect"
+      ],
+      "enabled": true,
+      "groupName": "go indirect dependencies"
     }
   ],
-  "prBodyTemplate": "{{{table}}}\n\n---\n\n\ud83e\udd16 **Auto-generated version bump PR**\n\nThis PR was automatically created by Renovate to update dependency versions.\n\n- **Minor/Patch updates**: auto-merged by the `automerge-version-bump` workflow once all required CI checks pass \u2014 no human review\n- **Major updates**: require manual review and approval; never auto-merged",
+  "prBodyTemplate": "{{{warnings}}}\n\n{{{table}}}\n\n---\n\n\ud83e\udd16 **Auto-generated version bump PR**\n\nThis PR was automatically created by Renovate to update dependency versions.\n\n- **Minor/Patch updates**: auto-merged by the `automerge-version-bump` workflow once all required CI checks pass \u2014 no human review\n- **Major updates**: require manual review and approval; never auto-merged\n\n{{{controls}}}\n",
   "schedule": [
     "every weekend"
+  ],
+  "postUpdateOptions": [
+    "gomodTidy"
   ]
 }

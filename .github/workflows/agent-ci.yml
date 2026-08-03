@@ -28,7 +28,7 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
-        go: ['1.23', '1.26']
+        go: ['1.25', '1.26']
 
     steps:
       - name: Checkout code
@@ -40,12 +40,40 @@ jobs:
           go-version: ${{ matrix.go }}
           cache-dependency-path: envdrift-agent/go.sum
 
+      - name: Verify go.mod/go.sum are tidy
+        # BEFORE 'Download dependencies': `go mod download` writes missing
+        # go.sum checksums on the runner, which would mask untidiness of the
+        # COMMITTED files (verified: a dropped go.sum line fails -diff before
+        # download, passes after). One leg only: -diff output could differ
+        # across toolchains, and a split failure across 6 legs is noise.
+        # Renovate's gomodTidy keeps this green for bot PRs; contributors
+        # run `go mod tidy` locally.
+        if: matrix.os == 'ubuntu-latest' && matrix.go == '1.26'
+        run: go mod tidy -diff
+
       - name: Download dependencies
         run: go mod download
 
       - name: Run tests
         shell: bash
         run: go test -v -race -coverprofile=coverage.out ./...
+
+      - name: govulncheck
+        # Vulnerability gate for the shipped agent (closes #721). Two passes:
+        # native SOURCE analysis (call-graph reachability on the host), then
+        # BINARY-mode analysis of a windows-amd64 exe built from the same
+        # package as the release artifact — GO-2026-5024 only surfaced under
+        # windows analysis, and binary mode audits the artifact shape rather
+        # than a build-constraint approximation of it. One leg, like the tidy
+        # gate above; the guard-the-guard test keeps both conditions alive
+        # across matrix rotations.
+        if: matrix.os == 'ubuntu-latest' && matrix.go == '1.26'
+        run: |
+          # renovate: datasource=go depName=golang.org/x/vuln
+          go install golang.org/x/vuln/cmd/govulncheck@v1.6.0
+          govulncheck ./...
+          GOOS=windows GOARCH=amd64 go build -o /tmp/agent-windows-amd64.exe ./cmd/envdrift-agent
+          govulncheck -mode=binary /tmp/agent-windows-amd64.exe
 
       - name: Upload coverage
         uses: codecov/codecov-action@v7
