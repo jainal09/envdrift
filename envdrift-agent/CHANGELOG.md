@@ -5,6 +5,13 @@ All notable changes to the EnvDrift Agent will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.5](https://github.com/jainal09/envdrift/compare/agent-v1.1.4...agent-v1.1.5) (2026-08-03)
+
+
+### Bug Fixes
+
+* **renovate:** track Go indirect deps, pin CI tooling, close audit gaps ([#720](https://github.com/jainal09/envdrift/issues/720)) ([d6e2680](https://github.com/jainal09/envdrift/commit/d6e2680ff0cb6b92c484245cb50d431acd861b9a))
+
 ## [1.1.4](https://github.com/jainal09/envdrift/compare/agent-v1.1.3...agent-v1.1.4) (2026-07-07)
 
 
