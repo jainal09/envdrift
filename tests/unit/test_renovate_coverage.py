@@ -327,17 +327,45 @@ def test_go_floor_supports_current_x_sys() -> None:
     # permanently false and the ONLY tidiness gate in CI would evaporate with
     # zero diagnostics — the silent-guard-death mode this module exists to
     # prevent.
-    tidy_steps = [
-        step
+    for gate, needle in (
+        ("go mod tidy", "go mod tidy -diff"),
+        ("govulncheck", "govulncheck ./..."),
+    ):
+        steps = [step for step in ci["jobs"]["test"]["steps"] if needle in str(step.get("run", ""))]
+        assert steps, f"agent-ci.yml lost the {gate} gate"
+        condition = str(steps[0].get("if", ""))
+        assert any(f"'{leg}'" in condition for leg in matrix_go), (
+            f"the {gate} gate's condition ({condition!r}) references no current "
+            f"matrix leg ({matrix_go}) — the gate would never run again"
+        )
+
+    # The govulncheck gate must analyse the Windows build too: GO-2026-5024
+    # was invisible to native analysis and only surfaced under GOOS=windows.
+    vuln_run = next(
+        str(step.get("run", ""))
         for step in ci["jobs"]["test"]["steps"]
-        if "go mod tidy -diff" in str(step.get("run", ""))
-    ]
-    assert tidy_steps, "agent-ci.yml lost the go mod tidy gate"
-    condition = str(tidy_steps[0].get("if", ""))
-    assert any(f"'{leg}'" in condition for leg in matrix_go), (
-        f"the tidy gate's condition ({condition!r}) references no current "
-        f"matrix leg ({matrix_go}) — the gate would never run again"
+        if "govulncheck ./..." in str(step.get("run", ""))
     )
+    assert "GOOS=windows" in vuln_run, (
+        "the govulncheck gate lost its GOOS=windows pass — the class of "
+        "vulnerability that motivated it (GO-2026-5024) only shows up there"
+    )
+    # And its install line must be pinned + Renovate-annotated, matching the
+    # go-install customManager (a regex matching nothing = Infisical mode).
+    managers = [
+        m
+        for m in _renovate_config().get("customManagers", [])
+        if any("go install" in ms for ms in m.get("matchStrings", []))
+        and any("workflows" in pat for pat in m.get("managerFilePatterns", []))
+    ]
+    assert managers, "renovate.json lost the workflow go-install customManager"
+    workflow_text = (_WORKFLOWS / "agent-ci.yml").read_text(encoding="utf-8")
+    for manager in managers:
+        for match_string in manager["matchStrings"]:
+            pattern = re.sub(r"\(\?<(\w+)>", r"(?P<\1>", match_string)
+            found = re.search(pattern, workflow_text)
+            assert found, f"go-install manager regex matches nothing: {match_string!r}"
+            assert found.group("depName") == "golang.org/x/vuln"
 
 
 def _workflow_files() -> list[Path]:

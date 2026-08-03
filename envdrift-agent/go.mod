@@ -2,6 +2,11 @@ module github.com/jainal09/envdrift-agent
 
 go 1.25.0
 
+// Renovate-tracked (gomod manager, depType toolchain). Floor for the
+// GO-2026-4602 stdlib fix (os@go1.25.8): building with an older toolchain
+// ships the vulnerable os package inside the released agent binaries.
+toolchain go1.25.12
+
 require (
 	github.com/fsnotify/fsnotify v1.10.1
 	github.com/gen2brain/beeep v0.11.2

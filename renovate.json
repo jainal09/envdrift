@@ -152,6 +152,16 @@
       ],
       "depNameTemplate": "golangci/golangci-lint",
       "datasourceTemplate": "github-releases"
+    },
+    {
+      "customType": "regex",
+      "description": "Annotated `go install <module>@vX.Y.Z` commands in workflows (govulncheck in agent-ci.yml). datasource=go resolves the module version; the annotation names the MODULE (golang.org/x/vuln), not the cmd/ path.",
+      "managerFilePatterns": [
+        "/^\\.github/workflows/.*\\.ya?ml$/"
+      ],
+      "matchStrings": [
+        "# renovate: datasource=(?<datasource>\\S+) depName=(?<depName>\\S+)\\s+[^\\n]*go install [^@\\s]+@(?<currentValue>v\\d+\\.\\d+\\.\\d+)"
+      ]
     }
   ],
   "packageRules": [
