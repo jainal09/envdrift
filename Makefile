@@ -80,7 +80,7 @@ COMPOSE_TEST_NOSTART = LOCALSTACK_AUTH_TOKEN=$${LOCALSTACK_AUTH_TOKEN:-not-neede
 # token, so fail here with something actionable rather than letting compose
 # emit a bare variable-not-set error. A free Hobby token is enough.
 test-integration-up:
-	@if [ -z "$$LOCALSTACK_AUTH_TOKEN" ] && ! grep -qsE '^[[:space:]]*LOCALSTACK_AUTH_TOKEN[[:space:]]*=[[:space:]]*\S' tests/.env; then \
+	@if [ -z "$$LOCALSTACK_AUTH_TOKEN" ] && ! grep -qsE '^[[:space:]]*LOCALSTACK_AUTH_TOKEN[[:space:]]*=[[:space:]]*[^[:space:]]' tests/.env; then \
 		echo ""; \
 		echo "ERROR: LOCALSTACK_AUTH_TOKEN is not set."; \
 		echo ""; \
