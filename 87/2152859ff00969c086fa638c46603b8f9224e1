@@ -1,0 +1,27 @@
+tests/unit/test_renovate_coverage.py
+  s_387a201b31e3a1::t_230fbd74310efc 325-341
+  s_387a201b31e3a1::t_a886608ba83e6e 343-351,357,380,405-414,454-460
+  s_387a201b31e3a1::t_e6a87ced7834bb 342
+renovate.json
+  s_387a201b31e3a1::t_a886608ba83e6e 146
+envdrift-agent/CONTRIBUTING.md
+  s_387a201b31e3a1::t_230fbd74310efc 9
+.github/workflows/agent-ci.yml
+  s_387a201b31e3a1::t_230fbd74310efc 46-50
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.20",
+  "base_commit_sha": "872152859ff00969c086fa638c46603b8f9224e1",
+  "prompts": {},
+  "sessions": {
+    "s_387a201b31e3a1": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "1bd295c2-9ec5-43f6-a658-6971b2b820c0",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Jainal Gosaliya <jainal09gosalia@gmail.com>"
+    }
+  }
+}
