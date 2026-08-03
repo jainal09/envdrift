@@ -1,0 +1,23 @@
+tests/unit/test_renovate_coverage.py
+  s_387a201b31e3a1::t_1b4c72e3b81de0 1-298,310-317,322,334-360
+  s_387a201b31e3a1::t_55324d4eba46bd 299-309,318-321,323-333
+.github/workflows/agent-ci.yml
+  s_387a201b31e3a1::t_55324d4eba46bd 44-49,54-55
+  s_387a201b31e3a1::t_bfeb2673d53056 56
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.20",
+  "base_commit_sha": "e8a85d62f69220d4fb0061278654b83b520ebc58",
+  "prompts": {},
+  "sessions": {
+    "s_387a201b31e3a1": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "1bd295c2-9ec5-43f6-a658-6971b2b820c0",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Jainal Gosaliya <jainal09gosalia@gmail.com>"
+    }
+  }
+}
