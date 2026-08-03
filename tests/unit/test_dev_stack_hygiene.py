@@ -600,15 +600,44 @@ def test_manager_tag_template_matches_the_download_url_tag() -> None:
         )
 
 
+# A missing/renamed repository IS the regression the upstream-tag guard exists
+# to catch, so it must never be downgraded to a skip. Only genuinely
+# environmental failures (no credentials, rate limit, transient network) may.
+_REPO_GONE = re.compile(r"\b(404|Not Found|Could not resolve to a Repository)\b", re.I)
+
+
+def _fetch_release_tags(repo: str) -> list[str]:
+    """Recent release tags for ``repo``; fails on a missing repo, skips on env."""
+    result = subprocess.run(
+        ["gh", "api", f"repos/{repo}/releases?per_page=100", "--jq", ".[].tag_name"],
+        capture_output=True,
+        text=True,
+        timeout=60,
+        check=False,
+    )
+    if result.returncode == 0:
+        return [tag for tag in result.stdout.split() if tag]
+
+    stderr = result.stderr.strip()
+    if _REPO_GONE.search(stderr):
+        pytest.fail(
+            f"{repo} does not exist or is not reachable ({stderr[:160]}). "
+            "A Renovate manager pointing at a missing repository is the exact "
+            "failure mode this test exists to catch — the pin would freeze with "
+            "no diagnostic."
+        )
+    pytest.skip(f"cannot query GitHub for {repo}: {stderr[:160]}")
+
+
 @pytest.mark.integration
 @pytest.mark.skipif(shutil.which("gh") is None, reason="gh CLI not installed")
 def test_every_manager_matches_a_real_upstream_tag() -> None:
     """Each manager must match tags the configured repo ACTUALLY publishes.
 
-    This is the regression test for the Infisical freeze, and it is the only
-    check here that would have failed before that fix: the static guards all
-    passed on the broken config because the manager was self-consistent. What
-    it was not, was connected to reality — ``Infisical/infisical`` had stopped
+    This is the regression test for the Infisical freeze, and the only check
+    here that would have failed before that fix: the static guards all passed
+    on the broken config because the manager was self-consistent. What it was
+    not, was connected to reality — ``Infisical/infisical`` had stopped
     publishing ``infisical-cli/v*`` tags entirely, so the regex matched none of
     the 100 most recent releases and Renovate had nothing to compare the pin
     against.
@@ -620,37 +649,15 @@ def test_every_manager_matches_a_real_upstream_tag() -> None:
     upstream reality never executes.
     """
     for manager in _github_managers():
-        repo = manager["depNameTemplate"]
         extract = manager.get("extractVersionTemplate")
         if not extract:
             continue
-        result = subprocess.run(
-            ["gh", "api", f"repos/{repo}/releases?per_page=100", "--jq", ".[].tag_name"],
-            capture_output=True,
-            text=True,
-            timeout=60,
-            check=False,
-        )
-        if result.returncode != 0:
-            stderr = result.stderr.strip()
-            # A missing/renamed repository IS the regression this test guards —
-            # turning it into a skip would hide exactly what we are watching for.
-            # Only genuinely environmental failures (no credentials, rate limit,
-            # transient network) may skip.
-            if re.search(r"\b(404|Not Found|Could not resolve to a Repository)\b", stderr, re.I):
-                pytest.fail(
-                    f"{repo} does not exist or is not reachable ({stderr[:160]}). "
-                    "A Renovate manager pointing at a missing repository is the "
-                    "exact failure mode this test exists to catch — the pin would "
-                    "freeze with no diagnostic."
-                )
-            pytest.skip(f"cannot query GitHub for {repo}: {stderr[:160]}")
-
-        tags = [t for t in result.stdout.split() if t]
+        repo = manager["depNameTemplate"]
+        tags = _fetch_release_tags(repo)
         assert tags, f"{repo} published no releases at all"
 
         py_extract = re.sub(r"\(\?<(\w+)>", r"(?P<\1>", extract)
-        matching = [t for t in tags if re.match(py_extract, t)]
+        matching = [tag for tag in tags if re.match(py_extract, tag)]
         assert matching, (
             f"{repo}: extractVersionTemplate {extract!r} matches NONE of the "
             f"{len(tags)} most recent release tags (e.g. {tags[:3]}). Renovate "
