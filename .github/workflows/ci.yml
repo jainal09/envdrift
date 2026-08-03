@@ -66,6 +66,13 @@ jobs:
         run: uv run pytest -m "not integration"
 
       - name: Run integration tests
+        # GH_TOKEN is required: test_dev_stack_hygiene's upstream-tag guard
+        # shells out to `gh api`. Without it `gh` is unauthenticated on a clean
+        # runner, every call fails, and the test SKIPS — leaving every required
+        # check green while the only guard that verifies Renovate managers
+        # against upstream reality never runs.
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: uv run pytest -m integration --cov-append
 
       - name: Upload coverage reports to Codecov

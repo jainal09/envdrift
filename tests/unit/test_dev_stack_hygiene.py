@@ -613,7 +613,11 @@ def test_every_manager_matches_a_real_upstream_tag() -> None:
     the 100 most recent releases and Renovate had nothing to compare the pin
     against.
 
-    Network-gated (integration marker + ``gh``) because it queries GitHub.
+    Network-gated (integration marker + ``gh``) because it queries GitHub. CI
+    must export ``GH_TOKEN`` where ``-m integration`` runs, otherwise ``gh``
+    is unauthenticated on a clean runner, every call fails, and this test
+    skips — leaving all required checks green while the only guard that checks
+    upstream reality never executes.
     """
     for manager in _github_managers():
         repo = manager["depNameTemplate"]
@@ -628,7 +632,19 @@ def test_every_manager_matches_a_real_upstream_tag() -> None:
             check=False,
         )
         if result.returncode != 0:
-            pytest.skip(f"could not query {repo} releases: {result.stderr[:120]}")
+            stderr = result.stderr.strip()
+            # A missing/renamed repository IS the regression this test guards —
+            # turning it into a skip would hide exactly what we are watching for.
+            # Only genuinely environmental failures (no credentials, rate limit,
+            # transient network) may skip.
+            if re.search(r"\b(404|Not Found|Could not resolve to a Repository)\b", stderr, re.I):
+                pytest.fail(
+                    f"{repo} does not exist or is not reachable ({stderr[:160]}). "
+                    "A Renovate manager pointing at a missing repository is the "
+                    "exact failure mode this test exists to catch — the pin would "
+                    "freeze with no diagnostic."
+                )
+            pytest.skip(f"cannot query GitHub for {repo}: {stderr[:160]}")
 
         tags = [t for t in result.stdout.split() if t]
         assert tags, f"{repo} published no releases at all"

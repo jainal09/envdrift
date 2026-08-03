@@ -130,16 +130,22 @@ brew install sops
 # never drifts from what the tool actually expects.
 SOPS_VERSION=$(python -c "import json,importlib.resources as r; \
   print(json.loads(r.files('envdrift').joinpath('constants.json').read_text())['sops_version'])")
-# Download to a temp file first, then move it into place, so an interrupted
-# download cannot leave a truncated binary at the target path. Only the final
-# install step needs privileges; drop `sudo` if you are already root.
+# Fail-closed install. Every step is chained with `&&`, so a failed download
+# never reaches the replacement: a broken network must leave any existing sops
+# untouched rather than overwriting it with a partial file. Drop `sudo` if you
+# are already root.
+SOPS_URL="https://github.com/getsops/sops/releases/download/v${SOPS_VERSION}/sops-v${SOPS_VERSION}.linux.amd64"
 TMP_SOPS=$(mktemp -t sops.XXXXXX)
-trap 'rm -f "$TMP_SOPS"' EXIT
-wget "https://github.com/getsops/sops/releases/download/v${SOPS_VERSION}/sops-v${SOPS_VERSION}.linux.amd64" \
-  -O "$TMP_SOPS"
-chmod +x "$TMP_SOPS"
-# `install` copies atomically-enough and sets the mode in one privileged step.
-sudo install -m 0755 "$TMP_SOPS" /usr/local/bin/sops
+# Staging path on the TARGET filesystem, so the final step is a same-filesystem
+# rename (atomic) rather than a cross-device copy.
+STAGE_SOPS=/usr/local/bin/.sops.staged.$$
+trap 'rm -f "$TMP_SOPS"; sudo rm -f "$STAGE_SOPS"' EXIT
+
+wget -O "$TMP_SOPS" "$SOPS_URL" \
+  && test -s "$TMP_SOPS" \
+  && sudo install -m 0755 "$TMP_SOPS" "$STAGE_SOPS" \
+  && sudo mv -f "$STAGE_SOPS" /usr/local/bin/sops \
+  || { echo "sops install failed - existing binary left untouched" >&2; exit 1; }
 ```
 
 ### "Failed to decrypt: no key found"

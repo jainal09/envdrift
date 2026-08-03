@@ -38,7 +38,14 @@ _HTML_COMMENT = re.compile(r"<!--.*?-->", re.DOTALL)
 # death this module exists to catch. The closing fence must be at least as long
 # as the opening one, which the backreference-plus-suffix handles.
 _FENCED_BLOCK = re.compile(
-    r"(?ms)^[ \t]*(?P<fence>`{3,}|~{3,})[^\n]*\n.*?^[ \t]*(?P=fence)`*~*[ \t]*$"
+    r"(?ms)"
+    r"^[ \t]*(?:(?P<bt>`{3,})|(?P<td>~{3,}))[^\n]*\n"  # opener, remembering its type
+    r".*?"
+    # Closer must repeat the SAME delimiter character. CommonMark allows the
+    # closing fence to be longer, but not to mix ` and ~ — accepting a mixed
+    # run ended the block early, so a later @AGENTS.md still inside the real
+    # fence was counted as an active import.
+    r"^[ \t]*(?:(?P=bt)`*|(?P=td)~*)[ \t]*$"
 )
 _CODE_SPAN = re.compile(r"`[^`\n]*`")
 _IMPORT_LINE = re.compile(r"(?m)^\s*@([^\s`]+)\s*$")
@@ -89,6 +96,9 @@ def test_claude_md_actively_imports_agents_md() -> None:
         ("4-backtick fence", "````\n@AGENTS.md\n````"),
         ("5-tilde fence", "~~~~~\n@AGENTS.md\n~~~~~"),
         ("fence with info string", "```markdown\n@AGENTS.md\n```"),
+        # A mixed-character run is NOT a valid closer, so the import stays
+        # inside the fence and must still be inert.
+        ("mixed-closer fence", "````\ntext\n````~~~\n@AGENTS.md\n````"),
         ("html comment", "<!--\n@AGENTS.md\n-->"),
     ],
 )

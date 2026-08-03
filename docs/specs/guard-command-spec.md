@@ -1054,14 +1054,6 @@ DOWNLOAD_URL_TEMPLATES = {
     if (template := _load_constants()["gitleaks_download_urls"].get(constants_key))
 }
 
-
-def get_download_url(self) -> str:
-    key = (platform.system(), platform.machine())
-    template = self.DOWNLOAD_URL_TEMPLATES.get(key)
-    if template is None:
-        raise GitleaksInstallError(f"Unsupported platform: {key}")
-    return template.format(version=self._version)
-
 SEVERITY_MAP = {
     "CRITICAL": FindingSeverity.CRITICAL,
     "HIGH": FindingSeverity.HIGH,
@@ -1141,10 +1133,13 @@ class GitleaksScanner(ScannerBackend):
             machine = "arm64" if system == "Darwin" else "aarch64"
 
         key = (system, machine)
-        if key not in DOWNLOAD_URLS:
+        template = DOWNLOAD_URL_TEMPLATES.get(key)
+        if template is None:
             raise RuntimeError(f"Unsupported platform: {system} {machine}")
 
-        url = DOWNLOAD_URLS[key]
+        # Render here, not at module import: a scanner constructed with an
+        # explicit `version=` must download THAT build, not the pinned default.
+        url = template.format(version=self._version)
         progress(f"Downloading gitleaks v{self._version}...")
 
         with tempfile.TemporaryDirectory() as tmp_dir:
