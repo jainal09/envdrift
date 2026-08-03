@@ -37,7 +37,8 @@ without `LOCALSTACK_AUTH_TOKEN` it exits with code 55 and
 A **free Hobby token** covers everything this suite needs — no paid plan, and
 there are no CI credit limits.
 
-1. Sign up at <https://app.localstack.cloud> and copy your Personal Auth Token.
+1. Sign up at <https://app.localstack.cloud> and copy your **Personal Auth
+   Token** (also called a Developer Token). This one is for *local* use.
 2. Make it available locally, either way:
 
    ```bash
@@ -79,6 +80,12 @@ Please do this instead, so your change is still verified:
    tab via *Run workflow* (`workflow_dispatch`). Note this requires the
    workflow file to exist on your fork's default branch, so sync your fork's
    `main` first.
+
+   For CI, LocalStack recommends a dedicated **CI Auth Token** (workspace
+   scope, managed in the LocalStack console) rather than your personal
+   Developer Token. A personal token does activate the licence in CI, but it
+   ties shared automation to an individual identity — use a CI Auth Token if
+   your workspace has one.
 
 A maintainer will re-run the suite with the upstream token before merging.
 Branches pushed directly to this repository — including Renovate and

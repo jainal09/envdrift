@@ -70,12 +70,16 @@ def _get_infisical_checksums_url() -> str:
 
 
 def _parse_version_tokens(output: str) -> set[str]:
-    """Extract whole dotted-version tokens from ``<binary> --version`` output.
+    """Extract whole version tokens from ``<binary> --version`` output.
 
     Used instead of a substring test so that a pinned ``0.43.11`` is not
     considered satisfied by a binary reporting ``0.43.116``.
+
+    A token must not be followed by another version character, so a prerelease
+    build like ``0.43.116-rc.1`` does not yield a bare ``0.43.116`` and thus
+    cannot pass for the released version.
     """
-    return set(re.findall(r"\d+(?:\.\d+)+", output))
+    return set(re.findall(r"(?<![\w.-])\d+(?:\.\d+)+(?![\w.-])", output))
 
 
 def _get_infisical_checksums_urls() -> dict[str, str]:
@@ -136,14 +140,11 @@ class InfisicalInstaller:
     """Installer for infisical binary."""
 
     # Download URLs by platform
-    # The CLI moved out of the Infisical/infisical monorepo into Infisical/cli
-    # (the last CLI release published from the old repo was 0.41.90). The tag
-    # format lost its `infisical-cli/` prefix and the tarballs are named
-    # `cli_*` rather than `infisical_*`.
-    DOWNLOAD_URL_TEMPLATE = (
-        "https://github.com/Infisical/cli/releases/download/"
-        "v{version}/cli_{version}_{os}_{arch}.{ext}"
-    )
+    # NOTE: no hardcoded URL template. constants.json is the single
+    # Renovate-managed source of release metadata; a second copy in Python is
+    # exactly how this integration broke before (the CLI moved repo, tag format
+    # and asset prefix, and an inlined template kept 404ing). A missing platform
+    # key now fails loudly instead of silently downloading from a stale URL.
 
     PLATFORM_MAP: ClassVar[dict[tuple[str, str], tuple[str, str, str]]] = {
         ("Darwin", "x86_64"): ("darwin", "amd64", "tar.gz"),
@@ -185,20 +186,18 @@ class InfisicalInstaller:
                 f"Unsupported platform: {system} {machine}. Supported: {supported}"
             )
 
-        os_name, arch, ext = self.PLATFORM_MAP[key]
-
-        # Check if we have custom URLs in constants
-        custom_urls = _get_infisical_download_urls()
+        os_name, arch, _ext = self.PLATFORM_MAP[key]
         url_key = f"{os_name}_{arch}"
-        if url_key in custom_urls:
-            return custom_urls[url_key].format(version=self.version)
 
-        return self.DOWNLOAD_URL_TEMPLATE.format(
-            version=self.version,
-            os=os_name,
-            arch=arch,
-            ext=ext,
-        )
+        templates = _get_infisical_download_urls()
+        template = templates.get(url_key)
+        if not template:
+            raise InfisicalInstallError(
+                f"No infisical download URL configured for {url_key}. "
+                f"Add it to infisical_download_urls in constants.json "
+                f"(configured: {sorted(templates) or 'none'})."
+            )
+        return template.format(version=self.version)
 
     def get_checksums_url(self) -> str:
         """Get the URL of the upstream-published checksums file for this version.
@@ -320,7 +319,9 @@ class InfisicalInstaller:
                 # Exact token match, not a substring: upstream version numbers
                 # carry large patch components, so `0.43.11 in "... 0.43.116"`
                 # would be true and would skip reinstalling a wrong binary.
-                if self.version in _parse_version_tokens(result.stdout):
+                # A non-zero exit means the binary did not report a version at
+                # all; whatever landed on stdout must not count as "installed".
+                if result.returncode == 0 and self.version in _parse_version_tokens(result.stdout):
                     self.progress(f"infisical v{self.version} already installed")
                     return target_path
             except Exception:

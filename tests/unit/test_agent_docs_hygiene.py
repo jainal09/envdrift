@@ -29,7 +29,12 @@ _REPO_ROOT = Path(__file__).resolve().parents[2]
 _CLAUDE_MD = _REPO_ROOT / "CLAUDE.md"
 _AGENTS_MD = _REPO_ROOT / "AGENTS.md"
 
-_FENCED_BLOCK = re.compile(r"```.*?```", re.DOTALL)
+# Block-level HTML comments are stripped before CLAUDE.md reaches the model, so
+# an import inside one is inert — and invisible to a naive text search.
+_HTML_COMMENT = re.compile(r"<!--.*?-->", re.DOTALL)
+# Both fence styles count: CommonMark allows ``` and ~~~, and import parsing
+# skips either.
+_FENCED_BLOCK = re.compile(r"(?ms)^[ \t]*(?:```|~~~).*?^[ \t]*(?:```|~~~)[ \t]*$")
 _CODE_SPAN = re.compile(r"`[^`\n]*`")
 _IMPORT_LINE = re.compile(r"(?m)^\s*@([^\s`]+)\s*$")
 
@@ -37,12 +42,17 @@ _IMPORT_LINE = re.compile(r"(?m)^\s*@([^\s`]+)\s*$")
 def _active_imports(markdown: str) -> list[str]:
     """Imports Claude Code would actually honour.
 
-    Mirrors the documented parser behaviour: code spans and fenced code blocks
-    are stripped first, so anything inside them is NOT an import.
+    Mirrors the documented parser behaviour. Every stripped construct is a way
+    the import can die while the raw file still *contains* the text:
+
+    * HTML comments  — stripped from context before the model sees them
+    * fenced blocks  — ``` and ~~~ alike
+    * code spans     — a backticked ``@AGENTS.md`` is literal text
     """
-    without_fences = _FENCED_BLOCK.sub("", markdown)
-    without_spans = _CODE_SPAN.sub("", without_fences)
-    return _IMPORT_LINE.findall(without_spans)
+    stripped = _HTML_COMMENT.sub("", markdown)
+    stripped = _FENCED_BLOCK.sub("", stripped)
+    stripped = _CODE_SPAN.sub("", stripped)
+    return _IMPORT_LINE.findall(stripped)
 
 
 def test_agents_md_exists() -> None:
@@ -63,6 +73,31 @@ def test_claude_md_actively_imports_agents_md() -> None:
         "bare @AGENTS.md on its own line, outside any backticks or fence. "
         f"Imports currently honoured: {imports or 'none'}."
     )
+
+
+@pytest.mark.parametrize(
+    ("label", "wrapper"),
+    [
+        ("code span", "`@AGENTS.md`"),
+        ("backtick fence", "```\n@AGENTS.md\n```"),
+        ("tilde fence", "~~~\n@AGENTS.md\n~~~"),
+        ("html comment", "<!--\n@AGENTS.md\n-->"),
+    ],
+)
+def test_inert_import_forms_are_not_counted(label: str, wrapper: str) -> None:
+    """Each way an import can silently die must be detected as "no import".
+
+    Every one of these leaves a literal ``@AGENTS.md`` in the file, so a plain
+    text search would report success while Claude Code loads nothing.
+    """
+    assert _active_imports(f"# Doc\n\n{wrapper}\n") == [], (
+        f"an @AGENTS.md inside a {label} is inert but was counted as an import"
+    )
+
+
+def test_a_bare_import_line_is_counted() -> None:
+    """Guard the guard: the stripping must not eat a genuine import."""
+    assert _active_imports("# Doc\n\n@AGENTS.md\n\ntext") == ["AGENTS.md"]
 
 
 def test_import_is_not_hidden_in_a_code_span_or_fence() -> None:

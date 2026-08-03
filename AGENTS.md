@@ -102,8 +102,21 @@ dotenvx-v2 regression that CI caught only because CI runs everything.
   verified:
 
   ```bash
+  # bash / zsh (Linux, macOS, WSL, Git-Bash)
   uname -s                      # Darwin | Linux | MINGW*/MSYS*
-  command -v powershell.exe     # real Windows reachable (WSL interop / Windows)
+  command -v powershell.exe     # non-empty => real Windows reachable
+  ```
+
+  ```powershell
+  # native PowerShell (Windows) - `uname` and `command -v` do not exist there
+  $PSVersionTable.Platform      # Win32NT, or $null on Windows PowerShell 5.1
+  [System.Environment]::OSVersion.Platform
+  ```
+
+  Portable fallback that works from any shell with Python available:
+
+  ```bash
+  python -c "import platform; print(platform.system())"   # Windows|Darwin|Linux
   ```
 
   - **You can reach the target OS** → prove it there, and say which OS and how.

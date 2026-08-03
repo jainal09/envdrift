@@ -149,8 +149,9 @@ These have bitten us in CI or review and aren't obvious from the code alone.
   still open, **then** delete the parent branch. See `AGENTS.md` §5.
 - **Cross-platform bugs need proof on the target OS — and you may not have it.**
   Drive paths, cp1252, CRLF and `os.replace`-on-an-open-file bugs are Windows-only
-  and cannot be proven from Linux/macOS. Check what you actually have (`uname -s`,
-  `command -v powershell.exe`) before claiming a platform is verified. If you
+  and cannot be proven from Linux/macOS. Check what you actually have before claiming a platform is verified —
+  `python -c "import platform; print(platform.system())"` works from any
+  shell (`uname`/`command -v` are Bash-only and absent in native PowerShell). If you
   cannot reach the target OS, say so plainly and rely on the CI cross-platform
   matrix (ubuntu/macos/windows on every PR); a red run there is a real bug even
   though the check is not required. Never claim a platform was verified when it

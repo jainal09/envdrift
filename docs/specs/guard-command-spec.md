@@ -1045,13 +1045,22 @@ PLATFORM_MAP = {
     ("Windows", "AMD64"): "windows_amd64",
 }
 
-_URL_TEMPLATES = _load_constants()["gitleaks_download_urls"]
-
-DOWNLOAD_URLS = {
-    platform_key: _URL_TEMPLATES[constants_key].format(version=GITLEAKS_VERSION)
+# Keep the templates UNRENDERED here. Rendering with the module-level pinned
+# version would make an installer constructed with a different `version=` still
+# download the pinned build. Format at lookup time with the instance's version.
+DOWNLOAD_URL_TEMPLATES = {
+    platform_key: template
     for platform_key, constants_key in PLATFORM_MAP.items()
-    if constants_key in _URL_TEMPLATES
+    if (template := _load_constants()["gitleaks_download_urls"].get(constants_key))
 }
+
+
+def get_download_url(self) -> str:
+    key = (platform.system(), platform.machine())
+    template = self.DOWNLOAD_URL_TEMPLATES.get(key)
+    if template is None:
+        raise GitleaksInstallError(f"Unsupported platform: {key}")
+    return template.format(version=self._version)
 
 SEVERITY_MAP = {
     "CRITICAL": FindingSeverity.CRITICAL,

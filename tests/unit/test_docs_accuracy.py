@@ -626,7 +626,7 @@ class TestSpecsDoNotHardcodeDownloadAssets:
         constants = json.loads(self._CONSTANTS.read_text(encoding="utf-8"))
         real = constants[f"{tool}_download_urls"]
         # Filenames the spec spells out literally, with the version templated.
-        spelled = set(re.findall(rf"{tool}_\{{[A-Z_]+\}}_([a-z0-9_]+\.(?:tar\.gz|zip))", spec))
+        spelled = set(re.findall(rf"{tool}_\{{\w+\}}_([a-z0-9_]+\.(?:tar\.gz|zip))", spec))
         allowed = {url.rsplit("/", 1)[-1].split("}_", 1)[-1] for url in real.values()}
         bogus = sorted(name for name in spelled if name not in allowed)
         assert not bogus, (

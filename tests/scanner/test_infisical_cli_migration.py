@@ -112,3 +112,46 @@ class TestInstalledVersionMatchIsExact:
         """The matching version is still recognised -> no redundant download."""
         download = self._install_with_reported_version(tmp_path, "0.43.116", "0.43.116")
         download.assert_not_called()
+
+
+class TestVersionTokenParsing:
+    """Regression: the installed-version check must not accept near-misses.
+
+    Two ways a wrong binary could be mistaken for the pinned one:
+
+    * a substring match, so ``0.43.11`` was satisfied by ``0.43.116`` (upstream
+      patch numbers are three digits, so this is reachable);
+    * a prerelease build, where ``0.43.116-rc.1`` yields a bare ``0.43.116``.
+
+    And a ``--version`` invocation that FAILED must never mark the binary
+    installed, whatever landed on stdout.
+    """
+
+    @staticmethod
+    def _install(tmp_path: Path, pinned: str, reported: str, returncode: int = 0):
+        target = tmp_path / "infisical"
+        target.write_text("#!/bin/sh\n")
+        installer = InfisicalInstaller(version=pinned)
+        with (
+            patch("envdrift.scanner.infisical.get_infisical_path", return_value=target),
+            patch("envdrift.scanner.infisical.subprocess.run") as run,
+            patch.object(InfisicalInstaller, "download_and_extract") as download,
+        ):
+            run.return_value = MagicMock(returncode=returncode, stdout=reported, stderr="")
+            installer.install()
+            return download
+
+    def test_prerelease_does_not_satisfy_the_release_pin(self, tmp_path: Path):
+        """0.43.116-rc.1 installed must NOT satisfy a 0.43.116 pin."""
+        download = self._install(tmp_path, "0.43.116", "infisical version 0.43.116-rc.1\n")
+        download.assert_called_once()
+
+    def test_failed_version_command_forces_reinstall(self, tmp_path: Path):
+        """A non-zero exit means unusable, even if stdout contains the version."""
+        download = self._install(tmp_path, "0.43.116", "infisical version 0.43.116\n", returncode=1)
+        download.assert_called_once()
+
+    def test_matching_version_and_clean_exit_skips_reinstall(self, tmp_path: Path):
+        """The happy path still avoids a redundant download."""
+        download = self._install(tmp_path, "0.43.116", "infisical version 0.43.116\n")
+        download.assert_not_called()

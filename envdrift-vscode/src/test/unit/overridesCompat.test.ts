@@ -38,13 +38,23 @@ const NODE_MODULES = path.join(EXT_ROOT, 'node_modules');
  * `@scope/pkg/node_modules/` would be skipped and this guard would report
  * green while the exact bug it exists to catch was present.
  */
-function findMinimatchCopies(root: string, depth = 0): string[] {
-    if (depth > 6 || !fs.existsSync(root)) {
+function findMinimatchCopies(root: string, seen = new Set<string>()): string[] {
+    if (!fs.existsSync(root)) {
         return [];
     }
+    // Guard against symlink cycles by real path rather than a depth cap: npm
+    // trees can legitimately nest deeper than any fixed limit, and a truncated
+    // walk would silently skip a copy — leaving this guard green while the bug
+    // it exists to catch was present.
+    const key = fs.realpathSync(root);
+    if (seen.has(key)) {
+        return [];
+    }
+    seen.add(key);
+
     const found: string[] = [];
     for (const entry of fs.readdirSync(root, { withFileTypes: true })) {
-        if (!entry.isDirectory()) {
+        if (!entry.isDirectory() && !entry.isSymbolicLink()) {
             continue;
         }
         const dir = path.join(root, entry.name);
@@ -54,12 +64,12 @@ function findMinimatchCopies(root: string, depth = 0): string[] {
         }
         // A scope directory holds packages, not a node_modules tree.
         if (entry.name.startsWith('@')) {
-            found.push(...findMinimatchCopies(dir, depth + 1));
+            found.push(...findMinimatchCopies(dir, seen));
             continue;
         }
         const nested = path.join(dir, 'node_modules');
         if (fs.existsSync(nested)) {
-            found.push(...findMinimatchCopies(nested, depth + 1));
+            found.push(...findMinimatchCopies(nested, seen));
         }
     }
     return found;

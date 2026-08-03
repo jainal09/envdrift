@@ -427,24 +427,79 @@ def test_localstack_services_stay_within_the_free_hobby_tier() -> None:
         )
 
 
-def test_localstack_requires_an_auth_token_in_both_stacks() -> None:
-    """Both stacks must pass LOCALSTACK_AUTH_TOKEN, and never a literal one."""
-    compose_text = _COMPOSE_PATH.read_text(encoding="utf-8")
-    workflow_text = _INTEGRATION_WORKFLOW_PATH.read_text(encoding="utf-8")
+# A committed LocalStack token. Deliberately NOT anchored on a trailing hyphen:
+# real tokens are `ls-` followed by an opaque suffix that may be entirely
+# alphanumeric, so requiring a second hyphen missed a whole class of leak.
+_LITERAL_TOKEN = re.compile(r"ls-[A-Za-z0-9]{8,}")
 
-    assert "LOCALSTACK_AUTH_TOKEN" in compose_text, (
-        "tests/docker-compose.test.yml must pass LOCALSTACK_AUTH_TOKEN - "
-        "LocalStack exits(55) without it since 2026.03.0."
-    )
-    assert "LOCALSTACK_AUTH_TOKEN" in workflow_text, (
-        "integration-tests.yml must pass LOCALSTACK_AUTH_TOKEN to the service container."
-    )
-    # The token must come from the environment / a GitHub secret, never inline.
-    for source, text in (
-        ("tests/docker-compose.test.yml", compose_text),
-        ("integration-tests.yml", workflow_text),
+
+def _localstack_env() -> dict[str, dict[str, str]]:
+    """The localstack environment as PARSED config, not raw text.
+
+    Parsing matters: a raw-text search for "LOCALSTACK_AUTH_TOKEN" is satisfied
+    by the surrounding comments alone, so the guard would still pass if the
+    actual setting were deleted.
+    """
+    compose = yaml.safe_load(_COMPOSE_PATH.read_text(encoding="utf-8"))
+    raw_env = compose["services"]["localstack"]["environment"]
+    compose_env: dict[str, str] = {}
+    for item in raw_env:  # compose uses a KEY=VALUE list
+        if isinstance(item, str) and "=" in item:
+            key, _, value = item.partition("=")
+            compose_env[key.strip()] = value
+
+    workflow = yaml.safe_load(_INTEGRATION_WORKFLOW_PATH.read_text(encoding="utf-8"))
+    ci_env = workflow["jobs"]["integration-tests"]["services"]["localstack"]["env"]
+    return {
+        "tests/docker-compose.test.yml": compose_env,
+        "integration-tests.yml": {k: str(v) for k, v in ci_env.items()},
+    }
+
+
+def test_localstack_requires_an_auth_token_in_both_stacks() -> None:
+    """Both stacks must actually SET LOCALSTACK_AUTH_TOKEN, not just mention it."""
+    for source, env in _localstack_env().items():
+        assert "LOCALSTACK_AUTH_TOKEN" in env, (
+            f"{source}: localstack does not set LOCALSTACK_AUTH_TOKEN. The "
+            "container exits(55) without it since LocalStack 2026.03.0."
+        )
+        value = env["LOCALSTACK_AUTH_TOKEN"]
+        assert value.strip(), f"{source}: LOCALSTACK_AUTH_TOKEN is set but empty."
+        # Must be indirected through the environment or a GitHub secret.
+        assert value.lstrip().startswith("${"), (
+            f"{source}: LOCALSTACK_AUTH_TOKEN must be interpolated from the "
+            f"environment or a repository secret, got {value[:40]!r}."
+        )
+
+
+def test_no_literal_localstack_token_is_committed() -> None:
+    """A real token must never appear in the stack files."""
+    for source, path in (
+        ("tests/docker-compose.test.yml", _COMPOSE_PATH),
+        ("integration-tests.yml", _INTEGRATION_WORKFLOW_PATH),
+        (".gitignore", _REPO_ROOT / ".gitignore"),
     ):
-        assert not re.search(r"ls-[A-Za-z0-9]{6,}-", text), (
+        text = path.read_text(encoding="utf-8")
+        assert not _LITERAL_TOKEN.search(text), (
             f"{source}: a literal LocalStack token appears to be committed. "
             "Tokens must come from the environment or a repository secret."
         )
+
+
+def test_literal_token_matcher_actually_matches_a_token() -> None:
+    """Guard the guard: a matcher that matches nothing is worse than none.
+
+    The previous pattern required a hyphen AFTER the suffix, so an
+    all-alphanumeric token was invisible to it. The sample below is assembled
+    by concatenation so the whole literal never appears in source (GitHub push
+    protection rejects realistic secret literals).
+    """
+    hyphenated = "ls-" + "sAQofABI" + "-cubI-9429"
+    alphanumeric = "ls-" + "abc123def456ghi"
+    for sample in (hyphenated, alphanumeric):
+        assert _LITERAL_TOKEN.search(f"  - LOCALSTACK_AUTH_TOKEN={sample}\n"), (
+            f"the literal-token matcher fails to detect {sample[:6]}... — a "
+            "committed token of this shape would slip through."
+        )
+    # ...and it must not fire on the legitimate interpolated form.
+    assert not _LITERAL_TOKEN.search("- LOCALSTACK_AUTH_TOKEN=${LOCALSTACK_AUTH_TOKEN:?msg}")
