@@ -136,11 +136,11 @@ brew install sops
 # Manual alternative. Runs in a subshell so a failure cannot close your
 # terminal and the cleanup trap does not outlive the block.
 (
-  # Fail-closed here comes from `set -e`: a `grep` that matches nothing exits
-  # non-zero and aborts, and the `test -s` below catches an empty extraction.
-  # (An earlier form piped grep straight into `sha256sum -c`, where an empty
-  # stdin exits 0 and verified vacuously — hence the explicit file + test.)
-  # `pipefail` is kept so any future pipeline here cannot regress that way.
+  # Fail-closed: `set -e` aborts when `grep` finds no checksum line for this
+  # asset, and `test -s` below catches an empty extraction. Extracting to a
+  # file rather than piping into `sha256sum -c` keeps that failure attributable
+  # — a renamed or wrong-arch asset stops here with an obvious cause instead of
+  # inside the verifier. `pipefail` guards any pipeline added here later.
   set -euo pipefail
 
   # envdrift may be isolated (the installer uses ~/.envdrift/venv, and
@@ -180,8 +180,10 @@ brew install sops
   $CURL -o "$TMP/$ASSET" "$BASE/$ASSET"
   $CURL -o "$TMP/checksums.txt" "$BASE/sops-v${SOPS_VERSION}.checksums.txt"
 
-  # Verify BEFORE installing. The explicit grep check is belt-and-braces with
-  # pipefail: an absent line must abort, never verify vacuously.
+  # Verify BEFORE installing, and fail on a MISSING line as loudly as on a
+  # mismatched one: `grep` exits non-zero when the asset is absent from the
+  # checksums file (renamed upstream, wrong arch), and `test -s` covers the
+  # case where it matched but produced nothing usable.
   grep " ${ASSET}\$" "$TMP/checksums.txt" > "$TMP/expected.txt"
   test -s "$TMP/expected.txt"
   ( cd "$TMP" && sha256sum -c expected.txt )
