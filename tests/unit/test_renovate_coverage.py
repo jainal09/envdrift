@@ -384,8 +384,15 @@ def test_govulncheck_gate_analyses_the_windows_build() -> None:
     """
     run = str(_agent_step_running("govulncheck ./...").get("run", ""))
     assert "GOOS=windows" in run, (
-        "the govulncheck gate lost its GOOS=windows pass — the class of "
+        "the govulncheck gate lost its windows coverage — the class of "
         "vulnerability that motivated it (GO-2026-5024) only shows up there"
+    )
+    # Binary mode, not just source mode: `GOOS=windows govulncheck ./...` is a
+    # build-constraint approximation, while -mode=binary audits an exe built
+    # from the same package as the release artifact.
+    assert "-mode=binary" in run, (
+        "the govulncheck gate no longer analyses a built windows binary — "
+        "source-mode-only coverage oversells what is being audited"
     )
 
 
