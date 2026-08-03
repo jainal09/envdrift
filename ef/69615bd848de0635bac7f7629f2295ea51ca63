@@ -1,0 +1,45 @@
+.github/workflows/cross-platform-integration.yml
+  s_387a201b31e3a1::t_db52d88beeb17a 69
+.github/workflows/agent-ci.yml
+  s_387a201b31e3a1::t_8dc3008f51dbba 31
+  s_387a201b31e3a1::t_642762f8f88e6d 46-52
+.github/workflows/publish.yml
+  s_387a201b31e3a1::t_db52d88beeb17a 34-35,83-84
+envdrift-agent/go.mod
+  s_387a201b31e3a1::t_8dc3008f51dbba 3
+envdrift-agent/CONTRIBUTING.md
+  s_387a201b31e3a1::t_642762f8f88e6d 52-55
+tests/unit/test_dev_stack_hygiene.py
+  s_387a201b31e3a1::t_50bd4b182121b6 673-779
+.github/workflows/codspeed.yml
+  s_387a201b31e3a1::t_db52d88beeb17a 29-30
+.github/workflows/ci.yml
+  s_387a201b31e3a1::t_db52d88beeb17a 28-29,65-66
+.github/workflows/integration-tests.yml
+  s_387a201b31e3a1::t_db52d88beeb17a 138-139,344-345
+Makefile
+  s_387a201b31e3a1::t_8fa49d5c5ed1b3 146-151,155
+.github/workflows/cross-platform.yml
+  s_387a201b31e3a1::t_db52d88beeb17a 73
+.github/workflows/docs.yml
+  s_387a201b31e3a1::t_8fa49d5c5ed1b3 40-41
+renovate.json
+  s_387a201b31e3a1::t_ef3a2b28c6fc4d 131-141,186-187,189-194,199,202-204
+  s_387a201b31e3a1::t_8dc3008f51dbba 188,195-196
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.20",
+  "base_commit_sha": "ef69615bd848de0635bac7f7629f2295ea51ca63",
+  "prompts": {},
+  "sessions": {
+    "s_387a201b31e3a1": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "1bd295c2-9ec5-43f6-a658-6971b2b820c0",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Jainal Gosaliya <jainal09gosalia@gmail.com>"
+    }
+  }
+}
