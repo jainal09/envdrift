@@ -5,6 +5,13 @@ All notable changes to the EnvDrift VS Code Extension will be documented in this
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.8](https://github.com/jainal09/envdrift/compare/vscode-v0.1.7...vscode-v0.1.8) (2026-08-03)
+
+
+### Bug Fixes
+
+* **deps:** bring every pin to latest and repair the Renovate tracking that let them freeze ([#716](https://github.com/jainal09/envdrift/issues/716)) ([32111eb](https://github.com/jainal09/envdrift/commit/32111eb4e4d24178ca1ecab481667299de9adf63))
+
 ## [0.1.7](https://github.com/jainal09/envdrift/compare/vscode-v0.1.6...vscode-v0.1.7) (2026-08-02)
 
 
