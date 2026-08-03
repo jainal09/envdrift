@@ -1,0 +1,20 @@
+docs/support/troubleshooting.md
+  s_387a201b31e3a1::t_90b27e5c3c296a 139-143
+  s_387a201b31e3a1::t_eceb8e869bfc51 183-186
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.20",
+  "base_commit_sha": "03d9e63d29873385aa84c6458d7a31dd7ca57fc6",
+  "prompts": {},
+  "sessions": {
+    "s_387a201b31e3a1": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "1bd295c2-9ec5-43f6-a658-6971b2b820c0",
+        "model": "claude-opus-5"
+      },
+      "human_author": "Jainal Gosaliya <jainal09gosalia@gmail.com>"
+    }
+  }
+}
