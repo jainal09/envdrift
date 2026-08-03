@@ -216,6 +216,19 @@
       ],
       "enabled": true,
       "groupName": "go indirect dependencies"
+    },
+    {
+      "description": "Gate major updates for indirect Go modules behind dependency dashboard approval, because Go major versions usually require import-path migration before a PR is mergeable.",
+      "matchManagers": [
+        "gomod"
+      ],
+      "matchDepTypes": [
+        "indirect"
+      ],
+      "matchUpdateTypes": [
+        "major"
+      ],
+      "dependencyDashboardApproval": true
     }
   ],
   "prBodyTemplate": "{{{warnings}}}\n\n{{{table}}}\n\n---\n\n\ud83e\udd16 **Auto-generated version bump PR**\n\nThis PR was automatically created by Renovate to update dependency versions.\n\n- **Minor/Patch updates**: auto-merged by the `automerge-version-bump` workflow once all required CI checks pass \u2014 no human review\n- **Major updates**: require manual review and approval; never auto-merged\n\n{{{controls}}}\n",
