@@ -113,7 +113,8 @@ def _constants_managers() -> list[dict[str, Any]]:
 
     Only these carry download URLs to cross-check. Managers that pin a command
     in docs (the golangci-lint CONTRIBUTING.md one) have no artifact URLs by
-    design and are covered by the live upstream-tag test instead.
+    design; the live upstream-tag test covers them by asserting real release
+    tags match the verbatim v-shape those managers embed.
     """
     return [
         m
@@ -240,8 +241,13 @@ def test_every_manager_matches_a_real_upstream_tag() -> None:
     """
     for manager in _github_managers():
         extract = manager.get("extractVersionTemplate")
+        # A manager without extractVersionTemplate embeds the tag VERBATIM in
+        # the file it updates (the doc-pin manager writes `@v2.12.2`, and
+        # `go install pkg@2.12.2` without the v is rejected by Go — verified).
+        # Skipping those here left them with zero upstream-reality coverage,
+        # so instead assert real tags match the verbatim v-shape.
         if not extract:
-            continue
+            extract = r"^v\d+\.\d+\.\d+"
         repo = manager["depNameTemplate"]
         tags = _fetch_release_tags(repo)
         assert tags, f"{repo} published no releases at all"
@@ -286,6 +292,22 @@ def test_go_indirect_dependencies_are_tracked() -> None:
     )
 
 
+def _agent_ci() -> dict[str, Any]:
+    return yaml.safe_load((_WORKFLOWS / "agent-ci.yml").read_text(encoding="utf-8"))
+
+
+def _agent_matrix_go() -> list[str]:
+    return [str(leg) for leg in _agent_ci()["jobs"]["test"]["strategy"]["matrix"]["go"]]
+
+
+def _agent_step_running(needle: str) -> dict[str, Any]:
+    steps = [
+        step for step in _agent_ci()["jobs"]["test"]["steps"] if needle in str(step.get("run", ""))
+    ]
+    assert steps, f"agent-ci.yml lost the step running {needle!r}"
+    return steps[0]
+
+
 def test_go_floor_supports_current_x_sys() -> None:
     """go.mod's floor must stay >= what golang.org/x/sys requires.
 
@@ -301,10 +323,8 @@ def test_go_floor_supports_current_x_sys() -> None:
         f"go.mod declares go {directive.group(0)[3:]} but x/sys >= 0.44.0 "
         "requires 1.25; the indirect-update PR cannot merge below that"
     )
-    ci = yaml.safe_load((_WORKFLOWS / "agent-ci.yml").read_text(encoding="utf-8"))
-    matrix_go = ci["jobs"]["test"]["strategy"]["matrix"]["go"]
-    for leg in matrix_go:
-        major, minor = (int(x) for x in str(leg).split(".")[:2])
+    for leg in _agent_matrix_go():
+        major, minor = (int(x) for x in leg.split(".")[:2])
         assert (major, minor) >= (1, 25), (
             f"agent-ci.yml matrix leg go {leg} is below the go.mod floor"
         )
@@ -322,36 +342,46 @@ def test_go_floor_supports_current_x_sys() -> None:
         "(package-imported in the shipped windows-amd64 binary)"
     )
 
-    # Guard the tidy gate itself: its `if:` pins a literal matrix leg, so a
-    # future matrix rotation (e.g. ['1.27', '1.28']) would make the condition
-    # permanently false and the ONLY tidiness gate in CI would evaporate with
-    # zero diagnostics — the silent-guard-death mode this module exists to
-    # prevent.
-    for gate, needle in (
-        ("go mod tidy", "go mod tidy -diff"),
-        ("govulncheck", "govulncheck ./..."),
-    ):
-        steps = [step for step in ci["jobs"]["test"]["steps"] if needle in str(step.get("run", ""))]
-        assert steps, f"agent-ci.yml lost the {gate} gate"
-        condition = str(steps[0].get("if", ""))
-        assert any(f"'{leg}'" in condition for leg in matrix_go), (
-            f"the {gate} gate's condition ({condition!r}) references no current "
-            f"matrix leg ({matrix_go}) — the gate would never run again"
-        )
 
-    # The govulncheck gate must analyse the Windows build too: GO-2026-5024
-    # was invisible to native analysis and only surfaced under GOOS=windows.
-    vuln_run = next(
-        str(step.get("run", ""))
-        for step in ci["jobs"]["test"]["steps"]
-        if "govulncheck ./..." in str(step.get("run", ""))
+@pytest.mark.parametrize(
+    ("gate", "needle"),
+    [("go mod tidy", "go mod tidy -diff"), ("govulncheck", "govulncheck ./...")],
+)
+def test_agent_gates_survive_matrix_rotation(gate: str, needle: str) -> None:
+    """Each CI gate's `if:` must reference a leg in the CURRENT matrix.
+
+    Both gates pin a literal leg; a matrix rotation (e.g. ['1.27','1.28'])
+    would make the condition permanently false and the gate would evaporate
+    with zero diagnostics — the silent-guard-death mode this module exists to
+    prevent.
+    """
+    condition = str(_agent_step_running(needle).get("if", ""))
+    matrix_go = _agent_matrix_go()
+    assert any(f"'{leg}'" in condition for leg in matrix_go), (
+        f"the {gate} gate's condition ({condition!r}) references no current "
+        f"matrix leg ({matrix_go}) — the gate would never run again"
     )
-    assert "GOOS=windows" in vuln_run, (
+
+
+def test_govulncheck_gate_analyses_the_windows_build() -> None:
+    """Dropping the GOOS=windows pass re-blinds the gate to its founding CVE.
+
+    GO-2026-5024 was invisible to native analysis and only surfaced under
+    GOOS=windows analysis of the released windows-amd64 binary.
+    """
+    run = str(_agent_step_running("govulncheck ./...").get("run", ""))
+    assert "GOOS=windows" in run, (
         "the govulncheck gate lost its GOOS=windows pass — the class of "
         "vulnerability that motivated it (GO-2026-5024) only shows up there"
     )
-    # And its install line must be pinned + Renovate-annotated, matching the
-    # go-install customManager (a regex matching nothing = Infisical mode).
+
+
+def test_go_install_manager_matches_the_workflow() -> None:
+    """The go-install customManager's regex must match agent-ci.yml.
+
+    A regex matching nothing reports up-to-date forever (the Infisical mode),
+    leaving the pinned govulncheck version frozen with no diagnostic.
+    """
     managers = [
         m
         for m in _renovate_config().get("customManagers", [])
