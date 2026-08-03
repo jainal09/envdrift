@@ -1,0 +1,30 @@
+Makefile
+  s_387a201b31e3a1::t_c4ee32c296e880 98-106,108
+.github/workflows/integration-tests.yml
+  s_387a201b31e3a1::t_b673fb6415d44d 15-27
+CONTRIBUTING.md
+  s_387a201b31e3a1::t_b673fb6415d44d 90-95
+tests/unit/test_dev_stack_hygiene.py
+  s_387a201b31e3a1::t_9828e0be319f8c 500-507
+tests/unit/test_cli_help_markup.py
+  s_387a201b31e3a1::t_dce0c4b29a0569 42-50,163-175
+docs/support/troubleshooting.md
+  s_387a201b31e3a1::t_af75d6cf523711 129-135
+  s_387a201b31e3a1::t_b2bb7c25644d17 136-175
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.20",
+  "base_commit_sha": "2238110087e6844767c2808f6a4e3e67a1ff84e0",
+  "prompts": {},
+  "sessions": {
+    "s_387a201b31e3a1": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "1bd295c2-9ec5-43f6-a658-6971b2b820c0",
+        "model": "claude-opus-5"
+      },
+      "human_author": "Jainal Gosaliya <jainal09gosalia@gmail.com>"
+    }
+  }
+}
