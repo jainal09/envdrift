@@ -1,5 +1,12 @@
 # Changelog
 
+## [11.0.2](https://github.com/jainal09/envdrift/compare/v11.0.1...v11.0.2) (2026-08-03)
+
+
+### Bug Fixes
+
+* **deps:** bring every pin to latest and repair the Renovate tracking that let them freeze ([#716](https://github.com/jainal09/envdrift/issues/716)) ([32111eb](https://github.com/jainal09/envdrift/commit/32111eb4e4d24178ca1ecab481667299de9adf63))
+
 ## [11.0.1](https://github.com/jainal09/envdrift/compare/v11.0.0...v11.0.1) (2026-08-02)
 
 
