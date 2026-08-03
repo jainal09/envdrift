@@ -292,6 +292,27 @@ def test_go_indirect_dependencies_are_tracked() -> None:
     )
 
 
+def test_go_indirect_major_updates_require_dashboard_approval() -> None:
+    """Major updates for indirect modules must be dashboard-gated.
+
+    Go major versions change module paths (``/v2``, ``/v3``, …), so indirect
+    major upgrades are frequently non-mergeable until a parent dependency
+    migrates imports. Keep them visible, but require dashboard approval before
+    opening a PR.
+    """
+    rules = [
+        r
+        for r in _renovate_config().get("packageRules", [])
+        if r.get("matchManagers") == ["gomod"]
+        and r.get("matchDepTypes") == ["indirect"]
+        and r.get("matchUpdateTypes") == ["major"]
+    ]
+    assert rules, "renovate.json lost the gomod+indirect+major packageRule"
+    assert rules[0].get("dependencyDashboardApproval") is True, (
+        "major updates for indirect Go modules must require dashboard approval"
+    )
+
+
 def _agent_ci() -> dict[str, Any]:
     return yaml.safe_load((_WORKFLOWS / "agent-ci.yml").read_text(encoding="utf-8"))
 
