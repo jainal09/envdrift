@@ -108,6 +108,20 @@ def _github_managers() -> list[dict[str, Any]]:
     ]
 
 
+def _constants_managers() -> list[dict[str, Any]]:
+    """github-releases managers that pin tools via constants.json.
+
+    Only these carry download URLs to cross-check. Managers that pin a command
+    in docs (the golangci-lint CONTRIBUTING.md one) have no artifact URLs by
+    design and are covered by the live upstream-tag test instead.
+    """
+    return [
+        m
+        for m in _github_managers()
+        if any("constants" in p for p in m.get("managerFilePatterns", []))
+    ]
+
+
 def _tool_for_manager(manager: dict[str, Any]) -> str | None:
     """The constants.json tool prefix a manager targets, e.g. ``infisical``."""
     for pattern in manager.get("matchStrings", []):
@@ -140,7 +154,7 @@ def test_manager_repo_matches_the_configured_download_url() -> None:
     nothing to do with the artifact actually installed.
     """
     constants = _constants()
-    for manager in _github_managers():
+    for manager in _constants_managers():
         tool = _tool_for_manager(manager)
         urls = _download_urls_for(constants, tool) if tool else {}
         assert urls, f"{tool}: no download URLs found in constants.json"
@@ -157,7 +171,7 @@ def test_manager_repo_matches_the_configured_download_url() -> None:
 def test_manager_tag_template_matches_the_download_url_tag() -> None:
     """``extractVersionTemplate`` must match the tag shape the URLs encode."""
     constants = _constants()
-    for manager in _github_managers():
+    for manager in _constants_managers():
         tool = _tool_for_manager(manager)
         urls = _download_urls_for(constants, tool) if tool else {}
         extract = manager.get("extractVersionTemplate")
@@ -295,6 +309,19 @@ def test_go_floor_supports_current_x_sys() -> None:
             f"agent-ci.yml matrix leg go {leg} is below the go.mod floor"
         )
 
+    # The floor exists FOR the x/sys security fix, so also assert the module
+    # actually selected is at or past it — a floor bump that still ships the
+    # vulnerable version would pass the directive checks while GO-2026-5024
+    # stays package-linked in the released Windows binary.
+    x_sys = re.search(r"golang\.org/x/sys v(\d+)\.(\d+)\.(\d+)", go_mod)
+    assert x_sys, "envdrift-agent/go.mod no longer requires golang.org/x/sys"
+    selected = tuple(int(g) for g in x_sys.groups())
+    assert selected >= (0, 44, 0), (
+        f"golang.org/x/sys v{'.'.join(map(str, selected))} is selected, but "
+        "every version below v0.44.0 is affected by GO-2026-5024 "
+        "(package-imported in the shipped windows-amd64 binary)"
+    )
+
 
 def _setup_uv_steps() -> list[tuple[str, dict[str, Any]]]:
     """Every (workflow-name, step) pair whose step uses astral-sh/setup-uv."""
@@ -357,4 +384,40 @@ def test_makefile_tool_pins_are_renovate_visible() -> None:
     # And the pin must actually be used by the recipe, not just declared.
     assert "markdownlint-cli2@$(MARKDOWNLINT_VERSION)" in makefile, (
         "lint-docs no longer interpolates MARKDOWNLINT_VERSION - the pin is decorative"
+    )
+
+
+def test_golangci_lint_doc_pin_matches_the_workflow_pin() -> None:
+    """The contributor-doc install command must match the CI pin exactly.
+
+    Both copies are Renovate-visible (agent-ci.yml via the annotation manager,
+    CONTRIBUTING.md via its own customManager targeting the same depName), so
+    one Renovate PR updates both. This guard is the belt-and-braces: if either
+    manager silently stops matching — the Infisical failure mode — the copies
+    drift and this fails loud instead.
+    """
+    doc = (_REPO_ROOT / "envdrift-agent" / "CONTRIBUTING.md").read_text(encoding="utf-8")
+    doc_pin = re.search(r"golangci-lint/v2/cmd/golangci-lint@(v\d+\.\d+\.\d+)", doc)
+    assert doc_pin, "CONTRIBUTING.md lost its pinned golangci-lint install command"
+
+    workflow = (_WORKFLOWS / "agent-ci.yml").read_text(encoding="utf-8")
+    ci_pin = re.search(r"depName=golangci/golangci-lint\s+version:\s*(v\d+\.\d+\.\d+)", workflow)
+    assert ci_pin, "agent-ci.yml lost its annotated golangci-lint version"
+    assert doc_pin.group(1) == ci_pin.group(1), (
+        f"CONTRIBUTING.md installs golangci-lint {doc_pin.group(1)} but CI runs "
+        f"{ci_pin.group(1)} — contributors would lint with a different toolchain"
+    )
+
+    # And the doc manager's regex must actually match the doc, or Renovate
+    # will silently never update that copy.
+    managers = [
+        m
+        for m in _renovate_config().get("customManagers", [])
+        if any("CONTRIBUTING" in pat for pat in m.get("managerFilePatterns", []))
+    ]
+    assert managers, "renovate.json lost the CONTRIBUTING.md customManager"
+    pattern = re.sub(r"\(\?<(\w+)>", r"(?P<\1>", managers[0]["matchStrings"][0])
+    assert re.search(pattern, doc), (
+        "the CONTRIBUTING.md manager regex matches nothing in the doc - "
+        "Renovate would report up-to-date forever (the Infisical failure mode)"
     )
