@@ -130,12 +130,16 @@ brew install sops
 # never drifts from what the tool actually expects.
 SOPS_VERSION=$(python -c "import json,importlib.resources as r; \
   print(json.loads(r.files('envdrift').joinpath('constants.json').read_text())['sops_version'])")
-# Download to a temp file on the same filesystem, then move it into place, so
-# an interrupted download cannot leave a truncated binary at the target path.
-TMP_SOPS=$(mktemp /usr/local/bin/.sops.XXXXXX)
+# Download to a temp file first, then move it into place, so an interrupted
+# download cannot leave a truncated binary at the target path. Only the final
+# install step needs privileges; drop `sudo` if you are already root.
+TMP_SOPS=$(mktemp -t sops.XXXXXX)
+trap 'rm -f "$TMP_SOPS"' EXIT
 wget "https://github.com/getsops/sops/releases/download/v${SOPS_VERSION}/sops-v${SOPS_VERSION}.linux.amd64" \
-  -O "$TMP_SOPS" && chmod +x "$TMP_SOPS" && mv -f "$TMP_SOPS" /usr/local/bin/sops \
-  || { rm -f "$TMP_SOPS"; echo "sops install failed" >&2; exit 1; }
+  -O "$TMP_SOPS"
+chmod +x "$TMP_SOPS"
+# `install` copies atomically-enough and sets the mode in one privileged step.
+sudo install -m 0755 "$TMP_SOPS" /usr/local/bin/sops
 ```
 
 ### "Failed to decrypt: no key found"

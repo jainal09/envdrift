@@ -541,6 +541,21 @@ def _tool_for_manager(manager: dict[str, Any]) -> str | None:
     return None
 
 
+def _download_urls_for(constants: dict[str, Any], tool: str) -> dict[str, str]:
+    """Download URL templates for ``tool``, however constants.json spells them.
+
+    dotenvx predates the ``<tool>_download_urls`` convention and still lives at
+    the top-level ``download_urls`` key. Looking only for the prefixed name made
+    the guards below silently ``continue`` past it — leaving one of the seven
+    github-releases managers unvalidated, which is exactly the kind of quiet
+    coverage hole these tests exist to prevent.
+    """
+    urls = constants.get(f"{tool}_download_urls")
+    if urls is None and tool == "dotenvx":
+        urls = constants.get("download_urls")
+    return urls or {}
+
+
 def test_manager_repo_matches_the_configured_download_url() -> None:
     """``depNameTemplate`` must be the same repo the download URLs point at.
 
@@ -551,9 +566,8 @@ def test_manager_repo_matches_the_configured_download_url() -> None:
     constants = _constants()
     for manager in _github_managers():
         tool = _tool_for_manager(manager)
-        urls = constants.get(f"{tool}_download_urls") if tool else None
-        if not urls:
-            continue
+        urls = _download_urls_for(constants, tool) if tool else {}
+        assert urls, f"{tool}: no download URLs found in constants.json"
         for platform_key, url in urls.items():
             parsed = _GH_RELEASE_URL.match(url)
             assert parsed, f"{tool}.{platform_key}: unparsable GitHub release URL {url!r}"
@@ -569,9 +583,10 @@ def test_manager_tag_template_matches_the_download_url_tag() -> None:
     constants = _constants()
     for manager in _github_managers():
         tool = _tool_for_manager(manager)
-        urls = constants.get(f"{tool}_download_urls") if tool else None
+        urls = _download_urls_for(constants, tool) if tool else {}
         extract = manager.get("extractVersionTemplate")
-        if not urls or not extract:
+        assert urls, f"{tool}: no download URLs found in constants.json"
+        if not extract:
             continue
         py_extract = re.sub(r"\(\?<(\w+)>", r"(?P<\1>", extract)
         sample_tag = next(iter(urls.values()))

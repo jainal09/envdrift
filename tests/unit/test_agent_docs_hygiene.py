@@ -32,9 +32,14 @@ _AGENTS_MD = _REPO_ROOT / "AGENTS.md"
 # Block-level HTML comments are stripped before CLAUDE.md reaches the model, so
 # an import inside one is inert — and invisible to a naive text search.
 _HTML_COMMENT = re.compile(r"<!--.*?-->", re.DOTALL)
-# Both fence styles count: CommonMark allows ``` and ~~~, and import parsing
-# skips either.
-_FENCED_BLOCK = re.compile(r"(?ms)^[ \t]*(?:```|~~~).*?^[ \t]*(?:```|~~~)[ \t]*$")
+# Both fence styles count, at any length: CommonMark allows a fence of THREE OR
+# MORE matching delimiters, and import parsing skips all of them. Matching only
+# exactly three left a four-backtick block active, which is the same silent
+# death this module exists to catch. The closing fence must be at least as long
+# as the opening one, which the backreference-plus-suffix handles.
+_FENCED_BLOCK = re.compile(
+    r"(?ms)^[ \t]*(?P<fence>`{3,}|~{3,})[^\n]*\n.*?^[ \t]*(?P=fence)`*~*[ \t]*$"
+)
 _CODE_SPAN = re.compile(r"`[^`\n]*`")
 _IMPORT_LINE = re.compile(r"(?m)^\s*@([^\s`]+)\s*$")
 
@@ -81,6 +86,9 @@ def test_claude_md_actively_imports_agents_md() -> None:
         ("code span", "`@AGENTS.md`"),
         ("backtick fence", "```\n@AGENTS.md\n```"),
         ("tilde fence", "~~~\n@AGENTS.md\n~~~"),
+        ("4-backtick fence", "````\n@AGENTS.md\n````"),
+        ("5-tilde fence", "~~~~~\n@AGENTS.md\n~~~~~"),
+        ("fence with info string", "```markdown\n@AGENTS.md\n```"),
         ("html comment", "<!--\n@AGENTS.md\n-->"),
     ],
 )

@@ -154,8 +154,9 @@ These have bitten us in CI or review and aren't obvious from the code alone.
   shell (`uname`/`command -v` are Bash-only and absent in native PowerShell). If you
   cannot reach the target OS, say so plainly and rely on the CI cross-platform
   matrix (ubuntu/macos/windows) — but note it is `paths:`-gated to
-  `src/**`/`tests/**`/`pyproject.toml`/`uv.lock`, so a docs-only PR gets no
-  cross-OS coverage; use `workflow_dispatch` if you need one. A red run there is
+  `src/**`/`tests/**`/`pyproject.toml`/`uv.lock` plus each workflow's own file,
+  so a docs-only PR (or one touching some *other* workflow) gets no cross-OS
+  coverage; use `workflow_dispatch` if you need one. A red run there is
   a real bug even though the check is not required. Never claim a platform was
   verified when it was not. See `AGENTS.md` §3 for the full rule; machine-specific
   setup lives in your untracked `CLAUDE.local.md`, not in this repo.

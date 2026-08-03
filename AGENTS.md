@@ -124,9 +124,11 @@ dotenvx-v2 regression that CI caught only because CI runs everything.
     (ubuntu/macos/windows), the portable proof available to everyone. Two
     caveats that decide whether it actually covers your change:
     - it is **`paths:`-gated** to `src/**`, `tests/**`, `pyproject.toml`,
-      `uv.lock` and its own workflow file, so a docs-only or workflow-only PR
-      does **not** trigger it and gets no cross-OS coverage at all. Both
-      workflows accept `workflow_dispatch` if you need a run anyway.
+      `uv.lock` and *its own* workflow file. So a docs-only PR gets no cross-OS
+      coverage at all, and so does a PR touching some other workflow — but
+      editing `cross-platform.yml` itself does trigger it, because that path is
+      in its own filter. Both workflows accept `workflow_dispatch` if you need
+      a run anyway.
     - it is **not a required check**, but a red run is a real cross-OS bug —
       fix it, never wave it through.
   - **Never** claim a platform was verified when it was not, and never silently
