@@ -5,7 +5,7 @@ Check or perform encryption on .env files using dotenvx or SOPS.
 ## Synopsis
 
 ```bash
-envdrift encrypt [ENV_FILE]... [OPTIONS]
+envdrift encrypt [OPTIONS] [env_files]...
 ```
 
 ## Description
@@ -66,7 +66,7 @@ command line. Without `--check`, each file is encrypted in turn.
 
 | Argument      | Description                    | Default |
 | :------------ | :----------------------------- | :------ |
-| `ENV_FILE`... | Path(s) to the .env file(s)    | `.env`  |
+| `[env_files]`... | Path(s) to the .env file(s)    | `.env`  |
 
 ## Options
 

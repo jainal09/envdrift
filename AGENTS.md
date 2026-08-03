@@ -90,15 +90,55 @@ dotenvx-v2 regression that CI caught only because CI runs everything.
   `src/envdrift/constants.json` and are bumped by Renovate. Install the pinned
   version and exercise the real thing; derive expectations from its actual output,
   never hardcode a version or a header.
-- **Cross-platform bugs need cross-platform proof.** This dev box is WSL2 with
-  Windows interop: `powershell.exe -NoProfile -Command '…'` runs *real* Windows
-  (PowerShell 5.1, git, `C:\Python314\python.exe`). Several real bugs were
+- **Cross-platform bugs need cross-platform proof.** Several real bugs here were
   Windows-only (drive-letter paths, cp1252 decodes, CRLF, `os.replace` on an open
-  file, filename-suffix parsing). Prove the fix on real Windows: reproduce the
-  failure on the old code, show it passing on the new. **⚠️ Work laptop: corporate
-  security blocks execution from arbitrary paths — do ALL Windows clone/test work
-  under `C:\DBSW` (`/mnt/c/DBSW` from WSL), a per-task subdir, cleaned up after.**
-  Single-quote the `-Command` on the bash side or bash eats `$variables`.
+  file, filename-suffix parsing), so a fix for one is not done until it is proven
+  on the OS it targets: reproduce the failure on the old code, show it passing on
+  the new.
+
+  **Do not assume any particular dev machine.** This is an open-source project;
+  contributors work on Linux, macOS and Windows, and most boxes cannot run the
+  other two. Establish what you actually have before claiming a platform is
+  verified:
+
+  ```bash
+  # bash / zsh (Linux, macOS, WSL, Git-Bash)
+  uname -s                      # Darwin | Linux | MINGW*/MSYS*
+  command -v powershell.exe     # non-empty => real Windows reachable
+  ```
+
+  ```powershell
+  # native PowerShell (Windows) - `uname` and `command -v` do not exist there
+  $PSVersionTable.Platform      # Win32NT, or $null on Windows PowerShell 5.1
+  [System.Environment]::OSVersion.Platform
+  ```
+
+  Portable fallback that works from any shell with Python available:
+
+  ```bash
+  python -c "import platform; print(platform.system())"   # Windows|Darwin|Linux
+  ```
+
+  - **You can reach the target OS** → prove it there, and say which OS and how.
+  - **You cannot** → say so explicitly and lean on the CI cross-platform matrix
+    (ubuntu/macos/windows), the portable proof available to everyone. Two
+    caveats that decide whether it actually covers your change:
+    - it is **`paths:`-gated** to `src/**`, `tests/**`, `pyproject.toml`,
+      `uv.lock` and *its own* workflow file. So a docs-only PR gets no cross-OS
+      coverage at all, and so does a PR touching some other workflow — but
+      editing `cross-platform.yml` itself does trigger it, because that path is
+      in its own filter. Both workflows accept `workflow_dispatch` if you need
+      a run anyway.
+    - it is **not a required check**, but a red run is a real cross-OS bug —
+      fix it, never wave it through.
+  - **Never** claim a platform was verified when it was not, and never silently
+    skip the question. "Windows unverified — no Windows host available; CI
+    `windows-latest` is green" is a complete, honest answer.
+
+  Machine-specific setup (interop shells, sandbox directories, corporate
+  execution policies) is intentionally **not** recorded in this repository. Keep
+  it in an untracked `CLAUDE.local.md` at the repo root, which Claude Code loads
+  automatically and `.gitignore` excludes.
 - **Machine output stays machine-readable.** `--format json` / SARIF must be
   ANSI-clean regardless of `FORCE_COLOR`/TTY. Watch the fixture trap: a
   *session-scoped* fixture that snapshots `os.environ` before the autouse

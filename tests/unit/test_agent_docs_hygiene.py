@@ -1,0 +1,185 @@
+"""Guard how agent instructions are LOADED, not just what they say.
+
+Claude Code reads ``CLAUDE.md``; it does not read ``AGENTS.md``. The only way
+AGENTS.md reaches an agent's context is the ``@AGENTS.md`` import line in
+CLAUDE.md.
+
+This is guarded because the failure is completely silent. CLAUDE.md previously
+linked to AGENTS.md in prose ("Doing substantial work here? Read AGENTS.md"),
+which loads nothing — it just hopes the agent opens the file. An agent then ran
+a large autonomous change in this repo having only ever seen the summary, and
+nothing anywhere reported a problem.
+
+Two ways the import can silently die, both covered below:
+
+1. It gets wrapped in backticks or moved into a fenced block. Claude Code's
+   import parser skips code spans and fenced code blocks, so ``@AGENTS.md``
+   becomes inert prose that still *looks* correct in the rendered markdown.
+2. AGENTS.md is renamed or moved and the import dangles.
+"""
+
+from __future__ import annotations
+
+import re
+from pathlib import Path
+
+import pytest
+
+_REPO_ROOT = Path(__file__).resolve().parents[2]
+_CLAUDE_MD = _REPO_ROOT / "CLAUDE.md"
+_AGENTS_MD = _REPO_ROOT / "AGENTS.md"
+
+# Block-level HTML comments are stripped before CLAUDE.md reaches the model, so
+# an import inside one is inert — and invisible to a naive text search.
+_HTML_COMMENT = re.compile(r"<!--.*?-->", re.DOTALL)
+# Both fence styles count, at any length: CommonMark allows a fence of THREE OR
+# MORE matching delimiters, and import parsing skips all of them. Matching only
+# exactly three left a four-backtick block active, which is the same silent
+# death this module exists to catch. The closing fence must be at least as long
+# as the opening one, which the backreference-plus-suffix handles.
+_FENCED_BLOCK = re.compile(
+    r"(?ms)"
+    r"^[ \t]*(?:(?P<bt>`{3,})|(?P<td>~{3,}))[^\n]*\n"  # opener, remembering its type
+    r".*?"
+    # Closer must repeat the SAME delimiter character. CommonMark allows the
+    # closing fence to be longer, but not to mix ` and ~ — accepting a mixed
+    # run ended the block early, so a later @AGENTS.md still inside the real
+    # fence was counted as an active import.
+    # An UNCLOSED fence runs to end of document, so `\Z` is an accepted
+    # terminator too; requiring a closer reported the import ALIVE while it was
+    # dead inside the fence.
+    r"(?:^[ \t]*(?:(?P=bt)`*|(?P=td)~*)[ \t]*$|\Z)"
+)
+# Code spans may be delimited by a RUN of backticks, not just one. A single-tick
+# pattern parsed ``@AGENTS.md`` as two EMPTY spans and left a bare @AGENTS.md
+# line behind, which then counted as an active import.
+_CODE_SPAN = re.compile(r"(?s)(?P<ticks>`+)(?:(?!(?P=ticks)).)*?(?P=ticks)")
+_IMPORT_LINE = re.compile(r"(?m)^\s*@([^\s`]+)\s*$")
+
+
+def _active_imports(markdown: str) -> list[str]:
+    """Imports Claude Code would actually honour.
+
+    Mirrors the documented parser behaviour. Every stripped construct is a way
+    the import can die while the raw file still *contains* the text:
+
+    * HTML comments  — stripped from context before the model sees them
+    * fenced blocks  — ``` and ~~~ alike
+    * code spans     — a backticked ``@AGENTS.md`` is literal text
+    """
+    stripped = _HTML_COMMENT.sub("", markdown)
+    stripped = _FENCED_BLOCK.sub("", stripped)
+    stripped = _CODE_SPAN.sub("", stripped)
+    return _IMPORT_LINE.findall(stripped)
+
+
+def test_agents_md_exists() -> None:
+    """The import target must exist, or the import dangles silently."""
+    assert _AGENTS_MD.is_file(), (
+        "AGENTS.md is missing. CLAUDE.md imports it with '@AGENTS.md'; if the "
+        "file is renamed, update the import in the same commit."
+    )
+
+
+def test_claude_md_actively_imports_agents_md() -> None:
+    """CLAUDE.md must import AGENTS.md, not merely link to it."""
+    imports = _active_imports(_CLAUDE_MD.read_text(encoding="utf-8"))
+    assert "AGENTS.md" in imports, (
+        "CLAUDE.md does not actively import AGENTS.md. A prose link or a "
+        "backticked '@AGENTS.md' loads NOTHING — Claude Code reads CLAUDE.md "
+        "only, and import parsing skips code spans and fenced blocks. Put a "
+        "bare @AGENTS.md on its own line, outside any backticks or fence. "
+        f"Imports currently honoured: {imports or 'none'}."
+    )
+
+
+@pytest.mark.parametrize(
+    ("label", "wrapper"),
+    [
+        ("code span", "`@AGENTS.md`"),
+        ("backtick fence", "```\n@AGENTS.md\n```"),
+        ("tilde fence", "~~~\n@AGENTS.md\n~~~"),
+        ("4-backtick fence", "````\n@AGENTS.md\n````"),
+        ("5-tilde fence", "~~~~~\n@AGENTS.md\n~~~~~"),
+        ("fence with info string", "```markdown\n@AGENTS.md\n```"),
+        # A mixed-character run is NOT a valid closer, so the import stays
+        # inside the fence and must still be inert.
+        ("mixed-closer fence", "````\ntext\n````~~~\n@AGENTS.md\n````"),
+        # False-ACTIVE paths: the raw text has no closer / uses a tick RUN, so
+        # a naive stripper reported the import alive while it was dead.
+        ("unclosed fence at EOF", "```\n@AGENTS.md"),
+        ("double-backtick span", "``@AGENTS.md``"),
+        ("triple-backtick span", "```@AGENTS.md```"),
+        ("html comment", "<!--\n@AGENTS.md\n-->"),
+    ],
+)
+def test_inert_import_forms_are_not_counted(label: str, wrapper: str) -> None:
+    """Each way an import can silently die must be detected as "no import".
+
+    Every one of these leaves a literal ``@AGENTS.md`` in the file, so a plain
+    text search would report success while Claude Code loads nothing.
+    """
+    assert _active_imports(f"# Doc\n\n{wrapper}\n") == [], (
+        f"an @AGENTS.md inside a {label} is inert but was counted as an import"
+    )
+
+
+def test_a_bare_import_line_is_counted() -> None:
+    """Guard the guard: the stripping must not eat a genuine import."""
+    assert _active_imports("# Doc\n\n@AGENTS.md\n\ntext") == ["AGENTS.md"]
+
+
+def test_import_is_not_hidden_in_a_code_span_or_fence() -> None:
+    """A backticked mention must never be mistaken for a working import.
+
+    Directly pins the subtle failure: the raw text can contain '@AGENTS.md'
+    while the parser sees no import at all.
+    """
+    raw = _CLAUDE_MD.read_text(encoding="utf-8")
+    assert "@AGENTS.md" in raw  # sanity: the text is there at all
+    assert "AGENTS.md" in _active_imports(raw), (
+        "'@AGENTS.md' appears in CLAUDE.md but only inside a code span or "
+        "fenced block, so Claude Code will not import it."
+    )
+
+
+@pytest.mark.parametrize("doc", [_CLAUDE_MD, _AGENTS_MD])
+def test_docs_do_not_assume_one_contributor_operating_system(doc: Path) -> None:
+    """Agent docs must not state a specific dev OS as a universal premise.
+
+    envdrift is open source: contributors run Linux, macOS and Windows, and
+    most boxes cannot reach the other two. Docs that assert "this dev box is
+    WSL2" mislead an agent into either fabricating platform verification or
+    treating an impossible step as mandatory. Machine-specific setup belongs in
+    a clearly-scoped maintainer note.
+    """
+    text = doc.read_text(encoding="utf-8")
+    # HTML comments are maintainer notes stripped before reaching context.
+    prose = re.sub(r"<!--.*?-->", "", text, flags=re.DOTALL)
+
+    banned = [
+        "This dev box is WSL2",
+        "This is a WSL2 box",
+    ]
+    found = [phrase for phrase in banned if phrase in prose]
+    assert not found, (
+        f"{doc.name} asserts a specific developer machine ({found}). State the "
+        "requirement (prove cross-platform fixes on the target OS, and say so "
+        "honestly when you cannot) rather than assuming everyone has the "
+        "maintainer's setup."
+    )
+
+
+@pytest.mark.parametrize("doc", [_CLAUDE_MD, _AGENTS_MD])
+def test_docs_tell_agents_to_admit_unverifiable_platforms(doc: Path) -> None:
+    """Both docs must keep the "say so when you cannot verify" instruction."""
+    # Strip markdown emphasis and collapse whitespace so the phrase still
+    # matches when it is bolded or wrapped across lines.
+    text = re.sub(r"[*_`]", "", doc.read_text(encoding="utf-8").lower())
+    text = " ".join(text.split())
+    assert "cross-platform" in text, f"{doc.name} lost its cross-platform guidance"
+    assert "never claim a platform was verified" in text, (
+        f"{doc.name} must keep the explicit instruction never to claim a "
+        "platform was verified when it was not — that is the failure this "
+        "guidance exists to prevent."
+    )

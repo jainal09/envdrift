@@ -18,43 +18,54 @@ import pytest
 
 from envdrift.scanner.infisical import (
     InfisicalInstaller,
+    InfisicalInstallError,
     InfisicalScanner,
 )
 from tests.helpers import write_checksums_for
 
 
-class TestDownloadUrlTemplateFallback:
-    """Cover the DOWNLOAD_URL_TEMPLATE fallback (line 162)."""
+class TestDownloadUrlRequiresConstants:
+    """There is no hardcoded URL fallback — constants.json is the only source.
+
+    A second copy of the release metadata in Python is how this integration
+    broke before: the CLI changed repository, tag format and asset prefix, and
+    an inlined template kept producing 404s. A missing platform key must fail
+    loudly rather than silently download from a stale URL.
+    """
 
     @patch("envdrift.scanner.infisical._get_infisical_download_urls", return_value={})
     @patch("envdrift.scanner.infisical.get_platform_info")
-    def test_falls_back_to_template_when_no_custom_url(
-        self, mock_platform: MagicMock, mock_custom: MagicMock
-    ):
-        """When constants provide no custom URL, build from the template."""
+    def test_missing_constants_entry_raises(self, mock_platform: MagicMock, mock_urls: MagicMock):
+        """No configured URL for this platform -> InfisicalInstallError."""
         mock_platform.return_value = ("Linux", "x86_64")
-        installer = InfisicalInstaller(version="9.9.9")
-        url = installer.get_download_url()
-        # Template uses os/arch/ext placeholders -> linux/amd64/tar.gz
-        assert url == (
-            "https://github.com/Infisical/infisical/releases/download/"
-            "infisical-cli/v9.9.9/infisical_9.9.9_linux_amd64.tar.gz"
-        )
+        with pytest.raises(InfisicalInstallError, match="linux_amd64"):
+            InfisicalInstaller(version="9.9.9").get_download_url()
 
     @patch(
         "envdrift.scanner.infisical._get_infisical_download_urls",
-        return_value={"windows_amd64": "custom://{version}/win.zip"},
+        return_value={"windows_amd64": "https://example.test/{version}/win.zip"},
     )
     @patch("envdrift.scanner.infisical.get_platform_info")
-    def test_template_fallback_for_unlisted_key(
-        self, mock_platform: MagicMock, mock_custom: MagicMock
+    def test_unlisted_platform_key_raises_instead_of_falling_back(
+        self, mock_platform: MagicMock, mock_urls: MagicMock
     ):
-        """A custom map missing the current key still falls to the template."""
+        """A partial map must not silently resolve some other platform's URL."""
         mock_platform.return_value = ("Linux", "arm64")
-        installer = InfisicalInstaller(version="1.2.3")
-        url = installer.get_download_url()
-        assert url.endswith("infisical_1.2.3_linux_arm64.tar.gz")
-        assert "custom://" not in url
+        with pytest.raises(InfisicalInstallError, match="linux_arm64"):
+            InfisicalInstaller(version="1.2.3").get_download_url()
+
+    @patch(
+        "envdrift.scanner.infisical._get_infisical_download_urls",
+        return_value={"linux_amd64": "https://example.test/v{version}/cli.tar.gz"},
+    )
+    @patch("envdrift.scanner.infisical.get_platform_info")
+    def test_configured_template_is_rendered_with_the_version(
+        self, mock_platform: MagicMock, mock_urls: MagicMock
+    ):
+        """The configured template is used verbatim, with {version} filled in."""
+        mock_platform.return_value = ("Linux", "x86_64")
+        url = InfisicalInstaller(version="1.2.3").get_download_url()
+        assert url == "https://example.test/v1.2.3/cli.tar.gz"
 
 
 class TestDownloadAndExtractBranches:

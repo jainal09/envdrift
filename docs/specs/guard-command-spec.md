@@ -1020,16 +1020,42 @@ from .base import (
 )
 
 
-# Version pinned for reproducibility (sourced from constants.json)
-GITLEAKS_VERSION = "8.30.0"
+def _load_constants() -> dict:
+    """Load constants from the package's constants.json."""
+    constants_path = Path(__file__).parent.parent / "constants.json"
+    with open(constants_path) as f:
+        return json.load(f)
 
-DOWNLOAD_URLS = {
-    ("Darwin", "arm64"): f"https://github.com/gitleaks/gitleaks/releases/download/v{GITLEAKS_VERSION}/gitleaks_{GITLEAKS_VERSION}_darwin_arm64.tar.gz",
-    ("Darwin", "x86_64"): f"https://github.com/gitleaks/gitleaks/releases/download/v{GITLEAKS_VERSION}/gitleaks_{GITLEAKS_VERSION}_darwin_amd64.tar.gz",
-    ("Linux", "x86_64"): f"https://github.com/gitleaks/gitleaks/releases/download/v{GITLEAKS_VERSION}/gitleaks_{GITLEAKS_VERSION}_linux_amd64.tar.gz",
-    ("Linux", "aarch64"): f"https://github.com/gitleaks/gitleaks/releases/download/v{GITLEAKS_VERSION}/gitleaks_{GITLEAKS_VERSION}_linux_arm64.tar.gz",
-    ("Windows", "AMD64"): f"https://github.com/gitleaks/gitleaks/releases/download/v{GITLEAKS_VERSION}/gitleaks_{GITLEAKS_VERSION}_windows_amd64.zip",
+
+# Lazy accessors with fallbacks, matching the real module: constants.json is
+# the Renovate-managed source of truth, and reading it at call time (rather
+# than eagerly at import) keeps a malformed/missing file from breaking import.
+def _get_gitleaks_version() -> str:
+    """Get the pinned gitleaks version from constants."""
+    return _load_constants().get("gitleaks_version", "8.21.2")
+
+
+def _get_gitleaks_download_urls() -> dict[str, str]:
+    """Get download URL templates from constants."""
+    return _load_constants().get("gitleaks_download_urls", {})
+
+
+# (system, machine) -> (os, arch, ext). Never re-type the asset FILENAMES here:
+# upstream gitleaks publishes x64 assets (gitleaks_<v>_linux_x64), not amd64,
+# and an inlined copy of the wrong name produces 404s that only surface at
+# install time.
+# Keys must match what install()'s normalization below PRODUCES, which is not
+# the same spelling the real module uses: this example normalizes Windows to
+# "AMD64" and Linux arm to "aarch64". Copying the module's keys verbatim made
+# install() raise "Unsupported platform" on exactly those two platforms.
+PLATFORM_MAP: dict[tuple[str, str], tuple[str, str, str]] = {
+    ("Darwin", "x86_64"): ("darwin", "amd64", "tar.gz"),
+    ("Darwin", "arm64"): ("darwin", "arm64", "tar.gz"),
+    ("Linux", "x86_64"): ("linux", "amd64", "tar.gz"),
+    ("Linux", "aarch64"): ("linux", "arm64", "tar.gz"),
+    ("Windows", "AMD64"): ("windows", "amd64", "zip"),
 }
+
 
 SEVERITY_MAP = {
     "CRITICAL": FindingSeverity.CRITICAL,
@@ -1046,10 +1072,10 @@ class GitleaksScanner(ScannerBackend):
     def __init__(
         self,
         auto_install: bool = True,
-        version: str = GITLEAKS_VERSION,
+        version: str | None = None,
     ):
         self._auto_install = auto_install
-        self._version = version
+        self._version = version or _get_gitleaks_version()
         self._binary_path: Path | None = None
 
     @property
@@ -1110,10 +1136,17 @@ class GitleaksScanner(ScannerBackend):
             machine = "arm64" if system == "Darwin" else "aarch64"
 
         key = (system, machine)
-        if key not in DOWNLOAD_URLS:
+        if key not in PLATFORM_MAP:
             raise RuntimeError(f"Unsupported platform: {system} {machine}")
 
-        url = DOWNLOAD_URLS[key]
+        os_name, arch, _ext = PLATFORM_MAP[key]
+        template = _get_gitleaks_download_urls().get(f"{os_name}_{arch}")
+        if template is None:
+            raise RuntimeError(f"No gitleaks URL configured for {os_name}_{arch}")
+
+        # Render here, not at import: a scanner constructed with an explicit
+        # `version=` must download THAT build, not the pinned default.
+        url = template.format(version=self._version)
         progress(f"Downloading gitleaks v{self._version}...")
 
         with tempfile.TemporaryDirectory() as tmp_dir:
@@ -1275,7 +1308,14 @@ from .base import (
 )
 
 
-TRUFFLEHOG_VERSION = "3.92.4"  # sourced from constants.json
+def _load_constants() -> dict:
+    """Load constants from the package's constants.json."""
+    constants_path = Path(__file__).parent.parent / "constants.json"
+    with open(constants_path) as f:
+        return json.load(f)
+
+
+TRUFFLEHOG_VERSION = _load_constants()["trufflehog_version"]  # never hardcode
 
 DOWNLOAD_URLS = {
     ("Darwin", "arm64"): f"https://github.com/trufflesecurity/trufflehog/releases/download/v{TRUFFLEHOG_VERSION}/trufflehog_{TRUFFLEHOG_VERSION}_darwin_arm64.tar.gz",

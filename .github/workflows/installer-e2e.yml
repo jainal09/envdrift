@@ -26,7 +26,7 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest]
-        python-version: ["3.11", "3.13"]
+        python-version: ["3.11", "3.14"]
     steps:
       - uses: actions/checkout@v7
 
@@ -68,7 +68,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        python-version: ["3.11", "3.13"]
+        python-version: ["3.11", "3.14"]
         # powershell = Windows PowerShell 5.1, the OS default that the documented
         # `irm | iex` one-liner actually runs in (#483); pwsh = PowerShell 7.
         shell: [pwsh, powershell]
@@ -139,7 +139,7 @@ jobs:
           }
 
   test-unix-venv-fallback:
-    name: Unix venv fallback – ubuntu-latest / Python 3.13
+    name: Unix venv fallback – ubuntu-latest / Python 3.14
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -150,7 +150,7 @@ jobs:
 
       - name: Remove venv module
         run: |
-          sudo apt-get remove -y python3-venv python3.13-venv || true
+          sudo apt-get remove -y python3-venv python3.14-venv || true
           # Also remove the venv module from the setup-python installation
           VENV_DIR=$(python3 -c "import os, venv; print(os.path.dirname(venv.__file__))" 2>/dev/null) && sudo mv "$VENV_DIR" "${VENV_DIR}.bak" || true
           # Confirm venv is unavailable

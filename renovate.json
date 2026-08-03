@@ -12,6 +12,14 @@
     "**/test/**",
     "**/__fixtures__/**"
   ],
+  "lockFileMaintenance": {
+    "enabled": true,
+    "schedule": [
+      "every weekend"
+    ],
+    "commitMessageAction": "Lock file maintenance",
+    "automerge": false
+  },
   "dependencyDashboardApproval": false,
   "semanticCommits": "enabled",
   "labels": [
@@ -45,54 +53,80 @@
     },
     {
       "customType": "regex",
-      "managerFilePatterns": ["/^src/envdrift/constants\\.json$/"],
-      "matchStrings": ["\"trivy_version\":\\s*\"(?<currentValue>\\d+\\.\\d+\\.\\d+)\""],
+      "managerFilePatterns": [
+        "/^src/envdrift/constants\\.json$/"
+      ],
+      "matchStrings": [
+        "\"trivy_version\":\\s*\"(?<currentValue>\\d+\\.\\d+\\.\\d+)\""
+      ],
       "depNameTemplate": "aquasecurity/trivy",
       "datasourceTemplate": "github-releases",
       "extractVersionTemplate": "^v(?<version>.*)$"
     },
     {
       "customType": "regex",
-      "managerFilePatterns": ["/^src/envdrift/constants\\.json$/"],
-      "matchStrings": ["\"gitleaks_version\":\\s*\"(?<currentValue>\\d+\\.\\d+\\.\\d+)\""],
+      "managerFilePatterns": [
+        "/^src/envdrift/constants\\.json$/"
+      ],
+      "matchStrings": [
+        "\"gitleaks_version\":\\s*\"(?<currentValue>\\d+\\.\\d+\\.\\d+)\""
+      ],
       "depNameTemplate": "gitleaks/gitleaks",
       "datasourceTemplate": "github-releases",
       "extractVersionTemplate": "^v(?<version>.*)$"
     },
     {
       "customType": "regex",
-      "managerFilePatterns": ["/^src/envdrift/constants\\.json$/"],
-      "matchStrings": ["\"trufflehog_version\":\\s*\"(?<currentValue>\\d+\\.\\d+\\.\\d+)\""],
+      "managerFilePatterns": [
+        "/^src/envdrift/constants\\.json$/"
+      ],
+      "matchStrings": [
+        "\"trufflehog_version\":\\s*\"(?<currentValue>\\d+\\.\\d+\\.\\d+)\""
+      ],
       "depNameTemplate": "trufflesecurity/trufflehog",
       "datasourceTemplate": "github-releases",
       "extractVersionTemplate": "^v(?<version>.*)$"
     },
     {
       "customType": "regex",
-      "managerFilePatterns": ["/^src/envdrift/constants\\.json$/"],
-      "matchStrings": ["\"talisman_version\":\\s*\"(?<currentValue>\\d+\\.\\d+\\.\\d+)\""],
+      "managerFilePatterns": [
+        "/^src/envdrift/constants\\.json$/"
+      ],
+      "matchStrings": [
+        "\"talisman_version\":\\s*\"(?<currentValue>\\d+\\.\\d+\\.\\d+)\""
+      ],
       "depNameTemplate": "thoughtworks/talisman",
       "datasourceTemplate": "github-releases",
       "extractVersionTemplate": "^v(?<version>.*)$"
     },
     {
       "customType": "regex",
-      "managerFilePatterns": ["/^src/envdrift/constants\\.json$/"],
-      "matchStrings": ["\"infisical_version\":\\s*\"(?<currentValue>\\d+\\.\\d+\\.\\d+)\""],
-      "depNameTemplate": "Infisical/infisical",
+      "managerFilePatterns": [
+        "/^src/envdrift/constants\\.json$/"
+      ],
+      "matchStrings": [
+        "\"infisical_version\":\\s*\"(?<currentValue>\\d+\\.\\d+\\.\\d+)\""
+      ],
+      "depNameTemplate": "Infisical/cli",
       "datasourceTemplate": "github-releases",
-      "extractVersionTemplate": "^infisical-cli/v(?<version>.*)$"
+      "extractVersionTemplate": "^v(?<version>.*)$"
     },
     {
       "customType": "regex",
-      "managerFilePatterns": ["/^src/envdrift/constants\\.json$/"],
-      "matchStrings": ["\"detect_secrets_version\":\\s*\"(?<currentValue>\\d+\\.\\d+\\.\\d+)\""],
+      "managerFilePatterns": [
+        "/^src/envdrift/constants\\.json$/"
+      ],
+      "matchStrings": [
+        "\"detect_secrets_version\":\\s*\"(?<currentValue>\\d+\\.\\d+\\.\\d+)\""
+      ],
       "depNameTemplate": "detect-secrets",
       "datasourceTemplate": "pypi"
     },
     {
       "customType": "regex",
-      "managerFilePatterns": ["/^\\.github/workflows/.*\\.ya?ml$/"],
+      "managerFilePatterns": [
+        "/^\\.github/workflows/.*\\.ya?ml$/"
+      ],
       "matchStrings": [
         "# renovate: datasource=(?<datasource>\\S+) depName=(?<depName>\\S+)\\s+version:\\s*(?<currentValue>v\\d+\\.\\d+\\.\\d+)"
       ]
@@ -129,9 +163,19 @@
         "nagyesta/lowkey-vault"
       ],
       "groupName": "integration test stack images"
+    },
+    {
+      "description": "Pin LocalStack to the canonical zero-padded CalVer form (2026.07.1). Upstream publishes equivalent unpadded (2026.7.1) and truncated (2026.07, 2026) aliases that Renovate treats as EQUAL, so without this the literal can silently flip form between bumps. It also blocks a regression to the pre-2026.03 4.x line, which is tokenless but unmaintained.",
+      "matchDatasources": [
+        "docker"
+      ],
+      "matchPackageNames": [
+        "localstack/localstack"
+      ],
+      "allowedVersions": "/^\\d{4}\\.\\d{2}\\.\\d+$/"
     }
   ],
-  "prBodyTemplate": "{{{table}}}\n\n---\n\n🤖 **Auto-generated version bump PR**\n\nThis PR was automatically created by Renovate to update dependency versions.\n\n- **Minor/Patch updates**: auto-merged by the `automerge-version-bump` workflow once all required CI checks pass — no human review\n- **Major updates**: require manual review and approval; never auto-merged",
+  "prBodyTemplate": "{{{table}}}\n\n---\n\n\ud83e\udd16 **Auto-generated version bump PR**\n\nThis PR was automatically created by Renovate to update dependency versions.\n\n- **Minor/Patch updates**: auto-merged by the `automerge-version-bump` workflow once all required CI checks pass \u2014 no human review\n- **Major updates**: require manual review and approval; never auto-merged",
   "schedule": [
     "every weekend"
   ]

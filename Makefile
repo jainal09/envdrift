@@ -54,20 +54,68 @@ security:
 test:
 	uv run pytest
 
+# Single source of truth for the integration compose invocation.
+#
+# --env-file must be passed to EVERY compose command, not just `up`: the compose
+# file declares LOCALSTACK_AUTH_TOKEN with a `${...:?}` guard, and compose
+# evaluates that interpolation on every parse. If the token lives only in
+# tests/.env (the documented fallback), omitting --env-file makes `down` and
+# `ps` fail to read the file at all — so the stack could be started but never
+# stopped, and the `ps` probe below would silently report zero running services.
+COMPOSE_TEST = docker compose $(if $(wildcard tests/.env),--env-file tests/.env,) -f tests/docker-compose.test.yml
+
+# Same invocation for commands that do NOT start containers (down, ps).
+#
+# The compose file declares LOCALSTACK_AUTH_TOKEN with a `${...:?}` guard,
+# evaluated on EVERY parse. So a developer who exported the token, started the
+# stack, then ran `make test-integration-down` from a fresh shell (no export,
+# no tests/.env) had teardown ABORT, leaving containers, network and volumes
+# running. The token is irrelevant when we are not starting anything, so
+# supply a placeholder if it is absent — never weaken the guard on `up`.
+COMPOSE_TEST_NOSTART = LOCALSTACK_AUTH_TOKEN=$${LOCALSTACK_AUTH_TOKEN:-not-needed-for-teardown} $(COMPOSE_TEST)
+
 # Start integration test containers
+#
+# LocalStack has been account-gated since 2026.03.0 and exits(55) without a
+# token, so fail here with something actionable rather than letting compose
+# emit a bare variable-not-set error. A free Hobby token is enough.
 test-integration-up:
-	docker compose -f tests/docker-compose.test.yml up -d --wait
+	@if [ -z "$$LOCALSTACK_AUTH_TOKEN" ] && ! grep -qsE '^[[:space:]]*LOCALSTACK_AUTH_TOKEN[[:space:]]*=[[:space:]]*[^[:space:]]' tests/.env; then \
+		echo ""; \
+		echo "ERROR: LOCALSTACK_AUTH_TOKEN is not set."; \
+		echo ""; \
+		echo "LocalStack requires an auth token since 2026.03.0. A FREE Hobby"; \
+		echo "token covers everything this suite needs."; \
+		echo ""; \
+		echo "  1. Sign up at https://app.localstack.cloud"; \
+		echo "  2. Copy your Personal Auth Token"; \
+		echo "  3. Either export it:"; \
+		echo "       export LOCALSTACK_AUTH_TOKEN=ls-..."; \
+		echo "     or write tests/.env (gitignored):"; \
+		echo "       echo 'LOCALSTACK_AUTH_TOKEN=ls-...' > tests/.env"; \
+		echo ""; \
+		exit 1; \
+	fi
+	$(COMPOSE_TEST) up -d --wait
 	@echo "Services started. Run 'make test-integration' to run tests."
 
 # Stop integration test containers
 test-integration-down:
-	docker compose -f tests/docker-compose.test.yml down -v
+	@$(COMPOSE_TEST_NOSTART) down -v
 
 # Run integration tests (starts containers if needed)
 test-integration:
-	@running=$$(docker compose -f tests/docker-compose.test.yml ps --status running --format json 2>/dev/null | grep -c '"Service"' || echo 0); \
+	@# `grep -c` prints 0 AND exits 1 when nothing matches, so `|| echo 0`
+	@# appended a SECOND line: running became "0\n0", the -lt test errored with
+	@# "integer expression expected" and took the false branch. The cold-start
+	@# case — the only one this guard exists for — therefore never started the
+	@# stack, pytest ran against a dead stack, every container test auto-skipped,
+	@# and `make test-integration` exited 0 with zero integration tests run.
+	@running=$$($(COMPOSE_TEST_NOSTART) ps --status running --format json 2>/dev/null \
+		| grep -c '"Service"' || true); \
+	running=$${running:-0}; \
 	if [ "$$running" -lt 3 ]; then \
-		echo "Starting containers..."; \
+		echo "Starting containers ($$running/3 running)..."; \
 		$(MAKE) test-integration-up; \
 	fi
 	uv run --extra test-integration pytest -m "integration" -v

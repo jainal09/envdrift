@@ -5,15 +5,15 @@ Compare two .env files and show differences.
 ## Synopsis
 
 ```bash
-envdrift diff ENV1 ENV2 [OPTIONS]
+envdrift diff [OPTIONS] {env1} {env2}
 ```
 
 ## Description
 
 The `diff` command compares two .env files and shows:
 
-- **Added variables** - Present in ENV2 but not ENV1
-- **Removed variables** - Present in ENV1 but not ENV2
+- **Added variables** - Present in `{env2}` but not `{env1}`
+- **Removed variables** - Present in `{env1}` but not `{env2}`
 - **Changed variables** - Different values between files
 - **Unchanged variables** - Same in both (with `--include-unchanged`)
 
@@ -27,8 +27,8 @@ This is useful for:
 
 | Argument | Description                           |
 | :------- | :------------------------------------ |
-| `ENV1`   | Path to first .env file (baseline)      |
-| `ENV2`   | Path to second .env file (comparison)  |
+| `{env1}` | Path to first .env file (baseline)      |
+| `{env2}` | Path to second .env file (comparison)  |
 
 ## Options
 
@@ -288,8 +288,8 @@ If a later step needs to parse and comment on the report, the default exit-0 beh
 
 | Type        | Description                                       |
 | :---------- | :------------------------------------------------ |
-| `added`     | Variable exists in ENV2 but not ENV1              |
-| `removed`   | Variable exists in ENV1 but not ENV2              |
+| `added`     | Variable exists in `{env2}` but not `{env1}`              |
+| `removed`   | Variable exists in `{env1}` but not `{env2}`              |
 | `changed`   | Variable exists in both but with different values |
 | `unchanged` | Variable is identical in both files               |
 

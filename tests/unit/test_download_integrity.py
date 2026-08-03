@@ -211,6 +211,16 @@ def _point_scanner_at_server(monkeypatch, mod, tool: str, server, archive_name: 
         lambda: f"{server.base_url}/checksums.txt",
         raising=False,
     )
+    # Some tools (infisical) resolve a per-platform checksums override first,
+    # because upstream splits darwin digests into a separate file. Point those
+    # at the local server too, otherwise the installer would escape the test
+    # fixture and fetch the real published checksums over the network.
+    if hasattr(mod, f"_get_{tool}_checksums_urls"):
+        monkeypatch.setattr(
+            mod,
+            f"_get_{tool}_checksums_urls",
+            lambda: dict.fromkeys(ALL_URL_KEYS, f"{server.base_url}/checksums.txt"),
+        )
 
 
 @pytest.mark.parametrize(("mod", "prefix", "tool"), SCANNER_CASES)

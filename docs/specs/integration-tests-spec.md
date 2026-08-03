@@ -28,6 +28,30 @@ forward-looking.
 
 ### 1. LocalStack (AWS Secrets Manager)
 
+**Auth token required.** Since LocalStack 2026.03.0 the image is account-gated:
+without `LOCALSTACK_AUTH_TOKEN` the container exits with code 55 and
+`License activation failed`. The tokenless community image is gone and the
+`LOCALSTACK_ACKNOWLEDGE_ACCOUNT_REQUIREMENT` grace period ended 2026-04-06.
+
+A **free Hobby token** covers everything this suite needs. Hobby exposes `kms`,
+`lambda`, `s3`, `secretsmanager` and `sts`; `tests/unit/test_dev_stack_hygiene.py`
+fails if `SERVICES` ever strays outside that set, since anything else would
+require a paid plan.
+
+- **Locally:** get a token from <https://app.localstack.cloud>, then either
+  `export LOCALSTACK_AUTH_TOKEN=ls-...` or write `tests/.env` (gitignored).
+  `make test-integration-up` fails with setup instructions if neither exists.
+- **In CI:** supplied from the `LOCALSTACK_AUTH_TOKEN` repository secret.
+- **Fork PRs:** GitHub does not expose secrets to pull requests from forks, so
+  the four `Integration Tests` jobs cannot start LocalStack there and will fail
+  at container initialisation. This is a platform limitation, not a repo bug.
+  Renovate and Dependabot branches live in this repository, so they are
+  unaffected. A maintainer must run the integration suite for an external
+  contribution (e.g. by pushing the branch to this repo).
+
+Never commit a token; the hygiene test also fails on a committed `ls-...`
+literal.
+
 **Container Setup:**
 
 ```yaml
@@ -35,10 +59,14 @@ forward-looking.
 # kept identical to the integration-tests.yml CI service containers (#500)
 services:
   localstack:
-    image: localstack/localstack:4.14
+    image: localstack/localstack:2026.07.1
     ports:
       - "4566:4566"
     environment:
+      # Mandatory since 2026.03.0 — the container exits(55) without it.
+      # Supplied from the environment or the gitignored tests/.env locally,
+      # and from the LOCALSTACK_AUTH_TOKEN repository secret in CI.
+      - LOCALSTACK_AUTH_TOKEN=${LOCALSTACK_AUTH_TOKEN:?get a free Hobby token at https://app.localstack.cloud}
       - SERVICES=secretsmanager
       - DEBUG=0
     volumes:
@@ -69,7 +97,7 @@ def localstack_aws():
 services:
   vault:
     # Keep the image pin in sync with tests/docker-compose.test.yml.
-    image: hashicorp/vault:2.0
+    image: hashicorp/vault:2.0.3
     user: root
     ports:
       - "8200:8200"
@@ -116,7 +144,7 @@ def vault_server():
 # kept identical to the integration-tests.yml CI service containers (#500)
 services:
   lowkey-vault:
-    image: nagyesta/lowkey-vault:7.3.0
+    image: nagyesta/lowkey-vault:7.3.48
     ports:
       - "8443:8443"  # Key Vault API (HTTPS, self-signed cert)
       - "8080:8080"  # managed-identity token stub (HTTP)

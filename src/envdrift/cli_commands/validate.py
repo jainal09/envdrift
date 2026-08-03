@@ -60,7 +60,7 @@ def validate(
         typer.Option(
             "--check-encryption/--no-check-encryption",
             help="Check that sensitive vars are encrypted "
-            "(default: [validation].check_encryption from envdrift.toml, else on)",
+            r"(default: \[validation].check_encryption from envdrift.toml, else on)",
         ),
     ] = None,
     fix: Annotated[
@@ -70,7 +70,7 @@ def validate(
         bool, typer.Option("--verbose", "-v", help="Show additional details")
     ] = False,
 ) -> None:
-    """
+    r"""
     Validate one or more .env files against a Pydantic Settings schema and display results.
 
     Loads the specified Settings class, parses each given .env file, runs validation
@@ -93,7 +93,7 @@ def validate(
         ci (bool): When true, exit with code 1 if validation fails.
         check_encryption (bool | None): Tri-state. When explicitly set via
             ``--check-encryption``/``--no-check-encryption`` it overrides config;
-            when left unset (None) it falls back to ``[validation].check_encryption``
+            when left unset (None) it falls back to ``\[validation].check_encryption``
             from envdrift.toml (default on). Controls validation of
             encryption-related metadata on sensitive fields.
         fix (bool): When true and validation fails, print a fix template with

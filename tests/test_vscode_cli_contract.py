@@ -156,9 +156,14 @@ class TestEnvdriftCliContract:
         # positional may be a single `[ENV_FILE]` or a variadic `[ENV_FILES]...`
         # (encrypt accepts multiple files as a pre-commit hook entry, #493); the
         # extension spawns exactly one file, which is valid for either shape.
+        # Case-insensitive on the metavar: typer >= 0.21 renders optional
+        # positionals from the lowercase parameter name (`[env_files]...`)
+        # instead of the old uppercased form. That is a cosmetic upstream
+        # restyle — what this contract actually pins is that the positional
+        # still EXISTS and is still optional/variadic.
         pattern = (
             rf"Usage: envdrift(?:\.[Ee][Xx][Ee])? {re.escape(sub)} "
-            r"\[OPTIONS\] \[ENV_FILES?\](?:\.\.\.)?"
+            r"\[OPTIONS\] \[(?i:ENV_FILES?)\](?:\.\.\.)?"
         )
         assert re.search(pattern, usage), (
             f"`envdrift {sub}` does not take a positional env file — the extension's "

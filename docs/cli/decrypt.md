@@ -6,8 +6,8 @@ decrypt a file (dotenvx drift detection).
 ## Synopsis
 
 ```bash
-envdrift decrypt [ENV_FILE]
-envdrift decrypt [ENV_FILE] --verify-vault --provider <p> --secret <name> \
+envdrift decrypt [OPTIONS] [env_file]
+envdrift decrypt [env_file] --verify-vault --provider <p> --secret <name> \
   [--vault-url ... | --project-id ... | --region ...]
 ```
 
@@ -44,7 +44,7 @@ normally via `envdrift decrypt -- -dash.env`.
 
 | Argument   | Description                     | Default |
 | :--------- | :------------------------------ | :------ |
-| `ENV_FILE` | Path to the encrypted .env file | `.env`  |
+| `[env_file]` | Path to the encrypted .env file | `.env`  |
 
 ## Options
 

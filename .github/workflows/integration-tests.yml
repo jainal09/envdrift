@@ -7,6 +7,26 @@
 # - Pull requests to main
 # - Pushes to main
 # - Manual dispatch
+#
+# REQUIRES the LOCALSTACK_AUTH_TOKEN repository secret. LocalStack has been
+# account-gated since 2026.03.0 and the container exits(55) with "License
+# activation failed" without it. A free Hobby token is sufficient.
+#
+# FORK PULL REQUESTS: GitHub does not expose secrets to PRs from forks, so
+# these jobs WILL fail at "Initialize containers" on a fork PR. That is a
+# deliberate POLICY CHOICE, not a technical impossibility: a job-level
+#   if: github.event.pull_request.head.repo.full_name == github.repository
+# is evaluated before service containers start, and a skipped required check
+# satisfies branch protection. We do not do that, because a required gate that
+# reports green without running is exactly the silent-pass this repo's
+# fail-closed rule exists to prevent — an honest red is better.
+#
+# Unblock path: a maintainer runs the suite locally with the token, or pushes
+# the contributor's branch to this repository so CI gets the secret. Re-running
+# the fork-PR workflow does NOT help — secrets are withheld even on re-run.
+# See "If you are contributing from a fork" in CONTRIBUTING.md.
+# Branches pushed to this repository (including Renovate/Dependabot) are
+# unaffected.
 
 name: Integration Tests
 
@@ -44,10 +64,13 @@ jobs:
     # Service containers for integration tests
     services:
       localstack:
-        image: localstack/localstack:4.14 # Keep in sync with tests/docker-compose.test.yml
+        image: localstack/localstack:2026.07.1 # Keep in sync with tests/docker-compose.test.yml
         ports:
           - 4566:4566
         env:
+          # Required since LocalStack 2026.03.0. Free Hobby token; see
+          # tests/docker-compose.test.yml for the tier constraints.
+          LOCALSTACK_AUTH_TOKEN: ${{ secrets.LOCALSTACK_AUTH_TOKEN }}
           SERVICES: secretsmanager
           DEBUG: "0"
           EAGER_SERVICE_LOADING: "1"
@@ -59,7 +82,7 @@ jobs:
           --health-start-period=30s
 
       vault:
-        image: hashicorp/vault:2.0 # Keep in sync with tests/docker-compose.test.yml
+        image: hashicorp/vault:2.0.3 # Keep in sync with tests/docker-compose.test.yml
         ports:
           - 8200:8200
         env:

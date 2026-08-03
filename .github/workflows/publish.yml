@@ -36,6 +36,13 @@ jobs:
         run: uv sync --all-extras --locked
 
       - name: Run tests
+        # GH_TOKEN is required: this runs the WHOLE suite, integration tests
+        # included, and test_dev_stack_hygiene's upstream-tag guard shells out
+        # to `gh api`. Without it the guard skips — in the last gate before
+        # publishing, which is exactly where a frozen Renovate pin should be
+        # caught.
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: uv run pytest
 
   publish:

@@ -126,9 +126,71 @@ Install SOPS:
 # macOS
 brew install sops
 
-# Linux
-wget https://github.com/getsops/sops/releases/download/v3.13.1/sops-v3.13.1.linux.amd64 -O /usr/local/bin/sops
-chmod +x /usr/local/bin/sops
+# Linux. Simplest option: let envdrift install and verify sops for you. It
+# reads the pinned version from constants.json and checks the published SHA256
+# before installing. Enable it in envdrift.toml:
+#
+#   [encryption.sops]
+#   auto_install = true
+#
+# Manual alternative. Runs in a subshell so a failure cannot close your
+# terminal and the cleanup trap does not outlive the block.
+(
+  # Fail-closed: `set -e` aborts when `grep` finds no checksum line for this
+  # asset, and `test -s` below catches an empty extraction. Extracting to a
+  # file rather than piping into `sha256sum -c` keeps that failure attributable
+  # — a renamed or wrong-arch asset stops here with an obvious cause instead of
+  # inside the verifier. `pipefail` guards any pipeline added here later.
+  set -euo pipefail
+
+  # envdrift may be isolated (the installer uses ~/.envdrift/venv, and
+  # pipx/uv tool installs are isolated too), so pick an interpreter that can
+  # actually import it rather than assuming a bare `python` on PATH.
+  for PY in "$HOME/.envdrift/venv/bin/python" python3 python; do
+    command -v "$PY" >/dev/null 2>&1 || continue
+    "$PY" -c "import envdrift" 2>/dev/null && ENVDRIFT_PY="$PY" && break
+  done
+  : "${ENVDRIFT_PY:?cannot find a Python that can import envdrift - run this from the environment where envdrift is installed}"
+
+  SOPS_VERSION=$("$ENVDRIFT_PY" -c "import json,importlib.resources as r; \
+    print(json.loads(r.files('envdrift').joinpath('constants.json').read_text())['sops_version'])")
+  : "${SOPS_VERSION:?could not read sops_version from constants.json}"
+
+  # Match the machine: installing an x86-64 binary on aarch64 downloads and
+  # verifies fine, then fails at exec time.
+  case "$(uname -m)" in
+    x86_64|amd64) ARCH=amd64 ;;
+    aarch64|arm64) ARCH=arm64 ;;
+    *) echo "unsupported architecture: $(uname -m)" >&2; exit 1 ;;
+  esac
+
+  BASE="https://github.com/getsops/sops/releases/download/v${SOPS_VERSION}"
+  ASSET="sops-v${SOPS_VERSION}.linux.${ARCH}"
+  TMP=$(mktemp -d)
+  # Stage on the TARGET filesystem so the final step is a same-filesystem
+  # rename. `install` alone copies into place and can leave a partial binary if
+  # interrupted or if the disk fills.
+  STAGE=/usr/local/bin/.sops.staged.$$
+  trap 'rm -rf "$TMP"; sudo rm -f "$STAGE"' EXIT
+
+  # Bounded so a stalled connection cannot hang the install. Values match
+  # install_integrity.py (FETCH_TIMEOUT_SECONDS / DOWNLOAD_TIMEOUT_SECONDS);
+  # note --max-time is a TOTAL time cap for the request, not a per-read one.
+  CURL="curl -fsSL --connect-timeout 30 --max-time 60"
+  $CURL -o "$TMP/$ASSET" "$BASE/$ASSET"
+  $CURL -o "$TMP/checksums.txt" "$BASE/sops-v${SOPS_VERSION}.checksums.txt"
+
+  # Verify BEFORE installing, and fail on a MISSING line as loudly as on a
+  # mismatched one: `grep` exits non-zero when the asset is absent from the
+  # checksums file (renamed upstream, wrong arch), and `test -s` covers the
+  # case where it matched but produced nothing usable.
+  grep " ${ASSET}\$" "$TMP/checksums.txt" > "$TMP/expected.txt"
+  test -s "$TMP/expected.txt"
+  ( cd "$TMP" && sha256sum -c expected.txt )
+
+  sudo install -m 0755 "$TMP/$ASSET" "$STAGE"
+  sudo mv -f "$STAGE" /usr/local/bin/sops
+)
 ```
 
 ### "Failed to decrypt: no key found"

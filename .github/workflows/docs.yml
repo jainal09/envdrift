@@ -6,6 +6,13 @@ on:
     paths:
       - 'docs/**'
       - 'mkdocs.yml'
+      # The build now installs from the lockfile (uv sync --extra docs
+      # --locked), so a docs-dependency bump or a change to this workflow must
+      # rebuild too — otherwise a broken docs toolchain lands silently and only
+      # surfaces on the next unrelated docs edit.
+      - 'pyproject.toml'
+      - 'uv.lock'
+      - '.github/workflows/docs.yml'
   workflow_dispatch:
 
 permissions:
@@ -28,12 +35,20 @@ jobs:
         with:
           python-version: '3.14'
 
+      - name: Install uv
+        uses: astral-sh/setup-uv@v9.0.0
+
+      # Build the docs from the locked dependency set rather than a bare
+      # `pip install mkdocs-material mkdocs-redirects`. That form pulled
+      # whatever was newest at build time, bypassing uv.lock entirely and
+      # leaving the docs toolchain as the one thing in CI Renovate could not
+      # see. The `docs` extra is already declared in pyproject.toml and pinned
+      # in uv.lock, so --locked keeps this reproducible.
       - name: Install dependencies
-        run: |
-          pip install mkdocs-material mkdocs-redirects
+        run: uv sync --extra docs --locked
 
       - name: Build docs
-        run: mkdocs build --strict
+        run: uv run mkdocs build --strict
 
       - name: Upload artifact
         uses: actions/upload-pages-artifact@v5

@@ -45,6 +45,7 @@ They read the real files — no mocking of the behavior under test.
 
 from __future__ import annotations
 
+import json
 import re
 from pathlib import Path
 
@@ -603,3 +604,43 @@ def test_api_md_init_distinguishes_aliases_from_parser_warnings(tmp_path: Path) 
 
 if __name__ == "__main__":  # pragma: no cover
     raise SystemExit(pytest.main([__file__, "-v"]))
+
+
+class TestSpecsDoNotHardcodeDownloadAssets:
+    """Spec examples must not re-type external download asset names.
+
+    ``docs/specs/guard-command-spec.md`` once inlined
+    ``gitleaks_{version}_linux_amd64.tar.gz`` while upstream actually publishes
+    ``_x64`` assets, so anyone implementing from the spec produced 404 URLs
+    that only fail at install time. constants.json is the Renovate-managed
+    source of truth; specs must read from it rather than copy it.
+    """
+
+    _SPECS = (
+        Path(__file__).resolve().parents[2] / "docs" / "specs" / "guard-command-spec.md",
+        Path(__file__).resolve().parents[2] / "docs" / "specs" / "new-guards-spec.md",
+    )
+    _CONSTANTS = Path(__file__).resolve().parents[2] / "src" / "envdrift" / "constants.json"
+
+    @pytest.mark.parametrize("tool", ["gitleaks", "trufflehog", "talisman", "trivy", "infisical"])
+    def test_spec_asset_names_match_constants(self, tool: str):
+        """Any asset filename in any spec must exist in constants.json.
+
+        Matches a templated version (``{version}``, ``{TOOL_VERSION}``) *and* a
+        concrete one: pasting a real URL with a literal version is the likeliest
+        authoring mistake, and it rots exactly as described above. Both specs
+        are swept, since new-guards-spec.md carries the same URL copies.
+        """
+        spec = "\n".join(path.read_text(encoding="utf-8") for path in self._SPECS)
+        constants = json.loads(self._CONSTANTS.read_text(encoding="utf-8"))
+        real = constants.get(f"{tool}_download_urls") or constants.get("download_urls", {})
+        # Version segment: either a {placeholder} or a literal such as 8.30.0.
+        version_seg = r"(?:\{\w+\}|\d[\w.]*)"
+        spelled = set(re.findall(rf"{tool}_{version_seg}_([a-z0-9_]+\.(?:tar\.gz|zip))", spec))
+        allowed = {re.sub(r"^.*?\}_", "", url.rsplit("/", 1)[-1]) for url in real.values()}
+        bogus = sorted(name for name in spelled if name not in allowed)
+        assert not bogus, (
+            f"docs/specs spell out {tool} assets {bogus} that do not exist in "
+            f"constants.json (real suffixes: {sorted(allowed)}). Read the "
+            "templates from constants.json in the example instead of copying them."
+        )

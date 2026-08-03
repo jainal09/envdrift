@@ -54,13 +54,17 @@
         "windows_amd64": "https://github.com/aquasecurity/trivy/releases/download/v{version}/trivy_{version}_windows-64bit.zip"
     },
     "trivy_checksums_url": "https://github.com/aquasecurity/trivy/releases/download/v{version}/trivy_{version}_checksums.txt",
-    "infisical_version": "0.41.90",
+    "infisical_version": "0.43.116",
     "infisical_download_urls": {
-        "darwin_amd64": "https://github.com/Infisical/infisical/releases/download/infisical-cli/v{version}/infisical_{version}_darwin_amd64.tar.gz",
-        "darwin_arm64": "https://github.com/Infisical/infisical/releases/download/infisical-cli/v{version}/infisical_{version}_darwin_arm64.tar.gz",
-        "linux_amd64": "https://github.com/Infisical/infisical/releases/download/infisical-cli/v{version}/infisical_{version}_linux_amd64.tar.gz",
-        "linux_arm64": "https://github.com/Infisical/infisical/releases/download/infisical-cli/v{version}/infisical_{version}_linux_arm64.tar.gz",
-        "windows_amd64": "https://github.com/Infisical/infisical/releases/download/infisical-cli/v{version}/infisical_{version}_windows_amd64.zip"
+        "darwin_amd64": "https://github.com/Infisical/cli/releases/download/v{version}/cli_{version}_darwin_amd64.tar.gz",
+        "darwin_arm64": "https://github.com/Infisical/cli/releases/download/v{version}/cli_{version}_darwin_arm64.tar.gz",
+        "linux_amd64": "https://github.com/Infisical/cli/releases/download/v{version}/cli_{version}_linux_amd64.tar.gz",
+        "linux_arm64": "https://github.com/Infisical/cli/releases/download/v{version}/cli_{version}_linux_arm64.tar.gz",
+        "windows_amd64": "https://github.com/Infisical/cli/releases/download/v{version}/cli_{version}_windows_amd64.zip"
     },
-    "infisical_checksums_url": "https://github.com/Infisical/infisical/releases/download/infisical-cli/v{version}/checksums.txt"
+    "infisical_checksums_url": "https://github.com/Infisical/cli/releases/download/v{version}/checksums.txt",
+    "infisical_checksums_urls": {
+        "darwin_amd64": "https://github.com/Infisical/cli/releases/download/v{version}/checksums-darwin.txt",
+        "darwin_arm64": "https://github.com/Infisical/cli/releases/download/v{version}/checksums-darwin.txt"
+    }
 }

@@ -210,7 +210,7 @@ def register(
         bool,
         typer.Option(
             "--auto-enable/--no-auto-enable",
-            help="Print instructions to enable [guardian] in envdrift.toml",
+            help=r"Print instructions to enable \[guardian] in envdrift.toml",
         ),
     ] = True,
 ) -> None:

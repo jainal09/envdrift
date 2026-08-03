@@ -6,7 +6,7 @@ This command is specific to dotenvx keys; SOPS users should use their SOPS key m
 ## Synopsis
 
 ```bash
-envdrift vault-pull [OPTIONS] FOLDER SECRET_NAME
+envdrift vault-pull [OPTIONS] {folder} {secret_name}
 ```
 
 ## Description
@@ -61,12 +61,12 @@ envdrift vault-pull ./services/myapp my-secret-name --env production --no-decryp
 
 ## Options
 
-### `FOLDER`
+### `{folder}`
 
 Path to the folder where the fetched `.env.keys` file is written (and which contains
 the `.env.<env>` file to decrypt).
 
-### `SECRET_NAME`
+### `{secret_name}`
 
 Name of the secret to fetch from the vault.
 
@@ -107,7 +107,7 @@ Only write the key to `.env.keys`; do not decrypt the `.env.<env>` file.
 
 ### `--env-file`
 
-Custom dotenv filename to decrypt, relative to `FOLDER`. This is useful for files
+Custom dotenv filename to decrypt, relative to `{folder}`. This is useful for files
 like `postgresql.env` or `dotnet-service-template.env.sqa`. The key name still
 comes from `--env`.
 
@@ -212,7 +212,7 @@ client defaults to `us-east-1` when `--region` is omitted):
 [ERROR] Cannot write services/myapp/.env.keys: [Errno 13] Permission denied: ...
 ```
 
-`FOLDER` must be an existing directory; it is validated before the secret is
+`{folder}` must be an existing directory; it is validated before the secret is
 fetched.
 
 ## Exit Codes

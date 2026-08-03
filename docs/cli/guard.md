@@ -5,7 +5,7 @@ Scan repositories for unencrypted `.env` files and exposed secrets.
 ## Synopsis
 
 ```bash
-envdrift guard [OPTIONS] [PATHS]...
+envdrift guard [OPTIONS] [paths]...
 ```
 
 ## Description
@@ -35,7 +35,7 @@ paths are provided, the current directory is scanned.
 
 | Argument | Description | Default |
 | :-- | :-- | :-- |
-| `PATHS` | Files or directories to scan | `.` |
+| `[paths]` | Files or directories to scan | `.` |
 
 ## Options
 
