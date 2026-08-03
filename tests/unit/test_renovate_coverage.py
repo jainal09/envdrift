@@ -317,11 +317,22 @@ def test_go_floor_supports_current_x_sys() -> None:
     with extra steps.
     """
     go_mod = (_REPO_ROOT / "envdrift-agent" / "go.mod").read_text(encoding="utf-8")
-    directive = re.search(r"(?m)^go (\d+)\.(\d+)", go_mod)
+    directive = re.search(r"(?m)^go (\d+)\.(\d+)(?:\.(\d+))?", go_mod)
     assert directive, "envdrift-agent/go.mod lost its go directive"
-    assert (int(directive.group(1)), int(directive.group(2))) >= (1, 25), (
-        f"go.mod declares go {directive.group(0)[3:]} but x/sys >= 0.44.0 "
-        "requires 1.25; the indirect-update PR cannot merge below that"
+    floor = (
+        int(directive.group(1)),
+        int(directive.group(2)),
+        int(directive.group(3) or 0),
+    )
+    # Patch level matters: the go directive is the MANDATORY minimum (a
+    # `toolchain` directive is only a suggestion that GOTOOLCHAIN=local
+    # ignores), and GO-2026-4602 (stdlib os, symbol-reachable via fsnotify)
+    # is fixed in go1.25.8. A directive below that admits compilers that
+    # ship the vulnerable os package into the released agent binaries.
+    assert floor >= (1, 25, 8), (
+        f"go.mod declares go {'.'.join(map(str, floor))}, below the "
+        "GO-2026-4602 stdlib security floor (1.25.8) — GOTOOLCHAIN=local "
+        "builders would ship the vulnerable os package"
     )
     for leg in _agent_matrix_go():
         major, minor = (int(x) for x in leg.split(".")[:2])
@@ -355,9 +366,11 @@ def test_agent_gates_survive_matrix_rotation(gate: str, needle: str) -> None:
     with zero diagnostics — the silent-guard-death mode this module exists to
     prevent.
     """
-    condition = str(_agent_step_running(needle).get("if", ""))
+    condition = str(_agent_step_running(needle).get("if", "") or "")
+    if not condition:
+        return  # no condition = the gate runs on every leg, the robust form
     matrix_go = _agent_matrix_go()
-    assert any(f"'{leg}'" in condition for leg in matrix_go), (
+    assert any(f"'{leg}'" in condition or f'"{leg}"' in condition for leg in matrix_go), (
         f"the {gate} gate's condition ({condition!r}) references no current "
         f"matrix leg ({matrix_go}) — the gate would never run again"
     )

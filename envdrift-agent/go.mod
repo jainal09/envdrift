@@ -1,11 +1,11 @@
 module github.com/jainal09/envdrift-agent
 
-go 1.25.0
-
-// Renovate-tracked (gomod manager, depType toolchain). Floor for the
-// GO-2026-4602 stdlib fix (os@go1.25.8): building with an older toolchain
-// ships the vulnerable os package inside the released agent binaries.
-toolchain go1.25.12
+// The MANDATORY minimum (Renovate-tracked, depType golang). This carries the
+// GO-2026-4602 stdlib security floor (os fixed in go1.25.8): a `toolchain`
+// directive is only a suggestion that GOTOOLCHAIN=local ignores, so the go
+// directive itself must exclude compilers that ship the vulnerable os
+// package into the released agent binaries.
+go 1.25.12
 
 require (
 	github.com/fsnotify/fsnotify v1.10.1

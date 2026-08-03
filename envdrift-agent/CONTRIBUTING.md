@@ -6,7 +6,7 @@ Thank you for your interest in contributing to EnvDrift Agent!
 
 ### Prerequisites
 
-- Go 1.25+
+- Go 1.25.12+ (the go.mod floor carries a stdlib security fix; older toolchains are refused)
 - Make
 - (Optional) golangci-lint for linting
 
