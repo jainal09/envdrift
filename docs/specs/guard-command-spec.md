@@ -1044,12 +1044,16 @@ def _get_gitleaks_download_urls() -> dict[str, str]:
 # upstream gitleaks publishes x64 assets (gitleaks_<v>_linux_x64), not amd64,
 # and an inlined copy of the wrong name produces 404s that only surface at
 # install time.
+# Keys must match what install()'s normalization below PRODUCES, which is not
+# the same spelling the real module uses: this example normalizes Windows to
+# "AMD64" and Linux arm to "aarch64". Copying the module's keys verbatim made
+# install() raise "Unsupported platform" on exactly those two platforms.
 PLATFORM_MAP: dict[tuple[str, str], tuple[str, str, str]] = {
     ("Darwin", "x86_64"): ("darwin", "amd64", "tar.gz"),
     ("Darwin", "arm64"): ("darwin", "arm64", "tar.gz"),
     ("Linux", "x86_64"): ("linux", "amd64", "tar.gz"),
-    ("Linux", "arm64"): ("linux", "arm64", "tar.gz"),
-    ("Windows", "x86_64"): ("windows", "amd64", "zip"),
+    ("Linux", "aarch64"): ("linux", "arm64", "tar.gz"),
+    ("Windows", "AMD64"): ("windows", "amd64", "zip"),
 }
 
 

@@ -136,9 +136,11 @@ brew install sops
 # Manual alternative. Runs in a subshell so a failure cannot close your
 # terminal and the cleanup trap does not outlive the block.
 (
-  # pipefail matters: without it a `grep` that matches nothing feeds EMPTY
-  # stdin to `sha256sum -c`, which exits 0 — so a renamed asset would silently
-  # pass verification in a block that advertises itself as fail-closed.
+  # Fail-closed here comes from `set -e`: a `grep` that matches nothing exits
+  # non-zero and aborts, and the `test -s` below catches an empty extraction.
+  # (An earlier form piped grep straight into `sha256sum -c`, where an empty
+  # stdin exits 0 and verified vacuously — hence the explicit file + test.)
+  # `pipefail` is kept so any future pipeline here cannot regress that way.
   set -euo pipefail
 
   # envdrift may be isolated (the installer uses ~/.envdrift/venv, and
@@ -171,7 +173,9 @@ brew install sops
   STAGE=/usr/local/bin/.sops.staged.$$
   trap 'rm -rf "$TMP"; sudo rm -f "$STAGE"' EXIT
 
-  # Bounded, matching install_integrity.py: 30s connect, 60s transfer.
+  # Bounded so a stalled connection cannot hang the install. Values match
+  # install_integrity.py (FETCH_TIMEOUT_SECONDS / DOWNLOAD_TIMEOUT_SECONDS);
+  # note --max-time is a TOTAL time cap for the request, not a per-read one.
   CURL="curl -fsSL --connect-timeout 30 --max-time 60"
   $CURL -o "$TMP/$ASSET" "$BASE/$ASSET"
   $CURL -o "$TMP/checksums.txt" "$BASE/sops-v${SOPS_VERSION}.checksums.txt"
