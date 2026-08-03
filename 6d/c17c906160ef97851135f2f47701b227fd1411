@@ -1,0 +1,41 @@
+envdrift-vscode/src/test/unit/overridesCompat.test.ts
+  s_387a201b31e3a1::t_5ba83475e95709 88
+  s_387a201b31e3a1::t_ad0cacf399835d 51-64
+docs/cli/vault-push.md
+  s_387a201b31e3a1::t_d866c8377be111 92,96
+docs/specs/guard-command-spec.md
+  s_387a201b31e3a1::t_f379853e057de8 1030-1046,1048-1052,1135,1138-1144
+  s_387a201b31e3a1::t_c54fd7c4785edc 1047
+  s_387a201b31e3a1::t_84402ce4ffc14f 1071,1074
+.github/workflows/publish.yml
+  s_387a201b31e3a1::t_4b6e6d5943fc64 39-45
+tests/unit/test_docs_accuracy.py
+  s_387a201b31e3a1::t_5e32e90d2107cc 625,639-640
+  s_387a201b31e3a1::t_628d4e581f98da 619-622
+  s_387a201b31e3a1::t_b33f369e4e7a84 627-634,636-638,643-644
+tests/scanner/test_infisical_cli_migration.py
+  s_387a201b31e3a1::t_58f52f0cfb0539 19-23,162-182
+docs/cli/diff.md
+  s_387a201b31e3a1::t_d866c8377be111 15-16,291-292
+tests/unit/test_agent_docs_hygiene.py
+  s_387a201b31e3a1::t_81da9081364fc8 48-51,53-56
+  s_387a201b31e3a1::t_d866c8377be111 108-112
+.github/workflows/ci.yml
+  s_387a201b31e3a1::t_4f65ca53aa5cef 41-48
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.20",
+  "base_commit_sha": "6dc17c906160ef97851135f2f47701b227fd1411",
+  "prompts": {},
+  "sessions": {
+    "s_387a201b31e3a1": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "1bd295c2-9ec5-43f6-a658-6971b2b820c0",
+        "model": "claude-opus-5"
+      },
+      "human_author": "Jainal Gosaliya <jainal09gosalia@gmail.com>"
+    }
+  }
+}
