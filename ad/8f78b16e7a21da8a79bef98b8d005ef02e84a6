@@ -1,0 +1,30 @@
+docs/cli/vault-pull.md
+  s_387a201b31e3a1::t_f0cc3116d4d693 64,69
+  s_387a201b31e3a1::t_da0fdc4eb7ddd3 110,215
+tests/unit/test_agent_docs_hygiene.py
+  s_387a201b31e3a1::t_9ecc9b3458ddf2 35-42,89-91
+docs/support/troubleshooting.md
+  s_387a201b31e3a1::t_2e3b03eddad11c 133-137,139-142
+AGENTS.md
+  s_387a201b31e3a1::t_f0cc3116d4d693 127-131
+CLAUDE.md
+  s_387a201b31e3a1::t_f0cc3116d4d693 157-159
+tests/unit/test_dev_stack_hygiene.py
+  s_387a201b31e3a1::t_920b8ee38dc6fb 544-558,569-570,586,588-589
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.20",
+  "base_commit_sha": "ad8f78b16e7a21da8a79bef98b8d005ef02e84a6",
+  "prompts": {},
+  "sessions": {
+    "s_387a201b31e3a1": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "1bd295c2-9ec5-43f6-a658-6971b2b820c0",
+        "model": "claude-opus-5"
+      },
+      "human_author": "Jainal Gosaliya <jainal09gosalia@gmail.com>"
+    }
+  }
+}
