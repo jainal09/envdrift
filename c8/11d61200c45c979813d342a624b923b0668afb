@@ -1,0 +1,26 @@
+tests/unit/test_renovate_coverage.py
+  s_387a201b31e3a1::t_fde705b1fa06a2 111-124,157,174,398,414,417
+  s_387a201b31e3a1::t_9ec2a8109083d7 312-324,388-397,399-413,415-416,418-423
+envdrift-agent/go.mod
+  s_387a201b31e3a1::t_40e16fa5cd9181 24
+envdrift-agent/go.sum
+  s_387a201b31e3a1::t_8272d485319b4d 47-48
+renovate.json
+  s_387a201b31e3a1::t_efdb2986723668 143-154
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.20",
+  "base_commit_sha": "c811d61200c45c979813d342a624b923b0668afb",
+  "prompts": {},
+  "sessions": {
+    "s_387a201b31e3a1": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "1bd295c2-9ec5-43f6-a658-6971b2b820c0",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Jainal Gosaliya <jainal09gosalia@gmail.com>"
+    }
+  }
+}
