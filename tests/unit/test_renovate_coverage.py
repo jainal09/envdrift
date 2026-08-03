@@ -322,12 +322,39 @@ def test_go_floor_supports_current_x_sys() -> None:
         "(package-imported in the shipped windows-amd64 binary)"
     )
 
+    # Guard the tidy gate itself: its `if:` pins a literal matrix leg, so a
+    # future matrix rotation (e.g. ['1.27', '1.28']) would make the condition
+    # permanently false and the ONLY tidiness gate in CI would evaporate with
+    # zero diagnostics — the silent-guard-death mode this module exists to
+    # prevent.
+    tidy_steps = [
+        step
+        for step in ci["jobs"]["test"]["steps"]
+        if "go mod tidy -diff" in str(step.get("run", ""))
+    ]
+    assert tidy_steps, "agent-ci.yml lost the go mod tidy gate"
+    condition = str(tidy_steps[0].get("if", ""))
+    assert any(f"'{leg}'" in condition for leg in matrix_go), (
+        f"the tidy gate's condition ({condition!r}) references no current "
+        f"matrix leg ({matrix_go}) — the gate would never run again"
+    )
+
+
+def _workflow_files() -> list[Path]:
+    """All workflow files, both extensions.
+
+    renovate.json's workflows managerFilePatterns accept `ya?ml`; a guard that
+    globs only `*.yml` would let a future `.yaml` workflow escape every assert
+    while Renovate half-tracks it.
+    """
+    return sorted(p for ext in ("*.yml", "*.yaml") for p in _WORKFLOWS.glob(ext))
+
 
 def _setup_uv_steps() -> list[tuple[str, dict[str, Any]]]:
     """Every (workflow-name, step) pair whose step uses astral-sh/setup-uv."""
     return [
         (wf.name, step)
-        for wf in sorted(_WORKFLOWS.glob("*.yml"))
+        for wf in sorted(_workflow_files())
         for job in (yaml.safe_load(wf.read_text(encoding="utf-8")).get("jobs") or {}).values()
         for step in job.get("steps") or []
         if "astral-sh/setup-uv" in str(step.get("uses", ""))
@@ -350,7 +377,7 @@ def test_setup_uv_steps_pin_the_uv_version() -> None:
 
     annotated = sorted(
         wf.name
-        for wf in _WORKFLOWS.glob("*.yml")
+        for wf in _workflow_files()
         if "depName=astral-sh/uv" in wf.read_text(encoding="utf-8")
     )
     assert not annotated, (
@@ -375,8 +402,16 @@ def test_makefile_tool_pins_are_renovate_visible() -> None:
         if any("Makefile" in p for p in m.get("managerFilePatterns", []))
     ]
     assert managers, "renovate.json lost the Makefile customManager"
-    pattern = re.sub(r"\(\?<(\w+)>", r"(?P<\1>", managers[0]["matchStrings"][0])
-    matches = {m.group("depName"): m.group("currentValue") for m in re.finditer(pattern, makefile)}
+    matches: dict[str, str] = {}
+    for manager in managers:
+        for match_string in manager["matchStrings"]:
+            pattern = re.sub(r"\(\?<(\w+)>", r"(?P<\1>", match_string)
+            found = list(re.finditer(pattern, makefile))
+            assert found, (
+                f"Makefile manager matchString matches nothing: {match_string!r} "
+                "- an unmatched regex reports up-to-date forever"
+            )
+            matches.update((m.group("depName"), m.group("currentValue")) for m in found)
     assert "markdownlint-cli2" in matches, (
         "the Makefile manager regex no longer matches the markdownlint-cli2 "
         f"pin (matched: {matches or 'nothing'})"
@@ -416,8 +451,10 @@ def test_golangci_lint_doc_pin_matches_the_workflow_pin() -> None:
         if any("CONTRIBUTING" in pat for pat in m.get("managerFilePatterns", []))
     ]
     assert managers, "renovate.json lost the CONTRIBUTING.md customManager"
-    pattern = re.sub(r"\(\?<(\w+)>", r"(?P<\1>", managers[0]["matchStrings"][0])
-    assert re.search(pattern, doc), (
-        "the CONTRIBUTING.md manager regex matches nothing in the doc - "
-        "Renovate would report up-to-date forever (the Infisical failure mode)"
-    )
+    for manager in managers:
+        for match_string in manager["matchStrings"]:
+            pattern = re.sub(r"\(\?<(\w+)>", r"(?P<\1>", match_string)
+            assert re.search(pattern, doc), (
+                f"CONTRIBUTING.md manager regex matches nothing: {match_string!r} "
+                "- Renovate would report up-to-date forever (the Infisical mode)"
+            )

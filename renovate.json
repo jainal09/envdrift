@@ -143,7 +143,7 @@
     },
     {
       "customType": "regex",
-      "description": "golangci-lint install command in the agent contributor docs. Keeps the doc copy in the SAME Renovate PR as the agent-ci.yml pin, so the two cannot drift the way copied pins otherwise do.",
+      "description": "golangci-lint install command in the agent contributor docs. Keeps the doc copy in the SAME Renovate PR as the agent-ci.yml pin, so the two cannot drift the way copied pins otherwise do. MAJOR-BUMP NOTE: this regex and the doc command both hardcode the /v2/ module path. When golangci-lint cuts v3, the (manual-review) major PR must also move the module path in BOTH places - the parity guard stays green if the two copies break identically.",
       "managerFilePatterns": [
         "/^envdrift-agent/CONTRIBUTING\\.md$/"
       ],
