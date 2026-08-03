@@ -40,15 +40,19 @@ jobs:
           go-version: ${{ matrix.go }}
           cache-dependency-path: envdrift-agent/go.sum
 
-      - name: Download dependencies
-        run: go mod download
-
       - name: Verify go.mod/go.sum are tidy
-        # One leg only: -diff output could differ across toolchains, and a
-        # split failure across 6 legs is noise. Renovate's gomodTidy keeps
+        # BEFORE 'Download dependencies': `go mod download` writes missing
+        # go.sum checksums on the runner, which would mask untidiness of the
+  # COMMITTED files (verified: a dropped go.sum line fails -diff before
+  # download, passes after). One leg only: -diff output could differ
+  # across toolchains, and a split failure across 6 legs is noise.
+  # Renovate's gomodTidy keeps
         # this green for bot PRs; contributors run `go mod tidy` locally.
         if: matrix.os == 'ubuntu-latest' && matrix.go == '1.26'
         run: go mod tidy -diff
+
+      - name: Download dependencies
+        run: go mod download
 
       - name: Run tests
         shell: bash
