@@ -136,7 +136,10 @@ brew install sops
 # Manual alternative. Runs in a subshell so a failure cannot close your
 # terminal and the cleanup trap does not outlive the block.
 (
-  set -eu
+  # pipefail matters: without it a `grep` that matches nothing feeds EMPTY
+  # stdin to `sha256sum -c`, which exits 0 — so a renamed asset would silently
+  # pass verification in a block that advertises itself as fail-closed.
+  set -euo pipefail
 
   # envdrift may be isolated (the installer uses ~/.envdrift/venv, and
   # pipx/uv tool installs are isolated too), so pick an interpreter that can
@@ -162,16 +165,25 @@ brew install sops
   BASE="https://github.com/getsops/sops/releases/download/v${SOPS_VERSION}"
   ASSET="sops-v${SOPS_VERSION}.linux.${ARCH}"
   TMP=$(mktemp -d)
-  trap 'rm -rf "$TMP"' EXIT
+  # Stage on the TARGET filesystem so the final step is a same-filesystem
+  # rename. `install` alone copies into place and can leave a partial binary if
+  # interrupted or if the disk fills.
+  STAGE=/usr/local/bin/.sops.staged.$$
+  trap 'rm -rf "$TMP"; sudo rm -f "$STAGE"' EXIT
 
-  curl -fsSL -o "$TMP/$ASSET" "$BASE/$ASSET"
-  curl -fsSL -o "$TMP/checksums.txt" "$BASE/sops-v${SOPS_VERSION}.checksums.txt"
+  # Bounded, matching install_integrity.py: 30s connect, 60s transfer.
+  CURL="curl -fsSL --connect-timeout 30 --max-time 60"
+  $CURL -o "$TMP/$ASSET" "$BASE/$ASSET"
+  $CURL -o "$TMP/checksums.txt" "$BASE/sops-v${SOPS_VERSION}.checksums.txt"
 
-  # Verify before installing: a fail-closed install that never checks a
-  # checksum only protects against truncation, not against a bad artifact.
-  ( cd "$TMP" && grep " ${ASSET}\$" checksums.txt | sha256sum -c - )
+  # Verify BEFORE installing. The explicit grep check is belt-and-braces with
+  # pipefail: an absent line must abort, never verify vacuously.
+  grep " ${ASSET}\$" "$TMP/checksums.txt" > "$TMP/expected.txt"
+  test -s "$TMP/expected.txt"
+  ( cd "$TMP" && sha256sum -c expected.txt )
 
-  sudo install -m 0755 "$TMP/$ASSET" /usr/local/bin/sops
+  sudo install -m 0755 "$TMP/$ASSET" "$STAGE"
+  sudo mv -f "$STAGE" /usr/local/bin/sops
 )
 ```
 

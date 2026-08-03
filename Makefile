@@ -64,6 +64,16 @@ test:
 # stopped, and the `ps` probe below would silently report zero running services.
 COMPOSE_TEST = docker compose $(if $(wildcard tests/.env),--env-file tests/.env,) -f tests/docker-compose.test.yml
 
+# Same invocation for commands that do NOT start containers (down, ps).
+#
+# The compose file declares LOCALSTACK_AUTH_TOKEN with a `${...:?}` guard,
+# evaluated on EVERY parse. So a developer who exported the token, started the
+# stack, then ran `make test-integration-down` from a fresh shell (no export,
+# no tests/.env) had teardown ABORT, leaving containers, network and volumes
+# running. The token is irrelevant when we are not starting anything, so
+# supply a placeholder if it is absent — never weaken the guard on `up`.
+COMPOSE_TEST_NOSTART = LOCALSTACK_AUTH_TOKEN=$${LOCALSTACK_AUTH_TOKEN:-not-needed-for-teardown} $(COMPOSE_TEST)
+
 # Start integration test containers
 #
 # LocalStack has been account-gated since 2026.03.0 and exits(55) without a
@@ -91,7 +101,7 @@ test-integration-up:
 
 # Stop integration test containers
 test-integration-down:
-	$(COMPOSE_TEST) down -v
+	@$(COMPOSE_TEST_NOSTART) down -v
 
 # Run integration tests (starts containers if needed)
 test-integration:
@@ -101,7 +111,7 @@ test-integration:
 	@# case — the only one this guard exists for — therefore never started the
 	@# stack, pytest ran against a dead stack, every container test auto-skipped,
 	@# and `make test-integration` exited 0 with zero integration tests run.
-	@running=$$($(COMPOSE_TEST) ps --status running --format json 2>/dev/null \
+	@running=$$($(COMPOSE_TEST_NOSTART) ps --status running --format json 2>/dev/null \
 		| grep -c '"Service"' || true); \
 	running=$${running:-0}; \
 	if [ "$$running" -lt 3 ]; then \
