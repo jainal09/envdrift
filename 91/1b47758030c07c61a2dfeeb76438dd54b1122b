@@ -1,0 +1,20 @@
+tests/unit/test_renovate_coverage.py
+  s_387a201b31e3a1::t_7b088ffa970b46 116-117,244-248,250
+  s_387a201b31e3a1::t_587d13ab02cd06 295-310,326-327,346-362,364-373,377-384
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.20",
+  "base_commit_sha": "911b47758030c07c61a2dfeeb76438dd54b1122b",
+  "prompts": {},
+  "sessions": {
+    "s_387a201b31e3a1": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "1bd295c2-9ec5-43f6-a658-6971b2b820c0",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Jainal Gosaliya <jainal09gosalia@gmail.com>"
+    }
+  }
+}
