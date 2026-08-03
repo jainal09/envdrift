@@ -1,5 +1,12 @@
 # Changelog
 
+## [11.0.3](https://github.com/jainal09/envdrift/compare/v11.0.2...v11.0.3) (2026-08-03)
+
+
+### Bug Fixes
+
+* **renovate:** track Go indirect deps, pin CI tooling, close audit gaps ([#720](https://github.com/jainal09/envdrift/issues/720)) ([d6e2680](https://github.com/jainal09/envdrift/commit/d6e2680ff0cb6b92c484245cb50d431acd861b9a))
+
 ## [11.0.2](https://github.com/jainal09/envdrift/compare/v11.0.1...v11.0.2) (2026-08-03)
 
 
