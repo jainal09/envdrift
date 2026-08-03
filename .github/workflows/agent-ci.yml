@@ -28,7 +28,7 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
-        go: ['1.23', '1.26']
+        go: ['1.25', '1.26']
 
     steps:
       - name: Checkout code
@@ -42,6 +42,13 @@ jobs:
 
       - name: Download dependencies
         run: go mod download
+
+      - name: Verify go.mod/go.sum are tidy
+        # One leg only: -diff output could differ across toolchains, and a
+        # split failure across 6 legs is noise. Renovate's gomodTidy keeps
+        # this green for bot PRs; contributors run `go mod tidy` locally.
+        if: matrix.os == 'ubuntu-latest' && matrix.go == '1.26'
+        run: go mod tidy -diff
 
       - name: Run tests
         shell: bash

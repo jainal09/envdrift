@@ -670,3 +670,110 @@ def test_every_manager_matches_a_real_upstream_tag() -> None:
             "cannot extract a version, so this pin is frozen with no diagnostic "
             "— exactly how infisical sat at 0.41.90 after the CLI moved repos."
         )
+
+
+# --- Renovate coverage invariants from the 2026-08 audit ------------------------
+
+
+def test_go_indirect_dependencies_are_tracked() -> None:
+    """Renovate must not silently skip the agent's indirect Go modules.
+
+    The gomod extractor stamps ``enabled: false`` on every ``// indirect``
+    require (absent a Go 1.24+ ``tool`` directive), removing them from updates
+    AND the dashboard with no diagnostic. That left 12 of the agent's modules
+    invisible — including golang.org/x/sys with GO-2026-5024 package-imported
+    in the shipped Windows binary. The rule below is the only thing keeping
+    them visible; grouping keeps the weekend run from opening ~12 PRs at once.
+    """
+    rules = [
+        r
+        for r in _renovate_config().get("packageRules", [])
+        if r.get("matchManagers") == ["gomod"] and r.get("matchDepTypes") == ["indirect"]
+    ]
+    assert rules, "renovate.json lost the gomod indirect packageRule"
+    assert rules[0].get("enabled") is True
+    assert rules[0].get("groupName"), (
+        "indirect Go updates must be grouped, or one weekend run opens a PR "
+        "per module against a repo that freezes new work at ~20 open PRs"
+    )
+    assert "gomodTidy" in _renovate_config().get("postUpdateOptions", []), (
+        "postUpdateOptions must keep gomodTidy: without it Renovate adds new "
+        "go.sum hashes but never prunes stale ones"
+    )
+
+
+def test_go_floor_supports_current_x_sys() -> None:
+    """go.mod's floor must stay >= what golang.org/x/sys requires.
+
+    x/sys v0.44.0 (the GO-2026-5024 fix) declares ``go 1.25.0``. If the module
+    floor or any CI matrix leg drops below that, the indirect-deps rule opens
+    an un-mergeable PR and the CVE fix is unreachable — silent non-coverage
+    with extra steps.
+    """
+    go_mod = (_REPO_ROOT / "envdrift-agent" / "go.mod").read_text(encoding="utf-8")
+    directive = re.search(r"(?m)^go (\d+)\.(\d+)", go_mod)
+    assert directive, "envdrift-agent/go.mod lost its go directive"
+    assert (int(directive.group(1)), int(directive.group(2))) >= (1, 25), (
+        f"go.mod declares go {directive.group(0)[3:]} but x/sys >= 0.44.0 "
+        "requires 1.25; the indirect-update PR cannot merge below that"
+    )
+    ci = yaml.safe_load((_WORKFLOWS / "agent-ci.yml").read_text(encoding="utf-8"))
+    matrix_go = ci["jobs"]["test"]["strategy"]["matrix"]["go"]
+    for leg in matrix_go:
+        major, minor = (int(x) for x in str(leg).split(".")[:2])
+        assert (major, minor) >= (1, 25), (
+            f"agent-ci.yml matrix leg go {leg} is below the go.mod floor"
+        )
+
+
+def test_setup_uv_steps_pin_the_uv_version() -> None:
+    """Every setup-uv step must pin `version:` — and never via a regex annotation.
+
+    Unpinned, `latest` uv drives all 12 required checks and `uv build`/`uv
+    publish` on the release path. The `version:` input is extracted by
+    Renovate's BUILT-IN github-actions manager as astral-sh/uv, so a
+    `# renovate:` comment on these steps would double-track the same dep.
+    """
+    pinned, bare = [], []
+    for wf in sorted(_WORKFLOWS.glob("*.yml")):
+        text = wf.read_text(encoding="utf-8")
+        assert "depName=astral-sh/uv" not in text, (
+            f"{wf.name}: remove the astral-sh/uv regex annotation — the "
+            "github-actions manager already tracks the version input, so the "
+            "annotation creates a duplicate dependency"
+        )
+        doc = yaml.safe_load(text)
+        for job in (doc.get("jobs") or {}).values():
+            for step in job.get("steps") or []:
+                if "astral-sh/setup-uv" in str(step.get("uses", "")):
+                    version = (step.get("with") or {}).get("version")
+                    (pinned if version else bare).append(f"{wf.name}")
+    assert pinned, "no setup-uv steps found — did the workflows move?"
+    assert not bare, f"setup-uv steps without a pinned uv version: {bare}"
+
+
+def test_makefile_tool_pins_are_renovate_visible() -> None:
+    """Every `# renovate:` annotated pin in the Makefile must match the manager.
+
+    The Lint check runs `npx markdownlint-cli2@$(MARKDOWNLINT_VERSION)`; the
+    pin only stays fresh if the Makefile customManager's regex actually
+    matches it (the Infisical lesson: a manager whose regex matches nothing
+    reports up-to-date forever).
+    """
+    makefile = (_REPO_ROOT / "Makefile").read_text(encoding="utf-8")
+    managers = [
+        m
+        for m in _renovate_config().get("customManagers", [])
+        if any("Makefile" in p for p in m.get("managerFilePatterns", []))
+    ]
+    assert managers, "renovate.json lost the Makefile customManager"
+    pattern = re.sub(r"\(\?<(\w+)>", r"(?P<\1>", managers[0]["matchStrings"][0])
+    matches = {m.group("depName"): m.group("currentValue") for m in re.finditer(pattern, makefile)}
+    assert "markdownlint-cli2" in matches, (
+        "the Makefile manager regex no longer matches the markdownlint-cli2 "
+        f"pin (matched: {matches or 'nothing'})"
+    )
+    # And the pin must actually be used by the recipe, not just declared.
+    assert "markdownlint-cli2@$(MARKDOWNLINT_VERSION)" in makefile, (
+        "lint-docs no longer interpolates MARKDOWNLINT_VERSION - the pin is decorative"
+    )

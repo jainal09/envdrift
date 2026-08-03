@@ -143,10 +143,16 @@ docs:
 docs-serve:
 	uv run mkdocs serve
 
+# Pinned so the REQUIRED Lint check is reproducible. `npx markdownlint-cli2`
+# with no version fetches whatever npm serves that minute, so an upstream
+# release could fail a required gate with no PR and no warning.
+# renovate: datasource=npm depName=markdownlint-cli2
+MARKDOWNLINT_VERSION = 0.23.2
+
 # Lint markdown documentation
 lint-docs:
 	@echo "Linting markdown files..."
-	npx markdownlint-cli2 "**/*.md" "!**/node_modules/**" "!.venv/**" "!venv/**" "!.git/**" "!dist/**" "!build/**" "!site/**" "!.pytest_cache/**" \
+	npx markdownlint-cli2@$(MARKDOWNLINT_VERSION) "**/*.md" "!**/node_modules/**" "!.venv/**" "!venv/**" "!.git/**" "!dist/**" "!build/**" "!site/**" "!.pytest_cache/**" \
 	 "!.ruff_cache/**" "!.uv-cache/**" "!**/.vscode-test/**" "!**/CHANGELOG.md"
 
 # Clean build artifacts
