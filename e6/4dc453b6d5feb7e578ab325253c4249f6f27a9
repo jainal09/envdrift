@@ -1,0 +1,27 @@
+tests/unit/test_agent_docs_hygiene.py
+  s_387a201b31e3a1::t_6148306bc00e17 41-48,99-101
+docs/support/troubleshooting.md
+  s_387a201b31e3a1::t_c197db05cb5cf2 133-137,139-148
+.github/workflows/ci.yml
+  s_387a201b31e3a1::t_369d1c659822ef 69-75
+docs/specs/guard-command-spec.md
+  s_387a201b31e3a1::t_2c2a8c2c59fb57 1136-1137,1140-1142
+tests/unit/test_dev_stack_hygiene.py
+  s_387a201b31e3a1::t_89c49c9d975904 616-620,635-647
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.20",
+  "base_commit_sha": "e64dc453b6d5feb7e578ab325253c4249f6f27a9",
+  "prompts": {},
+  "sessions": {
+    "s_387a201b31e3a1": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "1bd295c2-9ec5-43f6-a658-6971b2b820c0",
+        "model": "claude-opus-5"
+      },
+      "human_author": "Jainal Gosaliya <jainal09gosalia@gmail.com>"
+    }
+  }
+}
