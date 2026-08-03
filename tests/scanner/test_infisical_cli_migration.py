@@ -16,7 +16,11 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from envdrift.scanner.infisical import InfisicalInstaller, _get_infisical_version
+from envdrift.scanner.infisical import (
+    InfisicalInstaller,
+    _get_infisical_download_urls,
+    _get_infisical_version,
+)
 
 
 class TestPlatformSpecificChecksums:
@@ -155,3 +159,24 @@ class TestVersionTokenParsing:
         """The happy path still avoids a redundant download."""
         download = self._install(tmp_path, "0.43.116", "infisical version 0.43.116\n")
         download.assert_not_called()
+
+
+def test_constants_cover_every_supported_platform():
+    """Every platform the installer claims to support must have a URL.
+
+    ``get_download_url`` now fails loudly on a missing key, which is right, but
+    nothing would have caught a hole BEFORE it shipped: the real-constants
+    tests only resolve darwin_arm64, linux_amd64 and windows_amd64, so a
+    dropped or typoed ``darwin_amd64`` (Intel macs) or ``linux_arm64`` would
+    stay green until a user's machine hit the raise.
+    """
+    configured = set(_get_infisical_download_urls())
+    required = {
+        f"{os_name}_{arch}" for (os_name, arch, _ext) in InfisicalInstaller.PLATFORM_MAP.values()
+    }
+    missing = sorted(required - configured)
+    assert not missing, (
+        f"constants.json infisical_download_urls is missing {missing}. "
+        f"PLATFORM_MAP advertises support for these, so install() would raise "
+        f"on those machines. Configured: {sorted(configured)}."
+    )

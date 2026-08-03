@@ -616,21 +616,31 @@ class TestSpecsDoNotHardcodeDownloadAssets:
     source of truth; specs must read from it rather than copy it.
     """
 
-    _SPEC = Path(__file__).resolve().parents[2] / "docs" / "specs" / "guard-command-spec.md"
+    _SPECS = (
+        Path(__file__).resolve().parents[2] / "docs" / "specs" / "guard-command-spec.md",
+        Path(__file__).resolve().parents[2] / "docs" / "specs" / "new-guards-spec.md",
+    )
     _CONSTANTS = Path(__file__).resolve().parents[2] / "src" / "envdrift" / "constants.json"
 
-    @pytest.mark.parametrize("tool", ["gitleaks", "trufflehog"])
+    @pytest.mark.parametrize("tool", ["gitleaks", "trufflehog", "talisman", "trivy", "infisical"])
     def test_spec_asset_names_match_constants(self, tool: str):
-        """Any asset filename in the spec must exist in constants.json."""
-        spec = self._SPEC.read_text(encoding="utf-8")
+        """Any asset filename in any spec must exist in constants.json.
+
+        Matches a templated version (``{version}``, ``{TOOL_VERSION}``) *and* a
+        concrete one: pasting a real URL with a literal version is the likeliest
+        authoring mistake, and it rots exactly as described above. Both specs
+        are swept, since new-guards-spec.md carries the same URL copies.
+        """
+        spec = "\n".join(path.read_text(encoding="utf-8") for path in self._SPECS)
         constants = json.loads(self._CONSTANTS.read_text(encoding="utf-8"))
-        real = constants[f"{tool}_download_urls"]
-        # Filenames the spec spells out literally, with the version templated.
-        spelled = set(re.findall(rf"{tool}_\{{\w+\}}_([a-z0-9_]+\.(?:tar\.gz|zip))", spec))
-        allowed = {url.rsplit("/", 1)[-1].split("}_", 1)[-1] for url in real.values()}
+        real = constants.get(f"{tool}_download_urls") or constants.get("download_urls", {})
+        # Version segment: either a {placeholder} or a literal such as 8.30.0.
+        version_seg = r"(?:\{\w+\}|\d[\w.]*)"
+        spelled = set(re.findall(rf"{tool}_{version_seg}_([a-z0-9_]+\.(?:tar\.gz|zip))", spec))
+        allowed = {re.sub(r"^.*?\}_", "", url.rsplit("/", 1)[-1]) for url in real.values()}
         bogus = sorted(name for name in spelled if name not in allowed)
         assert not bogus, (
-            f"guard-command-spec.md spells out {tool} assets {bogus} that do not "
-            f"exist in constants.json (real suffixes: {sorted(allowed)}). Read the "
+            f"docs/specs spell out {tool} assets {bogus} that do not exist in "
+            f"constants.json (real suffixes: {sorted(allowed)}). Read the "
             "templates from constants.json in the example instead of copying them."
         )

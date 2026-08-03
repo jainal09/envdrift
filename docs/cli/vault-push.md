@@ -89,11 +89,11 @@ envdrift vault-push --all --skip-encrypt
 
 ## Options
 
-### `FOLDER`
+### `{folder}`
 
 Path to the folder containing the `.env.keys` file (normal mode) or the secret name (direct mode).
 
-### `SECRET_NAME`
+### `{secret_name}`
 
 Name for the secret in the vault (normal mode) or the value to push (direct mode).
 

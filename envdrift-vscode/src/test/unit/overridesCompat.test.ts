@@ -48,6 +48,20 @@ function childRoots(dir: string, name: string): string[] {
     return fs.existsSync(nested) ? [nested] : [];
 }
 
+/** True when `dir` is a real, requirable minimatch package. */
+function isMinimatchPackage(dir: string): boolean {
+    // A SCOPED package named minimatch (e.g. @types/minimatch) matches by name
+    // but has no runtime entry point, so require() would throw MODULE_NOT_FOUND
+    // and fail the suite spuriously. Require a resolvable entry instead of
+    // trusting the directory name.
+    try {
+        require.resolve(dir);
+        return true;
+    } catch {
+        return false;
+    }
+}
+
 /** Immediate subdirectories of `root`, as [name, fullPath] pairs. */
 function subdirectories(root: string): Array<[string, string]> {
     return fs
@@ -71,7 +85,7 @@ function findMinimatchCopies(root: string, seen = new Set<string>()): string[] {
     seen.add(key);
 
     return subdirectories(root).flatMap(([name, dir]) =>
-        name === 'minimatch'
+        name === 'minimatch' && isMinimatchPackage(dir)
             ? [dir]
             : childRoots(dir, name).flatMap((next) => findMinimatchCopies(next, seen)),
     );

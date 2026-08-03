@@ -1027,32 +1027,31 @@ def _load_constants() -> dict:
         return json.load(f)
 
 
-# Version pinned for reproducibility. Read it from constants.json rather than
-# repeating the literal here — constants.json is the single Renovate-managed
-# source of truth, and a copied literal silently goes stale on every bump.
-GITLEAKS_VERSION = _load_constants()["gitleaks_version"]
+# Lazy accessors with fallbacks, matching the real module: constants.json is
+# the Renovate-managed source of truth, and reading it at call time (rather
+# than eagerly at import) keeps a malformed/missing file from breaking import.
+def _get_gitleaks_version() -> str:
+    """Get the pinned gitleaks version from constants."""
+    return _load_constants().get("gitleaks_version", "8.21.2")
 
-# Read the URL templates from constants.json too — do NOT re-type the asset
-# names here. Upstream gitleaks publishes x64 assets (gitleaks_<v>_linux_x64),
-# not amd64, and an inlined copy of the wrong name produces 404s that only
-# surface at install time. constants.json is Renovate-managed and already
-# correct; PLATFORM_MAP translates platform.system()/machine() to its keys.
-PLATFORM_MAP = {
-    ("Darwin", "arm64"): "darwin_arm64",
-    ("Darwin", "x86_64"): "darwin_amd64",
-    ("Linux", "x86_64"): "linux_amd64",
-    ("Linux", "aarch64"): "linux_arm64",
-    ("Windows", "AMD64"): "windows_amd64",
+
+def _get_gitleaks_download_urls() -> dict[str, str]:
+    """Get download URL templates from constants."""
+    return _load_constants().get("gitleaks_download_urls", {})
+
+
+# (system, machine) -> (os, arch, ext). Never re-type the asset FILENAMES here:
+# upstream gitleaks publishes x64 assets (gitleaks_<v>_linux_x64), not amd64,
+# and an inlined copy of the wrong name produces 404s that only surface at
+# install time.
+PLATFORM_MAP: dict[tuple[str, str], tuple[str, str, str]] = {
+    ("Darwin", "x86_64"): ("darwin", "amd64", "tar.gz"),
+    ("Darwin", "arm64"): ("darwin", "arm64", "tar.gz"),
+    ("Linux", "x86_64"): ("linux", "amd64", "tar.gz"),
+    ("Linux", "arm64"): ("linux", "arm64", "tar.gz"),
+    ("Windows", "x86_64"): ("windows", "amd64", "zip"),
 }
 
-# Keep the templates UNRENDERED here. Rendering with the module-level pinned
-# version would make an installer constructed with a different `version=` still
-# download the pinned build. Format at lookup time with the instance's version.
-DOWNLOAD_URL_TEMPLATES = {
-    platform_key: template
-    for platform_key, constants_key in PLATFORM_MAP.items()
-    if (template := _load_constants()["gitleaks_download_urls"].get(constants_key))
-}
 
 SEVERITY_MAP = {
     "CRITICAL": FindingSeverity.CRITICAL,
@@ -1069,10 +1068,10 @@ class GitleaksScanner(ScannerBackend):
     def __init__(
         self,
         auto_install: bool = True,
-        version: str = GITLEAKS_VERSION,
+        version: str | None = None,
     ):
         self._auto_install = auto_install
-        self._version = version
+        self._version = version or _get_gitleaks_version()
         self._binary_path: Path | None = None
 
     @property
@@ -1133,12 +1132,16 @@ class GitleaksScanner(ScannerBackend):
             machine = "arm64" if system == "Darwin" else "aarch64"
 
         key = (system, machine)
-        template = DOWNLOAD_URL_TEMPLATES.get(key)
-        if template is None:
+        if key not in PLATFORM_MAP:
             raise RuntimeError(f"Unsupported platform: {system} {machine}")
 
-        # Render here, not at module import: a scanner constructed with an
-        # explicit `version=` must download THAT build, not the pinned default.
+        os_name, arch, _ext = PLATFORM_MAP[key]
+        template = _get_gitleaks_download_urls().get(f"{os_name}_{arch}")
+        if template is None:
+            raise RuntimeError(f"No gitleaks URL configured for {os_name}_{arch}")
+
+        # Render here, not at import: a scanner constructed with an explicit
+        # `version=` must download THAT build, not the pinned default.
         url = template.format(version=self._version)
         progress(f"Downloading gitleaks v{self._version}...")
 

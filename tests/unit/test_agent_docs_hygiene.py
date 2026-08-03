@@ -45,9 +45,15 @@ _FENCED_BLOCK = re.compile(
     # closing fence to be longer, but not to mix ` and ~ — accepting a mixed
     # run ended the block early, so a later @AGENTS.md still inside the real
     # fence was counted as an active import.
-    r"^[ \t]*(?:(?P=bt)`*|(?P=td)~*)[ \t]*$"
+    # An UNCLOSED fence runs to end of document, so `\Z` is an accepted
+    # terminator too; requiring a closer reported the import ALIVE while it was
+    # dead inside the fence.
+    r"(?:^[ \t]*(?:(?P=bt)`*|(?P=td)~*)[ \t]*$|\Z)"
 )
-_CODE_SPAN = re.compile(r"`[^`\n]*`")
+# Code spans may be delimited by a RUN of backticks, not just one. A single-tick
+# pattern parsed ``@AGENTS.md`` as two EMPTY spans and left a bare @AGENTS.md
+# line behind, which then counted as an active import.
+_CODE_SPAN = re.compile(r"(?s)(?P<ticks>`+)(?:(?!(?P=ticks)).)*?(?P=ticks)")
 _IMPORT_LINE = re.compile(r"(?m)^\s*@([^\s`]+)\s*$")
 
 
@@ -99,6 +105,11 @@ def test_claude_md_actively_imports_agents_md() -> None:
         # A mixed-character run is NOT a valid closer, so the import stays
         # inside the fence and must still be inert.
         ("mixed-closer fence", "````\ntext\n````~~~\n@AGENTS.md\n````"),
+        # False-ACTIVE paths: the raw text has no closer / uses a tick RUN, so
+        # a naive stripper reported the import alive while it was dead.
+        ("unclosed fence at EOF", "```\n@AGENTS.md"),
+        ("double-backtick span", "``@AGENTS.md``"),
+        ("triple-backtick span", "```@AGENTS.md```"),
         ("html comment", "<!--\n@AGENTS.md\n-->"),
     ],
 )

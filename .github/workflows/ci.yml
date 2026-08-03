@@ -38,6 +38,14 @@ jobs:
       - name: Lint markdown docs
         run: make lint-docs
 
+      # Build the docs on every PR, not just on push-to-main. deploy-docs only
+      # runs post-merge, so a change that breaks the docs build (a dependency
+      # bump, a bad snippet) would merge green and fail after the fact, leaving
+      # Pages stale until someone fixed it forward. Lint is a required check,
+      # so this makes a broken docs build block the PR instead.
+      - name: Build docs (strict)
+        run: uv run mkdocs build --strict
+
   tests:
     name: Tests & Coverage
     runs-on: ubuntu-latest
