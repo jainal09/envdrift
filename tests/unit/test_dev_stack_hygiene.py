@@ -497,8 +497,14 @@ def test_literal_token_matcher_actually_matches_a_token() -> None:
     by concatenation so the whole literal never appears in source (GitHub push
     protection rejects realistic secret literals).
     """
-    hyphenated = "ls-" + "sAQofABI" + "-cubI-9429"
-    alphanumeric = "ls-" + "abc123def456ghi"
+    # Obviously-synthetic on purpose. The matcher only needs the SHAPE
+    # (`ls-` + 8 or more alphanumerics, optionally hyphenated), and a sample
+    # that reads like plausible token material invites secret-scanner noise and
+    # copy/paste confusion — in the very test whose job is keeping real tokens
+    # out of the tree. Still assembled by concatenation so no whole literal
+    # appears in source.
+    hyphenated = "ls-" + "testABCD" + "-fake-0000"
+    alphanumeric = "ls-" + "examplefake9999"
     for sample in (hyphenated, alphanumeric):
         assert _LITERAL_TOKEN.search(f"  - LOCALSTACK_AUTH_TOKEN={sample}\n"), (
             f"the literal-token matcher fails to detect {sample[:6]}... — a "

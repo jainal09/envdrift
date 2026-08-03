@@ -12,13 +12,19 @@
 # account-gated since 2026.03.0 and the container exits(55) with "License
 # activation failed" without it. A free Hobby token is sufficient.
 #
-# FORK PULL REQUESTS: GitHub does not expose secrets to PRs from forks, and
-# service containers start before any step runs, so there is nowhere to add a
-# graceful guard. These jobs WILL fail at "Initialize containers" on a fork PR.
-# That is a platform limitation, not a defect in the contribution. Fork
-# contributors should run the suite locally with their own free token, or add
-# the secret to their own fork and use Run workflow (workflow_dispatch); see
-# the "If you are contributing from a fork" section of CONTRIBUTING.md.
+# FORK PULL REQUESTS: GitHub does not expose secrets to PRs from forks, so
+# these jobs WILL fail at "Initialize containers" on a fork PR. That is a
+# deliberate POLICY CHOICE, not a technical impossibility: a job-level
+#   if: github.event.pull_request.head.repo.full_name == github.repository
+# is evaluated before service containers start, and a skipped required check
+# satisfies branch protection. We do not do that, because a required gate that
+# reports green without running is exactly the silent-pass this repo's
+# fail-closed rule exists to prevent — an honest red is better.
+#
+# Unblock path: a maintainer runs the suite locally with the token, or pushes
+# the contributor's branch to this repository so CI gets the secret. Re-running
+# the fork-PR workflow does NOT help — secrets are withheld even on re-run.
+# See "If you are contributing from a fork" in CONTRIBUTING.md.
 # Branches pushed to this repository (including Renovate/Dependabot) are
 # unaffected.
 

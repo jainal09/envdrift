@@ -87,7 +87,12 @@ Please do this instead, so your change is still verified:
    ties shared automation to an individual identity — use a CI Auth Token if
    your workspace has one.
 
-A maintainer will re-run the suite with the upstream token before merging.
+A maintainer will run the suite for your change before merging — either
+locally with the upstream token, or by pushing your branch to this repository
+so CI gets the secret. Re-running the failed workflow does **not** help:
+GitHub withholds repository secrets from fork-PR runs even on re-run, and
+"Approve and run" grants execution, not secrets.
+
 Branches pushed directly to this repository — including Renovate and
 Dependabot — are unaffected and get the token normally.
 

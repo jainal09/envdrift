@@ -95,9 +95,17 @@ test-integration-down:
 
 # Run integration tests (starts containers if needed)
 test-integration:
-	@running=$$($(COMPOSE_TEST) ps --status running --format json 2>/dev/null | grep -c '"Service"' || echo 0); \
+	@# `grep -c` prints 0 AND exits 1 when nothing matches, so `|| echo 0`
+	@# appended a SECOND line: running became "0\n0", the -lt test errored with
+	@# "integer expression expected" and took the false branch. The cold-start
+	@# case — the only one this guard exists for — therefore never started the
+	@# stack, pytest ran against a dead stack, every container test auto-skipped,
+	@# and `make test-integration` exited 0 with zero integration tests run.
+	@running=$$($(COMPOSE_TEST) ps --status running --format json 2>/dev/null \
+		| grep -c '"Service"' || true); \
+	running=$${running:-0}; \
 	if [ "$$running" -lt 3 ]; then \
-		echo "Starting containers..."; \
+		echo "Starting containers ($$running/3 running)..."; \
 		$(MAKE) test-integration-up; \
 	fi
 	uv run --extra test-integration pytest -m "integration" -v

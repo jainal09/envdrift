@@ -126,26 +126,53 @@ Install SOPS:
 # macOS
 brew install sops
 
-# Linux — install the version envdrift pins, read from constants.json so this
-# never drifts from what the tool actually expects.
-SOPS_VERSION=$(python -c "import json,importlib.resources as r; \
-  print(json.loads(r.files('envdrift').joinpath('constants.json').read_text())['sops_version'])")
-# Fail-closed install. Every step is chained with `&&`, so a failed download
-# never reaches the replacement: a broken network must leave any existing sops
-# untouched rather than overwriting it with a partial file. Drop `sudo` if you
-# are already root.
-SOPS_URL="https://github.com/getsops/sops/releases/download/v${SOPS_VERSION}/sops-v${SOPS_VERSION}.linux.amd64"
-TMP_SOPS=$(mktemp -t sops.XXXXXX)
-# Staging path on the TARGET filesystem, so the final step is a same-filesystem
-# rename (atomic) rather than a cross-device copy.
-STAGE_SOPS=/usr/local/bin/.sops.staged.$$
-trap 'rm -f "$TMP_SOPS"; sudo rm -f "$STAGE_SOPS"' EXIT
+# Linux. Simplest option: let envdrift install and verify sops for you. It
+# reads the pinned version from constants.json and checks the published SHA256
+# before installing. Enable it in envdrift.toml:
+#
+#   [encryption.sops]
+#   auto_install = true
+#
+# Manual alternative. Runs in a subshell so a failure cannot close your
+# terminal and the cleanup trap does not outlive the block.
+(
+  set -eu
 
-wget -O "$TMP_SOPS" "$SOPS_URL" \
-  && test -s "$TMP_SOPS" \
-  && sudo install -m 0755 "$TMP_SOPS" "$STAGE_SOPS" \
-  && sudo mv -f "$STAGE_SOPS" /usr/local/bin/sops \
-  || { echo "sops install failed - existing binary left untouched" >&2; exit 1; }
+  # envdrift may be isolated (the installer uses ~/.envdrift/venv, and
+  # pipx/uv tool installs are isolated too), so pick an interpreter that can
+  # actually import it rather than assuming a bare `python` on PATH.
+  for PY in "$HOME/.envdrift/venv/bin/python" python3 python; do
+    command -v "$PY" >/dev/null 2>&1 || continue
+    "$PY" -c "import envdrift" 2>/dev/null && ENVDRIFT_PY="$PY" && break
+  done
+  : "${ENVDRIFT_PY:?cannot find a Python that can import envdrift - run this from the environment where envdrift is installed}"
+
+  SOPS_VERSION=$("$ENVDRIFT_PY" -c "import json,importlib.resources as r; \
+    print(json.loads(r.files('envdrift').joinpath('constants.json').read_text())['sops_version'])")
+  : "${SOPS_VERSION:?could not read sops_version from constants.json}"
+
+  # Match the machine: installing an x86-64 binary on aarch64 downloads and
+  # verifies fine, then fails at exec time.
+  case "$(uname -m)" in
+    x86_64|amd64) ARCH=amd64 ;;
+    aarch64|arm64) ARCH=arm64 ;;
+    *) echo "unsupported architecture: $(uname -m)" >&2; exit 1 ;;
+  esac
+
+  BASE="https://github.com/getsops/sops/releases/download/v${SOPS_VERSION}"
+  ASSET="sops-v${SOPS_VERSION}.linux.${ARCH}"
+  TMP=$(mktemp -d)
+  trap 'rm -rf "$TMP"' EXIT
+
+  curl -fsSL -o "$TMP/$ASSET" "$BASE/$ASSET"
+  curl -fsSL -o "$TMP/checksums.txt" "$BASE/sops-v${SOPS_VERSION}.checksums.txt"
+
+  # Verify before installing: a fail-closed install that never checks a
+  # checksum only protects against truncation, not against a bad artifact.
+  ( cd "$TMP" && grep " ${ASSET}\$" checksums.txt | sha256sum -c - )
+
+  sudo install -m 0755 "$TMP/$ASSET" /usr/local/bin/sops
+)
 ```
 
 ### "Failed to decrypt: no key found"

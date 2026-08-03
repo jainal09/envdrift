@@ -39,10 +39,15 @@ from envdrift.cli import app
 # [tool.envdrift.vault.sync], [guardian]. Metavars like [OPTIONS] / [env_files]
 # are produced by click itself (not our help text) and are filtered out below.
 #
-# The dash matters: Rich swallows [vault-sync] exactly like [vault], so leaving
-# `-` out of the class would let a dashed section name be deleted from --help
-# while this sweep still reported green.
-_BRACKETED = re.compile(r"\[([a-z][a-z0-9_.-]*)\]")
+# Mirrors Rich's own tag grammar (rich.markup.RE_TAGS), which constrains only
+# the FIRST character of a tag to [a-z#/@] and then accepts anything up to the
+# closing bracket. Constraining every character instead — e.g. [a-z0-9_.-]* —
+# made the sweep blind to runs Rich really does delete: verified against
+# rich 15.0.0 that `[vault.Sync]`, `[dotenvX]`, `[vault_SYNC]` and
+# `[vault sync]` are all stripped from rendered help while a narrow pattern
+# detects none of them, so the guard passed vacuously for exactly the strings
+# it exists to protect.
+_BRACKETED = re.compile(r"\[([a-z#/@][^\[\]]*)\]")
 
 # NOTE: deliberately no metavar exclusion list.
 #
@@ -155,7 +160,19 @@ class TestDetectorItself:
 
     @pytest.mark.parametrize(
         "name",
-        ["vault", "vault.sync", "tool.envdrift.vault.sync", "guardian", "vault-sync"],
+        [
+            "vault",
+            "vault.sync",
+            "tool.envdrift.vault.sync",
+            "guardian",
+            "vault-sync",
+            # Rich only constrains the FIRST tag character, so these are
+            # swallowed too and must be swept.
+            "vault.Sync",
+            "dotenvX",
+            "vault_SYNC",
+            "vault sync",
+        ],
     )
     def test_detects_identifiers_rich_would_swallow(self, name: str):
         """Every shape of section name we document must be detected."""
