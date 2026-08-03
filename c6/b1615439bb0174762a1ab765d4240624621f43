@@ -1,0 +1,49 @@
+envdrift-vscode/src/test/unit/overridesCompat.test.ts
+  s_387a201b31e3a1::t_7b2ca547358683 41-42,45-54,57,67,72
+tests/scanner/test_infisical_cli_migration.py
+  s_387a201b31e3a1::t_ec02b757c60b14 140,146,151
+  s_387a201b31e3a1::t_02065c121d7492 115-139,141-145,147-150,152-157
+.github/workflows/docs.yml
+  s_387a201b31e3a1::t_1b23c4adea3c6a 9-15
+AGENTS.md
+  s_387a201b31e3a1::t_d2a296ea55d42b 105,107-119
+CLAUDE.md
+  s_387a201b31e3a1::t_80f36aaf9ed379 152-154
+tests/unit/coverage/test_cov_scanner_infisical.py
+  s_387a201b31e3a1::t_13a4834ec541ac 27-34,39,41-42,46,49-50,52,54-68
+  s_387a201b31e3a1::t_ec02b757c60b14 38
+  s_387a201b31e3a1::t_bc1616c9e2db41 21
+docs/specs/guard-command-spec.md
+  s_387a201b31e3a1::t_3cb37e083615be 1048-1052,1054,1057-1063
+  s_387a201b31e3a1::t_f288a6652b922f 1064
+CONTRIBUTING.md
+  s_387a201b31e3a1::t_a2192a04c1d523 40-41,84-88
+  s_387a201b31e3a1::t_0ed4929091515b 89
+src/envdrift/scanner/infisical.py
+  s_387a201b31e3a1::t_19a7505ef6e9ba 143-147,189,192-200
+  s_387a201b31e3a1::t_dd349b4be40779 73,77-80,82,322-323
+  s_387a201b31e3a1::t_ec02b757c60b14 324
+tests/unit/test_docs_accuracy.py
+  s_387a201b31e3a1::t_afe0becefeec9a 629
+tests/unit/test_agent_docs_hygiene.py
+  s_387a201b31e3a1::t_d99fd4a72fa194 78-102
+  s_387a201b31e3a1::t_1fbd97bdf936c2 32-37,45-50,52-55
+tests/unit/test_dev_stack_hygiene.py
+  s_387a201b31e3a1::t_9832157c6ef877 430-458,460-472,474-480,482-483,487-505
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.20",
+  "base_commit_sha": "c6b1615439bb0174762a1ab765d4240624621f43",
+  "prompts": {},
+  "sessions": {
+    "s_387a201b31e3a1": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "1bd295c2-9ec5-43f6-a658-6971b2b820c0",
+        "model": "claude-opus-5"
+      },
+      "human_author": "Jainal Gosaliya <jainal09gosalia@gmail.com>"
+    }
+  }
+}
