@@ -24,9 +24,12 @@ from __future__ import annotations
 
 import json
 import re
+import shutil
+import subprocess
 from pathlib import Path
 from typing import Any
 
+import pytest
 import yaml
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -503,3 +506,123 @@ def test_literal_token_matcher_actually_matches_a_token() -> None:
         )
     # ...and it must not fire on the legitimate interpolated form.
     assert not _LITERAL_TOKEN.search("- LOCALSTACK_AUTH_TOKEN=${LOCALSTACK_AUTH_TOKEN:?msg}")
+
+
+# --- Renovate manager <-> upstream reality -----------------------------------
+#
+# The earlier guards in this module only proved that each `matchStrings` regex
+# matches constants.json and that every `<tool>_version` key has SOME manager.
+# Neither touches `depNameTemplate` or `extractVersionTemplate` — the two fields
+# that actually froze the Infisical pin. That manager was internally consistent
+# (its regex matched, its tag template matched its own download URL) while being
+# detached from upstream: the CLI had moved repository, so the configured repo
+# published no tags of the configured shape and Renovate reported "up to date"
+# forever with zero diagnostics.
+
+_GH_RELEASE_URL = re.compile(
+    r"https://github\.com/(?P<repo>[^/]+/[^/]+)/releases/download/(?P<tag>.+)/[^/]+$"
+)
+
+
+def _github_managers() -> list[dict[str, Any]]:
+    return [
+        m
+        for m in _renovate_config().get("customManagers", [])
+        if m.get("datasourceTemplate") == "github-releases" and m.get("depNameTemplate")
+    ]
+
+
+def _tool_for_manager(manager: dict[str, Any]) -> str | None:
+    """The constants.json tool prefix a manager targets, e.g. ``infisical``."""
+    for pattern in manager.get("matchStrings", []):
+        found = re.search(r'"(\w+)_version"', pattern)
+        if found:
+            return found.group(1)
+    return None
+
+
+def test_manager_repo_matches_the_configured_download_url() -> None:
+    """``depNameTemplate`` must be the same repo the download URLs point at.
+
+    A mismatch means Renovate watches releases in one repository while the
+    installer downloads from another — the pin then tracks a stream that has
+    nothing to do with the artifact actually installed.
+    """
+    constants = _constants()
+    for manager in _github_managers():
+        tool = _tool_for_manager(manager)
+        urls = constants.get(f"{tool}_download_urls") if tool else None
+        if not urls:
+            continue
+        for platform_key, url in urls.items():
+            parsed = _GH_RELEASE_URL.match(url)
+            assert parsed, f"{tool}.{platform_key}: unparsable GitHub release URL {url!r}"
+            assert parsed.group("repo") == manager["depNameTemplate"], (
+                f"{tool}: Renovate watches {manager['depNameTemplate']!r} but "
+                f"{platform_key} downloads from {parsed.group('repo')!r}. The pin "
+                "would track a repository that does not publish this artifact."
+            )
+
+
+def test_manager_tag_template_matches_the_download_url_tag() -> None:
+    """``extractVersionTemplate`` must match the tag shape the URLs encode."""
+    constants = _constants()
+    for manager in _github_managers():
+        tool = _tool_for_manager(manager)
+        urls = constants.get(f"{tool}_download_urls") if tool else None
+        extract = manager.get("extractVersionTemplate")
+        if not urls or not extract:
+            continue
+        py_extract = re.sub(r"\(\?<(\w+)>", r"(?P<\1>", extract)
+        sample_tag = next(iter(urls.values()))
+        parsed = _GH_RELEASE_URL.match(sample_tag)
+        assert parsed
+        concrete = parsed.group("tag").replace("{version}", "1.2.3")
+        assert re.match(py_extract, concrete), (
+            f"{tool}: extractVersionTemplate {extract!r} does not match the tag "
+            f"{concrete!r} encoded in its download URL. Renovate would extract no "
+            "version and silently report the pin as up to date."
+        )
+
+
+@pytest.mark.integration
+@pytest.mark.skipif(shutil.which("gh") is None, reason="gh CLI not installed")
+def test_every_manager_matches_a_real_upstream_tag() -> None:
+    """Each manager must match tags the configured repo ACTUALLY publishes.
+
+    This is the regression test for the Infisical freeze, and it is the only
+    check here that would have failed before that fix: the static guards all
+    passed on the broken config because the manager was self-consistent. What
+    it was not, was connected to reality — ``Infisical/infisical`` had stopped
+    publishing ``infisical-cli/v*`` tags entirely, so the regex matched none of
+    the 100 most recent releases and Renovate had nothing to compare the pin
+    against.
+
+    Network-gated (integration marker + ``gh``) because it queries GitHub.
+    """
+    for manager in _github_managers():
+        repo = manager["depNameTemplate"]
+        extract = manager.get("extractVersionTemplate")
+        if not extract:
+            continue
+        result = subprocess.run(
+            ["gh", "api", f"repos/{repo}/releases?per_page=100", "--jq", ".[].tag_name"],
+            capture_output=True,
+            text=True,
+            timeout=60,
+            check=False,
+        )
+        if result.returncode != 0:
+            pytest.skip(f"could not query {repo} releases: {result.stderr[:120]}")
+
+        tags = [t for t in result.stdout.split() if t]
+        assert tags, f"{repo} published no releases at all"
+
+        py_extract = re.sub(r"\(\?<(\w+)>", r"(?P<\1>", extract)
+        matching = [t for t in tags if re.match(py_extract, t)]
+        assert matching, (
+            f"{repo}: extractVersionTemplate {extract!r} matches NONE of the "
+            f"{len(tags)} most recent release tags (e.g. {tags[:3]}). Renovate "
+            "cannot extract a version, so this pin is frozen with no diagnostic "
+            "— exactly how infisical sat at 0.41.90 after the CLI moved repos."
+        )

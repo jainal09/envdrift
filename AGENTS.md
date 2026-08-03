@@ -120,10 +120,15 @@ dotenvx-v2 regression that CI caught only because CI runs everything.
   ```
 
   - **You can reach the target OS** → prove it there, and say which OS and how.
-  - **You cannot** → say so explicitly and lean on the CI cross-platform matrix,
-    which runs ubuntu/macos/windows on every PR and is the portable proof
-    available to everyone. It is *not* a required check, but a red run is a real
-    cross-OS bug — fix it, never wave it through.
+  - **You cannot** → say so explicitly and lean on the CI cross-platform matrix
+    (ubuntu/macos/windows), the portable proof available to everyone. Two
+    caveats that decide whether it actually covers your change:
+    - it is **`paths:`-gated** to `src/**`, `tests/**`, `pyproject.toml`,
+      `uv.lock` and its own workflow file, so a docs-only or workflow-only PR
+      does **not** trigger it and gets no cross-OS coverage at all. Both
+      workflows accept `workflow_dispatch` if you need a run anyway.
+    - it is **not a required check**, but a red run is a real cross-OS bug —
+      fix it, never wave it through.
   - **Never** claim a platform was verified when it was not, and never silently
     skip the question. "Windows unverified — no Windows host available; CI
     `windows-latest` is green" is a complete, honest answer.
