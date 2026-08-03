@@ -1,5 +1,12 @@
 # Changelog
 
+## [11.0.4](https://github.com/jainal09/envdrift/compare/v11.0.3...v11.0.4) (2026-08-03)
+
+
+### Bug Fixes
+
+* **renovate:** gate indirect Go majors behind dashboard approval ([#727](https://github.com/jainal09/envdrift/issues/727)) ([681cf7e](https://github.com/jainal09/envdrift/commit/681cf7e797e1580e6caff9f92a13b787840ea80f))
+
 ## [11.0.3](https://github.com/jainal09/envdrift/compare/v11.0.2...v11.0.3) (2026-08-03)
 
 
