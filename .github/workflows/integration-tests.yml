@@ -64,7 +64,7 @@ jobs:
     # Service containers for integration tests
     services:
       localstack:
-        image: localstack/localstack:2026.07.1 # Keep in sync with tests/docker-compose.test.yml
+        image: localstack/localstack:2026.07.2 # Keep in sync with tests/docker-compose.test.yml
         ports:
           - 4566:4566
         env:
@@ -82,7 +82,7 @@ jobs:
           --health-start-period=30s
 
       vault:
-        image: hashicorp/vault:2.0.3 # Keep in sync with tests/docker-compose.test.yml
+        image: hashicorp/vault:2.0.4 # Keep in sync with tests/docker-compose.test.yml
         ports:
           - 8200:8200
         env:
