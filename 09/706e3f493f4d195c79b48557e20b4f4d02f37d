@@ -1,0 +1,19 @@
+tests/unit/test_parser_multiline.py
+  s_6bbbb9b70605ed::t_90a86cd26a5796 40-53,402-411
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "09706e3f493f4d195c79b48557e20b4f4d02f37d",
+  "prompts": {},
+  "sessions": {
+    "s_6bbbb9b70605ed": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "15729a9a-c438-4788-bf87-0dd65a39a266",
+        "model": "unknown"
+      },
+      "human_author": "Jainal Gosaliya <jainal09gosalia@gmail.com>"
+    }
+  }
+}
