@@ -329,7 +329,7 @@ def test_localstack_pins_the_canonical_calver_form() -> None:
 
 
 # Services the free Hobby tier actually exposes, confirmed 2026-08-02 by
-# booting localstack/localstack:2026.07.1 with a Hobby token and reading
+# booting localstack/localstack:2026.07.4 with a Hobby token and reading
 # /_localstack/health. Anything outside this set needs a PAID plan.
 _HOBBY_TIER_SERVICES = frozenset({"kms", "lambda", "s3", "secretsmanager", "sts"})
 

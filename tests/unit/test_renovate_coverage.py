@@ -557,3 +557,50 @@ def test_golangci_lint_doc_pin_matches_the_workflow_pin() -> None:
                 f"CONTRIBUTING.md manager regex matches nothing: {match_string!r} "
                 "- Renovate would report up-to-date forever (the Infisical mode)"
             )
+
+
+def test_integration_spec_image_pins_are_renovate_visible() -> None:
+    """The spec doc's stack image pins must track the tested Compose stack.
+
+    Renovate's docker manager sees ``tests/docker-compose.test.yml`` and
+    ``integration-tests.yml`` but not the prose copies in the spec, so every
+    stack bump used to land with the doc stale — and ``test_docs_accuracy``'s
+    Vault guard turned that into a red required check on the Renovate PR
+    (#733). The doc now has its own customManager sharing the
+    ``integration test stack images`` group, so one PR moves all three copies;
+    this guard fails loud if that regex ever stops matching (the Infisical
+    mode) or if a pin drifts anyway.
+    """
+    spec = (_REPO_ROOT / "docs" / "specs" / "integration-tests-spec.md").read_text(encoding="utf-8")
+    compose = (_REPO_ROOT / "tests" / "docker-compose.test.yml").read_text(encoding="utf-8")
+
+    for image in ("localstack/localstack", "hashicorp/vault", "nagyesta/lowkey-vault"):
+        pattern = rf"image:\s*{re.escape(image)}:([^\s#]+)"
+        spec_pin = re.search(pattern, spec)
+        compose_pin = re.search(pattern, compose)
+        assert spec_pin, f"integration spec lost its pinned {image} image"
+        assert compose_pin, f"test Compose stack lost its pinned {image} image"
+        assert spec_pin.group(1) == compose_pin.group(1), (
+            f"integration spec documents {image}:{spec_pin.group(1)} but the tested "
+            f"stack runs {compose_pin.group(1)} — the doc would teach a stale pin"
+        )
+
+    managers = [
+        m
+        for m in _renovate_config().get("customManagers", [])
+        if any("integration-tests-spec" in pat for pat in m.get("managerFilePatterns", []))
+    ]
+    assert managers, "renovate.json lost the integration-tests-spec.md customManager"
+    seen: set[str] = set()
+    for manager in managers:
+        for match_string in manager["matchStrings"]:
+            pattern = re.sub(r"\(\?<(\w+)>", r"(?P<\1>", match_string)
+            found = list(re.finditer(pattern, spec))
+            assert found, (
+                f"integration-spec manager regex matches nothing: {match_string!r} "
+                "- Renovate would report up-to-date forever (the Infisical mode)"
+            )
+            seen.update(m.group("depName") for m in found)
+    assert seen == {"localstack/localstack", "hashicorp/vault", "nagyesta/lowkey-vault"}, (
+        f"the spec manager no longer covers every stack image (matched: {sorted(seen)})"
+    )

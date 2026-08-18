@@ -162,6 +162,17 @@
       "matchStrings": [
         "# renovate: datasource=(?<datasource>\\S+) depName=(?<depName>\\S+)\\s+[^\\n]*go install [^@\\s]+@(?<currentValue>v\\d+\\.\\d+\\.\\d+)"
       ]
+    },
+    {
+      "customType": "regex",
+      "description": "Integration-stack image pins copied into the integration-tests spec doc. Keeps the doc copies in the SAME Renovate PR as tests/docker-compose.test.yml and .github/workflows/integration-tests.yml (they share the `integration test stack images` group), so a bump cannot land with the doc stale - tests/unit/test_docs_accuracy.py fails CI when the spec's Vault pin drifts from the Compose stack (#733).",
+      "managerFilePatterns": [
+        "/^docs/specs/integration-tests-spec\\.md$/"
+      ],
+      "matchStrings": [
+        "image:\\s*(?<depName>localstack/localstack|hashicorp/vault|nagyesta/lowkey-vault):(?<currentValue>\\S+)"
+      ],
+      "datasourceTemplate": "docker"
     }
   ],
   "packageRules": [
