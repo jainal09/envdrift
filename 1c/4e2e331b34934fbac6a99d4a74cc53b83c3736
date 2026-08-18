@@ -1,0 +1,29 @@
+pyproject.toml
+  s_6bbbb9b70605ed::t_0c005d44cf6998 56
+src/envdrift/core/parser.py
+  s_6bbbb9b70605ed::t_b6bea074bf8e69 256,670-685,687-692,694-697,703-704,706,757-762,764-766,772-775
+tests/unit/test_packaging_floors.py
+  s_6bbbb9b70605ed::t_df5591f7a41ebd 3-10,35-38,50-61
+tests/unit/test_parser_edge_cases.py
+  s_6bbbb9b70605ed::t_987fe162e6b76e 539-550,558
+tests/unit/test_parser_multiline.py
+  s_6bbbb9b70605ed::t_1e93076c2f15bb 15-16,31-40,213-223,227,230,292-301,306,373-404
+uv.lock
+  s_6bbbb9b70605ed::t_b833315f9eeb6c 761
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "1c4e2e331b34934fbac6a99d4a74cc53b83c3736",
+  "prompts": {},
+  "sessions": {
+    "s_6bbbb9b70605ed": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "15729a9a-c438-4788-bf87-0dd65a39a266",
+        "model": "unknown"
+      },
+      "human_author": "Jainal Gosaliya <jainal09gosalia@gmail.com>"
+    }
+  }
+}
