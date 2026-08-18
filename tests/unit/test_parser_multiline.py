@@ -388,9 +388,10 @@ class TestPythonDotenvParity:
         """Differential sweep of every short body over the metacharacters.
 
         The hand-written cases above pin the shapes we reason about; this
-        pins the lexer itself. Every string up to four characters drawn from
-        the quote/escape/comment/newline alphabet is parsed by both
-        implementations and the ``K``/``Z`` bindings compared. Other keys are
+        pins the lexer itself. Every body up to four characters drawn from
+        the quote/escape/comment/newline alphabet — including the empty
+        RHS — is parsed by both implementations and the ``K``/``Z``
+        bindings compared. Other keys are
         excluded: envdrift deliberately rejects keys containing quotes or
         backslashes (#573), which is key lexing, not value lexing.
 
@@ -401,7 +402,7 @@ class TestPythonDotenvParity:
         parser = EnvParser()
         contents = [
             "K=" + "".join(combo) + "\nZ=1\n"
-            for size in range(1, 5)
+            for size in range(0, 5)
             for combo in itertools.product(_LEXER_ALPHABET, repeat=size)
         ]
         divergences = [
