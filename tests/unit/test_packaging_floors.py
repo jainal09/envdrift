@@ -1,5 +1,13 @@
 """Regression tests for declared dependency floors in ``pyproject.toml``.
 
+``EnvParser`` reproduces python-dotenv's quoted-value lexer character for
+character so ``validate``/``diff`` report exactly the values pydantic-settings
+loads. python-dotenv 1.2.3 changed that lexer twice (it strips a leading UTF-8
+BOM, and ``(?:\\\\.|[^"\\\\])*`` replaced the ambiguous backtracking
+``(?:\\\\"|[^"])*``), so the emulation is only correct against 1.2.3+: on an
+older release envdrift would report values the user's app never sees, with no
+error. The floor is what makes that unreachable for installs.
+
 envdrift's command signatures use PEP 604 unions (``str | None``) in
 ``typer.Option``/``typer.Argument`` annotations (e.g. ``cli.py``,
 ``cli_commands/diff.py``). typer only supports those from 0.13: every older
@@ -24,6 +32,10 @@ from tests.helpers import declared_dependency_floor, version_tuple
 # `--help`; 0.15.4 (click<8.2 pin) and 0.16.0+ work end to end.
 _MINIMUM_WORKING_TYPER = (0, 15, 4)
 
+# python-dotenv 1.2.3 shipped both lexer fixes EnvParser now emulates:
+# the leading-BOM strip and upstream #680's escape-aware quote regex.
+_MINIMUM_EMULATED_DOTENV = (1, 2, 3)
+
 
 def test_typer_floor_supports_pep604_union_annotations() -> None:
     """The typer floor must be a version the CLI actually runs on (>= 0.15.4)."""
@@ -34,4 +46,16 @@ def test_typer_floor_supports_pep604_union_annotations() -> None:
         "`--help` rendering, and typer < 0.13 crashes every envdrift invocation with "
         "'RuntimeError: Type not yet supported: str | None' (PEP 604 unions in the "
         "command signatures); see issue #496"
+    )
+
+
+def test_python_dotenv_floor_matches_the_emulated_lexer() -> None:
+    """The python-dotenv floor must be the release whose lexer we emulate."""
+    floor = version_tuple(declared_dependency_floor("python-dotenv"))
+    assert floor >= _MINIMUM_EMULATED_DOTENV, (
+        f"pyproject.toml declares python-dotenv>={'.'.join(map(str, floor))}, but "
+        "EnvParser emulates the 1.2.3 lexer: older releases keep the UTF-8 BOM in the "
+        "first key and mis-read a value ending in an escaped backslash as an escaped "
+        "quote (upstream #680), so envdrift would silently report values that "
+        "pydantic-settings never loads"
     )

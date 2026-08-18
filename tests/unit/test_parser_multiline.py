@@ -12,6 +12,8 @@ pydantic-settings class loading the same file in-process.
 
 from __future__ import annotations
 
+import itertools
+
 import pytest
 from dotenv import dotenv_values
 
@@ -24,6 +26,30 @@ PEM_FOOTER = "-----END " + "TEST CERT-----"
 PEM_BODY_1 = "QUJDREVGMDEyMzQ1Njc4OQ" + "=="
 PEM_BODY_2 = "MDEyMzQ1Njc4OWFiY2RlZg" + "=="
 PEM_VALUE = "\n".join([PEM_HEADER, PEM_BODY_1, PEM_BODY_2, PEM_FOOTER])
+
+
+class _Absent:
+    """Sentinel distinguishing "key absent" from "key present, empty value"."""
+
+    def __repr__(self) -> str:
+        return "<absent>"
+
+
+_ABSENT = _Absent()
+
+# Metacharacters that drive the quoted-value lexer, plus one ordinary letter.
+_LEXER_ALPHABET = "a\"'\\\n= #"
+
+
+def _lex_divergence(parser, env_path, content):
+    """``(content, actual, expected)`` when ``K``/``Z`` lex differently, else None."""
+    env_path.write_text(content, encoding="utf-8")
+    expected = dict(dotenv_values(env_path))
+    actual = _values(parser.parse(env_path))
+    for key in ("K", "Z"):
+        if actual.get(key, _ABSENT) != expected.get(key, _ABSENT):
+            return content, actual.get(key, _ABSENT), expected.get(key, _ABSENT)
+    return None
 
 
 def _values(env_file) -> dict[str, str]:
@@ -198,19 +224,24 @@ class TestMultilineQuotedValues:
         assert set(result.variables) == {"DB_PASSWORD", "NEXT"}
         assert result.variables["DB_PASSWORD"].value == "leak"
 
-    def test_all_escaped_quotes_close_at_last_quote_like_dotenv(self):
-        """python-dotenv's greedy ``(?:\\\\"|[^"])*`` lexing backtracks: when
-        every quote is backslash-preceded, the LAST ``\\"`` is re-read as
-        backslash + close quote (``dotenv_values`` on ``K="a\\"`` is
-        ``{'K': 'a\\\\'}``)."""
-        content = 'K="a\\"\n'
+    def test_trailing_escaped_quote_never_closes_like_dotenv(self):
+        """A value whose only quote is escaped is unterminated and dropped.
+
+        python-dotenv 1.2.3 replaced the ambiguous, backtracking
+        ``(?:\\\\"|[^"])*`` lexer with ``(?:\\\\.|[^"\\\\])*`` (upstream #680):
+        ``\\"`` is an escaped quote, so ``K="a\\"`` never closes, the binding
+        is dropped, and the following line still parses on its own
+        (``dotenv_values`` is ``{'X': '1'}``). The old lexer re-read the final
+        ``\\"`` as backslash + close quote and yielded ``{'K': 'a\\\\'}``.
+        """
+        content = 'K="a\\"\nX=1\n'
 
         result = EnvParser().parse_string(content)
 
-        assert result.variables["K"].value == "a\\"
+        assert _values(result) == {"X": "1"}
 
     def test_definitive_close_spans_lines_past_escaped_quotes(self):
-        """A backslash-preceded quote stays interior when an unescaped quote
+        """An escaped quote stays interior when an unescaped quote
         exists later — even on a later line with junk after it, where the
         whole binding is dropped through that line (``dotenv_values`` on this
         content is ``{}``)."""
@@ -272,16 +303,21 @@ class TestSingleLineQuotedEscapes:
 
         assert set(result.variables) == {"NEXT"}
 
-    def test_escaped_backslash_then_quote_reopens_like_dotenv(self):
-        """``\\\\"`` mid-value: the quote after an escaped backslash is still
-        backslash-preceded, so python-dotenv keeps it interior and closes at
-        the next unescaped quote (``dotenv_values`` on ``K="a\\\\"b"`` is
-        ``{'K': 'a\\\\"b'}``)."""
+    def test_escaped_backslash_closes_the_value_like_dotenv(self):
+        """``\\\\"``: the escaped backslash is consumed, so the quote CLOSES.
+
+        This is the upstream #680 fix python-dotenv 1.2.3 shipped — a value
+        ending in an escaped backslash is no longer mis-read as an escaped
+        quote. ``K="a\\\\"b"`` therefore closes after ``a\\\\`` and the trailing
+        ``b"`` is non-comment junk, which drops the whole binding
+        (``dotenv_values`` is ``{}``). The old lexer kept the quote interior
+        and yielded ``{'K': 'a\\\\"b'}``.
+        """
         content = 'K="a\\\\"b"\n'
 
         result = EnvParser().parse_string(content)
 
-        assert result.variables["K"].value == 'a\\"b'
+        assert result.variables == {}
 
     def test_unquoted_value_backslashes_untouched(self):
         content = "K=a\\nb\n"
@@ -347,6 +383,37 @@ class TestPythonDotenvParity:
         parsed = _values(EnvParser().parse(env_path))
 
         assert parsed == dict(dotenv_values(env_path))
+
+    def test_exhaustive_quote_lexing_matches_python_dotenv(self, tmp_path):
+        """Differential sweep of every short body over the metacharacters.
+
+        The hand-written cases above pin the shapes we reason about; this
+        pins the lexer itself. Every body up to four characters drawn from
+        the quote/escape/comment/newline alphabet — including the empty
+        RHS — is parsed by both implementations and the ``K``/``Z``
+        bindings compared. Other keys are
+        excluded: envdrift deliberately rejects keys containing quotes or
+        backslashes (#573), which is key lexing, not value lexing.
+
+        The pre-1.2.3 emulation failed 22 of these (138 across a longer
+        randomized sweep); the escape-aware lexer passes all of them.
+        """
+        env_path = tmp_path / ".env"
+        parser = EnvParser()
+        contents = [
+            "K=" + "".join(combo) + "\nZ=1\n"
+            for size in range(0, 5)
+            for combo in itertools.product(_LEXER_ALPHABET, repeat=size)
+        ]
+        divergences = [
+            divergence
+            for content in contents
+            if (divergence := _lex_divergence(parser, env_path, content)) is not None
+        ]
+        assert not divergences, (
+            f"{len(divergences)} inputs lex differently from python-dotenv, e.g. "
+            + "; ".join(f"{c!r}: envdrift={a!r} dotenv={e!r}" for c, a, e in divergences[:5])
+        )
 
     def test_crlf_file_matches_python_dotenv(self, tmp_path):
         raw = f'CERT="{PEM_HEADER}\r\n{PEM_BODY_1}\r\n{PEM_FOOTER}"\r\nAFTER=ok\r\n'
