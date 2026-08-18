@@ -37,6 +37,20 @@ class _Absent:
 
 _ABSENT = _Absent()
 
+# Metacharacters that drive the quoted-value lexer, plus one ordinary letter.
+_LEXER_ALPHABET = "a\"'\\\n= #"
+
+
+def _lex_divergence(parser, env_path, content):
+    """``(content, actual, expected)`` when ``K``/``Z`` lex differently, else None."""
+    env_path.write_text(content, encoding="utf-8")
+    expected = dict(dotenv_values(env_path))
+    actual = _values(parser.parse(env_path))
+    for key in ("K", "Z"):
+        if actual.get(key, _ABSENT) != expected.get(key, _ABSENT):
+            return content, actual.get(key, _ABSENT), expected.get(key, _ABSENT)
+    return None
+
 
 def _values(env_file) -> dict[str, str]:
     """Plain ``{name: value}`` view of a parsed EnvFile."""
@@ -385,18 +399,16 @@ class TestPythonDotenvParity:
         """
         env_path = tmp_path / ".env"
         parser = EnvParser()
-        divergences = []
-        for size in range(1, 5):
-            for combo in itertools.product("a\"'\\\n= #", repeat=size):
-                content = "K=" + "".join(combo) + "\nZ=1\n"
-                env_path.write_text(content, encoding="utf-8")
-                expected = dict(dotenv_values(env_path))
-                actual = _values(parser.parse(env_path))
-                for key in ("K", "Z"):
-                    if actual.get(key, _ABSENT) != expected.get(key, _ABSENT):
-                        divergences.append(
-                            (content, actual.get(key, _ABSENT), expected.get(key, _ABSENT))
-                        )
+        contents = [
+            "K=" + "".join(combo) + "\nZ=1\n"
+            for size in range(1, 5)
+            for combo in itertools.product(_LEXER_ALPHABET, repeat=size)
+        ]
+        divergences = [
+            divergence
+            for content in contents
+            if (divergence := _lex_divergence(parser, env_path, content)) is not None
+        ]
         assert not divergences, (
             f"{len(divergences)} inputs lex differently from python-dotenv, e.g. "
             + "; ".join(f"{c!r}: envdrift={a!r} dotenv={e!r}" for c, a, e in divergences[:5])
