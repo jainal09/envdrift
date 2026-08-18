@@ -1,0 +1,25 @@
+docs/specs/integration-tests-spec.md
+  s_6bbbb9b70605ed::t_8191178ccf6f4e 62,100,147
+renovate.json
+  s_6bbbb9b70605ed::t_c34662d55e83e9 165-175
+tests/unit/test_dev_stack_hygiene.py
+  s_6bbbb9b70605ed::t_890d00751eb6c1 332
+tests/unit/test_renovate_coverage.py
+  s_6bbbb9b70605ed::t_c30bedd3c7932f 560-606
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "dfa6abc861431b0e381123433e4479bff31c8f76",
+  "prompts": {},
+  "sessions": {
+    "s_6bbbb9b70605ed": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "15729a9a-c438-4788-bf87-0dd65a39a266",
+        "model": "unknown"
+      },
+      "human_author": "Jainal Gosaliya <jainal09gosalia@gmail.com>"
+    }
+  }
+}
