@@ -253,7 +253,7 @@ class EnvParser:
     # inside double-/single-quoted values so `validate`/`diff` see exactly the
     # values pydantic-settings loads (#458). The value itself runs to the
     # close quote — across physical lines — found by ``_find_close_quote``,
-    # which reproduces dotenv's greedy `"((?:\\"|[^"])*)"` lexing exactly.
+    # which reproduces dotenv's `"((?:\\.|[^"\\])*)"` lexing exactly.
     DOUBLE_QUOTE_ESCAPES_PATTERN = re.compile(r"\\[\\'\"abfnrtv]")
     SINGLE_QUOTE_ESCAPES_PATTERN = re.compile(r"\\[\\']")
 
@@ -667,47 +667,43 @@ class EnvParser:
         return self._decode_escapes(escapes, text[1:close])
 
     @staticmethod
-    def _scan_chunk(chunk: str, quote: str, start: int) -> tuple[int | None, int | None]:
-        """Scan ``chunk[start:]`` for close-quote candidates (dotenv semantics).
+    def _scan_chunk(chunk: str, quote: str, start: int) -> int | None:
+        """Index of the close quote in ``chunk[start:]``, or ``None``.
 
-        python-dotenv lexes a quoted value with the greedy backtracking regex
-        ``"((?:\\\\"|[^"])*)"``: a quote can sit INSIDE the value only when it
-        is immediately preceded by a backslash, so the value closes at the
-        first quote NOT preceded by a backslash — or, when every quote is
-        backslash-preceded, at the last quote (the regex gives the final
-        ``\\"`` pair back and reads it as backslash + close quote).
+        python-dotenv 1.2.3 lexes a quoted value with
+        ``"((?:\\\\.|[^"\\\\])*)"`` (DOTALL): a backslash always escapes the
+        character after it, so an escaped backslash (``\\\\``) can no longer be
+        mistaken for the start of an escaped quote. The value therefore closes
+        at the first quote the scan reaches with no pending escape — there is
+        no longer any backtracking "last backslash-preceded quote" fallback
+        (upstream #680; before 1.2.3 the ambiguous ``"((?:\\\\"|[^"])*)"``
+        regex mis-read ``K="a\\\\"`` as a closed value and swallowed the
+        following lines).
 
-        Returns:
-            tuple[int | None, int | None]: ``(definitive, fallback)`` —
-            ``definitive`` is the index of the first quote in ``chunk[start:]``
-            not immediately preceded by a backslash (the value must close
-            there); ``fallback`` is the index of the last backslash-preceded
-            quote seen before it (the close python-dotenv settles on when no
-            definitive close exists anywhere in the remaining input). A quote
-            at index 0 is always definitive: its predecessor in the joined
-            text is the ``\\n`` joiner (or the opening quote), never a
-            backslash.
+        Escape state never carries between chunks: chunks are joined by a
+        single ``\\n``, so a backslash in the last position escapes exactly
+        that joiner and the next chunk resumes unescaped at index 0.
         """
-        fallback = None
-        i = chunk.find(quote, start)
-        while i != -1:
-            if i > 0 and chunk[i - 1] == "\\":
-                fallback = i
-                i = chunk.find(quote, i + 1)
+        i = start
+        end = len(chunk)
+        while i < end:
+            char = chunk[i]
+            if char == "\\":
+                i += 2  # escapes the next character (the \n joiner at chunk end)
                 continue
-            return i, fallback
-        return None, fallback
+            if char == quote:
+                return i
+            i += 1
+        return None
 
     @staticmethod
     def _find_close_quote(text: str) -> int | None:
         """Index of the quote closing ``text[0]``, or ``None`` (dotenv rules).
 
-        The first quote not immediately preceded by a backslash; when every
-        quote is backslash-preceded, the last one (see ``_scan_chunk``).
-        Newlines are ordinary value characters.
+        The first quote reached with no pending backslash escape (see
+        ``_scan_chunk``). Newlines are ordinary value characters.
         """
-        definitive, fallback = EnvParser._scan_chunk(text, text[0], 1)
-        return definitive if definitive is not None else fallback
+        return EnvParser._scan_chunk(text, text[0], 1)
 
     def _continue_quoted_value(
         self, raw_value: str, lines: list[str], start: int
@@ -758,23 +754,25 @@ class EnvParser:
     def _locate_quoted_value_close(
         self, text: str, quote: str, lines: list[str], start: int
     ) -> tuple[list[str], tuple[int, int] | None]:
-        """Locate a definitive or fallback close without nesting the caller."""
+        """Locate the close quote without nesting the caller.
+
+        Each chunk is scanned once (no re-visiting), so the scan stays linear
+        in the input. A chunk with no quote at all cannot close the value, but
+        it is still appended so ``chunks`` indices stay aligned with ``lines``.
+        """
         chunks = [text]
-        definitive, fallback = self._scan_chunk(text, quote, 1)
-        fallback_close = (0, fallback) if fallback is not None else None
-        if definitive is not None:
-            return chunks, (0, definitive)
+        close = self._scan_chunk(text, quote, 1)
+        if close is not None:
+            return chunks, (0, close)
 
         for offset, next_line in enumerate(lines[start:], start=1):
             chunks.append(next_line)
             if quote not in next_line:
                 continue
-            definitive, fallback = self._scan_chunk(next_line, quote, 0)
-            if fallback is not None:
-                fallback_close = (offset, fallback)
-            if definitive is not None:
-                return chunks, (offset, definitive)
-        return chunks, fallback_close
+            close = self._scan_chunk(next_line, quote, 0)
+            if close is not None:
+                return chunks, (offset, close)
+        return chunks, None
 
     def _decode_escapes(self, escapes: re.Pattern[str], value: str) -> str:
         """Decode a quoted value's escape sequences like python-dotenv.

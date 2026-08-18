@@ -536,12 +536,18 @@ class TestPythonDotenvParity:
         assert parsed.variables["NOTE"].value == loaded.NOTE
         assert loaded.NOTE == "part1\u2028SECRET_PASSWORD=hunter2"
 
-    def test_bom_divergence_from_python_dotenv_is_deliberate(self, tmp_path):
-        """python-dotenv (and pydantic-settings) keep ``\\ufeffAPI_KEY`` as
-        the key; envdrift strips the encoding artifact instead (#486) so its
-        reports name the variable the user actually wrote. The divergence is
-        not silent: ``EnvFile.leading_bom`` is set and ``validate`` warns
-        (see ``TestUtf8Bom.test_validator_warns_on_leading_bom``)."""
+    def test_bom_handling_now_matches_python_dotenv(self, tmp_path):
+        """Upstream converged on envdrift's BOM handling (#486).
+
+        python-dotenv used to keep ``\\ufeffAPI_KEY`` as the key, so the first
+        variable of a BOM-saved file was silently lost by pydantic-settings;
+        envdrift stripped the encoding artifact instead so its reports name
+        the variable the user actually wrote. python-dotenv 1.2.3 now strips
+        the BOM too, so this is parity rather than a documented divergence —
+        and it is still not silent on our side: ``EnvFile.leading_bom`` is set
+        and ``validate`` warns (see
+        ``TestUtf8Bom.test_validator_warns_on_leading_bom``).
+        """
         env_path = tmp_path / "bom.env"
         env_path.write_bytes(b"\xef\xbb\xbfAPI_KEY=abc123\n")
 
@@ -549,4 +555,4 @@ class TestPythonDotenvParity:
 
         assert _values(parsed) == {"API_KEY": "abc123"}
         assert parsed.leading_bom is True
-        assert dict(dotenv_values(env_path)) == {"\ufeffAPI_KEY": "abc123"}
+        assert dict(dotenv_values(env_path)) == {"API_KEY": "abc123"}
