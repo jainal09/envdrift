@@ -59,7 +59,7 @@ literal.
 # kept identical to the integration-tests.yml CI service containers (#500)
 services:
   localstack:
-    image: localstack/localstack:2026.07.4
+    image: localstack/localstack:2026.07.5
     ports:
       - "4566:4566"
     environment:
