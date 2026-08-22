@@ -64,7 +64,7 @@ jobs:
     # Service containers for integration tests
     services:
       localstack:
-        image: localstack/localstack:2026.07.4 # Keep in sync with tests/docker-compose.test.yml
+        image: localstack/localstack:2026.07.5 # Keep in sync with tests/docker-compose.test.yml
         ports:
           - 4566:4566
         env:
