@@ -20,7 +20,7 @@ services:
     # Hobby exposes kms, lambda, s3, secretsmanager and sts, so keep SERVICES
     # within that set (tests/unit/test_dev_stack_hygiene.py enforces it) or the
     # stack would need a paid plan.
-    image: localstack/localstack:2026.07.5  # Keep in sync with .github/workflows/integration-tests.yml
+    image: localstack/localstack:2026.08.0  # Keep in sync with .github/workflows/integration-tests.yml
     ports:
       - "4566:4566"
     environment:
