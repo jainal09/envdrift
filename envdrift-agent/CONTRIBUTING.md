@@ -52,7 +52,7 @@ go test -v ./internal/config/...
 # v2 module path — the /cmd/... path without /v2 silently installs the
 # abandoned v1 line (tops out at 1.64.x) while CI runs v2; keep the version
 # in sync with .github/workflows/agent-ci.yml
-go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.13.1
+go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.13.2
 
 # Run linter
 make lint

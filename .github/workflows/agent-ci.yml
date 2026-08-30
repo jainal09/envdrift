@@ -241,5 +241,5 @@ jobs:
           # version-mapping config from raw.githubusercontent.com on every run,
           # which 429s under rate limiting (see #410). Bumped by Renovate.
           # renovate: datasource=github-releases depName=golangci/golangci-lint
-          version: v2.13.1
+          version: v2.13.2
           working-directory: envdrift-agent
