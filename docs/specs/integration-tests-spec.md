@@ -59,7 +59,7 @@ literal.
 # kept identical to the integration-tests.yml CI service containers (#500)
 services:
   localstack:
-    image: localstack/localstack:2026.08.0
+    image: localstack/localstack:2026.08.1
     ports:
       - "4566:4566"
     environment:
@@ -97,7 +97,7 @@ def localstack_aws():
 services:
   vault:
     # Keep the image pin in sync with tests/docker-compose.test.yml.
-    image: hashicorp/vault:2.0.4
+    image: hashicorp/vault:2.1.0
     user: root
     ports:
       - "8200:8200"
