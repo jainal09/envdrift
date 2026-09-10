@@ -27,6 +27,17 @@ Optional (recommended) pre-commit hooks:
 pre-commit install
 ```
 
+The VS Code extension has its own Node toolchain, pinned in
+`envdrift-vscode/.nvmrc` (the version CI installs). Its dev dependencies declare
+a Node floor, so an older runtime fails `npm ci` with `EBADENGINE`:
+
+```bash
+cd envdrift-vscode
+nvm use          # or install the version in .nvmrc
+npm ci
+npm run lint && npm run pretest && npm run test:unit
+```
+
 ## Integration tests need a free LocalStack token
 
 The integration suite drives a real container stack (LocalStack, HashiCorp

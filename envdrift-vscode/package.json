@@ -11,7 +11,8 @@
   },
   "homepage": "https://github.com/jainal09/envdrift/tree/main/envdrift-vscode",
   "engines": {
-    "vscode": "^1.85.0"
+    "vscode": "^1.85.0",
+    "node": "^22.13.0 || >=24"
   },
   "categories": [
     "Other"
