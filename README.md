@@ -10,6 +10,8 @@
 [![Docs](https://img.shields.io/badge/docs-mkdocs-blue)](https://jainal09.github.io/envdrift)
 [![codecov](https://codecov.io/gh/jainal09/envdrift/graph/badge.svg)](https://codecov.io/gh/jainal09/envdrift)
 [![CodSpeed](https://img.shields.io/endpoint?url=https://codspeed.io/badge.json)](https://codspeed.io/jainal09/envdrift?utm_source=badge)
+[![Greptile: The War on Bugs](https://www.greptile.com/badge.svg)](https://www.greptile.com/?utm_source=oss_badge&utm_medium=readme&utm_campaign=greptile_for_open_source)
+[![CodeRabbit Reviews](https://img.shields.io/coderabbit/prs/github/jainal09/envdrift?utm_source=oss&utm_medium=github&utm_campaign=jainal09%2Fenvdrift&labelColor=171717&color=FF570A&label=CodeRabbit+Reviews)](https://coderabbit.ai)
 
 Sync environment variables across your team. No more "it works on my machine."
 
@@ -112,6 +114,18 @@ envdrift diff .env.dev .env.prod
 ## Documentation
 
 Full documentation: **[jainal09.github.io/envdrift](https://jainal09.github.io/envdrift)**
+
+## Code Review Partners
+
+envdrift's pull requests are reviewed by three AI review bots, all of which provide their
+service to this project for free through their open-source programs. Thanks to them for
+supporting open source:
+
+- **[CodeRabbit](https://www.coderabbit.ai/oss)** — free reviews for every public repository
+- **[Greptile](https://www.greptile.com/open-source)** — free reviews for OSI-licensed public repositories
+- **[cubic](https://www.cubic.dev/)** — free unlimited reviews for public repositories
+
+Only the first two appear in the badge row above; cubic publishes no README badge.
 
 ## License
 

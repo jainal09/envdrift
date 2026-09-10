@@ -11,6 +11,10 @@
   <a href="https://www.python.org/downloads/"><img src="https://img.shields.io/badge/python-3.11+-blue.svg" alt="Python 3.11+"></a>
   <a href="https://opensource.org/licenses/MIT"><img src="https://img.shields.io/badge/License-MIT-yellow.svg" alt="License: MIT"></a>
   <a href="https://codecov.io/gh/jainal09/envdrift"><img src="https://codecov.io/gh/jainal09/envdrift/graph/badge.svg" alt="codecov"></a>
+  <a href="https://www.greptile.com/?utm_source=oss_badge&amp;utm_medium=readme&amp;utm_campaign=greptile_for_open_source">
+    <img src="https://www.greptile.com/badge.svg" alt="Greptile: The War on Bugs"></a>
+  <a href="https://coderabbit.ai"><img alt="CodeRabbit Reviews"
+    src="https://img.shields.io/coderabbit/prs/github/jainal09/envdrift?utm_source=oss&amp;utm_medium=github&amp;utm_campaign=jainal09%2Fenvdrift&amp;labelColor=171717&amp;color=FF570A&amp;label=CodeRabbit+Reviews"></a>
 </p>
 
 ---
