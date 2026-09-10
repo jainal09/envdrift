@@ -1,5 +1,12 @@
 # Changelog
 
+## [11.0.5](https://github.com/jainal09/envdrift/compare/v11.0.4...v11.0.5) (2026-09-10)
+
+
+### Documentation
+
+* credit the AI review bots' open-source programs ([#772](https://github.com/jainal09/envdrift/issues/772)) ([c9e5f0c](https://github.com/jainal09/envdrift/commit/c9e5f0c68e0b23b08f6808801975a9a923fe8c36))
+
 ## [11.0.4](https://github.com/jainal09/envdrift/compare/v11.0.3...v11.0.4) (2026-08-03)
 
 
