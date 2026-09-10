@@ -1,5 +1,5 @@
 {
-    "dotenvx_version": "2.21.0",
+    "dotenvx_version": "2.23.0",
     "download_urls": {
         "darwin_amd64": "https://github.com/dotenvx/dotenvx/releases/download/v{version}/dotenvx-{version}-darwin-amd64.tar.gz",
         "darwin_arm64": "https://github.com/dotenvx/dotenvx/releases/download/v{version}/dotenvx-{version}-darwin-arm64.tar.gz",
@@ -26,7 +26,7 @@
         "windows_amd64": "https://github.com/gitleaks/gitleaks/releases/download/v{version}/gitleaks_{version}_windows_x64.zip"
     },
     "gitleaks_checksums_url": "https://github.com/gitleaks/gitleaks/releases/download/v{version}/gitleaks_{version}_checksums.txt",
-    "trufflehog_version": "3.97.0",
+    "trufflehog_version": "3.97.4",
     "trufflehog_download_urls": {
         "darwin_amd64": "https://github.com/trufflesecurity/trufflehog/releases/download/v{version}/trufflehog_{version}_darwin_amd64.tar.gz",
         "darwin_arm64": "https://github.com/trufflesecurity/trufflehog/releases/download/v{version}/trufflehog_{version}_darwin_arm64.tar.gz",
@@ -54,7 +54,7 @@
         "windows_amd64": "https://github.com/aquasecurity/trivy/releases/download/v{version}/trivy_{version}_windows-64bit.zip"
     },
     "trivy_checksums_url": "https://github.com/aquasecurity/trivy/releases/download/v{version}/trivy_{version}_checksums.txt",
-    "infisical_version": "0.43.125",
+    "infisical_version": "0.43.129",
     "infisical_download_urls": {
         "darwin_amd64": "https://github.com/Infisical/cli/releases/download/v{version}/cli_{version}_darwin_amd64.tar.gz",
         "darwin_arm64": "https://github.com/Infisical/cli/releases/download/v{version}/cli_{version}_darwin_arm64.tar.gz",
