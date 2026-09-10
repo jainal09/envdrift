@@ -125,6 +125,8 @@ supporting open source:
 - **[Greptile](https://www.greptile.com/open-source)** — free reviews for OSI-licensed public repositories
 - **[cubic](https://www.cubic.dev/)** — free unlimited reviews for public repositories
 
+Only the first two appear in the badge row above; cubic publishes no README badge.
+
 ## License
 
 MIT
