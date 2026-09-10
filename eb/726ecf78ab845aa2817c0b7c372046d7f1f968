@@ -1,0 +1,23 @@
+README.md
+  s_0718a8d3a23999::t_3d4ca40b184ca0 14,118-126
+  s_0718a8d3a23999::t_b2ec1034761f27 13
+  s_0718a8d3a23999::t_8762ff21a9bd1a 127
+docs/index.md
+  s_0718a8d3a23999::t_6469cea2b7868c 14-17
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "eb726ecf78ab845aa2817c0b7c372046d7f1f968",
+  "prompts": {},
+  "sessions": {
+    "s_0718a8d3a23999": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "ff44259f-e721-4fa1-9605-30fd1d502217",
+        "model": "claude-opus-5"
+      },
+      "human_author": "Jainal Gosaliya <jainal09gosalia@gmail.com>"
+    }
+  }
+}
