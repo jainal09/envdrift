@@ -1,0 +1,29 @@
+CONTRIBUTING.md
+  s_0718a8d3a23999::t_2d26a734f2e55d 30-40
+envdrift-vscode/.nvmrc
+  s_0718a8d3a23999::t_04b5fbc97ccab7 1
+envdrift-vscode/.vscodeignore
+  s_0718a8d3a23999::t_ca595b42ef9efd 12
+envdrift-vscode/package-lock.json
+  s_0718a8d3a23999::t_aa935ca9190b67 32-33
+envdrift-vscode/package.json
+  s_0718a8d3a23999::t_38bf33dccb254b 14-15
+tests/test_vscode_cli_contract.py
+  s_0718a8d3a23999::t_a049f5fbdcd3c4 275-315
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "546dd362b09de300e12e0823adb93a0e3e8de151",
+  "prompts": {},
+  "sessions": {
+    "s_0718a8d3a23999": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "ff44259f-e721-4fa1-9605-30fd1d502217",
+        "model": "claude-opus-5"
+      },
+      "human_author": "Jainal Gosaliya <jainal09gosalia@gmail.com>"
+    }
+  }
+}
