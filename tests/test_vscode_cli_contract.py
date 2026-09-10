@@ -272,6 +272,47 @@ class TestPackagingAndDocsContract:
         assert "node_modules/**" in ignored, ".vscodeignore must exclude node_modules/**"
         assert "out/**" in ignored, ".vscodeignore must exclude the tsc out/ tree"
 
+    def test_declared_node_engine_matches_the_pinned_toolchain(self) -> None:
+        """The extension must declare the Node floor its dev toolchain needs.
+
+        Regression (#771): mocha 12 requires Node ``^20.19.0 || >=22.12.0`` and
+        eslint 10 requires ``^20.19.0 || ^22.13.0 || >=24``, but ``package.json``
+        declared only ``engines.vscode`` — a contributor on an older Node got an
+        opaque test-setup failure instead of an ``EBADENGINE`` warning. This pins
+        the declaration, keeps the lockfile's mirrored copy in sync, keeps
+        ``.nvmrc`` equal to the Node the workflows install, and keeps that
+        dev-only file out of the shipped vsix.
+        """
+        pkg = json.loads((VSCODE_DIR / "package.json").read_text(encoding="utf-8"))
+        engines = pkg.get("engines", {})
+        assert engines.get("node"), "package.json must declare engines.node for the dev toolchain"
+
+        # npm mirrors engines into the lockfile's root entry; drift makes
+        # `npm ci` and `npm install` disagree about the floor.
+        lock = json.loads((VSCODE_DIR / "package-lock.json").read_text(encoding="utf-8"))
+        assert lock["packages"][""]["engines"] == engines, (
+            "package-lock.json root engines drifted from package.json — run `npm install`"
+        )
+
+        # .nvmrc is the contributor-facing pin; it must match what CI installs.
+        nvmrc = (VSCODE_DIR / ".nvmrc").read_text(encoding="utf-8").strip()
+        workflows = sorted((REPO_ROOT / ".github" / "workflows").glob("vscode-*.yml"))
+        assert workflows, "no vscode-*.yml workflows found"
+        for workflow in workflows:
+            pinned = set(
+                re.findall(r"node-version: '([^']+)'", workflow.read_text(encoding="utf-8"))
+            )
+            assert pinned <= {nvmrc}, (
+                f"{workflow.name} installs Node {sorted(pinned)} but .nvmrc pins {nvmrc}"
+            )
+
+        # Dev-only file: shipping it in the vsix is dead weight on the marketplace.
+        ignored = {
+            line.strip()
+            for line in (VSCODE_DIR / ".vscodeignore").read_text(encoding="utf-8").splitlines()
+        }
+        assert ".nvmrc" in ignored, ".vscodeignore must exclude the dev-only .nvmrc"
+
 
 @pytest.mark.integration
 class TestAgentCliContract:
