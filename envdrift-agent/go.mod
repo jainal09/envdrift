@@ -5,7 +5,7 @@ module github.com/jainal09/envdrift-agent
 // directive is only a suggestion that GOTOOLCHAIN=local ignores, so the go
 // directive itself must exclude compilers that ship the vulnerable os
 // package into the released agent binaries.
-go 1.25.12
+go 1.26.0
 
 require (
 	github.com/fsnotify/fsnotify v1.10.1
@@ -26,5 +26,5 @@ require (
 	github.com/sergeymakinen/go-ico v1.0.0 // indirect
 	github.com/spf13/pflag v1.0.10 // indirect
 	github.com/tadvi/systray v0.0.0-20190226123456-11a2b8fa57af // indirect
-	golang.org/x/sys v0.47.0 // indirect
+	golang.org/x/sys v0.48.0 // indirect
 )
