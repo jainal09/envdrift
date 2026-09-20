@@ -59,7 +59,7 @@ literal.
 # kept identical to the integration-tests.yml CI service containers (#500)
 services:
   localstack:
-    image: localstack/localstack:2026.08.2
+    image: localstack/localstack:2026.08.3
     ports:
       - "4566:4566"
     environment:
@@ -97,7 +97,7 @@ def localstack_aws():
 services:
   vault:
     # Keep the image pin in sync with tests/docker-compose.test.yml.
-    image: hashicorp/vault:2.1.0
+    image: hashicorp/vault:2.1.1
     user: root
     ports:
       - "8200:8200"
@@ -144,7 +144,7 @@ def vault_server():
 # kept identical to the integration-tests.yml CI service containers (#500)
 services:
   lowkey-vault:
-    image: nagyesta/lowkey-vault:7.3.74
+    image: nagyesta/lowkey-vault:7.3.98
     ports:
       - "8443:8443"  # Key Vault API (HTTPS, self-signed cert)
       - "8080:8080"  # managed-identity token stub (HTTP)
