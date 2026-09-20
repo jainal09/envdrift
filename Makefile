@@ -147,7 +147,7 @@ docs-serve:
 # with no version fetches whatever npm serves that minute, so an upstream
 # release could fail a required gate with no PR and no warning.
 # renovate: datasource=npm depName=markdownlint-cli2
-MARKDOWNLINT_VERSION = 0.23.2
+MARKDOWNLINT_VERSION = 0.23.3
 
 # Lint markdown documentation
 lint-docs:
