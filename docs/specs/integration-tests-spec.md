@@ -144,7 +144,7 @@ def vault_server():
 # kept identical to the integration-tests.yml CI service containers (#500)
 services:
   lowkey-vault:
-    image: nagyesta/lowkey-vault:7.3.98
+    image: nagyesta/lowkey-vault:7.3.112
     ports:
       - "8443:8443"  # Key Vault API (HTTPS, self-signed cert)
       - "8080:8080"  # managed-identity token stub (HTTP)
