@@ -144,7 +144,7 @@
     "@types/sinon": "^22.0.0",
     "@types/vscode": "^1.85.0",
     "@vscode/test-electron": "^3.0.0",
-    "@vscode/vsce": "^3.9.2",
+    "@vscode/vsce": "^4.0.0",
     "esbuild": "^0.28.1",
     "eslint": "^10.0.0",
     "glob": "^13.0.0",
