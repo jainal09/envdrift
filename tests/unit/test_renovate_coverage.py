@@ -329,6 +329,86 @@ def _agent_step_running(needle: str) -> dict[str, Any]:
     return steps[0]
 
 
+# Per supported release line, the first patch where `govulncheck` reports NO
+# stdlib advisory, reachable or not: GO-2026-4602 (os, reachable via fsnotify)
+# is fixed in go1.26.1, GO-2026-4971 (net) in go1.26.3, and the unreachable
+# rest (GO-2026-5026/5942/5972/6088/6089/6090/6091/6218) in go1.26.6. go1.25 is
+# out of support since go1.27 shipped and gets no further fixes, so it is
+# rejected outright. Lines newer than the table were released after these
+# fixes and include them.
+_GO_LINE_SECURITY_FLOORS = {(1, 26): (1, 26, 6)}
+
+
+def _go_floor_violations(go_mod: str, matrix_legs: list[str]) -> list[str]:
+    """Every way ``go.mod``'s go directive or a CI matrix leg breaks the floor.
+
+    Patch level matters: the go directive is the MANDATORY minimum (a
+    `toolchain` directive is only a suggestion that GOTOOLCHAIN=local
+    ignores). A plain lexicographic ``>= (1, 25, 8)`` let Renovate's
+    ``go 1.26.0`` through even though go1.26.0 ships reachable GO-2026-4602
+    and GO-2026-4971, and comparing matrix legs to a hardcoded ``1.25``
+    instead of the directive let a 1.25 leg survive a 1.26 floor (#781).
+    """
+    directive = re.search(r"(?m)^go (\d+)\.(\d+)(?:\.(\d+))?", go_mod)
+    if directive is None:
+        return ["envdrift-agent/go.mod lost its go directive"]
+    floor = (
+        int(directive.group(1)),
+        int(directive.group(2)),
+        int(directive.group(3) or 0),
+    )
+    shown = ".".join(map(str, floor))
+    violations = []
+    line = floor[:2]
+    if line < min(_GO_LINE_SECURITY_FLOORS):
+        violations.append(
+            f"go.mod declares go {shown}, a release line older than every supported, patched one"
+        )
+    required = _GO_LINE_SECURITY_FLOORS.get(line, floor)
+    if floor < required:
+        violations.append(
+            f"go.mod declares go {shown}, below the "
+            f"go{'.'.join(map(str, required))} stdlib security floor — "
+            "GOTOOLCHAIN=local builders would ship vulnerable stdlib packages"
+        )
+    # Every matrix leg must be able to build the module: with GOTOOLCHAIN=local
+    # a leg below the go directive fails at `go mod download` ("go.mod requires
+    # go >= ..."). A `major.minor` leg resolves to that line's newest patch, so
+    # only its line is compared; an explicit `major.minor.patch` pin is
+    # compared in full.
+    for leg in matrix_legs:
+        parts = tuple(int(x) for x in leg.split("."))
+        if parts[:2] < line or (len(parts) > 2 and parts < floor):
+            violations.append(
+                f"agent-ci.yml matrix leg go {leg} is below the go.mod floor go {shown}"
+            )
+    return violations
+
+
+@pytest.mark.parametrize(
+    ("directive", "legs", "expected"),
+    [
+        pytest.param("1.26.6", ["1.26", "1.27"], [], id="current-floor-and-matrix"),
+        pytest.param("1.27.0", ["1.27"], [], id="newer-line-than-table"),
+        pytest.param("1.26.6", ["1.26.6", "1.27.1"], [], id="explicit-pins-at-floor"),
+        pytest.param("1.26.0", ["1.26"], ["security floor"], id="renovate-781-directive"),
+        pytest.param("1.26.3", ["1.26"], ["security floor"], id="reachable-only-floor"),
+        pytest.param("1.25.12", ["1.25"], ["older than every"], id="eol-line"),
+        pytest.param("1.26.6", ["1.25", "1.26"], ["matrix leg go 1.25"], id="leg-below-line"),
+        pytest.param("1.26.6", ["1.26.0"], ["matrix leg go 1.26.0"], id="leg-patch-pin-below"),
+    ],
+)
+def test_go_floor_guard_catches_each_violation(
+    directive: str, legs: list[str], expected: list[str]
+) -> None:
+    """The guard itself must reject each regression shape it exists for."""
+    violations = _go_floor_violations(f"module m\n\ngo {directive}\n", legs)
+
+    assert len(violations) == len(expected), violations
+    for needle, violation in zip(expected, violations, strict=True):
+        assert needle in violation
+
+
 def test_go_floor_supports_current_x_sys() -> None:
     """go.mod's floor must stay >= what golang.org/x/sys requires.
 
@@ -338,44 +418,7 @@ def test_go_floor_supports_current_x_sys() -> None:
     fix is unreachable — silent non-coverage with extra steps.
     """
     go_mod = (_REPO_ROOT / "envdrift-agent" / "go.mod").read_text(encoding="utf-8")
-    directive = re.search(r"(?m)^go (\d+)\.(\d+)(?:\.(\d+))?", go_mod)
-    assert directive, "envdrift-agent/go.mod lost its go directive"
-    floor = (
-        int(directive.group(1)),
-        int(directive.group(2)),
-        int(directive.group(3) or 0),
-    )
-    # Patch level matters: the go directive is the MANDATORY minimum (a
-    # `toolchain` directive is only a suggestion that GOTOOLCHAIN=local
-    # ignores), and each release line has its own stdlib security floor —
-    # the first patch where `govulncheck ./...` reports nothing reachable:
-    # GO-2026-4602 (os, via fsnotify) is fixed in go1.25.8 / go1.26.1 and
-    # GO-2026-4971 (net) in go1.25.10 / go1.26.3. A plain lexicographic
-    # `>= (1, 25, 8)` let Renovate's `go 1.26.0` through even though go1.26.0
-    # ships both. Lines newer than the table were released after these
-    # fixes and include them.
-    line_floors = {(1, 25): (1, 25, 10), (1, 26): (1, 26, 3)}
-    line = floor[:2]
-    assert line >= min(line_floors), (
-        f"go.mod declares go {'.'.join(map(str, floor))}, a release line older "
-        "than every patched one"
-    )
-    required = line_floors.get(line, floor)
-    assert floor >= required, (
-        f"go.mod declares go {'.'.join(map(str, floor))}, below the "
-        f"go{'.'.join(map(str, required))} stdlib security floor "
-        "(GO-2026-4602 / GO-2026-4971) — GOTOOLCHAIN=local builders would "
-        "ship the vulnerable os/net packages"
-    )
-    # Every matrix leg must be able to build the module: with GOTOOLCHAIN=local
-    # a leg on an older release line than the go directive fails at
-    # `go mod download` ("go.mod requires go >= ...").
-    for leg in _agent_matrix_go():
-        major, minor = (int(x) for x in leg.split(".")[:2])
-        assert (major, minor) >= line, (
-            f"agent-ci.yml matrix leg go {leg} is below the go.mod floor "
-            f"go {'.'.join(map(str, floor))}"
-        )
+    assert _go_floor_violations(go_mod, _agent_matrix_go()) == []
 
     # The floor exists FOR the x/sys security fix, so also assert the module
     # actually selected is at or past it — a floor bump that still ships the
