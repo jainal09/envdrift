@@ -207,8 +207,8 @@ class EnvParser:
     - Unquoted values follow python-dotenv's ``parse_unquoted_value`` rule
       (#486/#537): the whitespace right after ``=`` is consumed first, then
       the value is cut at the first whitespace-preceded ``#`` — so ``K= # c``
-      is the value ``# c``, and a stray quote mid-token never opens a quote
-      context.
+      is the empty value (python-dotenv >= 1.2.4) while ``K=#FF0000`` keeps
+      ``#FF0000``, and a stray quote mid-token never opens a quote context.
     - Physical lines end at ``\\n`` / ``\\r\\n`` / ``\\r`` only; other Unicode
       line boundaries (U+2028, form feed, ...) are value content (#486).
     - A leading UTF-8 BOM is an encoding artifact: it is stripped from the
@@ -292,8 +292,10 @@ class EnvParser:
     # python-dotenv's unquoted-value comment rule (dotenv/parser.py
     # `parse_unquoted_value`): applied AFTER the post-`=` whitespace is
     # consumed, the first whitespace-preceded `#` starts the comment. A `#`
-    # that begins the value (`K= # c`, `K=#FF0000`) is value content, and a
-    # quote character mid-token never opens a quote context (#486/#537).
+    # directly after `=` (`K=#FF0000`) is value content, a `#` after
+    # post-`=` whitespace (`K= # c`) makes the value empty (python-dotenv
+    # >= 1.2.4), and a quote character mid-token never opens a quote context
+    # (#486/#537).
     UNQUOTED_COMMENT_PATTERN = re.compile(r"\s+#.*")
 
     def parse(self, path: Path | str, *, lenient: bool = False) -> EnvFile:
@@ -612,7 +614,7 @@ class EnvParser:
         takes that path (it drops malformed quoted bindings like
         python-dotenv); it serves direct callers only. The whitespace context
         matters, so pass the RAW value (the regex's ``=`` group), unstripped:
-        ``K= # c`` is the value ``# c`` but ``K=v # c`` is ``v``.
+        ``K=#c`` is the value ``#c`` but ``K= # c`` is ``''``.
         """
         stripped = raw_value.strip()
         quoted = self._match_quoted_value(stripped)
@@ -629,14 +631,18 @@ class EnvParser:
         """Lex an unquoted RHS exactly like python-dotenv (#486/#537).
 
         python-dotenv's ``_equal_sign`` lexer (``=[^\\S\\r\\n]*``) consumes the
-        whitespace right after ``=`` BEFORE the value starts, then
-        ``parse_unquoted_value`` applies ``re.sub(r"\\s+#.*", "", part)`` and
-        ``.rstrip()``. A ``#`` at the start of the value therefore has no
-        preceding whitespace inside the value and is content: ``K= # c`` is
-        ``# c`` (dotenv_values: ``{'K': '# c'}``), while ``K= v # c`` is
-        ``v``.
+        whitespace right after ``=`` BEFORE the value starts. Since
+        python-dotenv 1.2.4 (upstream #663), when that whitespace is
+        non-empty and the next character is ``#``, the value is empty and the
+        rest of the line is an inline comment: ``K= # c`` is ``''``
+        (dotenv_values: ``{'K': ''}``). Otherwise ``parse_unquoted_value``
+        applies ``re.sub(r"\\s+#.*", "", part)`` and ``.rstrip()``, so
+        ``K=#FF0000`` (no whitespace before the ``#``) keeps ``#FF0000`` and
+        ``K= v # c`` is ``v``.
         """
         part = raw_value.lstrip()
+        if part.startswith("#") and len(part) < len(raw_value):
+            return ""
         return self.UNQUOTED_COMMENT_PATTERN.sub("", part).rstrip()
 
     def _match_quoted_value(self, text: str) -> str | None:
