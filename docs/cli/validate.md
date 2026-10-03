@@ -68,9 +68,10 @@ judged exactly as the real app loads them:
 - Unquoted values follow python-dotenv's comment rule: the whitespace right
   after `=` is consumed first, then the value is cut at the first
   whitespace-preceded `#`. `MSG=user's data # comment` is `user's data` even
-  though the value contains a stray quote, while `K= # c` keeps the whole
-  `# c` as its value (a leading `#` has no whitespace before it inside the
-  value).
+  though the value contains a stray quote. A `#` directly after `=` is value
+  content (`K=#FF0000` is `#FF0000`), while whitespace then `#` after `=` is an
+  inline comment on an empty value (`K= # c` is `""`), matching
+  python-dotenv 1.2.4 and later.
 - Physical lines end at `\n` / `\r\n` / `\r` only; other Unicode line
   boundaries (U+2028, form feed, ...) are value content.
 - A leading UTF-8 BOM is stripped instead of becoming part of the first key,

@@ -8,9 +8,9 @@ actually loads — in five edge cases:
   literal and failed configs the real loader accepts.
 - A mid-token apostrophe in an unquoted value (``user's data # comment``)
   toggled quote state in the old comment-stripping scan and disabled
-  inline-comment stripping for the rest of the line; and a value that was
-  only whitespace + ``# comment`` was zeroed to ``""`` where python-dotenv
-  loads the whole ``# comment`` text (#537).
+  inline-comment stripping for the rest of the line. (A value that is only
+  whitespace + ``# comment`` loads the ``# comment`` text up to python-dotenv
+  1.2.3 (#537) and ``""`` from 1.2.4 on; the parser follows 1.2.4.)
 - Double-quoted escape sequences (``\\n``, ``\\t``, ...) — fixed by the #458
   quoted-value lexer; pinned here with the original #486 repros.
 - Unicode line boundaries (U+2028, form feed, NEL, ...) inside a value split
@@ -228,37 +228,55 @@ class TestValueFromRawDirectCallers:
 
 
 class TestUnquotedLeadingCommentValue:
-    """#537: an unquoted value that STARTS with ``#`` after the post-``=``
-    whitespace is value content, never a comment.
+    """#537 / python-dotenv 1.2.4: a ``#`` right after the post-``=``
+    whitespace makes the value EMPTY; a ``#`` directly after ``=`` is content.
 
     python-dotenv's ``_equal_sign`` lexer (``=[^\\S\\r\\n]*``) consumes the
-    whitespace after ``=`` before the value is lexed, so the ``#`` has no
-    preceding whitespace inside the value and the comment rule
-    (``\\s+#.*``) never strips it. Ground truth (python-dotenv 1.2.2)::
+    whitespace after ``=`` before the value is lexed. Up to 1.2.3 a leading
+    ``#`` was then value content (``K= # c`` -> ``'# c'``); 1.2.4 (upstream
+    #663) treats it as an inline comment when that whitespace is non-empty.
+    Ground truth (python-dotenv 1.2.4)::
 
-        dotenv_values("K= # c\\nEMPTY=  # just a comment\\n")
-        == {'K': '# c', 'EMPTY': '# just a comment'}
+        dotenv_values("K= # c\\nEMPTY=  # just a comment\\nC=#FF0000\\n")
+        == {'K': '', 'EMPTY': '', 'C': '#FF0000'}
     """
 
-    def test_issue_repro_whole_trailing_text_is_the_value(self):
+    def test_issue_repro_whitespace_then_hash_is_empty(self):
         result = EnvParser().parse_string("K= # c\nEMPTY=  # just a comment\n")
 
-        assert _values(result) == {"K": "# c", "EMPTY": "# just a comment"}
+        assert _values(result) == {"K": "", "EMPTY": ""}
 
-    def test_status_is_plaintext_not_empty(self):
-        """The real loader receives ``'# c'`` — a non-empty value — so the
-        variable must not be classified EMPTY (validate/encrypt semantics)."""
+    def test_status_is_empty_not_plaintext(self):
+        """The real loader receives ``''`` — so the variable must be
+        classified EMPTY, not PLAINTEXT carrying the comment text as a
+        phantom value (validate/encrypt semantics)."""
         result = EnvParser().parse_string("K= # c\n")
 
-        assert result.variables["K"].encryption_status == EncryptionStatus.PLAINTEXT
+        assert result.variables["K"].value == ""
+        assert result.variables["K"].encryption_status == EncryptionStatus.EMPTY
 
     def test_tab_and_space_mix_before_hash(self):
-        """``K= \\t # c # d``: dotenv_values yields ``'# c'`` — the leading
-        whitespace is consumed, then the SECOND (whitespace-preceded) ``#``
-        starts the comment."""
+        """``K= \\t # c # d``: dotenv_values yields ``''`` — the leading
+        whitespace is consumed and the first ``#`` starts the comment."""
         result = EnvParser().parse_string("K= \t # c # d\n")
 
-        assert result.variables["K"].value == "# c"
+        assert result.variables["K"].value == ""
+
+    def test_hash_directly_after_equals_is_content(self):
+        """``K=#FF0000`` has no whitespace before the ``#``, so it is still
+        the value ``'#FF0000'`` (dotenv_values) — hex colours and the like
+        must not be mistaken for a comment."""
+        result = EnvParser().parse_string("K=#FF0000\nT=#a # c\n")
+
+        assert _values(result) == {"K": "#FF0000", "T": "#a"}
+
+    def test_value_from_raw_needs_the_unstripped_rhs(self):
+        """The whitespace context decides the result, which is why callers
+        must pass the raw ``=`` group: ``' # c'`` is empty, ``'# c'`` is not."""
+        parser = EnvParser()
+
+        assert parser.value_from_raw(" # c") == ""
+        assert parser.value_from_raw("# c") == "# c"
 
     def test_value_then_comment_still_stripped(self):
         """``K= v # c`` is ``'v'`` (dotenv_values) — consuming the post-``=``
@@ -473,9 +491,10 @@ class TestPythonDotenvParity:
             pytest.param("MSG=user's data # comment\n", id="apostrophe-inline-comment"),
             pytest.param(
                 "K= # c\nEMPTY=  # just a comment\n",
-                id="leading-hash-after-equals-is-the-value",
+                id="whitespace-then-hash-is-empty",
             ),
             pytest.param("K= \t # c # d\nMSG= v # c\n", id="post-equals-whitespace-comment"),
+            pytest.param("C=#FF0000\nT=#a # c\n", id="hash-directly-after-equals-is-content"),
             pytest.param("MSG=it's O'Brien's # note\n", id="multi-apostrophe-comment"),
             pytest.param('MSG=a "b # c" d\n', id="mid-value-quote-comment"),
             pytest.param('MSG="tab\\there"\nTOKEN="abc\\ndef"\n', id="double-quoted-escapes"),
