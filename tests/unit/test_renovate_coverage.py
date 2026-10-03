@@ -332,10 +332,10 @@ def _agent_step_running(needle: str) -> dict[str, Any]:
 def test_go_floor_supports_current_x_sys() -> None:
     """go.mod's floor must stay >= what golang.org/x/sys requires.
 
-    x/sys v0.44.0 (the GO-2026-5024 fix) declares ``go 1.25.0``. If the module
-    floor or any CI matrix leg drops below that, the indirect-deps rule opens
-    an un-mergeable PR and the CVE fix is unreachable — silent non-coverage
-    with extra steps.
+    x/sys v0.44.0 (the GO-2026-5024 fix) declares ``go 1.25.0``; v0.48.0
+    declares ``go 1.26.0``. If the module floor or any CI matrix leg drops
+    below that, the indirect-deps rule opens an un-mergeable PR and the CVE
+    fix is unreachable — silent non-coverage with extra steps.
     """
     go_mod = (_REPO_ROOT / "envdrift-agent" / "go.mod").read_text(encoding="utf-8")
     directive = re.search(r"(?m)^go (\d+)\.(\d+)(?:\.(\d+))?", go_mod)
@@ -347,18 +347,34 @@ def test_go_floor_supports_current_x_sys() -> None:
     )
     # Patch level matters: the go directive is the MANDATORY minimum (a
     # `toolchain` directive is only a suggestion that GOTOOLCHAIN=local
-    # ignores), and GO-2026-4602 (stdlib os, symbol-reachable via fsnotify)
-    # is fixed in go1.25.8. A directive below that admits compilers that
-    # ship the vulnerable os package into the released agent binaries.
-    assert floor >= (1, 25, 8), (
-        f"go.mod declares go {'.'.join(map(str, floor))}, below the "
-        "GO-2026-4602 stdlib security floor (1.25.8) — GOTOOLCHAIN=local "
-        "builders would ship the vulnerable os package"
+    # ignores), and each release line has its own stdlib security floor —
+    # the first patch where `govulncheck ./...` reports nothing reachable:
+    # GO-2026-4602 (os, via fsnotify) is fixed in go1.25.8 / go1.26.1 and
+    # GO-2026-4971 (net) in go1.25.10 / go1.26.3. A plain lexicographic
+    # `>= (1, 25, 8)` let Renovate's `go 1.26.0` through even though go1.26.0
+    # ships both. Lines newer than the table were released after these
+    # fixes and include them.
+    line_floors = {(1, 25): (1, 25, 10), (1, 26): (1, 26, 3)}
+    line = floor[:2]
+    assert line >= min(line_floors), (
+        f"go.mod declares go {'.'.join(map(str, floor))}, a release line older "
+        "than every patched one"
     )
+    required = line_floors.get(line, floor)
+    assert floor >= required, (
+        f"go.mod declares go {'.'.join(map(str, floor))}, below the "
+        f"go{'.'.join(map(str, required))} stdlib security floor "
+        "(GO-2026-4602 / GO-2026-4971) — GOTOOLCHAIN=local builders would "
+        "ship the vulnerable os/net packages"
+    )
+    # Every matrix leg must be able to build the module: with GOTOOLCHAIN=local
+    # a leg on an older release line than the go directive fails at
+    # `go mod download` ("go.mod requires go >= ...").
     for leg in _agent_matrix_go():
         major, minor = (int(x) for x in leg.split(".")[:2])
-        assert (major, minor) >= (1, 25), (
-            f"agent-ci.yml matrix leg go {leg} is below the go.mod floor"
+        assert (major, minor) >= line, (
+            f"agent-ci.yml matrix leg go {leg} is below the go.mod floor "
+            f"go {'.'.join(map(str, floor))}"
         )
 
     # The floor exists FOR the x/sys security fix, so also assert the module
