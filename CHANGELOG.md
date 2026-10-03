@@ -1,5 +1,12 @@
 # Changelog
 
+## [11.0.6](https://github.com/jainal09/envdrift/compare/v11.0.5...v11.0.6) (2026-10-03)
+
+
+### Bug Fixes
+
+* unblock dependency PRs (python-dotenv 1.2.4 parsing, agent Go 1.26.6 floor) ([#818](https://github.com/jainal09/envdrift/issues/818)) ([04c5b5c](https://github.com/jainal09/envdrift/commit/04c5b5c653ec0d44af4877e2e239454aaee6c8c0))
+
 ## [11.0.5](https://github.com/jainal09/envdrift/compare/v11.0.4...v11.0.5) (2026-09-10)
 
 
