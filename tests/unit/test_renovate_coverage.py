@@ -331,12 +331,14 @@ def _agent_step_running(needle: str) -> dict[str, Any]:
 
 # Per supported release line, the first patch where `govulncheck` reports NO
 # stdlib advisory, reachable or not: GO-2026-4602 (os, reachable via fsnotify)
-# is fixed in go1.26.1, GO-2026-4971 (net) in go1.26.3, and the unreachable
-# rest (GO-2026-5026/5942/5972/6088/6089/6090/6091/6218) in go1.26.6. go1.25 is
-# out of support since go1.27 shipped and gets no further fixes, so it is
-# rejected outright. Lines newer than the table were released after these
-# fixes and include them.
-_GO_LINE_SECURITY_FLOORS = {(1, 26): (1, 26, 6)}
+# is fixed in go1.26.1, GO-2026-4971 (net) in go1.26.3, the unreachable
+# GO-2026-5026/5942/5972/6088/6089/6090/6091/6218 in go1.26.6, and
+# GO-2026-6604..6617 (published 2026-10-08; 6604 is a Windows os.Root escape
+# in a package the agent imports) in go1.26.9 / go1.27.2. go1.25 is out of
+# support since go1.27 shipped and gets no further fixes, so it is rejected
+# outright. Lines newer than the table were released after these fixes and
+# include them.
+_GO_LINE_SECURITY_FLOORS = {(1, 26): (1, 26, 9), (1, 27): (1, 27, 2)}
 
 
 def _go_directive_floor(go_mod: str) -> tuple[int, int, int] | None:
@@ -361,8 +363,10 @@ def _go_directive_violations(floor: tuple[int, int, int]) -> list[str]:
 
 
 def _go_leg_below_floor(leg: str, floor: tuple[int, int, int]) -> bool:
-    """A `major.minor` leg resolves to that line's newest patch, so only its
-    line is compared; an explicit `major.minor.patch` pin is compared in full."""
+    """A `major.minor` leg resolves to that line's newest patch (setup-go's
+    ``check-latest``, see ``test_agent_setup_go_resolves_newest_patch``), so
+    only its line is compared; an explicit `major.minor.patch` pin is compared
+    in full."""
     parts = tuple(int(x) for x in leg.split("."))
     return parts < (floor if len(parts) > 2 else floor[:2])
 
@@ -393,14 +397,16 @@ def _go_floor_violations(go_mod: str, matrix_legs: list[str]) -> list[str]:
 @pytest.mark.parametrize(
     ("directive", "legs", "expected"),
     [
-        pytest.param("1.26.6", ["1.26", "1.27"], [], id="current-floor-and-matrix"),
-        pytest.param("1.27.0", ["1.27"], [], id="newer-line-than-table"),
-        pytest.param("1.26.6", ["1.26.6", "1.27.1"], [], id="explicit-pins-at-floor"),
+        pytest.param("1.26.9", ["1.26", "1.27"], [], id="current-floor-and-matrix"),
+        pytest.param("1.28.0", ["1.28"], [], id="newer-line-than-table"),
+        pytest.param("1.26.9", ["1.26.9", "1.27.2"], [], id="explicit-pins-at-floor"),
         pytest.param("1.26.0", ["1.26"], ["security floor"], id="renovate-781-directive"),
         pytest.param("1.26.3", ["1.26"], ["security floor"], id="reachable-only-floor"),
+        pytest.param("1.26.6", ["1.26"], ["security floor"], id="pre-2026-10-08-floor"),
+        pytest.param("1.27.1", ["1.27"], ["security floor"], id="unpatched-1.27-line"),
         pytest.param("1.25.12", ["1.25"], ["older than every"], id="eol-line"),
-        pytest.param("1.26.6", ["1.25", "1.26"], ["matrix leg go 1.25"], id="leg-below-line"),
-        pytest.param("1.26.6", ["1.26.0"], ["matrix leg go 1.26.0"], id="leg-patch-pin-below"),
+        pytest.param("1.26.9", ["1.25", "1.26"], ["matrix leg go 1.25"], id="leg-below-line"),
+        pytest.param("1.26.9", ["1.26.6"], ["matrix leg go 1.26.6"], id="leg-patch-pin-below"),
     ],
 )
 def test_go_floor_guard_catches_each_violation(
@@ -437,6 +443,37 @@ def test_go_floor_supports_current_x_sys() -> None:
         "every version below v0.44.0 is affected by GO-2026-5024 "
         "(package-imported in the shipped windows-amd64 binary)"
     )
+
+
+def _setup_go_steps(workflow: str) -> list[dict[str, Any]]:
+    jobs = yaml.safe_load((_WORKFLOWS / workflow).read_text(encoding="utf-8"))["jobs"]
+    return [
+        step
+        for job in jobs.values()
+        for step in job.get("steps", [])
+        if str(step.get("uses", "")).startswith("actions/setup-go@")
+    ]
+
+
+@pytest.mark.parametrize("workflow", ["agent-ci.yml", "agent-release.yml"])
+def test_agent_setup_go_resolves_newest_patch(workflow: str) -> None:
+    """Every setup-go step must set ``check-latest: true``.
+
+    Without it, a ``major.minor`` go-version takes whatever patch the runner
+    image has cached: on 2026-10-10 the '1.26' leg ran go1.26.8 although
+    go1.26.9, the fix for GO-2026-6604..6617 (published 2026-10-08), was out. Under
+    GOTOOLCHAIN=local that leg cannot build a 1.26.9 floor at all, and the
+    release binaries would carry whichever stdlib the image happens to hold.
+    ``_go_leg_below_floor`` also relies on legs resolving to the newest patch.
+    """
+    steps = _setup_go_steps(workflow)
+    assert steps, f"{workflow} lost its actions/setup-go step"
+    stale = [
+        str(step.get("name", step["uses"]))
+        for step in steps
+        if step.get("with", {}).get("check-latest") is not True
+    ]
+    assert not stale, f"{workflow} setup-go steps without check-latest: true: {stale}"
 
 
 @pytest.mark.parametrize(
