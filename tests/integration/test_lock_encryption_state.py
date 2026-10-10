@@ -30,6 +30,7 @@ coverage for issue #485).
 from __future__ import annotations
 
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -477,30 +478,32 @@ class TestLockAllPartialLifecycle:
             f"skip-worktree bit not lifted after lock --all re-encrypt: {flags!r}"
         )
 
-    @pytest.mark.skipif(
-        sys.platform == "win32" or not hasattr(os, "geteuid") or os.geteuid() == 0,
-        reason="read-only file write is not enforced on Windows or for root",
-    )
     def test_lock_all_keeps_combined_file_when_encryption_fails(
         self, git_partial_project: tuple[Path, Path], cli: Cli
     ):
         """A failed .secret encryption must NOT delete the combined artifact.
 
-        A read-only ``.secret`` makes dotenvx fail to write the re-encrypted
-        content (it already has the public key, so the keys file is irrelevant):
-        it leaves the new value plaintext, the post-encrypt read-back trips,
-        ``encrypt_secret_file`` raises, and the combined file — the one remaining
-        runtime artifact — must be kept rather than deleted.
+        A corrupted public-key header makes every dotenvx version refuse to
+        encrypt the new value ("hex string expected"): it stays plaintext,
+        ``encrypt_secret_file`` raises, and the combined file — the one
+        remaining runtime artifact — must be kept rather than deleted. (A
+        read-only ``.secret`` no longer works as the trigger: dotenvx 2.34
+        rewrites it anyway; see the truthfulness test below.)
         """
         project, secret_file = git_partial_project
+        content, corrupted = re.subn(
+            r'^(DOTENV_PUBLIC_KEY[A-Z0-9_]*=")[0-9a-fA-F]+(")',
+            r"\1zz-not-a-public-key\2",
+            secret_file.read_text(encoding="utf-8"),
+            flags=re.MULTILINE,
+        )
+        assert corrupted == 1, "fixture lost its dotenvx public-key header"
+        secret_file.write_text(content, encoding="utf-8")
         _append_plaintext(secret_file, "NEW_SECRET=" + LEAKED_VALUE)
         combined_file = project / "partial" / ".env.production"
         combined_file.write_text("APP_NAME=myapp\nAPI_KEY=oldvalue1\n", encoding="utf-8")
-        secret_file.chmod(0o400)
-        try:
-            result = cli.run(["lock", "--all", "--force"], project)
-        finally:
-            secret_file.chmod(0o600)
+
+        result = cli.run(["lock", "--all", "--force"], project)
 
         assert result.returncode == 1, (
             f"lock --all exited 0 despite a failed .secret encryption:\n{result.stdout}"
@@ -514,6 +517,49 @@ class TestLockAllPartialLifecycle:
         norm = _norm(result).lower()
         assert "kept (encryption failed)" in norm
         assert "ready to commit" not in norm
+
+    @pytest.mark.skipif(
+        sys.platform == "win32",
+        reason="POSIX read-only mode bits are not how Windows marks files read-only",
+    )
+    def test_lock_all_readonly_secret_never_reports_false_success(
+        self, git_partial_project: tuple[Path, Path], cli: Cli
+    ):
+        """A read-only ``.secret`` either fails truthfully or really encrypts.
+
+        dotenvx up to 2.32 cannot write it (FILE_NOT_WRITABLE); 2.34 replaces
+        it in place and keeps the read-only mode (as does any version run by
+        root). Whichever happens, the exit code must match the outcome: a
+        failure keeps the plaintext and the combined file, and a success leaves
+        a ``.secret`` that decrypts back to the new value.
+        """
+        project, secret_file = git_partial_project
+        _append_plaintext(secret_file, "NEW_SECRET=" + LEAKED_VALUE)
+        combined_file = project / "partial" / ".env.production"
+        combined_file.write_text("APP_NAME=myapp\nAPI_KEY=oldvalue1\n", encoding="utf-8")
+        secret_file.chmod(0o400)
+        try:
+            result = cli.run(["lock", "--all", "--force"], project)
+        finally:
+            secret_file.chmod(0o600)
+
+        norm = _norm(result).lower()
+        if result.returncode != 0:
+            assert result.returncode == 1, norm
+            assert combined_file.exists(), norm
+            assert LEAKED_VALUE in secret_file.read_text(encoding="utf-8"), norm
+            assert "kept (encryption failed)" in norm
+            return
+
+        assert LEAKED_VALUE not in secret_file.read_text(encoding="utf-8"), (
+            "lock --all exited 0 but the new secret is still plaintext"
+        )
+        rel = secret_file.relative_to(project).as_posix()
+        decrypted = cli.run(["decrypt", rel], project)
+        assert decrypted.returncode == 0, _norm(decrypted)
+        assert LEAKED_VALUE in secret_file.read_text(encoding="utf-8"), (
+            "lock --all exited 0 but the encrypted .secret does not decrypt to the new value"
+        )
 
     @pytest.mark.skipif(
         sys.platform == "win32" or not hasattr(os, "geteuid") or os.geteuid() == 0,

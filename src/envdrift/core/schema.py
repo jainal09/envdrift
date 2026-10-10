@@ -66,7 +66,10 @@ class FieldMetadata:
     sensitive: bool
     default: Any
     description: str | None
-    field_type: type
+    # The raw ``FieldInfo.annotation``: a type form (``list[str]``,
+    # ``int | None``, ``Literal[...]``), not necessarily a ``type``. pydantic
+    # 2.14 types it as ``TypeForm[Any]``, which ``type`` rejects.
+    field_type: Any
     annotation: str
     # The effective Pydantic validation alias used as the input key for
     # ``model_validate``. ``validation_alias`` takes precedence over ``alias``.
