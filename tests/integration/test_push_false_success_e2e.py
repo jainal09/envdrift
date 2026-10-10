@@ -153,16 +153,25 @@ class TestPushFailsWhenEncryptionDoesNotTakeEffect:
         )
 
     @pytest.mark.skipif(
-        sys.platform == "win32" or not hasattr(os, "geteuid") or os.geteuid() == 0,
-        reason="read-only chmod is not enforced on Windows or for root",
+        sys.platform == "win32",
+        reason="POSIX read-only mode bits are not how Windows marks files read-only",
     )
-    def test_push_readonly_env_keys_file_fails_nonzero(
+    def test_push_readonly_env_keys_file_never_reports_false_success(
         self,
         git_repo: Path,
         integration_pythonpath: str,
         envdrift_cmd: list[str],
     ):
-        """A read-only .env.keys file (the issue's exact repro) also fails the push."""
+        """A read-only .env.keys file (the issue's exact repro) never yields a false success.
+
+        dotenvx up to 2.32 refuses the write (FILE_NOT_WRITABLE) and exits
+        non-zero; 2.34 chmods the owner's read-only key file back to 0600 and
+        really saves the private key (as does any version run by root). Either
+        outcome is fine as long as the exit code tells the truth: a failure must
+        keep the plaintext, and a success must leave ciphertext that the
+        persisted key decrypts. The unconditional-failure shape is
+        ``test_push_env_keys_directory_fails_nonzero_and_keeps_source_intact``.
+        """
         work_dir = git_repo
         _write_combine_config(work_dir)
         (work_dir / ".env.production.clear").write_text("DEBUG=false\n", encoding="utf-8")
@@ -179,16 +188,34 @@ class TestPushFailsWhenEncryptionDoesNotTakeEffect:
                 integration_pythonpath=integration_pythonpath,
                 envdrift_cmd=envdrift_cmd,
             )
+        finally:
+            keys.chmod(0o644)  # let tmp_path cleanup remove it
 
-            out = " ".join(_out(result).split())
+        out = " ".join(_out(result).split())
+        if result.returncode != 0:
             assert result.returncode == 1, f"exit={result.returncode}\n{out}"
             assert "Push complete" not in out, out
             # v1 surfaces the failure via envdrift's outcome check, v2 via
-            # dotenvx's own EACCES non-zero exit. Either proves no false success.
+            # dotenvx's own non-zero exit. Either proves no false success.
             assert "did not take effect" in out or "Failed to encrypt" in out, out
             assert leak_value in secret.read_text(encoding="utf-8")
-        finally:
-            keys.chmod(0o644)  # let tmp_path cleanup remove it
+            return
+
+        assert "Push complete" in out, out
+        assert leak_value not in secret.read_text(encoding="utf-8"), (
+            "push exited 0 but the secret is still plaintext"
+        )
+        decrypted = subprocess.run(
+            ["dotenvx", "get", "JWT_SECRET", "-f", secret.name, "-fk", keys.name],
+            cwd=work_dir,
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+        assert decrypted.stdout.strip() == leak_value, (
+            "push exited 0 but the persisted .env.keys cannot decrypt the secret: "
+            f"{decrypted.stdout!r} {decrypted.stderr!r}"
+        )
 
 
 class TestPushRefusesWhenBothSourcesMissing:
