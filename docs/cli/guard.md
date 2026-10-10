@@ -147,6 +147,11 @@ Infisical provides:
 envdrift guard --infisical
 ```
 
+> **Note:** Infisical CLI 0.43.136 and later (the betterleaks engine) do not report AWS
+> secret access keys ([#834](https://github.com/jainal09/envdrift/issues/834)). The
+> auto-installed binary is held at 0.43.135, but an `infisical` already on your `PATH` is
+> used as-is, so check `infisical --version` if you installed it yourself.
+
 ### `--history`, `-H`
 
 Include git history in the scan. Requires a git repository and at least one active history-capable
