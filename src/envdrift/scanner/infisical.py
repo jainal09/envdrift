@@ -716,8 +716,9 @@ class InfisicalScanner(ScannerBackend):
         findings share (one secret near two key IDs), or that a finding under
         the same rule already covers, is reported once. Duplicates are keyed by
         rule like the engine's own dedup, so a CRITICAL component is never
-        dropped in favour of a weaker finding of another rule on the same line;
-        the engine then resolves cross-rule duplicates by severity.
+        dropped in favour of a weaker finding of another rule on the same line.
+        The engine keeps both under its default (rule-keyed) dedup and, under
+        ``skip_duplicate``, collapses them to the higher severity.
 
         Args:
             report_data: Raw findings from the infisical JSON report.
