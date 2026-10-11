@@ -139,7 +139,9 @@ jobs:
           }
 
   test-unix-venv-fallback:
-    name: Unix venv fallback – ubuntu-latest / Python 3.14
+    # No version in the label: Renovate bumps the setup-python literal below
+    # and nothing else, so a mirrored version here would go stale (#840).
+    name: Unix venv fallback – ubuntu-latest
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -150,7 +152,10 @@ jobs:
 
       - name: Remove venv module
         run: |
-          sudo apt-get remove -y python3-venv python3.14-venv || true
+          # Derive the apt package from the interpreter under test, so a Renovate
+          # setup-python bump can't leave a stale version here (#840).
+          PYV=$(python3 -c 'import sys; print(f"{sys.version_info[0]}.{sys.version_info[1]}")')
+          sudo apt-get remove -y python3-venv "python${PYV}-venv" || true
           # Also remove the venv module from the setup-python installation
           VENV_DIR=$(python3 -c "import os, venv; print(os.path.dirname(venv.__file__))" 2>/dev/null) && sudo mv "$VENV_DIR" "${VENV_DIR}.bak" || true
           # Confirm venv is unavailable

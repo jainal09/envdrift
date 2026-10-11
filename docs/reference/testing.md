@@ -146,7 +146,7 @@ instead of the marker contract.
 
 Runs on every PR:
 
-- Python 3.14
+- A single Python version: the `python-version` pinned in `ci.yml`, which Renovate keeps current
 - Unit tests + integration tests (containers skipped if unavailable)
 - Linting and coverage upload
 
