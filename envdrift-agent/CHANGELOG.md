@@ -5,6 +5,14 @@ All notable changes to the EnvDrift Agent will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.6](https://github.com/jainal09/envdrift/compare/agent-v1.1.5...agent-v1.1.6) (2026-10-10)
+
+
+### Bug Fixes
+
+* **agent:** raise Go floor to 1.26.6 (clears GO-2026-4602, GO-2026-4971) and test Go 1.26/1.27 ([04c5b5c](https://github.com/jainal09/envdrift/commit/04c5b5c653ec0d44af4877e2e239454aaee6c8c0))
+* **agent:** raise Go floor to 1.26.9 (clears GO-2026-6604..6617) and build CI and release binaries with the newest Go patch ([#836](https://github.com/jainal09/envdrift/issues/836)) ([afe46e0](https://github.com/jainal09/envdrift/commit/afe46e01a63cd6a0a9b183a3c32122e462d07c1c))
+
 ## [1.1.5](https://github.com/jainal09/envdrift/compare/agent-v1.1.4...agent-v1.1.5) (2026-08-03)
 
 

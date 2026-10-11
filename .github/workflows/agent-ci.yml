@@ -38,6 +38,7 @@ jobs:
         uses: actions/setup-go@v7
         with:
           go-version: ${{ matrix.go }}
+          check-latest: true
           cache-dependency-path: envdrift-agent/go.sum
 
       - name: Verify go.mod/go.sum are tidy
@@ -70,7 +71,7 @@ jobs:
         if: matrix.os == 'ubuntu-latest' && matrix.go == '1.26'
         run: |
           # renovate: datasource=go depName=golang.org/x/vuln
-          go install golang.org/x/vuln/cmd/govulncheck@v1.8.0
+          go install golang.org/x/vuln/cmd/govulncheck@v1.9.0
           govulncheck ./...
           GOOS=windows GOARCH=amd64 go build -o /tmp/agent-windows-amd64.exe ./cmd/envdrift-agent
           govulncheck -mode=binary /tmp/agent-windows-amd64.exe
@@ -120,6 +121,7 @@ jobs:
         uses: actions/setup-go@v7
         with:
           go-version: '1.27'
+          check-latest: true
           cache-dependency-path: envdrift-agent/go.sum
 
       - name: Build binary
@@ -232,6 +234,7 @@ jobs:
         uses: actions/setup-go@v7
         with:
           go-version: '1.27'
+          check-latest: true
           cache-dependency-path: envdrift-agent/go.sum
 
       - name: golangci-lint

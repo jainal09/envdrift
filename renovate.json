@@ -218,6 +218,16 @@
       "allowedVersions": "/^\\d{4}\\.\\d{2}\\.\\d+$/"
     },
     {
+      "description": "Hold the Infisical CLI at 0.43.135, the last release on the gitleaks engine (#834). From 0.43.136 its betterleaks engine never reports AWS secret access keys, and tests/integration/test_scanner_external_binaries.py::test_infisical_detects_aws_credentials fails on those builds. Lift this hold once an Infisical release passes that test.",
+      "matchDatasources": [
+        "github-releases"
+      ],
+      "matchPackageNames": [
+        "Infisical/cli"
+      ],
+      "allowedVersions": "<=0.43.135"
+    },
+    {
       "description": "Track Go INDIRECT dependencies. Renovate's gomod extractor stamps enabled:false on every '// indirect' require (no Go 1.24+ tool directive here to re-enable them), so they vanish from updates AND from the dependency dashboard with no diagnostic - 12 of the agent's deps were invisible, including golang.org/x/sys with GO-2026-5024 package-imported in the shipped Windows binary.",
       "matchManagers": [
         "gomod"

@@ -225,6 +225,43 @@ def test_infisical_scan_no_git_parses_real_json_report(tmp_path):
         assert STRIPE_KEY not in finding.secret_preview
 
 
+# A long-lived access key ID, its secret access key, and an STS session key ID,
+# fragmented for push protection like the tokens above. High-entropy and not
+# the AWS documentation example, so no scanner allowlist applies.
+AWS_ACCESS_KEY_ID = "AKIA" + "KIT74Y7PUQ23N6CF"
+AWS_SECRET_ACCESS_KEY = "Eg+RG/Xq82Tiq6vi" + "6Iqw0Dm7sdvmMBTnlFjGO5hh"
+AWS_SESSION_KEY_ID = "ASIA" + "TE6A37WYKNWJ2AA2"
+
+
+@requires_infisical
+def test_infisical_detects_aws_credentials(tmp_path):
+    """Every line of an AWS credential set must be flagged (#834).
+
+    Infisical CLI 0.43.136 replaced its gitleaks engine with betterleaks, and
+    from then on (still on 0.43.141) the secret access key on line 2 is never
+    reported, while 0.43.135 flags all three lines. The GitHub-PAT test above
+    stays green on both, so this is the test that keeps the Renovate hold on
+    Infisical honest.
+    """
+    (tmp_path / "aws.env").write_text(
+        f"AWS_ACCESS_KEY_ID={AWS_ACCESS_KEY_ID}\n"
+        f"AWS_SECRET_ACCESS_KEY={AWS_SECRET_ACCESS_KEY}\n"
+        f"AWS_SESSION_KEY_ID={AWS_SESSION_KEY_ID}\n"
+    )
+
+    result = InfisicalScanner(auto_install=False).scan([tmp_path])
+
+    assert result.error is None, f"unexpected error: {result.error}"
+    flagged = {f.line_number for f in result.findings}
+    assert flagged >= {1, 2, 3}, (
+        f"infisical missed AWS credential lines {sorted({1, 2, 3} - flagged)}; "
+        f"rules reported: {sorted({f.rule_id for f in result.findings})}"
+    )
+    for finding in result.findings:
+        for raw in (AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, AWS_SESSION_KEY_ID):
+            assert raw not in finding.secret_preview
+
+
 # --- ScanEngine orchestration / filtering (P1) ----------------------------
 
 

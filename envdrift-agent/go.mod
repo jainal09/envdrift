@@ -2,12 +2,13 @@ module github.com/jainal09/envdrift-agent
 
 // The MANDATORY minimum (Renovate-tracked, depType golang). This carries the
 // stdlib security floor (reachable: GO-2026-4602 os fixed in go1.26.1,
-// GO-2026-4971 net in go1.26.3; go1.26.6 clears every known stdlib advisory,
-// reachable or not; golang.org/x/sys >= v0.48.0 needs go1.26): a `toolchain`
+// GO-2026-4971 net in go1.26.3; go1.26.9 clears every known stdlib advisory,
+// reachable or not, including GO-2026-6604..6617 from 2026-10-08;
+// golang.org/x/sys >= v0.48.0 needs go1.26): a `toolchain`
 // directive is only a suggestion that GOTOOLCHAIN=local ignores, so the go
 // directive itself must exclude compilers that ship vulnerable stdlib
 // packages into the released agent binaries.
-go 1.26.6
+go 1.26.9
 
 require (
 	github.com/fsnotify/fsnotify v1.10.1
