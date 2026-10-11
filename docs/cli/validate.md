@@ -75,9 +75,18 @@ judged exactly as the real app loads them:
 - Physical lines end at `\n` / `\r\n` / `\r` only; other Unicode line
   boundaries (U+2028, form feed, ...) are value content.
 - A leading UTF-8 BOM is stripped instead of becoming part of the first key,
-  and `validate` warns about it: pydantic-settings reads plain UTF-8, so the
-  running app still sees the BOM-prefixed key unless the BOM is removed or
-  `env_file_encoding='utf-8-sig'` is set.
+  exactly like python-dotenv 1.2.3 and later, so the verdict is about the key
+  you wrote. `validate` also warns, because whether the running app sees that
+  key depends on the app's own environment, which envdrift cannot inspect
+  (envdrift is often installed in an isolated venv, pipx or `uv tool`). A
+  pydantic-settings app loads it under its real name only with python-dotenv
+  1.2.3 or later (pydantic-settings accepts 0.21.0 and later) or
+  `env_file_encoding='utf-8-sig'`. With an older python-dotenv and the default
+  encoding, a non-UTF-8 `env_file_encoding`, or a shell sourcing the file, the
+  key gets an invisible `U+FEFF` prefix (or is not set at all) and a required
+  field backed by it comes up missing at startup. Re-save the file as UTF-8
+  without a BOM. Like every `validate` warning, it does not affect the `--ci`
+  exit code.
 
 Quoted keys and bare `KEY` bindings without `=` also follow python-dotenv. Bare
 bindings are omitted from validation because pydantic-settings filters their

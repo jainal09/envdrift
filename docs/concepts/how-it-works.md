@@ -32,9 +32,13 @@ When you run `envdrift validate`, it:
    `${VAR:-default}` references are expanded (values defined earlier in the
    file win over `os.environ`), unquoted values follow python-dotenv's
    inline-`#`-comment rule, and lines split on `\n` / `\r\n` / `\r` only.
-   One deliberate divergence: a leading UTF-8 BOM is stripped — and flagged
-   with a warning — so reports name the key the user wrote, while
-   pydantic-settings keeps the BOM on the first key. Non-comment content that
+   A leading UTF-8 BOM is stripped, as python-dotenv 1.2.3 and later do, so
+   reports name the key the user wrote; it is still flagged with a warning
+   because envdrift cannot see the app's python-dotenv version: an app on
+   python-dotenv older than 1.2.3 (which pydantic-settings still accepts) or
+   with a non-UTF-8 `env_file_encoding` sees a `U+FEFF`-prefixed first key,
+   and a shell sourcing the file does not set it at all, so a required field
+   backed by it comes up missing. Non-comment content that
    cannot be parsed is also ignored with a line-numbered warning rather than
    disappearing silently
 3. Checks for missing required fields

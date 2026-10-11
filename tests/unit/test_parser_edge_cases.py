@@ -25,6 +25,8 @@ pydantic-settings loading the same files in-process.
 
 from __future__ import annotations
 
+import re
+
 import pytest
 from dotenv import dotenv_values
 
@@ -347,6 +349,25 @@ class TestUtf8Bom:
     """#486: a UTF-8 BOM is an encoding artifact, not part of the first key."""
 
     BOM_CONTENT = b"\xef\xbb\xbfAPI_KEY=abc123\n"
+    SCHEMA = (
+        "from pydantic_settings import BaseSettings\n\n"
+        "class Settings(BaseSettings):\n    API_KEY: str\n"
+    )
+    # The conditions the #817 warning must state: envdrift cannot see the
+    # app's python-dotenv, so it says when the first key is lost instead of
+    # asserting either "will come up missing" or "unaffected".
+    BOM_WARNING_CONDITIONS = (
+        "envdrift validated the first key under its real name",
+        "only with python-dotenv >= 1.2.3",
+        "pydantic-settings accepts >= 0.21.0",
+        "env_file_encoding='utf-8-sig'",
+        "cannot see the app's python-dotenv version",
+        "With an older python-dotenv and the default encoding",
+        "a non-UTF-8 env_file_encoding",
+        "a shell sourcing the file",
+        "comes up missing at startup",
+        "Re-save the file as UTF-8 without a BOM",
+    )
 
     def test_parse_strips_bom_from_first_key(self, tmp_path):
         env_path = tmp_path / "bom.env"
@@ -396,9 +417,10 @@ class TestUtf8Bom:
         assert result.variables["A"].value == "x\ufeffy"
 
     def test_leading_bom_is_recorded_on_the_env_file(self, tmp_path):
-        """The stripped BOM is recorded so ``validate`` can warn: the real
-        loader (plain UTF-8 ``dotenv_values``) still sees the BOM-prefixed
-        key, so silence here would be a false green (#486 review)."""
+        """The stripped BOM is recorded so ``validate`` can warn: python-dotenv
+        >= 1.2.3 strips it too, but the app's own loader may keep it (older
+        python-dotenv, a non-UTF-8 encoding, a shell sourcing the file) and
+        lose the first key (#486, #817)."""
         bom = tmp_path / "bom.env"
         plain = tmp_path / "plain.env"
         bom.write_bytes(self.BOM_CONTENT)
@@ -415,29 +437,108 @@ class TestUtf8Bom:
 
         assert EnvParser().parse(env_path).leading_bom is False
 
-    def test_validator_warns_on_leading_bom(self, tmp_path):
-        """A BOM file otherwise valid must PASS with a warning naming the BOM
-        (pydantic-settings would fail the required field at startup)."""
+    def test_bom_warning_states_when_the_app_loses_the_first_key(self, tmp_path, monkeypatch):
+        """#817: the BOM warning must neither cry wolf nor falsely reassure.
+
+        The old warning claimed a required field backed by the first key
+        "will come up missing at startup" unconditionally, yet the REAL
+        pydantic-settings class loads it fine on python-dotenv >= 1.2.3.
+        The opposite claim ("pydantic-settings is unaffected") is just as
+        wrong: envdrift cannot see the app's python-dotenv (pydantic-settings
+        accepts >= 0.21.0, and < 1.2.3 keeps the BOM), and even on this
+        environment's python-dotenv a non-UTF-8 ``env_file_encoding`` loses
+        the key. The warning must state those conditions, the validation
+        verdict must stay PASS, and it must only fire on a BOM.
+        """
+        from pydantic import ValidationError
+
         from envdrift.core.schema import SchemaLoader
         from envdrift.core.validator import Validator
 
-        schema_file = tmp_path / "sc.py"
-        schema_file.write_text(
-            "from pydantic_settings import BaseSettings\n\n"
-            "class Settings(BaseSettings):\n    API_KEY: str\n",
-            encoding="utf-8",
-        )
-        env_path = tmp_path / "bom.env"
-        env_path.write_bytes(self.BOM_CONTENT)
+        monkeypatch.delenv("API_KEY", raising=False)
+        (tmp_path / "sc.py").write_text(self.SCHEMA, encoding="utf-8")
+        bom = tmp_path / "bom.env"
+        plain = tmp_path / "plain.env"
+        bom.write_bytes(self.BOM_CONTENT)
+        plain.write_bytes(self.BOM_CONTENT[3:])
 
         settings_cls = SchemaLoader().load("sc:Settings", tmp_path)
         schema_meta = SchemaLoader().extract_metadata(settings_cls)
-        env = EnvParser().parse(env_path, lenient=True)
 
-        result = Validator().validate(env, schema_meta, check_encryption=False)
+        # Ground truth from the real pydantic-settings class and the real
+        # python-dotenv envdrift installs (>= 1.2.4): the default encoding
+        # and utf-8-sig load the real name...
+        expected = {"API_KEY": "abc123"}
+        assert settings_cls(_env_file=str(bom)).model_dump() == expected
+        assert settings_cls(_env_file=str(bom), _env_file_encoding="utf-8-sig").model_dump() == (
+            expected
+        )
+        # ...but a non-UTF-8 encoding leaves the required field missing, so
+        # the app is NOT unconditionally unaffected.
+        with pytest.raises(ValidationError) as excinfo:
+            settings_cls(_env_file=str(bom), _env_file_encoding="latin-1")
+        assert any(
+            e["type"] == "missing" and e["loc"] == ("API_KEY",) for e in excinfo.value.errors()
+        )
+
+        parser, validator = EnvParser(), Validator()
+        result = validator.validate(
+            parser.parse(bom, lenient=True), schema_meta, check_encryption=False
+        )
+        plain_result = validator.validate(
+            parser.parse(plain, lenient=True), schema_meta, check_encryption=False
+        )
 
         assert result.valid
-        assert any("UTF-8 BOM" in w for w in result.warnings)
+        bom_warnings = [w for w in result.warnings if "UTF-8 BOM" in w]
+        assert len(bom_warnings) == 1
+        warning = bom_warnings[0]
+        for phrase in self.BOM_WARNING_CONDITIONS:
+            assert phrase in warning, phrase
+        assert "unaffected" not in warning
+        assert "will come up missing" not in warning
+        assert plain_result.valid
+        assert not any("BOM" in w for w in plain_result.warnings)
+
+    def test_validate_cli_bom_warning_states_its_conditions(self, tmp_path, monkeypatch):
+        """#817 end-to-end: ``validate --ci`` on a BOM file must exit 0 (a
+        warning never fails CI) and print the conditional warning, neither
+        the old unconditional "will come up missing" nor an "unaffected"
+        reassurance envdrift cannot back up."""
+        from typer.testing import CliRunner
+
+        from envdrift.cli import app
+
+        monkeypatch.delenv("API_KEY", raising=False)
+        (tmp_path / "sc.py").write_text(self.SCHEMA, encoding="utf-8")
+        env_path = tmp_path / ".env"
+        env_path.write_bytes(self.BOM_CONTENT)
+
+        result = CliRunner().invoke(
+            app,
+            [
+                "validate",
+                str(env_path),
+                "--schema",
+                "sc:Settings",
+                "--service-dir",
+                str(tmp_path),
+                "--no-check-encryption",
+                "--ci",
+            ],
+        )
+
+        # Strip ANSI first: with FORCE_COLOR set, Rich highlights the digits in
+        # "UTF-8" and "1.2.3", splitting the asserted phrases.
+        out = " ".join(re.sub(r"\x1b\[[0-9;]*m", "", result.output).split())
+        assert result.exit_code == 0, out
+        assert "Validation PASSED" in out
+        assert "MISSING" not in out
+        assert "File starts with a UTF-8 BOM" in out
+        for phrase in self.BOM_WARNING_CONDITIONS:
+            assert phrase in out, phrase
+        assert "unaffected" not in out
+        assert "will come up missing" not in out
 
 
 class TestPythonDotenvParity:
@@ -564,8 +665,8 @@ class TestPythonDotenvParity:
         the variable the user actually wrote. python-dotenv 1.2.3 now strips
         the BOM too, so this is parity rather than a documented divergence —
         and it is still not silent on our side: ``EnvFile.leading_bom`` is set
-        and ``validate`` warns (see
-        ``TestUtf8Bom.test_validator_warns_on_leading_bom``).
+        and ``validate`` flags the file for loaders that keep the BOM (see
+        ``TestUtf8Bom.test_bom_warning_states_when_the_app_loses_the_first_key``).
         """
         env_path = tmp_path / "bom.env"
         env_path.write_bytes(b"\xef\xbb\xbfAPI_KEY=abc123\n")

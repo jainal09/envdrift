@@ -70,9 +70,11 @@ class EnvFile:
     # decide how to render them, so machine-readable output stays clean.
     unparsed_lines: list[int] = field(default_factory=list)
     # True when the source text began with a UTF-8 BOM (U+FEFF). The parser
-    # strips it so reports name the variable the user wrote — but
-    # pydantic-settings reads .env files as plain UTF-8 and would see a
-    # ``U+FEFF``-prefixed first key, so `validate` surfaces a warning (#486).
+    # strips it so reports name the variable the user wrote, exactly like
+    # python-dotenv >= 1.2.3. The app's own loader may still keep it
+    # (python-dotenv < 1.2.3, which pydantic-settings still accepts; a
+    # non-UTF-8 encoding; a shell) and see a ``U+FEFF``-prefixed first key, so
+    # `validate` warns (#486, #817).
     leading_bom: bool = False
 
     @property
@@ -212,8 +214,9 @@ class EnvParser:
     - Physical lines end at ``\\n`` / ``\\r\\n`` / ``\\r`` only; other Unicode
       line boundaries (U+2028, form feed, ...) are value content (#486).
     - A leading UTF-8 BOM is an encoding artifact: it is stripped from the
-      first key and recorded on ``EnvFile.leading_bom`` so ``validate`` can
-      warn (pydantic-settings reads plain UTF-8 and keeps the BOM) (#486).
+      first key like python-dotenv >= 1.2.3 does, and recorded on
+      ``EnvFile.leading_bom`` so ``validate`` can warn that the app's own
+      loader may keep it (#486, #817).
     """
 
     # dotenvx encrypted value pattern
@@ -591,9 +594,12 @@ class EnvParser:
         A leading BOM is an encoding artifact (Notepad/PowerShell), not part
         of the first key — keeping it produced an invisible phantom
         ``U+FEFF``-prefixed ``NAME`` variable and self-contradictory
-        MISSING+EXTRA output. It is stripped but recorded on
-        ``EnvFile.leading_bom``: pydantic-settings reads plain UTF-8 and WOULD
-        see the ``U+FEFF``-prefixed key, so ``validate`` warns (#486).
+        MISSING+EXTRA output. python-dotenv >= 1.2.3 strips it the same way,
+        but that is envdrift's environment, not necessarily the app's. It is
+        recorded on ``EnvFile.leading_bom`` because the app's loader may keep
+        it (python-dotenv < 1.2.3, which pydantic-settings still accepts; a
+        non-UTF-8 ``env_file_encoding``; a shell sourcing the file) and see
+        the ``U+FEFF``-prefixed key, so ``validate`` warns (#486, #817).
         """
         if content.startswith("\ufeff"):
             return content.removeprefix("\ufeff"), True

@@ -235,10 +235,11 @@ class TestUtf8Bom:
 
     def test_validate_bom_file_passes_with_a_bom_warning(self, tmp_path, integration_env):
         """The BOM key used to make validate list API_KEY both MISSING and
-        EXTRA (the BOM renders invisibly) and exit 1. It now passes with an
-        explicit warning: pydantic-settings reads plain UTF-8, so the app
-        still sees the BOM-prefixed key (dotenv_values 1.2.2 loads
-        ``{'\\ufeffAPI_KEY': 'abc123'}``) — silence would be a false green."""
+        EXTRA (the BOM renders invisibly) and exit 1. It now passes with a
+        warning that states when the app loses the first key (python-dotenv
+        < 1.2.3, which pydantic-settings accepts; a non-UTF-8 encoding; a
+        shell) — neither the old unconditional "will come up missing" nor an
+        "unaffected" claim envdrift cannot verify about the app (#817)."""
         _write_schema(
             tmp_path,
             """
@@ -258,6 +259,12 @@ class TestUtf8Bom:
         assert "MISSING" not in out
         assert "EXTRA" not in out
         assert "UTF-8 BOM" in out
+        assert "only with python-dotenv >= 1.2.3" in out
+        assert "cannot see the app's python-dotenv version" in out
+        assert "comes up missing at startup" in out
+        assert "Re-save the file as UTF-8 without a BOM" in out
+        assert "unaffected" not in out
+        assert "will come up missing" not in out
 
     def test_diff_bom_twin_reports_no_drift(self, tmp_path, integration_env):
         """Issue repro: the BOM file and its BOM-less twin parse identically;
