@@ -363,8 +363,8 @@ jobs:
           # from the service-account key so the round-trip suite actually runs here.
           # Assign before exporting: `export VAR="$(cmd)"` returns export's status,
           # so a failed read would leave it empty and the tests would skip, not fail.
-          GOOGLE_CLOUD_PROJECT="$(python -c "import json; print(json.load(open('gcp_key.json'))['project_id'])")"
-          test -n "$GOOGLE_CLOUD_PROJECT"
+          # Python validates the value itself (a null project_id would print "None").
+          GOOGLE_CLOUD_PROJECT="$(python -c "import json, sys; p = json.load(open('gcp_key.json')).get('project_id'); print(p) if isinstance(p, str) and p.strip() else sys.exit('gcp_key.json has no usable project_id')")"
           export GOOGLE_CLOUD_PROJECT
           uv run pytest tests/integration/ -v -m gcp --timeout=120
 
