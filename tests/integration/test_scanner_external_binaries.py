@@ -444,6 +444,7 @@ requires_gitleaks = pytest.mark.skipif(not _HAS_GITLEAKS, reason="gitleaks not i
 @pytest.mark.parametrize("target", ["proj", "proj/sub/app.env"])
 @pytest.mark.xfail(
     strict=False,
+    raises=AssertionError,
     reason="the binary runs with cwd=<path> but is handed the relative path again (see #843)",
 )
 def test_scanner_scans_a_cwd_relative_path(tmp_path, monkeypatch, scanner_cls, target):
@@ -455,6 +456,7 @@ def test_scanner_scans_a_cwd_relative_path(tmp_path, monkeypatch, scanner_cls, t
     relative path unchanged, so it resolves to ``proj/proj`` and the scan
     fails with ``stat proj: no such file or directory``.
     """
+    (tmp_path / "proj" / "sub").mkdir(parents=True)
     _write_secret_file(tmp_path / "proj" / "sub", "app.env")
     monkeypatch.chdir(tmp_path)
 

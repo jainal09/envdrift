@@ -380,6 +380,17 @@ class TestScanCommandLine:
         assert "--confidence" not in argv.split()
         assert [f.line_number for f in result.findings] == [1]
 
+    def test_nothing_to_scan_skips_the_probe(self, tmp_path: Path):
+        """No existing path means no scan, so the probe must not run either."""
+        stub = _make_stub(tmp_path / "bin", BETTERLEAKS_HELP)
+
+        result = _scanner(stub).scan([tmp_path / "missing"])
+
+        assert result.error is None, result.error
+        assert result.findings == []
+        assert _log_lines(stub, "help.log") == []
+        assert _log_lines(stub, "argv.log") == []
+
     def test_every_path_is_scanned_at_low_confidence_after_one_probe(self, tmp_path: Path):
         first, second = tmp_path / "one", tmp_path / "two"
         first.mkdir()

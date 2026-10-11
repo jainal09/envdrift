@@ -579,8 +579,13 @@ class InfisicalScanner(ScannerBackend):
 
         all_findings: list[ScanFinding] = []
         total_files = 0
-        # Probed once per scan (and cached per binary), not once per path.
-        confidence_args = list(_CONFIDENCE_ARGS) if _supports_confidence_flag(binary) else []
+        # Probed once per scan (and cached per binary), not once per path, and
+        # only when there is something to scan.
+        confidence_args = (
+            list(_CONFIDENCE_ARGS)
+            if any(path.exists() for path in paths) and _supports_confidence_flag(binary)
+            else []
+        )
 
         for path in paths:
             if not path.exists():
