@@ -334,7 +334,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v7
 
-      - name: Set up Python 3.14
+      - name: Set up Python
         uses: actions/setup-python@v7
         with:
           python-version: "3.14"
@@ -361,7 +361,11 @@ jobs:
           export GOOGLE_APPLICATION_CREDENTIALS="$(pwd)/gcp_key.json"
           # The real-backend GCP tests also gate on GOOGLE_CLOUD_PROJECT; derive it
           # from the service-account key so the round-trip suite actually runs here.
-          export GOOGLE_CLOUD_PROJECT="$(python -c "import json; print(json.load(open('gcp_key.json'))['project_id'])")"
+          # Assign before exporting: `export VAR="$(cmd)"` returns export's status,
+          # so a failed read would leave it empty and the tests would skip, not fail.
+          # Python validates the value itself (a null project_id would print "None").
+          GOOGLE_CLOUD_PROJECT="$(python -c "import json, sys; p = json.load(open('gcp_key.json')).get('project_id'); print(p.strip()) if isinstance(p, str) and p.strip() else sys.exit('gcp_key.json has no usable project_id')")"
+          export GOOGLE_CLOUD_PROJECT
           uv run pytest tests/integration/ -v -m gcp --timeout=120
 
       - name: Run Azure tests (if configured)

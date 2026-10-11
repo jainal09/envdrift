@@ -10,7 +10,9 @@ This module provides:
 
 from __future__ import annotations
 
+import functools
 import json
+import logging
 import platform
 import re
 import shutil
@@ -45,6 +47,8 @@ from envdrift.scanner.platform_utils import (
 
 if TYPE_CHECKING:
     from collections.abc import Callable
+
+logger = logging.getLogger(__name__)
 
 
 def _load_constants() -> dict:
@@ -105,6 +109,100 @@ RULE_SEVERITY_MAP: dict[str, FindingSeverity] = {
     "private-key": FindingSeverity.CRITICAL,
     "generic-api-key": FindingSeverity.HIGH,
 }
+
+# Infisical CLI 0.43.136 swapped its gitleaks engine for betterleaks, which
+# drops every finding rated below ``--confidence`` (default "medium"). Its
+# ``generic-api-key`` and ``generic-password`` rules are rated "low", and they
+# are the only rules that report a lone AWS secret access key (the dedicated
+# ``aws-secret-access-key`` rule is never reported on its own), a generic API
+# key or a password, so the default silently loses them (#834). Releases up to
+# 0.43.135 reject the flag with a usage error and write no report, so it is
+# passed only when the binary's own ``scan --help`` lists it.
+_CONFIDENCE_ARGS = ("--confidence", "low")
+_CONFIDENCE_FLAG_RE = re.compile(r"^\s*(?:-\w,\s+)?--confidence(?![\w-])", re.MULTILINE)
+_HELP_PROBE_TIMEOUT_SECONDS = 10
+
+
+def _confidence_args(binary: Path, paths: list[Path]) -> list[str]:
+    """The ``--confidence`` arguments for one scan of ``paths``.
+
+    Probed once per scan (and cached per binary), not once per path, and only
+    when there is something to scan.
+    """
+    if any(path.exists() for path in paths) and _supports_confidence_flag(binary):
+        return list(_CONFIDENCE_ARGS)
+    return []
+
+
+class _ProbeError(Exception):
+    """The ``scan --help`` probe did not run to completion."""
+
+
+@functools.cache
+def _probe_confidence_flag(binary: str, _mtime_ns: int, _size: int) -> bool:
+    """Whether ``<binary> scan --help`` advertises a ``--confidence`` flag.
+
+    Cached per binary; the mtime and size in the key make a binary replaced in
+    place (an upgrade or reinstall) probe again. A probe that cannot run,
+    times out or exits non-zero raises ``_ProbeError`` instead of returning,
+    so the transient failure is not cached and the next scan probes again.
+    """
+    try:
+        result = subprocess.run(  # nosec B603
+            [binary, "scan", "--help"],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=_HELP_PROBE_TIMEOUT_SECONDS,
+        )
+    except Exception as e:
+        raise _ProbeError(str(e) or type(e).__name__) from e
+    if result.returncode != 0:
+        raise _ProbeError(f"exit code {result.returncode}")
+    return bool(_CONFIDENCE_FLAG_RE.search(f"{result.stdout}\n{result.stderr}"))
+
+
+def _supports_confidence_flag(binary: Path) -> bool:
+    """Whether the infisical binary at ``binary`` accepts ``scan --confidence``.
+
+    Never breaks the scan: when the probe fails, the scan runs on the
+    flag-less command line every release accepts, and the failure is logged
+    because a 0.43.136+ binary then reports only medium-confidence findings.
+    """
+    try:
+        resolved = binary.resolve()
+        stat = resolved.stat()
+        return _probe_confidence_flag(str(resolved), stat.st_mtime_ns, stat.st_size)
+    except (OSError, _ProbeError) as e:
+        logger.warning(
+            "Could not check whether %s supports `scan --confidence` (%s); scanning "
+            "without it, so Infisical CLI 0.43.136+ drops low-confidence findings (#834)",
+            binary,
+            e,
+        )
+        return False
+
+
+# Betterleaks composite rules nest their paired values under ``ComponentSets``
+# rather than reporting them (#834). Most of those components are not secrets
+# at all: tenant and client IDs, usernames, account names, hosts and URLs that
+# a rule only uses to validate its primary match. In 0.43.141 that is 25 of
+# the 31 component rules its 26 composite rules use, the OVH application key
+# among them, since it only identifies the app. Only the components below are
+# secret material the engine would otherwise hide, so only they are reported.
+# Any other component, including one a future release adds, stays unreported
+# until it is reviewed and listed here; its parent finding is still reported.
+_SECRET_COMPONENT_RULES = frozenset(
+    {
+        "alibaba-sts-security-token",
+        "aws-secret-access-key",
+        "exoscale-api-secret",
+        "ovh-consumer-key",
+        "polymarket-api-secret",
+        "polymarket-passphrase",
+    }
+)
 
 
 class InfisicalNotFoundError(Exception):
@@ -492,6 +590,7 @@ class InfisicalScanner(ScannerBackend):
 
         all_findings: list[ScanFinding] = []
         total_files = 0
+        confidence_args = _confidence_args(binary, paths)
 
         for path in paths:
             if not path.exists():
@@ -518,6 +617,8 @@ class InfisicalScanner(ScannerBackend):
                 # If not scanning git history, use --no-git
                 if not include_git_history:
                     args.append("--no-git")
+
+                args.extend(confidence_args)
 
                 # Run infisical scan
                 result = subprocess.run(  # nosec B603
@@ -563,6 +664,9 @@ class InfisicalScanner(ScannerBackend):
                                 finding = self._parse_finding(item, base_dir)
                                 if finding:
                                     all_findings.append(finding)
+                            all_findings.extend(
+                                self._parse_components(report_data, base_dir, all_findings)
+                            )
                     except json.JSONDecodeError:
                         # Invalid JSON in report, skip findings for this path
                         continue
@@ -592,6 +696,105 @@ class InfisicalScanner(ScannerBackend):
             files_scanned=total_files,
             duration_ms=int((time.time() - start_time) * 1000),
         )
+
+    def _parse_components(
+        self,
+        report_data: list[Any],
+        base_path: Path,
+        existing: list[ScanFinding],
+    ) -> list[ScanFinding]:
+        """Surface the secret components that betterleaks nests in a finding.
+
+        From 0.43.136 a composite rule (``aws-access-token``) reports only its
+        primary match, the AWS access key ID, and moves the paired secret
+        access key into ``ComponentSets[].components[]`` instead of reporting
+        it as a finding of its own (#834). Only components listed in
+        ``_SECRET_COMPONENT_RULES`` are reported; the rest (tenant and client
+        IDs, usernames, hosts) are not secrets. A component carries its own
+        rule, position and secret but no file or commit context, so it
+        inherits those from the parent finding. A component that several
+        findings share (one secret near two key IDs), or that a finding under
+        the same rule already covers, is reported once. Duplicates are keyed by
+        rule like the engine's own dedup, so a CRITICAL component is never
+        dropped in favour of a weaker finding of another rule on the same line.
+        The engine keeps both under its default (rule-keyed) dedup and, under
+        ``skip_duplicate``, collapses them to the higher severity.
+
+        Args:
+            report_data: Raw findings from the infisical JSON report.
+            base_path: Base path for resolving relative paths.
+            existing: Findings already parsed, used to skip duplicates.
+
+        Returns:
+            One ScanFinding per distinct component.
+        """
+        seen = {(f.file_path, f.line_number, f.rule_id, f.secret_hash) for f in existing}
+        components: list[ScanFinding] = []
+        for item in report_data:
+            for flattened in self._flatten_components(item):
+                finding = self._parse_finding(flattened, base_path)
+                if finding is None:
+                    continue
+                key = (finding.file_path, finding.line_number, finding.rule_id, finding.secret_hash)
+                if key in seen:
+                    continue
+                seen.add(key)
+                components.append(finding)
+        return components
+
+    @staticmethod
+    def _flatten_components(item: Any) -> list[dict[str, Any]]:
+        """Turn one finding's secret ``ComponentSets`` into standalone report items.
+
+        Args:
+            item: Raw finding from infisical JSON output.
+
+        Returns:
+            One report item per component whose rule is in
+            ``_SECRET_COMPONENT_RULES``, in the shape ``_parse_finding`` reads.
+        """
+        if not isinstance(item, dict):
+            return []
+        context = {
+            key: item[key] for key in ("File", "Commit", "Author", "Email", "Date") if key in item
+        }
+        parent_rule = item.get("RuleID", "unknown")
+        flattened: list[dict[str, Any]] = []
+        for component in InfisicalScanner._secret_components(item.get("ComponentSets")):
+            entry = dict(context)
+            entry.update(
+                (key, component[key])
+                for key in ("RuleID", "StartLine", "StartColumn", "Secret", "Match")
+                if key in component
+            )
+            entry["Description"] = f"{entry.get('RuleID', 'unknown')} (paired with {parent_rule})"
+            flattened.append(entry)
+        return flattened
+
+    @staticmethod
+    def _secret_components(component_sets: Any) -> list[dict[str, Any]]:
+        """The well-formed members of ``ComponentSets`` whose rule is a secret.
+
+        Args:
+            component_sets: The ``ComponentSets`` value of one raw finding.
+
+        Returns:
+            Every component dict whose ``RuleID`` is in ``_SECRET_COMPONENT_RULES``;
+            malformed sets and members are skipped.
+        """
+        sets = component_sets if isinstance(component_sets, list) else []
+        members = (
+            member
+            for component_set in sets
+            if isinstance(component_set, dict) and isinstance(component_set.get("components"), list)
+            for member in component_set["components"]
+        )
+        return [
+            member
+            for member in members
+            if isinstance(member, dict)
+            and str(member.get("RuleID", "")).lower() in _SECRET_COMPONENT_RULES
+        ]
 
     def _parse_finding(self, item: dict[str, Any], base_path: Path) -> ScanFinding | None:
         """Parse an infisical finding into our format.

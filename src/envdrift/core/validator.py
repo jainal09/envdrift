@@ -127,21 +127,35 @@ def _bound_env_var(
 
 
 def _warn_leading_bom(env_file: EnvFile, result: ValidationResult) -> None:
-    """Warn when the file starts with a UTF-8 BOM.
+    """Warn that the app may not see the first key of a BOM-saved file.
 
-    The parser strips a leading UTF-8 BOM so reports name the variable
-    the user wrote — but pydantic-settings reads .env files as plain
-    UTF-8 (dotenv_values default), so at startup the app sees the first
-    key BOM-prefixed and a required field backed by it comes up missing.
-    Surface that loudly instead of a silent false PASS (#486 review).
+    The parser strips a leading UTF-8 BOM so the verdict is about the key
+    the user wrote. Whether the running app agrees depends on ITS runtime,
+    which envdrift cannot inspect: envdrift's own ``python-dotenv>=1.2.4``
+    floor governs only envdrift's environment (often isolated: the
+    installer's ~/.envdrift/venv, pipx, uv tool), while pydantic-settings
+    itself accepts ``python-dotenv>=0.21.0``. A pydantic-settings app loads
+    the real name only with python-dotenv >= 1.2.3 (which strips the BOM)
+    or ``env_file_encoding='utf-8-sig'``. An older python-dotenv keeps a
+    ``U+FEFF`` prefix on the key, a non-UTF-8 encoding decodes the BOM bytes
+    into other characters (``latin-1`` gives three), and a shell sourcing the
+    file does not set the key at all; each way the required field backed by
+    it comes up missing at startup. So the warning states those conditions
+    instead of asserting the app is safe (#486, #817).
     """
     if env_file.leading_bom:
         result.warnings.append(
-            "File starts with a UTF-8 BOM: pydantic-settings reads .env files "
-            "as plain UTF-8, so the app will see the first key with an "
-            "invisible '\\ufeff' prefix and a required field backed by it "
-            "will come up missing at startup. Remove the BOM or set "
-            "env_file_encoding='utf-8-sig' on the model config."
+            "File starts with a UTF-8 BOM. envdrift validated the first key "
+            "under its real name, but a pydantic-settings app loads it that way "
+            "only with python-dotenv >= 1.2.3 (pydantic-settings accepts "
+            ">= 0.21.0) or env_file_encoding='utf-8-sig', and envdrift cannot "
+            "see the app's python-dotenv version. With an older python-dotenv "
+            "and the default encoding the key keeps an invisible '\\ufeff' "
+            "prefix, a non-UTF-8 env_file_encoding decodes the BOM bytes into "
+            "other characters in front of it, and a shell sourcing the file "
+            "does not set it at all; each way, a required field backed by it "
+            "comes up missing at startup. Re-save the file as UTF-8 without a "
+            "BOM."
         )
 
 
