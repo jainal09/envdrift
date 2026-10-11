@@ -123,6 +123,17 @@ _CONFIDENCE_FLAG_RE = re.compile(r"^\s*(?:-\w,\s+)?--confidence(?![\w-])", re.MU
 _HELP_PROBE_TIMEOUT_SECONDS = 10
 
 
+def _confidence_args(binary: Path, paths: list[Path]) -> list[str]:
+    """The ``--confidence`` arguments for one scan of ``paths``.
+
+    Probed once per scan (and cached per binary), not once per path, and only
+    when there is something to scan.
+    """
+    if any(path.exists() for path in paths) and _supports_confidence_flag(binary):
+        return list(_CONFIDENCE_ARGS)
+    return []
+
+
 class _ProbeError(Exception):
     """The ``scan --help`` probe did not run to completion."""
 
@@ -579,13 +590,7 @@ class InfisicalScanner(ScannerBackend):
 
         all_findings: list[ScanFinding] = []
         total_files = 0
-        # Probed once per scan (and cached per binary), not once per path, and
-        # only when there is something to scan.
-        confidence_args = (
-            list(_CONFIDENCE_ARGS)
-            if any(path.exists() for path in paths) and _supports_confidence_flag(binary)
-            else []
-        )
+        confidence_args = _confidence_args(binary, paths)
 
         for path in paths:
             if not path.exists():
@@ -708,8 +713,11 @@ class InfisicalScanner(ScannerBackend):
         IDs, usernames, hosts) are not secrets. A component carries its own
         rule, position and secret but no file or commit context, so it
         inherits those from the parent finding. A component that several
-        findings share (one secret near two key IDs), or whose line and secret
-        a finding already covers, is reported once.
+        findings share (one secret near two key IDs), or that a finding under
+        the same rule already covers, is reported once. Duplicates are keyed by
+        rule like the engine's own dedup, so a CRITICAL component is never
+        dropped in favour of a weaker finding of another rule on the same line;
+        the engine then resolves cross-rule duplicates by severity.
 
         Args:
             report_data: Raw findings from the infisical JSON report.
@@ -719,14 +727,14 @@ class InfisicalScanner(ScannerBackend):
         Returns:
             One ScanFinding per distinct component.
         """
-        seen = {(f.file_path, f.line_number, f.secret_hash) for f in existing}
+        seen = {(f.file_path, f.line_number, f.rule_id, f.secret_hash) for f in existing}
         components: list[ScanFinding] = []
         for item in report_data:
             for flattened in self._flatten_components(item):
                 finding = self._parse_finding(flattened, base_path)
                 if finding is None:
                     continue
-                key = (finding.file_path, finding.line_number, finding.secret_hash)
+                key = (finding.file_path, finding.line_number, finding.rule_id, finding.secret_hash)
                 if key in seen:
                     continue
                 seen.add(key)

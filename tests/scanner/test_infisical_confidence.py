@@ -451,21 +451,39 @@ class TestComponentSets:
 
         assert [f.line_number for f in components] == [2]
 
-    def test_secret_already_reported_on_its_own_is_not_duplicated(self, tmp_path: Path):
-        existing = ScanFinding(
+    @staticmethod
+    def _existing(tmp_path: Path, rule: str, severity: FindingSeverity) -> ScanFinding:
+        """A finding already parsed for the secret on line 2 of aws.env."""
+        return ScanFinding(
             file_path=tmp_path / "aws.env",
             line_number=2,
-            rule_id="infisical-generic-api-key",
-            rule_description="Generic API Key",
-            description="Secret detected: Generic API Key",
-            severity=FindingSeverity.HIGH,
+            rule_id=f"infisical-{rule}",
+            rule_description=rule,
+            description=f"Secret detected: {rule}",
+            severity=severity,
             scanner="infisical",
             secret_hash=hash_secret(SECRET),
         )
+
+    def test_secret_already_reported_under_the_same_rule_is_not_duplicated(self, tmp_path: Path):
+        existing = self._existing(tmp_path, "aws-secret-access-key", FindingSeverity.CRITICAL)
         report = [_composite("aws.env", 1, AKID)]
 
         scanner = InfisicalScanner(auto_install=False)
         assert scanner._parse_components(report, tmp_path, [existing]) == []
+
+    def test_critical_component_survives_a_weaker_finding_of_another_rule(self, tmp_path: Path):
+        """A HIGH generic finding on the same line and secret must not swallow
+        the CRITICAL AWS secret component, or ``--fail-on critical`` passes."""
+        existing = self._existing(tmp_path, "generic-api-key", FindingSeverity.HIGH)
+        report = [_composite("aws.env", 1, AKID)]
+
+        scanner = InfisicalScanner(auto_install=False)
+        (component,) = scanner._parse_components(report, tmp_path, [existing])
+
+        assert component.rule_id == "infisical-aws-secret-access-key"
+        assert component.severity == FindingSeverity.CRITICAL
+        assert component.line_number == 2
 
     @pytest.mark.parametrize(
         "component_sets",
