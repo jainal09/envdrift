@@ -218,7 +218,7 @@
       "allowedVersions": "/^\\d{4}\\.\\d{2}\\.\\d+$/"
     },
     {
-      "description": "Hold the Infisical CLI at 0.43.135, the last release on the gitleaks engine (#834). From 0.43.136 its betterleaks engine never reports AWS secret access keys, and tests/integration/test_scanner_external_binaries.py::test_infisical_detects_aws_credentials fails on those builds. Lift this hold once an Infisical release passes that test.",
+      "description": "Hold the Infisical CLI at 0.43.135, the last release on the gitleaks engine (#834). From 0.43.136 its betterleaks engine reports an AWS access key ID only when a secret access key sits within a few lines of it in the same file, at every --confidence level, so a lone key ID is never flagged and tests/integration/test_scanner_external_binaries.py::test_infisical_detects_lone_aws_access_key_ids fails on those builds (still so on 0.43.141). The scanner already offsets the engine's other losses (it passes --confidence low and reports the secret access keys nested in ComponentSets). Lift this hold once an Infisical release passes that test.",
       "matchDatasources": [
         "github-releases"
       ],

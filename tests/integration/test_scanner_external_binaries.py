@@ -14,12 +14,15 @@ from __future__ import annotations
 
 import shutil
 from dataclasses import replace
+from pathlib import Path
 
 import pytest
 
 from envdrift.scanner.base import AggregatedScanResult, ScanFinding, ScanResult
 from envdrift.scanner.engine import GuardConfig, ScanEngine
+from envdrift.scanner.gitleaks import GitleaksScanner
 from envdrift.scanner.infisical import InfisicalScanner
+from envdrift.scanner.patterns import hash_secret
 from envdrift.scanner.talisman import TalismanScanner
 from envdrift.scanner.trivy import TrivyScanner
 
@@ -237,11 +240,11 @@ AWS_SESSION_KEY_ID = "ASIA" + "TE6A37WYKNWJ2AA2"
 def test_infisical_detects_aws_credentials(tmp_path):
     """Every line of an AWS credential set must be flagged (#834).
 
-    Infisical CLI 0.43.136 replaced its gitleaks engine with betterleaks, and
-    from then on (still on 0.43.141) the secret access key on line 2 is never
-    reported, while 0.43.135 flags all three lines. The GitHub-PAT test above
-    stays green on both, so this is the test that keeps the Renovate hold on
-    Infisical honest.
+    0.43.135 (gitleaks engine) flags all three lines. From 0.43.136 the
+    betterleaks engine reports the key IDs on lines 1 and 3 as a composite
+    ``aws-access-token`` match and nests the secret access key on line 2 under
+    ``ComponentSets`` instead of reporting it, so the scanner has to surface
+    those components itself, secret hash included.
     """
     (tmp_path / "aws.env").write_text(
         f"AWS_ACCESS_KEY_ID={AWS_ACCESS_KEY_ID}\n"
@@ -257,9 +260,208 @@ def test_infisical_detects_aws_credentials(tmp_path):
         f"infisical missed AWS credential lines {sorted({1, 2, 3} - flagged)}; "
         f"rules reported: {sorted({f.rule_id for f in result.findings})}"
     )
+    assert any(
+        f.line_number == 2 and f.secret_hash == hash_secret(AWS_SECRET_ACCESS_KEY)
+        for f in result.findings
+    ), "the secret access key itself must be captured, not just its line"
     for finding in result.findings:
         for raw in (AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, AWS_SESSION_KEY_ID):
             assert raw not in finding.secret_preview
+
+
+# A generic high-entropy API key, fragmented like the tokens above.
+GENERIC_API_KEY = "q8Zt3VnR7wXy2Lp9" + "Ks4Bd6Fh1Jm5Nc0Gx"
+
+
+@requires_infisical
+def test_infisical_reports_low_confidence_secrets(tmp_path):
+    """Secrets betterleaks rates "low" confidence must still be reported (#834).
+
+    From 0.43.136 infisical drops every finding below ``--confidence``, which
+    defaults to "medium", and only its "low"-rated generic rules report a lone
+    AWS secret access key or a generic API key. So the scanner passes
+    ``--confidence low`` whenever the binary's ``scan --help`` lists the flag.
+    0.43.135 has no such flag (it rejects it) and reports all three files
+    without it.
+    """
+    files = {
+        "secret.env": f"AWS_SECRET_ACCESS_KEY={AWS_SECRET_ACCESS_KEY}\n",
+        "config.json": f'{{\n  "secretAccessKey": "{AWS_SECRET_ACCESS_KEY}"\n}}\n',
+        "api.env": f"API_KEY={GENERIC_API_KEY}\n",
+    }
+    for name, text in files.items():
+        (tmp_path / name).write_text(text)
+
+    result = InfisicalScanner(auto_install=False).scan([tmp_path])
+
+    assert result.error is None, f"unexpected error: {result.error}"
+    flagged = {f.file_path.name for f in result.findings}
+    assert flagged >= set(files), (
+        f"infisical missed low-confidence secrets in {sorted(set(files) - flagged)}; "
+        f"rules reported: {sorted({f.rule_id for f in result.findings})}"
+    )
+    for finding in result.findings:
+        for raw in (AWS_SECRET_ACCESS_KEY, GENERIC_API_KEY):
+            assert raw not in finding.secret_preview
+
+
+@requires_infisical
+def test_infisical_detects_lone_aws_access_key_ids(tmp_path):
+    """An AWS key ID with no secret access key next to it must be flagged (#834).
+
+    This is the test that keeps the Renovate hold on Infisical honest.
+    0.43.135 flags every file here. From 0.43.136 the betterleaks
+    ``aws-access-token`` rule fires only when a secret access key sits within
+    a few lines of the key ID in the same file, at every ``--confidence``
+    level (still so on 0.43.141), so none of its built-in rules report these.
+    """
+    files = {
+        "app.env": f"AWS_ACCESS_KEY_ID={AWS_ACCESS_KEY_ID}\n",
+        "session.env": f"AWS_SESSION_KEY_ID={AWS_SESSION_KEY_ID}\n",
+        "credentials": f"[default]\naws_access_key_id = {AWS_ACCESS_KEY_ID}\nregion = us-east-1\n",
+        "deploy.sh": f"aws configure set aws_access_key_id {AWS_ACCESS_KEY_ID}\n",
+    }
+    for name, text in files.items():
+        (tmp_path / name).write_text(text)
+
+    result = InfisicalScanner(auto_install=False).scan([tmp_path])
+
+    assert result.error is None, f"unexpected error: {result.error}"
+    flagged = {f.file_path.name for f in result.findings}
+    assert flagged >= set(files), (
+        f"infisical missed lone AWS key IDs in {sorted(set(files) - flagged)}; "
+        f"rules reported: {sorted({f.rule_id for f in result.findings})}"
+    )
+
+
+# Secrets that betterleaks nests under another rule's finding, keyed by the
+# (file, line) that must be flagged. Fragmented like the tokens above.
+NESTED_SECRETS = {
+    ("exoscale.env", 2): "Zq9Xw8Vu7Ts6Rq5Po4Nm" + "3Lk2Jh1Gf0EdCbAz9Yx8Wv7U",
+    ("polymarket.env", 2): "q8Zt3VnR7wXy2Lp9Ks4B" + "d6Fh1Jm5Nc0GxW2eTt7Y/Ab+=",
+    ("ovh.env", 4): "Pa6Hn2Wq8Ze4Rt1Y" + "u9Io3Kl7Mj5Xc0Bv",
+    ("alibaba.env", 3): "CAISq8Zt3VnR7wXy2Lp9" + "Ks4Bd6Fh1Jm5Nc0GxW2e",
+}
+
+
+@requires_infisical
+def test_infisical_reports_nested_secret_components(tmp_path):
+    """Secrets nested under another rule's finding must be reported (#834).
+
+    Besides the AWS secret access key, betterleaks (0.43.136+) nests the
+    Exoscale and Polymarket API secrets, the OVH consumer key and the Alibaba
+    STS security token under the composite rule's primary match instead of
+    reporting them. 0.43.135 flags each of these lines as a generic API key.
+    """
+    secret = NESTED_SECRETS
+    files = {
+        "exoscale.env": (
+            "EXOSCALE_API_KEY=EXO" + "a1B2c3D4e5F6g7H8i9J0k1L2\n"
+            f"EXOSCALE_API_SECRET={secret['exoscale.env', 2]}\n"
+        ),
+        "polymarket.env": (
+            "POLYMARKET_API_KEY=7c2e9f14-3b8a-4d6e-" + "a1f0-5b9c8d7e6f3a\n"
+            f"POLYMARKET_API_SECRET={secret['polymarket.env', 2]}\n"
+            "POLYMARKET_PASSPHRASE=c0rrect_h0rse_" + "b4ttery_st4ple\n"
+        ),
+        "ovh.env": (
+            "OVH_ENDPOINT=ovh-eu\n"
+            "OVH_APPLICATION_KEY=k7Qp2Xz9" + "Lm4Wn8Rt\n"
+            "OVH_APPLICATION_SECRET=Vb3Mr8Sd5Fg1Jc0Y" + "eHq7Tz2Kp9Lw4Nx6\n"
+            f"OVH_CONSUMER_KEY={secret['ovh.env', 4]}\n"
+        ),
+        "alibaba.env": (
+            "ALIBABA_ACCESS_KEY_ID=STS." + "NUgYrLnoC2YtqMv8XzBk3pQw\n"
+            "ALIBABA_ACCESS_KEY_SECRET=Hq7Tz2Kp9Lw4Nx6V" + "b3Mr8Sd5Fg1Jc0Ye\n"
+            f"ALIBABA_SECURITY_TOKEN={secret['alibaba.env', 3]}\n"
+        ),
+    }
+    for name, text in files.items():
+        (tmp_path / name).write_text(text)
+
+    result = InfisicalScanner(auto_install=False).scan([tmp_path])
+
+    assert result.error is None, f"unexpected error: {result.error}"
+    flagged = {(f.file_path.name, f.line_number) for f in result.findings}
+    assert flagged >= set(NESTED_SECRETS), (
+        f"infisical missed nested secrets at {sorted(set(NESTED_SECRETS) - flagged)}; "
+        f"rules reported: {sorted({f.rule_id for f in result.findings})}"
+    )
+    for finding in result.findings:
+        for raw in NESTED_SECRETS.values():
+            assert raw not in finding.secret_preview
+
+
+# Azure service-principal values and a password, fragmented like the tokens above.
+AZURE_TENANT_ID = "3f2b8c1d-4e5a-4b6c-" + "9d7e-8f9a0b1c2d3e"
+AZURE_CLIENT_ID = "a1b2c3d4-e5f6-4a7b-" + "8c9d-0e1f2a3b4c5d"
+AZURE_CLIENT_SECRET = "Xy78Q~" + "aB3dE5fG7hJ9kL1mN3pQ5rS7tV9wX1yZ3b"
+DB_PASSWORD = "Tr0ub4dor" + "&3xK9pQ!vL2m"
+
+
+@requires_infisical
+def test_infisical_does_not_report_identifiers_paired_with_a_secret(tmp_path):
+    """Tenant IDs, client IDs and usernames next to a secret are not secrets (#834).
+
+    Betterleaks (0.43.136+) nests the Azure tenant and client IDs that sit near
+    a client secret, and the username near a password, under ComponentSets.
+    Reporting them would fail ``guard`` on values that are not secrets and
+    that 0.43.135 never flagged. The client secret on line 3 is flagged by
+    every release, which keeps this test from passing on an empty scan.
+    """
+    (tmp_path / "azure.env").write_text(
+        f"AZURE_TENANT_ID={AZURE_TENANT_ID}\n"
+        f"AZURE_CLIENT_ID={AZURE_CLIENT_ID}\n"
+        f"AZURE_CLIENT_SECRET={AZURE_CLIENT_SECRET}\n"
+    )
+    (tmp_path / "db.env").write_text(f"DB_USERNAME=reporting_service\nDB_PASSWORD={DB_PASSWORD}\n")
+
+    result = InfisicalScanner(auto_install=False).scan([tmp_path])
+
+    assert result.error is None, f"unexpected error: {result.error}"
+    flagged = {(f.file_path.name, f.line_number) for f in result.findings}
+    assert ("azure.env", 3) in flagged, f"the client secret was missed; got {sorted(flagged)}"
+    identifiers = {("azure.env", 1), ("azure.env", 2), ("db.env", 1)}
+    assert not flagged & identifiers, (
+        f"identifiers reported as secrets at {sorted(flagged & identifiers)}; "
+        f"rules reported: {sorted({f.rule_id for f in result.findings})}"
+    )
+
+
+# --- Relative scan paths (#843) -------------------------------------------
+
+_HAS_GITLEAKS = GitleaksScanner(auto_install=False).is_installed()
+requires_gitleaks = pytest.mark.skipif(not _HAS_GITLEAKS, reason="gitleaks not installed")
+
+
+@pytest.mark.parametrize(
+    "scanner_cls",
+    [
+        pytest.param(InfisicalScanner, marks=requires_infisical, id="infisical"),
+        pytest.param(GitleaksScanner, marks=requires_gitleaks, id="gitleaks"),
+    ],
+)
+@pytest.mark.parametrize("target", ["proj", "proj/sub/app.env"])
+@pytest.mark.xfail(
+    strict=False,
+    reason="the binary runs with cwd=<path> but is handed the relative path again (see #843)",
+)
+def test_scanner_scans_a_cwd_relative_path(tmp_path, monkeypatch, scanner_cls, target):
+    """A cwd-relative path must scan like its absolute form (#843).
+
+    ``guard <subdir>`` and ``guard --pr-base`` (which passes cwd-relative
+    paths for changed files) hand scanners relative paths. Both backends run
+    the binary with ``cwd`` set to the path (or its parent) yet pass the
+    relative path unchanged, so it resolves to ``proj/proj`` and the scan
+    fails with ``stat proj: no such file or directory``.
+    """
+    _write_secret_file(tmp_path / "proj" / "sub", "app.env")
+    monkeypatch.chdir(tmp_path)
+
+    result = scanner_cls(auto_install=False).scan([Path(target)])
+
+    assert result.error is None, f"unexpected error: {result.error}"
+    assert any(f.file_path.name == "app.env" for f in result.findings), result.findings
 
 
 # --- ScanEngine orchestration / filtering (P1) ----------------------------

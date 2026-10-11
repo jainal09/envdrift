@@ -238,6 +238,24 @@ class TestFindingParsing:
         assert finding.scanner == "infisical"
         assert "****" in finding.secret_preview  # Redacted
 
+    @pytest.mark.xfail(
+        strict=False,
+        reason="RULE_SEVERITY_MAP keys miss the rule IDs Infisical emits (see #844)",
+    )
+    @pytest.mark.parametrize("rule_id", ["aws-access-token", "stripe-access-token"])
+    def test_emitted_rule_ids_get_their_intended_severity(
+        self, scanner: InfisicalScanner, tmp_path: Path, rule_id: str
+    ):
+        """Both engines emit these IDs, not the map's ``aws-access-key-id`` /
+        ``stripe-api-key``, so a leaked AWS key ID or Stripe live key falls
+        back to HIGH and slips past ``--fail-on critical`` (#844)."""
+        item: dict[str, Any] = {"RuleID": rule_id, "File": "a.env", "Secret": "x" * 20}
+
+        finding = scanner._parse_finding(item, tmp_path)
+
+        assert finding is not None
+        assert finding.severity == FindingSeverity.CRITICAL
+
     def test_parse_finding_with_commit_info(self, scanner: InfisicalScanner, tmp_path: Path):
         """Test parsing a finding with git commit information."""
         item: dict[str, Any] = {
@@ -474,8 +492,9 @@ class TestInfisicalScanExecution:
                 result = mock_scanner.scan([path1, path2])
 
         assert result.success is True
-        # Should be called once per existing path
-        assert mock_run.call_count == 2
+        # One scan per existing path; the `scan --help` flag probe is not a scan.
+        scans = [c for c in mock_run.call_args_list if "--report-path" in c.args[0]]
+        assert len(scans) == 2
 
 
 class TestInfisicalAutoInstall:

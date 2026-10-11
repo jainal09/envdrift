@@ -147,11 +147,24 @@ Infisical provides:
 envdrift guard --infisical
 ```
 
-> **Note:** Infisical CLI 0.43.136 and later (the betterleaks engine) do not report AWS
-> secret access keys ([#834](https://github.com/jainal09/envdrift/issues/834)). The
-> auto-installed binary is pinned to a gitleaks-engine release (0.43.135 or earlier), but an
-> `infisical` already on your `PATH` is used as-is, so check `infisical --version` if you
-> installed it yourself.
+> **Note:** Infisical CLI 0.43.136 and later (the betterleaks engine) report less than earlier
+> releases ([#834](https://github.com/jainal09/envdrift/issues/834)). envdrift makes up for most of it:
+>
+> - When `infisical scan --help` lists `--confidence`, envdrift scans with `--confidence low`. The
+>   default, `medium`, hides lone AWS secret access keys, generic API keys and passwords, which only
+>   the engine's low-confidence generic rules report. Releases up to 0.43.135 reject the flag, so
+>   they never get it.
+> - Betterleaks nests the secret access key of a paired AWS credential inside the key ID's finding.
+>   envdrift reports it as its own finding, and does the same for the few other nested values that
+>   are secrets (the Exoscale and Polymarket API secrets, the Polymarket passphrase, the OVH
+>   consumer key and the Alibaba STS security token). The other values betterleaks nests, such as
+>   Azure tenant and client IDs, usernames, account names and hosts, are not secrets, so envdrift
+>   does not report them.
+>
+> Betterleaks still never reports an AWS access key ID that has no secret access key within a few
+> lines of it: none of its built-in rules does, at any `--confidence` level. So the auto-installed
+> binary stays pinned to 0.43.135, the last gitleaks-engine release. An `infisical` already on your
+> `PATH` is used as-is, though: check `infisical --version` if you installed it yourself.
 
 ### `--history`, `-H`
 
