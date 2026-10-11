@@ -362,9 +362,9 @@ class TestUtf8Bom:
         "pydantic-settings accepts >= 0.21.0",
         "env_file_encoding='utf-8-sig'",
         "cannot see the app's python-dotenv version",
-        "With an older python-dotenv and the default encoding",
-        "a non-UTF-8 env_file_encoding",
-        "a shell sourcing the file",
+        "With an older python-dotenv and the default encoding the key keeps an invisible",
+        "a non-UTF-8 env_file_encoding decodes the BOM bytes into other characters",
+        "a shell sourcing the file does not set it at all",
         "comes up missing at startup",
         "Re-save the file as UTF-8 without a BOM",
     )
@@ -474,7 +474,9 @@ class TestUtf8Bom:
             expected
         )
         # ...but a non-UTF-8 encoding leaves the required field missing, so
-        # the app is NOT unconditionally unaffected.
+        # the app is NOT unconditionally unaffected. It decodes the BOM bytes
+        # into other characters, not into an invisible U+FEFF.
+        assert list(dotenv_values(bom, encoding="latin-1")) == ["\u00ef\u00bb\u00bfAPI_KEY"]
         with pytest.raises(ValidationError) as excinfo:
             settings_cls(_env_file=str(bom), _env_file_encoding="latin-1")
         assert any(

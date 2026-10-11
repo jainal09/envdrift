@@ -35,10 +35,11 @@ When you run `envdrift validate`, it:
    A leading UTF-8 BOM is stripped, as python-dotenv 1.2.3 and later do, so
    reports name the key the user wrote; it is still flagged with a warning
    because envdrift cannot see the app's python-dotenv version: an app on
-   python-dotenv older than 1.2.3 (which pydantic-settings still accepts) or
-   with a non-UTF-8 `env_file_encoding` sees a `U+FEFF`-prefixed first key,
-   and a shell sourcing the file does not set it at all, so a required field
-   backed by it comes up missing. Non-comment content that
+   python-dotenv older than 1.2.3 (which pydantic-settings still accepts)
+   sees a `U+FEFF`-prefixed first key, a non-UTF-8 `env_file_encoding`
+   decodes the BOM bytes into other characters, and a shell sourcing the file
+   does not set the key at all, so a required field backed by it comes up
+   missing. Non-comment content that
    cannot be parsed is also ignored with a line-numbered warning rather than
    disappearing silently
 3. Checks for missing required fields

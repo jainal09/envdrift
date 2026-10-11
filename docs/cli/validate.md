@@ -82,10 +82,11 @@ judged exactly as the real app loads them:
   pydantic-settings app loads it under its real name only with python-dotenv
   1.2.3 or later (pydantic-settings accepts 0.21.0 and later) or
   `env_file_encoding='utf-8-sig'`. With an older python-dotenv and the default
-  encoding, a non-UTF-8 `env_file_encoding`, or a shell sourcing the file, the
-  key gets an invisible `U+FEFF` prefix (or is not set at all) and a required
-  field backed by it comes up missing at startup. Re-save the file as UTF-8
-  without a BOM. Like every `validate` warning, it does not affect the `--ci`
+  encoding the key keeps an invisible `U+FEFF` prefix, a non-UTF-8
+  `env_file_encoding` decodes the BOM bytes into other characters (`latin-1`
+  gives `ï»¿`), and a shell sourcing the file does not set the key at all. Each
+  way, a required field backed by it comes up missing at startup. Re-save the
+  file as UTF-8 without a BOM. Like every `validate` warning, it does not affect the `--ci`
   exit code.
 
 Quoted keys and bare `KEY` bindings without `=` also follow python-dotenv. Bare
