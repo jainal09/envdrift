@@ -91,20 +91,25 @@ def _version_mirrors(workflow: dict[Any, Any], source: str) -> list[str]:
     return violations
 
 
-def test_workflow_labels_do_not_repeat_renovate_bumped_versions() -> None:
-    """No workflow label or command may go stale on a setup-action bump (#840)."""
+def _load_workflows() -> dict[str, dict[Any, Any]]:
+    """Every workflow file, parsed, keyed by file name."""
     files = _workflow_files()
     assert files, "no workflow files found — did .github/workflows move?"
-    workflows = {wf.name: yaml.safe_load(wf.read_text(encoding="utf-8")) for wf in files}
+    return {wf.name: yaml.safe_load(wf.read_text(encoding="utf-8")) for wf in files}
 
-    literals = [
-        pair
-        for workflow in workflows.values()
-        for job in (workflow.get("jobs") or {}).values()
-        for pair in _literal_versions(job)
-    ]
+
+def _all_literal_versions(workflows: dict[str, dict[Any, Any]]) -> set[tuple[str, str]]:
+    """The literal version inputs of every job in every workflow."""
+    jobs = (job for wf in workflows.values() for job in (wf.get("jobs") or {}).values())
+    return {pair for job in jobs for pair in _literal_versions(job)}
+
+
+def test_workflow_labels_do_not_repeat_renovate_bumped_versions() -> None:
+    """No workflow label or command may go stale on a setup-action bump (#840)."""
+    workflows = _load_workflows()
+
     # A guard that finds no literal inputs checks nothing; fail loudly instead.
-    assert any(key == "python-version" for key, _ in literals), (
+    assert any(key == "python-version" for key, _ in _all_literal_versions(workflows)), (
         "no literal setup-python versions found — the guard would be vacuous"
     )
 

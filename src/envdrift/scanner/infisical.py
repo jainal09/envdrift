@@ -741,32 +741,46 @@ class InfisicalScanner(ScannerBackend):
         """
         if not isinstance(item, dict):
             return []
-        component_sets = item.get("ComponentSets")
-        if not isinstance(component_sets, list):
-            return []
         context = {
             key: item[key] for key in ("File", "Commit", "Author", "Email", "Date") if key in item
         }
         parent_rule = item.get("RuleID", "unknown")
         flattened: list[dict[str, Any]] = []
-        for component_set in component_sets:
-            members = component_set.get("components") if isinstance(component_set, dict) else None
-            for component in members if isinstance(members, list) else []:
-                if not isinstance(component, dict):
-                    continue
-                if str(component.get("RuleID", "")).lower() not in _SECRET_COMPONENT_RULES:
-                    continue
-                entry = dict(context)
-                entry.update(
-                    (key, component[key])
-                    for key in ("RuleID", "StartLine", "StartColumn", "Secret", "Match")
-                    if key in component
-                )
-                entry["Description"] = (
-                    f"{entry.get('RuleID', 'unknown')} (paired with {parent_rule})"
-                )
-                flattened.append(entry)
+        for component in InfisicalScanner._secret_components(item.get("ComponentSets")):
+            entry = dict(context)
+            entry.update(
+                (key, component[key])
+                for key in ("RuleID", "StartLine", "StartColumn", "Secret", "Match")
+                if key in component
+            )
+            entry["Description"] = f"{entry.get('RuleID', 'unknown')} (paired with {parent_rule})"
+            flattened.append(entry)
         return flattened
+
+    @staticmethod
+    def _secret_components(component_sets: Any) -> list[dict[str, Any]]:
+        """The well-formed members of ``ComponentSets`` whose rule is a secret.
+
+        Args:
+            component_sets: The ``ComponentSets`` value of one raw finding.
+
+        Returns:
+            Every component dict whose ``RuleID`` is in ``_SECRET_COMPONENT_RULES``;
+            malformed sets and members are skipped.
+        """
+        sets = component_sets if isinstance(component_sets, list) else []
+        members = (
+            member
+            for component_set in sets
+            if isinstance(component_set, dict) and isinstance(component_set.get("components"), list)
+            for member in component_set["components"]
+        )
+        return [
+            member
+            for member in members
+            if isinstance(member, dict)
+            and str(member.get("RuleID", "")).lower() in _SECRET_COMPONENT_RULES
+        ]
 
     def _parse_finding(self, item: dict[str, Any], base_path: Path) -> ScanFinding | None:
         """Parse an infisical finding into our format.
