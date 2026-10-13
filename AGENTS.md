@@ -234,6 +234,14 @@ DIRTY/BEHIND state you're already handling. Re-arm only after the agent's final 
   release should wait until the last feature PR lands so its changelog includes it.
   Merging one release PR rewrites the shared manifest, so a sibling release PR goes
   DIRTY until release-please regenerates it — expected; wait and merge.
+- **Release PRs are merged by hand.** The "Auto-merge Version Bumps" workflow merges
+  only Renovate minor/patch PRs (labels `version-bump-auto` + `minor-version-bump`);
+  release-please PRs (`autorelease: pending`) and lock-file-maintenance PRs never
+  qualify. Its squash-merges run as `GITHUB_TOKEN`, and GitHub fires no workflows
+  for a `GITHUB_TOKEN` push — so after one lands, release-please has not
+  regenerated the release PR (it is stale/`BEHIND`) and main CI has not run.
+  Dispatch `gh workflow run release-please.yml` (or `gh pr update-branch` the
+  release PR) before merging it.
 
 ---
 
