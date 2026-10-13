@@ -211,3 +211,71 @@ def test_guard_json_scanner_error_is_ansi_clean(
     # The native scanner still reports the critical secret, and blocking
     # findings take precedence over the scanner error (docs/cli/guard.md).
     assert result.returncode == 1, result.stderr
+
+
+@pytest.mark.parametrize("scanner", _SCANNERS)
+@pytest.mark.xfail(
+    strict=False,
+    raises=AssertionError,
+    reason="an absolute path is passed unchanged and the binaries do not walk into a "
+    "symlinked root (see #853)",
+)
+def test_guard_absolute_symlinked_directory_is_scanned(tmp_path: Path, scanner):
+    """An absolute path to a symlinked directory scans like the relative one."""
+    name, flags, _config = scanner
+    _write_secret(tmp_path / "repo" / "proj" / "sub" / "app.env")
+    link = tmp_path / "linkproj"
+    try:
+        link.symlink_to(tmp_path / "repo" / "proj", target_is_directory=True)
+    except OSError as exc:  # Windows without symlink privilege
+        pytest.skip(f"cannot create a symlink here: {exc}")
+
+    _result, payload = _guard([str(link), *flags], cwd=tmp_path)
+
+    assert _scanner_result(payload, name)["error"] is None
+    assert _scanner_paths(payload, name), f"{name} reported nothing for {link}"
+
+
+@pytest.mark.skipif(
+    not GitleaksScanner(auto_install=False).is_installed(), reason="gitleaks not installed"
+)
+@pytest.mark.xfail(
+    strict=False,
+    raises=AssertionError,
+    reason="gitleaks runs in each changed file's directory, so a repo-root "
+    ".gitleaksignore misses nested files (see #854)",
+)
+def test_guard_pr_base_honours_repo_root_gitleaksignore_for_nested_files(git_repo: Path):
+    """A repo-root ``.gitleaksignore`` suppresses nested and root-level files alike."""
+    _feature_branch(git_repo)
+    _write_secret(git_repo / "config" / "settings.txt")
+    _write_secret(git_repo / "top.txt")
+    (git_repo / ".gitleaksignore").write_text(
+        "config/settings.txt:github-pat:1\ntop.txt:github-pat:1\n"
+    )
+    _git(git_repo, "add", "-A")
+    _git(git_repo, "commit", "-q", "-m", "feature")
+
+    _result, payload = _guard(["--pr-base", "base", "--gitleaks"], cwd=git_repo)
+
+    assert _scanner_result(payload, "gitleaks")["error"] is None
+    assert _scanner_paths(payload, "gitleaks") == set()
+
+
+@pytest.mark.skipif(
+    not GitleaksScanner(auto_install=False).is_installed(), reason="gitleaks not installed"
+)
+@pytest.mark.xfail(
+    strict=False,
+    raises=AssertionError,
+    reason="native resolves a directory target to absolute paths while gitleaks keeps "
+    "the cwd-relative form (see #855)",
+)
+def test_guard_reports_one_path_form_per_file(tmp_path: Path):
+    """Every scanner names ``proj/sub/app.env`` the same way in one report."""
+    _write_secret(tmp_path / "proj" / "sub" / "app.env")
+
+    _result, payload = _guard(["proj", "--gitleaks"], cwd=tmp_path)
+
+    forms = {f["file_path"] for f in payload["findings"]}
+    assert len(forms) == 1, sorted(forms)

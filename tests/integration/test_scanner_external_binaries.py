@@ -15,7 +15,6 @@ from __future__ import annotations
 import base64
 import hashlib
 import json
-import os
 import re
 import shutil
 import subprocess
@@ -281,7 +280,10 @@ def test_infisical_detects_aws_credentials(tmp_path):
 def _infisical_runs_betterleaks() -> bool:
     """Whether the infisical binary in use is 0.43.136+, the betterleaks engine."""
     version = InfisicalScanner(auto_install=False).get_version() or ""
-    return tuple(int(part) for part in re.findall(r"\d+", version)[:3]) >= (0, 43, 136)
+    parts = re.findall(r"\d+", version)[:3]
+    # Fail loud: a silent False would skip the betterleaks-only assertions.
+    assert len(parts) == 3, f"could not parse the infisical version from {version!r}"
+    return tuple(int(part) for part in parts) >= (0, 43, 136)
 
 
 @requires_infisical
@@ -357,12 +359,40 @@ def test_infisical_grades_azure_storage_account_keys_by_engine(tmp_path):
         assert graded == [(1, "infisical-generic-api-key", "high")], graded
 
 
-def _run_guard(args: list[str], *, cwd: Path) -> subprocess.CompletedProcess:
-    """Run the real ``envdrift guard`` CLI, un-colorized, as a subprocess."""
-    env = os.environ.copy()
-    env.pop("FORCE_COLOR", None)
-    src = str(Path(__file__).resolve().parents[2] / "src")
-    env["PYTHONPATH"] = os.pathsep.join(filter(None, [src, env.get("PYTHONPATH")]))
+@requires_infisical
+def test_infisical_grades_stripe_live_keys_critical_and_test_keys_high(tmp_path):
+    """Stripe live keys are CRITICAL, test-mode keys HIGH, on both engines (#844).
+
+    Both engines report every Stripe secret and restricted key under
+    ``stripe-access-token``, which used to fall back to HIGH. The test-mode
+    downgrade reads the finding's ``Secret``, so this pins that the real report
+    carries just the key there.
+    """
+    body = "4eC39HqLyjWDarjtT1zdp7dc" + "ABCDEFGH"
+    (tmp_path / "stripe.env").write_text(
+        f"STRIPE_SECRET_KEY={'sk_live_' + body}\n"
+        f"STRIPE_RESTRICTED_KEY={'rk_live_' + body}\n"
+        f"STRIPE_TEST_KEY={'sk_test_' + body}\n"
+    )
+
+    result = InfisicalScanner(auto_install=False).scan([tmp_path])
+
+    assert result.error is None, f"unexpected error: {result.error}"
+    graded = sorted((f.line_number, f.rule_id, f.severity.value) for f in result.findings)
+    stripe = [
+        (f.line_number, f.severity)
+        for f in result.findings
+        if f.rule_id == "infisical-stripe-access-token"
+    ]
+    assert sorted(stripe) == [(1, CRITICAL), (2, CRITICAL), (3, FindingSeverity.HIGH)], graded
+
+
+def _run_guard(args: list[str], *, cwd: Path, env: dict[str, str]) -> subprocess.CompletedProcess:
+    """Run the real ``envdrift guard`` CLI as a subprocess with ``env``.
+
+    Pass the ``integration_env`` fixture: the autouse conftest fixture has
+    already stripped ``FORCE_COLOR``, so the output is un-colorized.
+    """
     return subprocess.run(
         [sys.executable, "-m", "envdrift.cli", "guard", *args],
         cwd=str(cwd),
@@ -374,7 +404,7 @@ def _run_guard(args: list[str], *, cwd: Path) -> subprocess.CompletedProcess:
 
 
 @requires_infisical
-def test_guard_infisical_fail_on_critical_blocks_an_aws_key_id(tmp_path):
+def test_guard_infisical_fail_on_critical_blocks_an_aws_key_id(tmp_path, integration_env):
     """``guard --infisical --fail-on critical`` must fail on a leaked AWS key ID (#844).
 
     The native scanner's own AWS rules and Infisical's nested secret are ignored,
@@ -407,6 +437,7 @@ def test_guard_infisical_fail_on_critical_blocks_an_aws_key_id(tmp_path):
             "envdrift.toml",
         ],
         cwd=tmp_path,
+        env=integration_env,
     )
 
     assert result.returncode == 1, (result.returncode, result.stdout, result.stderr)

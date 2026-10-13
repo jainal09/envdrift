@@ -30,7 +30,10 @@ HIGH = FindingSeverity.HIGH
 # Every rule ID seen in real reports from Infisical CLI 0.43.135 (gitleaks engine)
 # and 0.43.141 (betterleaks), over a 66-shape fixture matrix plus probes for the
 # GitHub refresh token and GitLab's routable PATs, and the severity each must get
-# (#844). Rows marked 0.43.141 come only from the betterleaks engine.
+# (#844). Rows marked 0.43.141 come only from the betterleaks engine, rows
+# marked 0.43.135 only from the gitleaks one. The HIGH rows pin current
+# behaviour, not policy: several are CRITICAL in the native scanner, and the
+# cross-scanner severity policy is tracked in #850.
 EMITTED_RULE_SEVERITIES = [
     ("aws-access-token", CRITICAL),
     ("aws-secret-access-key", CRITICAL),  # 0.43.141, nested under ComponentSets
@@ -50,7 +53,7 @@ EMITTED_RULE_SEVERITIES = [
     ("stripe-access-token", CRITICAL),  # live keys; test-mode keys are HIGH
     ("azure-ad-client-secret", HIGH),
     ("curl-auth-header", HIGH),
-    ("datadog-access-token", HIGH),
+    ("datadog-access-token", HIGH),  # 0.43.135
     ("datadog-api-key", HIGH),  # 0.43.141
     ("datadog-application-key", HIGH),  # 0.43.141
     ("gcp-api-key", HIGH),
@@ -328,7 +331,7 @@ class TestFindingParsing:
             pytest.param("rk_test_" + STRIPE_KEY_BODY, HIGH, id="rk_test"),
         ],
     )
-    def test_stripe_test_mode_keys_stay_high(
+    def test_stripe_live_keys_critical_test_keys_high(
         self,
         scanner: InfisicalScanner,
         tmp_path: Path,
@@ -351,7 +354,6 @@ class TestFindingParsing:
             ("stripe-api-key", CRITICAL),
             ("google-api-key", HIGH),
             ("slack-token", HIGH),
-            ("AWS-Access-Token", CRITICAL),
         ],
     )
     def test_original_rule_ids_keep_their_severity(
@@ -361,14 +363,24 @@ class TestFindingParsing:
         rule_id: str,
         expected: FindingSeverity,
     ):
-        """No built-in rule emits the original keys, but a custom rules config
-        may, and rule IDs are matched case-insensitively."""
+        """No built-in rule emits the original keys, but a custom rules config may."""
         item: dict[str, Any] = {"RuleID": rule_id, "File": "a.env", "Secret": "x" * 20}
 
         finding = scanner._parse_finding(item, tmp_path)
 
         assert finding is not None
         assert finding.severity == expected
+
+    def test_rule_ids_are_matched_case_insensitively(
+        self, scanner: InfisicalScanner, tmp_path: Path
+    ):
+        """A custom rules config may spell a rule ID in another case."""
+        item: dict[str, Any] = {"RuleID": "AWS-Access-Token", "File": "a.env", "Secret": "x" * 20}
+
+        finding = scanner._parse_finding(item, tmp_path)
+
+        assert finding is not None
+        assert finding.severity == CRITICAL
 
     def test_parse_finding_with_commit_info(self, scanner: InfisicalScanner, tmp_path: Path):
         """Test parsing a finding with git commit information."""

@@ -104,10 +104,11 @@ def _get_infisical_checksums_urls() -> dict[str, str]:
 # the IDs the CLI actually emits, read from real reports of both engines (0.43.135
 # gitleaks, 0.43.136+ betterleaks). The original keys matched none of them, so AWS
 # key IDs and Stripe keys fell back to HIGH and passed ``--fail-on critical``
-# (#844). CRITICAL is kept for credentials that on their own give write access to
-# cloud resources, source code, published packages or payments, and for private
-# keys. The native scanner grades each of these CRITICAL too. Every other rule is
-# HIGH.
+# (#844). CRITICAL covers AWS, Azure storage, GitHub/GitLab, npm/PyPI and Stripe
+# live credentials plus private keys, which the native scanner grades CRITICAL
+# too. Every other rule is HIGH. Some of those (Heroku, Slack, OpenAI, SendGrid,
+# Google API keys) are CRITICAL in the native scanner; aligning the scanners'
+# severity policy is tracked in #850, so those HIGH grades are not a decision.
 RULE_SEVERITY_MAP: dict[str, FindingSeverity] = {
     # Both engines report AWS access key IDs (AKIA, ASIA, ...) under
     # ``aws-access-token``. From 0.43.136 that happens only next to a secret
