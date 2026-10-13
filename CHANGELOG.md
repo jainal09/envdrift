@@ -1,5 +1,13 @@
 # Changelog
 
+## [11.0.7](https://github.com/jainal09/envdrift/compare/v11.0.6...v11.0.7) (2026-10-11)
+
+
+### Bug Fixes
+
+* **scanner:** pass --confidence low to Infisical and report nested secret components ([#834](https://github.com/jainal09/envdrift/issues/834)) ([76b1d83](https://github.com/jainal09/envdrift/commit/76b1d839f211ea62bdf14e24b8e33f83fb6a4d5c))
+* **validate:** make the BOM warning conditional on the app's python-dotenv ([#817](https://github.com/jainal09/envdrift/issues/817)) ([76b1d83](https://github.com/jainal09/envdrift/commit/76b1d839f211ea62bdf14e24b8e33f83fb6a4d5c))
+
 ## [11.0.6](https://github.com/jainal09/envdrift/compare/v11.0.5...v11.0.6) (2026-10-03)
 
 
