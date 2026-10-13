@@ -813,14 +813,11 @@ class DotenvxWrapper:
         "decryption failed",
     ]
 
-    # Regex to strip ANSI escape codes from output
-    ANSI_ESCAPE_PATTERN: ClassVar[re.Pattern[str]] = re.compile(r"\x1b\[[0-9;]*m")
-
     @classmethod
     def _clean_output(cls, text: str) -> str:
         """Strip ANSI escape codes and normalize Unicode characters for clean output."""
-        # Strip ANSI escape codes
-        text = cls.ANSI_ESCAPE_PATTERN.sub("", text)
+        # Strip ANSI escape codes, cursor/erase sequences included (not just colors)
+        text = strip_ansi(text)
         # Replace Unicode ellipsis with ASCII equivalent (avoids encoding issues on Windows)
         text = text.replace("…", "...")
         # Also handle the mojibake version (UTF-8 ellipsis decoded as Windows-1252)
