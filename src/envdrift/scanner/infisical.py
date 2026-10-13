@@ -13,6 +13,7 @@ from __future__ import annotations
 import functools
 import json
 import logging
+import os
 import platform
 import re
 import shutil
@@ -43,7 +44,10 @@ from envdrift.scanner.platform_utils import (
     get_venv_bin_dir,
     safe_extract_tar,
     safe_extract_zip,
+    scan_location,
 )
+from envdrift.utils.git import get_git_root, has_git_head
+from envdrift.utils.text import strip_ansi
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -96,19 +100,71 @@ def _get_infisical_checksums_urls() -> dict[str, str]:
     return _load_constants().get("infisical_checksums_urls", {})
 
 
-# Severity mapping - Infisical doesn't have built-in severity, so we map by rule type
+# Infisical reports no severity, so findings are graded by rule ID. The keys are
+# the IDs the CLI actually emits, read from real reports of both engines (0.43.135
+# gitleaks, 0.43.136+ betterleaks). The original keys matched none of them, so AWS
+# key IDs and Stripe keys fell back to HIGH and passed ``--fail-on critical``
+# (#844). CRITICAL covers AWS, Azure storage, GitHub/GitLab, npm/PyPI and Stripe
+# live credentials plus private keys, which the native scanner grades CRITICAL
+# too. Every other rule is HIGH. Some of those (Heroku, Slack, OpenAI, SendGrid,
+# Google API keys) are CRITICAL in the native scanner; aligning the scanners'
+# severity policy is tracked in #850, so those HIGH grades are not a decision.
 RULE_SEVERITY_MAP: dict[str, FindingSeverity] = {
-    "aws-access-key-id": FindingSeverity.CRITICAL,
+    # Both engines report AWS access key IDs (AKIA, ASIA, ...) under
+    # ``aws-access-token``. From 0.43.136 that happens only next to a secret
+    # access key, which betterleaks nests as ``aws-secret-access-key``. Upstream
+    # betterleaks#410 makes that secret optional, which brings lone key IDs back
+    # under ``aws-access-token``. 0.43.135 has no secret access key rule, and every
+    # version reports a lone secret access key only as ``generic-api-key`` (HIGH).
+    "aws-access-token": FindingSeverity.CRITICAL,
     "aws-secret-access-key": FindingSeverity.CRITICAL,
-    "github-pat": FindingSeverity.CRITICAL,
+    # Other cloud keys. Only betterleaks has ``azure-storage-account-key``: 0.43.135
+    # reports those keys as ``generic-api-key`` (HIGH). A GCP service-account match
+    # always spans the account's private key, which the ``private-key`` rule of
+    # both engines also reports as CRITICAL.
+    "azure-storage-account-key": FindingSeverity.CRITICAL,
+    "gcp-service-account": FindingSeverity.CRITICAL,
+    # Source control and package registries.
+    "github-app-token": FindingSeverity.CRITICAL,
+    "github-fine-grained-pat": FindingSeverity.CRITICAL,
     "github-oauth": FindingSeverity.CRITICAL,
+    "github-pat": FindingSeverity.CRITICAL,
+    "github-refresh-token": FindingSeverity.CRITICAL,
     "gitlab-pat": FindingSeverity.CRITICAL,
+    "gitlab-pat-routable": FindingSeverity.CRITICAL,
+    "gitlab-pat-routable-versioned": FindingSeverity.CRITICAL,
+    "npm-access-token": FindingSeverity.CRITICAL,
+    "pypi-upload-token": FindingSeverity.CRITICAL,
+    # Stripe secret and restricted keys; see ``_rule_severity`` for test-mode keys.
+    "stripe-access-token": FindingSeverity.CRITICAL,
+    # Any ``-----BEGIN ... PRIVATE KEY-----`` block: PEM, OpenSSH or PGP.
+    "private-key": FindingSeverity.CRITICAL,
+    # These match the HIGH fallback and are listed only to make the choice explicit.
+    "gcp-api-key": FindingSeverity.HIGH,
+    "generic-api-key": FindingSeverity.HIGH,
+    "slack-bot-token": FindingSeverity.HIGH,
+    "slack-user-token": FindingSeverity.HIGH,
+    "slack-webhook-url": FindingSeverity.HIGH,
+    # The original keys. No built-in rule uses them, but a custom rules config may.
+    "aws-access-key-id": FindingSeverity.CRITICAL,
     "google-api-key": FindingSeverity.HIGH,
     "slack-token": FindingSeverity.HIGH,
     "stripe-api-key": FindingSeverity.CRITICAL,
-    "private-key": FindingSeverity.CRITICAL,
-    "generic-api-key": FindingSeverity.HIGH,
 }
+
+# ``stripe-access-token`` also matches test-mode keys (``sk_test_``, ``rk_test_``),
+# which cannot move money. The native and detect-secrets scanners flag only live
+# keys, so a test-mode key keeps the HIGH grade it had before #844.
+_STRIPE_TEST_KEY_RE = re.compile(r"[rs]k_test_")
+
+
+def _rule_severity(rule_id: str, secret: str) -> FindingSeverity:
+    """The severity of a finding under ``rule_id`` whose matched value is ``secret``."""
+    rule = rule_id.lower()
+    if rule == "stripe-access-token" and _STRIPE_TEST_KEY_RE.match(secret):
+        return FindingSeverity.HIGH
+    return RULE_SEVERITY_MAP.get(rule, FindingSeverity.HIGH)
+
 
 # Infisical CLI 0.43.136 swapped its gitleaks engine for betterleaks, which
 # drops every finding rated below ``--confidence`` (default "medium"). Its
@@ -182,6 +238,89 @@ def _supports_confidence_flag(binary: Path) -> bool:
             e,
         )
         return False
+
+
+def _history_target(path: Path) -> tuple[Path | None, str | None]:
+    """The repository root Infisical must scan for ``path`` in history mode.
+
+    Without ``--no-git`` Infisical scans the history of the whole repository
+    that contains ``--source`` and reports ``File`` relative to its root, but
+    it cannot scan a file, a directory outside a repository or a repository
+    with no commits: for each it writes the empty ``[]`` report of a clean
+    scan (#843). So history scans run on the root, which a finding's ``File``
+    is joined onto, and a path that cannot be history-scanned is an error, as
+    for gitleaks (#641).
+
+    The root comes back in the form of ``path``, relative to the cwd for a
+    relative one, so relative scan paths keep reporting relative findings.
+
+    Returns:
+        Tuple of (repository root, None), or (None, error message).
+    """
+    git_root = get_git_root(path)
+    if git_root is None:
+        return None, f"Cannot scan Git history for {path}: not inside a Git repository"
+    if not has_git_head(git_root):
+        return None, f"Cannot scan Git history for {path}: the Git repository has no commits"
+    if path.is_absolute():
+        return git_root, None
+    try:
+        return Path(os.path.relpath(git_root, Path.cwd())), None
+    except ValueError:
+        # Windows: a root on another drive than the cwd has no relative form.
+        return git_root, None
+
+
+def _prepare_scan_targets(
+    paths: list[Path], *, include_git_history: bool
+) -> tuple[list[Path], list[str]]:
+    """Build the unique ``--source`` targets for one Infisical run.
+
+    In history mode every path maps to its repository root, and paths in the
+    same repository share one scan, so ``guard --pr-base --history`` with N
+    changed files runs one history scan instead of N. Preflight failures are
+    collected per target, so one bad path does not discard the valid ones.
+    """
+    targets: list[Path] = []
+    errors: list[str] = []
+    seen_history_roots: set[Path] = set()
+    for path in paths:
+        if not path.exists():
+            continue
+        if not include_git_history:
+            targets.append(path)
+            continue
+
+        history_target, error = _history_target(path)
+        if error is not None or history_target is None:
+            errors.append(error or f"Cannot scan Git history for {path}")
+            continue
+        resolved_target = history_target.resolve()
+        if resolved_target in seen_history_roots:
+            continue
+        seen_history_roots.add(resolved_target)
+        targets.append(history_target)
+    return targets, errors
+
+
+def _combined_error(run_error: str | None, target_errors: list[str]) -> str | None:
+    """Join a run failure with the per-target preflight diagnostics."""
+    parts = ([run_error] if run_error else []) + target_errors
+    return "; ".join(parts) if parts else None
+
+
+def _load_findings(report_path: Path) -> list[Any]:
+    """The findings in an Infisical JSON report, or ``[]`` when it holds none.
+
+    A missing, empty, unparsable or non-list report holds no findings.
+    """
+    if not report_path.exists() or report_path.stat().st_size == 0:
+        return []
+    try:
+        report_data = json.loads(report_path.read_text())
+    except json.JSONDecodeError:
+        return []
+    return report_data if isinstance(report_data, list) else []
 
 
 # Betterleaks composite rules nest their paired values under ``ComponentSets``
@@ -579,23 +718,34 @@ class InfisicalScanner(ScannerBackend):
         """
         start_time = time.time()
 
+        # Per-target preflight, as for gitleaks (#641): a path that cannot be
+        # history-scanned is an error, and the valid ones are still scanned.
+        # Every returned ScanResult carries those errors so the run stays
+        # truthfully incomplete.
+        scan_targets, target_errors = _prepare_scan_targets(
+            paths, include_git_history=include_git_history
+        )
+        if target_errors and not scan_targets:
+            return ScanResult(
+                scanner_name=self.name,
+                error=_combined_error(None, target_errors),
+                duration_ms=int((time.time() - start_time) * 1000),
+            )
+
         try:
             binary = self._find_binary()
         except InfisicalNotFoundError as e:
             return ScanResult(
                 scanner_name=self.name,
-                error=str(e),
+                error=_combined_error(str(e), target_errors),
                 duration_ms=int((time.time() - start_time) * 1000),
             )
 
         all_findings: list[ScanFinding] = []
         total_files = 0
-        confidence_args = _confidence_args(binary, paths)
+        confidence_args = _confidence_args(binary, scan_targets)
 
-        for path in paths:
-            if not path.exists():
-                continue
-
+        for path in scan_targets:
             # Create temp file for JSON report
             report_path: Path | None = None
             try:
@@ -603,15 +753,17 @@ class InfisicalScanner(ScannerBackend):
                     mode="w", suffix=".json", delete=False
                 ) as report_file:
                     report_path = Path(report_file.name)
-                # Build command with explicit source path
-                work_dir = path if path.is_dir() else path.parent
+                # Build command with explicit source path. ``File`` comes back
+                # relative to the directory infisical runs in, the repository
+                # root in history mode, so findings are joined onto it.
+                work_dir, source_arg = scan_location(path)
                 args = [
                     str(binary),
                     "scan",
                     "--report-path",
                     str(report_path),
                     "--source",
-                    str(path),
+                    source_arg,
                 ]
 
                 # If not scanning git history, use --no-git
@@ -631,58 +783,51 @@ class InfisicalScanner(ScannerBackend):
                     cwd=str(work_dir),
                 )
 
-                # Infisical returns non-zero when leaks are found, so only treat as
-                # error if no report was generated.
-                if result.returncode != 0 and (
-                    not report_path.exists() or report_path.stat().st_size == 0
-                ):
+                report_data = _load_findings(report_path)
+
+                # Infisical exits non-zero when it reports leaks, so a non-zero
+                # exit that reported none is a failed scan. A scan that cannot
+                # run still writes an empty ``[]`` report, which used to pass as
+                # clean (#843).
+                if result.returncode != 0 and not report_data:
+                    # zerolog colors its log lines even on a pipe, and this
+                    # message lands in --json/SARIF output (#843).
                     error_msg = (
-                        result.stderr.strip()
-                        or result.stdout.strip()
+                        strip_ansi(result.stderr).strip()
+                        or strip_ansi(result.stdout).strip()
                         or f"infisical scan failed for {path} (exit code {result.returncode})"
                     )
                     return ScanResult(
                         scanner_name=self.name,
                         findings=all_findings,
-                        error=error_msg,
+                        error=_combined_error(error_msg, target_errors),
                         duration_ms=int((time.time() - start_time) * 1000),
                     )
 
-                # Parse JSON report
-                if report_path.exists() and report_path.stat().st_size > 0:
-                    try:
-                        report_data = json.loads(report_path.read_text())
-                        if report_data and isinstance(report_data, list):
-                            # Count unique files
-                            files_with_findings = {
-                                item.get("File") for item in report_data if item.get("File")
-                            }
-                            total_files += len(files_with_findings)
-                            # Use work_dir as base for relative path resolution
-                            base_dir = work_dir
-                            for item in report_data:
-                                finding = self._parse_finding(item, base_dir)
-                                if finding:
-                                    all_findings.append(finding)
-                            all_findings.extend(
-                                self._parse_components(report_data, base_dir, all_findings)
-                            )
-                    except json.JSONDecodeError:
-                        # Invalid JSON in report, skip findings for this path
-                        continue
+                if report_data:
+                    # Count unique files
+                    files_with_findings = {
+                        item.get("File") for item in report_data if item.get("File")
+                    }
+                    total_files += len(files_with_findings)
+                    for item in report_data:
+                        finding = self._parse_finding(item, work_dir)
+                        if finding:
+                            all_findings.append(finding)
+                    all_findings.extend(self._parse_components(report_data, work_dir, all_findings))
 
             except subprocess.TimeoutExpired:
                 return ScanResult(
                     scanner_name=self.name,
                     findings=all_findings,
-                    error=f"Scan timed out for {path}",
+                    error=_combined_error(f"Scan timed out for {path}", target_errors),
                     duration_ms=int((time.time() - start_time) * 1000),
                 )
             except Exception as e:
                 return ScanResult(
                     scanner_name=self.name,
                     findings=all_findings,
-                    error=str(e),
+                    error=_combined_error(str(e), target_errors),
                     duration_ms=int((time.time() - start_time) * 1000),
                 )
             finally:
@@ -694,6 +839,7 @@ class InfisicalScanner(ScannerBackend):
             scanner_name=self.name,
             findings=all_findings,
             files_scanned=total_files,
+            error=_combined_error(None, target_errors),
             duration_ms=int((time.time() - start_time) * 1000),
         )
 
@@ -826,7 +972,7 @@ class InfisicalScanner(ScannerBackend):
             description: str = str(item.get("Description") or rule_id)
 
             # Map severity based on rule type
-            severity = RULE_SEVERITY_MAP.get(rule_id.lower(), FindingSeverity.HIGH)
+            severity = _rule_severity(rule_id, str(secret))
 
             return ScanFinding(
                 file_path=file_path,

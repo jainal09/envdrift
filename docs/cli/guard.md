@@ -147,6 +147,32 @@ Infisical provides:
 envdrift guard --infisical
 ```
 
+Infisical reports no severity of its own, so envdrift grades each finding by its rule ID. These rules
+are CRITICAL, so `--fail-on critical` blocks them:
+
+- AWS access key IDs (`aws-access-token`, both engines). On 0.43.136 and later, also the secret
+  access key that betterleaks nests under a key ID (`aws-secret-access-key`)
+- Azure storage account keys (`azure-storage-account-key`, 0.43.136 and later only)
+- GCP service-account keys: both engines report the private key inside them as `private-key`
+- GitHub tokens and GitLab personal access tokens
+- npm access tokens and PyPI upload tokens
+- Stripe live secret and restricted keys (`stripe-access-token`)
+- private keys
+
+Every other built-in rule is HIGH. That includes Google API keys, Slack tokens, Stripe test-mode keys
+(`sk_test_`, `rk_test_`) and the generic rules. A custom Infisical rule config that emits the IDs
+`aws-access-key-id` or `stripe-api-key` is graded CRITICAL too. envdrift 11.0.7 and earlier graded most of the
+CRITICAL rules above HIGH, AWS key IDs and Stripe live keys included: its severity table was keyed
+on rule IDs the Infisical CLI does not emit, so `--fail-on critical` let those findings through
+([#844](https://github.com/jainal09/envdrift/issues/844)).
+
+On 0.43.135, the version envdrift auto-installs, Infisical has no rule for AWS secret access keys or
+Azure storage account keys and reports both as `generic-api-key`, which is HIGH. Every version does
+the same for an AWS secret access key with no key ID next to it. So `--fail-on critical` does not
+block these keys on Infisical's findings alone. In the working tree the native scanner still grades
+them CRITICAL (its `azure-storage-key` rule, and its `aws-secret-access-key` rule for a value assigned
+to a `SECRET_ACCESS_KEY` name), but it does not scan git history.
+
 > **Note:** Infisical CLI 0.43.136 and later (the betterleaks engine) report less than earlier
 > releases ([#834](https://github.com/jainal09/envdrift/issues/834)). envdrift makes up for most of it:
 >
@@ -176,6 +202,12 @@ error instead of silently skipping the history.
 ```bash
 envdrift guard --history
 ```
+
+gitleaks and infisical scan the history of the whole repository that contains each scanned path,
+a file or a subdirectory alike, once per repository, so `--pr-base --history` with many changed
+files runs one history scan. A path outside any git repository, or in a repository with no commits,
+is a scanner error for them, never a clean history: with no blocking finding, guard exits 5 (scan
+incomplete).
 
 ### `--entropy` / `--no-entropy`, `-e`
 

@@ -30,6 +30,7 @@ from envdrift.install_integrity import (
     atomic_install,
     verify_download,
 )
+from envdrift.utils.text import strip_ansi
 
 
 def _load_constants() -> dict:
@@ -93,8 +94,6 @@ DOWNLOAD_URLS = {
     ("Windows", "AMD64"): _URL_TEMPLATES["windows_amd64"],
     ("Windows", "x86_64"): _URL_TEMPLATES["windows_amd64"],
 }
-
-_ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-9;?]*[ -/]*[@-~]")
 
 
 class DotenvxNotFoundError(Exception):
@@ -780,7 +779,7 @@ class DotenvxWrapper:
             if check and result.returncode != 0:
                 stderr = (result.stderr or "").strip()
                 if stderr:
-                    stderr = _ANSI_ESCAPE_RE.sub("", stderr).strip()
+                    stderr = strip_ansi(stderr).strip()
                     if not stderr:
                         stderr = "no error output"
                 else:
@@ -814,14 +813,11 @@ class DotenvxWrapper:
         "decryption failed",
     ]
 
-    # Regex to strip ANSI escape codes from output
-    ANSI_ESCAPE_PATTERN: ClassVar[re.Pattern[str]] = re.compile(r"\x1b\[[0-9;]*m")
-
     @classmethod
     def _clean_output(cls, text: str) -> str:
         """Strip ANSI escape codes and normalize Unicode characters for clean output."""
-        # Strip ANSI escape codes
-        text = cls.ANSI_ESCAPE_PATTERN.sub("", text)
+        # Strip ANSI escape codes, cursor/erase sequences included (not just colors)
+        text = strip_ansi(text)
         # Replace Unicode ellipsis with ASCII equivalent (avoids encoding issues on Windows)
         text = text.replace("…", "...")
         # Also handle the mojibake version (UTF-8 ellipsis decoded as Windows-1252)

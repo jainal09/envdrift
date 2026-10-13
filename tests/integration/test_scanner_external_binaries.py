@@ -12,13 +12,19 @@ real files in temporary directories / git repos.
 
 from __future__ import annotations
 
+import base64
+import hashlib
+import json
+import re
 import shutil
+import subprocess
+import sys
 from dataclasses import replace
 from pathlib import Path
 
 import pytest
 
-from envdrift.scanner.base import AggregatedScanResult, ScanFinding, ScanResult
+from envdrift.scanner.base import AggregatedScanResult, FindingSeverity, ScanFinding, ScanResult
 from envdrift.scanner.engine import GuardConfig, ScanEngine
 from envdrift.scanner.gitleaks import GitleaksScanner
 from envdrift.scanner.infisical import InfisicalScanner
@@ -27,6 +33,8 @@ from envdrift.scanner.talisman import TalismanScanner
 from envdrift.scanner.trivy import TrivyScanner
 
 pytestmark = [pytest.mark.integration, pytest.mark.slow]
+
+CRITICAL = FindingSeverity.CRITICAL
 
 
 # --- Skip helpers ---------------------------------------------------------
@@ -269,6 +277,179 @@ def test_infisical_detects_aws_credentials(tmp_path):
             assert raw not in finding.secret_preview
 
 
+def _infisical_runs_betterleaks() -> bool:
+    """Whether the infisical binary in use is 0.43.136+, the betterleaks engine."""
+    version = InfisicalScanner(auto_install=False).get_version() or ""
+    parts = re.findall(r"\d+", version)[:3]
+    # Fail loud: a silent False would skip the betterleaks-only assertions.
+    assert len(parts) == 3, f"could not parse the infisical version from {version!r}"
+    return tuple(int(part) for part in parts) >= (0, 43, 136)
+
+
+@requires_infisical
+def test_infisical_grades_aws_credentials_critical(tmp_path):
+    """AWS key IDs and their secret access key must be CRITICAL (#844).
+
+    Both engines report the key IDs on lines 1 and 3 under ``aws-access-token``.
+    That rule ID used to fall back to HIGH, so ``--fail-on critical`` let a leaked
+    key ID through. From 0.43.136 the secret on line 2 is nested under the key ID
+    as ``aws-secret-access-key``, which must be CRITICAL as well. 0.43.135 has no
+    rule for a secret access key and reports line 2 as ``generic-api-key`` (HIGH),
+    so line 2 is checked only on the betterleaks engine.
+    """
+    (tmp_path / "aws.env").write_text(
+        f"AWS_ACCESS_KEY_ID={AWS_ACCESS_KEY_ID}\n"
+        f"AWS_SECRET_ACCESS_KEY={AWS_SECRET_ACCESS_KEY}\n"
+        f"AWS_SESSION_KEY_ID={AWS_SESSION_KEY_ID}\n"
+    )
+
+    result = InfisicalScanner(auto_install=False).scan([tmp_path])
+
+    assert result.error is None, f"unexpected error: {result.error}"
+    graded = sorted((f.line_number, f.rule_id, f.severity.value) for f in result.findings)
+    critical = {(f.line_number, f.rule_id) for f in result.findings if f.severity == CRITICAL}
+    key_ids = {(1, "infisical-aws-access-token"), (3, "infisical-aws-access-token")}
+    assert key_ids <= critical, f"AWS key IDs not graded CRITICAL: {graded}"
+    aws_rules = {"infisical-aws-access-token", "infisical-aws-secret-access-key"}
+    assert all(f.severity == CRITICAL for f in result.findings if f.rule_id in aws_rules), graded
+    if _infisical_runs_betterleaks():
+        reported = {(f.line_number, f.rule_id, f.severity, f.secret_hash) for f in result.findings}
+        nested = (
+            2,
+            "infisical-aws-secret-access-key",
+            CRITICAL,
+            hash_secret(AWS_SECRET_ACCESS_KEY),
+        )
+        assert nested in reported, f"the nested secret access key is not CRITICAL: {graded}"
+
+
+# An Azure storage account key: 64 random-looking bytes, base64-encoded to 88
+# characters. Derived at runtime so no key literal appears in source.
+AZURE_STORAGE_KEY = base64.b64encode(hashlib.sha512(b"envdrift-844-azure").digest()).decode()
+
+
+@requires_infisical
+def test_infisical_grades_azure_storage_account_keys_by_engine(tmp_path):
+    """Pin which engine grades an Azure storage account key CRITICAL (#844).
+
+    The betterleaks engine (0.43.136+) reports it as ``azure-storage-account-key``,
+    which must be CRITICAL. 0.43.135, the pinned version, has no such rule and
+    reports the key only as ``generic-api-key`` (HIGH), so ``--fail-on critical``
+    does not block it on Infisical's findings alone. docs/cli/guard.md says so; if
+    this branch fails, the engine changed and that page must change with it.
+    """
+    (tmp_path / "azure.env").write_text(
+        "AZURE_STORAGE_CONNECTION_STRING=DefaultEndpointsProtocol=https;"
+        f"AccountName=envdriftprobe;AccountKey={AZURE_STORAGE_KEY};"
+        "EndpointSuffix=core.windows.net\n"
+    )
+
+    result = InfisicalScanner(auto_install=False).scan([tmp_path])
+
+    assert result.error is None, f"unexpected error: {result.error}"
+    graded = sorted((f.line_number, f.rule_id, f.severity.value) for f in result.findings)
+    assert any(f.line_number == 1 for f in result.findings), f"key not detected: {graded}"
+    if _infisical_runs_betterleaks():
+        assert any(
+            f.rule_id == "infisical-azure-storage-account-key"
+            and f.severity == CRITICAL
+            and f.secret_hash == hash_secret(AZURE_STORAGE_KEY)
+            for f in result.findings
+        ), f"the Azure storage account key is not CRITICAL: {graded}"
+    else:
+        assert graded == [(1, "infisical-generic-api-key", "high")], graded
+
+
+@requires_infisical
+def test_infisical_grades_stripe_live_keys_critical_and_test_keys_high(tmp_path):
+    """Stripe live keys are CRITICAL, test-mode keys HIGH, on both engines (#844).
+
+    Both engines report every Stripe secret and restricted key under
+    ``stripe-access-token``, which used to fall back to HIGH. The test-mode
+    downgrade reads the finding's ``Secret``, so this pins that the real report
+    carries just the key there.
+    """
+    body = "4eC39HqLyjWDarjtT1zdp7dc" + "ABCDEFGH"
+    (tmp_path / "stripe.env").write_text(
+        f"STRIPE_SECRET_KEY={'sk_live_' + body}\n"
+        f"STRIPE_RESTRICTED_KEY={'rk_live_' + body}\n"
+        f"STRIPE_TEST_KEY={'sk_test_' + body}\n"
+    )
+
+    result = InfisicalScanner(auto_install=False).scan([tmp_path])
+
+    assert result.error is None, f"unexpected error: {result.error}"
+    graded = sorted((f.line_number, f.rule_id, f.severity.value) for f in result.findings)
+    stripe = [
+        (f.line_number, f.severity)
+        for f in result.findings
+        if f.rule_id == "infisical-stripe-access-token"
+    ]
+    assert sorted(stripe) == [(1, CRITICAL), (2, CRITICAL), (3, FindingSeverity.HIGH)], graded
+
+
+def _run_guard(args: list[str], *, cwd: Path, env: dict[str, str]) -> subprocess.CompletedProcess:
+    """Run the real ``envdrift guard`` CLI as a subprocess with ``env``.
+
+    Pass the ``integration_env`` fixture: the autouse conftest fixture has
+    already stripped ``FORCE_COLOR``, so the output is un-colorized.
+    """
+    return subprocess.run(
+        [sys.executable, "-m", "envdrift.cli", "guard", *args],
+        cwd=str(cwd),
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=600,
+    )
+
+
+@requires_infisical
+def test_guard_infisical_fail_on_critical_blocks_an_aws_key_id(tmp_path, integration_env):
+    """``guard --infisical --fail-on critical`` must fail on a leaked AWS key ID (#844).
+
+    The native scanner's own AWS rules and Infisical's nested secret are ignored,
+    so Infisical's key ID finding alone decides the exit: on 0.43.135 the secret
+    on line 2 is a HIGH ``generic-api-key``, and once betterleaks#410 ships the
+    betterleaks engine also reports a key ID with no secret nested under it. The
+    key ID used to be graded HIGH, so this run exited 0.
+    """
+    (tmp_path / "aws.env").write_text(
+        f"AWS_ACCESS_KEY_ID={AWS_ACCESS_KEY_ID}\nAWS_SECRET_ACCESS_KEY={AWS_SECRET_ACCESS_KEY}\n"
+    )
+    (tmp_path / "envdrift.toml").write_text(
+        "[guard.ignore_rules]\n"
+        '"aws-access-key-id" = ["*"]\n'
+        '"aws-secret-access-key" = ["*"]\n'
+        '"infisical-aws-secret-access-key" = ["*"]\n'
+    )
+
+    result = _run_guard(
+        [
+            ".",
+            "--infisical",
+            "--no-gitleaks",
+            "--no-auto-install",
+            "--ci",
+            "--fail-on",
+            "critical",
+            "--json",
+            "--config",
+            "envdrift.toml",
+        ],
+        cwd=tmp_path,
+        env=integration_env,
+    )
+
+    assert result.returncode == 1, (result.returncode, result.stdout, result.stderr)
+    payload = json.loads(result.stdout)
+    assert payload["exit_code"] == 1
+    critical = [
+        (f["rule_id"], f["line_number"]) for f in payload["findings"] if f["severity"] == "critical"
+    ]
+    assert critical == [("infisical-aws-access-token", 1)], payload["findings"]
+
+
 # A generic high-entropy API key, fragmented like the tokens above.
 GENERIC_API_KEY = "q8Zt3VnR7wXy2Lp9" + "Ks4Bd6Fh1Jm5Nc0Gx"
 
@@ -434,36 +615,165 @@ _HAS_GITLEAKS = GitleaksScanner(auto_install=False).is_installed()
 requires_gitleaks = pytest.mark.skipif(not _HAS_GITLEAKS, reason="gitleaks not installed")
 
 
+_PATH_SCANNERS = [
+    pytest.param(InfisicalScanner, marks=requires_infisical, id="infisical"),
+    pytest.param(GitleaksScanner, marks=requires_gitleaks, id="gitleaks"),
+]
+
+
+@pytest.mark.parametrize("scanner_cls", _PATH_SCANNERS)
 @pytest.mark.parametrize(
-    "scanner_cls",
+    "case",  # (cwd, target, expected finding path)
     [
-        pytest.param(InfisicalScanner, marks=requires_infisical, id="infisical"),
-        pytest.param(GitleaksScanner, marks=requires_gitleaks, id="gitleaks"),
+        (".", "proj", "proj/sub/app.env"),
+        (".", "proj/sub/app.env", "proj/sub/app.env"),
+        # A file in the cwd: gitleaks used to report ``app.env/app.env``.
+        ("proj/sub", "app.env", "app.env"),
+        ("proj/sub", "../../proj", "../../proj/sub/app.env"),
+        (".", "<abs>/proj", "<abs>/proj/sub/app.env"),
+        (".", "<abs>/proj/sub/app.env", "<abs>/proj/sub/app.env"),
     ],
+    ids=["dir", "nested-file", "file-in-cwd", "parent-relative", "abs-dir", "abs-file"],
 )
-@pytest.mark.parametrize("target", ["proj", "proj/sub/app.env"])
-@pytest.mark.xfail(
-    strict=False,
-    raises=AssertionError,
-    reason="the binary runs with cwd=<path> but is handed the relative path again (see #843)",
-)
-def test_scanner_scans_a_cwd_relative_path(tmp_path, monkeypatch, scanner_cls, target):
-    """A cwd-relative path must scan like its absolute form (#843).
+def test_scanner_scans_a_cwd_relative_path(tmp_path, monkeypatch, scanner_cls, case):
+    """A path scans in any form and findings come back in that form (#843).
 
     ``guard <subdir>`` and ``guard --pr-base`` (which passes cwd-relative
-    paths for changed files) hand scanners relative paths. Both backends run
-    the binary with ``cwd`` set to the path (or its parent) yet pass the
-    relative path unchanged, so it resolves to ``proj/proj`` and the scan
-    fails with ``stat proj: no such file or directory``.
+    paths for changed files) hand scanners relative paths. Both backends ran
+    the binary with ``cwd`` set to the path (or its parent) yet passed the
+    relative path unchanged, so it resolved to ``proj/proj`` and the scan
+    failed with ``stat proj: no such file or directory``. Relative in must be
+    relative out (what guard displays and matches config paths against), and
+    absolute in, absolute out.
     """
+    cwd, target, expected = case
     (tmp_path / "proj" / "sub").mkdir(parents=True)
     _write_secret_file(tmp_path / "proj" / "sub", "app.env")
-    monkeypatch.chdir(tmp_path)
+    monkeypatch.chdir(tmp_path / cwd)
+    absolute = str(tmp_path)
 
-    result = scanner_cls(auto_install=False).scan([Path(target)])
+    result = scanner_cls(auto_install=False).scan([Path(target.replace("<abs>", absolute))])
 
     assert result.error is None, f"unexpected error: {result.error}"
-    assert any(f.file_path.name == "app.env" for f in result.findings), result.findings
+    assert result.findings, "the planted secrets were not reported"
+    assert {f.file_path for f in result.findings} == {Path(expected.replace("<abs>", absolute))}
+    for finding in result.findings:
+        assert finding.file_path.is_file(), f"{finding.file_path} does not name the file"
+
+
+def _commit_all(repo: Path) -> None:
+    import subprocess  # nosec B404
+
+    subprocess.run(["git", "add", "-A"], cwd=repo, capture_output=True, check=True)
+    subprocess.run(["git", "commit", "-m", "secrets"], cwd=repo, capture_output=True, check=True)
+
+
+@pytest.mark.parametrize("scanner_cls", _PATH_SCANNERS)
+@pytest.mark.parametrize(
+    "targets",
+    [
+        ("proj",),
+        ("<abs>/proj",),
+        (".",),
+        # Files: Infisical's git mode cannot scan one and wrote an empty `[]`.
+        ("proj/sub/app.env",),
+        ("<abs>/proj/sub/app.env",),
+        # ``guard --pr-base --history``: several changed files, one repository.
+        ("proj/sub/app.env", "proj/other.txt", "proj"),
+    ],
+    ids=["subdir", "abs-subdir", "root", "file", "abs-file", "pr-base-files"],
+)
+def test_history_scan_of_a_subdirectory_names_the_real_file(
+    git_repo, monkeypatch, scanner_cls, targets
+):
+    """History findings name the committed file whatever path is scanned (#843).
+
+    History ``File`` values are repo-relative. Infisical joined them onto the
+    scanned directory, so a subdirectory reported ``proj/proj/sub/app.env``, a
+    relative one failed outright like the working-tree scan, and a file passed
+    as clean. The secret is scrubbed from the working tree, so only the history
+    can report it.
+    """
+    (git_repo / "proj" / "sub").mkdir(parents=True)
+    _write_secret_file(git_repo / "proj" / "sub", "app.env")
+    (git_repo / "proj" / "other.txt").write_text("nothing here\n")
+    _commit_all(git_repo)
+    (git_repo / "proj" / "sub" / "app.env").write_text("GITHUB_TOKEN=scrubbed\n")
+    _commit_all(git_repo)
+    monkeypatch.chdir(git_repo)
+    paths = [Path(target.replace("<abs>", str(git_repo))) for target in targets]
+
+    result = scanner_cls(auto_install=False).scan(paths, include_git_history=True)
+
+    assert result.error is None, f"unexpected error: {result.error}"
+    assert result.findings, "the committed secrets were not reported"
+    secret_file = (git_repo / "proj" / "sub" / "app.env").resolve()
+    assert {f.file_path.resolve() for f in result.findings} == {secret_file}
+    assert all(f.commit_sha for f in result.findings)
+    # One history scan per repository: several paths in it report each secret once.
+    keys = [(f.rule_id, f.commit_sha, f.line_number, f.secret_hash) for f in result.findings]
+    assert len(keys) == len(set(keys)), result.findings
+    if scanner_cls is InfisicalScanner:
+        # Relative in, relative out (gitleaks reports its absolute history root).
+        assert all(
+            f.file_path.is_absolute() == targets[0].startswith("<abs>") for f in result.findings
+        )
+
+
+@pytest.mark.parametrize("scanner_cls", _PATH_SCANNERS)
+@pytest.mark.parametrize("case", ["plain-dir", "plain-file", "no-commits"])
+def test_history_scan_that_cannot_run_is_an_error(tmp_path, monkeypatch, scanner_cls, case):
+    """A path with no history to scan is an error, never a clean pass (#843).
+
+    Infisical's git mode exits 1 with an empty ``[]`` report for a directory
+    outside a repository or a file, and 0 with one for a repository without
+    commits. All three used to read as a clean scan.
+    """
+    import subprocess  # nosec B404
+
+    monkeypatch.setenv("GIT_CEILING_DIRECTORIES", str(tmp_path))
+    (tmp_path / "proj").mkdir()
+    _write_secret_file(tmp_path / "proj", "app.env")
+    if case == "no-commits":
+        subprocess.run(["git", "init", "-q"], cwd=tmp_path / "proj", check=True)
+    monkeypatch.chdir(tmp_path)
+    target = Path("proj/app.env") if case == "plain-file" else Path("proj")
+
+    result = scanner_cls(auto_install=False).scan([target], include_git_history=True)
+
+    expected = "has no commits" if case == "no-commits" else "not inside a Git repository"
+    assert result.error is not None, "a history scan that cannot run must fail"
+    assert expected in result.error
+    assert result.findings == []
+
+
+@pytest.mark.parametrize(
+    ("scanner_cls", "config_name"),
+    [
+        pytest.param(InfisicalScanner, ".infisical-scan.toml", marks=requires_infisical, id="inf"),
+        pytest.param(GitleaksScanner, ".gitleaks.toml", marks=requires_gitleaks, id="gitleaks"),
+    ],
+)
+def test_scanner_error_is_ansi_clean(tmp_path, monkeypatch, scanner_cls, config_name):
+    """A failing binary's error carries no ANSI escapes or banner (#843).
+
+    Both binaries load ``<target>/<config_name>`` and exit with a colored
+    ``FTL`` log line when it is malformed. The integration conftest sets
+    ``NO_COLOR``, which these binaries honour, so it is removed here to get
+    the colors a user's terminal environment produces.
+    """
+    monkeypatch.delenv("NO_COLOR", raising=False)
+    (tmp_path / "proj").mkdir()
+    _write_secret_file(tmp_path / "proj", "app.env")
+    (tmp_path / "proj" / config_name).write_text("[[rules]\nid = \n")
+    monkeypatch.chdir(tmp_path)
+
+    result = scanner_cls(auto_install=False).scan([Path("proj")])
+
+    assert result.error, "a malformed scanner config must fail the scan"
+    assert "\x1b" not in result.error, repr(result.error)
+    assert "config" in result.error
+    assert "○" not in result.error, f"gitleaks banner in error: {result.error!r}"
 
 
 # --- ScanEngine orchestration / filtering (P1) ----------------------------

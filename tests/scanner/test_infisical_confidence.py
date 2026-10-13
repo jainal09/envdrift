@@ -214,7 +214,9 @@ def _make_stub(
     ``scan --help`` appends to ``help.log`` and prints ``help_text`` (or runs
     ``help_command``). Any other invocation appends its argv to ``argv.log``
     and copies ``report`` to the ``--report-path`` file, exiting 1 like the
-    real CLI does when it finds leaks. With ``rejects_confidence`` it instead
+    real CLI does when it finds leaks, or 0 for an empty report: the real CLI
+    never exits non-zero on a clean scan, and envdrift treats a non-zero exit
+    with no findings as a failed scan (#843). With ``rejects_confidence`` it instead
     behaves like 0.43.135 given ``--confidence``: usage error, exit 1, no report.
     """
     directory.mkdir(parents=True, exist_ok=True)
@@ -239,7 +241,7 @@ while [ $# -gt 0 ]; do
   if [ "$1" = "--report-path" ]; then cat {d}/report.json > "$2"; fi
   shift
 done
-exit 1
+exit {1 if report else 0}
 """
     stub = directory / "infisical"
     stub.write_text(script)
@@ -443,6 +445,22 @@ class TestComponentSets:
         assert finding.commit_sha == "abc123"
         assert finding.commit_author == "dev"
         assert finding.secret_hash == hash_secret(SECRET)
+
+    def test_paired_key_id_and_nested_secret_are_both_critical(self, tmp_path: Path):
+        """0.43.141 reports the key ID under ``aws-access-token`` and nests the
+        secret under it. Both must be CRITICAL; the key ID used to be graded
+        HIGH, so ``--fail-on critical`` let it through (#844)."""
+        report = [_composite("aws.env", 1, AKID)]
+        scanner = InfisicalScanner(auto_install=False)
+
+        key_id = scanner._parse_finding(report[0], tmp_path)
+        (secret,) = scanner._parse_components(report, tmp_path, [])
+
+        assert key_id is not None
+        assert key_id.rule_id == "infisical-aws-access-token"
+        assert key_id.severity == FindingSeverity.CRITICAL
+        assert secret.rule_id == "infisical-aws-secret-access-key"
+        assert secret.severity == FindingSeverity.CRITICAL
 
     def test_secret_shared_by_two_key_ids_is_reported_once(self, tmp_path: Path):
         report = [_composite("aws.env", 1, AKID), _composite("aws.env", 3, ASIA)]

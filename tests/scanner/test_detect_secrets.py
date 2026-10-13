@@ -345,3 +345,20 @@ class TestDetectSecretsScan:
 def test_detector_severity_mapping_contains_slack_token():
     """Detector severity map includes Slack Token as critical."""
     assert DETECTOR_SEVERITY["Slack Token"] == FindingSeverity.CRITICAL
+
+
+# The ``type`` strings detect-secrets 1.5.0 actually emits for these plugins, taken
+# from a real ``detect_secrets scan --force-use-all-plugins`` run. DETECTOR_SEVERITY
+# used to key them as "Cloudant", "npm credentials", "OpenAI API Key" and "PyPI
+# upload token", names no plugin emits, so all four fell back to HIGH.
+@pytest.mark.parametrize(
+    "emitted_type",
+    ["Cloudant Credentials", "NPM tokens", "OpenAI Token", "PyPI Token"],
+)
+def test_emitted_detector_types_get_their_intended_severity(emitted_type: str):
+    """Credential detectors graded CRITICAL are keyed on the name the tool emits."""
+    scanner = DetectSecretsScanner(auto_install=False)
+    secret = {"type": emitted_type, "line_number": 1, "hashed_secret": "0123abcd"}
+    finding = scanner._parse_secret(secret, Path("app.cfg"))
+    assert finding is not None
+    assert finding.severity == FindingSeverity.CRITICAL

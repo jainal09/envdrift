@@ -1433,3 +1433,13 @@ KEY=value
         result = env_file.read_text()
         assert "DOTENV_PUBLIC_KEY_LOCAL" not in result
         mock_run.assert_called_once()
+
+
+def test_clean_output_strips_cursor_and_erase_sequences():
+    """``_clean_output`` strips every CSI sequence, not just color codes.
+
+    It used a private ``\\x1b\\[[0-9;]*m`` pattern that left erase-line and
+    private-mode sequences (``\\x1b[2K``, ``\\x1b[?25l``) in error messages.
+    """
+    raw = "\x1b[?25l\x1b[2K\x1b[31m[MISSING_PRIVATE_KEY]\x1b[0m could not decrypt…\x1b[?25h"
+    assert DotenvxWrapper._clean_output(raw) == "[MISSING_PRIVATE_KEY] could not decrypt..."

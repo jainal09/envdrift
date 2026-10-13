@@ -991,3 +991,84 @@ class TestSarifSchemaConformance:
         location = document["runs"][0]["results"][0]["locations"][0]["physicalLocation"]
         assert location["artifactLocation"]["uri"] == "sub%20dir/.env"
         assert location["artifactLocation"]["uriBaseId"] == "SRCROOT"
+
+
+# A gitleaks/Infisical stderr line as zerolog writes it to a pipe: colored.
+_ANSI_ERROR = "\x1b[90m12:00AM\x1b[0m \x1b[31mFTL\x1b[0m stat proj: no such file or directory"
+
+
+def _errored_result(error: str) -> AggregatedScanResult:
+    return AggregatedScanResult(
+        results=[ScanResult(scanner_name="trivy", duration_ms=5, error=error)],
+        total_findings=0,
+        unique_findings=[],
+        scanners_used=["trivy"],
+        total_duration_ms=5,
+    )
+
+
+class TestScannerErrorsAreAnsiClean:
+    """Every backend's error reaches machine output escape-free (#843).
+
+    Stripping happens at the output boundary, so backends that copy a binary's
+    raw stderr (trivy, talisman, trufflehog, kingfisher, ...) are covered too.
+    """
+
+    def test_json_scanner_error_has_no_escapes(self):
+        data = json.loads(format_json(_errored_result(_ANSI_ERROR)))
+        error = data["scanner_results"][0]["error"]
+        assert "\x1b" not in error
+        assert "FTL stat proj: no such file or directory" in error
+
+    def test_json_keeps_null_and_empty_errors_distinct(self):
+        """``error`` null means success; an empty-string error is still a failure (#478)."""
+        clean = AggregatedScanResult(
+            results=[ScanResult(scanner_name="trivy", duration_ms=5)],
+            total_findings=0,
+            unique_findings=[],
+            scanners_used=["trivy"],
+            total_duration_ms=5,
+        )
+        assert json.loads(format_json(clean))["scanner_results"][0]["error"] is None
+        empty = json.loads(format_json(_errored_result("")))
+        assert empty["scanner_results"][0]["error"] == ""
+
+    def test_sarif_notification_has_no_escapes(self):
+        sarif = json.loads(format_sarif(_errored_result(_ANSI_ERROR)))
+        (note,) = sarif["runs"][0]["invocations"][0]["toolExecutionNotifications"]
+        assert "\x1b" not in note["message"]["text"]
+        assert note["message"]["text"].endswith("FTL stat proj: no such file or directory")
+
+
+def test_files_with_findings_counts_one_file_reported_in_two_forms(tmp_path, monkeypatch):
+    """Native resolves a directory target while gitleaks keeps it cwd-relative, so
+    one file arrives as an absolute and a relative path; it is still one file."""
+    monkeypatch.chdir(tmp_path)
+    rel = Path("proj/sub/app.env")
+    (tmp_path / rel).parent.mkdir(parents=True)
+    (tmp_path / rel).write_text("x\n")
+
+    def finding(path: Path, rule: str) -> ScanFinding:
+        return ScanFinding(
+            file_path=path,
+            rule_id=rule,
+            rule_description=rule,
+            description=rule,
+            severity=FindingSeverity.HIGH,
+            scanner=rule.split("-")[0],
+            line_number=1,
+        )
+
+    findings = [finding(tmp_path / rel, "native-github-pat"), finding(rel, "gitleaks-github-pat")]
+    result = AggregatedScanResult(
+        results=[ScanResult(scanner_name="native", findings=findings, duration_ms=5)],
+        total_findings=2,
+        unique_findings=findings,
+        scanners_used=["native", "gitleaks"],
+        total_duration_ms=5,
+    )
+    console = Console(record=True, width=400)
+    format_rich(result, console)
+    output = " ".join(console.export_text().split())
+
+    assert "Files with findings: 1 |" in output

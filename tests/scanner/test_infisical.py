@@ -17,10 +17,64 @@ from envdrift.scanner.infisical import (
     InfisicalNotFoundError,
     InfisicalScanner,
     _get_infisical_version,
+    _history_target,
+    _prepare_scan_targets,
     get_infisical_path,
     get_platform_info,
 )
 from tests.helpers import write_checksums_for
+
+CRITICAL = FindingSeverity.CRITICAL
+HIGH = FindingSeverity.HIGH
+
+# Every rule ID seen in real reports from Infisical CLI 0.43.135 (gitleaks engine)
+# and 0.43.141 (betterleaks), over a 66-shape fixture matrix plus probes for the
+# GitHub refresh token and GitLab's routable PATs, and the severity each must get
+# (#844). Rows marked 0.43.141 come only from the betterleaks engine, rows
+# marked 0.43.135 only from the gitleaks one. The HIGH rows pin current
+# behaviour, not policy: several are CRITICAL in the native scanner, and the
+# cross-scanner severity policy is tracked in #850.
+EMITTED_RULE_SEVERITIES = [
+    ("aws-access-token", CRITICAL),
+    ("aws-secret-access-key", CRITICAL),  # 0.43.141, nested under ComponentSets
+    ("azure-storage-account-key", CRITICAL),  # 0.43.141
+    ("gcp-service-account", CRITICAL),  # 0.43.141
+    ("github-app-token", CRITICAL),
+    ("github-fine-grained-pat", CRITICAL),
+    ("github-oauth", CRITICAL),
+    ("github-pat", CRITICAL),
+    ("github-refresh-token", CRITICAL),
+    ("gitlab-pat", CRITICAL),
+    ("gitlab-pat-routable", CRITICAL),
+    ("gitlab-pat-routable-versioned", CRITICAL),  # 0.43.141
+    ("npm-access-token", CRITICAL),
+    ("private-key", CRITICAL),
+    ("pypi-upload-token", CRITICAL),
+    ("stripe-access-token", CRITICAL),  # live keys; test-mode keys are HIGH
+    ("azure-ad-client-secret", HIGH),
+    ("curl-auth-header", HIGH),
+    ("datadog-access-token", HIGH),  # 0.43.135
+    ("datadog-api-key", HIGH),  # 0.43.141
+    ("datadog-application-key", HIGH),  # 0.43.141
+    ("gcp-api-key", HIGH),
+    ("generic-api-key", HIGH),
+    ("generic-credential-uri", HIGH),  # 0.43.141
+    ("generic-password", HIGH),  # 0.43.141
+    ("hashicorp-tf-password", HIGH),
+    ("heroku-api-key", HIGH),
+    ("heroku-api-key-v2", HIGH),  # 0.43.141
+    ("jwt", HIGH),
+    ("openai-api-key", HIGH),
+    ("sendgrid-api-token", HIGH),
+    ("slack-bot-token", HIGH),
+    ("slack-user-token", HIGH),
+    ("slack-webhook-url", HIGH),
+    ("twilio-api-key", HIGH),
+]
+
+# Fragmented so no full credential literal appears in source (push protection).
+PLACEHOLDER_SECRET = "q8Zt3VnR7wXy2Lp9" + "Ks4Bd6Fh1Jm5Nc0Gx"
+STRIPE_KEY_BODY = "4eC39HqLyjWDarjtT1zdp7dc" + "ABCDEFGH"
 
 
 class TestPlatformDetection:
@@ -238,23 +292,95 @@ class TestFindingParsing:
         assert finding.scanner == "infisical"
         assert "****" in finding.secret_preview  # Redacted
 
-    @pytest.mark.xfail(
-        strict=False,
-        reason="RULE_SEVERITY_MAP keys miss the rule IDs Infisical emits (see #844)",
-    )
-    @pytest.mark.parametrize("rule_id", ["aws-access-token", "stripe-access-token"])
+    @pytest.mark.parametrize(("rule_id", "expected"), EMITTED_RULE_SEVERITIES)
     def test_emitted_rule_ids_get_their_intended_severity(
-        self, scanner: InfisicalScanner, tmp_path: Path, rule_id: str
+        self,
+        scanner: InfisicalScanner,
+        tmp_path: Path,
+        rule_id: str,
+        expected: FindingSeverity,
     ):
-        """Both engines emit these IDs, not the map's ``aws-access-key-id`` /
-        ``stripe-api-key``, so a leaked AWS key ID or Stripe live key falls
-        back to HIGH and slips past ``--fail-on critical`` (#844)."""
+        """Grade each rule ID by the name the CLI really emits (#844).
+
+        The map used to be keyed on ``aws-access-key-id``, ``stripe-api-key``,
+        ``google-api-key`` and ``slack-token``, which neither engine emits. So
+        a leaked AWS key ID or Stripe live key fell back to HIGH and got past
+        ``--fail-on critical``.
+        """
+        item: dict[str, Any] = {
+            "RuleID": rule_id,
+            "Description": rule_id,
+            "StartLine": 1,
+            "File": "a.env",
+            "Secret": PLACEHOLDER_SECRET,
+        }
+
+        finding = scanner._parse_finding(item, tmp_path)
+
+        assert finding is not None
+        assert finding.rule_id == f"infisical-{rule_id}"
+        assert finding.severity == expected
+
+    @pytest.mark.parametrize(
+        ("secret", "expected"),
+        [
+            pytest.param("sk_live_" + STRIPE_KEY_BODY, CRITICAL, id="sk_live"),
+            pytest.param("rk_live_" + STRIPE_KEY_BODY, CRITICAL, id="rk_live"),
+            pytest.param("sk_prod_" + STRIPE_KEY_BODY, CRITICAL, id="sk_prod"),
+            pytest.param("sk_test_" + STRIPE_KEY_BODY, HIGH, id="sk_test"),
+            pytest.param("rk_test_" + STRIPE_KEY_BODY, HIGH, id="rk_test"),
+        ],
+    )
+    def test_stripe_live_keys_critical_test_keys_high(
+        self,
+        scanner: InfisicalScanner,
+        tmp_path: Path,
+        secret: str,
+        expected: FindingSeverity,
+    ):
+        """``stripe-access-token`` matches test-mode keys too. They cannot move
+        money and the native scanner does not flag them, so they stay HIGH."""
+        item: dict[str, Any] = {"RuleID": "stripe-access-token", "File": "a.env", "Secret": secret}
+
+        finding = scanner._parse_finding(item, tmp_path)
+
+        assert finding is not None
+        assert finding.severity == expected
+
+    @pytest.mark.parametrize(
+        ("rule_id", "expected"),
+        [
+            ("aws-access-key-id", CRITICAL),
+            ("stripe-api-key", CRITICAL),
+            ("google-api-key", HIGH),
+            ("slack-token", HIGH),
+        ],
+    )
+    def test_original_rule_ids_keep_their_severity(
+        self,
+        scanner: InfisicalScanner,
+        tmp_path: Path,
+        rule_id: str,
+        expected: FindingSeverity,
+    ):
+        """No built-in rule emits the original keys, but a custom rules config may."""
         item: dict[str, Any] = {"RuleID": rule_id, "File": "a.env", "Secret": "x" * 20}
 
         finding = scanner._parse_finding(item, tmp_path)
 
         assert finding is not None
-        assert finding.severity == FindingSeverity.CRITICAL
+        assert finding.severity == expected
+
+    def test_rule_ids_are_matched_case_insensitively(
+        self, scanner: InfisicalScanner, tmp_path: Path
+    ):
+        """A custom rules config may spell a rule ID in another case."""
+        item: dict[str, Any] = {"RuleID": "AWS-Access-Token", "File": "a.env", "Secret": "x" * 20}
+
+        finding = scanner._parse_finding(item, tmp_path)
+
+        assert finding is not None
+        assert finding.severity == CRITICAL
 
     def test_parse_finding_with_commit_info(self, scanner: InfisicalScanner, tmp_path: Path):
         """Test parsing a finding with git commit information."""
@@ -457,27 +583,20 @@ class TestInfisicalScanExecution:
         source_idx = call_args.index("--source")
         assert call_args[source_idx + 1] == str(tmp_path)
 
-    def test_scan_with_git_history_flag(self, mock_scanner: InfisicalScanner, tmp_path: Path):
-        """Test that scan passes correct args for git history scan."""
-        with patch.object(mock_scanner, "_find_binary", return_value=mock_scanner._binary_path):
-            with patch("subprocess.run") as mock_run:
-                mock_run.return_value = MagicMock(stdout="[]", stderr="", returncode=0)
-                mock_scanner.scan([tmp_path], include_git_history=True)
+    @pytest.mark.parametrize("history", [True, False], ids=["history", "no-history"])
+    def test_scan_passes_no_git_only_without_history(
+        self, mock_scanner: InfisicalScanner, tmp_path: Path, history: bool
+    ):
+        """``--no-git`` is passed exactly when git history is not scanned."""
+        with (
+            patch.object(mock_scanner, "_find_binary", return_value=mock_scanner._binary_path),
+            patch("envdrift.scanner.infisical._history_target", return_value=(tmp_path, None)),
+            patch("subprocess.run") as mock_run,
+        ):
+            mock_run.return_value = MagicMock(stdout="[]", stderr="", returncode=0)
+            mock_scanner.scan([tmp_path], include_git_history=history)
 
-        # Check that --no-git was NOT passed
-        call_args = mock_run.call_args[0][0]
-        assert "--no-git" not in call_args
-
-    def test_scan_without_git_history_flag(self, mock_scanner: InfisicalScanner, tmp_path: Path):
-        """Test that scan passes --no-git when not scanning history."""
-        with patch.object(mock_scanner, "_find_binary", return_value=mock_scanner._binary_path):
-            with patch("subprocess.run") as mock_run:
-                mock_run.return_value = MagicMock(stdout="[]", stderr="", returncode=0)
-                mock_scanner.scan([tmp_path], include_git_history=False)
-
-        # Check that --no-git WAS passed
-        call_args = mock_run.call_args[0][0]
-        assert "--no-git" in call_args
+        assert ("--no-git" in mock_run.call_args[0][0]) is not history
 
     def test_scan_multiple_paths(self, mock_scanner: InfisicalScanner, tmp_path: Path):
         """Test scanning multiple paths."""
@@ -495,6 +614,362 @@ class TestInfisicalScanExecution:
         # One scan per existing path; the `scan --help` flag probe is not a scan.
         scans = [c for c in mock_run.call_args_list if "--report-path" in c.args[0]]
         assert len(scans) == 2
+
+    @pytest.mark.parametrize(
+        ("target", "expected"),
+        [
+            ("proj", "proj/sub/app.env"),
+            ("proj/sub/app.env", "proj/sub/app.env"),
+        ],
+    )
+    def test_relative_target_is_resolved_once(
+        self,
+        mock_scanner: InfisicalScanner,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        target: str,
+        expected: str,
+    ):
+        """``--source`` is relative to the directory infisical runs in (#843).
+
+        It used to get the cwd-relative path unchanged while running inside
+        that path, which resolved ``proj`` to ``proj/proj``.
+        """
+        secret_file = tmp_path / "proj" / "sub" / "app.env"
+        secret_file.parent.mkdir(parents=True)
+        secret_file.write_text("X=1\n")
+        monkeypatch.chdir(tmp_path)
+
+        def fake_infisical(args: list[str], **kwargs):
+            if "--report-path" not in args:  # the `scan --help` probe
+                return MagicMock(stdout="", stderr="", returncode=0)
+            # Like the real binary: --source is resolved against its cwd, and
+            # a finding's File is that argument joined with the path below it.
+            source = Path(args[args.index("--source") + 1])
+            resolved = (Path(kwargs["cwd"]) / source).resolve()
+            assert resolved == (tmp_path / target).resolve(), "target resolved twice"
+            file_arg = source if resolved.is_file() else source / secret_file.relative_to(resolved)
+            report = Path(args[args.index("--report-path") + 1])
+            report.write_text(json.dumps([{"File": str(file_arg), "RuleID": "x", "Secret": "s3"}]))
+            return MagicMock(stdout="", stderr="", returncode=1)
+
+        with patch.object(mock_scanner, "_find_binary", return_value=mock_scanner._binary_path):
+            with patch("subprocess.run", side_effect=fake_infisical):
+                result = mock_scanner.scan([Path(target)])
+
+        assert result.error is None
+        assert [f.file_path for f in result.findings] == [Path(expected)]
+
+    def test_scan_error_is_ansi_clean(self, mock_scanner: InfisicalScanner, tmp_path: Path):
+        """The binary's colored stderr must not carry escapes into --json/SARIF (#843)."""
+        # Infisical 0.43.141 stderr, verbatim, for a --source it cannot stat.
+        stderr = (
+            "\x1b[90m2026-10-13T04:30:26Z\x1b[0m \x1b[31mFTL\x1b[0m Failed to load config "
+            '\x1b[36merror=\x1b[0m\x1b[31m\x1b[1m"stat proj: no such file or directory"'
+            "\x1b[0m\x1b[0m\n"
+        )
+        with patch.object(mock_scanner, "_find_binary", return_value=mock_scanner._binary_path):
+            with patch("subprocess.run") as mock_run:
+                mock_run.return_value = MagicMock(stdout="", stderr=stderr, returncode=1)
+                result = mock_scanner.scan([tmp_path])
+
+        assert result.error == (
+            '2026-10-13T04:30:26Z FTL Failed to load config error="stat proj: no such file '
+            'or directory"'
+        )
+
+
+def _git_repo_with_subdir(root: Path, *, commit: bool = True) -> Path:
+    """Initialize a git repository at ``root`` with a ``proj/sub`` directory."""
+    (root / "proj" / "sub").mkdir(parents=True)
+    subprocess.run(["git", "init", "-q"], cwd=root, capture_output=True, check=True)
+    if commit:
+        subprocess.run(
+            [
+                "git",
+                "-c",
+                "user.name=Test",
+                "-c",
+                "user.email=test@example.com",
+                "commit",
+                "-q",
+                "--allow-empty",
+                "-m",
+                "initial",
+            ],
+            cwd=root,
+            capture_output=True,
+            check=True,
+        )
+    return root
+
+
+class TestHistoryTarget:
+    """History scans run on the repository root, in the caller's form (#843)."""
+
+    def test_absolute_subdirectory_maps_to_the_repository_root(self, tmp_path: Path):
+        repo = _git_repo_with_subdir(tmp_path)
+
+        target, error = _history_target(repo / "proj")
+
+        assert error is None
+        assert target is not None
+        assert target.is_absolute()
+        assert target.resolve() == repo.resolve()
+
+    @pytest.mark.parametrize(
+        ("cwd", "path", "expected"),
+        [
+            (".", ".", "."),
+            (".", "proj", "."),
+            (".", "proj/sub", "."),
+            ("proj/sub", ".", "../.."),
+            ("proj/sub", "..", "../.."),
+        ],
+    )
+    def test_relative_path_maps_to_a_cwd_relative_root(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        cwd: str,
+        path: str,
+        expected: str,
+    ):
+        """A relative scan path keeps reporting cwd-relative findings."""
+        repo = _git_repo_with_subdir(tmp_path)
+        monkeypatch.chdir(repo / cwd)
+
+        assert _history_target(Path(path)) == (Path(expected), None)
+
+    def test_file_maps_to_its_repository_root(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        """Infisical's git mode cannot scan a file, so its repository is scanned."""
+        repo = _git_repo_with_subdir(tmp_path)
+        (repo / "proj" / "sub" / "app.env").write_text("X=1\n")
+        monkeypatch.chdir(repo / "proj")
+
+        assert _history_target(Path("sub/app.env")) == (Path(".."), None)
+
+    def test_rejects_a_directory_outside_a_repository(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        monkeypatch.setenv("GIT_CEILING_DIRECTORIES", str(tmp_path))
+        (tmp_path / "plain").mkdir()
+
+        target, error = _history_target(tmp_path / "plain")
+
+        assert target is None
+        assert error is not None
+        assert "not inside a Git repository" in error
+
+    def test_rejects_a_repository_without_commits(self, tmp_path: Path):
+        repo = _git_repo_with_subdir(tmp_path, commit=False)
+
+        target, error = _history_target(repo / "proj")
+
+        assert target is None
+        assert error is not None
+        assert "has no commits" in error
+
+    def test_root_without_a_relative_form_stays_absolute(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        """On Windows a root on another drive than the cwd has no relative form."""
+        repo = _git_repo_with_subdir(tmp_path)
+        monkeypatch.chdir(repo)
+
+        def other_drive(*_args: object) -> str:
+            raise ValueError("path is on mount 'D:', start on mount 'C:'")
+
+        with patch("envdrift.scanner.infisical.os.path.relpath", side_effect=other_drive):
+            target, error = _history_target(Path("proj"))
+
+        assert error is None
+        assert target is not None
+        assert target.is_absolute()
+        assert target.resolve() == repo.resolve()
+
+
+class TestPrepareScanTargets:
+    """One Infisical run gets one ``--source`` per target (#843)."""
+
+    def test_working_tree_targets_are_the_existing_paths(self, tmp_path: Path):
+        (tmp_path / "a").mkdir()
+        (tmp_path / "b.env").write_text("X=1\n")
+        paths = [tmp_path / "a", tmp_path / "missing", tmp_path / "b.env"]
+
+        targets, errors = _prepare_scan_targets(paths, include_git_history=False)
+
+        assert targets == [tmp_path / "a", tmp_path / "b.env"]
+        assert errors == []
+
+    def test_paths_in_one_repository_share_one_history_scan(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        """``guard --pr-base --history`` with N changed files scans history once."""
+        repo = _git_repo_with_subdir(tmp_path)
+        (repo / "proj" / "sub" / "a.env").write_text("X=1\n")
+        (repo / "proj" / "b.env").write_text("X=1\n")
+        (repo / "root.env").write_text("X=1\n")
+        monkeypatch.chdir(repo)
+        paths = [Path("proj/sub/a.env"), Path("proj/b.env"), Path("root.env"), Path("proj")]
+
+        targets, errors = _prepare_scan_targets(paths, include_git_history=True)
+
+        assert targets == [Path()]
+        assert errors == []
+
+    @pytest.mark.parametrize("invalid_first", [True, False], ids=["invalid-first", "valid-first"])
+    def test_invalid_history_target_keeps_the_valid_one(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, invalid_first: bool
+    ):
+        monkeypatch.setenv("GIT_CEILING_DIRECTORIES", str(tmp_path))
+        repo = _git_repo_with_subdir(tmp_path / "repo")
+        plain = tmp_path / "plain"
+        plain.mkdir()
+        paths = [plain, repo] if invalid_first else [repo, plain]
+
+        targets, errors = _prepare_scan_targets(paths, include_git_history=True)
+
+        assert [target.resolve() for target in targets] == [repo.resolve()]
+        assert len(errors) == 1
+        assert "not inside a Git repository" in errors[0]
+
+
+class TestScanFailsClosed:
+    """A scan that did not run must never read as a clean one (#843)."""
+
+    @pytest.fixture
+    def scanner(self, tmp_path: Path) -> InfisicalScanner:
+        scanner = InfisicalScanner(auto_install=False)
+        scanner._binary_path = tmp_path / "infisical"
+        scanner._binary_path.touch()
+        return scanner
+
+    # Infisical 0.43.135 in git mode on a file source: rc=1, an empty `[]`
+    # report and this stderr, verbatim (NO_COLOR=1).
+    _PARTIAL_SCAN = (
+        "2026-10-13T05:32:16Z INF scanning for exposed secrets...\n"
+        "5:32AM ERR [git] fatal: cannot change to 's.txt': Not a directory\n"
+        "5:32AM ERR skipping finding links: unable to parse remote URL "
+        'error="fork/exec /usr/bin/git: not a directory"\n'
+        '5:32AM ERR failed to scan Git repository error="stderr is not empty"\n'
+        "2026-10-13T05:32:16Z WRN partial scan completed in 10.6ms\n"
+        "2026-10-13T05:32:16Z WRN no leaks found in partial scan\n"
+    )
+
+    @staticmethod
+    def _fake_infisical(report: str, returncode: int, stderr: str = ""):
+        def run(args: list[str], **_kwargs: Any) -> MagicMock:
+            if "--report-path" in args:
+                Path(args[args.index("--report-path") + 1]).write_text(report)
+            return MagicMock(stdout="", stderr=stderr, returncode=returncode)
+
+        return run
+
+    @pytest.mark.parametrize("report", ["[]\n", "", "not json", "{}"])
+    def test_nonzero_exit_without_findings_is_an_error(
+        self, scanner: InfisicalScanner, tmp_path: Path, report: str
+    ):
+        """Infisical exits non-zero on leaks only when it reports them."""
+        with patch.object(scanner, "_find_binary", return_value=scanner._binary_path):
+            with patch(
+                "subprocess.run", side_effect=self._fake_infisical(report, 1, self._PARTIAL_SCAN)
+            ):
+                result = scanner.scan([tmp_path])
+
+        assert result.success is False
+        assert result.error is not None
+        assert "no leaks found in partial scan" in result.error
+        assert result.findings == []
+
+    def test_nonzero_exit_without_output_names_the_path(
+        self, scanner: InfisicalScanner, tmp_path: Path
+    ):
+        with patch.object(scanner, "_find_binary", return_value=scanner._binary_path):
+            with patch("subprocess.run", side_effect=self._fake_infisical("[]", 2)):
+                result = scanner.scan([tmp_path])
+
+        assert result.error == f"infisical scan failed for {tmp_path} (exit code 2)"
+
+    def test_zero_exit_with_an_empty_report_is_clean(
+        self, scanner: InfisicalScanner, tmp_path: Path
+    ):
+        with patch.object(scanner, "_find_binary", return_value=scanner._binary_path):
+            with patch("subprocess.run", side_effect=self._fake_infisical("[]\n", 0)):
+                result = scanner.scan([tmp_path])
+
+        assert result.success is True
+        assert result.findings == []
+
+    def test_history_outside_a_repository_never_runs_the_binary(
+        self, scanner: InfisicalScanner, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        monkeypatch.setenv("GIT_CEILING_DIRECTORIES", str(tmp_path))
+        plain = tmp_path / "plain"
+        plain.mkdir()
+
+        with patch("subprocess.run", wraps=subprocess.run) as run:
+            result = scanner.scan([plain], include_git_history=True)
+
+        assert result.success is False
+        assert result.error == f"Cannot scan Git history for {plain}: not inside a Git repository"
+        assert not [c for c in run.call_args_list if "--report-path" in c.args[0]]
+
+    def test_history_error_survives_a_valid_sibling(
+        self, scanner: InfisicalScanner, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        """The valid repository is still scanned, and the run stays incomplete."""
+        monkeypatch.setenv("GIT_CEILING_DIRECTORIES", str(tmp_path))
+        _git_repo_with_subdir(tmp_path / "repo")
+        plain = tmp_path / "plain"
+        plain.mkdir()
+        monkeypatch.chdir(tmp_path)
+        report = json.dumps(
+            [{"File": "proj/sub/app.env", "RuleID": "x", "Secret": "s3", "Commit": "abc123"}]
+        )
+        calls: list[tuple[list[str], str]] = []
+        real_run = subprocess.run
+
+        def fake(args: list[str], **kwargs: Any) -> Any:
+            if args[0] == "git":  # the preflight's real git calls
+                return real_run(args, **kwargs)
+            if "--report-path" not in args:  # the `scan --help` probe
+                return MagicMock(stdout="", stderr="", returncode=0)
+            calls.append((args, kwargs["cwd"]))
+            Path(args[args.index("--report-path") + 1]).write_text(report)
+            return MagicMock(stdout="", stderr="", returncode=1)
+
+        with patch.object(scanner, "_find_binary", return_value=scanner._binary_path):
+            with patch("subprocess.run", side_effect=fake):
+                result = scanner.scan(
+                    [Path("plain"), Path("repo/proj/sub"), Path("repo")], include_git_history=True
+                )
+
+        # One history scan, of the repository root, run inside it.
+        assert len(calls) == 1
+        args, cwd = calls[0]
+        assert args[args.index("--source") + 1] == "."
+        assert "--no-git" not in args
+        assert Path(cwd) == Path("repo")
+        # Repo-relative ``File`` joined onto the root, relative in, relative out.
+        assert [f.file_path for f in result.findings] == [Path("repo/proj/sub/app.env")]
+        assert result.error == "Cannot scan Git history for plain: not inside a Git repository"
+
+    def test_history_preflight_error_joins_a_missing_binary(self, tmp_path: Path, monkeypatch):
+        monkeypatch.setenv("GIT_CEILING_DIRECTORIES", str(tmp_path))
+        repo = _git_repo_with_subdir(tmp_path / "repo")
+        plain = tmp_path / "plain"
+        plain.mkdir()
+        scanner = InfisicalScanner(auto_install=False)
+
+        with patch.object(scanner, "_find_binary", side_effect=InfisicalNotFoundError("gone")):
+            result = scanner.scan([plain, repo], include_git_history=True)
+
+        assert result.error == (
+            f"gone; Cannot scan Git history for {plain}: not inside a Git repository"
+        )
 
 
 class TestInfisicalAutoInstall:

@@ -28,6 +28,7 @@ from envdrift.scanner.base import (
     ScanFinding,
 )
 from envdrift.utils.git import get_git_root
+from envdrift.utils.text import strip_ansi
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -199,7 +200,7 @@ def format_rich(result: AggregatedScanResult, console: Console | None = None) ->
     if errors:
         error_lines: list[str] = []
         for r in errors:
-            msg = (r.error or "").strip()
+            msg = strip_ansi(r.error or "").strip()
             if len(msg) > 200:
                 msg = f"{msg[:200]}…"
             error_lines.append(f"[red]{r.scanner_name}[/red]: {msg}")
@@ -285,7 +286,12 @@ def format_rich(result: AggregatedScanResult, console: Console | None = None) ->
 def _print_scan_info(result: AggregatedScanResult, console: Console) -> None:
     """Print scan metadata."""
     total_files_reported = sum(r.files_scanned for r in result.results)
-    files_with_findings = len({str(f.file_path) for f in result.unique_findings})
+    # Scanners report the same file in different forms (native resolves a
+    # directory target, gitleaks/Infisical keep it cwd-relative), so count
+    # resolved paths or one file is counted once per form.
+    files_with_findings = len(
+        {_resolved_finding_path(Path(f.file_path)) for f in result.unique_findings}
+    )
     console.print(
         f"\n[dim]Scanners: {', '.join(result.scanners_used)} | "
         f"Files with findings: {files_with_findings} | "
@@ -327,7 +333,9 @@ def format_json(result: AggregatedScanResult, exit_code: int | None = None) -> s
                 "name": r.scanner_name,
                 "files_scanned": r.files_scanned,
                 "duration_ms": r.duration_ms,
-                "error": r.error,
+                # Scanner errors are often a binary's stderr, which some tools
+                # color even on a pipe; machine output stays ANSI-clean (#843).
+                "error": strip_ansi(r.error) if r.error is not None else None,
                 # A skipped scanner (default-set, binary unavailable, no
                 # auto-install) is distinguishable from both "ran clean"
                 # (skipped false, error null) and "failed" (error set) (#641).
@@ -558,7 +566,7 @@ def format_sarif(result: AggregatedScanResult, exit_code: int | None = None) -> 
             "toolExecutionNotifications": [
                 {
                     "level": "error",
-                    "message": {"text": f"{r.scanner_name}: {(r.error or '').strip()}"},
+                    "message": {"text": f"{r.scanner_name}: {strip_ansi(r.error or '').strip()}"},
                 }
                 for r in result.results
                 if not r.success

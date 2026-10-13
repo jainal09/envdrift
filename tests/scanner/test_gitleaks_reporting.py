@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import subprocess
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -93,7 +94,7 @@ class TestMixedHistoryTargets:
 
         targets, errors = _prepare_scan_targets(paths, include_git_history=True)
 
-        assert [target for target, _base in targets] == [repo.resolve()]
+        assert targets == [repo.resolve()]
         assert len(errors) == 1
         assert "not inside a Git repository" in errors[0]
 
@@ -140,7 +141,68 @@ def test_scan_uses_modern_positional_command(
     assert "detect" not in call_args
     assert "--source" not in call_args
     assert "--no-git" not in call_args
+    # The ASCII-art banner on stderr used to land in the scanner error (#843).
+    assert "--no-banner" in call_args
     assert call_args[-1] == str(tmp_path)
+
+
+# gitleaks 8.30.1 stderr, verbatim, for a scan path it cannot stat (#843).
+_GITLEAKS_FTL = (
+    "\x1b[90m4:30AM\x1b[0m \x1b[31mFTL\x1b[0m \x1b[1mstat proj: no such file or directory\x1b[0m\n"
+)
+
+
+@pytest.mark.parametrize("target", ["proj", "proj/sub/app.env"])
+def test_relative_target_is_resolved_once(
+    mock_scanner: GitleaksScanner,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    target: str,
+):
+    """gitleaks gets a cwd-relative target relative to the directory it runs in (#843).
+
+    It used to get the path unchanged while running inside that path, which
+    resolved ``proj`` to ``proj/proj``. The finding must come back in the
+    caller's (relative) form, not as ``app.env/app.env`` for a file target.
+    """
+    secret_file = tmp_path / "proj" / "sub" / "app.env"
+    secret_file.parent.mkdir(parents=True)
+    secret_file.write_text("X=1\n")
+    monkeypatch.chdir(tmp_path)
+
+    def fake_gitleaks(args: list[str], **kwargs):
+        # Like the real binary: the argument is resolved against its cwd, and a
+        # finding's File is that argument joined with the path below it.
+        arg = Path(args[-1])
+        resolved = (Path(kwargs["cwd"]) / arg).resolve()
+        assert resolved == (tmp_path / target).resolve(), "target resolved twice"
+        file_arg = arg if resolved.is_file() else arg / secret_file.relative_to(resolved)
+        report = Path(args[args.index("--report-path") + 1])
+        report.write_text(
+            json.dumps([{"File": str(file_arg), "RuleID": "x", "StartLine": 1, "Secret": "s3cr3t"}])
+        )
+        return MagicMock(stdout="", stderr="", returncode=0)
+
+    with (
+        patch.object(mock_scanner, "_find_binary", return_value=mock_scanner._binary_path),
+        patch("subprocess.run", side_effect=fake_gitleaks),
+    ):
+        result = mock_scanner.scan([Path(target)])
+
+    assert result.error is None
+    assert [f.file_path for f in result.findings] == [Path("proj/sub/app.env")]
+
+
+def test_scan_error_is_ansi_clean(mock_scanner: GitleaksScanner, tmp_path: Path):
+    """The binary's colored stderr must not carry escapes into --json/SARIF (#843)."""
+    with (
+        patch.object(mock_scanner, "_find_binary", return_value=mock_scanner._binary_path),
+        patch("subprocess.run") as mock_run,
+    ):
+        mock_run.return_value = MagicMock(stdout="", stderr=_GITLEAKS_FTL, returncode=1)
+        result = mock_scanner.scan([tmp_path])
+
+    assert result.error == "4:30AM FTL stat proj: no such file or directory"
 
 
 def test_history_outside_git_is_an_error(mock_scanner: GitleaksScanner, tmp_path: Path):
