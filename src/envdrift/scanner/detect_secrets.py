@@ -63,12 +63,14 @@ class DetectSecretsError(Exception):
     pass
 
 
-# Severity mapping based on detector type (using output format names)
+# Severity mapping keyed on the exact ``type`` string each detect-secrets plugin
+# emits (its ``secret_type``). A key that matches no emitted name is dead and its
+# findings silently fall back to HIGH, so take names from a real scan.
 DETECTOR_SEVERITY: dict[str, FindingSeverity] = {
     # Critical - cloud provider credentials
     "AWS Access Key": FindingSeverity.CRITICAL,
     "Azure Storage Account access key": FindingSeverity.CRITICAL,
-    "Cloudant": FindingSeverity.CRITICAL,
+    "Cloudant Credentials": FindingSeverity.CRITICAL,
     "IBM Cloud IAM Key": FindingSeverity.CRITICAL,
     "IBM COS HMAC Credentials": FindingSeverity.CRITICAL,
     "SoftLayer Credentials": FindingSeverity.CRITICAL,
@@ -80,11 +82,11 @@ DETECTOR_SEVERITY: dict[str, FindingSeverity] = {
     "Stripe Access Key": FindingSeverity.CRITICAL,
     "Twilio API Key": FindingSeverity.CRITICAL,
     "Mailchimp Access Key": FindingSeverity.CRITICAL,
-    "npm credentials": FindingSeverity.CRITICAL,
+    "NPM tokens": FindingSeverity.CRITICAL,
     "SendGrid API Key": FindingSeverity.CRITICAL,
     "Square OAuth Secret": FindingSeverity.CRITICAL,
-    "OpenAI API Key": FindingSeverity.CRITICAL,
-    "PyPI upload token": FindingSeverity.CRITICAL,
+    "OpenAI Token": FindingSeverity.CRITICAL,
+    "PyPI Token": FindingSeverity.CRITICAL,
     "Telegram Bot Token": FindingSeverity.CRITICAL,
     # High - cryptographic keys
     "Private Key": FindingSeverity.HIGH,

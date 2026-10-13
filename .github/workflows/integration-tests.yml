@@ -141,6 +141,18 @@ jobs:
       - name: Install dependencies
         run: uv sync --all-extras --locked
 
+      - name: Install detect-secrets
+        run: |
+          # envdrift runs it as `python -m detect_secrets`, so it goes into the project
+          # venv. Version comes from constants.json (Renovate's pypi manager), so the
+          # real-package tests in tests/integration/test_detect_secrets_real.py run
+          # instead of skipping.
+          DS_VERSION=$(python -c "import json,sys; sys.stdout.write(json.load(open('src/envdrift/constants.json'))['detect_secrets_version'])") \
+            || { echo 'ERROR: could not read detect_secrets_version from src/envdrift/constants.json' >&2; exit 1; }
+          test -n "$DS_VERSION" || { echo 'ERROR: detect_secrets_version resolved empty' >&2; exit 1; }
+          uv pip install "detect-secrets==$DS_VERSION"
+          uv run --no-sync python -m detect_secrets --version
+
       - name: Install dotenvx
         run: |
           mkdir -p "$HOME/.local/bin"
