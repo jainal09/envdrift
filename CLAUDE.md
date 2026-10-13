@@ -137,7 +137,7 @@ These have bitten us in CI or review and aren't obvious from the code alone.
   `pytest -m "not integration"` — not just the file you touched — because other
   suites may assert the old behavior.
 - **`pyrefly` skips `tests/` inside `.claude/worktrees/`.** A worktree under the
-  gitignored `.claude/` makes pyrefly's ignore resolution drop the whole `tests/`
+  gitignored `.claude/worktrees/` makes pyrefly's ignore resolution drop the whole `tests/`
   tree (`WARN Skipping include pattern … tests/**`), so a type error in a test
   file passes locally but fails the `Tests & Coverage` CI job. Create scratch
   worktrees as **siblings of the repo** (`../envdrift-<name>`), and always run the
