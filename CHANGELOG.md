@@ -1,5 +1,21 @@
 # Changelog
 
+## [11.0.8](https://github.com/jainal09/envdrift/compare/v11.0.7...v11.0.8) (2026-10-13)
+
+
+### Bug Fixes
+
+* **scanner:** grade Infisical rule IDs by what the CLI actually emits ([#844](https://github.com/jainal09/envdrift/issues/844)) ([d3e5c02](https://github.com/jainal09/envdrift/commit/d3e5c028c26096829438c04dbd819c58a9979868))
+* **scanner:** Infisical history scans run on the repository root and fail closed ([#852](https://github.com/jainal09/envdrift/issues/852)) ([d3e5c02](https://github.com/jainal09/envdrift/commit/d3e5c028c26096829438c04dbd819c58a9979868))
+* **scanner:** key detect-secrets severities on the type names it emits ([d3e5c02](https://github.com/jainal09/envdrift/commit/d3e5c028c26096829438c04dbd819c58a9979868))
+* **scanner:** resolve relative scan paths for gitleaks and Infisical ([#843](https://github.com/jainal09/envdrift/issues/843)) ([d3e5c02](https://github.com/jainal09/envdrift/commit/d3e5c028c26096829438c04dbd819c58a9979868))
+* **scanner:** strip ANSI from every scanner error and count each file once ([d3e5c02](https://github.com/jainal09/envdrift/commit/d3e5c028c26096829438c04dbd819c58a9979868))
+
+
+### Documentation
+
+* **agents:** release PRs need a manual merge; GITHUB_TOKEN merges skip push CI ([d3e5c02](https://github.com/jainal09/envdrift/commit/d3e5c028c26096829438c04dbd819c58a9979868))
+
 ## [11.0.7](https://github.com/jainal09/envdrift/compare/v11.0.6...v11.0.7) (2026-10-11)
 
 
