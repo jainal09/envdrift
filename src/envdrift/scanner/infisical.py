@@ -13,6 +13,7 @@ from __future__ import annotations
 import functools
 import json
 import logging
+import os
 import platform
 import re
 import shutil
@@ -43,7 +44,10 @@ from envdrift.scanner.platform_utils import (
     get_venv_bin_dir,
     safe_extract_tar,
     safe_extract_zip,
+    scan_location,
 )
+from envdrift.utils.git import get_git_root, has_git_head
+from envdrift.utils.text import strip_ansi
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -182,6 +186,89 @@ def _supports_confidence_flag(binary: Path) -> bool:
             e,
         )
         return False
+
+
+def _history_target(path: Path) -> tuple[Path | None, str | None]:
+    """The repository root Infisical must scan for ``path`` in history mode.
+
+    Without ``--no-git`` Infisical scans the history of the whole repository
+    that contains ``--source`` and reports ``File`` relative to its root, but
+    it cannot scan a file, a directory outside a repository or a repository
+    with no commits: for each it writes the empty ``[]`` report of a clean
+    scan (#843). So history scans run on the root, which a finding's ``File``
+    is joined onto, and a path that cannot be history-scanned is an error, as
+    for gitleaks (#641).
+
+    The root comes back in the form of ``path``, relative to the cwd for a
+    relative one, so relative scan paths keep reporting relative findings.
+
+    Returns:
+        Tuple of (repository root, None), or (None, error message).
+    """
+    git_root = get_git_root(path)
+    if git_root is None:
+        return None, f"Cannot scan Git history for {path}: not inside a Git repository"
+    if not has_git_head(git_root):
+        return None, f"Cannot scan Git history for {path}: the Git repository has no commits"
+    if path.is_absolute():
+        return git_root, None
+    try:
+        return Path(os.path.relpath(git_root, Path.cwd())), None
+    except ValueError:
+        # Windows: a root on another drive than the cwd has no relative form.
+        return git_root, None
+
+
+def _prepare_scan_targets(
+    paths: list[Path], *, include_git_history: bool
+) -> tuple[list[Path], list[str]]:
+    """Build the unique ``--source`` targets for one Infisical run.
+
+    In history mode every path maps to its repository root, and paths in the
+    same repository share one scan, so ``guard --pr-base --history`` with N
+    changed files runs one history scan instead of N. Preflight failures are
+    collected per target, so one bad path does not discard the valid ones.
+    """
+    targets: list[Path] = []
+    errors: list[str] = []
+    seen_history_roots: set[Path] = set()
+    for path in paths:
+        if not path.exists():
+            continue
+        if not include_git_history:
+            targets.append(path)
+            continue
+
+        history_target, error = _history_target(path)
+        if error is not None or history_target is None:
+            errors.append(error or f"Cannot scan Git history for {path}")
+            continue
+        resolved_target = history_target.resolve()
+        if resolved_target in seen_history_roots:
+            continue
+        seen_history_roots.add(resolved_target)
+        targets.append(history_target)
+    return targets, errors
+
+
+def _combined_error(run_error: str | None, target_errors: list[str]) -> str | None:
+    """Join a run failure with the per-target preflight diagnostics."""
+    parts = ([run_error] if run_error else []) + target_errors
+    return "; ".join(parts) if parts else None
+
+
+def _load_findings(report_path: Path) -> list[Any]:
+    """The findings in an Infisical JSON report, or ``[]`` when it holds none.
+
+    A missing, empty, unparsable or non-list report holds no findings.
+    """
+    if not report_path.exists() or report_path.stat().st_size == 0:
+        return []
+    try:
+        report_data = json.loads(report_path.read_text())
+    except json.JSONDecodeError:
+        return []
+    return report_data if isinstance(report_data, list) else []
 
 
 # Betterleaks composite rules nest their paired values under ``ComponentSets``
@@ -579,23 +666,34 @@ class InfisicalScanner(ScannerBackend):
         """
         start_time = time.time()
 
+        # Per-target preflight, as for gitleaks (#641): a path that cannot be
+        # history-scanned is an error, and the valid ones are still scanned.
+        # Every returned ScanResult carries those errors so the run stays
+        # truthfully incomplete.
+        scan_targets, target_errors = _prepare_scan_targets(
+            paths, include_git_history=include_git_history
+        )
+        if target_errors and not scan_targets:
+            return ScanResult(
+                scanner_name=self.name,
+                error=_combined_error(None, target_errors),
+                duration_ms=int((time.time() - start_time) * 1000),
+            )
+
         try:
             binary = self._find_binary()
         except InfisicalNotFoundError as e:
             return ScanResult(
                 scanner_name=self.name,
-                error=str(e),
+                error=_combined_error(str(e), target_errors),
                 duration_ms=int((time.time() - start_time) * 1000),
             )
 
         all_findings: list[ScanFinding] = []
         total_files = 0
-        confidence_args = _confidence_args(binary, paths)
+        confidence_args = _confidence_args(binary, scan_targets)
 
-        for path in paths:
-            if not path.exists():
-                continue
-
+        for path in scan_targets:
             # Create temp file for JSON report
             report_path: Path | None = None
             try:
@@ -603,15 +701,17 @@ class InfisicalScanner(ScannerBackend):
                     mode="w", suffix=".json", delete=False
                 ) as report_file:
                     report_path = Path(report_file.name)
-                # Build command with explicit source path
-                work_dir = path if path.is_dir() else path.parent
+                # Build command with explicit source path. ``File`` comes back
+                # relative to the directory infisical runs in, the repository
+                # root in history mode, so findings are joined onto it.
+                work_dir, source_arg = scan_location(path)
                 args = [
                     str(binary),
                     "scan",
                     "--report-path",
                     str(report_path),
                     "--source",
-                    str(path),
+                    source_arg,
                 ]
 
                 # If not scanning git history, use --no-git
@@ -631,58 +731,51 @@ class InfisicalScanner(ScannerBackend):
                     cwd=str(work_dir),
                 )
 
-                # Infisical returns non-zero when leaks are found, so only treat as
-                # error if no report was generated.
-                if result.returncode != 0 and (
-                    not report_path.exists() or report_path.stat().st_size == 0
-                ):
+                report_data = _load_findings(report_path)
+
+                # Infisical exits non-zero when it reports leaks, so a non-zero
+                # exit that reported none is a failed scan. A scan that cannot
+                # run still writes an empty ``[]`` report, which used to pass as
+                # clean (#843).
+                if result.returncode != 0 and not report_data:
+                    # zerolog colors its log lines even on a pipe, and this
+                    # message lands in --json/SARIF output (#843).
                     error_msg = (
-                        result.stderr.strip()
-                        or result.stdout.strip()
+                        strip_ansi(result.stderr).strip()
+                        or strip_ansi(result.stdout).strip()
                         or f"infisical scan failed for {path} (exit code {result.returncode})"
                     )
                     return ScanResult(
                         scanner_name=self.name,
                         findings=all_findings,
-                        error=error_msg,
+                        error=_combined_error(error_msg, target_errors),
                         duration_ms=int((time.time() - start_time) * 1000),
                     )
 
-                # Parse JSON report
-                if report_path.exists() and report_path.stat().st_size > 0:
-                    try:
-                        report_data = json.loads(report_path.read_text())
-                        if report_data and isinstance(report_data, list):
-                            # Count unique files
-                            files_with_findings = {
-                                item.get("File") for item in report_data if item.get("File")
-                            }
-                            total_files += len(files_with_findings)
-                            # Use work_dir as base for relative path resolution
-                            base_dir = work_dir
-                            for item in report_data:
-                                finding = self._parse_finding(item, base_dir)
-                                if finding:
-                                    all_findings.append(finding)
-                            all_findings.extend(
-                                self._parse_components(report_data, base_dir, all_findings)
-                            )
-                    except json.JSONDecodeError:
-                        # Invalid JSON in report, skip findings for this path
-                        continue
+                if report_data:
+                    # Count unique files
+                    files_with_findings = {
+                        item.get("File") for item in report_data if item.get("File")
+                    }
+                    total_files += len(files_with_findings)
+                    for item in report_data:
+                        finding = self._parse_finding(item, work_dir)
+                        if finding:
+                            all_findings.append(finding)
+                    all_findings.extend(self._parse_components(report_data, work_dir, all_findings))
 
             except subprocess.TimeoutExpired:
                 return ScanResult(
                     scanner_name=self.name,
                     findings=all_findings,
-                    error=f"Scan timed out for {path}",
+                    error=_combined_error(f"Scan timed out for {path}", target_errors),
                     duration_ms=int((time.time() - start_time) * 1000),
                 )
             except Exception as e:
                 return ScanResult(
                     scanner_name=self.name,
                     findings=all_findings,
-                    error=str(e),
+                    error=_combined_error(str(e), target_errors),
                     duration_ms=int((time.time() - start_time) * 1000),
                 )
             finally:
@@ -694,6 +787,7 @@ class InfisicalScanner(ScannerBackend):
             scanner_name=self.name,
             findings=all_findings,
             files_scanned=total_files,
+            error=_combined_error(None, target_errors),
             duration_ms=int((time.time() - start_time) * 1000),
         )
 

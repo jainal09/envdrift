@@ -214,7 +214,9 @@ def _make_stub(
     ``scan --help`` appends to ``help.log`` and prints ``help_text`` (or runs
     ``help_command``). Any other invocation appends its argv to ``argv.log``
     and copies ``report`` to the ``--report-path`` file, exiting 1 like the
-    real CLI does when it finds leaks. With ``rejects_confidence`` it instead
+    real CLI does when it finds leaks, or 0 for an empty report: the real CLI
+    never exits non-zero on a clean scan, and envdrift treats a non-zero exit
+    with no findings as a failed scan (#843). With ``rejects_confidence`` it instead
     behaves like 0.43.135 given ``--confidence``: usage error, exit 1, no report.
     """
     directory.mkdir(parents=True, exist_ok=True)
@@ -239,7 +241,7 @@ while [ $# -gt 0 ]; do
   if [ "$1" = "--report-path" ]; then cat {d}/report.json > "$2"; fi
   shift
 done
-exit 1
+exit {1 if report else 0}
 """
     stub = directory / "infisical"
     stub.write_text(script)

@@ -36,6 +36,32 @@ def get_platform_info() -> tuple[str, str]:
     return system, machine
 
 
+def scan_location(path: Path) -> tuple[Path, str]:
+    """Where to run a scanner binary on ``path``, and the path argument to give it.
+
+    The binary runs in the directory itself, or in a file's parent. A relative
+    ``path`` is relative to *our* cwd, so it is re-expressed relative to that
+    directory (``.`` or the file name); passing it unchanged resolved it a
+    second time (``proj`` -> ``proj/proj``) and the scan failed (#843). An
+    absolute path is passed unchanged.
+
+    Gitleaks and Infisical report each finding's ``File`` as that argument
+    joined with the file's path below it, so joining a relative ``File`` onto
+    the returned directory gives the finding in the caller's form: relative in,
+    relative out; absolute in, absolute out.
+
+    Args:
+        path: File or directory to scan, absolute or relative to the cwd.
+
+    Returns:
+        Tuple of (working directory for the binary, path argument for it).
+    """
+    work_dir = path if path.is_dir() else path.parent
+    if path.is_absolute():
+        return work_dir, str(path)
+    return work_dir, "." if path.is_dir() else path.name
+
+
 def get_venv_bin_dir() -> Path:
     """Get the virtual environment's bin directory.
 

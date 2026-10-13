@@ -177,6 +177,12 @@ error instead of silently skipping the history.
 envdrift guard --history
 ```
 
+gitleaks and infisical scan the history of the whole repository that contains each scanned path,
+a file or a subdirectory alike, once per repository, so `--pr-base --history` with many changed
+files runs one history scan. A path outside any git repository, or in a repository with no commits,
+is a scanner error for them, never a clean history: with no blocking finding, guard exits 5 (scan
+incomplete).
+
 ### `--entropy` / `--no-entropy`, `-e`
 
 Control entropy-based detection in the native scanner. By default (no flag,

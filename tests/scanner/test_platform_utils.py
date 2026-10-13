@@ -15,6 +15,7 @@ from envdrift.scanner.platform_utils import (
     get_venv_bin_dir,
     safe_extract_tar,
     safe_extract_zip,
+    scan_location,
 )
 
 
@@ -227,3 +228,57 @@ class TestSafeExtractZip:
             safe_extract_zip(zf, extract_dir, ValueError)
 
         assert (extract_dir / "dir1" / "dir2" / "file.txt").exists()
+
+
+class TestScanLocation:
+    """Tests for scan_location: where a scanner binary runs and what it is given (#843)."""
+
+    @pytest.fixture
+    def tree(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+        """``tmp_path/proj/sub/app.env``, with the cwd set to ``tmp_path``."""
+        (tmp_path / "proj" / "sub").mkdir(parents=True)
+        (tmp_path / "proj" / "sub" / "app.env").write_text("X=1\n")
+        monkeypatch.chdir(tmp_path)
+        return tmp_path
+
+    @pytest.mark.parametrize(
+        ("target", "work_dir", "argument"),
+        [
+            ("proj", "proj", "."),
+            ("proj/sub", "proj/sub", "."),
+            ("proj/sub/app.env", "proj/sub", "app.env"),
+            (".", ".", "."),
+        ],
+    )
+    def test_relative_path_is_reexpressed_relative_to_the_work_dir(
+        self, tree: Path, target: str, work_dir: str, argument: str
+    ):
+        """A relative path must not be resolved a second time inside the work dir."""
+        cwd, arg = scan_location(Path(target))
+
+        assert cwd == Path(work_dir)
+        assert arg == argument
+        # The binary resolves ``arg`` against ``cwd``: that must be the target.
+        assert (cwd / arg).resolve() == (tree / target).resolve()
+
+    def test_file_in_the_cwd_runs_in_the_cwd(self, tree: Path, monkeypatch: pytest.MonkeyPatch):
+        monkeypatch.chdir(tree / "proj" / "sub")
+
+        assert scan_location(Path("app.env")) == (Path(), "app.env")
+
+    def test_parent_relative_path_keeps_its_form(self, tree: Path, monkeypatch: pytest.MonkeyPatch):
+        monkeypatch.chdir(tree / "proj" / "sub")
+
+        cwd, arg = scan_location(Path("../../proj"))
+
+        assert (cwd, arg) == (Path("../../proj"), ".")
+        assert not cwd.is_absolute()
+
+    @pytest.mark.parametrize(
+        ("target", "work_dir"),
+        [("proj", "proj"), ("proj/sub/app.env", "proj/sub")],
+    )
+    def test_absolute_path_is_passed_unchanged(self, tree: Path, target: str, work_dir: str):
+        absolute = tree / target
+
+        assert scan_location(absolute) == (tree / work_dir, str(absolute))
