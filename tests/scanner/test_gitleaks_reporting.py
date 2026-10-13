@@ -152,19 +152,12 @@ _GITLEAKS_FTL = (
 )
 
 
-@pytest.mark.parametrize(
-    ("target", "expected"),
-    [
-        ("proj", "proj/sub/app.env"),
-        ("proj/sub/app.env", "proj/sub/app.env"),
-    ],
-)
+@pytest.mark.parametrize("target", ["proj", "proj/sub/app.env"])
 def test_relative_target_is_resolved_once(
     mock_scanner: GitleaksScanner,
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     target: str,
-    expected: str,
 ):
     """gitleaks gets a cwd-relative target relative to the directory it runs in (#843).
 
@@ -197,7 +190,7 @@ def test_relative_target_is_resolved_once(
         result = mock_scanner.scan([Path(target)])
 
     assert result.error is None
-    assert [f.file_path for f in result.findings] == [Path(expected)]
+    assert [f.file_path for f in result.findings] == [Path("proj/sub/app.env")]
 
 
 def test_scan_error_is_ansi_clean(mock_scanner: GitleaksScanner, tmp_path: Path):

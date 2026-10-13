@@ -10,8 +10,10 @@ from __future__ import annotations
 
 import importlib
 import importlib.util
+import inspect
 import pkgutil
 import subprocess  # nosec B404
+from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
@@ -29,19 +31,21 @@ pytestmark = [
 ]
 
 
-def _emitted_secret_types() -> set[str]:
-    """Return every ``secret_type`` the installed detect-secrets plugins emit."""
+def _plugin_classes() -> Iterator[type]:
+    """Yield every detector class the installed detect-secrets ships."""
     plugins = importlib.import_module("detect_secrets.plugins")
     base = importlib.import_module("detect_secrets.plugins.base").BasePlugin
-    emitted: set[str] = set()
     for module_info in pkgutil.iter_modules(plugins.__path__):
         module = importlib.import_module(f"detect_secrets.plugins.{module_info.name}")
-        for obj in vars(module).values():
-            if isinstance(obj, type) and issubclass(obj, base) and obj is not base:
-                secret_type = getattr(obj, "secret_type", None)
-                if isinstance(secret_type, str):
-                    emitted.add(secret_type)
-    return emitted
+        for _name, cls in inspect.getmembers(module, inspect.isclass):
+            if issubclass(cls, base) and cls is not base:
+                yield cls
+
+
+def _emitted_secret_types() -> set[str]:
+    """Return every ``secret_type`` the installed detect-secrets plugins emit."""
+    secret_types = (getattr(cls, "secret_type", None) for cls in _plugin_classes())
+    return {secret_type for secret_type in secret_types if isinstance(secret_type, str)}
 
 
 def test_every_severity_key_is_a_type_detect_secrets_emits():

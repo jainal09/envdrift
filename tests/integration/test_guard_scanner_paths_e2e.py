@@ -232,7 +232,9 @@ def test_guard_absolute_symlinked_directory_is_scanned(tmp_path: Path, scanner):
 
     _result, payload = _guard([str(link), *flags], cwd=tmp_path)
 
-    assert _scanner_result(payload, name)["error"] is None
+    # pytest.fail, not assert: xfail(raises=AssertionError) must not hide a scanner error.
+    if (error := _scanner_result(payload, name)["error"]) is not None:
+        pytest.fail(f"{name} failed instead of scanning: {error}")
     assert _scanner_paths(payload, name), f"{name} reported nothing for {link}"
 
 
@@ -258,7 +260,8 @@ def test_guard_pr_base_honours_repo_root_gitleaksignore_for_nested_files(git_rep
 
     _result, payload = _guard(["--pr-base", "base", "--gitleaks"], cwd=git_repo)
 
-    assert _scanner_result(payload, "gitleaks")["error"] is None
+    if (error := _scanner_result(payload, "gitleaks")["error"]) is not None:
+        pytest.fail(f"gitleaks failed instead of scanning: {error}")
     assert _scanner_paths(payload, "gitleaks") == set()
 
 

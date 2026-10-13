@@ -583,30 +583,20 @@ class TestInfisicalScanExecution:
         source_idx = call_args.index("--source")
         assert call_args[source_idx + 1] == str(tmp_path)
 
-    def test_scan_with_git_history_flag(self, mock_scanner: InfisicalScanner, tmp_path: Path):
-        """Test that scan passes correct args for git history scan."""
+    @pytest.mark.parametrize("history", [True, False], ids=["history", "no-history"])
+    def test_scan_passes_no_git_only_without_history(
+        self, mock_scanner: InfisicalScanner, tmp_path: Path, history: bool
+    ):
+        """``--no-git`` is passed exactly when git history is not scanned."""
         with (
             patch.object(mock_scanner, "_find_binary", return_value=mock_scanner._binary_path),
             patch("envdrift.scanner.infisical._history_target", return_value=(tmp_path, None)),
+            patch("subprocess.run") as mock_run,
         ):
-            with patch("subprocess.run") as mock_run:
-                mock_run.return_value = MagicMock(stdout="[]", stderr="", returncode=0)
-                mock_scanner.scan([tmp_path], include_git_history=True)
+            mock_run.return_value = MagicMock(stdout="[]", stderr="", returncode=0)
+            mock_scanner.scan([tmp_path], include_git_history=history)
 
-        # Check that --no-git was NOT passed
-        call_args = mock_run.call_args[0][0]
-        assert "--no-git" not in call_args
-
-    def test_scan_without_git_history_flag(self, mock_scanner: InfisicalScanner, tmp_path: Path):
-        """Test that scan passes --no-git when not scanning history."""
-        with patch.object(mock_scanner, "_find_binary", return_value=mock_scanner._binary_path):
-            with patch("subprocess.run") as mock_run:
-                mock_run.return_value = MagicMock(stdout="[]", stderr="", returncode=0)
-                mock_scanner.scan([tmp_path], include_git_history=False)
-
-        # Check that --no-git WAS passed
-        call_args = mock_run.call_args[0][0]
-        assert "--no-git" in call_args
+        assert ("--no-git" in mock_run.call_args[0][0]) is not history
 
     def test_scan_multiple_paths(self, mock_scanner: InfisicalScanner, tmp_path: Path):
         """Test scanning multiple paths."""

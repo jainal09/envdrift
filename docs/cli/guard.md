@@ -159,8 +159,9 @@ are CRITICAL, so `--fail-on critical` blocks them:
 - Stripe live secret and restricted keys (`stripe-access-token`)
 - private keys
 
-Every other rule is HIGH. That includes Google API keys, Slack tokens, Stripe test-mode keys
-(`sk_test_`, `rk_test_`) and the generic rules. envdrift 11.0.7 and earlier graded most of the
+Every other built-in rule is HIGH. That includes Google API keys, Slack tokens, Stripe test-mode keys
+(`sk_test_`, `rk_test_`) and the generic rules. A custom Infisical rule config that emits the IDs
+`aws-access-key-id` or `stripe-api-key` is graded CRITICAL too. envdrift 11.0.7 and earlier graded most of the
 CRITICAL rules above HIGH, AWS key IDs and Stripe live keys included: its severity table was keyed
 on rule IDs the Infisical CLI does not emit, so `--fail-on critical` let those findings through
 ([#844](https://github.com/jainal09/envdrift/issues/844)).

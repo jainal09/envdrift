@@ -178,12 +178,14 @@ These have bitten us in CI or review and aren't obvious from the code alone.
   the rest, so it's `update-branch` → wait CI green → merge, one PR at a time.
 - Transient infra failures — Docker Hub 429s, an "Initialize containers" step, the
   occasional `commitlint` hiccup — are not your code: `gh run rerun <id> --failed`.
-- The "Auto-merge Version Bumps" workflow merges **only** Renovate minor/patch PRs
-  (labels `version-bump-auto` + `minor-version-bump`). release-please PRs and
+- The "Auto-merge Version Bumps" workflow merges **only** PRs labelled both
+  `version-bump-auto` and `minor-version-bump` (Renovate applies them to minor/patch
+  updates; the workflow checks the labels, not the author). release-please PRs and
   lock-file-maintenance PRs must be merged by hand. Its merges use `GITHUB_TOKEN`,
   so the resulting push to `main` fires **no** `push` workflows: release-please
-  doesn't regenerate the release PR and main CI doesn't run. Re-sync with
-  `gh workflow run release-please.yml` (or `gh pr update-branch` the release PR).
+  doesn't regenerate the release PR and main CI doesn't run. Run
+  `gh workflow run release-please.yml` to regenerate it; `gh pr update-branch` only
+  syncs a `BEHIND` release PR and does not add the new commits to its changelog.
 
 ## CodeRabbit & review bots
 

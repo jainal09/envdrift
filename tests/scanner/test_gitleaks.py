@@ -745,5 +745,7 @@ def test_gitleaks_grades_an_aws_key_id_critical(tmp_path: Path):
 
     finding = GitleaksScanner(auto_install=False)._parse_finding(item, tmp_path)
 
-    assert finding is not None
+    # pytest.fail, not assert: xfail(raises=AssertionError) must not hide a parse failure.
+    if finding is None:
+        pytest.fail("gitleaks report row did not parse into a finding")
     assert finding.severity == FindingSeverity.CRITICAL

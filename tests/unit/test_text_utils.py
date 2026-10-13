@@ -24,6 +24,9 @@ from envdrift.utils.text import strip_ansi
         ),
         # Cursor control and private-mode sequences.
         ("\x1b[2K\x1b[1Gdone\x1b[?25h", "done"),
+        # Colon-form truecolor and ``<``-prefixed parameters (full 0x30-0x3F range).
+        ("\x1b[38:2::1:2:3mred\x1b[0m", "red"),
+        ("\x1b[<5;10;20Mclick", "click"),
         ("plain text [not an escape]", "plain text [not an escape]"),
         ("", ""),
     ],

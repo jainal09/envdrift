@@ -313,13 +313,14 @@ def test_infisical_grades_aws_credentials_critical(tmp_path):
     aws_rules = {"infisical-aws-access-token", "infisical-aws-secret-access-key"}
     assert all(f.severity == CRITICAL for f in result.findings if f.rule_id in aws_rules), graded
     if _infisical_runs_betterleaks():
-        assert any(
-            f.line_number == 2
-            and f.rule_id == "infisical-aws-secret-access-key"
-            and f.severity == CRITICAL
-            and f.secret_hash == hash_secret(AWS_SECRET_ACCESS_KEY)
-            for f in result.findings
-        ), f"the nested secret access key is not CRITICAL: {graded}"
+        reported = {(f.line_number, f.rule_id, f.severity, f.secret_hash) for f in result.findings}
+        nested = (
+            2,
+            "infisical-aws-secret-access-key",
+            CRITICAL,
+            hash_secret(AWS_SECRET_ACCESS_KEY),
+        )
+        assert nested in reported, f"the nested secret access key is not CRITICAL: {graded}"
 
 
 # An Azure storage account key: 64 random-looking bytes, base64-encoded to 88
@@ -622,7 +623,7 @@ _PATH_SCANNERS = [
 
 @pytest.mark.parametrize("scanner_cls", _PATH_SCANNERS)
 @pytest.mark.parametrize(
-    ("cwd", "target", "expected"),
+    "case",  # (cwd, target, expected finding path)
     [
         (".", "proj", "proj/sub/app.env"),
         (".", "proj/sub/app.env", "proj/sub/app.env"),
@@ -632,10 +633,9 @@ _PATH_SCANNERS = [
         (".", "<abs>/proj", "<abs>/proj/sub/app.env"),
         (".", "<abs>/proj/sub/app.env", "<abs>/proj/sub/app.env"),
     ],
+    ids=["dir", "nested-file", "file-in-cwd", "parent-relative", "abs-dir", "abs-file"],
 )
-def test_scanner_scans_a_cwd_relative_path(
-    tmp_path, monkeypatch, scanner_cls, cwd, target, expected
-):
+def test_scanner_scans_a_cwd_relative_path(tmp_path, monkeypatch, scanner_cls, case):
     """A path scans in any form and findings come back in that form (#843).
 
     ``guard <subdir>`` and ``guard --pr-base`` (which passes cwd-relative
@@ -646,6 +646,7 @@ def test_scanner_scans_a_cwd_relative_path(
     relative out (what guard displays and matches config paths against), and
     absolute in, absolute out.
     """
+    cwd, target, expected = case
     (tmp_path / "proj" / "sub").mkdir(parents=True)
     _write_secret_file(tmp_path / "proj" / "sub", "app.env")
     monkeypatch.chdir(tmp_path / cwd)

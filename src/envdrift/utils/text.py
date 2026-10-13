@@ -6,8 +6,9 @@ import re
 
 # CSI escape sequences (colors, styles, cursor control). Go CLIs that log
 # through zerolog's console writer, such as gitleaks and Infisical, emit them
-# even when stderr is a pipe.
-_ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-9;?]*[ -/]*[@-~]")
+# even when stderr is a pipe. Parameter bytes span the full 0x30-0x3F range
+# (digits and ``:;<=>?``), so colon-form colors like ``\x1b[38:2::1:2:3m`` match.
+_ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
 
 
 def strip_ansi(text: str) -> str:
