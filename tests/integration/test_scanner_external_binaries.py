@@ -12,13 +12,20 @@ real files in temporary directories / git repos.
 
 from __future__ import annotations
 
+import base64
+import hashlib
+import json
+import os
+import re
 import shutil
+import subprocess
+import sys
 from dataclasses import replace
 from pathlib import Path
 
 import pytest
 
-from envdrift.scanner.base import AggregatedScanResult, ScanFinding, ScanResult
+from envdrift.scanner.base import AggregatedScanResult, FindingSeverity, ScanFinding, ScanResult
 from envdrift.scanner.engine import GuardConfig, ScanEngine
 from envdrift.scanner.gitleaks import GitleaksScanner
 from envdrift.scanner.infisical import InfisicalScanner
@@ -27,6 +34,8 @@ from envdrift.scanner.talisman import TalismanScanner
 from envdrift.scanner.trivy import TrivyScanner
 
 pytestmark = [pytest.mark.integration, pytest.mark.slow]
+
+CRITICAL = FindingSeverity.CRITICAL
 
 
 # --- Skip helpers ---------------------------------------------------------
@@ -267,6 +276,146 @@ def test_infisical_detects_aws_credentials(tmp_path):
     for finding in result.findings:
         for raw in (AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, AWS_SESSION_KEY_ID):
             assert raw not in finding.secret_preview
+
+
+def _infisical_runs_betterleaks() -> bool:
+    """Whether the infisical binary in use is 0.43.136+, the betterleaks engine."""
+    version = InfisicalScanner(auto_install=False).get_version() or ""
+    return tuple(int(part) for part in re.findall(r"\d+", version)[:3]) >= (0, 43, 136)
+
+
+@requires_infisical
+def test_infisical_grades_aws_credentials_critical(tmp_path):
+    """AWS key IDs and their secret access key must be CRITICAL (#844).
+
+    Both engines report the key IDs on lines 1 and 3 under ``aws-access-token``.
+    That rule ID used to fall back to HIGH, so ``--fail-on critical`` let a leaked
+    key ID through. From 0.43.136 the secret on line 2 is nested under the key ID
+    as ``aws-secret-access-key``, which must be CRITICAL as well. 0.43.135 has no
+    rule for a secret access key and reports line 2 as ``generic-api-key`` (HIGH),
+    so line 2 is checked only on the betterleaks engine.
+    """
+    (tmp_path / "aws.env").write_text(
+        f"AWS_ACCESS_KEY_ID={AWS_ACCESS_KEY_ID}\n"
+        f"AWS_SECRET_ACCESS_KEY={AWS_SECRET_ACCESS_KEY}\n"
+        f"AWS_SESSION_KEY_ID={AWS_SESSION_KEY_ID}\n"
+    )
+
+    result = InfisicalScanner(auto_install=False).scan([tmp_path])
+
+    assert result.error is None, f"unexpected error: {result.error}"
+    graded = sorted((f.line_number, f.rule_id, f.severity.value) for f in result.findings)
+    critical = {(f.line_number, f.rule_id) for f in result.findings if f.severity == CRITICAL}
+    key_ids = {(1, "infisical-aws-access-token"), (3, "infisical-aws-access-token")}
+    assert key_ids <= critical, f"AWS key IDs not graded CRITICAL: {graded}"
+    aws_rules = {"infisical-aws-access-token", "infisical-aws-secret-access-key"}
+    assert all(f.severity == CRITICAL for f in result.findings if f.rule_id in aws_rules), graded
+    if _infisical_runs_betterleaks():
+        assert any(
+            f.line_number == 2
+            and f.rule_id == "infisical-aws-secret-access-key"
+            and f.severity == CRITICAL
+            and f.secret_hash == hash_secret(AWS_SECRET_ACCESS_KEY)
+            for f in result.findings
+        ), f"the nested secret access key is not CRITICAL: {graded}"
+
+
+# An Azure storage account key: 64 random-looking bytes, base64-encoded to 88
+# characters. Derived at runtime so no key literal appears in source.
+AZURE_STORAGE_KEY = base64.b64encode(hashlib.sha512(b"envdrift-844-azure").digest()).decode()
+
+
+@requires_infisical
+def test_infisical_grades_azure_storage_account_keys_by_engine(tmp_path):
+    """Pin which engine grades an Azure storage account key CRITICAL (#844).
+
+    The betterleaks engine (0.43.136+) reports it as ``azure-storage-account-key``,
+    which must be CRITICAL. 0.43.135, the pinned version, has no such rule and
+    reports the key only as ``generic-api-key`` (HIGH), so ``--fail-on critical``
+    does not block it on Infisical's findings alone. docs/cli/guard.md says so; if
+    this branch fails, the engine changed and that page must change with it.
+    """
+    (tmp_path / "azure.env").write_text(
+        "AZURE_STORAGE_CONNECTION_STRING=DefaultEndpointsProtocol=https;"
+        f"AccountName=envdriftprobe;AccountKey={AZURE_STORAGE_KEY};"
+        "EndpointSuffix=core.windows.net\n"
+    )
+
+    result = InfisicalScanner(auto_install=False).scan([tmp_path])
+
+    assert result.error is None, f"unexpected error: {result.error}"
+    graded = sorted((f.line_number, f.rule_id, f.severity.value) for f in result.findings)
+    assert any(f.line_number == 1 for f in result.findings), f"key not detected: {graded}"
+    if _infisical_runs_betterleaks():
+        assert any(
+            f.rule_id == "infisical-azure-storage-account-key"
+            and f.severity == CRITICAL
+            and f.secret_hash == hash_secret(AZURE_STORAGE_KEY)
+            for f in result.findings
+        ), f"the Azure storage account key is not CRITICAL: {graded}"
+    else:
+        assert graded == [(1, "infisical-generic-api-key", "high")], graded
+
+
+def _run_guard(args: list[str], *, cwd: Path) -> subprocess.CompletedProcess:
+    """Run the real ``envdrift guard`` CLI, un-colorized, as a subprocess."""
+    env = os.environ.copy()
+    env.pop("FORCE_COLOR", None)
+    src = str(Path(__file__).resolve().parents[2] / "src")
+    env["PYTHONPATH"] = os.pathsep.join(filter(None, [src, env.get("PYTHONPATH")]))
+    return subprocess.run(
+        [sys.executable, "-m", "envdrift.cli", "guard", *args],
+        cwd=str(cwd),
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=600,
+    )
+
+
+@requires_infisical
+def test_guard_infisical_fail_on_critical_blocks_an_aws_key_id(tmp_path):
+    """``guard --infisical --fail-on critical`` must fail on a leaked AWS key ID (#844).
+
+    The native scanner's own AWS rules and Infisical's nested secret are ignored,
+    so Infisical's key ID finding alone decides the exit: on 0.43.135 the secret
+    on line 2 is a HIGH ``generic-api-key``, and once betterleaks#410 ships the
+    betterleaks engine also reports a key ID with no secret nested under it. The
+    key ID used to be graded HIGH, so this run exited 0.
+    """
+    (tmp_path / "aws.env").write_text(
+        f"AWS_ACCESS_KEY_ID={AWS_ACCESS_KEY_ID}\nAWS_SECRET_ACCESS_KEY={AWS_SECRET_ACCESS_KEY}\n"
+    )
+    (tmp_path / "envdrift.toml").write_text(
+        "[guard.ignore_rules]\n"
+        '"aws-access-key-id" = ["*"]\n'
+        '"aws-secret-access-key" = ["*"]\n'
+        '"infisical-aws-secret-access-key" = ["*"]\n'
+    )
+
+    result = _run_guard(
+        [
+            ".",
+            "--infisical",
+            "--no-gitleaks",
+            "--no-auto-install",
+            "--ci",
+            "--fail-on",
+            "critical",
+            "--json",
+            "--config",
+            "envdrift.toml",
+        ],
+        cwd=tmp_path,
+    )
+
+    assert result.returncode == 1, (result.returncode, result.stdout, result.stderr)
+    payload = json.loads(result.stdout)
+    assert payload["exit_code"] == 1
+    critical = [
+        (f["rule_id"], f["line_number"]) for f in payload["findings"] if f["severity"] == "critical"
+    ]
+    assert critical == [("infisical-aws-access-token", 1)], payload["findings"]
 
 
 # A generic high-entropy API key, fragmented like the tokens above.

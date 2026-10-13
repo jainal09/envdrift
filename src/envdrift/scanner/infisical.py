@@ -100,19 +100,70 @@ def _get_infisical_checksums_urls() -> dict[str, str]:
     return _load_constants().get("infisical_checksums_urls", {})
 
 
-# Severity mapping - Infisical doesn't have built-in severity, so we map by rule type
+# Infisical reports no severity, so findings are graded by rule ID. The keys are
+# the IDs the CLI actually emits, read from real reports of both engines (0.43.135
+# gitleaks, 0.43.136+ betterleaks). The original keys matched none of them, so AWS
+# key IDs and Stripe keys fell back to HIGH and passed ``--fail-on critical``
+# (#844). CRITICAL is kept for credentials that on their own give write access to
+# cloud resources, source code, published packages or payments, and for private
+# keys. The native scanner grades each of these CRITICAL too. Every other rule is
+# HIGH.
 RULE_SEVERITY_MAP: dict[str, FindingSeverity] = {
-    "aws-access-key-id": FindingSeverity.CRITICAL,
+    # Both engines report AWS access key IDs (AKIA, ASIA, ...) under
+    # ``aws-access-token``. From 0.43.136 that happens only next to a secret
+    # access key, which betterleaks nests as ``aws-secret-access-key``. Upstream
+    # betterleaks#410 makes that secret optional, which brings lone key IDs back
+    # under ``aws-access-token``. 0.43.135 has no secret access key rule, and every
+    # version reports a lone secret access key only as ``generic-api-key`` (HIGH).
+    "aws-access-token": FindingSeverity.CRITICAL,
     "aws-secret-access-key": FindingSeverity.CRITICAL,
-    "github-pat": FindingSeverity.CRITICAL,
+    # Other cloud keys. Only betterleaks has ``azure-storage-account-key``: 0.43.135
+    # reports those keys as ``generic-api-key`` (HIGH). A GCP service-account match
+    # always spans the account's private key, which the ``private-key`` rule of
+    # both engines also reports as CRITICAL.
+    "azure-storage-account-key": FindingSeverity.CRITICAL,
+    "gcp-service-account": FindingSeverity.CRITICAL,
+    # Source control and package registries.
+    "github-app-token": FindingSeverity.CRITICAL,
+    "github-fine-grained-pat": FindingSeverity.CRITICAL,
     "github-oauth": FindingSeverity.CRITICAL,
+    "github-pat": FindingSeverity.CRITICAL,
+    "github-refresh-token": FindingSeverity.CRITICAL,
     "gitlab-pat": FindingSeverity.CRITICAL,
+    "gitlab-pat-routable": FindingSeverity.CRITICAL,
+    "gitlab-pat-routable-versioned": FindingSeverity.CRITICAL,
+    "npm-access-token": FindingSeverity.CRITICAL,
+    "pypi-upload-token": FindingSeverity.CRITICAL,
+    # Stripe secret and restricted keys; see ``_rule_severity`` for test-mode keys.
+    "stripe-access-token": FindingSeverity.CRITICAL,
+    # Any ``-----BEGIN ... PRIVATE KEY-----`` block: PEM, OpenSSH or PGP.
+    "private-key": FindingSeverity.CRITICAL,
+    # These match the HIGH fallback and are listed only to make the choice explicit.
+    "gcp-api-key": FindingSeverity.HIGH,
+    "generic-api-key": FindingSeverity.HIGH,
+    "slack-bot-token": FindingSeverity.HIGH,
+    "slack-user-token": FindingSeverity.HIGH,
+    "slack-webhook-url": FindingSeverity.HIGH,
+    # The original keys. No built-in rule uses them, but a custom rules config may.
+    "aws-access-key-id": FindingSeverity.CRITICAL,
     "google-api-key": FindingSeverity.HIGH,
     "slack-token": FindingSeverity.HIGH,
     "stripe-api-key": FindingSeverity.CRITICAL,
-    "private-key": FindingSeverity.CRITICAL,
-    "generic-api-key": FindingSeverity.HIGH,
 }
+
+# ``stripe-access-token`` also matches test-mode keys (``sk_test_``, ``rk_test_``),
+# which cannot move money. The native and detect-secrets scanners flag only live
+# keys, so a test-mode key keeps the HIGH grade it had before #844.
+_STRIPE_TEST_KEY_RE = re.compile(r"[rs]k_test_")
+
+
+def _rule_severity(rule_id: str, secret: str) -> FindingSeverity:
+    """The severity of a finding under ``rule_id`` whose matched value is ``secret``."""
+    rule = rule_id.lower()
+    if rule == "stripe-access-token" and _STRIPE_TEST_KEY_RE.match(secret):
+        return FindingSeverity.HIGH
+    return RULE_SEVERITY_MAP.get(rule, FindingSeverity.HIGH)
+
 
 # Infisical CLI 0.43.136 swapped its gitleaks engine for betterleaks, which
 # drops every finding rated below ``--confidence`` (default "medium"). Its
@@ -920,7 +971,7 @@ class InfisicalScanner(ScannerBackend):
             description: str = str(item.get("Description") or rule_id)
 
             # Map severity based on rule type
-            severity = RULE_SEVERITY_MAP.get(rule_id.lower(), FindingSeverity.HIGH)
+            severity = _rule_severity(rule_id, str(secret))
 
             return ScanFinding(
                 file_path=file_path,

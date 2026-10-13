@@ -446,6 +446,22 @@ class TestComponentSets:
         assert finding.commit_author == "dev"
         assert finding.secret_hash == hash_secret(SECRET)
 
+    def test_paired_key_id_and_nested_secret_are_both_critical(self, tmp_path: Path):
+        """0.43.141 reports the key ID under ``aws-access-token`` and nests the
+        secret under it. Both must be CRITICAL; the key ID used to be graded
+        HIGH, so ``--fail-on critical`` let it through (#844)."""
+        report = [_composite("aws.env", 1, AKID)]
+        scanner = InfisicalScanner(auto_install=False)
+
+        key_id = scanner._parse_finding(report[0], tmp_path)
+        (secret,) = scanner._parse_components(report, tmp_path, [])
+
+        assert key_id is not None
+        assert key_id.rule_id == "infisical-aws-access-token"
+        assert key_id.severity == FindingSeverity.CRITICAL
+        assert secret.rule_id == "infisical-aws-secret-access-key"
+        assert secret.severity == FindingSeverity.CRITICAL
+
     def test_secret_shared_by_two_key_ids_is_reported_once(self, tmp_path: Path):
         report = [_composite("aws.env", 1, AKID), _composite("aws.env", 3, ASIA)]
 

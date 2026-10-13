@@ -24,6 +24,55 @@ from envdrift.scanner.infisical import (
 )
 from tests.helpers import write_checksums_for
 
+CRITICAL = FindingSeverity.CRITICAL
+HIGH = FindingSeverity.HIGH
+
+# Every rule ID seen in real reports from Infisical CLI 0.43.135 (gitleaks engine)
+# and 0.43.141 (betterleaks), over a 66-shape fixture matrix plus probes for the
+# GitHub refresh token and GitLab's routable PATs, and the severity each must get
+# (#844). Rows marked 0.43.141 come only from the betterleaks engine.
+EMITTED_RULE_SEVERITIES = [
+    ("aws-access-token", CRITICAL),
+    ("aws-secret-access-key", CRITICAL),  # 0.43.141, nested under ComponentSets
+    ("azure-storage-account-key", CRITICAL),  # 0.43.141
+    ("gcp-service-account", CRITICAL),  # 0.43.141
+    ("github-app-token", CRITICAL),
+    ("github-fine-grained-pat", CRITICAL),
+    ("github-oauth", CRITICAL),
+    ("github-pat", CRITICAL),
+    ("github-refresh-token", CRITICAL),
+    ("gitlab-pat", CRITICAL),
+    ("gitlab-pat-routable", CRITICAL),
+    ("gitlab-pat-routable-versioned", CRITICAL),  # 0.43.141
+    ("npm-access-token", CRITICAL),
+    ("private-key", CRITICAL),
+    ("pypi-upload-token", CRITICAL),
+    ("stripe-access-token", CRITICAL),  # live keys; test-mode keys are HIGH
+    ("azure-ad-client-secret", HIGH),
+    ("curl-auth-header", HIGH),
+    ("datadog-access-token", HIGH),
+    ("datadog-api-key", HIGH),  # 0.43.141
+    ("datadog-application-key", HIGH),  # 0.43.141
+    ("gcp-api-key", HIGH),
+    ("generic-api-key", HIGH),
+    ("generic-credential-uri", HIGH),  # 0.43.141
+    ("generic-password", HIGH),  # 0.43.141
+    ("hashicorp-tf-password", HIGH),
+    ("heroku-api-key", HIGH),
+    ("heroku-api-key-v2", HIGH),  # 0.43.141
+    ("jwt", HIGH),
+    ("openai-api-key", HIGH),
+    ("sendgrid-api-token", HIGH),
+    ("slack-bot-token", HIGH),
+    ("slack-user-token", HIGH),
+    ("slack-webhook-url", HIGH),
+    ("twilio-api-key", HIGH),
+]
+
+# Fragmented so no full credential literal appears in source (push protection).
+PLACEHOLDER_SECRET = "q8Zt3VnR7wXy2Lp9" + "Ks4Bd6Fh1Jm5Nc0Gx"
+STRIPE_KEY_BODY = "4eC39HqLyjWDarjtT1zdp7dc" + "ABCDEFGH"
+
 
 class TestPlatformDetection:
     """Tests for platform detection utilities."""
@@ -240,23 +289,86 @@ class TestFindingParsing:
         assert finding.scanner == "infisical"
         assert "****" in finding.secret_preview  # Redacted
 
-    @pytest.mark.xfail(
-        strict=False,
-        reason="RULE_SEVERITY_MAP keys miss the rule IDs Infisical emits (see #844)",
-    )
-    @pytest.mark.parametrize("rule_id", ["aws-access-token", "stripe-access-token"])
+    @pytest.mark.parametrize(("rule_id", "expected"), EMITTED_RULE_SEVERITIES)
     def test_emitted_rule_ids_get_their_intended_severity(
-        self, scanner: InfisicalScanner, tmp_path: Path, rule_id: str
+        self,
+        scanner: InfisicalScanner,
+        tmp_path: Path,
+        rule_id: str,
+        expected: FindingSeverity,
     ):
-        """Both engines emit these IDs, not the map's ``aws-access-key-id`` /
-        ``stripe-api-key``, so a leaked AWS key ID or Stripe live key falls
-        back to HIGH and slips past ``--fail-on critical`` (#844)."""
+        """Grade each rule ID by the name the CLI really emits (#844).
+
+        The map used to be keyed on ``aws-access-key-id``, ``stripe-api-key``,
+        ``google-api-key`` and ``slack-token``, which neither engine emits. So
+        a leaked AWS key ID or Stripe live key fell back to HIGH and got past
+        ``--fail-on critical``.
+        """
+        item: dict[str, Any] = {
+            "RuleID": rule_id,
+            "Description": rule_id,
+            "StartLine": 1,
+            "File": "a.env",
+            "Secret": PLACEHOLDER_SECRET,
+        }
+
+        finding = scanner._parse_finding(item, tmp_path)
+
+        assert finding is not None
+        assert finding.rule_id == f"infisical-{rule_id}"
+        assert finding.severity == expected
+
+    @pytest.mark.parametrize(
+        ("secret", "expected"),
+        [
+            pytest.param("sk_live_" + STRIPE_KEY_BODY, CRITICAL, id="sk_live"),
+            pytest.param("rk_live_" + STRIPE_KEY_BODY, CRITICAL, id="rk_live"),
+            pytest.param("sk_prod_" + STRIPE_KEY_BODY, CRITICAL, id="sk_prod"),
+            pytest.param("sk_test_" + STRIPE_KEY_BODY, HIGH, id="sk_test"),
+            pytest.param("rk_test_" + STRIPE_KEY_BODY, HIGH, id="rk_test"),
+        ],
+    )
+    def test_stripe_test_mode_keys_stay_high(
+        self,
+        scanner: InfisicalScanner,
+        tmp_path: Path,
+        secret: str,
+        expected: FindingSeverity,
+    ):
+        """``stripe-access-token`` matches test-mode keys too. They cannot move
+        money and the native scanner does not flag them, so they stay HIGH."""
+        item: dict[str, Any] = {"RuleID": "stripe-access-token", "File": "a.env", "Secret": secret}
+
+        finding = scanner._parse_finding(item, tmp_path)
+
+        assert finding is not None
+        assert finding.severity == expected
+
+    @pytest.mark.parametrize(
+        ("rule_id", "expected"),
+        [
+            ("aws-access-key-id", CRITICAL),
+            ("stripe-api-key", CRITICAL),
+            ("google-api-key", HIGH),
+            ("slack-token", HIGH),
+            ("AWS-Access-Token", CRITICAL),
+        ],
+    )
+    def test_original_rule_ids_keep_their_severity(
+        self,
+        scanner: InfisicalScanner,
+        tmp_path: Path,
+        rule_id: str,
+        expected: FindingSeverity,
+    ):
+        """No built-in rule emits the original keys, but a custom rules config
+        may, and rule IDs are matched case-insensitively."""
         item: dict[str, Any] = {"RuleID": rule_id, "File": "a.env", "Secret": "x" * 20}
 
         finding = scanner._parse_finding(item, tmp_path)
 
         assert finding is not None
-        assert finding.severity == FindingSeverity.CRITICAL
+        assert finding.severity == expected
 
     def test_parse_finding_with_commit_info(self, scanner: InfisicalScanner, tmp_path: Path):
         """Test parsing a finding with git commit information."""
