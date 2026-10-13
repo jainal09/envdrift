@@ -727,3 +727,23 @@ class TestGitleaksIntegration:
         assert result.success is True
         # gitleaks should detect this pattern
         # Note: may or may not trigger depending on gitleaks config
+
+
+@pytest.mark.xfail(
+    strict=False,
+    raises=AssertionError,
+    reason="gitleaks findings are hardcoded HIGH regardless of rule (see #850)",
+)
+def test_gitleaks_grades_an_aws_key_id_critical(tmp_path: Path):
+    """An ``aws-access-token`` finding is CRITICAL, as in the native and Infisical scanners."""
+    item: dict[str, Any] = {
+        "RuleID": "aws-access-token",
+        "File": "aws.env",
+        "StartLine": 1,
+        "Secret": "AKIA" + "IOSFODNN7EXAMPLQ",
+    }
+
+    finding = GitleaksScanner(auto_install=False)._parse_finding(item, tmp_path)
+
+    assert finding is not None
+    assert finding.severity == FindingSeverity.CRITICAL
