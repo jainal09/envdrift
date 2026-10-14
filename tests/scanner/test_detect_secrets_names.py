@@ -5,7 +5,6 @@ from __future__ import annotations
 import subprocess
 import sys
 from pathlib import Path
-from types import SimpleNamespace
 from unittest.mock import patch
 
 import pytest
@@ -14,15 +13,15 @@ from envdrift.scanner import detect_secrets as detect_secrets_module
 from envdrift.scanner.detect_secrets import (
     DetectSecretsScanner,
     _check_git_file_list,
-    _git_honors_config_env,
-    _git_quotes,
-    _is_undecodable,
+    _plan_scan,
+    _with_git_quotepath,
 )
 from tests.scanner.detect_secrets_helpers import (
     add_files,
     fake_detect_secrets,
     init_repo,
     no_version_probe,  # noqa: F401  (autouse)
+    requires_git_config_env,
 )
 
 
@@ -58,6 +57,7 @@ class TestUnquotedGitPaths:
     @pytest.fixture(autouse=True)
     def _no_git_settings_in_the_environment(self, monkeypatch: pytest.MonkeyPatch):
         monkeypatch.delenv("GIT_CONFIG_COUNT", raising=False)
+        monkeypatch.delenv("GIT_CONFIG_PARAMETERS", raising=False)
 
     @staticmethod
     def _scan(scanner: DetectSecretsScanner, target: Path):
@@ -117,7 +117,7 @@ class TestUnquotedGitPaths:
             "GIT_CONFIG_VALUE_1": "input",
         }
 
-        env = detect_secrets_module._with_unquoted_git_paths(environ)
+        env = _with_git_quotepath(environ, quoted=False)
 
         assert env == {
             **environ,
@@ -131,7 +131,7 @@ class TestUnquotedGitPaths:
 
     @pytest.mark.parametrize("count", ["", "junk", "-3", "1.5"])
     def test_a_count_git_cannot_use_is_replaced(self, count: str):
-        env = detect_secrets_module._with_unquoted_git_paths({"GIT_CONFIG_COUNT": count})
+        env = _with_git_quotepath({"GIT_CONFIG_COUNT": count}, quoted=False)
 
         assert (env["GIT_CONFIG_COUNT"], env["GIT_CONFIG_KEY_0"], env["GIT_CONFIG_VALUE_0"]) == (
             "1",
@@ -139,6 +139,16 @@ class TestUnquotedGitPaths:
             "false",
         )
 
+    def test_quoting_can_be_asked_for_too(self):
+        env = _with_git_quotepath({"GIT_CONFIG_COUNT": "1", "GIT_CONFIG_KEY_0": "a.b"}, quoted=True)
+
+        assert (env["GIT_CONFIG_COUNT"], env["GIT_CONFIG_KEY_1"], env["GIT_CONFIG_VALUE_1"]) == (
+            "2",
+            "core.quotepath",
+            "true",
+        )
+
+    @requires_git_config_env
     def test_a_non_ascii_name_is_scanned_not_reported(
         self, scanner: DetectSecretsScanner, tmp_path: Path
     ):
@@ -161,12 +171,26 @@ class TestUnquotedGitPaths:
 
         assert self._quotepath_setting(env) == ("1", "core.quotepath", "false")
         (warning,) = result.warnings
-        assert warning.startswith(f"Not scanned in {repo}: git writes the name of 3 tracked ")
+        assert warning.startswith(
+            f"Not scanned in {repo}: detect-secrets cannot match the name of 3 tracked "
+        )
         for shown in (repr('say "hi".cfg'), repr("back\\slash.cfg"), repr("new\nline.cfg")):
             assert shown in warning
         assert "plain.cfg" not in warning
         # The message is one line of printable text, whatever the names hold.
         assert "\n" not in warning
+
+    @pytest.mark.skipif(sys.platform == "win32", reason="Windows file names cannot hold these")
+    def test_a_carriage_return_in_a_name_is_reported_as_it_is(
+        self, scanner: DetectSecretsScanner, tmp_path: Path
+    ):
+        """git's output is read as bytes: a text-mode read turns the ``\\r`` into a newline."""
+        repo = init_repo(tmp_path)
+        _create_tracked(repo, "carriage\rreturn.cfg", "plain.cfg")
+
+        (warning,) = self._scan(scanner, repo)[0].warnings
+
+        assert repr("carriage\rreturn.cfg") in warning
 
     @pytest.mark.skipif(sys.platform == "win32", reason="Windows file names cannot hold these")
     def test_only_the_first_names_are_listed(self, scanner: DetectSecretsScanner, tmp_path: Path):
@@ -180,20 +204,20 @@ class TestUnquotedGitPaths:
         assert " and 2 more)" in warning
 
     @NOT_UTF8_PLATFORM
-    def test_a_name_that_is_not_utf8_leaves_the_setting_alone_and_reports_every_quoted_name(
+    def test_a_name_that_is_not_utf8_pins_quoting_on_and_reports_every_quoted_name(
         self, scanner: DetectSecretsScanner, tmp_path: Path
     ):
         """With the setting off detect-secrets cannot decode the list and fails the whole scan.
 
-        The default is kept for such a repository, which skips every non-ASCII name, and each
-        of them is reported.
+        Quoting is asked for in such a repository, which skips every non-ASCII name, and each of
+        them is reported.
         """
         repo = init_repo(tmp_path)
         _create_tracked(repo, NOT_UTF8, "café.cfg", "plain.cfg")
 
         result, env = self._scan(scanner, repo)
 
-        assert self._quotepath_setting(env) is None
+        assert self._quotepath_setting(env) == ("1", "core.quotepath", "true")
         (warning,) = result.warnings
         assert "the name of 2 tracked file(s)" in warning
         assert repr(NOT_UTF8) in warning
@@ -201,18 +225,117 @@ class TestUnquotedGitPaths:
         assert "plain.cfg" not in warning
 
     @NOT_UTF8_PLATFORM
-    def test_the_names_of_a_scan_below_a_subdirectory_are_those_below_it(
+    def test_a_name_that_is_not_utf8_anywhere_in_the_repository_pins_quoting_on(
+        self, scanner: DetectSecretsScanner, tmp_path: Path
+    ):
+        """detect-secrets decodes the whole list git gives it, whichever directory is scanned.
+
+        The name below ``other`` is not in the scan of ``sub``, and a name below ``vendor`` is
+        excluded from every scan, yet each makes detect-secrets fail on the list when git writes
+        names as they are.
+        """
+        repo = init_repo(tmp_path)
+        _create_tracked(repo, "sub/plain.cfg", "other/" + NOT_UTF8, "vendor/" + NOT_UTF8)
+
+        below, below_env = self._scan(scanner, repo / "sub")
+        top, top_env = self._scan(scanner, repo)
+
+        assert self._quotepath_setting(below_env) == ("1", "core.quotepath", "true")
+        assert self._quotepath_setting(top_env) == ("1", "core.quotepath", "true")
+        assert below.warnings == []
+        (warning,) = top.warnings  # quoted, so not scanned: the one below ``other`` is in this scan
+        assert repr("other/" + NOT_UTF8) in warning
+        assert "vendor" not in warning
+
+    @NOT_UTF8_PLATFORM
+    @requires_git_config_env  # a git before 2.31 ignores the setting that overrides the user's
+    def test_a_setting_of_the_user_that_turns_quoting_off_does_not_reach_detect_secrets(
+        self, scanner: DetectSecretsScanner, tmp_path: Path
+    ):
+        """A name that is not UTF-8 needs quoting on, so the user's own ``off`` is overridden."""
+        repo = init_repo(tmp_path)
+        subprocess.run(
+            ["git", "config", "core.quotepath", "false"], cwd=repo, check=True, capture_output=True
+        )
+        _create_tracked(repo, NOT_UTF8, "plain.cfg")
+
+        result, env = self._scan(scanner, repo)
+
+        assert self._quotepath_setting(env) == ("1", "core.quotepath", "true")
+        (warning,) = result.warnings
+        assert repr(NOT_UTF8) in warning
+        assert "plain.cfg" not in warning
+
+    def test_names_a_line_separator_splits_are_reported(
+        self, scanner: DetectSecretsScanner, tmp_path: Path
+    ):
+        """``str.splitlines`` splits git's list at U+0085, U+2028 and U+2029 as it does at a newline.
+
+        With quoting off git writes them as they are, so detect-secrets reads the name of such a
+        file as two names that match nothing, and it dropped the file in silence.
+        """
+        names = ["line\u2028sep.cfg", "line\u2029sep.cfg", "line\u0085sep.cfg"]
+        repo = init_repo(tmp_path)
+        _create_tracked(repo, *names, "plain.cfg")
+
+        result, _env = self._scan(scanner, repo)
+
+        assert len(result.warnings) == 1, "files dropped from the scan were not reported"
+        (warning,) = result.warnings
+        assert "the name of 3 tracked file(s)" in warning
+        for name in names:
+            assert repr(name) in warning
+        assert "plain.cfg" not in warning
+
+    def test_a_setting_that_git_takes_from_git_config_parameters_is_noticed(
+        self, scanner: DetectSecretsScanner, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        """``git -c core.quotepath=true`` exports it so, and it wins over ``GIT_CONFIG_COUNT``."""
+        repo = init_repo(tmp_path)
+        _create_tracked(repo, "café.cfg", "plain.cfg")
+        monkeypatch.setenv("GIT_CONFIG_PARAMETERS", "'core.quotepath=true'")
+
+        result, _env = self._scan(scanner, repo)
+
+        assert len(result.warnings) == 1, "a file dropped from the scan was not reported"
+        (warning,) = result.warnings
+        assert "the name of 1 tracked file(s)" in warning
+        assert repr("café.cfg") in warning
+        assert "plain.cfg" not in warning
+
+    @pytest.mark.skipif(sys.platform == "win32", reason="Windows file names cannot hold a colon")
+    def test_a_directory_named_like_a_pathspec_is_not_nothing(
+        self, scanner: DetectSecretsScanner, tmp_path: Path
+    ):
+        """``git ls-files -- :magic`` reads the colon as pathspec magic and finds no file."""
+        repo = init_repo(tmp_path)
+        _create_tracked(repo, ":magic/app.cfg", ":!bang/app.cfg", "plain.cfg")
+
+        assert self._scan(scanner, repo / ":magic")[0].warnings == []
+        assert self._scan(scanner, repo / ":!bang")[0].warnings == []
+
+    def test_the_names_below_a_directory_do_not_include_one_that_only_starts_like_it(
         self, scanner: DetectSecretsScanner, tmp_path: Path
     ):
         repo = init_repo(tmp_path)
-        _create_tracked(repo, NOT_UTF8, "sub/plain.cfg")
+        _create_tracked(repo, "sub/plain.cfg", 'sub2/say "hi".cfg')
 
         assert self._scan(scanner, repo / "sub")[0].warnings == []
-        assert self._quotepath_setting(self._scan(scanner, repo / "sub")[1]) == (
-            "1",
-            "core.quotepath",
-            "false",
-        )
+
+    def test_a_repository_git_cannot_list_is_reported(
+        self, scanner: DetectSecretsScanner, tmp_path: Path
+    ):
+        """detect-secrets lists the files with the same command, gets nothing and scans nothing."""
+        repo = init_repo(tmp_path)
+        add_files(repo, "app.cfg")
+        (repo / ".git" / "index").write_bytes(b"not an index")
+
+        result, env = self._scan(scanner, repo)
+
+        (warning,) = result.warnings
+        assert warning.startswith(f"Could not list the files git tracks in {repo}")
+        assert "index file" in warning
+        assert self._quotepath_setting(env) is None
 
     def test_a_directory_that_tracks_nothing_gets_the_environment_as_it_is(
         self, scanner: DetectSecretsScanner, tmp_path: Path
@@ -225,84 +348,24 @@ class TestUnquotedGitPaths:
         (warning,) = result.warnings
         assert warning.startswith("Scanned nothing in ")
 
-    def test_a_git_that_cannot_list_files_leaves_the_environment_alone(self, tmp_path: Path):
-        env, warnings = _check_git_file_list(tmp_path, None)
+    def test_a_scan_that_does_not_use_gits_list_says_nothing_about_it(self, tmp_path: Path):
+        plan = _plan_scan(tmp_path / "missing.cfg")
+
+        env, warnings = _check_git_file_list(tmp_path, plan)
 
         assert warnings == []
         assert self._quotepath_setting(env) is None
 
-    @pytest.mark.parametrize(
-        ("output", "honors"),
-        [
-            ("git version 2.43.0\n", True),
-            ("git version 2.31.0\n", True),
-            ("git version 2.30.2\n", False),
-            ("git version 2.25.1\n", False),
-            ("git version 1.8.3.1\n", False),
-            ("git version 2.39.3 (Apple Git-146)\n", True),
-            ("git version 2.45.1.windows.1\n", True),
-            ("git version 10.0.0\n", True),
-            ("something else entirely\n", True),
-            ("", True),
-        ],
-    )
-    def test_which_gits_read_the_environment_setting(self, output: str, honors: bool):
-        """``GIT_CONFIG_COUNT`` arrived in git 2.31; an older git ignores it."""
-        with patch(
-            "subprocess.run", return_value=SimpleNamespace(returncode=0, stdout=output, stderr="")
-        ):
-            assert _git_honors_config_env() is honors
+    @pytest.mark.parametrize("error", [OSError("no git"), subprocess.TimeoutExpired("git", 60)])
+    def test_a_git_that_cannot_run_says_nothing(self, tmp_path: Path, error: Exception):
+        repo = init_repo(tmp_path)
+        plan = _plan_scan(repo)
 
-    @pytest.mark.parametrize("error", [OSError("no git"), subprocess.TimeoutExpired("git", 10)])
-    def test_a_git_that_cannot_be_asked_is_taken_to_read_it(self, error: Exception):
         with patch("subprocess.run", side_effect=error):
-            assert _git_honors_config_env() is True
+            env, warnings = _check_git_file_list(repo, plan)
 
-    def test_an_old_git_leaves_the_environment_alone_and_non_ascii_names_are_reported(
-        self, tmp_path: Path
-    ):
-        """It would ignore the setting, so a non-ASCII name stays quoted and is reported."""
-        with patch.object(detect_secrets_module, "_git_honors_config_env", return_value=False):
-            env, warnings = _check_git_file_list(tmp_path, ["café.cfg", "plain.cfg"])
-
-        assert self._quotepath_setting(env) is None
-        (warning,) = warnings
-        assert "the name of 1 tracked file(s)" in warning
-        assert repr("café.cfg") in warning
-        assert "plain.cfg" not in warning
-
-    def test_a_current_git_gets_the_setting(self, tmp_path: Path):
-        with patch.object(detect_secrets_module, "_git_honors_config_env", return_value=True):
-            env, warnings = _check_git_file_list(tmp_path, ["café.cfg", "plain.cfg"])
-
-        assert self._quotepath_setting(env) == ("1", "core.quotepath", "false")
         assert warnings == []
-
-    @pytest.mark.parametrize(
-        ("name", "quotepath_off", "quoted"),
-        [
-            ("plain.cfg", False, False),
-            ("with space/and-dash_1.cfg", False, False),
-            ("café.cfg", False, True),
-            ("café.cfg", True, False),
-            ("文档/配置.cfg", False, True),
-            ("文档/配置.cfg", True, False),
-            ('say "hi".cfg', True, True),
-            ("back\\slash.cfg", True, True),
-            ("new\nline.cfg", True, True),
-            ("tab\there.cfg", True, True),
-            ("bell\x07.cfg", True, True),
-            ("del\x7f.cfg", True, True),
-            ("it's.cfg", True, False),
-        ],
-    )
-    def test_which_names_git_quotes(self, name: str, quotepath_off: bool, quoted: bool):
-        assert _git_quotes(name, quotepath_off=quotepath_off) is quoted
-
-    def test_a_lone_surrogate_is_a_name_that_is_not_utf8(self):
-        assert _is_undecodable(NOT_UTF8)
-        assert not _is_undecodable("café.cfg")
-        assert not _is_undecodable("plain.cfg")
+        assert self._quotepath_setting(env) is None
 
 
 class TestPathIsNotAnOption:

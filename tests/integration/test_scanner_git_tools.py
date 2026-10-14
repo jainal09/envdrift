@@ -277,6 +277,28 @@ class TestGitSecretsRealBinary:
             ("git-secrets-aws-secret-key", FindingSeverity.CRITICAL)
         ]
 
+    def test_scan_grades_a_hash_rocket_secret_access_key_critical(self, scanner_test_env):
+        """Puppet, Ruby and PHP assign with ``=>``, which git-secrets' AWS pattern matches too.
+
+        git-secrets flags the line, so the key on it is graded like the one assigned with ``=``.
+        """
+        work_dir = scanner_test_env["work_dir"]
+        self._init_repo_with_aws_patterns(work_dir)
+        secret = "Zq8W7E6R5T4Y3U2I1O0P" + "aSdFgHjKlZxCvBnM1234"
+        (work_dir / "puppet.pp").write_text(f"aws_secret_access_key => '{secret}',\n")
+        (work_dir / "ruby.rb").write_text(f':aws_secret_access_key => "{secret}"\n')
+        (work_dir / "php.php").write_text(f"'secret_access_key' => '{secret}',\n")
+
+        scanner = GitSecretsScanner(auto_install=False, register_aws=True)
+        result = scanner.scan([work_dir])
+
+        assert result.error is None
+        graded = {f.file_path.name: (f.rule_id, f.severity) for f in result.findings}
+        assert graded == dict.fromkeys(
+            ("puppet.pp", "ruby.rb", "php.php"),
+            ("git-secrets-aws-secret-key", FindingSeverity.CRITICAL),
+        )
+
     def test_scan_grades_a_region_name_as_a_password_not_an_aws_key(self, scanner_test_env):
         """A flagged line holding the letters "asia" is not an AWS key: HIGH, not CRITICAL.
 

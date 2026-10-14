@@ -556,8 +556,9 @@ class KingfisherScanner(ScannerBackend):
             rule_id = rule.get("id", "unknown")
             rule_name = rule.get("name", rule_id)
 
-            # Map severity based on rule type
-            severity = _map_severity(rule_id, rule_name, str(raw_secret))
+            # Map severity based on rule type. A report may carry the match only as the snippet,
+            # and a Stripe test-key check anchored at the start of the value is safe on either.
+            severity = _map_severity(rule_id, rule_name, str(raw_secret or snippet))
 
             # Get validation status - use allowlist for verified status
             validation = finding.get("validation", {})

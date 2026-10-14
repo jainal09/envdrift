@@ -116,18 +116,25 @@ findings (see [Configuration](#configuration)), though not the time spent scanni
 A tracked file with a non-ASCII name (`café.env`) is scanned too. envdrift runs detect-secrets with git's
 `core.quotepath` off (git 2.31 or later), because with it on `git ls-files` writes that name as
 `"caf\303\251.env"`, which names no file, and detect-secrets dropped the file without a word. Git quotes a
-name with a double quote, a backslash or a control character whatever the setting, and detect-secrets fails
-on a name that is not valid UTF-8 when the setting is off, so envdrift leaves it on in a repository that
-tracks one, and a git older than 2.31 ignores the setting altogether. detect-secrets cannot match those
-names, and the Scanner Warnings say "Not scanned in ..." and list the first three, instead of letting the
-file pass for clean. Rename the file or scan it with another scanner.
+name with a double quote, a backslash or a control character whatever the setting, and detect-secrets splits
+the list at U+0085, U+2028 and U+2029 as it does at a newline, so a name with one of those is lost too.
+detect-secrets also fails on a name that is not valid UTF-8 anywhere in the repository when the setting is
+off, even in a directory or file it would not scan, so envdrift turns the setting on (over your own git
+configuration) in a repository that tracks one. A git older than 2.31 ignores the setting altogether, and so
+does `GIT_CONFIG_PARAMETERS`, which `git -c` exports, in your environment. envdrift does not guess which names
+that affects: it runs the command detect-secrets runs, under the environment detect-secrets gets, and
+compares. For every file of the scan whose name is not in the list, the Scanner Warnings say "Not scanned
+in ..." and list the first three, instead of letting the file pass for clean. Rename the file or scan it with
+another scanner.
 
 When git tracks nothing that detect-secrets would scan in a directory (a repository whose files are not
 added yet, or a directory that is all ignored), detect-secrets prints an empty report, as for a
 directory with no secret. guard says so instead of letting that pass for a clean run: the
 Scanner Warnings panel, `scanner_results[].warnings` and the `--sarif` notifications carry "Scanned
 nothing in ..." and the fix, `git add` the files. It is a warning, not an error, and does not
-change the exit code. If detect-secrets cannot list the files of a directory at all, or prints a report
+change the exit code. If git cannot list the files of the repository (a damaged index), the warning says
+"Could not list the files git tracks in ...", because detect-secrets lists them with the same command and
+may have scanned none. If detect-secrets cannot list the files of a directory at all, or prints a report
 envdrift cannot read, the scan is an error (exit 5), never a clean run.
 
 Older envdrift releases passed detect-secrets no flag for a directory outside a git repository: it listed
@@ -627,7 +634,8 @@ Some grades are judgment calls or known gaps:
   every URL.
 - git-secrets reports a matching line, not a rule, so envdrift names the credential from the line. A
   line with an AWS access key ID is CRITICAL, as is a line with a secret access key (the 40-character
-  value) or a private key (a `-----BEGIN ... PRIVATE KEY` header or a long base64 body). A line that only
+  value assigned to the AWS secret field itself, with `=`, `:` or `=>`) or a private key (a
+  `-----BEGIN ... PRIVATE KEY` header, or a long base64 value assigned to `private_key` itself). A line that only
   names a key it does not hold (`private_key_path = ...`) is HIGH at most, and a line that names no
   credential at all is MEDIUM: this is the one place where an unclassified match is not HIGH.
 

@@ -15,9 +15,10 @@ from envdrift.scanner import detect_secrets as detect_secrets_module
 from envdrift.scanner.detect_secrets import (
     _EXCLUDED_DIRECTORIES,
     DetectSecretsScanner,
+    _check_git_file_list,
     _exclude_files_regex,
+    _names_to_scan,
     _plan_scan,
-    _scannable_tracked_names,
 )
 from tests.scanner.detect_secrets_helpers import (
     add_files,
@@ -409,19 +410,120 @@ class TestNothingToScan:
         assert self._scan(scanner, tmp_path).warnings == []
 
     def test_a_git_that_cannot_list_files_is_not_taken_for_an_empty_repository(
-        self, scanner: DetectSecretsScanner, tmp_path: Path
+        self, tmp_path: Path
     ):
+        """It is said to be unable to list, which is not "none is tracked", or nothing at all."""
         repo = init_repo(tmp_path)
         plan = _plan_scan(repo)
         real_run = subprocess.run
 
         def failing(args: list[str], **kwargs: Any):
-            if args[:2] == ["git", "ls-files"]:
-                return SimpleNamespace(returncode=128, stdout="", stderr="fatal")
+            if "ls-files" in args:
+                return SimpleNamespace(returncode=128, stdout=b"", stderr=b"fatal: bad index")
             return real_run(args, **kwargs)
 
         with patch("subprocess.run", side_effect=failing):
-            assert _scannable_tracked_names(plan) is None
+            _env, warnings = _check_git_file_list(repo, plan)
+
+        (warning,) = warnings
+        assert warning.startswith(
+            f"Could not list the files git tracks in {repo} (fatal: bad index)"
+        )
+        assert "Scanned nothing" not in warning
 
         with patch("subprocess.run", side_effect=OSError("no git")):
-            assert _scannable_tracked_names(plan) is None
+            assert _check_git_file_list(repo, plan)[1] == []
+
+        with patch("subprocess.run", side_effect=subprocess.TimeoutExpired("git", 60)):
+            assert _check_git_file_list(repo, plan)[1] == []
+
+    def test_a_failure_without_a_message_names_the_exit_code(self, tmp_path: Path):
+        repo = init_repo(tmp_path)
+        plan = _plan_scan(repo)
+        real_run = subprocess.run
+
+        def failing(args: list[str], **kwargs: Any):
+            if "ls-files" in args:
+                return SimpleNamespace(returncode=3, stdout=b"", stderr=b"\x1b[31m\x1b[0m")
+            return real_run(args, **kwargs)
+
+        with patch("subprocess.run", side_effect=failing):
+            (warning,) = _check_git_file_list(repo, plan)[1]
+
+        assert "(exit code 3)" in warning
+
+    def test_a_listing_that_fails_after_the_setting_was_added_is_reported_too(self, tmp_path: Path):
+        """The command detect-secrets runs, under the environment it gets, is the one that counts."""
+        repo = init_repo(tmp_path)
+        add_files(repo, "app.cfg")
+        plan = _plan_scan(repo)
+        real_run = subprocess.run
+
+        def second_fails(args: list[str], **kwargs: Any):
+            if "ls-files" in args and "-z" not in args:
+                return SimpleNamespace(returncode=128, stdout=b"", stderr=b"fatal: gone")
+            return real_run(args, **kwargs)
+
+        with patch("subprocess.run", side_effect=second_fails):
+            (warning,) = _check_git_file_list(repo, plan)[1]
+
+        assert warning.startswith(f"Could not list the files git tracks in {repo} (fatal: gone)")
+
+    def test_a_listing_that_cannot_run_after_the_setting_was_added_says_nothing(
+        self, tmp_path: Path
+    ):
+        repo = init_repo(tmp_path)
+        add_files(repo, "app.cfg")
+        plan = _plan_scan(repo)
+        real_run = subprocess.run
+
+        def second_cannot_run(args: list[str], **kwargs: Any):
+            if "ls-files" in args and "-z" not in args:
+                raise subprocess.TimeoutExpired(args, 60)
+            return real_run(args, **kwargs)
+
+        with patch("subprocess.run", side_effect=second_cannot_run):
+            assert _check_git_file_list(repo, plan)[1] == []
+
+
+class TestNamesToScan:
+    """The tracked files of a scan are those below its path that no excluded directory holds."""
+
+    @staticmethod
+    def _plan(prefix: str = "") -> Any:
+        prefix_path = PurePath(prefix)
+        return SimpleNamespace(
+            prefix=prefix_path, exclude=_exclude_files_regex(len(prefix_path.parts))
+        )
+
+    def test_everything_is_below_the_top_level(self):
+        tracked = ["a.cfg", "sub/b.cfg", "node_modules/c.cfg"]
+
+        assert _names_to_scan(self._plan(), tracked) == ["a.cfg", "sub/b.cfg"]
+
+    def test_a_subdirectory_holds_the_names_below_it_and_not_those_that_start_like_it(self):
+        tracked = [
+            "a.cfg",
+            "sub/b.cfg",
+            "sub/deep/c.cfg",
+            "sub2/d.cfg",
+            "subway.cfg",
+            "x/sub/e.cfg",
+        ]
+
+        assert _names_to_scan(self._plan("sub"), tracked) == ["sub/b.cfg", "sub/deep/c.cfg"]
+
+    def test_the_name_of_the_directory_itself_is_never_looked_at_for_an_exclusion(self):
+        """``build`` is the directory that was asked for; a ``build`` below it is not."""
+        tracked = ["build/a.cfg", "build/build/b.cfg", "build/src/c.cfg"]
+
+        assert _names_to_scan(self._plan("build"), tracked) == ["build/a.cfg", "build/src/c.cfg"]
+
+    def test_a_directory_with_a_nested_path_drops_two_leading_components(self):
+        tracked = ["a/b/c.cfg", "a/b/vendor/d.cfg", "a/other.cfg"]
+
+        assert _names_to_scan(self._plan("a/b"), tracked) == ["a/b/c.cfg"]
+
+    def test_nothing_tracked_is_nothing(self):
+        assert _names_to_scan(self._plan("sub"), ["other/a.cfg"]) == []
+        assert _names_to_scan(self._plan(), []) == []

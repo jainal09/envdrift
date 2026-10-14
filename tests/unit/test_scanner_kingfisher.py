@@ -319,6 +319,50 @@ class TestKingfisherScanner:
         assert "bcrypt" in result.rule_description.lower()
         assert result.line_number == 42
 
+    @pytest.mark.parametrize(
+        ("field", "snippet", "expected"),
+        [
+            # A report that carries the match only as its snippet: the test key is HIGH.
+            ("snippet", "sk_test_" + "4eC39HqLyjWDarjtT1zdp7dc" + "ABCDEFGH", FindingSeverity.HIGH),
+            (
+                "snippet",
+                "sk_live_" + "4eC39HqLyjWDarjtT1zdp7dc" + "ABCDEFGH",
+                FindingSeverity.CRITICAL,
+            ),
+            # A snippet that is a line around the key is not the key: stay with CRITICAL.
+            (
+                "snippet",
+                "STRIPE=sk_test_" + "4eC39HqLyjWDarjtT1zdp7dc" + "ABCDEFGH",
+                FindingSeverity.CRITICAL,
+            ),
+            # A secret field, when there is one, is what counts.
+            ("secret", "rk_test_" + "4eC39HqLyjWDarjtT1zdp7dc" + "ABCDEFGH", FindingSeverity.HIGH),
+        ],
+    )
+    def test_parse_finding_grades_a_stripe_test_key_by_what_the_report_carries(
+        self, field: str, snippet: str, expected: FindingSeverity
+    ):
+        scanner = KingfisherScanner(auto_install=False)
+        finding = {
+            "snippet": snippet,
+            "path": "/test/app.env",
+            "line": 3,
+            "validation": {"status": "Not Attempted"},
+        }
+        if field == "secret":
+            finding["secret"] = snippet
+
+        result = scanner._parse_finding(
+            {
+                "rule": {"name": "Stripe Secret Key", "id": "kingfisher.stripe.1"},
+                "finding": finding,
+            },
+            Path("/test"),
+        )
+
+        assert result is not None
+        assert result.severity == expected
+
 
 class TestKingfisherInstallation:
     """Tests for Kingfisher installation functionality."""

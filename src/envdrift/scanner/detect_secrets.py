@@ -23,7 +23,7 @@ import sys
 import time
 from dataclasses import dataclass
 from pathlib import Path, PurePath
-from typing import TYPE_CHECKING, Any, ClassVar
+from typing import TYPE_CHECKING, Any, ClassVar, NamedTuple
 
 from envdrift.scanner.base import (
     FindingSeverity,
@@ -256,13 +256,16 @@ def _version_warnings() -> list[str]:
     ]
 
 
-def _with_unquoted_git_paths(environ: Mapping[str, str]) -> dict[str, str]:
-    """A copy of ``environ`` that makes git write non-ASCII file names as they are.
+def _with_git_quotepath(environ: Mapping[str, str], *, quoted: bool) -> dict[str, str]:
+    """A copy of ``environ`` that sets ``core.quotepath`` for the git detect-secrets runs.
 
-    detect-secrets lists the files to scan with ``git ls-files``. Under git's default
-    ``core.quotepath`` that writes ``café.env`` as the quoted escape sequence
-    ``"caf\\303\\251.env"``, which names no file, so detect-secrets dropped the file from the
-    scan without a word and the run read as clean. The setting goes in through
+    detect-secrets lists the files to scan with ``git ls-files`` and decodes the whole list as
+    UTF-8. Under git's default (``quoted``) that writes ``café.env`` as the quoted escape
+    sequence ``"caf\\303\\251.env"``, which names no file, so detect-secrets dropped the file from
+    the scan without a word and the run read as clean. With the setting off git writes the name
+    as it is and detect-secrets matches it, but a name that is not UTF-8 then fails the decode,
+    and with it the whole scan. So the setting is off, and on in a repository that holds such a
+    name, over the user's own configuration, which often turns it off. It goes in through
     ``GIT_CONFIG_COUNT`` (git 2.31 and later), after any entries the caller already exports,
     because detect-secrets runs the git command itself and gives it no other way in.
     """
@@ -272,7 +275,7 @@ def _with_unquoted_git_paths(environ: Mapping[str, str]) -> dict[str, str]:
     except ValueError:
         count = 0
     env[f"GIT_CONFIG_KEY_{count}"] = "core.quotepath"
-    env[f"GIT_CONFIG_VALUE_{count}"] = "false"
+    env[f"GIT_CONFIG_VALUE_{count}"] = "true" if quoted else "false"
     env["GIT_CONFIG_COUNT"] = str(count + 1)
     return env
 
@@ -345,123 +348,122 @@ def _path_below(path: Path, root: Path) -> PurePath | None:
         return None
 
 
-def _scannable_tracked_names(plan: _ScanPlan) -> list[str] | None:
-    """The files git tracks below the path of ``plan`` that detect-secrets would scan.
+class _GitOutput(NamedTuple):
+    """What a ``git`` command printed, decoded as detect-secrets decodes it."""
 
-    detect-secrets scans the files git tracks, and it reports nothing at all, not even a
-    file count, for a directory where git tracks none (a new repository whose files are not
-    added yet, or a directory that is entirely ignored). The caller says so: that is not a
-    clean scan. None when the scan does not use git's list, or git cannot be asked.
+    returncode: int
+    stdout: str
+    stderr: str
+
+
+def _git_ls_files(root: Path, env: Mapping[str, str], *, nul: bool) -> _GitOutput | None:
+    """Run ``git ls-files`` for the repository at ``root`` under ``env``; None if git cannot run.
+
+    Without ``nul`` this is the command detect-secrets runs for the list of files it scans, so it
+    prints what detect-secrets reads, with a name git has to escape in quotes. With ``nul`` each
+    name is written as it is, whatever the configuration. The output is read as bytes, so no
+    newline in a name is translated, and a byte that is not UTF-8 becomes a lone surrogate
+    instead of an error.
     """
-    if plan.git_root is None:
-        return None
+    args = ["git", "-C", str(root), "ls-files"]
+    if nul:
+        args.append("-z")
     try:
         result = subprocess.run(  # nosec B603, B607
-            ["git", "ls-files", "-z", "--", plan.prefix.as_posix() if plan.prefix.parts else "."],
-            cwd=str(plan.git_root),
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            errors="surrogateescape",
-            timeout=60,
+            args, capture_output=True, timeout=60, env=dict(env)
         )
     except (OSError, subprocess.SubprocessError):
         return None
-    if result.returncode != 0:
-        return None
-    skipped = re.compile(plan.exclude)
-    return [name for name in result.stdout.split("\0") if name and not skipped.search(name)]
-
-
-# What git always quotes in a name (a double quote, a backslash, a control character), what it
-# also quotes with ``core.quotepath`` on (a byte above 0x7f), and bytes that are not UTF-8, which
-# Python reads from git's output as lone surrogates.
-_ALWAYS_QUOTED = re.compile(r'["\\\x00-\x1f\x7f]')
-_QUOTED_BY_QUOTEPATH = re.compile(r"[^\x00-\x7f]")
-_NOT_UTF8 = re.compile("[\udc80-\udcff]")
-
-
-def _git_quotes(name: str, *, quotepath_off: bool) -> bool:
-    """Whether ``git ls-files`` prints ``name`` in quotes, which detect-secrets cannot match."""
-    if _ALWAYS_QUOTED.search(name):
-        return True
-    return not quotepath_off and _QUOTED_BY_QUOTEPATH.search(name) is not None
-
-
-def _is_undecodable(name: str) -> bool:
-    """Whether ``name`` holds bytes that are not UTF-8 (they were read as lone surrogates)."""
-    return _NOT_UTF8.search(name) is not None
-
-
-# ``GIT_CONFIG_COUNT`` and its key and value variables arrived in git 2.31; an older git
-# ignores them.
-_GIT_CONFIG_ENV_SINCE = (2, 31)
-
-
-def _git_honors_config_env() -> bool:
-    """Whether the installed git reads configuration from ``GIT_CONFIG_COUNT``.
-
-    True when that cannot be told: a git that cannot be asked for its version is no reason to
-    report a file as skipped that may well be scanned.
-    """
-    try:
-        result = subprocess.run(  # nosec B603, B607
-            ["git", "--version"],
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            timeout=10,
-        )
-    except (OSError, subprocess.SubprocessError):
-        return True
-    found = re.match(r"git version (\d+)\.(\d+)", result.stdout) if result.stdout else None
-    return found is None or (int(found[1]), int(found[2])) >= _GIT_CONFIG_ENV_SINCE
-
-
-def _not_scanned_warning(path: Path, quoted: list[str]) -> str:
-    """The warning for tracked files whose names git quotes, which detect-secrets cannot match."""
-    shown = ", ".join(repr(name) for name in quoted[:3])
-    more = f" and {len(quoted) - 3} more" if len(quoted) > 3 else ""
-    return (
-        f"Not scanned in {path}: git writes the name of {len(quoted)} tracked file(s) in quotes, "
-        f"which detect-secrets cannot match ({shown}{more}). Git quotes a name with a double "
-        "quote, a backslash or a control character, and one with a non-ASCII character when it "
-        "cannot be told not to (that needs git 2.31 or later and names that are all UTF-8). "
-        "Rename the file or scan it with another scanner."
+    return _GitOutput(
+        result.returncode,
+        result.stdout.decode("utf-8", errors="surrogateescape"),
+        result.stderr.decode("utf-8", errors="replace"),
     )
 
 
-def _check_git_file_list(path: Path, names: list[str] | None) -> tuple[dict[str, str], list[str]]:
+def _names_to_scan(plan: _ScanPlan, tracked: list[str]) -> list[str]:
+    """The tracked files below the path of ``plan`` that detect-secrets does not exclude.
+
+    Git names them relative to the top level of the repository, and so do the prefix of the
+    plan and its exclude pattern.
+    """
+    below = f"{plan.prefix.as_posix()}/" if plan.prefix.parts else ""
+    excluded = re.compile(plan.exclude)
+    return [name for name in tracked if name.startswith(below) and not excluded.search(name)]
+
+
+# Bytes that are not UTF-8, which Python reads from git's output as lone surrogates.
+_NOT_UTF8 = re.compile("[\udc80-\udcff]")
+
+
+def _not_scanned_warning(path: Path, names: list[str]) -> str:
+    """The warning for tracked files whose names detect-secrets cannot match in git's list."""
+    shown = ", ".join(repr(name) for name in names[:3])
+    more = f" and {len(names) - 3} more" if len(names) > 3 else ""
+    return (
+        f"Not scanned in {path}: detect-secrets cannot match the name of {len(names)} tracked "
+        f"file(s) in the list git gives it ({shown}{more}). Git quotes a name with a double "
+        "quote, a backslash or a control character, and one with a non-ASCII character unless "
+        "core.quotepath is off (envdrift turns it off with git 2.31 or later when every name is "
+        "UTF-8, but GIT_CONFIG_PARAMETERS, which git -c sets, wins); a line separator (U+0085, "
+        "U+2028, U+2029) splits a name in two. Rename the file or scan it with another scanner."
+    )
+
+
+def _unlisted_warning(path: Path, listing: _GitOutput) -> str:
+    """The warning for a ``git ls-files`` that failed: detect-secrets gets no list from it either."""
+    lines = strip_ansi(listing.stderr).strip().splitlines()
+    detail = lines[0][:200] if lines else f"exit code {listing.returncode}"
+    return (
+        f"Could not list the files git tracks in {path} ({detail}). detect-secrets scans the "
+        "files git tracks, with the same command, so it may have scanned none and an empty "
+        "report is not a clean run."
+    )
+
+
+def _check_git_file_list(path: Path, plan: _ScanPlan) -> tuple[dict[str, str], list[str]]:
     """The environment to run detect-secrets in, and warnings about the files git lists for it.
 
-    detect-secrets matches the names ``git ls-files`` prints with the files it finds, and git
-    writes a name it has to escape in quotes, which matches no file: the file was dropped from
-    the scan without a word and the run read as clean. Turning ``core.quotepath`` off makes git
-    print non-ASCII names as they are. That is not safe when a name holds bytes that are not
-    UTF-8, since detect-secrets decodes the list and fails on them, and it does nothing on a git
-    older than 2.31, which ignores the variable; the setting stays at its default then. A name
-    that git still quotes is reported, never skipped in silence.
+    detect-secrets matches the names ``git ls-files`` prints with the files it finds, and drops
+    a file whose name does not match, in silence: the run then reads as clean. Git writes a name
+    it escapes in quotes (``core.quotepath`` is set so that it does not, see
+    ``_with_git_quotepath``), and detect-secrets splits the list at U+0085, U+2028 and U+2029
+    too. Rather than model what git and Python do with each name, this runs the command
+    detect-secrets runs, under the environment it gets, and reports every file of the scan whose
+    name is not in the list it reads. That covers whatever else changes the output, as a git
+    older than 2.31 (which ignores ``GIT_CONFIG_COUNT``) or ``GIT_CONFIG_PARAMETERS`` (set by
+    ``git -c``, it wins over the setting) do.
 
     Args:
         path: The path being scanned, for the messages.
-        names: What ``_scannable_tracked_names`` found, None when detect-secrets does not use
-            git's list.
+        plan: How detect-secrets is run over ``path``; its ``git_root`` is None when it does not
+            use git's list.
     """
     env = dict(os.environ)
-    if names is None:
+    if plan.git_root is None:
         return env, []
+    listing = _git_ls_files(plan.git_root, env, nul=True)
+    if listing is None:
+        return env, []
+    if listing.returncode != 0:
+        return env, [_unlisted_warning(path, listing)]
+    names = _names_to_scan(plan, [name for name in listing.stdout.split("\0") if name])
     if not names:
         return env, [
             f"Scanned nothing in {path}: in a git repository detect-secrets scans the files "
             "git tracks, and none is tracked there that it does not skip. Run git add on the "
             "files to scan them."
         ]
-    quotepath_off = _git_honors_config_env() and not any(_is_undecodable(name) for name in names)
-    if quotepath_off:
-        env = _with_unquoted_git_paths(env)
-    quoted = [name for name in names if _git_quotes(name, quotepath_off=quotepath_off)]
-    return env, [_not_scanned_warning(path, quoted)] if quoted else []
+    # detect-secrets decodes the whole list, not only the names of this scan.
+    env = _with_git_quotepath(env, quoted=_NOT_UTF8.search(listing.stdout) is not None)
+    listed = _git_ls_files(plan.git_root, env, nul=False)
+    if listed is None:
+        return env, []
+    if listed.returncode != 0:
+        return env, [_unlisted_warning(path, listed)]
+    seen = set(listed.stdout.splitlines())
+    unmatched = [name for name in names if name not in seen]
+    return env, [_not_scanned_warning(path, unmatched)] if unmatched else []
 
 
 def _report_file(name: str, base_path: Path, prefix: PurePath) -> Path:
@@ -783,8 +785,9 @@ class DetectSecretsScanner(ScannerBackend):
 
         Returns:
             ScanResult containing all findings. Its ``warnings`` say when the installed
-            detect-secrets is not the pinned version, so severities may be inaccurate, and
-            when git tracks no file to scan in a directory.
+            detect-secrets is not the pinned version, so severities may be inaccurate, when
+            git tracks no file to scan in a directory or cannot list them, and when a tracked
+            file is not scanned because detect-secrets cannot match its name.
         """
         # Note: detect-secrets doesn't support git history scanning
         _ = include_git_history  # intentionally ignored (interface compatibility)
@@ -820,7 +823,7 @@ class DetectSecretsScanner(ScannerBackend):
 
             try:
                 plan = _plan_scan(path)
-                env, listing_warnings = _check_git_file_list(path, _scannable_tracked_names(plan))
+                env, listing_warnings = _check_git_file_list(path, plan)
                 result = _run_detect_secrets(plan, env)
                 warnings = [*warnings, *listing_warnings]
 

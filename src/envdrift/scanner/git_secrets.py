@@ -60,15 +60,16 @@ _AWS_ACCESS_KEY_ID_RE = re.compile(
 # that only names ``aws_secret_access_key_file`` or ``private_key_path``, holds a long value
 # under another field (``private_key_id``, a checksum next to the file name), holds neither,
 # so it is HIGH, not CRITICAL (see ``_holds_credential``). The key is base64 without padding,
-# so a ``=`` before it is the assignment, not part of it.
+# so a ``=`` before it is the assignment, not part of it. The assignment is ``=``, ``:`` or the
+# hash rocket ``=>`` of Puppet, Ruby and PHP: git-secrets' own AWS pattern takes all three.
 _AWS_SECRET_ACCESS_KEY_RE = re.compile(
-    r"(?:aws_secret(?:_access)?(?:_key)?|secret_access_key)[\"']?\s*[=:]\s*[\"']?"
+    r"(?:aws_secret(?:_access)?(?:_key)?|secret_access_key)[\"']?\s*(?:=>|[=:])\s*[\"']?"
     r"[A-Za-z0-9/+]{40}(?![A-Za-z0-9/+=])",
     re.IGNORECASE,
 )
 _PRIVATE_KEY_HEADER_RE = re.compile(r"-----BEGIN [A-Z0-9 ]*PRIVATE KEY")
 _PRIVATE_KEY_VALUE_RE = re.compile(
-    r"private_key[\"']?\s*[:=]\s*[\"']?[A-Za-z0-9+/]{64,}", re.IGNORECASE
+    r"private_key[\"']?\s*(?:=>|[:=])\s*[\"']?[A-Za-z0-9+/]{64,}", re.IGNORECASE
 )
 
 # git-secrets reports a matching line, not a rule, so ``_detect_rule_type`` names the

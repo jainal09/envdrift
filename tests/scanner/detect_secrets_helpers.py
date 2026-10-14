@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 import shutil
 import subprocess
 from pathlib import Path
@@ -20,6 +21,28 @@ from envdrift.scanner.detect_secrets import (
 # The real probe and warning builder, bound before ``no_version_probe`` replaces the module's.
 REAL_VERSION_WARNINGS = _version_warnings
 PINNED = _get_detect_secrets_version()
+
+
+def installed_git_version() -> tuple[int, int] | None:
+    """The ``(major, minor)`` of the git on PATH, None when it is missing or cannot be read."""
+    try:
+        output = subprocess.run(
+            ["git", "--version"], capture_output=True, text=True, timeout=10
+        ).stdout
+    except (OSError, subprocess.SubprocessError):
+        return None
+    found = re.match(r"git version (\d+)\.(\d+)", output)
+    return (int(found[1]), int(found[2])) if found else None
+
+
+# ``GIT_CONFIG_COUNT``, which carries the ``core.quotepath`` setting into the git that
+# detect-secrets runs, arrived in git 2.31: an older git ignores it, so a non-ASCII name stays
+# quoted there and the file is reported, not scanned. A git that cannot be asked is taken to read it.
+_GIT_VERSION = installed_git_version()
+requires_git_config_env = pytest.mark.skipif(
+    _GIT_VERSION is not None and _GIT_VERSION < (2, 31),
+    reason="git before 2.31 ignores GIT_CONFIG_COUNT, which carries the core.quotepath setting",
+)
 
 
 @pytest.fixture(autouse=True)
@@ -52,7 +75,13 @@ def add_files(repo: Path, *names: str) -> None:
         file = repo / name
         file.parent.mkdir(parents=True, exist_ok=True)
         file.write_text("x = 1\n")
-    subprocess.run(["git", "add", "--", *names], cwd=repo, check=True, capture_output=True)
+    # A name is not a pathspec: ``:magic/app.cfg`` would otherwise be read as pathspec magic.
+    subprocess.run(
+        ["git", "--literal-pathspecs", "add", "--", *names],
+        cwd=repo,
+        check=True,
+        capture_output=True,
+    )
 
 
 def fake_detect_secrets(report: dict[str, Any] | None = None, stderr: str = ""):

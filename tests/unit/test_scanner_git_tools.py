@@ -245,6 +245,21 @@ class TestGitSecretsScanner:
                 "export AWS_SECRET_ACCESS_KEY=" + "wJalrXUtnFEMI/K7MDENG/bPxRfi" + "CYEXAMPLEKEY",
                 "aws-secret-key",
             ),
+            # Puppet, Ruby and PHP assign with a hash rocket, which git-secrets' own AWS pattern
+            # matches too, so the line it flags is graded like the one with ``=``.
+            (
+                "aws_secret_access_key => '" + "wJalrXUtnFEMI/K7MDENG/bPxRfi" + "CYEXAMPLEKEY',",
+                "aws-secret-key",
+            ),
+            (
+                ':aws_secret_access_key => "' + "wJalrXUtnFEMI/K7MDENG/bPxRfi" + 'CYEXAMPLEKEY"',
+                "aws-secret-key",
+            ),
+            (
+                "'secret_access_key' => '" + "wJalrXUtnFEMI/K7MDENG/bPxRfi" + "CYEXAMPLEKEY',",
+                "aws-secret-key",
+            ),
+            ("private_key => '" + "MIIEvQIBADANBgkqhkiG9w0BAQEFAASC" * 3 + "'", "private-key"),
             ("-----BEGIN RSA PRIVATE KEY-----", "private-key"),
             ("-----BEGIN OPENSSH PRIVATE KEY-----", "private-key"),
             ("private_key = " + "MIIEvQIBADANBgkqhkiG9w0BAQEFAASC" * 3, "private-key"),

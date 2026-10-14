@@ -22,6 +22,7 @@ from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
+from tests.scanner.detect_secrets_helpers import requires_git_config_env
 
 from envdrift.scanner import detect_secrets as detect_secrets_module
 from envdrift.scanner.base import FindingSeverity
@@ -332,6 +333,7 @@ def test_scan_of_paths_that_look_like_options_scans_them(git_repo: Path):
     assert _found(dir_result.findings, git_repo) == ["-sub/a.cfg"]
 
 
+@requires_git_config_env
 def test_scan_of_tracked_files_with_non_ascii_names_reports_them(git_repo: Path):
     """A leaked token in ``café.cfg`` is reported, not skipped in silence.
 
@@ -364,6 +366,7 @@ def _track_or_skip(repo: Path, *names: str) -> None:
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="Windows file names cannot hold these")
+@requires_git_config_env
 def test_scan_says_so_when_git_quotes_a_tracked_name_whatever_the_setting(git_repo: Path):
     """Git quotes a name with a double quote or a backslash even with ``core.quotepath`` off.
 
@@ -403,6 +406,183 @@ def test_scan_of_a_name_that_is_not_utf8_does_not_fail_and_says_what_it_skipped(
     assert "the name of 2 tracked file(s)" in warning
     assert repr(not_utf8) in warning
     assert repr("naïve.cfg") in warning
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="Windows file names are never non-UTF-8")
+def test_scan_of_a_name_that_is_not_utf8_outside_the_scan_does_not_fail(git_repo: Path):
+    """detect-secrets decodes the whole list git gives it, not only the part it scans.
+
+    A name that is not UTF-8 in another directory (``other``) or in an excluded one (``vendor``)
+    made it fail with a ``UnicodeDecodeError`` when git wrote names as they are.
+    """
+    not_utf8 = "caf\udce9.cfg"  # Latin-1 "café": the byte 0xe9, which is not UTF-8
+    _track_or_skip(git_repo, "sub/ok.cfg", "ok.cfg", "other/" + not_utf8, "vendor/" + not_utf8)
+    scanner = DetectSecretsScanner(auto_install=False)
+
+    top = scanner.scan([git_repo])
+    sub = scanner.scan([git_repo / "sub"])
+
+    assert top.error is None, top.error
+    assert sub.error is None, sub.error
+    assert _found(top.findings, git_repo) == ["ok.cfg", "sub/ok.cfg"]
+    assert _found(sub.findings, git_repo) == ["sub/ok.cfg"]
+    assert sub.warnings == []
+    (warning,) = top.warnings  # the one below ``other`` is in the scan and git quotes it
+    assert repr("other/" + not_utf8) in warning
+    assert "vendor" not in warning
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="Windows file names are never non-UTF-8")
+@requires_git_config_env  # a git before 2.31 ignores the setting that overrides the user's
+def test_scan_of_a_name_that_is_not_utf8_when_the_user_turned_quoting_off(git_repo: Path):
+    """A user's own ``core.quotepath = false`` (a common setting) must not reach detect-secrets.
+
+    It reads the list as UTF-8, so a name that is not UTF-8 failed the whole scan with it off.
+    """
+    not_utf8 = "caf\udce9.cfg"
+    subprocess.run(
+        ["git", "config", "core.quotepath", "false"], cwd=git_repo, capture_output=True, check=True
+    )
+    _track_or_skip(git_repo, not_utf8, "plain.cfg")
+
+    result = DetectSecretsScanner(auto_install=False).scan([git_repo])
+
+    assert result.error is None, result.error
+    assert _found(result.findings, git_repo) == ["plain.cfg"]
+    (warning,) = result.warnings
+    assert repr(not_utf8) in warning
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="Windows file names cannot hold these")
+def test_scan_says_so_when_a_line_separator_splits_a_tracked_name(git_repo: Path):
+    """detect-secrets splits git's list with ``str.splitlines``, which also splits at U+2028.
+
+    The name of such a file reads as two names that match nothing, so the file was dropped from
+    the scan with no error and no warning.
+    """
+    names = ["line\u2028sep.cfg", "line\u2029sep.cfg", "line\u0085sep.cfg"]
+    _track_or_skip(git_repo, *names, "plain.cfg")
+
+    result = DetectSecretsScanner(auto_install=False).scan([git_repo])
+
+    assert result.error is None, result.error
+    assert _found(result.findings, git_repo) == ["plain.cfg"]
+    assert len(result.warnings) == 1, "files dropped from the scan were not reported"
+    (warning,) = result.warnings
+    assert "the name of 3 tracked file(s)" in warning
+    for name in names:
+        assert repr(name) in warning
+
+
+def test_scan_says_so_when_the_git_configuration_keeps_a_name_quoted(
+    git_repo: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """``git -c core.quotepath=true detect-secrets`` exports the setting in ``GIT_CONFIG_PARAMETERS``.
+
+    It wins over the ``GIT_CONFIG_COUNT`` entry envdrift adds, so ``café.cfg`` stays quoted and
+    is not scanned: said so, not left as a clean run.
+    """
+    _track_or_skip(git_repo, "café.cfg", "plain.cfg")
+    monkeypatch.setenv("GIT_CONFIG_PARAMETERS", "'core.quotepath=true'")
+
+    result = DetectSecretsScanner(auto_install=False).scan([git_repo])
+
+    assert result.error is None, result.error
+    assert _found(result.findings, git_repo) == ["plain.cfg"]
+    assert len(result.warnings) == 1, "a file dropped from the scan was not reported"
+    (warning,) = result.warnings
+    assert repr("café.cfg") in warning
+
+
+# Names that git quotes, that Python splits, that look like options or pathspecs, or that no
+# ASCII-only code reads right. Each is a tracked file holding a token.
+AWKWARD_NAMES = [
+    "plain.cfg",
+    "with space.cfg",
+    " leading space.cfg",
+    "trailing space .cfg",
+    "dir with space/inner file.cfg",
+    "café.cfg",
+    "sub/naïve.cfg",
+    "文档/配置.cfg",
+    "emoji-\U0001f600.cfg",
+    "zero\u200bwidth.cfg",
+    "bom\ufeff.cfg",
+    "tab\there.cfg",
+    "new\nline.cfg",
+    "carriage\rreturn.cfg",
+    "bell\x07.cfg",
+    "form\x0cfeed.cfg",
+    "vertical\x0btab.cfg",
+    "separator\x1c.cfg",
+    "del\x7f.cfg",
+    "line\u0085next.cfg",
+    "line\u2028separator.cfg",
+    "paragraph\u2029separator.cfg",
+    'double"quote.cfg',
+    "single'quote.cfg",
+    "back\\slash.cfg",
+    "-dash.cfg",
+    "#hash.cfg",
+    "!bang.cfg",
+    ":colon.cfg",
+    "[bracket].cfg",
+    "{brace}.cfg",
+    "star*.cfg",
+    "question?.cfg",
+    "~tilde.cfg",
+    "$dollar.cfg",
+]
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="Windows file names cannot hold most of these")
+@pytest.mark.parametrize("quotepath", [None, "true", "false"])
+@pytest.mark.parametrize("not_utf8", [False, True], ids=["utf8", "with-a-name-that-is-not-utf8"])
+def test_no_tracked_file_is_dropped_in_silence(
+    git_repo: Path, quotepath: str | None, not_utf8: bool
+):
+    """Every tracked file is scanned or reported, whatever its name and the git configuration.
+
+    detect-secrets drops a file whose name it cannot match in git's list (a name git quotes, or
+    that Python splits into lines) without an error or a word, which read as a clean run. The scan
+    counts the files it reports against the ones git tracks, so nothing goes missing.
+    """
+    names = [*AWKWARD_NAMES, "caf\udce9.cfg"] if not_utf8 else AWKWARD_NAMES
+    if quotepath is not None:
+        subprocess.run(
+            ["git", "config", "core.quotepath", quotepath],
+            cwd=git_repo,
+            capture_output=True,
+            check=True,
+        )
+    try:
+        for name in names:
+            (git_repo / name).parent.mkdir(parents=True, exist_ok=True)
+            (git_repo / name).write_text(NPM_TOKEN_LINE)
+    except OSError as exc:
+        pytest.skip(f"this file system cannot hold the name: {exc}")
+    subprocess.run(
+        ["git", "--literal-pathspecs", "add", "--", *names],
+        cwd=git_repo,
+        capture_output=True,
+        check=True,
+    )
+
+    result = DetectSecretsScanner(auto_install=False).scan([git_repo])
+
+    assert result.error is None, result.error
+    scanned = len(result.findings)
+    reported = sum(
+        int(count)
+        for warning in result.warnings
+        for count in re.findall(r"the name of (\d+) tracked file", warning)
+    )
+    assert scanned + reported == len(names), (
+        f"{len(names) - scanned - reported} tracked files were dropped in silence: "
+        f"{scanned} scanned and {reported} reported of {len(names)}"
+    )
+    # A name that is plain is scanned, whatever else is in the repository.
+    assert "plain.cfg" in _found(result.findings, git_repo)
 
 
 @pytest.mark.parametrize("name", ["build", "dist", "vendor", "coverage"])
