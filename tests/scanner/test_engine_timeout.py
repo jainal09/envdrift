@@ -44,12 +44,20 @@ print("RETURNED", [r.error for r in result.results])
 """
 
 
+class ScanStillBlockedError(AssertionError):
+    """``scan()`` did not return after a scanner timed out: the failure #870 describes."""
+
+
 @pytest.mark.xfail(
     strict=False,
+    raises=ScanStillBlockedError,
     reason="the timeout records an error but cannot free the blocked scanner thread (see #870)",
 )
 def test_a_scanner_that_never_returns_does_not_hold_the_run_past_its_timeout():
-    """``scan()`` waits for every worker thread, so one that never returns holds it forever."""
+    """``scan()`` waits for every worker thread, so one that never returns holds it forever.
+
+    Only that failure is expected: a child that cannot start or crashes fails the test.
+    """
     # The child imports the same package as this process.
     source = str(Path(envdrift.__file__).resolve().parents[1])
     try:
@@ -61,7 +69,8 @@ def test_a_scanner_that_never_returns_does_not_hold_the_run_past_its_timeout():
             env={**os.environ, "PYTHONPATH": source},
             check=False,
         )
-    except subprocess.TimeoutExpired:
-        pytest.fail("scan() did not return after the scanner timed out")
+    except subprocess.TimeoutExpired as exc:
+        raise ScanStillBlockedError("scan() did not return after the scanner timed out") from exc
 
-    assert "Scanner timed out after 600s" in result.stdout
+    assert result.returncode == 0, result.stderr
+    assert "RETURNED ['Scanner timed out after 600s']" in result.stdout

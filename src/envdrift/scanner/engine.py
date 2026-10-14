@@ -674,7 +674,7 @@ class ScanEngine:
         and the secret's hash (when present). With ``display``, the file is the place
         it really is, not the name it was reported under, so a directory scanned both
         directly and through a symlink to it reports each secret once (#861); the name
-        kept is the real one. Including the hash means two
+        kept is the real one when the findings otherwise tie. Including the hash means two
         *distinct* secrets that match the same rule on the same line (e.g. two
         AWS keys on one ``.env`` line, #348) are both reported, while the same
         secret matched by the same rule at one location still collapses to one

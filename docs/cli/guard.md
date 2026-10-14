@@ -55,13 +55,14 @@ directory is scanned in its absolute form too (`envdrift guard "$PWD/linkproj"`)
 file is scanned through to its target and shown as the link. A `..` after a symlink names the link
 target's parent: `envdrift guard linkproj/..` scans that directory and shows its files where they are.
 
-A file that two of the paths you pass reach by two names is one finding. `envdrift guard . linkproj`,
-where `linkproj` is a symlink to `proj`, scans `proj` twice, and the secret in `proj/sub/app.env` is
-reported once, under the name the file really has (`proj/sub/app.env`), whichever path comes first.
-When only links to the directory are scanned (`envdrift guard link2 link1`), the first one you pass
-names it (`link2/sub/app.env`), for every scanner. A symlink to a file that is scanned too is that
-file, not a second finding, and the file is shown by its own name, not the link's. Two secrets on one
-line, or the same secret on two lines, stay separate findings.
+A file that two of the paths you pass reach by two names is one finding for each scanner.
+`envdrift guard . linkproj`, where `linkproj` is a symlink to `proj`, scans `proj` twice, and the secret in
+`proj/sub/app.env` is reported once by each scanner, under the name the file really has (`proj/sub/app.env`),
+whichever path comes first. When only links to the directory are scanned (`envdrift guard link2 link1`), the
+first one you pass names it (`link2/sub/app.env`), for every scanner. A symlink to a file that is scanned too is
+that file, not a second finding, and the file is shown by its own name, not the link's. Two secrets on one line,
+or the same secret on two lines, stay separate findings, and so do the reports of two scanners, which name the
+rule differently.
 
 The path shown is not always the path in a gitleaks or Infisical fingerprint. `envdrift guard` with
 no path and absolute paths are fingerprinted by absolute path; see

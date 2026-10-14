@@ -341,8 +341,14 @@ def test_guard_names_a_file_the_same_way_whichever_link_or_alias_reaches_it(
     result, payload = _guard([*scan_paths, *flags], cwd=tmp_path)
 
     assert _scanner_result(payload, name)["error"] is None, result.stderr
-    assert {f["scanner"] for f in payload["findings"]} == {"native", name}
-    assert _finding_paths(payload) == {Path(scan_paths[0]) / "sub" / "app.env"}
+    shown = Path(scan_paths[0]) / "sub" / "app.env"
+    binary = [f for f in payload["findings"] if f["scanner"] == name]
+    native = [
+        f for f in payload["findings"] if f["scanner"] == "native" and f["rule_id"] == "github-pat"
+    ]
+    assert [Path(f["file_path"]) for f in binary] == [shown]
+    assert [Path(f["file_path"]) for f in native] == [shown]
+    assert _finding_paths(payload) == {shown}
     assert result.returncode == 1, result.stderr
 
 

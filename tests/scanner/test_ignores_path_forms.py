@@ -210,17 +210,20 @@ class TestPathFormsMatching:
         assert forms.match(["**/build/**"])
         assert forms.match(["/ci/build/**"])
 
-    def test_a_plain_absolute_path_is_matched_by_a_pattern_without_a_separator_on_its_name(self):
+    def test_a_plain_absolute_path_is_matched_by_a_pattern_without_a_separator_on_its_name(
+        self, tmp_path: Path
+    ):
         """Nothing says which of the directories above it belong to the project."""
-        unix = PathForms.of(Path("/ci/build/repo/x.py"))
+        # Absolute on this platform: a rooted path without a drive is no absolute path on Windows.
+        native = PathForms.of(tmp_path / "ci" / "build" / "repo" / "x.py")
         windows = PathForms.of(PureWindowsPath(r"C:\ci\build\repo\x.py"))
 
-        for forms in (unix, windows):
+        for forms in (native, windows):
             assert forms.match(["x.py"])
             assert forms.match(["*.py"])
             assert not forms.match(["build"])
             assert not forms.match(["repo"])
-        assert unix.match(["**/build/**"])
+        assert native.match(["**/build/**"])
         assert windows.match(["**/build/**"])
 
     def test_a_plain_relative_path_is_matched_by_each_of_its_parts(self):

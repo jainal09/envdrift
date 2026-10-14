@@ -138,18 +138,15 @@ class PathForms:
 
     def match(self, patterns: Iterable[str]) -> bool:
         """Whether any pattern of ``patterns`` matches one of these names."""
-        for pattern in patterns:
-            if is_absolute_pattern(pattern):
-                matched = any(fnmatch.fnmatch(name.as_posix(), pattern) for name in self.absolute)
-            elif _is_bare(pattern):
-                matched = any(_matches_a_part(name, pattern) for name in self.bare or self.relative)
-            else:
-                matched = any(
-                    _matches_name_or_trailing_part(name, pattern) for name in self.relative
-                )
-            if matched:
-                return True
-        return False
+        return any(self._matches_one(pattern) for pattern in patterns)
+
+    def _matches_one(self, pattern: str) -> bool:
+        """Whether ``pattern`` matches one of these names, by the kind of pattern it is."""
+        if is_absolute_pattern(pattern):
+            return any(fnmatch.fnmatch(name.as_posix(), pattern) for name in self.absolute)
+        if _is_bare(pattern):
+            return any(_matches_a_part(name, pattern) for name in self.bare or self.relative)
+        return any(_matches_name_or_trailing_part(name, pattern) for name in self.relative)
 
 
 @dataclass

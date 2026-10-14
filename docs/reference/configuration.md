@@ -158,7 +158,7 @@ Notes:
 
 - `ignore_paths` and `ignore_rules` apply to every scanner. For a file inside the directory guard runs in, a
   relative pattern matches paths below that directory, never the directories above it; see
-  [TOML Configuration](../cli/guard.md#toml-configuration) for the exact rule. A pattern without a `/`
+  [TOML Configuration](../cli/guard.md#toml-configuration) for the exact rule. A pattern without a path separator
   (`node_modules`, `*.env`) is matched against each part of the path below the directory guard runs in (below the scan
   path for a file outside it), so it also hides the files below a directory of that name.
 - `skip_encrypted_files` defaults to `true`, so findings from files carrying
