@@ -61,7 +61,7 @@ def _patch_engine(monkeypatch: pytest.MonkeyPatch, result: AggregatedScanResult)
         def get_scanner_info(self):
             return []
 
-        def scan(self, _paths, on_scanner_complete=None):
+        def scan(self, _paths, on_scanner_complete=None, aliases=None):
             return result
 
         def check_combined_files_security(self):

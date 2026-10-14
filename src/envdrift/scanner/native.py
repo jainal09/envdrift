@@ -341,6 +341,24 @@ def _decode_unicode_text(raw: bytes) -> str | None:
     return None
 
 
+def _resolved(path: Path) -> Path | None:
+    """``path`` with its symlinks resolved, or ``None`` when that fails."""
+    try:
+        return path.resolve()
+    except (OSError, RuntimeError):  # RuntimeError: a symlink loop before Python 3.13
+        return None
+
+
+def _path_below(path: Path | None, base: Path) -> Path | None:
+    """``path`` relative to ``base``, or ``None`` when it is not below it."""
+    if path is None:
+        return None
+    try:
+        return path.relative_to(base)
+    except ValueError:
+        return None
+
+
 class NativeScanner(ScannerBackend):
     """Built-in scanner with zero external dependencies.
 
@@ -414,8 +432,9 @@ class NativeScanner(ScannerBackend):
         else:
             self._ignore_patterns = DEFAULT_IGNORE_PATTERNS
 
-        if additional_ignore_patterns:
-            self._ignore_patterns = self._ignore_patterns + tuple(additional_ignore_patterns)
+        # The caller's own patterns ([guard] ignore_paths): kept apart because
+        # they never see a directory above the cwd (#859, see _should_ignore).
+        self._additional_ignore_patterns = tuple(additional_ignore_patterns or ())
 
     # The native scanner reads file content only and ignores
     # ``include_git_history``; guard refuses ``--history`` when no active
@@ -453,6 +472,7 @@ class NativeScanner(ScannerBackend):
         start_time = time.time()
         findings: list[ScanFinding] = []
         files_scanned = 0
+        cwd = Path.cwd().resolve()
 
         for path in paths:
             if not path.exists():
@@ -461,7 +481,7 @@ class NativeScanner(ScannerBackend):
             files_to_scan = [path] if path.is_file() else self._collect_files(path)
 
             for file_path in files_to_scan:
-                if self._should_ignore(file_path, path):
+                if self._should_ignore(file_path, path, cwd):
                     continue
 
                 files_scanned += 1
@@ -665,12 +685,25 @@ class NativeScanner(ScannerBackend):
 
         return files
 
-    def _should_ignore(self, file_path: Path, base_path: Path) -> bool:
+    def _should_ignore(self, file_path: Path, base_path: Path, cwd: Path | None = None) -> bool:
         """Check if a file should be ignored based on patterns.
+
+        Patterns match the file's real location below the scan path. A file
+        whose real location is not below it (a symlink to a file elsewhere)
+        is matched by its name and the directories it was found in below the
+        scan path, never by its absolute path, whose directories above the
+        scan path are no pattern's to match (#859). The built-in patterns
+        never match a path-shaped default such as ``vendor/**`` against such
+        a file, so a link inside ``vendor/`` is still scanned. With the scan
+        path above the cwd, the additional patterns (``[guard] ignore_paths``)
+        match a file under the cwd, where it was found or where it really is,
+        by its path below the cwd: like the scan engine's matching of every
+        scanner's findings, they never see the directories above the cwd.
 
         Args:
             file_path: Path to the file.
             base_path: Base path for relative matching.
+            cwd: The resolved directory guard runs in. Defaults to the current one.
 
         Returns:
             True if the file should be ignored.
@@ -682,17 +715,49 @@ class NativeScanner(ScannerBackend):
         # raise, the fallback matched against the absolute path, and every
         # directory-scoped pattern (bin/**, dist/**, vendor/**, ...) silently
         # stopped applying — ``guard`` and ``guard .`` returned different results.
-        try:
-            relative_path = file_path.resolve().relative_to(base_path.resolve())
-        except (ValueError, OSError):
-            relative_path = file_path
-
-        path_str = str(relative_path)
+        base = _resolved(base_path) or base_path
+        real = _resolved(file_path)
         name = file_path.name
+        if self._matches_builtin_patterns(file_path, base, real, name):
+            return True
+        if not self._additional_ignore_patterns:
+            return False
+        cwd = Path.cwd().resolve() if cwd is None else cwd
+        anchor = self._pattern_anchor(base, cwd, file_path, real)
+        own = _path_below(real, anchor) or _path_below(file_path, anchor) or Path(name)
+        return self._matches_any(self._additional_ignore_patterns, own, name)
 
+    def _matches_builtin_patterns(
+        self, file_path: Path, base: Path, real: Path | None, name: str
+    ) -> bool:
+        """Whether a built-in ignore pattern matches the file, by its path below the scan path."""
+        scanned = _path_below(real, base)
+        if scanned is not None:
+            return self._matches_any(self._ignore_patterns, scanned, name)
+        # A symlink to a file outside the scan path: its name stands for the whole path, so a
+        # path-shaped default never matches it.
+        found = _path_below(file_path, base) or Path(name)
         return any(
-            self._pattern_matches(pattern, path_str, name, relative_path.parts)
+            self._pattern_matches(pattern, name, name, found.parts)
             for pattern in self._ignore_patterns
+        )
+
+    @staticmethod
+    def _pattern_anchor(base: Path, cwd: Path, file_path: Path, real: Path | None) -> Path:
+        """The directory the additional patterns see a file below: ``base``, or the cwd above it.
+
+        With the scan path ``base`` above the cwd, a file under the cwd, where it was found or
+        where it really is, is named below the cwd, never through the directories above it.
+        """
+        if cwd == base or not cwd.is_relative_to(base):
+            return base
+        under_cwd = file_path.is_relative_to(cwd) or (real is not None and real.is_relative_to(cwd))
+        return cwd if under_cwd else base
+
+    def _matches_any(self, patterns: tuple[str, ...], path: Path, name: str) -> bool:
+        """Whether one of ``patterns`` matches the file at ``path`` (relative) named ``name``."""
+        return any(
+            self._pattern_matches(pattern, str(path), name, path.parts) for pattern in patterns
         )
 
     @staticmethod

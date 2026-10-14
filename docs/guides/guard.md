@@ -194,6 +194,12 @@ ignore_paths = [
 "django-secret-key" = ["**/test_settings.py", "**/conftest.py"]
 ```
 
+For a file inside the directory guard runs in, a relative pattern matches paths below that directory, never the
+directories above it, so `**/tests/**` does not hide a checkout that lives under a `tests` directory. A file outside it,
+such as one changed by a pull request when guard runs in a subdirectory, is still matched by its absolute path. An
+absolute pattern (`/home/me/repo/tests/**`) matches the whole absolute path. See
+[TOML Configuration](../cli/guard.md#toml-configuration) for the exact rule.
+
 ### Ignore Priority
 
 The ignore system applies in this order:
@@ -218,7 +224,9 @@ add it to `ignore_paths` yourself — explicit user ignores always suppress ever
 
 Directory-scoped defaults (`bin/**`, `dist/**`, `vendor/**`, `node_modules/**`, ...)
 apply consistently however the scan path is spelled: `envdrift guard`, `envdrift
-guard .`, and a symlinked path all produce the same result set.
+guard .`, and a symlinked path all produce the same result set. They match a file by
+where it is below the scan path, never by the directories above it, and never skip a
+symlink to a file outside the scan path, which only the built-in scanner follows.
 
 ### Finding Rule IDs
 

@@ -371,7 +371,7 @@ class TestNativeScannerInternals:
         assert files == expected
 
     def test_should_ignore_handles_outside_base(self):
-        """Relative path failures fall back to full path matching."""
+        """A file that cannot be placed below the base is matched by its name."""
         scanner = NativeScanner(ignore_patterns=["secret.txt"])
         assert scanner._should_ignore(Path("/outside/secret.txt"), Path("/base")) is True
 
@@ -2242,3 +2242,257 @@ class TestShouldIgnorePathResolution:
         """Files outside the base still match by filename via the fallback."""
         scanner = NativeScanner(ignore_patterns=["secret.txt"])
         assert scanner._should_ignore(Path("/outside/secret.txt"), Path("/base")) is True
+
+    def test_a_symlink_loop_does_not_abort_the_scan(self, tmp_path: Path):
+        """Before Python 3.13 ``Path.resolve()`` raises ``RuntimeError`` for a symlink loop.
+
+        It escaped ``_should_ignore``, so one pair of tracked links to each other made the whole
+        native scan fail with exit 5 ("Symlink loop") and no finding of the repository reported.
+        """
+        (tmp_path / "app.env").write_text(
+            "GITHUB_TOKEN=" + "ghp_" + "SYNTHETIC0TEST0TOKEN0FOR0UNIT0TESTS0\n"
+        )
+        try:
+            (tmp_path / "a").symlink_to("b")
+            (tmp_path / "b").symlink_to("a")
+        except (OSError, NotImplementedError):
+            pytest.skip("symlinks not supported on this platform")
+
+        result = NativeScanner().scan([tmp_path])
+
+        assert result.error is None, result.error
+        assert {finding.file_path.name for finding in result.findings} == {"app.env"}
+
+
+class TestIgnorePathsBelowTheCwd:
+    """#859: ``[guard] ignore_paths`` never match the directories above the cwd."""
+
+    @staticmethod
+    def _secret(path: Path) -> Path:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(f"GITHUB_TOKEN={'ghp_' + 'SYNTHETIC0TEST0TOKEN0FOR0UNIT0TESTS0'}\n")
+        return path
+
+    def test_fallback_never_matches_the_absolute_path(self):
+        """A file that cannot be placed below the scan path keeps only its name."""
+        scanner = NativeScanner(additional_ignore_patterns=["**/build/**", "build"])
+        assert scanner._should_ignore(Path("/ci/build/x/secret.txt"), Path("/base")) is False
+
+    def test_symlinked_file_outside_the_scan_path_is_matched_where_it_was_found(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        """A link in a checkout under ``build/`` was matched by its absolute path.
+
+        Its target lies outside the scan path, so ``relative_to`` failed and
+        ``build`` and ``**/build/**`` hid the secret behind it.
+        """
+        repo = tmp_path / "build" / "repo"
+        target = self._secret(tmp_path / "shared" / "secret.txt")
+        (repo / "proj").mkdir(parents=True)
+        try:
+            (repo / "proj" / "link.txt").symlink_to(target)
+        except OSError as exc:  # Windows without the symlink privilege
+            pytest.skip(f"cannot create a symlink here: {exc}")
+        link = repo.resolve() / "proj" / "link.txt"
+        monkeypatch.chdir(repo)
+
+        hidden = NativeScanner(additional_ignore_patterns=["build", "**/build/**"])
+        named = NativeScanner(additional_ignore_patterns=["proj/link.txt"])
+
+        assert hidden._should_ignore(link, repo) is False
+        assert named._should_ignore(link, repo) is True
+        assert [f.file_path for f in hidden.scan([repo]).findings] == [link]
+
+    def test_unresolvable_scan_path_is_matched_as_given(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        # Below tmp_path, which pytest resolves: a drive-less "/base" is no
+        # absolute path on Windows, and resolving its files adds the drive.
+        base = tmp_path / "base"
+        real_resolve = Path.resolve
+
+        def resolve(self: Path, strict: bool = False) -> Path:
+            if self == base:
+                raise OSError("permission denied")
+            return real_resolve(self, strict)
+
+        monkeypatch.setattr(Path, "resolve", resolve)
+        scanner = NativeScanner()
+
+        assert scanner._should_ignore(base / "node_modules" / "x.js", base) is True
+        assert scanner._should_ignore(base / "src" / "x.js", base) is False
+
+    def test_unresolvable_file_is_matched_where_it_was_found(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        """Never by its absolute path: a path-shaped default does not apply, as before."""
+        base = tmp_path / "base"  # resolved, see test_unresolvable_scan_path_is_matched_as_given
+        real_resolve = Path.resolve
+
+        def resolve(self: Path, strict: bool = False) -> Path:
+            if self.name == "x.js":
+                raise OSError("permission denied")
+            return real_resolve(self, strict)
+
+        monkeypatch.setattr(Path, "resolve", resolve)
+        found = base / "node_modules" / "x.js"
+
+        assert NativeScanner()._should_ignore(found, base, base) is False
+        scanner = NativeScanner(additional_ignore_patterns=["node_modules/*"])
+        assert scanner._should_ignore(found, base, base) is True
+        scanner = NativeScanner(additional_ignore_patterns=["**/base/**"])
+        assert scanner._should_ignore(found, base, base) is False
+
+    def test_cwd_can_be_given(self, tmp_path: Path):
+        """``scan`` resolves the cwd once and hands it to every check."""
+        cwd = tmp_path / "builds" / "repo"
+        inside = self._secret(cwd / "app.env")
+        scanner = NativeScanner(additional_ignore_patterns=["builds"])
+
+        assert scanner._should_ignore(inside.resolve(), tmp_path, cwd.resolve()) is False
+        assert scanner._should_ignore(inside.resolve(), tmp_path, tmp_path.resolve()) is True
+
+    @pytest.mark.parametrize("pattern", ["builds", "builds/**", "repo"])
+    def test_scan_path_above_the_cwd_matches_files_under_the_cwd_below_it(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, pattern: str
+    ):
+        """``guard ../../..`` from ``builds/repo/proj``: the path below the scan
+        path named ``builds`` and ``repo``, directories above the cwd.
+        """
+        cwd = tmp_path / "builds" / "repo" / "proj"
+        inside = self._secret(cwd / "sub" / "app.env")
+        outside = self._secret(tmp_path / "builds" / "repo" / "other" / "app.env")
+        monkeypatch.chdir(cwd)
+        scanner = NativeScanner(additional_ignore_patterns=[pattern])
+
+        assert scanner._should_ignore(inside.resolve(), tmp_path) is False
+        # Outside the cwd the path below the scan path is matched as before.
+        assert scanner._should_ignore(outside.resolve(), tmp_path) is True
+        assert {f.file_path for f in scanner.scan([tmp_path]).findings} == {inside.resolve()}
+
+    def test_scan_path_above_the_cwd_still_matches_patterns_below_the_cwd(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        cwd = tmp_path / "builds" / "repo" / "proj"
+        inside = self._secret(cwd / "sub" / "app.env")
+        monkeypatch.chdir(cwd)
+
+        for pattern in ("sub/*", "sub", "app.env"):
+            scanner = NativeScanner(additional_ignore_patterns=[pattern])
+            assert scanner._should_ignore(inside.resolve(), tmp_path) is True, pattern
+
+    def test_built_in_patterns_still_match_below_the_scan_path(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        """The defaults (``build/**``, ...) describe what is scanned, not the cwd."""
+        cwd = tmp_path / "build" / "repo"
+        inside = self._secret(cwd / "app.env")
+        monkeypatch.chdir(cwd)
+
+        assert NativeScanner()._should_ignore(inside.resolve(), tmp_path) is True
+        assert NativeScanner()._should_ignore(inside.resolve(), cwd) is False
+
+    @staticmethod
+    def _link(link: Path, target: Path) -> None:
+        link.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            link.symlink_to(target)
+        except OSError as exc:  # Windows without the symlink privilege
+            pytest.skip(f"cannot create a symlink here: {exc}")
+
+    @pytest.mark.parametrize("directory", ["build", "vendor", "node_modules/pkg", "dist"])
+    def test_built_in_patterns_keep_scanning_a_link_to_a_file_elsewhere(
+        self, tmp_path: Path, directory: str
+    ):
+        """A link inside ``vendor/`` to a file outside the scan path is scanned, as it was.
+
+        Matched by its absolute path, no directory-scoped default ever applied
+        to it, and no other scanner follows such a link.
+        """
+        target = self._secret(tmp_path / "shared" / "creds.env")
+        repo = tmp_path / "repo"
+        self._link(repo / directory / "link.env", target)
+        link = repo.resolve() / directory / "link.env"
+
+        assert NativeScanner()._should_ignore(link, repo) is False
+        # A regular file there is skipped, as before.
+        self._secret(repo / directory / "real.env")
+        assert NativeScanner()._should_ignore(link.with_name("real.env"), repo) is True
+
+    def test_built_in_patterns_match_a_link_to_a_file_elsewhere_by_name_and_directories(
+        self, tmp_path: Path
+    ):
+        """Basename defaults still see the link's name and its directories below the scan path.
+
+        Its absolute path is never matched, so a directory above the checkout
+        named like a default (``x.egg``) does not hide it.
+        """
+        target = self._secret(tmp_path / "shared" / "creds.env")
+        repo = tmp_path / "x.egg" / "repo"
+        self._link(repo / "notes.md", target)
+        self._link(repo / "pkg.egg" / "link.env", target)
+        self._link(repo / "src" / "link.env", target)
+        scanner = NativeScanner()
+
+        assert scanner._should_ignore(repo.resolve() / "notes.md", repo) is True
+        assert scanner._should_ignore(repo.resolve() / "pkg.egg" / "link.env", repo) is True
+        assert scanner._should_ignore(repo.resolve() / "src" / "link.env", repo) is False
+
+    @pytest.mark.parametrize("pattern", ["builds/**", "builds", "shared.txt"])
+    def test_scan_path_above_the_cwd_matches_a_link_by_where_it_was_found(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, pattern: str
+    ):
+        """``guard ../..`` from ``builds/repo``: a link to ``builds/shared.txt`` (#859).
+
+        Its target is outside the cwd but below the scan path, and its path
+        there named ``builds``, a directory above the cwd, so the link was
+        skipped while ``guard .`` scanned it.
+        """
+        cwd = tmp_path / "builds" / "repo"
+        target = self._secret(tmp_path / "builds" / "shared.txt")
+        self._link(cwd / "proj" / "link.txt", target)
+        link = cwd.resolve() / "proj" / "link.txt"
+        monkeypatch.chdir(cwd)
+        scanner = NativeScanner(additional_ignore_patterns=[pattern])
+
+        assert scanner._should_ignore(link, tmp_path) is False
+        assert scanner._should_ignore(link, cwd) is False
+        assert NativeScanner(additional_ignore_patterns=["proj/*"])._should_ignore(link, tmp_path)
+
+    def test_scan_path_above_the_cwd_matches_a_link_within_the_cwd_by_its_target(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        """As ``guard .`` does: the target's path below the cwd when it is under it."""
+        cwd = tmp_path / "builds" / "repo"
+        target = self._secret(cwd / "real" / "app.env")
+        self._link(cwd / "proj" / "link.env", target)
+        link = cwd.resolve() / "proj" / "link.env"
+        monkeypatch.chdir(cwd)
+
+        for base in (tmp_path, cwd):
+            assert NativeScanner(additional_ignore_patterns=["real/*"])._should_ignore(link, base)
+            assert not NativeScanner(additional_ignore_patterns=["builds/**"])._should_ignore(
+                link, base
+            )
+
+    @pytest.mark.parametrize("pattern", ["builds/**", "builds", "repo"])
+    def test_scan_path_above_the_cwd_matches_a_link_outside_the_cwd_by_its_target_under_it(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, pattern: str
+    ):
+        """``guard ../..`` from ``builds/repo``: ``builds/elsewhere/link.env`` -> ``real.env``.
+
+        The link's real location is under the cwd, so it is named by that
+        location below the cwd, as the scan engine names it. It was matched by
+        its target's path below the scan path, ``builds/repo/real.env``, whose
+        directories are above the cwd, so these patterns dropped the link.
+        """
+        cwd = tmp_path / "builds" / "repo"
+        target = self._secret(cwd / "real.env")
+        self._link(tmp_path / "builds" / "elsewhere" / "link.env", target)
+        link = tmp_path.resolve() / "builds" / "elsewhere" / "link.env"
+        monkeypatch.chdir(cwd)
+        scanner = NativeScanner(additional_ignore_patterns=[pattern])
+
+        assert scanner._should_ignore(link, tmp_path) is False
+        assert NativeScanner(additional_ignore_patterns=["real.env"])._should_ignore(link, tmp_path)
+        assert {f.file_path for f in scanner.scan([tmp_path]).findings} == {link, target.resolve()}

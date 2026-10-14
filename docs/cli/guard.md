@@ -856,25 +856,56 @@ ignore_paths = [
 "django-secret-key" = ["**/test_settings.py"]
 ```
 
-A pattern in `ignore_paths` or `ignore_rules` matches a file by the path guard shows, by the path
-shown for its real location with symlinks resolved, and by the path the scanner reported, and also by
-any trailing part of those paths (`config/settings.txt` matches `/repo/config/settings.txt`). A path
-shown relative to the directory guard runs in is also matched as if it started with `/`, so
-`**/tests/**` matches `tests/test_app.py`. So a relative pattern for a path inside that directory
-gives one verdict for a file, whichever scanner reports it and however you spell the scan path:
-`envdrift guard`, `envdrift guard .`, `envdrift guard proj`. A file scanned through a symlink matches a
-pattern for the link name and one for its real location; scanned through its real location it matches
-only the latter, so name the real location when you scan both ways. A pattern that is absolute, or names a
-directory above the directory guard runs in (`../config/*`), is matched against the path a scanner
-reported and, for a file outside that directory, the absolute path guard shows. What a scanner reports
-depends on how the scan path is spelled: absolute for a directory the built-in scanner scans and for
-every scanner given no path or an absolute one, `../…` for a file outside the directory (for example
-`--pr-base` run from a subdirectory), relative otherwise. Such a pattern can therefore give different
-verdicts for one file, so write patterns relative to the directory guard runs in. A broad glob such as
-`**/build/**` also matches a directory above the checkout in the absolute paths of `envdrift guard`
-with no path and of the built-in scanner, so it hides every finding of a checkout that lives under a
-`build/` directory (tracked as [#859](https://github.com/jainal09/envdrift/issues/859)): avoid globs
-that can match an ancestor of the checkout. Inline comments are read from the file itself.
+A pattern in `ignore_paths` or `ignore_rules` that does not start with `/`, `//` or a Windows drive (`C:/`) is relative.
+For a file inside the directory guard runs in, it is matched against the file's paths relative to that directory: the
+path guard shows when that is inside the directory, and the path of the file's real location, with symlinks resolved,
+when that is inside it. Each is also matched as if it started with `/`, so `**/tests/**` matches `tests/test_app.py`,
+and by any trailing part (`config/settings.txt` matches `deploy/config/settings.txt`). A file is inside when one of those
+paths is. A path that runs through another spelling of the directory is inside it too, though guard shows it absolute
+(an absolute path through macOS `/tmp`, see [How paths are shown](#how-paths-are-shown)). The directories above the
+directory guard runs in never take part for such a file: `**/build/**` does not hide a checkout that lives under a
+`build` directory, and `../repo/**` run from `repo` matches nothing inside it. So a relative pattern gives one verdict for
+a file inside that directory, whichever scanner reports it and however you spell the scan path: `envdrift guard`,
+`envdrift guard .`, `envdrift guard proj` and `envdrift guard "$PWD/proj"`.
+
+A file outside the directory guard runs in is shown absolute, and a relative pattern is matched against that absolute
+path, the path the scanner reported, and the absolute path of its real location, each with any trailing part, so the
+directories above the checkout do take part. `../config/*` matches the `../config/settings.txt` every scanner reports
+under `--pr-base` run from a subdirectory, and `**/build/**` hides that file there when the checkout lives under a `build`
+directory. What a scanner reports for such a file depends on how the scan path is spelled, so a pattern can give
+different verdicts for it: write patterns for the directory guard runs in, and run guard from there.
+
+An absolute pattern, such as `/home/me/repo/tests/**`, `C:/repo/tests/**` or `//server/share/repo/**`, is matched against
+a file's whole absolute path: the directory guard runs in joined with the path guard shows, the path the scanner reported
+when that is absolute, and its real location with symlinks resolved. Write it with symlinks resolved, since the real
+location is always among those paths and a path through a symlink only when you spell the scan path that way: on macOS a
+checkout under `/tmp` is under `/private/tmp`. Write patterns with `/` on every platform: Windows paths are compared with
+their `\` turned into `/`, though a pattern that starts with `\` or `C:\` is read as absolute too.
+
+A file scanned through a symlink matches a relative pattern for the link name when the link is inside the directory guard
+runs in, and one for its real location when that is inside it; scanned through its real location it matches only the
+latter, so name the real location when you scan both ways. Under `--staged` a pattern matches the staged file, not the
+temporary copy guard scans: a staged file outside the directory guard runs in (`--staged` run from a subdirectory) is
+matched by its path in the repository, such as `config/app.env`, with any trailing part and as if it started with `/`,
+and by its absolute path. Inline comments are read from the file itself.
+
+envdrift 11.0.9 and earlier also matched a relative pattern against the directories above the directory guard runs in.
+They used the absolute paths that the built-in scanner reports, as does every scanner given no path or an absolute one,
+and under `--staged` the path of the temporary copy. So `**/build/**` hid every finding of a checkout under a `build`
+directory, and `tmp/**` every staged finding where the temporary directory is `/tmp`. Those findings are reported now.
+Under `--staged` run from a subdirectory, a staged file inside it is now matched by its path below that directory, like
+any other file there, and no longer by its path in the repository (`sub/app.env` for `app.env` run from `sub`).
+11.0.9 also matched a pattern that starts with `/` against the path guard shows taken as if it started with `/`, so
+`/proj/**` matched `proj/` in the directory guard runs in; such a pattern is now an absolute path, so write `proj/**`,
+which also matches a `proj` directory deeper down. An absolute pattern used to match a file inside the directory guard
+runs in only when a scanner reported the file by its absolute path. It now matches the file's absolute path whatever a
+scanner reported, so it also hides findings that 11.0.9 reported: those of gitleaks and Infisical under
+`envdrift guard .` or `envdrift guard proj`, and staged files under `--staged`. An `ignore_rules` pattern with a
+character class, such as `[ab].env`, now matches a trailing part of a path (`x/a.env`), as an `ignore_paths` pattern
+always did. If you relied on a directory above the one guard runs in, name it in an absolute pattern, or run guard from
+the directory your relative patterns are written for: guard also reads an `envdrift.toml` in a parent directory, but
+matches its relative patterns below the directory it runs in, where a pattern that starts with `**/` matches at any
+depth.
 
 ### gitleaks and Infisical ignore files
 
