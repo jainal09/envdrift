@@ -1,5 +1,15 @@
 # Changelog
 
+## [11.1.1](https://github.com/jainal09/envdrift/compare/v11.1.0...v11.1.1) (2026-10-14)
+
+
+### Bug Fixes
+
+* **scanner:** do not fail the native scan on a symlink loop on Python 3.11 and 3.12 ([eea3e6a](https://github.com/jainal09/envdrift/commit/eea3e6a0b71ca470aa94514f3fb3f5e35e077925))
+* **scanner:** let an ignore_rules pattern with a character class match a trailing part of a path ([eea3e6a](https://github.com/jainal09/envdrift/commit/eea3e6a0b71ca470aa94514f3fb3f5e35e077925))
+* **scanner:** match an absolute ignore pattern against a file's absolute path whatever a scanner reported ([eea3e6a](https://github.com/jainal09/envdrift/commit/eea3e6a0b71ca470aa94514f3fb3f5e35e077925))
+* **scanner:** match relative ignore globs only below the directory guard runs in ([#859](https://github.com/jainal09/envdrift/issues/859)) ([eea3e6a](https://github.com/jainal09/envdrift/commit/eea3e6a0b71ca470aa94514f3fb3f5e35e077925))
+
 ## [11.1.0](https://github.com/jainal09/envdrift/compare/v11.0.9...v11.1.0) (2026-10-14)
 
 
