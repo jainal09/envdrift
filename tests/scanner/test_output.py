@@ -546,6 +546,80 @@ class TestRichOutput:
         assert len(ci.columns) == 1
         assert len(wide_ci.columns) == 5
 
+    # A file outside the cwd is shown by its absolute path (#855): longer than
+    # the Location column, so the table must keep its end, not its start.
+    _OUTSIDE = Path("/very/long/absolute/checkout/of/the/repository") / "config" / "settings.txt"
+
+    @classmethod
+    def _outside_cwd_result(cls, commit_sha: str | None = None) -> AggregatedScanResult:
+        result = cls._aws_finding_result()
+        result.unique_findings[0] = replace(
+            result.unique_findings[0],
+            file_path=cls._OUTSIDE,
+            line_number=3,
+            column_number=14,
+            commit_sha=commit_sha,
+        )
+        return result
+
+    @pytest.mark.parametrize(
+        "console",
+        [
+            pytest.param(lambda: _interactive_console(80), id="interactive-narrow"),
+            pytest.param(lambda: _interactive_console(140), id="interactive-wide"),
+            pytest.param(
+                lambda: Console(record=True, force_terminal=False, no_color=True, width=140),
+                id="ci-wide",
+            ),
+        ],
+    )
+    def test_long_location_keeps_its_file_name_and_line(self, console):
+        """Rich cut the location at its end, so a long path lost its file and line."""
+        console = console()
+        format_rich(self._outside_cwd_result(), console)
+        out = console.export_text()
+
+        assert "settings.txt:3:14" in out
+        assert "…" in out
+        assert "/very/long/absolute" not in out  # the start gives way
+
+    def test_long_history_location_keeps_its_commit(self):
+        console = _interactive_console(140)
+        format_rich(self._outside_cwd_result(commit_sha="abcdef1234567890"), console)
+        out = console.export_text()
+
+        assert "abcdef12 @ …" in out
+        assert "settings.txt:3:14" in out
+
+    @pytest.mark.parametrize("width", [40, 4])
+    def test_short_location_is_shown_whole(self, width: int):
+        from envdrift.scanner.output import _LocationCell
+
+        console = Console(record=True, width=width, _environ={})
+        console.print(_LocationCell(self._aws_finding_result().unique_findings[0]))
+
+        assert console.export_text().strip() == ".env"
+
+    @pytest.mark.parametrize(
+        ("text", "width", "kept"),
+        [
+            ("config/settings.txt", 40, "config/settings.txt"),
+            ("abcdef", 4, "…def"),
+            ("abcdef", 1, "…"),
+            ("abcdef", 0, ""),
+            # Wide characters take two cells each.
+            ("路径/文件.txt", 10, "…/文件.txt"),
+            ("路径/文件.txt", 9, "…文件.txt"),
+        ],
+    )
+    def test_keep_tail(self, text: str, width: int, kept: str):
+        from rich.cells import cell_len
+
+        from envdrift.scanner.output import _keep_tail
+
+        assert _keep_tail(text, width) == kept
+        assert cell_len(_keep_tail(text, width)) <= max(width, 0)
+
     def test_format_rich_threshold_99_is_narrow(self):
         """Width 99 (one below the threshold) drops the secondary Preview column."""
         console = _interactive_console(99)
@@ -880,6 +954,80 @@ class TestSarifPortability:
             PurePosixPath("/repo/configs/.env"), PurePosixPath("/repo")
         )
         assert location == {"uri": "configs/.env", "uriBaseId": "SRCROOT"}
+
+
+def _git_repo_with_finding(repo: Path) -> ScanFinding:
+    """``git init`` ``repo`` and return a finding for ``repo/x.txt``."""
+    import subprocess  # nosec B404
+
+    repo.mkdir(parents=True)
+    subprocess.run(["git", "init", "-q"], cwd=repo, check=True, capture_output=True)  # nosec B603 B607
+    return ScanFinding(
+        file_path=repo / "x.txt",
+        line_number=1,
+        rule_id="github-pat",
+        rule_description="GitHub token",
+        description="GitHub token",
+        severity=FindingSeverity.CRITICAL,
+        scanner="native",
+        secret_hash="0123abcd",
+    )
+
+
+class TestSarifSourceRoot:
+    """``SRCROOT`` does not depend on the order findings are reported in.
+
+    It was the repository of the first finding, so a scan of two repositories
+    flipped its root, every URI and every fingerprint when finding paths
+    changed form or order (#855 changed both).
+    """
+
+    @staticmethod
+    def _srcroot(findings: list[ScanFinding]) -> str:
+        data = json.loads(format_sarif(_aggregate(findings)))
+        return data["runs"][0]["originalUriBaseIds"]["SRCROOT"]["uri"]
+
+    @pytest.mark.parametrize(
+        ("cwd", "winner"),
+        [("work", "a"), ("z/repo", "z")],
+        ids=["first-by-path", "cwd-repository-with-a-finding"],
+    )
+    def test_the_root_does_not_depend_on_the_order(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, cwd: str, winner: str
+    ):
+        monkeypatch.setenv("GIT_CEILING_DIRECTORIES", str(tmp_path))
+        first = _git_repo_with_finding(tmp_path / "a" / "repo")
+        second = _git_repo_with_finding(tmp_path / "z" / "repo")
+        (tmp_path / "work").mkdir()
+        monkeypatch.chdir(tmp_path / cwd)
+
+        expected = (tmp_path / winner / "repo").resolve().as_uri() + "/"
+        assert self._srcroot([first, second]) == expected
+        assert self._srcroot([second, first]) == expected
+
+    def test_the_cwd_repository_without_a_finding_gives_way(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        """``guard --sarif /path/to/repo`` run from another checkout (#489)."""
+        monkeypatch.setenv("GIT_CEILING_DIRECTORIES", str(tmp_path))
+        scanned = _git_repo_with_finding(tmp_path / "scanned")
+        _git_repo_with_finding(tmp_path / "own")
+        monkeypatch.chdir(tmp_path / "own")
+
+        assert self._srcroot([scanned]) == (tmp_path / "scanned").resolve().as_uri() + "/"
+
+    def test_the_cwd_repository_when_no_finding_is_in_a_repository(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        monkeypatch.setenv("GIT_CEILING_DIRECTORIES", str(tmp_path))
+        _git_repo_with_finding(tmp_path / "own")
+        (tmp_path / "plain").mkdir()
+        outside = replace(
+            _git_repo_with_finding(tmp_path / "x"), file_path=tmp_path / "plain" / "y"
+        )
+        monkeypatch.chdir(tmp_path / "own")
+
+        assert self._srcroot([outside]) == (tmp_path / "own").resolve().as_uri() + "/"
 
 
 def _validate_against_sarif_schema(document: dict) -> None:

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -143,7 +144,75 @@ def test_scan_uses_modern_positional_command(
     assert "--no-git" not in call_args
     # The ASCII-art banner on stderr used to land in the scanner error (#843).
     assert "--no-banner" in call_args
-    assert call_args[-1] == str(tmp_path)
+    if include_history:
+        # In the repository root, as before: gitleaks also reads its cwd's
+        # .gitleaksignore, whose entries must not meet history fingerprints.
+        assert call_args[-2:] == ["--", "."]
+        assert mock_run.call_args.kwargs["cwd"] == tmp_path
+    else:
+        # In our cwd, on the directory as given, with the separator that
+        # makes a symlinked root walk (#853).
+        assert call_args[-2:] == ["--", f"{tmp_path}{os.sep}"]
+        assert mock_run.call_args.kwargs["cwd"] is None
+
+
+@pytest.mark.parametrize("target", ["-foo", "--report-path=pwned/notes.txt"])
+def test_dash_prefixed_target_follows_the_end_of_options(
+    mock_scanner: GitleaksScanner, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, target: str
+):
+    """A path that starts with ``-`` must not be parsed as gitleaks flags.
+
+    Without ``--`` gitleaks read ``-foo/`` as ``-f oo/`` and failed, and a
+    changed file named ``--report-path=pwned/notes.txt`` moved the report into
+    the checkout and passed the scan clean.
+    """
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / target).parent.mkdir(parents=True, exist_ok=True)
+    (tmp_path / target).write_text("X=1\n")
+    with (
+        patch.object(mock_scanner, "_find_binary", return_value=mock_scanner._binary_path),
+        patch("subprocess.run") as mock_run,
+    ):
+        mock_run.return_value = MagicMock(stdout="", stderr="", returncode=0)
+        mock_scanner.scan([Path(target)])
+
+    call_args = mock_run.call_args[0][0]
+    assert call_args[-2:] == ["--", str(Path(target))]
+    assert call_args.index("--") > call_args.index("--report-path")
+
+
+def test_symlinked_file_findings_are_reported_under_the_link(
+    mock_scanner: GitleaksScanner, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """gitleaks scans a symlinked file as its target; its findings belong to the link.
+
+    Path-based ignores match the reported path, so a finding named after the
+    target escaped an ``ignore_paths`` entry for the link guard was given.
+    """
+    (tmp_path / "real").mkdir()
+    (tmp_path / "real" / "app.env").write_text("X=1\n")
+    try:
+        (tmp_path / "link.env").symlink_to(tmp_path / "real" / "app.env")
+    except OSError as exc:  # Windows without the symlink privilege
+        pytest.skip(f"cannot create a symlink here: {exc}")
+    monkeypatch.chdir(tmp_path)
+
+    def fake_gitleaks(args: list[str], **kwargs):
+        assert args[-1] == str(Path("real/app.env")), "a symlinked file is given as its target"
+        report = Path(args[args.index("--report-path") + 1])
+        report.write_text(
+            json.dumps([{"File": args[-1], "RuleID": "x", "StartLine": 1, "Secret": "s3cr3t"}])
+        )
+        return MagicMock(stdout="", stderr="", returncode=0)
+
+    with (
+        patch.object(mock_scanner, "_find_binary", return_value=mock_scanner._binary_path),
+        patch("subprocess.run", side_effect=fake_gitleaks),
+    ):
+        result = mock_scanner.scan([Path("link.env")])
+
+    assert result.error is None
+    assert [f.file_path for f in result.findings] == [Path("link.env")]
 
 
 # gitleaks 8.30.1 stderr, verbatim, for a scan path it cannot stat (#843).
@@ -159,7 +228,7 @@ def test_relative_target_is_resolved_once(
     monkeypatch: pytest.MonkeyPatch,
     target: str,
 ):
-    """gitleaks gets a cwd-relative target relative to the directory it runs in (#843).
+    """gitleaks runs in our cwd and gets a cwd-relative target as given (#843, #854).
 
     It used to get the path unchanged while running inside that path, which
     resolved ``proj`` to ``proj/proj``. The finding must come back in the
@@ -171,10 +240,12 @@ def test_relative_target_is_resolved_once(
     monkeypatch.chdir(tmp_path)
 
     def fake_gitleaks(args: list[str], **kwargs):
-        # Like the real binary: the argument is resolved against its cwd, and a
-        # finding's File is that argument joined with the path below it.
+        # Like the real binary: the argument is resolved against the cwd it
+        # runs in, ours, and a finding's File is that argument joined with
+        # the path below it.
+        assert kwargs.get("cwd") is None, "gitleaks must run in our cwd"
         arg = Path(args[-1])
-        resolved = (Path(kwargs["cwd"]) / arg).resolve()
+        resolved = arg.resolve()
         assert resolved == (tmp_path / target).resolve(), "target resolved twice"
         file_arg = arg if resolved.is_file() else arg / secret_file.relative_to(resolved)
         report = Path(args[args.index("--report-path") + 1])

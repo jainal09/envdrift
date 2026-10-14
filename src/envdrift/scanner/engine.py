@@ -13,7 +13,7 @@ import re
 import time
 from collections.abc import Callable
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -32,6 +32,7 @@ from envdrift.scanner.base import (
     ScannerBackend,
     ScanResult,
 )
+from envdrift.scanner.finding_paths import FindingPathDisplay
 from envdrift.scanner.ignores import IgnoreConfig, IgnoreFilter
 from envdrift.scanner.native import (
     NativeScanner,
@@ -614,9 +615,24 @@ class ScanEngine:
         if self.config.skip_gitignored:
             filtered_findings = self._filter_gitignored_files(filtered_findings)
 
+        # One display form per file (#855). Scanners report a file the way
+        # their scan path gave it (native resolves a directory, gitleaks and
+        # Infisical keep guard's form). The filters read each file by the path
+        # its scanner reported; dedup and every output below see one form,
+        # relative to the cwd when the file is under it.
+        display = FindingPathDisplay(paths)
+
         # Apply centralized ignore filter (inline comments + TOML config rules)
-        # This works across ALL scanners (native, gitleaks, trufflehog, etc.)
-        filtered_findings = self._ignore_filter.filter(filtered_findings)
+        # This works across ALL scanners (native, gitleaks, trufflehog, etc.).
+        # Path patterns match every name of a file, the shown one included, so
+        # one pattern gives one verdict for a file whichever scanner reported
+        # it and however the scan path was spelled.
+        filtered_findings = self._ignore_filter.filter(filtered_findings, display.forms)
+
+        filtered_findings = display.findings(filtered_findings)
+        results = [
+            replace(result, findings=display.findings(result.findings)) for result in results
+        ]
 
         # Deduplicate findings (after filtering for deterministic, correct results)
         unique_findings = self._deduplicate(filtered_findings)

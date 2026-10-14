@@ -14,7 +14,9 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 from urllib.parse import quote_from_bytes
 
+from rich.cells import cell_len
 from rich.console import Console
+from rich.measure import Measurement
 from rich.panel import Panel
 from rich.table import Table
 from rich.text import Text
@@ -33,6 +35,8 @@ from envdrift.utils.text import strip_ansi
 if TYPE_CHECKING:
     from collections.abc import Sequence
     from pathlib import PurePath
+
+    from rich.console import ConsoleOptions, RenderResult
 
 # The real project repository, reported as the SARIF driver's informationUri
 # (Code Scanning displays it on every alert — #489).
@@ -83,9 +87,59 @@ def _severity_cell(finding: ScanFinding) -> Text:
 
 def _display_location(finding: ScanFinding) -> str:
     """Include short commit context when a finding came from Git history."""
-    if finding.commit_sha:
-        return f"{finding.commit_sha[:8]} @ {finding.location}"
-    return finding.location
+    return f"{_commit_prefix(finding)}{finding.location}"
+
+
+def _commit_prefix(finding: ScanFinding) -> str:
+    """``"<short sha> @ "`` for a finding from Git history, else nothing."""
+    return f"{finding.commit_sha[:8]} @ " if finding.commit_sha else ""
+
+
+# Below this many cells for the path, a history finding's location is
+# shortened as a whole instead of keeping its commit prefix.
+_MIN_LOCATION_TAIL = 12
+
+
+def _keep_tail(text: str, width: int) -> str:
+    """``text`` cut from the start to ``width`` cells, the cut marked with ``…``."""
+    if cell_len(text) <= width:
+        return text
+    if width < 1:
+        return ""
+    kept: list[str] = []
+    used = 0
+    for char in reversed(text):
+        used += cell_len(char)
+        if used > width - 1:
+            break
+        kept.append(char)
+    return "…" + "".join(reversed(kept))
+
+
+class _LocationCell:
+    """A finding's location that, when too wide for its cell, loses its start.
+
+    Rich cuts a one-line cell at its end, which drops the file name and line
+    from a long path, the absolute form a file outside the working directory
+    is shown in (#855). This cell keeps the end of the path instead, and the
+    commit of a history finding: ``abcdef12 @ …/config/settings.txt:3``.
+    """
+
+    def __init__(self, finding: ScanFinding) -> None:
+        self._prefix = _commit_prefix(finding)
+        self._location = finding.location
+
+    def __rich_measure__(self, console: Console, options: ConsoleOptions) -> Measurement:
+        return Measurement.get(console, options, Text(self._prefix + self._location))
+
+    def __rich_console__(self, console: Console, options: ConsoleOptions) -> RenderResult:
+        width = options.max_width
+        prefix_width = cell_len(self._prefix)
+        if self._prefix and width - prefix_width >= _MIN_LOCATION_TAIL:
+            shown = self._prefix + _keep_tail(self._location, width - prefix_width)
+        else:
+            shown = _keep_tail(self._prefix + self._location, width)
+        yield Text(shown, no_wrap=True, overflow="crop")
 
 
 def _build_full_findings_table(findings: list[ScanFinding]) -> Table:
@@ -106,7 +160,7 @@ def _build_full_findings_table(findings: list[ScanFinding]) -> Table:
     for f in findings:
         table.add_row(
             _severity_cell(f),
-            _display_location(f),
+            _LocationCell(f),
             f.rule_id,
             f.description,
             f.secret_preview or "-",
@@ -149,7 +203,7 @@ def _build_compact_findings_table(findings: list[ScanFinding], *, wide: bool) ->
     if wide:
         table.add_column("Preview", style="dim", no_wrap=True, max_width=14, overflow="ellipsis")
     for f in findings:
-        row: list[str | Text] = [_severity_cell(f), _display_location(f)]
+        row: list[str | Text | _LocationCell] = [_severity_cell(f), _LocationCell(f)]
         if wide:
             row.append(f.rule_id)
         row.append(f.description)
@@ -286,9 +340,9 @@ def format_rich(result: AggregatedScanResult, console: Console | None = None) ->
 def _print_scan_info(result: AggregatedScanResult, console: Console) -> None:
     """Print scan metadata."""
     total_files_reported = sum(r.files_scanned for r in result.results)
-    # Scanners report the same file in different forms (native resolves a
-    # directory target, gitleaks/Infisical keep it cwd-relative), so count
-    # resolved paths or one file is counted once per form.
+    # Findings name a file in one form (#855), but one file can still go by
+    # two names when it is scanned both through a symlink and directly, so
+    # count resolved paths or such a file is counted once per name.
     files_with_findings = len(
         {_resolved_finding_path(Path(f.file_path)) for f in result.unique_findings}
     )
@@ -368,6 +422,20 @@ def _sarif_rule(finding: ScanFinding) -> dict[str, Any]:
     }
 
 
+def _holds_a_finding(root: Path, finding_paths: Sequence[Path]) -> bool:
+    """Whether ``root`` contains a finding, or there are no findings to contain."""
+    return not finding_paths or any(path.is_relative_to(root) for path in finding_paths)
+
+
+def _first_finding_repo(finding_paths: Sequence[Path]) -> Path | None:
+    """The git root of the first finding (by path) that is in a repository, if any."""
+    for candidate in sorted(finding_paths):
+        root = get_git_root(candidate if candidate.is_dir() else candidate.parent)
+        if root is not None:
+            return root.resolve()
+    return None
+
+
 def _sarif_source_root(finding_paths: Sequence[Path] = ()) -> Path:
     """Resolve the ``SRCROOT`` base directory for SARIF artifact URIs.
 
@@ -375,19 +443,22 @@ def _sarif_source_root(finding_paths: Sequence[Path] = ()) -> Path:
     (``git rev-parse --show-toplevel``) so alerts map to repo files no matter
     which directory guard was invoked from.
 
-    The root is derived from the git repo that actually contains the scanned
-    findings, then the invocation cwd's repo, and finally cwd itself when
-    nothing is under git. Preferring the findings' repo means
-    ``guard --sarif /path/to/repo`` run from an unrelated cwd still emits
-    repo-relative URIs instead of absolute ``file://`` fallbacks that Code
-    Scanning cannot map (#489).
+    The root is the invocation cwd's repo when it contains a finding, else
+    the repo of the first finding (by path) that is in one, then the cwd's
+    repo, and finally cwd itself when nothing is under git. Preferring the
+    findings' repo means ``guard --sarif /path/to/repo`` run from an
+    unrelated cwd still emits repo-relative URIs instead of absolute
+    ``file://`` fallbacks that Code Scanning cannot map (#489). The choice
+    does not depend on the order findings are reported in, so a scan that
+    covers two repositories keeps its root, and with it every URI and
+    fingerprint, when finding paths change form or order.
     """
-    for candidate in (*finding_paths, Path.cwd()):
-        base = candidate if candidate.is_dir() else candidate.parent
-        root = get_git_root(base)
-        if root is not None:
-            return root.resolve()
-    return Path.cwd().resolve()
+    cwd = Path.cwd()
+    git_cwd = get_git_root(cwd)
+    cwd_root = git_cwd.resolve() if git_cwd is not None else None
+    if cwd_root is not None and _holds_a_finding(cwd_root, finding_paths):
+        return cwd_root
+    return _first_finding_repo(finding_paths) or cwd_root or cwd.resolve()
 
 
 def _sarif_artifact_location(file_path: PurePath, srcroot: PurePath) -> dict[str, Any]:

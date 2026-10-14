@@ -609,7 +609,7 @@ def test_infisical_does_not_report_identifiers_paired_with_a_secret(tmp_path):
     )
 
 
-# --- Relative scan paths (#843) -------------------------------------------
+# --- Relative and symlinked scan paths (#843, #853) ------------------------
 
 _HAS_GITLEAKS = GitleaksScanner(auto_install=False).is_installed()
 requires_gitleaks = pytest.mark.skipif(not _HAS_GITLEAKS, reason="gitleaks not installed")
@@ -659,6 +659,90 @@ def test_scanner_scans_a_cwd_relative_path(tmp_path, monkeypatch, scanner_cls, c
     assert {f.file_path for f in result.findings} == {Path(expected.replace("<abs>", absolute))}
     for finding in result.findings:
         assert finding.file_path.is_file(), f"{finding.file_path} does not name the file"
+
+
+@pytest.mark.parametrize("scanner_cls", _PATH_SCANNERS)
+@pytest.mark.parametrize(
+    "case",  # (target, expected finding path)
+    [
+        ("linkproj", "linkproj/sub/app.env"),
+        ("<abs>/linkproj", "<abs>/linkproj/sub/app.env"),
+        # A symlinked file is scanned as its target and reported as the link,
+        # the name path-based ignores match it by.
+        ("link.env", "link.env"),
+        ("<abs>/link.env", "<abs>/link.env"),
+    ],
+    ids=["dir", "abs-dir", "file", "abs-file"],
+)
+def test_scanner_scans_a_symlinked_root(tmp_path, monkeypatch, scanner_cls, case):
+    """A symlink given as the scan root is scanned, in any form (#853).
+
+    Both binaries treat a symlink given as their root as a file and skip it
+    without an error. A relative directory link worked only because the
+    binary ran inside it; the absolute one reported nothing. A directory now
+    gets a trailing separator, which makes the OS follow the link, and a
+    symlinked file, which both skip even then, is given as its target and its
+    findings are reported under the link.
+    """
+    target, expected = case
+    (tmp_path / "proj" / "sub").mkdir(parents=True)
+    _write_secret_file(tmp_path / "proj" / "sub", "app.env")
+    try:
+        (tmp_path / "linkproj").symlink_to(tmp_path / "proj", target_is_directory=True)
+        (tmp_path / "link.env").symlink_to(tmp_path / "proj" / "sub" / "app.env")
+    except OSError as exc:  # Windows without the symlink privilege
+        pytest.skip(f"cannot create a symlink here: {exc}")
+    monkeypatch.chdir(tmp_path)
+    absolute = str(tmp_path)
+
+    result = scanner_cls(auto_install=False).scan([Path(target.replace("<abs>", absolute))])
+
+    assert result.error is None, f"unexpected error: {result.error}"
+    assert result.findings, f"nothing reported for the symlinked {target}"
+    assert {f.file_path for f in result.findings} == {Path(expected.replace("<abs>", absolute))}
+
+
+@pytest.mark.parametrize("scanner_cls", _PATH_SCANNERS)
+@pytest.mark.parametrize(
+    "target",
+    [
+        "linkproj/..",
+        pytest.param(
+            "linkproj/../proj",
+            marks=pytest.mark.skipif(
+                sys.platform == "win32",
+                reason="Windows resolves '..' lexically: the path names ./proj, which is absent",
+            ),
+        ),
+        "<abs>/linkproj/..",
+    ],
+)
+def test_scanner_scans_a_parent_reference_after_a_symlink(
+    tmp_path, monkeypatch, scanner_cls, target
+):
+    """``..`` after a symlinked directory names its target's parent, and is scanned.
+
+    Both binaries walk the directory the OS resolves but clean each walked
+    path lexically, so every file below ``linkproj/..`` became a path below
+    ``.`` that does not exist. They skipped it without an error: a clean scan
+    of a directory holding a secret. 11.0.8 already missed the absolute form.
+    """
+    (tmp_path / "elsewhere" / "proj" / "sub").mkdir(parents=True)
+    _write_secret_file(tmp_path / "elsewhere" / "proj" / "sub", "app.env")
+    try:
+        (tmp_path / "linkproj").symlink_to(
+            tmp_path / "elsewhere" / "proj", target_is_directory=True
+        )
+    except OSError as exc:  # Windows without the symlink privilege
+        pytest.skip(f"cannot create a symlink here: {exc}")
+    monkeypatch.chdir(tmp_path)
+
+    result = scanner_cls(auto_install=False).scan([Path(target.replace("<abs>", str(tmp_path)))])
+
+    assert result.error is None, f"unexpected error: {result.error}"
+    assert result.findings, f"nothing reported for {target}"
+    secret_file = (tmp_path / "elsewhere" / "proj" / "sub" / "app.env").resolve()
+    assert {f.file_path.resolve() for f in result.findings} == {secret_file}
 
 
 def _commit_all(repo: Path) -> None:

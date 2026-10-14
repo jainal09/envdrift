@@ -30,6 +30,8 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
+    from collections.abc import Callable, Iterable
+
     from envdrift.scanner.base import ScanFinding
 
 
@@ -113,11 +115,19 @@ class IgnoreFilter:
         self.config = config or IgnoreConfig()
         self._file_cache: dict[Path, list[str]] = {}
 
-    def filter(self, findings: list[ScanFinding]) -> list[ScanFinding]:
+    def filter(
+        self,
+        findings: list[ScanFinding],
+        path_forms: Callable[[Path], Iterable[Path]] | None = None,
+    ) -> list[ScanFinding]:
         """Filter out ignored findings.
 
         Args:
             findings: List of findings from all scanners.
+            path_forms: Gives every name of the file at a finding path. Path
+                patterns are matched against each of them, so one file is
+                matched the same way whichever form a scanner reported it in.
+                Defaults to the finding path alone.
 
         Returns:
             Filtered list with ignored findings removed.
@@ -125,13 +135,14 @@ class IgnoreFilter:
         filtered = []
 
         for finding in findings:
-            if self._should_ignore(finding):
+            forms = path_forms(finding.file_path) if path_forms else (finding.file_path,)
+            if self._should_ignore(finding, tuple(forms)):
                 continue
             filtered.append(finding)
 
         return filtered
 
-    def _should_ignore(self, finding: ScanFinding) -> bool:
+    def _should_ignore(self, finding: ScanFinding, forms: tuple[Path, ...] = ()) -> bool:
         """Check if a finding should be ignored.
 
         Checks in order:
@@ -142,6 +153,8 @@ class IgnoreFilter:
 
         Args:
             finding: The finding to check.
+            forms: Every name of the finding's file that path patterns are
+                matched against. Defaults to the finding path alone.
 
         Returns:
             True if the finding should be ignored.
@@ -149,25 +162,26 @@ class IgnoreFilter:
         file_path = finding.file_path
         rule_id = finding.rule_id
         line_number = finding.line_number
+        forms = forms or (file_path,)
 
-        # Check 1: Inline ignore comments
+        # Check 1: Inline ignore comments (read from the file as reported)
         if line_number is not None and self._has_inline_ignore(file_path, line_number, rule_id):
             return True
 
         # Check 2: Rule+path combinations
-        if self._matches_rule_path_ignore(rule_id, file_path):
+        if any(self._matches_rule_path_ignore(rule_id, form) for form in forms):
             return True
 
         # Check 3: Noisy-rule path ignores — suppress only low-confidence
         # keyword/entropy detections in these paths; a distinctive-prefix
         # CRITICAL token in pyproject.toml / a lock file must still surface (#477)
-        if is_noisy_rule(rule_id) and self._matches_path_patterns(
-            file_path, self.config.noisy_rule_paths
+        if is_noisy_rule(rule_id) and any(
+            self._matches_path_patterns(form, self.config.noisy_rule_paths) for form in forms
         ):
             return True
 
         # Check 4: Global path ignores (already handled by scanner, but double-check)
-        return bool(self._matches_global_ignore(file_path))
+        return any(self._matches_global_ignore(form) for form in forms)
 
     def _has_inline_ignore(self, file_path: Path, line_number: int, rule_id: str) -> bool:
         """Check if a specific line has an ignore comment.

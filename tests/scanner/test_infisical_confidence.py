@@ -350,8 +350,10 @@ class TestScanCommandLine:
     def test_betterleaks_binary_scans_at_low_confidence(self, tmp_path: Path):
         src = tmp_path / "src"
         src.mkdir()
+        # Like the real binary: ``File`` is the --source argument (absolute
+        # here) joined with the file's path below it.
         stub = _make_stub(
-            tmp_path / "bin", BETTERLEAKS_HELP, report=[_composite("aws.env", 1, AKID)]
+            tmp_path / "bin", BETTERLEAKS_HELP, report=[_composite(str(src / "aws.env"), 1, AKID)]
         )
 
         result = _scanner(stub).scan([src])
@@ -367,6 +369,37 @@ class TestScanCommandLine:
         assert by_line[2].secret_hash == hash_secret(SECRET)
         assert by_line[2].severity == FindingSeverity.CRITICAL
         assert SECRET not in by_line[2].secret_preview
+
+    def test_symlinked_file_findings_and_components_are_reported_under_the_link(
+        self, tmp_path: Path
+    ):
+        """A symlinked file is scanned as its target; every finding belongs to the link.
+
+        The nested secret access key is reported once, under the link, next to
+        its key ID: it is not duplicated by its two names.
+        """
+        target = tmp_path / "real" / "aws.env"
+        target.parent.mkdir()
+        target.write_text("X=1\n")
+        link = tmp_path / "link.env"
+        try:
+            link.symlink_to(target)
+        except OSError as exc:  # pragma: no cover - POSIX stub tests only
+            pytest.skip(f"cannot create a symlink here: {exc}")
+        # Like the real binary, given the target: ``File`` names the target.
+        stub = _make_stub(
+            tmp_path / "bin", BETTERLEAKS_HELP, report=[_composite(str(target), 1, AKID)]
+        )
+
+        result = _scanner(stub).scan([link])
+
+        assert result.error is None, result.error
+        (argv,) = _log_lines(stub, "argv.log")
+        assert f" --source {target} " in f" {argv} "
+        assert sorted((f.file_path, f.line_number) for f in result.findings) == [
+            (link, 1),
+            (link, 2),
+        ]
 
     def test_gitleaks_binary_scans_without_the_flag(self, tmp_path: Path):
         """0.43.135 rejects --confidence (no report), so it must never get it."""

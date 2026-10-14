@@ -22,6 +22,7 @@ import tarfile
 import tempfile
 import time
 import zipfile
+from dataclasses import replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, ClassVar
 
@@ -44,7 +45,8 @@ from envdrift.scanner.platform_utils import (
     get_venv_bin_dir,
     safe_extract_tar,
     safe_extract_zip,
-    scan_location,
+    scan_argument,
+    symlinked_file,
 )
 from envdrift.utils.git import get_git_root, has_git_head
 from envdrift.utils.text import strip_ansi
@@ -753,17 +755,23 @@ class InfisicalScanner(ScannerBackend):
                     mode="w", suffix=".json", delete=False
                 ) as report_file:
                     report_path = Path(report_file.name)
-                # Build command with explicit source path. ``File`` comes back
-                # relative to the directory infisical runs in, the repository
-                # root in history mode, so findings are joined onto it.
-                work_dir, source_arg = scan_location(path)
+                # Build command with explicit source path. Infisical runs in
+                # our cwd on the path as given, so ``File`` is a path from our
+                # cwd, like gitleaks (#854). In history mode ``File`` is
+                # relative to the repository root, which is the path there, so
+                # findings are joined onto it. Unlike gitleaks, Infisical reads
+                # only the scanned directory's ignore file, never the cwd's,
+                # so a history scan need not run in the root. ``--source``
+                # takes the next argument whatever it starts with.
+                finding_base = path if include_git_history else Path()
+                file_link = symlinked_file(path)
                 args = [
                     str(binary),
                     "scan",
                     "--report-path",
                     str(report_path),
                     "--source",
-                    source_arg,
+                    scan_argument(path),
                 ]
 
                 # If not scanning git history, use --no-git
@@ -780,7 +788,6 @@ class InfisicalScanner(ScannerBackend):
                     encoding="utf-8",
                     errors="replace",
                     timeout=300,  # 5 minute timeout
-                    cwd=str(work_dir),
                 )
 
                 report_data = _load_findings(report_path)
@@ -810,11 +817,20 @@ class InfisicalScanner(ScannerBackend):
                         item.get("File") for item in report_data if item.get("File")
                     }
                     total_files += len(files_with_findings)
+                    run_findings: list[ScanFinding] = []
                     for item in report_data:
-                        finding = self._parse_finding(item, work_dir)
+                        finding = self._parse_finding(item, finding_base)
                         if finding:
-                            all_findings.append(finding)
-                    all_findings.extend(self._parse_components(report_data, work_dir, all_findings))
+                            run_findings.append(finding)
+                    run_findings.extend(
+                        self._parse_components(
+                            report_data, finding_base, [*all_findings, *run_findings]
+                        )
+                    )
+                    if file_link is not None:
+                        # Scanned as its target; reported as the link.
+                        run_findings = [replace(f, file_path=file_link) for f in run_findings]
+                    all_findings.extend(run_findings)
 
             except subprocess.TimeoutExpired:
                 return ScanResult(

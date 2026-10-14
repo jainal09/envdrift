@@ -755,3 +755,56 @@ class TestNoisyRulePathIgnores:
 
         finding = self._finding("github-pat", pyproject, severity=FindingSeverity.CRITICAL)
         assert filter_.filter([finding]) == []
+
+
+class TestIgnoreFilterPathForms:
+    """#855: path patterns match every name of a file, not only the reported one."""
+
+    @staticmethod
+    def _finding(file_path: Path, rule_id: str = "github-pat") -> ScanFinding:
+        return ScanFinding(
+            rule_id=rule_id,
+            rule_description=rule_id,
+            file_path=file_path,
+            line_number=1,
+            description="finding",
+            severity=FindingSeverity.CRITICAL,
+            scanner="native",
+        )
+
+    @staticmethod
+    def _forms(*extra: Path):
+        return lambda path: (path, *extra)
+
+    def test_global_ignore_matches_another_name(self, tmp_path: Path):
+        finding = self._finding(tmp_path / "repo" / "proj" / "app.env")
+        filter_ = IgnoreFilter(IgnoreConfig(ignore_paths=["linkproj/**"]))
+
+        assert filter_.filter([finding]) == [finding]
+        assert filter_.filter([finding], self._forms(Path("linkproj/app.env"))) == []
+
+    def test_rule_path_ignore_matches_another_name(self, tmp_path: Path):
+        finding = self._finding(tmp_path / "repo" / "app.env")
+        filter_ = IgnoreFilter(IgnoreConfig(ignore_rules={"github-pat": ["link.env"]}))
+
+        assert filter_.filter([finding], self._forms(Path("link.env"))) == []
+
+    def test_noisy_rule_path_matches_another_name(self, tmp_path: Path):
+        finding = self._finding(tmp_path / "real.json", rule_id="generic-secret")
+        filter_ = IgnoreFilter(IgnoreConfig(noisy_rule_paths=["package-lock.json"]))
+
+        assert filter_.filter([finding], self._forms(Path("package-lock.json"))) == []
+
+    def test_no_name_matches(self, tmp_path: Path):
+        finding = self._finding(tmp_path / "app.env")
+        filter_ = IgnoreFilter(IgnoreConfig(ignore_paths=["other/**"]))
+
+        assert filter_.filter([finding], self._forms(Path("app.env"))) == [finding]
+
+    def test_inline_ignore_reads_the_reported_file(self, tmp_path: Path):
+        """The other names are only matched; the comment is read from the reported file."""
+        reported = tmp_path / "app.env"
+        reported.write_text("TOKEN=x  # envdrift:ignore\n")
+        finding = self._finding(reported)
+
+        assert IgnoreFilter().filter([finding], self._forms(tmp_path / "missing.env")) == []
