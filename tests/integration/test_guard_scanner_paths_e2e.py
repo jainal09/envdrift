@@ -867,3 +867,32 @@ def test_guard_ignore_paths_give_one_verdict_however_the_path_is_spelled(
     assert _scanner_result(payload, name)["error"] is None
     assert payload["findings"] == []
     assert result.returncode == 0, result.stderr
+
+
+@pytest.mark.xfail(
+    strict=False,
+    reason="ignore_paths globs also match the directories above the checkout (see #859)",
+)
+@pytest.mark.parametrize("scanner", _SCANNERS)
+@pytest.mark.parametrize("args", [[], ["."]])
+def test_guard_ignore_glob_ignores_directories_above_the_checkout(
+    tmp_path: Path, scanner, args: list[str]
+):
+    """``**/build/**`` must not hide a checkout that merely lives under ``build/``.
+
+    The built-in scanner reports absolute paths, and ``guard`` with no path hands
+    gitleaks and Infisical the absolute working directory, so the glob matched
+    ``<tmp>/build/repo/...`` through the directory above the checkout and every
+    finding disappeared with exit 0.
+    """
+    name, flags, _config = scanner
+    repo = tmp_path / "build" / "repo"
+    _write_secret(repo / "proj" / "sub" / "app.env")
+    (repo / "envdrift.toml").write_text('[guard]\nignore_paths = ["**/build/**"]\n')
+
+    result, payload = _guard([*args, *flags], cwd=repo)
+
+    assert _scanner_result(payload, name)["error"] is None
+    assert {"native", name} <= {f["scanner"] for f in payload["findings"]}
+    assert _scanner_paths(payload, name) == {Path("proj/sub/app.env")}
+    assert result.returncode == 1, result.stderr
