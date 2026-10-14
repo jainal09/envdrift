@@ -78,14 +78,16 @@ def _guard(args: list[str], *, cwd: Path) -> tuple[subprocess.CompletedProcess, 
         encoding="utf-8",
     )
     out = result.stdout
-    assert "{" in out, f"no JSON document (rc={result.returncode})\n{out}\n{result.stderr}"
+    if "{" not in out:
+        pytest.fail(f"no JSON document (rc={result.returncode})\n{out}\n{result.stderr}")
     # --pr-base prints a one-line progress notice ahead of the document.
     return result, json.loads(out[out.index("{") : out.rindex("}") + 1])
 
 
 def _scanner_result(payload: dict, name: str) -> dict:
     results = [r for r in payload["scanner_results"] if r["name"] == name]
-    assert len(results) == 1, payload["scanner_results"]
+    if len(results) != 1:
+        pytest.fail(f"expected one {name} result, got {payload['scanner_results']}")
     return results[0]
 
 
@@ -871,6 +873,7 @@ def test_guard_ignore_paths_give_one_verdict_however_the_path_is_spelled(
 
 @pytest.mark.xfail(
     strict=False,
+    raises=AssertionError,
     reason="ignore_paths globs also match the directories above the checkout (see #859)",
 )
 @pytest.mark.parametrize("scanner", _SCANNERS)
@@ -892,7 +895,9 @@ def test_guard_ignore_glob_ignores_directories_above_the_checkout(
 
     result, payload = _guard([*args, *flags], cwd=repo)
 
-    assert _scanner_result(payload, name)["error"] is None
+    scanner_error = _scanner_result(payload, name)["error"]
+    if scanner_error is not None:  # the scanner did not run: not the #859 failure
+        pytest.fail(f"{name} failed: {scanner_error}")
     assert {"native", name} <= {f["scanner"] for f in payload["findings"]}
     assert _scanner_paths(payload, name) == {Path("proj/sub/app.env")}
     assert result.returncode == 1, result.stderr

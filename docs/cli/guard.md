@@ -676,7 +676,9 @@ any trailing part of those paths (`config/settings.txt` matches `/repo/config/se
 shown relative to the directory guard runs in is also matched as if it started with `/`, so
 `**/tests/**` matches `tests/test_app.py`. So a relative pattern for a path inside that directory
 gives one verdict for a file, whichever scanner reports it and however you spell the scan path:
-`envdrift guard`, `envdrift guard .`, a symlink or its target. A pattern that is absolute, or names a
+`envdrift guard`, `envdrift guard .`, `envdrift guard proj`. A file scanned through a symlink matches a
+pattern for the link name and one for its real location; scanned through its real location it matches
+only the latter, so name the real location when you scan both ways. A pattern that is absolute, or names a
 directory above the directory guard runs in (`../config/*`), is matched against the path a scanner
 reported and, for a file outside that directory, the absolute path guard shows. What a scanner reports
 depends on how the scan path is spelled: absolute for a directory the built-in scanner scans and for
