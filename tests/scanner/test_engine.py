@@ -5,6 +5,7 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 from types import SimpleNamespace
+from typing import Any
 
 import pytest
 
@@ -803,6 +804,28 @@ class TestIntegration:
         # Only the one in the root should be found
         ignored_findings = [f for f in aws_findings if "ignored" in str(f.file_path)]
         assert len(ignored_findings) == 0
+
+    def test_scan_with_ignore_paths_given_as_one_string(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        """A bare string is one glob for the native scanner too, not one per character.
+
+        The engine normalized ``ignore_paths`` for its ignore filter but gave
+        the native scanner the raw value, which made every character a
+        pattern: ``*`` skipped every file, and the scan reported nothing.
+        """
+        token = "ghp_" + "0123456789" + "abcdefghijklmnopqrstuvwxyz"
+        for directory in ("app", "tests"):
+            (tmp_path / directory).mkdir()
+            (tmp_path / directory / "settings.py").write_text(f'TOKEN = "{token}"\n')
+        monkeypatch.chdir(tmp_path)
+        # SDK callers may pass one glob as a string, as [guard] ignore_paths accepts.
+        one_glob: Any = "tests/**"
+        config = GuardConfig(use_native=True, use_gitleaks=False, ignore_paths=one_glob)
+
+        result = ScanEngine(config).scan([tmp_path])
+
+        assert {f.file_path for f in result.unique_findings} == {Path("app/settings.py")}
 
     def test_scan_with_inline_ignore_comments(self, tmp_path: Path):
         """Test scan respects inline ignore comments."""

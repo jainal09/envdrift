@@ -316,42 +316,194 @@ class TestFindingPathDisplay:
 
 
 class TestFindingPathForms:
-    """``FindingPathDisplay.forms``: every name path-based ignores match a file by (#855)."""
+    """``FindingPathDisplay.forms``: the names path-based ignores match a file by (#855, #859)."""
 
-    def test_relative_and_absolute_reports_of_one_file_share_its_shown_names(self, tmp_path: Path):
+    def test_relative_and_absolute_reports_of_one_file_share_its_names(self, tmp_path: Path):
         """``guard .`` reports ``proj/app.env`` where ``guard`` reports it absolute."""
         (tmp_path / "proj").mkdir()
         display = FindingPathDisplay([Path()], cwd=tmp_path)
-        shown = {Path("proj/app.env"), Path(os.sep) / "proj" / "app.env"}
 
-        assert set(display.forms(Path("proj/app.env"))) == shown
-        assert set(display.forms(tmp_path / "proj" / "app.env")) == {
-            tmp_path / "proj" / "app.env",
-            *shown,
-        }
+        forms = display.forms(Path("proj/app.env"))
 
-    def test_names_of_a_file_under_the_cwd_stay_below_the_cwd(self, tmp_path: Path):
-        """``**/build/**`` must not match a checkout that lives under ``build/``.
+        assert forms == display.forms(tmp_path / "proj" / "app.env")
+        assert forms.relative == (Path("proj/app.env"), Path(os.sep) / "proj" / "app.env")
+        assert tmp_path / "proj" / "app.env" in forms.absolute
 
-        Only the reported path can name a directory above the cwd; the names
-        this adds are rooted at the cwd.
+    @pytest.mark.parametrize("reported", ["relative", "absolute", "resolved"])
+    def test_relative_names_of_a_file_under_the_cwd_stay_below_the_cwd(
+        self, tmp_path: Path, reported: str
+    ):
+        """``**/build/**`` must not match a checkout that lives under ``build/`` (#859).
+
+        The native scanner reports a resolved absolute path and ``guard`` with
+        no path makes gitleaks and Infisical report absolute paths too: those
+        are absolute names only, never matched by a relative pattern.
         """
         cwd = tmp_path / "build" / "repo"
         (cwd / "src").mkdir(parents=True)
         display = FindingPathDisplay([Path()], cwd=cwd)
+        path = {
+            "relative": Path("src/app.txt"),
+            "absolute": cwd / "src" / "app.txt",
+            "resolved": (cwd / "src" / "app.txt").resolve(),
+        }[reported]
 
-        for form in display.forms(Path("src/app.txt")):
-            assert "build" not in form.parts
+        forms = display.forms(path)
 
-    def test_reported_path_comes_first_and_names_are_unique(self, tmp_path: Path):
-        display = FindingPathDisplay([Path()], cwd=tmp_path)
+        assert forms.relative == (Path("src/app.txt"), Path(os.sep) / "src" / "app.txt")
+        assert cwd / "src" / "app.txt" in forms.absolute
 
-        forms = display.forms(Path("../outside.env"))
+    def test_absolute_names_are_the_shown_path_the_absolute_report_and_the_real_location(
+        self, tmp_path: Path
+    ):
+        """An absolute pattern sees the file wherever a scanner placed it (#859)."""
+        (tmp_path / "repo" / "proj").mkdir(parents=True)
+        _symlink(tmp_path / "linkproj", tmp_path / "repo" / "proj")
+        display = FindingPathDisplay([Path("linkproj")], cwd=tmp_path)
+        real = (tmp_path / "repo" / "proj" / "app.env").resolve()
 
-        assert forms[0] == Path("../outside.env")
-        assert len(forms) == len(set(forms))
-        # Outside the cwd the shown path is absolute, and so is its only name.
-        assert tmp_path.parent / "outside.env" in forms
+        assert set(display.forms(Path("linkproj/app.env")).absolute) == {
+            tmp_path / "linkproj" / "app.env",
+            real,
+        }
+        # The native scanner's resolved report is that real location.
+        assert set(display.forms(real).absolute) == {tmp_path / "linkproj" / "app.env", real}
+
+    def test_real_location_outside_the_cwd_is_only_an_absolute_name(self, tmp_path: Path):
+        """A symlink target outside the cwd is named by its absolute path alone (#859)."""
+        cwd = tmp_path / "work"
+        cwd.mkdir()
+        (tmp_path / "build" / "proj").mkdir(parents=True)
+        _symlink(cwd / "linkproj", tmp_path / "build" / "proj")
+        display = FindingPathDisplay([Path("linkproj")], cwd=cwd)
+        real = (tmp_path / "build" / "proj" / "app.env").resolve()
+
+        forms = display.forms(Path("linkproj/app.env"))
+
+        assert forms.relative == (Path("linkproj/app.env"), Path(os.sep) / "linkproj" / "app.env")
+        assert real in forms.absolute
+
+    def test_file_outside_the_cwd_keeps_its_reported_and_absolute_names(self, tmp_path: Path):
+        """Outside the cwd the names are what they were: ``../config/*`` matches the report."""
+        cwd = tmp_path / "repo" / "sub"
+        cwd.mkdir(parents=True)
+        display = FindingPathDisplay([Path("../config/settings.txt")], cwd=cwd)
+        shown = tmp_path / "repo" / "config" / "settings.txt"
+
+        forms = display.forms(Path("../config/settings.txt"))
+
+        assert forms.relative[0] == Path("../config/settings.txt")
+        assert shown in forms.relative
+        assert len(forms.relative) == len(set(forms.relative))
+        assert forms.absolute == (shown,)
+
+    def test_path_on_another_drive_is_named_like_a_file_outside_the_cwd(self, tmp_path: Path):
+        """On Windows ``os.path.relpath`` raises ``ValueError`` across drives (#859).
+
+        Such a file stays absolute, and its absolute path is matched with its
+        trailing parts as for any file outside the cwd.
+        """
+        cwd = tmp_path / "repo"
+        cwd.mkdir()
+        elsewhere = tmp_path / "shared" / "config" / "settings.txt"
+
+        def other_drive(*_args: object) -> str:
+            raise ValueError("path is on mount 'D:', start on mount 'C:'")
+
+        display = FindingPathDisplay([elsewhere], cwd=cwd)
+        with patch("envdrift.scanner.finding_paths.os.path.relpath", side_effect=other_drive):
+            assert display.path(elsewhere) == elsewhere
+            forms = display.forms(elsewhere)
+
+        assert forms.relative == (elsewhere,)
+        assert forms.absolute == (elsewhere,)
+        assert forms.match(["config/*"])
+
+    def test_file_under_the_cwd_is_named_below_it_when_relpath_fails(self, tmp_path: Path):
+        """Whether a file is under the cwd does not hang on ``os.path.relpath``."""
+        (tmp_path / "build" / "repo").mkdir(parents=True)
+        cwd = tmp_path / "build" / "repo"
+
+        def other_drive(*_args: object) -> str:
+            raise ValueError("path is on mount 'D:', start on mount 'C:'")
+
+        display = FindingPathDisplay([Path()], cwd=cwd)
+        with patch("envdrift.scanner.finding_paths.os.path.relpath", side_effect=other_drive):
+            forms = display.forms(cwd / "config" / "settings.txt")
+
+        assert forms.relative == (
+            Path("config/settings.txt"),
+            Path(os.sep) / "config" / "settings.txt",
+        )
+        assert not forms.match(["**/build/**"])
+
+    @pytest.mark.parametrize("target", ["proj", "linkproj"])
+    def test_path_through_another_spelling_of_the_cwd_is_named_below_the_cwd(
+        self, tmp_path: Path, target: str
+    ):
+        """``guard "$PWD/proj"`` where ``/tmp`` links to ``/private/tmp`` (#859).
+
+        The cwd is the physical directory, so a path through the symlinked
+        spelling is shown absolute, and its trailing parts named the
+        directories above the checkout: ``**/build/**`` hid the file. Below a
+        symlink to elsewhere (``linkproj``) the real location does not tell.
+        """
+        physical = tmp_path / "private" / "x" / "build" / "repo"
+        (physical / "proj").mkdir(parents=True)
+        (tmp_path / "other" / "proj").mkdir(parents=True)
+        _symlink(physical / "linkproj", tmp_path / "other" / "proj")
+        _symlink(tmp_path / "tmp", tmp_path / "private" / "x")
+        logical = tmp_path / "tmp" / "build" / "repo"
+        display = FindingPathDisplay([logical / target], cwd=physical)
+        reported = logical / target / "sub" / "app.env"
+
+        forms = display.forms(reported)
+
+        assert display.path(reported).is_absolute()
+        assert forms.relative[:2] == (
+            Path(target) / "sub" / "app.env",
+            Path(os.sep) / target / "sub" / "app.env",
+        )
+        assert reported in forms.absolute
+        assert not forms.match(["**/build/**", "**/tmp/**", "build/repo/**", "repo/**"])
+        assert forms.match([f"{target}/**"])
+
+    def test_real_location_under_the_cwd_names_a_file_shown_elsewhere(self, tmp_path: Path):
+        """A symlink outside the cwd to a directory under it: the real location counts."""
+        cwd = tmp_path / "build" / "repo"
+        (cwd / "proj").mkdir(parents=True)
+        (tmp_path / "elsewhere").mkdir()
+        _symlink(tmp_path / "elsewhere" / "link", cwd / "proj")
+        display = FindingPathDisplay([tmp_path / "elsewhere" / "link"], cwd=cwd)
+        reported = tmp_path / "elsewhere" / "link" / "sub" / "app.env"
+
+        forms = display.forms(reported)
+
+        assert forms.relative == (
+            Path("proj/sub/app.env"),
+            Path(os.sep) / "proj" / "sub" / "app.env",
+        )
+        assert reported in forms.absolute
+        assert not forms.match(["**/build/**", "**/elsewhere/**", "link/**"])
+        assert forms.match([f"{(tmp_path / 'elsewhere').as_posix()}/**"])
+
+    def test_path_through_a_symlinked_cwd_is_named_below_its_real_location(self, tmp_path: Path):
+        """A cwd given through a symlink (a Windows junction or ``subst`` drive).
+
+        A scanner given the physical path reports a file that ``os.path.relpath``
+        places outside the cwd's spelling, though it is under the cwd.
+        """
+        (tmp_path / "real" / "proj").mkdir(parents=True)
+        _symlink(tmp_path / "link", tmp_path / "real")
+        display = FindingPathDisplay([tmp_path / "real" / "proj"], cwd=tmp_path / "link")
+        reported = tmp_path / "real" / "proj" / "app.env"
+
+        forms = display.forms(reported)
+
+        assert display.path(reported).is_absolute()
+        assert forms.relative == (Path("proj/app.env"), Path(os.sep) / "proj" / "app.env")
+        assert not forms.match(["**/real/**"])
+        assert forms.match([f"{(tmp_path / 'real').as_posix()}/**"])
 
     @pytest.mark.parametrize("absolute", [False, True], ids=["relative", "absolute"])
     def test_file_below_a_symlinked_scan_path_is_named_by_link_and_real_location(
@@ -364,11 +516,11 @@ class TestFindingPathForms:
         real = (tmp_path / "repo" / "proj" / "sub" / "app.env").resolve()
 
         for reported in (real, Path("linkproj/sub/app.env")):
-            forms = display.forms(reported)
-            assert Path("linkproj/sub/app.env") in forms
-            assert Path(os.sep) / "linkproj" / "sub" / "app.env" in forms
-            assert Path("repo/proj/sub/app.env") in forms
-            assert Path(os.sep) / "repo" / "proj" / "sub" / "app.env" in forms
+            relative = display.forms(reported).relative
+            assert Path("linkproj/sub/app.env") in relative
+            assert Path(os.sep) / "linkproj" / "sub" / "app.env" in relative
+            assert Path("repo/proj/sub/app.env") in relative
+            assert Path(os.sep) / "repo" / "proj" / "sub" / "app.env" in relative
 
     def test_names_are_computed_once_per_path(self, tmp_path: Path):
         display = FindingPathDisplay([Path()], cwd=tmp_path)
@@ -387,7 +539,89 @@ class TestFindingPathForms:
         with patch.object(Path, "resolve", resolve):
             forms = display.forms(Path("loop.env"))
 
-        assert forms == (Path("loop.env"), Path(os.sep) / "loop.env")
+        assert forms.relative == (Path("loop.env"), Path(os.sep) / "loop.env")
+        assert forms.absolute == (tmp_path / "loop.env",)
+
+
+class TestScannedCopyForms:
+    """``guard --staged`` scans temporary copies: ignores match the staged file (#859)."""
+
+    @pytest.fixture
+    def mirror(self, tmp_path: Path) -> Path:
+        """A copy of ``config/app.env`` in a temporary directory named like a glob would."""
+        copy = tmp_path / "tmp" / "envdrift-staged-x" / "config" / "app.env"
+        copy.parent.mkdir(parents=True)
+        copy.write_text("X=1\n")
+        return copy
+
+    @pytest.fixture
+    def repo(self, tmp_path: Path) -> Path:
+        """The checkout the mirror copies, under a directory named ``build``."""
+        repo = tmp_path / "build" / "repo"
+        (repo / "sub").mkdir(parents=True)
+        return repo
+
+    @staticmethod
+    def _aliases(mirror: Path, repo: Path) -> dict[Path, Path]:
+        return {(mirror.parents[1]).resolve(): repo}
+
+    def test_copy_is_named_by_the_staged_file_under_the_cwd(self, repo: Path, mirror: Path):
+        display = FindingPathDisplay([mirror], cwd=repo, aliases=self._aliases(mirror, repo))
+
+        forms = display.forms(mirror)
+
+        assert forms.relative == (Path("config/app.env"), Path(os.sep) / "config" / "app.env")
+        assert forms.absolute == (repo / "config" / "app.env",)
+        assert not forms.match(["tmp/**", "**/envdrift-staged-*/**", "**/build/**"])
+        # The copy itself is still shown where it is; guard rewrites it afterwards.
+        assert display.path(mirror) == mirror
+
+    def test_copy_of_a_file_outside_the_cwd_is_named_by_its_path_in_the_repository(
+        self, repo: Path, mirror: Path
+    ):
+        """Run from a subdirectory, a staged file elsewhere is outside the cwd.
+
+        Its absolute path named the directories above the checkout, so
+        ``**/build/**`` hid it where its copy never had (#859).
+        """
+        staged = repo / "config" / "app.env"
+        display = FindingPathDisplay(
+            [mirror], cwd=repo / "sub", aliases=self._aliases(mirror, repo)
+        )
+
+        forms = display.forms(mirror)
+
+        assert forms.relative == (Path("config/app.env"), Path(os.sep) / "config" / "app.env")
+        assert forms.absolute == (staged,)
+        assert not forms.match(["**/build/**", "build/**", "repo/**", "tmp/**"])
+        # As the copy's path below the temporary directory always matched.
+        assert forms.match(["config/*"])
+        assert forms.match(["**/config/**"])
+        assert forms.match([f"{repo.as_posix()}/config/**"])
+
+    def test_path_that_cannot_be_resolved_is_no_copy(self, repo: Path, mirror: Path):
+        real_resolve = Path.resolve
+
+        def resolve(self: Path, strict: bool = False) -> Path:
+            if self.name == "app.env":
+                raise OSError("permission denied")
+            return real_resolve(self, strict)
+
+        display = FindingPathDisplay([mirror], cwd=repo, aliases=self._aliases(mirror, repo))
+        with patch.object(Path, "resolve", resolve):
+            forms = display.forms(mirror)
+
+        assert forms.relative == (mirror,)
+
+    def test_path_that_is_no_copy_keeps_its_own_names(
+        self, tmp_path: Path, repo: Path, mirror: Path
+    ):
+        display = FindingPathDisplay([Path()], cwd=tmp_path, aliases=self._aliases(mirror, repo))
+
+        assert display.forms(Path("other.env")).relative == (
+            Path("other.env"),
+            Path(os.sep) / "other.env",
+        )
 
 
 class _FixedScanner(ScannerBackend):
@@ -536,3 +770,132 @@ class TestScanEngineDisplayPaths:
 
         assert result.unique_findings, "the planted token was not reported"
         assert {f.file_path for f in result.unique_findings} == {Path("linkproj/sub/app.env")}
+
+
+class TestScanEngineIgnoresBelowTheCwd:
+    """Relative path ignores never match through the directories above the cwd (#859)."""
+
+    @pytest.fixture
+    def repo(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+        """A checkout at ``<tmp>/build/repo`` holding ``proj/sub/app.env``, as the cwd."""
+        repo = tmp_path / "build" / "repo"
+        (repo / "proj" / "sub").mkdir(parents=True)
+        (repo / "proj" / "sub" / "app.env").write_text(f"GITHUB_TOKEN={GITHUB_TOKEN}\n")
+        monkeypatch.chdir(repo)
+        return repo
+
+    @staticmethod
+    def _scanners(repo: Path) -> tuple[ScannerBackend, ScannerBackend, ScannerBackend]:
+        """The native scanner's absolute report, and the binaries' ``guard .`` and
+        ``guard ../repo/proj`` reports.
+        """
+        native = _FixedScanner("native", [_finding(repo / "proj" / "sub" / "app.env")])
+        relative = _FixedScanner(
+            "gitleaks", [_finding("proj/sub/app.env", scanner="gitleaks", rule="gitleaks-x")]
+        )
+        via_parent = _FixedScanner(
+            "infisical",
+            [_finding("../repo/proj/sub/app.env", scanner="infisical", rule="infisical-x")],
+        )
+        return native, relative, via_parent
+
+    @pytest.mark.parametrize(
+        "pattern", ["**/build/**", "build/**", "build/repo/**", "**/repo/**", "../repo/proj/**"]
+    )
+    def test_relative_pattern_naming_a_directory_above_the_cwd_reports_the_file(
+        self, repo: Path, pattern: str
+    ):
+        """``**/build/**`` matched the native scanner's absolute path.
+
+        So a checkout that merely lives under ``build/`` had every finding
+        hidden with exit 0.
+        """
+        result = _engine(*self._scanners(repo), ignore_paths=[pattern]).scan([Path()])
+
+        assert {(f.scanner, f.file_path) for f in result.unique_findings} == {
+            ("native", Path("proj/sub/app.env")),
+            ("gitleaks", Path("proj/sub/app.env")),
+            ("infisical", Path("proj/sub/app.env")),
+        }
+
+    @pytest.mark.parametrize("pattern", ["**/build/**", "build/repo/proj/sub/app.env"])
+    def test_rule_path_ignores_do_not_match_above_the_cwd_either(self, repo: Path, pattern: str):
+        native, _relative, _via_parent = self._scanners(repo)
+        engine = _engine(native, ignore_rules={"github-pat": [pattern]})
+
+        assert [f.file_path for f in engine.scan([Path()]).unique_findings] == [
+            Path("proj/sub/app.env")
+        ]
+
+    @pytest.mark.parametrize("prefix", ["<repo>/proj", "<tmp>/build"])
+    def test_absolute_pattern_matches_every_report(self, repo: Path, tmp_path: Path, prefix: str):
+        """An absolute pattern names the file whichever form a scanner reported it in.
+
+        It matched only the absolute paths the native scanner and ``guard``
+        with no path report, so ``guard .`` let gitleaks findings through.
+        """
+        anchor = prefix.replace("<repo>", repo.as_posix()).replace("<tmp>", tmp_path.as_posix())
+        engine = _engine(*self._scanners(repo), ignore_paths=[f"{anchor}/**"])
+
+        assert engine.scan([Path()]).unique_findings == []
+
+    @pytest.mark.parametrize(
+        ("pattern", "kept"), [("tmp/**", 1), ("**/envdrift-staged-*/**", 1), ("proj/**", 0)]
+    )
+    def test_scanned_copies_are_matched_by_the_files_they_copy(
+        self, repo: Path, tmp_path: Path, pattern: str, kept: int
+    ):
+        """``guard --staged`` scans copies in a temporary directory (#859).
+
+        Patterns matched the copy's path, so ``tmp/**`` hid every staged
+        finding on a system whose temporary directory is ``/tmp``.
+        """
+        copy = tmp_path / "tmp" / "envdrift-staged-x" / "proj" / "sub" / "app.env"
+        copy.parent.mkdir(parents=True)
+        copy.write_text(f"GITHUB_TOKEN={GITHUB_TOKEN}\n")
+        scanner = _FixedScanner("native", [_finding(copy)])
+
+        result = _engine(scanner, ignore_paths=[pattern]).scan(
+            [copy], aliases={(tmp_path / "tmp" / "envdrift-staged-x").resolve(): repo}
+        )
+
+        assert len(result.unique_findings) == kept
+
+    @pytest.mark.parametrize(
+        ("pattern", "kept"),
+        [
+            ("**/build/**", 1),
+            ("build/**", 1),
+            ("repo/**", 1),
+            ("tmp/**", 1),
+            ("proj/**", 0),
+            ("**/proj/**", 0),
+            ("<repo>/proj/**", 0),
+        ],
+    )
+    def test_staged_file_outside_the_cwd_is_matched_by_its_path_in_the_repository(
+        self,
+        repo: Path,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        pattern: str,
+        kept: int,
+    ):
+        """``guard --staged`` from a subdirectory: a staged file elsewhere (#859).
+
+        Matched by its absolute path, ``**/build/**`` hid it in a checkout under
+        ``build/``, where its copy in the temporary directory never had.
+        """
+        (repo / "other").mkdir()
+        monkeypatch.chdir(repo / "other")
+        copy = tmp_path / "tmp" / "envdrift-staged-x" / "proj" / "sub" / "app.env"
+        copy.parent.mkdir(parents=True)
+        copy.write_text(f"GITHUB_TOKEN={GITHUB_TOKEN}\n")
+        scanner = _FixedScanner("native", [_finding(copy)])
+        ignore = pattern.replace("<repo>", repo.as_posix())
+
+        result = _engine(scanner, ignore_paths=[ignore]).scan(
+            [copy], aliases={(tmp_path / "tmp" / "envdrift-staged-x").resolve(): repo}
+        )
+
+        assert len(result.unique_findings) == kept

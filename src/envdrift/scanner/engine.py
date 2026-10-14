@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import re
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from dataclasses import dataclass, field, replace
 from pathlib import Path
@@ -365,7 +365,9 @@ class ScanEngine:
                 NativeScanner(
                     check_entropy=self.config.check_entropy,
                     entropy_threshold=self.config.entropy_threshold,
-                    additional_ignore_patterns=self.config.ignore_paths,
+                    # Normalized as for the ignore filter: a bare string would
+                    # become one pattern per character, and "*" skips every file.
+                    additional_ignore_patterns=normalize_ignore_paths(self.config.ignore_paths),
                     allowed_clear_files=self.config.allowed_clear_files,
                     skip_clear_files=self.config.skip_clear_files,
                     mapped_env_files=self.config.mapped_env_files,
@@ -481,6 +483,7 @@ class ScanEngine:
         self,
         paths: list[Path],
         on_scanner_complete: Callable[[str, int, int, ScanResult | None], None] | None = None,
+        aliases: Mapping[Path, Path] | None = None,
     ) -> AggregatedScanResult:
         """
         Run all configured scanners against the given file system paths, aggregate their findings, and apply deduplication and centralized filtering.
@@ -489,6 +492,10 @@ class ScanEngine:
             paths (list[Path]): Files or directories to scan.
             on_scanner_complete: Optional callback called when each scanner completes.
                                  Signature: (scanner_name: str, completed: int, total: int, result: ScanResult) -> None
+            aliases: Maps a directory of copies, resolved, to the absolute directory they
+                     copy (``guard --staged`` scans copies of the staged files in a temporary
+                     directory laid out like the repository). Path-based ignores match the
+                     names of the file a copy stands for, not of the copy.
 
         Returns:
             AggregatedScanResult: Aggregated scan outcome containing:
@@ -620,13 +627,15 @@ class ScanEngine:
         # Infisical keep guard's form). The filters read each file by the path
         # its scanner reported; dedup and every output below see one form,
         # relative to the cwd when the file is under it.
-        display = FindingPathDisplay(paths)
+        display = FindingPathDisplay(paths, aliases=aliases)
 
         # Apply centralized ignore filter (inline comments + TOML config rules)
         # This works across ALL scanners (native, gitleaks, trufflehog, etc.).
-        # Path patterns match every name of a file, the shown one included, so
-        # one pattern gives one verdict for a file whichever scanner reported
-        # it and however the scan path was spelled.
+        # Relative path patterns match a file under the cwd by its names below
+        # the cwd, the shown one included, so they give one verdict for such
+        # a file whichever scanner reported it and however the scan path was
+        # spelled, and never match through the directories above the cwd
+        # (#859). Absolute patterns match its absolute names.
         filtered_findings = self._ignore_filter.filter(filtered_findings, display.forms)
 
         filtered_findings = display.findings(filtered_findings)

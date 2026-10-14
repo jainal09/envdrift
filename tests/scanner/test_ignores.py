@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import dataclasses
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 
 import pytest
 
@@ -12,6 +12,8 @@ from envdrift.scanner.ignores import (
     IGNORE_PATTERN,
     IgnoreConfig,
     IgnoreFilter,
+    PathForms,
+    is_absolute_pattern,
     parse_ignore_comment,
 )
 
@@ -407,6 +409,39 @@ class TestIgnoreFilterRulePathIgnores:
 
         assert len(result) == 1
 
+    @staticmethod
+    def _nested_finding() -> ScanFinding:
+        return ScanFinding(
+            rule_id="github-pat",
+            rule_description="GitHub PAT",
+            file_path=Path("x/a.env"),
+            line_number=None,
+            description="finding",
+            severity=FindingSeverity.CRITICAL,
+            scanner="native",
+        )
+
+    def test_global_ignore_character_class_matches_a_trailing_part(self):
+        assert (
+            IgnoreFilter(IgnoreConfig(ignore_paths=["[ab].env"])).filter([self._nested_finding()])
+            == []
+        )
+
+    def test_rule_path_ignore_character_class_matches_a_trailing_part(self):
+        """``[ab].env`` matches ``x/a.env`` in ``ignore_rules`` as in ``ignore_paths``.
+
+        An early exit stopped trying the trailing parts of a path once one was
+        shorter than a pattern without ``*`` or ``?``, but a character class
+        matches fewer characters than it spells, so ``a.env`` was never tried.
+        """
+        rules = IgnoreConfig(ignore_rules={"github-pat": ["[ab].env"]})
+        assert IgnoreFilter(rules).filter([self._nested_finding()]) == []
+
+    @pytest.mark.parametrize(("pattern", "kept"), [("a.env", 0), ("x/a.env", 0), ("y/a.env", 1)])
+    def test_rule_path_ignore_literal_matches_a_trailing_part(self, pattern: str, kept: int):
+        rules = IgnoreConfig(ignore_rules={"github-pat": [pattern]})
+        assert len(IgnoreFilter(rules).filter([self._nested_finding()])) == kept
+
 
 class TestIgnoreFilterGlobalPathIgnores:
     """Tests for global path ignores from config."""
@@ -758,7 +793,7 @@ class TestNoisyRulePathIgnores:
 
 
 class TestIgnoreFilterPathForms:
-    """#855: path patterns match every name of a file, not only the reported one."""
+    """#855, #859: path patterns match the names ``path_forms`` gives a file, not only its report."""
 
     @staticmethod
     def _finding(file_path: Path, rule_id: str = "github-pat") -> ScanFinding:
@@ -774,7 +809,7 @@ class TestIgnoreFilterPathForms:
 
     @staticmethod
     def _forms(*extra: Path):
-        return lambda path: (path, *extra)
+        return lambda path: PathForms((path, *extra))
 
     def test_global_ignore_matches_another_name(self, tmp_path: Path):
         finding = self._finding(tmp_path / "repo" / "proj" / "app.env")
@@ -808,3 +843,112 @@ class TestIgnoreFilterPathForms:
         finding = self._finding(reported)
 
         assert IgnoreFilter().filter([finding], self._forms(tmp_path / "missing.env")) == []
+
+    def test_plain_names_are_each_matched_on_their_own(self, tmp_path: Path):
+        """11.0.9 took plain paths from ``path_forms``: each is matched as given."""
+        finding = self._finding(tmp_path / "repo" / "app.env")
+
+        def names(path: Path) -> tuple[Path, ...]:
+            return (path, Path("linkproj/app.env"))
+
+        assert (
+            IgnoreFilter(IgnoreConfig(ignore_paths=["linkproj/**"])).filter([finding], names) == []
+        )
+        absolute = IgnoreConfig(ignore_paths=[f"{(tmp_path / 'repo').as_posix()}/**"])
+        assert IgnoreFilter(absolute).filter([finding], names) == []
+        assert IgnoreFilter(IgnoreConfig(ignore_paths=["/linkproj/**"])).filter(
+            [finding], names
+        ) == [finding]
+
+
+class TestPathFormsMatching:
+    """#859: relative patterns see relative names, absolute patterns absolute names."""
+
+    @pytest.mark.parametrize(
+        "pattern", ["/repo/x", "//server/share/x", "C:/repo/x", "c:\\repo\\x", "\\\\server\\x"]
+    )
+    def test_absolute_patterns(self, pattern: str):
+        assert is_absolute_pattern(pattern)
+
+    @pytest.mark.parametrize(
+        "pattern", ["x", "**/build/**", "./x", "../config/*", "*/x", "C:x", "[/]x", "?x"]
+    )
+    def test_relative_patterns(self, pattern: str):
+        assert not is_absolute_pattern(pattern)
+
+    def test_relative_pattern_matches_a_name_and_its_trailing_parts(self):
+        forms = PathForms((Path("deploy/config/settings.txt"),))
+
+        assert forms.match(["deploy/config/*"])
+        assert forms.match(["config/settings.txt"])
+        assert forms.match(["settings.txt"])
+        assert not forms.match(["deploy/settings.txt"])
+
+    def test_relative_pattern_never_sees_an_absolute_name(self):
+        """A checkout under ``build/``: ``**/build/**`` must not match (#859)."""
+        forms = PathForms(
+            relative=(Path("proj/app.env"), Path("/proj/app.env")),
+            absolute=(Path("/ci/build/repo/proj/app.env"),),
+        )
+
+        assert not forms.match(["**/build/**", "build/**", "build/repo/proj/*", "repo/**"])
+        assert forms.match(["**/proj/**"])
+
+    def test_absolute_pattern_matches_an_absolute_name_whole(self):
+        forms = PathForms(
+            relative=(Path("proj/app.env"), Path("/proj/app.env")),
+            absolute=(Path("/ci/build/repo/proj/app.env"),),
+        )
+
+        assert forms.match(["/ci/build/repo/proj/**"])
+        assert forms.match(["/ci/build/**"])
+        # Not a trailing part, and not the name rooted at the cwd.
+        assert not forms.match(["/repo/proj/**"])
+        assert not forms.match(["/proj/**"])
+
+    def test_names_on_their_own_keep_the_historical_matching(self, tmp_path: Path):
+        """Without a display, a finding path is matched as given, with its trailing parts.
+
+        Built from a real anchor: on Windows a path without a drive is not absolute.
+        """
+        root = Path(tmp_path.anchor)
+        path = root / "ci" / "build" / "repo" / "app.env"
+        absolute = PathForms.of(path)
+        relative = PathForms.of(Path("proj/app.env"))
+
+        assert absolute.relative == absolute.absolute == (path,)
+        assert absolute.match(["**/build/**"])
+        assert absolute.match([f"{(root / 'ci').as_posix()}/**"])
+        assert relative.absolute == ()
+        assert not relative.match(["/proj/**"])
+
+    def test_windows_names_are_compared_with_forward_slashes(self):
+        """Patterns use ``/``; a Windows path's backslashes and drive must not stop a match."""
+        forms = PathForms(
+            relative=(
+                PureWindowsPath(r"proj\sub\app.env"),
+                PureWindowsPath(r"\proj\sub\app.env"),
+            ),
+            absolute=(PureWindowsPath(r"C:\ci\build\repo\proj\sub\app.env"),),
+        )
+
+        assert forms.match(["proj/sub/*"])
+        assert forms.match(["**/sub/**"])
+        assert forms.match(["sub/app.env"])
+        assert forms.match(["C:/ci/build/repo/proj/**"])
+        assert not forms.match(["**/build/**"])
+        assert not forms.match(["D:/ci/**"])
+
+    def test_windows_unc_path_matches_an_unc_pattern(self):
+        forms = PathForms.of(PureWindowsPath(r"\\server\share\repo\config\app.env"))
+
+        assert forms.match(["//server/share/repo/**"])
+        assert forms.match(["config/app.env"])
+
+    def test_file_on_another_drive_is_matched_absolute_with_its_trailing_parts(self):
+        """``os.path.relpath`` raises across drives, so the file is shown absolute."""
+        forms = PathForms.of(PureWindowsPath(r"D:\shared\config\settings.txt"))
+
+        assert forms.match(["config/*"])
+        assert forms.match(["D:/shared/**"])
+        assert not forms.match(["C:/shared/**"])

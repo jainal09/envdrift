@@ -131,7 +131,7 @@ Configuration for the `envdrift guard` command.
 | `skip_encrypted_files` | `bool` | `true` | Skip findings from files with dotenvx/SOPS encryption markers |
 | `skip_duplicate` | `bool` | `false` | Show only unique findings by secret value |
 | `skip_gitignored` | `bool` | `false` | Skip findings from files that are in `.gitignore` |
-| `ignore_paths` | `list[string]` | `[]` | Glob patterns ignored by the native scanner |
+| `ignore_paths` | `list[string]` | `[]` | Glob patterns of paths whose findings guard ignores, for every scanner |
 | `ignore_rules` | `dict[string, list[string]]` | `{}` | Per-rule path patterns to ignore (rule ID → glob patterns) |
 | `verify_secrets` | `bool` | `false` | Reserved for future verified secret checks |
 
@@ -156,7 +156,9 @@ verify_secrets = false
 
 Notes:
 
-- `ignore_paths` applies to the native scanner's file walk.
+- `ignore_paths` and `ignore_rules` apply to every scanner. For a file inside the directory guard runs in, a
+  relative pattern matches paths below that directory, never the directories above it; see
+  [TOML Configuration](../cli/guard.md#toml-configuration) for the exact rule.
 - `skip_encrypted_files` defaults to `true`, so findings from files carrying
   dotenvx/SOPS encryption markers are filtered out unless you set it to `false`.
 - `scanners` can be set under `[tool.envdrift.guard]` in `pyproject.toml`.

@@ -14,7 +14,8 @@ nested files under ``--pr-base`` (#854), and every scanner shows a file in one
 form, relative to the cwd when it is under it (#855). History scans still run
 gitleaks in the repository root. The tests at the end pin the paths that are
 not what they look like: names that start with ``-``, ``..`` after a symlink,
-and ignore patterns that must match the path guard shows.
+and ignore patterns that must match the path guard shows, but never through the
+directories above the one guard runs in (#859).
 
 Each test drives the real CLI as a subprocess and SKIPs cleanly when the
 binary is not installed (no auto-install).
@@ -871,11 +872,6 @@ def test_guard_ignore_paths_give_one_verdict_however_the_path_is_spelled(
     assert result.returncode == 0, result.stderr
 
 
-@pytest.mark.xfail(
-    strict=False,
-    raises=AssertionError,
-    reason="ignore_paths globs also match the directories above the checkout (see #859)",
-)
 @pytest.mark.parametrize("scanner", _SCANNERS)
 @pytest.mark.parametrize("args", [[], ["."]])
 def test_guard_ignore_glob_ignores_directories_above_the_checkout(
@@ -925,3 +921,426 @@ def test_guard_ignore_pattern_naming_a_directory_above_the_cwd_matches_the_repor
     assert _scanner_result(payload, name)["error"] is None
     assert payload["findings"] == []
     assert result.returncode == 0, result.stderr
+
+
+def _ignore_paths(directory: Path, pattern: str, **anchors: Path) -> None:
+    """Write ``envdrift.toml`` with ``ignore_paths = [pattern]``, ``<name>`` expanded.
+
+    An absolute pattern is written with ``/``, the separator patterns use on
+    every platform.
+    """
+    for anchor, path in anchors.items():
+        pattern = pattern.replace(f"<{anchor}>", path.as_posix())
+    (directory / "envdrift.toml").write_text(f"[guard]\nignore_paths = ['{pattern}']\n")
+
+
+def _assert_verdict(
+    result: subprocess.CompletedProcess, payload: dict, name: str, shown: Path, suppressed: bool
+) -> None:
+    """``name`` and the native scanner report ``shown``, or nothing reports anything."""
+    assert _scanner_result(payload, name)["error"] is None
+    if suppressed:
+        assert payload["findings"] == []
+        assert result.returncode == 0, result.stderr
+    else:
+        assert {f["scanner"] for f in payload["findings"]} == {"native", name}
+        assert _finding_paths(payload) == {shown}
+        assert result.returncode == 1, result.stderr
+
+
+@pytest.mark.parametrize("scanner", _SCANNERS)
+@pytest.mark.parametrize(
+    "args",
+    [[], ["."], ["proj"], ["<repo>/proj"], ["../repo/proj"]],
+    ids=["no-path", "dot", "subdir", "absolute-subdir", "subdir-via-parent"],
+)
+@pytest.mark.parametrize(
+    ("pattern", "suppressed"),
+    [
+        # A relative pattern sees only names below the directory guard runs in ...
+        ("**/build/**", False),
+        ("build/repo/**", False),
+        ("../repo/proj/**", False),
+        # ... an absolute one the file's absolute path, whatever directory it names.
+        ("<repo>/proj/**", True),
+        ("<tmp>/build/**", True),
+        # A leading ``/`` makes a pattern absolute: not rooted at the cwd.
+        ("/proj/**", False),
+    ],
+    ids=[
+        "glob-above",
+        "relative-above",
+        "parent-reference",
+        "absolute",
+        "absolute-above",
+        "rooted",
+    ],
+)
+def test_guard_ignore_patterns_in_a_checkout_under_a_directory_they_name(
+    tmp_path: Path, scanner, args: list[str], pattern: str, suppressed: bool
+):
+    """One verdict per pattern for every spelling of the scan path and every scanner (#859).
+
+    The built-in scanner reports absolute paths, and ``guard`` with no path or
+    an absolute path makes gitleaks and Infisical report them too. Relative
+    patterns matched them through the directories above the checkout, and an
+    absolute pattern matched them but not the relative paths ``guard .``
+    reports, so each spelling gave its own verdict.
+    """
+    name, flags, _config = scanner
+    repo = tmp_path / "build" / "repo"
+    _write_secret(repo / "proj" / "sub" / "app.env")
+    _ignore_paths(repo, pattern, repo=repo, tmp=tmp_path)
+
+    result, payload = _guard(
+        [*(arg.replace("<repo>", str(repo)) for arg in args), *flags], cwd=repo
+    )
+
+    _assert_verdict(result, payload, name, Path("proj/sub/app.env"), suppressed)
+
+
+@pytest.mark.parametrize("scanner", _SCANNERS)
+@pytest.mark.parametrize("args", [["linkproj"], ["<cwd>/linkproj"]], ids=["relative", "absolute"])
+@pytest.mark.parametrize(
+    ("pattern", "suppressed"),
+    [
+        ("linkproj/**", True),
+        # The link's target lies outside the cwd, under build/: only an
+        # absolute pattern names it.
+        ("**/build/**", False),
+        ("<tmp>/build/proj/**", True),
+    ],
+    ids=["link-name", "target-glob", "target-absolute"],
+)
+def test_guard_ignore_patterns_for_a_symlinked_directory_outside_the_cwd(
+    tmp_path: Path, scanner, args: list[str], pattern: str, suppressed: bool
+):
+    """A file below a symlink matches a pattern for the link name or its real location.
+
+    A relative pattern names the real location only when it is below the
+    directory guard runs in; ``**/build/**`` matched the target's absolute
+    path through ``build/`` (#859).
+    """
+    name, flags, _config = scanner
+    cwd = tmp_path / "work"
+    cwd.mkdir()
+    _write_secret(tmp_path / "build" / "proj" / "sub" / "app.env")
+    _symlink(cwd / "linkproj", tmp_path / "build" / "proj")
+    _ignore_paths(cwd, pattern, tmp=tmp_path)
+
+    result, payload = _guard([*(arg.replace("<cwd>", str(cwd)) for arg in args), *flags], cwd=cwd)
+
+    _assert_verdict(result, payload, name, Path("linkproj/sub/app.env"), suppressed)
+
+
+@pytest.mark.parametrize("scanner", _SCANNERS)
+@pytest.mark.parametrize("args", [["real"], ["<tmp>/real"]], ids=["relative", "absolute"])
+def test_guard_ignore_pattern_for_a_link_name_does_not_cover_its_real_location(
+    tmp_path: Path, scanner, args: list[str]
+):
+    """A file scanned through its real location matches only patterns for that location.
+
+    docs/cli/guard.md: name the real location when you scan both ways.
+    """
+    name, flags, _config = scanner
+    _write_secret(tmp_path / "real" / "app.env")
+    _symlink(tmp_path / "linkproj", tmp_path / "real")
+    _ignore_paths(tmp_path, "linkproj/**")
+
+    result, payload = _guard(
+        [*(arg.replace("<tmp>", str(tmp_path)) for arg in args), *flags], cwd=tmp_path
+    )
+
+    _assert_verdict(result, payload, name, Path("real/app.env"), suppressed=False)
+
+
+def _cwd_of_a_process_started_in(directory: Path) -> Path:
+    """The working directory a child process started in ``directory`` sees.
+
+    POSIX resolves the symlinks in it (macOS ``/tmp`` is ``/private/tmp``);
+    Windows keeps the path as given.
+    """
+    out = subprocess.run(  # nosec B603
+        [sys.executable, "-c", "import os; print(os.getcwd())"],
+        cwd=str(directory),
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout
+    return Path(out.strip())
+
+
+@pytest.mark.parametrize("scanner", _SCANNERS)
+@pytest.mark.parametrize(
+    ("args", "logical_spelling"),
+    [
+        ([], False),
+        (["."], False),
+        (["proj"], False),
+        (["<logical>/proj"], True),
+        (["<logical>"], True),
+    ],
+    ids=["no-path", "dot", "subdir", "logical-subdir", "logical-cwd"],
+)
+@pytest.mark.parametrize(
+    ("pattern", "suppressed"),
+    [
+        ("**/build/**", False),
+        ("**/tmp/**", False),
+        ("build/repo/**", False),
+        ("<physical>/proj/**", True),
+        ("proj/sub/*", True),
+    ],
+    ids=["glob-above", "link-above", "relative-above", "physical-absolute", "relative"],
+)
+def test_guard_ignore_patterns_through_a_symlinked_parent_of_the_cwd(
+    tmp_path: Path,
+    scanner,
+    args: list[str],
+    logical_spelling: bool,
+    pattern: str,
+    suppressed: bool,
+):
+    """``guard "$PWD/proj"`` where ``/tmp`` links to ``/private/tmp``, as on macOS (#859).
+
+    guard runs in the physical directory, so a path through the symlinked
+    spelling of it is shown absolute. Its trailing parts named the
+    directories above the checkout, so ``**/build/**`` hid every finding for
+    that spelling while ``guard proj`` reported them.
+    """
+    name, flags, _config = scanner
+    physical = tmp_path / "private" / "x" / "build" / "repo"
+    _write_secret(physical / "proj" / "sub" / "app.env")
+    _symlink(tmp_path / "tmp", tmp_path / "private" / "x")
+    logical = tmp_path / "tmp" / "build" / "repo"
+    _ignore_paths(physical, pattern, physical=physical)
+    shown = Path("proj/sub/app.env")
+    if logical_spelling:
+        # Shown absolute where guard runs in the physical directory (POSIX),
+        # relative where it keeps the symlinked spelling (Windows).
+        shown = logical / shown
+        cwd = _cwd_of_a_process_started_in(logical)
+        if shown.is_relative_to(cwd):
+            shown = shown.relative_to(cwd)
+
+    result, payload = _guard(
+        [*(arg.replace("<logical>", str(logical)) for arg in args), *flags], cwd=logical
+    )
+
+    _assert_verdict(result, payload, name, shown, suppressed)
+
+
+@pytest.mark.parametrize("args", [[], ["."]], ids=["no-path", "dot"])
+def test_guard_native_keeps_scanning_links_in_default_ignored_directories(
+    tmp_path: Path, args: list[str]
+):
+    """A tracked link in ``build/`` or ``node_modules/`` to a file elsewhere is reported.
+
+    The built-in scanner never applied its directory-scoped defaults to such a
+    link, which no other scanner follows; matching the link where it was
+    found would have dropped it silently.
+    """
+    _write_secret(tmp_path / "shared" / "prod.env")
+    repo = tmp_path / "repo"
+    for directory in ("build", "node_modules/pkg"):
+        (repo / directory).mkdir(parents=True)
+        _symlink(repo / directory / "creds.env", tmp_path / "shared" / "prod.env")
+    _git(repo, "init", "-q")
+    _git(repo, "add", "-A")
+
+    result, payload = _guard([*args, "--native-only"], cwd=repo)
+
+    assert _scanner_result(payload, "native")["error"] is None
+    assert _finding_paths(payload) == {
+        Path("build/creds.env"),
+        Path("node_modules/pkg/creds.env"),
+    }
+    assert result.returncode == 1, result.stderr
+
+
+@pytest.mark.parametrize("args", [["."], ["../.."], ["<tmp>"]], ids=["dot", "above", "absolute"])
+@pytest.mark.parametrize("pattern", ["builds/**", "builds"])
+def test_guard_native_matches_a_link_under_the_cwd_below_the_cwd(
+    tmp_path: Path, args: list[str], pattern: str
+):
+    """``guard ../..`` from ``builds/repo``: a link to ``builds/shared.txt`` is reported.
+
+    The built-in scanner matched the link by its target's path below the scan
+    path, ``builds/shared.txt``, which names a directory above the cwd, so the
+    patterns hid it there; ``guard .`` matched its absolute path, so ``builds``
+    hid it too (#859).
+    """
+    cwd = tmp_path / "builds" / "repo"
+    _write_secret(tmp_path / "builds" / "shared.txt")
+    (cwd / "proj").mkdir(parents=True)
+    _symlink(cwd / "proj" / "link.txt", tmp_path / "builds" / "shared.txt")
+    _ignore_paths(cwd, pattern)
+
+    result, payload = _guard(
+        [*(arg.replace("<tmp>", str(tmp_path)) for arg in args), "--native-only"], cwd=cwd
+    )
+
+    assert _scanner_result(payload, "native")["error"] is None
+    assert Path("proj/link.txt") in _finding_paths(payload)
+    assert result.returncode == 1, result.stderr
+
+
+@pytest.mark.parametrize(
+    ("pattern", "suppressed"),
+    [("builds/**", False), ("builds", False), ("repo", False), ("real.env", True)],
+)
+def test_guard_native_matches_a_link_outside_the_cwd_by_its_target_below_the_cwd(
+    tmp_path: Path, pattern: str, suppressed: bool
+):
+    """``guard ../..`` from ``builds/repo``: ``builds/elsewhere/link.env`` -> ``real.env``.
+
+    The link's real location is under the cwd, so it is matched by that
+    location below the cwd, as the scan engine matches it. The built-in
+    scanner matched the path below the scan path, ``builds/repo/real.env``,
+    whose directories are above the cwd, so the patterns dropped the link
+    (#859).
+    """
+    cwd = tmp_path / "builds" / "repo"
+    _write_secret(cwd / "real.env")
+    (tmp_path / "builds" / "elsewhere").mkdir()
+    _symlink(tmp_path / "builds" / "elsewhere" / "link.env", cwd / "real.env")
+    _ignore_paths(cwd, pattern)
+
+    result, payload = _guard(["../..", "--native-only"], cwd=cwd)
+
+    assert _scanner_result(payload, "native")["error"] is None
+    if suppressed:
+        assert payload["findings"] == []
+        assert result.returncode == 0, result.stderr
+    else:
+        # Outside the cwd the link is shown absolute, below the resolved scan path.
+        # Both names are reported: dedup keys on the path shown (see #861).
+        link = tmp_path.resolve() / "builds" / "elsewhere" / "link.env"
+        assert _finding_paths(payload) == {Path("real.env"), link}
+        assert result.returncode == 1, result.stderr
+
+
+@pytest.mark.parametrize(
+    ("pattern", "suppressed"),
+    [("build", False), ("**/build/**", False), ("proj/link.txt", True)],
+    ids=["dir-name", "glob", "link-name"],
+)
+def test_guard_native_matches_a_symlinked_file_where_it_was_found(
+    tmp_path: Path, pattern: str, suppressed: bool
+):
+    """A symlink whose target lies outside the scan path is matched by its own path.
+
+    The built-in scanner matched such a file by its absolute path, so in a
+    checkout under ``build/`` the patterns ``build`` and ``**/build/**`` hid
+    the secret behind the link (#859).
+    """
+    repo = tmp_path / "build" / "repo"
+    _write_secret(tmp_path / "shared" / "secret.txt")
+    (repo / "proj").mkdir(parents=True)
+    _symlink(repo / "proj" / "link.txt", tmp_path / "shared" / "secret.txt")
+    _ignore_paths(repo, pattern)
+
+    result, payload = _guard([".", "--native-only"], cwd=repo)
+
+    assert _scanner_result(payload, "native")["error"] is None
+    if suppressed:
+        assert payload["findings"] == []
+        assert result.returncode == 0, result.stderr
+    else:
+        assert _finding_paths(payload) == {Path("proj/link.txt")}
+        assert result.returncode == 1, result.stderr
+
+
+@pytest.mark.parametrize("scanner", _SCANNERS)
+@pytest.mark.parametrize("pattern", ["builds", "builds/**", "repo"])
+def test_guard_scan_path_above_the_cwd_keeps_its_directories_out_of_ignores(
+    tmp_path: Path, scanner, pattern: str
+):
+    """``guard ../../..`` from ``builds/repo/proj`` reports the file below the cwd.
+
+    The built-in scanner matched ``ignore_paths`` against the path below the
+    scan path, ``builds/repo/proj/sub/app.env``, whose directories are above
+    the cwd, and hid what gitleaks and Infisical reported (#859).
+    """
+    name, flags, _config = scanner
+    cwd = tmp_path / "builds" / "repo" / "proj"
+    _write_secret(cwd / "sub" / "app.env")
+    _ignore_paths(cwd, pattern)
+
+    result, payload = _guard(["../../..", *flags], cwd=cwd)
+
+    _assert_verdict(result, payload, name, Path("sub/app.env"), suppressed=False)
+
+
+@pytest.mark.parametrize("scanner", _SCANNERS)
+@pytest.mark.parametrize(
+    ("pattern", "suppressed"),
+    [
+        ("ci-temp/**", False),
+        ("**/envdrift-staged-*/**", False),
+        ("config/**", True),
+        ("<repo>/config/**", True),
+    ],
+    ids=["temp-dir", "copy-dir", "relative", "absolute"],
+)
+def test_guard_staged_ignores_match_the_staged_file_not_its_copy(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, scanner, pattern: str, suppressed: bool
+):
+    """``--staged`` scans copies in the temporary directory; patterns match the staged file.
+
+    Patterns matched the copy's path, so one naming the temporary directory
+    (``tmp/**`` where that is ``/tmp``) hid every staged finding, and an
+    absolute pattern for the staged file never matched it (#859).
+    """
+    name, flags, _config = scanner
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (tmp_path / "ci-temp").mkdir()
+    monkeypatch.setenv("TMPDIR", str(tmp_path / "ci-temp"))
+    _git(repo, "init", "-q")
+    _write_secret(repo / "config" / "app.env")
+    _git(repo, "add", "config/app.env")
+    _ignore_paths(repo, pattern, repo=repo)
+
+    result, payload = _guard(["--staged", *flags], cwd=repo)
+
+    _assert_verdict(result, payload, name, Path("config/app.env"), suppressed)
+
+
+@pytest.mark.parametrize("scanner", _SCANNERS)
+@pytest.mark.parametrize(
+    ("pattern", "suppressed"),
+    [
+        ("**/build/**", False),
+        ("build/**", False),
+        ("repo/**", False),
+        ("ci-temp/**", False),
+        # As the copy's path below the temporary directory always matched.
+        ("config/*", True),
+        ("**/config/**", True),
+        ("<repo>/config/**", True),
+    ],
+    ids=["glob-above", "relative-above", "repo-name", "temp-dir", "repo-path", "glob", "absolute"],
+)
+def test_guard_staged_from_a_subdirectory_matches_a_staged_file_elsewhere_in_the_repository(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, scanner, pattern: str, suppressed: bool
+):
+    """``--staged`` from ``sub/``, only ``config/app.env`` staged, in a checkout under ``build/``.
+
+    The staged file is outside the cwd and shown absolute. Matched by that
+    path's trailing parts, ``**/build/**`` hid it and the commit shipped the
+    secret with exit 0, where matching its copy had reported it (#859).
+    """
+    name, flags, _config = scanner
+    repo = tmp_path / "build" / "repo"
+    (repo / "sub").mkdir(parents=True)
+    (tmp_path / "ci-temp").mkdir()
+    monkeypatch.setenv("TMPDIR", str(tmp_path / "ci-temp"))
+    _git(repo, "init", "-q")
+    _write_secret(repo / "config" / "app.env")
+    _git(repo, "add", "config/app.env")
+    _ignore_paths(repo / "sub", pattern, repo=repo)
+
+    result, payload = _guard(["--staged", *flags], cwd=repo / "sub")
+
+    _assert_verdict(result, payload, name, repo / "config" / "app.env", suppressed)

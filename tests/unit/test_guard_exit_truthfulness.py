@@ -95,7 +95,7 @@ def _patch_engine(monkeypatch, result: AggregatedScanResult) -> None:
         def get_scanner_info(self):
             return []
 
-        def scan(self, _paths, on_scanner_complete=None):
+        def scan(self, _paths, on_scanner_complete=None, aliases=None):
             return result
 
         def check_combined_files_security(self):

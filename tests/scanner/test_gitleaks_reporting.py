@@ -186,8 +186,9 @@ def test_symlinked_file_findings_are_reported_under_the_link(
 ):
     """gitleaks scans a symlinked file as its target; its findings belong to the link.
 
-    Path-based ignores match the reported path, so a finding named after the
-    target escaped an ``ignore_paths`` entry for the link guard was given.
+    When path-based ignores matched only the reported path, a finding named
+    after the target escaped an ``ignore_paths`` entry for the link guard was
+    given. The link is the path guard shows, the name relative patterns match.
     """
     (tmp_path / "real").mkdir()
     (tmp_path / "real" / "app.env").write_text("X=1\n")

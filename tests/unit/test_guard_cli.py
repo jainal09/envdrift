@@ -73,7 +73,7 @@ def _patch_guard_dependencies(monkeypatch, config: EnvdriftConfig, result: Aggre
             info_calls.append(True)
             return [{"name": "native", "installed": True, "version": "1.0.0"}]
 
-        def scan(self, _paths, on_scanner_complete=None):
+        def scan(self, _paths, on_scanner_complete=None, aliases=None):
             return result
 
         def check_combined_files_security(self):
@@ -117,7 +117,7 @@ def test_guard_defaults_to_cwd(tmp_path: Path, monkeypatch):
         def get_scanner_info(self):
             return []
 
-        def scan(self, paths, on_scanner_complete=None):
+        def scan(self, paths, on_scanner_complete=None, aliases=None):
             scan_paths.append(paths)
             return dummy_result
 
@@ -172,7 +172,7 @@ def test_guard_survives_bad_guardian_idle_timeout(tmp_path: Path, monkeypatch):
         def get_scanner_info(self):
             return []
 
-        def scan(self, paths, on_scanner_complete=None):
+        def scan(self, paths, on_scanner_complete=None, aliases=None):
             return dummy_result
 
         def check_combined_files_security(self):
@@ -205,7 +205,7 @@ def test_guard_survives_bad_partial_encryption(tmp_path: Path, monkeypatch):
         def get_scanner_info(self):
             return []
 
-        def scan(self, paths, on_scanner_complete=None):
+        def scan(self, paths, on_scanner_complete=None, aliases=None):
             return dummy_result
 
         def check_combined_files_security(self):
@@ -559,7 +559,7 @@ def test_guard_staged_scans_only_staged_files(tmp_path: Path, monkeypatch):
         def get_scanner_info(self):
             return []
 
-        def scan(self, paths, on_scanner_complete=None):
+        def scan(self, paths, on_scanner_complete=None, aliases=None):
             scan_paths.append(paths)
             # The mirror is cleaned up right after the scan; capture now.
             scanned_contents.update({p.name: p.read_text(encoding="utf-8") for p in paths})
@@ -626,7 +626,7 @@ def test_guard_staged_resolves_repo_relative_paths_against_toplevel(tmp_path: Pa
         def get_scanner_info(self):
             return []
 
-        def scan(self, paths, on_scanner_complete=None):
+        def scan(self, paths, on_scanner_complete=None, aliases=None):
             scan_paths.append(paths)
             return dummy_result
 
@@ -682,7 +682,7 @@ def _patch_dummy_engine(monkeypatch, config, scan_paths):
         def get_scanner_info(self):
             return []
 
-        def scan(self, paths, on_scanner_complete=None):
+        def scan(self, paths, on_scanner_complete=None, aliases=None):
             scan_paths.append(paths)
             return _build_result([])
 
@@ -920,7 +920,7 @@ def test_guard_history_without_capable_scanner_errors(tmp_path: Path, monkeypatc
         def get_scanner_info(self):
             return []
 
-        def scan(self, paths, on_scanner_complete=None):
+        def scan(self, paths, on_scanner_complete=None, aliases=None):
             raise AssertionError("scan must not run when --history is unsatisfiable")
 
         def check_combined_files_security(self):
@@ -953,7 +953,7 @@ def test_guard_history_without_capable_scanner_errors_json(tmp_path: Path, monke
         def get_scanner_info(self):
             return []
 
-        def scan(self, paths, on_scanner_complete=None):
+        def scan(self, paths, on_scanner_complete=None, aliases=None):
             raise AssertionError("scan must not run when --history is unsatisfiable")
 
         def check_combined_files_security(self):
@@ -1190,7 +1190,7 @@ def test_guard_pr_base_scans_diff_files(tmp_path: Path, monkeypatch):
         def get_scanner_info(self):
             return []
 
-        def scan(self, paths, on_scanner_complete=None):
+        def scan(self, paths, on_scanner_complete=None, aliases=None):
             scan_paths.append(paths)
             return dummy_result
 

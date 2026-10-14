@@ -7,9 +7,11 @@ absolute repository root, and kingfisher and git-secrets resolve every path.
 One report used to name one file in several ways. The scan engine passes every
 finding through :class:`FindingPathDisplay` once, after its filters, so dedup
 and every output see one form: relative to the cwd when the file is under it,
-absolute otherwise. The filters match path-based ignores against every name
+absolute otherwise. The filters match path-based ignores against the names
 :meth:`FindingPathDisplay.forms` gives a file, so a pattern that matches the
-path guard shows suppresses the file whichever scanner reported it.
+path guard shows suppresses the file whichever scanner reported it, and a
+relative pattern never matches a file under the cwd through the directories
+above the cwd (#859).
 """
 
 from __future__ import annotations
@@ -20,7 +22,11 @@ from dataclasses import replace
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from envdrift.scanner.ignores import PathForms
+
 if TYPE_CHECKING:
+    from collections.abc import Mapping
+
     from envdrift.scanner.base import ScanFinding
 
 
@@ -58,6 +64,14 @@ def _absolute(path: Path, cwd: Path) -> Path:
 def _rooted(path: Path) -> tuple[Path, ...]:
     """``path``, and a relative ``path`` also rooted (``tests/x`` -> ``/tests/x``)."""
     return (path,) if path.is_absolute() else (path, Path(os.sep) / path)
+
+
+def _below(path: Path, base: Path) -> Path | None:
+    """``path`` relative to ``base``, or ``None`` when it is not below it."""
+    try:
+        return path.relative_to(base)
+    except ValueError:
+        return None
 
 
 def _rename_in(text: str, old: Path, new: Path) -> str:
@@ -105,14 +119,27 @@ class FindingPathDisplay:
     gives the form to show.
     """
 
-    def __init__(self, scan_paths: list[Path], cwd: Path | None = None) -> None:
+    def __init__(
+        self,
+        scan_paths: list[Path],
+        cwd: Path | None = None,
+        aliases: Mapping[Path, Path] | None = None,
+    ) -> None:
         """Prepare the rewrite for one scan.
 
         Args:
             scan_paths: The paths the scan was given.
             cwd: The directory paths are shown from. Defaults to the current one.
+            aliases: Maps a directory of copies, resolved, to the absolute
+                directory they copy: a file below the first stands for the
+                file at the same path below the second. ``guard --staged``
+                scans copies of the staged files in a temporary directory laid
+                out like the repository: path-based ignores match the names of
+                the staged file, never of its copy.
         """
         self._cwd = Path.cwd() if cwd is None else cwd
+        self._real_cwd = _resolved(self._cwd) or self._cwd
+        self._aliases = dict(aliases or {})
         self._scan_paths = [self._absolute(path) for path in scan_paths]
         # (real location, given path) for each scan path reached through a
         # symlink, deepest real location first so the closest one wins.
@@ -124,7 +151,7 @@ class FindingPathDisplay:
         self._linked = sorted(linked, key=lambda pair: len(pair[0].parts), reverse=True)
         self._real_dirs: dict[Path, Path | None] = {}
         self._shown: dict[Path, Path] = {}
-        self._forms: dict[Path, tuple[Path, ...]] = {}
+        self._forms: dict[Path, PathForms] = {}
 
     def _absolute(self, path: Path) -> Path:
         return _absolute(path, self._cwd)
@@ -139,29 +166,101 @@ class FindingPathDisplay:
             shown = self._shown[path] = display_path(absolute, self._cwd)
         return shown
 
-    def forms(self, path: Path) -> tuple[Path, ...]:
-        """Every name of the file at finding path ``path`` that path-based ignores match.
+    def forms(self, path: Path) -> PathForms:
+        """The names of the file at finding path ``path`` that path-based ignores match.
 
-        The path as the scanner reported it, the path guard shows, and the
-        path shown for its real location with every symlink resolved. A
-        pattern that matches any of them suppresses the file, so the verdict is
-        the same whichever scanner reported it and however the scan path was
-        spelled: ``guard`` and ``guard .``, a symlinked path or its target.
+        For a file under the cwd a relative pattern sees only names below the
+        cwd: the path guard shows, that path rooted at the cwd
+        (``/tests/x.py``, so ``**/tests/**`` matches a top-level ``tests``
+        directory), and the same two for its real location with every symlink
+        resolved when that is under the cwd too. The directories above the
+        cwd never take part, so ``**/build/**`` does not hide a checkout that
+        lives under ``build/`` (#859). A file is under the cwd when the path
+        guard shows is, when that path runs through another spelling of the
+        cwd (``"$PWD/proj"`` where ``/tmp`` links to ``/private/tmp`` is shown
+        absolute), or when its real location is. An absolute pattern sees the
+        absolute names: the cwd joined with the shown path, the path as
+        reported when it is absolute, and the real location. So for a file
+        under the cwd the verdict of a relative pattern is the same whichever
+        scanner reported the file and however the scan path was spelled:
+        ``guard``, ``guard .``, ``guard proj``, ``guard "$PWD/proj"``, a
+        symlinked path or its target.
 
-        A shown path relative to the cwd is also matched rooted at the cwd
-        (``/tests/x.py``), so ``**/tests/**`` matches a top-level ``tests``
-        directory as it did the absolute paths some scanners report, without
-        matching a directory above the cwd that the absolute path names.
+        For a file outside the cwd a relative pattern sees the reported path,
+        the shown path and the real location, with their trailing parts:
+        ``../config/*`` matches what a scanner reports for such a file under
+        ``--pr-base`` run from a subdirectory. A copy (see ``aliases``) of a
+        file outside the cwd is named by its path below the directory copied,
+        as the copy was, so the directories above the repository never name a
+        staged file.
         """
         forms = self._forms.get(path)
         if forms is None:
-            shown = self.path(path)
-            real = _resolved(self._absolute(shown))
-            candidates = [path, *_rooted(shown)]
-            if real is not None:
-                candidates.extend(_rooted(display_path(real, self._cwd)))
-            forms = self._forms[path] = tuple(dict.fromkeys(candidates))
+            forms = self._forms[path] = self._names(path)
         return forms
+
+    def _names(self, path: Path) -> PathForms:
+        """The names :meth:`forms` gives the file at finding path ``path``."""
+        copied = self._copied(path)
+        if copied is None:
+            reported: Path | None = path
+            shown = self.path(path)
+        else:  # a scanned copy is named by the file it copies, never by itself
+            reported = None
+            shown = display_path(copied[0], self._cwd)
+        absolute = self._cwd / shown
+        real = _resolved(absolute)
+        real_below = None if real is None else _below(real, self._real_cwd)
+        below = [name for name in (self._below_cwd(shown), real_below) if name is not None]
+        if below:  # under the cwd, where it was found or where it really is
+            relative = [form for name in below for form in _rooted(name)]
+        elif copied is not None:  # a staged file outside the cwd: its path in the repository
+            relative = list(_rooted(copied[1]))
+        else:  # outside the cwd
+            relative = [name for name in (reported, shown, real) if name is not None]
+        absolutes = [absolute]
+        if reported is not None and reported.is_absolute():
+            absolutes.append(reported)
+        if real is not None:
+            absolutes.append(real)
+        return PathForms(tuple(dict.fromkeys(relative)), tuple(dict.fromkeys(absolutes)))
+
+    def _copied(self, path: Path) -> tuple[Path, Path] | None:
+        """The file a scanned copy at ``path`` stands for, and its path below the directory copied.
+
+        ``None`` for a path that is not below a directory of copies.
+        """
+        if not self._aliases:
+            return None
+        real = _resolved(self._absolute(path))
+        if real is None:
+            return None
+        for copies, originals in self._aliases.items():
+            below = _below(real, copies)
+            if below is not None:
+                return originals / below, below
+        return None
+
+    def _below_cwd(self, shown: Path) -> Path | None:
+        """The shown path ``shown`` relative to the cwd, or ``None`` when it is not below it.
+
+        An absolute path that runs through another spelling of the cwd, such as
+        ``"$PWD/proj"`` where ``/tmp`` links to ``/private/tmp`` (shown
+        absolute, see :func:`display_path`), is below the directory in it that
+        resolves to the cwd.
+        """
+        if not shown.is_absolute():
+            return shown
+        for directory in reversed(shown.parents):
+            if self._real_dir(directory) == self._real_cwd:
+                return shown.relative_to(directory)
+        return None
+
+    def _real_dir(self, directory: Path) -> Path | None:
+        """``directory`` with its symlinks resolved (cached), or ``None`` when that fails."""
+        if directory not in self._real_dirs:
+            self._real_dirs[directory] = _resolved(directory)
+        return self._real_dirs[directory]
 
     def _below_given_path(self, absolute: Path) -> Path:
         """``absolute`` moved below the symlinked scan path it really sits below.
@@ -169,9 +268,7 @@ class FindingPathDisplay:
         Only the directory is resolved: a file that is itself a symlink stays
         where it was found, not where it points.
         """
-        if absolute.parent not in self._real_dirs:
-            self._real_dirs[absolute.parent] = _resolved(absolute.parent)
-        real_dir = self._real_dirs[absolute.parent]
+        real_dir = self._real_dir(absolute.parent)
         if real_dir is None:
             return absolute
         real = real_dir / absolute.name

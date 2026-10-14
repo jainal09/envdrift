@@ -26,7 +26,7 @@ from __future__ import annotations
 import fnmatch
 import re
 from dataclasses import dataclass, field
-from pathlib import Path
+from pathlib import Path, PurePath
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -57,6 +57,63 @@ def is_noisy_rule(rule_id: str) -> bool:
     """Whether ``rule_id`` is a noisy keyword/entropy-style detection."""
     rule = rule_id.lower()
     return any(marker in rule for marker in NOISY_RULE_ID_MARKERS)
+
+
+# A pattern that names files by their absolute path: ``/repo/x``,
+# ``//server/share/x`` or ``C:/repo/x``, also spelled with Windows backslashes.
+_ABSOLUTE_PATTERN = re.compile(r"(?:[A-Za-z]:)?[/\\]")
+
+
+def is_absolute_pattern(pattern: str) -> bool:
+    """Whether the path pattern ``pattern`` names files by their absolute path."""
+    return _ABSOLUTE_PATTERN.match(pattern) is not None
+
+
+def _matches_name_or_trailing_part(name: PurePath, pattern: str) -> bool:
+    """Whether ``pattern`` matches ``name`` or a trailing part of it (``sub/x`` of ``a/sub/x``).
+
+    Every trailing part is tried. ``ignore_rules`` used to stop once a part
+    was shorter than a pattern without ``*`` or ``?``, but a character class
+    matches fewer characters than it spells, so ``[ab].env`` missed the
+    ``a.env`` of ``x/a.env`` that ``ignore_paths`` matched.
+    """
+    if fnmatch.fnmatch(name.as_posix(), pattern):
+        return True
+    parts = name.parts
+    return any(fnmatch.fnmatch("/".join(parts[i:]), pattern) for i in range(len(parts)))
+
+
+@dataclass(frozen=True)
+class PathForms:
+    """The names of one file that path patterns are matched against (#859).
+
+    A relative pattern is matched against each ``relative`` name and every
+    trailing part of it, so ``config/settings.txt`` matches
+    ``deploy/config/settings.txt``. An absolute pattern is matched against each
+    ``absolute`` name as a whole. Names are compared with ``/`` separators,
+    the separator patterns use on every platform.
+    """
+
+    relative: tuple[PurePath, ...]
+    absolute: tuple[PurePath, ...] = ()
+
+    @classmethod
+    def of(cls, *paths: PurePath) -> PathForms:
+        """``paths`` matched on their own: each as given, with its trailing parts.
+
+        An absolute one is also matched whole by an absolute pattern.
+        """
+        return cls(paths, tuple(path for path in paths if path.is_absolute()))
+
+    def match(self, patterns: Iterable[str]) -> bool:
+        """Whether any pattern of ``patterns`` matches one of these names."""
+        for pattern in patterns:
+            if is_absolute_pattern(pattern):
+                if any(fnmatch.fnmatch(name.as_posix(), pattern) for name in self.absolute):
+                    return True
+            elif any(_matches_name_or_trailing_part(name, pattern) for name in self.relative):
+                return True
+        return False
 
 
 @dataclass
@@ -118,16 +175,17 @@ class IgnoreFilter:
     def filter(
         self,
         findings: list[ScanFinding],
-        path_forms: Callable[[Path], Iterable[Path]] | None = None,
+        path_forms: Callable[[Path], PathForms | Iterable[Path]] | None = None,
     ) -> list[ScanFinding]:
         """Filter out ignored findings.
 
         Args:
             findings: List of findings from all scanners.
-            path_forms: Gives every name of the file at a finding path. Path
-                patterns are matched against each of them, so one file is
-                matched the same way whichever form a scanner reported it in.
-                Defaults to the finding path alone.
+            path_forms: Gives the names of the file at a finding path that
+                path patterns are matched against, so one file is matched the
+                same way whichever form a scanner reported it in. Defaults to
+                the finding path alone (:meth:`PathForms.of`). Plain paths, the
+                form 11.0.9 took, are each matched on their own.
 
         Returns:
             Filtered list with ignored findings removed.
@@ -135,14 +193,16 @@ class IgnoreFilter:
         filtered = []
 
         for finding in findings:
-            forms = path_forms(finding.file_path) if path_forms else (finding.file_path,)
-            if self._should_ignore(finding, tuple(forms)):
+            forms = path_forms(finding.file_path) if path_forms else None
+            if forms is not None and not isinstance(forms, PathForms):
+                forms = PathForms.of(*forms)
+            if self._should_ignore(finding, forms):
                 continue
             filtered.append(finding)
 
         return filtered
 
-    def _should_ignore(self, finding: ScanFinding, forms: tuple[Path, ...] = ()) -> bool:
+    def _should_ignore(self, finding: ScanFinding, forms: PathForms | None = None) -> bool:
         """Check if a finding should be ignored.
 
         Checks in order:
@@ -153,7 +213,7 @@ class IgnoreFilter:
 
         Args:
             finding: The finding to check.
-            forms: Every name of the finding's file that path patterns are
+            forms: The names of the finding's file that path patterns are
                 matched against. Defaults to the finding path alone.
 
         Returns:
@@ -162,26 +222,24 @@ class IgnoreFilter:
         file_path = finding.file_path
         rule_id = finding.rule_id
         line_number = finding.line_number
-        forms = forms or (file_path,)
+        forms = PathForms.of(file_path) if forms is None else forms
 
         # Check 1: Inline ignore comments (read from the file as reported)
         if line_number is not None and self._has_inline_ignore(file_path, line_number, rule_id):
             return True
 
         # Check 2: Rule+path combinations
-        if any(self._matches_rule_path_ignore(rule_id, form) for form in forms):
+        if self._matches_rule_path_ignore(rule_id, forms):
             return True
 
         # Check 3: Noisy-rule path ignores — suppress only low-confidence
         # keyword/entropy detections in these paths; a distinctive-prefix
         # CRITICAL token in pyproject.toml / a lock file must still surface (#477)
-        if is_noisy_rule(rule_id) and any(
-            self._matches_path_patterns(form, self.config.noisy_rule_paths) for form in forms
-        ):
+        if is_noisy_rule(rule_id) and forms.match(self.config.noisy_rule_paths):
             return True
 
         # Check 4: Global path ignores (already handled by scanner, but double-check)
-        return any(self._matches_global_ignore(form) for form in forms)
+        return self._matches_global_ignore(forms)
 
     def _has_inline_ignore(self, file_path: Path, line_number: int, rule_id: str) -> bool:
         """Check if a specific line has an ignore comment.
@@ -236,68 +294,32 @@ class IgnoreFilter:
             self._file_cache[file_path] = []
             return []
 
-    def _matches_rule_path_ignore(self, rule_id: str, file_path: Path) -> bool:
+    def _matches_rule_path_ignore(self, rule_id: str, forms: PathForms) -> bool:
         """Check if rule+path combination is ignored in config.
+
+        Matched like the global path ignores.
 
         Args:
             rule_id: The rule ID.
-            file_path: The file path.
+            forms: The names of the file.
 
         Returns:
             True if this rule is ignored for this path.
         """
-        if rule_id not in self.config.ignore_rules:
-            return False
+        return rule_id in self.config.ignore_rules and forms.match(
+            self.config.ignore_rules[rule_id]
+        )
 
-        path_patterns = self.config.ignore_rules[rule_id]
-        path_str = str(file_path)
-
-        for pattern in path_patterns:
-            # Try full path match first
-            if fnmatch.fnmatch(path_str, pattern):
-                return True
-            # Try matching suffix paths (optimization: break on first match)
-            for i in range(len(file_path.parts)):
-                partial = "/".join(file_path.parts[i:])
-                if fnmatch.fnmatch(partial, pattern):
-                    return True
-                # Early break: if pattern doesn't contain wildcards and partial is longer,
-                # no point checking shorter suffixes
-                if "*" not in pattern and "?" not in pattern and len(partial) < len(pattern):
-                    break
-
-        return False
-
-    def _matches_global_ignore(self, file_path: Path) -> bool:
+    def _matches_global_ignore(self, forms: PathForms) -> bool:
         """Check if path matches global ignore patterns.
 
         Args:
-            file_path: The file path.
+            forms: The names of the file.
 
         Returns:
             True if path should be globally ignored.
         """
-        return self._matches_path_patterns(file_path, self.config.ignore_paths)
-
-    @staticmethod
-    def _matches_path_patterns(file_path: Path, patterns: list[str]) -> bool:
-        """Whether ``file_path`` matches any glob in ``patterns``.
-
-        Tries the full path first, then every path suffix (so ``pyproject.toml``
-        matches ``/repo/sub/pyproject.toml`` and ``**/tests/**`` matches at any
-        depth), mirroring the historical global-ignore semantics.
-        """
-        path_str = str(file_path)
-
-        for pattern in patterns:
-            if fnmatch.fnmatch(path_str, pattern):
-                return True
-            for i in range(len(file_path.parts)):
-                partial = "/".join(file_path.parts[i:])
-                if fnmatch.fnmatch(partial, pattern):
-                    return True
-
-        return False
+        return forms.match(self.config.ignore_paths)
 
 
 def parse_ignore_comment(line: str) -> tuple[bool, str | None, str | None]:

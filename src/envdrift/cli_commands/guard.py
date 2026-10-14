@@ -191,7 +191,9 @@ def _materialize_staged_index(
     0 while the commit still ships it (#476). Each repo-root-relative staged
     path (the form ``git diff --cached --name-only`` emits) is read with ``git
     show :<path>`` and written under the mirror with the same relative layout,
-    so filename/suffix rules and path-pattern ignores keep matching.
+    so filename/suffix rules keep matching. Path-pattern ignores match the
+    staged file itself: the scan engine is told the mirror copies the
+    repository (#859).
 
     Returns the ``TemporaryDirectory`` handle (caller cleans up), the mirror
     paths to scan, and a map of resolved mirror path -> display path (in the
@@ -365,13 +367,15 @@ def _git_toplevel() -> Path:
 
 def _collect_staged_targets(
     json_output: bool, sarif: bool
-) -> tuple[tempfile.TemporaryDirectory, list[Path], dict[Path, Path]]:
+) -> tuple[tempfile.TemporaryDirectory, list[Path], dict[Path, Path], dict[Path, Path]]:
     """Collect the ``--staged`` (pre-commit) scan targets from the git index.
 
     Returns the staged-mirror temp dir handle (the caller cleans it up), the
-    mirror paths to scan, and the mirror-path -> display-path map used to
-    rewrite finding locations after the scan (#476). Exits 0 when nothing is
-    staged and with the operational exit code when git fails.
+    mirror paths to scan, the mirror-path -> display-path map used to
+    rewrite finding locations after the scan (#476), and the scan engine's
+    ``aliases``: the resolved mirror directory -> the repository root it
+    copies, so path ignores match the staged files (#859). Exits 0 when
+    nothing is staged and with the operational exit code when git fails.
     """
     import subprocess  # nosec B404
 
@@ -407,10 +411,12 @@ def _collect_staged_targets(
             raise typer.Exit(code=0)
         # Scan the staged *index blobs*, not the working-tree copies: the
         # blob is what the commit ships, and the two can differ (#476).
-        # Findings are remapped to cwd-relative repo paths after the scan
-        # so output and path-based config matching are unchanged.
+        # Path ignores match the staged files, not their temporary copies
+        # (#859), and findings are remapped to cwd-relative repo paths after
+        # the scan, so output and path-based config matching are unchanged.
+        repo_root = _git_toplevel()
         staged_tmpdir, paths, staged_display_paths = _materialize_staged_index(
-            staged_files, _git_toplevel()
+            staged_files, repo_root
         )
         if not paths:
             staged_tmpdir.cleanup()
@@ -422,7 +428,8 @@ def _collect_staged_targets(
             # Operational failure (no readable index blobs), not a finding.
             raise typer.Exit(code=EXIT_OPERATIONAL_ERROR)
         _emit_progress(json_output, sarif, f"[dim]Scanning {len(paths)} staged file(s)...[/dim]")
-        return staged_tmpdir, paths, staged_display_paths
+        aliases = {Path(staged_tmpdir.name).resolve(): repo_root}
+        return staged_tmpdir, paths, staged_display_paths, aliases
     except subprocess.TimeoutExpired as err:
         # Route through _emit_error so --json/--sarif stdout stays a
         # parseable document on git failures too (#478 review).
@@ -874,8 +881,14 @@ def _run_scan_with_progress(
     output_console: Console,
     scanner_names: list[str],
     show_progress: bool | list[str],
+    aliases: dict[Path, Path],
 ) -> AggregatedScanResult:
-    """Run the scan, with a live per-scanner progress display in human mode."""
+    """Run the scan, with a live per-scanner progress display in human mode.
+
+    ``aliases`` maps the ``--staged`` mirror directory to the repository root
+    it copies, so path ignores match the staged files, not the temporary
+    copies (#859).
+    """
     # Track completed scanners for progress display
     completed_scanners: dict[str, float] = {}  # name -> duration in seconds
     total_scanners = len(scanner_names)
@@ -938,11 +951,11 @@ def _run_scan_with_progress(
             refresh_per_second=10,
         )
         with live:
-            result = engine.scan(paths, on_scanner_complete=on_scanner_complete)
+            result = engine.scan(paths, on_scanner_complete=on_scanner_complete, aliases=aliases)
         output_console.print()
     else:
         live = None
-        result = engine.scan(paths)
+        result = engine.scan(paths, aliases=aliases)
     return result
 
 
@@ -1205,14 +1218,18 @@ def guard(
     _warn_sarif_overrides_json(json_output, sarif)
 
     # Staged-mirror state (set only by the --staged branch): the temp dir
-    # holding the staged index blobs and the mirror-path -> display-path map
-    # used to rewrite finding locations after the scan (#476).
+    # holding the staged index blobs, the mirror-path -> display-path map
+    # used to rewrite finding locations after the scan (#476), and the
+    # mirror -> repository map path ignores are matched through (#859).
     staged_tmpdir: tempfile.TemporaryDirectory | None = None
     staged_display_paths: dict[Path, Path] = {}
+    staged_aliases: dict[Path, Path] = {}
 
     # Handle --staged flag (pre-commit mode)
     if staged:
-        staged_tmpdir, paths, staged_display_paths = _collect_staged_targets(json_output, sarif)
+        staged_tmpdir, paths, staged_display_paths, staged_aliases = _collect_staged_targets(
+            json_output, sarif
+        )
     # Handle --pr-base flag (CI mode for PRs)
     elif pr_base:
         paths = _collect_pr_base_targets(pr_base, json_output, sarif)
@@ -1272,7 +1289,7 @@ def guard(
 
     try:
         result = _run_scan_with_progress(
-            engine, paths, output_console, scanner_names, show_progress
+            engine, paths, output_console, scanner_names, show_progress, staged_aliases
         )
         if staged_display_paths:
             # Findings point into the staged mirror; rewrite them to the real
