@@ -61,9 +61,9 @@ A file that two of the paths you pass reach by two names is one finding for each
 whichever path comes first. When only links to the directory are scanned (`envdrift guard link2 link1`), the
 first one you pass names it (`link2/sub/app.env`), for every scanner. A symlink to a file that is scanned too is
 that file, not a second finding, and the file is shown by its own name, not the link's, unless the finding
-reported under the link is worth more (a higher severity, or verified). Two secrets on one line, or the same
-secret on two lines, stay separate findings, and so do the reports of two scanners, which name the rule
-differently.
+reported under the link has a higher severity, or is verified when the severities tie. Two secrets on one
+line, or the same secret on two lines, stay separate findings, and so do the reports of two scanners, which
+name the rule differently.
 
 The path shown is not always the path in a gitleaks or Infisical fingerprint. `envdrift guard` with
 no path and absolute paths are fingerprinted by absolute path; see
@@ -898,9 +898,10 @@ under `--pr-base` run from a subdirectory, and `**/build/**` hides that file the
 directory. A pattern without a separator is the exception: it is matched against the parts of the file's path below
 a scan path that holds it (a file you name yourself has only its own name), never against the directories above the
 scan path, so `build` does not hide `envdrift guard ../build/repo` run from a sibling directory. With several scan
-paths the pattern must match below each one that holds the file, so adding a scan path never hides what another
-reports. What a scanner reports for such a file depends on how the scan path is spelled, so a path pattern can give
-different verdicts for it: write patterns for the directory guard runs in, and run guard from there.
+paths the file is hidden only if your patterns hide it below each scan path that holds it, so adding a scan path
+never hides what another reports. What a scanner reports for such a file depends on how the scan path is spelled, so
+a path pattern can give different verdicts for it: write patterns for the directory guard runs in, and run guard from
+there.
 
 An absolute pattern, such as `/home/me/repo/tests/**`, `C:/repo/tests/**` or `//server/share/repo/**`, is matched against
 a file's whole absolute path: the directory guard runs in joined with the path guard shows, the path the scanner reported

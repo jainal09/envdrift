@@ -291,19 +291,28 @@ class FindingPathDisplay:
     ) -> tuple[tuple[Path, ...], ...]:
         """The names the file has below each scan path it sits under, one view per scan path.
 
-        The file is seen where it was found and where it really is. A scan path that is the file
-        itself gives its own name only, and so does a file below no scan path.
+        A file below no scan path has its own name only.
         """
-        views = []
-        for given in self._scan_paths:
-            below = []
-            for name, base in ((absolute, given), (real, self._real_dir(given))):
-                found = None if name is None or base is None else _below(name, base)
-                if found is not None:
-                    below.append(found)
-            if below:
-                views.append(_unique(name for name in below if name.parts) or (own_name,))
-        return tuple(dict.fromkeys(views)) or ((own_name,),)
+        views = (self._view_below(given, absolute, real, own_name) for given in self._scan_paths)
+        return tuple(dict.fromkeys(view for view in views if view is not None)) or ((own_name,),)
+
+    def _view_below(
+        self, given: Path, absolute: Path, real: Path | None, own_name: Path
+    ) -> tuple[Path, ...] | None:
+        """The names the file has below the scan path ``given``, or ``None`` when it is not below.
+
+        The file is seen where it was found and where it really is. A scan path that is the file
+        itself gives its own name only.
+        """
+        candidates = ((absolute, given), (real, self._real_dir(given)))
+        below = [
+            found
+            for name, base in candidates
+            if name is not None and base is not None and (found := _below(name, base)) is not None
+        ]
+        if not below:
+            return None
+        return _unique(name for name in below if name.parts) or (own_name,)
 
     def _copied(self, path: Path) -> tuple[Path, Path] | None:
         """The file a scanned copy at ``path`` stands for, and its path below the directory copied.

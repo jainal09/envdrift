@@ -136,17 +136,32 @@ class PathForms:
         return cls(paths, tuple(path for path in paths if path.is_absolute()), (names,))
 
     def match(self, patterns: Iterable[str]) -> bool:
-        """Whether any pattern of ``patterns`` matches one of these names."""
-        return any(self._matches_one(pattern) for pattern in patterns)
+        """Whether any pattern of ``patterns`` matches one of these names.
+
+        The patterns without a separator are taken together: a file with several views is hidden
+        when every view is hidden by one of them, not necessarily the same one.
+        """
+        bare: list[str] = []
+        for pattern in patterns:
+            if _is_bare(pattern):
+                bare.append(pattern)
+            elif self._matches_one(pattern):
+                return True
+        return bool(bare) and self._hidden_in_every_view(bare)
 
     def _matches_one(self, pattern: str) -> bool:
-        """Whether ``pattern`` matches one of these names, by the kind of pattern it is."""
+        """Whether the absolute or path ``pattern`` matches one of these names."""
         if is_absolute_pattern(pattern):
             return any(fnmatch.fnmatch(name.as_posix(), pattern) for name in self.absolute)
-        if _is_bare(pattern):
-            views = self.bare or (self.relative,)
-            return all(any(_matches_a_part(name, pattern) for name in view) for view in views)
         return any(_matches_name_or_trailing_part(name, pattern) for name in self.relative)
+
+    def _hidden_in_every_view(self, patterns: list[str]) -> bool:
+        """Whether one of the patterns without a separator matches in each view of the file."""
+        views = self.bare or (self.relative,)
+        return all(
+            any(_matches_a_part(name, pattern) for pattern in patterns for name in view)
+            for view in views
+        )
 
 
 @dataclass

@@ -223,6 +223,19 @@ class TestPathFormsMatching:
         assert forms.match(["app.env"])
         assert forms.match(["nothing", "sub"])  # the patterns are alternatives; the views are not
 
+    def test_each_view_may_be_hidden_by_a_different_pattern(self):
+        forms = PathForms(
+            relative=(Path("/ci/a/f.env"),), bare=((Path("a/f.env"),), (Path("b/f.env"),))
+        )
+
+        assert not forms.match(["a"])  # the second view has no `a`
+        assert not forms.match(["b"])
+        assert forms.match(["a", "b"])  # one pattern per view
+        assert forms.match(["f.env"])
+        assert forms.match(
+            ["a", "**/ci/**"]
+        )  # a path pattern hides the file whatever the views say
+
     def test_a_plain_absolute_path_is_matched_by_a_pattern_without_a_separator_on_its_name(
         self, tmp_path: Path
     ):
