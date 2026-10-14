@@ -341,6 +341,14 @@ def _decode_unicode_text(raw: bytes) -> str | None:
     return None
 
 
+def _resolved(path: Path) -> Path | None:
+    """``path`` with its symlinks resolved, or ``None`` when that fails."""
+    try:
+        return path.resolve()
+    except (OSError, RuntimeError):  # RuntimeError: a symlink loop before Python 3.13
+        return None
+
+
 def _path_below(path: Path | None, base: Path) -> Path | None:
     """``path`` relative to ``base``, or ``None`` when it is not below it."""
     if path is None:
@@ -707,27 +715,10 @@ class NativeScanner(ScannerBackend):
         # raise, the fallback matched against the absolute path, and every
         # directory-scoped pattern (bin/**, dist/**, vendor/**, ...) silently
         # stopped applying — ``guard`` and ``guard .`` returned different results.
-        try:
-            base = base_path.resolve()
-        except (OSError, RuntimeError):  # RuntimeError: a symlink loop before Python 3.13
-            base = base_path
-        try:
-            real: Path | None = file_path.resolve()
-        except (OSError, RuntimeError):
-            real = None
+        base = _resolved(base_path) or base_path
+        real = _resolved(file_path)
         name = file_path.name
-
-        scanned = _path_below(real, base)
-        if scanned is None:
-            # A symlink to a file outside the scan path: its name stands for
-            # the whole path, so a path-shaped default never matches it.
-            found = _path_below(file_path, base) or Path(name)
-            if any(
-                self._pattern_matches(pattern, name, name, found.parts)
-                for pattern in self._ignore_patterns
-            ):
-                return True
-        elif self._matches_any(self._ignore_patterns, scanned, name):
+        if self._matches_builtin_patterns(file_path, base, real, name):
             return True
         if not self._additional_ignore_patterns:
             return False
@@ -735,6 +726,21 @@ class NativeScanner(ScannerBackend):
         anchor = self._pattern_anchor(base, cwd, file_path, real)
         own = _path_below(real, anchor) or _path_below(file_path, anchor) or Path(name)
         return self._matches_any(self._additional_ignore_patterns, own, name)
+
+    def _matches_builtin_patterns(
+        self, file_path: Path, base: Path, real: Path | None, name: str
+    ) -> bool:
+        """Whether a built-in ignore pattern matches the file, by its path below the scan path."""
+        scanned = _path_below(real, base)
+        if scanned is not None:
+            return self._matches_any(self._ignore_patterns, scanned, name)
+        # A symlink to a file outside the scan path: its name stands for the whole path, so a
+        # path-shaped default never matches it.
+        found = _path_below(file_path, base) or Path(name)
+        return any(
+            self._pattern_matches(pattern, name, name, found.parts)
+            for pattern in self._ignore_patterns
+        )
 
     @staticmethod
     def _pattern_anchor(base: Path, cwd: Path, file_path: Path, real: Path | None) -> Path:
