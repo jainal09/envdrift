@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import replace
 from pathlib import Path
 
@@ -202,6 +203,7 @@ class TestJsonOutput:
             "error": None,
             "skipped": False,
             "skip_reason": None,
+            "warnings": [],
         }
         assert gitleaks["skipped"] is True
         assert gitleaks["error"] is None
@@ -1186,6 +1188,138 @@ class TestScannerErrorsAreAnsiClean:
         (note,) = sarif["runs"][0]["invocations"][0]["toolExecutionNotifications"]
         assert "\x1b" not in note["message"]["text"]
         assert note["message"]["text"].endswith("FTL stat proj: no such file or directory")
+
+
+# A warning as the detect-secrets version check words it: both versions, the consequence and the fix.
+_VERSION_WARNING = (
+    "The installed version is 1.4.0, but envdrift grades findings against version 1.5.0. "
+    "Another version can rename or add detectors, so severities may be inaccurate. "
+    "Install the pinned version: pip install detect-secrets==1.5.0"
+)
+
+
+def _warned_result(*warnings: str, error: str | None = None) -> AggregatedScanResult:
+    """A run whose detect-secrets scan succeeded (or failed, with ``error``) and warned."""
+    return AggregatedScanResult(
+        results=[
+            ScanResult(scanner_name="native", files_scanned=3, duration_ms=10),
+            ScanResult(
+                scanner_name="detect-secrets",
+                files_scanned=2,
+                duration_ms=20,
+                error=error,
+                warnings=list(warnings),
+            ),
+        ],
+        total_findings=0,
+        unique_findings=[],
+        scanners_used=["native", "detect-secrets"],
+        total_duration_ms=30,
+    )
+
+
+def _flat(console: Console) -> str:
+    """The recorded output with panel borders removed and whitespace collapsed."""
+    return " ".join(re.sub(r"[│╭╮╰╯─]", " ", console.export_text()).split())
+
+
+class TestScannerWarnings:
+    """A non-fatal scanner warning reaches human, JSON and SARIF output, never the verdict."""
+
+    def test_scan_result_has_no_warnings_by_default(self):
+        assert ScanResult(scanner_name="native").warnings == []
+
+    def test_each_result_gets_its_own_warning_list(self):
+        first, second = ScanResult(scanner_name="a"), ScanResult(scanner_name="b")
+        first.warnings.append("only on a")
+        assert second.warnings == []
+
+    def test_json_carries_the_warning_per_scanner(self):
+        data = json.loads(format_json(_warned_result(_VERSION_WARNING)))
+
+        native, detect_secrets = data["scanner_results"]
+        assert native["warnings"] == []
+        assert detect_secrets["warnings"] == [_VERSION_WARNING]
+        assert "1.4.0" in detect_secrets["warnings"][0]
+        assert "1.5.0" in detect_secrets["warnings"][0]
+        assert "pip install detect-secrets==1.5.0" in detect_secrets["warnings"][0]
+
+    def test_json_warning_does_not_change_the_verdict(self):
+        """The scan completed, so a warning is not a failure: exit 0, nothing blocking."""
+        result = _warned_result(_VERSION_WARNING)
+        data = json.loads(format_json(result))
+
+        assert data["exit_code"] == 0
+        assert data["has_blocking_findings"] is False
+        assert result.exit_code == 0
+        assert result.has_errors is False
+
+    def test_json_warning_has_no_escapes(self):
+        data = json.loads(format_json(_warned_result("\x1b[31mred\x1b[0m warning")))
+        assert data["scanner_results"][1]["warnings"] == ["red warning"]
+
+    def test_sarif_carries_the_warning_as_a_warning_notification(self):
+        document = json.loads(format_sarif(_warned_result(_VERSION_WARNING)))
+
+        invocation = document["runs"][0]["invocations"][0]
+        assert invocation["executionSuccessful"] is True
+        assert invocation["exitCode"] == 0
+        assert invocation["toolExecutionNotifications"] == [
+            {"level": "warning", "message": {"text": f"detect-secrets: {_VERSION_WARNING}"}}
+        ]
+
+    def test_sarif_lists_errors_before_warnings(self):
+        result = _warned_result(_VERSION_WARNING, error="boom")
+
+        invocation = json.loads(format_sarif(result))["runs"][0]["invocations"][0]
+
+        assert invocation["executionSuccessful"] is False
+        assert [n["level"] for n in invocation["toolExecutionNotifications"]] == [
+            "error",
+            "warning",
+        ]
+
+    def test_sarif_warning_has_no_escapes_and_validates_against_the_schema(self):
+        document = json.loads(format_sarif(_warned_result("\x1b[31mred\x1b[0m warning")))
+
+        (note,) = document["runs"][0]["invocations"][0]["toolExecutionNotifications"]
+        assert note["message"]["text"] == "detect-secrets: red warning"
+        _validate_against_sarif_schema(document)
+
+    def test_sarif_without_warnings_has_no_notifications(self):
+        invocation = json.loads(format_sarif(_warned_result()))["runs"][0]["invocations"][0]
+        assert invocation["toolExecutionNotifications"] == []
+
+    def test_rich_shows_the_warning_and_keeps_the_clean_verdict(self):
+        console = Console(record=True, force_terminal=True, width=120)
+
+        format_rich(_warned_result(_VERSION_WARNING), console)
+        output = _flat(console)
+
+        assert "Scanner Warnings" in output
+        assert "detect-secrets" in output
+        assert "1.4.0" in output
+        assert "1.5.0" in output
+        assert "severities may be inaccurate" in output
+        assert "pip install detect-secrets==1.5.0" in output
+        # A warning is not an error: no failure panel, and the run still reads as clean.
+        assert "Scanner Errors" not in output
+        assert "No secrets or policy violations detected" in output
+
+    def test_rich_keeps_brackets_in_a_warning_literal(self):
+        """A warning is text, not Rich markup: ``[red]`` must not be swallowed as a tag."""
+        console = Console(record=True, force_terminal=True, width=120)
+
+        format_rich(_warned_result("install detect-secrets[all] [red] now"), console)
+
+        assert "detect-secrets[all] [red] now" in _flat(console)
+
+    def test_rich_without_warnings_has_no_warning_panel(self):
+        console = Console(record=True, force_terminal=True, width=120)
+
+        format_rich(_warned_result(), console)
+
+        assert "Scanner Warnings" not in console.export_text()
 
 
 def test_files_with_findings_counts_one_file_reported_in_two_forms(tmp_path, monkeypatch):

@@ -169,6 +169,11 @@ class ScanResult:
             ran. A skipped scanner is distinct from both "ran clean" and
             "failed": it carries no error (the run stays complete for exit-code
             purposes) but must remain visible in every output mode (#641).
+        warnings: Non-fatal notices about a scanner that ran, for example that
+            the installed detect-secrets is not the version its severities were
+            written for. The scan completed and its findings stand, so a warning
+            never changes the exit code, but it must be visible in every output
+            mode: the findings may be less reliable than they look.
     """
 
     scanner_name: str
@@ -177,6 +182,7 @@ class ScanResult:
     duration_ms: int = 0
     error: str | None = None
     skip_reason: str | None = None
+    warnings: list[str] = field(default_factory=list)
 
     @property
     def success(self) -> bool:

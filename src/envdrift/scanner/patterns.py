@@ -5,6 +5,12 @@ and configuration files. Patterns are categorized by confidence level:
 
 - CRITICAL_PATTERNS: High-confidence patterns with known secret formats
 - HIGH_PATTERNS: Generic patterns that likely indicate secrets
+
+The list a pattern sits in says how sure the match is; the pattern's own ``severity`` says
+how bad a leak is, so a password hash in HIGH_PATTERNS is CRITICAL. That severity is also
+the reference grade for its credential class in the other scanners (see "Severity" in
+docs/cli/guard.md): a test fails when gitleaks, Infisical, detect-secrets, Kingfisher or
+git-secrets grade the same class differently.
 """
 
 from __future__ import annotations
@@ -256,7 +262,7 @@ CRITICAL_PATTERNS: list[SecretPattern] = [
         id="mailchimp-api-key",
         description="Mailchimp API Key",
         pattern=re.compile(r"([a-f0-9]{32}-us[0-9]{1,2})"),
-        severity=FindingSeverity.HIGH,
+        severity=FindingSeverity.CRITICAL,
         keywords=("mailchimp",),
         require_keyword=True,
     ),
@@ -316,7 +322,7 @@ CRITICAL_PATTERNS: list[SecretPattern] = [
         id="discord-bot-token",
         description="Discord Bot Token",
         pattern=re.compile(r"([MN][A-Za-z\d]{23,}\.[\w-]{6}\.[\w-]{27})"),
-        severity=FindingSeverity.HIGH,
+        severity=FindingSeverity.CRITICAL,
         keywords=("discord",),
     ),
     SecretPattern(
@@ -330,7 +336,7 @@ CRITICAL_PATTERNS: list[SecretPattern] = [
         id="telegram-bot-token",
         description="Telegram Bot Token",
         pattern=re.compile(r"([0-9]{8,10}:[a-zA-Z0-9_-]{35})"),
-        severity=FindingSeverity.HIGH,
+        severity=FindingSeverity.CRITICAL,
         keywords=("telegram", "bot"),
         require_keyword=True,
     ),
@@ -439,12 +445,15 @@ CRITICAL_PATTERNS: list[SecretPattern] = [
 
 # Mixed-confidence patterns - patterns with varying severity levels
 HIGH_PATTERNS: list[SecretPattern] = [
-    # JWT - medium severity because JWTs are often meant to be shared
+    # JWT - HIGH, as gitleaks, Infisical and detect-secrets grade it. Some JWTs are meant to
+    # be shared (an OIDC ID token, a Supabase anon key), but a bearer or session token and a
+    # Supabase service_role key look the same and no pattern can tell them apart. It was
+    # MEDIUM here, so a run without gitleaks passed a JWT at the default --fail-on high.
     SecretPattern(
         id="jwt-token",
         description="JSON Web Token",
         pattern=re.compile(r"(eyJ[a-zA-Z0-9_-]*\.eyJ[a-zA-Z0-9_-]*\.[a-zA-Z0-9_-]*)"),
-        severity=FindingSeverity.MEDIUM,
+        severity=FindingSeverity.HIGH,
     ),
     SecretPattern(
         id="generic-api-key",
@@ -497,18 +506,18 @@ HIGH_PATTERNS: list[SecretPattern] = [
         pattern=re.compile(r"(?i)redis://(?:[^:]+:)?([^@]+)@[^\s]+"),
         severity=FindingSeverity.HIGH,
     ),
-    # Password hashes (dangerous if leaked)
+    # Password hashes (dangerous if leaked), CRITICAL like Kingfisher's hash rules
     SecretPattern(
         id="bcrypt-hash",
         description="Bcrypt Password Hash",
         pattern=re.compile(r"(\$2[ayb]\$[0-9]{2}\$[a-zA-Z0-9./]{53})"),
-        severity=FindingSeverity.HIGH,
+        severity=FindingSeverity.CRITICAL,
     ),
     SecretPattern(
         id="sha512crypt-hash",
         description="SHA-512 Crypt Password Hash",
         pattern=re.compile(r"(\$6\$[a-zA-Z0-9./]{8,16}\$[a-zA-Z0-9./]{86})"),
-        severity=FindingSeverity.HIGH,
+        severity=FindingSeverity.CRITICAL,
     ),
     # Docker registry auth
     SecretPattern(

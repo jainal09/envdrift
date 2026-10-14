@@ -1,4 +1,4 @@
-"""Tests for detect-secrets scanner integration."""
+"""Tests for the detect-secrets scanner: installer, scan and report parsing, severities."""
 
 from __future__ import annotations
 
@@ -11,6 +11,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from envdrift.scanner import detect_secrets as detect_secrets_module
 from envdrift.scanner.base import FindingSeverity
 from envdrift.scanner.detect_secrets import (
     DETECTOR_SEVERITY,
@@ -20,6 +21,7 @@ from envdrift.scanner.detect_secrets import (
     DetectSecretsScanner,
     _get_detect_secrets_version,
 )
+from tests.scanner.detect_secrets_helpers import no_version_probe  # noqa: F401  (autouse)
 
 
 class TestDetectSecretsInstaller:
@@ -103,6 +105,33 @@ class TestDetectSecretsInstaller:
         cmd = mock_run.call_args[0][0]
         assert cmd[:3] == [sys.executable, "-m", "pip"]
         assert cmd[-1] == "detect-secrets==1.5.0"
+
+    @patch("shutil.which", return_value=None)
+    @patch("subprocess.run")
+    def test_a_reinstall_forgets_the_version_probed_before_it(
+        self, mock_run: MagicMock, _mock_which: MagicMock
+    ):
+        """The version check reads the package that is there after an install, not before it."""
+        detect_secrets_module._installed_versions[sys.executable] = "1.4.0"
+        mock_run.return_value = SimpleNamespace(returncode=0, stderr="", stdout="")
+
+        assert DetectSecretsInstaller(version="1.5.0").install(force=True) is True
+
+        assert detect_secrets_module._installed_versions == {}
+
+    @patch("shutil.which", return_value=None)
+    @patch("subprocess.run")
+    def test_a_failed_install_keeps_the_version_probed_before_it(
+        self, mock_run: MagicMock, _mock_which: MagicMock
+    ):
+        """Nothing changed, so what was probed still holds."""
+        detect_secrets_module._installed_versions[sys.executable] = "1.4.0"
+        mock_run.return_value = SimpleNamespace(returncode=1, stderr="boom", stdout="")
+
+        with pytest.raises(DetectSecretsInstallError):
+            DetectSecretsInstaller(version="1.5.0").install(force=True)
+
+        assert detect_secrets_module._installed_versions == {sys.executable: "1.4.0"}
 
     @patch.object(DetectSecretsInstaller, "_is_installed", return_value=False)
     @patch("shutil.which", return_value=None)
@@ -194,6 +223,13 @@ class TestDetectSecretsScanner:
         scanner = DetectSecretsScanner(auto_install=False)
         assert scanner.get_version() is None
 
+    @patch("subprocess.run", side_effect=OSError("no interpreter"))
+    def test_get_version_returns_none_when_the_probe_cannot_run(self, _mock_run: MagicMock):
+        """The probe is a subprocess: when it cannot start there is no version, not a crash."""
+        scanner = DetectSecretsScanner(auto_install=False)
+        assert scanner.get_version() is None
+        assert detect_secrets_module._installed_versions == {}
+
     def test_ensure_installed_when_disabled_raises(self):
         """_ensure_installed raises when auto-install disabled."""
         scanner = DetectSecretsScanner(auto_install=False)
@@ -268,6 +304,17 @@ class TestDetectSecretsScanner:
         assert finding.severity == FindingSeverity.HIGH
 
 
+def _scan_printing(path: Path, stdout: str, stderr: str = "", returncode: int = 0):
+    """Scan ``path`` with a detect-secrets that exits ``returncode`` printing ``stdout``/``stderr``."""
+    scanner = DetectSecretsScanner(auto_install=False)
+    output = SimpleNamespace(returncode=returncode, stdout=stdout, stderr=stderr)
+    with (
+        patch.object(scanner, "_ensure_installed", return_value=None),
+        patch("subprocess.run", return_value=output),
+    ):
+        return scanner.scan([path])
+
+
 class TestDetectSecretsScan:
     """Tests for detect-secrets scan behavior."""
 
@@ -285,7 +332,6 @@ class TestDetectSecretsScan:
 
     def test_scan_parses_baseline(self, tmp_path: Path):
         """Scan parses JSON baseline output into findings."""
-        scanner = DetectSecretsScanner(auto_install=False)
         baseline = {
             "results": {
                 "config.py": [
@@ -304,27 +350,57 @@ class TestDetectSecretsScan:
                 ],
             }
         }
-        with patch.object(scanner, "_ensure_installed", return_value=None):
-            with patch("subprocess.run") as mock_run:
-                mock_run.return_value = SimpleNamespace(
-                    returncode=0, stdout=json.dumps(baseline), stderr=""
-                )
-                result = scanner.scan([tmp_path])
+        result = _scan_printing(tmp_path, json.dumps(baseline))
 
         assert result.error is None
         assert result.files_scanned == 2
         assert len(result.findings) == 2
         assert result.findings[0].file_path == tmp_path / "config.py"
 
-    def test_scan_handles_invalid_json(self, tmp_path: Path):
-        """Scan ignores invalid JSON output."""
-        scanner = DetectSecretsScanner(auto_install=False)
-        with patch.object(scanner, "_ensure_installed", return_value=None):
-            with patch("subprocess.run") as mock_run:
-                mock_run.return_value = SimpleNamespace(returncode=0, stdout="not-json", stderr="")
-                result = scanner.scan([tmp_path])
+    def test_scan_reports_output_it_cannot_read_as_an_error(self, tmp_path: Path):
+        """A report that cannot be read is not a clean run (#851).
+
+        Unreadable output with nothing on stderr used to pass as "no findings".
+        """
+        result = _scan_printing(tmp_path, "not-json")
+
+        assert result.error is not None
+        assert "detect-secrets output error" in result.error
+        assert "not-json" in result.error
+        assert result.findings == []
+
+    def test_scan_prefers_stderr_in_the_unreadable_output_error(self, tmp_path: Path):
+        result = _scan_printing(tmp_path, "not-json", stderr="Traceback: boom")
+
+        assert result.error == "detect-secrets output error: Traceback: boom"
+
+    @pytest.mark.parametrize(
+        "stdout",
+        ["[]", "null", '"done"', "42", "{}", '{"version": "1.5.0"}', '{"results": []}'],
+    )
+    def test_scan_reports_json_that_is_not_a_report_as_an_error(self, tmp_path: Path, stdout: str):
+        """A report is an object with a ``results`` mapping, empty when nothing was found.
+
+        Anything else cannot be told from a scan that looked at nothing, so it is not a clean run.
+        """
+        result = _scan_printing(tmp_path, stdout)
+
+        assert result.error is not None
+        assert result.error.startswith("detect-secrets output error: ")
+        assert result.findings == []
+
+    def test_scan_accepts_an_empty_report(self, tmp_path: Path):
+        result = _scan_printing(tmp_path, '{"results": {}}')
 
         assert result.error is None
+        assert result.findings == []
+        assert result.files_scanned == 0
+
+    def test_scan_reports_a_missing_report_as_an_error(self, tmp_path: Path):
+        """detect-secrets always prints a baseline; none at all means nothing was scanned."""
+        result = _scan_printing(tmp_path, "  \n")
+
+        assert result.error == f"detect-secrets printed no report for {tmp_path}"
         assert result.findings == []
 
     def test_scan_timeout_returns_error(self, tmp_path: Path):
@@ -362,3 +438,28 @@ def test_emitted_detector_types_get_their_intended_severity(emitted_type: str):
     finding = scanner._parse_secret(secret, Path("app.cfg"))
     assert finding is not None
     assert finding.severity == FindingSeverity.CRITICAL
+
+
+# detect-secrets graded these by a table that disagreed with the other scanners (#850).
+# The ``type`` strings are those detect-secrets 1.5.0 emits.
+@pytest.mark.parametrize(
+    ("emitted_type", "expected"),
+    [
+        ("Private Key", FindingSeverity.CRITICAL),
+        ("Secret Keyword", FindingSeverity.HIGH),
+        ("Artifactory Credentials", FindingSeverity.HIGH),
+        ("Twilio API Key", FindingSeverity.HIGH),
+        # Never lowered below the HIGH it always was: a JWT can be a bearer token.
+        ("JSON Web Token", FindingSeverity.HIGH),
+        ("Base64 High Entropy String", FindingSeverity.MEDIUM),
+    ],
+)
+def test_detector_grades_follow_the_cross_scanner_policy(
+    emitted_type: str, expected: FindingSeverity
+):
+    """The full table is held to tests/severity_policy.py by test_severity_policy.py."""
+    scanner = DetectSecretsScanner(auto_install=False)
+    secret = {"type": emitted_type, "line_number": 1, "hashed_secret": "0123abcd"}
+    finding = scanner._parse_secret(secret, Path("app.cfg"))
+    assert finding is not None
+    assert finding.severity == expected

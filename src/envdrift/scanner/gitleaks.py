@@ -30,13 +30,13 @@ from envdrift.install_integrity import (
     verify_download,
 )
 from envdrift.scanner.base import (
-    FindingSeverity,
     ScanFinding,
     ScannerBackend,
     ScanResult,
 )
 from envdrift.scanner.patterns import hash_secret, redact_secret
 from envdrift.scanner.platform_utils import scan_argument, symlinked_file
+from envdrift.scanner.rule_severity import rule_severity
 from envdrift.utils.git import get_git_root, has_git_head
 from envdrift.utils.text import strip_ansi
 
@@ -64,17 +64,6 @@ def _get_gitleaks_download_urls() -> dict[str, str]:
 def _get_gitleaks_checksums_url() -> str:
     """Get the upstream checksums file URL template from constants."""
     return _load_constants().get("gitleaks_checksums_url", "")
-
-
-# Severity mapping from gitleaks to our severity levels
-SEVERITY_MAP: dict[str, FindingSeverity] = {
-    "CRITICAL": FindingSeverity.CRITICAL,
-    "HIGH": FindingSeverity.HIGH,
-    "MEDIUM": FindingSeverity.MEDIUM,
-    "LOW": FindingSeverity.LOW,
-    "INFO": FindingSeverity.INFO,
-    # Gitleaks doesn't have severity in output, default to HIGH
-}
 
 
 class GitleaksNotFoundError(Exception):
@@ -715,8 +704,10 @@ class GitleaksScanner(ScannerBackend):
             rule_id: str = str(item.get("RuleID", "unknown"))
             rule_description: str = str(item.get("Description") or rule_id)
 
-            # Gitleaks doesn't provide severity, default based on rule
-            severity = FindingSeverity.HIGH
+            # Gitleaks reports no severity, so grade by the rule that matched. This used
+            # to be a flat HIGH, which let ``--fail-on critical`` through for an AWS key
+            # ID or a private key (#850).
+            severity = rule_severity(rule_id, str(secret))
 
             return ScanFinding(
                 file_path=file_path,

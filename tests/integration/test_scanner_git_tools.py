@@ -17,6 +17,7 @@ from pathlib import Path
 
 import pytest
 
+from envdrift.scanner.base import FindingSeverity
 from envdrift.scanner.git_secrets import GitSecretsScanner
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -257,6 +258,74 @@ class TestGitSecretsRealBinary:
         assert result.error is None
         assert len(result.findings) >= 1, "git-secrets finding (emitted on stderr) was not captured"
         assert any("aws" in f.rule_id for f in result.findings)
+        # An AWS access key ID is CRITICAL whichever scanner finds it (#850).
+        assert [f.severity for f in result.findings] == [FindingSeverity.CRITICAL]
+
+    def test_scan_grades_an_aws_secret_access_key_critical(self, scanner_test_env):
+        """git-secrets' AWS provider also flags a secret access key: CRITICAL like gitleaks."""
+        work_dir = scanner_test_env["work_dir"]
+        self._init_repo_with_aws_patterns(work_dir)
+        # 40 characters of the base64 alphabet, built here so the literal is never whole.
+        secret = "Zq8W7E6R5T4Y3U2I1O0P" + "aSdFgHjKlZxCvBnM1234"
+        (work_dir / "secret.cfg").write_text(f"aws_secret_access_key = {secret}\n")
+
+        scanner = GitSecretsScanner(auto_install=False, register_aws=True)
+        result = scanner.scan([work_dir])
+
+        assert result.error is None
+        assert [(f.rule_id, f.severity) for f in result.findings] == [
+            ("git-secrets-aws-secret-key", FindingSeverity.CRITICAL)
+        ]
+
+    def test_scan_grades_a_hash_rocket_secret_access_key_critical(self, scanner_test_env):
+        """Puppet, Ruby and PHP assign with ``=>``, which git-secrets' AWS pattern matches too.
+
+        git-secrets flags the line, so the key on it is graded like the one assigned with ``=``.
+        """
+        work_dir = scanner_test_env["work_dir"]
+        self._init_repo_with_aws_patterns(work_dir)
+        secret = "Zq8W7E6R5T4Y3U2I1O0P" + "aSdFgHjKlZxCvBnM1234"
+        (work_dir / "puppet.pp").write_text(f"aws_secret_access_key => '{secret}',\n")
+        (work_dir / "ruby.rb").write_text(f':aws_secret_access_key => "{secret}"\n')
+        (work_dir / "php.php").write_text(f"'secret_access_key' => '{secret}',\n")
+
+        scanner = GitSecretsScanner(auto_install=False, register_aws=True)
+        result = scanner.scan([work_dir])
+
+        assert result.error is None
+        graded = {f.file_path.name: (f.rule_id, f.severity) for f in result.findings}
+        assert graded == dict.fromkeys(
+            ("puppet.pp", "ruby.rb", "php.php"),
+            ("git-secrets-aws-secret-key", FindingSeverity.CRITICAL),
+        )
+
+    def test_scan_grades_a_region_name_as_a_password_not_an_aws_key(self, scanner_test_env):
+        """A flagged line holding the letters "asia" is not an AWS key: HIGH, not CRITICAL.
+
+        The rule type decides the severity, and the type was read from the letters "akia" and
+        "asia" in the line, so ``password=asia-northeast1`` (a GCP region) graded CRITICAL.
+        """
+        work_dir = scanner_test_env["work_dir"]
+        self._init_repo_with_aws_patterns(work_dir)
+        subprocess.run(
+            ["git", "secrets", "--add", r"password\s*=\s*\S+"],
+            cwd=str(work_dir),
+            check=True,
+            capture_output=True,
+        )
+        (work_dir / "region.cfg").write_text("password=asia-northeast1\n")
+        # Built here so the access key ID is never whole in the source (push protection).
+        (work_dir / "aws.cfg").write_text("AWS_KEY=AKIA" + "Z9Q8W7E6R5T4Y3U2\n")
+
+        scanner = GitSecretsScanner(auto_install=False, register_aws=True)
+        result = scanner.scan([work_dir])
+
+        assert result.error is None
+        graded = {f.file_path.name: (f.rule_id, f.severity) for f in result.findings}
+        assert graded == {
+            "region.cfg": ("git-secrets-password", FindingSeverity.HIGH),
+            "aws.cfg": ("git-secrets-aws-access-key", FindingSeverity.CRITICAL),
+        }
 
     def test_scan_clean_repo_has_no_findings(self, scanner_test_env):
         """scan() of a repo without secrets yields no findings and no error."""

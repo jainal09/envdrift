@@ -45,6 +45,65 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+# An AWS access key ID, the credential the native scanner and gitleaks grade CRITICAL. The
+# type decides the severity, so a line is an access key ID only if it holds one: the letters
+# "asia" alone (a GCP region such as ``asia-northeast1``) do not make it one. The IAM entity
+# IDs that ``git secrets --register-aws`` also flags (AIDA, AROA, ...) name a principal and
+# open no door, so they stay generic.
+_AWS_ACCESS_KEY_ID_RE = re.compile(
+    r"(?<![A-Z0-9])(?:A3T[A-Z0-9]|AKIA|ABIA|ACCA|ASIA)[A-Z0-9]{16}(?![A-Z0-9])"
+)
+
+# The other two CRITICAL types are also earned by the credential, not by a word near it: a
+# secret access key is the 40-character value assigned to the AWS secret field itself, and a
+# private key is a PEM header or a long base64 value assigned to ``private_key`` itself. A line
+# that only names ``aws_secret_access_key_file`` or ``private_key_path``, holds a long value
+# under another field (``private_key_id``, a checksum next to the file name), holds neither,
+# so it is HIGH, not CRITICAL (see ``_holds_credential``). The key is base64 without padding,
+# so a ``=`` before it is the assignment, not part of it. The assignment is ``=``, ``:`` or the
+# hash rocket ``=>`` of Puppet, Ruby and PHP: git-secrets' own AWS pattern takes all three.
+_AWS_SECRET_ACCESS_KEY_RE = re.compile(
+    r"(?:aws_secret(?:_access)?(?:_key)?|secret_access_key)[\"']?\s*(?:=>|[=:])\s*[\"']?"
+    r"[A-Za-z0-9/+]{40}(?![A-Za-z0-9/+=])",
+    re.IGNORECASE,
+)
+_PRIVATE_KEY_HEADER_RE = re.compile(r"-----BEGIN [A-Z0-9 ]*PRIVATE KEY")
+_PRIVATE_KEY_VALUE_RE = re.compile(
+    r"private_key[\"']?\s*(?:=>|[:=])\s*[\"']?[A-Za-z0-9+/]{64,}", re.IGNORECASE
+)
+
+# git-secrets reports a matching line, not a rule, so ``_detect_rule_type`` names the
+# credential from the line's text. The grades follow the severity policy of the scanners
+# that grade by credential class (see "Severity" in docs/cli/guard.md): an AWS key or a
+# private key is CRITICAL and a generic password, token or API key HIGH, as in the native
+# scanner. A line that names nothing it can classify stays MEDIUM.
+RULE_TYPE_SEVERITY: dict[str, FindingSeverity] = {
+    "aws-access-key": FindingSeverity.CRITICAL,
+    "aws-secret-key": FindingSeverity.CRITICAL,
+    "private-key": FindingSeverity.CRITICAL,
+    "password": FindingSeverity.HIGH,
+    "token": FindingSeverity.HIGH,
+    "api-key": FindingSeverity.HIGH,
+    "generic-secret": FindingSeverity.MEDIUM,
+}
+
+
+def _holds_credential(rule_type: str, content: str) -> bool:
+    """Whether the line holds the credential its CRITICAL ``rule_type`` is named for.
+
+    ``_detect_rule_type`` names a line by the words in it, which is enough for the generic
+    types but not for a key: ``aws_secret_access_key_file = /root/.aws/credentials`` and
+    ``private_key_path = /etc/ssl/server.pem`` contain no secret.
+    """
+    if rule_type == "aws-secret-key":
+        return _AWS_SECRET_ACCESS_KEY_RE.search(content) is not None
+    if rule_type == "private-key":
+        return (
+            _PRIVATE_KEY_HEADER_RE.search(content) is not None
+            or _PRIVATE_KEY_VALUE_RE.search(content) is not None
+        )
+    return True
+
 
 class GitSecretsNotFoundError(Exception):
     """git-secrets not found."""
@@ -664,8 +723,11 @@ class GitSecretsScanner(ScannerBackend):
         rule_id = self._detect_rule_type(content)
         rule_description = self._get_rule_description(rule_id)
 
-        # Severity based on rule type
-        severity = FindingSeverity.HIGH if "aws" in rule_id else FindingSeverity.MEDIUM
+        # Severity based on rule type. A CRITICAL type needs the credential itself on the line:
+        # a line that only names a key (``private_key_path = ...``) is HIGH at most.
+        severity = RULE_TYPE_SEVERITY.get(rule_id, FindingSeverity.MEDIUM)
+        if severity is FindingSeverity.CRITICAL and not _holds_credential(rule_id, content):
+            severity = FindingSeverity.HIGH
 
         return ScanFinding(
             file_path=file_path,
@@ -695,9 +757,9 @@ class GitSecretsScanner(ScannerBackend):
             r"(AKIA[A-Z0-9]{16})",
             r"(ASIA[A-Z0-9]{16})",
             # AWS Secret Access Key (40 chars, base64-like, adjacent to known keys)
-            r"(?:aws_secret_access_key|secret_access_key|AWS_SECRET)\s*[=:]\s*[\"']?([A-Za-z0-9/+=]{40})[\"']?",
-            # KEY=VALUE or KEY: VALUE
-            r'=\s*["\']?([^"\'\s]+)["\']?',
+            r"(?:aws_secret_access_key|secret_access_key|AWS_SECRET)\s*(?:=>|[=:])\s*[\"']?([A-Za-z0-9/+=]{40})[\"']?",
+            # KEY=VALUE, KEY => VALUE or KEY: VALUE
+            r'(?:=>|=)\s*["\']?([^"\'\s]+)["\']?',
             r':\s*["\']?([^"\'\s]+)["\']?',
         ]
 
@@ -720,10 +782,12 @@ class GitSecretsScanner(ScannerBackend):
         """
         content_lower = content.lower()
 
-        if "akia" in content_lower or "asia" in content_lower:
+        if _AWS_ACCESS_KEY_ID_RE.search(content):
             return "aws-access-key"
         if "aws_secret" in content_lower or "secret_access_key" in content_lower:
             return "aws-secret-key"
+        if _PRIVATE_KEY_HEADER_RE.search(content):
+            return "private-key"
         if "password" in content_lower or "passwd" in content_lower:
             return "password"
         if "token" in content_lower:

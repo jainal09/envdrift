@@ -38,26 +38,91 @@ class TestMapSeverity:
         """netrc credentials should be CRITICAL."""
         assert _map_severity("kingfisher.netrc.1", "netrc Credentials") == FindingSeverity.CRITICAL
 
-    def test_github_token_is_high(self):
-        """GitHub tokens should be HIGH."""
-        assert _map_severity("kingfisher.github.1", "GitHub Token") == FindingSeverity.HIGH
+    def test_github_token_is_critical(self):
+        """GitHub tokens are CRITICAL, as in the native scanner (#850)."""
+        assert _map_severity("kingfisher.github.1", "GitHub Token") == FindingSeverity.CRITICAL
 
-    def test_slack_token_is_high(self):
-        """Slack tokens should be HIGH."""
-        assert _map_severity("kingfisher.slack.1", "Slack Token") == FindingSeverity.HIGH
+    def test_slack_token_is_critical(self):
+        """Slack tokens are CRITICAL, as in the native scanner (#850)."""
+        assert _map_severity("kingfisher.slack.1", "Slack Token") == FindingSeverity.CRITICAL
+
+    @pytest.mark.parametrize(
+        ("rule_id", "rule_name"),
+        [
+            ("kingfisher.aws.1", "AWS Access Key ID"),
+            ("kingfisher.azure.1", "Azure Storage Account Key"),
+            ("kingfisher.gcp.1", "GCP API Key"),
+            ("kingfisher.stripe.1", "Stripe API Key"),
+            ("kingfisher.sendgrid.1", "SendGrid API Key"),
+            ("kingfisher.mailchimp.1", "Mailchimp API Key"),
+            ("kingfisher.npm.1", "npm Access Token"),
+            ("kingfisher.privatekey.1", "Private Key"),
+        ],
+    )
+    def test_provider_credentials_are_critical(self, rule_id: str, rule_name: str):
+        """The credential classes the native scanner grades CRITICAL are CRITICAL here (#850)."""
+        assert _map_severity(rule_id, rule_name) == FindingSeverity.CRITICAL
+
+    def test_twilio_is_high(self):
+        """Twilio rules match SIDs, identifiers whose secret is another value."""
+        assert _map_severity("kingfisher.twilio.1", "Twilio API Key") == FindingSeverity.HIGH
 
     def test_api_key_pattern_is_high(self):
         """Rules containing api_key/api-key pattern should be HIGH."""
-        assert _map_severity("kingfisher.api-key.1", "AWS API Key") == FindingSeverity.HIGH
+        assert _map_severity("kingfisher.api-key.1", "Generic API Key") == FindingSeverity.HIGH
         assert _map_severity("kingfisher.api_key.1", "Generic API_KEY") == FindingSeverity.HIGH
 
     def test_password_is_high(self):
         """Password patterns should be HIGH."""
         assert _map_severity("kingfisher.weak.1", "Weak Password Pattern") == FindingSeverity.HIGH
 
-    def test_unknown_is_medium(self):
-        """Unknown rules should default to MEDIUM."""
-        assert _map_severity("kingfisher.unknown.1", "Unknown Rule") == FindingSeverity.MEDIUM
+    def test_unknown_is_high(self):
+        """A rule no class lists is HIGH, as in every other scanner (fail closed).
+
+        It was MEDIUM, which graded an unlisted credential detector below the generic rules.
+        """
+        assert _map_severity("kingfisher.unknown.1", "Unknown Rule") == FindingSeverity.HIGH
+
+    def test_betterleaks_rules_are_graded_like_gitleaks_and_infisical(self):
+        """Kingfisher's main catalog is betterleaks', graded by the table the others share."""
+        assert _map_severity("betterleaks.aws-access-token", "") == FindingSeverity.CRITICAL
+        assert _map_severity("betterleaks.gitlab-pat", "") == FindingSeverity.CRITICAL
+        assert _map_severity("betterleaks.openai-api-key", "") == FindingSeverity.CRITICAL
+        assert _map_severity("betterleaks.generic-api-key", "") == FindingSeverity.HIGH
+        assert _map_severity("betterleaks.azure-client-id", "") == FindingSeverity.HIGH
+
+    def test_a_stripe_test_key_is_graded_below_a_live_key(self):
+        live = "sk_live_" + "4eC39HqLyjWDarjtT1zdp7dc" + "ABCDEFGH"
+        test = "sk_test_" + "4eC39HqLyjWDarjtT1zdp7dc" + "ABCDEFGH"
+        rule = "betterleaks.stripe-access-token"
+        assert _map_severity(rule, "", live) == FindingSeverity.CRITICAL
+        assert _map_severity(rule, "", test) == FindingSeverity.HIGH
+
+    @pytest.mark.parametrize(
+        ("rule_id", "rule_name"),
+        [
+            ("kingfisher.stripe.1", "Stripe Secret Key"),
+            ("veles.stripe_secret_key", "Stripe API key"),
+        ],
+    )
+    def test_a_rule_graded_by_its_name_downgrades_a_stripe_test_key_too(
+        self, rule_id: str, rule_name: str
+    ):
+        """Only a ``betterleaks.`` rule was checked for the test-mode key, so these stayed CRITICAL."""
+        live = "sk_live_" + "4eC39HqLyjWDarjtT1zdp7dc" + "ABCDEFGH"
+        test = "rk_test_" + "4eC39HqLyjWDarjtT1zdp7dc" + "ABCDEFGH"
+        assert _map_severity(rule_id, rule_name, live) == FindingSeverity.CRITICAL
+        assert _map_severity(rule_id, rule_name, test) == FindingSeverity.HIGH
+        # Kingfisher does not always report the matched value: that is not a test key.
+        assert _map_severity(rule_id, rule_name) == FindingSeverity.CRITICAL
+
+    def test_an_aws_rule_is_critical_though_its_name_also_says_api_key(self):
+        """A rule named for AWS is an AWS credential, whatever else its name says.
+
+        ``AWS API Key`` was HIGH when the generic ``api-key`` keyword was the only one that
+        matched it. AWS is a CRITICAL class in every other scanner (#850), so it is CRITICAL here.
+        """
+        assert _map_severity("kingfisher.api-key.1", "AWS API Key") == FindingSeverity.CRITICAL
 
 
 class TestKingfisherScanner:
@@ -213,8 +278,9 @@ class TestKingfisherScanner:
             assert len(result.findings) == 1
             assert result.findings[0].rule_id == "kingfisher-kingfisher.generic.1"
             assert result.findings[0].rule_description == "Generic API Key"
-            # "Generic API Key" doesn't match HIGH patterns, so it's MEDIUM
-            assert result.findings[0].severity == FindingSeverity.MEDIUM
+            # A rule that names no CRITICAL class is HIGH, the grade of a generic secret. It was
+            # MEDIUM because "Generic API Key" has a space where the keyword has a hyphen.
+            assert result.findings[0].severity == FindingSeverity.HIGH
 
     @patch("shutil.which")
     @patch("subprocess.run")
@@ -252,6 +318,55 @@ class TestKingfisherScanner:
         assert result.severity == FindingSeverity.CRITICAL
         assert "bcrypt" in result.rule_description.lower()
         assert result.line_number == 42
+
+    @pytest.mark.parametrize(
+        ("secret", "snippet", "expected"),
+        [
+            # A report that carries the match only as its snippet: the test key is HIGH.
+            (None, "sk_test_" + "4eC39HqLyjWDarjtT1zdp7dc" + "ABCDEFGH", FindingSeverity.HIGH),
+            (None, "sk_live_" + "4eC39HqLyjWDarjtT1zdp7dc" + "ABCDEFGH", FindingSeverity.CRITICAL),
+            # A snippet that is a line around the key is not the key: stay with CRITICAL.
+            (
+                None,
+                "STRIPE=sk_test_" + "4eC39HqLyjWDarjtT1zdp7dc" + "ABCDEFGH",
+                FindingSeverity.CRITICAL,
+            ),
+            # A secret field, when there is one, is what counts: it wins over the snippet.
+            (
+                "rk_test_" + "4eC39HqLyjWDarjtT1zdp7dc" + "ABCDEFGH",
+                "sk_live_" + "4eC39HqLyjWDarjtT1zdp7dc" + "ABCDEFGH",
+                FindingSeverity.HIGH,
+            ),
+            (
+                "sk_live_" + "4eC39HqLyjWDarjtT1zdp7dc" + "ABCDEFGH",
+                "sk_test_" + "4eC39HqLyjWDarjtT1zdp7dc" + "ABCDEFGH",
+                FindingSeverity.CRITICAL,
+            ),
+        ],
+    )
+    def test_parse_finding_grades_a_stripe_test_key_by_what_the_report_carries(
+        self, secret: str | None, snippet: str, expected: FindingSeverity
+    ):
+        scanner = KingfisherScanner(auto_install=False)
+        finding: dict[str, object] = {
+            "snippet": snippet,
+            "path": "/test/app.env",
+            "line": 3,
+            "validation": {"status": "Not Attempted"},
+        }
+        if secret is not None:
+            finding["secret"] = secret
+
+        result = scanner._parse_finding(
+            {
+                "rule": {"name": "Stripe Secret Key", "id": "kingfisher.stripe.1"},
+                "finding": finding,
+            },
+            Path("/test"),
+        )
+
+        assert result is not None
+        assert result.severity == expected
 
 
 class TestKingfisherInstallation:
