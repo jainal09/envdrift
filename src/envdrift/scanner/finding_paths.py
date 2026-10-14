@@ -202,28 +202,43 @@ class FindingPathDisplay:
     def _names(self, path: Path) -> PathForms:
         """The names :meth:`forms` gives the file at finding path ``path``."""
         copied = self._copied(path)
-        if copied is None:
-            reported: Path | None = path
-            shown = self.path(path)
-        else:  # a scanned copy is named by the file it copies, never by itself
-            reported = None
-            shown = display_path(copied[0], self._cwd)
+        reported, shown = self._reported_and_shown(path, copied)
         absolute = self._cwd / shown
         real = _resolved(absolute)
-        real_below = None if real is None else _below(real, self._real_cwd)
-        below = [name for name in (self._below_cwd(shown), real_below) if name is not None]
-        if below:  # under the cwd, where it was found or where it really is
-            relative = [form for name in below for form in _rooted(name)]
-        elif copied is not None:  # a staged file outside the cwd: its path in the repository
-            relative = list(_rooted(copied[1]))
-        else:  # outside the cwd
-            relative = [name for name in (reported, shown, real) if name is not None]
+        relative = self._relative_names(shown, reported, real, copied)
         absolutes = [absolute]
         if reported is not None and reported.is_absolute():
             absolutes.append(reported)
         if real is not None:
             absolutes.append(real)
         return PathForms(tuple(dict.fromkeys(relative)), tuple(dict.fromkeys(absolutes)))
+
+    def _reported_and_shown(
+        self, path: Path, copied: tuple[Path, Path] | None
+    ) -> tuple[Path | None, Path]:
+        """The path as a scanner reported it, and the path to show, for finding path ``path``.
+
+        A scanned copy has no reported name: it is named by the file it copies, never by itself.
+        """
+        if copied is None:
+            return path, self.path(path)
+        return None, display_path(copied[0], self._cwd)
+
+    def _relative_names(
+        self,
+        shown: Path,
+        reported: Path | None,
+        real: Path | None,
+        copied: tuple[Path, Path] | None,
+    ) -> list[Path]:
+        """The names a relative pattern is matched against (see :meth:`forms`)."""
+        real_below = None if real is None else _below(real, self._real_cwd)
+        below = [name for name in (self._below_cwd(shown), real_below) if name is not None]
+        if below:  # under the cwd, where it was found or where it really is
+            return [form for name in below for form in _rooted(name)]
+        if copied is not None:  # a staged file outside the cwd: its path in the repository
+            return list(_rooted(copied[1]))
+        return [name for name in (reported, shown, real) if name is not None]  # outside the cwd
 
     def _copied(self, path: Path) -> tuple[Path, Path] | None:
         """The file a scanned copy at ``path`` stands for, and its path below the directory copied.

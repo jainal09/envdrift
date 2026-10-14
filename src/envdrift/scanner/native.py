@@ -732,17 +732,21 @@ class NativeScanner(ScannerBackend):
         if not self._additional_ignore_patterns:
             return False
         cwd = Path.cwd().resolve() if cwd is None else cwd
-        anchor = base
-        if (
-            cwd != base
-            and cwd.is_relative_to(base)
-            and (file_path.is_relative_to(cwd) or (real is not None and real.is_relative_to(cwd)))
-        ):
-            # The scan path lies above the cwd, and the file is under it where
-            # it was found or where it really is.
-            anchor = cwd
+        anchor = self._pattern_anchor(base, cwd, file_path, real)
         own = _path_below(real, anchor) or _path_below(file_path, anchor) or Path(name)
         return self._matches_any(self._additional_ignore_patterns, own, name)
+
+    @staticmethod
+    def _pattern_anchor(base: Path, cwd: Path, file_path: Path, real: Path | None) -> Path:
+        """The directory the additional patterns see a file below: ``base``, or the cwd above it.
+
+        With the scan path ``base`` above the cwd, a file under the cwd, where it was found or
+        where it really is, is named below the cwd, never through the directories above it.
+        """
+        if cwd == base or not cwd.is_relative_to(base):
+            return base
+        under_cwd = file_path.is_relative_to(cwd) or (real is not None and real.is_relative_to(cwd))
+        return cwd if under_cwd else base
 
     def _matches_any(self, patterns: tuple[str, ...], path: Path, name: str) -> bool:
         """Whether one of ``patterns`` matches the file at ``path`` (relative) named ``name``."""
