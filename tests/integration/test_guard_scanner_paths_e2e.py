@@ -973,6 +973,32 @@ def test_guard_a_bare_ignore_name_never_matches_the_directories_above_a_scan_pat
 
 
 @pytest.mark.parametrize("scanner", _SCANNERS)
+@pytest.mark.parametrize(
+    ("args", "suppressed"),
+    [(["../build/repo"], False), (["../build/repo", ".."], False), ([".."], True)],
+    ids=["narrow", "narrow-and-ancestor", "ancestor"],
+)
+def test_guard_adding_an_ancestor_scan_path_never_hides_what_the_narrower_one_reports(
+    tmp_path: Path, scanner, args: list[str], suppressed: bool
+):
+    """``build`` hides ``guard ..`` (it is below that scan path), not ``guard ../build/repo`` (#865).
+
+    A file two scan paths reach is hidden only if each of them would hide it, as each scan
+    reports the file unless its own view of the path does not.
+    """
+    name, flags, _config = scanner
+    repo = tmp_path / "build" / "repo"
+    _write_secret(repo / "sub" / "app.env")
+    work = tmp_path / "work"
+    work.mkdir()
+    _ignore_paths(work, "build")
+
+    result, payload = _guard([*args, *flags], cwd=work)
+
+    _assert_verdict(result, payload, name, repo / "sub" / "app.env", suppressed)
+
+
+@pytest.mark.parametrize("scanner", _SCANNERS)
 def test_guard_a_bare_ignore_rule_path_hides_that_rule_below_the_directory(tmp_path: Path, scanner):
     name, flags, _config = scanner
     _write_secret(tmp_path / "proj" / "sub" / "app.env")

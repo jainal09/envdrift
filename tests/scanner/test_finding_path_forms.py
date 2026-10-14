@@ -329,6 +329,63 @@ class TestBareNamesOutsideTheCwd:
         assert not forms.match(["build"])
         assert not forms.match(["repo"])
 
+    def test_an_ancestor_scan_path_does_not_hide_what_the_narrower_one_reports(self, work: Path):
+        """``guard ../build/repo ..``: each scan path would report the file unless its view hides it."""
+        repo = self._repo(work)
+        forms = FindingPathDisplay([repo, work.parent], cwd=work).forms(repo / "sub" / "app.env")
+
+        assert not forms.match(["build"])  # a directory below the ancestor, above the narrower path
+        assert not forms.match(["repo"])
+        assert forms.match(["sub"])  # below both
+        assert forms.match(["app.env"])
+
+    def test_the_order_of_the_scan_paths_does_not_matter(self, work: Path):
+        repo = self._repo(work)
+        file = repo / "sub" / "app.env"
+
+        first = FindingPathDisplay([repo, work.parent], cwd=work).forms(file)
+        second = FindingPathDisplay([work.parent, repo], cwd=work).forms(file)
+
+        assert {first.match([p]) for p in ("build", "sub")} == {
+            second.match([p]) for p in ("build", "sub")
+        }
+        assert not second.match(["build"])
+
+    def test_a_scan_path_that_does_not_hold_the_file_is_no_view_of_it(self, work: Path):
+        """Only the second scan path reaches the file: its names are the ones that count."""
+        repo = self._repo(work)
+        (work.parent / "elsewhere").mkdir()
+        forms = FindingPathDisplay([work.parent / "elsewhere", repo], cwd=work).forms(
+            repo / "sub" / "app.env"
+        )
+
+        assert forms.match(["sub"])
+        assert not forms.match(["build"])
+
+    def test_a_file_named_as_a_scan_path_too_is_not_hidden_by_the_directories_below_another(
+        self, work: Path
+    ):
+        repo = self._repo(work)
+        file = repo / "sub" / "app.env"
+        forms = FindingPathDisplay([repo, file], cwd=work).forms(file)
+
+        assert not forms.match(["sub"])  # the file itself is a scan path with only its own name
+        assert forms.match(["app.env"])
+
+    def test_the_name_a_link_inside_the_scan_path_was_found_under_counts(self, work: Path):
+        """The real file of a link lies outside the scan path; the link's own place does not."""
+        scan = work.parent / "scan"
+        (scan / "sub").mkdir(parents=True)
+        outside = work.parent / "elsewhere"
+        outside.mkdir()
+        (outside / "real.env").write_text("X=1\n")
+        symlink(scan / "sub" / "link.env", outside / "real.env")
+
+        forms = FindingPathDisplay([scan], cwd=work).forms(scan / "sub" / "link.env")
+
+        assert forms.match(["sub"])
+        assert not forms.match(["scan"])
+
     def test_a_path_pattern_still_sees_the_directories_above_the_scan_path(self, work: Path):
         """``**/build/**`` is documented to match here (#859); only bare names are scoped."""
         repo = self._repo(work)
@@ -403,6 +460,11 @@ class TestScannedCopyForms:
         assert forms.match(["config/*"])
         assert forms.match(["**/config/**"])
         assert forms.match([f"{repo.as_posix()}/config/**"])
+        # A pattern without a separator sees the same repository path: no views of its own.
+        assert forms.bare == ()
+        assert forms.match(["config"])
+        assert not forms.match(["build"])
+        assert not forms.match(["repo"])
 
     def test_path_that_cannot_be_resolved_is_no_copy(self, repo: Path, mirror: Path):
         real_resolve = Path.resolve

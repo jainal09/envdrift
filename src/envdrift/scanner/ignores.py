@@ -109,18 +109,20 @@ class PathForms:
     A relative pattern is matched against each ``relative`` name and every
     trailing part of it, so ``config/settings.txt`` matches
     ``deploy/config/settings.txt``. A relative pattern without a separator
-    (``node_modules``) is matched against each part of a name on its own, and
-    against the ``bare`` names when there are any: the names a file outside
-    the working directory has below the scan path it was found under, where
-    ``relative`` also holds the directories above it (#865). An absolute
-    pattern is matched against each ``absolute`` name as a whole. Names are
-    compared with ``/`` separators, the separator patterns use on every
-    platform.
+    (``node_modules``) is matched against each part of a name on its own. For
+    a file outside the working directory that is against the ``bare`` views
+    instead, one per scan path the file sits under, each holding the names it
+    has below that scan path, where ``relative`` also holds the directories
+    above it (#865). The file is hidden only if the pattern matches in every
+    view: a scan path whose view does not match reports it, as that scan alone
+    would. An absolute pattern is matched against each ``absolute`` name as a
+    whole. Names are compared with ``/`` separators, the separator patterns
+    use on every platform.
     """
 
     relative: tuple[PurePath, ...]
     absolute: tuple[PurePath, ...] = ()
-    bare: tuple[PurePath, ...] = ()
+    bare: tuple[tuple[PurePath, ...], ...] = ()
 
     @classmethod
     def of(cls, *paths: PurePath) -> PathForms:
@@ -130,11 +132,8 @@ class PathForms:
         separator sees an absolute path by its own name only: nothing says which of the
         directories above it belong to the project.
         """
-        return cls(
-            paths,
-            tuple(path for path in paths if path.is_absolute()),
-            tuple(type(path)(path.name) if path.is_absolute() else path for path in paths),
-        )
+        names = tuple(type(path)(path.name) if path.is_absolute() else path for path in paths)
+        return cls(paths, tuple(path for path in paths if path.is_absolute()), (names,))
 
     def match(self, patterns: Iterable[str]) -> bool:
         """Whether any pattern of ``patterns`` matches one of these names."""
@@ -145,7 +144,8 @@ class PathForms:
         if is_absolute_pattern(pattern):
             return any(fnmatch.fnmatch(name.as_posix(), pattern) for name in self.absolute)
         if _is_bare(pattern):
-            return any(_matches_a_part(name, pattern) for name in self.bare or self.relative)
+            views = self.bare or (self.relative,)
+            return all(any(_matches_a_part(name, pattern) for name in view) for view in views)
         return any(_matches_name_or_trailing_part(name, pattern) for name in self.relative)
 
 

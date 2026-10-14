@@ -201,10 +201,11 @@ class FindingPathDisplay:
         """Whether the finding path ``path`` is the name the file's real location is shown under.
 
         False for a name reached through a symlink inside the tree, such as a link to a file or a
-        second symlinked scan path. When two names of one file collapse into one finding, the
-        real one is kept, whichever scan path came first. Below a symlinked scan path every name
-        is shown under that path, so the file's real location is compared by the name it is
-        shown under, which is the name a scanner that resolves symlinks reports it by.
+        second symlinked scan path. Of two findings that are otherwise equal, the one reported
+        under the real name is kept. Below a symlinked scan path every name is shown under that
+        path, so the file's real location is compared by the name it is shown under, which is
+        the name a scanner that resolves symlinks reports it by. Of two links to one directory
+        the first scan path given is the one that names the file.
         """
         return self.path(self.location(path)) == self.path(path)
 
@@ -232,10 +233,12 @@ class FindingPathDisplay:
         the shown path and the real location, with their trailing parts:
         ``../config/*`` matches what a scanner reports for such a file under
         ``--pr-base`` run from a subdirectory. A pattern without a separator
-        (``build``) is the exception: it sees only the path below the scan
-        path the file was found under, or the file's own name when it is no
-        more than a scan path, so the directories above a checkout never name
-        it (#865). A copy (see ``aliases``) of a file outside the cwd is named
+        (``build``) is the exception: it sees the path below each scan path the
+        file sits under, one view per scan path, or the file's own name when it
+        is no more than a scan path or below none. The directories above a
+        checkout never name it, and it is hidden only if the pattern matches in
+        every view, so adding a scan path never hides what another one reports
+        (#865). A copy (see ``aliases``) of a file outside the cwd is named
         by its path below the directory copied, as the copy was, so the
         directories above the repository never name a staged file.
         """
@@ -257,10 +260,10 @@ class FindingPathDisplay:
         if copied is not None:  # a staged file outside the cwd: its path in the repository
             return PathForms(_unique(_rooted(copied[1])), _unique(absolutes))
         outside = [name for name in (reported, shown, real) if name is not None]
-        # A pattern without a separator sees what is below the scan path, not the directories
+        # A pattern without a separator sees what is below a scan path, not the directories
         # above it, so a checkout that merely lives under `build/` is not hidden by `build`.
-        bare = self._below_scan_paths(absolute, real) or [Path(shown.name)]
-        return PathForms(_unique(outside), _unique(absolutes), _unique(bare))
+        bare = self._views_below_scan_paths(absolute, real, Path(shown.name))
+        return PathForms(_unique(outside), _unique(absolutes), bare)
 
     def _reported_and_shown(
         self, path: Path, copied: tuple[Path, Path] | None
@@ -283,18 +286,24 @@ class FindingPathDisplay:
         below = [name for name in (self._below_cwd(shown), real_below) if name is not None]
         return [form for name in below for form in _rooted(name)]
 
-    def _below_scan_paths(self, absolute: Path, real: Path | None) -> list[Path]:
-        """The file's path below each scan path it sits under, where it was found or really is.
+    def _views_below_scan_paths(
+        self, absolute: Path, real: Path | None, own_name: Path
+    ) -> tuple[tuple[Path, ...], ...]:
+        """The names the file has below each scan path it sits under, one view per scan path.
 
-        Empty when the file is a scan path itself or below none.
+        The file is seen where it was found and where it really is. A scan path that is the file
+        itself gives its own name only, and so does a file below no scan path.
         """
-        names = []
+        views = []
         for given in self._scan_paths:
+            below = []
             for name, base in ((absolute, given), (real, self._real_dir(given))):
-                below = None if name is None or base is None else _below(name, base)
-                if below is not None and below.parts:
-                    names.append(below)
-        return names
+                found = None if name is None or base is None else _below(name, base)
+                if found is not None:
+                    below.append(found)
+            if below:
+                views.append(_unique(name for name in below if name.parts) or (own_name,))
+        return tuple(dict.fromkeys(views)) or ((own_name,),)
 
     def _copied(self, path: Path) -> tuple[Path, Path] | None:
         """The file a scanned copy at ``path`` stands for, and its path below the directory copied.

@@ -694,6 +694,8 @@ class ScanEngine:
 
         Args:
             findings: List of all findings from all scanners.
+            display: Gives the real location and the real name of a finding path. Without it
+                a file is its reported name.
 
         Returns:
             Deduplicated list sorted by severity (highest first).

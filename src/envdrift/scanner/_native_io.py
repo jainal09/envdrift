@@ -25,10 +25,10 @@ def read_raw_scannable_bytes(file_path: Path) -> bytes | None:
             return None
         # The file can be swapped for a named pipe after the stat above, so the open must not
         # wait for a writer, and what was opened is checked again on its descriptor.
-        flags = os.O_RDONLY | getattr(os, "O_NONBLOCK", 0) | getattr(os, "O_BINARY", 0)
-        descriptor = os.open(file_path, flags)
-        with os.fdopen(descriptor, "rb") as stream:
-            info = os.fstat(stream.fileno())
+        nonblock = getattr(os, "O_NONBLOCK", 0)
+        descriptor = os.open(file_path, os.O_RDONLY | nonblock | getattr(os, "O_BINARY", 0))
+        try:
+            info = os.fstat(descriptor)
             if not stat.S_ISREG(info.st_mode):
                 logger.debug("Skipping native scan of non-regular file %s", file_path)
                 return None
@@ -40,7 +40,14 @@ def read_raw_scannable_bytes(file_path: Path) -> bytes | None:
                     NATIVE_MAX_SCAN_BYTES,
                 )
                 return None
-            raw = stream.read(NATIVE_MAX_SCAN_BYTES + 1)
+            if nonblock:  # a regular file: reads must wait for the data, not give up on it
+                os.set_blocking(descriptor, True)
+            # closefd=False: the descriptor is closed below, exactly once, even when wrapping it
+            # fails (it does for a directory, and a failed wrap leaves the descriptor open).
+            with os.fdopen(descriptor, "rb", closefd=False) as stream:
+                raw = stream.read(NATIVE_MAX_SCAN_BYTES + 1)
+        finally:
+            os.close(descriptor)
     except OSError:
         return None
     if len(raw) <= NATIVE_MAX_SCAN_BYTES:

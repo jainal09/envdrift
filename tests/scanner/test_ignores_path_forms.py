@@ -199,7 +199,7 @@ class TestPathFormsMatching:
         forms = PathForms(
             relative=(Path("/ci/build/repo/sub/app.env"),),
             absolute=(Path("/ci/build/repo/sub/app.env"),),
-            bare=(Path("sub/app.env"),),
+            bare=((Path("sub/app.env"),),),
         )
 
         assert forms.match(["sub"])
@@ -209,6 +209,19 @@ class TestPathFormsMatching:
         # A path pattern keeps the relative names (#859), an absolute one the absolute names.
         assert forms.match(["**/build/**"])
         assert forms.match(["/ci/build/**"])
+
+    def test_a_file_under_two_scan_paths_is_hidden_only_if_every_view_hides_it(self):
+        """``guard ../build/repo ..``: the narrower scan path reports what ``..`` would hide."""
+        forms = PathForms(
+            relative=(Path("/ci/build/repo/sub/app.env"),),
+            bare=((Path("build/repo/sub/app.env"),), (Path("sub/app.env"),)),
+        )
+
+        assert not forms.match(["build"])  # only the view below the ancestor has it
+        assert not forms.match(["repo"])
+        assert forms.match(["sub"])  # both views have it
+        assert forms.match(["app.env"])
+        assert forms.match(["nothing", "sub"])  # the patterns are alternatives; the views are not
 
     def test_a_plain_absolute_path_is_matched_by_a_pattern_without_a_separator_on_its_name(
         self, tmp_path: Path

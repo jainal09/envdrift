@@ -24,8 +24,12 @@ def _native_io_os(**replaced: object) -> SimpleNamespace:
 
     Swapped in for that one module, so nothing else that uses ``os`` meanwhile is affected.
     """
-    names = ("open", "fdopen", "fstat", "O_RDONLY")
+    names = ("open", "fdopen", "fstat", "close", "O_RDONLY")
     return SimpleNamespace(**{**{name: getattr(os, name) for name in names}, **replaced})
+
+
+# Where this platform lists the open descriptors of the process, if it does.
+_FD_DIR = next((Path(path) for path in ("/proc/self/fd", "/dev/fd") if Path(path).is_dir()), None)
 
 
 class TestNativeScanner:
@@ -437,6 +441,29 @@ class TestNativeScannerInternals:
 
         monkeypatch.setattr(native_io, "os", _native_io_os(fstat=report_a_pipe))
         assert NativeScanner._read_scannable_content(file_path) is None
+
+    @pytest.mark.skipif(_FD_DIR is None, reason="counts descriptors through /proc or /dev/fd")
+    def test_a_path_that_turns_into_a_directory_after_the_stat_leaks_no_descriptor(
+        self, tmp_path: Path, monkeypatch
+    ):
+        """Opening a directory succeeds, wrapping it does not: the descriptor must still be closed."""
+        directory = tmp_path / "swapped.env"
+        directory.mkdir()
+        original_stat = Path.stat
+
+        def report_a_regular_file(self: Path, *args, **kwargs):
+            if self == directory:  # what stat saw just before the path became a directory
+                return SimpleNamespace(st_mode=stat.S_IFREG | 0o644, st_size=0)
+            return original_stat(self, *args, **kwargs)
+
+        monkeypatch.setattr(Path, "stat", report_a_regular_file)
+        assert _FD_DIR is not None
+        before = len(list(_FD_DIR.iterdir()))
+
+        for _ in range(50):
+            assert read_raw_scannable_bytes(directory) is None
+
+        assert len(list(_FD_DIR.iterdir())) == before
 
     def test_scan_file_skips_empty_content(self, tmp_path: Path):
         """Empty files return no findings."""
