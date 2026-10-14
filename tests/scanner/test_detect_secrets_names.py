@@ -20,6 +20,7 @@ from tests.scanner.detect_secrets_helpers import (
     add_files,
     fake_detect_secrets,
     init_repo,
+    isolated_git_config,  # noqa: F401  (fixture)
     no_version_probe,  # noqa: F401  (autouse)
     requires_git_config_env,
 )
@@ -42,6 +43,7 @@ NOT_UTF8_PLATFORM = pytest.mark.skipif(
 )
 
 
+@pytest.mark.usefixtures("isolated_git_config")
 class TestUnquotedGitPaths:
     """detect-secrets lists tracked files with ``git ls-files``, which quotes a name it escapes.
 
@@ -53,11 +55,6 @@ class TestUnquotedGitPaths:
     @pytest.fixture
     def scanner(self) -> DetectSecretsScanner:
         return DetectSecretsScanner(auto_install=False)
-
-    @pytest.fixture(autouse=True)
-    def _no_git_settings_in_the_environment(self, monkeypatch: pytest.MonkeyPatch):
-        monkeypatch.delenv("GIT_CONFIG_COUNT", raising=False)
-        monkeypatch.delenv("GIT_CONFIG_PARAMETERS", raising=False)
 
     @staticmethod
     def _scan(scanner: DetectSecretsScanner, target: Path):

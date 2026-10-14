@@ -320,37 +320,42 @@ class TestKingfisherScanner:
         assert result.line_number == 42
 
     @pytest.mark.parametrize(
-        ("field", "snippet", "expected"),
+        ("secret", "snippet", "expected"),
         [
             # A report that carries the match only as its snippet: the test key is HIGH.
-            ("snippet", "sk_test_" + "4eC39HqLyjWDarjtT1zdp7dc" + "ABCDEFGH", FindingSeverity.HIGH),
-            (
-                "snippet",
-                "sk_live_" + "4eC39HqLyjWDarjtT1zdp7dc" + "ABCDEFGH",
-                FindingSeverity.CRITICAL,
-            ),
+            (None, "sk_test_" + "4eC39HqLyjWDarjtT1zdp7dc" + "ABCDEFGH", FindingSeverity.HIGH),
+            (None, "sk_live_" + "4eC39HqLyjWDarjtT1zdp7dc" + "ABCDEFGH", FindingSeverity.CRITICAL),
             # A snippet that is a line around the key is not the key: stay with CRITICAL.
             (
-                "snippet",
+                None,
                 "STRIPE=sk_test_" + "4eC39HqLyjWDarjtT1zdp7dc" + "ABCDEFGH",
                 FindingSeverity.CRITICAL,
             ),
-            # A secret field, when there is one, is what counts.
-            ("secret", "rk_test_" + "4eC39HqLyjWDarjtT1zdp7dc" + "ABCDEFGH", FindingSeverity.HIGH),
+            # A secret field, when there is one, is what counts: it wins over the snippet.
+            (
+                "rk_test_" + "4eC39HqLyjWDarjtT1zdp7dc" + "ABCDEFGH",
+                "sk_live_" + "4eC39HqLyjWDarjtT1zdp7dc" + "ABCDEFGH",
+                FindingSeverity.HIGH,
+            ),
+            (
+                "sk_live_" + "4eC39HqLyjWDarjtT1zdp7dc" + "ABCDEFGH",
+                "sk_test_" + "4eC39HqLyjWDarjtT1zdp7dc" + "ABCDEFGH",
+                FindingSeverity.CRITICAL,
+            ),
         ],
     )
     def test_parse_finding_grades_a_stripe_test_key_by_what_the_report_carries(
-        self, field: str, snippet: str, expected: FindingSeverity
+        self, secret: str | None, snippet: str, expected: FindingSeverity
     ):
         scanner = KingfisherScanner(auto_install=False)
-        finding = {
+        finding: dict[str, object] = {
             "snippet": snippet,
             "path": "/test/app.env",
             "line": 3,
             "validation": {"status": "Not Attempted"},
         }
-        if field == "secret":
-            finding["secret"] = snippet
+        if secret is not None:
+            finding["secret"] = secret
 
         result = scanner._parse_finding(
             {

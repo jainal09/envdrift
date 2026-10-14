@@ -326,6 +326,33 @@ class TestGitSecretsScanner:
         result = scanner._extract_secret(content)
         assert result == "mysecretpassword"
 
+    @pytest.mark.parametrize(
+        ("content", "value"),
+        [
+            (
+                "aws_secret_access_key => '" + "wJalrXUtnFEMI/K7MDENG/bPxRfi" + "CYEXAMPLEKEY',",
+                None,
+            ),
+            (
+                ':aws_secret_access_key => "' + "wJalrXUtnFEMI/K7MDENG/bPxRfi" + 'CYEXAMPLEKEY"',
+                None,
+            ),
+            ("'secret_access_key' => '" + "wJalrXUtnFEMI/K7MDENG/bPxRfi" + "CYEXAMPLEKEY',", None),
+            ("private_key => '" + "MIIEvQIBADANBgkqhkiG9w0BAQEFAASC" * 3 + "'", None),
+            ("password => 'hunter2hunter2'", "hunter2hunter2"),
+        ],
+    )
+    def test_extract_secret_after_a_hash_rocket(self, content: str, value: str | None) -> None:
+        """Puppet, Ruby and PHP assign with ``=>``: the value is the secret, not the ``>``."""
+        scanner = GitSecretsScanner(auto_install=False)
+
+        result = scanner._extract_secret(content)
+
+        if value is None:
+            value = content.split("=>")[1].strip(" ',\"")
+        assert result == value
+        assert result != ">"
+
     def test_extract_secret_truncates_long_content(self) -> None:
         """Test _extract_secret truncates long content without patterns."""
         scanner = GitSecretsScanner(auto_install=False)

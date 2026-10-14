@@ -16,13 +16,17 @@ from pathlib import Path
 
 import pytest
 from tests.integration.detect_secrets_support import NPM_TOKEN_LINE, add_tracked, found
-from tests.scanner.detect_secrets_helpers import requires_git_config_env
+from tests.scanner.detect_secrets_helpers import (
+    isolated_git_config,  # noqa: F401  (fixture)
+    requires_git_config_env,
+)
 
 from envdrift.scanner.detect_secrets import DetectSecretsScanner
 
 pytestmark = [
     pytest.mark.integration,
     pytest.mark.slow,
+    pytest.mark.usefixtures("isolated_git_config"),
     pytest.mark.skipif(
         importlib.util.find_spec("detect_secrets") is None,
         reason="detect-secrets not installed (pip install detect-secrets)",

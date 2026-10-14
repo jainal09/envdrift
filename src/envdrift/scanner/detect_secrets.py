@@ -405,8 +405,9 @@ def _not_scanned_warning(path: Path, names: list[str]) -> str:
         f"file(s) in the list git gives it ({shown}{more}). Git quotes a name with a double "
         "quote, a backslash or a control character, and one with a non-ASCII character unless "
         "core.quotepath is off (envdrift turns it off with git 2.31 or later when every name is "
-        "UTF-8, but GIT_CONFIG_PARAMETERS, which git -c sets, wins); a line separator (U+0085, "
-        "U+2028, U+2029) splits a name in two. Rename the file or scan it with another scanner."
+        "UTF-8, but a core.quotepath in GIT_CONFIG_PARAMETERS, which git -c sets, wins); a line "
+        "separator (U+0085, U+2028, U+2029) splits a name in two. Rename the file or scan it with "
+        "another scanner."
     )
 
 
@@ -461,8 +462,8 @@ def _check_git_file_list(path: Path, plan: _ScanPlan) -> tuple[dict[str, str], l
     too. Rather than model what git and Python do with each name, this runs the command
     detect-secrets runs, under the environment it gets, and reports every file of the scan whose
     name is not in the list it reads. That covers whatever else changes the output, as a git
-    older than 2.31 (which ignores ``GIT_CONFIG_COUNT``) or ``GIT_CONFIG_PARAMETERS`` (set by
-    ``git -c``, it wins over the setting) do.
+    older than 2.31 (which ignores ``GIT_CONFIG_COUNT``) or a ``core.quotepath`` in
+    ``GIT_CONFIG_PARAMETERS`` (set by ``git -c``, it wins over the setting) do.
 
     Args:
         path: The path being scanned, for the messages.

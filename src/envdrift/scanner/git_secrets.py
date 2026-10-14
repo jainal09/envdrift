@@ -757,9 +757,9 @@ class GitSecretsScanner(ScannerBackend):
             r"(AKIA[A-Z0-9]{16})",
             r"(ASIA[A-Z0-9]{16})",
             # AWS Secret Access Key (40 chars, base64-like, adjacent to known keys)
-            r"(?:aws_secret_access_key|secret_access_key|AWS_SECRET)\s*[=:]\s*[\"']?([A-Za-z0-9/+=]{40})[\"']?",
-            # KEY=VALUE or KEY: VALUE
-            r'=\s*["\']?([^"\'\s]+)["\']?',
+            r"(?:aws_secret_access_key|secret_access_key|AWS_SECRET)\s*(?:=>|[=:])\s*[\"']?([A-Za-z0-9/+=]{40})[\"']?",
+            # KEY=VALUE, KEY => VALUE or KEY: VALUE
+            r'(?:=>|=)\s*["\']?([^"\'\s]+)["\']?',
             r':\s*["\']?([^"\'\s]+)["\']?',
         ]
 

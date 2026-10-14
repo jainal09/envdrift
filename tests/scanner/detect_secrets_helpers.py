@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 import shutil
 import subprocess
@@ -56,6 +57,24 @@ def no_version_probe(monkeypatch: pytest.MonkeyPatch):
     detect_secrets_module._installed_versions.clear()
     yield
     detect_secrets_module._installed_versions.clear()
+
+
+@pytest.fixture
+def isolated_git_config(tmp_path_factory: pytest.TempPathFactory, monkeypatch: pytest.MonkeyPatch):
+    """A git that reads no configuration of the machine, only the repository's own.
+
+    A ``core.quotepath`` in the user's or the system's configuration changes what ``git ls-files``
+    writes, and a git before 2.31 cannot be told to ignore it, so the tests that count on git's
+    default must not inherit one.
+    """
+    home = tmp_path_factory.mktemp("git-home")
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(home / ".config"))
+    monkeypatch.setenv("GIT_CONFIG_NOSYSTEM", "1")
+    monkeypatch.setenv("GIT_CONFIG_GLOBAL", os.devnull)
+    monkeypatch.setenv("GIT_CONFIG_SYSTEM", os.devnull)
+    monkeypatch.delenv("GIT_CONFIG_COUNT", raising=False)
+    monkeypatch.delenv("GIT_CONFIG_PARAMETERS", raising=False)
 
 
 def version_run(stdout: str = f"{PINNED}\n", returncode: int = 0, stderr: str = ""):

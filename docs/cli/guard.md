@@ -121,9 +121,9 @@ the list at U+0085, U+2028 and U+2029 as it does at a newline, so a name with on
 detect-secrets also fails on a name that is not valid UTF-8 anywhere in the repository when the setting is
 off, even in a directory or file it would not scan, so envdrift turns the setting on (over your own git
 configuration) in a repository that tracks one. A git older than 2.31 ignores the setting altogether, and so
-does `GIT_CONFIG_PARAMETERS`, which `git -c` exports, in your environment. envdrift does not guess which names
-that affects: it runs the command detect-secrets runs, under the environment detect-secrets gets, and
-compares. For every file of the scan whose name is not in the list, the Scanner Warnings say "Not scanned
+does a `core.quotepath` in `GIT_CONFIG_PARAMETERS`, which `git -c core.quotepath=...` exports, in your
+environment. envdrift does not guess which names that affects: it runs the command detect-secrets runs, under
+the environment detect-secrets gets, and compares. For every file of the scan whose name is not in the list, the Scanner Warnings say "Not scanned
 in ..." and list the first three, instead of letting the file pass for clean. Rename the file or scan it with
 another scanner.
 
