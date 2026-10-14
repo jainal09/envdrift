@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 from pathlib import Path
 from typing import Any
@@ -577,11 +578,12 @@ class TestInfisicalScanExecution:
                 mock_run.return_value = MagicMock(stdout="[]", stderr="", returncode=0)
                 mock_scanner.scan([tmp_path])
 
-        # Check that --source was passed with the correct path
+        # Check that --source was passed with the correct path: the directory as
+        # given, with the separator that makes a symlinked root walk (#853).
         call_args = mock_run.call_args[0][0]
         assert "--source" in call_args
         source_idx = call_args.index("--source")
-        assert call_args[source_idx + 1] == str(tmp_path)
+        assert call_args[source_idx + 1] == f"{tmp_path}{os.sep}"
 
     @pytest.mark.parametrize("history", [True, False], ids=["history", "no-history"])
     def test_scan_passes_no_git_only_without_history(
@@ -630,7 +632,7 @@ class TestInfisicalScanExecution:
         target: str,
         expected: str,
     ):
-        """``--source`` is relative to the directory infisical runs in (#843).
+        """Infisical runs in our cwd and gets a cwd-relative ``--source`` as given (#843).
 
         It used to get the cwd-relative path unchanged while running inside
         that path, which resolved ``proj`` to ``proj/proj``.
@@ -643,10 +645,12 @@ class TestInfisicalScanExecution:
         def fake_infisical(args: list[str], **kwargs):
             if "--report-path" not in args:  # the `scan --help` probe
                 return MagicMock(stdout="", stderr="", returncode=0)
-            # Like the real binary: --source is resolved against its cwd, and
-            # a finding's File is that argument joined with the path below it.
+            # Like the real binary: --source is resolved against the cwd it
+            # runs in, ours, and a finding's File is that argument joined with
+            # the path below it.
+            assert kwargs.get("cwd") is None, "infisical must run in our cwd"
             source = Path(args[args.index("--source") + 1])
-            resolved = (Path(kwargs["cwd"]) / source).resolve()
+            resolved = source.resolve()
             assert resolved == (tmp_path / target).resolve(), "target resolved twice"
             file_arg = source if resolved.is_file() else source / secret_file.relative_to(resolved)
             report = Path(args[args.index("--report-path") + 1])
@@ -929,7 +933,7 @@ class TestScanFailsClosed:
         report = json.dumps(
             [{"File": "proj/sub/app.env", "RuleID": "x", "Secret": "s3", "Commit": "abc123"}]
         )
-        calls: list[tuple[list[str], str]] = []
+        calls: list[tuple[list[str], str | None]] = []
         real_run = subprocess.run
 
         def fake(args: list[str], **kwargs: Any) -> Any:
@@ -937,7 +941,7 @@ class TestScanFailsClosed:
                 return real_run(args, **kwargs)
             if "--report-path" not in args:  # the `scan --help` probe
                 return MagicMock(stdout="", stderr="", returncode=0)
-            calls.append((args, kwargs["cwd"]))
+            calls.append((args, kwargs.get("cwd")))
             Path(args[args.index("--report-path") + 1]).write_text(report)
             return MagicMock(stdout="", stderr="", returncode=1)
 
@@ -947,12 +951,12 @@ class TestScanFailsClosed:
                     [Path("plain"), Path("repo/proj/sub"), Path("repo")], include_git_history=True
                 )
 
-        # One history scan, of the repository root, run inside it.
+        # One history scan, of the repository root, run in our cwd.
         assert len(calls) == 1
         args, cwd = calls[0]
-        assert args[args.index("--source") + 1] == "."
+        assert args[args.index("--source") + 1] == f"repo{os.sep}"
         assert "--no-git" not in args
-        assert Path(cwd) == Path("repo")
+        assert cwd is None
         # Repo-relative ``File`` joined onto the root, relative in, relative out.
         assert [f.file_path for f in result.findings] == [Path("repo/proj/sub/app.env")]
         assert result.error == "Cannot scan Git history for plain: not inside a Git repository"

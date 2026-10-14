@@ -18,6 +18,7 @@ import tarfile
 import tempfile
 import time
 import zipfile
+from dataclasses import replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, ClassVar
 
@@ -35,7 +36,7 @@ from envdrift.scanner.base import (
     ScanResult,
 )
 from envdrift.scanner.patterns import hash_secret, redact_secret
-from envdrift.scanner.platform_utils import scan_location
+from envdrift.scanner.platform_utils import scan_argument, symlinked_file
 from envdrift.utils.git import get_git_root, has_git_head
 from envdrift.utils.text import strip_ansi
 
@@ -580,11 +581,21 @@ class GitleaksScanner(ScannerBackend):
                 report_path = Path(report_file.name)
 
             try:
-                # Build command. Gitleaks reports ``File`` relative to the
-                # directory it runs in (repo-relative in history mode, whose
-                # target is the repo root), so findings are joined onto it.
-                command = "git" if include_git_history else "dir"
-                work_dir, target_arg = scan_location(scan_target)
+                # Build command. A directory scan runs in our cwd on the target
+                # as given, so ``File`` is a path from our cwd and fingerprints
+                # match a by-hand ``gitleaks dir <target>`` (#854). A history
+                # scan runs in the repository root, its target, as it always
+                # has: gitleaks also reads the .gitleaksignore in its cwd (its
+                # --gitleaks-ignore-path defaults to "."), whose entries would
+                # be matched against repo-relative history fingerprints. Its
+                # ``File`` is relative to that root, so findings are joined
+                # onto it.
+                if include_git_history:
+                    command, work_dir, target_arg = "git", scan_target, "."
+                else:
+                    command, work_dir, target_arg = "dir", None, scan_argument(scan_target)
+                finding_base = scan_target if include_git_history else Path()
+                file_link = symlinked_file(scan_target)
                 args = [
                     str(binary),
                     command,
@@ -595,6 +606,10 @@ class GitleaksScanner(ScannerBackend):
                     str(report_path),
                     "--exit-code",
                     "0",  # Don't fail on findings, we handle that
+                    # A path is not an option, whatever it starts with: a
+                    # changed file named ``--report-path=x`` must not redirect
+                    # the report and pass the scan clean.
+                    "--",
                     target_arg,
                 ]
 
@@ -605,7 +620,7 @@ class GitleaksScanner(ScannerBackend):
                     encoding="utf-8",
                     errors="replace",
                     timeout=300,  # 5 minute timeout
-                    cwd=str(work_dir),
+                    cwd=work_dir,
                 )
 
                 if result.returncode != 0:
@@ -634,7 +649,10 @@ class GitleaksScanner(ScannerBackend):
                             }
                             total_files += len(files_with_findings)
                             for item in findings_data:
-                                finding = self._parse_finding(item, work_dir)
+                                finding = self._parse_finding(item, finding_base)
+                                if finding and file_link is not None:
+                                    # Scanned as its target; reported as the link.
+                                    finding = replace(finding, file_path=file_link)
                                 if finding:
                                     all_findings.append(finding)
                     except json.JSONDecodeError:

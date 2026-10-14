@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import sys
 import tarfile
 import zipfile
 from pathlib import Path
@@ -15,7 +16,8 @@ from envdrift.scanner.platform_utils import (
     get_venv_bin_dir,
     safe_extract_tar,
     safe_extract_zip,
-    scan_location,
+    scan_argument,
+    symlinked_file,
 )
 
 
@@ -230,8 +232,16 @@ class TestSafeExtractZip:
         assert (extract_dir / "dir1" / "dir2" / "file.txt").exists()
 
 
-class TestScanLocation:
-    """Tests for scan_location: where a scanner binary runs and what it is given (#843)."""
+def _symlink(link: Path, target: Path) -> None:
+    """Create ``link`` -> ``target``, skipping where symlinks need a privilege."""
+    try:
+        link.symlink_to(target, target_is_directory=target.is_dir())
+    except OSError as exc:  # Windows without the symlink privilege
+        pytest.skip(f"cannot create a symlink here: {exc}")
+
+
+class TestScanArgument:
+    """What gitleaks and Infisical are given for a path, run from our cwd (#843, #853, #854)."""
 
     @pytest.fixture
     def tree(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
@@ -242,43 +252,146 @@ class TestScanLocation:
         return tmp_path
 
     @pytest.mark.parametrize(
-        ("target", "work_dir", "argument"),
-        [
-            ("proj", "proj", "."),
-            ("proj/sub", "proj/sub", "."),
-            ("proj/sub/app.env", "proj/sub", "app.env"),
-            (".", ".", "."),
-        ],
+        ("cwd", "target"),
+        [(".", "proj"), (".", "proj/sub"), ("proj/sub", "../../proj")],
     )
-    def test_relative_path_is_reexpressed_relative_to_the_work_dir(
-        self, tree: Path, target: str, work_dir: str, argument: str
+    def test_directory_is_given_as_is_with_a_trailing_separator(
+        self, tree: Path, monkeypatch: pytest.MonkeyPatch, cwd: str, target: str
     ):
-        """A relative path must not be resolved a second time inside the work dir."""
-        cwd, arg = scan_location(Path(target))
+        """The binary runs in our cwd, so the path is not re-expressed (#854)."""
+        monkeypatch.chdir(tree / cwd)
 
-        assert cwd == Path(work_dir)
-        assert arg == argument
-        # The binary resolves ``arg`` against ``cwd``: that must be the target.
-        assert (cwd / arg).resolve() == (tree / target).resolve()
+        argument = scan_argument(Path(target))
 
-    def test_file_in_the_cwd_runs_in_the_cwd(self, tree: Path, monkeypatch: pytest.MonkeyPatch):
-        monkeypatch.chdir(tree / "proj" / "sub")
+        assert argument == f"{Path(target)}{os.sep}"
+        assert Path(argument).resolve() == (tree / cwd / target).resolve()
 
-        assert scan_location(Path("app.env")) == (Path(), "app.env")
+    def test_dot_keeps_its_form(self, tree: Path):
+        """``guard .`` hands the binaries ``.``, exactly as before (#854)."""
+        assert scan_argument(Path()) == "."
 
-    def test_parent_relative_path_keeps_its_form(self, tree: Path, monkeypatch: pytest.MonkeyPatch):
-        monkeypatch.chdir(tree / "proj" / "sub")
+    def test_filesystem_root_keeps_its_form(self, tree: Path):
+        anchor = Path(tree.anchor)
 
-        cwd, arg = scan_location(Path("../../proj"))
+        assert scan_argument(anchor) == str(anchor)
 
-        assert (cwd, arg) == (Path("../../proj"), ".")
-        assert not cwd.is_absolute()
+    @pytest.mark.parametrize("target", ["proj/sub/app.env", "<abs>/proj/sub/app.env"])
+    def test_file_is_given_as_is(self, tree: Path, target: str):
+        path = Path(target.replace("<abs>", str(tree)))
+
+        assert scan_argument(path) == str(path)
+
+    def test_absolute_directory_keeps_its_form(self, tree: Path):
+        assert scan_argument(tree / "proj") == f"{tree / 'proj'}{os.sep}"
+
+    @pytest.mark.parametrize("absolute", [False, True], ids=["relative", "absolute"])
+    def test_symlinked_directory_gets_the_separator_the_binaries_need(
+        self, tree: Path, absolute: bool
+    ):
+        """Without it both binaries skip a symlinked root and report nothing (#853)."""
+        _symlink(tree / "linkproj", tree / "proj")
+        link = tree / "linkproj" if absolute else Path("linkproj")
+
+        assert scan_argument(link) == f"{link}{os.sep}"
+
+    def test_relative_symlinked_file_is_given_as_its_cwd_relative_target(self, tree: Path):
+        """Both binaries skip a symlinked file even as the root, so it is given by target."""
+        _symlink(tree / "link.env", tree / "proj" / "sub" / "app.env")
+
+        assert scan_argument(Path("link.env")) == str(Path("proj/sub/app.env"))
+
+    def test_absolute_symlinked_file_is_given_as_its_absolute_target(self, tree: Path):
+        _symlink(tree / "link.env", tree / "proj" / "sub" / "app.env")
+
+        argument = scan_argument(tree / "link.env")
+
+        assert Path(argument) == (tree / "proj" / "sub" / "app.env").resolve()
+
+    def test_symlinked_file_target_on_another_drive_stays_absolute(self, tree: Path):
+        """On Windows a target on another drive than the cwd has no relative form."""
+        _symlink(tree / "link.env", tree / "proj" / "sub" / "app.env")
+
+        def other_drive(*_args: object) -> str:
+            raise ValueError("path is on mount 'D:', start on mount 'C:'")
+
+        with patch("envdrift.scanner.platform_utils.os.path.relpath", side_effect=other_drive):
+            argument = scan_argument(Path("link.env"))
+
+        assert Path(argument) == (tree / "proj" / "sub" / "app.env").resolve()
 
     @pytest.mark.parametrize(
-        ("target", "work_dir"),
-        [("proj", "proj"), ("proj/sub/app.env", "proj/sub")],
+        "target",
+        [
+            "linkrepo/..",
+            # Windows resolves ``..`` lexically, so ``linkrepo/../proj`` names
+            # ``./proj``, which this tree no longer has: not a directory to scan.
+            pytest.param(
+                "linkrepo/../proj",
+                marks=pytest.mark.skipif(
+                    sys.platform == "win32",
+                    reason="Windows resolves '..' lexically: ./proj does not exist",
+                ),
+            ),
+            "<abs>/linkrepo/..",
+        ],
     )
-    def test_absolute_path_is_passed_unchanged(self, tree: Path, target: str, work_dir: str):
-        absolute = tree / target
+    def test_parent_reference_after_a_symlink_names_the_same_directory_once_cleaned(
+        self, tree: Path, target: str
+    ):
+        """Both binaries clean every walked path lexically, so ``link/..`` scanned nothing.
 
-        assert scan_location(absolute) == (tree / work_dir, str(absolute))
+        On POSIX ``..`` after a symlink names the link target's parent. The
+        binaries walked that directory, but joined and cleaned each entry
+        lexically into a path below ``.`` that does not exist, and skipped it
+        without an error. The argument must name, once cleaned, the directory
+        the path names (on Windows, which cleans ``..`` lexically itself, the
+        path as given already does).
+        """
+        (tree / "elsewhere" / "repo").mkdir(parents=True)
+        (tree / "proj").rename(tree / "elsewhere" / "proj")
+        _symlink(tree / "linkrepo", tree / "elsewhere" / "repo")
+        path = Path(target.replace("<abs>", str(tree)))
+
+        argument = scan_argument(path)
+
+        assert Path(os.path.normpath(argument)).resolve() == path.resolve()
+        assert Path(argument).is_absolute() == path.is_absolute()
+        assert argument.endswith(os.sep)
+
+    def test_parent_reference_without_a_symlink_keeps_its_form(self, tree: Path):
+        assert scan_argument(Path("proj/sub/..")) == f"{Path('proj/sub/..')}{os.sep}"
+
+    def test_unresolvable_parent_reference_keeps_its_form(self, tree: Path):
+        """A path that cannot be resolved is passed as given, for the binary to report."""
+        real_resolve = Path.resolve
+
+        def resolve(self: Path, strict: bool = False) -> Path:
+            if os.pardir in self.parts:
+                raise OSError("permission denied")
+            return real_resolve(self, strict)
+
+        with patch.object(Path, "resolve", resolve):
+            argument = scan_argument(Path("proj/sub/.."))
+
+        assert argument == f"{Path('proj/sub/..')}{os.sep}"
+
+
+class TestSymlinkedFile:
+    """``symlinked_file``: the link gitleaks and Infisical are given as its target (#853)."""
+
+    def test_symlink_to_a_file(self, tmp_path: Path):
+        (tmp_path / "app.env").write_text("X=1\n")
+        _symlink(tmp_path / "link.env", tmp_path / "app.env")
+
+        assert symlinked_file(tmp_path / "link.env") == tmp_path / "link.env"
+
+    def test_regular_file(self, tmp_path: Path):
+        (tmp_path / "app.env").write_text("X=1\n")
+
+        assert symlinked_file(tmp_path / "app.env") is None
+
+    def test_symlink_to_a_directory(self, tmp_path: Path):
+        (tmp_path / "proj").mkdir()
+        _symlink(tmp_path / "linkproj", tmp_path / "proj")
+
+        assert symlinked_file(tmp_path / "linkproj") is None

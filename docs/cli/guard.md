@@ -37,6 +37,34 @@ paths are provided, the current directory is scanned.
 | :-- | :-- | :-- |
 | `[paths]` | Files or directories to scan | `.` |
 
+### How paths are shown
+
+Every finding names its file relative to the directory guard runs in when its path, as given, is under
+that directory, and by its absolute path otherwise. Symlinks in an absolute path are not resolved for
+this, so an absolute path through a symlinked working directory (such as macOS `/tmp`) is shown
+absolute. On Windows a file on another drive is always shown absolute. Every scanner uses this one
+form, in the findings table, in `--json`, and in the finding messages, and so do `--staged`,
+`--pr-base` and `--history`. A file outside the working directory, such as one changed by a pull
+request when guard runs in a subdirectory, is shown absolute, not as `../file`. The findings table
+shortens a long path at its start, so the file name and line stay visible. SARIF artifact URIs stay
+relative to the repository root (see `--sarif` below).
+
+A path you pass through a symlink is shown under the name you gave: `envdrift guard linkproj` reports
+`linkproj/sub/app.env` from every scanner, including those that resolve symlinks. A symlinked
+directory is scanned in its absolute form too (`envdrift guard "$PWD/linkproj"`), and a symlink to a
+file is scanned through to its target and shown as the link. A `..` after a symlink names the link
+target's parent: `envdrift guard linkproj/..` scans that directory and shows its files where they are.
+
+The path shown is not always the path in a gitleaks or Infisical fingerprint. `envdrift guard` with
+no path and absolute paths are fingerprinted by absolute path; see
+[gitleaks and Infisical ignore files](#gitleaks-and-infisical-ignore-files).
+
+envdrift 11.0.8 and earlier could show one file in two forms in one report. The native scanner showed
+every file of a directory it scanned by its absolute path, gitleaks and Infisical showed it in the
+form of the path you passed, and gitleaks showed history findings by their absolute path. gitleaks and
+Infisical also reported nothing, and no error, for the absolute path of a symlinked directory (or of
+one followed by `..`) and for a symlink to a file.
+
 ## Options
 
 ### `--native-only`
@@ -350,7 +378,10 @@ Artifact URIs are emitted relative to the enclosing git repository root
 (declared as the `SRCROOT` base via `originalUriBaseIds`), percent-encoded
 per RFC 3986, no matter which directory guard runs from, so GitHub/GitLab
 Code Scanning maps every alert to a repo file; a finding outside the
-repository falls back to an absolute `file://` URI. Each result carries a
+repository falls back to an absolute `file://` URI. When the findings span
+several repositories, the root is the repository guard runs in if it holds a
+finding, and otherwise the first repository, by path, that does; the order
+of the findings does not change it. Each result carries a
 stable fingerprint built from the rule id, the location, and a truncated
 hash of the secret value — never the matched text — so two different secrets
 on the same line stay separate alerts. The redacted preview is attached as
@@ -638,6 +669,65 @@ ignore_paths = [
 "ftp-password" = ["**/*.json"]  # Matches translation "Mot de passe"
 "django-secret-key" = ["**/test_settings.py"]
 ```
+
+A pattern in `ignore_paths` or `ignore_rules` matches a file by the path guard shows, by the path
+shown for its real location with symlinks resolved, and by the path the scanner reported, and also by
+any trailing part of those paths (`config/settings.txt` matches `/repo/config/settings.txt`). A path
+shown relative to the directory guard runs in is also matched as if it started with `/`, so
+`**/tests/**` matches `tests/test_app.py`. So a relative pattern for a path inside that directory
+gives one verdict for a file, whichever scanner reports it and however you spell the scan path:
+`envdrift guard`, `envdrift guard .`, a symlink or its target. An absolute pattern, or one that names
+a directory above the directory guard runs in, matches only findings reported with an absolute path
+(the built-in scanner's, and every scanner's for `envdrift guard` with no path), so write such
+patterns relative to the directory guard runs in. Inline comments are read from the file itself.
+
+### gitleaks and Infisical ignore files
+
+gitleaks and Infisical also read their own ignore files, `.gitleaksignore` and `.infisicalignore`.
+Each line is a fingerprint, `<file>:<rule-id>:<line>`, as the binaries print it in their own reports.
+gitleaks also accepts `<commit>:<file>:<rule-id>:<line>` for a history finding. envdrift runs both
+binaries in the directory guard runs in and passes each path as you gave it, so `<file>` names the
+file the way `gitleaks dir <path>` run by hand from that directory does:
+
+| How guard is run | `<file>` in the fingerprint |
+| :-- | :-- |
+| `envdrift guard .`, `envdrift guard <dir>`, `envdrift guard <file>` | Relative to the directory guard runs in, e.g. `config/settings.txt` |
+| `envdrift guard --pr-base <ref>` | Relative to the directory guard runs in: repo-relative from the repository root, `../config/settings.txt` from a subdirectory |
+| `envdrift guard` with no path | Absolute: guard passes the absolute path of the directory it runs in |
+| `envdrift guard <absolute path>` | Absolute |
+| `--history` | Relative to the repository root |
+
+Where each binary looks for its ignore file:
+
+| Scanned path | `.gitleaksignore` (gitleaks) | `.infisicalignore` (Infisical) |
+| :-- | :-- | :-- |
+| A directory | The directory guard runs in, and the scanned directory | The scanned directory only |
+| A file, including every `--pr-base` file | The directory guard runs in | None |
+| `--history` | The repository root | The repository root |
+
+So under `--pr-base` run from the repository root, a repo-root `.gitleaksignore` with repo-relative
+fingerprints covers a changed file at any depth; run from a subdirectory, gitleaks reads that
+directory's `.gitleaksignore` instead. Infisical reads no ignore file when it scans a single file, so
+`.infisicalignore` never applies under `--pr-base`. Under `--staged` both binaries scan temporary
+copies of the staged files: their fingerprints name those copies, so no ignore-file entry matches; use
+inline comments or the `[guard]` ignores instead. A symlink to a file is scanned through to its
+target, and its fingerprint names the target. A directory path in which `..` follows a symlink is
+passed in its physical form, which its fingerprints name.
+
+The same paths are what the scanner configuration in a scanned directory sees: both binaries read
+`.gitleaks.toml` or `.infisical-scan.toml` from the directory they scan and match its allowlist `paths`
+against `<file>` as above. For `envdrift guard proj` that is `proj/sub/app.env`, so `^proj/sub/app\.env$`
+matches it and `^sub/app\.env$` does not. An unanchored `(^|/)sub/app\.env$` matches either way.
+
+`envdrift guard`, `envdrift guard .` and `--history` read the same ignore files, with the same
+fingerprints, as in earlier releases. envdrift 11.0.8 ran both binaries inside the scanned directory,
+or inside a scanned file's directory. gitleaks read only the `.gitleaksignore` there. Infisical read
+the `.infisicalignore` of a scanned directory and, as it still does, none for a scanned file. The
+fingerprints of a relative directory or file path, including every `--pr-base` file, were relative to
+that directory (`settings.txt:github-pat:1` for `config/settings.txt`), and so were the paths a
+scanned directory's allowlist matched. Rewrite such entries relative to the directory guard runs in,
+and put gitleaks entries for a scanned file in the `.gitleaksignore` there, the only one gitleaks
+reads for a file. Fingerprints of absolute paths have not changed.
 
 ### Common Rule IDs
 

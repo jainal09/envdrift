@@ -57,6 +57,7 @@ from envdrift.scanner.base import (
     ScanFinding,
 )
 from envdrift.scanner.engine import GuardConfig, ScanEngine
+from envdrift.scanner.finding_paths import display_path
 from envdrift.scanner.output import (
     format_json,
     format_rich,
@@ -192,9 +193,9 @@ def _materialize_staged_index(
     so filename/suffix rules and path-pattern ignores keep matching.
 
     Returns the ``TemporaryDirectory`` handle (caller cleans up), the mirror
-    paths to scan, and a map of resolved mirror path -> display path
-    (cwd-relative, like the other collection branches) used to rewrite finding
-    locations after the scan.
+    paths to scan, and a map of resolved mirror path -> display path (in the
+    form every mode shows: cwd-relative under the cwd, absolute outside it)
+    used to rewrite finding locations after the scan.
     """
     import subprocess  # nosec B404
 
@@ -227,7 +228,9 @@ def _materialize_staged_index(
             dest.parent.mkdir(parents=True, exist_ok=True)
             dest.write_bytes(show.stdout)
             scan_paths.append(dest)
-            display_paths[dest.resolve()] = Path(os.path.relpath(repo_root / rel, cwd))
+            # The display rule of every other mode: cwd-relative under the
+            # cwd, absolute outside it (#855).
+            display_paths[dest.resolve()] = display_path(repo_root / rel, cwd)
 
         if scan_paths:
             _git_index_mirror(mirror_root)
@@ -487,10 +490,10 @@ def _collect_pr_base_targets(pr_base: str, json_output: bool, sarif: bool) -> li
             repo_root = _git_toplevel()
             candidates = [repo_root / f for f in result.stdout.strip().split("\n") if f]
             # Resolve against the repo root for existence, scan with
-            # cwd-relative paths so findings display the short relative
-            # filename (a long absolute path gets truncated by the Rich
-            # panel) and path-based config matching behaves as it did from
-            # the repo root.
+            # cwd-relative paths so path-based config matching behaves as it
+            # did from the repo root, and gitleaks fingerprints are relative
+            # to the cwd, so a repo-root .gitleaksignore covers nested files
+            # (#854).
             paths = [Path(os.path.relpath(p, Path.cwd())) for p in candidates if p.exists()]
             if not paths:
                 _emit_empty_or_prose(json_output, sarif, _NO_PR_CHANGES)
