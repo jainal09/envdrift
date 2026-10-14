@@ -1,5 +1,15 @@
 # Changelog
 
+## [11.0.9](https://github.com/jainal09/envdrift/compare/v11.0.8...v11.0.9) (2026-10-14)
+
+
+### Bug Fixes
+
+* **scanner:** apply a repo-root .gitleaksignore to nested --pr-base files ([#854](https://github.com/jainal09/envdrift/issues/854)) ([734141c](https://github.com/jainal09/envdrift/commit/734141c24db6c2009ef74bb90b25c87dab119b4d))
+* **scanner:** pass -- before the path so a dash-named file cannot change gitleaks flags ([734141c](https://github.com/jainal09/envdrift/commit/734141c24db6c2009ef74bb90b25c87dab119b4d))
+* **scanner:** scan symlinked directories given by absolute path ([#853](https://github.com/jainal09/envdrift/issues/853)) ([734141c](https://github.com/jainal09/envdrift/commit/734141c24db6c2009ef74bb90b25c87dab119b4d))
+* **scanner:** show one path form per file across all scanners ([#855](https://github.com/jainal09/envdrift/issues/855)) ([734141c](https://github.com/jainal09/envdrift/commit/734141c24db6c2009ef74bb90b25c87dab119b4d))
+
 ## [11.0.8](https://github.com/jainal09/envdrift/compare/v11.0.7...v11.0.8) (2026-10-13)
 
 
