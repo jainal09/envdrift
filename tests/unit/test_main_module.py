@@ -22,6 +22,7 @@ from pathlib import Path
 
 import pytest
 
+import envdrift
 from envdrift import __version__
 
 
@@ -31,6 +32,10 @@ def _run_module(*args: str, cwd: Path) -> subprocess.CompletedProcess[str]:
     # Keep output un-colorized and parseable even under CI's FORCE_COLOR=1.
     env.pop("FORCE_COLOR", None)
     env["NO_COLOR"] = "1"
+    # The child imports the package this process imports. Left to the installed one, a source
+    # checkout that is not the installed project (a worktree, an export) compared two versions.
+    source = str(Path(envdrift.__file__).resolve().parents[1])
+    env["PYTHONPATH"] = os.pathsep.join(filter(None, [source, env.get("PYTHONPATH")]))
     return subprocess.run(
         [sys.executable, "-m", "envdrift", *args],
         capture_output=True,

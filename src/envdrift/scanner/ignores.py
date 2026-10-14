@@ -69,13 +69,32 @@ def is_absolute_pattern(pattern: str) -> bool:
     return _ABSOLUTE_PATTERN.match(pattern) is not None
 
 
-def _matches_name_or_trailing_part(name: PurePath, pattern: str) -> bool:
-    """Whether ``pattern`` matches ``name`` or a trailing part of it (``sub/x`` of ``a/sub/x``).
+def _is_bare(pattern: str) -> bool:
+    """Whether ``pattern`` has no separator: it names a directory or a file wherever it is."""
+    return "/" not in pattern and "\\" not in pattern
 
-    Every trailing part is tried. ``ignore_rules`` used to stop once a part
-    was shorter than a pattern without ``*`` or ``?``, but a character class
-    matches fewer characters than it spells, so ``[ab].env`` missed the
-    ``a.env`` of ``x/a.env`` that ``ignore_paths`` matched.
+
+def _matches_a_part(name: PurePath, pattern: str) -> bool:
+    """Whether a separator-free ``pattern`` matches one part of ``name`` on its own.
+
+    That is how ``.gitignore`` reads a bare name and how the built-in scanner always did (#865):
+    ``proj`` hides everything below a ``proj`` directory, ``*.env`` every ``.env`` file. It is not
+    matched against the whole name, where ``*`` crosses ``/``: ``[!.]*.test`` would swallow
+    ``apps/web/.env.test`` because of the first letter of ``apps`` (#505). The root of an
+    absolute name is no part.
+    """
+    parts = name.parts[1:] if name.anchor else name.parts
+    return any(fnmatch.fnmatch(part, pattern) for part in parts)
+
+
+def _matches_name_or_trailing_part(name: PurePath, pattern: str) -> bool:
+    """Whether the path ``pattern`` matches ``name`` or a trailing part of it.
+
+    A trailing part of ``a/sub/x`` is ``sub/x``. Every one is tried.
+    ``ignore_rules`` used to stop once a part was shorter than a pattern
+    without ``*`` or ``?``, but a character class matches fewer characters
+    than it spells, so ``[ab].env`` missed the ``a.env`` of ``x/a.env`` that
+    ``ignore_paths`` matched.
     """
     if fnmatch.fnmatch(name.as_posix(), pattern):
         return True
@@ -89,29 +108,46 @@ class PathForms:
 
     A relative pattern is matched against each ``relative`` name and every
     trailing part of it, so ``config/settings.txt`` matches
-    ``deploy/config/settings.txt``. An absolute pattern is matched against each
-    ``absolute`` name as a whole. Names are compared with ``/`` separators,
-    the separator patterns use on every platform.
+    ``deploy/config/settings.txt``. A relative pattern without a separator
+    (``node_modules``) is matched against each part of a name on its own, and
+    against the ``bare`` names when there are any: the names a file outside
+    the working directory has below the scan path it was found under, where
+    ``relative`` also holds the directories above it (#865). An absolute
+    pattern is matched against each ``absolute`` name as a whole. Names are
+    compared with ``/`` separators, the separator patterns use on every
+    platform.
     """
 
     relative: tuple[PurePath, ...]
     absolute: tuple[PurePath, ...] = ()
+    bare: tuple[PurePath, ...] = ()
 
     @classmethod
     def of(cls, *paths: PurePath) -> PathForms:
         """``paths`` matched on their own: each as given, with its trailing parts.
 
-        An absolute one is also matched whole by an absolute pattern.
+        An absolute one is also matched whole by an absolute pattern. A pattern without a
+        separator sees an absolute path by its own name only: nothing says which of the
+        directories above it belong to the project.
         """
-        return cls(paths, tuple(path for path in paths if path.is_absolute()))
+        return cls(
+            paths,
+            tuple(path for path in paths if path.is_absolute()),
+            tuple(type(path)(path.name) if path.is_absolute() else path for path in paths),
+        )
 
     def match(self, patterns: Iterable[str]) -> bool:
         """Whether any pattern of ``patterns`` matches one of these names."""
         for pattern in patterns:
             if is_absolute_pattern(pattern):
-                if any(fnmatch.fnmatch(name.as_posix(), pattern) for name in self.absolute):
-                    return True
-            elif any(_matches_name_or_trailing_part(name, pattern) for name in self.relative):
+                matched = any(fnmatch.fnmatch(name.as_posix(), pattern) for name in self.absolute)
+            elif _is_bare(pattern):
+                matched = any(_matches_a_part(name, pattern) for name in self.bare or self.relative)
+            else:
+                matched = any(
+                    _matches_name_or_trailing_part(name, pattern) for name in self.relative
+                )
+            if matched:
                 return True
         return False
 

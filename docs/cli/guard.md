@@ -55,9 +55,20 @@ directory is scanned in its absolute form too (`envdrift guard "$PWD/linkproj"`)
 file is scanned through to its target and shown as the link. A `..` after a symlink names the link
 target's parent: `envdrift guard linkproj/..` scans that directory and shows its files where they are.
 
+A file that two of the paths you pass reach by two names is one finding. `envdrift guard . linkproj`,
+where `linkproj` is a symlink to `proj`, scans `proj` twice, and the secret in `proj/sub/app.env` is
+reported once, under the name the file really has (`proj/sub/app.env`), whichever path comes first.
+When only links to the directory are scanned (`envdrift guard link2 link1`), the first one you pass
+names it (`link2/sub/app.env`), for every scanner. A symlink to a file that is scanned too is that
+file, not a second finding, and the file is shown by its own name, not the link's. Two secrets on one
+line, or the same secret on two lines, stay separate findings.
+
 The path shown is not always the path in a gitleaks or Infisical fingerprint. `envdrift guard` with
 no path and absolute paths are fingerprinted by absolute path; see
 [gitleaks and Infisical ignore files](#gitleaks-and-infisical-ignore-files).
+
+envdrift 11.1.1 and earlier reported a file twice when two of the paths you passed reached it by
+different names (`guard . linkproj`), because duplicates were found by the name shown.
 
 envdrift 11.0.8 and earlier could show one file in two forms in one report. The native scanner showed
 every file of a directory it scanned by its absolute path, gitleaks and Infisical showed it in the
@@ -868,12 +879,25 @@ directory guard runs in never take part for such a file: `**/build/**` does not 
 a file inside that directory, whichever scanner reports it and however you spell the scan path: `envdrift guard`,
 `envdrift guard .`, `envdrift guard proj` and `envdrift guard "$PWD/proj"`.
 
+A relative pattern without a path separator (`node_modules`, `proj`, `*.env`, `.env*`) names a directory or a file
+wherever it is, like a bare name in `.gitignore`. It is matched against each part of the path on its own, so
+`node_modules` hides everything below a `node_modules` directory at any depth, for every scanner. It is not matched
+against the whole path, where `*` crosses `/`: `[!.]*.test` does not hide `apps/web/.env.test` because of the first
+letter of `apps`. Add a `/` to match a path instead (`proj/**`, `**/node_modules/**`). Earlier releases matched such a
+pattern against the whole path or a trailing part only, in the filter that runs on the findings of every scanner, while
+the built-in scanner also skipped a file when a part of its path matched. So `proj` hid `proj/sub/app.env` from the
+built-in scanner and not from gitleaks or Infisical ([#865](https://github.com/jainal09/envdrift/issues/865)); it now
+hides it from all of them, and `[!.]*.test` no longer hides a nested dotfile such as `apps/web/.env.test` from any.
+
 A file outside the directory guard runs in is shown absolute, and a relative pattern is matched against that absolute
 path, the path the scanner reported, and the absolute path of its real location, each with any trailing part, so the
 directories above the checkout do take part. `../config/*` matches the `../config/settings.txt` every scanner reports
 under `--pr-base` run from a subdirectory, and `**/build/**` hides that file there when the checkout lives under a `build`
-directory. What a scanner reports for such a file depends on how the scan path is spelled, so a pattern can give
-different verdicts for it: write patterns for the directory guard runs in, and run guard from there.
+directory. A pattern without a separator is the exception: it is matched against the parts of the file's path below
+the scan path it was found under (a file you name yourself has only its own name), never against the directories above
+the scan path, so `build` does not hide `envdrift guard ../build/repo` run from a sibling directory. What a scanner
+reports for such a file depends on how the scan path is spelled, so a path pattern can give different verdicts for it:
+write patterns for the directory guard runs in, and run guard from there.
 
 An absolute pattern, such as `/home/me/repo/tests/**`, `C:/repo/tests/**` or `//server/share/repo/**`, is matched against
 a file's whole absolute path: the directory guard runs in joined with the path guard shows, the path the scanner reported
@@ -889,17 +913,17 @@ temporary copy guard scans: a staged file outside the directory guard runs in (`
 matched by its path in the repository, such as `config/app.env`, with any trailing part and as if it started with `/`,
 and by its absolute path. Inline comments are read from the file itself.
 
-envdrift 11.0.9 and earlier also matched a relative pattern against the directories above the directory guard runs in.
+envdrift 11.1.0 and earlier also matched a relative pattern against the directories above the directory guard runs in.
 They used the absolute paths that the built-in scanner reports, as does every scanner given no path or an absolute one,
 and under `--staged` the path of the temporary copy. So `**/build/**` hid every finding of a checkout under a `build`
 directory, and `tmp/**` every staged finding where the temporary directory is `/tmp`. Those findings are reported now.
 Under `--staged` run from a subdirectory, a staged file inside it is now matched by its path below that directory, like
 any other file there, and no longer by its path in the repository (`sub/app.env` for `app.env` run from `sub`).
-11.0.9 also matched a pattern that starts with `/` against the path guard shows taken as if it started with `/`, so
+11.1.0 also matched a pattern that starts with `/` against the path guard shows taken as if it started with `/`, so
 `/proj/**` matched `proj/` in the directory guard runs in; such a pattern is now an absolute path, so write `proj/**`,
 which also matches a `proj` directory deeper down. An absolute pattern used to match a file inside the directory guard
 runs in only when a scanner reported the file by its absolute path. It now matches the file's absolute path whatever a
-scanner reported, so it also hides findings that 11.0.9 reported: those of gitleaks and Infisical under
+scanner reported, so it also hides findings that 11.1.0 reported: those of gitleaks and Infisical under
 `envdrift guard .` or `envdrift guard proj`, and staged files under `--staged`. An `ignore_rules` pattern with a
 character class, such as `[ab].env`, now matches a trailing part of a path (`x/a.env`), as an `ignore_paths` pattern
 always did. If you relied on a directory above the one guard runs in, name it in an absolute pattern, or run guard from

@@ -290,6 +290,63 @@ def test_guard_relative_symlinked_directory_is_shown_under_the_link(tmp_path: Pa
 
 
 @pytest.mark.parametrize("scanner", _SCANNERS)
+@pytest.mark.parametrize("scan_paths", [[".", "linkproj"], ["linkproj", "."]], ids=["dot", "link"])
+def test_guard_of_a_directory_and_a_symlink_to_it_reports_each_secret_once(
+    tmp_path: Path, scanner, scan_paths: list[str]
+):
+    """``guard . linkproj`` scans ``proj`` twice, and each binary used to report it twice (#861).
+
+    The binaries name a file by the path they walked: ``proj/sub/app.env`` from ``.`` and
+    ``linkproj/sub/app.env`` from the link. Dedup compared those names, so one secret in one
+    file was two findings in ``--json`` and SARIF. The file is now one finding, named by where
+    it really is, whichever scan path is listed first.
+    """
+    name, flags, _config = scanner
+    _write_secret(tmp_path / "proj" / "sub" / "app.env")
+    _symlink(tmp_path / "linkproj", tmp_path / "proj")
+
+    result, payload = _guard([*scan_paths, *flags], cwd=tmp_path)
+
+    assert result.returncode == 1, f"critical secret must exit 1\n{result.stderr}"
+    assert _scanner_result(payload, name)["error"] is None
+    own = [f for f in payload["findings"] if f["scanner"] == name]
+    assert [Path(f["file_path"]) for f in own] == [Path("proj/sub/app.env")]
+    # The native scanner's finding for the same file is named the same way.
+    assert _finding_paths(payload) == {Path("proj/sub/app.env")}
+
+
+@pytest.mark.parametrize("scanner", _SCANNERS)
+@pytest.mark.parametrize(
+    "scan_paths",
+    [["link1"], ["link2", "link1"], ["link1", "link2"]],
+    ids=["one-link", "link2-first", "link1-first"],
+)
+def test_guard_names_a_file_the_same_way_whichever_link_or_alias_reaches_it(
+    tmp_path: Path, scanner, scan_paths: list[str]
+):
+    """A tree scanned through links holds a link to one of its files: one name, from every scanner.
+
+    ``proj/a_alias.env`` -> ``sub/app.env`` sorts before the file it links to, and every
+    name below a symlinked scan path differs from the file's real location, so the name that
+    survived deduplication was the alias for the built-in scanner and the file for gitleaks
+    and Infisical. With two links to one directory the scanners also disagreed on which link
+    to show (#861).
+    """
+    name, flags, _config = scanner
+    _write_secret(tmp_path / "proj" / "sub" / "app.env")
+    _symlink(tmp_path / "proj" / "a_alias.env", Path("sub/app.env"))
+    _symlink(tmp_path / "link1", tmp_path / "proj")
+    _symlink(tmp_path / "link2", tmp_path / "proj")
+
+    result, payload = _guard([*scan_paths, *flags], cwd=tmp_path)
+
+    assert _scanner_result(payload, name)["error"] is None, result.stderr
+    assert {f["scanner"] for f in payload["findings"]} == {"native", name}
+    assert _finding_paths(payload) == {Path(scan_paths[0]) / "sub" / "app.env"}
+    assert result.returncode == 1, result.stderr
+
+
+@pytest.mark.parametrize("scanner", _SCANNERS)
 @pytest.mark.parametrize("absolute", [False, True], ids=["relative", "absolute"])
 def test_guard_symlinked_file_is_scanned(tmp_path: Path, scanner, absolute: bool):
     """A symlink to a file is scanned through to its target and shown as the link.
@@ -848,6 +905,84 @@ def test_guard_ignore_paths_cover_a_symlinked_path(
 
 
 @pytest.mark.parametrize("scanner", _SCANNERS)
+@pytest.mark.parametrize(
+    ("args", "kept"),
+    [
+        ([], {Path("tests/t.env")}),
+        (["."], {Path("tests/t.env")}),
+        (["proj"], set()),
+        (["<tmp>/proj"], set()),
+    ],
+    ids=["no-path", "dot", "dir", "absolute-dir"],
+)
+def test_guard_a_bare_ignore_path_hides_a_directory_from_every_scanner(
+    tmp_path: Path, scanner, args: list[str], kept: set[Path]
+):
+    """``ignore_paths = ["proj"]`` hid ``proj/sub/app.env`` from the built-in scanner only (#865).
+
+    A bare name is matched against each part of the path, as ``.gitignore`` reads it. The
+    ignore filter the engine applies to gitleaks and Infisical matched it against the whole
+    path or a trailing part, so a directory of that name hid nothing from them.
+    """
+    name, flags, _config = scanner
+    _write_secret(tmp_path / "proj" / "sub" / "app.env")
+    _write_secret(tmp_path / "tests" / "t.env")
+    (tmp_path / "envdrift.toml").write_text('[guard]\nignore_paths = ["proj"]\n')
+
+    result, payload = _guard(
+        [*(arg.replace("<tmp>", str(tmp_path)) for arg in args), *flags], cwd=tmp_path
+    )
+
+    assert _scanner_result(payload, name)["error"] is None, result.stderr
+    # The binary and the built-in scanner agree: one verdict for the file.
+    assert _scanner_paths(payload, name) == kept
+    assert _finding_paths(payload) == kept
+
+
+@pytest.mark.parametrize("scanner", _SCANNERS)
+@pytest.mark.parametrize(
+    ("pattern", "suppressed"),
+    [("build", False), ("repo", False), ("sub", True), ("app.env", True), ("*.env", True)],
+    ids=["above", "scan-path-name", "below", "file", "glob"],
+)
+def test_guard_a_bare_ignore_name_never_matches_the_directories_above_a_scan_path_outside_the_cwd(
+    tmp_path: Path, scanner, pattern: str, suppressed: bool
+):
+    """``guard ../build/repo`` from a sibling directory: ``build`` is not part of the project (#865).
+
+    A bare name is matched part by part below the scan path, as the built-in scanner
+    does, so a checkout that merely lives under a directory of that name is not hidden:
+    the pattern is written for the project in the directory guard runs in, not for this one.
+    """
+    name, flags, _config = scanner
+    repo = tmp_path / "build" / "repo"
+    _write_secret(repo / "sub" / "app.env")
+    work = tmp_path / "work"
+    work.mkdir()
+    _ignore_paths(work, pattern)
+
+    result, payload = _guard(["../build/repo", *flags], cwd=work)
+
+    _assert_verdict(result, payload, name, repo / "sub" / "app.env", suppressed)
+
+
+@pytest.mark.parametrize("scanner", _SCANNERS)
+def test_guard_a_bare_ignore_rule_path_hides_that_rule_below_the_directory(tmp_path: Path, scanner):
+    name, flags, _config = scanner
+    _write_secret(tmp_path / "proj" / "sub" / "app.env")
+    _write_secret(tmp_path / "tests" / "t.env")
+    # A binary's rules are named for it: ``gitleaks-github-pat``.
+    (tmp_path / "envdrift.toml").write_text(
+        f'[guard.ignore_rules]\n"{name}-github-pat" = ["proj"]\n'
+    )
+
+    result, payload = _guard(flags, cwd=tmp_path)
+
+    assert _scanner_result(payload, name)["error"] is None, result.stderr
+    assert _scanner_paths(payload, name) == {Path("tests/t.env")}
+
+
+@pytest.mark.parametrize("scanner", _SCANNERS)
 @pytest.mark.parametrize("args", [[], ["."], ["proj"], ["<tmp>/proj"]])
 @pytest.mark.parametrize("pattern", ["**/proj/**", "proj/sub/app.env"])
 def test_guard_ignore_paths_give_one_verdict_however_the_path_is_spelled(
@@ -1138,13 +1273,15 @@ def test_guard_native_keeps_scanning_links_in_default_ignored_directories(
 
     The built-in scanner never applied its directory-scoped defaults to such a
     link, which no other scanner follows; matching the link where it was
-    found would have dropped it silently.
+    found would have dropped it silently. Each link has its own target: two
+    links to one file would be one finding (#861).
     """
-    _write_secret(tmp_path / "shared" / "prod.env")
     repo = tmp_path / "repo"
     for directory in ("build", "node_modules/pkg"):
+        target = tmp_path / "shared" / directory.replace("/", "-") / "prod.env"
+        _write_secret(target)
         (repo / directory).mkdir(parents=True)
-        _symlink(repo / directory / "creds.env", tmp_path / "shared" / "prod.env")
+        _symlink(repo / directory / "creds.env", target)
     _git(repo, "init", "-q")
     _git(repo, "add", "-A")
 
@@ -1213,10 +1350,9 @@ def test_guard_native_matches_a_link_outside_the_cwd_by_its_target_below_the_cwd
         assert payload["findings"] == []
         assert result.returncode == 0, result.stderr
     else:
-        # Outside the cwd the link is shown absolute, below the resolved scan path.
-        # Both names are reported: dedup keys on the path shown (see #861).
-        link = tmp_path.resolve() / "builds" / "elsewhere" / "link.env"
-        assert _finding_paths(payload) == {Path("real.env"), link}
+        # The link and its target are one file, so one finding, named where the file really
+        # is (#861); the link was shown absolute, below the resolved scan path.
+        assert _finding_paths(payload) == {Path("real.env")}
         assert result.returncode == 1, result.stderr
 
 

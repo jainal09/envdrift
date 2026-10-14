@@ -4,15 +4,28 @@ from __future__ import annotations
 
 import errno
 import os
+import stat
+import subprocess
+import sys
 from pathlib import Path, PureWindowsPath
 from types import SimpleNamespace
 
 import pytest
 
-from envdrift.scanner._native_io import NATIVE_MAX_SCAN_BYTES
+from envdrift.scanner import _native_io as native_io
+from envdrift.scanner._native_io import NATIVE_MAX_SCAN_BYTES, read_raw_scannable_bytes
 from envdrift.scanner.base import FindingSeverity
 from envdrift.scanner.engine import GuardConfig, ScanEngine
 from envdrift.scanner.native import _ENV_FILE_PATHSPECS, NativeScanner
+
+
+def _native_io_os(**replaced: object) -> SimpleNamespace:
+    """The ``os`` module as ``_native_io`` sees it, with some of its functions replaced.
+
+    Swapped in for that one module, so nothing else that uses ``os`` meanwhile is affected.
+    """
+    names = ("open", "fdopen", "fstat", "O_RDONLY")
+    return SimpleNamespace(**{**{name: getattr(os, name) for name in names}, **replaced})
 
 
 class TestNativeScanner:
@@ -385,33 +398,44 @@ class TestNativeScannerInternals:
         """Read failures return no findings."""
         scanner = NativeScanner()
         file_path = tmp_path / "config.py"
-        file_path.write_text("SECRET=VALUE")
-        original_open = Path.open
+        file_path.write_text("GITHUB_TOKEN=ghp_" + "x" * 36 + "\n")
+        assert scanner._scan_file(file_path), "the token must be found when the file can be read"
+        original_open = os.open
 
-        def raise_error(self, *args, **kwargs):
-            if self == file_path:
+        def raise_error(path, *args, **kwargs):
+            if Path(path) == file_path:
                 raise OSError("boom")
-            return original_open(self, *args, **kwargs)
+            return original_open(path, *args, **kwargs)
 
-        monkeypatch.setattr(Path, "open", raise_error)
+        monkeypatch.setattr(os, "open", raise_error)
         assert scanner._scan_file(file_path) == []
 
-    def test_read_scannable_content_bounds_a_file_that_grows_after_stat(
+    def test_read_scannable_content_bounds_a_file_that_grows_after_the_size_check(
         self, tmp_path: Path, monkeypatch
     ):
-        """The read cap still holds if a file grows between stat and open."""
+        """The read cap still holds if a file grows between the size check and the read."""
         file_path = tmp_path / "growing.txt"
         file_path.write_text("GITHUB_TOKEN=ghp_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\n")
         with file_path.open("ab") as stream:
             stream.truncate(NATIVE_MAX_SCAN_BYTES + 1)
-        original_stat = Path.stat
 
-        def report_small_size(self, *args, **kwargs):
-            if self == file_path:
-                return SimpleNamespace(st_size=1)
-            return original_stat(self, *args, **kwargs)
+        def report_small_size(descriptor: int):
+            return SimpleNamespace(st_size=1, st_mode=os.fstat(descriptor).st_mode)
 
-        monkeypatch.setattr(Path, "stat", report_small_size)
+        monkeypatch.setattr(native_io, "os", _native_io_os(fstat=report_small_size))
+        assert NativeScanner._read_scannable_content(file_path) is None
+
+    def test_read_scannable_content_skips_a_file_that_is_no_regular_file_once_opened(
+        self, tmp_path: Path, monkeypatch
+    ):
+        """A file swapped for a named pipe after the first check is caught on its descriptor."""
+        file_path = tmp_path / "swapped.txt"
+        file_path.write_text("GITHUB_TOKEN=ghp_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\n")
+
+        def report_a_pipe(descriptor: int):
+            return SimpleNamespace(st_size=0, st_mode=stat.S_IFIFO | 0o644)
+
+        monkeypatch.setattr(native_io, "os", _native_io_os(fstat=report_a_pipe))
         assert NativeScanner._read_scannable_content(file_path) is None
 
     def test_scan_file_skips_empty_content(self, tmp_path: Path):
@@ -420,6 +444,109 @@ class TestNativeScannerInternals:
         file_path = tmp_path / "empty.txt"
         file_path.write_text("")
         assert scanner._scan_file(file_path) == []
+
+
+@pytest.mark.skipif(not hasattr(os, "mkfifo"), reason="named pipes need a POSIX file system")
+class TestNamedPipes:
+    """A named pipe has no size, and opening it blocks until a writer opens the other end (#863).
+
+    Except for the first, every check runs in a child process with a timeout, so a scan that
+    blocks fails the test instead of hanging the suite.
+    """
+
+    def test_a_named_pipe_is_rejected_before_it_is_opened(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        """Opening the pipe is what blocks, so ``open`` fails the test instead of waiting."""
+        pipe = tmp_path / "pipe.env"
+        os.mkfifo(pipe)
+
+        def refuse(path: object, *args: object, **kwargs: object):
+            raise AssertionError(f"{path} must not be opened")
+
+        monkeypatch.setattr(native_io, "os", _native_io_os(open=refuse))
+
+        assert read_raw_scannable_bytes(pipe) is None
+
+    READ = (
+        "import sys; from pathlib import Path; "
+        "from envdrift.scanner._native_io import read_raw_scannable_bytes; "
+        "print(read_raw_scannable_bytes(Path(sys.argv[1])))"
+    )
+    # ``stat`` reports a regular file, as it did just before the file was swapped for a pipe.
+    SWAPPED = (
+        "import stat, sys; from pathlib import Path; from types import SimpleNamespace; "
+        "from envdrift.scanner._native_io import read_raw_scannable_bytes; "
+        "Path.stat = lambda self, *a, **k: SimpleNamespace(st_size=0, st_mode=stat.S_IFREG | 0o644); "
+        "print(read_raw_scannable_bytes(Path(sys.argv[1])))"
+    )
+    SCAN = (
+        "import sys; from pathlib import Path; from envdrift.scanner.native import NativeScanner; "
+        "result = NativeScanner().scan([Path(sys.argv[1])]); "
+        "print(result.error); print(sorted({f.file_path.name for f in result.findings}))"
+    )
+
+    @staticmethod
+    def _run(code: str, target: Path) -> list[str]:
+        import envdrift
+
+        # The child imports the same package as this process.
+        source = str(Path(envdrift.__file__).resolve().parents[1])
+        env = {**os.environ, "PYTHONPATH": source}
+        try:
+            result = subprocess.run(
+                [sys.executable, "-c", code, str(target)],
+                capture_output=True,
+                text=True,
+                timeout=30,
+                env=env,
+                check=False,
+            )
+        except subprocess.TimeoutExpired:
+            pytest.fail("the native scanner blocked on a named pipe")
+        assert result.returncode == 0, result.stderr
+        return result.stdout.strip().splitlines()
+
+    def test_a_named_pipe_is_not_read(self, tmp_path: Path):
+        pipe = tmp_path / "pipe.env"
+        os.mkfifo(pipe)
+
+        assert self._run(self.READ, pipe) == ["None"]
+
+    def test_a_file_swapped_for_a_named_pipe_after_the_stat_is_not_read(self, tmp_path: Path):
+        """The type is checked again on what was opened, which does not wait for a writer."""
+        pipe = tmp_path / "pipe.env"
+        os.mkfifo(pipe)
+
+        assert self._run(self.SWAPPED, pipe) == ["None"]
+
+    def test_a_symlink_to_a_named_pipe_is_not_read(self, tmp_path: Path):
+        pipe = tmp_path / "pipe.env"
+        os.mkfifo(pipe)
+        link = tmp_path / "link.env"
+        link.symlink_to(pipe)
+
+        assert self._run(self.READ, link) == ["None"]
+
+    def test_a_scan_of_a_directory_holding_a_named_pipe_finishes_and_scans_the_rest(
+        self, tmp_path: Path
+    ):
+        os.mkfifo(tmp_path / "pipe.env")
+        (tmp_path / "config.txt").write_text("GITHUB_TOKEN=ghp_" + "x" * 36 + "\n")
+
+        error, found = self._run(self.SCAN, tmp_path)
+
+        assert error == "None"
+        assert found == "['config.txt']"
+
+    def test_a_regular_file_and_a_symlink_to_one_are_still_read(self, tmp_path: Path):
+        target = tmp_path / "real.env"
+        target.write_bytes(b"X=1\n")
+        link = tmp_path / "link.env"
+        link.symlink_to(target)
+
+        assert self._run(self.READ, target) == ["b'X=1\\n'"]
+        assert self._run(self.READ, link) == ["b'X=1\\n'"]
 
 
 class TestUnencryptedEnvDetection:

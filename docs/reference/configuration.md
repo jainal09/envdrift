@@ -158,7 +158,9 @@ Notes:
 
 - `ignore_paths` and `ignore_rules` apply to every scanner. For a file inside the directory guard runs in, a
   relative pattern matches paths below that directory, never the directories above it; see
-  [TOML Configuration](../cli/guard.md#toml-configuration) for the exact rule.
+  [TOML Configuration](../cli/guard.md#toml-configuration) for the exact rule. A pattern without a `/`
+  (`node_modules`, `*.env`) is matched against each part of the path below the directory guard runs in (below the scan
+  path for a file outside it), so it also hides the files below a directory of that name.
 - `skip_encrypted_files` defaults to `true`, so findings from files carrying
   dotenvx/SOPS encryption markers are filtered out unless you set it to `false`.
 - `scanners` can be set under `[tool.envdrift.guard]` in `pyproject.toml`.
