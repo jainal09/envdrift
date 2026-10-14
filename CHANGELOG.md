@@ -1,5 +1,19 @@
 # Changelog
 
+## [11.1.0](https://github.com/jainal09/envdrift/compare/v11.0.9...v11.1.0) (2026-10-14)
+
+
+### Features
+
+* **scanner:** warn when the installed detect-secrets is not the pinned version ([3294d23](https://github.com/jainal09/envdrift/commit/3294d23b875689c4b7c1fe80aa896aa2b08ebe2e))
+
+
+### Bug Fixes
+
+* **scanner:** grade every scanner's findings by one severity policy ([#850](https://github.com/jainal09/envdrift/issues/850)) ([3294d23](https://github.com/jainal09/envdrift/commit/3294d23b875689c4b7c1fe80aa896aa2b08ebe2e))
+* **scanner:** scan directories outside git and below a repository's top level in detect-secrets ([#851](https://github.com/jainal09/envdrift/issues/851)) ([3294d23](https://github.com/jainal09/envdrift/commit/3294d23b875689c4b7c1fe80aa896aa2b08ebe2e))
+* **scanner:** scan git-tracked files with non-ASCII names in detect-secrets ([3294d23](https://github.com/jainal09/envdrift/commit/3294d23b875689c4b7c1fe80aa896aa2b08ebe2e))
+
 ## [11.0.9](https://github.com/jainal09/envdrift/compare/v11.0.8...v11.0.9) (2026-10-14)
 
 
