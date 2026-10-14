@@ -684,8 +684,11 @@ reported and, for a file outside that directory, the absolute path guard shows. 
 depends on how the scan path is spelled: absolute for a directory the built-in scanner scans and for
 every scanner given no path or an absolute one, `../…` for a file outside the directory (for example
 `--pr-base` run from a subdirectory), relative otherwise. Such a pattern can therefore give different
-verdicts for one file, so write patterns relative to the directory guard runs in. Inline comments are
-read from the file itself.
+verdicts for one file, so write patterns relative to the directory guard runs in. A broad glob such as
+`**/build/**` also matches a directory above the checkout in the absolute paths of `envdrift guard`
+with no path and of the built-in scanner, so it hides every finding of a checkout that lives under a
+`build/` directory (tracked as [#859](https://github.com/jainal09/envdrift/issues/859)): avoid globs
+that can match an ancestor of the checkout. Inline comments are read from the file itself.
 
 ### gitleaks and Infisical ignore files
 
