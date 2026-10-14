@@ -13,8 +13,9 @@ from envdrift.scanner.base import FindingSeverity, ScanFinding, ScannerBackend, 
 from envdrift.scanner.engine import GuardConfig, ScanEngine
 from envdrift.scanner.finding_paths import FindingPathDisplay, display_path
 
-# Fragment-assembled so GitHub push protection never sees the whole literal.
-GITHUB_TOKEN = "ghp_" + "016C7eX9bQ2vYwN3kLmZpRtUaScDfGhJkL01"
+# Visibly synthetic, and fragment-assembled so GitHub push protection never
+# sees the whole literal. It keeps the 36-character shape the detectors match.
+GITHUB_TOKEN = "ghp_" + "SYNTHETIC0TEST0TOKEN0FOR0UNIT0TESTS0"
 
 
 def _finding(
@@ -280,6 +281,19 @@ class TestFindingPathDisplay:
         assert shown.description == f"Run 'envdrift encrypt {Path('proj/.env')}' before committing."
         assert shown.rule_id == finding.rule_id
         assert shown.secret_hash == finding.secret_hash
+
+    def test_description_keeps_longer_names_that_start_or_end_like_the_path(self, tmp_path: Path):
+        """Only the path itself is renamed, not ``a.env.bak`` or ``/other/a.env``."""
+        raw = tmp_path / "proj" / "a.env"
+        other = tmp_path / "other" / "a.env"
+        description = f"Run 'envdrift encrypt {raw}'. Not {raw}.bak, {other} or x{raw}."
+        finding = _finding(raw, description=description)
+
+        shown = FindingPathDisplay([Path("proj")], cwd=tmp_path).finding(finding)
+
+        assert shown.description == (
+            f"Run 'envdrift encrypt {Path('proj/a.env')}'. Not {raw}.bak, {other} or x{raw}."
+        )
 
     def test_finding_already_in_display_form_is_returned_as_is(self, tmp_path: Path):
         finding = _finding("proj/.env")

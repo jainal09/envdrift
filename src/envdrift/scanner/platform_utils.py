@@ -82,9 +82,11 @@ def symlinked_file(path: Path) -> Path | None:
 
     gitleaks and Infisical skip a symlink to a file even when it is the path
     they are given, so :func:`scan_argument` gives them its target and they
-    name the target in every finding. Each of those findings belongs to the
-    link the caller gave, the name the native scanner reports it by, so the
-    scanners report them under that name, which path-based ignores match.
+    name the target in every finding. Their scanners put the link back on each
+    of those findings, because it is the name the caller gave. The native
+    scanner resolves the path itself, and the scan engine moves its findings
+    back under the link (see ``FindingPathDisplay``). Path-based ignores then
+    match the link name whichever scanner reported the file.
     """
     return path if path.is_symlink() and path.is_file() else None
 

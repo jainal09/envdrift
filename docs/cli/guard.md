@@ -676,10 +676,14 @@ any trailing part of those paths (`config/settings.txt` matches `/repo/config/se
 shown relative to the directory guard runs in is also matched as if it started with `/`, so
 `**/tests/**` matches `tests/test_app.py`. So a relative pattern for a path inside that directory
 gives one verdict for a file, whichever scanner reports it and however you spell the scan path:
-`envdrift guard`, `envdrift guard .`, a symlink or its target. An absolute pattern, or one that names
-a directory above the directory guard runs in, matches only findings reported with an absolute path
-(the built-in scanner's, and every scanner's for `envdrift guard` with no path), so write such
-patterns relative to the directory guard runs in. Inline comments are read from the file itself.
+`envdrift guard`, `envdrift guard .`, a symlink or its target. A pattern that is absolute, or names a
+directory above the directory guard runs in (`../config/*`), is matched against the path a scanner
+reported and, for a file outside that directory, the absolute path guard shows. What a scanner reports
+depends on how the scan path is spelled: absolute for a directory the built-in scanner scans and for
+every scanner given no path or an absolute one, `../…` for a file outside the directory (for example
+`--pr-base` run from a subdirectory), relative otherwise. Such a pattern can therefore give different
+verdicts for one file, so write patterns relative to the directory guard runs in. Inline comments are
+read from the file itself.
 
 ### gitleaks and Infisical ignore files
 

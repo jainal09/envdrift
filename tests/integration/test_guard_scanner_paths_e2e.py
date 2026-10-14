@@ -896,3 +896,27 @@ def test_guard_ignore_glob_ignores_directories_above_the_checkout(
     assert {"native", name} <= {f["scanner"] for f in payload["findings"]}
     assert _scanner_paths(payload, name) == {Path("proj/sub/app.env")}
     assert result.returncode == 1, result.stderr
+
+
+@pytest.mark.parametrize("scanner", _SCANNERS)
+def test_guard_ignore_pattern_naming_a_directory_above_the_cwd_matches_the_reported_path(
+    git_repo: Path, scanner
+):
+    """``../config/*`` suppresses what ``--pr-base`` run from a subdirectory reports.
+
+    Every scanner reports the changed file as ``../config/settings.txt`` there,
+    and docs/cli/guard.md says such a pattern is matched against that path.
+    """
+    name, flags, _config = scanner
+    _feature_branch(git_repo)
+    _write_secret(git_repo / "config" / "settings.txt")
+    (git_repo / "sub").mkdir()
+    (git_repo / "sub" / "envdrift.toml").write_text('[guard]\nignore_paths = ["../config/*"]\n')
+    _git(git_repo, "add", "-A")
+    _git(git_repo, "commit", "-q", "-m", "add secret")
+
+    result, payload = _guard(["--pr-base", "base", *flags], cwd=git_repo / "sub")
+
+    assert _scanner_result(payload, name)["error"] is None
+    assert payload["findings"] == []
+    assert result.returncode == 0, result.stderr

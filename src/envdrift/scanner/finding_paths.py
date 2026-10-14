@@ -15,6 +15,7 @@ path guard shows suppresses the file whichever scanner reported it.
 from __future__ import annotations
 
 import os
+import re
 from dataclasses import replace
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -57,6 +58,16 @@ def _absolute(path: Path, cwd: Path) -> Path:
 def _rooted(path: Path) -> tuple[Path, ...]:
     """``path``, and a relative ``path`` also rooted (``tests/x`` -> ``/tests/x``)."""
     return (path,) if path.is_absolute() else (path, Path(os.sep) / path)
+
+
+def _rename_in(text: str, old: Path, new: Path) -> str:
+    """``text`` with the path ``old`` named ``new`` wherever it stands alone.
+
+    A path that is only the start of a longer name (``a.env`` in ``a.env.bak``)
+    or the end of a longer path (``a.env`` in ``/x/a.env``) is left as it is.
+    """
+    pattern = rf"(?<![\w./\\-]){re.escape(str(old))}(?![\w/\\-]|\.\w)"
+    return re.sub(pattern, lambda _match: str(new), text)
 
 
 def display_path(path: Path, cwd: Path | None = None) -> Path:
@@ -176,7 +187,7 @@ class FindingPathDisplay:
             return finding
         # Scanners name the file in their message too (native: "Run 'envdrift
         # encrypt <path>'"), so the message names it the same way.
-        description = finding.description.replace(str(finding.file_path), str(shown))
+        description = _rename_in(finding.description, finding.file_path, shown)
         return replace(finding, file_path=shown, description=description)
 
     def findings(self, findings: list[ScanFinding]) -> list[ScanFinding]:
