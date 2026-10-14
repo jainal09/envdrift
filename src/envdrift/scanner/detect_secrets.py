@@ -435,6 +435,22 @@ def _scanned_nothing_warning(path: Path) -> str:
     )
 
 
+def _unmatched_warnings(
+    path: Path, root: Path, names: list[str], env: Mapping[str, str]
+) -> list[str]:
+    """Warnings for the ``names`` of a scan that are not in the list detect-secrets reads.
+
+    This runs the command detect-secrets runs in the repository at ``root``, under ``env``,
+    the environment it gets.
+    """
+    listed = _git_ls_files(root, env, nul=False)
+    if listed is None or listed.returncode != 0:
+        return _unlisted_warning(path, listed)
+    seen = set(listed.stdout.splitlines())
+    unmatched = [name for name in names if name not in seen]
+    return [_not_scanned_warning(path, unmatched)] if unmatched else []
+
+
 def _check_git_file_list(path: Path, plan: _ScanPlan) -> tuple[dict[str, str], list[str]]:
     """The environment to run detect-secrets in, and warnings about the files git lists for it.
 
@@ -464,12 +480,7 @@ def _check_git_file_list(path: Path, plan: _ScanPlan) -> tuple[dict[str, str], l
         return env, [_scanned_nothing_warning(path)]
     # detect-secrets decodes the whole list, not only the names of this scan.
     env = _with_git_quotepath(env, quoted=_NOT_UTF8.search(listing.stdout) is not None)
-    listed = _git_ls_files(plan.git_root, env, nul=False)
-    if listed is None or listed.returncode != 0:
-        return env, _unlisted_warning(path, listed)
-    seen = set(listed.stdout.splitlines())
-    unmatched = [name for name in names if name not in seen]
-    return env, [_not_scanned_warning(path, unmatched)] if unmatched else []
+    return env, _unmatched_warnings(path, plan.git_root, names, env)
 
 
 def _report_file(name: str, base_path: Path, prefix: PurePath) -> Path:

@@ -16,7 +16,7 @@ from pathlib import Path
 
 import pytest
 from tests.integration.detect_secrets_support import NPM_TOKEN_LINE, add_tracked, found
-from tests.scanner.detect_secrets_helpers import GIT_HONORS_CONFIG_ENV, requires_git_config_env
+from tests.scanner.detect_secrets_helpers import requires_git_config_env
 
 from envdrift.scanner.detect_secrets import DetectSecretsScanner
 
@@ -251,9 +251,46 @@ AWKWARD_NAMES = [
 ]
 
 
+def _create_and_track(repo: Path, names: list[str]) -> None:
+    """Write the token to each file and ``git add`` it, as a name and not as a pathspec.
+
+    The test is skipped where the file system cannot hold one of the names.
+    """
+    try:
+        for name in names:
+            (repo / name).parent.mkdir(parents=True, exist_ok=True)
+            (repo / name).write_text(NPM_TOKEN_LINE)
+    except OSError as exc:
+        pytest.skip(f"this file system cannot hold the name: {exc}")
+    subprocess.run(
+        ["git", "--literal-pathspecs", "add", "--", *names],
+        cwd=repo,
+        capture_output=True,
+        check=True,
+    )
+
+
+def _reported(warnings: list[str]) -> int:
+    """How many files the warnings say were not scanned (each says "the name of N tracked file")."""
+    counts = (re.findall(r"the name of (\d+) tracked file", warning) for warning in warnings)
+    return sum(int(count) for found_counts in counts for count in found_counts)
+
+
+# The setting of ``core.quotepath`` in the repository (None: the machine's own) and whether a name
+# that is not UTF-8 is tracked. The user's own ``off`` next to such a name needs git 2.31 or later
+# to be overridden; an older git makes detect-secrets fail loudly instead.
+INVARIANT_CASES = [
+    pytest.param(None, False, id="default"),
+    pytest.param("true", False, id="quotepath-on"),
+    pytest.param("false", False, id="quotepath-off"),
+    pytest.param(None, True, id="default-not-utf8"),
+    pytest.param("true", True, id="quotepath-on-not-utf8"),
+    pytest.param("false", True, id="quotepath-off-not-utf8", marks=requires_git_config_env),
+]
+
+
 @pytest.mark.skipif(sys.platform == "win32", reason="Windows file names cannot hold most of these")
-@pytest.mark.parametrize("quotepath", [None, "true", "false"])
-@pytest.mark.parametrize("not_utf8", [False, True], ids=["utf8", "with-a-name-that-is-not-utf8"])
+@pytest.mark.parametrize(("quotepath", "not_utf8"), INVARIANT_CASES)
 def test_no_tracked_file_is_dropped_in_silence(
     git_repo: Path, quotepath: str | None, not_utf8: bool
 ):
@@ -263,9 +300,6 @@ def test_no_tracked_file_is_dropped_in_silence(
     that Python splits into lines) without an error or a word, which read as a clean run. The scan
     counts the files it reports against the ones git tracks, so nothing goes missing.
     """
-    if quotepath == "false" and not_utf8 and not GIT_HONORS_CONFIG_ENV:
-        # envdrift cannot turn quoting back on for a git before 2.31, and detect-secrets fails.
-        pytest.skip("git before 2.31 ignores the setting that overrides quotepath = false")
     names = [*AWKWARD_NAMES, "caf\udce9.cfg"] if not_utf8 else AWKWARD_NAMES
     if quotepath is not None:
         subprocess.run(
@@ -274,28 +308,12 @@ def test_no_tracked_file_is_dropped_in_silence(
             capture_output=True,
             check=True,
         )
-    try:
-        for name in names:
-            (git_repo / name).parent.mkdir(parents=True, exist_ok=True)
-            (git_repo / name).write_text(NPM_TOKEN_LINE)
-    except OSError as exc:
-        pytest.skip(f"this file system cannot hold the name: {exc}")
-    subprocess.run(
-        ["git", "--literal-pathspecs", "add", "--", *names],
-        cwd=git_repo,
-        capture_output=True,
-        check=True,
-    )
+    _create_and_track(git_repo, names)
 
     result = DetectSecretsScanner(auto_install=False).scan([git_repo])
 
     assert result.error is None, result.error
-    scanned = len(result.findings)
-    reported = sum(
-        int(count)
-        for warning in result.warnings
-        for count in re.findall(r"the name of (\d+) tracked file", warning)
-    )
+    scanned, reported = len(result.findings), _reported(result.warnings)
     assert scanned + reported == len(names), (
         f"{len(names) - scanned - reported} tracked files were dropped in silence: "
         f"{scanned} scanned and {reported} reported of {len(names)}"
