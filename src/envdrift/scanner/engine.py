@@ -49,6 +49,15 @@ import logging
 logger = logging.getLogger(__name__)
 
 
+def _place_of(display: FindingPathDisplay | None) -> Callable[[Path], Path]:
+    """Where a finding path puts its file for deduplication: its real location, or as it is."""
+    return display.location if display is not None else _as_reported
+
+
+def _as_reported(path: Path) -> Path:
+    return path
+
+
 @dataclass
 class GuardConfig:
     """Configuration for the guard command and scan engine.
@@ -644,7 +653,7 @@ class ScanEngine:
         ]
 
         # Deduplicate findings (after filtering for deterministic, correct results)
-        unique_findings = self._deduplicate(filtered_findings)
+        unique_findings = self._deduplicate(filtered_findings, display)
 
         total_duration = int((time.time() - start_time) * 1000)
 
@@ -656,11 +665,16 @@ class ScanEngine:
             total_duration_ms=total_duration,
         )
 
-    def _deduplicate(self, findings: list[ScanFinding]) -> list[ScanFinding]:
+    def _deduplicate(
+        self, findings: list[ScanFinding], display: FindingPathDisplay | None = None
+    ) -> list[ScanFinding]:
         """Remove duplicate findings, keeping the highest severity.
 
-        By default, duplicates are identified by file path, line number, rule ID,
-        and the secret's hash (when present). Including the hash means two
+        By default, duplicates are identified by file, line number, rule ID,
+        and the secret's hash (when present). With ``display``, the file is the place
+        it really is, not the name it was reported under, so a directory scanned both
+        directly and through a symlink to it reports each secret once (#861); the name
+        kept is the real one when the findings otherwise tie. Including the hash means two
         *distinct* secrets that match the same rule on the same line (e.g. two
         AWS keys on one ``.env`` line, #348) are both reported, while the same
         secret matched by the same rule at one location still collapses to one
@@ -680,20 +694,23 @@ class ScanEngine:
 
         Args:
             findings: List of all findings from all scanners.
+            display: Gives the real location and the real name of a finding path. Without it
+                a file is its reported name.
 
         Returns:
             Deduplicated list sorted by severity (highest first).
         """
+        place = _place_of(display)
         seen: dict[tuple, ScanFinding] = {}
         for finding in findings:
-            key = self._dedup_key(finding)
+            key = self._dedup_key(finding, place(finding.file_path))
             existing = seen.get(key)
-            if existing is None or self._should_replace(finding, existing):
+            if existing is None or self._should_replace(finding, existing, display):
                 seen[key] = finding
 
         survivors = list(seen.values())
         if not self.config.skip_duplicate:
-            survivors = self._drop_hashless_duplicates(survivors)
+            survivors = self._drop_hashless_duplicates(survivors, place)
 
         # Sort by severity (highest first), then by file path
         return sorted(
@@ -702,8 +719,8 @@ class ScanEngine:
             reverse=True,
         )
 
-    def _dedup_key(self, finding: ScanFinding) -> tuple:
-        """Build the dedup key for ``finding`` under the active config.
+    def _dedup_key(self, finding: ScanFinding, place: Path) -> tuple:
+        """Build the dedup key for ``finding``, which sits at ``place``, under the active config.
 
         ``skip_duplicate``: key on the secret value only -- the secret hash when
         present (accurate), else the preview (may collide), else the location for
@@ -723,18 +740,23 @@ class ScanEngine:
                 return (finding.secret_hash,)
             if finding.secret_preview:
                 return (finding.secret_preview,)
-            return (finding.file_path, finding.line_number, finding.rule_id)
+            return (place, finding.line_number, finding.rule_id)
         return (
-            finding.file_path,
+            place,
             finding.line_number,
             finding.rule_id,
             finding.secret_hash or None,
         )
 
     @staticmethod
-    def _tie_key(finding: ScanFinding) -> tuple:
-        """Deterministic tie-breaker for otherwise-equal duplicate findings."""
+    def _tie_key(finding: ScanFinding, display: FindingPathDisplay | None = None) -> tuple:
+        """Deterministic tie-breaker for otherwise-equal duplicate findings.
+
+        A name that is where its file really is comes before one reached through a symlink.
+        """
+        by_link = display is not None and not display.is_real_name(finding.file_path)
         return (
+            by_link,
             str(finding.file_path),
             finding.line_number or 0,
             finding.rule_id,
@@ -742,7 +764,12 @@ class ScanEngine:
         )
 
     @classmethod
-    def _should_replace(cls, finding: ScanFinding, existing: ScanFinding) -> bool:
+    def _should_replace(
+        cls,
+        finding: ScanFinding,
+        existing: ScanFinding,
+        display: FindingPathDisplay | None = None,
+    ) -> bool:
         """Whether ``finding`` should replace ``existing`` at the same dedup key.
 
         Preference order, most significant first: higher severity, then verified
@@ -755,10 +782,12 @@ class ScanEngine:
             return finding.verified
         if bool(finding.secret_hash) != bool(existing.secret_hash):
             return bool(finding.secret_hash)
-        return cls._tie_key(finding) < cls._tie_key(existing)
+        return cls._tie_key(finding, display) < cls._tie_key(existing, display)
 
     @staticmethod
-    def _drop_hashless_duplicates(survivors: list[ScanFinding]) -> list[ScanFinding]:
+    def _drop_hashless_duplicates(
+        survivors: list[ScanFinding], place: Callable[[Path], Path]
+    ) -> list[ScanFinding]:
         """Drop hashless findings that merely duplicate a co-located hashed one.
 
         A hashless finding (no extractable secret value) at the same
@@ -779,7 +808,7 @@ class ScanEngine:
         for f in survivors:
             if not f.secret_hash:
                 continue
-            loc = (f.file_path, f.line_number, f.rule_id)
+            loc = (place(f.file_path), f.line_number, f.rule_id)
             current = hashed_max_severity.get(loc)
             if current is None or f.severity > current:
                 hashed_max_severity[loc] = f.severity
@@ -789,7 +818,7 @@ class ScanEngine:
             if f.secret_hash:
                 kept.append(f)
                 continue
-            co_located = hashed_max_severity.get((f.file_path, f.line_number, f.rule_id))
+            co_located = hashed_max_severity.get((place(f.file_path), f.line_number, f.rule_id))
             if co_located is None or f.severity > co_located:
                 kept.append(f)
         return kept

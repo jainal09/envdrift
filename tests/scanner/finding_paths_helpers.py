@@ -67,6 +67,7 @@ def scan_engine(
     *scanners: ScannerBackend,
     ignore_paths: list[str] | None = None,
     ignore_rules: dict[str, list[str]] | None = None,
+    skip_duplicate: bool = False,
 ) -> ScanEngine:
     engine = ScanEngine(
         GuardConfig(
@@ -74,6 +75,7 @@ def scan_engine(
             use_gitleaks=False,
             ignore_paths=ignore_paths or [],
             ignore_rules=ignore_rules or {},
+            skip_duplicate=skip_duplicate,
         )
     )
     engine.scanners = list(scanners)

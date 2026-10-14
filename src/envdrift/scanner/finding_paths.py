@@ -25,7 +25,7 @@ from typing import TYPE_CHECKING
 from envdrift.scanner.ignores import PathForms
 
 if TYPE_CHECKING:
-    from collections.abc import Mapping
+    from collections.abc import Iterable, Mapping
 
     from envdrift.scanner.base import ScanFinding
 
@@ -64,6 +64,21 @@ def _absolute(path: Path, cwd: Path) -> Path:
 def _rooted(path: Path) -> tuple[Path, ...]:
     """``path``, and a relative ``path`` also rooted (``tests/x`` -> ``/tests/x``)."""
     return (path,) if path.is_absolute() else (path, Path(os.sep) / path)
+
+
+def _absolute_names(absolute: Path, reported: Path | None, real: Path | None) -> list[Path]:
+    """The names an absolute pattern is matched against (see :meth:`FindingPathDisplay.forms`)."""
+    names = [absolute]
+    if reported is not None and reported.is_absolute():
+        names.append(reported)
+    if real is not None:
+        names.append(real)
+    return names
+
+
+def _unique(names: Iterable[Path]) -> tuple[Path, ...]:
+    """``names`` without repeats, in order."""
+    return tuple(dict.fromkeys(names))
 
 
 def _below(path: Path, base: Path) -> Path | None:
@@ -152,6 +167,7 @@ class FindingPathDisplay:
         self._real_dirs: dict[Path, Path | None] = {}
         self._shown: dict[Path, Path] = {}
         self._forms: dict[Path, PathForms] = {}
+        self._located: dict[Path, Path] = {}
 
     def _absolute(self, path: Path) -> Path:
         return _absolute(path, self._cwd)
@@ -165,6 +181,33 @@ class FindingPathDisplay:
                 absolute = self._below_given_path(absolute)
             shown = self._shown[path] = display_path(absolute, self._cwd)
         return shown
+
+    def location(self, path: Path) -> Path:
+        """Where the file at finding path ``path`` really is, with every symlink resolved.
+
+        Two names of one file have one location: a directory scanned both directly and
+        through a symlink to it (#861), or a file and a symlink to it. The scan engine
+        deduplicates on it, so such a file is one finding. A path that cannot be resolved is
+        located by its absolute shown path.
+        """
+        located = self._located.get(path)
+        if located is None:
+            absolute = self._absolute(self.path(path))
+            resolved = _resolved(absolute)
+            located = self._located[path] = absolute if resolved is None else resolved
+        return located
+
+    def is_real_name(self, path: Path) -> bool:
+        """Whether the finding path ``path`` is the name the file's real location is shown under.
+
+        False for a name reached through a symlink inside the tree, such as a link to a file or a
+        second symlinked scan path. Of two findings that are otherwise equal, the one reported
+        under the real name is kept. Below a symlinked scan path every name is shown under that
+        path, so the file's real location is compared by the name it is shown under, which is
+        the name a scanner that resolves symlinks reports it by. Of two links to one directory
+        the first scan path given is the one that names the file.
+        """
+        return self.path(self.location(path)) == self.path(path)
 
     def forms(self, path: Path) -> PathForms:
         """The names of the file at finding path ``path`` that path-based ignores match.
@@ -189,10 +232,15 @@ class FindingPathDisplay:
         For a file outside the cwd a relative pattern sees the reported path,
         the shown path and the real location, with their trailing parts:
         ``../config/*`` matches what a scanner reports for such a file under
-        ``--pr-base`` run from a subdirectory. A copy (see ``aliases``) of a
-        file outside the cwd is named by its path below the directory copied,
-        as the copy was, so the directories above the repository never name a
-        staged file.
+        ``--pr-base`` run from a subdirectory. A pattern without a separator
+        (``build``) is the exception: it sees the path below each scan path the
+        file sits under, one view per scan path, or the file's own name when it
+        is no more than a scan path or below none. The directories above a
+        checkout never name it, and it is hidden only if the pattern matches in
+        every view, so adding a scan path never hides what another one reports
+        (#865). A copy (see ``aliases``) of a file outside the cwd is named
+        by its path below the directory copied, as the copy was, so the
+        directories above the repository never name a staged file.
         """
         forms = self._forms.get(path)
         if forms is None:
@@ -205,13 +253,17 @@ class FindingPathDisplay:
         reported, shown = self._reported_and_shown(path, copied)
         absolute = self._cwd / shown
         real = _resolved(absolute)
-        relative = self._relative_names(shown, reported, real, copied)
-        absolutes = [absolute]
-        if reported is not None and reported.is_absolute():
-            absolutes.append(reported)
-        if real is not None:
-            absolutes.append(real)
-        return PathForms(tuple(dict.fromkeys(relative)), tuple(dict.fromkeys(absolutes)))
+        absolutes = _absolute_names(absolute, reported, real)
+        below = self._names_below_cwd(shown, real)
+        if below:  # under the cwd, where it was found or where it really is
+            return PathForms(_unique(below), _unique(absolutes))
+        if copied is not None:  # a staged file outside the cwd: its path in the repository
+            return PathForms(_unique(_rooted(copied[1])), _unique(absolutes))
+        outside = [name for name in (reported, shown, real) if name is not None]
+        # A pattern without a separator sees what is below a scan path, not the directories
+        # above it, so a checkout that merely lives under `build/` is not hidden by `build`.
+        bare = self._views_below_scan_paths(absolute, real, Path(shown.name))
+        return PathForms(_unique(outside), _unique(absolutes), bare)
 
     def _reported_and_shown(
         self, path: Path, copied: tuple[Path, Path] | None
@@ -224,21 +276,43 @@ class FindingPathDisplay:
             return path, self.path(path)
         return None, display_path(copied[0], self._cwd)
 
-    def _relative_names(
-        self,
-        shown: Path,
-        reported: Path | None,
-        real: Path | None,
-        copied: tuple[Path, Path] | None,
-    ) -> list[Path]:
-        """The names a relative pattern is matched against (see :meth:`forms`)."""
+    def _names_below_cwd(self, shown: Path, real: Path | None) -> list[Path]:
+        """The names below the cwd a relative pattern is matched against (see :meth:`forms`).
+
+        Empty for a file outside the cwd. Each name is also rooted, so ``**/tests/**`` matches a
+        top-level ``tests`` directory.
+        """
         real_below = None if real is None else _below(real, self._real_cwd)
         below = [name for name in (self._below_cwd(shown), real_below) if name is not None]
-        if below:  # under the cwd, where it was found or where it really is
-            return [form for name in below for form in _rooted(name)]
-        if copied is not None:  # a staged file outside the cwd: its path in the repository
-            return list(_rooted(copied[1]))
-        return [name for name in (reported, shown, real) if name is not None]  # outside the cwd
+        return [form for name in below for form in _rooted(name)]
+
+    def _views_below_scan_paths(
+        self, absolute: Path, real: Path | None, own_name: Path
+    ) -> tuple[tuple[Path, ...], ...]:
+        """The names the file has below each scan path it sits under, one view per scan path.
+
+        A file below no scan path has its own name only.
+        """
+        views = (self._view_below(given, absolute, real, own_name) for given in self._scan_paths)
+        return tuple(dict.fromkeys(view for view in views if view is not None)) or ((own_name,),)
+
+    def _view_below(
+        self, given: Path, absolute: Path, real: Path | None, own_name: Path
+    ) -> tuple[Path, ...] | None:
+        """The names the file has below the scan path ``given``, or ``None`` when it is not below.
+
+        The file is seen where it was found and where it really is. A scan path that is the file
+        itself gives its own name only.
+        """
+        candidates = ((absolute, given), (real, self._real_dir(given)))
+        below = [
+            found
+            for name, base in candidates
+            if name is not None and base is not None and (found := _below(name, base)) is not None
+        ]
+        if not below:
+            return None
+        return _unique(name for name in below if name.parts) or (own_name,)
 
     def _copied(self, path: Path) -> tuple[Path, Path] | None:
         """The file a scanned copy at ``path`` stands for, and its path below the directory copied.
