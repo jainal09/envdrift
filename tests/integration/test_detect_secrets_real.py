@@ -314,12 +314,12 @@ def test_scan_of_a_directory_with_nothing_tracked_warns_instead_of_reporting_cle
 
 
 def test_scan_of_paths_that_look_like_options_scans_them(git_repo: Path):
-    """A file named ``--exclude-files=.`` is a path, not the option that excludes everything.
+    """A file named ``--exclude-files=^`` is a path, not the option that excludes everything.
 
     argparse took it for the option, so detect-secrets had no path and nothing to scan, and the
     run passed as clean. A directory starting with ``-`` failed with a usage error instead.
     """
-    option_like = "--exclude-files=."
+    option_like = "--exclude-files=^"
     _add_tracked(git_repo, option_like, "-sub/a.cfg", "plain.cfg")
     scanner = DetectSecretsScanner(auto_install=False)
 

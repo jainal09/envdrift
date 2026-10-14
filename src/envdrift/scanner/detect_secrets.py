@@ -419,6 +419,19 @@ def _git_honors_config_env() -> bool:
     return found is None or (int(found[1]), int(found[2])) >= _GIT_CONFIG_ENV_SINCE
 
 
+def _not_scanned_warning(path: Path, quoted: list[str]) -> str:
+    """The warning for tracked files whose names git quotes, which detect-secrets cannot match."""
+    shown = ", ".join(repr(name) for name in quoted[:3])
+    more = f" and {len(quoted) - 3} more" if len(quoted) > 3 else ""
+    return (
+        f"Not scanned in {path}: git writes the name of {len(quoted)} tracked file(s) in quotes, "
+        f"which detect-secrets cannot match ({shown}{more}). Git quotes a name with a double "
+        "quote, a backslash or a control character, and one with a non-ASCII character when it "
+        "cannot be told not to (that needs git 2.31 or later and names that are all UTF-8). "
+        "Rename the file or scan it with another scanner."
+    )
+
+
 def _check_git_file_list(path: Path, names: list[str] | None) -> tuple[dict[str, str], list[str]]:
     """The environment to run detect-secrets in, and warnings about the files git lists for it.
 
@@ -448,17 +461,7 @@ def _check_git_file_list(path: Path, names: list[str] | None) -> tuple[dict[str,
     if quotepath_off:
         env = _with_unquoted_git_paths(env)
     quoted = [name for name in names if _git_quotes(name, quotepath_off=quotepath_off)]
-    if not quoted:
-        return env, []
-    shown = ", ".join(repr(name) for name in quoted[:3])
-    more = f" and {len(quoted) - 3} more" if len(quoted) > 3 else ""
-    return env, [
-        f"Not scanned in {path}: git writes the name of {len(quoted)} tracked file(s) in quotes, "
-        f"which detect-secrets cannot match ({shown}{more}). Git quotes a name with a double "
-        "quote, a backslash or a control character, and one with a non-ASCII character when it "
-        "cannot be told not to (that needs git 2.31 or later and names that are all UTF-8). "
-        "Rename the file or scan it with another scanner."
-    ]
+    return env, [_not_scanned_warning(path, quoted)] if quoted else []
 
 
 def _report_file(name: str, base_path: Path, prefix: PurePath) -> Path:
@@ -491,7 +494,7 @@ def _run_detect_secrets(plan: _ScanPlan, env: dict[str, str]) -> subprocess.Comp
             "--exclude-files",
             plan.exclude,
             # A path is not an option, whatever it starts with: a file named
-            # ``--exclude-files=.`` would otherwise exclude everything and pass clean.
+            # ``--exclude-files=^`` would otherwise exclude everything and pass clean.
             "--",
             plan.scan_path,
         ]

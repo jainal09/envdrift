@@ -782,8 +782,12 @@ def _payment_and_ai_samples() -> dict[str, dict[str, str]]:
 
 def _slack_samples() -> dict[str, dict[str, str]]:
     """Slack tokens and webhook URLs."""
-    s: dict[str, dict[str, str]] = {}
-    s["slack-token"] = {
+    return {"slack-token": {**_slack_token_files(), **_slack_legacy_and_webhook_files()}}
+
+
+def _slack_token_files() -> dict[str, str]:
+    """Bot, user, app and configuration tokens."""
+    return {
         "slack-bot.env": (
             "SLACK_BOT=xoxb-"
             + _tok("sb1", 11, _DIGITS)
@@ -820,6 +824,12 @@ def _slack_samples() -> dict[str, dict[str, str]]:
             + _tok("sc2", 150)
             + "\n"
         ),
+    }
+
+
+def _slack_legacy_and_webhook_files() -> dict[str, str]:
+    """Legacy workspace tokens and an incoming webhook URL."""
+    return {
         "slack-legacy.env": (
             "SLACK_LEGACY=xoxs-"
             + _tok("sl1", 11, _DIGITS)
@@ -849,7 +859,6 @@ def _slack_samples() -> dict[str, dict[str, str]]:
             + "\n"
         ),
     }
-    return s
 
 
 def _messaging_samples() -> dict[str, dict[str, str]]:
@@ -1000,8 +1009,8 @@ def _generic_samples() -> dict[str, dict[str, str]]:
     return s
 
 
-def _native_config_samples() -> dict[str, dict[str, str]]:
-    """Classes only the native scanner names: OAuth, framework, hosting and config secrets."""
+def _native_credential_samples() -> dict[str, dict[str, str]]:
+    """Classes only the native scanner names: OAuth, VCS, payment, header and registry secrets."""
     s: dict[str, dict[str, str]] = {}
     s["google-oauth-client-secret"] = {
         "google-oauth.env": "GOOGLE_CLIENT_SECRET=GOCSPX-" + _tok("goc1", 28, _URL) + "\n"
@@ -1042,6 +1051,12 @@ def _native_config_samples() -> dict[str, dict[str, str]]:
             + "\n"
         )
     }
+    return s
+
+
+def _native_config_samples() -> dict[str, dict[str, str]]:
+    """Classes only the native scanner names: framework, config, hosting and token secrets."""
+    s: dict[str, dict[str, str]] = {}
     s["framework-secret-key"] = {
         "framework.txt": (
             "APP_KEY=base64:"
@@ -1102,5 +1117,6 @@ def class_samples() -> dict[str, dict[str, str]]:
         **_messaging_samples(),
         **_developer_platform_samples(),
         **_generic_samples(),
+        **_native_credential_samples(),
         **_native_config_samples(),
     }

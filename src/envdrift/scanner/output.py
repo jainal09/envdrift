@@ -224,21 +224,26 @@ def _build_findings_table(result: AggregatedScanResult, *, interactive: bool, wi
     return _build_compact_findings_table(findings, wide=wide)
 
 
-def _print_scanner_warnings(result: AggregatedScanResult, console: Console) -> None:
-    """Print the non-fatal scanner warnings as a panel, if there are any.
+def _print_scanner_notices(result: AggregatedScanResult, console: Console) -> None:
+    """Print a panel for the scanners that were skipped and one for those that warned.
 
-    The scan ran and its findings stand, but they may be less reliable than they look (a
-    detect-secrets that is not the pinned version grades some findings wrongly). They never
-    change the verdict.
+    A default-set scanner skipped for a missing binary must be visible in human output even
+    though it does not fail the run (#641). A scanner's non-fatal warnings mean its findings
+    stand but may be less reliable than they look (a detect-secrets that is not the pinned
+    version grades some findings wrongly); they never change the verdict.
     """
-    lines = [
+    skipped = [
+        f"[yellow]{r.scanner_name}[/yellow]: {r.skip_reason}" for r in result.results if r.skipped
+    ]
+    warned = [
         f"[yellow]{r.scanner_name}[/yellow]: {escape(strip_ansi(message))}"
         for r in result.results
         for message in r.warnings
     ]
-    if lines:
-        console.print(Panel("\n".join(lines), title="Scanner Warnings", border_style="yellow"))
-        console.print()
+    for title, lines in (("Scanners Skipped", skipped), ("Scanner Warnings", warned)):
+        if lines:
+            console.print(Panel("\n".join(lines), title=title, border_style="yellow"))
+            console.print()
 
 
 def format_rich(result: AggregatedScanResult, console: Console | None = None) -> None:
@@ -251,21 +256,7 @@ def format_rich(result: AggregatedScanResult, console: Console | None = None) ->
     if console is None:
         console = Console()
 
-    # Surface default-set scanners skipped for a missing binary: the skip must
-    # be visible in human output even though it does not fail the run (#641).
-    skipped = [r for r in result.results if r.skipped]
-    if skipped:
-        skip_lines = [f"[yellow]{r.scanner_name}[/yellow]: {r.skip_reason}" for r in skipped]
-        console.print(
-            Panel(
-                "\n".join(skip_lines),
-                title="Scanners Skipped",
-                border_style="yellow",
-            )
-        )
-        console.print()
-
-    _print_scanner_warnings(result, console)
+    _print_scanner_notices(result, console)
 
     # Surface scanner errors prominently. Filter on the ScanResult.success
     # contract (error is not None), not truthiness, so an empty-string failure
