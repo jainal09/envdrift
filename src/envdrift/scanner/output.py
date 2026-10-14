@@ -224,6 +224,23 @@ def _build_findings_table(result: AggregatedScanResult, *, interactive: bool, wi
     return _build_compact_findings_table(findings, wide=wide)
 
 
+def _print_scanner_warnings(result: AggregatedScanResult, console: Console) -> None:
+    """Print the non-fatal scanner warnings as a panel, if there are any.
+
+    The scan ran and its findings stand, but they may be less reliable than they look (a
+    detect-secrets that is not the pinned version grades some findings wrongly). They never
+    change the verdict.
+    """
+    lines = [
+        f"[yellow]{r.scanner_name}[/yellow]: {escape(strip_ansi(message))}"
+        for r in result.results
+        for message in r.warnings
+    ]
+    if lines:
+        console.print(Panel("\n".join(lines), title="Scanner Warnings", border_style="yellow"))
+        console.print()
+
+
 def format_rich(result: AggregatedScanResult, console: Console | None = None) -> None:
     """Format and print results using Rich for terminal output.
 
@@ -248,24 +265,7 @@ def format_rich(result: AggregatedScanResult, console: Console | None = None) ->
         )
         console.print()
 
-    # Surface non-fatal scanner warnings: the scan ran and its findings stand, but
-    # they may be less reliable than they look (a detect-secrets that is not the
-    # pinned version grades some findings wrongly). They never change the verdict.
-    warned = [r for r in result.results if r.warnings]
-    if warned:
-        warning_lines = [
-            f"[yellow]{r.scanner_name}[/yellow]: {escape(strip_ansi(message))}"
-            for r in warned
-            for message in r.warnings
-        ]
-        console.print(
-            Panel(
-                "\n".join(warning_lines),
-                title="Scanner Warnings",
-                border_style="yellow",
-            )
-        )
-        console.print()
+    _print_scanner_warnings(result, console)
 
     # Surface scanner errors prominently. Filter on the ScanResult.success
     # contract (error is not None), not truthiness, so an empty-string failure

@@ -19,6 +19,7 @@ import re
 import subprocess
 import sys
 from pathlib import Path
+from typing import NamedTuple
 
 import pytest
 from tests.severity_policy import (
@@ -387,96 +388,114 @@ _IGNORE_NATIVE = (
 )
 
 
+class GateCase(NamedTuple):
+    """A file to scan, the ``--fail-on`` to scan it with, and what gitleaks' finding must give."""
+
+    filename: str
+    content: str
+    fail_on: str
+    exit_code: int
+    severity: str
+
+
 @requires_gitleaks
 @pytest.mark.parametrize(
-    ("filename", "content", "fail_on", "exit_code", "severity"),
+    "case",
     [
         pytest.param(
-            "aws.env",
-            "AWS_ACCESS_KEY_ID=" + "AKIA" + "QYLPMN5HHHFPZAM2\n",
-            "critical",
-            1,
-            "critical",
+            GateCase(
+                "aws.env",
+                "AWS_ACCESS_KEY_ID=" + "AKIA" + "QYLPMN5HHHFPZAM2\n",
+                "critical",
+                1,
+                "critical",
+            ),
             id="aws-key-id-blocks-fail-on-critical",
         ),
         pytest.param(
-            "stripe.env",
-            "STRIPE_KEY=" + "sk_live_" + "4eC39HqLyjWDarjtT1zdp7dc" + "ABCDEFGH\n",
-            "critical",
-            1,
-            "critical",
+            GateCase(
+                "stripe.env",
+                "STRIPE_KEY=" + "sk_live_" + "4eC39HqLyjWDarjtT1zdp7dc" + "ABCDEFGH\n",
+                "critical",
+                1,
+                "critical",
+            ),
             id="stripe-live-key-blocks-fail-on-critical",
         ),
         pytest.param(
-            "github.env",
-            "GITHUB_TOKEN=" + "ghp_" + "016C7eX9bQ2vYwN3kLmZpRtUaScDfGhJkL01\n",
-            "critical",
-            1,
-            "critical",
+            GateCase(
+                "github.env",
+                "GITHUB_TOKEN=" + "ghp_" + "016C7eX9bQ2vYwN3kLmZpRtUaScDfGhJkL01\n",
+                "critical",
+                1,
+                "critical",
+            ),
             id="github-token-blocks-fail-on-critical",
         ),
         pytest.param(
-            "stripe-test.env",
-            "STRIPE_TEST_KEY=" + "sk_test_" + "4eC39HqLyjWDarjtT1zdp7dc" + "ABCDEFGH\n",
-            "critical",
-            0,
-            "high",
+            GateCase(
+                "stripe-test.env",
+                "STRIPE_TEST_KEY=" + "sk_test_" + "4eC39HqLyjWDarjtT1zdp7dc" + "ABCDEFGH\n",
+                "critical",
+                0,
+                "high",
+            ),
             id="stripe-test-key-is-high-so-fail-on-critical-passes",
         ),
         pytest.param(
-            "stripe-test.env",
-            "STRIPE_TEST_KEY=" + "sk_test_" + "4eC39HqLyjWDarjtT1zdp7dc" + "ABCDEFGH\n",
-            "high",
-            2,
-            "high",
+            GateCase(
+                "stripe-test.env",
+                "STRIPE_TEST_KEY=" + "sk_test_" + "4eC39HqLyjWDarjtT1zdp7dc" + "ABCDEFGH\n",
+                "high",
+                2,
+                "high",
+            ),
             id="stripe-test-key-still-blocks-fail-on-high",
         ),
         pytest.param(
-            "jwt.env",
-            class_samples()["jwt"]["session.env"],
-            "high",
-            2,
-            "high",
+            GateCase(
+                "jwt.env",
+                class_samples()["jwt"]["session.env"],
+                "high",
+                2,
+                "high",
+            ),
             id="jwt-blocks-the-default-fail-on-high",
         ),
         pytest.param(
-            "jwt.env",
-            class_samples()["jwt"]["session.env"],
-            "critical",
-            0,
-            "high",
+            GateCase(
+                "jwt.env",
+                class_samples()["jwt"]["session.env"],
+                "critical",
+                0,
+                "high",
+            ),
             id="jwt-is-high-so-fail-on-critical-passes",
         ),
     ],
 )
 def test_guard_fail_on_follows_gitleaks_severity(
-    tmp_path: Path,
-    integration_env: dict[str, str],
-    filename: str,
-    content: str,
-    fail_on: str,
-    exit_code: int,
-    severity: str,
+    tmp_path: Path, integration_env: dict[str, str], case: GateCase
 ):
     """gitleaks graded every finding HIGH, so ``--fail-on critical`` exited 0 on an AWS key (#850).
 
     Only gitleaks' finding decides here (the native rules for the same value are ignored), and
     the exit code is the severity-derived one: 1 for CRITICAL, 2 for HIGH.
     """
-    (tmp_path / filename).write_text(content, encoding="utf-8")
+    (tmp_path / case.filename).write_text(case.content, encoding="utf-8")
     (tmp_path / "envdrift.toml").write_text(_IGNORE_NATIVE, encoding="utf-8")
 
     result = _guard(
-        [".", "--ci", "--fail-on", fail_on, "--json", "--no-auto-install"]
+        [".", "--ci", "--fail-on", case.fail_on, "--json", "--no-auto-install"]
         + ["--config", "envdrift.toml"],
         cwd=tmp_path,
         env=integration_env,
     )
 
-    assert result.returncode == exit_code, (result.returncode, result.stdout, result.stderr)
+    assert result.returncode == case.exit_code, (result.returncode, result.stdout, result.stderr)
     payload = json.loads(result.stdout)
-    assert payload["exit_code"] == exit_code
+    assert payload["exit_code"] == case.exit_code
     gitleaks = [f for f in payload["findings"] if f["scanner"] == "gitleaks"]
-    assert [f["severity"] for f in gitleaks] == [severity], payload["findings"]
+    assert [f["severity"] for f in gitleaks] == [case.severity], payload["findings"]
     # JSON severities are the plain lower-case names, with no escapes.
     assert re.fullmatch(r"[a-z]+", gitleaks[0]["severity"])

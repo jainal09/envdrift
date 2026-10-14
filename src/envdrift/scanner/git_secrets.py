@@ -56,11 +56,15 @@ _AWS_ACCESS_KEY_ID_RE = re.compile(
 
 # The other two CRITICAL types are also earned by the credential, not by a word near it: a
 # secret access key is the 40-character value the line assigns, and a private key is a PEM
-# header or a long base64 body. A line that only names ``aws_secret_access_key_file`` or
-# ``private_key_path`` holds neither, so it is HIGH, not CRITICAL (see ``_holds_credential``).
-_AWS_SECRET_ACCESS_KEY_RE = re.compile(r"(?<![A-Za-z0-9/+=])[A-Za-z0-9/+=]{40}(?![A-Za-z0-9/+=])")
+# header or a long base64 value assigned to ``private_key`` itself. A line that only names
+# ``aws_secret_access_key_file`` or ``private_key_path``, or holds a long identifier under
+# ``private_key_id``, holds neither, so it is HIGH, not CRITICAL (see ``_holds_credential``).
+# The key is base64 without padding, so a ``=`` before it is the assignment, not part of it.
+_AWS_SECRET_ACCESS_KEY_RE = re.compile(r"(?<![A-Za-z0-9/+])[A-Za-z0-9/+]{40}(?![A-Za-z0-9/+=])")
 _PRIVATE_KEY_HEADER_RE = re.compile(r"-----BEGIN [A-Z0-9 ]*PRIVATE KEY")
-_BASE64_BODY_RE = re.compile(r"[A-Za-z0-9+/]{64,}={0,2}")
+_PRIVATE_KEY_VALUE_RE = re.compile(
+    r"private_key[\"']?\s*[:=]\s*[\"']?[A-Za-z0-9+/]{64,}", re.IGNORECASE
+)
 
 # git-secrets reports a matching line, not a rule, so ``_detect_rule_type`` names the
 # credential from the line's text. The grades follow the severity policy of the scanners
@@ -90,7 +94,7 @@ def _holds_credential(rule_type: str, content: str) -> bool:
     if rule_type == "private-key":
         return (
             _PRIVATE_KEY_HEADER_RE.search(content) is not None
-            or _BASE64_BODY_RE.search(content) is not None
+            or _PRIVATE_KEY_VALUE_RE.search(content) is not None
         )
     return True
 

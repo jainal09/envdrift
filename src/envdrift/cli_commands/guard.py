@@ -955,11 +955,15 @@ def _warn_skipped_scanners(result: AggregatedScanResult) -> None:
         _warn_stderr(skip_record.skip_reason or f"{skip_record.scanner_name} scanner was skipped")
 
 
-def _warn_scanner_warnings(result: AggregatedScanResult, json_output: bool, sarif: bool) -> None:
-    """Repeat scanner warnings on stderr when --json/--sarif keep them off the terminal."""
-    # Human mode shows them in the Scanner Warnings panel. Under --json/--sarif they are
-    # in the document, but stdout is usually redirected to a file, so stderr keeps them
-    # visible in CI logs without contaminating the document.
+def _warn_scanner_notices(result: AggregatedScanResult, json_output: bool, sarif: bool) -> None:
+    """Put what the scanners had to say about their run on stderr, where stdout is a document.
+
+    A skipped scanner is shown in every mode. A scanner's warnings are repeated under
+    --json/--sarif only: human mode has the Scanner Warnings panel, and in the documents they
+    are data, but stdout is usually redirected to a file, so stderr keeps them visible in CI
+    logs without contaminating it.
+    """
+    _warn_skipped_scanners(result)
     if not _machine_mode(json_output, sarif):
         return
     for scan_result in result.results:
@@ -1278,8 +1282,7 @@ def guard(
         if staged_tmpdir is not None:
             staged_tmpdir.cleanup()
 
-    _warn_skipped_scanners(result)
-    _warn_scanner_warnings(result, json_output, sarif)
+    _warn_scanner_notices(result, json_output, sarif)
 
     # One source of truth for the verdict (#478): compute the effective exit
     # code BEFORE rendering, so the machine-readable documents carry the exact

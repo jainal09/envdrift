@@ -313,6 +313,25 @@ def test_scan_of_a_directory_with_nothing_tracked_warns_instead_of_reporting_cle
     assert "git add" in warning
 
 
+def test_scan_of_paths_that_look_like_options_scans_them(git_repo: Path):
+    """A file named ``--exclude-files=.`` is a path, not the option that excludes everything.
+
+    argparse took it for the option, so detect-secrets had no path and nothing to scan, and the
+    run passed as clean. A directory starting with ``-`` failed with a usage error instead.
+    """
+    option_like = "--exclude-files=."
+    _add_tracked(git_repo, option_like, "-sub/a.cfg", "plain.cfg")
+    scanner = DetectSecretsScanner(auto_install=False)
+
+    file_result = scanner.scan([git_repo / option_like])
+    dir_result = scanner.scan([git_repo / "-sub"])
+
+    assert file_result.error is None, file_result.error
+    assert dir_result.error is None, dir_result.error
+    assert [Path(f.file_path).name for f in file_result.findings] == [option_like]
+    assert _found(dir_result.findings, git_repo) == ["-sub/a.cfg"]
+
+
 def test_scan_of_tracked_files_with_non_ascii_names_reports_them(git_repo: Path):
     """A leaked token in ``café.cfg`` is reported, not skipped in silence.
 
@@ -548,15 +567,18 @@ def other_detect_secrets(tmp_path_factory: pytest.TempPathFactory) -> tuple[str,
     if done.returncode != 0:
         pytest.skip(f"cannot install {spec}: {done.stderr.strip()[:200]}")
     env = {**os.environ, "PYTHONPATH": str(target)}
-    probe = subprocess.run(
-        [sys.executable, "-m", "detect_secrets", "--version"],
-        env=env,
-        capture_output=True,
-        text=True,
-        encoding="utf-8",
-        errors="replace",
-        timeout=60,
-    )
+    try:
+        probe = subprocess.run(
+            [sys.executable, "-m", "detect_secrets", "--version"],
+            env=env,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=60,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        pytest.skip(f"{spec} does not run here: {exc}")
     if probe.returncode != 0 or version not in probe.stdout:
         pytest.skip(f"{spec} does not run here: {probe.stderr.strip()[:200]}")
     return version, target

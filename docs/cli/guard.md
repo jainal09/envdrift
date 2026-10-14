@@ -118,9 +118,9 @@ A tracked file with a non-ASCII name (`café.env`) is scanned too. envdrift runs
 `"caf\303\251.env"`, which names no file, and detect-secrets dropped the file without a word. Git quotes a
 name with a double quote, a backslash or a control character whatever the setting, and detect-secrets fails
 on a name that is not valid UTF-8 when the setting is off, so envdrift leaves it on in a repository that
-tracks one. detect-secrets cannot match those names, and the Scanner Warnings say "Not scanned in ..." and
-list the first three, instead of letting the file pass for clean. Rename the file or scan it with another
-scanner.
+tracks one, and a git older than 2.31 ignores the setting altogether. detect-secrets cannot match those
+names, and the Scanner Warnings say "Not scanned in ..." and list the first three, instead of letting the
+file pass for clean. Rename the file or scan it with another scanner.
 
 When git tracks nothing that detect-secrets would scan in a directory (a repository whose files are not
 added yet, or a directory that is all ignored), detect-secrets prints an empty report, as for a

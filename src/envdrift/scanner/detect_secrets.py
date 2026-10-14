@@ -393,6 +393,32 @@ def _is_undecodable(name: str) -> bool:
     return _NOT_UTF8.search(name) is not None
 
 
+# ``GIT_CONFIG_COUNT`` and its key and value variables arrived in git 2.31; an older git
+# ignores them.
+_GIT_CONFIG_ENV_SINCE = (2, 31)
+
+
+def _git_honors_config_env() -> bool:
+    """Whether the installed git reads configuration from ``GIT_CONFIG_COUNT``.
+
+    True when that cannot be told: a git that cannot be asked for its version is no reason to
+    report a file as skipped that may well be scanned.
+    """
+    try:
+        result = subprocess.run(  # nosec B603, B607
+            ["git", "--version"],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=10,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return True
+    found = re.match(r"git version (\d+)\.(\d+)", result.stdout) if result.stdout else None
+    return found is None or (int(found[1]), int(found[2])) >= _GIT_CONFIG_ENV_SINCE
+
+
 def _check_git_file_list(path: Path, names: list[str] | None) -> tuple[dict[str, str], list[str]]:
     """The environment to run detect-secrets in, and warnings about the files git lists for it.
 
@@ -400,8 +426,9 @@ def _check_git_file_list(path: Path, names: list[str] | None) -> tuple[dict[str,
     writes a name it has to escape in quotes, which matches no file: the file was dropped from
     the scan without a word and the run read as clean. Turning ``core.quotepath`` off makes git
     print non-ASCII names as they are. That is not safe when a name holds bytes that are not
-    UTF-8, since detect-secrets decodes the list and fails on them, so the setting stays at its
-    default then. A name that git still quotes is reported, never skipped in silence.
+    UTF-8, since detect-secrets decodes the list and fails on them, and it does nothing on a git
+    older than 2.31, which ignores the variable; the setting stays at its default then. A name
+    that git still quotes is reported, never skipped in silence.
 
     Args:
         path: The path being scanned, for the messages.
@@ -417,7 +444,7 @@ def _check_git_file_list(path: Path, names: list[str] | None) -> tuple[dict[str,
             "git tracks, and none is tracked there that it does not skip. Run git add on the "
             "files to scan them."
         ]
-    quotepath_off = not any(_is_undecodable(name) for name in names)
+    quotepath_off = _git_honors_config_env() and not any(_is_undecodable(name) for name in names)
     if quotepath_off:
         env = _with_unquoted_git_paths(env)
     quoted = [name for name in names if _git_quotes(name, quotepath_off=quotepath_off)]
@@ -428,9 +455,57 @@ def _check_git_file_list(path: Path, names: list[str] | None) -> tuple[dict[str,
     return env, [
         f"Not scanned in {path}: git writes the name of {len(quoted)} tracked file(s) in quotes, "
         f"which detect-secrets cannot match ({shown}{more}). Git quotes a name with a double "
-        "quote, a backslash, a control character or bytes that are not UTF-8. Rename the file "
-        "or scan it with another scanner."
+        "quote, a backslash or a control character, and one with a non-ASCII character when it "
+        "cannot be told not to (that needs git 2.31 or later and names that are all UTF-8). "
+        "Rename the file or scan it with another scanner."
     ]
+
+
+def _report_file(name: str, base_path: Path, prefix: PurePath) -> Path:
+    """The path of a file named in a report, below ``base_path`` as the caller named it.
+
+    A report names files relative to the directory detect-secrets ran in, so ``prefix``, the
+    way from there to ``base_path``, is dropped first. When ``base_path`` is a file the names
+    are relative to its parent directory.
+    """
+    file_path = Path(name)
+    if prefix.parts and file_path.parts[: len(prefix.parts)] == prefix.parts:
+        file_path = Path(*file_path.parts[len(prefix.parts) :])
+    if file_path.is_absolute():
+        return file_path
+    return (base_path.parent if base_path.is_file() else base_path) / file_path
+
+
+def _run_detect_secrets(plan: _ScanPlan, env: dict[str, str]) -> subprocess.CompletedProcess[str]:
+    """Run ``python -m detect_secrets scan`` over the path of ``plan`` with all plugins on.
+
+    "Final boss" mode: every plugin is enabled. Where it runs, whether it scans every file and
+    what it skips depend on the path (see ``_plan_scan``).
+    """
+    args = [sys.executable, "-m", "detect_secrets", "scan"]
+    if plan.all_files:
+        args.append("--all-files")
+    args.extend(
+        [
+            "--force-use-all-plugins",  # Enable ALL 27+ detectors
+            "--exclude-files",
+            plan.exclude,
+            # A path is not an option, whatever it starts with: a file named
+            # ``--exclude-files=.`` would otherwise exclude everything and pass clean.
+            "--",
+            plan.scan_path,
+        ]
+    )
+    return subprocess.run(  # nosec B603
+        args,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        timeout=300,  # 5 minute timeout
+        cwd=str(plan.cwd),
+        env=env,
+    )
 
 
 def _read_report(stdout: str) -> dict[str, Any] | None:
@@ -727,53 +802,32 @@ class DetectSecretsScanner(ScannerBackend):
         all_findings: list[ScanFinding] = []
         total_files = 0
 
+        def failed(error: str) -> ScanResult:
+            return ScanResult(
+                scanner_name=self.name,
+                findings=all_findings,
+                error=error,
+                duration_ms=int((time.time() - start_time) * 1000),
+                warnings=warnings,
+            )
+
         for path in paths:
             if not path.exists():
                 continue
 
             try:
-                # Build command with all plugins enabled ("final boss" mode). Where it runs,
-                # whether it scans every file and what it skips depend on the path (see
-                # ``_plan_scan``).
                 plan = _plan_scan(path)
                 env, listing_warnings = _check_git_file_list(path, _scannable_tracked_names(plan))
-                args = [sys.executable, "-m", "detect_secrets", "scan"]
-                if plan.all_files:
-                    args.append("--all-files")
-                args.extend(
-                    [
-                        "--force-use-all-plugins",  # Enable ALL 27+ detectors
-                        "--exclude-files",
-                        plan.exclude,
-                        plan.scan_path,
-                    ]
-                )
-
-                result = subprocess.run(  # nosec B603
-                    args,
-                    capture_output=True,
-                    text=True,
-                    encoding="utf-8",
-                    errors="replace",
-                    timeout=300,  # 5 minute timeout
-                    cwd=str(plan.cwd),
-                    env=env,
-                )
+                result = _run_detect_secrets(plan, env)
                 warnings = [*warnings, *listing_warnings]
 
                 # Belt and braces for #851: if detect-secrets still found no git work tree
                 # to list the files from (the check above and its own can disagree), it
                 # scanned nothing, which must not pass for a clean run.
                 if _NO_GIT_REPOSITORY_NOTICE in result.stderr:
-                    return ScanResult(
-                        scanner_name=self.name,
-                        findings=all_findings,
-                        error=(
-                            f"detect-secrets scanned nothing in {path}: it could not list "
-                            "the files of a git repository"
-                        ),
-                        duration_ms=int((time.time() - start_time) * 1000),
-                        warnings=warnings,
+                    return failed(
+                        f"detect-secrets scanned nothing in {path}: it could not list "
+                        "the files of a git repository"
                     )
 
                 # detect-secrets outputs JSON baseline to stdout
@@ -781,58 +835,26 @@ class DetectSecretsScanner(ScannerBackend):
                     baseline = _read_report(result.stdout)
                     if baseline is None:
                         # A report that cannot be read is not a clean one.
-                        return ScanResult(
-                            scanner_name=self.name,
-                            findings=all_findings,
-                            error=(
-                                "detect-secrets output error: "
-                                f"{(result.stderr or result.stdout)[:200]}"
-                            ),
-                            duration_ms=int((time.time() - start_time) * 1000),
-                            warnings=warnings,
+                        return failed(
+                            f"detect-secrets output error: {(result.stderr or result.stdout)[:200]}"
                         )
                     all_findings.extend(self._parse_baseline(baseline, path, plan.prefix))
                     total_files += len(baseline["results"])
                 elif result.returncode == 0:
                     # It always prints a baseline; none at all means nothing was scanned.
-                    return ScanResult(
-                        scanner_name=self.name,
-                        findings=all_findings,
-                        error=f"detect-secrets printed no report for {path}",
-                        duration_ms=int((time.time() - start_time) * 1000),
-                        warnings=warnings,
-                    )
+                    return failed(f"detect-secrets printed no report for {path}")
 
                 if result.returncode != 0:
-                    error_msg = (
+                    return failed(
                         result.stderr.strip()
                         or result.stdout.strip()
                         or f"detect-secrets scan failed for {path} (exit code {result.returncode})"
                     )
-                    return ScanResult(
-                        scanner_name=self.name,
-                        findings=all_findings,
-                        error=error_msg,
-                        duration_ms=int((time.time() - start_time) * 1000),
-                        warnings=warnings,
-                    )
 
             except subprocess.TimeoutExpired:
-                return ScanResult(
-                    scanner_name=self.name,
-                    findings=all_findings,
-                    error=f"Scan timed out for {path}",
-                    duration_ms=int((time.time() - start_time) * 1000),
-                    warnings=warnings,
-                )
+                return failed(f"Scan timed out for {path}")
             except Exception as e:
-                return ScanResult(
-                    scanner_name=self.name,
-                    findings=all_findings,
-                    error=str(e),
-                    duration_ms=int((time.time() - start_time) * 1000),
-                    warnings=warnings,
-                )
+                return failed(str(e))
 
         return ScanResult(
             scanner_name=self.name,
@@ -858,25 +880,12 @@ class DetectSecretsScanner(ScannerBackend):
             List of ScanFinding objects.
         """
         findings: list[ScanFinding] = []
-        results = baseline.get("results", {})
-
-        for file_path_str, secrets in results.items():
-            # Resolve file path - handle both directory and file base paths
-            file_path = Path(file_path_str)
-            if prefix.parts and file_path.parts[: len(prefix.parts)] == prefix.parts:
-                file_path = Path(*file_path.parts[len(prefix.parts) :])
-            if not file_path.is_absolute():
-                # If base_path is a file, paths are relative to its parent directory
-                if base_path.is_file():
-                    file_path = base_path.parent / file_path
-                else:
-                    file_path = base_path / file_path
-
+        for name, secrets in baseline.get("results", {}).items():
+            file_path = _report_file(name, base_path, prefix)
             for secret in secrets:
                 finding = self._parse_secret(secret, file_path)
-                if finding:
+                if finding is not None:
                     findings.append(finding)
-
         return findings
 
     def _parse_secret(self, secret: dict[str, Any], file_path: Path) -> ScanFinding | None:

@@ -28,7 +28,7 @@ def _jwt() -> str:
         return base64.urlsafe_b64encode(data).decode().rstrip("=")
 
     claims = part(b'{"role":"service_role","iss":"supabase","iat":1516239022}')
-    return part(b'{"alg":"HS256","typ":"JWT"}') + "." + claims + "." + "Zx9Kq2Wm7Lp4Rt8Nv6Bs3Yd"
+    return part(b'{"alg":"HS256","typ":"JWT"}') + "." + claims + "." + "FAKE_SIGNATURE"
 
 
 @pytest.fixture
@@ -44,6 +44,7 @@ def _guard(path: Path, *args: str):
 def test_a_jwt_found_by_the_native_scanner_is_high(jwt_project: Path):
     result = _guard(jwt_project)
 
+    assert result.exit_code == 2, result.output
     payload = json.loads(result.stdout)
     jwt = [f for f in payload["findings"] if f["rule_id"] == "jwt-token"]
     assert [f["severity"] for f in jwt] == ["high"], payload["findings"]

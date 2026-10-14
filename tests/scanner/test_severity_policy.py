@@ -23,7 +23,7 @@ from typing import Any
 import pytest
 
 from envdrift.scanner import infisical, kingfisher
-from envdrift.scanner.base import FindingSeverity
+from envdrift.scanner.base import FindingSeverity, ScanFinding
 from envdrift.scanner.detect_secrets import DETECTOR_SEVERITY, DetectSecretsScanner
 from envdrift.scanner.git_secrets import RULE_TYPE_SEVERITY, GitSecretsScanner
 from envdrift.scanner.gitleaks import GitleaksScanner
@@ -266,21 +266,23 @@ def test_git_secrets_grades_the_class_as_the_policy_says(cls: CredentialClass, t
         assert finding.severity == cls.severity, rule_type
 
 
+def _policy_names(field: str) -> set[str]:
+    """Every name the policy lists in ``field`` (``rules``, ``detect_secrets``, ...) over all classes."""
+    return {name for cls in POLICY for name in getattr(cls, field)}
+
+
 def test_every_table_entry_belongs_to_a_class():
     """A rule, detector or keyword the policy does not know cannot be held to a grade.
 
     Adding an entry to a table without a class here fails, so a grade cannot be set in one
     scanner and forgotten in the others.
     """
-    rules = {r for c in POLICY for r in c.rules}
-    detectors = {d for c in POLICY for d in c.detect_secrets}
     critical_keywords = {k for c in POLICY if c.severity is CRITICAL for k in c.kingfisher}
-    rule_types = {t for c in POLICY for t in c.git_secrets}
 
-    assert set(RULE_SEVERITY_MAP) - rules == set()
-    assert set(DETECTOR_SEVERITY) == detectors
+    assert set(RULE_SEVERITY_MAP) - _policy_names("rules") == set()
+    assert set(DETECTOR_SEVERITY) == _policy_names("detect_secrets")
     assert critical_keywords == kingfisher.CRITICAL_SEVERITY_RULES
-    assert set(RULE_TYPE_SEVERITY) == rule_types
+    assert set(RULE_TYPE_SEVERITY) == _policy_names("git_secrets")
 
 
 # --- The shared table against the rule IDs the real tools have ---
@@ -385,30 +387,40 @@ def test_a_jwt_is_never_graded_below_high():
     assert DETECTOR_SEVERITY["JSON Web Token"] is HIGH
 
 
+def _write_class_samples(directory: Path) -> None:
+    for cls_name, files in class_samples().items():
+        for name, content in files.items():
+            (directory / f"{cls_name}__{name.lstrip('.')}").write_text(content, encoding="utf-8")
+
+
+def _native_rule_ids_by_class(findings: list[ScanFinding]) -> dict[str, set[str]]:
+    """The native pattern ids found, per policy class, each held to its class's grade."""
+    owners = {rule: cls for cls in POLICY for rule in cls.native}
+    reported: dict[str, set[str]] = {}
+    for finding in findings:
+        owner = owners.get(finding.rule_id)
+        if owner is not None:
+            assert finding.severity == owner.severity, (finding.rule_id, finding.file_path)
+            reported.setdefault(owner.name, set()).add(finding.rule_id)
+    return reported
+
+
 def test_native_scan_of_each_class_sample_follows_the_policy(tmp_path: Path):
     """The native scanner flags a realistic sample of each class under the policy's id and grade.
 
-    This runs the real scanner (no binary needed) over the sample files, so a pattern id the
-    policy lists must exist and fire, and every finding of a class gets the class's grade.
+    This runs the real scanner (no binary needed) over the sample files. Every pattern id the
+    policy lists must exist and fire on a sample, bar the few in ``NO_NATIVE_SAMPLE``, and every
+    finding of a class gets the class's grade.
     """
-    owners: dict[str, CredentialClass] = {}
-    for cls in POLICY:
-        owners.update(dict.fromkeys(cls.native, cls))
-    for cls_name, files in class_samples().items():
-        for name, content in files.items():
-            (tmp_path / f"{cls_name}__{name.lstrip('.')}").write_text(content, encoding="utf-8")
+    _write_class_samples(tmp_path)
 
     result = NativeScanner(check_entropy=False).scan([tmp_path])
 
     assert result.error is None
-    reported: dict[str, set[str]] = {}
-    for finding in result.findings:
-        owner = owners.get(finding.rule_id)
-        if owner is None:
-            continue
-        assert finding.severity == owner.severity, (finding.rule_id, finding.file_path)
-        reported.setdefault(owner.name, set()).add(finding.rule_id)
+    reported = _native_rule_ids_by_class(result.findings)
+    sampled = class_samples()
     for cls in POLICY:
-        if set(cls.native) <= NO_NATIVE_SAMPLE or cls.name not in class_samples():
-            continue
-        assert cls.name in reported, f"native did not flag the {cls.name} sample"
+        expected = set(cls.native) - NO_NATIVE_SAMPLE
+        assert not expected or cls.name in sampled, f"no sample file for the {cls.name} class"
+        silent = expected - reported.get(cls.name, set())
+        assert not silent, f"native did not flag {sorted(silent)} in the {cls.name} samples"

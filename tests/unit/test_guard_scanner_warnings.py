@@ -28,8 +28,8 @@ from envdrift.utils.text import strip_ansi
 runner = CliRunner()
 
 WARNING = (
-    "detect-secrets 1.4.0 is installed, but envdrift grades findings against detect-secrets "
-    "1.5.0. Another version can rename or add detectors, so severities may be inaccurate. "
+    "The installed version is 1.4.0, but envdrift grades findings against version 1.5.0. "
+    "Another version can rename or add detectors, so severities may be inaccurate. "
     "Install the pinned version: pip install detect-secrets==1.5.0"
 )
 
@@ -108,6 +108,7 @@ def test_json_output_repeats_the_warning_on_stderr(tmp_path: Path, monkeypatch):
 
     result = runner.invoke(app, ["guard", str(tmp_path), "--json"])
 
+    assert result.exit_code == 0, result.output
     assert f"Warning: detect-secrets: {WARNING}" in result.stderr
 
 
@@ -134,7 +135,7 @@ def test_human_output_shows_the_warning_in_a_panel_and_not_on_stderr(tmp_path: P
     assert result.exit_code == 0, result.output
     output = _flat(result.stdout)
     assert "Scanner Warnings" in output
-    assert "detect-secrets 1.4.0 is installed" in output
+    assert "The installed version is 1.4.0" in output
     assert "pip install detect-secrets==1.5.0" in output
     assert "No secrets or policy violations detected" in output
     # The panel is the human surface; stderr is only for the machine modes.
@@ -178,6 +179,8 @@ def test_a_run_without_warnings_prints_none(tmp_path: Path, monkeypatch):
     machine = runner.invoke(app, ["guard", str(tmp_path), "--json"])
     human = runner.invoke(app, ["guard", str(tmp_path)])
 
+    assert machine.exit_code == 0, machine.output
+    assert human.exit_code == 0, human.output
     assert "Warning:" not in machine.stderr
     assert json.loads(machine.stdout)["scanner_results"][0]["warnings"] == []
     assert "Scanner Warnings" not in human.stdout

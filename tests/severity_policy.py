@@ -570,12 +570,8 @@ def _jwt() -> str:
     return head + "." + claims.decode().rstrip("=") + "." + _tok("jwt-sig", 43, _URL)
 
 
-def class_samples() -> dict[str, dict[str, str]]:
-    """One or more sample files per class: ``{class name: {file name: content}}``.
-
-    Every value is built from a seeded stream, so these are realistic enough for the real
-    scanners to flag, yet no complete secret appears in source (GitHub push protection).
-    """
+def _aws_and_azure_samples() -> dict[str, dict[str, str]]:
+    """Amazon Web Services and Azure credentials."""
     s: dict[str, dict[str, str]] = {}
     s["aws"] = {
         "aws-key-id.env": "AWS_ACCESS_KEY_ID=AKIA" + _tok("aws1", 16, _UPNUM) + "\n",
@@ -584,6 +580,7 @@ def class_samples() -> dict[str, dict[str, str]]:
             "AWS_SECRET_ACCESS_KEY=" + _tok("aws2s", 40, _ALNUM + "/+") + "\n"
         ),
         "aws-bedrock.env": "AWS_BEARER_TOKEN_BEDROCK=ABSK" + _tok("aws3", 120) + "\n",
+        "aws-session.env": "AWS_SESSION_TOKEN=" + _tok("aws4", 120, _ALNUM + "/+") + "\n",
     }
     s["azure-storage-key"] = {
         "azure-storage.env": (
@@ -620,6 +617,12 @@ def class_samples() -> dict[str, dict[str, str]]:
             + "\n"
         )
     }
+    return s
+
+
+def _gcp_and_ibm_samples() -> dict[str, dict[str, str]]:
+    """Google Cloud and IBM Cloud credentials."""
+    s: dict[str, dict[str, str]] = {}
     s["gcp-service-account"] = {
         "service-account.json": (
             '{\n  "type": "service_account",\n  "project_id": "demo-'
@@ -649,6 +652,12 @@ def class_samples() -> dict[str, dict[str, str]]:
         "gemini.env": "GEMINI_API_KEY=AQ.Ab8RN6" + _tok("gem", 44, _URL) + "\n",
     }
     s["ibm-cloud-iam-key"] = {"ibm.env": "IBM_CLOUD_API_KEY=" + _tok("ibm", 44, _URL) + "\n"}
+    return s
+
+
+def _code_hosting_and_registry_samples() -> dict[str, dict[str, str]]:
+    """Source hosting, package registry and Vault tokens."""
+    s: dict[str, dict[str, str]] = {}
     s["github-token"] = {
         "github-pat.env": "GITHUB_TOKEN=ghp_" + _tok("ghp", 36) + "\n",
         "github-oauth.env": "GH_OAUTH=gho_" + _tok("gho", 36) + "\n",
@@ -691,11 +700,19 @@ def class_samples() -> dict[str, dict[str, str]]:
             + "\n"
         )
     }
+    return s
+
+
+def _key_and_hash_samples() -> dict[str, dict[str, str]]:
+    """Private keys and password hashes."""
+    s: dict[str, dict[str, str]] = {}
     s["private-key"] = {
         "rsa.pem": _pem("RSA PRIVATE KEY", "rsa"),
         "generic.pem": _pem("PRIVATE KEY", "gen"),
         "ec.pem": _pem("EC PRIVATE KEY", "ec"),
         "openssh.key": _pem("OPENSSH PRIVATE KEY", "ossh"),
+        "dsa.pem": _pem("DSA PRIVATE KEY", "dsa"),
+        "putty.ppk": "PuTTY-User-Key-File-3: ssh-ed25519\nEncryption: none\nComment: probe\n",
         "pgp.asc": _pem("PGP PRIVATE KEY BLOCK", "pgp"),
         "age.key": "AGE-SECRET-KEY-1" + _tok("age", 58, "QPZRY9X8GF2TVDW0S3JN54KHCE6MUA7L") + "\n",
         "wallet.env": "POLYMARKET_PRIVATE_KEY=0x" + _tok("poly", 64, _HEX) + "\n",
@@ -708,6 +725,12 @@ def class_samples() -> dict[str, dict[str, str]]:
         + _tok("sc2", 86, "./" + _ALNUM)
         + "\n",
     }
+    return s
+
+
+def _payment_and_ai_samples() -> dict[str, dict[str, str]]:
+    """Payment, e-mail and AI provider keys."""
+    s: dict[str, dict[str, str]] = {}
     s["stripe-live-key"] = {
         "stripe-live.env": "STRIPE_KEY=sk_live_" + _tok("stl", 32) + "\n",
         "stripe-restricted.env": "STRIPE_RK=rk_live_" + _tok("strl", 32) + "\n",
@@ -722,6 +745,44 @@ def class_samples() -> dict[str, dict[str, str]]:
             + "\n"
         )
     }
+    s["sendgrid-api-key"] = {
+        "sendgrid.env": (
+            "SENDGRID_API_KEY=SG." + _tok("sg1", 22, _URL) + "." + _tok("sg2", 43, _URL) + "\n"
+        )
+    }
+    s["openai-api-key"] = {
+        "openai.env": "OPENAI_API_KEY=sk-"
+        + _tok("oai1", 20)
+        + "T3BlbkFJ"
+        + _tok("oai2", 20)
+        + "\n",
+        "openai-project.env": "OPENAI_API_KEY=sk-proj-" + _tok("oai3", 90, _URL) + "\n",
+    }
+    s["anthropic-api-key"] = {
+        "anthropic.env": "ANTHROPIC_API_KEY=sk-ant-api03-" + _tok("ant", 93, _URL) + "AA\n"
+    }
+    s["heroku-api-key"] = {
+        "heroku.env": (
+            "HEROKU_API_KEY="
+            + _tok("hk1", 8, _HEX)
+            + "-"
+            + _tok("hk2", 4, _HEX)
+            + "-"
+            + _tok("hk3", 4, _HEX)
+            + "-"
+            + _tok("hk4", 4, _HEX)
+            + "-"
+            + _tok("hk5", 12, _HEX)
+            + "\n"
+        ),
+        "heroku-v2.env": "HEROKU_KEY=HRKU-AA" + _tok("hk6", 58, _URL) + "\n",
+    }
+    return s
+
+
+def _slack_samples() -> dict[str, dict[str, str]]:
+    """Slack tokens and webhook URLs."""
+    s: dict[str, dict[str, str]] = {}
     s["slack-token"] = {
         "slack-bot.env": (
             "SLACK_BOT=xoxb-"
@@ -788,33 +849,12 @@ def class_samples() -> dict[str, dict[str, str]]:
             + "\n"
         ),
     }
-    s["sendgrid-api-key"] = {
-        "sendgrid.env": (
-            "SENDGRID_API_KEY=SG." + _tok("sg1", 22, _URL) + "." + _tok("sg2", 43, _URL) + "\n"
-        )
-    }
-    s["openai-api-key"] = {
-        "openai.env": "OPENAI_API_KEY=sk-" + _tok("oai1", 20) + "T3BlbkFJ" + _tok("oai2", 20) + "\n"
-    }
-    s["anthropic-api-key"] = {
-        "anthropic.env": "ANTHROPIC_API_KEY=sk-ant-api03-" + _tok("ant", 93, _URL) + "AA\n"
-    }
-    s["heroku-api-key"] = {
-        "heroku.env": (
-            "HEROKU_API_KEY="
-            + _tok("hk1", 8, _HEX)
-            + "-"
-            + _tok("hk2", 4, _HEX)
-            + "-"
-            + _tok("hk3", 4, _HEX)
-            + "-"
-            + _tok("hk4", 4, _HEX)
-            + "-"
-            + _tok("hk5", 12, _HEX)
-            + "\n"
-        ),
-        "heroku-v2.env": "HEROKU_KEY=HRKU-AA" + _tok("hk6", 58, _URL) + "\n",
-    }
+    return s
+
+
+def _messaging_samples() -> dict[str, dict[str, str]]:
+    """Chat, bot and social platform tokens."""
+    s: dict[str, dict[str, str]] = {}
     s["mailchimp-api-key"] = {
         "mailchimp.env": "MAILCHIMP_API_KEY=" + _tok("mc", 32, _HEX) + "-us20\n"
     }
@@ -836,11 +876,24 @@ def class_samples() -> dict[str, dict[str, str]]:
         ),
         "discord-api.env": "DISCORD_API_TOKEN=" + _tok("dc4", 64, _HEX) + "\n",
         "discord-client.env": "DISCORD_CLIENT_SECRET=" + _tok("dc5", 32, _LOWNUM) + "\n",
+        "discord-webhook.txt": (
+            "https://discord.com/api/webhooks/"
+            + _tok("dc6", 18, _DIGITS)
+            + "/"
+            + _tok("dc7", 68, _URL)
+            + "\n"
+        ),
     }
     s["facebook-access-token"] = {
         "facebook.env": "FB_PAGE_TOKEN=EAAM" + _tok("fb1", 120) + "\n",
         "facebook-secret.env": "FACEBOOK_APP_SECRET=" + _tok("fb2", 32, _HEX) + "\n",
     }
+    return s
+
+
+def _developer_platform_samples() -> dict[str, dict[str, str]]:
+    """Developer platform and SaaS API tokens."""
+    s: dict[str, dict[str, str]] = {}
     s["shopify-token"] = {
         "shopify.env": (
             "SHOPIFY_TOKEN=shpat_"
@@ -901,9 +954,16 @@ def class_samples() -> dict[str, dict[str, str]]:
             + _tok("tw2", 32, _HEX)
             + "\n"
         ),
+        "twilio-app.env": "TWILIO_APP_SID=AP" + _tok("tw3", 32, _HEX) + "\n",
         # Not a credential at all, but detect-secrets reports it as a Twilio API key.
         "cache-key.env": "CACHE_KEY=AC" + _tok("twc", 32, _HEX) + "\n",
     }
+    return s
+
+
+def _generic_samples() -> dict[str, dict[str, str]]:
+    """Generic secrets, credentials in URLs, and the HIGH-graded vendor keys."""
+    s: dict[str, dict[str, str]] = {}
     s["generic-secret"] = {
         "generic-api.env": 'api_key = "' + _tok("ga1", 32) + '"\n',
         "generic-password.py": 'password = "' + _tok("gs1", 14) + '"\n',
@@ -915,6 +975,10 @@ def class_samples() -> dict[str, dict[str, str]]:
         "database-url.env": (
             "DATABASE_URL=postgres://app:" + _tok("db1", 16) + "@db.internal.example.com/prod\n"
         ),
+        "mysql.env": "MYSQL_URL=mysql://app:" + _tok("my1", 16) + "@db.internal.example.com/prod\n",
+        "redis.env": "REDIS_URL=redis://default:"
+        + _tok("rd1", 16)
+        + "@cache.internal.example.com:6379\n",
         "mongodb.env": (
             "MONGO_URL=mongodb+srv://app:"
             + _tok("mo1", 16)
@@ -934,3 +998,109 @@ def class_samples() -> dict[str, dict[str, str]]:
     s["datadog-api-key"] = {"datadog.env": "DATADOG_API_KEY=" + _tok("dd1", 40, _HEX) + "\n"}
     s["jwt"] = {"session.env": "SESSION=" + _jwt() + "\n"}
     return s
+
+
+def _native_config_samples() -> dict[str, dict[str, str]]:
+    """Classes only the native scanner names: OAuth, framework, hosting and config secrets."""
+    s: dict[str, dict[str, str]] = {}
+    s["google-oauth-client-secret"] = {
+        "google-oauth.env": "GOOGLE_CLIENT_SECRET=GOCSPX-" + _tok("goc1", 28, _URL) + "\n"
+    }
+    s["git-credentials"] = {
+        "git-credentials.txt": "https://deploy:" + _tok("gcr1", 24) + "@github.com/acme/app.git\n"
+    }
+    s["braintree-access-token"] = {
+        "braintree.env": (
+            "BRAINTREE_ACCESS_TOKEN=access_token$production$"
+            + _tok("bt1", 16, _LOWNUM)
+            + "$"
+            + _tok("bt2", 32, _HEX)
+            + "\n"
+        )
+    }
+    s["github-app-client-id"] = {
+        "github-app.env": "GITHUB_APP_CLIENT_ID=Iv1." + _tok("gap1", 16, _HEX) + "\n"
+    }
+    s["recaptcha-secret"] = {
+        "recaptcha.env": "RECAPTCHA_SECRET_KEY=6L" + _tok("rc1", 38, _URL) + "\n"
+    }
+    s["auth-header"] = {
+        "headers.txt": (
+            "Authorization: Basic "
+            + _tok("ah1", 24, _ALNUM + "+/")
+            + "==\nAuthorization: Bearer "
+            + _tok("ah2", 32, _URL)
+            + "\n"
+        )
+    }
+    s["npmrc-credentials"] = {
+        "npmrc.txt": (
+            "_auth="
+            + _tok("nr1", 32, _ALNUM + "+/")
+            + "==\n//registry.npmjs.org/:_authToken="
+            + _tok("nr2", 36)
+            + "\n"
+        )
+    }
+    s["framework-secret-key"] = {
+        "framework.txt": (
+            "APP_KEY=base64:"
+            + _tok("fw1", 43, _ALNUM + "+/")
+            + "=\nSECRET_KEY = '"
+            + _tok("fw2", 50, _ALNUM + "!@#$%^&*")
+            + "'\ndefine('AUTH_KEY', '"
+            + _tok("fw3", 64, _ALNUM + "!@#$")
+            + "');\n"
+        )
+    }
+    s["config-password"] = {
+        "config-passwords.txt": (
+            "define('DB_PASSWORD', '"
+            + _tok("cp1", 16)
+            + "');\nServer=db;Database=app;Password="
+            + _tok("cp2", 16)
+            + ';\n{"password": "'
+            + _tok("cp3", 16)
+            + '"}\n<password>'
+            + _tok("cp4", 16)
+            + "</password>\n"
+        )
+    }
+    s["sentry-dsn"] = {
+        "sentry.env": (
+            "SENTRY_DSN=https://" + _tok("se1", 32, _HEX) + "@o4501234.ingest.sentry.io/4501234\n"
+        )
+    }
+    s["hosting-and-monitoring-token"] = {
+        "hosting.env": (
+            "VERCEL_TOKEN="
+            + _tok("hm1", 24)
+            + "\nNETLIFY_AUTH_TOKEN="
+            + _tok("hm2", 44, _URL)
+            + "\nNEW_RELIC_LICENSE_KEY="
+            + _tok("hm3", 40, _HEX)
+            + "\n"
+        )
+    }
+    s["base64-auth-token"] = {"base64-auth.env": "AUTH=" + _tok("b64a1", 44, _ALNUM + "+/") + "\n"}
+    return s
+
+
+def class_samples() -> dict[str, dict[str, str]]:
+    """One or more sample files per class: ``{class name: {file name: content}}``.
+
+    Every value is built from a seeded stream, so these are realistic enough for the real
+    scanners to flag, yet no complete secret appears in source (GitHub push protection).
+    """
+    return {
+        **_aws_and_azure_samples(),
+        **_gcp_and_ibm_samples(),
+        **_code_hosting_and_registry_samples(),
+        **_key_and_hash_samples(),
+        **_payment_and_ai_samples(),
+        **_slack_samples(),
+        **_messaging_samples(),
+        **_developer_platform_samples(),
+        **_generic_samples(),
+        **_native_config_samples(),
+    }

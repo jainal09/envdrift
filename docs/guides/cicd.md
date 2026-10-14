@@ -140,9 +140,10 @@ A run in which a selected scanner errored never exits 0: if nothing blocks the
 run but a scanner failed, guard exits 5 so CI fails closed instead of passing
 on a scan that never completed.
 
-The exit code a secret gets depends on its class, not on which of the native, gitleaks, Infisical,
-detect-secrets, Kingfisher and git-secrets scanners found it: an AWS key ID is CRITICAL (exit 1) from
-each of them. See [Severity](../cli/guard.md#severity).
+When a scanner recognises a credential's class, the exit code does not depend on which of the native,
+gitleaks, Infisical, detect-secrets, Kingfisher and git-secrets scanners found it: an AWS key ID is
+CRITICAL (exit 1) from each of them. A scanner without a rule for a class can still find the secret
+under a generic rule, which is HIGH. See [Severity](../cli/guard.md#severity).
 
 Because `guard` does not collapse failures to a flat `1`, CI scripts that key
 off its result should test for any non-zero exit (`$? -ne 0`) rather than

@@ -26,6 +26,7 @@ from envdrift.scanner.detect_secrets import (
     _check_git_file_list,
     _exclude_files_regex,
     _get_detect_secrets_version,
+    _git_honors_config_env,
     _git_quotes,
     _installed_version,
     _is_undecodable,
@@ -1324,6 +1325,53 @@ class TestUnquotedGitPaths:
         assert self._quotepath_setting(env) is None
 
     @pytest.mark.parametrize(
+        ("output", "honors"),
+        [
+            ("git version 2.43.0\n", True),
+            ("git version 2.31.0\n", True),
+            ("git version 2.30.2\n", False),
+            ("git version 2.25.1\n", False),
+            ("git version 1.8.3.1\n", False),
+            ("git version 2.39.3 (Apple Git-146)\n", True),
+            ("git version 2.45.1.windows.1\n", True),
+            ("git version 10.0.0\n", True),
+            ("something else entirely\n", True),
+            ("", True),
+        ],
+    )
+    def test_which_gits_read_the_environment_setting(self, output: str, honors: bool):
+        """``GIT_CONFIG_COUNT`` arrived in git 2.31; an older git ignores it."""
+        with patch(
+            "subprocess.run", return_value=SimpleNamespace(returncode=0, stdout=output, stderr="")
+        ):
+            assert _git_honors_config_env() is honors
+
+    @pytest.mark.parametrize("error", [OSError("no git"), subprocess.TimeoutExpired("git", 10)])
+    def test_a_git_that_cannot_be_asked_is_taken_to_read_it(self, error: Exception):
+        with patch("subprocess.run", side_effect=error):
+            assert _git_honors_config_env() is True
+
+    def test_an_old_git_leaves_the_environment_alone_and_non_ascii_names_are_reported(
+        self, tmp_path: Path
+    ):
+        """It would ignore the setting, so a non-ASCII name stays quoted and is reported."""
+        with patch.object(detect_secrets_module, "_git_honors_config_env", return_value=False):
+            env, warnings = _check_git_file_list(tmp_path, ["café.cfg", "plain.cfg"])
+
+        assert self._quotepath_setting(env) is None
+        (warning,) = warnings
+        assert "the name of 1 tracked file(s)" in warning
+        assert repr("café.cfg") in warning
+        assert "plain.cfg" not in warning
+
+    def test_a_current_git_gets_the_setting(self, tmp_path: Path):
+        with patch.object(detect_secrets_module, "_git_honors_config_env", return_value=True):
+            env, warnings = _check_git_file_list(tmp_path, ["café.cfg", "plain.cfg"])
+
+        assert self._quotepath_setting(env) == ("1", "core.quotepath", "false")
+        assert warnings == []
+
+    @pytest.mark.parametrize(
         ("name", "quotepath_off", "quoted"),
         [
             ("plain.cfg", False, False),
@@ -1348,6 +1396,61 @@ class TestUnquotedGitPaths:
         assert _is_undecodable(NOT_UTF8)
         assert not _is_undecodable("café.cfg")
         assert not _is_undecodable("plain.cfg")
+
+
+class TestPathIsNotAnOption:
+    """The path goes after ``--``, so a name that looks like an option stays a path.
+
+    A tracked file called ``--exclude-files=.`` was read by argparse as an option that
+    excludes everything, leaving no path to scan: the run printed an empty report and passed as
+    clean. A directory called ``-sub`` made detect-secrets fail with a usage error instead.
+    """
+
+    @pytest.fixture
+    def scanner(self) -> DetectSecretsScanner:
+        return DetectSecretsScanner(auto_install=False)
+
+    @staticmethod
+    def _command(scanner: DetectSecretsScanner, target: Path) -> list[str]:
+        run, calls = _fake_detect_secrets()
+        with (
+            patch.object(scanner, "_ensure_installed", return_value=None),
+            patch("subprocess.run", side_effect=run),
+        ):
+            scanner.scan([target])
+        (call,) = calls
+        return call[0]
+
+    def test_a_file_named_like_an_option_follows_a_double_dash(
+        self, scanner: DetectSecretsScanner, tmp_path: Path
+    ):
+        repo = _init_repo(tmp_path)
+        _add(repo, "--exclude-files=.")
+
+        args = self._command(scanner, repo / "--exclude-files=.")
+
+        assert args[-2:] == ["--", "--exclude-files=."]
+
+    def test_a_directory_starting_with_a_dash_follows_a_double_dash(
+        self, scanner: DetectSecretsScanner, tmp_path: Path
+    ):
+        repo = _init_repo(tmp_path)
+        _add(repo, "-sub/a.cfg")
+
+        args = self._command(scanner, repo / "-sub")
+
+        assert args[-2:] == ["--", "-sub"]
+
+    def test_the_options_come_before_the_double_dash(
+        self, scanner: DetectSecretsScanner, tmp_path: Path
+    ):
+        repo = _init_repo(tmp_path)
+        _add(repo, "app.cfg")
+
+        args = self._command(scanner, repo)
+
+        assert args.index("--force-use-all-plugins") < args.index("--exclude-files")
+        assert args.index("--exclude-files") + 1 < args.index("--") == len(args) - 2
 
 
 class TestNothingToScan:

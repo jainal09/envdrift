@@ -119,6 +119,9 @@ def _map_severity(rule_id: str, rule_name: str, matched: str = "") -> FindingSev
 
     combined = f"{rule} {rule_name}".lower()
     if any(keyword in combined for keyword in CRITICAL_SEVERITY_RULES):
+        if "stripe" in combined:
+            # A test-mode key cannot move money, so it is graded below a live one here too.
+            return rule_severity("stripe-access-token", matched)
         return FindingSeverity.CRITICAL
     return FindingSeverity.HIGH
 

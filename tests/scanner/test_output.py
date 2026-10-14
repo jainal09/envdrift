@@ -1192,8 +1192,8 @@ class TestScannerErrorsAreAnsiClean:
 
 # A warning as the detect-secrets version check words it: both versions, the consequence and the fix.
 _VERSION_WARNING = (
-    "detect-secrets 1.4.0 is installed, but envdrift grades findings against detect-secrets "
-    "1.5.0. Another version can rename or add detectors, so severities may be inaccurate. "
+    "The installed version is 1.4.0, but envdrift grades findings against version 1.5.0. "
+    "Another version can rename or add detectors, so severities may be inaccurate. "
     "Install the pinned version: pip install detect-secrets==1.5.0"
 )
 

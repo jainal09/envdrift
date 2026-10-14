@@ -98,6 +98,24 @@ class TestMapSeverity:
         assert _map_severity(rule, "", live) == FindingSeverity.CRITICAL
         assert _map_severity(rule, "", test) == FindingSeverity.HIGH
 
+    @pytest.mark.parametrize(
+        ("rule_id", "rule_name"),
+        [
+            ("kingfisher.stripe.1", "Stripe Secret Key"),
+            ("veles.stripe_secret_key", "Stripe API key"),
+        ],
+    )
+    def test_a_rule_graded_by_its_name_downgrades_a_stripe_test_key_too(
+        self, rule_id: str, rule_name: str
+    ):
+        """Only a ``betterleaks.`` rule was checked for the test-mode key, so these stayed CRITICAL."""
+        live = "sk_live_" + "4eC39HqLyjWDarjtT1zdp7dc" + "ABCDEFGH"
+        test = "rk_test_" + "4eC39HqLyjWDarjtT1zdp7dc" + "ABCDEFGH"
+        assert _map_severity(rule_id, rule_name, live) == FindingSeverity.CRITICAL
+        assert _map_severity(rule_id, rule_name, test) == FindingSeverity.HIGH
+        # Kingfisher does not always report the matched value: that is not a test key.
+        assert _map_severity(rule_id, rule_name) == FindingSeverity.CRITICAL
+
     def test_an_aws_rule_is_critical_though_its_name_also_says_api_key(self):
         """A rule named for AWS is an AWS credential, whatever else its name says.
 
