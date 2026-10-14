@@ -304,6 +304,17 @@ class TestDetectSecretsScanner:
         assert finding.severity == FindingSeverity.HIGH
 
 
+def _scan_printing(path: Path, stdout: str, stderr: str = "", returncode: int = 0):
+    """Scan ``path`` with a detect-secrets that exits ``returncode`` printing ``stdout``/``stderr``."""
+    scanner = DetectSecretsScanner(auto_install=False)
+    output = SimpleNamespace(returncode=returncode, stdout=stdout, stderr=stderr)
+    with (
+        patch.object(scanner, "_ensure_installed", return_value=None),
+        patch("subprocess.run", return_value=output),
+    ):
+        return scanner.scan([path])
+
+
 class TestDetectSecretsScan:
     """Tests for detect-secrets scan behavior."""
 
@@ -321,7 +332,6 @@ class TestDetectSecretsScan:
 
     def test_scan_parses_baseline(self, tmp_path: Path):
         """Scan parses JSON baseline output into findings."""
-        scanner = DetectSecretsScanner(auto_install=False)
         baseline = {
             "results": {
                 "config.py": [
@@ -340,12 +350,7 @@ class TestDetectSecretsScan:
                 ],
             }
         }
-        with patch.object(scanner, "_ensure_installed", return_value=None):
-            with patch("subprocess.run") as mock_run:
-                mock_run.return_value = SimpleNamespace(
-                    returncode=0, stdout=json.dumps(baseline), stderr=""
-                )
-                result = scanner.scan([tmp_path])
+        result = _scan_printing(tmp_path, json.dumps(baseline))
 
         assert result.error is None
         assert result.files_scanned == 2
@@ -357,11 +362,7 @@ class TestDetectSecretsScan:
 
         Unreadable output with nothing on stderr used to pass as "no findings".
         """
-        scanner = DetectSecretsScanner(auto_install=False)
-        with patch.object(scanner, "_ensure_installed", return_value=None):
-            with patch("subprocess.run") as mock_run:
-                mock_run.return_value = SimpleNamespace(returncode=0, stdout="not-json", stderr="")
-                result = scanner.scan([tmp_path])
+        result = _scan_printing(tmp_path, "not-json")
 
         assert result.error is not None
         assert "detect-secrets output error" in result.error
@@ -369,13 +370,7 @@ class TestDetectSecretsScan:
         assert result.findings == []
 
     def test_scan_prefers_stderr_in_the_unreadable_output_error(self, tmp_path: Path):
-        scanner = DetectSecretsScanner(auto_install=False)
-        with patch.object(scanner, "_ensure_installed", return_value=None):
-            with patch("subprocess.run") as mock_run:
-                mock_run.return_value = SimpleNamespace(
-                    returncode=0, stdout="not-json", stderr="Traceback: boom"
-                )
-                result = scanner.scan([tmp_path])
+        result = _scan_printing(tmp_path, "not-json", stderr="Traceback: boom")
 
         assert result.error == "detect-secrets output error: Traceback: boom"
 
@@ -388,24 +383,14 @@ class TestDetectSecretsScan:
 
         Anything else cannot be told from a scan that looked at nothing, so it is not a clean run.
         """
-        scanner = DetectSecretsScanner(auto_install=False)
-        with patch.object(scanner, "_ensure_installed", return_value=None):
-            with patch("subprocess.run") as mock_run:
-                mock_run.return_value = SimpleNamespace(returncode=0, stdout=stdout, stderr="")
-                result = scanner.scan([tmp_path])
+        result = _scan_printing(tmp_path, stdout)
 
         assert result.error is not None
         assert result.error.startswith("detect-secrets output error: ")
         assert result.findings == []
 
     def test_scan_accepts_an_empty_report(self, tmp_path: Path):
-        scanner = DetectSecretsScanner(auto_install=False)
-        with patch.object(scanner, "_ensure_installed", return_value=None):
-            with patch("subprocess.run") as mock_run:
-                mock_run.return_value = SimpleNamespace(
-                    returncode=0, stdout='{"results": {}}', stderr=""
-                )
-                result = scanner.scan([tmp_path])
+        result = _scan_printing(tmp_path, '{"results": {}}')
 
         assert result.error is None
         assert result.findings == []
@@ -413,11 +398,7 @@ class TestDetectSecretsScan:
 
     def test_scan_reports_a_missing_report_as_an_error(self, tmp_path: Path):
         """detect-secrets always prints a baseline; none at all means nothing was scanned."""
-        scanner = DetectSecretsScanner(auto_install=False)
-        with patch.object(scanner, "_ensure_installed", return_value=None):
-            with patch("subprocess.run") as mock_run:
-                mock_run.return_value = SimpleNamespace(returncode=0, stdout="  \n", stderr="")
-                result = scanner.scan([tmp_path])
+        result = _scan_printing(tmp_path, "  \n")
 
         assert result.error == f"detect-secrets printed no report for {tmp_path}"
         assert result.findings == []

@@ -55,12 +55,17 @@ _AWS_ACCESS_KEY_ID_RE = re.compile(
 )
 
 # The other two CRITICAL types are also earned by the credential, not by a word near it: a
-# secret access key is the 40-character value the line assigns, and a private key is a PEM
-# header or a long base64 value assigned to ``private_key`` itself. A line that only names
-# ``aws_secret_access_key_file`` or ``private_key_path``, or holds a long identifier under
-# ``private_key_id``, holds neither, so it is HIGH, not CRITICAL (see ``_holds_credential``).
-# The key is base64 without padding, so a ``=`` before it is the assignment, not part of it.
-_AWS_SECRET_ACCESS_KEY_RE = re.compile(r"(?<![A-Za-z0-9/+])[A-Za-z0-9/+]{40}(?![A-Za-z0-9/+=])")
+# secret access key is the 40-character value assigned to the AWS secret field itself, and a
+# private key is a PEM header or a long base64 value assigned to ``private_key`` itself. A line
+# that only names ``aws_secret_access_key_file`` or ``private_key_path``, holds a long value
+# under another field (``private_key_id``, a checksum next to the file name), holds neither,
+# so it is HIGH, not CRITICAL (see ``_holds_credential``). The key is base64 without padding,
+# so a ``=`` before it is the assignment, not part of it.
+_AWS_SECRET_ACCESS_KEY_RE = re.compile(
+    r"(?:aws_secret(?:_access)?(?:_key)?|secret_access_key)[\"']?\s*[=:]\s*[\"']?"
+    r"[A-Za-z0-9/+]{40}(?![A-Za-z0-9/+=])",
+    re.IGNORECASE,
+)
 _PRIVATE_KEY_HEADER_RE = re.compile(r"-----BEGIN [A-Z0-9 ]*PRIVATE KEY")
 _PRIVATE_KEY_VALUE_RE = re.compile(
     r"private_key[\"']?\s*[:=]\s*[\"']?[A-Za-z0-9+/]{64,}", re.IGNORECASE

@@ -183,6 +183,19 @@ class TestGitSecretsScanner:
             ("private_key_id = 123", "private-key"),
             ("aws_secret_access_key_file = /root/.aws/credentials", "aws-secret-key"),
             ("secret_access_key_rotation_days = 90", "aws-secret-key"),
+            # A 40-character value that belongs to another field of the same line.
+            (
+                "aws_secret_access_key_file=/root/.aws/credentials checksum="
+                + "0123456789abcdef" * 2
+                + "01234567",
+                "aws-secret-key",
+            ),
+            (
+                "secret_access_key_rotation_days=90 build_id="
+                + "0123456789abcdef" * 2
+                + "01234567",
+                "aws-secret-key",
+            ),
             # A long value that is an identifier or a fingerprint, not the key.
             ("private_key_id = " + "0123456789abcdef" * 4, "private-key"),
             ("private_key_fingerprint: " + "0123456789abcdef" * 4, "private-key"),
@@ -221,6 +234,15 @@ class TestGitSecretsScanner:
             ),
             (
                 "aws_secret_access_key: " + "wJalrXUtnFEMI/K7MDENG/bPxRfi" + "CYEXAMPLEKEY",
+                "aws-secret-key",
+            ),
+            (
+                "AWS_SECRET_KEY=" + "wJalrXUtnFEMI/K7MDENG/bPxRfi" + "CYEXAMPLEKEY",
+                "aws-secret-key",
+            ),
+            ("aws_secret=" + "wJalrXUtnFEMI/K7MDENG/bPxRfi" + "CYEXAMPLEKEY", "aws-secret-key"),
+            (
+                "export AWS_SECRET_ACCESS_KEY=" + "wJalrXUtnFEMI/K7MDENG/bPxRfi" + "CYEXAMPLEKEY",
                 "aws-secret-key",
             ),
             ("-----BEGIN RSA PRIVATE KEY-----", "private-key"),
