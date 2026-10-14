@@ -32,9 +32,9 @@ HIGH = FindingSeverity.HIGH
 # and 0.43.141 (betterleaks), over a 66-shape fixture matrix plus probes for the
 # GitHub refresh token and GitLab's routable PATs, and the severity each must get
 # (#844). Rows marked 0.43.141 come only from the betterleaks engine, rows
-# marked 0.43.135 only from the gitleaks one. The HIGH rows pin current
-# behaviour, not policy: several are CRITICAL in the native scanner, and the
-# cross-scanner severity policy is tracked in #850.
+# marked 0.43.135 only from the gitleaks one. The grades follow the severity policy
+# every scanner shares (#850, tests/severity_policy.py): the credential classes the
+# native scanner grades CRITICAL are CRITICAL here too, and the other rules are HIGH.
 EMITTED_RULE_SEVERITIES = [
     ("aws-access-token", CRITICAL),
     ("aws-secret-access-key", CRITICAL),  # 0.43.141, nested under ComponentSets
@@ -52,25 +52,43 @@ EMITTED_RULE_SEVERITIES = [
     ("private-key", CRITICAL),
     ("pypi-upload-token", CRITICAL),
     ("stripe-access-token", CRITICAL),  # live keys; test-mode keys are HIGH
-    ("azure-ad-client-secret", HIGH),
+    ("azure-ad-client-secret", CRITICAL),
+    ("gcp-api-key", CRITICAL),
+    ("heroku-api-key", CRITICAL),
+    ("heroku-api-key-v2", CRITICAL),  # 0.43.141
+    ("openai-api-key", CRITICAL),
+    ("sendgrid-api-token", CRITICAL),
+    ("slack-bot-token", CRITICAL),
+    ("slack-user-token", CRITICAL),
+    ("slack-webhook-url", CRITICAL),
+    # Rules of CRITICAL providers that the first version of the table forgot.
+    ("age-secret-key", CRITICAL),
+    ("discord-api-token", CRITICAL),
+    ("discord-client-secret", CRITICAL),
+    ("facebook-secret", CRITICAL),
+    ("gitlab-feature-flag-client-token", CRITICAL),
+    ("gitlab-session-cookie", CRITICAL),
+    ("linear-client-secret", CRITICAL),
+    ("aws-amazon-bedrock-api-key-long-lived", CRITICAL),  # 0.43.141
+    ("azure-app-configuration-connection-string", CRITICAL),  # 0.43.141
+    ("azure-servicebus-connection-string", CRITICAL),  # 0.43.141
+    ("gcp-application-default-credentials", CRITICAL),  # 0.43.141
+    ("gcp-gemini-api", CRITICAL),  # 0.43.141
+    ("gitlab-incoming-mail-address-token", CRITICAL),  # 0.43.141
+    ("polymarket-private-key", CRITICAL),  # 0.43.141
+    ("supabase-project-api-key", CRITICAL),  # 0.43.141, only next to a project URL
+    ("azure-tenant-id", HIGH),  # 0.43.141: an identifier, not a credential
     ("curl-auth-header", HIGH),
     ("datadog-access-token", HIGH),  # 0.43.135
     ("datadog-api-key", HIGH),  # 0.43.141
     ("datadog-application-key", HIGH),  # 0.43.141
-    ("gcp-api-key", HIGH),
     ("generic-api-key", HIGH),
     ("generic-credential-uri", HIGH),  # 0.43.141
     ("generic-password", HIGH),  # 0.43.141
     ("hashicorp-tf-password", HIGH),
-    ("heroku-api-key", HIGH),
-    ("heroku-api-key-v2", HIGH),  # 0.43.141
+    ("twilio-api-key", HIGH),  # an API key SID, an identifier whose secret is another value
+    # Never below HIGH: some JWTs are public, but a bearer token has the same shape.
     ("jwt", HIGH),
-    ("openai-api-key", HIGH),
-    ("sendgrid-api-token", HIGH),
-    ("slack-bot-token", HIGH),
-    ("slack-user-token", HIGH),
-    ("slack-webhook-url", HIGH),
-    ("twilio-api-key", HIGH),
 ]
 
 # Fragmented so no full credential literal appears in source (push protection).
@@ -353,8 +371,8 @@ class TestFindingParsing:
         [
             ("aws-access-key-id", CRITICAL),
             ("stripe-api-key", CRITICAL),
-            ("google-api-key", HIGH),
-            ("slack-token", HIGH),
+            ("google-api-key", CRITICAL),
+            ("slack-token", CRITICAL),
         ],
     )
     def test_original_rule_ids_keep_their_severity(

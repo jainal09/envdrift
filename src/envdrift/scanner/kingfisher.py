@@ -31,6 +31,7 @@ from envdrift.scanner.base import (
     ScanResult,
 )
 from envdrift.scanner.patterns import hash_secret, redact_secret
+from envdrift.scanner.rule_severity import rule_severity
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -44,36 +45,53 @@ class KingfisherInstallError(Exception):
     """Failed to install Kingfisher."""
 
 
-# Severity mapping based on rule types
-# Kingfisher doesn't have explicit severity, we map based on rule patterns
-HIGH_SEVERITY_RULES = {
+# Kingfisher reports no severity, so envdrift grades each finding by its rule. The grades
+# follow the severity policy of the scanners that grade by credential class (see "Severity"
+# in docs/cli/guard.md): a credential class gets the same severity here as from the native
+# scanner, gitleaks and Infisical.
+#
+# Kingfisher's main catalog is betterleaks', the rule set of Infisical 0.43.136 and later.
+# Those rules have the IDs ``betterleaks.<id>`` and are graded by the table gitleaks and
+# Infisical share, so one credential gets one grade from all three. The other built-in rules
+# (``veles.<id>``, Kingfisher's second rule source) and the rules of a custom rules file are
+# graded by a keyword in their ID or name: a keyword of a CRITICAL class makes the rule
+# CRITICAL, and any other rule is HIGH, the grade of a generic secret. Twilio is HIGH too:
+# its rules match SIDs, which are identifiers whose secret is another value.
+_BETTERLEAKS_PREFIX = "betterleaks."
+
+CRITICAL_SEVERITY_RULES = {
     "privatekey",
     "private-key",
     "private_key",
     "github",
+    "gitlab",
     "slack",
     "aws",
     "azure",
     "gcp",
-    "mongodb",
-    "jdbc",
-    "docker",
+    "ibm",
+    "cloudant",
+    "softlayer",
     "npm",
-    "mailchimp",
+    "pypi",
+    "vault",
     "stripe",
-    "twilio",
+    "square",
+    "mailchimp",
+    "mailgun",
     "sendgrid",
-    "api-key",
-    "api_key",
-    "apikey",
-    "secret-key",
-    "secret_key",
-    "password",
-    "token",
-    "credential",
-}
-
-CRITICAL_SEVERITY_RULES = {
+    "openai",
+    "anthropic",
+    "heroku",
+    "telegram",
+    "discord",
+    "facebook",
+    "shopify",
+    "digitalocean",
+    "doppler",
+    "postman",
+    "linear",
+    "supabase",
     "password-hash",
     "password_hash",
     "bcrypt",
@@ -83,27 +101,26 @@ CRITICAL_SEVERITY_RULES = {
 }
 
 
-def _map_severity(rule_id: str, rule_name: str) -> FindingSeverity:
+def _map_severity(rule_id: str, rule_name: str, matched: str = "") -> FindingSeverity:
     """Map Kingfisher rule to severity level.
 
     Args:
         rule_id: The rule ID from Kingfisher.
         rule_name: The rule name from Kingfisher.
+        matched: The matched value when Kingfisher reports it. A Stripe test key is graded
+            below a live one by its value.
 
     Returns:
         Appropriate FindingSeverity.
     """
-    combined = f"{rule_id} {rule_name}".lower()
+    rule = rule_id.lower()
+    if rule.startswith(_BETTERLEAKS_PREFIX):
+        return rule_severity(rule.removeprefix(_BETTERLEAKS_PREFIX), matched)
 
-    for pattern in CRITICAL_SEVERITY_RULES:
-        if pattern in combined:
-            return FindingSeverity.CRITICAL
-
-    for pattern in HIGH_SEVERITY_RULES:
-        if pattern in combined:
-            return FindingSeverity.HIGH
-
-    return FindingSeverity.MEDIUM
+    combined = f"{rule} {rule_name}".lower()
+    if any(keyword in combined for keyword in CRITICAL_SEVERITY_RULES):
+        return FindingSeverity.CRITICAL
+    return FindingSeverity.HIGH
 
 
 class KingfisherScanner(ScannerBackend):
@@ -537,7 +554,7 @@ class KingfisherScanner(ScannerBackend):
             rule_name = rule.get("name", rule_id)
 
             # Map severity based on rule type
-            severity = _map_severity(rule_id, rule_name)
+            severity = _map_severity(rule_id, rule_name, str(raw_secret))
 
             # Get validation status - use allowlist for verified status
             validation = finding.get("validation", {})

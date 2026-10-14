@@ -644,6 +644,55 @@ class TestScanEngine:
 
         assert result.results[0].error == "boom"
 
+    def test_scan_keeps_the_warnings_of_a_scanner_that_ran(self, tmp_path: Path):
+        """A scanner's non-fatal warnings survive the engine's filters into the result.
+
+        The engine rebuilds each result to show its finding paths in one form; a warning (for
+        example detect-secrets not being the pinned version) must come out of that unchanged,
+        with the findings, and must not change the verdict.
+        """
+        finding = ScanFinding(
+            file_path=tmp_path / "config.py",
+            line_number=1,
+            rule_id="stub-rule",
+            rule_description="Stub rule",
+            description="Stub finding",
+            severity=FindingSeverity.HIGH,
+            scanner="warned",
+        )
+
+        class WarnedScanner(ScannerBackend):
+            @property
+            def name(self) -> str:
+                return "warned"
+
+            @property
+            def description(self) -> str:
+                return "scanner with a warning"
+
+            def is_installed(self) -> bool:
+                return True
+
+            def scan(
+                self,
+                paths: list[Path],
+                include_git_history: bool = False,
+            ) -> ScanResult:
+                return ScanResult(
+                    scanner_name="warned", findings=[finding], warnings=["be careful", "again"]
+                )
+
+        engine = ScanEngine(GuardConfig(use_native=False, use_gitleaks=False))
+        engine.scanners = [WarnedScanner()]
+
+        result = engine.scan([tmp_path])
+
+        (warned,) = result.results
+        assert warned.warnings == ["be careful", "again"]
+        assert len(warned.findings) == 1
+        assert warned.success
+        assert result.exit_code == 2  # the HIGH finding decides it, not the warnings
+
     def test_get_scanner_info(self):
         """Test getting scanner information."""
         config = GuardConfig(use_native=True, use_gitleaks=False)

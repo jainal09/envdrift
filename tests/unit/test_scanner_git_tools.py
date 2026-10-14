@@ -9,6 +9,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from envdrift.scanner.base import FindingSeverity
 from envdrift.scanner.git_secrets import (
     GitSecretsInstaller,
     GitSecretsInstallError,
@@ -126,6 +127,100 @@ class TestGitSecretsScanner:
         scanner = GitSecretsScanner(auto_install=False)
         assert scanner._detect_rule_type("AKIAIOSFODNN7EXAMPLE") == "aws-access-key"
         assert scanner._detect_rule_type("ASIAIOSFODNN7EXAMPLE") == "aws-access-key"
+
+    @pytest.mark.parametrize("prefix", ["A3TA", "A3T0", "AKIA", "ABIA", "ACCA", "ASIA"])
+    def test_detect_rule_type_every_access_key_id_prefix(self, prefix: str) -> None:
+        """Each access key ID prefix, with its 16 characters, is an AWS access key."""
+        scanner = GitSecretsScanner(auto_install=False)
+        key_id = prefix + "ABCDEFGHIJ" + "012345"
+        assert scanner._detect_rule_type(f"AWS_KEY={key_id}") == "aws-access-key"
+        assert scanner._detect_rule_type(f"{key_id},{key_id}") == "aws-access-key"
+
+    @pytest.mark.parametrize(
+        ("line", "expected"),
+        [
+            # A GCP region is not an AWS key: the letters "asia" alone must not make one.
+            ("password=asia-northeast1", "password"),
+            ("region=asia-south1", "generic-secret"),
+            ("api_token=nakia", "token"),
+            # An AWS prefix without the 16 characters after it is not a key ID either, nor is
+            # one inside a longer run of key characters, nor in lower case.
+            ("AWS_KEY=AKIA1234", "generic-secret"),
+            ("AWS_KEY=" + "AKIA" + "ABCDEFGHIJ012345" + "EXTRA", "generic-secret"),
+            ("AWS_KEY=" + "X" + "AKIA" + "ABCDEFGHIJ012345", "generic-secret"),
+            ("AWS_KEY=akiaabcdefghij012345", "generic-secret"),
+            # git-secrets flags IAM entity IDs too; they are identifiers, not credentials.
+            ("AWS_USER=" + "AIDA" + "ABCDEFGHIJ012345", "generic-secret"),
+            ("AWS_ROLE=" + "AROA" + "ABCDEFGHIJ012345", "generic-secret"),
+        ],
+    )
+    def test_detect_rule_type_key_id_letters_alone_are_not_an_aws_key(
+        self, line: str, expected: str
+    ) -> None:
+        """The type decides the severity, so only a real key ID is an AWS access key (CRITICAL)."""
+        scanner = GitSecretsScanner(auto_install=False)
+        assert scanner._detect_rule_type(line) == expected
+
+    def test_a_region_name_is_graded_as_a_password_not_as_an_aws_key(self, tmp_path: Path) -> None:
+        """git-secrets flagged the line for its password pattern; "asia" must not raise it."""
+        scanner = GitSecretsScanner(auto_install=False)
+        region = scanner._create_finding("app.cfg", 1, "password=asia-northeast1", tmp_path)
+        key = scanner._create_finding(
+            "app.cfg", 2, "AWS_KEY=" + "AKIA" + "Z9Q8W7E6R5T4Y3U2", tmp_path
+        )
+        assert (region.rule_id, region.severity) == ("git-secrets-password", FindingSeverity.HIGH)
+        assert (key.rule_id, key.severity) == (
+            "git-secrets-aws-access-key",
+            FindingSeverity.CRITICAL,
+        )
+
+    @pytest.mark.parametrize(
+        ("line", "rule_id"),
+        [
+            # A line that names a key it does not hold: the word is no credential.
+            ("private_key_path = /etc/ssl/private/server.pem", "private-key"),
+            ("PRIVATE_KEY_FILE=./keys/dev.pem", "private-key"),
+            ("private_key_id = 123", "private-key"),
+            ("aws_secret_access_key_file = /root/.aws/credentials", "aws-secret-key"),
+            ("secret_access_key_rotation_days = 90", "aws-secret-key"),
+        ],
+    )
+    def test_a_line_that_only_names_a_key_is_not_critical(
+        self, line: str, rule_id: str, tmp_path: Path
+    ) -> None:
+        """The type comes from the words in the line, so CRITICAL needs the key itself."""
+        scanner = GitSecretsScanner(auto_install=False)
+
+        finding = scanner._create_finding("app.cfg", 1, line, tmp_path)
+
+        assert finding.rule_id == f"git-secrets-{rule_id}"
+        assert finding.severity == FindingSeverity.HIGH
+
+    @pytest.mark.parametrize(
+        ("line", "rule_id"),
+        [
+            (
+                "aws_secret_access_key = " + "wJalrXUtnFEMI/K7MDENG/bPxRfi" + "CYEXAMPLEKEY",
+                "aws-secret-key",
+            ),
+            (
+                '"secret_access_key": "' + "wJalrXUtnFEMI/K7MDENG/bPxRfi" + 'CYEXAMPLEKEY"',
+                "aws-secret-key",
+            ),
+            ("-----BEGIN RSA PRIVATE KEY-----", "private-key"),
+            ("-----BEGIN OPENSSH PRIVATE KEY-----", "private-key"),
+            ("private_key = " + "MIIEvQIBADANBgkqhkiG9w0BAQEFAASC" * 3, "private-key"),
+        ],
+    )
+    def test_a_line_that_holds_the_key_is_critical(
+        self, line: str, rule_id: str, tmp_path: Path
+    ) -> None:
+        scanner = GitSecretsScanner(auto_install=False)
+
+        finding = scanner._create_finding("app.cfg", 1, line, tmp_path)
+
+        assert finding.rule_id == f"git-secrets-{rule_id}"
+        assert finding.severity == FindingSeverity.CRITICAL
 
     def test_detect_rule_type_password(self) -> None:
         """Test _detect_rule_type correctly identifies passwords."""

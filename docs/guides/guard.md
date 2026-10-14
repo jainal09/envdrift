@@ -104,6 +104,11 @@ scanners = ["native", "gitleaks", "trufflehog", "detect-secrets", "kingfisher", 
 | trivy | Comprehensive multi-target scanning, severity filtering |
 | infisical | 140+ secret types, git history, staged changes |
 
+The native, gitleaks, Infisical, detect-secrets, Kingfisher and git-secrets scanners give a credential
+the same severity: an AWS key ID is CRITICAL whether gitleaks, detect-secrets or the native scanner found
+it, so `--fail-on critical` blocks the same things. trufflehog, trivy and talisman grade by what they
+report themselves. See [Severity](../cli/guard.md#severity) for the grades.
+
 ## Reporting and CI
 
 Generate SARIF output for code scanning systems:

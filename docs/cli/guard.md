@@ -99,6 +99,55 @@ Enable or disable detect-secrets. Disabled by default.
 envdrift guard --detect-secrets
 ```
 
+envdrift runs the `detect-secrets` package installed next to it (`python -m detect_secrets`) with every
+plugin enabled, and installs the pinned version when the package is missing and auto-install is on.
+
+**Which files it scans.** Inside a git repository detect-secrets scans the files git tracks, so a new
+file is scanned once you `git add` it, and a file git ignores is not. That holds for the top level of
+the repository and for any subdirectory of it: `envdrift guard sub` scans the tracked files below
+`sub`, and so does `envdrift guard .` run inside it. Outside a git repository it scans every file in
+the directory. Either way it skips everything below a directory named `node_modules`, `.venv`, `venv`,
+`.tox`, `.nox`, `site-packages`, `__pycache__`, `.mypy_cache`, `.pytest_cache`, `.ruff_cache`, `.git`,
+`dist`, `build`, `vendor` or `coverage`. Only directories count: a script called `build` is scanned, and
+so is the directory you point it at, whatever it is called. A file you name is always scanned. A
+directory outside git can hold more such trees than that list names; `[guard] ignore_paths` drops their
+findings (see [Configuration](#configuration)), though not the time spent scanning them.
+
+A tracked file with a non-ASCII name (`café.env`) is scanned too. envdrift runs detect-secrets with git's
+`core.quotepath` off (git 2.31 or later), because with it on `git ls-files` writes that name as
+`"caf\303\251.env"`, which names no file, and detect-secrets dropped the file without a word. Git quotes a
+name with a double quote, a backslash or a control character whatever the setting, and detect-secrets fails
+on a name that is not valid UTF-8 when the setting is off, so envdrift leaves it on in a repository that
+tracks one. detect-secrets cannot match those names, and the Scanner Warnings say "Not scanned in ..." and
+list the first three, instead of letting the file pass for clean. Rename the file or scan it with another
+scanner.
+
+When git tracks nothing that detect-secrets would scan in a directory (a repository whose files are not
+added yet, or a directory that is all ignored), detect-secrets prints an empty report, as for a
+directory with no secret. guard says so instead of letting that pass for a clean run: the
+Scanner Warnings panel, `scanner_results[].warnings` and the `--sarif` notifications carry "Scanned
+nothing in ..." and the fix, `git add` the files. It is a warning, not an error, and does not
+change the exit code. If detect-secrets cannot list the files of a directory at all, or prints a report
+envdrift cannot read, the scan is an error (exit 5), never a clean run.
+
+Older envdrift releases passed detect-secrets no flag for a directory outside a git repository: it listed
+no files, printed a notice on stderr and exited 0, and envdrift reported a clean run, exit 0, for a
+directory nothing had looked at ([#851](https://github.com/jainal09/envdrift/issues/851)). They also
+reported a clean run for a subdirectory of a repository (`envdrift guard sub`, or `envdrift guard .`
+run inside it), because detect-secrets compares the paths git lists, relative to the top level of the
+repository, with the paths it finds relative to the directory it runs in, and in a subdirectory not one
+of them agrees. A file called `build`, `dist`, `vendor` or `coverage` was skipped as well, as if it were
+one of those directories.
+
+**Which version.** envdrift grades detect-secrets findings by the detector names of the version it
+pins in `constants.json`. Another version can rename or add detectors, and a finding from a detector
+envdrift does not know is graded HIGH, so severities may be inaccurate. When the installed version is
+not the pinned one, or cannot be read, guard warns, naming the installed and the pinned version, and
+gives the fix: `pip install detect-secrets==<pinned version>`. The warning is a Scanner Warnings panel in
+the human output, `scanner_results[].warnings` in `--json`, a `warning` entry of
+`toolExecutionNotifications` in `--sarif`, and a line on stderr under `--json` and `--sarif`. It does not
+change the exit code, and envdrift never installs or changes the package for it.
+
 ### `--kingfisher` / `--no-kingfisher`
 
 Enable or disable Kingfisher scanner. Disabled by default.
@@ -175,24 +224,10 @@ Infisical provides:
 envdrift guard --infisical
 ```
 
-Infisical reports no severity of its own, so envdrift grades each finding by its rule ID. These rules
-are CRITICAL, so `--fail-on critical` blocks them:
-
-- AWS access key IDs (`aws-access-token`, both engines). On 0.43.136 and later, also the secret
-  access key that betterleaks nests under a key ID (`aws-secret-access-key`)
-- Azure storage account keys (`azure-storage-account-key`, 0.43.136 and later only)
-- GCP service-account keys: both engines report the private key inside them as `private-key`
-- GitHub tokens and GitLab personal access tokens
-- npm access tokens and PyPI upload tokens
-- Stripe live secret and restricted keys (`stripe-access-token`)
-- private keys
-
-Every other built-in rule is HIGH. That includes Google API keys, Slack tokens, Stripe test-mode keys
-(`sk_test_`, `rk_test_`) and the generic rules. A custom Infisical rule config that emits the IDs
-`aws-access-key-id` or `stripe-api-key` is graded CRITICAL too. envdrift 11.0.7 and earlier graded most of the
-CRITICAL rules above HIGH, AWS key IDs and Stripe live keys included: its severity table was keyed
-on rule IDs the Infisical CLI does not emit, so `--fail-on critical` let those findings through
-([#844](https://github.com/jainal09/envdrift/issues/844)).
+Infisical reports no severity of its own, so envdrift grades each finding by its rule ID, with the
+same table as gitleaks and the other scanners: see [Severity](#severity). A custom Infisical rule
+config that emits the IDs `aws-access-key-id`, `google-api-key`, `slack-token` or `stripe-api-key` is
+graded CRITICAL too.
 
 On 0.43.135, the version envdrift auto-installs, Infisical has no rule for AWS secret access keys or
 Azure storage account keys and reports both as `generic-api-key`, which is HIGH. Every version does
@@ -366,6 +401,12 @@ Output results as JSON.
 envdrift guard --json > guard-report.json
 ```
 
+Each entry of `scanner_results` has `name`, `files_scanned`, `duration_ms`, `error`, `skipped`,
+`skip_reason` and `warnings`. `warnings` lists the non-fatal notices of a scanner that ran, such as an
+unexpected detect-secrets version; it is empty when there are none, and a warning never changes
+`exit_code`. `findings[].severity` is `critical`, `high`, `medium`, `low` or `info`; how a finding is
+graded is described under [Severity](#severity).
+
 ### `--sarif`
 
 Output results as SARIF for code scanning tools.
@@ -386,6 +427,15 @@ stable fingerprint built from the rule id, the location, and a truncated
 hash of the secret value — never the matched text — so two different secrets
 on the same line stay separate alerts. The redacted preview is attached as
 the result's `properties.secretPreview`.
+
+A failed scanner is an `error` entry of the invocation's `toolExecutionNotifications`, and the
+non-fatal warnings of a scanner that ran (see `--detect-secrets`) are `warning` entries. A warning does
+not change `executionSuccessful` or `exitCode`. A result's `level` is `error` for CRITICAL and HIGH
+findings, `warning` for MEDIUM and `note` for LOW and INFO, and the `security-severity` of its rule is
+`9.0`, `7.0`, `5.0`, `3.0` and `1.0` respectively, which is what GitHub ranks alerts by. A rule has one
+`security-severity`, that of the most severe finding reported under it, so a Stripe test-mode key
+(HIGH) is ranked with the `9.0` of the rule's live keys when both are found; its `level` stays per
+result.
 
 !!! note "Upgrading from older releases"
     The fingerprint format changed in this release: existing GitHub Code
@@ -409,7 +459,8 @@ threshold fails CI with that severity's exit code (see [Exit Codes](#exit-codes)
 — including `--fail-on low` on a LOW-only result, which exits with code `4`,
 distinct from HIGH's code `2`. An unencrypted environment file is HIGH and exits
 with code `2` when it blocks the run.
-`INFO` findings are informational only and never fail CI.
+`INFO` findings are informational only and never fail CI. How a finding is graded `critical`, `high`
+or `medium` is described under [Severity](#severity).
 
 ```bash
 envdrift guard --ci --fail-on critical
@@ -517,6 +568,127 @@ envdrift guard --kingfisher --gitleaks
 envdrift guard ./db --kingfisher --native-only
 ```
 
+## Severity
+
+Every finding has a severity. It decides the exit code (see [Exit Codes](#exit-codes)) and whether
+`--fail-on` blocks the run. **The native, gitleaks, Infisical, detect-secrets, Kingfisher and
+git-secrets scanners give a credential class the same severity.** None of the last five reports a
+severity of its own, so envdrift grades each of their findings by the class of credential it matched,
+and the native scanner's grade for a class is the reference. trufflehog, trivy and talisman are the
+exception, described below the table.
+
+| Credential class | Severity |
+| :-- | :-- |
+| AWS access key IDs, secret access keys, session tokens and Bedrock API keys | CRITICAL |
+| Azure storage account keys, Azure AD client secrets and Azure connection strings | CRITICAL |
+| GCP service-account keys, application default credentials, OAuth client secrets and Google API keys | CRITICAL |
+| IBM Cloud, IBM COS, Cloudant and SoftLayer credentials | CRITICAL |
+| GitHub tokens: personal access, OAuth, app, refresh and fine-grained | CRITICAL |
+| GitLab tokens: personal access, pipeline trigger, runner, deploy, session cookie and others | CRITICAL |
+| npm and PyPI tokens, HashiCorp Vault tokens | CRITICAL |
+| Private keys: PEM, OpenSSH, PGP, PuTTY, age and wallet keys | CRITICAL |
+| Password hashes (bcrypt, sha512crypt), `.netrc` credentials | CRITICAL |
+| Stripe live secret and restricted keys, Square and Braintree tokens | CRITICAL |
+| Slack tokens and webhook URLs, Discord bot tokens and webhook URLs, Telegram bot tokens | CRITICAL |
+| OpenAI, Anthropic, SendGrid, Mailchimp, Mailgun, Heroku, Shopify, DigitalOcean, Doppler, Postman, Linear, Supabase and Facebook keys and tokens | CRITICAL |
+| Generic secrets: an API key, secret, token or password assigned to a value | HIGH |
+| JSON Web Tokens | HIGH |
+| Credentials in a URL: database, Redis and basic-auth URLs | HIGH |
+| Stripe test-mode keys (`sk_test_`, `rk_test_`), Twilio account and API key SIDs | HIGH |
+| Artifactory, Docker registry, Datadog, Atlassian, Algolia and Cloudflare credentials | HIGH |
+| High-entropy strings | MEDIUM |
+
+The table lists classes, not rule IDs. A class covers every rule, detector or pattern that finds it, in
+every scanner that has one, and `envdrift guard --json` shows the rule ID of each finding. A test checks
+the rule IDs of gitleaks, Infisical and Kingfisher against the table, so no credential rule of a provider
+in a CRITICAL class is left out by mistake; the rules for an identifier or a public value (an Azure
+tenant ID, a Discord client ID, a Mailgun public key) are the only ones of such a provider left at HIGH.
+A rule that no class lists, such as one a newer tool adds, is HIGH, in every scanner but git-secrets
+(below). A scanner without a rule for a class can still find its secrets, but only under a generic rule,
+which is HIGH: gitleaks reports an Azure storage account key as `generic-api-key`, for example, where the
+native scanner's own rule grades it CRITICAL. The native scanner also grades its policy findings itself:
+an unencrypted environment file is HIGH, and a plaintext partial-encryption `.secret` file or a tracked
+dotenvx `.env.keys` is CRITICAL.
+
+Some grades are judgment calls or known gaps:
+
+- A JSON Web Token is HIGH, never lower. Some are public by design (an OIDC ID token, a Supabase anon
+  key), but a bearer or session token and a Supabase `service_role` key have the same
+  `eyJ...eyJ...` shape, and no rule can tell them apart, so a JWT that leaked is treated as one that
+  matters. gitleaks, Infisical and detect-secrets have always graded it HIGH; the native scanner called
+  it MEDIUM and now agrees with them. A JWT that is public on purpose can be kept out of the report
+  with `# envdrift:ignore` on its line or by path (see [Handling False Positives](#handling-false-positives)).
+- A Twilio account SID or API key SID is HIGH. It identifies an account or a key; the secret is another
+  value. detect-secrets reports any `AC` or `SK` followed by 32 lower-case letters or digits as a Twilio
+  API key, `CACHE_KEY=AC...` included, which is why CRITICAL would raise false alarms at the top
+  severity.
+- A credential in a URL is HIGH, except that the native scanner grades one in a GitHub, GitLab or
+  Bitbucket URL CRITICAL. detect-secrets' basic-auth detector cannot tell the host, so it is HIGH for
+  every URL.
+- git-secrets reports a matching line, not a rule, so envdrift names the credential from the line. A
+  line with an AWS access key ID is CRITICAL, as is a line with a secret access key (the 40-character
+  value) or a private key (a `-----BEGIN ... PRIVATE KEY` header or a long base64 body). A line that only
+  names a key it does not hold (`private_key_path = ...`) is HIGH at most, and a line that names no
+  credential at all is MEDIUM: this is the one place where an unclassified match is not HIGH.
+
+A grade is looked up by the scanner's own name for the credential: the native scanner's pattern ID, the
+rule ID of gitleaks and Infisical (one shared table, because they share a rule set), the detector name of
+detect-secrets, and the kind of line for git-secrets. Kingfisher's main catalog is betterleaks', the rule
+set of Infisical 0.43.136 and later, and its rules are named `betterleaks.<id>`, so it looks those up in
+the same table as gitleaks and Infisical. Its other rules (the `veles.` ones, and rules from a custom
+rules file) are CRITICAL when a keyword of a CRITICAL class appears in the rule's ID or name, and HIGH
+otherwise. A test holds each of those tables to the table above, so they cannot drift apart again.
+
+trufflehog, trivy and talisman do not use the table. trufflehog grades a finding CRITICAL when it
+verified the secret with the provider and HIGH when it did not, and trivy and talisman pass the severity
+their own tool reports through, so they can grade a class differently from the six scanners above.
+
+!!! warning "Stricter severities and exit codes"
+    Older envdrift releases graded every gitleaks finding HIGH, and graded the same credential
+    differently in each scanner: the native scanner called a Heroku, Slack, OpenAI, SendGrid or Google
+    API key CRITICAL while Infisical called it HIGH, and detect-secrets called a private key HIGH where
+    the native scanner and Infisical called it CRITICAL. envdrift 11.0.7 and earlier also graded most of
+    Infisical's CRITICAL rules HIGH, AWS key IDs and Stripe live keys included
+    ([#844](https://github.com/jainal09/envdrift/issues/844)). Every scanner now follows the table above
+    ([#850](https://github.com/jainal09/envdrift/issues/850)), which changes what blocks a run. Most
+    changes make the gate stricter. Two lower a grade, a git-secrets line that only mentions `asia` and a
+    detect-secrets Twilio SID, and each gives the reason the old grade was wrong:
+
+    - `--fail-on critical` now blocks a gitleaks, Infisical, detect-secrets, Kingfisher or git-secrets
+      finding in a CRITICAL class. It used to pass an AWS key ID that only gitleaks found, a private key
+      that only detect-secrets found, or a Slack token that only Infisical found.
+    - A run whose worst finding is one of those now exits `1`, not `2`. A pipeline that branches on the
+      exit code `2` for such a credential must test for `1`; one that fails on any non-zero code is
+      unaffected.
+    - In `--json`, `findings[].severity`, `summary.by_severity` and `exit_code` change with the grades.
+      In `--sarif`, the `security-severity` of those alerts is `9.0`, not `7.0`.
+    - The native scanner now grades Discord and Telegram bot tokens, Mailchimp API keys and bcrypt and
+      sha512crypt hashes CRITICAL, where it graded them HIGH, so that it agrees with detect-secrets and
+      Kingfisher. It grades a JSON Web Token HIGH, where it graded it MEDIUM, to agree with gitleaks,
+      Infisical and detect-secrets, which always did. A run without gitleaks (`--native-only`,
+      `--no-gitleaks`) therefore exits `2` on a JWT, where it used to exit `3`, or `0` with `--ci` at the
+      default `--fail-on high`.
+    - detect-secrets' keyword and Artifactory detectors are HIGH, not MEDIUM, and its private key
+      detector is CRITICAL, not HIGH. git-secrets grades an AWS key CRITICAL, not HIGH, a private key
+      CRITICAL, not MEDIUM, and a password, token or API key HIGH, not MEDIUM.
+    - Kingfisher grades its betterleaks rules like gitleaks and Infisical do, and its other rules HIGH
+      unless a CRITICAL keyword names them, where it graded a rule that matched no keyword MEDIUM. A rule
+      that names GitLab, OpenAI, Heroku, Discord or another provider of a CRITICAL class is CRITICAL.
+    - The shared gitleaks and Infisical table grades the credential rules it used to leave to the HIGH
+      fallback CRITICAL, for example the Amazon Bedrock API keys, Azure connection strings, GitLab session
+      cookies and age keys, so `--fail-on critical` blocks them too.
+    - git-secrets tells an AWS access key by the key ID itself (`AKIA`, `ASIA`, `ABIA`, `ACCA` or `A3T`
+      plus one more character and 16 more, 20 in all), no longer by the letters `akia` or `asia`
+      anywhere in the line. `password=asia-northeast1` is a password (HIGH) and not an AWS key, and a
+      line such as `region=asia-south1` that git-secrets flagged for another reason is MEDIUM, not HIGH.
+      Likewise a line that only names a secret access key or a private key, without holding one, is
+      HIGH at most.
+    - One grade went down: a detect-secrets Twilio API key is HIGH, not CRITICAL, to match the native
+      scanner and every other scanner. The detector matches `AC` and `SK` followed by 32 letters or
+      digits, which are account and key SIDs, identifiers whose secret is another value (it reports
+      `CACHE_KEY=AC...` too), and it does not match a Twilio auth token at all. With
+      `--fail-on critical`, a Twilio SID that only detect-secrets found no longer blocks the run.
+
 ## Exit Codes
 
 `envdrift guard` uses severity-based exit codes, plus dedicated codes for an
@@ -561,6 +733,12 @@ default set whose binary is missing under `--no-auto-install` never ran and
 never failed: it is skipped with a visible warning and a
 `scanner_results[].skipped`/`skip_reason` record, and does not change the
 exit code (see `--auto-install` above).
+
+A scanner **warning** is neither a failure nor a skip. The scanner ran and completed, so its findings
+stand and the exit code is unchanged, but they may be less reliable than they look (for example, the
+installed detect-secrets is not the pinned version, see `--detect-secrets`). Warnings are listed in the
+human output (Scanner Warnings panel), in `--json` under `scanner_results[].warnings`, and in `--sarif`
+as `warning` entries of `toolExecutionNotifications`.
 
 The machine-readable verdict fields always match the process exit code: the
 `--json` document's `exit_code`/`has_blocking_findings` and the `--sarif`

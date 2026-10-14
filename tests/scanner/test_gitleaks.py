@@ -428,16 +428,17 @@ class TestFindingParsing:
             "StartColumn": 5,
             "File": "secrets.py",
             "Secret": "AKIAIOSFODNN7EXAMPLE",
-            "RuleID": "aws-access-key-id",
+            "RuleID": "aws-access-token",
         }
         finding = scanner._parse_finding(item, tmp_path)
 
         assert finding is not None
-        assert finding.rule_id == "gitleaks-aws-access-key-id"
+        assert finding.rule_id == "gitleaks-aws-access-token"
         assert finding.rule_description == "AWS Access Key ID"
         assert finding.line_number == 10
         assert finding.column_number == 5
-        assert finding.severity == FindingSeverity.HIGH
+        # Graded by its rule (#850): gitleaks reports no severity, and this used to be HIGH.
+        assert finding.severity == FindingSeverity.CRITICAL
         assert finding.scanner == "gitleaks"
         assert "****" in finding.secret_preview  # Redacted
 
@@ -728,12 +729,36 @@ class TestGitleaksIntegration:
         # gitleaks should detect this pattern
         # Note: may or may not trigger depending on gitleaks config
 
+    def test_real_run_grades_findings_by_rule(self, tmp_path: Path):
+        """A real gitleaks run grades by rule: key IDs and live keys CRITICAL, test keys HIGH.
 
-@pytest.mark.xfail(
-    strict=False,
-    raises=AssertionError,
-    reason="gitleaks findings are hardcoded HIGH regardless of rule (see #850)",
-)
+        gitleaks reports no severity, and every finding used to be HIGH (#850), so
+        ``--fail-on critical`` let an AWS key ID or a Stripe live key through. The
+        values are assembled from fragments (GitHub push protection).
+        """
+        body = "4eC39HqLyjWDarjtT1zdp7dc" + "ABCDEFGH"
+        (tmp_path / "aws.env").write_text("AWS_ACCESS_KEY_ID=" + "AKIA" + "QYLPMN5HHHFPZAM2\n")
+        (tmp_path / "stripe-live.env").write_text("STRIPE_KEY=" + "sk_live_" + body + "\n")
+        (tmp_path / "stripe-test.env").write_text("STRIPE_TEST_KEY=" + "sk_test_" + body + "\n")
+        (tmp_path / "github.env").write_text(
+            "GITHUB_TOKEN=" + "ghp_" + "016C7eX9bQ2vYwN3kLmZpRtUaScDfGhJkL01\n"
+        )
+
+        result = GitleaksScanner(auto_install=False).scan([tmp_path])
+
+        assert result.error is None
+        graded = {(Path(f.file_path).name, f.rule_id): f.severity for f in result.findings}
+        assert graded.get(("aws.env", "gitleaks-aws-access-token")) == FindingSeverity.CRITICAL
+        assert graded.get(("github.env", "gitleaks-github-pat")) == FindingSeverity.CRITICAL
+        assert (
+            graded.get(("stripe-live.env", "gitleaks-stripe-access-token"))
+            == FindingSeverity.CRITICAL
+        )
+        assert (
+            graded.get(("stripe-test.env", "gitleaks-stripe-access-token")) == FindingSeverity.HIGH
+        )
+
+
 def test_gitleaks_grades_an_aws_key_id_critical(tmp_path: Path):
     """An ``aws-access-token`` finding is CRITICAL, as in the native and Infisical scanners."""
     item: dict[str, Any] = {
@@ -745,7 +770,84 @@ def test_gitleaks_grades_an_aws_key_id_critical(tmp_path: Path):
 
     finding = GitleaksScanner(auto_install=False)._parse_finding(item, tmp_path)
 
-    # pytest.fail, not assert: xfail(raises=AssertionError) must not hide a parse failure.
-    if finding is None:
-        pytest.fail("gitleaks report row did not parse into a finding")
+    assert finding is not None, "gitleaks report row did not parse into a finding"
     assert finding.severity == FindingSeverity.CRITICAL
+
+
+# Rule IDs seen in real reports of gitleaks 8.30.1 (``gitleaks dir`` over a fixture per
+# credential class) and the severity each gets. gitleaks reports no severity, so envdrift
+# grades by rule; every finding used to be HIGH, so ``--fail-on critical`` let an AWS key ID,
+# a GitHub token or a private key through, and a leaked secret exited 2 instead of 1 (#850).
+# The full class table is tests/severity_policy.py.
+GITLEAKS_RULE_SEVERITIES = [
+    ("aws-access-token", FindingSeverity.CRITICAL),
+    ("github-pat", FindingSeverity.CRITICAL),
+    ("gitlab-pat", FindingSeverity.CRITICAL),
+    ("private-key", FindingSeverity.CRITICAL),
+    ("slack-bot-token", FindingSeverity.CRITICAL),
+    ("slack-webhook-url", FindingSeverity.CRITICAL),
+    ("openai-api-key", FindingSeverity.CRITICAL),
+    ("sendgrid-api-token", FindingSeverity.CRITICAL),
+    ("heroku-api-key", FindingSeverity.CRITICAL),
+    ("gcp-api-key", FindingSeverity.CRITICAL),
+    ("npm-access-token", FindingSeverity.CRITICAL),
+    ("pypi-upload-token", FindingSeverity.CRITICAL),
+    ("azure-ad-client-secret", FindingSeverity.CRITICAL),
+    # Rules of the same providers that the first version of the table forgot: the real
+    # 8.30.1 reports them, and each is a credential of a CRITICAL class.
+    ("age-secret-key", FindingSeverity.CRITICAL),
+    ("aws-amazon-bedrock-api-key-long-lived", FindingSeverity.CRITICAL),
+    ("aws-amazon-bedrock-api-key-short-lived", FindingSeverity.CRITICAL),
+    ("discord-api-token", FindingSeverity.CRITICAL),
+    ("discord-client-secret", FindingSeverity.CRITICAL),
+    ("facebook-secret", FindingSeverity.CRITICAL),
+    ("gitlab-feature-flag-client-token", FindingSeverity.CRITICAL),
+    ("gitlab-session-cookie", FindingSeverity.CRITICAL),
+    ("linear-client-secret", FindingSeverity.CRITICAL),
+    ("twilio-api-key", FindingSeverity.HIGH),
+    ("generic-api-key", FindingSeverity.HIGH),
+    # Never below HIGH: a JWT can be a bearer token, and it always was HIGH here.
+    ("jwt", FindingSeverity.HIGH),
+    ("discord-client-id", FindingSeverity.HIGH),  # an identifier, not a credential
+    ("a-rule-gitleaks-adds-later", FindingSeverity.HIGH),
+]
+
+
+@pytest.mark.parametrize(("rule_id", "expected"), GITLEAKS_RULE_SEVERITIES)
+def test_gitleaks_grades_each_finding_by_its_rule(
+    tmp_path: Path, rule_id: str, expected: FindingSeverity
+):
+    item: dict[str, Any] = {
+        "RuleID": rule_id,
+        "File": "a.env",
+        "StartLine": 1,
+        "Secret": "q8Zt3VnR7wXy2Lp9" + "Ks4Bd6Fh1Jm5Nc0Gx",
+    }
+
+    finding = GitleaksScanner(auto_install=False)._parse_finding(item, tmp_path)
+
+    assert finding is not None
+    assert finding.rule_id == f"gitleaks-{rule_id}"
+    assert finding.severity == expected
+
+
+@pytest.mark.parametrize(
+    ("secret", "expected"),
+    [
+        ("sk_live_" + "4eC39HqLyjWDarjtT1zdp7dc" + "ABCDEFGH", FindingSeverity.CRITICAL),
+        ("rk_live_" + "4eC39HqLyjWDarjtT1zdp7dc" + "ABCDEFGH", FindingSeverity.CRITICAL),
+        ("sk_test_" + "4eC39HqLyjWDarjtT1zdp7dc" + "ABCDEFGH", FindingSeverity.HIGH),
+        ("rk_test_" + "4eC39HqLyjWDarjtT1zdp7dc" + "ABCDEFGH", FindingSeverity.HIGH),
+    ],
+    ids=["sk_live", "rk_live", "sk_test", "rk_test"],
+)
+def test_gitleaks_stripe_live_keys_are_critical_and_test_keys_high(
+    tmp_path: Path, secret: str, expected: FindingSeverity
+):
+    """``stripe-access-token`` matches test-mode keys too, and those cannot move money."""
+    item: dict[str, Any] = {"RuleID": "stripe-access-token", "File": "a.env", "Secret": secret}
+
+    finding = GitleaksScanner(auto_install=False)._parse_finding(item, tmp_path)
+
+    assert finding is not None
+    assert finding.severity == expected

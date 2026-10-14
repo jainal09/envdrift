@@ -16,6 +16,7 @@ from urllib.parse import quote_from_bytes
 
 from rich.cells import cell_len
 from rich.console import Console
+from rich.markup import escape
 from rich.measure import Measurement
 from rich.panel import Panel
 from rich.table import Table
@@ -247,6 +248,25 @@ def format_rich(result: AggregatedScanResult, console: Console | None = None) ->
         )
         console.print()
 
+    # Surface non-fatal scanner warnings: the scan ran and its findings stand, but
+    # they may be less reliable than they look (a detect-secrets that is not the
+    # pinned version grades some findings wrongly). They never change the verdict.
+    warned = [r for r in result.results if r.warnings]
+    if warned:
+        warning_lines = [
+            f"[yellow]{r.scanner_name}[/yellow]: {escape(strip_ansi(message))}"
+            for r in warned
+            for message in r.warnings
+        ]
+        console.print(
+            Panel(
+                "\n".join(warning_lines),
+                title="Scanner Warnings",
+                border_style="yellow",
+            )
+        )
+        console.print()
+
     # Surface scanner errors prominently. Filter on the ScanResult.success
     # contract (error is not None), not truthiness, so an empty-string failure
     # still lands in the panel and matches the Scan Incomplete verdict (#478).
@@ -395,6 +415,10 @@ def format_json(result: AggregatedScanResult, exit_code: int | None = None) -> s
                 # (skipped false, error null) and "failed" (error set) (#641).
                 "skipped": r.skipped,
                 "skip_reason": r.skip_reason,
+                # Non-fatal notices about a scanner that ran, e.g. a detect-secrets
+                # that is not the pinned version (severities may be inaccurate).
+                # They never change exit_code. Always present, [] when there are none.
+                "warnings": [strip_ansi(message) for message in r.warnings],
             }
             for r in result.results
         ],
@@ -603,7 +627,9 @@ def format_sarif(result: AggregatedScanResult, exit_code: int | None = None) -> 
     the process exit (#478): ``exitCode`` is the effective exit code passed by
     the caller (or the result's own threshold-unaware code), and
     ``executionSuccessful`` is false when any selected scanner ran but failed,
-    with one error ``toolExecutionNotifications`` entry per failed scanner.
+    with one error ``toolExecutionNotifications`` entry per failed scanner. A
+    scanner's non-fatal warnings follow as ``warning`` entries; the run still
+    succeeded, so they change neither ``executionSuccessful`` nor ``exitCode``.
 
     Args:
         result: Aggregated scan results.
@@ -641,6 +667,16 @@ def format_sarif(result: AggregatedScanResult, exit_code: int | None = None) -> 
                 }
                 for r in result.results
                 if not r.success
+            ]
+            # A scanner's non-fatal warnings (the run still succeeded) follow its
+            # errors as ``warning`` notifications.
+            + [
+                {
+                    "level": "warning",
+                    "message": {"text": f"{r.scanner_name}: {strip_ansi(message).strip()}"},
+                }
+                for r in result.results
+                for message in r.warnings
             ],
         },
         srcroot=srcroot,
