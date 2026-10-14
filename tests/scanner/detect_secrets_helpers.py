@@ -39,8 +39,9 @@ def installed_git_version() -> tuple[int, int] | None:
 # detect-secrets runs, arrived in git 2.31: an older git ignores it, so a non-ASCII name stays
 # quoted there and the file is reported, not scanned. A git that cannot be asked is taken to read it.
 _GIT_VERSION = installed_git_version()
+GIT_HONORS_CONFIG_ENV = _GIT_VERSION is None or _GIT_VERSION >= (2, 31)
 requires_git_config_env = pytest.mark.skipif(
-    _GIT_VERSION is not None and _GIT_VERSION < (2, 31),
+    not GIT_HONORS_CONFIG_ENV,
     reason="git before 2.31 ignores GIT_CONFIG_COUNT, which carries the core.quotepath setting",
 )
 

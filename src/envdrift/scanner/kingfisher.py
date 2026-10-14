@@ -126,6 +126,15 @@ def _map_severity(rule_id: str, rule_name: str, matched: str = "") -> FindingSev
     return FindingSeverity.HIGH
 
 
+def _finding_path(finding: dict[str, Any], base_path: Path) -> Path:
+    """The file a finding is in; a relative path in the report is resolved against ``base_path``."""
+    path_str = finding.get("path", "")
+    if not path_str:
+        return base_path
+    file_path = Path(path_str)
+    return file_path if file_path.is_absolute() else (base_path / path_str).resolve()
+
+
 class KingfisherScanner(ScannerBackend):
     """Kingfisher scanner with automatic Homebrew installation.
 
@@ -536,14 +545,7 @@ class KingfisherScanner(ScannerBackend):
             rule = item.get("rule", {})
             finding = item.get("finding", {})
 
-            # Get file path and resolve relative paths
-            file_path_str = finding.get("path", "")
-            if file_path_str:
-                file_path = Path(file_path_str)
-                if not file_path.is_absolute():
-                    file_path = (base_path / file_path_str).resolve()
-            else:
-                file_path = base_path
+            file_path = _finding_path(finding, base_path)
 
             # Get the secret snippet and redact it
             snippet = finding.get("snippet", "")

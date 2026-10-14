@@ -410,14 +410,28 @@ def _not_scanned_warning(path: Path, names: list[str]) -> str:
     )
 
 
-def _unlisted_warning(path: Path, listing: _GitOutput) -> str:
-    """The warning for a ``git ls-files`` that failed: detect-secrets gets no list from it either."""
+def _unlisted_warning(path: Path, listing: _GitOutput | None) -> list[str]:
+    """The warning for a ``git ls-files`` that failed: detect-secrets gets no list from it either.
+
+    None when git could not be run at all, which says nothing about the repository.
+    """
+    if listing is None:
+        return []
     lines = strip_ansi(listing.stderr).strip().splitlines()
     detail = lines[0][:200] if lines else f"exit code {listing.returncode}"
-    return (
+    return [
         f"Could not list the files git tracks in {path} ({detail}). detect-secrets scans the "
         "files git tracks, with the same command, so it may have scanned none and an empty "
         "report is not a clean run."
+    ]
+
+
+def _scanned_nothing_warning(path: Path) -> str:
+    """The warning for a git repository that tracks no file detect-secrets would scan."""
+    return (
+        f"Scanned nothing in {path}: in a git repository detect-secrets scans the files "
+        "git tracks, and none is tracked there that it does not skip. Run git add on the "
+        "files to scan them."
     )
 
 
@@ -443,24 +457,16 @@ def _check_git_file_list(path: Path, plan: _ScanPlan) -> tuple[dict[str, str], l
     if plan.git_root is None:
         return env, []
     listing = _git_ls_files(plan.git_root, env, nul=True)
-    if listing is None:
-        return env, []
-    if listing.returncode != 0:
-        return env, [_unlisted_warning(path, listing)]
+    if listing is None or listing.returncode != 0:
+        return env, _unlisted_warning(path, listing)
     names = _names_to_scan(plan, [name for name in listing.stdout.split("\0") if name])
     if not names:
-        return env, [
-            f"Scanned nothing in {path}: in a git repository detect-secrets scans the files "
-            "git tracks, and none is tracked there that it does not skip. Run git add on the "
-            "files to scan them."
-        ]
+        return env, [_scanned_nothing_warning(path)]
     # detect-secrets decodes the whole list, not only the names of this scan.
     env = _with_git_quotepath(env, quoted=_NOT_UTF8.search(listing.stdout) is not None)
     listed = _git_ls_files(plan.git_root, env, nul=False)
-    if listed is None:
-        return env, []
-    if listed.returncode != 0:
-        return env, [_unlisted_warning(path, listed)]
+    if listed is None or listed.returncode != 0:
+        return env, _unlisted_warning(path, listed)
     seen = set(listed.stdout.splitlines())
     unmatched = [name for name in names if name not in seen]
     return env, [_not_scanned_warning(path, unmatched)] if unmatched else []
