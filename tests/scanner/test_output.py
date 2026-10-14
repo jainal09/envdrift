@@ -987,30 +987,23 @@ class TestSarifSourceRoot:
         data = json.loads(format_sarif(_aggregate(findings)))
         return data["runs"][0]["originalUriBaseIds"]["SRCROOT"]["uri"]
 
-    def test_first_repository_by_path_whatever_the_order(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    @pytest.mark.parametrize(
+        ("cwd", "winner"),
+        [("work", "a"), ("z/repo", "z")],
+        ids=["first-by-path", "cwd-repository-with-a-finding"],
+    )
+    def test_the_root_does_not_depend_on_the_order(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, cwd: str, winner: str
     ):
         monkeypatch.setenv("GIT_CEILING_DIRECTORIES", str(tmp_path))
         first = _git_repo_with_finding(tmp_path / "a" / "repo")
         second = _git_repo_with_finding(tmp_path / "z" / "repo")
         (tmp_path / "work").mkdir()
-        monkeypatch.chdir(tmp_path / "work")
+        monkeypatch.chdir(tmp_path / cwd)
 
-        expected = (tmp_path / "a" / "repo").resolve().as_uri() + "/"
+        expected = (tmp_path / winner / "repo").resolve().as_uri() + "/"
         assert self._srcroot([first, second]) == expected
         assert self._srcroot([second, first]) == expected
-
-    def test_the_cwd_repository_wins_when_it_holds_a_finding(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ):
-        monkeypatch.setenv("GIT_CEILING_DIRECTORIES", str(tmp_path))
-        other = _git_repo_with_finding(tmp_path / "a" / "repo")
-        own = _git_repo_with_finding(tmp_path / "z" / "repo")
-        monkeypatch.chdir(tmp_path / "z" / "repo")
-
-        expected = (tmp_path / "z" / "repo").resolve().as_uri() + "/"
-        assert self._srcroot([other, own]) == expected
-        assert self._srcroot([own, other]) == expected
 
     def test_the_cwd_repository_without_a_finding_gives_way(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch

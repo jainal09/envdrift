@@ -422,6 +422,15 @@ def _sarif_rule(finding: ScanFinding) -> dict[str, Any]:
     }
 
 
+def _first_finding_repo(finding_paths: Sequence[Path]) -> Path | None:
+    """The git root of the first finding (by path) that is in a repository, if any."""
+    for candidate in sorted(finding_paths):
+        root = get_git_root(candidate if candidate.is_dir() else candidate.parent)
+        if root is not None:
+            return root.resolve()
+    return None
+
+
 def _sarif_source_root(finding_paths: Sequence[Path] = ()) -> Path:
     """Resolve the ``SRCROOT`` base directory for SARIF artifact URIs.
 
@@ -440,17 +449,13 @@ def _sarif_source_root(finding_paths: Sequence[Path] = ()) -> Path:
     fingerprint, when finding paths change form or order.
     """
     cwd = Path.cwd()
-    cwd_root = get_git_root(cwd)
-    if cwd_root is not None:
-        cwd_root = cwd_root.resolve()
-        if not finding_paths or any(path.is_relative_to(cwd_root) for path in finding_paths):
-            return cwd_root
-    for candidate in sorted(finding_paths):
-        base = candidate if candidate.is_dir() else candidate.parent
-        root = get_git_root(base)
-        if root is not None:
-            return root.resolve()
-    return cwd_root if cwd_root is not None else cwd.resolve()
+    git_cwd = get_git_root(cwd)
+    cwd_root = git_cwd.resolve() if git_cwd is not None else None
+    if cwd_root is not None and (
+        not finding_paths or any(path.is_relative_to(cwd_root) for path in finding_paths)
+    ):
+        return cwd_root
+    return _first_finding_repo(finding_paths) or cwd_root or cwd.resolve()
 
 
 def _sarif_artifact_location(file_path: PurePath, srcroot: PurePath) -> dict[str, Any]:
