@@ -123,9 +123,9 @@ off, even in a directory or file it would not scan, so envdrift turns the settin
 configuration) in a repository that tracks one. A git older than 2.31 ignores the setting altogether, and so
 does a `core.quotepath` in `GIT_CONFIG_PARAMETERS`, which `git -c core.quotepath=...` exports, in your
 environment. envdrift does not guess which names that affects: it runs the command detect-secrets runs, under
-the environment detect-secrets gets, and compares. For every file of the scan whose name is not in the list, the Scanner Warnings say "Not scanned
-in ..." and list the first three, instead of letting the file pass for clean. Rename the file or scan it with
-another scanner.
+the environment detect-secrets gets, and compares. For every file of the scan whose name is not in the list,
+the Scanner Warnings say "Not scanned in ..." and list the first three, instead of letting the file pass for
+clean. Rename the file or scan it with another scanner.
 
 When git tracks nothing that detect-secrets would scan in a directory (a repository whose files are not
 added yet, or a directory that is all ignored), detect-secrets prints an empty report, as for a

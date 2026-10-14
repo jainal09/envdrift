@@ -414,7 +414,8 @@ def _not_scanned_warning(path: Path, names: list[str]) -> str:
 def _unlisted_warning(path: Path, listing: _GitOutput | None) -> list[str]:
     """The warning for a ``git ls-files`` that failed: detect-secrets gets no list from it either.
 
-    None when git could not be run at all, which says nothing about the repository.
+    No warning when git could not be run at all (``listing`` is None), which says nothing about
+    the repository.
     """
     if listing is None:
         return []
