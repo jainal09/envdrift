@@ -24,9 +24,11 @@ import sys
 import tempfile
 import time
 import urllib.request
+from collections.abc import Iterator
 from pathlib import Path
+from typing import Any
 
-from envdrift.utils.deadline import current_deadline
+from envdrift.utils.deadline import check_deadline, current_deadline
 
 #: Environment variable that disables checksum verification (unsafe).
 #: Shared with install.ps1, which uses the same name.
@@ -64,6 +66,18 @@ def _scanner_timeout(timeout: float) -> float:
     return deadline.timeout(timeout)
 
 
+def _read_body(response: Any) -> Iterator[bytes]:
+    """The body of a ``urlopen`` response, in the pieces it arrives in.
+
+    ``read1`` returns what has arrived, so a slow download is checked as it goes:
+    one for a scanner stops at the first read after its deadline, with
+    ``ScannerTimedOut`` (#900).
+    """
+    while chunk := response.read1(_CHUNK_BYTES):
+        check_deadline()
+        yield chunk
+
+
 def download_file(
     url: str, destination: Path, *, timeout: float = DOWNLOAD_TIMEOUT_SECONDS
 ) -> None:
@@ -72,18 +86,14 @@ def download_file(
     ``urlopen`` applies ``timeout`` to connection setup and every socket read.
     Streaming avoids buffering an entire release archive in memory, while
     leaving each caller responsible for its existing typed install error and
-    staging cleanup behavior. A download for a scanner stops at the first read
-    after the scanner's deadline, with ``ScannerTimedOut`` (#900).
+    staging cleanup behavior. A download for a scanner is held to the scanner's
+    deadline (#900).
     """
-    deadline = current_deadline()
     with (
         urllib.request.urlopen(url, timeout=_scanner_timeout(timeout)) as response,  # nosec B310
         destination.open("wb") as output,
     ):
-        # read1 returns what has arrived, so a slow download is checked as it goes.
-        while chunk := response.read1(_CHUNK_BYTES):
-            if deadline is not None:
-                deadline.check()
+        for chunk in _read_body(response):
             output.write(chunk)
 
 
@@ -155,9 +165,13 @@ def atomic_install(source: Path, target_path: Path, *, make_executable: bool = T
     (``shutil.copy2`` follows destination symlinks), and concurrent installs of
     the same binary would otherwise interleave through one shared staging file.
 
+    A scanner past its deadline installs nothing: this raises ``ScannerTimedOut``
+    instead (#900).
+
     Raises:
         OSError: if the copy or rename fails; ``target_path`` is left untouched.
     """
+    check_deadline()
     target_path.parent.mkdir(parents=True, exist_ok=True)
     # Exclusive, unpredictable, same-filesystem staging file (preserves the
     # atomic-rename guarantee while removing the TOCTOU/symlink surface).
@@ -217,7 +231,7 @@ def fetch_checksums(url: str, timeout: float = FETCH_TIMEOUT_SECONDS) -> dict[st
         with urllib.request.urlopen(  # nosec B310
             url, timeout=_scanner_timeout(timeout)
         ) as response:
-            content = response.read().decode("utf-8")
+            content = b"".join(_read_body(response)).decode("utf-8")
     except Exception as exc:
         raise ChecksumVerificationError(
             f"could not fetch checksums from {url}: {exc} — refusing to install "
@@ -262,3 +276,5 @@ def verify_download(
             f"checksum mismatch for {artifact_name}: expected {expected}, got {actual} — "
             f"the downloaded {tool_name} binary was NOT installed"
         )
+    # A scanner whose time ran out while it verified does not go on to install (#900).
+    check_deadline()

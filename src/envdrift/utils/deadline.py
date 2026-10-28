@@ -90,6 +90,13 @@ def current_deadline() -> ScannerDeadline | None:
     return getattr(_current, "deadline", None)
 
 
+def check_deadline() -> None:
+    """Raise ``ScannerTimedOut`` if a scanner runs on this thread and is past its deadline."""
+    deadline = current_deadline()
+    if deadline is not None:
+        deadline.check()
+
+
 def run_tool(args: Any, *, timeout: float, **kwargs: Any) -> subprocess.CompletedProcess[Any]:
     """``subprocess.run(args, timeout=timeout, **kwargs)`` for a tool that a scanner runs.
 

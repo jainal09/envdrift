@@ -32,10 +32,8 @@ runner = CliRunner()
 
 def _make_response(payload: bytes) -> MagicMock:
     """Build a context-manager mock mimicking urllib.request.urlopen()."""
-    resp = MagicMock()
-    resp.read.return_value = payload
     cm = MagicMock()
-    cm.__enter__.return_value = resp
+    cm.__enter__.return_value = io.BytesIO(payload)
     cm.__exit__.return_value = False
     return cm
 

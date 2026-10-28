@@ -16,7 +16,7 @@ import pytest
 
 import envdrift
 import envdrift.scanner.gitleaks as gitleaks_module
-from envdrift.install_integrity import download_file
+from envdrift.install_integrity import atomic_install, download_file, fetch_checksums
 from envdrift.scanner import engine as engine_module
 from envdrift.scanner.base import ScannerBackend, ScanResult
 from envdrift.scanner.engine import GuardConfig, ScanEngine
@@ -379,15 +379,19 @@ def test_an_installer_past_the_deadline_does_not_go_on_to_download(
     assert downloads == []
 
 
+# What the slow mirror below sends, one byte every 10 ms: 5 s in all.
+TRICKLE_BYTES = 500
+
+
 class _Trickle(BaseHTTPRequestHandler):
-    """Sends a release archive of a megabyte one byte at a time, as a slow mirror would."""
+    """Sends a file one byte at a time, as a slow mirror would."""
 
     def do_GET(self) -> None:
         self.send_response(200)
-        self.send_header("Content-Length", str(10**6))
+        self.send_header("Content-Length", str(TRICKLE_BYTES))
         self.end_headers()
         try:
-            for _ in range(10**6):
+            for _ in range(TRICKLE_BYTES):
                 self.wfile.write(b"x")
                 self.wfile.flush()
                 time.sleep(0.01)
@@ -403,7 +407,7 @@ def trickle_url() -> Iterator[str]:
     server = ThreadingHTTPServer(("127.0.0.1", 0), _Trickle)
     threading.Thread(target=server.serve_forever, daemon=True).start()
     try:
-        yield f"http://127.0.0.1:{server.server_port}/tool.tar.gz"
+        yield f"http://127.0.0.1:{server.server_port}/file"
     finally:
         server.shutdown()
         server.server_close()
@@ -420,5 +424,36 @@ def test_a_download_for_a_scanner_stops_at_its_deadline(tmp_path: Path, trickle_
     ):
         download_file(trickle_url, archive, timeout=60)
 
-    assert time.monotonic() - started < 5
-    assert 0 < archive.stat().st_size < 10**6, "the download did not get under way"
+    assert time.monotonic() - started < 3
+    assert 0 < archive.stat().st_size < TRICKLE_BYTES, "the download did not get under way"
+
+
+def test_a_checksums_fetch_for_a_scanner_stops_at_its_deadline(trickle_url: str) -> None:
+    """The checksums of an install are held to the deadline too, however small the file."""
+    started = time.monotonic()
+
+    with (
+        scanner_deadline(ScannerDeadline(started + 1.0)),
+        pytest.raises(ScannerTimedOut),
+    ):
+        fetch_checksums(trickle_url, timeout=60)
+
+    assert time.monotonic() - started < 3
+
+
+def test_a_scanner_past_its_deadline_installs_nothing(tmp_path: Path) -> None:
+    """A download it finished in time is not installed once its time is up."""
+    downloaded = tmp_path / "gitleaks.new"
+    downloaded.write_bytes(b"the new binary")
+    installed = tmp_path / "bin" / "gitleaks"
+    installed.parent.mkdir()
+    installed.write_bytes(b"the binary in place")
+
+    with (
+        scanner_deadline(ScannerDeadline(time.monotonic() - 1)),
+        pytest.raises(ScannerTimedOut),
+    ):
+        atomic_install(downloaded, installed)
+
+    assert installed.read_bytes() == b"the binary in place"
+    assert sorted(path.name for path in installed.parent.iterdir()) == ["gitleaks"]
