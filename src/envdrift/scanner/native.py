@@ -342,6 +342,20 @@ def _decode_unicode_text(raw: bytes) -> str | None:
     return None
 
 
+class _FileListError(Exception):
+    """git could not list some of the files below a directory; ``files`` holds the rest (#910)."""
+
+    def __init__(self, files: list[Path], message: str) -> None:
+        super().__init__(message)
+        self.files = files
+
+
+def _git_failure(stderr: str, returncode: int) -> str:
+    """git's own message for a call that failed, or its exit code."""
+    lines = stderr.strip().splitlines()
+    return lines[-1] if lines else f"exit code {returncode}"
+
+
 def _resolved(path: Path) -> Path | None:
     """``path`` with its symlinks resolved, or ``None`` when that fails."""
     try:
@@ -473,13 +487,19 @@ class NativeScanner(ScannerBackend):
         start_time = time.time()
         findings: list[ScanFinding] = []
         files_scanned = 0
+        errors: list[str] = []
         cwd = Path.cwd().resolve()
 
         for path in paths:
             if not path.exists():
                 continue
 
-            files_to_scan = [path] if path.is_file() else self._collect_files(path)
+            try:
+                files_to_scan = [path] if path.is_file() else self._collect_files(path)
+            except _FileListError as e:
+                # Scan the files git did list, and fail the scan for the rest (#910).
+                errors.append(str(e))
+                files_to_scan = e.files
 
             for file_path in files_to_scan:
                 if self._should_ignore(file_path, path, cwd):
@@ -495,6 +515,7 @@ class NativeScanner(ScannerBackend):
             scanner_name=self.name,
             findings=findings,
             files_scanned=files_scanned,
+            error="; ".join(errors) or None,
             duration_ms=duration_ms,
         )
 
@@ -511,10 +532,16 @@ class NativeScanner(ScannerBackend):
 
         Returns:
             List of file paths.
+
+        Raises:
+            _FileListError: git listed the tracked files but could not list the
+                untracked ones or the ignored env stores (#910). It holds the files
+                that were listed.
         """
         import subprocess  # nosec B404
 
         files: set[Path] = set()
+        unlisted: list[str] = []
         directory = directory.resolve()
 
         # ``-z`` keeps filenames byte-for-byte rather than applying Git's
@@ -570,8 +597,14 @@ class NativeScanner(ScannerBackend):
                 for rel_path in result.stdout.split("\0"):
                     if rel_path:
                         files.add(directory / rel_path)
-        except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
-            pass
+            else:
+                unlisted.append(
+                    f"the untracked files: {_git_failure(result.stderr, result.returncode)}"
+                )
+        except subprocess.TimeoutExpired as e:
+            unlisted.append(f"the untracked files: timed out after {e.timeout:g}s")
+        except OSError as e:
+            unlisted.append(f"the untracked files: {e}")
 
         # Method 3: Get untracked .env* files that ARE gitignored.
         # Partial-encryption secret/combined files are typically gitignored, and a
@@ -610,8 +643,14 @@ class NativeScanner(ScannerBackend):
                         and Path(rel_path).name != DOTENVX_KEYS_FILENAME
                     ):
                         files.add(directory / rel_path)
-        except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
-            pass
+            else:
+                unlisted.append(
+                    "the ignored .env files: " + _git_failure(result.stderr, result.returncode)
+                )
+        except subprocess.TimeoutExpired as e:
+            unlisted.append(f"the ignored .env files: timed out after {e.timeout:g}s")
+        except OSError as e:
+            unlisted.append(f"the ignored .env files: {e}")
 
         # Method 4: Add explicitly configured custom env files from vault.sync.
         # These may not match ".env*" and can otherwise be missed when untracked.
@@ -626,7 +665,13 @@ class NativeScanner(ScannerBackend):
                 files.add(candidate)
 
         # Return deterministically ordered list for stable scan results
-        return sorted(files, key=lambda p: str(p))
+        collected = sorted(files, key=lambda p: str(p))
+        if unlisted:
+            # A file git did not list is a file the scan never saw: fail closed (#910).
+            raise _FileListError(
+                collected, f"git could not list files in {directory}: " + "; ".join(unlisted)
+            )
+        return collected
 
     def _collect_files_fallback(self, directory: Path) -> list[Path]:
         """Fallback file collection using os.walk with early directory pruning.

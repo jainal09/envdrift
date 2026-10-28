@@ -233,17 +233,12 @@ class TestNativeScannerInternals:
         assert untracked.resolve() in finding_paths
         assert oversized.resolve() not in finding_paths
 
-    @pytest.mark.skipif(sys.platform == "win32", reason="the stand-in for git is a shell script")
-    @pytest.mark.xfail(
-        strict=False,
-        reason="untracked files drop out of the scan when git cannot list them (see #910)",
-    )
-    def test_untracked_files_are_not_dropped_when_git_cannot_list_them(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ):
-        """A secret in an untracked file is reported, or the scan fails, if git ls-files fails.
+    @staticmethod
+    def _repo_whose_git_fails(tmp_path: Path, monkeypatch, *, failing: str) -> Path:
+        """A repository, and a stand-in for git first on PATH that fails some of its listings.
 
-        The stand-in for git fails ``git ls-files --others``, as a timeout would, and hands every
+        ``failing`` is "untracked" (``git ls-files --others`` without ``--ignored``) or
+        "ignored" (with it). The stand-in fails those calls, as a timeout would, and hands every
         other call to the real git.
         """
         import shutil
@@ -254,23 +249,62 @@ class TestNativeScannerInternals:
         repo = tmp_path / "repo"
         repo.mkdir()
         subprocess.run([real_git, "init", "-q"], cwd=repo, check=True)
-        untracked = repo / "config.txt"
-        untracked.write_text("GITHUB_TOKEN=ghp_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\n")
         bin_dir = tmp_path / "bin"
         bin_dir.mkdir()
         git = bin_dir / "git"
         git.write_text(
             "#!/bin/sh\n"
-            'for a in "$@"; do [ "$a" = "--others" ] && exit 128; done\n'
+            "others=0; ignored=0\n"
+            'for a in "$@"; do\n'
+            '  [ "$a" = "--others" ] && others=1\n'
+            '  [ "$a" = "--ignored" ] && ignored=1\n'
+            "done\n"
+            f"if [ $others = 1 ] && [ $ignored = {int(failing == 'ignored')} ]; then\n"
+            '  echo "fatal: simulated failure" >&2; exit 128\n'
+            "fi\n"
             f'exec "{real_git}" "$@"\n'
         )
         git.chmod(0o755)
         monkeypatch.setenv("PATH", f"{bin_dir}{os.pathsep}{os.environ['PATH']}")
+        return repo
+
+    @pytest.mark.skipif(sys.platform == "win32", reason="the stand-in for git is a shell script")
+    @pytest.mark.parametrize(
+        ("failing", "unlisted"),
+        [("untracked", "the untracked files"), ("ignored", "the ignored .env files")],
+    )
+    def test_files_git_cannot_list_fail_the_scan(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, failing: str, unlisted: str
+    ):
+        """The files git did list are scanned, and the scan fails for the rest (#910).
+
+        A secret in a file git did not list used to pass the scan without a word.
+        """
+        repo = self._repo_whose_git_fails(tmp_path, monkeypatch, failing=failing)
+        untracked = repo / "config.txt"
+        untracked.write_text("GITHUB_TOKEN=ghp_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\n")
 
         result = NativeScanner().scan([repo])
 
+        assert result.error == (
+            f"git could not list files in {repo.resolve()}: {unlisted}: fatal: simulated failure"
+        )
         reported = {finding.file_path.resolve() for finding in result.findings}
-        assert untracked.resolve() in reported or result.error is not None
+        if failing == "ignored":
+            assert untracked.resolve() in reported
+
+    @pytest.mark.skipif(sys.platform == "win32", reason="the stand-in for git is a shell script")
+    def test_guard_does_not_pass_files_git_cannot_list(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        """A clean scan of what git listed is no pass when git could not list the rest (#910)."""
+        repo = self._repo_whose_git_fails(tmp_path, monkeypatch, failing="untracked")
+        (repo / "config.txt").write_text("GITHUB_TOKEN=ghp_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\n")
+
+        result = ScanEngine(GuardConfig(use_gitleaks=False)).scan([repo])
+
+        assert result.exit_code == 5
+        assert [r.error is not None for r in result.results] == [True]
 
     def test_collect_files_includes_gitignored_mapped_env_file(self, tmp_path: Path):
         """A gitignored custom env filename from vault.sync must still be collected."""
