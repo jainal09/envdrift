@@ -226,7 +226,7 @@ dev = [
 # newest release), accepts only 7.2-7.6 and 2025-07-01 and rejects 2026-04-01
 # with HTTP 400 before any handler runs, failing every SDK-backed Azure test.
 # 4.11.3 carries the same challenge-auth security fixes as 4.12.0.
-# Remove this together with the Lowkey Vault bump that adds 2026-04-01 support;
+# Remove this together with the Lowkey Vault bump that adds 2026-04-01 support (#904);
 # TestAzureEmulatorApiVersion in tests/integration/test_azure_integration.py
 # fails first (naming the version) if the SDK default and the emulator diverge.
 constraint-dependencies = ["azure-keyvault-secrets<4.12"]

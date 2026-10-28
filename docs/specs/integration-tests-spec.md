@@ -177,7 +177,7 @@ services:
 - Compatible with Azure SDK clients (7.3.0+ supports the SDK's `2025-07-01` API version).
   No release up to 7.3.127 accepts `2026-04-01`, the default from azure-keyvault-secrets
   4.12.0, so `[tool.uv] constraint-dependencies` in `pyproject.toml` holds the locked SDK
-  below 4.12 until a Lowkey bump adds it. `TestAzureEmulatorApiVersion` fails first,
+  below 4.12 until a Lowkey bump adds it (#904). `TestAzureEmulatorApiVersion` fails first,
   naming the version, if the SDK default and the emulator diverge
 - Some encryption algorithms not supported (acceptable for secrets testing)
 - Real-backend Azure tests fail loudly when the running emulator cannot be driven;
