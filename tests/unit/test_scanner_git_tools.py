@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import subprocess
+import sys
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -447,6 +448,30 @@ class TestGitSecretsInstalledBinary:
         with patch("envdrift.scanner.git_secrets.get_venv_bin_dir", return_value=tmp_path):
             assert _installed_binary() is None
 
+    @pytest.mark.skipif(sys.platform == "win32", reason="~/.local/bin is a POSIX install directory")
+    def test_a_lookup_does_not_create_the_install_directory(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Only an install creates ~/.local/bin: looking for git-secrets there does not."""
+        monkeypatch.delenv("VIRTUAL_ENV", raising=False)
+        monkeypatch.setenv("HOME", str(tmp_path))
+        assert _installed_binary() is None
+        assert not (tmp_path / ".local").exists()
+
+    @pytest.mark.skipif(sys.platform == "win32", reason="~/.local/bin is a POSIX install directory")
+    def test_an_install_directory_it_cannot_look_in_has_no_installed_binary(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """An OSError while looking in the install directory means no binary there, not a crash.
+
+        The home directory's name is too long for the filesystem, so looking in it fails with
+        ENAMETOOLONG: like a home directory the user may not read, it is neither missing nor a
+        file. The lookup used to create ~/.local/bin and raised that error out of is_installed().
+        """
+        monkeypatch.delenv("VIRTUAL_ENV", raising=False)
+        monkeypatch.setenv("HOME", str(tmp_path / ("x" * 300)))
+        assert _installed_binary() is None
+
 
 class TestGitSecretsParseOutput:
     """Tests for git-secrets output parsing."""
@@ -861,9 +886,12 @@ class TestGitSecretsInstallerPaths:
         assert make.args[0][:2] == ["make", "install"]
         assert make.kwargs["cwd"] == repo
 
-    @pytest.mark.parametrize("pin", ["", "master", "1.3.0", "7d6b970"])
-    def test_install_from_source_refuses_a_pin_that_is_not_a_commit(self, pin: str) -> None:
-        """Only a full commit ID pins the install: a branch or tag name can move."""
+    @pytest.mark.parametrize("pin", ["", "master", "1.3.0", "7d6b970", None, 123])
+    def test_install_from_source_refuses_a_pin_that_is_not_a_commit(self, pin: object) -> None:
+        """Only a full commit ID pins the install: a branch or tag name can move.
+
+        A pin that is not a string fails the install too, rather than raising a TypeError.
+        """
         with (
             patch("shutil.which", side_effect=lambda name: f"/usr/bin/{name}"),
             patch("subprocess.run") as mock_run,
