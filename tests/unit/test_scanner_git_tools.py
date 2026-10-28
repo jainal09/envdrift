@@ -436,6 +436,19 @@ class TestGitSecretsInstalledBinary:
             assert scanner._find_binary() == installed
         mock_run.assert_not_called()
 
+    def test_install_finds_an_install_that_is_not_on_path(self, tmp_path: Path) -> None:
+        """The installer does not clone and build again over the git-secrets it put there."""
+        installed = tmp_path / "git-secrets"
+        installed.touch()
+        with (
+            patch("shutil.which", return_value=None),
+            patch("envdrift.scanner.git_secrets.get_venv_bin_dir", return_value=tmp_path),
+            patch("platform.system", return_value="Linux"),
+            patch("subprocess.run") as mock_run,
+        ):
+            assert GitSecretsInstaller().install() == installed
+        mock_run.assert_not_called()
+
     def test_no_install_directory_means_no_installed_binary(self) -> None:
         """Windows without a venv has no install directory: the lookup moves on."""
         with patch(

@@ -267,11 +267,11 @@ class GitSecretsInstaller:
         Raises:
             GitSecretsInstallError: If installation fails.
         """
-        # Check if already installed
-        existing = shutil.which("git-secrets")
-        if existing and not force:
+        # Check if already installed: on PATH, or where this installer puts it
+        existing = _existing_binary()
+        if existing is not None and not force:
             self.progress("git-secrets already installed")
-            return Path(existing)
+            return existing
 
         system = platform.system()
 
