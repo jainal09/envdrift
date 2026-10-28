@@ -20,7 +20,7 @@ services:
     # Hobby exposes kms, lambda, s3, secretsmanager and sts, so keep SERVICES
     # within that set (tests/unit/test_dev_stack_hygiene.py enforces it) or the
     # stack would need a paid plan.
-    image: localstack/localstack:2026.09.1  # Keep in sync with .github/workflows/integration-tests.yml
+    image: localstack/localstack:2026.10.4  # Keep in sync with .github/workflows/integration-tests.yml
     ports:
       - "4566:4566"
     environment:
@@ -32,7 +32,21 @@ services:
       - DEBUG=0
       - EAGER_SERVICE_LOADING=1
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:4566/_localstack/health"]
+      # The image ships no curl since 2026.10 (it is purged after fetching
+      # Node.js), so a curl probe can never pass and `--wait` fails with the
+      # container "unhealthy". Probe with python3, as the image's own
+      # HEALTHCHECK does: urlopen raises on a non-2xx status, so this fails
+      # like `curl -f`, and ProxyHandler({}) ignores any proxy variables
+      # Docker injects. Keep identical to integration-tests.yml
+      # (tests/unit/test_dev_stack_hygiene.py enforces it).
+      test:
+        [
+          "CMD",
+          "python3",
+          "-c",
+          "import sys, urllib.request as u; u.build_opener(u.ProxyHandler({})).open(sys.argv[1], timeout=2)",
+          "http://localhost:4566/_localstack/health",
+        ]
       interval: 5s
       timeout: 5s
       # Matches the CI service-container window (integration-tests.yml). The
@@ -43,7 +57,7 @@ services:
       start_period: 30s
 
   vault:
-    image: hashicorp/vault:2.1.2  # Keep in sync with .github/workflows/integration-tests.yml
+    image: hashicorp/vault:2.2.1  # Keep in sync with .github/workflows/integration-tests.yml
     # Match integration-tests.yml (`--user root`) so the setcap/IPC_LOCK
     # behavior is identical between the local compose stack and CI.
     user: root
@@ -68,8 +82,10 @@ services:
 
   lowkey-vault:
     # 7.3.0+ is required: older images reject the api-version (2025-07-01)
-    # sent by the azure-keyvault-secrets SDK with HTTP 400.
-    image: nagyesta/lowkey-vault:7.3.112  # Keep in sync with .github/workflows/integration-tests.yml
+    # sent by the azure-keyvault-secrets SDK with HTTP 400. 7.3.127 and older
+    # also reject 2026-04-01 (the SDK default from 4.12.0), so pyproject.toml
+    # [tool.uv] holds the SDK below 4.12: drop that in the bump adding 2026-04-01 (#904).
+    image: nagyesta/lowkey-vault:7.3.127  # Keep in sync with .github/workflows/integration-tests.yml
     ports:
       - "8443:8443"
       # HTTP port serving the built-in managed-identity token stub

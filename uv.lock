@@ -6,6 +6,9 @@ resolution-markers = [
     "python_full_version < '3.14'",
 ]
 
+[manifest]
+constraints = [{ name = "azure-keyvault-secrets", specifier = "<4.12" }]
+
 [[package]]
 name = "annotated-doc"
 version = "0.0.5"

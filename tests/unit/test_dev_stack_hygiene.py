@@ -22,11 +22,21 @@ behavior under test.
 
 from __future__ import annotations
 
+import contextlib
 import json
+import os
 import re
+import shlex
+import socket
+import subprocess
+import sys
+import threading
+from collections.abc import Iterator
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
 
+import pytest
 import yaml
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -456,3 +466,174 @@ def test_literal_token_matcher_actually_matches_a_token() -> None:
         )
     # ...and it must not fire on the legitimate interpolated form.
     assert not _LITERAL_TOKEN.search("- LOCALSTACK_AUTH_TOKEN=${LOCALSTACK_AUTH_TOKEN:?msg}")
+
+
+# The endpoint both stacks' LocalStack health checks must probe: the gateway
+# port and health path, as seen from inside the container.
+_LOCALSTACK_HEALTH_URL = "http://localhost:4566/_localstack/health"
+
+
+def _healthcheck_argv(test: object) -> list[str]:
+    """The argv Docker runs for a compose ``healthcheck.test`` value.
+
+    ``["CMD", *argv]`` is exec form. ``["CMD-SHELL", cmd]`` and a bare string go
+    through ``/bin/sh -c``; ``shlex.split`` is that shell's word splitting for
+    the plain quoting a health command uses.
+    """
+    match test:
+        case str():
+            return shlex.split(test)
+        case ["CMD", *argv]:
+            return [str(arg) for arg in argv]
+        case ["CMD-SHELL", str(command)]:
+            return shlex.split(command)
+    raise AssertionError(f"unsupported compose healthcheck test: {test!r}")
+
+
+def _localstack_healthchecks() -> dict[str, list[str]]:
+    """The LocalStack health-check argv that each stack makes Docker run."""
+    compose = yaml.safe_load(_COMPOSE_PATH.read_text(encoding="utf-8"))
+    compose_test = compose["services"]["localstack"].get("healthcheck", {}).get("test")
+    assert compose_test, "tests/docker-compose.test.yml: localstack has no healthcheck test."
+
+    workflow = yaml.safe_load(_INTEGRATION_WORKFLOW_PATH.read_text(encoding="utf-8"))
+    options = workflow["jobs"]["integration-tests"]["services"]["localstack"].get("options", "")
+    # The runner hands `options` to `docker create`, which stores --health-cmd
+    # as CMD-SHELL: the value runs through /bin/sh -c inside the container.
+    tokens = shlex.split(options)
+    health_cmds = []
+    for index, token in enumerate(tokens):
+        if token.startswith("--health-cmd="):
+            health_cmds.append(token.partition("=")[2])
+        elif token == "--health-cmd" and index + 1 < len(tokens):
+            health_cmds.append(tokens[index + 1])
+    assert len(health_cmds) == 1, (
+        f"integration-tests.yml: expected one localstack --health-cmd, got {health_cmds}."
+    )
+    return {
+        "tests/docker-compose.test.yml": _healthcheck_argv(compose_test),
+        "integration-tests.yml": shlex.split(health_cmds[0]),
+    }
+
+
+def test_localstack_healthcheck_uses_python3_not_curl() -> None:
+    """The LocalStack health check must run python3: the image has no curl.
+
+    Since 2026.10.0 the localstack/localstack image installs curl only to
+    download Node.js and purges it in the same layer (there is no wget
+    either), so the old ``curl -f .../_localstack/health`` probe exits 127
+    ("curl: not found") on every attempt. The service container never turns
+    healthy and all four Integration Tests jobs die at "Initialize containers"
+    although LocalStack logs "Ready." (Renovate's 2026.09.1 -> 2026.10.4 bump,
+    PR #883). The image's own HEALTHCHECK moved to python3 in the same
+    release; python3 is the interpreter LocalStack itself runs on.
+    """
+    for source, argv in _localstack_healthchecks().items():
+        assert argv[:2] == ["python3", "-c"], (
+            f"{source}: the localstack health check runs {argv[:2]}, but the "
+            "LocalStack image ships no curl or wget since 2026.10. Probe with "
+            "`python3 -c`, as the image's own HEALTHCHECK does."
+        )
+        assert argv[-1] == _LOCALSTACK_HEALTH_URL, (
+            f"{source}: the localstack health check must end with the URL it "
+            f"probes, {_LOCALSTACK_HEALTH_URL} (got {argv[-1]!r})."
+        )
+
+
+def test_localstack_healthcheck_is_identical_in_both_stacks() -> None:
+    """Compose and CI must probe LocalStack with the same command (#500 parity).
+
+    CI only ever runs the workflow's copy; the compose copy runs only under
+    ``make test-integration-up`` (``--wait``). A probe fixed in one file and
+    not the other leaves the second broken with nothing to flag it.
+    """
+    checks = _localstack_healthchecks()
+    assert len({tuple(argv) for argv in checks.values()}) == 1, (
+        f"The localstack health checks differ between the stacks: {checks}"
+    )
+
+
+@contextlib.contextmanager
+def _health_endpoint(status: int) -> Iterator[str]:
+    """Serve ``status`` for /_localstack/health on an ephemeral localhost port."""
+
+    class Handler(BaseHTTPRequestHandler):
+        def do_GET(self) -> None:  # http.server handler API name
+            body = b'{"services": {"secretsmanager": "running"}}'
+            self.send_response(status if self.path == "/_localstack/health" else 404)
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, format: str, *args: object) -> None:
+            pass
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        yield f"http://127.0.0.1:{server.server_port}/_localstack/health"
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+        server.server_close()
+
+
+def _unused_local_port() -> int:
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        sock.bind(("127.0.0.1", 0))
+        return sock.getsockname()[1]
+
+
+def _run_localstack_probes(url: str) -> dict[str, subprocess.CompletedProcess[str]]:
+    """Run each stack's committed LocalStack probe against ``url``.
+
+    Only the interpreter (the host may have no ``python3`` on PATH) and the
+    target URL are swapped. A dead HTTP proxy is configured and no_proxy is
+    cleared: Docker can inject proxy variables into containers, and the probe
+    must still reach the local gateway directly.
+    """
+    dead_proxy = f"http://127.0.0.1:{_unused_local_port()}"
+    env = {
+        key: value
+        for key, value in os.environ.items()
+        if key.lower() not in {"http_proxy", "https_proxy", "all_proxy", "no_proxy"}
+    }
+    env["HTTP_PROXY"] = env["HTTPS_PROXY"] = dead_proxy
+    results = {}
+    for source, argv in _localstack_healthchecks().items():
+        assert argv[:2] == ["python3", "-c"] and argv[-1] == _LOCALSTACK_HEALTH_URL, (
+            f"{source}: not a `python3 -c <code> {_LOCALSTACK_HEALTH_URL}` probe: {argv}"
+        )
+        results[source] = subprocess.run(
+            [sys.executable, *argv[1:-1], url],
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=60,
+            check=False,
+        )
+    return results
+
+
+@pytest.mark.parametrize(("status", "healthy"), [(200, True), (503, False)])
+def test_localstack_probe_passes_only_on_a_2xx_health_response(status: int, healthy: bool) -> None:
+    """The probe must fail closed like ``curl -f`` did: healthy on 2xx only.
+
+    A probe that cannot fail (one ending in ``|| exit 0``, say) would let CI
+    run the suite against a LocalStack that never came up.
+    """
+    with _health_endpoint(status) as url:
+        results = _run_localstack_probes(url)
+    for source, result in results.items():
+        assert (result.returncode == 0) is healthy, (
+            f"{source}: probe exited {result.returncode} for HTTP {status} "
+            f"(expected {'success' if healthy else 'failure'}): {result.stderr[-500:]}"
+        )
+
+
+def test_localstack_probe_fails_when_nothing_listens() -> None:
+    """Before the gateway binds :4566 the probe must report unhealthy."""
+    url = f"http://127.0.0.1:{_unused_local_port()}/_localstack/health"
+    for source, result in _run_localstack_probes(url).items():
+        assert result.returncode != 0, f"{source}: probe passed with nothing listening."

@@ -198,13 +198,46 @@ def lowkey_vault_client(lowkey_vault_endpoint: str, lowkey_vault_ca_bundle: Path
       (#484). The dummy bearer is not a credential (built by concatenation to
       stay clear of secret-literal push protection).
     """
+    return _lowkey_session(lowkey_vault_ca_bundle), lowkey_vault_endpoint
+
+
+def _lowkey_session(ca_bundle: Path):
+    """A requests session for the local Lowkey Vault, whatever the environment says.
+
+    ``trust_env`` is off. With it on, requests replaces ``session.verify`` with
+    ``REQUESTS_CA_BUNDLE`` or ``CURL_CA_BUNDLE`` for every request that passes no
+    ``verify`` of its own, and sends ``localhost`` through ``HTTPS_PROXY`` unless
+    ``NO_PROXY`` exempts it. A machine that exports either then failed every seed and
+    REST call against the emulator's certificate.
+    """
     import requests
 
     session = requests.Session()
-    session.verify = str(lowkey_vault_ca_bundle)
+    session.trust_env = False
+    session.verify = str(ca_bundle)
     session.headers["Authorization"] = "Bearer " + "lowkey-vault-" + "integration-tests"
+    return session
 
-    return session, lowkey_vault_endpoint
+
+def test_lowkey_session_ignores_the_environment_ca_bundle_and_proxy(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The emulator's certificate is trusted even when the environment names another CA."""
+    lowkey_ca = tmp_path / "lowkey-ca.pem"
+    other_ca = str(tmp_path / "corporate-ca.pem")
+    monkeypatch.setenv("REQUESTS_CA_BUNDLE", other_ca)
+    monkeypatch.setenv("CURL_CA_BUNDLE", other_ca)
+    monkeypatch.setenv("HTTPS_PROXY", "http://127.0.0.1:9")
+    for name in ("NO_PROXY", "no_proxy"):
+        monkeypatch.delenv(name, raising=False)
+
+    session = _lowkey_session(lowkey_ca)
+    settings = session.merge_environment_settings(
+        "https://localhost:8443/secrets", {}, None, None, None
+    )
+
+    assert settings["verify"] == str(lowkey_ca)
+    assert not settings["proxies"]
 
 
 @pytest.fixture(scope="module")
@@ -237,6 +270,44 @@ def populated_azure_secrets(lowkey_vault_client) -> Generator[dict[str, str], No
     # Cleanup - delete secrets
     for name in secrets:
         _delete_secret(session, endpoint, name)
+
+
+# --- Emulator precondition: the SDK's default API version ------------------
+
+
+class TestAzureEmulatorApiVersion:
+    """Lowkey Vault must accept the API version the locked Azure SDK sends by default.
+
+    Regression for the #884 lock refresh: azure-keyvault-secrets 4.12.0
+    defaults to Key Vault API version ``2026-04-01``, which Lowkey Vault 7.3.x
+    rejects with a bare ``400 Bad Request`` before any handler runs. Every
+    SDK-backed test then failed with an opaque ``Operation returned an invalid
+    status`` while the direct REST tests below (pinned to ``7.4``) kept
+    passing. This runs before them so the lane names the real cause.
+    """
+
+    def test_emulator_accepts_sdk_default_api_version(self, lowkey_vault_client):
+        from azure.identity import DefaultAzureCredential
+        from azure.keyvault.secrets import SecretClient
+
+        session, endpoint = lowkey_vault_client
+        # Constructing the credential and client sends no request; it only
+        # resolves the installed SDK's default service API version.
+        with (
+            DefaultAzureCredential() as credential,
+            SecretClient(vault_url=endpoint, credential=credential) as client,
+        ):
+            api_version = client.api_version
+
+        response = session.get(f"{endpoint}/secrets", params={"api-version": api_version})
+
+        assert response.status_code == 200, (
+            "Lowkey Vault rejected the azure-keyvault-secrets default API version "
+            f"{api_version!r}: HTTP {response.status_code} {response.text[:200]}. "
+            "Bump the Lowkey Vault image to a release that supports it, or hold the "
+            "SDK below the release that made it the default via [tool.uv] "
+            "constraint-dependencies in pyproject.toml."
+        )
 
 
 # --- Direct Client Tests ---
