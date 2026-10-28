@@ -511,10 +511,11 @@ def test_talisman_report_that_cannot_be_parsed_fails_the_scan(
 
 @pytest.mark.parametrize(
     "content",
-    [b"null", b'{"results": {}}', b'{"results": false}'],
-    ids=["not-an-object", "results-empty-object", "results-false"],
+    [b"null", b'{"results": {}}', b'{"results": false}', b"{}", b'{"summary": {"types": {}}}'],
+    ids=["not-an-object", "results-empty-object", "results-false", "empty-object", "no-results"],
 )
 def test_talisman_report_of_the_wrong_shape_fails_the_scan(content: bytes, tmp_path: Path) -> None:
+    """Talisman always writes a ``results`` list, empty when it finds nothing."""
     scanner, binary = _with_binary(TalismanScanner, tmp_path)
     (target,) = _directories(tmp_path, "project")
 

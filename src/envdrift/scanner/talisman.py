@@ -125,10 +125,10 @@ def _load_report(report_dir: Path) -> tuple[dict[str, Any] | None, bool]:
     Talisman versions write the report in different places
     (``talisman_reports/data/report.json`` today), and the first location that holds a
     report that parses is used. The report is ``None`` when no location holds one. A
-    report that is not a JSON object with a ``results`` list (a partly written file, or a
-    message where the report should be) cannot be parsed; when it is the only one, the
-    findings are unknown, not absent (#874). Talisman writes UTF-8 whatever the platform's
-    encoding is (#873).
+    report is a JSON object with a ``results`` list, empty when nothing was found. Anything
+    else (a partly written file, a message where the report should be, an object without
+    that list) cannot be parsed; when it is the only one, the findings are unknown, not
+    absent (#874). Talisman writes UTF-8 whatever the platform's encoding is (#873).
     """
     unreadable = False
     for report_file in (
@@ -142,7 +142,7 @@ def _load_report(report_dir: Path) -> tuple[dict[str, Any] | None, bool]:
             report = json.loads(report_file.read_text(encoding="utf-8"))
         except (json.JSONDecodeError, UnicodeDecodeError):
             report = None
-        if isinstance(report, dict) and isinstance(report.get("results", []), list):
+        if isinstance(report, dict) and isinstance(report.get("results"), list):
             return report, False
         unreadable = True
     return None, unreadable
