@@ -692,6 +692,7 @@ def test_trufflehog_scans_the_history_of_a_repository_whose_path_a_url_reserves(
     tokens = _github_token_findings(result)
     assert tokens, "the committed token was not reported"
     assert {f.file_path.resolve() for f in tokens} == {(repo / "app.env").resolve()}
+    assert all(f.commit_sha for f in tokens)
 
 
 @requires_trufflehog

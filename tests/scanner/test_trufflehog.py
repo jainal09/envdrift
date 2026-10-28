@@ -22,6 +22,7 @@ from envdrift.scanner.trufflehog import (
     TrufflehogNotFoundError,
     TrufflehogScanner,
     _get_trufflehog_version,
+    _git_uri,
     get_platform_info,
     get_trufflehog_path,
     get_venv_bin_dir,
@@ -581,7 +582,7 @@ class TestTrufflehogScanExecution:
             mock_scanner.scan([tmp_path / "sub"], include_git_history=True)
 
         call_args = mock_run.call_args[0][0]
-        assert call_args[1:3] == ["git", "file://" + tmp_path.resolve().as_posix()]
+        assert call_args[1:3] == ["git", _git_uri(tmp_path.resolve())]
 
     @pytest.mark.parametrize("include_git_history", [False, True], ids=["filesystem", "git"])
     def test_scan_never_runs_the_self_updater(
