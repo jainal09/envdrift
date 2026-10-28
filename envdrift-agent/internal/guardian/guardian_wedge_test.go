@@ -256,17 +256,23 @@ func TestGuardian_SlowEncryptEventsStillProcessed(t *testing.T) {
 	cancel()
 	select {
 	case err := <-done:
-		// A cancelled Start is the clean shutdown path and must return nil (the
-		// contract TestGuardian_SlowEncryptShutdownStaysResponsive asserts).
-		// Errorf, not Fatalf, so the event-tracking verdict below still reports.
-		if err != nil {
-			t.Errorf("Start returned error on shutdown: %v", err)
-		}
+		expectCleanShutdown(t, err)
 	case <-time.After(5 * time.Second):
 		t.Log("Start() also failed to shut down within 5s")
 	}
 
 	if !tracked {
 		t.Fatal("file event was not processed while an encrypt subprocess was in flight (#494 wedge)")
+	}
+}
+
+// expectCleanShutdown reports an error that Start returned after its context was
+// cancelled: that is the clean shutdown path, and it must return nil (the contract
+// TestGuardian_SlowEncryptShutdownStaysResponsive asserts). Errorf, not Fatalf, so
+// the caller's own verdict still reports.
+func expectCleanShutdown(t *testing.T, err error) {
+	t.Helper()
+	if err != nil {
+		t.Errorf("Start returned error on shutdown: %v", err)
 	}
 }

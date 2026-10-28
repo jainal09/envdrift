@@ -480,12 +480,13 @@ def _healthcheck_argv(test: object) -> list[str]:
     through ``/bin/sh -c``; ``shlex.split`` is that shell's word splitting for
     the plain quoting a health command uses.
     """
-    if isinstance(test, str):
-        return shlex.split(test)
-    if isinstance(test, list) and test and test[0] == "CMD":
-        return [str(arg) for arg in test[1:]]
-    if isinstance(test, list) and len(test) == 2 and test[0] == "CMD-SHELL":
-        return shlex.split(str(test[1]))
+    match test:
+        case str():
+            return shlex.split(test)
+        case ["CMD", *argv]:
+            return [str(arg) for arg in argv]
+        case ["CMD-SHELL", str(command)]:
+            return shlex.split(command)
     raise AssertionError(f"unsupported compose healthcheck test: {test!r}")
 
 
