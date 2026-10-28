@@ -16,8 +16,20 @@ from envdrift.scanner.git_secrets import (
     GitSecretsNotFoundError,
     GitSecretsScanner,
     _get_git_secrets_commit,
+    _installed_binary,
     get_venv_bin_dir,
 )
+
+
+@pytest.fixture
+def no_installed_git_secrets():
+    """Keep a git-secrets in this machine's install directory out of a test.
+
+    ``_find_binary`` also looks where the installer puts git-secrets (#908), so on a machine whose
+    venv holds one, a test that mocks "not installed" would find it.
+    """
+    with patch("envdrift.scanner.git_secrets._installed_binary", return_value=None):
+        yield
 
 
 class TestGetVenvBinDir:
@@ -82,6 +94,7 @@ class TestGitSecretsInstaller:
                     assert result == Path("/usr/local/bin/git-secrets")
 
 
+@pytest.mark.usefixtures("no_installed_git_secrets")
 class TestGitSecretsScanner:
     """Tests for GitSecretsScanner."""
 
@@ -378,15 +391,22 @@ class TestGitSecretsScanner:
             result = scanner.install()
             assert result == Path("/installed/git-secrets")
 
-    def test_run_git_secrets_uses_standalone_command(self) -> None:
-        """Test _run_git_secrets uses standalone command when available."""
-        with patch("shutil.which", return_value="/usr/local/bin/git-secrets"):
-            with patch("subprocess.run") as mock_run:
-                mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
-                scanner = GitSecretsScanner(auto_install=False)
-                scanner._run_git_secrets(["--list"], Path("/tmp"))
-                mock_run.assert_called_once()
-                assert mock_run.call_args[0][0][0] == "/usr/local/bin/git-secrets"
+    def test_run_git_secrets_runs_the_binary_it_found(self, tmp_path: Path) -> None:
+        """The binary _find_binary found runs, its directory first on the child's PATH (#908).
+
+        PATH need not hold it, and git-secrets runs its `git secrets ...` providers through git.
+        """
+        binary = tmp_path / "bin" / "git-secrets"
+        binary.parent.mkdir()
+        binary.touch()
+        with patch("subprocess.run") as mock_run:
+            mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
+            scanner = GitSecretsScanner(auto_install=False)
+            scanner._binary_path = binary
+            scanner._run_git_secrets(["--list"], tmp_path)
+
+        assert mock_run.call_args[0][0] == [str(binary), "--list"]
+        assert mock_run.call_args.kwargs["env"]["PATH"].split(os.pathsep)[0] == str(binary.parent)
 
     def test_run_git_secrets_falls_back_to_git_subcommand(self) -> None:
         """Test _run_git_secrets falls back to git subcommand."""
@@ -397,6 +417,35 @@ class TestGitSecretsScanner:
             mock_run.assert_called_once()
             assert mock_run.call_args[0][0][0] == "git"
             assert mock_run.call_args[0][0][1] == "secrets"
+
+
+class TestGitSecretsInstalledBinary:
+    """A git-secrets in the installer's directory is found though PATH does not hold it (#908)."""
+
+    def test_find_binary_finds_an_install_that_is_not_on_path(self, tmp_path: Path) -> None:
+        """No `git secrets --list` probe and no second install: the installed binary is used."""
+        installed = tmp_path / "git-secrets"
+        installed.touch()
+        with (
+            patch("shutil.which", return_value=None),
+            patch("envdrift.scanner.git_secrets.get_venv_bin_dir", return_value=tmp_path),
+            patch("subprocess.run") as mock_run,
+        ):
+            scanner = GitSecretsScanner(auto_install=True)
+            assert scanner._find_binary() == installed
+        mock_run.assert_not_called()
+
+    def test_no_install_directory_means_no_installed_binary(self) -> None:
+        """Windows without a venv has no install directory: the lookup moves on."""
+        with patch(
+            "envdrift.scanner.git_secrets.get_venv_bin_dir",
+            side_effect=RuntimeError("Cannot find suitable bin directory for installation"),
+        ):
+            assert _installed_binary() is None
+
+    def test_an_empty_install_directory_has_no_installed_binary(self, tmp_path: Path) -> None:
+        with patch("envdrift.scanner.git_secrets.get_venv_bin_dir", return_value=tmp_path):
+            assert _installed_binary() is None
 
 
 class TestGitSecretsParseOutput:
@@ -830,6 +879,7 @@ class TestGitSecretsInstallerPaths:
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.usefixtures("no_installed_git_secrets")
 class TestGitSecretsScannerFindBinaryExtra:
     """Extra _find_binary paths not covered by the basic tests."""
 

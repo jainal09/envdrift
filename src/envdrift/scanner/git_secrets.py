@@ -170,6 +170,15 @@ def _get_git_secrets_commit() -> str:
     return _load_constants().get("git_secrets_commit", "")
 
 
+def _installed_binary() -> Path | None:
+    """The git-secrets the installer put in its target directory, if it is there."""
+    try:
+        candidate = get_venv_bin_dir() / "git-secrets"
+    except RuntimeError:
+        return None
+    return candidate if candidate.is_file() else None
+
+
 def get_venv_bin_dir() -> Path:
     """Get the virtual environment's bin directory.
 
@@ -447,6 +456,12 @@ class GitSecretsScanner(ScannerBackend):
             self._binary_path = Path(system_path)
             return self._binary_path
 
+        # Check where the installer puts it, which need not be on PATH (#908)
+        installed = _installed_binary()
+        if installed is not None:
+            self._binary_path = installed
+            return installed
+
         # Check git subcommand (git secrets)
         try:
             result = run_tool(
@@ -510,28 +525,25 @@ class GitSecretsScanner(ScannerBackend):
         Returns:
             CompletedProcess object.
         """
-        # Try as standalone command first
-        git_secrets_path = shutil.which("git-secrets")
-        if git_secrets_path:
-            return run_tool(
-                [git_secrets_path, *args],
-                capture_output=True,
-                text=True,
-                encoding="utf-8",
-                errors="replace",
-                timeout=300,
-                cwd=cwd,
-            )
-
-        # Fall back to git subcommand
+        binary = self._binary_path
+        if binary is not None and binary.is_absolute() and binary.is_file():
+            # The git-secrets _find_binary found or installed, on PATH or not (#908). Its
+            # directory goes on the child's PATH as well: git-secrets runs the providers
+            # registered as `git secrets ...` (the AWS one from --register-aws) through git.
+            path = os.pathsep.join(filter(None, [str(binary.parent), os.environ.get("PATH")]))
+            command, env = [str(binary), *args], {**os.environ, "PATH": path}
+        else:
+            # Fall back to git subcommand
+            command, env = ["git", "secrets", *args], None
         return run_tool(
-            ["git", "secrets", *args],
+            command,
             capture_output=True,
             text=True,
             encoding="utf-8",
             errors="replace",
             timeout=300,
             cwd=cwd,
+            env=env,
         )
 
     def scan(

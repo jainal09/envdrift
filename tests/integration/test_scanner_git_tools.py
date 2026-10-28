@@ -393,6 +393,45 @@ class TestGitSecretsRealBinary:
         assert result.error.startswith(f"git-secrets could not scan {work_dir}: fatal: ")
         assert result.findings == []
 
+    def test_an_installed_git_secrets_runs_though_path_does_not_hold_it(
+        self, scanner_test_env, monkeypatch
+    ):
+        """git-secrets in the installer's directory runs when no PATH entry holds it (#908).
+
+        It used to be looked up on PATH again for every command, so the scan fell back to
+        ``git secrets``, which git could not find, and reported a match it could not parse. Its
+        directory must also reach git-secrets' own PATH: the AWS provider that --register-aws
+        adds runs ``git secrets --aws-provider``, which supplies the keys in
+        ~/.aws/credentials. A file holding one of them in no assignment matches only through it.
+        """
+        tmp_path = scanner_test_env["tmp_path"]
+        venv_bin = tmp_path / "venv" / "bin"
+        venv_bin.mkdir(parents=True)
+        shutil.copy2(shutil.which("git-secrets") or "", venv_bin / "git-secrets")
+        monkeypatch.setenv("VIRTUAL_ENV", str(tmp_path / "venv"))
+        path_entries = os.environ["PATH"].split(os.pathsep)
+        monkeypatch.setenv(
+            "PATH",
+            os.pathsep.join(
+                entry for entry in path_entries if not Path(entry, "git-secrets").exists()
+            ),
+        )
+        assert shutil.which("git-secrets") is None
+        secret = "Zq8W7E6R5T4Y3U2I1O0P" + "aSdFgHjKlZxCvBnM5678"
+        home = tmp_path / "home"
+        (home / ".aws").mkdir(parents=True)
+        (home / ".aws" / "credentials").write_text(f"[default]\naws_secret_access_key = {secret}\n")
+        monkeypatch.setenv("HOME", str(home))
+        work_dir = scanner_test_env["work_dir"]
+        subprocess.run(["git", "init", "-q"], cwd=work_dir, check=True, capture_output=True)
+        (work_dir / "notes.txt").write_text(f"rotated to {secret} yesterday\n")
+
+        scanner = GitSecretsScanner(auto_install=False, register_aws=True)
+        result = scanner.scan([work_dir])
+
+        assert result.error is None, result.error
+        assert [finding.file_path.name for finding in result.findings] == ["notes.txt"]
+
 
 def _clone_upstream(dest: Path) -> None:
     """Clone the git-secrets repository; skip only when the network cannot be reached."""

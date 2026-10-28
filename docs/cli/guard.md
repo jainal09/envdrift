@@ -209,7 +209,10 @@ envdrift guard --git-secrets
 
 git-secrets publishes no release binaries. On Linux, auto-install clones its repository and builds the
 commit envdrift pins in `constants.json`, and fails when that commit cannot be checked out. On macOS it
-installs the Homebrew formula.
+installs the Homebrew formula. envdrift runs the git-secrets it installed, in the active venv or
+`~/.local/bin`, even when that directory is not on your `PATH`. Older releases did not find it there,
+so the scan failed with "git-secrets reported a match ... that envdrift cannot parse" and every run
+installed it again.
 
 ### `--talisman` / `--no-talisman`
 
