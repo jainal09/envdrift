@@ -198,6 +198,10 @@ git-secrets provides:
 envdrift guard --git-secrets
 ```
 
+git-secrets publishes no release binaries. On Linux, auto-install clones its repository and builds the
+commit envdrift pins in `constants.json`, and fails when that commit cannot be checked out. On macOS it
+installs the Homebrew formula.
+
 ### `--talisman` / `--no-talisman`
 
 Enable or disable Talisman scanner. Disabled by default.
@@ -412,6 +416,8 @@ Auto-installed scanner binaries are verified against the upstream-published
 SHA256 checksums before they are installed or executed; the install fails
 closed when the checksum is missing, unreachable, or mismatched. Set
 `ENVDRIFT_INSECURE_SKIP_CHECKSUM=1` to skip verification (unsafe).
+git-secrets, which publishes no binaries, is built on Linux from the commit
+pinned in `constants.json` instead (see `--git-secrets`).
 
 ### `--json`, `-j`
 

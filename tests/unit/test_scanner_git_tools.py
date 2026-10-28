@@ -15,6 +15,7 @@ from envdrift.scanner.git_secrets import (
     GitSecretsInstallError,
     GitSecretsNotFoundError,
     GitSecretsScanner,
+    _get_git_secrets_commit,
     get_venv_bin_dir,
 )
 
@@ -775,6 +776,53 @@ class TestGitSecretsInstallerPaths:
             installer = GitSecretsInstaller()
             with pytest.raises(GitSecretsInstallError, match="timed out"):
                 installer._install_from_source()
+
+    def test_install_from_source_checks_out_the_pinned_commit(self, tmp_path: Path) -> None:
+        """The source install builds the commit constants.json pins, not master (#902).
+
+        It cloned the default branch with ``--depth 1`` and installed whatever master held that
+        day. The real clone and build are in tests/integration/test_scanner_git_tools.py.
+        """
+        (tmp_path / "bin").mkdir()
+        (tmp_path / "bin" / "git-secrets").touch()
+        with (
+            patch("shutil.which", side_effect=lambda name: f"/usr/bin/{name}"),
+            patch("subprocess.run") as mock_run,
+            patch(
+                "envdrift.scanner.git_secrets.get_venv_bin_dir",
+                return_value=tmp_path / "bin",
+            ),
+        ):
+            mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
+            GitSecretsInstaller()._install_from_source()
+
+        clone, checkout, make = mock_run.call_args_list
+        repo = Path(clone.args[0][-1])
+        assert clone.args[0][:2] == ["git", "clone"]
+        assert "--depth" not in clone.args[0]
+        assert checkout.args[0] == [
+            "git",
+            "checkout",
+            "--quiet",
+            "--detach",
+            _get_git_secrets_commit(),
+        ]
+        assert checkout.kwargs["cwd"] == repo
+        assert checkout.kwargs["check"] is True
+        assert make.args[0][:2] == ["make", "install"]
+        assert make.kwargs["cwd"] == repo
+
+    @pytest.mark.parametrize("pin", ["", "master", "1.3.0", "7d6b970"])
+    def test_install_from_source_refuses_a_pin_that_is_not_a_commit(self, pin: str) -> None:
+        """Only a full commit ID pins the install: a branch or tag name can move."""
+        with (
+            patch("shutil.which", side_effect=lambda name: f"/usr/bin/{name}"),
+            patch("subprocess.run") as mock_run,
+            patch("envdrift.scanner.git_secrets._get_git_secrets_commit", return_value=pin),
+        ):
+            with pytest.raises(GitSecretsInstallError, match="which is not a commit ID"):
+                GitSecretsInstaller()._install_from_source()
+        mock_run.assert_not_called()
 
 
 # ---------------------------------------------------------------------------

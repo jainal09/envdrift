@@ -13,6 +13,7 @@ to make that class of silent non-coverage loud.
 from __future__ import annotations
 
 import json
+import os
 import re
 import shutil
 import subprocess
@@ -82,6 +83,56 @@ def test_every_versioned_tool_has_a_custom_manager() -> None:
         f"constants.json pins {missing} with no Renovate custom manager. "
         "Hardcoded versions must always be Renovate-managed."
     )
+
+
+def _digest_managers() -> list[dict[str, Any]]:
+    """Managers that keep a ``<tool>_commit`` pin at the head of a branch (git-refs)."""
+    return [
+        m
+        for m in _renovate_config().get("customManagers", [])
+        if m.get("datasourceTemplate") == "git-refs"
+    ]
+
+
+def test_every_pinned_commit_has_a_digest_manager() -> None:
+    """A ``<tool>_commit`` pin must be Renovate-managed like a version (#902).
+
+    Renovate updates a commit as the digest of a branch: the manager captures
+    ``currentDigest`` and names the branch in ``currentValueTemplate``. Without
+    the branch there is nothing to compare the digest with, and the pin freezes.
+    """
+    pinned = {key for key in _constants() if key.endswith("_commit")}
+    covered = {
+        key
+        for key in pinned
+        for m in _digest_managers()
+        for pattern in m.get("matchStrings", [])
+        if f'"{key}"' in pattern
+        and "(?<currentDigest>" in pattern
+        and m.get("currentValueTemplate")
+        and m.get("packageNameTemplate", "").startswith("https://")
+    }
+    missing = sorted(pinned - covered)
+    assert not missing, (
+        f"constants.json pins {missing} with no git-refs digest manager. "
+        "Hardcoded commits must always be Renovate-managed."
+    )
+
+
+def test_git_secrets_manager_tracks_the_repository_the_installer_clones() -> None:
+    """Renovate must watch the repository git-secrets is built from.
+
+    A manager on another repository would move the pin to commits the installer's
+    clone does not hold, and every source install would fail.
+    """
+    from envdrift.scanner.git_secrets import GitSecretsInstaller
+
+    managers = [
+        m for m in _digest_managers() if any("git_secrets_commit" in p for p in m["matchStrings"])
+    ]
+    assert [m["packageNameTemplate"] for m in managers] == [
+        GitSecretsInstaller.REPO_URL.removesuffix(".git")
+    ]
 
 
 # --- Renovate manager <-> upstream reality -----------------------------------
@@ -259,6 +310,34 @@ def test_every_manager_matches_a_real_upstream_tag() -> None:
             f"{len(tags)} most recent release tags (e.g. {tags[:3]}). Renovate "
             "cannot extract a version, so this pin is frozen with no diagnostic "
             "— exactly how infisical sat at 0.41.90 after the CLI moved repos."
+        )
+
+
+@pytest.mark.integration
+@pytest.mark.skipif(shutil.which("git") is None, reason="git not installed")
+def test_every_digest_manager_tracks_a_live_branch() -> None:
+    """The branch a digest manager follows must exist in the repository it names.
+
+    Renamed (``master`` to ``main``) or moved, the branch has no head for
+    Renovate to compare the pinned commit with, so the pin freezes with no
+    diagnostic, as the Infisical pin did. As in the test above, only an
+    unreachable network skips: a missing repository or branch fails.
+    """
+    for manager in _digest_managers():
+        url, branch = manager["packageNameTemplate"], manager["currentValueTemplate"]
+        result = subprocess.run(
+            ["git", "ls-remote", "--heads", url, f"refs/heads/{branch}"],
+            capture_output=True,
+            text=True,
+            timeout=60,
+            check=False,
+            env={**os.environ, "GIT_TERMINAL_PROMPT": "0"},
+        )
+        if result.returncode != 0 and "unable to access" in result.stderr:
+            pytest.skip(f"cannot reach {url}: {result.stderr.strip()[:160]}")
+        assert result.returncode == 0, f"cannot list {url}: {result.stderr.strip()[:160]}"
+        assert result.stdout.rstrip().endswith(f"\trefs/heads/{branch}"), (
+            f"{url} has no branch {branch!r}, so Renovate cannot update the pinned commit"
         )
 
 

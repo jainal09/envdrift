@@ -4,11 +4,13 @@ Tests for:
 - Scanner CLI flags (--git-secrets)
 - Scanner configuration via envdrift.toml
 - Scanner detection and findings on test data
+- The source install, at the commit pinned in constants.json
 """
 
 from __future__ import annotations
 
 import os
+import platform
 import shutil
 import subprocess
 import sys
@@ -18,7 +20,11 @@ from pathlib import Path
 import pytest
 
 from envdrift.scanner.base import FindingSeverity
-from envdrift.scanner.git_secrets import GitSecretsScanner
+from envdrift.scanner.git_secrets import (
+    GitSecretsInstaller,
+    GitSecretsScanner,
+    _get_git_secrets_commit,
+)
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 PYTHONPATH = str(REPO_ROOT / "src")
@@ -386,6 +392,74 @@ class TestGitSecretsRealBinary:
         assert result.error is not None
         assert result.error.startswith(f"git-secrets could not scan {work_dir}: fatal: ")
         assert result.findings == []
+
+
+def _clone_upstream(dest: Path) -> None:
+    """Clone the git-secrets repository; skip only when the network cannot be reached."""
+    result = subprocess.run(
+        ["git", "clone", "--quiet", GitSecretsInstaller.REPO_URL, str(dest)],
+        capture_output=True,
+        text=True,
+        timeout=120,
+        check=False,
+        env={**os.environ, "GIT_TERMINAL_PROMPT": "0"},
+    )
+    if result.returncode != 0 and "unable to access" in result.stderr:
+        pytest.skip(f"cannot reach {GitSecretsInstaller.REPO_URL}: {result.stderr.strip()[:160]}")
+    assert result.returncode == 0, f"cannot clone git-secrets: {result.stderr.strip()}"
+
+
+def _script_at(repo: Path, commit: str) -> bytes:
+    """The git-secrets script as it is at ``commit``."""
+    return subprocess.run(
+        ["git", "show", f"{commit}:git-secrets"], cwd=repo, capture_output=True, check=True
+    ).stdout
+
+
+@pytest.mark.integration
+@pytest.mark.skipif(
+    platform.system() != "Linux", reason="git-secrets is built from source on Linux"
+)
+@pytest.mark.skipif(shutil.which("make") is None, reason="make not installed")
+class TestGitSecretsSourceInstall:
+    """The real source install builds the commit pinned in constants.json (#902).
+
+    It used to clone master with ``--depth 1``, so what it installed changed with upstream.
+    """
+
+    def test_installs_the_pinned_commit(self, tmp_path, monkeypatch):
+        """The pinned commit exists upstream and is the script that gets installed."""
+        upstream = tmp_path / "upstream"
+        _clone_upstream(upstream)
+        monkeypatch.setenv("VIRTUAL_ENV", str(tmp_path / "venv"))
+
+        installed = GitSecretsInstaller().install(force=True)
+
+        assert installed == tmp_path / "venv" / "bin" / "git-secrets"
+        assert installed.read_bytes() == _script_at(upstream, _get_git_secrets_commit())
+
+    def test_installs_the_pinned_commit_not_master(self, tmp_path, monkeypatch):
+        """Pinned to an older commit, the install is that commit's script, not master's.
+
+        The commit of release 1.3.0 stands in for an older pin: its script differs from
+        master's, so an install of master cannot pass for it.
+        """
+        upstream = tmp_path / "upstream"
+        _clone_upstream(upstream)
+        older = subprocess.run(
+            ["git", "rev-parse", "1.3.0^{commit}"],
+            cwd=upstream,
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout.strip()
+        assert _script_at(upstream, older) != _script_at(upstream, "HEAD")
+        monkeypatch.setenv("VIRTUAL_ENV", str(tmp_path / "venv"))
+        monkeypatch.setattr("envdrift.scanner.git_secrets._get_git_secrets_commit", lambda: older)
+
+        installed = GitSecretsInstaller().install(force=True)
+
+        assert installed.read_bytes() == _script_at(upstream, older)
 
 
 @pytest.mark.integration

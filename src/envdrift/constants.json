@@ -36,6 +36,7 @@
     },
     "trufflehog_checksums_url": "https://github.com/trufflesecurity/trufflehog/releases/download/v{version}/trufflehog_{version}_checksums.txt",
     "detect_secrets_version": "1.5.0",
+    "git_secrets_commit": "7d6b970cbd3c216353cb22b383b70c150140662e",
     "talisman_version": "1.37.0",
     "talisman_download_urls": {
         "darwin_amd64": "https://github.com/thoughtworks/talisman/releases/download/v{version}/talisman_darwin_amd64",

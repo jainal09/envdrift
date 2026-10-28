@@ -21,6 +21,7 @@ See: https://github.com/awslabs/git-secrets
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 import platform
@@ -151,6 +152,24 @@ class GitSecretsError(Exception):
     pass
 
 
+# A full commit ID. git-secrets publishes no release binaries and its master branch moves, so
+# the installer checks out one commit (#902); a branch or tag name would install whatever it
+# points to on the day.
+_COMMIT_RE = re.compile(r"[0-9a-f]{40}")
+
+
+def _load_constants() -> dict:
+    """Load constants from the package's constants.json."""
+    constants_path = Path(__file__).parent.parent / "constants.json"
+    with open(constants_path) as f:
+        return json.load(f)
+
+
+def _get_git_secrets_commit() -> str:
+    """Get the pinned git-secrets commit from constants."""
+    return _load_constants().get("git_secrets_commit", "")
+
+
 def get_venv_bin_dir() -> Path:
     """Get the virtual environment's bin directory.
 
@@ -179,7 +198,7 @@ class GitSecretsInstaller:
 
     git-secrets is a shell script, so installation methods vary by platform:
     - macOS: Homebrew (brew install git-secrets)
-    - Linux: Clone repo and make install
+    - Linux: Clone repo, check out the commit pinned in constants.json, and make install
     - Windows: PowerShell script or manual
     """
 
@@ -269,7 +288,7 @@ class GitSecretsInstaller:
             raise GitSecretsInstallError(f"Homebrew installation failed: {e}") from e
 
     def _install_from_source(self) -> Path:
-        """Install from source on Linux."""
+        """Install from source on Linux, at the commit pinned in constants.json."""
         self.progress("Installing git-secrets from source...")
 
         # Check if git is available
@@ -280,6 +299,12 @@ class GitSecretsInstaller:
         if not shutil.which("make"):
             raise GitSecretsInstallError("make not found. Please install make first.")
 
+        commit = _get_git_secrets_commit()
+        if not _COMMIT_RE.fullmatch(commit):
+            raise GitSecretsInstallError(
+                f"constants.json pins git-secrets to {commit!r}, which is not a commit ID"
+            )
+
         with tempfile.TemporaryDirectory() as tmp_dir:
             tmp_path = Path(tmp_dir)
             repo_path = tmp_path / "git-secrets"
@@ -288,12 +313,25 @@ class GitSecretsInstaller:
                 # Clone the repository
                 self.progress("Cloning git-secrets repository...")
                 run_tool(
-                    ["git", "clone", "--depth", "1", self.REPO_URL, str(repo_path)],
+                    ["git", "clone", "--quiet", "--no-checkout", self.REPO_URL, str(repo_path)],
                     capture_output=True,
                     text=True,
                     encoding="utf-8",
                     errors="replace",
                     timeout=120,
+                    check=True,
+                )
+
+                # Check out the pinned commit: git fails if the clone does not hold it
+                self.progress(f"Checking out git-secrets {commit[:7]}...")
+                run_tool(
+                    ["git", "checkout", "--quiet", "--detach", commit],
+                    capture_output=True,
+                    text=True,
+                    encoding="utf-8",
+                    errors="replace",
+                    timeout=60,
+                    cwd=repo_path,
                     check=True,
                 )
 
