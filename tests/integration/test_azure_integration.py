@@ -239,6 +239,44 @@ def populated_azure_secrets(lowkey_vault_client) -> Generator[dict[str, str], No
         _delete_secret(session, endpoint, name)
 
 
+# --- Emulator precondition: the SDK's default API version ------------------
+
+
+class TestAzureEmulatorApiVersion:
+    """Lowkey Vault must accept the API version the locked Azure SDK sends by default.
+
+    Regression for the #884 lock refresh: azure-keyvault-secrets 4.12.0
+    defaults to Key Vault API version ``2026-04-01``, which Lowkey Vault 7.3.x
+    rejects with a bare ``400 Bad Request`` before any handler runs. Every
+    SDK-backed test then failed with an opaque ``Operation returned an invalid
+    status`` while the direct REST tests below (pinned to ``7.4``) kept
+    passing. This runs before them so the lane names the real cause.
+    """
+
+    def test_emulator_accepts_sdk_default_api_version(self, lowkey_vault_client):
+        from azure.identity import DefaultAzureCredential
+        from azure.keyvault.secrets import SecretClient
+
+        session, endpoint = lowkey_vault_client
+        # Constructing the credential and client sends no request; it only
+        # resolves the installed SDK's default service API version.
+        with (
+            DefaultAzureCredential() as credential,
+            SecretClient(vault_url=endpoint, credential=credential) as client,
+        ):
+            api_version = client.api_version
+
+        response = session.get(f"{endpoint}/secrets", params={"api-version": api_version})
+
+        assert response.status_code == 200, (
+            "Lowkey Vault rejected the azure-keyvault-secrets default API version "
+            f"{api_version!r}: HTTP {response.status_code} {response.text[:200]}. "
+            "Bump the Lowkey Vault image to a release that supports it, or hold the "
+            "SDK below the release that made it the default via [tool.uv] "
+            "constraint-dependencies in pyproject.toml."
+        )
+
+
 # --- Direct Client Tests ---
 
 
