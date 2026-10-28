@@ -40,6 +40,7 @@ from envdrift.scanner.base import (
     ScanResult,
     exception_message,
     parsed_finding,
+    tool_timeout,
 )
 from envdrift.scanner.patterns import hash_secret, redact_secret
 
@@ -370,7 +371,7 @@ class TrufflehogInstaller:
                     text=True,
                     encoding="utf-8",
                     errors="replace",
-                    timeout=10,
+                    timeout=tool_timeout(10),
                 )
                 if self.version in result.stdout:
                     self.progress(f"trufflehog v{self.version} already installed")
@@ -451,7 +452,7 @@ class TrufflehogScanner(ScannerBackend):
                 text=True,
                 encoding="utf-8",
                 errors="replace",
-                timeout=10,
+                timeout=tool_timeout(10),
             )
             # Output format: "trufflehog 3.88.3"
             return result.stdout.strip().split()[-1] if result.returncode == 0 else None
@@ -580,7 +581,7 @@ class TrufflehogScanner(ScannerBackend):
                     text=True,
                     encoding="utf-8",
                     errors="replace",
-                    timeout=600,  # 10 minute timeout (trufflehog can be slow)
+                    timeout=tool_timeout(600),  # 10 minute timeout (trufflehog can be slow)
                 )
 
                 # Parse JSON lines output (trufflehog outputs one JSON per line)

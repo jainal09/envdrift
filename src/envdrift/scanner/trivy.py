@@ -36,6 +36,7 @@ from envdrift.scanner.base import (
     ScanResult,
     exception_message,
     parsed_finding,
+    tool_timeout,
     unparsable_report_error,
 )
 from envdrift.scanner.patterns import hash_secret, redact_secret
@@ -305,7 +306,7 @@ class TrivyInstaller:
                     text=True,
                     encoding="utf-8",
                     errors="replace",
-                    timeout=10,
+                    timeout=tool_timeout(10),
                 )
                 if self.version in result.stdout:
                     self.progress(f"trivy v{self.version} already installed")
@@ -380,7 +381,7 @@ class TrivyScanner(ScannerBackend):
                 text=True,
                 encoding="utf-8",
                 errors="replace",
-                timeout=10,
+                timeout=tool_timeout(10),
             )
             if result.returncode == 0:
                 try:
@@ -500,7 +501,7 @@ class TrivyScanner(ScannerBackend):
                     text=True,
                     encoding="utf-8",
                     errors="replace",
-                    timeout=300,  # 5 minute timeout
+                    timeout=tool_timeout(300),  # 5 minute timeout
                 )
 
                 # Check for non-zero exit code indicating an error

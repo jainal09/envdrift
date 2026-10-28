@@ -35,6 +35,7 @@ from envdrift.scanner.base import (
     ScanResult,
     exception_message,
     parsed_finding,
+    tool_timeout,
 )
 from envdrift.scanner.patterns import hash_secret, redact_secret
 from envdrift.scanner.platform_utils import scan_argument, symlinked_file
@@ -407,7 +408,7 @@ class GitleaksInstaller:
                     text=True,
                     encoding="utf-8",
                     errors="replace",
-                    timeout=10,
+                    timeout=tool_timeout(10),
                 )
                 if self.version in result.stdout:
                     self.progress(f"gitleaks v{self.version} already installed")
@@ -480,7 +481,7 @@ class GitleaksScanner(ScannerBackend):
                 text=True,
                 encoding="utf-8",
                 errors="replace",
-                timeout=10,
+                timeout=tool_timeout(10),
             )
             # Output format: "gitleaks version 8.21.2"
             return result.stdout.strip().split()[-1] if result.returncode == 0 else None
@@ -630,7 +631,7 @@ class GitleaksScanner(ScannerBackend):
                     text=True,
                     encoding="utf-8",
                     errors="replace",
-                    timeout=300,  # 5 minute timeout
+                    timeout=tool_timeout(300),  # 5 minute timeout
                     cwd=work_dir,
                 )
 

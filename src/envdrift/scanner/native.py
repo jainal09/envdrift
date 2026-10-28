@@ -36,6 +36,7 @@ from envdrift.scanner.base import (
     ScanFinding,
     ScannerBackend,
     ScanResult,
+    tool_timeout,
 )
 from envdrift.scanner.patterns import (
     ALL_PATTERNS,
@@ -530,7 +531,7 @@ class NativeScanner(ScannerBackend):
                 encoding="utf-8",
                 errors="surrogateescape",
                 cwd=directory,
-                timeout=30,
+                timeout=tool_timeout(30),
             )
             if result.returncode != 0:
                 # Not a git repo or git error - use fallback
@@ -563,7 +564,7 @@ class NativeScanner(ScannerBackend):
                 encoding="utf-8",
                 errors="surrogateescape",
                 cwd=directory,
-                timeout=30,
+                timeout=tool_timeout(30),
             )
             if result.returncode == 0:
                 for rel_path in result.stdout.split("\0"):
@@ -599,7 +600,7 @@ class NativeScanner(ScannerBackend):
                 encoding="utf-8",
                 errors="surrogateescape",
                 cwd=directory,
-                timeout=30,
+                timeout=tool_timeout(30),
             )
             if result.returncode == 0:
                 for rel_path in result.stdout.split("\0"):

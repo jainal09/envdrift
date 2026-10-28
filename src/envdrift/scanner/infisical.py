@@ -39,6 +39,7 @@ from envdrift.scanner.base import (
     ScanResult,
     exception_message,
     parsed_finding,
+    tool_timeout,
 )
 from envdrift.scanner.patterns import hash_secret, redact_secret
 from envdrift.scanner.platform_utils import (
@@ -152,7 +153,7 @@ def _probe_confidence_flag(binary: str, _mtime_ns: int, _size: int) -> bool:
             text=True,
             encoding="utf-8",
             errors="replace",
-            timeout=_HELP_PROBE_TIMEOUT_SECONDS,
+            timeout=tool_timeout(_HELP_PROBE_TIMEOUT_SECONDS),
         )
     except Exception as e:
         raise _ProbeError(exception_message(e)) from e
@@ -522,7 +523,7 @@ class InfisicalInstaller:
                     text=True,
                     encoding="utf-8",
                     errors="replace",
-                    timeout=10,
+                    timeout=tool_timeout(10),
                 )
                 # Exact token match, not a substring: upstream version numbers
                 # carry large patch components, so `0.43.11 in "... 0.43.116"`
@@ -601,7 +602,7 @@ class InfisicalScanner(ScannerBackend):
                 text=True,
                 encoding="utf-8",
                 errors="replace",
-                timeout=10,
+                timeout=tool_timeout(10),
             )
             # Output format: "infisical version X.Y.Z"
             output = result.stdout.strip()
@@ -756,7 +757,7 @@ class InfisicalScanner(ScannerBackend):
                     text=True,
                     encoding="utf-8",
                     errors="replace",
-                    timeout=300,  # 5 minute timeout
+                    timeout=tool_timeout(300),  # 5 minute timeout
                 )
 
                 report_data = _load_findings(report_path)

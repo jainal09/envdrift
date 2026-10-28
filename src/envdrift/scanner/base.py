@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import threading
+import time
 from abc import ABC, abstractmethod
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
@@ -240,6 +243,37 @@ def parsed_finding(finding: ScanFinding | None, error: str) -> ScanFinding:
     if finding is None:
         raise UnparsableReportError(error)
     return finding
+
+
+# The time.monotonic() by which the scanner running on this thread must be done, if any.
+_deadline = threading.local()
+
+
+@contextmanager
+def scanner_deadline(deadline: float) -> Iterator[None]:
+    """Give the scanner that runs on this thread until ``deadline``, a ``time.monotonic()``.
+
+    The engine stops waiting for a scanner still running then and leaves it behind, since a
+    thread cannot be stopped (#870). ``tool_timeout`` caps the tools the scanner runs at that
+    moment, so that a tool is killed then instead of running on, even after guard exits (#900).
+    """
+    _deadline.value = deadline
+    try:
+        yield
+    finally:
+        _deadline.value = None
+
+
+def tool_timeout(seconds: float) -> float:
+    """The timeout for a tool a scanner runs: ``seconds``, or the scanner's time left if less.
+
+    ``subprocess.run`` kills a tool that runs past its timeout. Outside ``scanner_deadline``
+    there is no time limit to keep to, and the timeout is ``seconds`` (#900).
+    """
+    deadline = getattr(_deadline, "value", None)
+    if deadline is None:
+        return seconds
+    return max(0.0, min(seconds, deadline - time.monotonic()))
 
 
 @dataclass

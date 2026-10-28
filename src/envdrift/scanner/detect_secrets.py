@@ -31,6 +31,7 @@ from envdrift.scanner.base import (
     ScannerBackend,
     ScanResult,
     exception_message,
+    tool_timeout,
     unparsable_report_error,
 )
 from envdrift.utils.git import get_git_root
@@ -178,7 +179,7 @@ def _run_version_probe() -> subprocess.CompletedProcess[str]:
         text=True,
         encoding="utf-8",
         errors="replace",
-        timeout=_VERSION_PROBE_TIMEOUT_SECONDS,
+        timeout=tool_timeout(_VERSION_PROBE_TIMEOUT_SECONDS),
     )
 
 
@@ -372,7 +373,7 @@ def _git_ls_files(root: Path, env: Mapping[str, str], *, nul: bool) -> _GitOutpu
         args.append("-z")
     try:
         result = subprocess.run(  # nosec B603, B607
-            args, capture_output=True, timeout=60, env=dict(env)
+            args, capture_output=True, timeout=tool_timeout(60), env=dict(env)
         )
     except (OSError, subprocess.SubprocessError):
         return None
@@ -528,7 +529,7 @@ def _run_detect_secrets(plan: _ScanPlan, env: dict[str, str]) -> subprocess.Comp
         text=True,
         encoding="utf-8",
         errors="replace",
-        timeout=300,  # 5 minute timeout
+        timeout=tool_timeout(300),  # 5 minute timeout
         cwd=str(plan.cwd),
         env=env,
     )
@@ -614,7 +615,7 @@ class DetectSecretsInstaller:
                 text=True,
                 encoding="utf-8",
                 errors="replace",
-                timeout=120,
+                timeout=tool_timeout(120),
             )
 
             if result.returncode != 0:

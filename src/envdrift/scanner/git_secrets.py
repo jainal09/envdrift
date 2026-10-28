@@ -38,6 +38,7 @@ from envdrift.scanner.base import (
     ScannerBackend,
     ScanResult,
     exception_message,
+    tool_timeout,
 )
 from envdrift.scanner.patterns import hash_secret, redact_secret
 
@@ -243,7 +244,7 @@ class GitSecretsInstaller:
                 text=True,
                 encoding="utf-8",
                 errors="replace",
-                timeout=300,
+                timeout=tool_timeout(300),
             )
 
             # Check if installation succeeded
@@ -292,7 +293,7 @@ class GitSecretsInstaller:
                     text=True,
                     encoding="utf-8",
                     errors="replace",
-                    timeout=120,
+                    timeout=tool_timeout(120),
                     check=True,
                 )
 
@@ -307,7 +308,7 @@ class GitSecretsInstaller:
                     text=True,
                     encoding="utf-8",
                     errors="replace",
-                    timeout=60,
+                    timeout=tool_timeout(60),
                     cwd=repo_path,
                     check=True,
                 )
@@ -416,7 +417,7 @@ class GitSecretsScanner(ScannerBackend):
                 text=True,
                 encoding="utf-8",
                 errors="replace",
-                timeout=5,
+                timeout=tool_timeout(5),
             )
             # Only check returncode - a successful command means git-secrets is installed
             if result.returncode == 0:
@@ -480,7 +481,7 @@ class GitSecretsScanner(ScannerBackend):
                 text=True,
                 encoding="utf-8",
                 errors="replace",
-                timeout=300,
+                timeout=tool_timeout(300),
                 cwd=cwd,
             )
 
@@ -491,7 +492,7 @@ class GitSecretsScanner(ScannerBackend):
             text=True,
             encoding="utf-8",
             errors="replace",
-            timeout=300,
+            timeout=tool_timeout(300),
             cwd=cwd,
         )
 

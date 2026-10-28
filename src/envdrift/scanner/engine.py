@@ -34,6 +34,7 @@ from envdrift.scanner.base import (
     ScannerBackend,
     ScanResult,
     exception_message,
+    scanner_deadline,
 )
 from envdrift.scanner.finding_paths import FindingPathDisplay
 from envdrift.scanner.ignores import IgnoreConfig, IgnoreFilter
@@ -357,20 +358,23 @@ class ScanEngine:
         index: int,
         paths: list[Path],
         finished: queue.SimpleQueue[tuple[int, ScanResult]],
+        deadline: float,
     ) -> None:
-        """Run ``self.scanners[index]`` on a new daemon thread.
+        """Run ``self.scanners[index]`` on a new daemon thread, until ``deadline`` at most.
 
         The thread puts ``(index, result)`` on ``finished``. A daemon thread, not a
         ``ThreadPoolExecutor`` worker: a scanner that never returns is abandoned when its time is
         up, and the interpreter joins every pool worker at exit, so such a worker would hang the
-        process after ``scan()`` had returned (#870).
+        process after ``scan()`` had returned (#870). A tool the scanner runs is killed at
+        ``deadline``, a ``time.monotonic()``, instead of running on (#900).
         """
         scanner = self.scanners[index]
         include_git_history = self.config.include_git_history
 
         def run() -> None:
             try:
-                scan_result = self._run_scanner(scanner, paths, include_git_history)
+                with scanner_deadline(deadline):
+                    scan_result = self._run_scanner(scanner, paths, include_git_history)
             except BaseException as e:
                 # Always deliver a result: without one, scan() would wait out the whole time
                 # limit for a scanner that has already ended.
@@ -429,7 +433,8 @@ class ScanEngine:
                 index = queued.popleft()
                 # A monotonic clock: setting the system time neither ends nor extends a run.
                 started_at[index] = time.monotonic()
-                self._start_scanner(index, paths, finished)
+                deadline = started_at[index] + _SCANNER_TIMEOUT_SECONDS
+                self._start_scanner(index, paths, finished, deadline)
 
             for index, scan_result in self._delivered(finished):
                 if index in started_at:  # not a scanner that has timed out already

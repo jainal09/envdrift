@@ -34,6 +34,7 @@ from envdrift.scanner.base import (
     ScanResult,
     exception_message,
     parsed_finding,
+    tool_timeout,
 )
 from envdrift.scanner.patterns import hash_secret, redact_secret
 from envdrift.scanner.platform_utils import get_platform_info, get_venv_bin_dir
@@ -351,7 +352,7 @@ class TalismanInstaller:
                     text=True,
                     encoding="utf-8",
                     errors="replace",
-                    timeout=10,
+                    timeout=tool_timeout(10),
                 )
                 if self.version in result.stdout or self.version in result.stderr:
                     self.progress(f"talisman v{self.version} already installed")
@@ -426,7 +427,7 @@ class TalismanScanner(ScannerBackend):
                 text=True,
                 encoding="utf-8",
                 errors="replace",
-                timeout=10,
+                timeout=tool_timeout(10),
             )
             # Output format varies, try to extract version
             output = result.stdout.strip() or result.stderr.strip()
@@ -559,7 +560,7 @@ class TalismanScanner(ScannerBackend):
                         text=True,
                         encoding="utf-8",
                         errors="replace",
-                        timeout=300,  # 5 minute timeout
+                        timeout=tool_timeout(300),  # 5 minute timeout
                         cwd=str(work_dir),
                     )
 

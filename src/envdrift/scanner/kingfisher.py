@@ -32,6 +32,7 @@ from envdrift.scanner.base import (
     UnparsableReportError,
     exception_message,
     parsed_finding,
+    tool_timeout,
 )
 from envdrift.scanner.patterns import hash_secret, redact_secret
 from envdrift.scanner.rule_severity import rule_severity
@@ -243,7 +244,7 @@ class KingfisherScanner(ScannerBackend):
                 text=True,
                 encoding="utf-8",
                 errors="replace",
-                timeout=10,
+                timeout=tool_timeout(10),
             )
             # Output format: "kingfisher 1.73.0"
             if result.returncode == 0:
@@ -308,7 +309,7 @@ class KingfisherScanner(ScannerBackend):
                 text=True,
                 encoding="utf-8",
                 errors="replace",
-                timeout=120,  # 2 minute timeout
+                timeout=tool_timeout(120),  # 2 minute timeout
             )
 
             if result.returncode != 0:
@@ -493,7 +494,7 @@ class KingfisherScanner(ScannerBackend):
                     text=True,
                     encoding="utf-8",
                     errors="replace",
-                    timeout=600,  # 10 minute timeout for thorough scanning
+                    timeout=tool_timeout(600),  # 10 minute timeout for thorough scanning
                 )
 
                 # Exit codes: 0 = no findings, 200 = findings detected, others = error
