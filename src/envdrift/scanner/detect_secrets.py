@@ -30,6 +30,8 @@ from envdrift.scanner.base import (
     ScanFinding,
     ScannerBackend,
     ScanResult,
+    exception_message,
+    unparsable_report_error,
 )
 from envdrift.utils.git import get_git_root
 from envdrift.utils.text import strip_ansi
@@ -817,7 +819,7 @@ class DetectSecretsScanner(ScannerBackend):
         except DetectSecretsNotFoundError as e:
             return ScanResult(
                 scanner_name=self.name,
-                error=str(e),
+                error=exception_message(e),
                 duration_ms=int((time.time() - start_time) * 1000),
             )
 
@@ -860,9 +862,7 @@ class DetectSecretsScanner(ScannerBackend):
                     baseline = _read_report(result.stdout)
                     if baseline is None:
                         # A report that cannot be read is not a clean one.
-                        return failed(
-                            f"detect-secrets output error: {(result.stderr or result.stdout)[:200]}"
-                        )
+                        return failed(unparsable_report_error("detect-secrets", result, path))
                     all_findings.extend(self._parse_baseline(baseline, path, plan.prefix))
                     total_files += len(baseline["results"])
                 elif result.returncode == 0:
@@ -870,16 +870,16 @@ class DetectSecretsScanner(ScannerBackend):
                     return failed(f"detect-secrets printed no report for {path}")
 
                 if result.returncode != 0:
+                    # Not stdout, which is the report.
                     return failed(
                         result.stderr.strip()
-                        or result.stdout.strip()
                         or f"detect-secrets scan failed for {path} (exit code {result.returncode})"
                     )
 
             except subprocess.TimeoutExpired:
                 return failed(f"Scan timed out for {path}")
             except Exception as e:
-                return failed(str(e))
+                return failed(exception_message(e))
 
         return ScanResult(
             scanner_name=self.name,

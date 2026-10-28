@@ -368,6 +368,25 @@ class TestGitSecretsRealBinary:
         assert result.error is None
         assert any(f.file_path == secret_file.resolve() for f in result.findings)
 
+    def test_scan_that_git_secrets_cannot_run_fails(self, scanner_test_env):
+        """A repository whose git config git cannot read is not scanned, so it is not clean.
+
+        git-secrets then loads no patterns, matches nothing and exits 0; only git's
+        ``fatal:`` message says so. The run that never matched ``leak.txt`` was a clean scan.
+        """
+        work_dir = scanner_test_env["work_dir"]
+        self._init_repo_with_aws_patterns(work_dir)
+        (work_dir / "leak.txt").write_text("AWS_KEY=AKIA" + "Z9Q8W7E6R5T4Y3U2\n")
+        with (work_dir / ".git" / "config").open("a") as config:
+            config.write("[core\n")  # a section that is never closed
+
+        scanner = GitSecretsScanner(auto_install=False, register_aws=True)
+        result = scanner.scan([work_dir])
+
+        assert result.error is not None
+        assert result.error.startswith(f"git-secrets could not scan {work_dir}: fatal: ")
+        assert result.findings == []
+
 
 @pytest.mark.integration
 class TestScannerConfiguration:

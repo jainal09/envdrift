@@ -33,6 +33,8 @@ from envdrift.scanner.base import (
     ScanFinding,
     ScannerBackend,
     ScanResult,
+    exception_message,
+    parsed_finding,
 )
 from envdrift.scanner.patterns import hash_secret, redact_secret
 from envdrift.scanner.platform_utils import scan_argument, symlinked_file
@@ -117,8 +119,28 @@ def _prepare_scan_targets(
 
 def _combined_error(run_error: str | None, target_errors: list[str]) -> str | None:
     """Join a run failure with the per-target preflight diagnostics (#641)."""
-    parts = ([run_error] if run_error else []) + target_errors
+    parts = ([run_error] if run_error is not None else []) + target_errors
     return "; ".join(parts) if parts else None
+
+
+def _load_findings(report_path: Path) -> list[Any] | None:
+    """The findings in a gitleaks JSON report, or None when the report cannot be read.
+
+    gitleaks writes ``[]``, or no report at all, when it finds nothing, so a missing or
+    empty report holds no findings, and so does ``null``, which Go writes for an empty
+    list. Anything else that is not a JSON list (a partly written file, or a message where
+    the report should be) leaves the findings unknown, not absent, so it is not a clean
+    scan (#874). gitleaks writes UTF-8 whatever the platform's encoding is (#873).
+    """
+    if not report_path.exists() or report_path.stat().st_size == 0:
+        return []
+    try:
+        report = json.loads(report_path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, UnicodeDecodeError):
+        return None
+    if report is None:
+        return []
+    return report if isinstance(report, list) else None
 
 
 class GitleaksInstallError(Exception):
@@ -560,7 +582,7 @@ class GitleaksScanner(ScannerBackend):
         except GitleaksNotFoundError as e:
             return ScanResult(
                 scanner_name=self.name,
-                error=_combined_error(str(e), target_errors),
+                error=_combined_error(exception_message(e), target_errors),
                 duration_ms=int((time.time() - start_time) * 1000),
             )
 
@@ -627,26 +649,31 @@ class GitleaksScanner(ScannerBackend):
                         duration_ms=int((time.time() - start_time) * 1000),
                     )
 
-                # Parse JSON output from report file
-                if report_path.exists() and report_path.stat().st_size > 0:
-                    try:
-                        findings_data = json.loads(report_path.read_text())
-                        if findings_data and isinstance(findings_data, list):
-                            # Count unique files with findings
-                            files_with_findings = {
-                                item.get("File") for item in findings_data if item.get("File")
-                            }
-                            total_files += len(files_with_findings)
-                            for item in findings_data:
-                                finding = self._parse_finding(item, finding_base)
-                                if finding and file_link is not None:
-                                    # Scanned as its target; reported as the link.
-                                    finding = replace(finding, file_path=file_link)
-                                if finding:
-                                    all_findings.append(finding)
-                    except json.JSONDecodeError:
-                        # Not valid JSON, might be empty or error message
-                        pass
+                findings_data = _load_findings(report_path)
+                if findings_data is None:
+                    return ScanResult(
+                        scanner_name=self.name,
+                        findings=all_findings,
+                        error=_combined_error(
+                            f"gitleaks wrote a report for {scan_target} that envdrift cannot parse",
+                            target_errors,
+                        ),
+                        duration_ms=int((time.time() - start_time) * 1000),
+                    )
+                # Count unique files with findings
+                files_with_findings = {
+                    item.get("File") for item in findings_data if item.get("File")
+                }
+                total_files += len(files_with_findings)
+                for item in findings_data:
+                    finding = parsed_finding(
+                        self._parse_finding(item, finding_base),
+                        f"gitleaks wrote a report for {scan_target} that envdrift cannot parse",
+                    )
+                    if file_link is not None:
+                        # Scanned as its target; reported as the link.
+                        finding = replace(finding, file_path=file_link)
+                    all_findings.append(finding)
 
             except subprocess.TimeoutExpired:
                 return ScanResult(
@@ -659,7 +686,7 @@ class GitleaksScanner(ScannerBackend):
                 return ScanResult(
                     scanner_name=self.name,
                     findings=all_findings,
-                    error=_combined_error(str(e), target_errors),
+                    error=_combined_error(exception_message(e), target_errors),
                     duration_ms=int((time.time() - start_time) * 1000),
                 )
             finally:

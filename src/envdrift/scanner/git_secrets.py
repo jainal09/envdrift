@@ -37,6 +37,7 @@ from envdrift.scanner.base import (
     ScanFinding,
     ScannerBackend,
     ScanResult,
+    exception_message,
 )
 from envdrift.scanner.patterns import hash_secret, redact_secret
 
@@ -53,6 +54,10 @@ logger = logging.getLogger(__name__)
 _AWS_ACCESS_KEY_ID_RE = re.compile(
     r"(?<![A-Z0-9])(?:A3T[A-Z0-9]|AKIA|ABIA|ACCA|ASIA)[A-Z0-9]{16}(?![A-Z0-9])"
 )
+
+# A line of git-secrets output that envdrift may quote: not blank, and no match. A match,
+# ``path:line:content`` (``commit:path:line:...`` in history), holds the secret.
+_QUOTABLE_LINE = re.compile(r"^(?!.*:\d+:).*\S")
 
 # The other two CRITICAL types are also earned by the credential, not by a word near it: a
 # secret access key is the 40-character value assigned to the AWS secret field itself, and a
@@ -103,6 +108,28 @@ def _holds_credential(rule_type: str, content: str) -> bool:
             or _PRIVATE_KEY_VALUE_RE.search(content) is not None
         )
     return True
+
+
+def _scan_error(
+    result: subprocess.CompletedProcess[str], found: list[ScanFinding], path: Path
+) -> str | None:
+    """Why the git-secrets run that scanned ``path`` failed, or None when it did not.
+
+    git-secrets exits 0 when it finds nothing and 1 when it reports matches. It exits with any
+    other code when it fails: 2 when grep fails, 128 when git does, 129 for an option it does
+    not know. When git cannot read its config, git-secrets loads no patterns, matches nothing
+    and exits 0, so only git's ``fatal:`` message on stderr tells. An exit of 1 with no match
+    that envdrift can parse leaves the findings unknown as well (#872). A line that could be a
+    match (``path:line:content``) is never quoted: it would hold the secret.
+    """
+    lines = [line for line in result.stderr.splitlines() if _QUOTABLE_LINE.match(line)]
+    fatal = [line for line in lines if line.startswith("fatal: ")]
+    if fatal or result.returncode not in (0, 1):
+        detail = next(iter(fatal + lines), f"exit code {result.returncode}")
+        return f"git-secrets could not scan {path}: {detail}"
+    if result.returncode == 1 and not found:
+        return f"git-secrets reported a match in {path} that envdrift cannot parse"
+    return None
 
 
 class GitSecretsNotFoundError(Exception):
@@ -489,12 +516,13 @@ class GitSecretsScanner(ScannerBackend):
         except GitSecretsNotFoundError as e:
             return ScanResult(
                 scanner_name=self.name,
-                error=str(e),
+                error=exception_message(e),
                 duration_ms=int((time.time() - start_time) * 1000),
             )
 
         all_findings: list[ScanFinding] = []
         total_files = 0
+        path_errors: list[str] = []
 
         for path in paths:
             if not path.exists():
@@ -587,37 +615,37 @@ class GitSecretsScanner(ScannerBackend):
                 # Parse output.
                 # git-secrets writes its findings (format: path:line_number:content,
                 # followed by an "[ERROR] Matched..." trailer) to STDERR, not stdout,
-                # and exits non-zero when matches are found. Parse stderr to capture
+                # and exits 1 when matches are found. Parse stderr to capture
                 # them; _parse_output skips the "[ERROR]"/"error:" trailer lines.
-                if result.stderr:
-                    stderr_findings = self._parse_output(result.stderr, cwd)
-                    for finding in stderr_findings:
-                        if finding not in all_findings:
-                            all_findings.append(finding)
-
                 # Defensive fallback: some git-secrets variants/wrappers may emit
                 # findings on stdout. Parse it too so findings are never dropped.
-                if result.stdout:
-                    for finding in self._parse_output(result.stdout, cwd):
-                        if finding not in all_findings:
-                            all_findings.append(finding)
+                found = self._parse_output(result.stderr, cwd)
+                found += self._parse_output(result.stdout, cwd)
+                for finding in found:
+                    if finding not in all_findings:
+                        all_findings.append(finding)
+                error = _scan_error(result, found, path)
+                if error:
+                    path_errors.append(error)
 
             except subprocess.TimeoutExpired:
+                # The paths that failed before this one still count.
                 return ScanResult(
                     scanner_name=self.name,
                     findings=all_findings,
-                    error=f"Scan timed out for {path}",
+                    error="; ".join([*path_errors, f"Scan timed out for {path}"]),
                     duration_ms=int((time.time() - start_time) * 1000),
                 )
             except Exception as e:
-                # Non-fatal errors, log and continue with other paths
-                logger.debug("Error scanning %s: %s", path, e)
-                continue
+                # The other paths are still scanned, but this one was not, so
+                # the run is incomplete, not clean (#872).
+                path_errors.append(f"git-secrets could not scan {path}: {exception_message(e)}")
 
         return ScanResult(
             scanner_name=self.name,
             findings=all_findings,
             files_scanned=total_files,
+            error="; ".join(path_errors) if path_errors else None,
             duration_ms=int((time.time() - start_time) * 1000),
         )
 

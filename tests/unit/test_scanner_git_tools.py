@@ -914,8 +914,11 @@ class TestGitSecretsScan:
         assert result.error is not None
         assert "timed out" in result.error.lower()
 
-    def test_scan_non_fatal_exception_continues_to_next_path(self, tmp_path: Path) -> None:
-        """Test scan continues scanning subsequent paths after a non-fatal exception."""
+    def test_scan_exception_is_an_error_and_the_next_path_is_scanned(self, tmp_path: Path) -> None:
+        """A path that could not be scanned fails the scan; the other paths are still scanned.
+
+        The exception used to be logged at debug level only, so the scan passed as clean (#872).
+        """
         (tmp_path / ".git").mkdir()
         path1 = tmp_path / "file1.env"
         path1.write_text("x=1")
@@ -935,7 +938,7 @@ class TestGitSecretsScan:
             ]
             scanner = GitSecretsScanner(auto_install=False)
             result = scanner.scan([path1, path2])
-        assert result.error is None
+        assert result.error == f"git-secrets could not scan {path1}: unexpected"
         assert mock_run.call_count == 6  # confirms path2 was actually scanned
         assert result.files_scanned == 2  # both files counted; proves the loop continued past path1
 

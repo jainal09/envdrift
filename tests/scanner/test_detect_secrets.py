@@ -364,15 +364,30 @@ class TestDetectSecretsScan:
         """
         result = _scan_printing(tmp_path, "not-json")
 
-        assert result.error is not None
-        assert "detect-secrets output error" in result.error
-        assert "not-json" in result.error
+        assert (
+            result.error
+            == f"detect-secrets printed a report for {tmp_path} that envdrift cannot parse"
+        )
         assert result.findings == []
 
-    def test_scan_prefers_stderr_in_the_unreadable_output_error(self, tmp_path: Path):
-        result = _scan_printing(tmp_path, "not-json", stderr="Traceback: boom")
+    def test_scan_leaves_the_report_out_of_the_unreadable_output_error(self, tmp_path: Path):
+        """What detect-secrets printed is the report, whose start can hold what it found (#874)."""
+        cut_short = '{"results": {"app.env": [{"type": "Secret Keyword", "Sec'
 
-        assert result.error == "detect-secrets output error: Traceback: boom"
+        result = _scan_printing(tmp_path, cut_short, stderr="Traceback: boom")
+
+        assert result.error == (
+            f"detect-secrets printed a report for {tmp_path} that envdrift cannot parse: "
+            "Traceback: boom"
+        )
+
+    def test_scan_failure_leaves_the_report_out_of_its_error(self, tmp_path: Path):
+        """A failed run that printed a report says how it failed, not what the report holds."""
+        report = json.dumps({"results": {"app.env": [{"type": "Secret Keyword"}]}})
+
+        result = _scan_printing(tmp_path, report, returncode=2)
+
+        assert result.error == f"detect-secrets scan failed for {tmp_path} (exit code 2)"
 
     @pytest.mark.parametrize(
         "stdout",
@@ -385,8 +400,10 @@ class TestDetectSecretsScan:
         """
         result = _scan_printing(tmp_path, stdout)
 
-        assert result.error is not None
-        assert result.error.startswith("detect-secrets output error: ")
+        assert (
+            result.error
+            == f"detect-secrets printed a report for {tmp_path} that envdrift cannot parse"
+        )
         assert result.findings == []
 
     def test_scan_accepts_an_empty_report(self, tmp_path: Path):

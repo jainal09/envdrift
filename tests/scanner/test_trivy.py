@@ -353,13 +353,14 @@ class TestTrivyScanExecution:
         assert len(result.findings) == 0
 
     def test_scan_handles_invalid_json(self, mock_scanner: TrivyScanner, tmp_path: Path):
-        """Test that scan handles invalid JSON gracefully."""
+        """Output that is not JSON leaves the findings unknown: a scan error (#874)."""
         with patch.object(mock_scanner, "_find_binary", return_value=mock_scanner._binary_path):
             with patch("subprocess.run") as mock_run:
                 mock_run.return_value = MagicMock(stdout="not valid json", stderr="", returncode=0)
                 result = mock_scanner.scan([tmp_path])
 
-        assert result.success is True
+        assert result.success is False
+        assert result.error == f"trivy printed a report for {tmp_path} that envdrift cannot parse"
         assert len(result.findings) == 0
 
     def test_scan_handles_timeout(self, mock_scanner: TrivyScanner, tmp_path: Path):

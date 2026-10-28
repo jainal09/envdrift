@@ -9,10 +9,12 @@ The ScanEngine is responsible for:
 
 from __future__ import annotations
 
+import queue
 import re
+import threading
 import time
-from collections.abc import Callable, Mapping
-from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
+from collections import deque
+from collections.abc import Callable, Iterator, Mapping
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -31,6 +33,7 @@ from envdrift.scanner.base import (
     ScanFinding,
     ScannerBackend,
     ScanResult,
+    exception_message,
 )
 from envdrift.scanner.finding_paths import FindingPathDisplay
 from envdrift.scanner.ignores import IgnoreConfig, IgnoreFilter
@@ -47,6 +50,15 @@ if TYPE_CHECKING:
 import logging
 
 logger = logging.getLogger(__name__)
+
+# How long one scanner may run, counted from when it starts. A scanner still running then is
+# reported as timed out and left behind on its daemon thread (#870).
+_SCANNER_TIMEOUT_SECONDS = 600
+# At most this many scanners that the engine waits for run at once, so a full selection does not
+# overwhelm the machine. A scanner left behind at its time limit no longer counts (#870, #900).
+_MAX_PARALLEL_SCANNERS = 4
+# How often the engine wakes, while it waits for the scanners, to look for one past its time.
+_POLL_SECONDS = 1.0
 
 
 def _place_of(display: FindingPathDisplay | None) -> Callable[[Path], Path]:
@@ -337,8 +349,104 @@ class ScanEngine:
         except Exception as e:
             return ScanResult(
                 scanner_name=scanner.name,
-                error=str(e),
+                error=exception_message(e),
             )
+
+    def _start_scanner(
+        self,
+        index: int,
+        paths: list[Path],
+        finished: queue.SimpleQueue[tuple[int, ScanResult]],
+    ) -> None:
+        """Run ``self.scanners[index]`` on a new daemon thread.
+
+        The thread puts ``(index, result)`` on ``finished``. A daemon thread, not a
+        ``ThreadPoolExecutor`` worker: a scanner that never returns is abandoned when its time is
+        up, and the interpreter joins every pool worker at exit, so such a worker would hang the
+        process after ``scan()`` had returned (#870).
+        """
+        scanner = self.scanners[index]
+        include_git_history = self.config.include_git_history
+
+        def run() -> None:
+            try:
+                scan_result = self._run_scanner(scanner, paths, include_git_history)
+            except BaseException as e:
+                # Always deliver a result: without one, scan() would wait out the whole time
+                # limit for a scanner that has already ended.
+                scan_result = ScanResult(
+                    scanner_name=scanner.name, error=f"Scanner failed: {exception_message(e)}"
+                )
+            finished.put((index, scan_result))
+
+        threading.Thread(target=run, name=f"envdrift-scanner-{scanner.name}", daemon=True).start()
+
+    @staticmethod
+    def _delivered(
+        finished: queue.SimpleQueue[tuple[int, ScanResult]],
+    ) -> Iterator[tuple[int, ScanResult]]:
+        """Yield the results on ``finished``, waiting up to ``_POLL_SECONDS`` for the first.
+
+        Each later result is taken when the caller asks for it, so one delivered while the
+        caller handles another is yielded too, before the caller goes on to check the time
+        limits: a scanner whose result is in is never reported as timed out.
+        """
+        try:
+            yield finished.get(timeout=_POLL_SECONDS)
+            while True:
+                yield finished.get_nowait()
+        except queue.Empty:
+            return
+
+    def _run_scanners(
+        self,
+        paths: list[Path],
+        on_scanner_complete: Callable[[str, int, int, ScanResult | None], None] | None,
+    ) -> list[ScanResult]:
+        """Run every scanner, at most ``_MAX_PARALLEL_SCANNERS`` at once, and return the results.
+
+        Each scanner runs on its own daemon thread and has ``_SCANNER_TIMEOUT_SECONDS`` from when
+        it starts, not from when it was queued behind other scanners. One still running then is
+        recorded as timed out, an error that fails the run, and is abandoned: a thread cannot be
+        stopped, so nothing waits for it, neither this method nor the exit of the process; a
+        result it delivers later is dropped, and its place goes to the next scanner (#870).
+        ``on_scanner_complete`` is called on this thread as each scanner finishes or times out.
+        """
+        total = len(self.scanners)
+        finished: queue.SimpleQueue[tuple[int, ScanResult]] = queue.SimpleQueue()
+        queued = deque(range(total))
+        started_at: dict[int, float] = {}  # the scanners running now, by index
+        results: list[ScanResult] = []
+
+        def record(index: int, scan_result: ScanResult) -> None:
+            del started_at[index]
+            results.append(scan_result)
+            if on_scanner_complete:
+                on_scanner_complete(self.scanners[index].name, len(results), total, scan_result)
+
+        while queued or started_at:
+            while queued and len(started_at) < _MAX_PARALLEL_SCANNERS:
+                index = queued.popleft()
+                # A monotonic clock: setting the system time neither ends nor extends a run.
+                started_at[index] = time.monotonic()
+                self._start_scanner(index, paths, finished)
+
+            for index, scan_result in self._delivered(finished):
+                if index in started_at:  # not a scanner that has timed out already
+                    record(index, scan_result)
+
+            now = time.monotonic()
+            for index, started in list(started_at.items()):
+                if now - started > _SCANNER_TIMEOUT_SECONDS:
+                    record(
+                        index,
+                        ScanResult(
+                            scanner_name=self.scanners[index].name,
+                            error=f"Scanner timed out after {_SCANNER_TIMEOUT_SECONDS}s",
+                        ),
+                    )
+
+        return results
 
     def _retain_scanner(self, scanner: ScannerBackend) -> None:
         """Retain an external scanner, or record a skip when it cannot run.
@@ -508,7 +616,8 @@ class ScanEngine:
 
         Returns:
             AggregatedScanResult: Aggregated scan outcome containing:
-                - results: list of per-scanner ScanResult objects (including errors).
+                - results: list of per-scanner ScanResult objects (including errors; a scanner
+                  still running ``_SCANNER_TIMEOUT_SECONDS`` after it started is an error).
                 - total_findings: total number of findings collected before deduplication/filtering.
                 - unique_findings: deduplicated and filtered list of ScanFinding objects.
                 - scanners_used: list of scanner names that were executed.
@@ -531,75 +640,9 @@ class ScanEngine:
 
         self._warn_if_history_unsupported()
 
-        # Run scanners in parallel using ThreadPoolExecutor
-        # Use at most 4 workers to avoid overwhelming the system
-        max_workers = min(len(self.scanners), 4)
-        total_scanners = len(self.scanners)
-        completed_count = 0
-        per_scanner_timeout_s = 600
-
-        with ThreadPoolExecutor(max_workers=max_workers) as executor:
-            # Submit all scanner tasks
-            future_to_scanner = {
-                executor.submit(
-                    self._run_scanner, scanner, paths, self.config.include_git_history
-                ): scanner
-                for scanner in self.scanners
-            }
-
-            start_times = {future: time.time() for future in future_to_scanner}
-            pending = set(future_to_scanner)
-
-            # Collect results as they complete, while enforcing per-scanner timeouts
-            while pending:
-                done, pending = wait(pending, timeout=1, return_when=FIRST_COMPLETED)
-
-                for future in done:
-                    scanner = future_to_scanner[future]
-                    try:
-                        scan_result = future.result()
-                    except Exception as e:
-                        # Record scanner failure but continue with others
-                        scan_result = ScanResult(
-                            scanner_name=scanner.name,
-                            error=f"Scanner failed: {e!s}",
-                        )
-                    results.append(scan_result)
-
-                    # Notify progress callback
-                    completed_count += 1
-                    if on_scanner_complete:
-                        on_scanner_complete(
-                            scanner.name,
-                            completed_count,
-                            total_scanners,
-                            scan_result,
-                        )
-
-                # Mark long-running scanners as timed out
-                now = time.time()
-                timed_out = [
-                    future
-                    for future in pending
-                    if now - start_times[future] > per_scanner_timeout_s
-                ]
-                for future in timed_out:
-                    scanner = future_to_scanner[future]
-                    future.cancel()
-                    scan_result = ScanResult(
-                        scanner_name=scanner.name,
-                        error=f"Scanner timed out after {per_scanner_timeout_s}s",
-                    )
-                    results.append(scan_result)
-                    completed_count += 1
-                    if on_scanner_complete:
-                        on_scanner_complete(
-                            scanner.name,
-                            completed_count,
-                            total_scanners,
-                            scan_result,
-                        )
-                    pending.remove(future)
+        # Run the scanners in parallel. A scanner past its time limit is reported as failed
+        # and left behind; it cannot hold up this scan or the exit of the process (#870).
+        results.extend(self._run_scanners(paths, on_scanner_complete))
 
         # Collect all findings (sort results by scanner name for deterministic order)
         results.sort(key=lambda r: r.scanner_name)

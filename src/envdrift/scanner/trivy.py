@@ -34,6 +34,9 @@ from envdrift.scanner.base import (
     ScanFinding,
     ScannerBackend,
     ScanResult,
+    exception_message,
+    parsed_finding,
+    unparsable_report_error,
 )
 from envdrift.scanner.patterns import hash_secret, redact_secret
 from envdrift.scanner.platform_utils import (
@@ -120,6 +123,25 @@ def get_trivy_path() -> Path:
     bin_dir = get_venv_bin_dir()
     binary_name = "trivy.exe" if platform.system() == "Windows" else "trivy"
     return bin_dir / binary_name
+
+
+def _load_report(output: str) -> dict[str, Any] | None:
+    """The report trivy printed, or None when ``output`` is not one.
+
+    A report is a JSON object whose ``Results`` list is absent when nothing was found, and a
+    run that printed nothing found nothing. Output of any other kind (a report cut short, a
+    message where the report should be, ``Results`` that are not a list) leaves the findings
+    unknown, not absent, so it is not a clean scan (#874).
+    """
+    if not output.strip():
+        return {}
+    try:
+        report = json.loads(output)
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(report, dict) or not isinstance(report.get("Results", []), list):
+        return None
+    return report
 
 
 class TrivyInstaller:
@@ -448,7 +470,7 @@ class TrivyScanner(ScannerBackend):
         except TrivyNotFoundError as e:
             return ScanResult(
                 scanner_name=self.name,
-                error=str(e),
+                error=exception_message(e),
                 duration_ms=int((time.time() - start_time) * 1000),
             )
 
@@ -497,15 +519,17 @@ class TrivyScanner(ScannerBackend):
                     )
 
                 # Parse JSON output
-                if result.stdout.strip():
-                    try:
-                        scan_data = json.loads(result.stdout)
-                        findings, files = self._parse_output(scan_data, path)
-                        all_findings.extend(findings)
-                        total_files += files
-                    except json.JSONDecodeError:
-                        # Not valid JSON, might be error message
-                        pass
+                scan_data = _load_report(result.stdout)
+                if scan_data is None:
+                    return ScanResult(
+                        scanner_name=self.name,
+                        findings=all_findings,
+                        error=unparsable_report_error("trivy", result, path),
+                        duration_ms=int((time.time() - start_time) * 1000),
+                    )
+                findings, files = self._parse_output(scan_data, path)
+                all_findings.extend(findings)
+                total_files += files
 
             except subprocess.TimeoutExpired:
                 return ScanResult(
@@ -518,7 +542,7 @@ class TrivyScanner(ScannerBackend):
                 return ScanResult(
                     scanner_name=self.name,
                     findings=all_findings,
-                    error=str(e),
+                    error=exception_message(e),
                     duration_ms=int((time.time() - start_time) * 1000),
                 )
 
@@ -556,9 +580,12 @@ class TrivyScanner(ScannerBackend):
             # Get secrets from result
             secrets = result.get("Secrets", [])
             for secret in secrets:
-                finding = self._parse_secret(secret, target, base_path, state)
-                if finding:
-                    findings.append(finding)
+                findings.append(
+                    parsed_finding(
+                        self._parse_secret(secret, target, base_path, state),
+                        f"trivy printed a report for {base_path} that envdrift cannot parse",
+                    )
+                )
 
         return findings, files_scanned
 

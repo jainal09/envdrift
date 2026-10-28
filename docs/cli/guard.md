@@ -748,6 +748,23 @@ still exits 1. The scanner errors are listed in the human output (Scanner
 Errors panel), in `--json` under `scanner_results[].error`, and in `--sarif`
 as invocation `toolExecutionNotifications`.
 
+A scanner fails when its binary reports an error, runs out of time, or writes a
+report envdrift cannot parse. A report cut short, a message where the report
+should be, or a finding whose fields envdrift cannot read leaves the findings
+unknown, so the run is not clean; the error names the scanner and the path it
+scanned, never the report, which may hold the secrets it found. A report that
+holds no findings is a clean scan: that is what the binaries write when they find
+nothing. So is no report at all after a successful run, except from
+detect-secrets, which always prints one.
+
+A scanner still running 10 minutes after it started has failed: guard stops
+waiting for it and records `Scanner timed out after 600s` as its error, the
+other scanners' results stand, and with no blocking finding guard exits 5. At
+most four scanners run at once, and each one's 10 minutes count from when it
+starts. A scanner that timed out no longer counts toward the four, but guard
+does not stop a tool process (gitleaks, trufflehog, ...) that it started, so that
+process can keep running, even after guard exits.
+
 Exit 5 applies to scanners you **selected** — a CLI flag or a `[guard]
 scanners` list written in your config. A scanner active only via the built-in
 default set whose binary is missing under `--no-auto-install` never ran and
