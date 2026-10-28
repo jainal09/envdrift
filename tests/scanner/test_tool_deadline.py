@@ -1,4 +1,8 @@
-"""A tool a scanner runs is killed at the scanner's time limit, not left running (#900)."""
+"""A tool a scanner runs is killed at the scanner's time limit, not left running (#900).
+
+These tests run their tools through ``run_tool``'s own runner, which kills a tool together with
+the processes it started (#911), not through the ``subprocess.run`` seam of the unit tests.
+"""
 
 from __future__ import annotations
 
@@ -29,6 +33,9 @@ from envdrift.utils.deadline import (
     scanner_deadline,
 )
 from envdrift.utils.git import get_git_root
+from envdrift.utils.process_tree import _ppid_from_stat
+
+pytestmark = pytest.mark.real_tool_runner
 
 # A tool that never ends. It rewrites its heartbeat file, which holds its pid, every 50 ms, so a
 # test on any platform can tell whether it still runs, even after the process that started it
@@ -314,9 +321,6 @@ def test_a_git_helper_is_held_to_the_scanners_deadline(
     sys.platform == "win32",
     reason="the tool is a shell script that starts its child in the background",
 )
-@pytest.mark.xfail(
-    strict=False, reason="only the tool is killed, not the processes it started (see #911)"
-)
 def test_the_processes_a_timed_out_tool_started_end_with_it(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -336,6 +340,64 @@ def test_the_processes_a_timed_out_tool_started_end_with_it(
         assert not _still_beating(beat), "the tool's child still runs after its scanner timed out"
     finally:
         _stop(beat)
+
+
+# A tool that starts a child, which never ends, and waits for it, on every platform.
+PARENT = """
+import subprocess, sys
+
+subprocess.run([sys.executable, sys.argv[1], sys.argv[2]])
+"""
+
+
+def test_a_tool_that_times_out_is_killed_with_the_processes_it_started(tmp_path: Path) -> None:
+    """subprocess.run would kill the tool and leave its child running (#911)."""
+    beat = tmp_path / "beat"
+    heartbeat = tmp_path / "heartbeat.py"
+    heartbeat.write_text(HEARTBEAT)
+
+    try:
+        with pytest.raises(subprocess.TimeoutExpired):
+            run_tool(
+                [sys.executable, "-c", PARENT, str(heartbeat), str(beat)],
+                capture_output=True,
+                timeout=1.5,
+            )
+
+        assert beat.exists(), "the tool's child never started"
+        assert not _still_beating(beat), "the tool's child still runs after the tool timed out"
+    finally:
+        _stop(beat)
+
+
+def test_the_runner_takes_what_subprocess_run_takes() -> None:
+    """``run_tool`` runs a tool as ``subprocess.run`` would, input and errors included."""
+    echo = [sys.executable, "-c", "import sys; sys.stdout.write(sys.stdin.read().upper())"]
+    fail = [sys.executable, "-c", "import sys; sys.stderr.write('no'); sys.exit(3)"]
+
+    done = run_tool(echo, input="secret", capture_output=True, text=True, timeout=60)
+    assert (done.returncode, done.stdout, done.stderr) == (0, "SECRET", "")
+    assert run_tool(fail, capture_output=True, timeout=60).returncode == 3
+    with pytest.raises(subprocess.CalledProcessError) as raised:
+        run_tool(fail, capture_output=True, text=True, timeout=60, check=True)
+    assert (raised.value.returncode, raised.value.stderr) == (3, "no")
+    with pytest.raises(ValueError, match="stdin and input"):
+        run_tool(echo, input="x", stdin=subprocess.DEVNULL, timeout=60)
+    with pytest.raises(ValueError, match="capture_output"):
+        run_tool(echo, capture_output=True, stdout=subprocess.DEVNULL, timeout=60)
+
+
+@pytest.mark.parametrize(
+    ("stat", "ppid"),
+    [
+        ("41 (git) S 7 41 41 0 -1", 7),
+        ("42 (my tool (v2)) R 9 42 42 0 -1", 9),
+        ("43 ( ) ) S 11 43 43 0 -1", 11),
+    ],
+)
+def test_the_parent_is_read_past_the_command_name(stat: str, ppid: int) -> None:
+    """A command name in /proc/<pid>/stat may hold spaces and parentheses."""
+    assert _ppid_from_stat(stat) == ppid
 
 
 def test_a_scanner_done_only_after_its_deadline_has_timed_out(

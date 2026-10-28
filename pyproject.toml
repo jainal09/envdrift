@@ -180,6 +180,7 @@ markers = [
     "azure: Tests requiring Lowkey Vault (Azure Key Vault emulator).",
     "gcp: Tests requiring GCP credentials (skipped by default).",
     "slow: Tests that take >10 seconds.",
+    "real_tool_runner: Runs tools through run_tool's own runner, not the subprocess.run stub seam.",
 ]
 addopts = [
     "--strict-markers",

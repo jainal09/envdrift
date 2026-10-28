@@ -1,10 +1,13 @@
 """Pytest configuration and shared fixtures."""
 
+import subprocess
+
 import pytest
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from envdrift.install_integrity import INSECURE_SKIP_ENV
+from envdrift.utils import deadline
 from envdrift.utils.git import GIT_LOCATION_VARIABLES
 
 
@@ -18,6 +21,20 @@ def _no_inherited_git_location(monkeypatch):
     """
     for name in GIT_LOCATION_VARIABLES:
         monkeypatch.delenv(name, raising=False)
+
+
+@pytest.fixture(autouse=True)
+def _tools_run_through_subprocess_run(request, monkeypatch):
+    """Let the unit tests stub the tools envdrift runs by patching ``subprocess.run``.
+
+    ``run_tool`` starts a tool with ``subprocess.Popen`` of its own, so that a timeout can kill
+    the processes the tool started too (#911). Most unit tests stub the scanners' tools with
+    ``patch("subprocess.run")``, so ``run_tool`` goes through ``subprocess.run`` for them. The
+    integration tests, and a test marked ``real_tool_runner``, run the real one.
+    """
+    if "integration" in request.keywords or "real_tool_runner" in request.keywords:
+        return
+    monkeypatch.setattr(deadline, "_run", lambda args, **kwargs: subprocess.run(args, **kwargs))
 
 
 @pytest.fixture(autouse=True)

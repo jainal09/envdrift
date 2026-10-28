@@ -801,9 +801,10 @@ was running (gitleaks, trufflehog, ...) is killed when its time is up, and guard
 waits up to 5 seconds for that before it goes on. The scanner starts no tool and
 no download after that, so none of its tools keeps running after guard exits.
 A scanner that finishes only after its time is up has timed out too, since a tool
-it ran may have been cut short. Only the tool's own process is killed: a process
-the tool started, such as the `git grep` that git-secrets runs, runs on until it
-next writes its output or its work is done
+it ran may have been cut short. A tool is killed together with the processes it
+started, such as the `git grep` that git-secrets runs. Earlier releases killed
+only the tool, and those processes ran on after guard had exited, until they next
+wrote their output or their work was done
 ([#911](https://github.com/jainal09/envdrift/issues/911)).
 
 Exit 5 applies to scanners you **selected** — a CLI flag or a `[guard]
