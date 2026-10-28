@@ -449,6 +449,16 @@ class TestGitSecretsInstalledBinary:
             assert _installed_binary() is None
 
     @pytest.mark.skipif(sys.platform == "win32", reason="~/.local/bin is a POSIX install directory")
+    def test_an_install_creates_the_install_directory(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The installer's call creates ~/.local/bin, which ``make install`` writes to."""
+        monkeypatch.delenv("VIRTUAL_ENV", raising=False)
+        monkeypatch.setenv("HOME", str(tmp_path))
+        assert get_venv_bin_dir() == tmp_path / ".local" / "bin"
+        assert (tmp_path / ".local" / "bin").is_dir()
+
+    @pytest.mark.skipif(sys.platform == "win32", reason="~/.local/bin is a POSIX install directory")
     def test_a_lookup_does_not_create_the_install_directory(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:

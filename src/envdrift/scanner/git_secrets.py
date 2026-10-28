@@ -222,14 +222,14 @@ def get_venv_bin_dir(create: bool = True) -> Path:
             return venv / "Scripts"
         return venv / "bin"
 
-    # Default to user bin directory
-    if platform.system() != "Windows":
-        user_bin = Path.home() / ".local" / "bin"
-        if create:
-            user_bin.mkdir(parents=True, exist_ok=True)
-        return user_bin
+    # Default to user bin directory, except on Windows
+    if platform.system() == "Windows":
+        raise RuntimeError("Cannot find suitable bin directory for installation")
 
-    raise RuntimeError("Cannot find suitable bin directory for installation")
+    user_bin = Path.home() / ".local" / "bin"
+    if create:
+        user_bin.mkdir(parents=True, exist_ok=True)
+    return user_bin
 
 
 class GitSecretsInstaller:
