@@ -80,8 +80,9 @@ one followed by `..`) and for a symlink to a file.
 
 Older envdrift releases ran trufflehog on each path as you passed it. It joined a relative path onto
 itself (`proj/proj/sub/app.env`), and reported nothing, and no error, for a symlinked directory or file
-or a `..` after a symlink. With `--history` it failed on a subdirectory of a repository, and scanned a
-path outside any repository as plain files instead of failing.
+or a `..` after a symlink. With `--history` it failed on a subdirectory of a repository, on every path on
+Windows and on a repository whose path holds `#` or `%`, and scanned a path outside any repository as
+plain files instead of failing.
 
 ## Options
 

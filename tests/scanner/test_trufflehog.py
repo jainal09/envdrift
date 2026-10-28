@@ -581,7 +581,7 @@ class TestTrufflehogScanExecution:
             mock_scanner.scan([tmp_path / "sub"], include_git_history=True)
 
         call_args = mock_run.call_args[0][0]
-        assert call_args[1:3] == ["git", f"file://{tmp_path.resolve()}"]
+        assert call_args[1:3] == ["git", "file://" + tmp_path.resolve().as_posix()]
 
     @pytest.mark.parametrize("include_git_history", [False, True], ids=["filesystem", "git"])
     def test_scan_never_runs_the_self_updater(

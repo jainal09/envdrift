@@ -4,11 +4,11 @@ from __future__ import annotations
 
 import shutil
 import subprocess
-from pathlib import Path
+from pathlib import Path, PurePosixPath, PureWindowsPath
 
 import pytest
 
-from envdrift.scanner.trufflehog import _logged_error, _scan_targets, _under
+from envdrift.scanner.trufflehog import _git_uri, _logged_error, _scan_targets, _under
 
 
 def _git(cwd: Path, *args: str) -> None:
@@ -84,6 +84,21 @@ class TestHistoryTargets:
         )
 
         assert (targets, errors) == ([tmp_path / "present"], [])
+
+
+class TestGitUri:
+    """The ``file://`` URI a history scan gives trufflehog, which parses it as a URL."""
+
+    def test_a_posix_root_is_its_absolute_path(self):
+        assert _git_uri(PurePosixPath("/work/repo")) == "file:///work/repo"
+
+    def test_a_windows_drive_is_the_host_and_the_path_takes_forward_slashes(self):
+        """``file://C:\\work\\repo`` does not parse: trufflehog tried it as an SSH URL."""
+        assert _git_uri(PureWindowsPath(r"C:\work\repo")) == "file://C:/work/repo"
+
+    def test_characters_a_url_reserves_are_percent_encoded(self):
+        """A ``#`` would start a fragment and a ``%`` an escape."""
+        assert _git_uri(PurePosixPath("/work/C#/100%/a b?")) == "file:///work/C%23/100%25/a%20b%3F"
 
 
 class TestFindingPaths:

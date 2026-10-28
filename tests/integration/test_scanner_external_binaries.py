@@ -673,6 +673,28 @@ def test_trufflehog_reports_a_secret_in_the_history_of_a_repository(git_repo, mo
 
 
 @requires_trufflehog
+def test_trufflehog_scans_the_history_of_a_repository_whose_path_a_url_reserves(tmp_path):
+    """A ``#``, ``%`` or space in the repository's path stays a path in trufflehog's URI.
+
+    trufflehog parses the ``file://`` URI as a URL: a ``#`` started a fragment and a ``%`` an
+    escape, so the scan failed. On Windows every path failed, as ``file://C:\\...`` does not parse.
+    """
+    repo = tmp_path / "c# 100% repo"
+    repo.mkdir()
+    for args in (["init"], ["config", "user.email", "t@example.com"], ["config", "user.name", "t"]):
+        subprocess.run(["git", *args], cwd=repo, capture_output=True, check=True)
+    _write_secret_file(repo, "app.env")
+    _commit_all(repo)
+
+    result = TrufflehogScanner(auto_install=False).scan([repo], include_git_history=True)
+
+    assert result.error is None, f"unexpected error: {result.error}"
+    tokens = _github_token_findings(result)
+    assert tokens, "the committed token was not reported"
+    assert {f.file_path.resolve() for f in tokens} == {(repo / "app.env").resolve()}
+
+
+@requires_trufflehog
 def test_guard_trufflehog_reports_a_github_token(tmp_path, integration_env):
     """``guard --trufflehog`` runs the real binary and reports its finding in ``--json``."""
     _write_secret_file(tmp_path)

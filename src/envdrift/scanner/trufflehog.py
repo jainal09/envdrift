@@ -25,8 +25,9 @@ import tempfile
 import time
 import zipfile
 from dataclasses import replace
-from pathlib import Path
+from pathlib import Path, PurePath
 from typing import TYPE_CHECKING, Any, ClassVar
+from urllib.parse import quote
 
 from envdrift.install_integrity import (
     DOWNLOAD_TIMEOUT_SECONDS,
@@ -248,6 +249,18 @@ def _scan_targets(paths: list[Path], *, include_git_history: bool) -> tuple[list
             seen_roots.add(root.resolve())
             targets.append(root)
     return targets, errors
+
+
+def _git_uri(root: PurePath) -> str:
+    """The ``file://`` URI of the repository at ``root``, for ``trufflehog git``.
+
+    trufflehog parses it with Go's url.Parse, then joins its host and path back into a path. So the
+    path is written with forward slashes and percent-encoded: a ``#``, ``%`` or ``?`` in a directory
+    name stays in the path, and a Windows drive lands in the host, the form git takes as well
+    (``file://C:/projects/repo``). ``file://C:\\...`` did not parse, and trufflehog tried it as an
+    SSH URL, so no history scan ran on Windows.
+    """
+    return "file://" + quote(root.as_posix(), safe="/:")
 
 
 def _under(target: Path, physical: Path, reported: Path) -> Path:
@@ -665,7 +678,7 @@ class TrufflehogScanner(ScannerBackend):
         """
         physical = target.resolve()
         if include_git_history:
-            args = [str(binary), "git", f"file://{physical}", "--json"]
+            args = [str(binary), "git", _git_uri(physical), "--json"]
         else:
             args = [str(binary), "filesystem", str(physical), "--json"]
 
