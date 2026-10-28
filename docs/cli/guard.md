@@ -78,6 +78,12 @@ form of the path you passed, and gitleaks showed history findings by their absol
 Infisical also reported nothing, and no error, for the absolute path of a symlinked directory (or of
 one followed by `..`) and for a symlink to a file.
 
+Older envdrift releases ran trufflehog on each path as you passed it. It joined a relative path onto
+itself (`proj/proj/sub/app.env`), and reported nothing, and no error, for a symlinked directory or file
+or a `..` after a symlink. With `--history` it failed on a subdirectory of a repository, on every path on
+Windows and on a repository whose path holds `#` or `%`, and scanned a path outside any repository as
+plain files instead of failing.
+
 ## Options
 
 ### `--native-only`
@@ -103,6 +109,10 @@ Enable or disable trufflehog. Disabled by default.
 ```bash
 envdrift guard --trufflehog
 ```
+
+envdrift runs trufflehog with `--no-update`. Without that flag trufflehog asks `oss.trufflehog.org` for a
+newer release before every scan and writes it over its own binary, replacing the version envdrift pins
+and verifies. Older envdrift releases did not pass it.
 
 ### `--detect-secrets` / `--no-detect-secrets`
 
@@ -198,6 +208,13 @@ git-secrets provides:
 envdrift guard --git-secrets
 ```
 
+git-secrets publishes no release binaries. On Linux, auto-install clones its repository and builds the
+commit envdrift pins in `constants.json`, and fails when that commit cannot be checked out. On macOS it
+installs the Homebrew formula. envdrift runs the git-secrets it installed, in the active venv or
+`~/.local/bin`, even when that directory is not on your `PATH`. Older releases did not find it there,
+so the scan failed with "git-secrets reported a match ... that envdrift cannot parse" and every run
+installed it again.
+
 ### `--talisman` / `--no-talisman`
 
 Enable or disable Talisman scanner. Disabled by default.
@@ -286,11 +303,11 @@ error instead of silently skipping the history.
 envdrift guard --history
 ```
 
-gitleaks and infisical scan the history of the whole repository that contains each scanned path,
-a file or a subdirectory alike, once per repository, so `--pr-base --history` with many changed
-files runs one history scan. A path outside any git repository, or in a repository with no commits,
-is a scanner error for them, never a clean history: with no blocking finding, guard exits 5 (scan
-incomplete).
+gitleaks, infisical and trufflehog scan the history of the whole repository that contains each
+scanned path, a file or a subdirectory alike, once per repository, so `--pr-base --history` with many
+changed files runs one history scan. A path outside any git repository, or in a repository with no
+commits, is a scanner error for them, never a clean history: with no blocking finding, guard exits 5
+(scan incomplete).
 
 ### `--entropy` / `--no-entropy`, `-e`
 
@@ -412,6 +429,8 @@ Auto-installed scanner binaries are verified against the upstream-published
 SHA256 checksums before they are installed or executed; the install fails
 closed when the checksum is missing, unreachable, or mismatched. Set
 `ENVDRIFT_INSECURE_SKIP_CHECKSUM=1` to skip verification (unsafe).
+git-secrets, which publishes no binaries, is built on Linux from the commit
+pinned in `constants.json` instead (see `--git-secrets`).
 
 ### `--json`, `-j`
 

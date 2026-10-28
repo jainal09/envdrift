@@ -21,6 +21,7 @@ See: https://github.com/awslabs/git-secrets
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 import platform
@@ -151,8 +152,64 @@ class GitSecretsError(Exception):
     pass
 
 
-def get_venv_bin_dir() -> Path:
+# A full commit ID. git-secrets publishes no release binaries and its master branch moves, so
+# the installer checks out one commit (#902); a branch or tag name would install whatever it
+# points to on the day.
+_COMMIT_RE = re.compile(r"[0-9a-f]{40}")
+
+
+def _load_constants() -> dict:
+    """Load constants from the package's constants.json."""
+    constants_path = Path(__file__).parent.parent / "constants.json"
+    with open(constants_path) as f:
+        return json.load(f)
+
+
+def _get_git_secrets_commit() -> str:
+    """Get the pinned git-secrets commit from constants."""
+    return _load_constants().get("git_secrets_commit", "")
+
+
+def _pinned_commit() -> str:
+    """The commit constants.json pins git-secrets to, if it is a full commit ID."""
+    commit = _get_git_secrets_commit()
+    if not isinstance(commit, str) or not _COMMIT_RE.fullmatch(commit):
+        raise GitSecretsInstallError(
+            f"constants.json pins git-secrets to {commit!r}, which is not a commit ID"
+        )
+    return commit
+
+
+def _installed_binary() -> Path | None:
+    """The git-secrets the installer put in its target directory, if it is there."""
+    try:
+        # Looking creates no directory, and a directory that cannot be read holds no binary to run
+        candidate = get_venv_bin_dir(create=False) / "git-secrets"
+        return candidate if candidate.is_file() else None
+    except (RuntimeError, OSError):
+        return None
+
+
+def _existing_binary() -> Path | None:
+    """git-secrets on PATH, or else where the installer puts it, which need not be on PATH (#908)."""
+    system_path = shutil.which("git-secrets")
+    if system_path:
+        return Path(system_path)
+    return _installed_binary()
+
+
+def _script_file(binary: Path | None) -> Path | None:
+    """binary if it is a git-secrets script on disk; None for the `git secrets` subcommand."""
+    if binary is None or not binary.is_absolute():
+        return None
+    return binary if binary.is_file() else None
+
+
+def get_venv_bin_dir(create: bool = True) -> Path:
     """Get the virtual environment's bin directory.
+
+    Args:
+        create: Create ~/.local/bin when it is the directory; a lookup passes False.
 
     Returns:
         Path to the bin directory where binaries should be installed.
@@ -165,13 +222,14 @@ def get_venv_bin_dir() -> Path:
             return venv / "Scripts"
         return venv / "bin"
 
-    # Default to user bin directory
-    if platform.system() != "Windows":
-        user_bin = Path.home() / ".local" / "bin"
-        user_bin.mkdir(parents=True, exist_ok=True)
-        return user_bin
+    # Default to user bin directory, except on Windows
+    if platform.system() == "Windows":
+        raise RuntimeError("Cannot find suitable bin directory for installation")
 
-    raise RuntimeError("Cannot find suitable bin directory for installation")
+    user_bin = Path.home() / ".local" / "bin"
+    if create:
+        user_bin.mkdir(parents=True, exist_ok=True)
+    return user_bin
 
 
 class GitSecretsInstaller:
@@ -179,7 +237,7 @@ class GitSecretsInstaller:
 
     git-secrets is a shell script, so installation methods vary by platform:
     - macOS: Homebrew (brew install git-secrets)
-    - Linux: Clone repo and make install
+    - Linux: Clone repo, check out the commit pinned in constants.json, and make install
     - Windows: PowerShell script or manual
     """
 
@@ -269,7 +327,7 @@ class GitSecretsInstaller:
             raise GitSecretsInstallError(f"Homebrew installation failed: {e}") from e
 
     def _install_from_source(self) -> Path:
-        """Install from source on Linux."""
+        """Install from source on Linux, at the commit pinned in constants.json."""
         self.progress("Installing git-secrets from source...")
 
         # Check if git is available
@@ -280,22 +338,14 @@ class GitSecretsInstaller:
         if not shutil.which("make"):
             raise GitSecretsInstallError("make not found. Please install make first.")
 
+        commit = _pinned_commit()
+
         with tempfile.TemporaryDirectory() as tmp_dir:
             tmp_path = Path(tmp_dir)
             repo_path = tmp_path / "git-secrets"
 
             try:
-                # Clone the repository
-                self.progress("Cloning git-secrets repository...")
-                run_tool(
-                    ["git", "clone", "--depth", "1", self.REPO_URL, str(repo_path)],
-                    capture_output=True,
-                    text=True,
-                    encoding="utf-8",
-                    errors="replace",
-                    timeout=120,
-                    check=True,
-                )
+                self._clone_at(commit, repo_path)
 
                 # Install to user's local bin
                 target_dir = get_venv_bin_dir()
@@ -329,6 +379,32 @@ class GitSecretsInstaller:
                 raise GitSecretsInstallError(f"Installation failed: {e.stderr or e.stdout}") from e
             except subprocess.TimeoutExpired as e:
                 raise GitSecretsInstallError("Installation timed out") from e
+
+    def _clone_at(self, commit: str, repo_path: Path) -> None:
+        """Clone git-secrets to repo_path and check out commit there."""
+        self.progress("Cloning git-secrets repository...")
+        run_tool(
+            ["git", "clone", "--quiet", "--no-checkout", self.REPO_URL, str(repo_path)],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=120,
+            check=True,
+        )
+
+        # Check out the pinned commit: git fails if the clone does not hold it
+        self.progress(f"Checking out git-secrets {commit[:7]}...")
+        run_tool(
+            ["git", "checkout", "--quiet", "--detach", commit],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=60,
+            cwd=repo_path,
+            check=True,
+        )
 
 
 class GitSecretsScanner(ScannerBackend):
@@ -403,11 +479,11 @@ class GitSecretsScanner(ScannerBackend):
         if self._binary_path and self._binary_path.exists():
             return self._binary_path
 
-        # Check system PATH
-        system_path = shutil.which("git-secrets")
-        if system_path:
-            self._binary_path = Path(system_path)
-            return self._binary_path
+        # Check system PATH, then where the installer puts it
+        existing = _existing_binary()
+        if existing is not None:
+            self._binary_path = existing
+            return existing
 
         # Check git subcommand (git secrets)
         try:
@@ -472,28 +548,25 @@ class GitSecretsScanner(ScannerBackend):
         Returns:
             CompletedProcess object.
         """
-        # Try as standalone command first
-        git_secrets_path = shutil.which("git-secrets")
-        if git_secrets_path:
-            return run_tool(
-                [git_secrets_path, *args],
-                capture_output=True,
-                text=True,
-                encoding="utf-8",
-                errors="replace",
-                timeout=300,
-                cwd=cwd,
-            )
-
-        # Fall back to git subcommand
+        script = _script_file(self._binary_path)
+        if script is not None:
+            # The git-secrets _find_binary found or installed, on PATH or not (#908). Its
+            # directory goes on the child's PATH as well: git-secrets runs the providers
+            # registered as `git secrets ...` (the AWS one from --register-aws) through git.
+            path = os.pathsep.join(filter(None, [str(script.parent), os.environ.get("PATH")]))
+            command, env = [str(script), *args], {**os.environ, "PATH": path}
+        else:
+            # Fall back to git subcommand
+            command, env = ["git", "secrets", *args], None
         return run_tool(
-            ["git", "secrets", *args],
+            command,
             capture_output=True,
             text=True,
             encoding="utf-8",
             errors="replace",
             timeout=300,
             cwd=cwd,
+            env=env,
         )
 
     def scan(

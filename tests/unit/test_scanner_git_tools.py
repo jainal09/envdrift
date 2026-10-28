@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import subprocess
+import sys
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -15,8 +16,21 @@ from envdrift.scanner.git_secrets import (
     GitSecretsInstallError,
     GitSecretsNotFoundError,
     GitSecretsScanner,
+    _get_git_secrets_commit,
+    _installed_binary,
     get_venv_bin_dir,
 )
+
+
+@pytest.fixture
+def no_installed_git_secrets():
+    """Keep a git-secrets in this machine's install directory out of a test.
+
+    ``_find_binary`` also looks where the installer puts git-secrets (#908), so on a machine whose
+    venv holds one, a test that mocks "not installed" would find it.
+    """
+    with patch("envdrift.scanner.git_secrets._installed_binary", return_value=None):
+        yield
 
 
 class TestGetVenvBinDir:
@@ -81,6 +95,7 @@ class TestGitSecretsInstaller:
                     assert result == Path("/usr/local/bin/git-secrets")
 
 
+@pytest.mark.usefixtures("no_installed_git_secrets")
 class TestGitSecretsScanner:
     """Tests for GitSecretsScanner."""
 
@@ -377,15 +392,22 @@ class TestGitSecretsScanner:
             result = scanner.install()
             assert result == Path("/installed/git-secrets")
 
-    def test_run_git_secrets_uses_standalone_command(self) -> None:
-        """Test _run_git_secrets uses standalone command when available."""
-        with patch("shutil.which", return_value="/usr/local/bin/git-secrets"):
-            with patch("subprocess.run") as mock_run:
-                mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
-                scanner = GitSecretsScanner(auto_install=False)
-                scanner._run_git_secrets(["--list"], Path("/tmp"))
-                mock_run.assert_called_once()
-                assert mock_run.call_args[0][0][0] == "/usr/local/bin/git-secrets"
+    def test_run_git_secrets_runs_the_binary_it_found(self, tmp_path: Path) -> None:
+        """The binary _find_binary found runs, its directory first on the child's PATH (#908).
+
+        PATH need not hold it, and git-secrets runs its `git secrets ...` providers through git.
+        """
+        binary = tmp_path / "bin" / "git-secrets"
+        binary.parent.mkdir()
+        binary.touch()
+        with patch("subprocess.run") as mock_run:
+            mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
+            scanner = GitSecretsScanner(auto_install=False)
+            scanner._binary_path = binary
+            scanner._run_git_secrets(["--list"], tmp_path)
+
+        assert mock_run.call_args[0][0] == [str(binary), "--list"]
+        assert mock_run.call_args.kwargs["env"]["PATH"].split(os.pathsep)[0] == str(binary.parent)
 
     def test_run_git_secrets_falls_back_to_git_subcommand(self) -> None:
         """Test _run_git_secrets falls back to git subcommand."""
@@ -396,6 +418,69 @@ class TestGitSecretsScanner:
             mock_run.assert_called_once()
             assert mock_run.call_args[0][0][0] == "git"
             assert mock_run.call_args[0][0][1] == "secrets"
+
+
+class TestGitSecretsInstalledBinary:
+    """A git-secrets in the installer's directory is found though PATH does not hold it (#908)."""
+
+    def test_find_binary_finds_an_install_that_is_not_on_path(self, tmp_path: Path) -> None:
+        """No `git secrets --list` probe and no second install: the installed binary is used."""
+        installed = tmp_path / "git-secrets"
+        installed.touch()
+        with (
+            patch("shutil.which", return_value=None),
+            patch("envdrift.scanner.git_secrets.get_venv_bin_dir", return_value=tmp_path),
+            patch("subprocess.run") as mock_run,
+        ):
+            scanner = GitSecretsScanner(auto_install=True)
+            assert scanner._find_binary() == installed
+        mock_run.assert_not_called()
+
+    def test_no_install_directory_means_no_installed_binary(self) -> None:
+        """Windows without a venv has no install directory: the lookup moves on."""
+        with patch(
+            "envdrift.scanner.git_secrets.get_venv_bin_dir",
+            side_effect=RuntimeError("Cannot find suitable bin directory for installation"),
+        ):
+            assert _installed_binary() is None
+
+    def test_an_empty_install_directory_has_no_installed_binary(self, tmp_path: Path) -> None:
+        with patch("envdrift.scanner.git_secrets.get_venv_bin_dir", return_value=tmp_path):
+            assert _installed_binary() is None
+
+    @pytest.mark.skipif(sys.platform == "win32", reason="~/.local/bin is a POSIX install directory")
+    def test_an_install_creates_the_install_directory(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The installer's call creates ~/.local/bin, which ``make install`` writes to."""
+        monkeypatch.delenv("VIRTUAL_ENV", raising=False)
+        monkeypatch.setenv("HOME", str(tmp_path))
+        assert get_venv_bin_dir() == tmp_path / ".local" / "bin"
+        assert (tmp_path / ".local" / "bin").is_dir()
+
+    @pytest.mark.skipif(sys.platform == "win32", reason="~/.local/bin is a POSIX install directory")
+    def test_a_lookup_does_not_create_the_install_directory(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Only an install creates ~/.local/bin: looking for git-secrets there does not."""
+        monkeypatch.delenv("VIRTUAL_ENV", raising=False)
+        monkeypatch.setenv("HOME", str(tmp_path))
+        assert _installed_binary() is None
+        assert not (tmp_path / ".local").exists()
+
+    @pytest.mark.skipif(sys.platform == "win32", reason="~/.local/bin is a POSIX install directory")
+    def test_an_install_directory_it_cannot_look_in_has_no_installed_binary(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """An OSError while looking in the install directory means no binary there, not a crash.
+
+        The home directory's name is too long for the filesystem, so looking in it fails with
+        ENAMETOOLONG: like a home directory the user may not read, it is neither missing nor a
+        file. The lookup used to create ~/.local/bin and raised that error out of is_installed().
+        """
+        monkeypatch.delenv("VIRTUAL_ENV", raising=False)
+        monkeypatch.setenv("HOME", str(tmp_path / ("x" * 300)))
+        assert _installed_binary() is None
 
 
 class TestGitSecretsParseOutput:
@@ -776,12 +861,63 @@ class TestGitSecretsInstallerPaths:
             with pytest.raises(GitSecretsInstallError, match="timed out"):
                 installer._install_from_source()
 
+    def test_install_from_source_checks_out_the_pinned_commit(self, tmp_path: Path) -> None:
+        """The source install builds the commit constants.json pins, not master (#902).
+
+        It cloned the default branch with ``--depth 1`` and installed whatever master held that
+        day. The real clone and build are in tests/integration/test_scanner_git_tools.py.
+        """
+        (tmp_path / "bin").mkdir()
+        (tmp_path / "bin" / "git-secrets").touch()
+        with (
+            patch("shutil.which", side_effect=lambda name: f"/usr/bin/{name}"),
+            patch("subprocess.run") as mock_run,
+            patch(
+                "envdrift.scanner.git_secrets.get_venv_bin_dir",
+                return_value=tmp_path / "bin",
+            ),
+        ):
+            mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
+            GitSecretsInstaller()._install_from_source()
+
+        clone, checkout, make = mock_run.call_args_list
+        repo = Path(clone.args[0][-1])
+        assert clone.args[0][:2] == ["git", "clone"]
+        assert "--depth" not in clone.args[0]
+        assert checkout.args[0] == [
+            "git",
+            "checkout",
+            "--quiet",
+            "--detach",
+            _get_git_secrets_commit(),
+        ]
+        assert checkout.kwargs["cwd"] == repo
+        assert checkout.kwargs["check"] is True
+        assert make.args[0][:2] == ["make", "install"]
+        assert make.kwargs["cwd"] == repo
+
+    @pytest.mark.parametrize("pin", ["", "master", "1.3.0", "7d6b970", None, 123])
+    def test_install_from_source_refuses_a_pin_that_is_not_a_commit(self, pin: object) -> None:
+        """Only a full commit ID pins the install: a branch or tag name can move.
+
+        A pin that is not a string fails the install too, rather than raising a TypeError.
+        """
+        with (
+            patch("shutil.which", side_effect=lambda name: f"/usr/bin/{name}"),
+            patch("subprocess.run") as mock_run,
+            patch("envdrift.scanner.git_secrets._get_git_secrets_commit", return_value=pin),
+        ):
+            with pytest.raises(GitSecretsInstallError, match="which is not a commit ID"):
+                GitSecretsInstaller()._install_from_source()
+        mock_run.assert_not_called()
+
 
 # ---------------------------------------------------------------------------
 # _find_binary extra paths (lines 328-329, 338-343)
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.usefixtures("no_installed_git_secrets")
 class TestGitSecretsScannerFindBinaryExtra:
     """Extra _find_binary paths not covered by the basic tests."""
 

@@ -1,6 +1,6 @@
 """Integration tests for external-binary secret scanners.
 
-These tests exercise the REAL scanner binaries (talisman, trivy, infisical) and
+These tests exercise the REAL scanner binaries (talisman, trivy, infisical, trufflehog) and
 the ScanEngine orchestration/filtering against real subprocess output. Each test
 is gated on the binary being installed via ``shutil.which`` / ``is_installed()``
 so it SKIPs cleanly when a tool is absent (e.g. in a minimal local env) and runs
@@ -17,8 +17,10 @@ import hashlib
 import json
 import re
 import shutil
+import socket
 import subprocess
 import sys
+import threading
 from dataclasses import replace
 from pathlib import Path
 
@@ -31,6 +33,7 @@ from envdrift.scanner.infisical import InfisicalScanner
 from envdrift.scanner.patterns import hash_secret
 from envdrift.scanner.talisman import TalismanScanner
 from envdrift.scanner.trivy import TrivyScanner
+from envdrift.scanner.trufflehog import TrufflehogScanner
 
 pytestmark = [pytest.mark.integration, pytest.mark.slow]
 
@@ -42,6 +45,7 @@ CRITICAL = FindingSeverity.CRITICAL
 _HAS_TALISMAN = TalismanScanner(auto_install=False).is_installed()
 _HAS_TRIVY = TrivyScanner(auto_install=False).is_installed()
 _HAS_INFISICAL = InfisicalScanner(auto_install=False).is_installed()
+_HAS_TRUFFLEHOG = TrufflehogScanner(auto_install=False).is_installed()
 
 requires_talisman = pytest.mark.skipif(
     not _HAS_TALISMAN, reason="talisman not installed (brew install talisman)"
@@ -52,6 +56,9 @@ requires_trivy = pytest.mark.skipif(
 requires_infisical = pytest.mark.skipif(
     not _HAS_INFISICAL,
     reason="infisical not installed (brew install infisical/get-cli/infisical)",
+)
+requires_trufflehog = pytest.mark.skipif(
+    not _HAS_TRUFFLEHOG, reason="trufflehog not installed (brew install trufflehog)"
 )
 
 
@@ -609,6 +616,154 @@ def test_infisical_does_not_report_identifiers_paired_with_a_secret(tmp_path):
     )
 
 
+# --- trufflehog (#902) ----------------------------------------------------
+
+
+def _github_token_findings(result: ScanResult) -> list[ScanFinding]:
+    return [f for f in result.findings if f.secret_hash == hash_secret(GITHUB_TOKEN)]
+
+
+@requires_trufflehog
+def test_trufflehog_reports_a_github_token(tmp_path):
+    """The real trufflehog's JSON lines become a finding for the token, redacted.
+
+    envdrift runs it without verification, so the token is unverified and HIGH.
+    """
+    _write_secret_file(tmp_path)
+
+    result = TrufflehogScanner(auto_install=False).scan([tmp_path])
+
+    assert result.error is None, f"unexpected error: {result.error}"
+    tokens = _github_token_findings(result)
+    assert tokens, f"the GitHub token was missed; rules: {[f.rule_id for f in result.findings]}"
+    for finding in tokens:
+        assert (finding.file_path, finding.line_number) == (tmp_path / "creds.env", 1)
+        assert finding.severity is FindingSeverity.HIGH
+        assert finding.verified is False
+        assert GITHUB_TOKEN not in finding.secret_preview
+
+
+@requires_trufflehog
+def test_trufflehog_scan_of_a_clean_directory_is_clean(tmp_path):
+    """A directory without secrets has no findings and no error."""
+    (tmp_path / "app.env").write_text("APP_NAME=demo\nDEBUG=false\n")
+
+    result = TrufflehogScanner(auto_install=False).scan([tmp_path])
+
+    assert result.error is None, f"unexpected error: {result.error}"
+    assert result.findings == []
+
+
+@requires_trufflehog
+def test_trufflehog_reports_a_secret_in_the_history_of_a_repository(git_repo, monkeypatch):
+    """A history scan of the repository root reports a token scrubbed from the working tree."""
+    _write_secret_file(git_repo, "app.env")
+    _commit_all(git_repo)
+    (git_repo / "app.env").write_text("GITHUB_TOKEN=scrubbed\n")
+    _commit_all(git_repo)
+    monkeypatch.chdir(git_repo)
+
+    result = TrufflehogScanner(auto_install=False).scan([Path()], include_git_history=True)
+
+    assert result.error is None, f"unexpected error: {result.error}"
+    tokens = _github_token_findings(result)
+    assert tokens, "the committed token was not reported"
+    assert {f.file_path.resolve() for f in tokens} == {(git_repo / "app.env").resolve()}
+    assert all(f.commit_sha for f in tokens)
+
+
+@requires_trufflehog
+def test_trufflehog_scans_the_history_of_a_repository_whose_path_a_url_reserves(tmp_path):
+    """A ``#``, ``%`` or space in the repository's path stays a path in trufflehog's URI.
+
+    trufflehog parses the ``file://`` URI as a URL: a ``#`` started a fragment and a ``%`` an
+    escape, so the scan failed. On Windows every path failed, as ``file://C:\\...`` does not parse.
+    """
+    repo = tmp_path / "c# 100% repo"
+    repo.mkdir()
+    for args in (["init"], ["config", "user.email", "t@example.com"], ["config", "user.name", "t"]):
+        subprocess.run(["git", *args], cwd=repo, capture_output=True, check=True)
+    _write_secret_file(repo, "app.env")
+    _commit_all(repo)
+
+    result = TrufflehogScanner(auto_install=False).scan([repo], include_git_history=True)
+
+    assert result.error is None, f"unexpected error: {result.error}"
+    tokens = _github_token_findings(result)
+    assert tokens, "the committed token was not reported"
+    assert {f.file_path.resolve() for f in tokens} == {(repo / "app.env").resolve()}
+    assert all(f.commit_sha for f in tokens)
+
+
+@requires_trufflehog
+def test_guard_trufflehog_reports_a_github_token(tmp_path, integration_env):
+    """``guard --trufflehog`` runs the real binary and reports its finding in ``--json``."""
+    _write_secret_file(tmp_path)
+
+    result = _run_guard(
+        [".", "--trufflehog", "--no-gitleaks", "--no-auto-install", "--ci", "--json"],
+        cwd=tmp_path,
+        env=integration_env,
+    )
+
+    assert result.returncode == 1, (result.returncode, result.stdout, result.stderr)
+    payload = json.loads(result.stdout)
+    trufflehog = [f for f in payload["findings"] if f["scanner"] == "trufflehog"]
+    assert trufflehog, payload["findings"]
+    assert {(f["file_path"], f["line_number"]) for f in trufflehog} == {("creds.env", 1)}
+
+
+@pytest.fixture
+def recording_proxy(monkeypatch):
+    """Route the HTTP(S) proxy of child processes to a local listener; yield what it was asked.
+
+    The listener records the first line of each request (``CONNECT host:443 ...``) and refuses
+    it, so nothing leaves the machine.
+    """
+    requests: list[str] = []
+    server = socket.create_server(("127.0.0.1", 0))
+
+    def serve() -> None:
+        while True:
+            try:
+                conn, _ = server.accept()
+            except OSError:
+                return
+            with conn:
+                conn.settimeout(5)
+                try:
+                    requests.append(conn.recv(4096).decode("latin-1").partition("\r\n")[0])
+                    conn.sendall(b"HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\n\r\n")
+                except OSError:
+                    pass
+
+    threading.Thread(target=serve, daemon=True).start()
+    proxy = f"http://127.0.0.1:{server.getsockname()[1]}"
+    for name in ("HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy"):
+        monkeypatch.setenv(name, proxy)
+    for name in ("NO_PROXY", "no_proxy", "ALL_PROXY", "all_proxy"):
+        monkeypatch.delenv(name, raising=False)
+    yield requests
+    server.close()
+
+
+@requires_trufflehog
+def test_trufflehog_scan_does_not_run_its_self_updater(tmp_path, recording_proxy):
+    """A scan must leave the pinned trufflehog binary as installed (#907).
+
+    Unless given ``--no-update``, trufflehog asks oss.trufflehog.org for a newer release before
+    every scan and writes it over its own binary. A scan without verification has nothing else
+    to fetch, so it must make no request at all.
+    """
+    _write_secret_file(tmp_path)
+
+    result = TrufflehogScanner(auto_install=False).scan([tmp_path])
+
+    assert result.error is None, f"unexpected error: {result.error}"
+    assert _github_token_findings(result), "the scan did not run"
+    assert recording_proxy == [], f"trufflehog went online during a scan: {recording_proxy}"
+
+
 # --- Relative and symlinked scan paths (#843, #853) ------------------------
 
 _HAS_GITLEAKS = GitleaksScanner(auto_install=False).is_installed()
@@ -618,6 +773,7 @@ requires_gitleaks = pytest.mark.skipif(not _HAS_GITLEAKS, reason="gitleaks not i
 _PATH_SCANNERS = [
     pytest.param(InfisicalScanner, marks=requires_infisical, id="infisical"),
     pytest.param(GitleaksScanner, marks=requires_gitleaks, id="gitleaks"),
+    pytest.param(TrufflehogScanner, marks=requires_trufflehog, id="trufflehog"),
 ]
 
 

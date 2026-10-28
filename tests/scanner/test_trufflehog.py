@@ -22,6 +22,7 @@ from envdrift.scanner.trufflehog import (
     TrufflehogNotFoundError,
     TrufflehogScanner,
     _get_trufflehog_version,
+    _git_uri,
     get_platform_info,
     get_trufflehog_path,
     get_venv_bin_dir,
@@ -570,17 +571,36 @@ class TestTrufflehogScanExecution:
         assert "filesystem" in call_args
 
     def test_scan_uses_git_mode_for_history(self, mock_scanner: TrufflehogScanner, tmp_path: Path):
-        """Test that scan uses git mode when scanning history."""
-        # Create a fake .git directory
-        (tmp_path / ".git").mkdir()
-
-        with patch.object(mock_scanner, "_find_binary", return_value=mock_scanner._binary_path):
-            with patch("subprocess.run") as mock_run:
-                mock_run.return_value = MagicMock(stdout="", stderr="", returncode=0)
-                mock_scanner.scan([tmp_path], include_git_history=True)
+        """A history scan runs git mode on the physical repository root (#906)."""
+        with (
+            patch.object(mock_scanner, "_find_binary", return_value=mock_scanner._binary_path),
+            patch("envdrift.scanner.trufflehog._history_target", return_value=(tmp_path, None)),
+            patch("subprocess.run") as mock_run,
+        ):
+            mock_run.return_value = MagicMock(stdout="", stderr="", returncode=0)
+            (tmp_path / "sub").mkdir()
+            mock_scanner.scan([tmp_path / "sub"], include_git_history=True)
 
         call_args = mock_run.call_args[0][0]
-        assert "git" in call_args
+        assert call_args[1:3] == ["git", _git_uri(tmp_path.resolve())]
+
+    @pytest.mark.parametrize("include_git_history", [False, True], ids=["filesystem", "git"])
+    def test_scan_never_runs_the_self_updater(
+        self, mock_scanner: TrufflehogScanner, tmp_path: Path, include_git_history: bool
+    ):
+        """Every scan passes --no-update, or trufflehog may replace its pinned binary (#907).
+
+        The real binary is checked in tests/integration/test_scanner_external_binaries.py.
+        """
+        with (
+            patch.object(mock_scanner, "_find_binary", return_value=mock_scanner._binary_path),
+            patch("envdrift.scanner.trufflehog._history_target", return_value=(tmp_path, None)),
+            patch("subprocess.run") as mock_run,
+        ):
+            mock_run.return_value = MagicMock(stdout="", stderr="", returncode=0)
+            mock_scanner.scan([tmp_path], include_git_history=include_git_history)
+
+        assert "--no-update" in mock_run.call_args[0][0]
 
     def test_scan_with_verification_disabled(self, mock_scanner: TrufflehogScanner, tmp_path: Path):
         """Test that scan passes --no-verification flag."""
@@ -689,54 +709,6 @@ class TestTrufflehogVersion:
 
         version = scanner.get_version()
         assert version == "3.88.3"
-
-
-class TestGitRepoDetection:
-    """Tests for git repository detection."""
-
-    @pytest.fixture
-    def scanner(self) -> TrufflehogScanner:
-        """Create a scanner for testing."""
-        return TrufflehogScanner(auto_install=False)
-
-    def test_is_git_repo_with_git_dir(self, scanner: TrufflehogScanner, tmp_path: Path):
-        """Test detection when .git directory exists."""
-        (tmp_path / ".git").mkdir()
-        assert scanner._is_git_repo(tmp_path) is True
-
-    def test_is_git_repo_without_git_dir(
-        self,
-        scanner: TrufflehogScanner,
-        tmp_path: Path,
-        monkeypatch: pytest.MonkeyPatch,
-    ):
-        """Test detection when no .git directory."""
-        real_parents = Path.parents
-
-        def bounded_parents(path: Path):
-            if path == tmp_path:
-                return ()
-            return real_parents.__get__(path, type(path))
-
-        # Treat the isolated test directory as the walk root. Host ancestors
-        # may contain unrelated git metadata (for example, a mounted /tmp/.git).
-        monkeypatch.setattr(Path, "parents", property(bounded_parents))
-
-        assert scanner._is_git_repo(tmp_path) is False
-
-    def test_is_git_repo_with_parent_git_dir(self, scanner: TrufflehogScanner, tmp_path: Path):
-        """Test detection when .git exists in parent directory."""
-        (tmp_path / ".git").mkdir()
-        subdir = tmp_path / "subdir"
-        subdir.mkdir()
-        assert scanner._is_git_repo(subdir) is True
-
-    def test_is_git_repo_with_file_path(self, scanner: TrufflehogScanner, tmp_path: Path):
-        """Test detection when given a file path."""
-        (tmp_path / ".git").mkdir()
-        file_path = tmp_path / "test.py"
-        file_path.touch()
-        assert scanner._is_git_repo(file_path) is True
 
 
 class TestExceptionClasses:

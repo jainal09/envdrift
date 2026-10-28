@@ -208,6 +208,18 @@ jobs:
           "$HOME/.local/bin/infisical" --version || true
           "$HOME/.local/bin/talisman" --version || true
 
+      - name: Install trufflehog and git-secrets
+        run: |
+          # envdrift's own installers put them in the project venv, which `uv run` puts on
+          # PATH, so their real-binary tests run instead of skipping (#902): trufflehog at
+          # the version in constants.json, checksum verified, and git-secrets, which
+          # publishes no binaries, built from the commit pinned there.
+          uv run --no-sync python -c "from envdrift.scanner.trufflehog import TrufflehogInstaller as I; print(I(progress_callback=print).install())"
+          uv run --no-sync python -c "from envdrift.scanner.git_secrets import GitSecretsInstaller as I; print(I(progress_callback=print).install(force=True))"
+          uv run --no-sync trufflehog --version
+          # The git-secrets tests are skip-gated on shutil.which: fail here instead.
+          uv run --no-sync python -c "import shutil, sys; sys.exit(shutil.which('git-secrets') is None)"
+
       - name: Verify services are accessible
         run: |
           # Wait for services to fully start after health checks pass

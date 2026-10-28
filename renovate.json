@@ -124,6 +124,20 @@
     },
     {
       "customType": "regex",
+      "description": "git-secrets publishes no release binaries and its last tag (1.3.0, 2019) predates the fixes and patterns on master, so the installer and CI check out this commit of master (#902). A digest update carries no minor-version-bump label, so it is never auto-merged.",
+      "managerFilePatterns": [
+        "/^src/envdrift/constants\\.json$/"
+      ],
+      "matchStrings": [
+        "\"git_secrets_commit\":\\s*\"(?<currentDigest>[0-9a-f]{40})\""
+      ],
+      "currentValueTemplate": "master",
+      "depNameTemplate": "awslabs/git-secrets",
+      "packageNameTemplate": "https://github.com/awslabs/git-secrets",
+      "datasourceTemplate": "git-refs"
+    },
+    {
+      "customType": "regex",
       "managerFilePatterns": [
         "/^\\.github/workflows/.*\\.ya?ml$/"
       ],
