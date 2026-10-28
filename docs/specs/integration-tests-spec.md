@@ -59,7 +59,7 @@ literal.
 # kept identical to the integration-tests.yml CI service containers (#500)
 services:
   localstack:
-    image: localstack/localstack:2026.09.1
+    image: localstack/localstack:2026.10.4
     ports:
       - "4566:4566"
     environment:
@@ -72,6 +72,15 @@ services:
     volumes:
       - "/var/run/docker.sock:/var/run/docker.sock"
 ```
+
+**Health check.** Since 2026.10 the image no longer ships `curl` (it is purged
+after the Node.js download), so a `curl -f .../_localstack/health` probe exits
+127 on every attempt: the container never turns healthy,
+`make test-integration-up` fails, and CI dies at "Initialize containers". Both
+stacks probe with the image's `python3` instead, as LocalStack's own
+`HEALTHCHECK` does; `tests/docker-compose.test.yml` holds the command.
+`tests/unit/test_dev_stack_hygiene.py` keeps the two copies identical and checks
+that the probe fails on a non-2xx response.
 
 **Test Configuration:**
 
@@ -97,7 +106,7 @@ def localstack_aws():
 services:
   vault:
     # Keep the image pin in sync with tests/docker-compose.test.yml.
-    image: hashicorp/vault:2.1.2
+    image: hashicorp/vault:2.2.1
     user: root
     ports:
       - "8200:8200"
@@ -144,7 +153,7 @@ def vault_server():
 # kept identical to the integration-tests.yml CI service containers (#500)
 services:
   lowkey-vault:
-    image: nagyesta/lowkey-vault:7.3.112
+    image: nagyesta/lowkey-vault:7.3.127
     ports:
       - "8443:8443"  # Key Vault API (HTTPS, self-signed cert)
       - "8080:8080"  # managed-identity token stub (HTTP)
