@@ -1,5 +1,14 @@
 # Changelog
 
+## [11.1.2](https://github.com/jainal09/envdrift/compare/v11.1.1...v11.1.2) (2026-10-28)
+
+
+### Bug Fixes
+
+* **scanner:** do not hang the native scan on a named pipe in a directory outside git ([#863](https://github.com/jainal09/envdrift/issues/863)) ([5d8a359](https://github.com/jainal09/envdrift/commit/5d8a35994f3a1e029b901f81c268ba98f994b07f))
+* **scanner:** let a bare ignore_paths or ignore_rules name hide a directory from all scanners ([#865](https://github.com/jainal09/envdrift/issues/865)) ([5d8a359](https://github.com/jainal09/envdrift/commit/5d8a35994f3a1e029b901f81c268ba98f994b07f))
+* **scanner:** report a file once per scanner when two scan paths reach it by different names ([#861](https://github.com/jainal09/envdrift/issues/861)) ([5d8a359](https://github.com/jainal09/envdrift/commit/5d8a35994f3a1e029b901f81c268ba98f994b07f))
+
 ## [11.1.1](https://github.com/jainal09/envdrift/compare/v11.1.0...v11.1.1) (2026-10-14)
 
 
