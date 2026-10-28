@@ -17,8 +17,10 @@ import hashlib
 import json
 import re
 import shutil
+import socket
 import subprocess
 import sys
+import threading
 from dataclasses import replace
 from pathlib import Path
 
@@ -686,6 +688,57 @@ def test_guard_trufflehog_reports_a_github_token(tmp_path, integration_env):
     trufflehog = [f for f in payload["findings"] if f["scanner"] == "trufflehog"]
     assert trufflehog, payload["findings"]
     assert {(f["file_path"], f["line_number"]) for f in trufflehog} == {("creds.env", 1)}
+
+
+@pytest.fixture
+def recording_proxy(monkeypatch):
+    """Route the HTTP(S) proxy of child processes to a local listener; yield what it was asked.
+
+    The listener records the first line of each request (``CONNECT host:443 ...``) and refuses
+    it, so nothing leaves the machine.
+    """
+    requests: list[str] = []
+    server = socket.create_server(("127.0.0.1", 0))
+
+    def serve() -> None:
+        while True:
+            try:
+                conn, _ = server.accept()
+            except OSError:
+                return
+            with conn:
+                conn.settimeout(5)
+                try:
+                    requests.append(conn.recv(4096).decode("latin-1").partition("\r\n")[0])
+                    conn.sendall(b"HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\n\r\n")
+                except OSError:
+                    pass
+
+    threading.Thread(target=serve, daemon=True).start()
+    proxy = f"http://127.0.0.1:{server.getsockname()[1]}"
+    for name in ("HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy"):
+        monkeypatch.setenv(name, proxy)
+    for name in ("NO_PROXY", "no_proxy", "ALL_PROXY", "all_proxy"):
+        monkeypatch.delenv(name, raising=False)
+    yield requests
+    server.close()
+
+
+@requires_trufflehog
+def test_trufflehog_scan_does_not_run_its_self_updater(tmp_path, recording_proxy):
+    """A scan must leave the pinned trufflehog binary as installed (#907).
+
+    Unless given ``--no-update``, trufflehog asks oss.trufflehog.org for a newer release before
+    every scan and writes it over its own binary. A scan without verification has nothing else
+    to fetch, so it must make no request at all.
+    """
+    _write_secret_file(tmp_path)
+
+    result = TrufflehogScanner(auto_install=False).scan([tmp_path])
+
+    assert result.error is None, f"unexpected error: {result.error}"
+    assert _github_token_findings(result), "the scan did not run"
+    assert recording_proxy == [], f"trufflehog went online during a scan: {recording_proxy}"
 
 
 # --- Relative and symlinked scan paths (#843, #853) ------------------------

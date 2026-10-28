@@ -582,6 +582,22 @@ class TestTrufflehogScanExecution:
         call_args = mock_run.call_args[0][0]
         assert "git" in call_args
 
+    @pytest.mark.parametrize("include_git_history", [False, True], ids=["filesystem", "git"])
+    def test_scan_never_runs_the_self_updater(
+        self, mock_scanner: TrufflehogScanner, tmp_path: Path, include_git_history: bool
+    ):
+        """Every scan passes --no-update, or trufflehog may replace its pinned binary (#907).
+
+        The real binary is checked in tests/integration/test_scanner_external_binaries.py.
+        """
+        (tmp_path / ".git").mkdir()
+        with patch.object(mock_scanner, "_find_binary", return_value=mock_scanner._binary_path):
+            with patch("subprocess.run") as mock_run:
+                mock_run.return_value = MagicMock(stdout="", stderr="", returncode=0)
+                mock_scanner.scan([tmp_path], include_git_history=include_git_history)
+
+        assert "--no-update" in mock_run.call_args[0][0]
+
     def test_scan_with_verification_disabled(self, mock_scanner: TrufflehogScanner, tmp_path: Path):
         """Test that scan passes --no-verification flag."""
         with patch.object(mock_scanner, "_find_binary", return_value=mock_scanner._binary_path):

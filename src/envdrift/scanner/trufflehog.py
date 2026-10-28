@@ -570,6 +570,10 @@ class TrufflehogScanner(ScannerBackend):
                     "--json",
                 ]
 
+            # Without --no-update, every scan runs trufflehog's self-updater, which writes any newer
+            # release from oss.trufflehog.org over the pinned, checksum-verified binary (#907).
+            args.append("--no-update")
+
             # Add verification flag if enabled
             if not self._verify:
                 args.append("--no-verification")

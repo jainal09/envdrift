@@ -104,6 +104,10 @@ Enable or disable trufflehog. Disabled by default.
 envdrift guard --trufflehog
 ```
 
+envdrift runs trufflehog with `--no-update`. Without that flag trufflehog asks `oss.trufflehog.org` for a
+newer release before every scan and writes it over its own binary, replacing the version envdrift pins
+and verifies. Older envdrift releases did not pass it.
+
 ### `--detect-secrets` / `--no-detect-secrets`
 
 Enable or disable detect-secrets. Disabled by default.
