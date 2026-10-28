@@ -5,7 +5,7 @@ These tests target previously-uncovered branches in ScanEngine:
 - Successful initialization of every selected external scanner, including the
   unavailable-binary path that must remain visible in scan results.
 - The scan() early-return when no scanners are configured.
-- The scan() loop's future.result() exception handler and progress callback.
+- The handler around each scanner's thread, and the progress callback.
 - The per-scanner timeout branch.
 - The skip_gitignored filter being wired into scan().
 - Edge cases inside _filter_encrypted_files.line_at (OSError + out-of-range).
@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import subprocess
 import sys
+import threading
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -261,12 +262,12 @@ class TestScanEarlyReturn:
 class TestScanLoopBranches:
     """Cover the result-collection loop's error path and progress callback."""
 
-    def test_future_result_exception_recorded_and_callback_invoked(self, monkeypatch):
-        """If future.result() raises, the scan records the failure via callback.
+    def test_run_scanner_exception_recorded_and_callback_invoked(self, monkeypatch):
+        """If _run_scanner raises, the scan records the failure via callback.
 
         The scanner-level try/except in _run_scanner is bypassed by patching it to
-        raise directly, so the *outer* handler in scan() (the `except Exception`
-        around future.result()) is what catches the error.
+        raise directly, so the *outer* handler on the scanner's thread (the
+        `except BaseException` in _start_scanner) is what catches the error.
         """
 
         class OkScanner(ScannerBackend):
@@ -340,13 +341,14 @@ class TestScanTimeoutBranch:
     """Cover the per-scanner timeout handling in scan()."""
 
     def test_scanner_timeout_is_recorded(self, monkeypatch):
-        """A scanner that never finishes is cancelled and reported as timed out.
+        """A scanner still running at its time limit is reported as timed out.
 
-        We force the timeout by patching time.time so the elapsed check exceeds
-        the 600s budget, and patch concurrent.futures.wait to report the future
-        as never done (so it lands in the timeout sweep).
+        The limit is cut to a twentieth of a second, and the scanner blocks until
+        the test releases it, so it is still running when the engine checks.
         """
         from envdrift.scanner import engine as engine_mod
+
+        release = threading.Event()
 
         class HangingScanner(ScannerBackend):
             @property
@@ -361,48 +363,26 @@ class TestScanTimeoutBranch:
                 return True
 
             def scan(self, paths, include_git_history=False) -> ScanResult:
-                # Never actually called in a way that completes within wait().
+                release.wait(timeout=30)  # bounded, so a broken engine cannot hang the test
                 return ScanResult(scanner_name=self.name)
 
         engine = ScanEngine(_off_config())
         engine.scanners = [HangingScanner()]
-
-        # First wait() call: report nothing done, keep the future pending.
-        # The timeout sweep then runs and cancels it.
-        original_wait = engine_mod.wait
-        call_state = {"count": 0}
-
-        def fake_wait(pending, timeout=None, return_when=None):
-            call_state["count"] += 1
-            # Always report nothing completed so the pending future is swept.
-            return set(), set(pending)
-
-        monkeypatch.setattr(engine_mod, "wait", fake_wait)
-
-        # Make elapsed time look huge so now - start_time > per_scanner_timeout_s.
-        time_values = iter([1000.0] + [1_000_000.0] * 50)
-        real_time = engine_mod.time.time
-
-        def fake_time():
-            try:
-                return next(time_values)
-            except StopIteration:
-                return real_time()
-
-        monkeypatch.setattr(engine_mod.time, "time", fake_time)
+        monkeypatch.setattr(engine_mod, "_SCANNER_TIMEOUT_SECONDS", 0.05)
+        monkeypatch.setattr(engine_mod, "_POLL_SECONDS", 0.01)
 
         events: list[str] = []
-        result = engine.scan(
-            [Path()],
-            on_scanner_complete=lambda n, c, t, r: events.append((r.error or "") if r else ""),
-        )
+        try:
+            result = engine.scan(
+                [Path()],
+                on_scanner_complete=lambda n, c, t, r: events.append((r.error or "") if r else ""),
+            )
+        finally:
+            release.set()
 
-        assert call_state["count"] >= 1
         assert len(result.results) == 1
         assert "timed out" in (result.results[0].error or "")
         assert any("timed out" in e for e in events)
-        # Sanity: the real wait still exists (we didn't clobber globally).
-        assert original_wait is not None
 
 
 class TestSkipGitignoredWiredIntoScan:

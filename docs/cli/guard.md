@@ -755,6 +755,13 @@ the scanner and the path it scanned, never the report, which may hold the secret
 it found. A report that holds no findings, or no report at all after a successful
 run, is a clean scan: that is what the binaries write when they find nothing.
 
+A scanner still running 10 minutes after it started has failed: guard stops
+waiting for it and records `Scanner timed out after 600s` as its error, the
+other scanners' results stand, and with no blocking finding guard exits 5. At
+most four scanners run at once, and each one's 10 minutes count from when it
+starts. Guard does not stop a tool process (gitleaks, trufflehog, ...) that the
+timed-out scanner started, so that process can keep running after guard exits.
+
 Exit 5 applies to scanners you **selected** — a CLI flag or a `[guard]
 scanners` list written in your config. A scanner active only via the built-in
 default set whose binary is missing under `--no-auto-install` never ran and
