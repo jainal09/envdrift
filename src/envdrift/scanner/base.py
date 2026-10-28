@@ -195,6 +195,17 @@ class ScanResult:
         return self.skip_reason is not None
 
 
+def exception_message(error: BaseException) -> str:
+    """The message of ``error`` for a scan error, never an empty one (#872).
+
+    ``str(error)`` is empty for ``RuntimeError()``, ``TimeoutError()`` or ``MemoryError()``.
+    A blank scan error is shown as nothing, and one that is joined with other messages
+    disappears, which turns the failed scan into a clean one. Such an error is named by its
+    type instead.
+    """
+    return str(error) or type(error).__name__
+
+
 @dataclass
 class AggregatedScanResult:
     """Combined results from all scanners.

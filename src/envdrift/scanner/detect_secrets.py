@@ -30,6 +30,7 @@ from envdrift.scanner.base import (
     ScanFinding,
     ScannerBackend,
     ScanResult,
+    exception_message,
 )
 from envdrift.utils.git import get_git_root
 from envdrift.utils.text import strip_ansi
@@ -817,7 +818,7 @@ class DetectSecretsScanner(ScannerBackend):
         except DetectSecretsNotFoundError as e:
             return ScanResult(
                 scanner_name=self.name,
-                error=str(e),
+                error=exception_message(e),
                 duration_ms=int((time.time() - start_time) * 1000),
             )
 
@@ -879,7 +880,7 @@ class DetectSecretsScanner(ScannerBackend):
             except subprocess.TimeoutExpired:
                 return failed(f"Scan timed out for {path}")
             except Exception as e:
-                return failed(str(e))
+                return failed(exception_message(e))
 
         return ScanResult(
             scanner_name=self.name,

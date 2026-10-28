@@ -37,6 +37,7 @@ from envdrift.scanner.base import (
     ScanFinding,
     ScannerBackend,
     ScanResult,
+    exception_message,
 )
 from envdrift.scanner.patterns import hash_secret, redact_secret
 from envdrift.scanner.platform_utils import (
@@ -153,7 +154,7 @@ def _probe_confidence_flag(binary: str, _mtime_ns: int, _size: int) -> bool:
             timeout=_HELP_PROBE_TIMEOUT_SECONDS,
         )
     except Exception as e:
-        raise _ProbeError(str(e) or type(e).__name__) from e
+        raise _ProbeError(exception_message(e)) from e
     if result.returncode != 0:
         raise _ProbeError(f"exit code {result.returncode}")
     return bool(_CONFIDENCE_FLAG_RE.search(f"{result.stdout}\n{result.stderr}"))
@@ -245,22 +246,51 @@ def _prepare_scan_targets(
 
 def _combined_error(run_error: str | None, target_errors: list[str]) -> str | None:
     """Join a run failure with the per-target preflight diagnostics."""
-    parts = ([run_error] if run_error else []) + target_errors
+    parts = ([run_error] if run_error is not None else []) + target_errors
     return "; ".join(parts) if parts else None
 
 
-def _load_findings(report_path: Path) -> list[Any]:
-    """The findings in an Infisical JSON report, or ``[]`` when it holds none.
+def _load_findings(report_path: Path) -> list[Any] | None:
+    """The findings in an Infisical JSON report, or None when the report cannot be read.
 
-    A missing, empty, unparsable or non-list report holds no findings.
+    A missing or empty report holds no findings, and so do ``[]`` and ``null``, which Go
+    writes for an empty list. Anything else that is not a JSON list (a partly written
+    file, or a message where the report should be) leaves the findings unknown, not
+    absent, so it is not a clean scan (#874). Infisical writes UTF-8 whatever the
+    platform's encoding is (#873).
     """
     if not report_path.exists() or report_path.stat().st_size == 0:
         return []
     try:
-        report_data = json.loads(report_path.read_text())
-    except json.JSONDecodeError:
+        report_data = json.loads(report_path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, UnicodeDecodeError):
+        return None
+    if report_data is None:
         return []
-    return report_data if isinstance(report_data, list) else []
+    return report_data if isinstance(report_data, list) else None
+
+
+def _run_error(
+    result: subprocess.CompletedProcess[str], report: list[Any] | None, path: Path
+) -> str | None:
+    """Why the Infisical run that scanned ``path`` failed, or None when it did not.
+
+    Infisical exits non-zero when it reports leaks, so a non-zero exit that reported none
+    is a failed scan. A scan that cannot run still writes an empty ``[]`` report, which
+    used to pass as clean (#843). A report that cannot be parsed after a successful run
+    leaves the findings unknown, not absent (#874).
+    """
+    if result.returncode != 0 and not report:
+        # zerolog colors its log lines even on a pipe, and this message lands in
+        # --json/SARIF output (#843).
+        return (
+            strip_ansi(result.stderr).strip()
+            or strip_ansi(result.stdout).strip()
+            or f"infisical scan failed for {path} (exit code {result.returncode})"
+        )
+    if report is None:
+        return f"infisical wrote a report for {path} that envdrift cannot parse"
+    return None
 
 
 # Betterleaks composite rules nest their paired values under ``ComponentSets``
@@ -677,7 +707,7 @@ class InfisicalScanner(ScannerBackend):
         except InfisicalNotFoundError as e:
             return ScanResult(
                 scanner_name=self.name,
-                error=_combined_error(str(e), target_errors),
+                error=_combined_error(exception_message(e), target_errors),
                 duration_ms=int((time.time() - start_time) * 1000),
             )
 
@@ -729,19 +759,8 @@ class InfisicalScanner(ScannerBackend):
                 )
 
                 report_data = _load_findings(report_path)
-
-                # Infisical exits non-zero when it reports leaks, so a non-zero
-                # exit that reported none is a failed scan. A scan that cannot
-                # run still writes an empty ``[]`` report, which used to pass as
-                # clean (#843).
-                if result.returncode != 0 and not report_data:
-                    # zerolog colors its log lines even on a pipe, and this
-                    # message lands in --json/SARIF output (#843).
-                    error_msg = (
-                        strip_ansi(result.stderr).strip()
-                        or strip_ansi(result.stdout).strip()
-                        or f"infisical scan failed for {path} (exit code {result.returncode})"
-                    )
+                error_msg = _run_error(result, report_data, path)
+                if error_msg is not None:
                     return ScanResult(
                         scanner_name=self.name,
                         findings=all_findings,
@@ -781,7 +800,7 @@ class InfisicalScanner(ScannerBackend):
                 return ScanResult(
                     scanner_name=self.name,
                     findings=all_findings,
-                    error=_combined_error(str(e), target_errors),
+                    error=_combined_error(exception_message(e), target_errors),
                     duration_ms=int((time.time() - start_time) * 1000),
                 )
             finally:

@@ -546,7 +546,7 @@ class TestInfisicalScanExecution:
         assert len(result.findings) == 0
 
     def test_scan_handles_invalid_json(self, mock_scanner: InfisicalScanner, tmp_path: Path):
-        """Test that scan handles invalid JSON in report file gracefully."""
+        """A report that is not JSON leaves the findings unknown: a scan error (#874)."""
 
         def write_invalid_json(*args, **kwargs):
             """Mock subprocess that writes invalid JSON to report file."""
@@ -560,7 +560,8 @@ class TestInfisicalScanExecution:
             with patch("subprocess.run", side_effect=write_invalid_json):
                 result = mock_scanner.scan([tmp_path])
 
-        assert result.success is True
+        assert result.success is False
+        assert result.error == f"infisical wrote a report for {tmp_path} that envdrift cannot parse"
         assert len(result.findings) == 0
 
     def test_scan_handles_timeout(self, mock_scanner: InfisicalScanner, tmp_path: Path):

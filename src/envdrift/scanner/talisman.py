@@ -32,6 +32,7 @@ from envdrift.scanner.base import (
     ScanFinding,
     ScannerBackend,
     ScanResult,
+    exception_message,
 )
 from envdrift.scanner.patterns import hash_secret, redact_secret
 from envdrift.scanner.platform_utils import get_platform_info, get_venv_bin_dir
@@ -115,6 +116,34 @@ def _execution_error(result: subprocess.CompletedProcess[str], path: Path, work_
     """Build a useful error from a failed Talisman subprocess."""
     raw_error = result.stderr.strip() or result.stdout.strip() or f"talisman scan failed for {path}"
     return _friendly_execution_error(raw_error, path, work_dir)
+
+
+def _load_report(report_dir: Path) -> tuple[dict[str, Any] | None, bool]:
+    """The report talisman wrote in ``report_dir``, and whether one could not be parsed.
+
+    Talisman versions write the report in different places
+    (``talisman_reports/data/report.json`` today), and the first location that holds a
+    report that parses is used. The report is ``None`` when no location holds one. A
+    report that is not a JSON object (a partly written file, or a message where the report
+    should be) cannot be parsed; when it is the only one, the findings are unknown, not
+    absent (#874). Talisman writes UTF-8 whatever the platform's encoding is (#873).
+    """
+    unreadable = False
+    for report_file in (
+        report_dir / "talisman_reports" / "data" / "report.json",
+        report_dir / "report.json",
+        report_dir / "talisman_report.json",
+    ):
+        if not report_file.exists():
+            continue
+        try:
+            report = json.loads(report_file.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, UnicodeDecodeError):
+            report = None
+        if isinstance(report, dict):
+            return report, False
+        unreadable = True
+    return None, unreadable
 
 
 def _extract_secret_from_message(message: str) -> str:
@@ -487,7 +516,7 @@ class TalismanScanner(ScannerBackend):
         except TalismanNotFoundError as e:
             return ScanResult(
                 scanner_name=self.name,
-                error=str(e),
+                error=exception_message(e),
                 duration_ms=int((time.time() - start_time) * 1000),
             )
 
@@ -532,34 +561,24 @@ class TalismanScanner(ScannerBackend):
                         cwd=str(work_dir),
                     )
 
-                    # Parse JSON report if it exists
-                    # Talisman creates talisman_report/talisman_reports/data/report.json
-                    possible_report_files = [
-                        report_path / "talisman_reports" / "data" / "report.json",
-                        report_path / "report.json",
-                        report_path / "talisman_report.json",
-                    ]
-
-                    report_found = False
-                    for report_file in possible_report_files:
-                        if report_file.exists():
-                            try:
-                                report_data = json.loads(report_file.read_text())
-                                findings, files = self._parse_report(report_data, path)
-                                all_findings.extend(findings)
-                                total_files += files
-                                report_found = True
-                                break
-                            except json.JSONDecodeError:
-                                # Invalid JSON in report file, try next possible location
-                                continue
-
-                    # Check for execution errors: non-zero exit code without valid report
-                    if result.returncode != 0 and not report_found:
+                    report_data, unreadable = _load_report(report_path)
+                    if report_data is not None:
+                        findings, files = self._parse_report(report_data, path)
+                        all_findings.extend(findings)
+                        total_files += files
+                    elif result.returncode != 0:
+                        # Check for execution errors: non-zero exit code without valid report
                         return ScanResult(
                             scanner_name=self.name,
                             findings=all_findings,
                             error=_execution_error(result, path, work_dir),
+                            duration_ms=int((time.time() - start_time) * 1000),
+                        )
+                    elif unreadable:
+                        return ScanResult(
+                            scanner_name=self.name,
+                            findings=all_findings,
+                            error=f"talisman wrote a report for {path} that envdrift cannot parse",
                             duration_ms=int((time.time() - start_time) * 1000),
                         )
 
@@ -574,7 +593,7 @@ class TalismanScanner(ScannerBackend):
                     return ScanResult(
                         scanner_name=self.name,
                         findings=all_findings,
-                        error=str(e),
+                        error=exception_message(e),
                         duration_ms=int((time.time() - start_time) * 1000),
                     )
 

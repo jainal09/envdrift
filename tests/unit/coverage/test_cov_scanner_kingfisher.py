@@ -235,8 +235,8 @@ class TestScanErrorBranches:
 
     @patch("shutil.which")
     @patch("subprocess.run")
-    def test_invalid_json_report_is_ignored(self, mock_run, mock_which, tmp_path):
-        """An invalid JSON report is swallowed, yielding no findings (466-468)."""
+    def test_invalid_json_report_fails_the_scan(self, mock_run, mock_which, tmp_path):
+        """A report that is not JSON leaves the findings unknown: a scan error (#874)."""
         mock_which.return_value = "/opt/homebrew/bin/kingfisher"
         mock_run.return_value = MagicMock(returncode=200, stdout="", stderr="")
 
@@ -252,7 +252,9 @@ class TestScanErrorBranches:
             mock_temp.return_value.__exit__ = MagicMock(return_value=False)
             result = scanner.scan([tmp_path])
 
-        assert result.error is None
+        assert (
+            result.error == f"Kingfisher wrote a report for {tmp_path} that envdrift cannot parse"
+        )
         assert result.findings == []
 
     @patch("shutil.which")

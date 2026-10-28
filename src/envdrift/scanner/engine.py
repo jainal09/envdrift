@@ -31,6 +31,7 @@ from envdrift.scanner.base import (
     ScanFinding,
     ScannerBackend,
     ScanResult,
+    exception_message,
 )
 from envdrift.scanner.finding_paths import FindingPathDisplay
 from envdrift.scanner.ignores import IgnoreConfig, IgnoreFilter
@@ -337,7 +338,7 @@ class ScanEngine:
         except Exception as e:
             return ScanResult(
                 scanner_name=scanner.name,
-                error=str(e),
+                error=exception_message(e),
             )
 
     def _retain_scanner(self, scanner: ScannerBackend) -> None:

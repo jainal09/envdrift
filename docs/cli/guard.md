@@ -748,6 +748,13 @@ still exits 1. The scanner errors are listed in the human output (Scanner
 Errors panel), in `--json` under `scanner_results[].error`, and in `--sarif`
 as invocation `toolExecutionNotifications`.
 
+A scanner fails when its binary exits with an error, runs out of time, or writes
+a report envdrift cannot parse. A report cut short, or a message where the report
+should be, leaves the findings unknown, so the run is not clean; the error names
+the scanner and the path it scanned, never the report, which may hold the secrets
+it found. A report that holds no findings, or no report at all after a successful
+run, is a clean scan: that is what the binaries write when they find nothing.
+
 Exit 5 applies to scanners you **selected** — a CLI flag or a `[guard]
 scanners` list written in your config. A scanner active only via the built-in
 default set whose binary is missing under `--no-auto-install` never ran and

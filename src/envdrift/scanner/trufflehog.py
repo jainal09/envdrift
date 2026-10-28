@@ -38,6 +38,7 @@ from envdrift.scanner.base import (
     ScanFinding,
     ScannerBackend,
     ScanResult,
+    exception_message,
 )
 from envdrift.scanner.patterns import hash_secret, redact_secret
 
@@ -164,6 +165,28 @@ def get_trufflehog_path() -> Path:
     bin_dir = get_venv_bin_dir()
     binary_name = "trufflehog.exe" if platform.system() == "Windows" else "trufflehog"
     return bin_dir / binary_name
+
+
+def _load_findings(output: str) -> tuple[list[Any], bool]:
+    """The findings trufflehog printed, one JSON object per line, and whether all were read.
+
+    A line that is not JSON is progress output and is skipped. A line that starts as a JSON
+    object but does not parse is a finding cut short, which leaves the findings unknown,
+    not absent (#874): the findings that parse are returned, with False. Lines are split on
+    ``\\n`` only, as trufflehog writes them; a secret may hold other line breaks.
+    """
+    findings: list[Any] = []
+    complete = True
+    for line in output.split("\n"):
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            findings.append(json.loads(line))
+        except json.JSONDecodeError:
+            if line.startswith("{"):
+                complete = False
+    return findings, complete
 
 
 class TrufflehogInstaller:
@@ -508,7 +531,7 @@ class TrufflehogScanner(ScannerBackend):
         except TrufflehogNotFoundError as e:
             return ScanResult(
                 scanner_name=self.name,
-                error=str(e),
+                error=exception_message(e),
                 duration_ms=int((time.time() - start_time) * 1000),
             )
 
@@ -554,39 +577,38 @@ class TrufflehogScanner(ScannerBackend):
                 )
 
                 # Parse JSON lines output (trufflehog outputs one JSON per line)
-                if result.stdout.strip():
-                    files_with_findings: set[str] = set()
-                    for line in result.stdout.strip().split("\n"):
-                        line = line.strip()
-                        if not line:
-                            continue
-                        try:
-                            item = json.loads(line)
-                            # Track unique files from findings
-                            source_meta = item.get("SourceMetadata", {}).get("Data", {})
-                            file_path_str = source_meta.get("Filesystem", {}).get(
-                                "file", ""
-                            ) or source_meta.get("Git", {}).get("file", "")
-                            if file_path_str:
-                                files_with_findings.add(file_path_str)
-                            finding = self._parse_finding(item, path)
-                            if finding:
-                                all_findings.append(finding)
-                        except json.JSONDecodeError:
-                            # Skip non-JSON lines (progress output, etc.)
-                            continue
-                    total_files += len(files_with_findings)
+                items, complete = _load_findings(result.stdout)
+                files_with_findings: set[str] = set()
+                for item in items:
+                    # Track unique files from findings
+                    source_meta = item.get("SourceMetadata", {}).get("Data", {})
+                    file_path_str = source_meta.get("Filesystem", {}).get(
+                        "file", ""
+                    ) or source_meta.get("Git", {}).get("file", "")
+                    if file_path_str:
+                        files_with_findings.add(file_path_str)
+                    finding = self._parse_finding(item, path)
+                    if finding:
+                        all_findings.append(finding)
+                total_files += len(files_with_findings)
 
                 if result.returncode != 0:
+                    # Not stdout: the findings there hold the raw secrets.
                     error_msg = (
                         result.stderr.strip()
-                        or result.stdout.strip()
                         or f"trufflehog scan failed for {path} (exit code {result.returncode})"
                     )
                     return ScanResult(
                         scanner_name=self.name,
                         findings=all_findings,
                         error=error_msg,
+                        duration_ms=int((time.time() - start_time) * 1000),
+                    )
+                if not complete:
+                    return ScanResult(
+                        scanner_name=self.name,
+                        findings=all_findings,
+                        error=f"trufflehog printed a finding for {path} that envdrift cannot parse",
                         duration_ms=int((time.time() - start_time) * 1000),
                     )
 
@@ -601,7 +623,7 @@ class TrufflehogScanner(ScannerBackend):
                 return ScanResult(
                     scanner_name=self.name,
                     findings=all_findings,
-                    error=str(e),
+                    error=exception_message(e),
                     duration_ms=int((time.time() - start_time) * 1000),
                 )
 

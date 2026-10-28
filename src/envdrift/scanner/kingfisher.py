@@ -29,6 +29,7 @@ from envdrift.scanner.base import (
     ScanFinding,
     ScannerBackend,
     ScanResult,
+    exception_message,
 )
 from envdrift.scanner.patterns import hash_secret, redact_secret
 from envdrift.scanner.rule_severity import rule_severity
@@ -133,6 +134,27 @@ def _finding_path(finding: dict[str, Any], base_path: Path) -> Path:
         return base_path
     file_path = Path(path_str)
     return file_path if file_path.is_absolute() else (base_path / path_str).resolve()
+
+
+def _load_findings(report_path: Path) -> list[Any] | None:
+    """The findings in a Kingfisher JSON report, or None when the report cannot be read.
+
+    A missing or empty report holds no findings, and so does an object whose ``findings``
+    is empty or absent. Anything else (a partly written file, a message where the report
+    should be, a ``findings`` that is not a list) leaves the findings unknown, not absent,
+    so it is not a clean scan (#874). Kingfisher writes UTF-8 whatever the platform's
+    encoding is (#873).
+    """
+    if not report_path.exists() or report_path.stat().st_size == 0:
+        return []
+    try:
+        report = json.loads(report_path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, UnicodeDecodeError):
+        return None
+    if not isinstance(report, dict):
+        return None
+    findings = report.get("findings") or []
+    return findings if isinstance(findings, list) else None
 
 
 class KingfisherScanner(ScannerBackend):
@@ -349,7 +371,7 @@ class KingfisherScanner(ScannerBackend):
         except KingfisherNotFoundError as e:
             return ScanResult(
                 scanner_name=self.name,
-                error=str(e),
+                error=exception_message(e),
                 duration_ms=int((time.time() - start_time) * 1000),
             )
 
@@ -482,28 +504,26 @@ class KingfisherScanner(ScannerBackend):
                         duration_ms=int((time.time() - start_time) * 1000),
                     )
 
-                # Parse JSON output from report file
-                if report_path.exists() and report_path.stat().st_size > 0:
-                    try:
-                        findings_data = json.loads(report_path.read_text())
-                        findings_list = findings_data.get("findings", [])
+                findings_list = _load_findings(report_path)
+                if findings_list is None:
+                    return ScanResult(
+                        scanner_name=self.name,
+                        findings=all_findings,
+                        error=f"Kingfisher wrote a report for {path} that envdrift cannot parse",
+                        duration_ms=int((time.time() - start_time) * 1000),
+                    )
+                # Count unique files with findings
+                files_with_findings = {
+                    item.get("finding", {}).get("path")
+                    for item in findings_list
+                    if item.get("finding", {}).get("path")
+                }
+                total_files += len(files_with_findings)
 
-                        if findings_list and isinstance(findings_list, list):
-                            # Count unique files with findings
-                            files_with_findings = {
-                                item.get("finding", {}).get("path")
-                                for item in findings_list
-                                if item.get("finding", {}).get("path")
-                            }
-                            total_files += len(files_with_findings)
-
-                            for item in findings_list:
-                                finding = self._parse_finding(item, path)
-                                if finding:
-                                    all_findings.append(finding)
-                    except json.JSONDecodeError:
-                        # Not valid JSON, might be empty or error message
-                        pass
+                for item in findings_list:
+                    finding = self._parse_finding(item, path)
+                    if finding:
+                        all_findings.append(finding)
 
             except subprocess.TimeoutExpired:
                 return ScanResult(

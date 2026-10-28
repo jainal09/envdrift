@@ -37,6 +37,7 @@ from envdrift.scanner.base import (
     ScanFinding,
     ScannerBackend,
     ScanResult,
+    exception_message,
 )
 from envdrift.scanner.patterns import hash_secret, redact_secret
 
@@ -489,12 +490,13 @@ class GitSecretsScanner(ScannerBackend):
         except GitSecretsNotFoundError as e:
             return ScanResult(
                 scanner_name=self.name,
-                error=str(e),
+                error=exception_message(e),
                 duration_ms=int((time.time() - start_time) * 1000),
             )
 
         all_findings: list[ScanFinding] = []
         total_files = 0
+        path_errors: list[str] = []
 
         for path in paths:
             if not path.exists():
@@ -610,14 +612,15 @@ class GitSecretsScanner(ScannerBackend):
                     duration_ms=int((time.time() - start_time) * 1000),
                 )
             except Exception as e:
-                # Non-fatal errors, log and continue with other paths
-                logger.debug("Error scanning %s: %s", path, e)
-                continue
+                # The other paths are still scanned, but this one was not, so
+                # the run is incomplete, not clean (#872).
+                path_errors.append(f"git-secrets could not scan {path}: {exception_message(e)}")
 
         return ScanResult(
             scanner_name=self.name,
             findings=all_findings,
             files_scanned=total_files,
+            error="; ".join(path_errors) if path_errors else None,
             duration_ms=int((time.time() - start_time) * 1000),
         )
 
