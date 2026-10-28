@@ -1,5 +1,17 @@
 # Changelog
 
+## [11.1.3](https://github.com/jainal09/envdrift/compare/v11.1.2...v11.1.3) (2026-10-28)
+
+
+### Bug Fixes
+
+* **scanner:** fail the scan when a scanner writes a report envdrift cannot parse ([#874](https://github.com/jainal09/envdrift/issues/874)) ([84146fc](https://github.com/jainal09/envdrift/commit/84146fca9d8d15e0f45230f2d82ff47b27311f94))
+* **scanner:** fail the scan when git-secrets cannot run, instead of passing it as clean ([#872](https://github.com/jainal09/envdrift/issues/872)) ([84146fc](https://github.com/jainal09/envdrift/commit/84146fca9d8d15e0f45230f2d82ff47b27311f94))
+* **scanner:** keep the reports of trufflehog and detect-secrets out of their error messages ([84146fc](https://github.com/jainal09/envdrift/commit/84146fca9d8d15e0f45230f2d82ff47b27311f94))
+* **scanner:** name every scanner exception and fail the scan instead of passing it as clean ([#872](https://github.com/jainal09/envdrift/issues/872)) ([84146fc](https://github.com/jainal09/envdrift/commit/84146fca9d8d15e0f45230f2d82ff47b27311f94))
+* **scanner:** read scanner JSON reports as UTF-8 on every platform ([#873](https://github.com/jainal09/envdrift/issues/873)) ([84146fc](https://github.com/jainal09/envdrift/commit/84146fca9d8d15e0f45230f2d82ff47b27311f94))
+* **scanner:** stop waiting for a scanner past its time limit, so guard can no longer hang ([#870](https://github.com/jainal09/envdrift/issues/870)) ([84146fc](https://github.com/jainal09/envdrift/commit/84146fca9d8d15e0f45230f2d82ff47b27311f94))
+
 ## [11.1.2](https://github.com/jainal09/envdrift/compare/v11.1.1...v11.1.2) (2026-10-28)
 
 
