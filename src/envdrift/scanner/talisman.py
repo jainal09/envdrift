@@ -34,10 +34,10 @@ from envdrift.scanner.base import (
     ScanResult,
     exception_message,
     parsed_finding,
-    tool_timeout,
 )
 from envdrift.scanner.patterns import hash_secret, redact_secret
 from envdrift.scanner.platform_utils import get_platform_info, get_venv_bin_dir
+from envdrift.utils.deadline import run_tool
 from envdrift.utils.git import get_git_root, has_git_head
 
 if TYPE_CHECKING:
@@ -346,13 +346,13 @@ class TalismanInstaller:
         if target_path.exists() and not force:
             # Verify version
             try:
-                result = subprocess.run(  # nosec B603
+                result = run_tool(
                     [str(target_path), "--version"],
                     capture_output=True,
                     text=True,
                     encoding="utf-8",
                     errors="replace",
-                    timeout=tool_timeout(10),
+                    timeout=10,
                 )
                 if self.version in result.stdout or self.version in result.stderr:
                     self.progress(f"talisman v{self.version} already installed")
@@ -421,13 +421,13 @@ class TalismanScanner(ScannerBackend):
         """Get installed talisman version."""
         try:
             binary = self._find_binary()
-            result = subprocess.run(  # nosec B603
+            result = run_tool(
                 [str(binary), "--version"],
                 capture_output=True,
                 text=True,
                 encoding="utf-8",
                 errors="replace",
-                timeout=tool_timeout(10),
+                timeout=10,
             )
             # Output format varies, try to extract version
             output = result.stdout.strip() or result.stderr.strip()
@@ -554,13 +554,13 @@ class TalismanScanner(ScannerBackend):
 
                     # Run talisman from the target directory
                     work_dir = path if path.is_dir() else path.parent
-                    result = subprocess.run(  # nosec B603
+                    result = run_tool(
                         args,
                         capture_output=True,
                         text=True,
                         encoding="utf-8",
                         errors="replace",
-                        timeout=tool_timeout(300),  # 5 minute timeout
+                        timeout=300,  # 5 minute timeout
                         cwd=str(work_dir),
                     )
 

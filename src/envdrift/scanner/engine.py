@@ -34,7 +34,6 @@ from envdrift.scanner.base import (
     ScannerBackend,
     ScanResult,
     exception_message,
-    scanner_deadline,
 )
 from envdrift.scanner.finding_paths import FindingPathDisplay
 from envdrift.scanner.ignores import IgnoreConfig, IgnoreFilter
@@ -44,6 +43,7 @@ from envdrift.scanner.native import (
     _is_encrypted_value_line,
 )
 from envdrift.scanner.patterns import hash_secret
+from envdrift.utils.deadline import ScannerDeadline, scanner_deadline
 
 if TYPE_CHECKING:
     pass
@@ -60,6 +60,16 @@ _SCANNER_TIMEOUT_SECONDS = 600
 _MAX_PARALLEL_SCANNERS = 4
 # How often the engine wakes, while it waits for the scanners, to look for one past its time.
 _POLL_SECONDS = 1.0
+# How long the engine waits, once a scanner has timed out, for the tools it is running to be
+# killed. Each one is killed at the deadline by its capped timeout, which takes moments (#900).
+_TOOL_KILL_GRACE_SECONDS = 5.0
+
+
+def _timed_out(scanner_name: str) -> ScanResult:
+    """The result of a scanner that ran past its time limit."""
+    return ScanResult(
+        scanner_name=scanner_name, error=f"Scanner timed out after {_SCANNER_TIMEOUT_SECONDS}s"
+    )
 
 
 def _place_of(display: FindingPathDisplay | None) -> Callable[[Path], Path]:
@@ -358,15 +368,17 @@ class ScanEngine:
         index: int,
         paths: list[Path],
         finished: queue.SimpleQueue[tuple[int, ScanResult]],
-        deadline: float,
+        deadline: ScannerDeadline,
     ) -> None:
         """Run ``self.scanners[index]`` on a new daemon thread, until ``deadline`` at most.
 
         The thread puts ``(index, result)`` on ``finished``. A daemon thread, not a
         ``ThreadPoolExecutor`` worker: a scanner that never returns is abandoned when its time is
         up, and the interpreter joins every pool worker at exit, so such a worker would hang the
-        process after ``scan()`` had returned (#870). A tool the scanner runs is killed at
-        ``deadline``, a ``time.monotonic()``, instead of running on (#900).
+        process after ``scan()`` had returned (#870). The tools the scanner runs are held to
+        ``deadline`` (#900): one still running then is killed, and none starts after it. So a
+        scanner that is done only after its deadline reports a timeout, as what it found may be
+        incomplete.
         """
         scanner = self.scanners[index]
         include_git_history = self.config.include_git_history
@@ -381,6 +393,8 @@ class ScanEngine:
                 scan_result = ScanResult(
                     scanner_name=scanner.name, error=f"Scanner failed: {exception_message(e)}"
                 )
+            if deadline.passed():
+                scan_result = _timed_out(scanner.name)
             finished.put((index, scan_result))
 
         threading.Thread(target=run, name=f"envdrift-scanner-{scanner.name}", daemon=True).start()
@@ -393,7 +407,8 @@ class ScanEngine:
 
         Each later result is taken when the caller asks for it, so one delivered while the
         caller handles another is yielded too, before the caller goes on to check the time
-        limits: a scanner whose result is in is never reported as timed out.
+        limits: a scanner whose result is in is never reported as timed out, unless it was done
+        only after its deadline and reports so itself.
         """
         try:
             yield finished.get(timeout=_POLL_SECONDS)
@@ -413,43 +428,41 @@ class ScanEngine:
         it starts, not from when it was queued behind other scanners. One still running then is
         recorded as timed out, an error that fails the run, and is abandoned: a thread cannot be
         stopped, so nothing waits for it, neither this method nor the exit of the process; a
-        result it delivers later is dropped, and its place goes to the next scanner (#870).
-        ``on_scanner_complete`` is called on this thread as each scanner finishes or times out.
+        result it delivers later is dropped, and its place goes to the next scanner (#870). Its
+        tools are killed at its deadline, and this method waits for them to have been before it
+        goes on, so that none outlives guard (#900). ``on_scanner_complete`` is called on this
+        thread as each scanner finishes or times out.
         """
         total = len(self.scanners)
         finished: queue.SimpleQueue[tuple[int, ScanResult]] = queue.SimpleQueue()
         queued = deque(range(total))
-        started_at: dict[int, float] = {}  # the scanners running now, by index
+        running: dict[int, ScannerDeadline] = {}  # the deadlines of the scanners running now
         results: list[ScanResult] = []
 
         def record(index: int, scan_result: ScanResult) -> None:
-            del started_at[index]
+            del running[index]
             results.append(scan_result)
             if on_scanner_complete:
                 on_scanner_complete(self.scanners[index].name, len(results), total, scan_result)
 
-        while queued or started_at:
-            while queued and len(started_at) < _MAX_PARALLEL_SCANNERS:
+        while queued or running:
+            while queued and len(running) < _MAX_PARALLEL_SCANNERS:
                 index = queued.popleft()
                 # A monotonic clock: setting the system time neither ends nor extends a run.
-                started_at[index] = time.monotonic()
-                deadline = started_at[index] + _SCANNER_TIMEOUT_SECONDS
-                self._start_scanner(index, paths, finished, deadline)
+                running[index] = ScannerDeadline(time.monotonic() + _SCANNER_TIMEOUT_SECONDS)
+                self._start_scanner(index, paths, finished, running[index])
 
             for index, scan_result in self._delivered(finished):
-                if index in started_at:  # not a scanner that has timed out already
+                if index in running:  # not a scanner that has timed out already
                     record(index, scan_result)
 
-            now = time.monotonic()
-            for index, started in list(started_at.items()):
-                if now - started > _SCANNER_TIMEOUT_SECONDS:
-                    record(
-                        index,
-                        ScanResult(
-                            scanner_name=self.scanners[index].name,
-                            error=f"Scanner timed out after {_SCANNER_TIMEOUT_SECONDS}s",
-                        ),
-                    )
+            for index, deadline in list(running.items()):
+                if deadline.passed():
+                    record(index, _timed_out(self.scanners[index].name))
+                    # Its running tools are killed at the deadline, by their own timeouts, on
+                    # the scanner's thread. Wait for that: if guard exited first, the thread
+                    # would end with it and the tools would run on (#900).
+                    deadline.wait_for_tools(_TOOL_KILL_GRACE_SECONDS)
 
         return results
 

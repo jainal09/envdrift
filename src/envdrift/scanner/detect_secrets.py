@@ -31,9 +31,9 @@ from envdrift.scanner.base import (
     ScannerBackend,
     ScanResult,
     exception_message,
-    tool_timeout,
     unparsable_report_error,
 )
+from envdrift.utils.deadline import run_tool
 from envdrift.utils.git import get_git_root
 from envdrift.utils.text import strip_ansi
 
@@ -173,13 +173,13 @@ class _VersionProbeError(Exception):
 
 def _run_version_probe() -> subprocess.CompletedProcess[str]:
     """Run ``python -m detect_secrets --version`` in envdrift's interpreter."""
-    return subprocess.run(  # nosec B603
+    return run_tool(
         [sys.executable, "-m", "detect_secrets", "--version"],
         capture_output=True,
         text=True,
         encoding="utf-8",
         errors="replace",
-        timeout=tool_timeout(_VERSION_PROBE_TIMEOUT_SECONDS),
+        timeout=_VERSION_PROBE_TIMEOUT_SECONDS,
     )
 
 
@@ -372,9 +372,7 @@ def _git_ls_files(root: Path, env: Mapping[str, str], *, nul: bool) -> _GitOutpu
     if nul:
         args.append("-z")
     try:
-        result = subprocess.run(  # nosec B603, B607
-            args, capture_output=True, timeout=tool_timeout(60), env=dict(env)
-        )
+        result = run_tool(args, capture_output=True, timeout=60, env=dict(env))
     except (OSError, subprocess.SubprocessError):
         return None
     return _GitOutput(
@@ -523,13 +521,13 @@ def _run_detect_secrets(plan: _ScanPlan, env: dict[str, str]) -> subprocess.Comp
             plan.scan_path,
         ]
     )
-    return subprocess.run(  # nosec B603
+    return run_tool(
         args,
         capture_output=True,
         text=True,
         encoding="utf-8",
         errors="replace",
-        timeout=tool_timeout(300),  # 5 minute timeout
+        timeout=300,  # 5 minute timeout
         cwd=str(plan.cwd),
         env=env,
     )
@@ -609,13 +607,13 @@ class DetectSecretsInstaller:
                     f"detect-secrets=={self.version}",
                 ]
 
-            result = subprocess.run(  # nosec B603
+            result = run_tool(
                 cmd,
                 capture_output=True,
                 text=True,
                 encoding="utf-8",
                 errors="replace",
-                timeout=tool_timeout(120),
+                timeout=120,
             )
 
             if result.returncode != 0:

@@ -36,7 +36,6 @@ from envdrift.scanner.base import (
     ScanFinding,
     ScannerBackend,
     ScanResult,
-    tool_timeout,
 )
 from envdrift.scanner.patterns import (
     ALL_PATTERNS,
@@ -45,6 +44,7 @@ from envdrift.scanner.patterns import (
     hash_secret,
     redact_secret,
 )
+from envdrift.utils.deadline import run_tool
 from envdrift.utils.git import is_file_tracked
 
 # Encryption markers for dotenvx
@@ -524,14 +524,14 @@ class NativeScanner(ScannerBackend):
 
         # Method 1: Get tracked files from git (fast - reads index)
         try:
-            result = subprocess.run(  # nosec B603, B607
+            result = run_tool(
                 ["git", "ls-files", "-z"],
                 capture_output=True,
                 text=True,
                 encoding="utf-8",
                 errors="surrogateescape",
                 cwd=directory,
-                timeout=tool_timeout(30),
+                timeout=30,
             )
             if result.returncode != 0:
                 # Not a git repo or git error - use fallback
@@ -551,7 +551,7 @@ class NativeScanner(ScannerBackend):
         # with exit 0. Git already applies the repository's ignore policy, and the
         # normal _should_ignore/_looks_binary filters still apply before scanning.
         try:
-            result = subprocess.run(  # nosec B603, B607
+            result = run_tool(
                 [
                     "git",
                     "ls-files",
@@ -564,7 +564,7 @@ class NativeScanner(ScannerBackend):
                 encoding="utf-8",
                 errors="surrogateescape",
                 cwd=directory,
-                timeout=tool_timeout(30),
+                timeout=30,
             )
             if result.returncode == 0:
                 for rel_path in result.stdout.split("\0"):
@@ -584,7 +584,7 @@ class NativeScanner(ScannerBackend):
         # it here would wrongly flag a properly-configured project as having an
         # "unencrypted env file". A *tracked* .env.keys is still caught by Method 1.
         try:
-            result = subprocess.run(  # nosec B603, B607
+            result = run_tool(
                 [
                     "git",
                     "ls-files",
@@ -600,7 +600,7 @@ class NativeScanner(ScannerBackend):
                 encoding="utf-8",
                 errors="surrogateescape",
                 cwd=directory,
-                timeout=tool_timeout(30),
+                timeout=30,
             )
             if result.returncode == 0:
                 for rel_path in result.stdout.split("\0"):

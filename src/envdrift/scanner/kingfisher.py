@@ -32,10 +32,10 @@ from envdrift.scanner.base import (
     UnparsableReportError,
     exception_message,
     parsed_finding,
-    tool_timeout,
 )
 from envdrift.scanner.patterns import hash_secret, redact_secret
 from envdrift.scanner.rule_severity import rule_severity
+from envdrift.utils.deadline import run_tool
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -238,13 +238,13 @@ class KingfisherScanner(ScannerBackend):
         """Get installed Kingfisher version."""
         try:
             binary = self._find_binary()
-            result = subprocess.run(  # nosec B603
+            result = run_tool(
                 [str(binary), "--version"],
                 capture_output=True,
                 text=True,
                 encoding="utf-8",
                 errors="replace",
-                timeout=tool_timeout(10),
+                timeout=10,
             )
             # Output format: "kingfisher 1.73.0"
             if result.returncode == 0:
@@ -303,13 +303,13 @@ class KingfisherScanner(ScannerBackend):
 
         try:
             # Run brew install
-            result = subprocess.run(  # nosec B603
+            result = run_tool(
                 [brew_path, "install", "kingfisher"],
                 capture_output=True,
                 text=True,
                 encoding="utf-8",
                 errors="replace",
-                timeout=tool_timeout(120),  # 2 minute timeout
+                timeout=120,  # 2 minute timeout
             )
 
             if result.returncode != 0:
@@ -488,13 +488,13 @@ class KingfisherScanner(ScannerBackend):
 
                 # Run scan
                 # Note: Kingfisher uses exit code 200 for "findings detected"
-                result = subprocess.run(  # nosec B603
+                result = run_tool(
                     args,
                     capture_output=True,
                     text=True,
                     encoding="utf-8",
                     errors="replace",
-                    timeout=tool_timeout(600),  # 10 minute timeout for thorough scanning
+                    timeout=600,  # 10 minute timeout for thorough scanning
                 )
 
                 # Exit codes: 0 = no findings, 200 = findings detected, others = error

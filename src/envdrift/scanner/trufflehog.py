@@ -40,9 +40,9 @@ from envdrift.scanner.base import (
     ScanResult,
     exception_message,
     parsed_finding,
-    tool_timeout,
 )
 from envdrift.scanner.patterns import hash_secret, redact_secret
+from envdrift.utils.deadline import run_tool
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -365,13 +365,13 @@ class TrufflehogInstaller:
         if target_path.exists() and not force:
             # Verify version
             try:
-                result = subprocess.run(  # nosec B603
+                result = run_tool(
                     [str(target_path), "--version"],
                     capture_output=True,
                     text=True,
                     encoding="utf-8",
                     errors="replace",
-                    timeout=tool_timeout(10),
+                    timeout=10,
                 )
                 if self.version in result.stdout:
                     self.progress(f"trufflehog v{self.version} already installed")
@@ -446,13 +446,13 @@ class TrufflehogScanner(ScannerBackend):
         """Get installed trufflehog version."""
         try:
             binary = self._find_binary()
-            result = subprocess.run(  # nosec B603
+            result = run_tool(
                 [str(binary), "--version"],
                 capture_output=True,
                 text=True,
                 encoding="utf-8",
                 errors="replace",
-                timeout=tool_timeout(10),
+                timeout=10,
             )
             # Output format: "trufflehog 3.88.3"
             return result.stdout.strip().split()[-1] if result.returncode == 0 else None
@@ -575,13 +575,13 @@ class TrufflehogScanner(ScannerBackend):
                 args.append("--no-verification")
 
             try:
-                result = subprocess.run(  # nosec B603
+                result = run_tool(
                     args,
                     capture_output=True,
                     text=True,
                     encoding="utf-8",
                     errors="replace",
-                    timeout=tool_timeout(600),  # 10 minute timeout (trufflehog can be slow)
+                    timeout=600,  # 10 minute timeout (trufflehog can be slow)
                 )
 
                 # Parse JSON lines output (trufflehog outputs one JSON per line)

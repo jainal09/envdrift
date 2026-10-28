@@ -36,7 +36,6 @@ from envdrift.scanner.base import (
     ScanResult,
     exception_message,
     parsed_finding,
-    tool_timeout,
     unparsable_report_error,
 )
 from envdrift.scanner.patterns import hash_secret, redact_secret
@@ -46,6 +45,7 @@ from envdrift.scanner.platform_utils import (
     safe_extract_tar,
     safe_extract_zip,
 )
+from envdrift.utils.deadline import run_tool
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -300,13 +300,13 @@ class TrivyInstaller:
         if target_path.exists() and not force:
             # Verify version
             try:
-                result = subprocess.run(  # nosec B603
+                result = run_tool(
                     [str(target_path), "version", "--format", "json"],
                     capture_output=True,
                     text=True,
                     encoding="utf-8",
                     errors="replace",
-                    timeout=tool_timeout(10),
+                    timeout=10,
                 )
                 if self.version in result.stdout:
                     self.progress(f"trivy v{self.version} already installed")
@@ -375,13 +375,13 @@ class TrivyScanner(ScannerBackend):
         """Get installed trivy version."""
         try:
             binary = self._find_binary()
-            result = subprocess.run(  # nosec B603
+            result = run_tool(
                 [str(binary), "version", "--format", "json"],
                 capture_output=True,
                 text=True,
                 encoding="utf-8",
                 errors="replace",
-                timeout=tool_timeout(10),
+                timeout=10,
             )
             if result.returncode == 0:
                 try:
@@ -495,13 +495,13 @@ class TrivyScanner(ScannerBackend):
                     str(path),
                 ]
 
-                result = subprocess.run(  # nosec B603
+                result = run_tool(
                     args,
                     capture_output=True,
                     text=True,
                     encoding="utf-8",
                     errors="replace",
-                    timeout=tool_timeout(300),  # 5 minute timeout
+                    timeout=300,  # 5 minute timeout
                 )
 
                 # Check for non-zero exit code indicating an error
