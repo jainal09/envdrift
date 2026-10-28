@@ -55,9 +55,9 @@ _AWS_ACCESS_KEY_ID_RE = re.compile(
     r"(?<![A-Z0-9])(?:A3T[A-Z0-9]|AKIA|ABIA|ACCA|ASIA)[A-Z0-9]{16}(?![A-Z0-9])"
 )
 
-# The ``:line:`` of a line git-secrets matched, ``path:line:content`` (``commit:path:line:...``
-# in history), which holds the secret.
-_MATCH_LINE = re.compile(r":\d+:")
+# A line of git-secrets output that envdrift may quote: not blank, and no match. A match,
+# ``path:line:content`` (``commit:path:line:...`` in history), holds the secret.
+_QUOTABLE_LINE = re.compile(r"^(?!.*:\d+:).*\S")
 
 # The other two CRITICAL types are also earned by the credential, not by a word near it: a
 # secret access key is the 40-character value assigned to the AWS secret field itself, and a
@@ -122,14 +122,10 @@ def _scan_error(
     that envdrift can parse leaves the findings unknown as well (#872). A line that could be a
     match (``path:line:content``) is never quoted: it would hold the secret.
     """
-    messages = [
-        line
-        for line in result.stderr.strip().splitlines()
-        if line.strip() and not _MATCH_LINE.search(line)
-    ]
-    fatal = [line for line in messages if line.startswith("fatal: ")]
+    lines = [line for line in result.stderr.splitlines() if _QUOTABLE_LINE.match(line)]
+    fatal = [line for line in lines if line.startswith("fatal: ")]
     if fatal or result.returncode not in (0, 1):
-        detail = (fatal or messages or [f"exit code {result.returncode}"])[0]
+        detail = next(iter(fatal + lines), f"exit code {result.returncode}")
         return f"git-secrets could not scan {path}: {detail}"
     if result.returncode == 1 and not found:
         return f"git-secrets reported a match in {path} that envdrift cannot parse"
@@ -623,10 +619,8 @@ class GitSecretsScanner(ScannerBackend):
                 # them; _parse_output skips the "[ERROR]"/"error:" trailer lines.
                 # Defensive fallback: some git-secrets variants/wrappers may emit
                 # findings on stdout. Parse it too so findings are never dropped.
-                found = [
-                    *(self._parse_output(result.stderr, cwd) if result.stderr else []),
-                    *(self._parse_output(result.stdout, cwd) if result.stdout else []),
-                ]
+                found = self._parse_output(result.stderr, cwd)
+                found += self._parse_output(result.stdout, cwd)
                 for finding in found:
                     if finding not in all_findings:
                         all_findings.append(finding)
