@@ -72,10 +72,17 @@ def _read_body(response: Any) -> Iterator[bytes]:
     ``read1`` returns what has arrived, so a slow download is checked as it goes:
     one for a scanner stops at the first read after its deadline, with
     ``ScannerTimedOut`` (#900).
+
+    Raises:
+        OSError: the server closed the connection before it sent the whole body.
+            ``read1`` ends quietly there, where ``read()`` would raise.
     """
     while chunk := response.read1(_CHUNK_BYTES):
         check_deadline()
         yield chunk
+    remaining = getattr(response, "length", None)
+    if remaining:
+        raise OSError(f"the server closed the connection with {remaining} bytes still to send")
 
 
 def download_file(

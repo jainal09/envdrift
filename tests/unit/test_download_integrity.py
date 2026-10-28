@@ -123,6 +123,41 @@ def stall_server():
         thread.join(timeout=5)
 
 
+@pytest.fixture
+def truncating_url():
+    """A URL whose server announces 100 bytes, sends 10 and hangs up, as a dropped download does."""
+    server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    server.bind(("127.0.0.1", 0))
+    server.listen(4)
+    server.settimeout(0.1)
+    done = threading.Event()
+
+    def serve() -> None:
+        try:
+            while not done.is_set():
+                try:
+                    connection, _ = server.accept()
+                except TimeoutError:
+                    continue
+                with connection:
+                    connection.recv(65536)  # the request
+                    connection.sendall(
+                        b"HTTP/1.1 200 OK\r\nContent-Length: 100\r\nConnection: close\r\n\r\n"
+                        + b"x" * 10
+                    )
+        finally:
+            server.close()
+
+    thread = threading.Thread(target=serve, daemon=True)
+    thread.start()
+    try:
+        yield f"http://127.0.0.1:{server.getsockname()[1]}/file"
+    finally:
+        done.set()
+        thread.join(timeout=5)
+
+
 def _sha256_bytes(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
 
@@ -951,6 +986,20 @@ class TestInstallIntegrityHelpers:
             integrity.verify_download(
                 artifact, "tool.tar.gz", f"{file_server.base_url}/checksums.txt", "tool"
             )
+
+    def test_a_checksums_file_cut_short_is_not_parsed(self, integrity, truncating_url):
+        """A checksums file the server stopped sending is a failed fetch, not a short file.
+
+        ``read1`` ends quietly where the server hangs up, so the cut-short file used to be
+        parsed and failed as a missing or mismatched checksum.
+        """
+        with pytest.raises(integrity.ChecksumVerificationError, match="could not fetch checksums"):
+            integrity.fetch_checksums(truncating_url)
+
+    def test_a_download_cut_short_fails(self, integrity, truncating_url, tmp_path: Path):
+        """A download the server stopped sending fails at once, with what is missing."""
+        with pytest.raises(OSError, match="with 90 bytes still to send"):
+            integrity.download_file(truncating_url, tmp_path / "tool.tar.gz", timeout=5)
 
     def test_verify_download_rejects_unreachable_checksums(self, integrity, tmp_path: Path):
         artifact = tmp_path / "tool.tar.gz"
