@@ -33,6 +33,7 @@ from envdrift.scanner.base import (
     ScannerBackend,
     ScanResult,
     exception_message,
+    parsed_finding,
 )
 from envdrift.scanner.patterns import hash_secret, redact_secret
 from envdrift.scanner.platform_utils import get_platform_info, get_venv_bin_dir
@@ -124,9 +125,10 @@ def _load_report(report_dir: Path) -> tuple[dict[str, Any] | None, bool]:
     Talisman versions write the report in different places
     (``talisman_reports/data/report.json`` today), and the first location that holds a
     report that parses is used. The report is ``None`` when no location holds one. A
-    report that is not a JSON object (a partly written file, or a message where the report
-    should be) cannot be parsed; when it is the only one, the findings are unknown, not
-    absent (#874). Talisman writes UTF-8 whatever the platform's encoding is (#873).
+    report that is not a JSON object with a ``results`` list (a partly written file, or a
+    message where the report should be) cannot be parsed; when it is the only one, the
+    findings are unknown, not absent (#874). Talisman writes UTF-8 whatever the platform's
+    encoding is (#873).
     """
     unreadable = False
     for report_file in (
@@ -140,7 +142,7 @@ def _load_report(report_dir: Path) -> tuple[dict[str, Any] | None, bool]:
             report = json.loads(report_file.read_text(encoding="utf-8"))
         except (json.JSONDecodeError, UnicodeDecodeError):
             report = None
-        if isinstance(report, dict):
+        if isinstance(report, dict) and isinstance(report.get("results", []), list):
             return report, False
         unreadable = True
     return None, unreadable
@@ -640,15 +642,16 @@ class TalismanScanner(ScannerBackend):
             # Parse failures/warnings in result. Real talisman reports use the
             # keys ``failure_list``/``warning_list``/``ignore_list``; older/test
             # fixtures may use ``failures``/``warnings``/``ignores``.
+            unparsable = f"talisman wrote a report for {base_path} that envdrift cannot parse"
             for failure in result.get("failure_list", result.get("failures", [])):
-                finding = self._parse_failure(failure, file_path)
-                if finding:
-                    findings.append(finding)
+                findings.append(parsed_finding(self._parse_failure(failure, file_path), unparsable))
 
             for warning in result.get("warning_list", result.get("warnings", [])):
-                finding = self._parse_failure(warning, file_path, is_warning=True)
-                if finding:
-                    findings.append(finding)
+                findings.append(
+                    parsed_finding(
+                        self._parse_failure(warning, file_path, is_warning=True), unparsable
+                    )
+                )
 
             # Also check for ignores that are still flagged
             for _ignore in result.get("ignore_list", result.get("ignores", [])):

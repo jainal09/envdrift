@@ -39,6 +39,7 @@ from envdrift.scanner.base import (
     ScannerBackend,
     ScanResult,
     exception_message,
+    parsed_finding,
 )
 from envdrift.scanner.patterns import hash_secret, redact_secret
 
@@ -171,9 +172,10 @@ def _load_findings(output: str) -> tuple[list[Any], bool]:
     """The findings trufflehog printed, one JSON object per line, and whether all were read.
 
     A line that is not JSON is progress output and is skipped. A line that starts as a JSON
-    object but does not parse is a finding cut short, which leaves the findings unknown,
-    not absent (#874): the findings that parse are returned, with False. Lines are split on
-    ``\\n`` only, as trufflehog writes them; a secret may hold other line breaks.
+    object but does not parse is a finding cut short, and a line of JSON that is not an
+    object is no finding at all; either leaves the findings unknown, not absent (#874): the
+    findings that parse are returned, with False. Lines are split on ``\\n`` only, as
+    trufflehog writes them; a secret may hold other line breaks.
     """
     findings: list[Any] = []
     complete = True
@@ -182,10 +184,15 @@ def _load_findings(output: str) -> tuple[list[Any], bool]:
         if not line:
             continue
         try:
-            findings.append(json.loads(line))
+            finding = json.loads(line)
         except json.JSONDecodeError:
             if line.startswith("{"):
                 complete = False
+            continue
+        if isinstance(finding, dict):
+            findings.append(finding)
+        else:
+            complete = False
     return findings, complete
 
 
@@ -587,9 +594,12 @@ class TrufflehogScanner(ScannerBackend):
                     ) or source_meta.get("Git", {}).get("file", "")
                     if file_path_str:
                         files_with_findings.add(file_path_str)
-                    finding = self._parse_finding(item, path)
-                    if finding:
-                        all_findings.append(finding)
+                    all_findings.append(
+                        parsed_finding(
+                            self._parse_finding(item, path),
+                            f"trufflehog printed a finding for {path} that envdrift cannot parse",
+                        )
+                    )
                 total_files += len(files_with_findings)
 
                 if result.returncode != 0:

@@ -29,7 +29,9 @@ from envdrift.scanner.base import (
     ScanFinding,
     ScannerBackend,
     ScanResult,
+    UnparsableReportError,
     exception_message,
+    parsed_finding,
 )
 from envdrift.scanner.patterns import hash_secret, redact_secret
 from envdrift.scanner.rule_severity import rule_severity
@@ -140,10 +142,10 @@ def _load_findings(report_path: Path) -> list[Any] | None:
     """The findings in a Kingfisher JSON report, or None when the report cannot be read.
 
     A missing or empty report holds no findings, and so does an object whose ``findings``
-    is empty or absent. Anything else (a partly written file, a message where the report
-    should be, a ``findings`` that is not a list) leaves the findings unknown, not absent,
-    so it is not a clean scan (#874). Kingfisher writes UTF-8 whatever the platform's
-    encoding is (#873).
+    is an empty list, null or absent. Anything else (a partly written file, a message where
+    the report should be, a ``findings`` that is not a list, even a falsy one such as
+    ``false`` or ``{}``) leaves the findings unknown, not absent, so it is not a clean scan
+    (#874). Kingfisher writes UTF-8 whatever the platform's encoding is (#873).
     """
     if not report_path.exists() or report_path.stat().st_size == 0:
         return []
@@ -153,7 +155,9 @@ def _load_findings(report_path: Path) -> list[Any] | None:
         return None
     if not isinstance(report, dict):
         return None
-    findings = report.get("findings") or []
+    findings = report.get("findings")
+    if findings is None:
+        return []
     return findings if isinstance(findings, list) else None
 
 
@@ -521,9 +525,12 @@ class KingfisherScanner(ScannerBackend):
                 total_files += len(files_with_findings)
 
                 for item in findings_list:
-                    finding = self._parse_finding(item, path)
-                    if finding:
-                        all_findings.append(finding)
+                    all_findings.append(
+                        parsed_finding(
+                            self._parse_finding(item, path),
+                            f"Kingfisher wrote a report for {path} that envdrift cannot parse",
+                        )
+                    )
 
             except subprocess.TimeoutExpired:
                 return ScanResult(
@@ -536,7 +543,10 @@ class KingfisherScanner(ScannerBackend):
                 return ScanResult(
                     scanner_name=self.name,
                     findings=all_findings,
-                    error=f"{type(e).__name__}: {e}",
+                    # A report envdrift cannot parse is named as such, not as an exception.
+                    error=str(e)
+                    if isinstance(e, UnparsableReportError)
+                    else f"{type(e).__name__}: {e}",
                     duration_ms=int((time.time() - start_time) * 1000),
                 )
             finally:

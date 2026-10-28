@@ -35,6 +35,8 @@ from envdrift.scanner.base import (
     ScannerBackend,
     ScanResult,
     exception_message,
+    parsed_finding,
+    unparsable_report_error,
 )
 from envdrift.scanner.patterns import hash_secret, redact_secret
 from envdrift.scanner.platform_utils import (
@@ -126,28 +128,20 @@ def get_trivy_path() -> Path:
 def _load_report(output: str) -> dict[str, Any] | None:
     """The report trivy printed, or None when ``output`` is not one.
 
-    A report is a JSON object, which has no ``Results`` when nothing was found. Output of
-    any other kind (a report cut short, or a message where the report should be) leaves the
-    findings unknown, not absent, so it is not a clean scan (#874).
+    A report is a JSON object whose ``Results`` list is absent when nothing was found, and a
+    run that printed nothing found nothing. Output of any other kind (a report cut short, a
+    message where the report should be, ``Results`` that are not a list) leaves the findings
+    unknown, not absent, so it is not a clean scan (#874).
     """
+    if not output.strip():
+        return {}
     try:
         report = json.loads(output)
     except json.JSONDecodeError:
         return None
-    return report if isinstance(report, dict) else None
-
-
-def _unparsable_report_error(result: subprocess.CompletedProcess[str], path: Path) -> str:
-    """The error for trivy output that is not a report, which leaves the output out.
-
-    A report cut short holds the secrets trivy found, so it must not end up in the error.
-    What trivy wrote to stderr is kept: it says why a failed run printed no report.
-    """
-    error = f"trivy printed a report for {path} that envdrift cannot parse"
-    if result.returncode != 0:
-        error += f" (exit code {result.returncode})"
-    stderr = result.stderr.strip()
-    return f"{error}: {stderr}" if stderr else error
+    if not isinstance(report, dict) or not isinstance(report.get("Results", []), list):
+        return None
+    return report
 
 
 class TrivyInstaller:
@@ -525,18 +519,17 @@ class TrivyScanner(ScannerBackend):
                     )
 
                 # Parse JSON output
-                if result.stdout.strip():
-                    scan_data = _load_report(result.stdout)
-                    if scan_data is None:
-                        return ScanResult(
-                            scanner_name=self.name,
-                            findings=all_findings,
-                            error=_unparsable_report_error(result, path),
-                            duration_ms=int((time.time() - start_time) * 1000),
-                        )
-                    findings, files = self._parse_output(scan_data, path)
-                    all_findings.extend(findings)
-                    total_files += files
+                scan_data = _load_report(result.stdout)
+                if scan_data is None:
+                    return ScanResult(
+                        scanner_name=self.name,
+                        findings=all_findings,
+                        error=unparsable_report_error("trivy", result, path),
+                        duration_ms=int((time.time() - start_time) * 1000),
+                    )
+                findings, files = self._parse_output(scan_data, path)
+                all_findings.extend(findings)
+                total_files += files
 
             except subprocess.TimeoutExpired:
                 return ScanResult(
@@ -587,9 +580,12 @@ class TrivyScanner(ScannerBackend):
             # Get secrets from result
             secrets = result.get("Secrets", [])
             for secret in secrets:
-                finding = self._parse_secret(secret, target, base_path, state)
-                if finding:
-                    findings.append(finding)
+                findings.append(
+                    parsed_finding(
+                        self._parse_secret(secret, target, base_path, state),
+                        f"trivy printed a report for {base_path} that envdrift cannot parse",
+                    )
+                )
 
         return findings, files_scanned
 

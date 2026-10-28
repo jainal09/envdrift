@@ -55,6 +55,10 @@ _AWS_ACCESS_KEY_ID_RE = re.compile(
     r"(?<![A-Z0-9])(?:A3T[A-Z0-9]|AKIA|ABIA|ACCA|ASIA)[A-Z0-9]{16}(?![A-Z0-9])"
 )
 
+# The ``:line:`` of a line git-secrets matched, ``path:line:content`` (``commit:path:line:...``
+# in history), which holds the secret.
+_MATCH_LINE = re.compile(r":\d+:")
+
 # The other two CRITICAL types are also earned by the credential, not by a word near it: a
 # secret access key is the 40-character value assigned to the AWS secret field itself, and a
 # private key is a PEM header or a long base64 value assigned to ``private_key`` itself. A line
@@ -104,6 +108,32 @@ def _holds_credential(rule_type: str, content: str) -> bool:
             or _PRIVATE_KEY_VALUE_RE.search(content) is not None
         )
     return True
+
+
+def _scan_error(
+    result: subprocess.CompletedProcess[str], found: list[ScanFinding], path: Path
+) -> str | None:
+    """Why the git-secrets run that scanned ``path`` failed, or None when it did not.
+
+    git-secrets exits 0 when it finds nothing and 1 when it reports matches. It exits with any
+    other code when it fails: 2 when grep fails, 128 when git does, 129 for an option it does
+    not know. When git cannot read its config, git-secrets loads no patterns, matches nothing
+    and exits 0, so only git's ``fatal:`` message on stderr tells. An exit of 1 with no match
+    that envdrift can parse leaves the findings unknown as well (#872). A line that could be a
+    match (``path:line:content``) is never quoted: it would hold the secret.
+    """
+    messages = [
+        line
+        for line in result.stderr.strip().splitlines()
+        if line.strip() and not _MATCH_LINE.search(line)
+    ]
+    fatal = [line for line in messages if line.startswith("fatal: ")]
+    if fatal or result.returncode not in (0, 1):
+        detail = (fatal or messages or [f"exit code {result.returncode}"])[0]
+        return f"git-secrets could not scan {path}: {detail}"
+    if result.returncode == 1 and not found:
+        return f"git-secrets reported a match in {path} that envdrift cannot parse"
+    return None
 
 
 class GitSecretsNotFoundError(Exception):
@@ -589,26 +619,27 @@ class GitSecretsScanner(ScannerBackend):
                 # Parse output.
                 # git-secrets writes its findings (format: path:line_number:content,
                 # followed by an "[ERROR] Matched..." trailer) to STDERR, not stdout,
-                # and exits non-zero when matches are found. Parse stderr to capture
+                # and exits 1 when matches are found. Parse stderr to capture
                 # them; _parse_output skips the "[ERROR]"/"error:" trailer lines.
-                if result.stderr:
-                    stderr_findings = self._parse_output(result.stderr, cwd)
-                    for finding in stderr_findings:
-                        if finding not in all_findings:
-                            all_findings.append(finding)
-
                 # Defensive fallback: some git-secrets variants/wrappers may emit
                 # findings on stdout. Parse it too so findings are never dropped.
-                if result.stdout:
-                    for finding in self._parse_output(result.stdout, cwd):
-                        if finding not in all_findings:
-                            all_findings.append(finding)
+                found = [
+                    *(self._parse_output(result.stderr, cwd) if result.stderr else []),
+                    *(self._parse_output(result.stdout, cwd) if result.stdout else []),
+                ]
+                for finding in found:
+                    if finding not in all_findings:
+                        all_findings.append(finding)
+                error = _scan_error(result, found, path)
+                if error:
+                    path_errors.append(error)
 
             except subprocess.TimeoutExpired:
+                # The paths that failed before this one still count.
                 return ScanResult(
                     scanner_name=self.name,
                     findings=all_findings,
-                    error=f"Scan timed out for {path}",
+                    error="; ".join([*path_errors, f"Scan timed out for {path}"]),
                     duration_ms=int((time.time() - start_time) * 1000),
                 )
             except Exception as e:

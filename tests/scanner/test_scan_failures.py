@@ -189,6 +189,92 @@ def test_git_secrets_reports_a_path_it_could_not_scan_and_scans_the_others(
     assert [f.file_path for f in result.findings] == [second / "app.env"]
 
 
+@pytest.mark.parametrize(
+    ("returncode", "stderr", "error"),
+    [
+        (
+            # What git-secrets does when git cannot read its config: no patterns, no matches.
+            0,
+            "fatal: bad config line 15 in file .git/config\n" * 3,
+            "git-secrets could not scan {path}: fatal: bad config line 15 in file .git/config",
+        ),
+        (
+            128,
+            "fatal: bad config line 15 in file .git/config\n",
+            "git-secrets could not scan {path}: fatal: bad config line 15 in file .git/config",
+        ),
+        (
+            129,
+            "error: unknown option `bogus'\nusage: git secrets --scan [-r|--recursive]\n",
+            "git-secrets could not scan {path}: error: unknown option `bogus'",
+        ),
+        (2, "", "git-secrets could not scan {path}: exit code 2"),
+    ],
+    ids=["git-config-unreadable", "git-fails", "unknown-option", "no-message"],
+)
+def test_git_secrets_failure_fails_the_scan(
+    returncode: int, stderr: str, error: str, tmp_path: Path
+) -> None:
+    """A git-secrets run that failed read as a clean scan, whatever it exited with."""
+    scanner, binary = _with_binary(GitSecretsScanner, tmp_path)
+    (target,) = _directories(tmp_path, "project")
+    run = [MagicMock(returncode=returncode, stdout="", stderr=stderr)]
+
+    result = _scan(scanner, binary, [target], run)
+
+    assert result.error == error.format(path=target)
+
+
+def test_git_secrets_match_that_cannot_be_parsed_fails_the_scan(tmp_path: Path) -> None:
+    """An exit of 1 means git-secrets matched; with no match parsed, the findings are unknown.
+
+    The matched line is left out of the error: it holds the secret.
+    """
+    scanner, binary = _with_binary(GitSecretsScanner, tmp_path)
+    (target,) = _directories(tmp_path, "project")
+    stderr = f"TOKEN={SECRET}\n\n[ERROR] Matched one or more prohibited patterns\n"
+    run = [MagicMock(returncode=1, stdout="", stderr=stderr)]
+
+    result = _scan(scanner, binary, [target], run)
+
+    assert result.error == f"git-secrets reported a match in {target} that envdrift cannot parse"
+
+
+@pytest.mark.parametrize("returncode", [1, 2])
+def test_git_secrets_never_quotes_a_matched_line(returncode: int, tmp_path: Path) -> None:
+    """A matched line is no error message, even from a file named like one of git's."""
+    scanner, binary = _with_binary(GitSecretsScanner, tmp_path)
+    (target,) = _directories(tmp_path, "project")
+    stderr = f"fatal: x.env:3:TOKEN={SECRET}\n\n[ERROR] Matched one or more prohibited patterns\n"
+    run = [MagicMock(returncode=returncode, stdout="", stderr=stderr)]
+
+    result = _scan(scanner, binary, [target], run)
+
+    assert SECRET not in (result.error or "")
+    if returncode == 1:
+        assert result.error is None
+        assert [f.line_number for f in result.findings] == [3]
+    else:
+        assert result.error == (
+            f"git-secrets could not scan {target}: [ERROR] Matched one or more prohibited patterns"
+        )
+
+
+def test_git_secrets_timeout_keeps_the_errors_of_the_paths_before_it(tmp_path: Path) -> None:
+    scanner, binary = _with_binary(GitSecretsScanner, tmp_path)
+    first, second = _directories(tmp_path, "first", "second")
+    outcomes = iter([OSError("permission denied"), subprocess.TimeoutExpired("git-secrets", 300)])
+
+    def run(*_args: Any, **_kwargs: Any) -> MagicMock:
+        raise next(outcomes)
+
+    result = _scan(scanner, binary, [first, second], run)
+
+    assert result.error == (
+        f"git-secrets could not scan {first}: permission denied; Scan timed out for {second}"
+    )
+
+
 # --- #873: a report written in UTF-8 ------------------------------------------------
 
 
@@ -254,21 +340,21 @@ UNPARSABLE = [b'[{"RuleID": "github-pat", "File": "app.env", "Sec', b"error: out
 
 @pytest.mark.parametrize("content", UNPARSABLE, ids=["cut-short", "message"])
 @pytest.mark.parametrize(
-    ("scanner_cls", "option", "returncode"),
+    ("scanner_cls", "option"),
     [
-        (GitleaksScanner, "--report-path", 0),
-        (InfisicalScanner, "--report-path", 0),
-        (KingfisherScanner, "-o", 0),
+        (GitleaksScanner, "--report-path"),
+        (InfisicalScanner, "--report-path"),
+        (KingfisherScanner, "-o"),
     ],
     ids=["gitleaks", "infisical", "kingfisher"],
 )
 def test_a_report_that_cannot_be_parsed_fails_the_scan(
-    scanner_cls: type[Any], option: str, returncode: int, content: bytes, tmp_path: Path
+    scanner_cls: type[Any], option: str, content: bytes, tmp_path: Path
 ) -> None:
     scanner, binary = _with_binary(scanner_cls, tmp_path)
     (target,) = _directories(tmp_path, "project")
 
-    result = _scan(scanner, binary, [target], _report_writer(option, content, returncode))
+    result = _scan(scanner, binary, [target], _report_writer(option, content))
 
     assert result.success is False
     assert f"wrote a report for {target} that envdrift cannot parse" in (result.error or "")
@@ -283,8 +369,17 @@ def test_a_report_that_cannot_be_parsed_fails_the_scan(
         (InfisicalScanner, "--report-path", b'"no findings"'),
         (KingfisherScanner, "-o", b'[{"findings": []}]'),
         (KingfisherScanner, "-o", b'{"findings": {"rule": "github"}}'),
+        (KingfisherScanner, "-o", b'{"findings": {}}'),
+        (KingfisherScanner, "-o", b'{"findings": false}'),
     ],
-    ids=["gitleaks-object", "infisical-string", "kingfisher-list", "kingfisher-findings-object"],
+    ids=[
+        "gitleaks-object",
+        "infisical-string",
+        "kingfisher-list",
+        "kingfisher-findings-object",
+        "kingfisher-findings-empty-object",
+        "kingfisher-findings-false",
+    ],
 )
 def test_a_report_of_the_wrong_shape_fails_the_scan(
     scanner_cls: type[Any], option: str, content: bytes, tmp_path: Path
@@ -296,6 +391,69 @@ def test_a_report_of_the_wrong_shape_fails_the_scan(
 
     assert result.success is False
     assert "cannot parse" in (result.error or "")
+
+
+def _printing(stdout: str) -> Any:
+    """A ``subprocess.run`` for a tool that prints its report."""
+    return lambda *_args, **_kwargs: MagicMock(returncode=0, stdout=stdout, stderr="")
+
+
+# Each report holds one finding with a field of the wrong type, as a new release of a tool
+# could write it, so the scanner's parser fails on it. The finding used to be skipped, and the
+# report read as clean.
+MALFORMED_FINDING = {
+    "gitleaks": (
+        GitleaksScanner,
+        _report_writer("--report-path", b'[{"RuleID": "github-pat", "File": 123}]'),
+    ),
+    "infisical": (
+        InfisicalScanner,
+        _report_writer("--report-path", b'[{"RuleID": "github-pat", "File": 123}]'),
+    ),
+    "kingfisher": (
+        KingfisherScanner,
+        _report_writer("-o", b'{"findings": [{"rule": {"id": "github"}, "finding": {"path": 1}}]}'),
+    ),
+    "talisman": (
+        TalismanScanner,
+        _talisman_report_writer(b'{"results": [{"filename": "a.env", "failure_list": ["oops"]}]}'),
+    ),
+    "trivy": (
+        TrivyScanner,
+        _printing('{"Results": [{"Target": 123, "Secrets": [{"RuleID": "github-pat"}]}]}'),
+    ),
+    "trufflehog": (
+        TrufflehogScanner,
+        _printing('{"SourceMetadata": {"Data": {"Filesystem": {"file": 123}}}, "Raw": "x"}'),
+    ),
+}
+
+
+@pytest.mark.parametrize(
+    ("scanner_cls", "run"), MALFORMED_FINDING.values(), ids=list(MALFORMED_FINDING)
+)
+def test_a_finding_that_cannot_be_parsed_fails_the_scan(
+    scanner_cls: type[Any], run: Any, tmp_path: Path
+) -> None:
+    scanner, binary = _with_binary(scanner_cls, tmp_path)
+    (target,) = _directories(tmp_path, "project")
+
+    result = _scan(scanner, binary, [target], run)
+
+    error = result.error or ""
+    assert error.endswith(f" for {target} that envdrift cannot parse")
+    assert error.split(" ")[0].lower() == scanner.name
+
+
+@pytest.mark.parametrize("line", ["42", '"scanning"', "null", '[{"Raw": "x"}]'])
+def test_trufflehog_json_that_is_not_a_finding_fails_the_scan(line: str, tmp_path: Path) -> None:
+    """Every finding trufflehog prints is a JSON object; other JSON leaves them unknown."""
+    scanner, binary = _with_binary(TrufflehogScanner, tmp_path)
+    (target,) = _directories(tmp_path, "project")
+
+    result = _scan(scanner, binary, [target], _printing(line))
+
+    assert result.error == f"trufflehog printed a finding for {target} that envdrift cannot parse"
 
 
 @pytest.mark.parametrize(
@@ -351,11 +509,16 @@ def test_talisman_report_that_cannot_be_parsed_fails_the_scan(
     assert result.error == f"talisman wrote a report for {target} that envdrift cannot parse"
 
 
-def test_talisman_report_that_is_not_an_object_fails_the_scan(tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    "content",
+    [b"null", b'{"results": {}}', b'{"results": false}'],
+    ids=["not-an-object", "results-empty-object", "results-false"],
+)
+def test_talisman_report_of_the_wrong_shape_fails_the_scan(content: bytes, tmp_path: Path) -> None:
     scanner, binary = _with_binary(TalismanScanner, tmp_path)
     (target,) = _directories(tmp_path, "project")
 
-    result = _scan(scanner, binary, [target], _talisman_report_writer(b"null"))
+    result = _scan(scanner, binary, [target], _talisman_report_writer(content))
 
     assert result.error == f"talisman wrote a report for {target} that envdrift cannot parse"
 
@@ -372,7 +535,16 @@ def test_talisman_clean_report_is_a_clean_scan(tmp_path: Path) -> None:
     assert result.findings == []
 
 
-@pytest.mark.parametrize("stdout", ['{"SchemaVersion": 2, "Resu', "FATAL: no space left on device"])
+@pytest.mark.parametrize(
+    "stdout",
+    [
+        '{"SchemaVersion": 2, "Resu',
+        "FATAL: no space left on device",
+        '{"SchemaVersion": 2, "Results": {}}',
+        '{"SchemaVersion": 2, "Results": false}',
+    ],
+    ids=["cut-short", "message", "results-empty-object", "results-false"],
+)
 def test_trivy_output_that_is_not_a_report_fails_the_scan(stdout: str, tmp_path: Path) -> None:
     scanner, binary = _with_binary(TrivyScanner, tmp_path)
     (target,) = _directories(tmp_path, "project")
@@ -380,6 +552,21 @@ def test_trivy_output_that_is_not_a_report_fails_the_scan(stdout: str, tmp_path:
     result = _scan(scanner, binary, [target], [MagicMock(returncode=0, stdout=stdout, stderr="")])
 
     assert result.error == f"trivy printed a report for {target} that envdrift cannot parse"
+
+
+# What trivy prints for a directory with no secrets: a report with no ``Results``.
+TRIVY_CLEAN = '{"SchemaVersion": 2, "ArtifactName": "project", "ArtifactType": "filesystem"}'
+
+
+@pytest.mark.parametrize("stdout", [TRIVY_CLEAN, "", "\n"], ids=["no-results", "empty", "blank"])
+def test_trivy_output_that_reports_nothing_is_a_clean_scan(stdout: str, tmp_path: Path) -> None:
+    scanner, binary = _with_binary(TrivyScanner, tmp_path)
+    (target,) = _directories(tmp_path, "project")
+
+    result = _scan(scanner, binary, [target], [MagicMock(returncode=0, stdout=stdout, stderr="")])
+
+    assert result.error is None
+    assert result.findings == []
 
 
 def test_trivy_failure_with_output_that_is_not_a_report_says_why_without_the_output(

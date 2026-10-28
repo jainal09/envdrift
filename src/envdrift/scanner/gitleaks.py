@@ -34,6 +34,7 @@ from envdrift.scanner.base import (
     ScannerBackend,
     ScanResult,
     exception_message,
+    parsed_finding,
 )
 from envdrift.scanner.patterns import hash_secret, redact_secret
 from envdrift.scanner.platform_utils import scan_argument, symlinked_file
@@ -665,12 +666,14 @@ class GitleaksScanner(ScannerBackend):
                 }
                 total_files += len(files_with_findings)
                 for item in findings_data:
-                    finding = self._parse_finding(item, finding_base)
-                    if finding and file_link is not None:
+                    finding = parsed_finding(
+                        self._parse_finding(item, finding_base),
+                        f"gitleaks wrote a report for {scan_target} that envdrift cannot parse",
+                    )
+                    if file_link is not None:
                         # Scanned as its target; reported as the link.
                         finding = replace(finding, file_path=file_link)
-                    if finding:
-                        all_findings.append(finding)
+                    all_findings.append(finding)
 
             except subprocess.TimeoutExpired:
                 return ScanResult(

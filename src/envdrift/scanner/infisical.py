@@ -38,6 +38,7 @@ from envdrift.scanner.base import (
     ScannerBackend,
     ScanResult,
     exception_message,
+    parsed_finding,
 )
 from envdrift.scanner.patterns import hash_secret, redact_secret
 from envdrift.scanner.platform_utils import (
@@ -776,9 +777,12 @@ class InfisicalScanner(ScannerBackend):
                     total_files += len(files_with_findings)
                     run_findings: list[ScanFinding] = []
                     for item in report_data:
-                        finding = self._parse_finding(item, finding_base)
-                        if finding:
-                            run_findings.append(finding)
+                        run_findings.append(
+                            parsed_finding(
+                                self._parse_finding(item, finding_base),
+                                f"infisical wrote a report for {path} that envdrift cannot parse",
+                            )
+                        )
                     run_findings.extend(
                         self._parse_components(
                             report_data, finding_base, [*all_findings, *run_findings]

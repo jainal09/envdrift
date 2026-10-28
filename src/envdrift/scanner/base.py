@@ -7,7 +7,10 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    import subprocess  # nosec B404
 
 # Guard exit codes — the single documented contract (docs/cli/guard.md).
 # 1-4 are severity-derived "findings" codes; 5 and 6 are reserved for runs
@@ -204,6 +207,39 @@ def exception_message(error: BaseException) -> str:
     type instead.
     """
     return str(error) or type(error).__name__
+
+
+def unparsable_report_error(tool: str, result: subprocess.CompletedProcess[str], path: Path) -> str:
+    """The error for a report ``tool`` printed for ``path`` that envdrift cannot parse (#874).
+
+    The output is left out: a report cut short holds the secrets the tool found. What the tool
+    wrote to stderr is kept, since it says why a failed run printed no report.
+    """
+    error = f"{tool} printed a report for {path} that envdrift cannot parse"
+    if result.returncode != 0:
+        error += f" (exit code {result.returncode})"
+    stderr = result.stderr.strip()
+    return f"{error}: {stderr}" if stderr else error
+
+
+class UnparsableReportError(Exception):
+    """A finding in a scanner's report that envdrift cannot parse (#874).
+
+    Its message names the scanner and the path it scanned, never the report. Raised in a
+    scanner's ``scan()``, it fails the scan with that message.
+    """
+
+
+def parsed_finding(finding: ScanFinding | None, error: str) -> ScanFinding:
+    """``finding``, as a scanner's ``_parse_*`` method returned it, unless that is None.
+
+    The method returns None for a finding it cannot parse, such as one whose fields have
+    changed type in a new release of the tool. Skipping it would drop the finding without a
+    word, so this raises ``UnparsableReportError(error)`` instead (#874).
+    """
+    if finding is None:
+        raise UnparsableReportError(error)
+    return finding
 
 
 @dataclass
