@@ -78,6 +78,11 @@ form of the path you passed, and gitleaks showed history findings by their absol
 Infisical also reported nothing, and no error, for the absolute path of a symlinked directory (or of
 one followed by `..`) and for a symlink to a file.
 
+Older envdrift releases ran trufflehog on each path as you passed it. It joined a relative path onto
+itself (`proj/proj/sub/app.env`), and reported nothing, and no error, for a symlinked directory or file
+or a `..` after a symlink. With `--history` it failed on a subdirectory of a repository, and scanned a
+path outside any repository as plain files instead of failing.
+
 ## Options
 
 ### `--native-only`
@@ -294,11 +299,11 @@ error instead of silently skipping the history.
 envdrift guard --history
 ```
 
-gitleaks and infisical scan the history of the whole repository that contains each scanned path,
-a file or a subdirectory alike, once per repository, so `--pr-base --history` with many changed
-files runs one history scan. A path outside any git repository, or in a repository with no commits,
-is a scanner error for them, never a clean history: with no blocking finding, guard exits 5 (scan
-incomplete).
+gitleaks, infisical and trufflehog scan the history of the whole repository that contains each
+scanned path, a file or a subdirectory alike, once per repository, so `--pr-base --history` with many
+changed files runs one history scan. A path outside any git repository, or in a repository with no
+commits, is a scanner error for them, never a clean history: with no blocking finding, guard exits 5
+(scan incomplete).
 
 ### `--entropy` / `--no-entropy`, `-e`
 

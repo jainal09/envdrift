@@ -16,6 +16,7 @@ This module provides:
 from __future__ import annotations
 
 import json
+import os
 import platform
 import shutil
 import subprocess  # nosec B404
@@ -23,6 +24,7 @@ import tarfile
 import tempfile
 import time
 import zipfile
+from dataclasses import replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, ClassVar
 
@@ -43,6 +45,7 @@ from envdrift.scanner.base import (
 )
 from envdrift.scanner.patterns import hash_secret, redact_secret
 from envdrift.utils.deadline import run_tool
+from envdrift.utils.git import get_git_root, has_git_head
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -195,6 +198,93 @@ def _load_findings(output: str) -> tuple[list[Any], bool]:
         else:
             complete = False
     return findings, complete
+
+
+def _history_target(path: Path) -> tuple[Path | None, str | None]:
+    """The root of the Git repository whose history trufflehog scans for ``path``.
+
+    The root comes back in the form of ``path``, relative to the cwd for a relative one, so
+    relative scan paths keep reporting relative findings.
+
+    Returns:
+        Tuple of (repository root, None), or (None, error message).
+    """
+    git_root = get_git_root(path)
+    if git_root is None:
+        return None, f"Cannot scan Git history for {path}: not inside a Git repository"
+    if not has_git_head(git_root):
+        return None, f"Cannot scan Git history for {path}: the Git repository has no commits"
+    if path.is_absolute():
+        return git_root, None
+    try:
+        return Path(os.path.relpath(git_root, Path.cwd())), None
+    except ValueError:
+        # Windows: a root on another drive than the cwd has no relative form.
+        return git_root, None
+
+
+def _scan_targets(paths: list[Path], *, include_git_history: bool) -> tuple[list[Path], list[str]]:
+    """The targets to run trufflehog on, and why any path cannot be scanned.
+
+    In history mode every path maps to its repository root, and paths in the same repository
+    share one scan. A path whose history cannot be scanned (outside a repository, or in one
+    without commits) is an error, never a quiet scan of its files instead (#906), and does not
+    keep the other paths from being scanned.
+    """
+    targets: list[Path] = []
+    errors: list[str] = []
+    seen_roots: set[Path] = set()
+    for path in paths:
+        if not path.exists():
+            continue
+        if not include_git_history:
+            targets.append(path)
+            continue
+        root, error = _history_target(path)
+        if root is None:
+            errors.append(error or f"Cannot scan Git history for {path}")
+            continue
+        if root.resolve() not in seen_roots:
+            seen_roots.add(root.resolve())
+            targets.append(root)
+    return targets, errors
+
+
+def _under(target: Path, physical: Path, reported: Path) -> Path:
+    """``reported``, a file trufflehog found below ``physical``, named under ``target``.
+
+    trufflehog scans ``physical``, the resolved form of ``target``, and names each file it walks
+    by that path. A path relative to a repository root was already joined onto ``target`` and is
+    returned as is.
+    """
+    try:
+        return target / reported.relative_to(physical)
+    except ValueError:
+        return reported
+
+
+def _logged_error(stderr: str) -> str:
+    """The errors trufflehog logged on ``stderr``, as ``message: error``.
+
+    Under ``--json`` trufflehog logs JSON lines, and the error of a failed run is in an entry of
+    level ``error``. Output that is no JSON log at all is returned as it is. A log without an
+    error entry returns an empty string.
+    """
+    errors: list[str] = []
+    logged = False
+    for line in stderr.splitlines():
+        try:
+            entry = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(entry, dict):
+            continue
+        logged = True
+        if entry.get("level") == "error":
+            errors.append(": ".join(str(entry[key]) for key in ("msg", "error") if entry.get(key)))
+    if errors:
+        return "; ".join(errors)
+    return "" if logged else stderr.strip()
 
 
 class TrufflehogInstaller:
@@ -527,7 +617,7 @@ class TrufflehogScanner(ScannerBackend):
 
         Args:
             paths: List of files or directories to scan.
-            include_git_history: If True, scan git history as well.
+            include_git_history: If True, scan the history of their Git repositories instead.
 
         Returns:
             ScanResult containing all findings.
@@ -543,125 +633,80 @@ class TrufflehogScanner(ScannerBackend):
                 duration_ms=int((time.time() - start_time) * 1000),
             )
 
+        targets, errors = _scan_targets(paths, include_git_history=include_git_history)
         all_findings: list[ScanFinding] = []
         total_files = 0
-
-        for path in paths:
-            if not path.exists():
-                continue
-
-            # Build command based on scan type
-            if include_git_history and self._is_git_repo(path):
-                # Use git scanner for history
-                args = [
-                    str(binary),
-                    "git",
-                    f"file://{path.resolve()}"
-                    if path.is_dir()
-                    else f"file://{path.parent.resolve()}",
-                    "--json",
-                ]
-            else:
-                # Use filesystem scanner
-                args = [
-                    str(binary),
-                    "filesystem",
-                    str(path),
-                    "--json",
-                ]
-
-            # Without --no-update, every scan runs trufflehog's self-updater, which writes any newer
-            # release from oss.trufflehog.org over the pinned, checksum-verified binary (#907).
-            args.append("--no-update")
-
-            # Add verification flag if enabled
-            if not self._verify:
-                args.append("--no-verification")
-
-            try:
-                result = run_tool(
-                    args,
-                    capture_output=True,
-                    text=True,
-                    encoding="utf-8",
-                    errors="replace",
-                    timeout=600,  # 10 minute timeout (trufflehog can be slow)
-                )
-
-                # Parse JSON lines output (trufflehog outputs one JSON per line)
-                items, complete = _load_findings(result.stdout)
-                files_with_findings: set[str] = set()
-                for item in items:
-                    # Track unique files from findings
-                    source_meta = item.get("SourceMetadata", {}).get("Data", {})
-                    file_path_str = source_meta.get("Filesystem", {}).get(
-                        "file", ""
-                    ) or source_meta.get("Git", {}).get("file", "")
-                    if file_path_str:
-                        files_with_findings.add(file_path_str)
-                    all_findings.append(
-                        parsed_finding(
-                            self._parse_finding(item, path),
-                            f"trufflehog printed a finding for {path} that envdrift cannot parse",
-                        )
-                    )
-                total_files += len(files_with_findings)
-
-                if result.returncode != 0:
-                    # Not stdout: the findings there hold the raw secrets.
-                    error_msg = (
-                        result.stderr.strip()
-                        or f"trufflehog scan failed for {path} (exit code {result.returncode})"
-                    )
-                    return ScanResult(
-                        scanner_name=self.name,
-                        findings=all_findings,
-                        error=error_msg,
-                        duration_ms=int((time.time() - start_time) * 1000),
-                    )
-                if not complete:
-                    return ScanResult(
-                        scanner_name=self.name,
-                        findings=all_findings,
-                        error=f"trufflehog printed a finding for {path} that envdrift cannot parse",
-                        duration_ms=int((time.time() - start_time) * 1000),
-                    )
-
-            except subprocess.TimeoutExpired:
-                return ScanResult(
-                    scanner_name=self.name,
-                    findings=all_findings,
-                    error=f"Scan timed out for {path}",
-                    duration_ms=int((time.time() - start_time) * 1000),
-                )
-            except Exception as e:
-                return ScanResult(
-                    scanner_name=self.name,
-                    findings=all_findings,
-                    error=exception_message(e),
-                    duration_ms=int((time.time() - start_time) * 1000),
-                )
+        for target in targets:
+            findings, files, error = self._scan_target(binary, target, include_git_history)
+            all_findings.extend(findings)
+            total_files += files
+            if error is not None:
+                errors.insert(0, error)
+                break
 
         return ScanResult(
             scanner_name=self.name,
             findings=all_findings,
             files_scanned=total_files,
+            error="; ".join(errors) if errors else None,
             duration_ms=int((time.time() - start_time) * 1000),
         )
 
-    def _is_git_repo(self, path: Path) -> bool:
-        """Check if path is inside a git repository.
+    def _scan_target(
+        self, binary: Path, target: Path, include_git_history: bool
+    ) -> tuple[list[ScanFinding], int, str | None]:
+        """Run trufflehog on one target: its findings, the files they are in, and its error.
 
-        Args:
-            path: Path to check.
-
-        Returns:
-            True if path is in a git repo.
+        trufflehog follows no symlink at the root it is given, and cleans that root lexically, so
+        a symlinked directory or file, or ``..`` after a symlink, scanned as nothing (#906). It is
+        given the physical path instead, names every file by it, and each file is named under
+        ``target`` again. A history target is a repository root: trufflehog clones it, and names
+        each file relative to it.
         """
-        check_path = path if path.is_dir() else path.parent
-        return (check_path / ".git").exists() or any(
-            (p / ".git").exists() for p in check_path.parents
-        )
+        physical = target.resolve()
+        if include_git_history:
+            args = [str(binary), "git", f"file://{physical}", "--json"]
+        else:
+            args = [str(binary), "filesystem", str(physical), "--json"]
+
+        # Without --no-update, every scan runs trufflehog's self-updater, which writes any newer
+        # release from oss.trufflehog.org over the pinned, checksum-verified binary (#907).
+        args.append("--no-update")
+
+        # Add verification flag if enabled
+        if not self._verify:
+            args.append("--no-verification")
+
+        unparsable = f"trufflehog printed a finding for {target} that envdrift cannot parse"
+        findings: list[ScanFinding] = []
+        try:
+            result = run_tool(
+                args,
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                timeout=600,  # 10 minute timeout (trufflehog can be slow)
+            )
+            # Parse JSON lines output (trufflehog outputs one JSON per line)
+            items, complete = _load_findings(result.stdout)
+            for item in items:
+                finding = parsed_finding(self._parse_finding(item, target), unparsable)
+                file_path = _under(target, physical, finding.file_path)
+                findings.append(replace(finding, file_path=file_path))
+        except subprocess.TimeoutExpired:
+            return findings, 0, f"Scan timed out for {target}"
+        except Exception as e:
+            return findings, 0, exception_message(e)
+
+        files = len({finding.file_path for finding in findings})
+        if result.returncode != 0:
+            # Not stdout: the findings there hold the raw secrets.
+            failure = f"trufflehog scan failed for {target} (exit code {result.returncode})"
+            return findings, files, _logged_error(result.stderr) or failure
+        if not complete:
+            return findings, files, unparsable
+        return findings, files, None
 
     def _parse_finding(self, item: dict[str, Any], base_path: Path) -> ScanFinding | None:
         """Parse a trufflehog finding into our format.

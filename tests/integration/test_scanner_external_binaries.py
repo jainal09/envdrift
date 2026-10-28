@@ -750,17 +750,7 @@ requires_gitleaks = pytest.mark.skipif(not _HAS_GITLEAKS, reason="gitleaks not i
 _PATH_SCANNERS = [
     pytest.param(InfisicalScanner, marks=requires_infisical, id="infisical"),
     pytest.param(GitleaksScanner, marks=requires_gitleaks, id="gitleaks"),
-    pytest.param(
-        TrufflehogScanner,
-        marks=[
-            requires_trufflehog,
-            pytest.mark.xfail(
-                strict=False,
-                reason="trufflehog mis-reports relative, symlinked and history paths (see #906)",
-            ),
-        ],
-        id="trufflehog",
-    ),
+    pytest.param(TrufflehogScanner, marks=requires_trufflehog, id="trufflehog"),
 ]
 
 
