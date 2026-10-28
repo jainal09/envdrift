@@ -14,7 +14,7 @@ import re
 import threading
 import time
 from collections import deque
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Iterator, Mapping
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -54,7 +54,8 @@ logger = logging.getLogger(__name__)
 # How long one scanner may run, counted from when it starts. A scanner still running then is
 # reported as timed out and left behind on its daemon thread (#870).
 _SCANNER_TIMEOUT_SECONDS = 600
-# At most this many scanners run at once, so a full selection does not overwhelm the machine.
+# At most this many scanners that the engine waits for run at once, so a full selection does not
+# overwhelm the machine. A scanner left behind at its time limit no longer counts (#870, #900).
 _MAX_PARALLEL_SCANNERS = 4
 # How often the engine wakes, while it waits for the scanners, to look for one past its time.
 _POLL_SECONDS = 1.0
@@ -380,6 +381,23 @@ class ScanEngine:
 
         threading.Thread(target=run, name=f"envdrift-scanner-{scanner.name}", daemon=True).start()
 
+    @staticmethod
+    def _delivered(
+        finished: queue.SimpleQueue[tuple[int, ScanResult]],
+    ) -> Iterator[tuple[int, ScanResult]]:
+        """Yield the results on ``finished``, waiting up to ``_POLL_SECONDS`` for the first.
+
+        Each later result is taken when the caller asks for it, so one delivered while the
+        caller handles another is yielded too, before the caller goes on to check the time
+        limits: a scanner whose result is in is never reported as timed out.
+        """
+        try:
+            yield finished.get(timeout=_POLL_SECONDS)
+            while True:
+                yield finished.get_nowait()
+        except queue.Empty:
+            return
+
     def _run_scanners(
         self,
         paths: list[Path],
@@ -409,18 +427,15 @@ class ScanEngine:
         while queued or started_at:
             while queued and len(started_at) < _MAX_PARALLEL_SCANNERS:
                 index = queued.popleft()
-                started_at[index] = time.time()
+                # A monotonic clock: setting the system time neither ends nor extends a run.
+                started_at[index] = time.monotonic()
                 self._start_scanner(index, paths, finished)
 
-            try:
-                index, scan_result = finished.get(timeout=_POLL_SECONDS)
-            except queue.Empty:
-                pass
-            else:
+            for index, scan_result in self._delivered(finished):
                 if index in started_at:  # not a scanner that has timed out already
                     record(index, scan_result)
 
-            now = time.time()
+            now = time.monotonic()
             for index, started in list(started_at.items()):
                 if now - started > _SCANNER_TIMEOUT_SECONDS:
                     record(

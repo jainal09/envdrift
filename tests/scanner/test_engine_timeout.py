@@ -59,9 +59,9 @@ class Quick(ScannerBackend):
         return ScanResult(scanner_name="quick")
 
 
-real_time = time.time
-start = real_time()
-engine_module.time.time = lambda: real_time() + (700 if real_time() - start > 1.5 else 0)
+real_clock = time.monotonic
+start = real_clock()
+engine_module.time.monotonic = lambda: real_clock() + (700 if real_clock() - start > 1.5 else 0)
 engine = engine_module.ScanEngine(engine_module.GuardConfig(use_native=False, use_gitleaks=False))
 engine.scanners = [Blocker(), Quick()]
 result = engine.scan([Path(".")])
@@ -232,6 +232,57 @@ def test_a_result_delivered_after_the_time_limit_is_dropped(
     assert completed == [("late", "Scanner timed out after 0.2s"), ("releaser", None)]
 
 
+def test_a_result_that_is_in_before_the_time_limit_is_kept(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """A scanner whose result waits while the engine handles another's is not timed out.
+
+    Both scanners end at once. While the engine handles the first result, the second is
+    already in and the time limit passes. The engine used to take one result, then check the
+    time limits, so it reported the second scanner as timed out and dropped its findings.
+    """
+    monkeypatch.setattr(engine_module, "_POLL_SECONDS", 0.01)
+    clock = [1000.0]
+    monkeypatch.setattr(engine_module.time, "monotonic", lambda: clock[0])
+    together = threading.Barrier(2, timeout=30)
+    threads: dict[str, threading.Thread] = {}
+    finding = ScanFinding(
+        file_path=tmp_path / "config.py",
+        line_number=1,
+        rule_id="stub-rule",
+        rule_description="Stub rule",
+        description="Stub finding",
+        severity=FindingSeverity.HIGH,
+        scanner="second",
+    )
+
+    class Together(FixedScanner):
+        def scan(self, paths: list[Path], include_git_history: bool = False) -> ScanResult:
+            threads[self.name] = threading.current_thread()
+            together.wait()
+            return super().scan(paths, include_git_history)
+
+    def on_complete(name: str, done: int, total: int, scan_result: ScanResult | None) -> None:
+        if done == 1:
+            other = "second" if name == "first" else "first"
+            threads[other].join(timeout=30)  # its thread puts its result in before it ends
+            clock[0] += _ONE_LIMIT_AND_MORE
+
+    result = _engine(Together("first", []), Together("second", [finding])).scan(
+        [tmp_path], on_scanner_complete=on_complete
+    )
+
+    assert sorted((r.scanner_name, r.error) for r in result.results) == [
+        ("first", None),
+        ("second", None),
+    ]
+    assert [f.rule_id for f in result.unique_findings] == ["stub-rule"]
+
+
+# More than the engine's limit of 600 s per scanner.
+_ONE_LIMIT_AND_MORE = 601
+
+
 def test_at_most_four_scanners_run_at_once(tmp_path: Path):
     """Six scanners run four at a time: the first four meet, and no fifth joins them."""
     lock = threading.Lock()
@@ -268,7 +319,7 @@ def test_the_time_limit_counts_from_when_a_scanner_starts(
     monkeypatch.setattr(engine_module, "_MAX_PARALLEL_SCANNERS", 1)
     monkeypatch.setattr(engine_module, "_POLL_SECONDS", 0.01)
     clock = [1000.0]
-    monkeypatch.setattr(engine_module.time, "time", lambda: clock[0])
+    monkeypatch.setattr(engine_module.time, "monotonic", lambda: clock[0])
 
     class Slow(FixedScanner):
         """Takes 590 of the engine's seconds, and is still running while the engine checks."""
