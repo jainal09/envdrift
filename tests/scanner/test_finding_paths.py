@@ -287,3 +287,97 @@ class TestFindingPathDisplay:
 
         real = (tree / "repo" / "proj" / "sub" / "app.env").resolve()
         assert display.path(real) == Path("repo/proj/sub/app.env")
+
+
+class TestFindingLocation:
+    """``FindingPathDisplay.location``: where a file really is, whatever name reached it (#861)."""
+
+    @pytest.fixture
+    def tree(self, tmp_path: Path) -> Path:
+        """``proj/sub/app.env`` with ``linkproj`` -> ``proj`` next to it."""
+        (tmp_path / "proj" / "sub").mkdir(parents=True)
+        (tmp_path / "proj" / "sub" / "app.env").write_text("X=1\n")
+        symlink(tmp_path / "linkproj", tmp_path / "proj")
+        return tmp_path
+
+    def test_two_names_of_one_file_have_one_location(self, tree: Path):
+        display = FindingPathDisplay([Path(), Path("linkproj")], cwd=tree)
+        real = (tree / "proj" / "sub" / "app.env").resolve()
+
+        assert display.location(Path("proj/sub/app.env")) == real
+        assert display.location(Path("linkproj/sub/app.env")) == real
+        assert display.location(tree / "linkproj" / "sub" / "app.env") == real
+
+    def test_a_file_and_the_symlink_to_it_have_one_location(self, tree: Path):
+        symlink(tree / "proj" / "alias.env", tree / "proj" / "sub" / "app.env")
+        display = FindingPathDisplay([Path()], cwd=tree)
+
+        assert display.location(Path("proj/alias.env")) == display.location(
+            Path("proj/sub/app.env")
+        )
+
+    def test_two_files_have_two_locations(self, tree: Path):
+        (tree / "proj" / "sub" / "other.env").write_text("X=1\n")
+        display = FindingPathDisplay([Path()], cwd=tree)
+
+        assert display.location(Path("proj/sub/app.env")) != display.location(
+            Path("proj/sub/other.env")
+        )
+
+    def test_a_file_that_is_not_there_is_located_by_its_absolute_path(self, tmp_path: Path):
+        display = FindingPathDisplay([Path()], cwd=tmp_path)
+
+        assert display.location(Path("gone/app.env")) == tmp_path / "gone" / "app.env"
+
+    def test_a_location_that_cannot_be_resolved_falls_back_to_the_absolute_path(
+        self, tmp_path: Path
+    ):
+        display = FindingPathDisplay([Path()], cwd=tmp_path)
+        real_resolve = Path.resolve
+
+        def resolve(self: Path, strict: bool = False) -> Path:
+            if self.name == "loop.env":
+                raise RuntimeError(f"Symlink loop from {self!r}")
+            return real_resolve(self, strict)
+
+        with patch.object(Path, "resolve", resolve):
+            assert display.location(Path("loop.env")) == tmp_path / "loop.env"
+
+    def test_locations_are_computed_once_per_path(self, tmp_path: Path):
+        display = FindingPathDisplay([Path()], cwd=tmp_path)
+
+        assert display.location(Path("a.env")) is display.location(Path("a.env"))
+
+
+class TestFindingRealName:
+    """``FindingPathDisplay.is_real_name``: the name a file's real location is shown under (#861)."""
+
+    @pytest.fixture
+    def tree(self, tmp_path: Path) -> Path:
+        """``proj/sub/app.env``, ``proj/a_alias.env`` -> it, and two links to ``proj``."""
+        (tmp_path / "proj" / "sub").mkdir(parents=True)
+        (tmp_path / "proj" / "sub" / "app.env").write_text("X=1\n")
+        symlink(tmp_path / "proj" / "a_alias.env", Path("sub/app.env"))
+        symlink(tmp_path / "link1", tmp_path / "proj")
+        symlink(tmp_path / "link2", tmp_path / "proj")
+        return tmp_path
+
+    def test_without_a_symlinked_scan_path_the_file_is_real_and_its_alias_is_not(self, tree: Path):
+        display = FindingPathDisplay([Path("proj")], cwd=tree)
+
+        assert display.is_real_name(Path("proj/sub/app.env"))
+        assert not display.is_real_name(Path("proj/a_alias.env"))
+
+    def test_below_a_symlinked_scan_path_the_file_is_real_and_its_alias_is_not(self, tree: Path):
+        """Every name below the link differs from the real location, but only one is the file's."""
+        display = FindingPathDisplay([Path("link1")], cwd=tree)
+
+        assert display.is_real_name(Path("link1/sub/app.env"))
+        assert display.is_real_name(tree / "proj" / "sub" / "app.env")  # as a native scanner says
+        assert not display.is_real_name(Path("link1/a_alias.env"))
+
+    def test_of_two_links_to_one_directory_the_first_scan_path_names_the_file(self, tree: Path):
+        display = FindingPathDisplay([Path("link2"), Path("link1")], cwd=tree)
+
+        assert display.is_real_name(Path("link2/sub/app.env"))
+        assert not display.is_real_name(Path("link1/sub/app.env"))

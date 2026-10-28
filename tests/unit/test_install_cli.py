@@ -517,8 +517,11 @@ class TestCheckCommand:
         assert result.exit_code == 0
         assert "Broken installation at" in out
         assert "envdrift install agent --force" in out
-        assert "Version: unknown" not in out
-        assert "Status: unknown" not in out
+        # The agent's section only: the Python CLI's own version line says "unknown" in a
+        # checkout that has not been built (no generated _version.py).
+        agent_section = out.split("Background Agent:", 1)[1]
+        assert "Version: unknown" not in agent_section
+        assert "Status: unknown" not in agent_section
 
     def test_check_agent_version_nonzero_exit_reports_broken(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
