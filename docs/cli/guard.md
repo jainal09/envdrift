@@ -798,7 +798,8 @@ other scanners' results stand, and with no blocking finding guard exits 5. At
 most four scanners run at once, and each one's 10 minutes count from when it
 starts. A scanner that timed out no longer counts toward the four. The tool it
 was running (gitleaks, trufflehog, ...) is killed when its time is up, and guard
-waits up to 5 seconds for that before it goes on. The scanner starts no tool and
+waits up to 5 seconds for that before it goes on, once for all the scanners that
+time out together. The scanner starts no tool and
 no download after that, so none of its tools keeps running after guard exits.
 A scanner that finishes only after its time is up has timed out too, since a tool
 it ran may have been cut short. A tool is killed together with the processes it

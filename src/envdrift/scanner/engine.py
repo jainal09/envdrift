@@ -61,8 +61,9 @@ _SCANNER_TIMEOUT_SECONDS = 600
 _MAX_PARALLEL_SCANNERS = 4
 # How often the engine wakes, while it waits for the scanners, to look for one past its time.
 _POLL_SECONDS = 1.0
-# How long the engine waits, once a scanner has timed out, for the tools it is running to be
-# killed. Each one is killed at the deadline by its capped timeout, which takes moments (#900).
+# How long the engine waits, once scanners have timed out, for the tools they are running to be
+# killed: one wait for all those that timed out together. Each tool is killed at its deadline by
+# its capped timeout, which takes moments (#900).
 _TOOL_KILL_GRACE_SECONDS = 5.0
 
 
@@ -457,13 +458,18 @@ class ScanEngine:
                 if index in running:  # not a scanner that has timed out already
                     record(index, scan_result)
 
-            for index, deadline in list(running.items()):
-                if deadline.passed():
-                    record(index, _timed_out(self.scanners[index].name))
-                    # Its running tools are killed at the deadline, by their own timeouts, on
-                    # the scanner's thread. Wait for that: if guard exited first, the thread
-                    # would end with it and the tools would run on (#900).
-                    deadline.wait_for_tools(_TOOL_KILL_GRACE_SECONDS)
+            expired = [
+                (index, deadline) for index, deadline in running.items() if deadline.passed()
+            ]
+            for index, _ in expired:
+                record(index, _timed_out(self.scanners[index].name))
+            # Their running tools are killed at the deadline, by their own timeouts, on the
+            # scanners' threads. Wait for that, one grace period for all the scanners that timed
+            # out together: if guard exited first, the threads would end with it and the tools
+            # would run on (#900).
+            grace_ends = time.monotonic() + _TOOL_KILL_GRACE_SECONDS
+            for _, deadline in expired:
+                deadline.wait_for_tools(max(0.0, grace_ends - time.monotonic()))
 
         return results
 

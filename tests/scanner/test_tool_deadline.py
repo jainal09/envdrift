@@ -400,6 +400,48 @@ def test_the_parent_is_read_past_the_command_name(stat: str, ppid: int) -> None:
     assert _ppid_from_stat(stat) == ppid
 
 
+class StuckTool(ScannerBackend):
+    """Keeps a tool counted as running long after its kill, as one slow to end would."""
+
+    def __init__(self, name: str) -> None:
+        self._name = name
+
+    @property
+    def name(self) -> str:
+        return self._name
+
+    @property
+    def description(self) -> str:
+        return "keeps a tool running past its kill"
+
+    def is_installed(self) -> bool:
+        return True
+
+    def scan(self, paths: list[Path], include_git_history: bool = False) -> ScanResult:
+        deadline = current_deadline()
+        assert deadline is not None
+        with deadline.tool():
+            time.sleep(LIMIT_SECONDS + 5)
+        return ScanResult(scanner_name=self.name)
+
+
+def test_scanners_that_time_out_together_share_one_grace_period(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The engine waits once for the tools of all the scanners that timed out together."""
+    engine = _engine(StuckTool("stuck-a"), monkeypatch)
+    engine.scanners = [StuckTool("stuck-a"), StuckTool("stuck-b")]
+    monkeypatch.setattr(engine_module, "_TOOL_KILL_GRACE_SECONDS", 1.0)
+
+    started = time.monotonic()
+    result = engine.scan([tmp_path])
+    elapsed = time.monotonic() - started
+
+    assert [r.error for r in result.results] == [TIMED_OUT, TIMED_OUT]
+    # One grace period after the limit, not one per scanner (LIMIT_SECONDS + 2).
+    assert elapsed < LIMIT_SECONDS + 1.8, f"waited {elapsed:.1f}s"
+
+
 def test_a_scanner_done_only_after_its_deadline_has_timed_out(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
