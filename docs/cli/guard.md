@@ -761,9 +761,15 @@ A scanner still running 10 minutes after it started has failed: guard stops
 waiting for it and records `Scanner timed out after 600s` as its error, the
 other scanners' results stand, and with no blocking finding guard exits 5. At
 most four scanners run at once, and each one's 10 minutes count from when it
-starts. A scanner that timed out no longer counts toward the four, but guard
-does not stop a tool process (gitleaks, trufflehog, ...) that it started, so that
-process can keep running, even after guard exits.
+starts. A scanner that timed out no longer counts toward the four. The tool it
+was running (gitleaks, trufflehog, ...) is killed when its time is up, and guard
+waits up to 5 seconds for that before it goes on. The scanner starts no tool and
+no download after that, so none of its tools keeps running after guard exits.
+A scanner that finishes only after its time is up has timed out too, since a tool
+it ran may have been cut short. Only the tool's own process is killed: a process
+the tool started, such as the `git grep` that git-secrets runs, runs on until it
+next writes its output or its work is done
+([#911](https://github.com/jainal09/envdrift/issues/911)).
 
 Exit 5 applies to scanners you **selected** — a CLI flag or a `[guard]
 scanners` list written in your config. A scanner active only via the built-in

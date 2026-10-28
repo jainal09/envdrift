@@ -24,7 +24,11 @@ import sys
 import tempfile
 import time
 import urllib.request
+from collections.abc import Iterator
 from pathlib import Path
+from typing import Any
+
+from envdrift.utils.deadline import check_deadline, current_deadline
 
 #: Environment variable that disables checksum verification (unsafe).
 #: Shared with install.ps1, which uses the same name.
@@ -38,11 +42,47 @@ FETCH_TIMEOUT_SECONDS = 30.0
 #: auto-install forever after a server accepts the connection and stalls (#515).
 DOWNLOAD_TIMEOUT_SECONDS = 60.0
 
+#: How much of a download is read at a time.
+_CHUNK_BYTES = 64 * 1024
+
 _SHA256_HEX_RE = re.compile(r"^[0-9a-fA-F]{64}$")
 
 
 class ChecksumVerificationError(Exception):
     """A downloaded artifact could not be verified against published checksums."""
+
+
+def _scanner_timeout(timeout: float) -> float:
+    """``timeout`` for a download, capped at the deadline of the scanner it is for, if any.
+
+    A scanner auto-installs its tool on its own thread. Once its deadline has passed this
+    raises ``ScannerTimedOut`` instead, so that a scanner that has timed out does not start
+    a download (#900).
+    """
+    deadline = current_deadline()
+    if deadline is None:
+        return timeout
+    deadline.check()
+    return deadline.timeout(timeout)
+
+
+def _read_body(response: Any) -> Iterator[bytes]:
+    """The body of a ``urlopen`` response, in the pieces it arrives in.
+
+    ``read1`` returns what has arrived, so a slow download is checked as it goes:
+    one for a scanner stops at the first read after its deadline, with
+    ``ScannerTimedOut`` (#900).
+
+    Raises:
+        OSError: the server closed the connection before it sent the whole body.
+            ``read1`` ends quietly there, where ``read()`` would raise.
+    """
+    while chunk := response.read1(_CHUNK_BYTES):
+        check_deadline()
+        yield chunk
+    remaining = getattr(response, "length", None)
+    if remaining:
+        raise OSError(f"the server closed the connection with {remaining} bytes still to send")
 
 
 def download_file(
@@ -53,13 +93,15 @@ def download_file(
     ``urlopen`` applies ``timeout`` to connection setup and every socket read.
     Streaming avoids buffering an entire release archive in memory, while
     leaving each caller responsible for its existing typed install error and
-    staging cleanup behavior.
+    staging cleanup behavior. A download for a scanner is held to the scanner's
+    deadline (#900).
     """
     with (
-        urllib.request.urlopen(url, timeout=timeout) as response,  # nosec B310
+        urllib.request.urlopen(url, timeout=_scanner_timeout(timeout)) as response,  # nosec B310
         destination.open("wb") as output,
     ):
-        shutil.copyfileobj(response, output)
+        for chunk in _read_body(response):
+            output.write(chunk)
 
 
 def verification_disabled() -> bool:
@@ -130,9 +172,13 @@ def atomic_install(source: Path, target_path: Path, *, make_executable: bool = T
     (``shutil.copy2`` follows destination symlinks), and concurrent installs of
     the same binary would otherwise interleave through one shared staging file.
 
+    A scanner past its deadline installs nothing: this raises ``ScannerTimedOut``
+    instead (#900).
+
     Raises:
         OSError: if the copy or rename fails; ``target_path`` is left untouched.
     """
+    check_deadline()
     target_path.parent.mkdir(parents=True, exist_ok=True)
     # Exclusive, unpredictable, same-filesystem staging file (preserves the
     # atomic-rename guarantee while removing the TOCTOU/symlink surface).
@@ -189,8 +235,10 @@ def fetch_checksums(url: str, timeout: float = FETCH_TIMEOUT_SECONDS) -> dict[st
         )
     try:
         # URL comes from the Renovate-managed constants.json (https templates).
-        with urllib.request.urlopen(url, timeout=timeout) as response:  # nosec B310
-            content = response.read().decode("utf-8")
+        with urllib.request.urlopen(  # nosec B310
+            url, timeout=_scanner_timeout(timeout)
+        ) as response:
+            content = b"".join(_read_body(response)).decode("utf-8")
     except Exception as exc:
         raise ChecksumVerificationError(
             f"could not fetch checksums from {url}: {exc} — refusing to install "
@@ -235,3 +283,5 @@ def verify_download(
             f"checksum mismatch for {artifact_name}: expected {expected}, got {actual} — "
             f"the downloaded {tool_name} binary was NOT installed"
         )
+    # A scanner whose time ran out while it verified does not go on to install (#900).
+    check_deadline()

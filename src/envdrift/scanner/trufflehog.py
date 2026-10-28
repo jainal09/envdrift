@@ -42,6 +42,7 @@ from envdrift.scanner.base import (
     parsed_finding,
 )
 from envdrift.scanner.patterns import hash_secret, redact_secret
+from envdrift.utils.deadline import run_tool
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -364,7 +365,7 @@ class TrufflehogInstaller:
         if target_path.exists() and not force:
             # Verify version
             try:
-                result = subprocess.run(  # nosec B603
+                result = run_tool(
                     [str(target_path), "--version"],
                     capture_output=True,
                     text=True,
@@ -445,7 +446,7 @@ class TrufflehogScanner(ScannerBackend):
         """Get installed trufflehog version."""
         try:
             binary = self._find_binary()
-            result = subprocess.run(  # nosec B603
+            result = run_tool(
                 [str(binary), "--version"],
                 capture_output=True,
                 text=True,
@@ -574,7 +575,7 @@ class TrufflehogScanner(ScannerBackend):
                 args.append("--no-verification")
 
             try:
-                result = subprocess.run(  # nosec B603
+                result = run_tool(
                     args,
                     capture_output=True,
                     text=True,

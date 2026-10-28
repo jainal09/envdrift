@@ -54,6 +54,7 @@ from envdrift.scanner.platform_utils import (
 # importable from here for existing callers.
 from envdrift.scanner.rule_severity import RULE_SEVERITY_MAP as RULE_SEVERITY_MAP
 from envdrift.scanner.rule_severity import rule_severity
+from envdrift.utils.deadline import run_tool
 from envdrift.utils.git import get_git_root, has_git_head
 from envdrift.utils.text import strip_ansi
 
@@ -146,7 +147,7 @@ def _probe_confidence_flag(binary: str, _mtime_ns: int, _size: int) -> bool:
     so the transient failure is not cached and the next scan probes again.
     """
     try:
-        result = subprocess.run(  # nosec B603
+        result = run_tool(
             [binary, "scan", "--help"],
             capture_output=True,
             text=True,
@@ -516,7 +517,7 @@ class InfisicalInstaller:
         if target_path.exists() and not force:
             # Verify version
             try:
-                result = subprocess.run(  # nosec B603
+                result = run_tool(
                     [str(target_path), "--version"],
                     capture_output=True,
                     text=True,
@@ -595,7 +596,7 @@ class InfisicalScanner(ScannerBackend):
         """Get installed infisical version."""
         try:
             binary = self._find_binary()
-            result = subprocess.run(  # nosec B603
+            result = run_tool(
                 [str(binary), "--version"],
                 capture_output=True,
                 text=True,
@@ -750,7 +751,7 @@ class InfisicalScanner(ScannerBackend):
                 args.extend(confidence_args)
 
                 # Run infisical scan
-                result = subprocess.run(  # nosec B603
+                result = run_tool(
                     args,
                     capture_output=True,
                     text=True,

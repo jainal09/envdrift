@@ -39,6 +39,7 @@ from envdrift.scanner.base import (
 from envdrift.scanner.patterns import hash_secret, redact_secret
 from envdrift.scanner.platform_utils import scan_argument, symlinked_file
 from envdrift.scanner.rule_severity import rule_severity
+from envdrift.utils.deadline import run_tool
 from envdrift.utils.git import get_git_root, has_git_head
 from envdrift.utils.text import strip_ansi
 
@@ -401,7 +402,7 @@ class GitleaksInstaller:
         if target_path.exists() and not force:
             # Verify version
             try:
-                result = subprocess.run(  # nosec B603
+                result = run_tool(
                     [str(target_path), "version"],
                     capture_output=True,
                     text=True,
@@ -474,7 +475,7 @@ class GitleaksScanner(ScannerBackend):
         """Get installed gitleaks version."""
         try:
             binary = self._find_binary()
-            result = subprocess.run(  # nosec B603
+            result = run_tool(
                 [str(binary), "version"],
                 capture_output=True,
                 text=True,
@@ -624,7 +625,7 @@ class GitleaksScanner(ScannerBackend):
                     target_arg,
                 ]
 
-                result = subprocess.run(  # nosec B603
+                result = run_tool(
                     args,
                     capture_output=True,
                     text=True,

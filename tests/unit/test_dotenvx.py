@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import io
 import subprocess
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -422,10 +423,10 @@ def _urlopen_serving(archive_bytes: bytes, artifact_name: str):
 
     def fake_urlopen(url, timeout=None):
         cm = MagicMock()
-        response = MagicMock()
         url_text = url if isinstance(url, str) else getattr(url, "full_url", str(url))
-        response.read.return_value = checksums if "checksums" in url_text else archive_bytes
-        cm.__enter__.return_value = response
+        cm.__enter__.return_value = io.BytesIO(
+            checksums if "checksums" in url_text else archive_bytes
+        )
         cm.__exit__.return_value = False
         return cm
 

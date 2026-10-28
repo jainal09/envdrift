@@ -122,7 +122,8 @@ def test_an_exception_without_a_message_fails_the_scan(
 ) -> None:
     """gitleaks, Infisical and git-secrets passed this for clean; the others had no error text.
 
-    The scan stops at the first path, so the second one is never scanned.
+    Every scanner but git-secrets stops at the first path, so the second one is never scanned.
+    git-secrets records the error and goes on to the next path, and its run still fails.
     """
     scanner, binary = _with_binary(scanner_cls, tmp_path)
 

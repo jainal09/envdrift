@@ -44,6 +44,7 @@ from envdrift.scanner.patterns import (
     hash_secret,
     redact_secret,
 )
+from envdrift.utils.deadline import run_tool
 from envdrift.utils.git import is_file_tracked
 
 # Encryption markers for dotenvx
@@ -523,7 +524,7 @@ class NativeScanner(ScannerBackend):
 
         # Method 1: Get tracked files from git (fast - reads index)
         try:
-            result = subprocess.run(  # nosec B603, B607
+            result = run_tool(
                 ["git", "ls-files", "-z"],
                 capture_output=True,
                 text=True,
@@ -550,7 +551,7 @@ class NativeScanner(ScannerBackend):
         # with exit 0. Git already applies the repository's ignore policy, and the
         # normal _should_ignore/_looks_binary filters still apply before scanning.
         try:
-            result = subprocess.run(  # nosec B603, B607
+            result = run_tool(
                 [
                     "git",
                     "ls-files",
@@ -583,7 +584,7 @@ class NativeScanner(ScannerBackend):
         # it here would wrongly flag a properly-configured project as having an
         # "unencrypted env file". A *tracked* .env.keys is still caught by Method 1.
         try:
-            result = subprocess.run(  # nosec B603, B607
+            result = run_tool(
                 [
                     "git",
                     "ls-files",

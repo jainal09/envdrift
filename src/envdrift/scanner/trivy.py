@@ -45,6 +45,7 @@ from envdrift.scanner.platform_utils import (
     safe_extract_tar,
     safe_extract_zip,
 )
+from envdrift.utils.deadline import run_tool
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -299,7 +300,7 @@ class TrivyInstaller:
         if target_path.exists() and not force:
             # Verify version
             try:
-                result = subprocess.run(  # nosec B603
+                result = run_tool(
                     [str(target_path), "version", "--format", "json"],
                     capture_output=True,
                     text=True,
@@ -374,7 +375,7 @@ class TrivyScanner(ScannerBackend):
         """Get installed trivy version."""
         try:
             binary = self._find_binary()
-            result = subprocess.run(  # nosec B603
+            result = run_tool(
                 [str(binary), "version", "--format", "json"],
                 capture_output=True,
                 text=True,
@@ -494,7 +495,7 @@ class TrivyScanner(ScannerBackend):
                     str(path),
                 ]
 
-                result = subprocess.run(  # nosec B603
+                result = run_tool(
                     args,
                     capture_output=True,
                     text=True,

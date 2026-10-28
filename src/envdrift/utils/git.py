@@ -11,6 +11,8 @@ import subprocess  # nosec B404
 from collections.abc import Iterable
 from pathlib import Path
 
+from envdrift.utils.deadline import run_tool
+
 # Every subprocess call in this module pins ``encoding="utf-8"`` with
 # ``errors="surrogateescape"``: ``text=True`` alone decodes git's output with the
 # platform locale codec — cp1252 on Windows, US-ASCII under LC_ALL=C — which
@@ -38,7 +40,7 @@ def is_git_repo(path: Path) -> bool:
         True if path is inside a git repository, False otherwise.
     """
     try:
-        result = subprocess.run(  # nosec B603, B607
+        result = run_tool(
             ["git", "rev-parse", "--is-inside-work-tree"],
             cwd=str(path if path.is_dir() else path.parent),
             capture_output=True,
@@ -63,7 +65,7 @@ def get_git_root(path: Path) -> Path | None:
         Path to the git root, or None if not in a git repository.
     """
     try:
-        result = subprocess.run(  # nosec B603, B607
+        result = run_tool(
             ["git", "rev-parse", "--show-toplevel"],
             cwd=str(path if path.is_dir() else path.parent),
             capture_output=True,
@@ -91,7 +93,7 @@ def has_git_head(path: Path) -> bool:
         return False
 
     try:
-        result = subprocess.run(  # nosec B603, B607
+        result = run_tool(
             ["git", "rev-parse", "--verify", "HEAD^{commit}"],
             cwd=str(git_root),
             capture_output=True,
@@ -127,7 +129,7 @@ def get_file_from_git(file_path: Path, ref: str = "HEAD") -> str | None:
         # git's ``<rev>:<path>`` revision syntax does NOT normalize backslashes,
         # so the path must use forward slashes (POSIX) even on Windows — matching
         # the ``.as_posix()`` usage elsewhere in this module (e.g. line 238/267).
-        result = subprocess.run(  # nosec B603, B607
+        result = run_tool(
             ["git", "show", f"{ref}:{relative_path.as_posix()}"],
             cwd=str(git_root),
             capture_output=True,
@@ -163,7 +165,7 @@ def is_file_modified(file_path: Path) -> bool:
         relative_path = file_path.resolve().relative_to(git_root)
 
         # Check for both staged and unstaged modifications
-        result = subprocess.run(  # nosec B603, B607
+        result = run_tool(
             ["git", "status", "--porcelain", str(relative_path)],
             cwd=str(git_root),
             capture_output=True,
@@ -200,7 +202,7 @@ def restore_file_from_git(file_path: Path, ref: str = "HEAD") -> bool:
     try:
         relative_path = file_path.resolve().relative_to(git_root)
 
-        result = subprocess.run(  # nosec B603, B607
+        result = run_tool(
             ["git", "checkout", ref, "--", str(relative_path)],
             cwd=str(git_root),
             capture_output=True,
@@ -232,7 +234,7 @@ def is_file_tracked(file_path: Path) -> bool:
     try:
         relative_path = file_path.resolve().relative_to(git_root)
 
-        result = subprocess.run(  # nosec B603, B607
+        result = run_tool(
             ["git", "ls-files", "--error-unmatch", str(relative_path)],
             cwd=str(git_root),
             capture_output=True,
@@ -307,7 +309,7 @@ def _is_path_ignored(path: Path, git_root: Path) -> bool:
         return False
 
     try:
-        result = subprocess.run(  # nosec B603, B607
+        result = run_tool(
             [
                 "git",
                 "-c",

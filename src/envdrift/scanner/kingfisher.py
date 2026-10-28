@@ -35,6 +35,7 @@ from envdrift.scanner.base import (
 )
 from envdrift.scanner.patterns import hash_secret, redact_secret
 from envdrift.scanner.rule_severity import rule_severity
+from envdrift.utils.deadline import run_tool
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -237,7 +238,7 @@ class KingfisherScanner(ScannerBackend):
         """Get installed Kingfisher version."""
         try:
             binary = self._find_binary()
-            result = subprocess.run(  # nosec B603
+            result = run_tool(
                 [str(binary), "--version"],
                 capture_output=True,
                 text=True,
@@ -302,7 +303,7 @@ class KingfisherScanner(ScannerBackend):
 
         try:
             # Run brew install
-            result = subprocess.run(  # nosec B603
+            result = run_tool(
                 [brew_path, "install", "kingfisher"],
                 capture_output=True,
                 text=True,
@@ -487,7 +488,7 @@ class KingfisherScanner(ScannerBackend):
 
                 # Run scan
                 # Note: Kingfisher uses exit code 200 for "findings detected"
-                result = subprocess.run(  # nosec B603
+                result = run_tool(
                     args,
                     capture_output=True,
                     text=True,

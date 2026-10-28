@@ -40,6 +40,7 @@ from envdrift.scanner.base import (
     exception_message,
 )
 from envdrift.scanner.patterns import hash_secret, redact_secret
+from envdrift.utils.deadline import run_tool
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -237,7 +238,7 @@ class GitSecretsInstaller:
             )
 
         try:
-            result = subprocess.run(  # nosec B603, B607
+            result = run_tool(
                 ["brew", "install", "git-secrets"],
                 capture_output=True,
                 text=True,
@@ -286,7 +287,7 @@ class GitSecretsInstaller:
             try:
                 # Clone the repository
                 self.progress("Cloning git-secrets repository...")
-                subprocess.run(  # nosec B603, B607
+                run_tool(
                     ["git", "clone", "--depth", "1", self.REPO_URL, str(repo_path)],
                     capture_output=True,
                     text=True,
@@ -301,7 +302,7 @@ class GitSecretsInstaller:
                 self.progress(f"Installing to {target_dir}...")
 
                 # Run make install with custom PREFIX
-                subprocess.run(  # nosec B603, B607
+                run_tool(
                     ["make", "install", f"PREFIX={target_dir.parent}"],
                     capture_output=True,
                     text=True,
@@ -410,7 +411,7 @@ class GitSecretsScanner(ScannerBackend):
 
         # Check git subcommand (git secrets)
         try:
-            result = subprocess.run(  # nosec B603, B607
+            result = run_tool(
                 ["git", "secrets", "--list"],
                 capture_output=True,
                 text=True,
@@ -474,7 +475,7 @@ class GitSecretsScanner(ScannerBackend):
         # Try as standalone command first
         git_secrets_path = shutil.which("git-secrets")
         if git_secrets_path:
-            return subprocess.run(  # nosec B603
+            return run_tool(
                 [git_secrets_path, *args],
                 capture_output=True,
                 text=True,
@@ -485,7 +486,7 @@ class GitSecretsScanner(ScannerBackend):
             )
 
         # Fall back to git subcommand
-        return subprocess.run(  # nosec B603, B607
+        return run_tool(
             ["git", "secrets", *args],
             capture_output=True,
             text=True,
