@@ -198,13 +198,46 @@ def lowkey_vault_client(lowkey_vault_endpoint: str, lowkey_vault_ca_bundle: Path
       (#484). The dummy bearer is not a credential (built by concatenation to
       stay clear of secret-literal push protection).
     """
+    return _lowkey_session(lowkey_vault_ca_bundle), lowkey_vault_endpoint
+
+
+def _lowkey_session(ca_bundle: Path):
+    """A requests session for the local Lowkey Vault, whatever the environment says.
+
+    ``trust_env`` is off. With it on, requests replaces ``session.verify`` with
+    ``REQUESTS_CA_BUNDLE`` or ``CURL_CA_BUNDLE`` for every request that passes no
+    ``verify`` of its own, and sends ``localhost`` through ``HTTPS_PROXY`` unless
+    ``NO_PROXY`` exempts it. A machine that exports either then failed every seed and
+    REST call against the emulator's certificate.
+    """
     import requests
 
     session = requests.Session()
-    session.verify = str(lowkey_vault_ca_bundle)
+    session.trust_env = False
+    session.verify = str(ca_bundle)
     session.headers["Authorization"] = "Bearer " + "lowkey-vault-" + "integration-tests"
+    return session
 
-    return session, lowkey_vault_endpoint
+
+def test_lowkey_session_ignores_the_environment_ca_bundle_and_proxy(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The emulator's certificate is trusted even when the environment names another CA."""
+    lowkey_ca = tmp_path / "lowkey-ca.pem"
+    other_ca = str(tmp_path / "corporate-ca.pem")
+    monkeypatch.setenv("REQUESTS_CA_BUNDLE", other_ca)
+    monkeypatch.setenv("CURL_CA_BUNDLE", other_ca)
+    monkeypatch.setenv("HTTPS_PROXY", "http://127.0.0.1:9")
+    for name in ("NO_PROXY", "no_proxy"):
+        monkeypatch.delenv(name, raising=False)
+
+    session = _lowkey_session(lowkey_ca)
+    settings = session.merge_environment_settings(
+        "https://localhost:8443/secrets", {}, None, None, None
+    )
+
+    assert settings["verify"] == str(lowkey_ca)
+    assert not settings["proxies"]
 
 
 @pytest.fixture(scope="module")
