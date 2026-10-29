@@ -722,7 +722,9 @@ def test_trufflehog_history_scan_leaves_the_index_a_hook_exported_alone(
 
     result = TrufflehogScanner(auto_install=False).scan([git_repo], include_git_history=True)
 
-    assert result.error is None, f"unexpected error: {result.error}"
+    # Not an assert: only the assertion below is the known bug, and an error is not.
+    if result.error is not None:
+        pytest.fail(f"unexpected error: {result.error}")
     assert index.read_bytes() == staged, "the scan rewrote the index git was about to commit"
 
 

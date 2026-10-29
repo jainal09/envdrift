@@ -182,7 +182,9 @@ def test_scan_lists_the_repository_whatever_index_a_hook_exported(
 
     result = DetectSecretsScanner(auto_install=False).scan([git_repo])
 
-    assert result.error is None, result.error
+    # Not an assert: only the assertion below is the known bug, and an error is not.
+    if result.error is not None:
+        pytest.fail(f"unexpected error: {result.error}")
     assert found(result.findings, git_repo) == ["tracked.cfg"]
 
 
