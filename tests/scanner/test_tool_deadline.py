@@ -140,7 +140,13 @@ class LateButClean(ScannerBackend):
 
 
 def _still_beating(beat: Path) -> bool:
-    """Whether the tool writing ``beat`` still runs, given a few seconds to stop."""
+    """Whether the tool writing ``beat`` still runs, given a few seconds to stop.
+
+    The tool is resumed first: one that a kill stopped (``SIGSTOP``) but left alive does not beat.
+    """
+    if sys.platform != "win32":
+        with contextlib.suppress(OSError, ValueError, IndexError):  # gone, or not started
+            os.kill(int(beat.read_text().split()[0]), signal.SIGCONT)
     deadline = time.monotonic() + 5
     while time.monotonic() < deadline:
         before = beat.read_text() if beat.exists() else ""

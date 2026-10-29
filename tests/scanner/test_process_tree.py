@@ -120,8 +120,6 @@ def test_a_failed_listing_still_kills_the_processes_it_stopped(
         except subprocess.TimeoutExpired:
             returncode = None
         assert returncode == -signal.SIGKILL, "the tool was left stopped"
-        with contextlib.suppress(ProcessLookupError):
-            os.kill(child, signal.SIGCONT)  # a child left stopped would beat again
         assert not _still_beating(beat), "the tool's child was left stopped"
     finally:
         tool.kill()  # SIGKILL ends a stopped process too; it sends nothing to a reaped tool
@@ -161,8 +159,6 @@ def test_a_failed_listing_does_not_replace_the_timeout(
             )
 
         assert "Could not kill every process" in caplog.text
-        with contextlib.suppress(ProcessLookupError):
-            os.kill(_beating_pid(beat), signal.SIGCONT)  # a child left stopped would beat again
         assert not _still_beating(beat), "the tool's child still runs after the tool timed out"
     finally:
         _stop(beat)
