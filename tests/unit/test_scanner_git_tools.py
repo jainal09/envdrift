@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import platform
 import subprocess
 import sys
 import tempfile
@@ -33,6 +34,17 @@ def no_installed_git_secrets():
     """
     with patch("envdrift.scanner.git_secrets._installed_binary", return_value=None):
         yield
+
+
+@pytest.fixture(autouse=True)
+def _posix_platform(monkeypatch):
+    """Run these tests as on Linux, whatever runs them.
+
+    They stub git-secrets at a POSIX path, with no extension. On Windows the lookup passes over
+    such a file, a Bash script that runs there only as `git secrets`; the tests of that patch
+    platform.system themselves.
+    """
+    monkeypatch.setattr(platform, "system", lambda: "Linux")
 
 
 class TestGetVenvBinDir:
