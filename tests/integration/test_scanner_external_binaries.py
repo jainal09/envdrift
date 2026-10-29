@@ -1072,7 +1072,7 @@ _HOOK_SCANNERS = [
 @pytest.mark.parametrize("scanner_cls", _HOOK_SCANNERS)
 @pytest.mark.parametrize("include_git_history", [False, True], ids=["files", "history"])
 def test_scan_reads_its_own_repository_under_a_hook_git_dir(
-    git_repo, tmp_path_factory, monkeypatch, scanner_cls, include_git_history
+    git_repo, tmp_path_factory, scanner_cls, include_git_history
 ):
     """#915: another repository's GIT_DIR, as a git hook exports it, does not change the scan.
 
@@ -1085,11 +1085,12 @@ def test_scan_reads_its_own_repository_under_a_hook_git_dir(
     identity = ["-c", "user.name=t", "-c", "user.email=t@example.com", "-c", "commit.gpgsign=false"]
     for args in (["init", "-q"], [*identity, "commit", "-q", "--allow-empty", "-m", "init"]):
         subprocess.run(["git", *args], cwd=hook_repo, capture_output=True, check=True)
-    monkeypatch.setenv("GIT_DIR", str(hook_repo / ".git"))
+    scanner = scanner_cls(auto_install=False)
 
-    result = scanner_cls(auto_install=False).scan(
-        [git_repo], include_git_history=include_git_history
-    )
+    # Only the scan runs under the hook's GIT_DIR: the commit above went to git_repo.
+    with pytest.MonkeyPatch.context() as hook_env:
+        hook_env.setenv("GIT_DIR", str(hook_repo / ".git"))
+        result = scanner.scan([git_repo], include_git_history=include_git_history)
 
     assert result.error is None, f"unexpected error: {result.error}"
     assert any(Path(f.file_path).name == "app.env" for f in result.findings), result.findings

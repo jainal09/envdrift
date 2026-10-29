@@ -1357,12 +1357,7 @@ class TestPrivateKeyFileScanResult:
         ("variable", "path"), [("GIT_DIR", ".git"), ("GIT_INDEX_FILE", ".git/index")]
     )
     def test_staged_key_file_flagged_whatever_index_a_hook_exported(
-        self,
-        scanner: NativeScanner,
-        tmp_path: Path,
-        monkeypatch: pytest.MonkeyPatch,
-        variable: str,
-        path: str,
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, variable: str, path: str
     ):
         """Another repository's GIT_DIR or GIT_INDEX_FILE, as a git hook exports it, hides nothing.
 
@@ -1377,7 +1372,7 @@ class TestPrivateKeyFileScanResult:
         git("add", "-f", ".env.keys")
         monkeypatch.setenv(variable, str(hook / path))
 
-        result = scanner.scan([repo])
+        result = NativeScanner().scan([repo])
 
         assert [f.rule_id for f in result.findings] == ["committed-private-key"]
 
