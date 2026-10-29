@@ -100,15 +100,17 @@ def _index_of(index: Path, git_dir: Path, *, named: bool, env: Mapping[str, str]
     """Whether a hook's GIT_INDEX_FILE, ``index``, is an index of the repository at ``git_dir``.
 
     git keeps the index it commits from in the git directory: index.lock during ``git commit
-    -a``, next-index-<pid>.lock during ``git commit <path>``. An index in another git directory
-    is that repository's. One outside every git directory is an alternate index that the user
-    set, which git exports as GIT_INDEX_FILE too: it is the hook's repository's, the one GIT_DIR
-    names (``named``), or else the one the hook runs in, this process's working directory.
+    -a``, next-index-<pid>.lock during ``git commit <path>``. An index in another git directory,
+    at any depth, is that repository's. One outside every git directory is an alternate index
+    that the user set, which git exports as GIT_INDEX_FILE too: it is the hook's repository's,
+    the one GIT_DIR names (``named``), or else the one the hook runs in, this process's working
+    directory.
     """
-    if index.parent == git_dir:
-        return True
-    if _is_git_dir(index.parent):
-        return False
+    for directory in index.parents:
+        if directory == git_dir:
+            return True
+        if _is_git_dir(directory):
+            return False
     if named:
         return True
     try:

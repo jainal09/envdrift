@@ -646,6 +646,27 @@ class TestHookGitVariables:
         assert env is not None
         assert "GIT_INDEX_FILE" not in env
 
+    def test_hook_env_places_an_index_by_the_git_directory_above_it(
+        self, tmp_path: Path, monkeypatch
+    ):
+        """An index in a subdirectory of a git directory is that repository's, wherever git runs.
+
+        Only the index's own directory was checked: deeper in another repository's git directory,
+        it passed for an alternate index of the repository the hook runs in, and the reverse.
+        """
+        hook_repo, other = tmp_path / "hook", tmp_path / "other"
+        for repo in (hook_repo, other):
+            repo.mkdir()
+            _git(repo, "init", "-q")
+        monkeypatch.setenv("GIT_INDEX_FILE", str(hook_repo / ".git" / "tmp" / "index"))
+        monkeypatch.chdir(other)
+
+        env = _hook_env(other)
+
+        assert env is not None
+        assert "GIT_INDEX_FILE" not in env, "another repository's index was kept"
+        assert _hook_env(hook_repo) is None, "the repository's own index was dropped"
+
     def test_hook_env_keeps_an_alternate_index_of_the_git_dir_it_names(
         self, tmp_path: Path, monkeypatch
     ):
