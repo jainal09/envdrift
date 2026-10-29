@@ -356,6 +356,48 @@ def _git_failure(stderr: str, returncode: int) -> str:
     return lines[-1] if lines else f"exit code {returncode}"
 
 
+# How long one ``git ls-files`` may take before the native scanner gives up on it.
+_GIT_LIST_TIMEOUT_SECONDS = 30
+
+
+def _complete_paths(output: str | bytes | None) -> list[str]:
+    """The paths in ``git ls-files -z`` output that their NUL ends; a last one cut short is out.
+
+    A listing killed by its timeout hands over what it wrote so far: as bytes on POSIX, as text
+    on Windows. ``surrogateescape`` round-trips any non-UTF-8 bytes into ``Path``.
+    """
+    if isinstance(output, bytes):
+        output = output.decode("utf-8", errors="surrogateescape")
+    return [path for path in (output or "").split("\0")[:-1] if path]
+
+
+def _git_list(directory: Path, args: list[str]) -> tuple[list[str], str | None]:
+    """The paths ``git ls-files <args>`` lists in ``directory``, and why it failed, if it did.
+
+    A listing that fails or times out can have written some paths first. Those are complete, so
+    they are scanned too, and the failure still fails the scan (#910).
+    """
+    import subprocess  # nosec B404
+
+    try:
+        result = run_tool(
+            ["git", "ls-files", *args],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="surrogateescape",
+            cwd=directory,
+            timeout=_GIT_LIST_TIMEOUT_SECONDS,
+        )
+    except subprocess.TimeoutExpired as e:
+        return _complete_paths(e.stdout), f"timed out after {e.timeout:g}s"
+    except OSError as e:
+        return [], str(e)
+    if result.returncode != 0:
+        return _complete_paths(result.stdout), _git_failure(result.stderr, result.returncode)
+    return _complete_paths(result.stdout), None
+
+
 def _resolved(path: Path) -> Path | None:
     """``path`` with its symlinks resolved, or ``None`` when that fails."""
     try:
@@ -538,73 +580,30 @@ class NativeScanner(ScannerBackend):
                 untracked ones or the ignored env stores (#910). It holds the files
                 that were listed.
         """
-        import subprocess  # nosec B404
-
         files: set[Path] = set()
         unlisted: list[str] = []
         directory = directory.resolve()
 
         # ``-z`` keeps filenames byte-for-byte rather than applying Git's
-        # C-style quotepath escaping to non-ASCII or newline-containing paths.
-        # ``surrogateescape`` round-trips any non-UTF-8 bytes into ``Path``;
-        # every git invocation below therefore uses NUL-separated output.
+        # C-style quotepath escaping to non-ASCII or newline-containing paths;
+        # every git invocation below therefore uses NUL-terminated output.
 
         # Method 1: Get tracked files from git (fast - reads index)
-        try:
-            result = run_tool(
-                ["git", "ls-files", "-z"],
-                capture_output=True,
-                text=True,
-                encoding="utf-8",
-                errors="surrogateescape",
-                cwd=directory,
-                timeout=30,
-            )
-            if result.returncode != 0:
-                # Not a git repo or git error - use fallback
-                return self._collect_files_fallback(directory)
-
-            for rel_path in result.stdout.split("\0"):
-                if rel_path:
-                    files.add(directory / rel_path)
-
-        except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
-            # git not available - fall back to os.walk
+        paths, failure = _git_list(directory, ["-z"])
+        if failure is not None:
+            # Not a git repo, git error or no git at all - walk the directory instead
             return self._collect_files_fallback(directory)
+        files.update(directory / rel_path for rel_path in paths)
 
         # Method 2: Get every ordinary untracked file (respects .gitignore).
         # Restricting this pass to .env-shaped names let secrets in config.txt,
         # secrets.yaml, and other would-be commit inputs bypass the native scanner
         # with exit 0. Git already applies the repository's ignore policy, and the
         # normal _should_ignore/_looks_binary filters still apply before scanning.
-        try:
-            result = run_tool(
-                [
-                    "git",
-                    "ls-files",
-                    "--others",
-                    "--exclude-standard",
-                    "-z",
-                ],
-                capture_output=True,
-                text=True,
-                encoding="utf-8",
-                errors="surrogateescape",
-                cwd=directory,
-                timeout=30,
-            )
-            if result.returncode == 0:
-                for rel_path in result.stdout.split("\0"):
-                    if rel_path:
-                        files.add(directory / rel_path)
-            else:
-                unlisted.append(
-                    f"the untracked files: {_git_failure(result.stderr, result.returncode)}"
-                )
-        except subprocess.TimeoutExpired as e:
-            unlisted.append(f"the untracked files: timed out after {e.timeout:g}s")
-        except OSError as e:
-            unlisted.append(f"the untracked files: {e}")
+        paths, failure = _git_list(directory, ["--others", "--exclude-standard", "-z"])
+        files.update(directory / rel_path for rel_path in paths)
+        if failure is not None:
+            unlisted.append(f"the untracked files: {failure}")
 
         # Method 3: Get untracked .env* files that ARE gitignored.
         # Partial-encryption secret/combined files are typically gitignored, and a
@@ -616,41 +615,17 @@ class NativeScanner(ScannerBackend):
         # private key file, always plaintext, and meant to stay local-only. Scanning
         # it here would wrongly flag a properly-configured project as having an
         # "unencrypted env file". A *tracked* .env.keys is still caught by Method 1.
-        try:
-            result = run_tool(
-                [
-                    "git",
-                    "ls-files",
-                    "--others",
-                    "--ignored",
-                    "--exclude-standard",
-                    "-z",
-                    "--",
-                    *_ENV_FILE_PATHSPECS,
-                ],
-                capture_output=True,
-                text=True,
-                encoding="utf-8",
-                errors="surrogateescape",
-                cwd=directory,
-                timeout=30,
-            )
-            if result.returncode == 0:
-                for rel_path in result.stdout.split("\0"):
-                    if (
-                        rel_path
-                        and _is_env_file(rel_path)
-                        and Path(rel_path).name != DOTENVX_KEYS_FILENAME
-                    ):
-                        files.add(directory / rel_path)
-            else:
-                unlisted.append(
-                    "the ignored .env files: " + _git_failure(result.stderr, result.returncode)
-                )
-        except subprocess.TimeoutExpired as e:
-            unlisted.append(f"the ignored .env files: timed out after {e.timeout:g}s")
-        except OSError as e:
-            unlisted.append(f"the ignored .env files: {e}")
+        paths, failure = _git_list(
+            directory,
+            ["--others", "--ignored", "--exclude-standard", "-z", "--", *_ENV_FILE_PATHSPECS],
+        )
+        files.update(
+            directory / rel_path
+            for rel_path in paths
+            if _is_env_file(rel_path) and Path(rel_path).name != DOTENVX_KEYS_FILENAME
+        )
+        if failure is not None:
+            unlisted.append(f"the ignored .env files: {failure}")
 
         # Method 4: Add explicitly configured custom env files from vault.sync.
         # These may not match ".env*" and can otherwise be missed when untracked.

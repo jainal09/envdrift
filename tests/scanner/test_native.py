@@ -13,10 +13,11 @@ from types import SimpleNamespace
 import pytest
 
 from envdrift.scanner import _native_io as native_io
+from envdrift.scanner import native as native_module
 from envdrift.scanner._native_io import NATIVE_MAX_SCAN_BYTES, read_raw_scannable_bytes
 from envdrift.scanner.base import FindingSeverity
 from envdrift.scanner.engine import GuardConfig, ScanEngine
-from envdrift.scanner.native import _ENV_FILE_PATHSPECS, NativeScanner
+from envdrift.scanner.native import _ENV_FILE_PATHSPECS, NativeScanner, _complete_paths
 
 
 def _native_io_os(**replaced: object) -> SimpleNamespace:
@@ -234,12 +235,15 @@ class TestNativeScannerInternals:
         assert oversized.resolve() not in finding_paths
 
     @staticmethod
-    def _repo_whose_git_fails(tmp_path: Path, monkeypatch, *, failing: str) -> Path:
+    def _repo_whose_git_fails(
+        tmp_path: Path, monkeypatch, *, failing: str, prints: str = "", hangs: bool = False
+    ) -> Path:
         """A repository, and a stand-in for git first on PATH that fails some of its listings.
 
         ``failing`` is "untracked" (``git ls-files --others`` without ``--ignored``) or
-        "ignored" (with it). The stand-in fails those calls, as a timeout would, and hands every
-        other call to the real git.
+        "ignored" (with it). The stand-in writes ``prints`` (a printf format) for those calls and
+        then fails, or with ``hangs`` sleeps past any timeout. It hands every other call to the
+        real git.
         """
         import shutil
 
@@ -260,8 +264,13 @@ class TestNativeScannerInternals:
             '  [ "$a" = "--ignored" ] && ignored=1\n'
             "done\n"
             f"if [ $others = 1 ] && [ $ignored = {int(failing == 'ignored')} ]; then\n"
-            '  echo "fatal: simulated failure" >&2; exit 128\n'
-            "fi\n"
+            f"  printf '{prints}'\n"
+            + (
+                "  exec sleep 10\n"
+                if hangs
+                else '  echo "fatal: simulated failure" >&2; exit 128\n'
+            )
+            + "fi\n"
             f'exec "{real_git}" "$@"\n'
         )
         git.chmod(0o755)
@@ -294,6 +303,33 @@ class TestNativeScannerInternals:
             assert untracked.resolve() in reported
 
     @pytest.mark.skipif(sys.platform == "win32", reason="the stand-in for git is a shell script")
+    @pytest.mark.parametrize(
+        ("hangs", "failure"),
+        [(False, "fatal: simulated failure"), (True, "timed out after 1s")],
+        ids=["failed", "timed-out"],
+    )
+    def test_files_git_listed_before_it_failed_are_scanned(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, hangs: bool, failure: str
+    ):
+        """Every path git ended with its NUL before it failed is scanned; one cut short is not.
+
+        The scan still fails for the files git never listed (#910).
+        """
+        monkeypatch.setattr(native_module, "_GIT_LIST_TIMEOUT_SECONDS", 1)
+        repo = self._repo_whose_git_fails(
+            tmp_path, monkeypatch, failing="untracked", prints="listed.txt\\000cut.txt", hangs=hangs
+        )
+        for name in ("listed.txt", "cut.txt"):
+            (repo / name).write_text("GITHUB_TOKEN=ghp_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\n")
+
+        result = NativeScanner().scan([repo])
+
+        assert result.error == (
+            f"git could not list files in {repo.resolve()}: the untracked files: {failure}"
+        )
+        assert {finding.file_path.name for finding in result.findings} == {"listed.txt"}
+
+    @pytest.mark.skipif(sys.platform == "win32", reason="the stand-in for git is a shell script")
     def test_guard_does_not_pass_files_git_cannot_list(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ):
@@ -305,6 +341,21 @@ class TestNativeScannerInternals:
 
         assert result.exit_code == 5
         assert [r.error is not None for r in result.results] == [True]
+
+    @pytest.mark.parametrize(
+        ("output", "paths"),
+        [
+            ("a.txt\0sub/b.env\0", ["a.txt", "sub/b.env"]),
+            ("a.txt\0cut", ["a.txt"]),
+            (b"a.txt\0caf\xe9.env\0cu", ["a.txt", "caf\udce9.env"]),
+            ("", []),
+            (None, []),
+        ],
+        ids=["complete", "cut-short", "bytes-not-utf8", "empty", "none"],
+    )
+    def test_complete_paths_are_those_their_nul_ends(self, output, paths):
+        """A listing killed by its timeout hands over bytes on POSIX and text on Windows."""
+        assert _complete_paths(output) == paths
 
     def test_collect_files_includes_gitignored_mapped_env_file(self, tmp_path: Path):
         """A gitignored custom env filename from vault.sync must still be collected."""

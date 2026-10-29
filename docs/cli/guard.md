@@ -778,8 +778,9 @@ detect-secrets, which always prints one.
 
 The native scanner fails too when git cannot list some of the files in a
 directory it scans: the untracked files, or the ignored `.env` files it always
-checks. It still scans the files git did list, and its error names the directory
-and git's message.
+checks. It still scans every file git did list, even in a listing that failed or
+timed out partway, and its error names the directory and why the listing failed:
+git's message, or that it timed out.
 
 A scanner still running 10 minutes after it started has failed: guard stops
 waiting for it and records `Scanner timed out after 600s` as its error, the
