@@ -352,6 +352,49 @@ class TestNativeScannerInternals:
         assert result.exit_code == 5
         assert [r.error is not None for r in result.results] == [True]
 
+    @pytest.mark.parametrize("variable", ["GIT_DIR", "GIT_INDEX_FILE"])
+    def test_git_lists_the_repository_the_directory_is_in(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, variable: str
+    ):
+        """GIT_DIR or GIT_INDEX_FILE, which a git hook exports, does not change what git lists.
+
+        Inherited from a hook in another repository, they made git list that repository's index.
+        A tracked file that .gitignore matches then went unscanned, with no error.
+        """
+        import shutil
+
+        if shutil.which("git") is None:
+            pytest.skip("git not available")
+
+        def git(cwd: Path, *args: str) -> None:
+            config = ["-c", "user.name=t", "-c", "user.email=t@example.com"]
+            config += ["-c", "commit.gpgsign=false"]
+            subprocess.run(["git", *config, *args], cwd=cwd, check=True, capture_output=True)
+
+        other = tmp_path / "other"
+        other.mkdir()
+        git(other, "init", "-q")
+        (other / "readme.txt").write_text("hello\n")
+        git(other, "add", "readme.txt")
+        git(other, "commit", "-qm", "init")
+        scanned = tmp_path / "scanned"
+        scanned.mkdir()
+        git(scanned, "init", "-q")
+        (scanned / ".gitignore").write_text("secrets.txt\n")
+        (scanned / "secrets.txt").write_text(
+            "GITHUB_TOKEN=ghp_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\n"
+        )
+        git(scanned, "add", ".gitignore")
+        git(scanned, "add", "--force", "secrets.txt")
+        git(scanned, "commit", "-qm", "init")
+        location = other / ".git" if variable == "GIT_DIR" else other / ".git" / "index"
+        monkeypatch.setenv(variable, str(location))
+
+        result = NativeScanner().scan([scanned])
+
+        assert result.error is None
+        assert "secrets.txt" in {finding.file_path.name for finding in result.findings}
+
     @pytest.mark.parametrize(
         ("output", "paths"),
         [

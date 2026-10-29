@@ -359,6 +359,10 @@ def _git_failure(stderr: str, returncode: int) -> str:
 # How long one ``git ls-files`` may take before the native scanner gives up on it.
 _GIT_LIST_TIMEOUT_SECONDS = 30
 
+# git lists the repository that each scanned directory is in. A git hook exports these, and
+# inherited they point git at the hook's repository or index instead.
+_GIT_LOCATION_VARIABLES = ("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_COMMON_DIR")
+
 
 def _complete_paths(output: str | bytes | None) -> list[str]:
     """The paths in ``git ls-files -z`` output that their NUL ends; a last one cut short is out.
@@ -377,8 +381,10 @@ def _git_list(directory: Path, args: list[str]) -> tuple[list[str], str | None]:
     A listing that fails or times out can have written some paths first. Those are complete, so
     they are scanned too, and the failure still fails the scan (#910).
     """
+    import os
     import subprocess  # nosec B404
 
+    env = {k: v for k, v in os.environ.items() if k not in _GIT_LOCATION_VARIABLES}
     try:
         result = run_tool(
             ["git", "ls-files", *args],
@@ -387,6 +393,7 @@ def _git_list(directory: Path, args: list[str]) -> tuple[list[str], str | None]:
             encoding="utf-8",
             errors="surrogateescape",
             cwd=directory,
+            env=env,
             timeout=_GIT_LIST_TIMEOUT_SECONDS,
         )
     except subprocess.TimeoutExpired as e:
