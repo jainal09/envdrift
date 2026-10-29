@@ -5,6 +5,7 @@ from __future__ import annotations
 import pytest
 
 from envdrift.scanner.base import FindingSeverity
+from envdrift.scanner.native import NativeScanner
 from envdrift.scanner.patterns import (
     ALL_PATTERNS,
     CRITICAL_PATTERNS,
@@ -13,18 +14,31 @@ from envdrift.scanner.patterns import (
     redact_secret,
 )
 
-# crypt(3)'s SHA-512 hashes of "pw": one with an explicit rounds= field, at passlib's default
-# rounds, and one with a 2-character salt. Built by concatenation, as the other fixtures are.
-SHA512CRYPT_WITH_ROUNDS = (
-    "$6$"
-    + "rounds=656000$abcdefgh$"
-    + "pLncf7ljI4rnlGRtlaRLIaBXT8hoDhe5j.p3YfqrEPrlrDTn7qRk9ssGh4MFgYzW30TNcYrpyeSWhww63/Kel0"
-)
-SHA512CRYPT_SHORT_SALT = (
-    "$6$"
-    + "ab$"
-    + "td.Yv18i64fuHSCSFfhcg9cvGN/q.1N72dPYEBvvVyQIQbX2mVX2dRrHRg.vLlqSchKS1d4urAkRbfv.vYLNE1"
-)
+# crypt(3)'s SHA-512 hashes of "pw" in each form it writes: the default 16-character salt, an
+# explicit rounds= field at passlib's default rounds, a 2-character salt and an empty salt (#934).
+# Built by concatenation, as the other fixtures are.
+SHA512CRYPT_FORMS = {
+    "default": (
+        "$6$"
+        + "abcdefghijklmnop$"
+        + "GRSTFj3H0pZ9BY1uhdqITG.qORbXkTk40qgaa1roNICfs/axSgdNnbKEYghuyLnrmnFXvSE09GdxJbCDOnxdc1"
+    ),
+    "rounds": (
+        "$6$"
+        + "rounds=656000$abcdefgh$"
+        + "pLncf7ljI4rnlGRtlaRLIaBXT8hoDhe5j.p3YfqrEPrlrDTn7qRk9ssGh4MFgYzW30TNcYrpyeSWhww63/Kel0"
+    ),
+    "short-salt": (
+        "$6$"
+        + "ab$"
+        + "td.Yv18i64fuHSCSFfhcg9cvGN/q.1N72dPYEBvvVyQIQbX2mVX2dRrHRg.vLlqSchKS1d4urAkRbfv.vYLNE1"
+    ),
+    "empty-salt": (
+        "$6$"
+        + "$"
+        + "Z7WSO9A8tKGD2oGB9t2ViKdYTIHgnjMZIbdOJElGnO.QoZE5zDsfnF1WHM.IL2KPxhNG4/v/zU9LBcGhxg5Uy."
+    ),
+}
 
 
 class TestSecretPatterns:
@@ -72,18 +86,25 @@ class TestSecretPatterns:
 
         assert matched, f"Pattern {expected_pattern_id} should match {secret[:20]}..."
 
-    @pytest.mark.xfail(
-        strict=False,
-        raises=AssertionError,
-        reason="the sha512crypt pattern needs a salt of 8 or more characters and no rounds= (see #934)",
-    )
-    @pytest.mark.parametrize(
-        "hashed", [SHA512CRYPT_WITH_ROUNDS, SHA512CRYPT_SHORT_SALT], ids=["rounds", "short-salt"]
-    )
+    @pytest.mark.parametrize("hashed", SHA512CRYPT_FORMS.values(), ids=SHA512CRYPT_FORMS.keys())
     def test_every_sha512crypt_form_matches(self, hashed: str):
-        """crypt(3) writes an optional rounds= field, and salts of up to 16 characters (#934)."""
+        """The pattern captures the whole hash, in every form crypt(3) writes (#934)."""
         (pattern,) = [p for p in ALL_PATTERNS if p.id == "sha512crypt-hash"]
-        assert pattern.pattern.search(f"admin:{hashed}")
+        match = pattern.pattern.search(f"admin:{hashed}:20000:0:99999:7:::")
+        assert match is not None
+        assert match.group(1) == hashed
+
+    @pytest.mark.parametrize("hashed", SHA512CRYPT_FORMS.values(), ids=SHA512CRYPT_FORMS.keys())
+    def test_the_native_scanner_reports_every_sha512crypt_form(self, tmp_path, hashed: str):
+        """A shadow entry in any form crypt(3) writes is a CRITICAL finding (#934)."""
+        shadow = tmp_path / "shadow"
+        shadow.write_text(f"admin:{hashed}:20000:0:99999:7:::\n")
+
+        result = NativeScanner().scan([shadow])
+
+        assert [(f.rule_id, f.severity) for f in result.findings] == [
+            ("sha512crypt-hash", FindingSeverity.CRITICAL)
+        ]
 
     @pytest.mark.parametrize(
         "non_secret",

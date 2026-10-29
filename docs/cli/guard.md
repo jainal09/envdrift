@@ -623,8 +623,7 @@ envdrift guard --kingfisher --gitleaks
 ### Find password hashes in database dumps
 
 ```bash
-# The native scanner finds bcrypt hashes, and sha512crypt hashes with no rounds= field and a
-# salt of 8 to 16 characters (#934)
+# The native scanner finds bcrypt and sha512crypt password hashes
 envdrift guard ./db/users.sql --native-only
 ```
 

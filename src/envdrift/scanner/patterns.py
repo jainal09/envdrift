@@ -516,7 +516,10 @@ HIGH_PATTERNS: list[SecretPattern] = [
     SecretPattern(
         id="sha512crypt-hash",
         description="SHA-512 Crypt Password Hash",
-        pattern=re.compile(r"(\$6\$[a-zA-Z0-9./]{8,16}\$[a-zA-Z0-9./]{86})"),
+        # crypt(3) writes an optional rounds= field, and a salt of 0 to 16 characters (#934)
+        pattern=re.compile(
+            r"(\$6\$(?:rounds=[0-9]{1,9}\$)?[a-zA-Z0-9./]{0,16}\$[a-zA-Z0-9./]{86})"
+        ),
         severity=FindingSeverity.CRITICAL,
     ),
     # Docker registry auth
