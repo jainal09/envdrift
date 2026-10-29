@@ -6,6 +6,8 @@ the processes it started (#911), not through the ``subprocess.run`` seam of the 
 
 from __future__ import annotations
 
+import contextlib
+import errno
 import os
 import signal
 import subprocess
@@ -25,6 +27,7 @@ from envdrift.scanner import engine as engine_module
 from envdrift.scanner.base import ScannerBackend, ScanResult
 from envdrift.scanner.engine import GuardConfig, ScanEngine
 from envdrift.scanner.gitleaks import GitleaksInstaller
+from envdrift.utils import process_tree
 from envdrift.utils.deadline import (
     ScannerDeadline,
     ScannerTimedOut,
@@ -33,7 +36,7 @@ from envdrift.utils.deadline import (
     scanner_deadline,
 )
 from envdrift.utils.git import get_git_root
-from envdrift.utils.process_tree import _ppid_from_stat
+from envdrift.utils.process_tree import _ppid_from_stat, kill_process_tree
 
 pytestmark = pytest.mark.real_tool_runner
 
@@ -145,6 +148,16 @@ def _stop(beat: Path) -> None:
         os.kill(pid, signal.SIGTERM)
     except (OSError, ValueError, IndexError):
         pass
+
+
+def _beating_pid(beat: Path) -> int:
+    """The pid of the tool writing ``beat``, once it has started."""
+    deadline = time.monotonic() + 10
+    while time.monotonic() < deadline:
+        with contextlib.suppress(OSError, ValueError, IndexError):
+            return int(beat.read_text().split()[0])
+        time.sleep(0.05)
+    raise AssertionError("the tool never started")
 
 
 def _engine(scanner: ScannerBackend, monkeypatch: pytest.MonkeyPatch) -> ScanEngine:
@@ -370,6 +383,110 @@ def test_a_tool_that_times_out_is_killed_with_the_processes_it_started(tmp_path:
         _stop(beat)
 
 
+# Names the process with bytes that are not UTF-8, as the kernel names one whose executable has a
+# long non-ASCII name: it cuts the name at 15 bytes, here in the middle of a "€".
+RENAMED = """
+from pathlib import Path
+
+Path("/proc/self/comm").write_bytes(b"tool-\\xe2\\x82")
+"""
+
+
+@pytest.mark.skipif(
+    not Path("/proc/self/comm").is_file(), reason="a process renames itself through /proc on Linux"
+)
+def test_a_child_whose_name_is_not_utf8_is_killed_too(tmp_path: Path) -> None:
+    """Its /proc/<pid>/stat did not decode as text, which left it out of the tree."""
+    beat = tmp_path / "beat"
+    child = tmp_path / "child.py"
+    child.write_text(RENAMED + HEARTBEAT)
+
+    try:
+        with pytest.raises(subprocess.TimeoutExpired):
+            run_tool(
+                [sys.executable, "-c", PARENT, str(child), str(beat)],
+                capture_output=True,
+                timeout=1.5,
+            )
+
+        assert beat.exists(), "the tool's child never started"
+        assert not _still_beating(beat), "the tool's child still runs after the tool timed out"
+    finally:
+        _stop(beat)
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="taskkill /T walks the tree on Windows")
+def test_a_failed_listing_still_kills_the_processes_it_stopped(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A stopped process that is not killed never ends, and Popen's exit waits for it forever.
+
+    The second listing fails, as one does with no file descriptor left, once the tool and its
+    child are stopped. They were left stopped.
+    """
+    beat = tmp_path / "beat"
+    heartbeat = tmp_path / "heartbeat.py"
+    heartbeat.write_text(HEARTBEAT)
+    children_by_parent = process_tree._children_by_parent
+    listings = []
+
+    def listing() -> dict[int, list[int]]:
+        listings.append(None)
+        if len(listings) > 1:
+            raise OSError(errno.EMFILE, os.strerror(errno.EMFILE))
+        return children_by_parent()
+
+    monkeypatch.setattr(process_tree, "_children_by_parent", listing)
+    tool = subprocess.Popen([sys.executable, "-c", PARENT, str(heartbeat), str(beat)])
+    child = None
+    try:
+        child = _beating_pid(beat)
+        with pytest.raises(OSError) as raised:
+            kill_process_tree(tool)
+        assert raised.value.errno == errno.EMFILE
+
+        try:
+            returncode = tool.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            returncode = None
+        assert returncode == -signal.SIGKILL, "the tool was left stopped"
+        with contextlib.suppress(ProcessLookupError):
+            os.kill(child, signal.SIGCONT)  # a child left stopped would beat again
+        assert not _still_beating(beat), "the tool's child was left stopped"
+    finally:
+        for pid in (tool.pid, child):
+            if pid is not None:
+                with contextlib.suppress(OSError):
+                    os.kill(pid, signal.SIGKILL)  # which ends a stopped process too
+        tool.wait()
+
+
+@pytest.mark.xfail(
+    strict=False, reason="a child its tool left running is no longer below the tool (see #922)"
+)
+@pytest.mark.skipif(
+    sys.platform == "win32",
+    reason="the tool is a shell script that starts its child in the background",
+)
+def test_a_child_that_outlived_its_tool_ends_with_it(tmp_path: Path) -> None:
+    """A tool that exits at once, leaving its child running with the tool's output pipe open."""
+    beat = tmp_path / "beat"
+    heartbeat = tmp_path / "heartbeat.py"
+    heartbeat.write_text(HEARTBEAT)
+    tool = tmp_path / "tool.sh"
+    tool.write_text(f'#!/bin/sh\n"{sys.executable}" "{heartbeat}" "{beat}" &\n')
+    tool.chmod(0o755)
+
+    try:
+        with pytest.raises(subprocess.TimeoutExpired):
+            run_tool([str(tool)], capture_output=True, timeout=1.5)
+
+        assert beat.exists(), "the tool's child never started"
+        assert not _still_beating(beat), "the tool's child still runs after the tool timed out"
+    finally:
+        _stop(beat)
+
+
 def test_the_runner_takes_what_subprocess_run_takes() -> None:
     """``run_tool`` runs a tool as ``subprocess.run`` would, input and errors included."""
     echo = [sys.executable, "-c", "import sys; sys.stdout.write(sys.stdin.read().upper())"]
@@ -390,13 +507,14 @@ def test_the_runner_takes_what_subprocess_run_takes() -> None:
 @pytest.mark.parametrize(
     ("stat", "ppid"),
     [
-        ("41 (git) S 7 41 41 0 -1", 7),
-        ("42 (my tool (v2)) R 9 42 42 0 -1", 9),
-        ("43 ( ) ) S 11 43 43 0 -1", 11),
+        (b"41 (git) S 7 41 41 0 -1", 7),
+        (b"42 (my tool (v2)) R 9 42 42 0 -1", 9),
+        (b"43 ( ) ) S 11 43 43 0 -1", 11),
+        (b"44 (tool-\xe2\x82) S 13 44 44 0 -1", 13),
     ],
 )
-def test_the_parent_is_read_past_the_command_name(stat: str, ppid: int) -> None:
-    """A command name in /proc/<pid>/stat may hold spaces and parentheses."""
+def test_the_parent_is_read_past_the_command_name(stat: bytes, ppid: int) -> None:
+    """A command name in /proc/<pid>/stat may hold spaces and parentheses, and need not be text."""
     assert _ppid_from_stat(stat) == ppid
 
 

@@ -522,6 +522,33 @@ class TestGitSecretsSourceInstall:
 
         assert installed.read_bytes() == _script_at(upstream, older)
 
+    def test_installs_over_a_git_secrets_that_cannot_run(self, tmp_path, monkeypatch):
+        """A file the install directory holds that cannot run is installed over, and runs.
+
+        The installer took any file there for an install. Installing again was not enough:
+        ``make install`` copies with ``cp -f``, which keeps the mode of the file it writes over.
+        """
+        upstream = tmp_path / "upstream"
+        _clone_upstream(upstream)
+        leftover = tmp_path / "venv" / "bin" / "git-secrets"
+        leftover.parent.mkdir(parents=True)
+        leftover.write_text("partial")
+        leftover.chmod(0o644)
+        monkeypatch.setenv("VIRTUAL_ENV", str(tmp_path / "venv"))
+        path_entries = os.environ["PATH"].split(os.pathsep)
+        monkeypatch.setenv(
+            "PATH",
+            os.pathsep.join(
+                entry for entry in path_entries if not Path(entry, "git-secrets").exists()
+            ),
+        )
+
+        installed = GitSecretsInstaller().install()
+
+        assert installed == leftover
+        assert installed.read_bytes() == _script_at(upstream, _get_git_secrets_commit())
+        assert os.access(installed, os.X_OK), "the install left a git-secrets that cannot run"
+
 
 @pytest.mark.integration
 class TestScannerConfiguration:

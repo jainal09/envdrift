@@ -182,13 +182,25 @@ def _pinned_commit() -> str:
 
 
 def _installed_binary() -> Path | None:
-    """The git-secrets the installer put in its target directory, if it is there."""
+    """The git-secrets the installer put in its target directory, if it is there to run."""
     try:
         # Looking creates no directory, and a directory that cannot be read holds no binary to run
         candidate = get_venv_bin_dir(create=False) / "git-secrets"
-        return candidate if candidate.is_file() else None
+        # As shutil.which() on PATH: a file there that cannot be run is an install to redo
+        return candidate if candidate.is_file() and os.access(candidate, os.X_OK) else None
     except (RuntimeError, OSError):
         return None
+
+
+def _make_runnable(script: Path) -> None:
+    """Let whoever may read ``script`` run it, if it cannot be run.
+
+    ``make install`` copies git-secrets with ``cp -f``, which keeps the mode of a file it writes
+    over, so an install over a git-secrets that could not be run left it so.
+    """
+    if not os.access(script, os.X_OK):
+        mode = script.stat().st_mode
+        script.chmod(mode | ((mode & 0o444) >> 2))
 
 
 def _existing_binary() -> Path | None:
@@ -366,6 +378,7 @@ class GitSecretsInstaller:
 
                 git_secrets_path = target_dir / "git-secrets"
                 if git_secrets_path.exists():
+                    _make_runnable(git_secrets_path)
                     self.progress(f"Installed to {git_secrets_path}")
                     return git_secrets_path
 

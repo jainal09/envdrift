@@ -23,30 +23,41 @@ def kill_process_tree(process: subprocess.Popen) -> None:
     """Kill ``process`` and every process below it that still runs.
 
     On POSIX each level of the tree is stopped (``SIGSTOP``) before its children are listed, so
-    that none of them can start another one unseen, and then every one is killed. On Windows
+    that none of them can start another one unseen, and then every one is killed: when a listing
+    fails, the processes stopped so far are killed before the error is raised. On Windows
     ``taskkill /T`` walks the tree. ``process`` itself is killed either way, as
     ``subprocess.run`` would.
     """
-    if sys.platform == "win32":
-        _taskkill_tree(process.pid)
-    else:
-        _kill_posix_tree(process.pid)
-    with contextlib.suppress(OSError):
-        process.kill()
+    try:
+        if sys.platform == "win32":
+            _taskkill_tree(process.pid)
+        else:
+            _kill_posix_tree(process.pid)
+    finally:
+        with contextlib.suppress(OSError):
+            process.kill()
 
 
 def _kill_posix_tree(pid: int) -> None:
     stopped: list[int] = []
+    try:
+        _stop_tree(pid, stopped)
+    finally:
+        # Even when a listing failed: a stopped process that is not killed never ends.
+        for p in stopped:
+            _signal(p, signal.SIGKILL)
+
+
+def _stop_tree(pid: int, stopped: list[int]) -> None:
+    """Stop ``pid`` and the processes below it, level by level, adding each to ``stopped``."""
     level = [pid]
     for _ in range(_MAX_DEPTH):
         frozen = [p for p in level if _signal(p, signal.SIGSTOP)]
         if not frozen:
-            break
+            return
         stopped.extend(frozen)
         children = _children_by_parent()
         level = [child for p in frozen for child in children.get(p, ()) if child not in stopped]
-    for p in stopped:
-        _signal(p, signal.SIGKILL)
 
 
 def _signal(pid: int, sig: int) -> bool:
@@ -74,7 +85,7 @@ def _process_table() -> list[tuple[int, int]]:
         for entry in proc.iterdir():
             if entry.name.isdigit():
                 with contextlib.suppress(OSError, ValueError, IndexError):
-                    table.append((int(entry.name), _ppid_from_stat((entry / "stat").read_text())))
+                    table.append((int(entry.name), _ppid_from_stat((entry / "stat").read_bytes())))
         return table
     try:
         listing = subprocess.run(  # nosec B603, B607
@@ -94,13 +105,14 @@ def _process_table() -> list[tuple[int, int]]:
     return table
 
 
-def _ppid_from_stat(stat: str) -> int:
-    """The parent pid in the text of ``/proc/<pid>/stat``.
+def _ppid_from_stat(stat: bytes) -> int:
+    """The parent pid in the contents of ``/proc/<pid>/stat``.
 
-    The text reads ``pid (comm) state ppid ...``, and ``comm`` may hold spaces and parentheses,
-    so the fields after it are counted from its last ``)``.
+    They read ``pid (comm) state ppid ...``. ``comm`` may hold spaces and parentheses, so the
+    fields after it are counted from its last ``)``, and it need not be text: the kernel cuts a
+    long name at 15 bytes, which can split a UTF-8 character.
     """
-    return int(stat.rsplit(")", 1)[1].split()[1])
+    return int(stat.rsplit(b")", 1)[1].split()[1])
 
 
 def _taskkill_tree(pid: int) -> None:

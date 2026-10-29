@@ -426,7 +426,7 @@ class TestGitSecretsInstalledBinary:
     def test_find_binary_finds_an_install_that_is_not_on_path(self, tmp_path: Path) -> None:
         """No `git secrets --list` probe and no second install: the installed binary is used."""
         installed = tmp_path / "git-secrets"
-        installed.touch()
+        installed.touch(mode=0o755)
         with (
             patch("shutil.which", return_value=None),
             patch("envdrift.scanner.git_secrets.get_venv_bin_dir", return_value=tmp_path),
@@ -439,7 +439,7 @@ class TestGitSecretsInstalledBinary:
     def test_install_finds_an_install_that_is_not_on_path(self, tmp_path: Path) -> None:
         """The installer does not clone and build again over the git-secrets it put there."""
         installed = tmp_path / "git-secrets"
-        installed.touch()
+        installed.touch(mode=0o755)
         with (
             patch("shutil.which", return_value=None),
             patch("envdrift.scanner.git_secrets.get_venv_bin_dir", return_value=tmp_path),
@@ -458,6 +458,14 @@ class TestGitSecretsInstalledBinary:
             assert _installed_binary() is None
 
     def test_an_empty_install_directory_has_no_installed_binary(self, tmp_path: Path) -> None:
+        with patch("envdrift.scanner.git_secrets.get_venv_bin_dir", return_value=tmp_path):
+            assert _installed_binary() is None
+
+    @pytest.mark.skipif(sys.platform == "win32", reason="Windows has no execute permission")
+    def test_a_file_that_cannot_run_is_no_installed_binary(self, tmp_path: Path) -> None:
+        """As shutil.which() passes one over on PATH: the scanner cannot run it, so it reinstalls."""
+        (tmp_path / "git-secrets").write_text("#!/usr/bin/env bash\n")
+        (tmp_path / "git-secrets").chmod(0o644)
         with patch("envdrift.scanner.git_secrets.get_venv_bin_dir", return_value=tmp_path):
             assert _installed_binary() is None
 
