@@ -46,6 +46,52 @@ def without_git_location(environ: Mapping[str, str] | None = None) -> dict[str, 
     return {key: value for key, value in source.items() if key not in GIT_LOCATION_VARIABLES}
 
 
+def _hook_env(git_root: Path) -> dict[str, str] | None:
+    """The environment for a git run in ``git_root`` that reads or writes its index.
+
+    In a git hook the location variables name the hook's repository, and GIT_INDEX_FILE the
+    index git is about to commit, which smart encryption restores an unchanged file into. They
+    are kept (None: this process's environment) when they name ``git_root``'s repository, and
+    dropped for any other one, a submodule say, where git would read or write the hook's
+    repository instead (#919).
+    """
+    exported = {name: os.environ[name] for name in GIT_LOCATION_VARIABLES if name in os.environ}
+    if not exported:
+        return None
+    env = without_git_location()
+    try:
+        result = run_tool(
+            ["git", "rev-parse", "--absolute-git-dir", "--git-common-dir"],
+            cwd=str(git_root),
+            env=env,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="surrogateescape",
+            timeout=10,
+        )
+    except (subprocess.TimeoutExpired, FileNotFoundError):
+        return env
+    lines = result.stdout.splitlines()
+    if result.returncode != 0 or len(lines) != 2:
+        return env
+    git_dir = Path(lines[0]).resolve()
+    own = {
+        "GIT_DIR": git_dir,
+        "GIT_COMMON_DIR": (git_root / lines[1]).resolve(),
+        "GIT_WORK_TREE": git_root.resolve(),
+        # git keeps the index it commits from in the git directory: index.lock during
+        # ``git commit -a``, next-index-<pid>.lock during ``git commit <path>``.
+        "GIT_INDEX_FILE": git_dir,
+    }
+    for name, value in exported.items():
+        # git reads a relative value against its working directory, git_root here.
+        path = (git_root / value).resolve()
+        if (path.parent if name == "GIT_INDEX_FILE" else path) != own[name]:
+            return env
+    return None
+
+
 def is_git_repo(path: Path) -> bool:
     """
     Check if the given path is inside a git repository.
@@ -152,6 +198,7 @@ def get_file_from_git(file_path: Path, ref: str = "HEAD") -> str | None:
         result = run_tool(
             ["git", "show", f"{ref}:{relative_path.as_posix()}"],
             cwd=str(git_root),
+            env=_hook_env(git_root),
             capture_output=True,
             text=True,
             encoding="utf-8",
@@ -188,6 +235,7 @@ def is_file_modified(file_path: Path) -> bool:
         result = run_tool(
             ["git", "status", "--porcelain", str(relative_path)],
             cwd=str(git_root),
+            env=_hook_env(git_root),
             capture_output=True,
             text=True,
             encoding="utf-8",
@@ -225,6 +273,7 @@ def restore_file_from_git(file_path: Path, ref: str = "HEAD") -> bool:
         result = run_tool(
             ["git", "checkout", ref, "--", str(relative_path)],
             cwd=str(git_root),
+            env=_hook_env(git_root),
             capture_output=True,
             text=True,
             encoding="utf-8",
@@ -243,10 +292,10 @@ def is_file_tracked(file_path: Path, *, env: Mapping[str, str] | None = None) ->
 
     Parameters:
         file_path: Absolute path to the file.
-        env: The environment git runs in, this process's when None. In a git hook that asks
-            the index the hook was given, the one being committed: smart encryption restores
-            the file into that index, so it must ask that one. ``without_git_location()``
-            asks the index of the file's own repository.
+        env: The environment git runs in. When None, a git hook's variables are kept if they
+            name the file's repository, so that git asks the index being committed, which
+            smart encryption restores the file into, and dropped otherwise.
+            ``without_git_location()`` always asks the index of the file's own repository.
 
     Returns:
         True if the file is tracked by git, False otherwise.
@@ -261,7 +310,7 @@ def is_file_tracked(file_path: Path, *, env: Mapping[str, str] | None = None) ->
         result = run_tool(
             ["git", "ls-files", "--error-unmatch", str(relative_path)],
             cwd=str(git_root),
-            env=env,
+            env=_hook_env(git_root) if env is None else env,
             capture_output=True,
             text=True,
             encoding="utf-8",
@@ -344,6 +393,7 @@ def _is_path_ignored(path: Path, git_root: Path) -> bool:
                 relative_path.as_posix(),
             ],
             cwd=str(git_root),
+            env=_hook_env(git_root),
             capture_output=True,
             text=True,
             encoding="utf-8",

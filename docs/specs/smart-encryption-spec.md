@@ -46,6 +46,15 @@ When re-encrypting a file, smart encryption:
 5. **If identical**: Restore original encrypted file from git (no re-encryption)
 6. **If different**: Proceed with normal encryption
 
+### In a git hook
+
+git exports `GIT_DIR`, `GIT_INDEX_FILE` and the like to its hooks. During
+`git commit -a`, `GIT_INDEX_FILE` is the index git is about to commit, so for a
+file of the hook's own repository smart encryption restores the file into that
+index, and the commit takes the encrypted version. For a file of another
+repository, a submodule say, every step runs in that file's own repository and
+index, whatever the hook exported.
+
 ### Implementation Details
 
 The feature is implemented in `src/envdrift/cli_commands/encryption_helpers.py`:

@@ -375,9 +375,8 @@ class TestSmartEncryptionInAGitHook:
     def test_leaves_a_file_of_another_repository_out_of_it(self, tmp_path: Path, monkeypatch):
         """A hook in one repository encrypts a file of another one, a submodule say.
 
-        is_file_tracked asks the hook's index, the one the restore writes, so the restore does not
-        put the other repository's file there, unless the hook's repository tracks the same path
-        (the xfail test below).
+        The hook's variables name another repository, so smart encryption drops them and the
+        restore never puts the other repository's file into the hook's index.
         """
         hook_repo = tmp_path / "hook"
         hook_repo.mkdir()
@@ -393,21 +392,16 @@ class TestSmartEncryptionInAGitHook:
 
         assert index.read_bytes() == staged
 
-    @pytest.mark.xfail(
-        strict=False,
-        raises=AssertionError,
-        reason="a file of another repository, at a path the hook's repository also tracks, is "
-        "restored through the hook's index (see #919)",
-    )
     @pytest.mark.parametrize("hook", ["commit -a", "linked worktree"])
     def test_leaves_it_alone_when_the_hook_repository_tracks_the_same_path(
         self, tmp_path: Path, monkeypatch, hook: str
     ):
-        """is_file_tracked, asking the hook's index, finds the hook repository's file there.
+        """The file is restored in its own repository, though the hook's tracks the same path (#919).
 
-        The restore then writes the other repository's file into that index. In a linked worktree
-        the hook's GIT_DIR also makes the committed version the hook repository's, so that file
-        is checked out over the other repository's.
+        is_file_tracked, asking the hook's index, found the hook repository's file there, and the
+        restore wrote the other repository's file into that index. In a linked worktree the hook's
+        GIT_DIR also made the committed version the hook repository's, so that file was checked
+        out over the other repository's.
         """
         env_file = self._decrypted_env_file(tmp_path / "other")
         hook_repo = tmp_path / "hook"
@@ -429,7 +423,9 @@ class TestSmartEncryptionInAGitHook:
         staged = index.read_bytes()
         monkeypatch.setenv("GIT_INDEX_FILE", str(index))
 
-        should_skip_reencryption(env_file, self._backend(), enabled=True)
+        should_skip, reason = should_skip_reencryption(env_file, self._backend(), enabled=True)
 
         assert env_file.read_text() != hook_file, "the hook repository's file was checked out"
         assert index.read_bytes() == staged, "the restore wrote into the hook's index"
+        assert should_skip is True, reason
+        assert env_file.read_text() == self._ENCRYPTED

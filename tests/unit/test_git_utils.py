@@ -9,6 +9,7 @@ from pathlib import Path, PureWindowsPath
 from unittest.mock import patch
 
 from envdrift.utils.git import (
+    _hook_env,
     ensure_gitignore_entries,
     get_file_from_git,
     get_git_root,
@@ -557,3 +558,60 @@ class TestHookGitVariables:
         assert is_file_tracked(repo / "app.txt") is False
         assert is_file_tracked(repo / "other.txt", env=without_git_location()) is False
         assert is_file_tracked(repo / "app.txt", env=without_git_location()) is True
+
+    def test_helpers_answer_for_another_repository_from_a_worktree_hook(
+        self, tmp_path: Path, monkeypatch
+    ):
+        """A linked worktree's hook exports an absolute GIT_DIR and GIT_INDEX_FILE (#919).
+
+        For a file of another repository, get_file_from_git read the hook repository's commit,
+        and is_file_tracked its index.
+        """
+        hook_repo, other = tmp_path / "hook", tmp_path / "other"
+        for repo, content in ((hook_repo, "hook\n"), (other, "other\n")):
+            repo.mkdir()
+            _git(repo, "init", "-q")
+            (repo / "app.txt").write_text(content)
+            _git(repo, "add", "app.txt")
+            _git(repo, "commit", "-qm", "init")
+        (other / "own.txt").write_text("own\n")
+        _git(other, "add", "own.txt")
+        worktree = tmp_path / "worktree"
+        _git(hook_repo, "worktree", "add", "-q", str(worktree))
+        git_dir = Path((worktree / ".git").read_text().split(":", 1)[1].strip())
+        monkeypatch.setenv("GIT_DIR", str(git_dir))
+        monkeypatch.setenv("GIT_INDEX_FILE", str(git_dir / "index"))
+
+        assert get_file_from_git(other / "app.txt") == "other\n"
+        assert is_file_tracked(other / "own.txt") is True
+
+    def test_ensure_gitignore_entries_reads_the_excludes_of_the_files_repository(
+        self, tmp_path: Path, monkeypatch
+    ):
+        """Under another repository's GIT_DIR, git check-ignore read that repository's excludes.
+
+        A key file they listed counted as ignored, so it was left out of its own repository's
+        .gitignore (#919).
+        """
+        hook_repo, other = tmp_path / "hook", tmp_path / "other"
+        for repo in (hook_repo, other):
+            repo.mkdir()
+            _git(repo, "init", "-q")
+        with (hook_repo / ".git" / "info" / "exclude").open("a") as exclude:
+            exclude.write(".env.keys\n")
+        (other / ".env.keys").write_text("DOTENV_PRIVATE_KEY=k\n")
+        monkeypatch.setenv("GIT_DIR", str(hook_repo / ".git"))
+
+        assert ensure_gitignore_entries([other / ".env.keys"]) == [".env.keys"]
+        assert (other / ".gitignore").read_text() == ".env.keys\n"
+
+    def test_hook_env_drops_the_variables_when_git_cannot_place_the_repository(
+        self, tmp_path: Path, monkeypatch
+    ):
+        """Unable to tell which repository the variables name, git runs without them."""
+        monkeypatch.setenv("GIT_INDEX_FILE", str(tmp_path / "index.lock"))
+
+        env = _hook_env(tmp_path)
+
+        assert env is not None
+        assert "GIT_INDEX_FILE" not in env
