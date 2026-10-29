@@ -288,6 +288,35 @@ def _git_index_mirror(mirror_root: Path) -> None:
         )
 
 
+def _mirror_renames(display_paths: dict[Path, Path]) -> list[tuple[str, str]]:
+    """Each form a staged mirror path is printed in, with its display path, longest first.
+
+    A scanner warning names a file as display_path shows it: absolute, or relative to the
+    cwd, resolved or not, when the mirror is under it. Longest first, so that no path is
+    rewritten through a shorter one it begins with ("a" in "a.bak").
+    """
+    cwds = {Path.cwd(), Path.cwd().resolve()}
+    return sorted(
+        {
+            (str(form), str(display))
+            for mirror, display in display_paths.items()
+            for form in (mirror, *(display_path(mirror, cwd) for cwd in cwds))
+        },
+        key=lambda rename: len(rename[0]),
+        reverse=True,
+    )
+
+
+def _remap_warnings(warnings: list[str], renames: list[tuple[str, str]]) -> list[str]:
+    """``warnings`` with each staged mirror path in them shown as its repository path."""
+    remapped = []
+    for warning in warnings:
+        for mirror, display in renames:
+            warning = warning.replace(mirror, display)
+        remapped.append(warning)
+    return remapped
+
+
 def _remap_finding_paths(
     result: AggregatedScanResult, display_paths: dict[Path, Path]
 ) -> AggregatedScanResult:
@@ -303,24 +332,7 @@ def _remap_finding_paths(
     for the same reason: the native scanner names a file too big to scan in one.
     """
 
-    # A warning names a file as display_path shows it: absolute, or relative to the
-    # cwd, resolved or not, when the mirror is under it. Longest first, so that no
-    # path is rewritten through a shorter one it begins with ("a" in "a.bak").
-    cwds = {Path.cwd(), Path.cwd().resolve()}
-    renames = sorted(
-        {
-            (str(form), str(display))
-            for mirror, display in display_paths.items()
-            for form in (mirror, *(display_path(mirror, cwd) for cwd in cwds))
-        },
-        key=lambda rename: len(rename[0]),
-        reverse=True,
-    )
-
-    def remap_warning(warning: str) -> str:
-        for mirror_str, display_str in renames:
-            warning = warning.replace(mirror_str, display_str)
-        return warning
+    renames = _mirror_renames(display_paths)
 
     def remap(finding: ScanFinding) -> ScanFinding:
         try:
@@ -344,7 +356,7 @@ def _remap_finding_paths(
             dataclasses.replace(
                 scan,
                 findings=[remap(f) for f in scan.findings],
-                warnings=[remap_warning(w) for w in scan.warnings],
+                warnings=_remap_warnings(scan.warnings, renames),
             )
             for scan in result.results
         ],
