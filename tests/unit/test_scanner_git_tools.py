@@ -927,8 +927,9 @@ class TestGitSecretsInstallerPaths:
             patch("subprocess.run") as mock_run,
         ):
             mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
-            with pytest.raises(GitSecretsInstallError, match="Installation failed"):
+            with pytest.raises(GitSecretsInstallError, match="Installation failed") as raised:
                 GitSecretsInstaller()._install_from_source()
+        assert isinstance(raised.value.__cause__, NotADirectoryError), "not ~/.local/bin's error"
 
     def test_install_from_source_reports_a_temporary_directory_it_cannot_make(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -940,8 +941,10 @@ class TestGitSecretsInstallerPaths:
             patch("subprocess.run") as mock_run,
         ):
             mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
-            with pytest.raises(GitSecretsInstallError, match="Installation failed"):
+            with pytest.raises(GitSecretsInstallError, match="Installation failed") as raised:
                 GitSecretsInstaller()._install_from_source()
+        assert isinstance(raised.value.__cause__, FileNotFoundError), "not the temp directory's"
+        mock_run.assert_not_called()  # nothing was cloned
 
     def test_install_from_source_checks_out_the_pinned_commit(self, tmp_path: Path) -> None:
         """The source install builds the commit constants.json pins, not master (#902).
