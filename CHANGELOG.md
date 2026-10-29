@@ -1,5 +1,13 @@
 # Changelog
 
+## [11.1.5](https://github.com/jainal09/envdrift/compare/v11.1.4...v11.1.5) (2026-10-29)
+
+
+### Bug Fixes
+
+* **scanner:** fail the native scan when git cannot list a directory's files ([#914](https://github.com/jainal09/envdrift/issues/914)) ([6a55ee8](https://github.com/jainal09/envdrift/commit/6a55ee83820b1edc62c09958ec4d3aec18d2e1f8))
+* **scanner:** run every scanner without the git variables a hook exported ([#918](https://github.com/jainal09/envdrift/issues/918)) ([ec4be7f](https://github.com/jainal09/envdrift/commit/ec4be7f646a6d4d36a84a8728f078f5cd04aa57c))
+
 ## [11.1.4](https://github.com/jainal09/envdrift/compare/v11.1.3...v11.1.4) (2026-10-28)
 
 
