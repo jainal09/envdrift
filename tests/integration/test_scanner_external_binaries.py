@@ -696,6 +696,37 @@ def test_trufflehog_scans_the_history_of_a_repository_whose_path_a_url_reserves(
 
 
 @requires_trufflehog
+@pytest.mark.xfail(
+    strict=False,
+    raises=AssertionError,
+    reason="trufflehog's history clone writes to a git hook's GIT_INDEX_FILE (see #916)",
+)
+def test_trufflehog_history_scan_leaves_the_index_a_hook_exported_alone(
+    git_repo, tmp_path_factory, monkeypatch
+):
+    """#916: a history scan does not write to the GIT_INDEX_FILE that git exports to a hook.
+
+    trufflehog clones the repository and checks it out, and the checkout wrote its index to the
+    inherited GIT_INDEX_FILE. In a hook that is the index git is about to commit, so the commit
+    came out empty and the staged changes were unstaged.
+    """
+    _write_secret_file(git_repo, "app.env")
+    _commit_all(git_repo)
+    hook_repo = tmp_path_factory.mktemp("hook-repo")
+    subprocess.run(["git", "init", "-q"], cwd=hook_repo, capture_output=True, check=True)
+    (hook_repo / "notes.txt").write_text("hello\n")
+    subprocess.run(["git", "add", "notes.txt"], cwd=hook_repo, capture_output=True, check=True)
+    index = hook_repo / ".git" / "index"
+    staged = index.read_bytes()
+    monkeypatch.setenv("GIT_INDEX_FILE", str(index))
+
+    result = TrufflehogScanner(auto_install=False).scan([git_repo], include_git_history=True)
+
+    assert result.error is None, f"unexpected error: {result.error}"
+    assert index.read_bytes() == staged, "the scan rewrote the index git was about to commit"
+
+
+@requires_trufflehog
 def test_guard_trufflehog_reports_a_github_token(tmp_path, integration_env):
     """``guard --trufflehog`` runs the real binary and reports its finding in ``--json``."""
     _write_secret_file(tmp_path)
