@@ -4,12 +4,14 @@ from __future__ import annotations
 
 import shutil
 import subprocess  # nosec B404
+import sys
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import pytest
 
+import envdrift
 from envdrift.cli_commands.encryption_helpers import should_skip_reencryption
 from envdrift.utils.git import without_git_location
 
@@ -323,6 +325,29 @@ def _git(cwd: Path, *args: str, index: Path | None = None) -> str:
     ).stdout
 
 
+# A pre-commit hook that re-encrypts argv[1] with smart encryption, with a backend whose decrypt
+# writes argv[2], and fails the commit unless the committed version is restored.
+SMART_ENCRYPTION_HOOK = """
+import sys
+from pathlib import Path
+from types import SimpleNamespace
+
+from envdrift.cli_commands.encryption_helpers import should_skip_reencryption
+
+
+class Backend:
+    name = "dotenvx"
+
+    def decrypt(self, path):
+        path.write_text(sys.argv[2])
+        return SimpleNamespace(success=True, message="")
+
+
+should_skip, reason = should_skip_reencryption(Path(sys.argv[1]), Backend(), enabled=True)
+sys.exit(0 if should_skip else reason)
+"""
+
+
 class TestSmartEncryptionInAGitHook:
     """A git hook's GIT_INDEX_FILE is the index git is about to commit (#915).
 
@@ -395,6 +420,55 @@ class TestSmartEncryptionInAGitHook:
         assert should_skip is True, reason
         committed = _git(repo, "rev-parse", "HEAD:.env.production").strip()
         assert _git(repo, "ls-files", "-s", index=index).split()[1] == committed
+
+    @pytest.mark.skipif(sys.platform == "win32", reason="the hook is a shell script")
+    def test_a_commit_from_an_alternate_index_holds_the_encrypted_file(self, tmp_path: Path):
+        """End to end: ``git commit -a`` from an alternate index, with a smart encryption hook.
+
+        The hook got ``GIT_INDEX_FILE=<alternate>.lock``. It was dropped, and the commit held the
+        decrypted file while the work tree held the encrypted one.
+        """
+        env_file = self._decrypted_env_file(tmp_path / "repo")
+        repo = env_file.parent
+        (repo / "app.txt").write_text("one\n")
+        _git(repo, "add", "app.txt")
+        _git(repo, "commit", "-qm", "app")
+        (repo / "app.txt").write_text("two\n")  # so that the commit is not empty
+        (tmp_path / "alternate").mkdir()
+        alternate = tmp_path / "alternate" / "index"
+        shutil.copyfile(repo / ".git" / "index", alternate)
+        script = tmp_path / "hook.py"
+        script.write_text(SMART_ENCRYPTION_HOOK)
+        hook = repo / ".git" / "hooks" / "pre-commit"
+        hook.write_text(
+            f'#!/bin/sh\nexec "{sys.executable}" "{script}" "{env_file}" \'{self._DECRYPTED}\'\n'
+        )
+        hook.chmod(0o755)
+        env = {
+            **without_git_location(),
+            "GIT_INDEX_FILE": str(alternate),
+            "PYTHONPATH": str(Path(envdrift.__file__).resolve().parents[1]),
+        }
+        config = [
+            "-c",
+            "user.name=t",
+            "-c",
+            "user.email=t@example.com",
+            "-c",
+            "commit.gpgsign=false",
+        ]
+
+        commit = subprocess.run(
+            ["git", *config, "commit", "-qam", "app two"],
+            cwd=repo,
+            env=env,
+            capture_output=True,
+            text=True,
+        )
+
+        assert commit.returncode == 0, commit.stderr
+        assert _git(repo, "show", "HEAD:app.txt") == "two\n", "not the hook's commit"
+        assert _git(repo, "show", "HEAD:.env.production") == self._ENCRYPTED
 
     def test_leaves_a_file_of_another_repository_out_of_an_alternate_index(
         self, tmp_path: Path, monkeypatch
