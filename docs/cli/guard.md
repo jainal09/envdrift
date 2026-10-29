@@ -620,9 +620,10 @@ envdrift guard --kingfisher --gitleaks
 envdrift guard ./db/users.sql --native-only
 ```
 
-Name each dump file. In a git checkout a directory scan skips gitignored files, `.env*` files
-aside, and dumps often are gitignored. The native scanner also skips any file over 10 MiB without
-a warning ([#933](https://github.com/jainal09/envdrift/issues/933)).
+Name each dump file. In a git checkout a directory scan skips the untracked files git ignores,
+apart from env files (`.env`, `.env.*` and `*.env`, but not `.env.keys`), and dumps often are such
+files. The native scanner also skips any file over 10 MiB without a warning
+([#933](https://github.com/jainal09/envdrift/issues/933)).
 
 ## Severity
 
