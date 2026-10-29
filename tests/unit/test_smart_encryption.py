@@ -372,6 +372,54 @@ class TestSmartEncryptionInAGitHook:
         committed = _git(repo, "rev-parse", "HEAD:.env.production").strip()
         assert _git(repo, "ls-files", "-s", index=index).split()[1] == committed
 
+    def test_restores_the_file_into_an_alternate_index_being_committed(
+        self, tmp_path: Path, monkeypatch
+    ):
+        """An index the user set outside the git directory is still the one being committed.
+
+        git exports it to the hook as GIT_INDEX_FILE, ``<index>.lock`` during ``git commit -a``.
+        It was dropped for lying outside the git directory: the restore wrote the default index,
+        and the commit took the decrypted file that ``-a`` had staged in the alternate one.
+        """
+        env_file = self._decrypted_env_file(tmp_path / "repo")
+        repo = env_file.parent
+        (tmp_path / "alternate").mkdir()
+        index = tmp_path / "alternate" / "index.lock"
+        shutil.copyfile(repo / ".git" / "index", index)
+        _git(repo, "add", ".env.production", index=index)
+        monkeypatch.setenv("GIT_INDEX_FILE", str(index))
+        monkeypatch.chdir(repo)  # git runs a hook in its work tree
+
+        should_skip, reason = should_skip_reencryption(env_file, self._backend(), enabled=True)
+
+        assert should_skip is True, reason
+        committed = _git(repo, "rev-parse", "HEAD:.env.production").strip()
+        assert _git(repo, "ls-files", "-s", index=index).split()[1] == committed
+
+    def test_leaves_a_file_of_another_repository_out_of_an_alternate_index(
+        self, tmp_path: Path, monkeypatch
+    ):
+        """The hook runs in its own repository, so its alternate index is not another one's."""
+        hook_repo = tmp_path / "hook"
+        hook_repo.mkdir()
+        _git(hook_repo, "init", "-q")
+        (hook_repo / ".env.production").write_text('SECRET="encrypted:hook"')
+        _git(hook_repo, "add", ".env.production")
+        _git(hook_repo, "commit", "-qm", "init")
+        (tmp_path / "alternate").mkdir()
+        index = tmp_path / "alternate" / "index.lock"
+        shutil.copyfile(hook_repo / ".git" / "index", index)
+        staged = index.read_bytes()
+        env_file = self._decrypted_env_file(tmp_path / "other")
+        monkeypatch.setenv("GIT_INDEX_FILE", str(index))
+        monkeypatch.chdir(hook_repo)
+
+        should_skip, reason = should_skip_reencryption(env_file, self._backend(), enabled=True)
+
+        assert index.read_bytes() == staged, "the restore wrote into the hook's alternate index"
+        assert should_skip is True, reason
+        assert env_file.read_text() == self._ENCRYPTED
+
     def test_leaves_a_file_of_another_repository_out_of_it(self, tmp_path: Path, monkeypatch):
         """A hook in one repository encrypts a file of another one, a submodule say.
 

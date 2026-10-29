@@ -8,6 +8,8 @@ import sys
 from pathlib import Path, PureWindowsPath
 from unittest.mock import patch
 
+import pytest
+
 from envdrift.utils.git import (
     _hook_env,
     ensure_gitignore_entries,
@@ -615,3 +617,72 @@ class TestHookGitVariables:
 
         assert env is not None
         assert "GIT_INDEX_FILE" not in env
+
+    def test_hook_env_keeps_an_alternate_index_of_the_repository_the_hook_runs_in(
+        self, tmp_path: Path, monkeypatch
+    ):
+        """An index the user set outside the git directory, which git exports to the hook too."""
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        _git(repo, "init", "-q")
+        monkeypatch.setenv("GIT_INDEX_FILE", str(tmp_path / "alternate" / "index.lock"))
+        monkeypatch.chdir(repo)
+
+        assert _hook_env(repo) is None
+
+    def test_hook_env_drops_an_alternate_index_for_another_repository(
+        self, tmp_path: Path, monkeypatch
+    ):
+        """The hook runs in its own repository: a file of another one gets that one's index."""
+        hook_repo, other = tmp_path / "hook", tmp_path / "other"
+        for repo in (hook_repo, other):
+            repo.mkdir()
+            _git(repo, "init", "-q")
+        monkeypatch.setenv("GIT_INDEX_FILE", str(tmp_path / "alternate" / "index.lock"))
+        monkeypatch.chdir(hook_repo)
+
+        env = _hook_env(other)
+
+        assert env is not None
+        assert "GIT_INDEX_FILE" not in env
+
+    def test_hook_env_keeps_an_alternate_index_of_the_git_dir_it_names(
+        self, tmp_path: Path, monkeypatch
+    ):
+        """GIT_DIR names the repository wherever the hook runs: the index is its alternate one."""
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        _git(repo, "init", "-q")
+        monkeypatch.setenv("GIT_DIR", str(repo / ".git"))
+        monkeypatch.setenv("GIT_INDEX_FILE", str(tmp_path / "alternate" / "index"))
+        monkeypatch.chdir(tmp_path)
+
+        assert _hook_env(repo) is None
+
+    def test_hook_env_keeps_an_alternate_index_run_outside_every_repository(
+        self, tmp_path: Path, monkeypatch
+    ):
+        """Nothing ties the index to another repository, so git uses it, as it would here."""
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        _git(repo, "init", "-q")
+        (tmp_path / "outside").mkdir()
+        monkeypatch.setenv("GIT_INDEX_FILE", str(tmp_path / "alternate" / "index"))
+        monkeypatch.chdir(tmp_path / "outside")
+
+        assert _hook_env(repo) is None
+
+    @pytest.mark.skipif(sys.platform == "win32", reason="Windows cannot remove a working directory")
+    def test_hook_env_keeps_an_alternate_index_when_the_working_directory_is_gone(
+        self, tmp_path: Path, monkeypatch
+    ):
+        """No working directory names a repository either."""
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        _git(repo, "init", "-q")
+        (tmp_path / "gone").mkdir()
+        monkeypatch.setenv("GIT_INDEX_FILE", str(tmp_path / "alternate" / "index"))
+        monkeypatch.chdir(tmp_path / "gone")
+        (tmp_path / "gone").rmdir()
+
+        assert _hook_env(repo) is None

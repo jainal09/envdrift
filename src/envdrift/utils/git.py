@@ -59,10 +59,28 @@ def _hook_env(git_root: Path) -> dict[str, str] | None:
     if not exported:
         return None
     env = without_git_location()
+    dirs = _git_dirs(git_root, env)
+    if dirs is None:
+        return env
+    git_dir, common_dir = dirs
+    own = {"GIT_DIR": git_dir, "GIT_COMMON_DIR": common_dir, "GIT_WORK_TREE": git_root.resolve()}
+    for name, value in exported.items():
+        # git reads a relative value against its working directory, git_root here.
+        path = (git_root / value).resolve()
+        if name == "GIT_INDEX_FILE":
+            if not _index_of(path, git_dir, named="GIT_DIR" in exported, env=env):
+                return env
+        elif path != own[name]:
+            return env
+    return None
+
+
+def _git_dirs(cwd: Path, env: Mapping[str, str]) -> tuple[Path, Path] | None:
+    """The git directory and the common git directory of the repository at ``cwd``, if any."""
     try:
         result = run_tool(
             ["git", "rev-parse", "--absolute-git-dir", "--git-common-dir"],
-            cwd=str(git_root),
+            cwd=str(cwd),
             env=env,
             capture_output=True,
             text=True,
@@ -71,25 +89,41 @@ def _hook_env(git_root: Path) -> dict[str, str] | None:
             timeout=10,
         )
     except (subprocess.TimeoutExpired, FileNotFoundError):
-        return env
+        return None
     lines = result.stdout.splitlines()
     if result.returncode != 0 or len(lines) != 2:
-        return env
-    git_dir = Path(lines[0]).resolve()
-    own = {
-        "GIT_DIR": git_dir,
-        "GIT_COMMON_DIR": (git_root / lines[1]).resolve(),
-        "GIT_WORK_TREE": git_root.resolve(),
-        # git keeps the index it commits from in the git directory: index.lock during
-        # ``git commit -a``, next-index-<pid>.lock during ``git commit <path>``.
-        "GIT_INDEX_FILE": git_dir,
-    }
-    for name, value in exported.items():
-        # git reads a relative value against its working directory, git_root here.
-        path = (git_root / value).resolve()
-        if (path.parent if name == "GIT_INDEX_FILE" else path) != own[name]:
-            return env
-    return None
+        return None
+    return Path(lines[0]).resolve(), (cwd / lines[1]).resolve()
+
+
+def _index_of(index: Path, git_dir: Path, *, named: bool, env: Mapping[str, str]) -> bool:
+    """Whether a hook's GIT_INDEX_FILE, ``index``, is an index of the repository at ``git_dir``.
+
+    git keeps the index it commits from in the git directory: index.lock during ``git commit
+    -a``, next-index-<pid>.lock during ``git commit <path>``. An index in another git directory
+    is that repository's. One outside every git directory is an alternate index that the user
+    set, which git exports as GIT_INDEX_FILE too: it is the hook's repository's, the one GIT_DIR
+    names (``named``), or else the one the hook runs in, this process's working directory.
+    """
+    if index.parent == git_dir:
+        return True
+    if _is_git_dir(index.parent):
+        return False
+    if named:
+        return True
+    try:
+        hook_dirs = _git_dirs(Path.cwd(), env)
+    except OSError:  # this process's working directory is gone
+        return True
+    # Run outside every repository, nothing ties the index to another one: git would use it
+    return hook_dirs is None or hook_dirs[0] == git_dir
+
+
+def _is_git_dir(path: Path) -> bool:
+    """Whether ``path`` is a git directory: a repository's, or a linked worktree's."""
+    return (path / "HEAD").is_file() and (
+        (path / "objects").is_dir() or (path / "commondir").is_file()
+    )
 
 
 def is_git_repo(path: Path) -> bool:

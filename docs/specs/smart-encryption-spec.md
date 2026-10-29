@@ -53,7 +53,10 @@ git exports `GIT_DIR`, `GIT_INDEX_FILE` and the like to its hooks. During
 file of the hook's own repository smart encryption restores the file into that
 index, and the commit takes the encrypted version. For a file of another
 repository, a submodule say, every step runs in that file's own repository and
-index, whatever the hook exported.
+index, whatever the hook exported. An alternate index that you set with
+`GIT_INDEX_FILE`, outside the git directory, which git exports to the hook too,
+is taken for an index of the repository that `GIT_DIR` names or, without it, of
+the repository the hook runs in.
 
 ### Implementation Details
 
