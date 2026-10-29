@@ -229,6 +229,14 @@ class TestPlaintextAfterAnEncryptedValue:
 
         assert NativeScanner(check_entropy=True).scan([path]).findings == []
 
+    def test_a_key_inside_the_ciphertext_is_not_reported(self, tmp_path: Path):
+        """The skipped span runs to the end of the encrypted value, whatever it holds."""
+        path = _write(
+            tmp_path / ".env", f'API_TOKEN="encrypted:{AWS_KEY}/{DOTENVX_CIPHERTEXT[10:]}"\n'
+        )
+
+        assert NativeScanner(check_entropy=True).scan([path]).findings == []
+
     @pytest.mark.parametrize(
         "value", [f'API_TOKEN="{DOTENVX_CIPHERTEXT}"', SOPS_VALUE], ids=["dotenvx", "sops"]
     )
