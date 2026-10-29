@@ -379,18 +379,7 @@ class GitSecretsInstaller:
                     check=True,
                 )
 
-                git_secrets_path = target_dir / "git-secrets"
-                if git_secrets_path.exists():
-                    _make_runnable(git_secrets_path)
-                    self.progress(f"Installed to {git_secrets_path}")
-                    return git_secrets_path
-
-                # Try system-wide check
-                system_path = shutil.which("git-secrets")
-                if system_path:
-                    return Path(system_path)
-
-                raise GitSecretsInstallError("git-secrets not found after installation")
+                return self._installed_script(target_dir)
 
             except subprocess.CalledProcessError as e:
                 raise GitSecretsInstallError(f"Installation failed: {e.stderr or e.stdout}") from e
@@ -400,6 +389,21 @@ class GitSecretsInstaller:
                 # A directory it cannot make, a mode it may not change: the scanner's auto-install
                 # reports an install error as such, where an OSError escaped it
                 raise GitSecretsInstallError(f"Installation failed: {e}") from e
+
+    def _installed_script(self, target_dir: Path) -> Path:
+        """The git-secrets ``make install`` put in target_dir, made runnable, or else on PATH."""
+        git_secrets_path = target_dir / "git-secrets"
+        if git_secrets_path.exists():
+            _make_runnable(git_secrets_path)
+            self.progress(f"Installed to {git_secrets_path}")
+            return git_secrets_path
+
+        # Try system-wide check
+        system_path = shutil.which("git-secrets")
+        if system_path:
+            return Path(system_path)
+
+        raise GitSecretsInstallError("git-secrets not found after installation")
 
     def _clone_at(self, commit: str, repo_path: Path) -> None:
         """Clone git-secrets to repo_path and check out commit there."""
