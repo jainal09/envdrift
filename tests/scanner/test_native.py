@@ -358,14 +358,23 @@ class TestNativeScannerInternals:
         assert result.exit_code == 5
         assert [r.error is not None for r in result.results] == [True]
 
-    @pytest.mark.parametrize("variable", ["GIT_DIR", "GIT_INDEX_FILE"])
+    @pytest.mark.parametrize(
+        ("variable", "location"),
+        [
+            ("GIT_DIR", ".git"),
+            ("GIT_INDEX_FILE", ".git/index"),
+            ("GIT_WORK_TREE", "."),
+            ("GIT_COMMON_DIR", ".git"),
+        ],
+    )
     def test_git_lists_the_repository_the_directory_is_in(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, variable: str
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, variable: str, location: str
     ):
-        """GIT_DIR or GIT_INDEX_FILE, which a git hook exports, does not change what git lists.
+        """The git location variables, which a git hook exports, do not change what git lists.
 
-        Inherited from a hook in another repository, they made git list that repository's index.
-        A tracked file that .gitignore matches then went unscanned, with no error.
+        Inherited from a hook in another repository, they made git read that repository's index,
+        work tree or exclude file. A tracked file that .gitignore matches, or an untracked file
+        that only the other repository excludes, then went unscanned, with no error.
         """
         import shutil
 
@@ -378,23 +387,26 @@ class TestNativeScannerInternals:
         (other / "readme.txt").write_text("hello\n")
         _git(other, "add", "readme.txt")
         _git(other, "commit", "-qm", "init")
+        info = other / ".git" / "info"
+        info.mkdir(exist_ok=True)
+        with (info / "exclude").open("a") as exclude:
+            exclude.write("untracked.txt\n")
         scanned = tmp_path / "scanned"
         scanned.mkdir()
         _git(scanned, "init", "-q")
         (scanned / ".gitignore").write_text("secrets.txt\n")
-        (scanned / "secrets.txt").write_text(
-            "GITHUB_TOKEN=ghp_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\n"
-        )
+        (scanned / "secrets.txt").write_text("GITHUB_TOKEN=ghp_" + "x" * 36 + "\n")
+        (scanned / "untracked.txt").write_text("GITHUB_TOKEN=ghp_" + "y" * 36 + "\n")
         _git(scanned, "add", ".gitignore")
         _git(scanned, "add", "--force", "secrets.txt")
         _git(scanned, "commit", "-qm", "init")
-        location = other / ".git" if variable == "GIT_DIR" else other / ".git" / "index"
-        monkeypatch.setenv(variable, str(location))
+        monkeypatch.setenv(variable, str(other / location))
 
         result = NativeScanner().scan([scanned])
 
         assert result.error is None
-        assert "secrets.txt" in {finding.file_path.name for finding in result.findings}
+        found = {finding.file_path.name for finding in result.findings}
+        assert {"secrets.txt", "untracked.txt"} <= found
 
     def test_git_lists_a_subdirectory_of_a_linked_worktree_from_its_hook(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch

@@ -906,6 +906,7 @@ def test_skip_gitignored_survives_non_utf8_locale(git_repo: Path) -> None:
 
 @pytest.mark.xfail(
     strict=False,
+    raises=AssertionError,
     reason="--skip-gitignored asks git check-ignore under a git hook's GIT_INDEX_FILE (see #915)",
 )
 def test_skip_gitignored_keeps_a_tracked_file_whatever_index_a_hook_exported(
