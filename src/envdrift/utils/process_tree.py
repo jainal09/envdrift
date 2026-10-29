@@ -24,6 +24,10 @@ _MAX_DEPTH = 64
 # scanners that time out 5 seconds to be killed: the processes the walk has stopped must be
 # killed within them, or guard could exit first and leave them stopped.
 _LISTING_SECONDS = 2.0
+# How reading another process's /proc files fails once it has exited, or when it is not this
+# user's: it is passed over. Another error, such as EMFILE, is this process's and is raised,
+# since passing over every process it hits would leave a running one out of the kill unseen.
+_GONE_OR_NOT_OURS = (FileNotFoundError, ProcessLookupError, PermissionError)
 
 
 def kill_process_tree(process: subprocess.Popen) -> None:
@@ -139,7 +143,7 @@ def _holds(fd_dir: Path, pipes: set[str], listing_ends: float) -> bool:
     try:
         with os.scandir(fd_dir) as fds:
             return any(_link(fd.path) in pipes for fd in _until(fds, listing_ends))
-    except OSError:  # gone, or not this user's
+    except _GONE_OR_NOT_OURS:
         return False
 
 
@@ -155,7 +159,7 @@ def _link(path: str) -> str | None:
     """Where the symbolic link ``path`` points, or None once it is gone."""
     try:
         return str(Path(path).readlink())
-    except OSError:  # closed since
+    except _GONE_OR_NOT_OURS:  # closed since
         return None
 
 
@@ -189,7 +193,7 @@ def _proc_table() -> list[tuple[int, int]]:
     table = []
     for entry in Path("/proc").iterdir():
         if entry.name.isdigit():
-            with contextlib.suppress(OSError, ValueError, IndexError):
+            with contextlib.suppress(*_GONE_OR_NOT_OURS, ValueError, IndexError):
                 table.append((int(entry.name), _ppid_from_stat((entry / "stat").read_bytes())))
     return table
 

@@ -403,6 +403,85 @@ def test_a_process_with_many_files_is_read_only_until_the_time_for_listing(
     assert 0 < len(read) < 200, f"read {len(read)} of the 200 entries"
 
 
+# Looks for the process that holds a pipe twice: as it is, and once it may open only the one file
+# that listing /proc takes, so that reading the holder's file descriptors fails with EMFILE.
+OUT_OF_FILES = """
+import os, resource, subprocess, sys, time
+
+from envdrift.utils import process_tree
+
+sleep = [sys.executable, "-c", "import time; time.sleep(60)"]
+holder = subprocess.Popen(sleep, stdout=subprocess.PIPE)
+try:
+    pipes = process_tree._output_pipes(holder)
+    print(process_tree._pipe_holders(pipes, time.monotonic() + 30) == [holder.pid])
+    lowest = os.open(os.devnull, os.O_RDONLY)
+    os.close(lowest)
+    soft, hard = resource.getrlimit(resource.RLIMIT_NOFILE)
+    resource.setrlimit(resource.RLIMIT_NOFILE, (lowest + 1, hard))
+    try:
+        print(process_tree._pipe_holders(pipes, time.monotonic() + 30))
+    except OSError as error:
+        print(error.errno)
+    finally:
+        resource.setrlimit(resource.RLIMIT_NOFILE, (soft, hard))
+finally:
+    holder.kill()
+    holder.wait()
+"""
+
+
+@pytest.mark.skipif(
+    not Path("/proc/self/fd").is_dir(), reason="Linux lists a process's files in /proc"
+)
+def test_a_search_that_runs_out_of_files_fails_loud() -> None:
+    """Out of file descriptors, the search for a tool's output raises EMFILE, not "no holder".
+
+    It took this process's EMFILE for a holder that was gone: it passed over every process and
+    left the holder running, and nothing said so. Raised, the error is logged by the runner,
+    which still raises the timeout (``test_a_failed_listing_does_not_replace_the_timeout``).
+    """
+    probe = subprocess.run(
+        [sys.executable, "-c", OUT_OF_FILES],
+        capture_output=True,
+        text=True,
+        timeout=60,
+        check=False,
+    )
+    assert probe.stdout.split() == ["True", str(errno.EMFILE)], probe.stdout + probe.stderr
+
+
+@pytest.mark.skipif(not Path("/proc/self/stat").is_file(), reason="Linux lists processes in /proc")
+def test_the_listing_passes_over_a_process_that_is_gone_but_not_its_own_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A process that exits while /proc is listed is passed over; an EMFILE of this one's is not.
+
+    Passed over as gone, every process it hit was left out of the walk, and ran on.
+    """
+    read_bytes = Path.read_bytes
+    errors: list[OSError] = [ProcessLookupError(errno.ESRCH, os.strerror(errno.ESRCH))]
+
+    def read_failing_for_this_process(path: Path) -> bytes:
+        if path.name == "stat" and path.parent.name == str(os.getpid()):
+            raise errors[-1]
+        return read_bytes(path)
+
+    monkeypatch.setattr(Path, "read_bytes", read_failing_for_this_process)
+    child = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"])
+    try:
+        table = dict(process_tree._proc_table())
+        assert os.getpid() not in table
+        assert table.get(child.pid) == os.getpid(), "the processes not gone were passed over too"
+        errors.append(OSError(errno.EMFILE, os.strerror(errno.EMFILE)))
+        with pytest.raises(OSError) as raised:
+            process_tree._proc_table()
+        assert raised.value.errno == errno.EMFILE
+    finally:
+        child.kill()
+        child.wait()
+
+
 @pytest.mark.skipif(sys.platform == "win32", reason="taskkill /T walks the tree on Windows")
 def test_a_holder_it_cannot_stop_is_looked_for_once(monkeypatch: pytest.MonkeyPatch) -> None:
     """One that is gone, or not this user's, ends the search instead of holding the kill up."""
