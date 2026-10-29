@@ -10,8 +10,11 @@ import shutil
 import subprocess
 
 import pytest
+from tests.severity_policy import class_samples
 
+from envdrift.scanner.base import FindingSeverity
 from envdrift.scanner.kingfisher import KingfisherScanner
+from envdrift.scanner.native import NativeScanner
 
 # Real-binary tests: integration lane only; skip all if Kingfisher is not installed
 pytestmark = [
@@ -21,6 +24,18 @@ pytestmark = [
         reason="Kingfisher not installed (install with: brew install kingfisher)",
     ),
 ]
+
+
+def _rsa_private_key_pem() -> bytes:
+    """A whole RSA private key, made for the test: GitHub's push protection rejects a real one."""
+    rsa = pytest.importorskip("cryptography.hazmat.primitives.asymmetric.rsa")
+    serialization = pytest.importorskip("cryptography.hazmat.primitives.serialization")
+    key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    return key.private_bytes(
+        serialization.Encoding.PEM,
+        serialization.PrivateFormat.TraditionalOpenSSL,
+        serialization.NoEncryption(),
+    )
 
 
 class TestKingfisherIntegration:
@@ -64,12 +79,11 @@ class TestKingfisherIntegration:
         # The key thing is it runs without error
 
     def test_scan_detects_private_key(self, tmp_path):
-        """Scanner detects private keys."""
-        test_file = tmp_path / "key.pem"
-        test_file.write_text("""-----BEGIN RSA PRIVATE KEY-----
-MIIEpAIBAAKCAQEA0Z3VS5JJcds3xfn/ygWyF8PbnGyhPtrXk5oPRxE=
------END RSA PRIVATE KEY-----
-""")
+        """A whole private key is found, and graded CRITICAL, as private keys are (#928).
+
+        The key was cut down to one line of base64, which Kingfisher 2.x does not take for a key.
+        """
+        (tmp_path / "key.pem").write_bytes(_rsa_private_key_pem())
 
         scanner = KingfisherScanner(
             auto_install=False,
@@ -79,22 +93,19 @@ MIIEpAIBAAKCAQEA0Z3VS5JJcds3xfn/ygWyF8PbnGyhPtrXk5oPRxE=
         result = scanner.scan([tmp_path])
 
         assert result.error is None
-        # Check if private key was detected
-        key_findings = [
-            f
-            for f in result.findings
-            if "private" in f.rule_description.lower() or "key" in f.rule_description.lower()
-        ]
-        assert len(key_findings) >= 1
+        key_findings = [f for f in result.findings if "private-key" in f.rule_id]
+        assert key_findings, result.findings
+        assert {f.file_path.name for f in key_findings} == {"key.pem"}
+        assert {f.severity for f in key_findings} == {FindingSeverity.CRITICAL}
 
-    def test_scan_detects_bcrypt_hash(self, tmp_path):
-        """Scanner detects bcrypt password hashes."""
-        test_file = tmp_path / "dump.sql"
-        test_file.write_text("""
-INSERT INTO users (username, password_hash) VALUES
-('admin', '$2y$10$abcdefghijklmnopqrstuv'),
-('user1', '$2a$12$R9h/cIPz0gi.URNNX3kh2OPST9/PgBkqquzi.Ss7KIUgO2t0jWMUW');
-""")
+    def test_password_hashes_are_left_to_the_native_scanner(self, tmp_path):
+        """Kingfisher 2.x has no rule for password hashes: the native scanner finds them (#928).
+
+        The docs said Kingfisher found bcrypt and sha512crypt hashes, as 1.x did. Should a release
+        find them again, this fails, and the docs can say so again.
+        """
+        for name, content in class_samples()["password-hash"].items():
+            (tmp_path / name).write_text(content)
 
         scanner = KingfisherScanner(
             auto_install=False,
@@ -104,14 +115,9 @@ INSERT INTO users (username, password_hash) VALUES
         result = scanner.scan([tmp_path])
 
         assert result.error is None
-        # Check if bcrypt hash was detected
-        hash_findings = [
-            f
-            for f in result.findings
-            if "bcrypt" in f.rule_description.lower() or "hash" in f.rule_description.lower()
-        ]
-        # Kingfisher should detect bcrypt hashes
-        assert len(hash_findings) >= 1
+        assert result.findings == []
+        native = NativeScanner().scan([tmp_path])
+        assert {f.rule_id for f in native.findings} == {"bcrypt-hash", "sha512crypt-hash"}
 
     def test_scan_detects_netrc_credentials(self, tmp_path):
         """Scanner detects .netrc credentials."""
@@ -177,26 +183,6 @@ password ghp_abcdefghijklmnopqrstuvwxyz1234567890
         assert result.scanner_name == "kingfisher"
         for finding in result.findings:
             assert finding.scanner == "kingfisher"
-
-    def test_finding_severity_mapping(self, tmp_path):
-        """Findings should have appropriate severity levels."""
-        # Create file with bcrypt hash (should be CRITICAL)
-        test_file = tmp_path / "users.sql"
-        test_file.write_text("password='$2y$10$abcdefghijklmnopqrstuv'")
-
-        scanner = KingfisherScanner(
-            auto_install=False,
-            validate_secrets=False,
-            confidence="low",
-        )
-        result = scanner.scan([tmp_path])
-
-        # Any bcrypt findings should be CRITICAL
-        from envdrift.scanner.base import FindingSeverity
-
-        bcrypt_findings = [f for f in result.findings if "bcrypt" in f.rule_description.lower()]
-        for f in bcrypt_findings:
-            assert f.severity == FindingSeverity.CRITICAL
 
 
 class TestKingfisherWithGuard:
