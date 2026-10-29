@@ -43,16 +43,16 @@ subprocess.run([sys.executable, sys.argv[1], sys.argv[2]])
 """
 
 
-def test_a_tool_that_times_out_is_killed_with_the_processes_it_started(tmp_path: Path) -> None:
-    """subprocess.run would kill the tool and leave its child running (#911)."""
+def _time_out_with_child(tmp_path: Path, child: str) -> None:
+    """Time ``PARENT`` out while its child runs the code ``child``: the child must end with it."""
     beat = tmp_path / "beat"
-    heartbeat = tmp_path / "heartbeat.py"
-    heartbeat.write_text(HEARTBEAT)
+    script = tmp_path / "child.py"
+    script.write_text(child)
 
     try:
         with pytest.raises(subprocess.TimeoutExpired):
             run_tool(
-                [sys.executable, "-c", PARENT, str(heartbeat), str(beat)],
+                [sys.executable, "-c", PARENT, str(script), str(beat)],
                 capture_output=True,
                 timeout=CHILD_TIMEOUT_SECONDS,
             )
@@ -61,6 +61,11 @@ def test_a_tool_that_times_out_is_killed_with_the_processes_it_started(tmp_path:
         assert not _still_beating(beat), "the tool's child still runs after the tool timed out"
     finally:
         _stop(beat)
+
+
+def test_a_tool_that_times_out_is_killed_with_the_processes_it_started(tmp_path: Path) -> None:
+    """subprocess.run would kill the tool and leave its child running (#911)."""
+    _time_out_with_child(tmp_path, HEARTBEAT)
 
 
 # Names the process with bytes that are not UTF-8, as the kernel names one whose executable has a
@@ -77,22 +82,7 @@ Path("/proc/self/comm").write_bytes(b"tool-\\xe2\\x82")
 )
 def test_a_child_whose_name_is_not_utf8_is_killed_too(tmp_path: Path) -> None:
     """Its /proc/<pid>/stat did not decode as text, which left it out of the tree."""
-    beat = tmp_path / "beat"
-    child = tmp_path / "child.py"
-    child.write_text(RENAMED + HEARTBEAT)
-
-    try:
-        with pytest.raises(subprocess.TimeoutExpired):
-            run_tool(
-                [sys.executable, "-c", PARENT, str(child), str(beat)],
-                capture_output=True,
-                timeout=CHILD_TIMEOUT_SECONDS,
-            )
-
-        assert beat.exists(), "the tool's child never started"
-        assert not _still_beating(beat), "the tool's child still runs after the tool timed out"
-    finally:
-        _stop(beat)
+    _time_out_with_child(tmp_path, RENAMED + HEARTBEAT)
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="taskkill /T walks the tree on Windows")
