@@ -63,10 +63,11 @@ These are the conventions we actually enforce — follow them on every change.
 ## External binary versions — never hardcode
 
 - Pinned versions for the external tools (`dotenvx`, `sops`, `gitleaks`,
-  `trufflehog`, `talisman`, `trivy`, `infisical`, `detect-secrets`) live in
-  **`src/envdrift/constants.json`** and are bumped by **Renovate**
+  `trufflehog`, `talisman`, `trivy`, `infisical`, `kingfisher`, `detect-secrets`)
+  live in **`src/envdrift/constants.json`** and are bumped by **Renovate**
   (`renovate.json` custom managers). Most also carry a download-URL template
-  there; `detect-secrets` is installed via pip (Renovate's `pypi` datasource).
+  there; `detect-secrets` is installed via pip (Renovate's `pypi` datasource),
+  and only CI installs the pinned `kingfisher` (envdrift installs it with Homebrew).
   Add a Renovate manager when you add a tool.
 - CI install steps and source code read the version/URL from `constants.json`
   (load it with `json` and pull the `<tool>_version` / `<tool>_download_urls`

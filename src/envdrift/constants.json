@@ -67,5 +67,13 @@
     "infisical_checksums_urls": {
         "darwin_amd64": "https://github.com/Infisical/cli/releases/download/v{version}/checksums-darwin.txt",
         "darwin_arm64": "https://github.com/Infisical/cli/releases/download/v{version}/checksums-darwin.txt"
+    },
+    "kingfisher_version": "2.15.0",
+    "kingfisher_download_urls": {
+        "darwin_amd64": "https://github.com/mongodb/kingfisher/releases/download/v{version}/kingfisher-darwin-x64.tgz",
+        "darwin_arm64": "https://github.com/mongodb/kingfisher/releases/download/v{version}/kingfisher-darwin-arm64.tgz",
+        "linux_amd64": "https://github.com/mongodb/kingfisher/releases/download/v{version}/kingfisher-linux-x64.tgz",
+        "linux_arm64": "https://github.com/mongodb/kingfisher/releases/download/v{version}/kingfisher-linux-arm64.tgz",
+        "windows_amd64": "https://github.com/mongodb/kingfisher/releases/download/v{version}/kingfisher-windows-x64.zip"
     }
 }
