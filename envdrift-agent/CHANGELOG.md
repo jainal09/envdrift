@@ -5,6 +5,13 @@ All notable changes to the EnvDrift Agent will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.7](https://github.com/jainal09/envdrift/compare/agent-v1.1.6...agent-v1.1.7) (2026-10-29)
+
+
+### Bug Fixes
+
+* **deps:** update module github.com/gen2brain/beeep to v0.11.3 ([#892](https://github.com/jainal09/envdrift/issues/892)) ([9c8c9bc](https://github.com/jainal09/envdrift/commit/9c8c9bc3f96f57944ed12436ad8ab3edc433ea21))
+
 ## [1.1.6](https://github.com/jainal09/envdrift/compare/agent-v1.1.5...agent-v1.1.6) (2026-10-10)
 
 
