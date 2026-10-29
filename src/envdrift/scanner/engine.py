@@ -44,6 +44,7 @@ from envdrift.scanner.native import (
 )
 from envdrift.scanner.patterns import hash_secret
 from envdrift.utils.deadline import ScannerDeadline, scanner_deadline
+from envdrift.utils.git import without_git_location
 
 if TYPE_CHECKING:
     pass
@@ -1149,6 +1150,9 @@ class ScanEngine:
                     capture_output=True,
                     timeout=30,
                     cwd=str(root),
+                    # check-ignore takes "tracked" from the index of root's repository, not a
+                    # git hook's (#915).
+                    env=without_git_location(),
                 )
                 if result.returncode not in (0, 1):
                     logger.warning(
@@ -1232,6 +1236,7 @@ class ScanEngine:
                 errors="surrogateescape",
                 timeout=30,
                 cwd=str(git_root),
+                env=without_git_location(),
             )
             # git check-ignore exits 0 (some paths ignored) or 1 (none ignored) on
             # success; anything else (e.g. 128) is an error reported on stderr with

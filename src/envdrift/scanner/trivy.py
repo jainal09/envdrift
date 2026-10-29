@@ -46,6 +46,7 @@ from envdrift.scanner.platform_utils import (
     safe_extract_zip,
 )
 from envdrift.utils.deadline import run_tool
+from envdrift.utils.git import without_git_location
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -502,6 +503,8 @@ class TrivyScanner(ScannerBackend):
                     encoding="utf-8",
                     errors="replace",
                     timeout=300,  # 5 minute timeout
+                    # Not a git hook's repository or index (#915).
+                    env=without_git_location(),
                 )
 
                 # Check for non-zero exit code indicating an error

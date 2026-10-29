@@ -36,6 +36,7 @@ from envdrift.scanner.base import (
 from envdrift.scanner.patterns import hash_secret, redact_secret
 from envdrift.scanner.rule_severity import rule_severity
 from envdrift.utils.deadline import run_tool
+from envdrift.utils.git import without_git_location
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -495,6 +496,8 @@ class KingfisherScanner(ScannerBackend):
                     encoding="utf-8",
                     errors="replace",
                     timeout=600,  # 10 minute timeout for thorough scanning
+                    # Its git reads the scanned repository, not a git hook's (#915).
+                    env=without_git_location(),
                 )
 
                 # Exit codes: 0 = no findings, 200 = findings detected, others = error

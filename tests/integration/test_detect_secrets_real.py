@@ -160,11 +160,6 @@ def test_scan_inside_a_git_repo_covers_the_tracked_files_only(git_repo: Path):
     assert [Path(f.file_path).name for f in result.findings] == ["tracked.cfg"]
 
 
-@pytest.mark.xfail(
-    strict=False,
-    raises=AssertionError,
-    reason="detect-secrets lists the files of a git hook's GIT_INDEX_FILE (see #915)",
-)
 def test_scan_lists_the_repository_whatever_index_a_hook_exported(
     git_repo: Path, tmp_path_factory: pytest.TempPathFactory, monkeypatch: pytest.MonkeyPatch
 ):

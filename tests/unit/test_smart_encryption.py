@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import os
+import shutil
 import subprocess  # nosec B404
 from pathlib import Path
 from types import SimpleNamespace
@@ -306,3 +308,84 @@ class TestShouldSkipReencryption:
 
         assert should_skip is False
         assert "not encrypted" in reason
+
+
+def _git(cwd: Path, *args: str, index: Path | None = None) -> str:
+    """Run git in ``cwd``, on the index file ``index`` when one is given."""
+    env = {key: value for key, value in os.environ.items() if key != "GIT_INDEX_FILE"}
+    if index is not None:
+        env["GIT_INDEX_FILE"] = str(index)
+    config = ["-c", "user.name=t", "-c", "user.email=t@example.com", "-c", "commit.gpgsign=false"]
+    return subprocess.run(
+        ["git", *config, *args], cwd=cwd, env=env, check=True, capture_output=True, text=True
+    ).stdout
+
+
+class TestSmartEncryptionInAGitHook:
+    """A git hook's GIT_INDEX_FILE is the index git is about to commit (#915).
+
+    Smart encryption restores an unchanged file into that index, so the commit holds the
+    encrypted version. A file of another repository must never land in it.
+    """
+
+    _ENCRYPTED = 'SECRET="encrypted:abc123xyz"'
+    _DECRYPTED = "SECRET=actual_secret_value"
+
+    def _decrypted_env_file(self, repo: Path) -> Path:
+        """``repo`` as a repository that commits an encrypted ``.env.production``, now decrypted."""
+        repo.mkdir()
+        _git(repo, "init", "-q")
+        env_file = repo / ".env.production"
+        env_file.write_text(self._ENCRYPTED)
+        _git(repo, "add", ".env.production")
+        _git(repo, "commit", "-qm", "init")
+        env_file.write_text(self._DECRYPTED)
+        return env_file
+
+    def _backend(self) -> MagicMock:
+        """A dotenvx backend whose decrypt gives back the decrypted file."""
+        backend = MagicMock()
+        backend.name = "dotenvx"
+
+        def decrypt(path: Path) -> SimpleNamespace:
+            path.write_text(self._DECRYPTED)
+            return SimpleNamespace(success=True, message="")
+
+        backend.decrypt = decrypt
+        return backend
+
+    def test_restores_the_file_into_the_index_being_committed(self, tmp_path: Path, monkeypatch):
+        """``git commit -a`` staged the decrypted file in the hook's index; the restore undoes it."""
+        env_file = self._decrypted_env_file(tmp_path / "repo")
+        repo = env_file.parent
+        index = repo / ".git" / "index.lock"
+        shutil.copyfile(repo / ".git" / "index", index)
+        _git(repo, "add", ".env.production", index=index)
+        monkeypatch.setenv("GIT_INDEX_FILE", str(index))
+
+        should_skip, reason = should_skip_reencryption(env_file, self._backend(), enabled=True)
+
+        assert should_skip is True, reason
+        assert env_file.read_text() == self._ENCRYPTED
+        committed = _git(repo, "rev-parse", "HEAD:.env.production").strip()
+        assert _git(repo, "ls-files", "-s", index=index).split()[1] == committed
+
+    def test_leaves_a_file_of_another_repository_out_of_it(self, tmp_path: Path, monkeypatch):
+        """A hook in one repository encrypts a file of another one, a submodule say.
+
+        is_file_tracked asks the hook's index, the one the restore writes, so the restore never
+        puts the other repository's file there.
+        """
+        hook_repo = tmp_path / "hook"
+        hook_repo.mkdir()
+        _git(hook_repo, "init", "-q")
+        (hook_repo / "app.txt").write_text("hello\n")
+        _git(hook_repo, "add", "app.txt")
+        index = hook_repo / ".git" / "index"
+        staged = index.read_bytes()
+        env_file = self._decrypted_env_file(tmp_path / "other")
+        monkeypatch.setenv("GIT_INDEX_FILE", str(index))
+
+        should_skip_reencryption(env_file, self._backend(), enabled=True)
+
+        assert index.read_bytes() == staged

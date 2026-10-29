@@ -904,11 +904,6 @@ def test_skip_gitignored_survives_non_utf8_locale(git_repo: Path) -> None:
     assert result.returncode == 1, f"expected 1, got {result.returncode}\n{result.stdout}"
 
 
-@pytest.mark.xfail(
-    strict=False,
-    raises=AssertionError,
-    reason="--skip-gitignored asks git check-ignore under a git hook's GIT_INDEX_FILE (see #915)",
-)
 def test_skip_gitignored_keeps_a_tracked_file_whatever_index_a_hook_exported(
     git_repo: Path, tmp_path_factory: pytest.TempPathFactory
 ) -> None:
@@ -936,6 +931,45 @@ def test_skip_gitignored_keeps_a_tracked_file_whatever_index_a_hook_exported(
     files = [Path(f["file_path"]).name for f in _guard_json(result)["findings"]]
     assert "leak.py" in files, files
     assert result.returncode == 1, f"expected 1, got {result.returncode}\n{result.stdout}"
+
+
+def test_combined_file_check_flags_a_tracked_file_whatever_index_a_hook_exported(
+    git_repo: Path, tmp_path_factory: pytest.TempPathFactory
+) -> None:
+    """#915: a combined file the repository tracks is flagged, though .gitignore matches it.
+
+    check-ignore never reports a tracked file as ignored, but it took "tracked" from the
+    GIT_INDEX_FILE that git exports to a hook, so a committed combined file read as protected.
+    """
+    (git_repo / ".gitignore").write_text("prod.combined.env\n")
+    (git_repo / "envdrift.toml").write_text(
+        "[partial_encryption]\n"
+        "enabled = true\n\n"
+        "[[partial_encryption.environments]]\n"
+        'name = "production"\n'
+        'clear_file = ".env.production.clear"\n'
+        'secret_file = ".env.production.secret"\n'
+        'combined_file = "prod.combined.env"\n'
+    )
+    (git_repo / "prod.combined.env").write_text("APP_NAME=demo\n")
+    _run_git(["add", ".gitignore"], cwd=git_repo)
+    _run_git(["add", "--force", "prod.combined.env"], cwd=git_repo)
+    hook_repo = tmp_path_factory.mktemp("hook-repo")
+    _run_git(["init", "-q"], cwd=hook_repo)
+    (hook_repo / "notes.txt").write_text("hello\n")
+    _run_git(["add", "notes.txt"], cwd=hook_repo)
+
+    result = _run_envdrift(
+        ["guard", "--native-only", "."],
+        cwd=git_repo,
+        env={"GIT_INDEX_FILE": str(hook_repo / ".git" / "index"), "COLUMNS": "200"},
+    )
+    out = " ".join((result.stdout + result.stderr).split())
+
+    assert "SECURITY WARNING" in out, out
+    assert "prod.combined.env" in result.stderr, out
+    # The unencrypted combined file is a HIGH finding.
+    assert result.returncode == 2, f"expected 2, got {result.returncode}\n{out}"
 
 
 def test_combined_file_gitignore_check_handles_non_ascii_name(git_repo: Path) -> None:
