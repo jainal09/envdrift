@@ -60,6 +60,9 @@ LIMIT_SECONDS = 1.5
 # then, kills it a second after the engine has given up on the scanner.
 STARTUP_DELAY_SECONDS = 1.0
 TIMED_OUT = f"Scanner timed out after {LIMIT_SECONDS}s"
+# The timeout of a tool that starts a child: long enough for both, two Python processes, to start
+# on a loaded machine. A child killed before it started would prove nothing (#924).
+CHILD_TIMEOUT_SECONDS = 4.0
 
 
 class HungTool(ScannerBackend):
@@ -161,9 +164,11 @@ def _beating_pid(beat: Path) -> int:
     raise AssertionError("the tool never started")
 
 
-def _engine(scanner: ScannerBackend, monkeypatch: pytest.MonkeyPatch) -> ScanEngine:
-    """An engine that runs only ``scanner``, with a time limit of ``LIMIT_SECONDS``."""
-    monkeypatch.setattr(engine_module, "_SCANNER_TIMEOUT_SECONDS", LIMIT_SECONDS)
+def _engine(
+    scanner: ScannerBackend, monkeypatch: pytest.MonkeyPatch, limit: float = LIMIT_SECONDS
+) -> ScanEngine:
+    """An engine that runs only ``scanner``, with a time limit of ``limit``."""
+    monkeypatch.setattr(engine_module, "_SCANNER_TIMEOUT_SECONDS", limit)
     monkeypatch.setattr(engine_module, "_POLL_SECONDS", 0.05)
     engine = ScanEngine(GuardConfig(use_native=False, use_gitleaks=False))
     engine.scanners = [scanner]
@@ -345,7 +350,7 @@ def test_the_processes_a_timed_out_tool_started_end_with_it(
     tool = tmp_path / "tool.sh"
     tool.write_text(f'#!/bin/sh\n"{sys.executable}" "{heartbeat}" "{beat}" &\nwait\n')
     tool.chmod(0o755)
-    engine = _engine(HungTool(beat, [str(tool)]), monkeypatch)
+    engine = _engine(HungTool(beat, [str(tool)]), monkeypatch, limit=CHILD_TIMEOUT_SECONDS)
 
     try:
         engine.scan([tmp_path])
@@ -375,7 +380,7 @@ def test_a_tool_that_times_out_is_killed_with_the_processes_it_started(tmp_path:
             run_tool(
                 [sys.executable, "-c", PARENT, str(heartbeat), str(beat)],
                 capture_output=True,
-                timeout=1.5,
+                timeout=CHILD_TIMEOUT_SECONDS,
             )
 
         assert beat.exists(), "the tool's child never started"
@@ -407,7 +412,7 @@ def test_a_child_whose_name_is_not_utf8_is_killed_too(tmp_path: Path) -> None:
             run_tool(
                 [sys.executable, "-c", PARENT, str(child), str(beat)],
                 capture_output=True,
-                timeout=1.5,
+                timeout=CHILD_TIMEOUT_SECONDS,
             )
 
         assert beat.exists(), "the tool's child never started"
@@ -488,7 +493,7 @@ def test_a_failed_listing_does_not_replace_the_timeout(
             run_tool(
                 [sys.executable, "-c", PARENT, str(heartbeat), str(beat)],
                 capture_output=True,
-                timeout=1.5,
+                timeout=CHILD_TIMEOUT_SECONDS,
             )
 
         assert "Could not kill every process" in caplog.text
@@ -522,7 +527,7 @@ def test_a_child_that_outlived_its_tool_ends_with_it(tmp_path: Path) -> None:
 
     try:
         with pytest.raises(subprocess.TimeoutExpired):
-            run_tool([str(tool)], capture_output=True, timeout=1.5)
+            run_tool([str(tool)], capture_output=True, timeout=CHILD_TIMEOUT_SECONDS)
 
         if not beat.exists():
             pytest.fail("the tool's child never started")
@@ -546,9 +551,19 @@ def test_an_interrupted_tool_is_killed_with_the_processes_it_started(tmp_path: P
         raise InterruptError
 
     previous = signal.signal(signal.SIGUSR1, interrupt)
-    # Sent to this thread, which waits for the tool: a signal to the process could go to another.
-    timer = threading.Timer(1.5, signal.pthread_kill, (threading.get_ident(), signal.SIGUSR1))
-    timer.start()
+    waiting = threading.get_ident()
+    done = threading.Event()
+
+    def interrupt_once_the_child_beats() -> None:
+        # Not after a fixed time, which a slow start can outlast (#924). Sent to the thread that
+        # waits for the tool: a signal to the process could go to another.
+        while not beat.exists() and not done.wait(0.05):
+            pass
+        if not done.is_set():
+            signal.pthread_kill(waiting, signal.SIGUSR1)
+
+    watcher = threading.Thread(target=interrupt_once_the_child_beats)
+    watcher.start()
     try:
         with pytest.raises(InterruptError):
             run_tool(
@@ -560,8 +575,8 @@ def test_an_interrupted_tool_is_killed_with_the_processes_it_started(tmp_path: P
         assert beat.exists(), "the tool's child never started"
         assert not _still_beating(beat), "the tool's child still runs after the interrupt"
     finally:
-        timer.cancel()
-        timer.join()
+        done.set()
+        watcher.join()
         signal.signal(signal.SIGUSR1, previous)
         _stop(beat)
 
