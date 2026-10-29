@@ -462,6 +462,43 @@ def test_a_failed_listing_still_kills_the_processes_it_stopped(
                 os.kill(child, signal.SIGKILL)
 
 
+@pytest.mark.skipif(sys.platform == "win32", reason="taskkill /T walks the tree on Windows")
+def test_a_failed_listing_does_not_replace_the_timeout(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """The listing's error is logged, and the tree still killed: the caller sees the timeout.
+
+    It replaced the TimeoutExpired, which the scanners and installers catch to report a timeout.
+    """
+    beat = tmp_path / "beat"
+    heartbeat = tmp_path / "heartbeat.py"
+    heartbeat.write_text(HEARTBEAT)
+    children_by_parent = process_tree._children_by_parent
+    listings = []
+
+    def listing() -> dict[int, list[int]]:
+        listings.append(None)
+        if len(listings) > 1:
+            raise OSError(errno.EMFILE, os.strerror(errno.EMFILE))
+        return children_by_parent()
+
+    monkeypatch.setattr(process_tree, "_children_by_parent", listing)
+    try:
+        with pytest.raises(subprocess.TimeoutExpired):
+            run_tool(
+                [sys.executable, "-c", PARENT, str(heartbeat), str(beat)],
+                capture_output=True,
+                timeout=1.5,
+            )
+
+        assert "Could not kill every process" in caplog.text
+        with contextlib.suppress(ProcessLookupError):
+            os.kill(_beating_pid(beat), signal.SIGCONT)  # a child left stopped would beat again
+        assert not _still_beating(beat), "the tool's child still runs after the tool timed out"
+    finally:
+        _stop(beat)
+
+
 @pytest.mark.xfail(
     strict=False,
     raises=AssertionError,

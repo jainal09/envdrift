@@ -183,6 +183,9 @@ def _pinned_commit() -> str:
 
 def _installed_binary() -> Path | None:
     """The git-secrets the installer put in its target directory, if it is there to run."""
+    if platform.system() == "Windows":
+        # A Bash script, which Windows runs only as `git secrets`, through Git's own shell
+        return None
     try:
         # Looking creates no directory, and a directory that cannot be read holds no binary to run
         candidate = get_venv_bin_dir(create=False) / "git-secrets"
@@ -393,6 +396,10 @@ class GitSecretsInstaller:
                 raise GitSecretsInstallError(f"Installation failed: {e.stderr or e.stdout}") from e
             except subprocess.TimeoutExpired as e:
                 raise GitSecretsInstallError("Installation timed out") from e
+            except OSError as e:
+                # A directory it cannot make, a mode it may not change: the scanner's auto-install
+                # reports an install error as such, where an OSError escaped it
+                raise GitSecretsInstallError(f"Installation failed: {e}") from e
 
     def _clone_at(self, commit: str, repo_path: Path) -> None:
         """Clone git-secrets to repo_path and check out commit there."""

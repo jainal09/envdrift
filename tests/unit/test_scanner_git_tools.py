@@ -430,6 +430,7 @@ class TestGitSecretsInstalledBinary:
         with (
             patch("shutil.which", return_value=None),
             patch("envdrift.scanner.git_secrets.get_venv_bin_dir", return_value=tmp_path),
+            patch("platform.system", return_value="Linux"),
             patch("subprocess.run") as mock_run,
         ):
             scanner = GitSecretsScanner(auto_install=True)
@@ -467,6 +468,19 @@ class TestGitSecretsInstalledBinary:
         (tmp_path / "git-secrets").write_text("#!/usr/bin/env bash\n")
         (tmp_path / "git-secrets").chmod(0o644)
         with patch("envdrift.scanner.git_secrets.get_venv_bin_dir", return_value=tmp_path):
+            assert _installed_binary() is None
+
+    def test_windows_has_no_installed_binary(self, tmp_path: Path) -> None:
+        """git-secrets is a Bash script: Windows runs it only as `git secrets`, not by its path.
+
+        The extensionless script in the venv's Scripts was taken for a binary to run, and
+        install() returned it instead of saying Windows has no automatic install.
+        """
+        (tmp_path / "git-secrets").touch(mode=0o755)
+        with (
+            patch("platform.system", return_value="Windows"),
+            patch("envdrift.scanner.git_secrets.get_venv_bin_dir", return_value=tmp_path),
+        ):
             assert _installed_binary() is None
 
     @pytest.mark.skipif(sys.platform == "win32", reason="~/.local/bin is a POSIX install directory")
@@ -881,6 +895,26 @@ class TestGitSecretsInstallerPaths:
             installer = GitSecretsInstaller()
             with pytest.raises(GitSecretsInstallError, match="timed out"):
                 installer._install_from_source()
+
+    @pytest.mark.skipif(sys.platform == "win32", reason="~/.local/bin is a POSIX install directory")
+    def test_install_from_source_reports_a_filesystem_error_as_an_install_error(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The scanner's auto-install reports a GitSecretsInstallError: an OSError escaped it.
+
+        The home directory is a file, so ~/.local/bin, where the install goes, cannot be made.
+        """
+        home = tmp_path / "home"
+        home.write_text("a file, not a directory")
+        monkeypatch.delenv("VIRTUAL_ENV", raising=False)
+        monkeypatch.setenv("HOME", str(home))
+        with (
+            patch("shutil.which", side_effect=lambda name: f"/usr/bin/{name}"),
+            patch("subprocess.run") as mock_run,
+        ):
+            mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
+            with pytest.raises(GitSecretsInstallError, match="Installation failed"):
+                GitSecretsInstaller()._install_from_source()
 
     def test_install_from_source_checks_out_the_pinned_commit(self, tmp_path: Path) -> None:
         """The source install builds the commit constants.json pins, not master (#902).
