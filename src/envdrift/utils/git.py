@@ -68,22 +68,30 @@ def _hook_env(git_root: Path) -> dict[str, str] | None:
         if relative
         else {name: Path(value) for name, value in exported.items()}
     )
-    if paths is None:
+    if paths is None or not _paths_of(paths, git_root, env):
         return env
+    if relative:
+        return {**os.environ, **{name: str(path) for name, path in paths.items()}}
+    return None
+
+
+def _paths_of(paths: Mapping[str, Path], git_root: Path, env: Mapping[str, str]) -> bool:
+    """Whether the paths that a hook's location variables point at are ``git_root``'s.
+
+    ``paths`` is by variable name, and ``env`` the environment without them.
+    """
     dirs = _git_dirs(git_root, env)
     if dirs is None:
-        return env
+        return False
     git_dir, common_dir = dirs
     own = {"GIT_DIR": git_dir, "GIT_COMMON_DIR": common_dir, "GIT_WORK_TREE": git_root.resolve()}
     for name, path in paths.items():
         if name == "GIT_INDEX_FILE":
-            if not _index_of(path.resolve(), git_dir, named="GIT_DIR" in exported, env=env):
-                return env
+            if not _index_of(path.resolve(), git_dir, named="GIT_DIR" in paths, env=env):
+                return False
         elif path.resolve() != own[name]:
-            return env
-    if relative:
-        return {**os.environ, **{name: str(path) for name, path in paths.items()}}
-    return None
+            return False
+    return True
 
 
 # The rev-parse options that print the path each location variable names, as git reads it.
