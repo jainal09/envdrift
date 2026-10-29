@@ -1833,7 +1833,7 @@ envdrift guard [OPTIONS] [PATHS]...
 | `--gitleaks/--no-gitleaks` | | `--gitleaks` | Use gitleaks scanner (auto-installs if missing) |
 | `--trufflehog/--no-trufflehog` | | `--no-trufflehog` | Use trufflehog scanner (auto-installs if missing) |
 | `--detect-secrets/--no-detect-secrets` | | `--no-detect-secrets` | Use detect-secrets scanner (27+ detectors) |
-| `--kingfisher/--no-kingfisher` | | `--no-kingfisher` | Use Kingfisher scanner (700+ rules, secret validation) |
+| `--kingfisher/--no-kingfisher` | | `--no-kingfisher` | Use Kingfisher scanner (Betterleaks and Veles rules, secret validation) |
 | `--git-secrets/--no-git-secrets` | | `--no-git-secrets` | Use git-secrets scanner (AWS credential detection) |
 | `--talisman/--no-talisman` | | `--no-talisman` | Use Talisman scanner (entropy detection) |
 | `--trivy/--no-trivy` | | `--no-trivy` | Use Trivy scanner (comprehensive security scanner) |

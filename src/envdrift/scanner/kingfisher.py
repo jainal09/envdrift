@@ -1,11 +1,14 @@
 """Kingfisher scanner integration with Homebrew installation support.
 
 Kingfisher is a high-performance secret scanner by MongoDB that features:
-- Over 700 built-in detection rules
+- Built-in detection rules from Betterleaks (Infisical's rule set) and Veles
 - Active secret validation (checks if secrets are still valid)
-- Password hash detection (bcrypt, sha512crypt, etc.)
+- Archive extraction and binary file scanning
 - Language-aware parsing using Tree-sitter
 - Entropy-based detection
+
+Kingfisher 2.x, unlike 1.x, has no rule for password hashes: the native scanner finds bcrypt
+and sha512crypt hashes (#928).
 
 This module provides:
 - Automatic Homebrew installation on macOS and Linux
@@ -167,11 +170,10 @@ class KingfisherScanner(ScannerBackend):
     """Kingfisher scanner with automatic Homebrew installation.
 
     Kingfisher is MongoDB's secret scanner that excels at:
-    - Password hash detection (bcrypt, sha512crypt, etc.)
     - Active secret validation
-    - High-performance scanning with Rust + Hyperscan
+    - High-performance scanning with Rust + Vectorscan
     - Language-aware parsing
-    - 700+ built-in detection rules
+    - Built-in Betterleaks and Veles detection rules
 
     Example:
         scanner = KingfisherScanner(auto_install=True)
@@ -225,7 +227,7 @@ class KingfisherScanner(ScannerBackend):
     @property
     def description(self) -> str:
         """Return scanner description."""
-        return "Kingfisher secret scanner (700+ rules, password hashes, validation)"
+        return "Kingfisher secret scanner (Betterleaks and Veles rules, validation)"
 
     def is_installed(self) -> bool:
         """Check if Kingfisher is available."""

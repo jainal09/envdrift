@@ -104,7 +104,7 @@ class GuardConfig:
         use_gitleaks: Enable gitleaks scanner (if available).
         use_trufflehog: Enable trufflehog scanner (if available).
         use_detect_secrets: Enable detect-secrets scanner - the "final boss".
-        use_kingfisher: Enable Kingfisher scanner (700+ rules, password hashes).
+        use_kingfisher: Enable Kingfisher scanner (Betterleaks and Veles rules, validation).
         use_git_secrets: Enable git-secrets scanner (AWS credential detection).
         use_talisman: Enable Talisman scanner (ThoughtWorks secret scanner).
         use_trivy: Enable Trivy scanner (Aqua Security comprehensive scanner).
@@ -555,7 +555,7 @@ class ScanEngine:
             except ImportError:
                 pass  # detect-secrets not yet implemented
 
-        # Kingfisher scanner - 700+ rules, password hashes, validation
+        # Kingfisher scanner - Betterleaks and Veles rules, validation
         if self.config.use_kingfisher:
             try:
                 from envdrift.scanner.kingfisher import KingfisherScanner

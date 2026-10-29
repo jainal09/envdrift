@@ -506,7 +506,7 @@ HIGH_PATTERNS: list[SecretPattern] = [
         pattern=re.compile(r"(?i)redis://(?:[^:]+:)?([^@]+)@[^\s]+"),
         severity=FindingSeverity.HIGH,
     ),
-    # Password hashes (dangerous if leaked), CRITICAL like Kingfisher's hash rules
+    # Password hashes (dangerous if leaked), CRITICAL. Kingfisher 2.x has no rule for them (#928)
     SecretPattern(
         id="bcrypt-hash",
         description="Bcrypt Password Hash",
