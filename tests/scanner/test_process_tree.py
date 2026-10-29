@@ -454,7 +454,8 @@ def test_a_search_that_runs_out_of_files_fails_loud() -> None:
         timeout=60,
         check=False,
     )
-    assert probe.stdout.split() == ["True", str(errno.EMFILE)], probe.stdout + probe.stderr
+    assert probe.returncode == 0, probe.stdout + probe.stderr
+    assert probe.stdout.split() == ["True", str(errno.EMFILE)], probe.stdout
 
 
 @pytest.mark.skipif(not Path("/proc/self/stat").is_file(), reason="Linux lists processes in /proc")
