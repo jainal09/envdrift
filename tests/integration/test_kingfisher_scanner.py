@@ -10,6 +10,8 @@ import shutil
 import subprocess
 
 import pytest
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric import rsa
 from tests.severity_policy import class_samples
 
 from envdrift.scanner.base import FindingSeverity
@@ -26,10 +28,17 @@ pytestmark = [
 ]
 
 
+@pytest.fixture
+def kingfisher_2() -> None:
+    """Skip a test of Kingfisher 2.x's rules where 1.x is installed: its rules differ (#928)."""
+    version = KingfisherScanner(auto_install=False).get_version() or ""
+    major = version.partition(".")[0]
+    if major.isdigit() and int(major) < 2:
+        pytest.skip(f"Kingfisher {version} is installed; this test describes 2.x's rules")
+
+
 def _rsa_private_key_pem() -> bytes:
     """A whole RSA private key, made for the test: GitHub's push protection rejects a real one."""
-    rsa = pytest.importorskip("cryptography.hazmat.primitives.asymmetric.rsa")
-    serialization = pytest.importorskip("cryptography.hazmat.primitives.serialization")
     key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
     return key.private_bytes(
         serialization.Encoding.PEM,
@@ -78,6 +87,7 @@ class TestKingfisherIntegration:
         # Kingfisher may or may not detect this depending on confidence
         # The key thing is it runs without error
 
+    @pytest.mark.usefixtures("kingfisher_2")
     def test_scan_detects_private_key(self, tmp_path):
         """A whole private key is found, and graded CRITICAL, as private keys are (#928).
 
@@ -98,6 +108,7 @@ class TestKingfisherIntegration:
         assert {f.file_path.name for f in key_findings} == {"key.pem"}
         assert {f.severity for f in key_findings} == {FindingSeverity.CRITICAL}
 
+    @pytest.mark.usefixtures("kingfisher_2")
     def test_password_hashes_are_left_to_the_native_scanner(self, tmp_path):
         """Kingfisher 2.x has no rule for password hashes: the native scanner finds them (#928).
 

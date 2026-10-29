@@ -673,6 +673,7 @@ azure = [
 ]
 dev = [
     { name = "bandit" },
+    { name = "cryptography" },
     { name = "jsonschema" },
     { name = "mkdocs-material" },
     { name = "mkdocs-redirects" },
@@ -703,6 +704,7 @@ test-integration = [
     { name = "azure-keyvault-secrets" },
     { name = "bandit" },
     { name = "boto3" },
+    { name = "cryptography" },
     { name = "docker" },
     { name = "google-cloud-secret-manager" },
     { name = "hvac" },
@@ -748,6 +750,8 @@ requires-dist = [
     { name = "boto3", marker = "extra == 'aws'", specifier = ">=1.34" },
     { name = "boto3", marker = "extra == 'test-integration'", specifier = ">=1.34" },
     { name = "boto3", marker = "extra == 'vault'", specifier = ">=1.34" },
+    { name = "cryptography", marker = "extra == 'dev'", specifier = ">=42.0" },
+    { name = "cryptography", marker = "extra == 'test-integration'", specifier = ">=42.0" },
     { name = "docker", marker = "extra == 'test-integration'", specifier = ">=7.0.0" },
     { name = "google-cloud-secret-manager", marker = "extra == 'all'", specifier = ">=2.16" },
     { name = "google-cloud-secret-manager", marker = "extra == 'gcp'", specifier = ">=2.16" },

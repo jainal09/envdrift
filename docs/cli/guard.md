@@ -609,7 +609,7 @@ envdrift guard --history --trufflehog
 ### Maximum detection with Kingfisher
 
 ```bash
-# Kingfisher adds the Betterleaks and Veles rules and validates the secrets it finds
+# Kingfisher adds the Betterleaks and Veles rules and validates the secrets its rules can check
 envdrift guard --kingfisher --gitleaks
 ```
 
@@ -617,8 +617,12 @@ envdrift guard --kingfisher --gitleaks
 
 ```bash
 # The native scanner finds bcrypt and sha512crypt password hashes
-envdrift guard ./db --native-only
+envdrift guard ./db/users.sql --native-only
 ```
+
+Name each dump file. In a git checkout a directory scan skips gitignored files, `.env*` files
+aside, and dumps often are gitignored. The native scanner also skips any file over 10 MiB without
+a warning ([#933](https://github.com/jainal09/envdrift/issues/933)).
 
 ## Severity
 
